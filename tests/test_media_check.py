@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import click
 import pytest
 from typer.testing import CliRunner
 
@@ -286,7 +287,8 @@ def test_cli_rejects_zero_repeats_before_backend_construction(tmp_path: Path) ->
     config.write_text("")
     out = tmp_path / "out"
     result = CliRunner().invoke(app, ["--config", str(config), "media", "check", "--out", str(out), "--repeats", "0"])
-    assert result.exit_code != 0 and "--repeats" in result.output
+    # Rich colours usage errors when it detects CI, which splits the option name with escape codes.
+    assert result.exit_code != 0 and "--repeats" in click.unstyle(result.output)
     assert not out.exists()
 
 

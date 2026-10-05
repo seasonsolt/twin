@@ -144,6 +144,15 @@ def source_to_meeting(parsed: ParsedSource) -> Meeting
   source or missing meeting ID/date/utterance index rather than fabricating lost metadata.
 - `parse_source(MEETING, path, settings, date)` parses a transcript via `persona.transcripts`, including local speaker sidecars. `parse_text` uses the pure `parse_transcript_text` for web uploads without accessing filesystem paths. CLI and web both accept this generic corpus kind; no meeting runtime or derived meeting store exists.
 
+## Memory upload queries and builds (code layers 3/5)
+
+- `PersonaStore` 的 `p_meta.sources_changed_at` 为带 UTC 时区的 ISO 时间（微秒精度），在新增/替换来源、实际删除来源及 `facet:` 授权决定改变时，与对应写入同事务更新；重复相同授权决定及非 facet 授权不更新。删除来源保留授权历史。`source_pending:<source_id>` 是来源等待构建的内部标记，成功构建后清除。
+- `profile.source_memories(store) -> dict[str, SourceMemory]` 是纯查询：每个来源返回 `expressions_total/target/others`（包括 held_out）、`items_supported`、`facets`（facet_id/name）、`contributes_nothing`、`build_status`（not_built/remembered/no_items）。按证据 expression_id 查询实际来源，重复引用和跨来源条目对每个来源只计一次；未拒绝条目口径与完成度一致。仍存于上次档案的条目也计入支撑，过期状态独立展示。
+- `profile.profile_stale(store) -> bool`：sources_changed_at 晚于 built_at，或来源非空而 built_at 缺失；旧无 sources_changed_at 的库兼容，旧 built_at 无时区时按本机时间解析。这个状态只覆盖来源/细项授权，不追踪配置变化。
+- `BuildReport` 保留原字段并追加 `facet_diffs: dict[str, FacetItemDiff]`；`FacetItemDiff` 含 `added/changed/removed`。比较 replace_facet_items 前后的原始 item_id 与 statement，不受人工审核替换表述影响；相同 ID 仅 statement 改变算 changed，ID 改变算 removed + added，证据/情境改变不算 statement diff。包含成功合并但零变化的细项，不包含失败或跳过的细项。
+- BuildReport 提供派生总计 `items_added/items_changed/items_removed/facets_changed` 和 `change_summary()`。facets_changed 只计算有非零 diff 的细项；无变化增量构建总计为零。构建日志仅使用编号、计数及错误类型，不记录条目文本、来源标题或异常正文。
+- 只有无失败且输入版本仍未变的构建，才由 `mark_profile_built` 同事务更新 built_at 并清除 pending 标记；built_at 记录本次构建开始时间。部分失败或构建期间来源/授权改变仍保持 stale，已完成结果保留供重试。CLI build/chat 在 stale 时向 stderr 提示，chat 仍运行。
+
 ## Generic evaluation schema (code layer 1)
 
 All contracts are frozen and forbid extras. `CaseInput` exposes only identity, scenario, mode and `BiographyInput(id, type, prompt)`; answers live separately in `BiographyExpected`. The biography-shaped question/answer contracts remain temporarily for the next personal-evaluation task, without any biography runner or benchmark. `Prediction` has `BiographyOutput(reply)`, nullable capabilities and explicit raw data. `Judgement` retains rubric verdicts; failed/uncalled rows have `score=None`. `Report` preserves records, policies, purposes, fingerprints, generic statistics and warnings. Development purpose requires a dev split; reports cannot mix purposes. Aggregation order is judge → repeat → case → group.

@@ -33,7 +33,7 @@ from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
 from .persona.dimensions import FACETS, requires_consent
-from .persona.profile import build_profile, consented_facets
+from .persona.profile import STALE_PROFILE_NOTICE, build_profile, consented_facets, profile_stale, source_memories
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import parse_source
 from .persona.store import PersonaStore
@@ -458,10 +458,19 @@ def persona_import(
 def persona_sources(ctx: typer.Context) -> None:
     """列出已导入的资料。"""
     with _persona_store(_settings(ctx)) as store:
+        memories = source_memories(store)
         for s in store.list_sources():
+            memory = memories[s.source_id]
+            status = {"not_built": "尚未构建", "no_items": "构建后未产生档案条目", "remembered": "已记住"}[
+                memory.build_status
+            ]
+            facets = "、".join(f["name"] for f in memory.facets) or "—"
             _say(
                 f"{s.source_id}  {SOURCE_KIND_LABELS[s.kind]}  {s.title}  本人 {s.n_target}/{s.n_expressions} 条  "
-                f"{s.first_date or '—'} 至 {s.last_date or '—'}"
+                f"{s.first_date or '—'} 至 {s.last_date or '—'}  "
+                f"原话 {memory.expressions_total}（本人 {memory.expressions_target} / "
+                f"他人 {memory.expressions_others}）  "
+                f"支撑档案 {memory.items_supported} 条  涉及：{facets}  {status}"
             )
 
 
@@ -470,13 +479,16 @@ def persona_sources(ctx: typer.Context) -> None:
 def persona_build(ctx: typer.Context) -> None:
     """抽取并合并人格档案，再更新检索向量；只处理新增或变化的部分。"""
     settings = _settings(ctx)
-    llm = _llm(settings)
-    embedder = _embedder(settings)
     with _persona_store(settings) as store:
+        if profile_stale(store):
+            _progress(STALE_PROFILE_NOTICE)
+        llm = _llm(settings)
+        embedder = _embedder(settings)
         report = build_profile(store, llm, settings, _progress)
         for failure in report.failures:
             _progress(f"FAILED {failure}")
-        _require_working_calls(llm, "人格档案")
+        if llm.failed and not llm.succeeded:
+            raise _fail(f"人格档案阶段的 {llm.failed} 次模型调用全部失败：{type(llm.last_error).__name__}")
         try:
             index_persona(store, embedder, settings, _progress)
         except EmbedError as e:
@@ -485,6 +497,10 @@ def persona_build(ctx: typer.Context) -> None:
             f"资料 {report.sources} 份，分块 {report.chunks_total}（本次抽取 {report.chunks_extracted}），"
             f"候选 {report.candidates} 条，合并细项 {report.facets_merged} 个，档案条目 {report.items} 条"
         )
+        _say(report.change_summary())
+        for facet_id, diff in sorted(report.facet_diffs.items()):
+            if diff.added or diff.changed or diff.removed:
+                _say(f"  {facet_id}：新增 {diff.added} 条、修改 {diff.changed} 条、删除 {diff.removed} 条")
         if report.failures:
             raise typer.Exit(code=1)
 
@@ -520,6 +536,8 @@ def persona_chat(
     settings = _settings(ctx)
     when = _optional_date(as_of, "--as-of")
     with _persona_store(settings) as store:
+        if profile_stale(store):
+            _progress(STALE_PROFILE_NOTICE)
         twin = PersonaChat(store, _llm(settings), _embedder(settings), settings)
         history: list[ChatTurn] = []
         while True:

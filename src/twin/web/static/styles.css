@@ -1765,6 +1765,14 @@ input[type="date"] {
 
 }
 
+.identity-table-wrap {
+  overflow-x: auto;
+}
+
+.identity-table-wrap .table {
+  min-width: 640px;
+}
+
 @media (prefers-reduced-motion: reduce) {
 .playback-panel * {
 

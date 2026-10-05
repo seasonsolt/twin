@@ -80,11 +80,16 @@ class PersonaStore:
         event = ConsentEvent(
             seq=1, scope=scope, decision=decision, at=dt.datetime.now(dt.UTC), origin=origin, note=note
         )
+        previous = db.execute(
+            "SELECT decision FROM p_consent WHERE scope = ? ORDER BY seq DESC LIMIT 1", (event.scope,)
+        ).fetchone()
         cursor = db.execute(
             "INSERT INTO p_consent (scope, decision, at, origin, note) VALUES (?, ?, ?, ?, ?)",
             (event.scope, event.decision.value, event.at.isoformat(), event.origin, event.note),
         )
         assert cursor.lastrowid is not None
+        if event.scope.startswith("facet:") and (previous is None or previous[0] != event.decision.value):
+            self._sources_changed(db)
         return event.model_copy(update={"seq": cursor.lastrowid})
 
     def append_consent(self, scope: Scope, decision: Decision, origin: Origin, note: str = "") -> ConsentEvent:
@@ -104,6 +109,12 @@ class PersonaStore:
         ]
 
     # ------------------------------------------------------------ sources
+
+    def _sources_changed(self, db: sqlite3.Connection) -> None:
+        db.execute(
+            "INSERT OR REPLACE INTO p_meta VALUES ('sources_changed_at', ?)",
+            (dt.datetime.now(dt.UTC).isoformat(),),
+        )
 
     def put_source(self, parsed: ParsedSource) -> bool:
         """Store a parsed source and its expressions, replacing a source with the same id (the same file and
@@ -137,6 +148,8 @@ class PersonaStore:
                     for e in parsed.expressions
                 ],
             )
+            self._sources_changed(db)
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, '1')", (f"source_pending:{source.source_id}",))
             if source.kind is SourceKind.QUESTIONNAIRE:
                 answered = {f for e in parsed.expressions if not e.held_out for f in e.facets_hint}
                 declined = set(source.declined_facets)
@@ -169,7 +182,11 @@ class PersonaStore:
             db.executemany("DELETE FROM p_candidates WHERE chunk_id = ?", [(c,) for c in chunks])
             db.execute("DELETE FROM p_chunks WHERE source_id = ?", (source_id,))
             db.execute("DELETE FROM p_expressions WHERE source_id = ?", (source_id,))
-            return db.execute("DELETE FROM p_sources WHERE source_id = ?", (source_id,)).rowcount > 0
+            deleted = db.execute("DELETE FROM p_sources WHERE source_id = ?", (source_id,)).rowcount > 0
+            if deleted:
+                self._sources_changed(db)
+                db.execute("DELETE FROM p_meta WHERE key = ?", (f"source_pending:{source_id}",))
+            return deleted
 
     # ------------------------------------------------------------ expressions
 
@@ -303,6 +320,17 @@ class PersonaStore:
     def set_meta(self, key: str, value: str) -> None:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (key, value))
+
+    def mark_profile_built(self, built_at: str, sources_changed_at: str | None) -> None:
+        """Acknowledge a successful build only if its input version is still current."""
+        with self._tx() as db:
+            saved = db.execute(
+                "INSERT OR REPLACE INTO p_meta SELECT 'built_at', ? "
+                "WHERE (SELECT value FROM p_meta WHERE key = 'sources_changed_at') IS ?",
+                (built_at, sources_changed_at),
+            )
+            if saved.rowcount:
+                db.execute("DELETE FROM p_meta WHERE key LIKE 'source_pending:%'")
 
     # ------------------------------------------------------------ vectors
 

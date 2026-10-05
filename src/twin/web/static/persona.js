@@ -15,6 +15,7 @@ const KIND_OPTIONS = [
   ["biography", "传记与他人记述", "别人写的关于本人的传记、年谱、报道；标题里的年份作为下面段落的日期"],
 ];
 const LEVEL_TONES = { 0: "neutral", 1: "info", 2: "go", 3: "accent" };
+const STALE_PROFILE_NOTICE = "资料或授权有变化，尚未重新构建；档案和聊天仍基于上次构建";
 const CHAT_KEY = "persona.chat";
 const POLL_MS = 1000;
 
@@ -88,6 +89,15 @@ export async function personaChatPage(ctx) {
   const send = h("button", { type: "submit", class: "btn" }, "发送");
   const clear = h("button", { type: "button", class: "btn secondary" }, "清空对话");
   const errorArea = h("div");
+  const staleNotice = h("div", { "aria-live": "polite" });
+  const refreshState = async () => {
+    try {
+      const memory = await api("/api/persona/state");
+      if (scope.alive) setChildren(staleNotice, memory.stale ? h("p", { class: "callout tone-hold" }, STALE_PROFILE_NOTICE, " ", h("a", { href: "#/sources" }, "去重新构建")) : null);
+    } catch (err) {
+      if (scope.alive) setChildren(staleNotice, errorBox(err, { title: "无法检查档案状态", retry: refreshState }));
+    }
+  };
 
   const render = () => {
     setChildren(log, history.length ? history.map(bubble) : empty("还没有对话", "在下面输入一句话开始。分身只依据已构建的人格档案作答。"));
@@ -105,6 +115,7 @@ export async function personaChatPage(ctx) {
     send.disabled = true;
     send.textContent = "思考中…";
     try {
+      refreshState();
       const messages = history.map((t) => ({ role: t.role, content: t.content }));
       const { job_id: jobId } = await api("/api/persona/chat", { method: "POST", json: { messages, as_of: asOf.value || null } });
       const reply = await waitForJob(jobId, scope);
@@ -137,6 +148,7 @@ export async function personaChatPage(ctx) {
 
   root.replaceChildren(
     pageHeader(`和${name}的分身聊天`, state.status?.labels?.chat_notice || "加载中…"),
+    staleNotice,
     log,
     h(
       "form",
@@ -154,6 +166,7 @@ export async function personaChatPage(ctx) {
   render();
   ctx.focused = true;
   input.focus();
+  await refreshState();
 }
 
 // ---------------------------------------------------------------- profile and completeness
@@ -378,6 +391,23 @@ export async function personaProfilePage(ctx) {
 
 // ---------------------------------------------------------------- sources and build
 
+function buildDiffView(result) {
+  return h("div", null,
+    h("p", null, `新增 ${result.items_added ?? 0} 条、修改 ${result.items_changed ?? 0} 条、删除 ${result.items_removed ?? 0} 条，涉及 ${result.facets_changed ?? 0} 个细项`),
+    h("ul", { class: "plain-list small" }, Object.entries(result.facet_diffs || {})
+      .filter(([, d]) => d.added || d.changed || d.removed)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, d]) => h("li", null, `${id}：新增 ${d.added} 条、修改 ${d.changed} 条、删除 ${d.removed} 条`))),
+  );
+}
+
+function sourceMemoryLine(source) {
+  const counts = `原话 ${source.expressions_total ?? source.n_expressions} 条（本人 ${source.expressions_target ?? source.n_target} / 他人 ${source.expressions_others ?? source.n_expressions - source.n_target}） · 支撑档案 ${source.items_supported ?? 0} 条`;
+  const facets = (source.facets || []).map((f) => f.name).join("、");
+  const status = source.build_status === "not_built" ? "尚未构建" : source.build_status === "no_items" ? "构建后未产生档案条目" : "";
+  return h("p", { class: "muted small" }, [counts, facets ? `涉及：${facets}` : "", status].filter(Boolean).join(" · "));
+}
+
 function sourceTable(sources, reload) {
   if (!sources.length) return empty("还没有导入资料", "从上面选择资料类型和文件导入。");
   return h(
@@ -401,7 +431,7 @@ function sourceTable(sources, reload) {
         return h(
           "tr",
           null,
-          h("td", null, s.title, s.declined_facets.length ? h("p", { class: "muted small" }, `未授权细项：${s.declined_facets.join("、")}`) : null),
+          h("td", null, s.title, sourceMemoryLine(s), s.declined_facets.length ? h("p", { class: "muted small" }, `未授权细项：${s.declined_facets.join("、")}`) : null),
           h("td", null, badge(s.kind_label, s.evidence_class === "self_report" ? "redirect" : "go")),
           h("td", null, `${s.n_target} / ${s.n_expressions}`),
           h("td", null, [s.first_date, s.last_date].filter(Boolean).join(" 至 ") || "—"),
@@ -426,11 +456,15 @@ export async function personaSourcesPage(ctx) {
   const list = h("div", null, loading());
   const buildButton = h("button", { type: "button", class: "btn" }, "构建人格档案");
   const buildResult = h("div");
+  const staleNotice = h("div", { "aria-live": "polite" });
 
   const reload = async () => {
     try {
-      const sources = await api("/api/persona/sources");
-      if (scope.alive) setChildren(list, sourceTable(sources, reload));
+      const [sources, memory] = await Promise.all([api("/api/persona/sources"), api("/api/persona/state")]);
+      if (scope.alive) {
+        setChildren(list, sourceTable(sources, reload));
+        setChildren(staleNotice, memory.stale ? h("p", { class: "callout tone-hold" }, STALE_PROFILE_NOTICE) : null);
+      }
     } catch (err) {
       if (scope.alive) setChildren(list, errorBox(err, { retry: reload }));
     }
@@ -456,7 +490,9 @@ export async function personaSourcesPage(ctx) {
           " ",
           h("a", { href: "#/persona" }, "查看档案与完成度"),
         ),
+        buildDiffView(r),
       );
+      reload();
       if (!restored) toast("人格档案已更新。", "go");
     },
   });
@@ -504,7 +540,7 @@ export async function personaSourcesPage(ctx) {
       importResult,
     ),
     h("section", { class: "card" }, h("h2", null, "已导入的资料"), list),
-    h("section", { class: "card" }, h("h2", null, "构建"), h("p", { class: "muted" }, "只处理新增或变化的资料；已经完成的模型调用不会重复。"), h("div", { class: "btn-row" }, buildButton), buildResult),
+    h("section", { class: "card" }, h("h2", null, "构建"), h("p", { class: "muted" }, "只处理新增或变化的资料；已经完成的模型调用不会重复。"), h("div", { class: "btn-row" }, staleNotice, buildButton), buildResult),
     buildJob.el,
   );
   buildJob.restore();
@@ -538,9 +574,9 @@ export async function personaQuestionnairePage(ctx) {
     kind: "persona_build",
     storageKey: "job.personaBuild",
     title: "人格档案构建进度",
-    onDone: (_job, { restored }) => {
+    onDone: (job, { restored }) => {
       if (!restored) toast("人格档案已根据问卷更新。", "go");
-      setChildren(submitArea, h("p", { class: "callout tone-go" }, "构建完成。", " ", h("a", { href: "#/persona" }, "查看人格档案与完成度"), "，或者 ", h("a", { href: "#/chat" }, "去和分身聊天"), "。"));
+      setChildren(submitArea, h("p", { class: "callout tone-go" }, "构建完成。", " ", h("a", { href: "#/persona" }, "查看人格档案与完成度"), "，或者 ", h("a", { href: "#/chat" }, "去和分身聊天"), "。"), buildDiffView(job.result || {}));
     },
   });
 

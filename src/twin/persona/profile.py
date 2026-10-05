@@ -19,6 +19,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +40,66 @@ CONTEXT_CHARS = 300
 MAX_MERGE_CANDIDATES = 80
 MAX_QUOTES = 3
 STYLE_DIMENSION = "D6"
+
+
+STALE_PROFILE_NOTICE = "资料或授权有变化，尚未重新构建；档案和聊天仍基于上次构建"
+
+
+def profile_stale(store: PersonaStore) -> bool:
+    built_at = store.get_meta("built_at")
+    if built_at is None:
+        return bool(store.list_sources())
+    changed_at = store.get_meta("sources_changed_at")
+    if changed_at is None:
+        return False
+    # Legacy built_at values are local naive timestamps; new timestamps carry UTC offsets.
+    return dt.datetime.fromisoformat(changed_at).astimezone(dt.UTC) > dt.datetime.fromisoformat(built_at).astimezone(
+        dt.UTC
+    )
+
+
+@dataclass(frozen=True)
+class SourceMemory:
+    expressions_total: int
+    expressions_target: int
+    expressions_others: int
+    items_supported: int
+    facets: list[dict[str, str]]
+    contributes_nothing: bool
+    build_status: Literal["not_built", "remembered", "no_items"]
+
+
+def source_memories(store: PersonaStore) -> dict[str, SourceMemory]:
+    """Query current, non-rejected profile support via expression IDs, once per source and item."""
+    expressions = store.list_expressions(include_held_out=True)
+    owners = {e.expression_id: e.source_id for e in expressions}
+    totals: dict[str, int] = {}
+    targets: dict[str, int] = {}
+    supported: dict[str, set[str]] = {}
+    facets: dict[str, set[str]] = {}
+    for e in expressions:
+        totals[e.source_id] = totals.get(e.source_id, 0) + 1
+        targets[e.source_id] = targets.get(e.source_id, 0) + int(e.is_target)
+    for item in store.list_items():
+        for source_id in {owners[e.expression_id] for e in item.evidence if e.expression_id in owners}:
+            supported.setdefault(source_id, set()).add(item.item_id)
+            facets.setdefault(source_id, set()).add(item.facet_id)
+    built_at = store.get_meta("built_at")
+    result: dict[str, SourceMemory] = {}
+    for source in store.list_sources():
+        sid = source.source_id
+        count = len(supported.get(sid, set()))
+        built = built_at is not None and store.get_meta(f"source_pending:{sid}") is None
+        result[sid] = SourceMemory(
+            expressions_total=totals.get(sid, 0),
+            expressions_target=targets.get(sid, 0),
+            expressions_others=totals.get(sid, 0) - targets.get(sid, 0),
+            items_supported=count,
+            facets=[{"facet_id": fid, "name": FACET_BY_ID[fid].name} for fid in sorted(facets.get(sid, set()))],
+            contributes_nothing=count == 0,
+            build_status="not_built" if not built else "remembered" if count else "no_items",
+        )
+    return result
 
 
 # ---------------------------------------------------------------- chunks
@@ -329,6 +390,13 @@ def merge_facet(
 # ---------------------------------------------------------------- build
 
 
+@dataclass(frozen=True)
+class FacetItemDiff:
+    added: int = 0
+    changed: int = 0
+    removed: int = 0
+
+
 @dataclass
 class BuildReport:
     sources: int = 0
@@ -339,6 +407,29 @@ class BuildReport:
     facets_merged: int = 0
     items: int = 0
     failures: list[str] = field(default_factory=list)
+    facet_diffs: dict[str, FacetItemDiff] = field(default_factory=dict)
+
+    @property
+    def items_added(self) -> int:
+        return sum(d.added for d in self.facet_diffs.values())
+
+    @property
+    def items_changed(self) -> int:
+        return sum(d.changed for d in self.facet_diffs.values())
+
+    @property
+    def items_removed(self) -> int:
+        return sum(d.removed for d in self.facet_diffs.values())
+
+    @property
+    def facets_changed(self) -> int:
+        return sum(bool(d.added or d.changed or d.removed) for d in self.facet_diffs.values())
+
+    def change_summary(self) -> str:
+        return (
+            f"新增 {self.items_added} 条、修改 {self.items_changed} 条、删除 {self.items_removed} 条，"
+            f"涉及 {self.facets_changed} 个细项"
+        )
 
 
 def _merge_key(candidates: Sequence[PersonaCandidate]) -> str:
@@ -349,7 +440,14 @@ def _merge_key(candidates: Sequence[PersonaCandidate]) -> str:
 
 def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: Progress | None = None) -> BuildReport:
     report = BuildReport()
+    sources_changed_at = store.get_meta("sources_changed_at")
+    built_at = dt.datetime.now(dt.UTC).isoformat()
     allowed = consented_facets(store)
+
+    def safe_progress(message: str) -> None:
+        if progress:
+            progress(": ".join(message.split(": ")[:2]) if message.startswith("FAILED ") else message)
+
     sources = store.list_sources()
     report.sources = len(sources)
     chunks = [c for s in sources for c in chunks_for(store, s, allowed, settings)]
@@ -359,9 +457,7 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
 
     def persist(chunk: Chunk, outcome: list[PersonaCandidate] | Exception) -> None:
         if isinstance(outcome, Exception):
-            report.failures.append(
-                f"extract {chunk.source.title} {chunk.chunk_id}: {type(outcome).__name__}: {outcome}"
-            )
+            report.failures.append(f"extract {chunk.chunk_id}: {type(outcome).__name__}")
         else:
             store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome)
             report.chunks_extracted += 1
@@ -370,8 +466,8 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
         lambda c: extract_chunk(llm, c, allowed, settings),
         todo,
         settings.max_workers,
-        progress,
-        label=lambda c: f"persona extract {c.source.title} {c.chunk_id}",
+        safe_progress,
+        label=lambda c: f"persona extract {c.chunk_id}",
         on_result=persist,
     )
     candidates = [c for c in store.list_candidates() if c.facet_id in allowed]
@@ -392,13 +488,23 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
     def save(job: tuple[str, list[PersonaCandidate]], outcome: list[PersonaItem] | Exception) -> None:
         facet_id, members = job
         if isinstance(outcome, Exception):
-            report.failures.append(f"merge {facet_id}: {type(outcome).__name__}: {outcome}")
+            report.failures.append(f"merge {facet_id}: {type(outcome).__name__}")
             return
+        before = {i.item_id: i.statement for i in store.list_items(facet_id, raw=True)}
         store.replace_facet_items(facet_id, outcome)
+        after = {i.item_id: i.statement for i in store.list_items(facet_id, raw=True)}
+        report.facet_diffs[facet_id] = FacetItemDiff(
+            added=len(after.keys() - before.keys()),
+            changed=sum(before[i] != after[i] for i in before.keys() & after.keys()),
+            removed=len(before.keys() - after.keys()),
+        )
         store.set_meta(f"merge:{facet_id}", _merge_key(members))
         report.facets_merged += 1
 
-    run_parallel(merge, jobs, settings.max_workers, progress, label=lambda j: f"persona merge {j[0]}", on_result=save)
+    run_parallel(
+        merge, jobs, settings.max_workers, safe_progress, label=lambda j: f"persona merge {j[0]}", on_result=save
+    )
     report.items = len(store.list_items())
-    store.set_meta("built_at", dt.datetime.now().isoformat(timespec="seconds"))
+    if not report.failures:
+        store.mark_profile_built(built_at, sources_changed_at)
     return report

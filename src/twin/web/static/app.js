@@ -11,6 +11,7 @@ const ROUTES = {
   questionnaire: { title: "建档问卷", render: personaQuestionnairePage },
   persona: { title: "人格档案", render: personaProfilePage },
   sources: { title: "资料与构建", render: personaSourcesPage },
+  identity: { title: "身份与授权", render: async (ctx) => (await import("./identity.js")).identityPage(ctx) },
 };
 
 let currentScope = null;

@@ -132,7 +132,7 @@ def test_failed_chunk_is_reported_and_retried_next_build(store: PersonaStore, se
         return handler(system, user, schema)
 
     first = pf.build_profile(store, FakeLLM(flaky), settings)
-    assert len(first.failures) == 1 and "boom" in first.failures[0] and first.chunks_extracted == 1
+    assert len(first.failures) == 1 and "RuntimeError" in first.failures[0] and first.chunks_extracted == 1
     second = pf.build_profile(store, FakeLLM(handler), settings)
     assert second.chunks_extracted == 1 and second.failures == []
 

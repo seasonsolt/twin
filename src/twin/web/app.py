@@ -21,7 +21,7 @@ from ..egress import EgressDenied, egress_status
 from ..media.schema import CHAT_NOTICE, EXPLICIT_LABEL, disclaimer
 from ..media.tts import SpeechSynthesizer
 from ..persona.store import PersonaStore
-from . import media, persona
+from . import identity, media, persona
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 
@@ -302,6 +302,7 @@ def create_app(
 
     persona.register(app, settings, backends, jobs, persona.read_uploads)
     media.register(app, settings, synthesizer_factory)
+    identity.register(app, settings)
 
     # ------------------------------------------------------------ front end
 

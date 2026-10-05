@@ -9,6 +9,7 @@ import email.policy
 import json
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -23,7 +24,7 @@ from ..persona.chat import PersonaChat, index_persona
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
-from ..persona.profile import build_profile, consented_facets
+from ..persona.profile import build_profile, consented_facets, profile_stale, source_memories
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial, submit_retest
 from ..persona.schema import SOURCE_KIND_LABELS, ChatTurn, ReviewStatus, SourceKind, evidence_class
 from ..persona.sources import parse_text
@@ -98,6 +99,11 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         "facets_merged": report.facets_merged,
         "items": report.items,
         "failures": report.failures,
+        "facet_diffs": {fid: asdict(diff) for fid, diff in report.facet_diffs.items()},
+        "items_added": report.items_added,
+        "items_changed": report.items_changed,
+        "items_removed": report.items_removed,
+        "facets_changed": report.facets_changed,
     }
 
 
@@ -134,7 +140,17 @@ def register(
     @app.get("/api/persona/sources")
     def list_sources() -> list[dict[str, Any]]:
         with open_store() as store:
-            return [source_view(s) for s in store.list_sources()]
+            memories = source_memories(store)
+            return [{**source_view(s), **asdict(memories[s.source_id])} for s in store.list_sources()]
+
+    @app.get("/api/persona/state")
+    def get_state() -> dict[str, Any]:
+        with open_store() as store:
+            return {
+                "stale": profile_stale(store),
+                "built_at": store.get_meta("built_at"),
+                "sources_changed_at": store.get_meta("sources_changed_at"),
+            }
 
     @app.post("/api/persona/import")
     async def import_sources(
@@ -174,7 +190,7 @@ def register(
     def start_build() -> dict[str, str]:
         llm, embedder = backends.llm(), backends.embedder()
         with open_store() as store:
-            if not store.list_sources():
+            if not store.list_sources() and not profile_stale(store):
                 raise HTTPException(400, "还没有导入资料：请先导入问卷、聊天记录、访谈或文档")
         job = jobs.submit("persona_build", "构建人格档案", lambda log: run_persona_build(settings, llm, embedder, log))
         return {"job_id": job.job_id}

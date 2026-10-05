@@ -23,9 +23,25 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   重复导入视为再次提交。保留 `Source.declined_facets`。撤回后运行 `twin persona build` 删除该细项条目，
   再由 `index_persona` 清除对应条目向量；不删除原始语料。
 - 生物特征范围在本版本永不可 `grant`（M4：不支持本人声音复刻、照片驱动形象）。
-  出境许可执行、音色接入和标识统一是后续任务，本台账尚不实施这些策略。
+  出境许可已执行；音色接入和标识统一仍是后续任务。
 - `twin identity show` 仅显示名字、别名和授权状态/时间/来源；`grant <scope>`、`revoke <scope>`
   可带 `--note`，备注不输出。
+
+## 出境许可（EgressInfo）
+
+- `config.egress_of(section)`（代码层 2）返回冻结的 `EgressInfo`：`kind`（llm/embed/tts/asr）、
+  `external`、`declared`、`host`、中文 `reason`。仅输出主机名，不含 URL 凭据、路径或查询串。
+- 四类配置及每位评委可追加 `egress = "local" | "external"`，显式声明优先；否则 hashing/silent
+  为本机，anthropic/claude_cli/cloudflare 为外部。OpenAI 兼容地址只有 localhost、127.0.0.0/8、::1
+  为本机（理由为“本机地址，未声明是否转发”），LAN 和未知地址均为外部。LLM/embed 与工厂一样
+  回退到 `OPENAI_BASE_URL`；TTS/ASR 只使用配置地址。本机转发代理必须声明 external。
+- `egress.require_egress`（代码层 9）读取 Identity 或 PersonaStore 的最新台账决定：只有 grant
+  允许外部服务，无记录、decline、revoke 均拒绝；本机不需授权。CLI 在构造 LLM、embed、每位评委
+  和回复朗读 TTS 前检查；Web 默认懒工厂同样检查，拒绝返回 403 `{"detail": "中文原因与授权命令"}`。
+  `/api/status` 增加各后端（含评委）的 `egress` 列表，包含 kind/provider/host/external/declared/granted。
+- 检查在首次构造而非应用启动；撤回对下一进程/下一次懒构造生效，已有 Web 缓存需重启，不热更新。
+  Web 注入工厂是可信测试接缝，仅绕过该工厂的检查；默认工厂和所有配置评委仍强制执行。
+  `media check` 仅用于非个人数据的合成评测句集（含自定义句集），不需出境授权。
 
 ## Transcript parsing (code layer 4)
 

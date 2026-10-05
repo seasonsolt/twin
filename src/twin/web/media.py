@@ -17,6 +17,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..config import Settings, make_synthesizer
+from ..egress import EgressDenied, require_configured_egress
 from ..media.adapters import presentable_from_payload
 from ..media.render import EXPORT_CSP, export_html, render_audio
 from ..media.schema import EXPLICIT_LABEL, AudioManifest, MediaScript
@@ -87,6 +88,8 @@ def register(
         nonlocal synthesizer
         with lock:
             if synthesizer is None:
+                if synthesizer_factory is None:
+                    require_configured_egress(settings, settings.tts)
                 try:
                     synthesizer = factory()
                 except (ValueError, OSError):
@@ -102,8 +105,15 @@ def register(
     def capabilities() -> dict[str, Any]:
         try:
             synth = speech()
-        except MediaError:
-            return {"available": False, "backend": None, "label": EXPLICIT_LABEL, "languages": [], "audio_formats": []}
+        except (MediaError, EgressDenied) as exc:
+            return {
+                "available": False,
+                "backend": None,
+                "label": EXPLICIT_LABEL,
+                "languages": [],
+                "audio_formats": [],
+                "error": str(exc) if isinstance(exc, EgressDenied) else speech_error(exc)[1],
+            }
         return {
             "available": synth.name != "silent",
             "backend": synth.name,
@@ -133,6 +143,8 @@ def register(
             requests.chmod(0o700)
             rendered = render_audio(script, synth, cache_dir)
             manifest = AudioManifest.model_validate_json((cache_dir / rendered.manifest_file).read_bytes())
+        except EgressDenied:
+            raise
         except OSError:
             raise MediaUnavailable("无法保存语音文件") from None
         return {

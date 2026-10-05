@@ -112,6 +112,8 @@ function renderStatus() {
       ? chip("模型", "配置有误，推演、构建和评测暂不可用", String(backendError), true)
       : chip("模型", [llm.provider, llm.model].filter(Boolean).join(" · ") || "未配置"),
   );
+  const external = (status.egress || []).filter((entry) => entry.external);
+  if (external.length) bar.append(h("span", { class: "status-error" }, `出境（外部服务）：${external.map((entry) => `${entry.kind}/${entry.provider} ${entry.host || "未知主机"}（${entry.granted ? "已授权" : "未授权"}）`).join("；")}`));
 }
 
 function boot() {

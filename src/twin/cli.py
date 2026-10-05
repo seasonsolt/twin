@@ -24,6 +24,7 @@ import typer
 from pydantic import ValidationError
 
 from .config import Settings, check_config_rename, load_settings, make_embedder, make_llm
+from .egress import egress_status, require_configured_egress
 from .embed import Embedder, EmbedError
 from .identity import Decision, Identity
 from .llm import CallTally, LLMError
@@ -47,6 +48,8 @@ db_path = "data/twin.db"
 max_workers = 4
 
 [llm]
+# egress = "local" 或 "external"：未声明时按提供方/主机推断；外部服务需台账授权 egress:llm。
+# 本机代理若转发到境外 API，应设置 egress = "external"。
 provider = "openai_compat"
 # 请设置内网模型名及端点；未配置不会调用公网默认端点。
 # model = "your-model"
@@ -54,10 +57,28 @@ provider = "openai_compat"
 api_key_env = "TWIN_LLM_KEY"
 
 [embed]
+# egress = "local" 或 "external"：hashing 默认为本机；外部向量服务需授权 egress:embed。
+# 本机转发代理应设置 egress = "external"。
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
-# 可选 [tts] / [asr] 配置见 docs/MEDIA.md。
+# 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
+# [tts]
+# egress = "local" 或 "external"：silent 默认为本机；外部朗读服务需授权 egress:tts。
+# 本机转发代理应设置 egress = "external"。
+# provider = "silent"
+
+# [asr]
+# egress = "local" 或 "external"：非本机地址默认外部；个人数据需授权 egress:asr。
+# 本机转发代理应设置 egress = "external"；media check 只用于合成句集，不用于个人数据。
+# provider = "openai_compat"
+
+# [[judges]]
+# egress = "local" 或 "external"：每位评委也单独分类，共享 egress:llm 的台账授权。
+# 本机转发代理应设置 egress = "external"。
+# provider = "openai_compat"
+# model = "your-judge-model"
+# base_url = "http://127.0.0.1:8000/v1"
 """
 app = typer.Typer(
     name="twin",
@@ -146,6 +167,8 @@ def _require_working_calls(llm: CallTally, stage: str) -> None:
 
 
 def _llm(settings: Settings) -> CallTally:
+    with _errors():
+        require_configured_egress(settings, settings.llm)
     try:
         llm = make_llm(settings.llm)
     except Exception as e:
@@ -156,6 +179,8 @@ def _llm(settings: Settings) -> CallTally:
 
 
 def _embedder(settings: Settings) -> Embedder:
+    with _errors():
+        require_configured_egress(settings, settings.embed)
     try:
         return make_embedder(settings.embed)
     except Exception as e:
@@ -358,6 +383,15 @@ def identity_show(ctx: typer.Context) -> None:
         else:
             derived = "已授权" if scope.removeprefix("facet:") in allowed else "未授权"
             _say(f"{scope} | 未记录（按问卷推导：{derived}） | — | —")
+    _say("出境：类型 | 提供方 | 主机 | 本机/外部 | 声明 | 许可")
+    for index, row in enumerate(egress_status(settings, identity)):
+        kind = row["kind"] if index < 4 else f"llm（评委 {index - 3}）"
+        permission = "无需" if not row["external"] else ("已授权" if row["granted"] else "未授权")
+        _say(
+            f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
+            f"{'外部' if row['external'] else '本机'} | {'已声明' if row['declared'] else '推断'} | "
+            f"{permission}"
+        )
 
 
 IdentityScopeArgument = Annotated[str, typer.Argument(help="授权范围，如 facet:9.1 或 egress:llm")]
@@ -374,6 +408,8 @@ def _identity_change(ctx: typer.Context, scope: str, decision: Decision, note: s
     _say(f"{event.scope}：{'已授权' if decision is Decision.GRANT else '已撤回'}（记录 {event.seq}）")
     if event.scope.startswith("facet:"):
         _say("请运行 `twin persona build`，使细项授权变更生效。")
+    if event.scope.startswith("egress:"):
+        _say("出境许可在下一进程或下一次懒构造后端时生效；已构造的网页后端需重启，不热更新。")
 
 
 @identity_app.command("grant")
@@ -529,6 +565,10 @@ def personal_eval_command(
     cases = select_cases(load_evalset(evalset), selected)
     settings = _settings(ctx)
     _usage_output.set(out)
+    require_configured_egress(settings, settings.llm)
+    require_configured_egress(settings, settings.embed)
+    for judge in settings.judges:
+        require_configured_egress(settings, judge)
     try:
         llm = make_llm(settings.llm)
         embedder = make_embedder(settings.embed)
@@ -636,8 +676,10 @@ def media_speak_command(
 
     with _errors():
         script = _media_source(ctx, source, kind, name)
+        settings = _settings(ctx)
+        require_configured_egress(settings, settings.tts)
         try:
-            synthesizer = make_synthesizer(_settings(ctx).tts)
+            synthesizer = make_synthesizer(settings.tts)
         except RenameError as e:
             raise _fail(str(e)) from None
         except (MediaError, ValueError):
@@ -671,6 +713,7 @@ def media_check_command(
     with _errors():
         settings = _settings(ctx)
         texts = load_sentences(sentences) if sentences is not None else DEFAULT_SENTENCES
+        # Synthetic speech-evaluation sentences, not persona data: no egress grant is required.
         try:
             synthesizer = make_synthesizer(settings.tts)
             recognizer = make_recognizer(settings.asr)

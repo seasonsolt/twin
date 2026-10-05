@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import tomllib
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +41,7 @@ class LLMSettings(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
     timeout: float = Field(default=600.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
+    egress: Literal["local", "external"] | None = None
 
 
 class EmbedSettings(BaseModel):
@@ -48,6 +53,7 @@ class EmbedSettings(BaseModel):
     batch_size: int = Field(default=32, gt=0)
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
+    egress: Literal["local", "external"] | None = None
 
 
 class TTSSettings(BaseModel):
@@ -61,6 +67,7 @@ class TTSSettings(BaseModel):
     language: str = "zh"
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
+    egress: Literal["local", "external"] | None = None
 
 
 class ASRSettings(BaseModel):
@@ -73,6 +80,63 @@ class ASRSettings(BaseModel):
     language: str = "zh"
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
+    egress: Literal["local", "external"] | None = None
+
+
+EgressKind = Literal["llm", "embed", "tts", "asr"]
+BackendSettings = LLMSettings | EmbedSettings | TTSSettings | ASRSettings
+
+
+@dataclass(frozen=True)
+class EgressInfo:
+    kind: EgressKind
+    external: bool
+    declared: bool
+    host: str | None
+    reason: str
+
+
+def egress_of(section: BackendSettings) -> EgressInfo:
+    """Conservative endpoint classification; never expose URL userinfo, paths or queries."""
+    kind: EgressKind
+    if isinstance(section, LLMSettings):
+        kind = "llm"
+    elif isinstance(section, EmbedSettings):
+        kind = "embed"
+    elif isinstance(section, TTSSettings):
+        kind = "tts"
+    else:
+        kind = "asr"
+    endpoint = section.base_url
+    if section.provider == "openai_compat" and kind in {"llm", "embed"}:
+        endpoint = endpoint or os.environ.get("OPENAI_BASE_URL")
+    if section.provider == "anthropic":
+        endpoint = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+    host = None
+    if endpoint:
+        try:
+            parsed = urlsplit(endpoint)
+            candidate = parsed.hostname
+            # Invalid endpoints remain unknown, not arbitrary text in errors or status.
+            if (
+                parsed.scheme in {"http", "https"}
+                and candidate
+                and not any(ch.isspace() or ch in "@/?#\\" for ch in candidate)
+            ):
+                host = candidate
+        except ValueError:
+            pass
+    if section.egress is not None:
+        return EgressInfo(kind, section.egress == "external", True, host, "配置显式声明")
+    if section.provider in {"hashing", "silent"}:
+        return EgressInfo(kind, False, False, host, "本机后端")
+    if section.provider in {"anthropic", "claude_cli", "cloudflare"}:
+        return EgressInfo(kind, True, False, host, "外部服务")
+    loopback = host == "localhost"
+    if host:
+        with suppress(ValueError):
+            loopback = ipaddress.ip_address(host).is_loopback
+    return EgressInfo(kind, not loopback, False, host, "本机地址，未声明是否转发" if loopback else "非本机或未知地址")
 
 
 class BudgetSettings(BaseModel):

@@ -44,6 +44,7 @@ LAYERS: dict[str, int] = {
     "evals.provenance": 8,
     "evals.personal": 8,
     "cli": 9,
+    "egress": 9,
     "web": 9,
     "web.app": 9,
     "web.backends": 9,

@@ -5,6 +5,8 @@ db_path = "data/twin.db"
 max_workers = 4
 
 [llm]
+# egress = "local" 或 "external"：未声明时按提供方/主机推断；外部服务需台账授权 egress:llm。
+# 本机代理若转发到境外 API，应设置 egress = "external"。
 provider = "openai_compat"
 # 请设置内网模型名及端点；未配置不会调用公网默认端点。
 # model = "your-model"
@@ -12,7 +14,25 @@ provider = "openai_compat"
 api_key_env = "TWIN_LLM_KEY"
 
 [embed]
+# egress = "local" 或 "external"：hashing 默认为本机；外部向量服务需授权 egress:embed。
+# 本机转发代理应设置 egress = "external"。
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
-# 可选 [tts] / [asr] 配置见 docs/MEDIA.md。
+# 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
+# [tts]
+# egress = "local" 或 "external"：silent 默认为本机；外部朗读服务需授权 egress:tts。
+# 本机转发代理应设置 egress = "external"。
+# provider = "silent"
+
+# [asr]
+# egress = "local" 或 "external"：非本机地址默认外部；个人数据需授权 egress:asr。
+# 本机转发代理应设置 egress = "external"；media check 只用于合成句集，不用于个人数据。
+# provider = "openai_compat"
+
+# [[judges]]
+# egress = "local" 或 "external"：每位评委也单独分类，共享 egress:llm 的台账授权。
+# 本机转发代理应设置 egress = "external"。
+# provider = "openai_compat"
+# model = "your-judge-model"
+# base_url = "http://127.0.0.1:8000/v1"

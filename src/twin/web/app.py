@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..config import Settings
+from ..egress import EgressDenied, egress_status
 from ..media.tts import SpeechSynthesizer
 from ..persona.store import PersonaStore
 from . import media, persona
@@ -227,6 +228,9 @@ def create_app(
     """The web UI application. ``llm_factory`` / ``embedder_factory`` default to ``config.make_llm(settings.llm)``
     and ``config.make_embedder(settings.embed)``; both are called lazily, once. ``synthesizer_factory`` defaults to
     ``config.make_synthesizer(settings.tts)`` and is also lazy, so speech failures do not affect other routes.
+    Injected factories are trusted test seams and bypass egress checks for their own backend only; configured
+    judges always require permission. Default factories check the ledger on first construction, not startup.
+    Revocation requires a new lazy construction / process (restart the web server for cached backends).
     ``allowed_hosts`` adds host names (besides localhost, 127.0.0.1 and [::1]) the server answers to, for
     ``twin ui --host <address>``."""
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
@@ -247,6 +251,10 @@ def create_app(
             detail = _HTTP_DETAILS[exc.status_code]
         return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=exc.headers)
 
+    @app.exception_handler(EgressDenied)
+    async def egress_denied(request: Request, exc: EgressDenied) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=403)
+
     @app.exception_handler(BackendUnavailable)
     async def backend_unavailable(request: Request, exc: BackendUnavailable) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=503)
@@ -263,11 +271,14 @@ def create_app(
     def get_status() -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
             counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
+            egress = egress_status(settings, store)
+        description = backends.describe()
         return {
             "target_name": settings.target_name,
             "counts": counts,
-            "llm": {"provider": settings.llm.provider, "model": settings.llm.model, **backends.describe()["llm"]},
-            "embed": {"provider": settings.embed.provider, **backends.describe()["embed"]},
+            "llm": {"provider": settings.llm.provider, "model": settings.llm.model, **description["llm"]},
+            "embed": {"provider": settings.embed.provider, **description["embed"]},
+            "egress": egress,
         }
 
     @app.get("/api/jobs")

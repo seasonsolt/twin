@@ -1,7 +1,7 @@
 [
   {"id": "f1", "category": "fact", "question": "虚构的林沐喜欢什么茶？", "answer": "桂花茶", "evidence": "林沐说：我喜欢桂花茶。", "source": "虚构笔记甲", "doc_id": "doc-a"},
   {"id": "f2", "category": "fact", "question": "虚构的林沐周末做什么？", "answer": "折纸", "evidence": ["林沐说：周末折纸。"], "source": "虚构笔记甲", "doc_id": "doc-a"},
-  {"id": "f3", "category": "fact", "question": "虚构的林沐住在哪座虚构城？", "answer": "云朵城", "evidence": "林沐住在云朵城。", "source": "虚构笔记乙", "doc_id": ""},
+  {"id": "f3", "category": "fact", "question": "虚构的林沐住在哪座虚构城？", "answer": "云朵城", "evidence": "林沐住在云朵城。", "source": "虚构笔记乙", "doc_id": "虚构笔记乙"},
   {"id": "u1", "category": "unanswerable", "question": "林沐没记录过的鞋码是什么？"},
   {"id": "s1", "category": "style", "question": "林沐怎么看待慢慢学习？"},
   {"id": "g1", "category": "general", "question": "解释一下折纸的对称性。"},

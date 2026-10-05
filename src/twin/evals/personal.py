@@ -107,13 +107,13 @@ def load_evalset(path: Path) -> tuple[Case, ...]:
         for field in required:
             if field not in item:
                 raise _invalid(item_id, field, "缺失")
-        for field in allowed - {"id", "category", "evidence"}:
-            # An empty doc_id falls back to source; all other text must be nonempty.
-            if (
-                field in item
-                and (not isinstance(item[field], str) or not item[field].strip())
-                and (field != "doc_id" or item[field] != "")
-            ):
+        if "doc_id" in item:
+            doc_id = item["doc_id"]
+            if not ((type(doc_id) is int and doc_id >= 0) or (isinstance(doc_id, str) and doc_id.strip())):
+                raise _invalid(item_id, "doc_id", "必须是非负整数或非空字符串")
+            item["doc_id"] = str(doc_id)
+        for field in allowed - {"id", "category", "evidence", "doc_id"}:
+            if field in item and (not isinstance(item[field], str) or not item[field].strip()):
                 raise _invalid(item_id, field, "必须是非空字符串")
         if "evidence" in item:
             ev = item["evidence"]
@@ -122,7 +122,7 @@ def load_evalset(path: Path) -> tuple[Case, ...]:
                 or (isinstance(ev, list) and ev and all(isinstance(v, str) and v.strip() for v in ev))
             ):
                 raise _invalid(item_id, "evidence", "必须是非空文本或文本列表")
-        group: str = (item.get("doc_id") or item["source"]) if category == "fact" else item_id
+        group: str = item["doc_id"] if category == "fact" else item_id
         payload = QuestionInput(id=item_id, category=category, prompt=item["question"])
         expected = QuestionExpected(
             answer=item.get("answer"),

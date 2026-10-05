@@ -114,6 +114,27 @@ def test_loader_answer_free_grouping_and_updates() -> None:
         select_cases(cases, ["bad"])
 
 
+@pytest.mark.parametrize("doc_id", [0, 42, "doc-a", "42"])
+def test_loader_normalizes_doc_id(tmp_path: Path, doc_id: int | str) -> None:
+    item = json.loads((FIXTURE / "evalset.json").read_text())[0]
+    item["doc_id"] = doc_id
+    path = tmp_path / "bank.json"
+    path.write_text(json.dumps([item]))
+    (case,) = load_evalset(path)
+    assert case.group_id == str(doc_id)
+    assert case.expected.source_group == str(doc_id)
+
+
+@pytest.mark.parametrize("doc_id", [True, False, 0.0, 1.5, -1, "", "   ", None, [], {}])
+def test_loader_rejects_invalid_doc_id(tmp_path: Path, doc_id: Any) -> None:
+    item = json.loads((FIXTURE / "evalset.json").read_text())[0]
+    item["doc_id"] = doc_id
+    path = tmp_path / "bank.json"
+    path.write_text(json.dumps([item]))
+    with pytest.raises(ValueError, match=r"f1.*字段 doc_id 必须是非负整数或非空字符串"):
+        load_evalset(path)
+
+
 @pytest.mark.parametrize(
     ("mutation", "field"),
     [

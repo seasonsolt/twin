@@ -1,1 +1,2 @@
 tests/golden/** -text
+src/twin/web/static/next/** linguist-generated=true -diff

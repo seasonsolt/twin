@@ -71,4 +71,96 @@
 - 导出独立 HTML 不含可执行脚本或外部资源；文本转义，JSON 元数据安全转义，含 AI 标识与来源指纹。指纹不是签名，也不证明客户端提交回答的真实性。
 - 语音不可用/拒绝/超时/过长对应 503/502/504/413，固定中文提示不回显服务消息。声音先播可听标识，以 ended 驱动句子推进；暂停保留位置，关闭释放音频，失败退回文字。
 
-前端使用 ES 模块，无构建步骤；所有服务端文本通过 textContent 呈现，支持窄屏及系统深浅主题。
+旧前端使用 ES 模块，无构建步骤；所有服务端文本通过 textContent 呈现，支持窄屏及系统深浅主题。
+
+## 新前端（迁移中）
+
+访问 `/next/`（`/next` 同样返回页面），默认 `#/chat`；`/next/#/gallery` 是交互组件与动效画廊。`/` 的旧 UI 保持不变。
+
+### 技术栈与目录
+
+Node 22、pnpm 10.32.1、React 19、严格 TypeScript、Vite、Tailwind CSS v4（`@tailwindcss/vite`）、`motion/react`、Radix Dialog/Tooltip/Tabs/Switch、lucide-react、zustand、clsx/tailwind-merge、react-router HashRouter。版本精确锁定在 `frontend/package.json`，传递依赖锁定在 `frontend/pnpm-lock.yaml`。开发使用 Vitest、Testing Library/user-event、jsdom、ESLint/typescript-eslint/react-hooks、Prettier。
+
+```text
+frontend/
+├── src/
+│   ├── design/       # tokens.css、motion.ts
+│   ├── components/   # ui/、motion/、layout/
+│   ├── lib/          # 同源 API、格式化与样式合并
+│   ├── stores/       # 状态与可见性轮询
+│   ├── pages/        # 占位页、组件画廊
+│   ├── test/         # setup 与行为/对比度测试
+│   └── main.tsx
+├── package.json / pnpm-lock.yaml
+├── vite.config.ts / tsconfig.json
+├── eslint.config.js / .prettierrc.json
+└── index.html
+src/twin/web/static/next/
+├── index.html
+└── assets/           # 带哈希的 JS/CSS，构建产物随代码纳入版本控制
+```
+
+```sh
+pnpm -C frontend install --frozen-lockfile
+pnpm -C frontend dev       # /next/；API 代理到本地 8765，另行启动 twin ui
+pnpm -C frontend typecheck
+pnpm -C frontend lint      # ESLint + Prettier
+pnpm -C frontend test
+pnpm -C frontend build
+uv run ruff check src tests deploy
+uv run ruff format --check src tests deploy
+uv run mypy
+uv run pytest -q
+```
+
+Vite base 为 `/next/`，输出到 `src/twin/web/static/next`，清空旧输出、无 sourcemap、关闭 modulePreload polyfill。后端仅新增 `/next`、`/next/` 和 `/next/assets/`，沿用全部安全头与 Host/CSRF 保护；缺少构建时显示中文提示并链接旧界面。Python 包运行不依赖 Node。CI 单独构建并对产物执行 `git diff --exit-code src/twin/web/static/next`，提交代码时需一并更新产物。CI 新增 actions 使用已通过 GitHub release 和 tag 核实的 SHA。
+
+### 设计令牌
+
+原创样式仅借鉴温暖留白、白色卡片、单一蓝色强调、轻边框与模糊侧栏，不复制参考站点代码、字体或资产。全部字体为系统栈，无运行时外部资源。
+
+| CSS 变量 | 浅色 | 深色（prefers-color-scheme） |
+| --- | --- | --- |
+| canvas | `#FBF8F4` | `#141311` |
+| surface / surface-raised | `#FFFFFF` / `#FFFFFF` | `#201E1B` / `#2A2723` |
+| border | `#E5E0D9` | `#403B34` |
+| text-primary | `#292622` | `#F5F0E9` |
+| text-secondary | `#625C54` | `#C4BCB1` |
+| text-tertiary | `#756E65` | `#ABA195` |
+| accent / hover / pressed | `#2563EB` / `#1D4ED8` / `#1E40AF` | `#8CB8FF` / `#A9CAFF` / `#BCD6FF` |
+| on-accent | `#FFFFFF` | `#141311` |
+| success / warning | `#187047` / `#8A570B` | `#7CDAA7` / `#ECC079` |
+| danger / info | `#B72E38` / `#2463AE` | `#FF9DA3` / `#8CB8FF` |
+| sidebar | white / 60% | `#201E1B` / 65% |
+
+状态色只表达状态。文字（含次级/三级）、强调色及状态色在 canvas、surface、surface-raised 上以单元测试检查 WCAG AA ≥ 4.5:1。圆角为 8/12/16/20px/full；字号为 12/13/14/16/20/24/32px，正文 14px、行高 1.75，标题紧字距。间距使用 Tailwind scale。阴影 elevation 1–3：浅色 `0 2px 6px / .04`、`0 6px 20px / .08`、`0 16px 48px / .12`（色 `#292622`），深色黑色透明度 .16/.24/.32；卡片 `4px 4px 0 rgb(0 0 0 / .03)`，深色透明度 .2。变量通过 Tailwind v4 `@theme inline` 接入。
+
+### 动效与可访问性
+
+| 预设 | stiffness | damping | 用途 |
+| --- | --- | --- | --- |
+| snappy | 520 | 38 | 按钮轻触、开关 |
+| gentle | 260 | 30 | 列表进入、页面、对话框、进度 |
+| bouncy | 380 | 18 | 仅轻松的点缀反馈 |
+| layout | 420 | 40 | 重排、侧栏宽度、标签/导航指示器、通知堆栈 |
+
+退出时长 quick/page/dialog 为 120/160/180ms；默认淡入淡出 150ms。`useMotionPreset()` 感知 `useReducedMotion()`：开启减少动态效果时只用淡入淡出，关闭位移、缩放、拖动、共享布局动画与 shimmer；进度和开关直接更新位置并淡入。不把弹簧仅改成快速 tween 来“减少”运动。拖动有惯性与弹性边界，距离 > 100px 或距离 > 10px 且速度 > 600px/s 才关闭，未达阈值回弹；始终提供键盘可用的关闭入口。
+
+UI：Button（4 变体/3 尺寸/loading）、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Badge、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider/useConfirm、Toast/toast、Tooltip。动效：Pressable、Reveal/Stagger/StaggerItem、PageTransition、LayoutScope/LayoutItem（隔离 LayoutGroup）、DragDismiss。每项在 gallery 有最小可交互示例。确认使用 `const confirm = useConfirm(); await confirm({title, body, confirmLabel, tone})`，返回 boolean，Escape/取消/关闭返回 false；卸载会结清待处理请求。Radix 提供焦点约束、键盘操作与 ARIA；通知包含 polite live region。
+
+AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pill；<768px 从顶栏打开弹簧底部抽屉，可下拖关闭。顶栏展示姓名、模型、外部 egress 主机及授权状态。`stores/status.ts` 可见时立即获取 `/api/status` 并每 10 秒刷新，隐藏时暂停并取消请求，恢复可见后立即刷新，卸载清理计时器与监听。
+
+所有 AI 标签及免责声明必须来自 `/api/status.labels`（explicit/disclaimer/chat_notice），不能在前端复制或兜底硬编码；未加载显示 Skeleton/留空。API 客户端仅接受本地 `/api/`，JSON/form 编码，所有非 GET 请求带 `X-Twin: 1`，错误为带 status/detail 的 `ApiError`，保留中文 detail，其他错误映射为中文。
+
+### 迁移状态
+
+| 新路由 | 状态 | 旧界面 |
+| --- | --- | --- |
+| `#/chat` | F0 占位 | `/#/chat` |
+| `#/questionnaire` | F0 占位 | `/#/questionnaire` |
+| `#/persona` | F0 占位 | `/#/persona` |
+| `#/sources` | F0 占位 | `/#/sources` |
+| `#/identity` | F0 占位 | `/#/identity` |
+| `#/gallery` | F0 组件与动效示例已实现 | 不适用 |
+
+测试覆盖 API CSRF/编码/错误、确认 true/false/关闭/Escape、IME 安全、Tabs、Switch/loading、通知、减少动态效果与双色对比度；`tests/test_web_next.py` 检查页面/资源 MIME、安全头、无内联脚本或外部资源、缺少构建的回退。

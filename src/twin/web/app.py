@@ -306,6 +306,23 @@ def create_app(
 
     # ------------------------------------------------------------ front end
 
+    next_dir = STATIC_DIR / "next"
+
+    @app.get("/next", response_class=HTMLResponse)
+    @app.get("/next/", response_class=HTMLResponse)
+    def next_page() -> HTMLResponse:
+        index = next_dir / "index.html"
+        if index.is_file():
+            return HTMLResponse(index.read_text(encoding="utf-8"))
+        return HTMLResponse(
+            '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>twin 新前端</title>'
+            "<h1>新前端正在迁移</h1><p>没有找到新前端文件，请先构建 frontend。</p>"
+            '<p><a href="/">打开旧界面</a></p></html>'
+        )
+
+    if (next_dir / "assets").is_dir():
+        app.mount("/next/assets", StaticFiles(directory=next_dir / "assets"), name="next-assets")
+
     if (STATIC_DIR / "index.html").is_file():
         files = StaticFiles(directory=STATIC_DIR, html=True)
         app.mount("/static", files, name="static-assets")

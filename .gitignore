@@ -16,3 +16,5 @@ eval-*/
 
 # Local secrets (API keys); never commit
 .env
+
+frontend/node_modules/

@@ -57,6 +57,7 @@ def register(app: FastAPI, settings: Settings) -> None:
             "name": identity.name,
             "aliases": identity.aliases,
             "voice": identity.voice,
+            "avatar": settings.avatar.preset,
             "consents": consents,
             "egress": egress_status(settings, identity),
             "biometric": {"voice_clone": False, "face": False, "reason": _BIOMETRIC_ERROR},

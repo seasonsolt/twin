@@ -1748,6 +1748,63 @@ input[type="date"] {
 
 }
 
+.playback-stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.playback-avatar-slot {
+  flex: 0 0 auto;
+}
+
+.playback-avatar-slot:empty {
+  display: none;
+}
+
+.playback-avatar {
+  position: sticky;
+  top: 5rem;
+  width: 200px;
+}
+
+.playback-avatar svg {
+  display: block;
+  width: 100%;
+}
+
+.avatar-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0.4rem;
+  border-radius: 0 0 0.75rem 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.playback-script {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .playback-stage {
+    flex-direction: column;
+  }
+  .playback-avatar-slot {
+    align-self: center;
+  }
+  .playback-avatar {
+    width: 150px;
+  }
+}
+
 .playback-current,
 .playback-transcript .is-current {
 

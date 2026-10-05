@@ -28,6 +28,7 @@
 | `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
 | `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（开头提示、按句切分、弃权只出提示） |
+| `media.lipsync` | 与 L4 同级（7） | 纯函数：时间戳、PCM 能量或合成节奏到版本化口型轨 |
 | `media.render` | 与 L4 同级（7） | 按脚本调用 `SpeechSynthesizer`、拼接音频、写入标识、生成 `LipSyncTrack`、缓存与导出 |
 | `web.media` / `cli` | L5 接入（9） | API、回放面板、`twin media ...` 命令 |
 
@@ -39,7 +40,7 @@
 | --- | --- | --- | --- | --- |
 | B1 运行时 → 媒体 | `ChatReply` | `PresentableAnswer`：口语文本、弃权与原因、置信度、截至日期、答案级引用、来源指纹 | `media.adapters`，每种运行时输出一个函数 | `media.script` 只认 `PresentableAnswer` |
 | B2 媒体 → 语音后端 | Cloudflare、自托管服务 | `SpeechRequest`（文本、音色、格式）/ `SpeechResult`（音频、格式、采样率、时长、可选的逐字时间戳） | `media.tts` 里每个后端一个类，实现 `SpeechSynthesizer` | `media.render` 只认协议和契约 |
-| B3 语音 → 形象 | `SpeechResult` | `LipSyncTrack`（时间到口型开合，版本化）、`AvatarSpec`（插画图层与口型帧） | `media.render` 生成口型轨：有时间戳就用时间戳，没有就用音频能量包络 | 前端只认 `AvatarSpec` 和 `LipSyncTrack`，不知道是哪个语音后端 |
+| B3 语音 → 形象 | `SpeechResult` | `LipSyncTrack`（时间到口型开合，版本化）、`AvatarSpec`（插画图层与口型帧） | `media.render` 经 `media.lipsync` 生成口型轨：优先逐字时间戳（timings），其次 WAV PCM 能量（energy），否则合成节奏（pattern） | 前端只认 `AvatarSpec` 和 `LipSyncTrack`，不知道是哪个语音后端 |
 | B4 媒体 → 接入层 | `media.render` 的产出 | `MediaScript`、`MediaManifest`、音频与口型轨文件 | `web.media`、`cli` 只做序列化和权限 | 浏览器和命令行只收契约 JSON 和文件 |
 | B5 媒体 → 语音识别（仅用于评测） | Cloudflare Whisper、自托管 FunASR/SenseVoice shim | `TranscriptionRequest`（音频、格式、语言、可选提示）/ `Transcription`（文本、语言、时长、extras），均带版本 | `media.asr` 每个后端一个类，实现 `SpeechRecognizer` 并声明 `ASRCapabilities` | `media.check` 只认协议和契约，不读取厂商 extras |
 
@@ -60,6 +61,14 @@ M1d：`--repeats` 默认 1，必须至少为 1；每句每次重复都有独立�
 总 `edits`、`reference_chars`、`cer` 及计时覆盖所有重复；`repeat_cers` 按相同重复序号组成整轮、以总编辑距离 / 总参考字数（空参考总分母取一）计算。总体 `mean_cer` 是各整轮 CER 的算术平均，`worst_repeat_cer` 是最差整轮 CER，`worst_sentence_repeat_cer` 另报所有单句重复中的最大 CER；总体平均仍按参考长度加权，不是逐句 CER 的简单平均。`traditional_sentence_count` 为任一次重复含疑似繁体的句子数，不重复计句。报告 Markdown 展示每次识别，不把多次识别拼成一条假设。
 
 M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/README.md`。OpenAI 适配器将 `X-Speech-Warning` 脱敏保存到 `SpeechResult.extras['warning']`，并将已知的 `possibly-truncated` 提升到追加的通用 `SpeechResult.warnings` 契约字段（默认空列表）；渲染层不读取 extras，只将通用警告写到 `AudioPart.warnings`（默认空列表，旧清单仍可读）。缓存不保存 extras，但保存通用警告。报告 v3 追加各次、逐句及总 `warning_parts`，计携带 `possibly-truncated` 的音频分片数；逐句与总计覆盖所有重复，区别于 ASR 长度判断的 `incomplete_repeats`，不把服务内部尝试计为独立分片。
+
+### B3 口型与风格化形象（M2）
+
+`SpeechResult` 只在展示层转换：`LipSyncTrack` v1 默认 `fps=25`，`levels` 每帧为 0–3（闭嘴到大开口），长度不超过 `fps × 600`，更长音频仅生成前 600 秒。`source` 为 timings / energy / pattern；时间戳对应各音频分片的朗读文本，词间闭嘴、词内按字符位置交替 2/3。WAV 能量支持 8/16-bit PCM 单/双声道，以每帧全部声道样本的 RMS、三帧移动平均、片内第 95 百分位为基准，按严格大于 10% / 35% / 70% 分成四档；纯静音全零，稀疏非静音导致基准为零时退回最大 RMS。MP3 或不支持/损坏的 WAV 使用明确合成的 pattern；未知时长默认 1 秒，不猜测音素。
+
+`AvatarSpec` v1 只有预置 ID、同源常驻标识、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 仅接受 default / ink / dawn；不支持照片或视频输入（M4 门槛）。浏览器以 DOM 构造内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
+
+回放以各分片的 `audio.currentTime` 驱动口型；暂停、停止、纯文字播放时闭嘴，关闭时释放动画与眨眼计时。正常情况下每 3–6 秒眨眼；减少动态效果时不眨眼，口型限于 0/1，保留正在说话的提示。弃权仅呈现提示，不生成讲述内容。
 
 ### 3.1 朗读文本规范化（M1c-tn / M1d v3）
 
@@ -96,7 +105,7 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 | --- | --- | --- |
 | M0 展示内核（不用模型，已完成） | `media.schema`、`media.script`；网页"回放"视图：逐句显示 `reply`，同步高亮对应引用和原话，常驻显式标识；导出带隐式标识的独立 HTML | 弃权回答不产生讲述段；每句的引用都能在原回答中找到；标识在所有视图和导出物中存在；分层测试通过；不依赖任何模型或网络 |
 | M1 语音（已完成，含 M1b–M1d：自托管服务、朗读规范化、回听评测、确定性与截断防护） | `media.tts` 协议与适配器；预置音色；开头语音提示；音频元数据标识；缓存 | 用语音识别回听（Workers AI whisper 或本地 ASR）计算字错率；首句延迟；元数据标识可读出；中文 `melotts` 的效果先实测再决定是否作为默认 |
-| M2 形象 | 风格化 2D 形象：浏览器端 Canvas/SVG，口型由音频能量或音素时间戳驱动；不用照片 | 无真人照片或视频输入；角标标识常驻；低端机也能流畅播放 |
+| M2 形象（已完成（浏览器端）） | 风格化 2D 形象：浏览器端 Canvas/SVG，口型由音频能量或音素时间戳驱动；不用照片 | 无真人照片或视频输入；角标标识常驻；低端机也能流畅播放 |
 | M3 片段导出 | 对话片段导出为 mp4：形象、字幕、引用卡片和标识，用 ffmpeg 合成，元数据写入隐式标识 | 导出物能追溯到来源回答；标识无法通过裁剪画面去掉（角标加片头片尾） |
 | M4 真人声音与形象（门槛） | 声音复刻、真人形象驱动 | 暂不开发。进入前需要：本人单独书面同意、模型资产隔离与审计、一键熔断、对外使用的审批流程 |
 

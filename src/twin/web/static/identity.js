@@ -72,6 +72,7 @@ export async function identityPage({ root, scope }) {
           h("p", null, `名字：${data.name}`),
           h("p", null, `别名：${data.aliases.join("、") || "—"}`),
           h("p", null, `音色：${data.voice || "—"}（预置音色）`),
+          h("p", null, `形象：${data.avatar || "—"}（风格化插画，不使用照片）`),
         ),
         h("section", { class: "card" }, h("h2", null, "细项授权"),
           h("p", { class: "muted" }, "未记录的细项沿用问卷推导；变更后需要重建人格档案。时间为 UTC。"),

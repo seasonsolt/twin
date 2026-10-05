@@ -19,6 +19,8 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   包含 `grant|revoke|decline`、UTC 时间、来源 `questionnaire|cli|web` 和可选备注，删除资料不删除授权历史。
 - `Identity.voice: str | None = None` 是追加的预置音色 ID，旧 JSON 缺失时为 `None`；
   `Identity.from_parts(..., voice=...)` 可从配置填入，不构造语音后端。
+- `Identity.avatar: str | None = None` 追加风格化预置 ID，旧 JSON 默认 `None`；
+  `Identity.from_parts(..., avatar=...)` 可从配置填入，CLI 与 `/api/identity.avatar` 显示配置预置，不涉及真人资产。
 - `Identity.from_parts` 按 `seq` 折叠，每个范围以最新决定为准，只有 `grant` 算授权。
   gated facet 无台账事件时保持旧问卷推导（回答且未拒绝）；非 gated facet 始终允许。
 - 问卷提交与文件导入在保存来源的同一事务中追加已回答细项的 `grant`、跳过细项的 `decline`；
@@ -215,6 +217,24 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   HTML rendering and `EXPORT_CSP` live in `media.render` (layer 7), shared by CLI and HTTP; `export_html` receives
   an explicit creation clock for deterministic tests. `web.media` (layer 9) only parses HTTP, invokes adapters,
   scripts and rendering, and serializes responses. HTML has no executable JavaScript or resources.
+
+## Avatar and lip sync (M2)
+
+- `LipSyncTrack` v1 is frozen and forbids extras: `fps: int = 25` (positive), `levels: list[int]`
+  (strict integers 0–3, at most `fps × 600`), and `source: Literal["timings", "energy", "pattern"]`.
+  `media.lipsync` (layer 7) prioritizes timings, then sniffed WAV energy, then synthetic rhythm;
+  `render_audio` attaches the track without reading backend extras. Track time is local to each file.
+- `AvatarSpec` v1 is frozen and forbids extras: `avatar_id`, `label` (the exact same Literal and default
+  `EXPLICIT_LABEL` as MediaScript), `palette` (exactly skin/hair/outfit/background/accent, six-digit hex),
+  `mouth_states: Literal[4] = 4`, `stylized: Literal[True] = True`. No URL, path or image fields exist.
+  `AVATAR_PRESETS` contains three invented flat palettes: default, ink and dawn.
+- `AudioPart.lipsync: LipSyncTrack | None = None` is append-only; old manifests load with null tracks
+  and display an idle avatar. HTTP audio segments carry the same nullable track.
+- `Settings.avatar` defaults to `AvatarSettings(preset="default")`; unknown presets produce a Chinese
+  preset list and photo/video prohibition (M4). Capabilities always include the selected `AvatarSpec`,
+  even when speech is unavailable. SVG uses DOM calls, a permanent `spec.label` badge and no asset inputs.
+  Playback samples the current part by audio time; pause/stop/text-only closes the mouth, close releases
+  rAF and blink timers. Reduced motion disables blinking and limits openness to 0/1.
 
 ## Speech access (M1)
 

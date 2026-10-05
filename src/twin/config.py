@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from .embed import Embedder, HashingEmbedder, OpenAICompatEmbedder, embedder_fingerprint
 from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, OpenAICompatLLM
 from .media.asr import CloudflareWhisper, OpenAICompatTranscription, SpeechRecognizer
-from .media.schema import VoiceSpec
+from .media.schema import AVATAR_PRESETS, VoiceSpec
 from .media.tts import CloudflareMeloTTS, OpenAICompatSpeech, SilentSynthesizer, SpeechSynthesizer
 from .usage import Price
 from .util import RenameError, fingerprint, key_from_env
@@ -77,6 +77,17 @@ class TTSSettings(BaseModel):
             raise ValueError(
                 "仅支持预置音色 ID（1–64 位字母、数字、下划线、点或连字符）；本版本禁止声音复刻（M4 门槛）"
             )
+        return value
+
+
+class AvatarSettings(BaseModel):
+    preset: str = "default"
+
+    @field_validator("preset")
+    @classmethod
+    def stylized_preset(cls, value: str) -> str:
+        if value not in AVATAR_PRESETS:
+            raise ValueError(f"形象仅支持预置：{'、'.join(AVATAR_PRESETS)}；不支持照片或视频输入（M4 门槛）")
         return value
 
 
@@ -169,6 +180,7 @@ class Settings(BaseModel):
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
+    avatar: AvatarSettings = Field(default_factory=AvatarSettings)
 
     def is_target(self, speaker: str) -> bool:
         return speaker == self.target_name or speaker in self.target_aliases

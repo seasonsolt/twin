@@ -17,6 +17,7 @@ from html import escape
 from pathlib import Path
 
 from ..util import fingerprint, private_directory
+from .lipsync import lipsync_for
 from .schema import (
     AudioManifest,
     AudioPart,
@@ -216,6 +217,7 @@ def render_audio(script: MediaScript, synthesizer: SpeechSynthesizer, cache_dir:
                     speech_text_version=SPEECH_TEXT_VERSION,
                     spoken_text=spoken,
                     warnings=result.warnings,
+                    lipsync=lipsync_for(result),
                 )
             )
         rendered.append(AudioSegment(index=segment.index, kind=segment.kind, parts=parts))

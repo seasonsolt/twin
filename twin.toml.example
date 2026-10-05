@@ -19,6 +19,9 @@ api_key_env = "TWIN_LLM_KEY"
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
+# [avatar] # 风格化插画，不支持照片或视频输入（M4 门槛）。
+# preset = "default" # 可选 default、ink、dawn。
+
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
 # [tts]
 # egress = "local" 或 "external"：silent 默认为本机；外部朗读服务需授权 egress:tts。

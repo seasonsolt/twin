@@ -20,7 +20,7 @@ from ..config import Settings, make_synthesizer
 from ..egress import EgressDenied, require_configured_egress
 from ..media.adapters import presentable_from_payload
 from ..media.render import EXPORT_CSP, export_html, render_audio
-from ..media.schema import EXPLICIT_LABEL, AudioManifest, MediaScript
+from ..media.schema import AVATAR_PRESETS, EXPLICIT_LABEL, AudioManifest, MediaScript
 from ..media.script import script_from_presentable
 from ..media.tts import (
     MediaError,
@@ -103,11 +103,13 @@ def register(
 
     @app.get("/api/media/capabilities")
     def capabilities() -> dict[str, Any]:
+        avatar = AVATAR_PRESETS[settings.avatar.preset].model_dump(mode="json")
         try:
             synth = speech()
             declared = synth.capabilities
         except (MediaError, EgressDenied) as exc:
             return {
+                "avatar": avatar,
                 "available": False,
                 "backend": None,
                 "label": EXPLICIT_LABEL,
@@ -116,6 +118,7 @@ def register(
                 "error": str(exc) if isinstance(exc, EgressDenied) else speech_error(exc)[1],
             }
         return {
+            "avatar": avatar,
             "available": synth.name != "silent",
             "backend": synth.name,
             "label": EXPLICIT_LABEL,
@@ -156,6 +159,7 @@ def register(
                     "url": f"/api/media/audio/{part.file_name}",
                     "audio_format": part.audio_format,
                     "duration_s": part.duration_s,
+                    "lipsync": part.lipsync.model_dump(mode="json") if part.lipsync is not None else None,
                 }
                 for segment in rendered.segments
                 for part in segment.parts

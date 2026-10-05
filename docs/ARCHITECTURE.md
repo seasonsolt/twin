@@ -14,7 +14,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | --- | --- | --- | --- |
 | Identity 身份 | 这个分身是谁、哪些维度允许采集、用什么音色和形象、对外怎么标识、数据能否出境 | L0 契约，加治理（横切） | **已完成：契约、台账、出境许可、预置音色、统一标识** |
 | Memory upload 记忆上传 | 上传聊天、文档、问卷、访谈、传记、会议转写，看到"记住了什么、还缺什么" | L1 语料、L2 认知 | 已有：多来源导入、化名处理、人格档案、细项完成度、审核 |
-| Service 服务 | 对话；听它说；以后看它讲、通过 API 调用 | L3 运行时、L4 展示、L5 接入 | 已有：对话、逐句回放、朗读；未做：形象、视频片段、API |
+| Service 服务 | 对话；听它说；以后看它讲、通过 API 调用 | L3 运行时、L4 展示、L5 接入 | 已有：对话、逐句回放、朗读、形象；未做：视频片段、API |
 
 服务的"内容"只来自 L3 运行时；声音、形象、视频是"呈现通道"，只能呈现已经有依据的回答，不能生成新内容。
 
@@ -28,7 +28,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.transcripts`、`persona.questionnaire` |
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |
-| L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.render` |
+| L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render` |
 | L5 接入（9） | 命令行、网页 | `cli`、`web.*` |
 | 横切：评测（8） | 执行框架、评委、统计、来源记录、回听评测 | `evals.harness`、`evals.provenance`、`evals.personal`、`media.check` |
 | 横切：治理 | 授权、标识、隐私、数据出境 | 规则见第 4 节；身份契约、授权台账、出境许可、预置音色与统一标识已完成 |

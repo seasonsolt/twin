@@ -62,6 +62,9 @@ api_key_env = "TWIN_LLM_KEY"
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
+# [avatar] # 风格化插画，不支持照片或视频输入（M4 门槛）。
+# preset = "default" # 可选 default、ink、dawn。
+
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
 # [tts]
 # egress = "local" 或 "external"：silent 默认为本机；外部朗读服务需授权 egress:tts。
@@ -366,12 +369,19 @@ def identity_show(ctx: typer.Context) -> None:
     settings = _settings(ctx)
     with _errors(), _persona_store(settings) as store:
         events = store.consent_events()
-        identity = Identity.from_parts(settings.target_name, settings.target_aliases, events, voice=settings.tts.voice)
+        identity = Identity.from_parts(
+            settings.target_name,
+            settings.target_aliases,
+            events,
+            voice=settings.tts.voice,
+            avatar=settings.avatar.preset,
+        )
         latest = {event.scope: event for event in events}
         allowed = consented_facets(store)
     _say(f"名字：{identity.name}")
     _say(f"别名：{'、'.join(identity.aliases) or '—'}")
     _say(f"音色：{identity.voice}（预置音色；声音复刻与照片驱动形象在本版本禁止）")
+    _say(f"形象：{identity.avatar}（风格化插画，不使用照片）")
     _say("范围 | 最新决定 | 时间（UTC） | 来源")
     scopes = set(latest) | {f"facet:{f.facet_id}" for f in FACETS if requires_consent(f.facet_id)}
     labels = {Decision.GRANT: "已授权", Decision.REVOKE: "已撤回", Decision.DECLINE: "未授权"}

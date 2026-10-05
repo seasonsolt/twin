@@ -28,6 +28,10 @@ async function openPlayback(answer, personaName, trigger) {
   let speaking = false;
   let partPosition = 0;
   let playbackVersion = 0;
+  let avatar = null;
+  let mouthFrame = null;
+  let currentPart = null;
+  const avatarSlot = h("div", { class: "playback-avatar-slot" });
   const label = h("p", { class: "media-label", role: "note" }, state.status?.labels?.explicit || "加载中…");
   const content = h("div", null, loading("正在准备回放…"));
   const close = h("button", { type: "button", class: "btn", onclick: () => panel.close() }, "关闭");
@@ -36,7 +40,29 @@ async function openPlayback(answer, personaName, trigger) {
   activePanel = panel;
   document.body.append(panel);
 
+  function stopMouth() {
+    if (mouthFrame !== null) cancelAnimationFrame(mouthFrame);
+    mouthFrame = null;
+    avatar?.setMouth(0);
+  }
+  function driveMouth() {
+    stopMouth();
+    function frame() {
+      mouthFrame = null;
+      if (!avatar || !playing || !speaking || !panel.open || audio.paused || audio.ended) {
+        avatar?.setMouth(0);
+        return;
+      }
+      const track = currentPart?.lipsync;
+      if (!track) return avatar.setMouth(0);
+      const level = track.levels[Math.floor(audio.currentTime * track.fps)] ?? 0;
+      avatar.setMouth(reduced.matches ? Math.min(1, level) : level);
+      mouthFrame = requestAnimationFrame(frame);
+    }
+    frame();
+  }
   function stop(reset = false) {
+    stopMouth();
     clearTimeout(timer);
     timer = null;
     playing = false;
@@ -110,6 +136,8 @@ async function openPlayback(answer, personaName, trigger) {
       audio.setAttribute("src", part.url);
       audio.currentTime = 0;
     }
+    stopMouth();
+    currentPart = part;
     const version = ++playbackVersion;
     try {
       Promise.resolve(audio.play()).catch(() => {
@@ -132,7 +160,11 @@ async function openPlayback(answer, personaName, trigger) {
       audio = document.createElement("audio");
       audio.preload = "auto";
       audio.addEventListener("error", audioFailed);
+      audio.addEventListener("playing", driveMouth);
+      audio.addEventListener("pause", stopMouth);
+      audio.addEventListener("waiting", stopMouth);
       audio.addEventListener("ended", () => {
+        stopMouth();
         if (!playing || !speaking || !panel.open) return;
         const parts = audioSegments.filter(segment => segment.index === script.segments[position].index);
         if (partPosition < parts.length - 1) partPosition += 1;
@@ -207,6 +239,7 @@ async function openPlayback(answer, personaName, trigger) {
     audio?.removeAttribute("src");
     audio?.load();
     reduced.removeEventListener("change", motionChanged);
+    avatar?.destroy();
     panel.remove();
     if (activePanel === panel) activePanel = null;
     if (trigger.isConnected) trigger.focus();
@@ -222,7 +255,8 @@ async function openPlayback(answer, personaName, trigger) {
     content.replaceChildren(
       h("h2", null, `${personaName} · 模拟推演回放`),
       h("p", { class: "help" }, "空格播放 / 暂停，左右方向键逐句切换；减少动态效果时仅朗读可自动推进。"),
-      h("div", { class: "btn-row" }, play, prev, next, download), voiceControls, voiceNotice, progress, current, transcript,
+      h("div", { class: "btn-row" }, play, prev, next, download), voiceControls, voiceNotice, progress,
+      h("div", { class: "playback-stage" }, avatarSlot, h("div", { class: "playback-script" }, current, transcript)),
       h("h3", null, "回答依据"),
       h("p", { class: "help" }, "引用属于整份回答，并非逐句对应；原话与出处可在原回答中展开查看。"),
       script.citations.length ? h("ul", null, script.citations.map((citation) =>
@@ -235,6 +269,13 @@ async function openPlayback(answer, personaName, trigger) {
       const capabilities = await api("/api/media/capabilities");
       if (panel.open && capabilities.available) {
         voiceControls.append(voiceToggle, h("span", { class: "muted small" }, `语音由 AI 合成（${capabilities.backend}）`));
+      }
+      if (panel.open && capabilities.avatar) {
+        const { createAvatar } = await import("./avatar.js");
+        if (!panel.open) return;
+        avatar = createAvatar(capabilities.avatar);
+        avatarSlot.append(avatar);
+        if (audio && !audio.paused) driveMouth();
       }
     } catch {
       voiceNotice.textContent = "语音暂不可用，可继续文字回放。";

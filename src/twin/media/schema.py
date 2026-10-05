@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Final, Literal
+import re
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION: Final = 1
 EXPLICIT_LABEL: Final = "AI 合成 · 模拟推演，不代表本人意见"
@@ -136,6 +137,75 @@ class SynthCapabilities(BaseModel):
     voices: list[str] | None = None
 
 
+class LipSyncTrack(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = SCHEMA_VERSION
+    fps: int = Field(default=25, gt=0, strict=True)
+    levels: list[Annotated[int, Field(ge=0, le=3, strict=True)]] = Field(default_factory=list)
+    source: Literal["timings", "energy", "pattern"]
+
+    @model_validator(mode="after")
+    def length_cap(self) -> LipSyncTrack:
+        if len(self.levels) > self.fps * 600:
+            raise ValueError("口型轨不能超过 600 秒")
+        return self
+
+
+class AvatarSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = SCHEMA_VERSION
+    avatar_id: str
+    label: Literal["AI 合成 · 模拟推演，不代表本人意见"] = EXPLICIT_LABEL
+    palette: dict[str, str]
+    mouth_states: Literal[4] = 4
+    stylized: Literal[True] = True
+
+    @field_validator("palette")
+    @classmethod
+    def flat_palette(cls, value: dict[str, str]) -> dict[str, str]:
+        if set(value) != {"skin", "hair", "outfit", "background", "accent"} or any(
+            re.fullmatch(r"#[0-9a-fA-F]{6}", color) is None for color in value.values()
+        ):
+            raise ValueError("形象仅接受 skin、hair、outfit、background、accent 五种十六进制颜色")
+        return value
+
+
+AVATAR_PRESETS: dict[str, AvatarSpec] = {
+    "default": AvatarSpec(
+        avatar_id="default",
+        palette={
+            "skin": "#F4CFAC",
+            "hair": "#57477D",
+            "outfit": "#447B91",
+            "background": "#E8F1F3",
+            "accent": "#C55C7D",
+        },
+    ),
+    "ink": AvatarSpec(
+        avatar_id="ink",
+        palette={
+            "skin": "#DBDFE8",
+            "hair": "#34364F",
+            "outfit": "#676D91",
+            "background": "#F1F0F7",
+            "accent": "#925F9F",
+        },
+    ),
+    "dawn": AvatarSpec(
+        avatar_id="dawn",
+        palette={
+            "skin": "#FFE1AC",
+            "hair": "#AB5E71",
+            "outfit": "#CB8055",
+            "background": "#FFF3DE",
+            "accent": "#7069A6",
+        },
+    ),
+}
+
+
 class AudioPart(BaseModel):
     """One ordered piece of a segment; timings are relative to this file."""
 
@@ -150,6 +220,7 @@ class AudioPart(BaseModel):
     speech_text_version: int = Field(default=0, ge=0)
     spoken_text: str = ""
     warnings: list[Literal["possibly-truncated"]] = Field(default_factory=list)
+    lipsync: LipSyncTrack | None = None
 
 
 class AudioSegment(BaseModel):

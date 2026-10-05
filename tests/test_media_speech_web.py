@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from twin.cli import app
 from twin.config import Settings, TTSSettings
 from twin.identity import Decision
-from twin.media.schema import OPENING_NOTICE
+from twin.media.schema import AVATAR_PRESETS, OPENING_NOTICE
 from twin.media.tts import (
     MediaError,
     MediaInputTooLong,
@@ -65,6 +65,7 @@ def test_capabilities_are_lazy_and_secret_free(tmp_path: Path) -> None:
         response = client.get("/api/media/capabilities")
         assert response.status_code == 200
         assert response.json() == {
+            "avatar": AVATAR_PRESETS["default"].model_dump(mode="json"),
             "available": True,
             "backend": "openai_compat:speech",
             "label": "AI 合成 · 模拟推演，不代表本人意见",

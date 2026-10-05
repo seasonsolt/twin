@@ -72,8 +72,9 @@ def test_get_shape_and_latest_decision(client: TestClient, settings: Settings) -
     assert response.headers["cache-control"] == "no-store"
     assert_no_note(response)
     data = response.json()
-    assert set(data) == {"name", "aliases", "voice", "consents", "egress", "biometric"}
+    assert set(data) == {"name", "aliases", "voice", "avatar", "consents", "egress", "biometric"}
     assert (data["name"], data["aliases"], data["voice"]) == ("合成人物", ["合成别名"], "invented-preset")
+    assert data["avatar"] == settings.avatar.preset
     assert {row["scope"] for row in data["consents"]} == {
         f"facet:{facet.facet_id}" for facet in FACETS if requires_consent(facet.facet_id)
     }

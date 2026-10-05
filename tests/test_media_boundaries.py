@@ -97,7 +97,16 @@ def test_speech_text_imports_only_stdlib_contract_and_util() -> None:
             assert target.split(".")[0] in sys.stdlib_module_names, target
 
 
-def test_render_imports_only_contract_protocol_speech_text_and_util() -> None:
+def test_lipsync_imports_only_stdlib_contract_and_util() -> None:
+    targets = _imports((MEDIA_ROOT / "lipsync.py").read_text(encoding="utf-8"), "twin.media")
+    for target in targets:
+        if target.startswith("twin"):
+            assert target in {"twin.media.schema", "twin.util"}, target
+        else:
+            assert target.split(".")[0] in sys.stdlib_module_names, target
+
+
+def test_render_imports_only_contract_protocol_speech_text_lipsync_and_util() -> None:
     targets = _imports((MEDIA_ROOT / "render.py").read_text(encoding="utf-8"), "twin.media")
     for target in targets:
         if target.startswith("twin"):
@@ -105,6 +114,7 @@ def test_render_imports_only_contract_protocol_speech_text_and_util() -> None:
                 "twin.media.schema",
                 "twin.media.tts",
                 "twin.media.speech_text",
+                "twin.media.lipsync",
                 "twin.util",
             }, target
         else:

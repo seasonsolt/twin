@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import tomllib
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .embed import Embedder, HashingEmbedder, OpenAICompatEmbedder, embedder_fingerprint
 from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, OpenAICompatLLM
@@ -68,6 +69,15 @@ class TTSSettings(BaseModel):
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
     egress: Literal["local", "external"] | None = None
+
+    @field_validator("voice")
+    @classmethod
+    def preset_voice(cls, value: str) -> str:
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value) is None or value in {".", ".."}:
+            raise ValueError(
+                "仅支持预置音色 ID（1–64 位字母、数字、下划线、点或连字符）；本版本禁止声音复刻（M4 门槛）"
+            )
+        return value
 
 
 class ASRSettings(BaseModel):

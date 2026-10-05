@@ -60,6 +60,9 @@ class Harness:
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request)
         assert request.headers["authorization"] == f"Bearer {KEY}"
+        if request.method == "GET":
+            assert str(request.url) == BASE + "/voices"
+            return httpx.Response(200, json={"voices": ["default"]})
         if self.timeout:
             raise httpx.ReadTimeout(f"{KEY} {BASE}", request=request)
         if self.status != 200:
@@ -118,6 +121,8 @@ def backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> 
     with httpx.Client(transport=httpx.MockTransport(lambda req: holder[0].handle(req))) as client:
         harness = Harness(request.param, client)
         holder.append(harness)
+        assert harness.synth.capabilities.voices == ["default"]
+        harness.calls.clear()
         yield harness
 
 
@@ -178,6 +183,8 @@ def test_openai_warning_header_maps_to_extras_and_normalized_contract(
     monkeypatch.setenv("TWIN_TTS_KEY", KEY)
 
     def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
         headers = {"content-type": "audio/wav" if audio_format == "wav" else "audio/mpeg"}
         if warning is not None:
             headers["x-speech-warning"] = warning
@@ -276,12 +283,17 @@ def test_factory_configuration(provider: str, tmp_path: Path, monkeypatch: pytes
     path = tmp_path / "settings.toml"
     path.write_text(
         f'[tts]\nprovider = "{provider}"\nmodel = "local-tts"\nbase_url = "{BASE}"\n'
-        'voice = "preset"\nlanguage = "en"\ntimeout = 12\nmax_retries = 0\n'
+        'voice = "default"\nlanguage = "en"\ntimeout = 12\nmax_retries = 0\n'
     )
     settings = load_settings(path)
     synth = make_synthesizer(settings.tts)
-    assert synth.voice.voice_id == "preset"
+    assert synth.voice.voice_id == "default"
     assert synth.voice.language == "en"
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        "twin.media.tts.httpx.Client",
+        lambda: client_type(transport=httpx.MockTransport(lambda _: httpx.Response(404))),
+    )
     assert synth.capabilities.languages == ["en"]
     assert KEY not in settings.model_dump_json()
     assert KEY not in synth.identity and BASE not in synth.identity

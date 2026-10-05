@@ -105,6 +105,7 @@ def register(
     def capabilities() -> dict[str, Any]:
         try:
             synth = speech()
+            declared = synth.capabilities
         except (MediaError, EgressDenied) as exc:
             return {
                 "available": False,
@@ -118,8 +119,8 @@ def register(
             "available": synth.name != "silent",
             "backend": synth.name,
             "label": EXPLICIT_LABEL,
-            "languages": synth.capabilities.languages,
-            "audio_formats": synth.capabilities.audio_formats,
+            "languages": declared.languages,
+            "audio_formats": declared.audio_formats,
         }
 
     def make_script(body: MediaBody) -> MediaScript:

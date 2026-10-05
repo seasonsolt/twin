@@ -72,6 +72,7 @@ class Identity(BaseModel):
     name: str
     aliases: list[str]
     consents: dict[Scope, Decision]
+    voice: str | None = None
 
     @model_validator(mode="after")
     def biometric_gate(self) -> Identity:
@@ -83,9 +84,12 @@ class Identity(BaseModel):
         return self.consents.get(_validate_scope(scope)) is Decision.GRANT
 
     @classmethod
-    def from_parts(cls, name: str, aliases: Iterable[str], events: Iterable[ConsentEvent]) -> Identity:
+    def from_parts(
+        cls, name: str, aliases: Iterable[str], events: Iterable[ConsentEvent], *, voice: str | None = None
+    ) -> Identity:
         return cls(
             name=name,
             aliases=list(aliases),
+            voice=voice,
             consents={event.scope: event.decision for event in sorted(events, key=lambda event: event.seq)},
         )

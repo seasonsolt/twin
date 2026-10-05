@@ -1,5 +1,6 @@
 import { api, errorBox } from "./api.js";
 import { h, loading } from "./dom.js";
+import { state } from "./state.js";
 
 let activePanel = null;
 
@@ -27,7 +28,7 @@ async function openPlayback(answer, personaName, trigger) {
   let speaking = false;
   let partPosition = 0;
   let playbackVersion = 0;
-  const label = h("p", { class: "media-label", role: "note" }, "AI 合成 · 模拟推演，不代表本人意见");
+  const label = h("p", { class: "media-label", role: "note" }, state.status?.labels?.explicit || "加载中…");
   const content = h("div", null, loading("正在准备回放…"));
   const close = h("button", { type: "button", class: "btn", onclick: () => panel.close() }, "关闭");
   const panel = h("dialog", { class: "playback-panel", "aria-label": "模拟推演回放" },
@@ -217,13 +218,13 @@ async function openPlayback(answer, personaName, trigger) {
       await api("/api/media/script", { method: "POST", json: body });
     if (!panel.open) return;
     script = { segments, citations, abstain };
-    label.textContent = explicitLabel;
+    label.textContent = state.status?.labels?.explicit || explicitLabel;
     content.replaceChildren(
       h("h2", null, `${personaName} · 模拟推演回放`),
       h("p", { class: "help" }, "空格播放 / 暂停，左右方向键逐句切换；减少动态效果时仅朗读可自动推进。"),
       h("div", { class: "btn-row" }, play, prev, next, download), voiceControls, voiceNotice, progress, current, transcript,
       h("h3", null, "回答依据"),
-      h("p", { class: "help" }, "引用属于整份回答，不代表逐句对应；原话与出处可在原回答中展开查看。"),
+      h("p", { class: "help" }, "引用属于整份回答，并非逐句对应；原话与出处可在原回答中展开查看。"),
       script.citations.length ? h("ul", null, script.citations.map((citation) =>
         h("li", null, citation.ref_id, citation.reason ? `：${citation.reason}` : ""))) : h("p", { class: "muted" }, "没有有效引用。"),
       error,

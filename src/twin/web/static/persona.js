@@ -4,7 +4,7 @@ import { badge, empty, field, h, loading, pageHeader, pct, sessionGet, sessionSe
 import { JobView } from "./jobs.js";
 import { REVIEW_LABELS, REVIEW_TONES } from "./labels.js";
 import { playbackAction } from "./playback.js";
-import { targetName } from "./state.js";
+import { state, targetName } from "./state.js";
 
 const KIND_OPTIONS = [
   ["questionnaire", "问卷", "建档问卷导出的文字（每题“回答：”下面是答案）"],
@@ -136,7 +136,7 @@ export async function personaChatPage(ctx) {
   });
 
   root.replaceChildren(
-    pageHeader(`和${name}的分身聊天`, "分身以本人身份、第一人称作答，只依据人格档案和本人原话；没有依据时会直说并标注“需要本人确认”。回复是模拟，不代表本人意见。"),
+    pageHeader(`和${name}的分身聊天`, state.status?.labels?.chat_notice || "加载中…"),
     log,
     h(
       "form",

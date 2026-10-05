@@ -57,6 +57,8 @@ def synth(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> It
     mp3 = b"\xff\xfb\x90\x00" + b"\0" * 413
 
     def handle(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(404)
         if request.param == "cloudflare":
             return httpx.Response(200, json={"result": {"audio": base64.b64encode(mp3).decode()}, "success": True})
         return httpx.Response(200, content=wav, headers={"content-type": "audio/wav"})
@@ -232,7 +234,7 @@ def test_voice_and_algorithm_settings_invalidate_cache(tmp_path: Path) -> None:
     first = Recorder(SilentSynthesizer())
     render_audio(make_script(), first, tmp_path)
     for inner in (
-        SilentSynthesizer(voice=VoiceSpec(voice_id="other")),
+        SilentSynthesizer(voice=VoiceSpec(language="en")),
         SilentSynthesizer(provides_timings=True),
         SilentSynthesizer(sample_rate=8000),
     ):

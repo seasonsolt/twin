@@ -10,6 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field
 SCHEMA_VERSION: Final = 1
 EXPLICIT_LABEL: Final = "AI 合成 · 模拟推演，不代表本人意见"
 OPENING_NOTICE = "以下内容由 AI 合成，是模拟推演，不代表本人意见。"
+CHAT_NOTICE: Final = (
+    "分身以本人身份、第一人称作答，只依据人格档案和本人原话；"
+    "没有依据时会直说并标注“需要本人确认”。回复是模拟，不代表本人意见。"
+)
+
+
+def disclaimer(name: str, external: bool) -> str:
+    storage = "部分数据经已授权的外部服务处理，详见页面顶部的出境提示。" if external else "数据只保存在本机。"
+    return f"所有推演结果均为模拟，供个人使用参考，不代表{name}本人的意见或决定。{storage}"
 
 
 class Segment(BaseModel):
@@ -124,6 +133,7 @@ class SynthCapabilities(BaseModel):
     languages: list[str] = Field(default_factory=lambda: ["zh"])
     streaming: bool = False
     reads_latin_acronyms: bool = True
+    voices: list[str] | None = None
 
 
 class AudioPart(BaseModel):

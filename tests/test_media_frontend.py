@@ -52,6 +52,8 @@ globalThis.fetch = async (path, init) => {
 const blobs = [];
 URL.createObjectURL = blob => { blobs.push(blob); return 'blob:example'; };
 URL.revokeObjectURL = () => {};
+const {state} = await import('./state.js');
+state.status = {labels: {explicit: '服务端提供的统一标识'}};
 const {playbackAction, closePlayback} = await import('./playback.js');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const descendants = node => [node, ...node.children.filter(c => c instanceof Element).flatMap(descendants)];
@@ -66,7 +68,8 @@ async function open() {
 }
 let [action, panel] = await open();
 assert.equal(panel.open, true);
-assert.ok(panel.textContent.includes(script.explicit_label));
+assert.ok(panel.textContent.includes(state.status.labels.explicit));
+assert.equal(panel.textContent.includes(script.explicit_label), false);
 assert.ok(panel.textContent.includes(script.persona_name));
 assert.ok(panel.textContent.includes(script.citations[0].ref_id));
 assert.ok(panel.textContent.includes(script.citations[0].reason));
@@ -255,7 +258,7 @@ def test_playback_controls(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required for offline frontend unit checks")
-    for name in ("playback.js", "api.js", "dom.js"):
+    for name in ("playback.js", "api.js", "dom.js", "state.js"):
         shutil.copyfile(STATIC / name, tmp_path / name)
     (tmp_path / "package.json").write_text('{"type":"module"}', encoding="utf-8")
     (tmp_path / "harness.mjs").write_text(HARNESS, encoding="utf-8")

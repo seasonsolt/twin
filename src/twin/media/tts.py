@@ -16,6 +16,7 @@ import binascii
 import io
 import json
 import math
+import threading
 import time
 import wave
 from typing import Protocol
@@ -51,8 +52,10 @@ class SpeechSynthesizer(Protocol):
     """Configured preset voice and opaque, secret-free cache identity are backend-neutral."""
 
     name: str
-    capabilities: SynthCapabilities
     voice: VoiceSpec
+
+    @property
+    def capabilities(self) -> SynthCapabilities: ...
 
     @property
     def identity(self) -> str: ...
@@ -60,7 +63,16 @@ class SpeechSynthesizer(Protocol):
     def synthesize(self, request: SpeechRequest) -> SpeechResult: ...
 
 
+def _check_voice(voice: VoiceSpec, capabilities: SynthCapabilities) -> None:
+    if capabilities.voices is not None and voice.voice_id not in capabilities.voices:
+        raise MediaRejected(
+            f"仅支持预置音色：配置音色 {voice.voice_id!r} 不在后端允许列表中"
+            f"（共 {len(capabilities.voices)} 个预置音色）"
+        )
+
+
 def _check_request(request: SpeechRequest, capabilities: SynthCapabilities) -> None:
+    _check_voice(request.voice, capabilities)
     if len(request.text) > capabilities.max_chars:
         raise MediaInputTooLong("Speech input exceeds max_chars")
     if not request.text.strip():
@@ -92,7 +104,9 @@ class SilentSynthesizer:
             max_chars=max_chars,
             audio_formats=["wav"],
             languages=[self.voice.language],
+            voices=["default"],
         )
+        _check_voice(self.voice, self.capabilities)
 
     @property
     def identity(self) -> str:
@@ -163,19 +177,24 @@ class _HTTPSpeech:
         return fingerprint({"backend": name, "model": model, "endpoint": endpoint})
 
     def _post(self, path: str, payload: dict[str, str]) -> httpx.Response:
+        return self._request("POST", path, payload)
+
+    def _request(self, method: str, path: str, payload: dict[str, str] | None = None) -> httpx.Response:
         for attempt in range(self._max_retries + 1):
             error: MediaError
             try:
                 if self._client is None:
                     with httpx.Client() as client:
-                        response = self._send(client, path, payload)
+                        response = self._send(client, method, path, payload)
                 else:
-                    response = self._send(self._client, path, payload)
+                    response = self._send(self._client, method, path, payload)
             except httpx.TimeoutException:
                 error = MediaTimeout("Speech service timed out")
             except (httpx.HTTPError, httpx.InvalidURL):
                 error = MediaUnavailable("Speech service transport failed")
             else:
+                if method == "GET" and response.status_code in (404, 405):
+                    return response
                 if response.status_code in (408, 429) or response.status_code >= 500:
                     error = (
                         MediaTimeout("Speech service timed out")
@@ -191,8 +210,9 @@ class _HTTPSpeech:
             time.sleep(min(0.1 * 2**attempt, 2.0))
         raise AssertionError("unreachable")
 
-    def _send(self, client: httpx.Client, path: str, payload: dict[str, str]) -> httpx.Response:
-        return client.post(
+    def _send(self, client: httpx.Client, method: str, path: str, payload: dict[str, str] | None) -> httpx.Response:
+        return client.request(
+            method,
             self._base_url + path,
             json=payload,
             headers={"Authorization": f"Bearer {self._key}"},
@@ -242,9 +262,13 @@ class CloudflareMeloTTS(_HTTPSpeech):
         )
         self.name = "cloudflare:melotts"
         self.capabilities = SynthCapabilities(
-            audio_formats=["mp3", "wav"], languages=languages or [self.voice.language], max_chars=500
+            audio_formats=["mp3", "wav"],
+            languages=languages or [self.voice.language],
+            max_chars=500,
+            reads_latin_acronyms=False,
+            voices=["default"],
         )
-        self.capabilities = self.capabilities.model_copy(update={"reads_latin_acronyms": False})
+        _check_voice(self.voice, self.capabilities)
 
     @property
     def identity(self) -> str:
@@ -317,9 +341,32 @@ class OpenAICompatSpeech(_HTTPSpeech):
         )
         self.model = model
         self.name = "openai_compat:speech"
-        self.capabilities = SynthCapabilities(
+        self._capabilities = SynthCapabilities(
             audio_formats=["wav", "mp3"], languages=[self.voice.language], max_chars=1000
         )
+        self._voices_loaded = False
+        self._capabilities_lock = threading.Lock()
+
+    @property
+    def capabilities(self) -> SynthCapabilities:
+        """Enumerate presets lazily; cache successful discovery, including unsupported endpoints."""
+        with self._capabilities_lock:
+            if not self._voices_loaded:
+                response = self._request("GET", "/voices")
+                if response.status_code == 200:
+                    try:
+                        payload = response.json()
+                        voices = payload["voices"]
+                        if not isinstance(voices, list) or not all(isinstance(voice, str) for voice in voices):
+                            raise ValueError("Invalid voices")
+                    except (ValueError, TypeError, KeyError):
+                        raise MediaUnavailable("Speech service returned invalid voices") from None
+                    self._capabilities = self._capabilities.model_copy(update={"voices": voices})
+                elif response.status_code not in (404, 405):
+                    raise MediaUnavailable("Speech service returned invalid voices") from None
+                self._voices_loaded = True
+            _check_voice(self.voice, self._capabilities)
+            return self._capabilities
 
     @property
     def identity(self) -> str:

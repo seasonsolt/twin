@@ -17,14 +17,16 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   `facet:<facet_id>`、`egress:llm|embed|tts|asr`、`biometric:voice_clone|face`。
 - `PersonaStore` 打开时以 `CREATE TABLE IF NOT EXISTS` 增加 `p_consent`；事件按自增 `seq` 只追加，
   包含 `grant|revoke|decline`、UTC 时间、来源 `questionnaire|cli|web` 和可选备注，删除资料不删除授权历史。
+- `Identity.voice: str | None = None` 是追加的预置音色 ID，旧 JSON 缺失时为 `None`；
+  `Identity.from_parts(..., voice=...)` 可从配置填入，不构造语音后端。
 - `Identity.from_parts` 按 `seq` 折叠，每个范围以最新决定为准，只有 `grant` 算授权。
   gated facet 无台账事件时保持旧问卷推导（回答且未拒绝）；非 gated facet 始终允许。
 - 问卷提交与文件导入在保存来源的同一事务中追加已回答细项的 `grant`、跳过细项的 `decline`；
   重复导入视为再次提交。保留 `Source.declined_facets`。撤回后运行 `twin persona build` 删除该细项条目，
   再由 `index_persona` 清除对应条目向量；不删除原始语料。
 - 生物特征范围在本版本永不可 `grant`（M4：不支持本人声音复刻、照片驱动形象）。
-  出境许可已执行；音色接入和标识统一仍是后续任务。
-- `twin identity show` 仅显示名字、别名和授权状态/时间/来源；`grant <scope>`、`revoke <scope>`
+  出境许可、预置音色校验与统一标识已接入。
+- `twin identity show` 仅显示名字、别名、配置音色及预置音色/M4 提示、授权状态/时间/来源；`grant <scope>`、`revoke <scope>`
   可带 `--note`，备注不输出。
 
 ## 出境许可（EgressInfo）
@@ -180,6 +182,12 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   `MediaManifest`, version 1. It depends only on stdlib, pydantic and util; `PresentableAnswer` forbids extra fields.
   The explicit label is `AI 合成 · 模拟推演，不代表本人意见`; the first segment always contains
   `以下内容由 AI 合成，是模拟推演，不代表本人意见。`.
+- `media.schema.EXPLICIT_LABEL` / `OPENING_NOTICE` 是显式标识与开头提示的唯一来源；
+  `CHAT_NOTICE` 保留聊天页提示，`disclaimer(name, external)` 生成页脚。
+  `MediaScript.explicit_label` / `MediaManifest.label` 保留原 `Literal` 契约，并测试其与常量一致。
+  `/api/status.labels` 追加 `{explicit, disclaimer, chat_notice}`，网页回放、页脚、聊天标题读取这些字段，
+  静态 HTML 仅用中性占位符。页脚的 `external` 来自 `egress_status`（含评委）：任一配置后端
+  同时为外部且已授权则说明 `部分数据经已授权的外部服务处理，详见页面顶部的出境提示。`，否则使用本机措辞。
 - `media.adapters` (layer 7) is the only media module that knows `ChatReply`; it validates raw JSON
   and produces `PresentableAnswer` with unchanged text and the upstream fingerprint.
   `media.script` (layer 7) converts only this boundary contract, without models, retrieval or rewriting.
@@ -202,8 +210,19 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
 ## Speech access (M1)
 
 - `create_app(..., synthesizer_factory=...)` lazily defaults to `config.make_synthesizer(settings.tts)`.
-  `silent` declares no available voice; capabilities expose only backend, AI label, languages and formats.
-  Cloudflare construction requires a nonempty configured key environment variable and names only that variable
+  `silent` declares speech unavailable in the UI; HTTP capabilities expose backend, AI label, languages and formats.
+- `TTSSettings.voice` accepts only preset IDs matching `^[A-Za-z0-9_.-]{1,64}$` (not `.` / `..`), rejecting
+  paths, URLs and data references with a Chinese preset-only / M4 error.
+  `SynthCapabilities.voices: list[str] | None = None` is additive; `None` means enumeration is unsupported,
+  an empty list means no presets. Silent and Cloudflare declare `["default"]` and validate at construction;
+  Cloudflare does not support speaker selection.
+- The existing `synth.capabilities` property is retained. OpenAI-compatible speech lazily queries
+  `GET {base_url}/voices` on first access and caches a valid string list from HTTP 200 or `None` from 404/405.
+  It uses the speech transport's authentication, timeout, retry and no-redirect handling; other failures and
+  malformed responses raise sanitized `MediaError` subclasses, not silent fallback. Failed discovery can retry.
+  The configured ID is checked on capability access, before first synthesis; request IDs are also checked before
+  POST whenever enumeration is available. Unknown IDs raise a Chinese error naming the ID and preset count.
+- Cloudflare construction requires a nonempty configured key environment variable and names only that variable
   on failure; the self-hosted OpenAI-compatible shim keeps credentials optional.
 - `POST /api/media/audio` uses the same source adapters and script contract, then `render_audio` into the database
   directory's `media-cache/`. Its ordered segment URLs may repeat a script index for split sentences; manifest

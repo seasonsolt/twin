@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..config import Settings
 from ..egress import EgressDenied, egress_status
+from ..media.schema import CHAT_NOTICE, EXPLICIT_LABEL, disclaimer
 from ..media.tts import SpeechSynthesizer
 from ..persona.store import PersonaStore
 from . import media, persona
@@ -279,6 +280,13 @@ def create_app(
             "llm": {"provider": settings.llm.provider, "model": settings.llm.model, **description["llm"]},
             "embed": {"provider": settings.embed.provider, **description["embed"]},
             "egress": egress,
+            "labels": {
+                "explicit": EXPLICIT_LABEL,
+                "disclaimer": disclaimer(
+                    settings.target_name, any(row["external"] and row["granted"] for row in egress)
+                ),
+                "chat_notice": CHAT_NOTICE,
+            },
         }
 
     @app.get("/api/jobs")

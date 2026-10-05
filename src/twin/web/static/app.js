@@ -99,9 +99,7 @@ function renderStatus() {
   }
   target.textContent = status.target_name ? `目标人物：${status.target_name}` : "";
   const footer = document.getElementById("footer-note");
-  if (footer && status.target_name) {
-    footer.textContent = `所有推演结果均为模拟，供个人使用参考，不代表${status.target_name}本人的意见或决定。数据只保存在本机。`;
-  }
+  if (footer) footer.textContent = status.labels?.disclaimer || "加载中…";
   const counts = status.counts || {};
   const llm = status.llm || {};
   const backendError = llm.error || status.embed?.error;

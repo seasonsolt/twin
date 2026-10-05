@@ -453,14 +453,13 @@ def personal_eval_command(
     categories: Annotated[list[str] | None, typer.Option("--categories", help="分类，可重复或逗号分隔")] = None,
     allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
 ) -> None:
-    """本人资料评测；update 仅标记未运行，不修改记忆。"""
+    """本人资料评测；update 在临时数据库副本上顺序执行导入、增量构建和删除。"""
     from .config import configuration_fingerprint
     from .evals.personal import (
-        PersonaSystem,
         ensure_output_directory,
         load_evalset,
         make_panel,
-        run_evaluation,
+        run_persona_evaluation,
         select_cases,
         write_outputs,
     )
@@ -481,21 +480,21 @@ def personal_eval_command(
             [(f"j{i}:{judge.llm.name}", judge.effort) for i, judge in enumerate(panel)],
             experiment={"repeats": repeats, "rubric_version": "1"},
         )
-        with _persona_store(settings) as store:
-            report = run_evaluation(
-                cases,
-                PersonaSystem(PersonaChat(store, llm, embedder, settings)),
-                panel,
-                persona_ref,
-                repeats=repeats,
-                max_workers=settings.max_workers,
-                fingerprints={"configuration": identity},
-            )
+        report = run_persona_evaluation(
+            cases,
+            llm,
+            embedder,
+            settings,
+            panel,
+            persona_ref,
+            repeats=repeats,
+            fingerprints={"configuration": identity},
+        )
         write_outputs(out, report, settings, allow_in_repo=allow_in_repo)
     except Exception:
         # Neither SDK errors nor runtime validation errors may echo personal prompts or answers.
         raise _fail("本人资料评测失败；请检查配置、参考文本和输出权限（详情已隐藏）") from None
-    _say("评测报告已写入；update 未运行：需要受控记忆编辑。")
+    _say("评测报告已写入；update 已在临时副本上运行。" if "update" not in report.skipped else "评测报告已写入。")
 
 
 @app.command("eval-compare")

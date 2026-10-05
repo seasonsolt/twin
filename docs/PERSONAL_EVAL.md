@@ -13,7 +13,8 @@ twin --config /private/path/twin.toml eval-compare \
   --out /private/path/comparison
 ```
 
-`--categories fact,unanswerable,style,general` 可过滤分类，也可重复该选项。
+默认运行全部分类（包含 update）；`--categories fact,unanswerable,style,general` 可排除 update，
+也可重复该选项。
 输出目录（包含解析符号链接后的路径）位于 git 仓库内时拒绝写入，除非显式
 `--allow-in-repo`。输出目录权限 0700，`records.json`、`report.json`、`report.md`
 权限 0600；records 经来源记录模块写入并脱敏配置中的端点和环境变量密钥。
@@ -27,36 +28,66 @@ twin --config /private/path/twin.toml eval-compare \
 - unanswerable / style / general：不需要标准答案。
 
 被测分身只收到 id、category、prompt，不收到标准答案、证据、更新字段或 persona
-参考文本。每次重复是独立单轮对话；不持久化聊天日志，不编辑记忆。评测错误隐藏
+参考文本。每次重复是独立单轮对话；不持久化聊天日志，不编辑真实记忆。评测错误隐藏
 后端异常详情，进度及调用追踪不包含题目或回答文本；records 含完整题目及回答。
 
 评委由 `[[judges]]` 配置产生；未配置时回退 `[llm]`。
 评委身份为 `j0:模型名`、`j1:模型名` 等，同名模型占不同位置仍是不同评委。
 评分沿用原评测脚本的通用措辞：
 
-- fact / update：关键事实正确 1；部分正确或混有错误 0.5；错误、未答或编造 0。
+- fact / update 的 add、modify：关键事实正确 1；部分正确或混有错误 0.5；错误、未答或编造 0。
+- update 的 delete：使用与 unanswerable 相同的拒答检查。
 - unanswerable：没有编造具体事实 1；编造 0。
 - style：persona（口吻、身份视角、观点与价值判断）及 quality 各 1–5。
 - general：quality（准确、完整、切题、清晰）1–5。
 
 style 的两个指标各有独立评委调用，保留各自失败行。不合规分数作为评委失败，
 不会当作零分。模板及控制标记（如 `<think>`、`<|im_start|>`）单独标记、计数，
-不直接改变评分。update 保留契约和评分规则，但整个分类显示 **not run**：需要受控
-记忆编辑；不会调用分身或评委。
+不直接改变评分。评分规则版本仍为 1。
+
+## update：受控记忆编辑
+
+选择 update 时，用 SQLite backup API（含已提交的 WAL 数据）在
+`tempfile.TemporaryDirectory()` 中创建私有数据库副本；CLI 不在真实数据库上初始化
+PersonaStore。副本使用独立的 PersonaStore / PersonaChat，成功或失败后都关闭并删除。
+没有真实数据库时只在临时目录中初始化空库，不创建真实文件。不重新训练模型。
+
+每个 update item 顺序执行，item、步骤、重复及其评委调用均不并行：
+
+1. **add**：用 document 导入的现有 `parse_text` 路径解析 add_fact，日期为今天；导入新来源，
+   增量 `build_profile`，刷新 `index_persona`，独立单轮问 question，按 answer 评分。
+2. **modify**：`PersonaStore.delete_source` 删除 add 来源，导入 modified_fact 的新来源；
+   再增量 build、刷新检索、提问，按 modified_answer 评分。
+3. **delete**：删除 modify 来源，再增量 build、刷新检索、提问；按 unanswerable 的拒答检查评分，
+   应承认未知或资料中没有记录，而不是继续声称知道该事实。
+
+每一步 build 后刷新 `p_vectors` 的 **items** 和 **expressions** 两个命名空间：chat 同时检索
+画像条目与本人原文，所以即使抽取没有生成画像条目，新增文档仍须可检索；修改和删除后
+清除过期条目及原文向量。聊天 `as_of=None`、`persist=False`。每个步骤在当前状态下运行
+`--repeats` 次独立提问，然后进入下一步骤；原题库 id 展开为 `<id>@add`、`<id>@modify`、
+`<id>@delete`，三个子题 group_id 都为原 item id。两项得到六个统计单位，而非两个。
+标准答案只供每一步评委使用，不进入 chat 的输入。
+
+运行成功时 update 与其他分类一样显示 **run**、均值与 bootstrap CI，不再产生 update
+跳过警告。排除 update 时不执行记忆编辑；读取旧的跳过 update 报告仍显示 **not run**。
+不支持受控编辑的自定义测试系统也保留跳过标记。构建或索引失败中止评测且隐藏异常详情；
+聊天或评委失败沿用原有失败策略，不伪造零分。
 
 固定策略 `all_judges_required`：任何评委、任何适用指标、任何重复失败，或重复
 回答缺失，则该题所有指标不可用。成功题目先平均各评委，再平均重复；每题只占一个
 统计单位。每分类报告题目总数、有效题数、来源组数、均值、评委失败率（失败调用 /
 实际评分调用，不含 not_called）、分身失败次数及带控制标记的回答次数。
 
-fact 按 doc_id / source 聚类，其余分类按题目 id 聚类。bootstrap 重采样整个来源组，
+fact 按 doc_id / source 聚类，update 的三个子题按原 item id 聚类，其余分类按题目 id 聚类。
+bootstrap 重采样整个来源组，
 每轮按抽到的题目数加权；2000 次，确定性种子，95% percentile 区间。少于两个非空
 来源组时区间为 null，不伪造确定性。重复、评委调用不是独立题目。
 
 比较统计 **B − A**，同 id 必须有相同题目、标准答案、分类及来源分组，persona 参考
 文本哈希也必须一致。每指标仅配对双方有效题目，沿用来源分组 bootstrap 差值，并报告
 B 胜 / B 负 / 平数、不可配对数及双方原始统计。这不是再调用模型的盲评；所有比较
-无需网络。双方独有题目仅计数，不加入配对均值。
+无需网络。双方独有题目仅计数，不加入配对均值。新旧 update 报告可以比较；
+仅双方共有且有效的子题参与 update 差值，旧的原 item id 不会被当作已执行的子题。
 
 ## 契约兼容决定
 

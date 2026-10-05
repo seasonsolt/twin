@@ -5,6 +5,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
+import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +29,14 @@ from twin.evals.personal import (
     make_panel,
     read_records,
     run_evaluation,
+    run_persona_evaluation,
     select_cases,
     summarize,
     write_comparison,
     write_outputs,
 )
 from twin.evals.schema import (
+    Case,
     CaseInput,
     JudgeStatus,
     Prediction,
@@ -42,15 +47,28 @@ from twin.evals.schema import (
 )
 from twin.evals.stats import bootstrap_grouped
 from twin.llm import FakeLLM
-from twin.persona.chat import PersonaChat
-from twin.persona.schema import ChatDraft
+from twin.persona.chat import PersonaChat, index_persona
+from twin.persona.profile import ExtractDraft, build_profile
+from twin.persona.schema import ChatDraft, SourceKind
+from twin.persona.sources import parse_text
 from twin.persona.store import PersonaStore
 from twin.usage import UsageRecorder, record_usage
 
 FIXTURE = Path(__file__).parent / "fixtures" / "personal_eval"
 
 
+@pytest.fixture(autouse=True)
+def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in tuple(os.environ):
+        if name.startswith(("TWIN_", "DTWIN_", "OPENAI_", "ANTHROPIC_")):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("TWIN_LLM_KEY", "invented-offline-key")
+    monkeypatch.setenv("TWIN_EMBED_KEY", "invented-offline-key")
+
+
 def grade(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+    if schema is ExtractDraft:
+        return {"items": []}
     if schema is ChatDraft:
         return {"reply": "INVENTED-ANSWER", "citations": [], "confidence": 0.2, "abstain": True}
     if schema.__name__ == "_Style":
@@ -441,7 +459,10 @@ def test_cli_fake_llm_outputs_and_captured_logs(
     )
     assert result.exit_code == 0, result.output
     report = read_records(out / "records.json")
-    assert len(report.predictions) == 12 and report.metrics["repeats"] == 2
+    assert len(report.predictions) == 18 and report.metrics["repeats"] == 2
+    assert summarize(report)["update"]["n_cases"] == 3
+    assert "update 已在临时副本上运行" in result.output
+    assert not (tmp_path / "fixture.db").exists()
     text = result.output + caplog.text
     for case in report.cases:
         assert case.input.payload.prompt not in text
@@ -493,3 +514,365 @@ def test_v1_readable_and_v2_generic_contract() -> None:
     assert QuestionInput.model_validate_json(payload.model_dump_json()) == payload
     with pytest.raises(ValidationError):
         QuestionInput.model_validate({**payload.model_dump(), "answer": "虚构答案"})
+
+
+def update_cases(tmp_path: Path) -> tuple[Case, ...]:
+    items = [
+        {
+            "id": item_id,
+            "category": "update",
+            "question": f"INVENTED-QUESTION-{item_id} 我选择什么？",
+            "answer": added,
+            "add_fact": f"我选择{added}。",
+            "modified_fact": f"我选择{modified}。",
+            "modified_answer": modified,
+        }
+        for item_id, added, modified in (("tea", "桂花茶", "薄荷茶"), ("port", "星港", "月港"))
+    ]
+    path = tmp_path / "updates.json"
+    path.write_text(json.dumps(items), encoding="utf-8")
+    return load_evalset(path)
+
+
+def memory_grade(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+    if schema is ExtractDraft:
+        match = re.search(r"本人：(我选择[^。]+。)", user)
+        return {
+            "items": [{"facet_id": "1.1", "statement": match[1], "quotes": [{"n": 1, "quote": match[1]}]}]
+            if match
+            else []
+        }
+    if schema is ChatDraft:
+        material = system + user.split("【对话】")[0]
+        choices = [word for word in ("桂花茶", "薄荷茶", "星港", "月港") if word in material]
+        assert len(choices) <= 1  # No stale profile evidence or expressions may survive an edit.
+        return {
+            "reply": choices[0] if choices else "资料里没有记录这个事实。",
+            "citations": re.findall(r"\[([^\]\n]+)\]", material),
+            "confidence": 0.8 if choices else 0.2,
+            "abstain": not choices,
+        }
+    answer = re.search(r"回答：([^\n]+)", user)
+    assert answer is not None
+    if schema.__name__ == "_Refusal":
+        assert "标准答案" not in user
+        return {"score": int(answer[1] == "资料里没有记录这个事实。"), "reason": "虚构删除评分"}
+    assert schema.__name__ == "_Accuracy"
+    expected = re.search(r"标准答案：([^\n]+)", user)
+    assert expected is not None
+    return {"score": int(answer[1] == expected[1]), "reason": "虚构准确评分"}
+
+
+def memory_settings(tmp_path: Path) -> Settings:
+    return Settings(db_path=tmp_path / "original.db", target_name="虚构林沐", max_workers=8)
+
+
+def seed_memory(settings: Settings) -> None:
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_text(SourceKind.DOCUMENT, "background.txt", "虚构背景：只用干净画笔。", settings))
+        build_profile(store, FakeLLM(memory_grade), settings)
+        index_persona(store, HashingEmbedder(), settings)
+
+
+def test_update_protocol_six_scores_private_db_and_incremental_indexes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    cases = update_cases(tmp_path)
+    settings = memory_settings(tmp_path)
+    seed_memory(settings)
+    settings.db_path.chmod(0o640)
+    before = settings.db_path.read_bytes()
+    mode = settings.db_path.stat().st_mode
+    events: list[str] = []
+    private_paths: list[Path] = []
+    snapshots: list[tuple[set[str], set[str]]] = []
+    extracted: list[int] = []
+    parsed_dates: list[dt.date | None] = []
+    real_parse = parse_text
+    real_delete = PersonaStore.delete_source
+    real_build = build_profile
+    real_index = index_persona
+    real_reply = PersonaChat.reply
+
+    def parse(*args: Any) -> Any:
+        events.append("import")
+        parsed_dates.append(args[-1])
+        return real_parse(*args)
+
+    def delete(store: PersonaStore, source_id: str) -> bool:
+        events.append("delete")
+        assert store.path != settings.db_path
+        return real_delete(store, source_id)
+
+    def build(store: PersonaStore, llm: Any, local: Settings) -> Any:
+        events.append("build")
+        assert local.max_workers == 1 and local.db_path == store.path != settings.db_path
+        private_paths.append(store.path)
+        result = real_build(store, llm, local)
+        extracted.append(result.chunks_extracted)
+        return result
+
+    def index(store: PersonaStore, embedder: Any, local: Settings) -> Any:
+        events.append("index")
+        result = real_index(store, embedder, local)
+        item_refs = set(store.vector_shas("items"))
+        expr_refs = set(store.vector_shas("expressions"))
+        assert item_refs == {item.item_id for item in store.list_items()}
+        assert expr_refs == {expr.expression_id for expr in store.list_expressions(target_only=True)}
+        assert all(expr.date == dt.date.today() for expr in store.list_expressions() if "我选择" in expr.text)
+        snapshots.append((item_refs, expr_refs))
+        return result
+
+    def reply(chat: PersonaChat, messages: Any, as_of: Any = None, *, persist: bool = True) -> Any:
+        events.append("ask")
+        assert as_of is None and persist is False
+        return real_reply(chat, messages, as_of=as_of, persist=persist)
+
+    monkeypatch.setattr("twin.evals.personal.parse_text", parse)
+    monkeypatch.setattr("twin.evals.personal.build_profile", build)
+    monkeypatch.setattr("twin.evals.personal.index_persona", index)
+    monkeypatch.setattr(PersonaStore, "delete_source", delete)
+    monkeypatch.setattr(PersonaChat, "reply", reply)
+    llm = FakeLLM(memory_grade)
+    panel = (Judge(FakeLLM(memory_grade), "low"), Judge(FakeLLM(memory_grade), "low"))
+    recorder = UsageRecorder()
+    with record_usage(recorder):
+        report = run_persona_evaluation(
+            cases, llm, HashingEmbedder(), settings, panel, FIXTURE / "persona.txt", repeats=2
+        )
+    recorder.write(tmp_path)
+    one_item = [
+        "import",
+        "build",
+        "index",
+        "ask",
+        "ask",
+        "delete",
+        "import",
+        "build",
+        "index",
+        "ask",
+        "ask",
+        "delete",
+        "build",
+        "index",
+        "ask",
+        "ask",
+    ]
+    assert events == one_item * 2
+    assert extracted == [1, 1, 0, 1, 1, 0]  # Existing source never gets re-extracted.
+    assert parsed_dates == [dt.date.today()] * 4
+    assert settings.db_path.read_bytes() == before
+    assert settings.db_path.stat().st_mode == mode
+    assert private_paths and all(not path.parent.exists() for path in private_paths)
+    assert snapshots[0][0].isdisjoint(snapshots[1][0]) and not snapshots[2][0]
+    assert len(snapshots[2][1]) == len(snapshots[5][1]) == 1
+    assert report.skipped == {} and report.warnings == ()
+    assert [case.input.case_id for case in report.cases] == [
+        f"{item}@{step}" for item in ("tea", "port") for step in ("add", "modify", "delete")
+    ]
+    assert [case.group_id for case in report.cases] == ["tea"] * 3 + ["port"] * 3
+    assert len(report.predictions) == 12
+    assert [prediction.text for prediction in report.predictions] == [
+        text
+        for text in ("桂花茶", "薄荷茶", "资料里没有记录这个事实。", "星港", "月港", "资料里没有记录这个事实。")
+        for _ in range(2)
+    ]
+    assert report.cases[1].expected.answer == "薄荷茶"
+    assert report.cases[4].expected.answer == "月港"
+    data = summarize(report)["update"]
+    assert data["status"] == "run" and data["n_cases"] == 6 and data["judge_calls"] == 24
+    assert data["metrics"]["accuracy"] == {
+        "n_scored": 6,
+        "n_groups": 2,
+        "mean": 1.0,
+        "ci95": bootstrap_grouped({"tea": [1, 1, 1], "port": [1, 1, 1]}, "personal:update:accuracy"),
+    }
+    assert all(row.rubric_version == "1" for row in report.judgements)
+    with sqlite3.connect(f"{settings.db_path.resolve().as_uri()}?mode=ro", uri=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 0
+    for secret in ("INVENTED-QUESTION", "桂花茶", "薄荷茶", "星港", "月港"):
+        assert secret not in caplog.text
+        for name in ("usage.json", "calls.jsonl"):
+            assert secret not in (tmp_path / name).read_text()
+    out = tmp_path / "records"
+    write_outputs(out, report, settings)
+    assert read_records(out / "records.json") == Report.model_validate_json(report.model_dump_json())
+    for name in ("report.json", "report.md"):
+        assert "INVENTED-QUESTION" not in (out / name).read_text()
+        assert "桂花茶" not in (out / name).read_text()
+    assert compare_reports(report, report)["categories"]["update"]["metrics"]["accuracy"]["ties"] == 6
+    old = run_evaluation(cases, InventedSystem(), panel, FIXTURE / "persona.txt")
+    assert compare_reports(old, report)["categories"]["update"]["status"] == "not run"
+    assert compare_reports(report, old)["runs"]["A"]["update"]["status"] == "run"
+    values = {"tea@add": 1, "tea@modify": 0.5, "tea@delete": 0, "port@add": 0.5, "port@modify": 1, "port@delete": 1}
+    changed = report.model_copy(
+        update={
+            "judgements": tuple(
+                row.model_copy(update={"score": values[row.case_id]}) if row.status is JudgeStatus.OK else row
+                for row in report.judgements
+            )
+        }
+    )
+    score = summarize(changed)["update"]["metrics"]["accuracy"]
+    assert score["mean"] == pytest.approx(4 / 6)
+    assert score["ci95"] == bootstrap_grouped({"tea": [1, 0.5, 0], "port": [0.5, 1, 1]}, "personal:update:accuracy")
+    delta = compare_reports(report, changed)["categories"]["update"]["metrics"]["accuracy"]
+    assert (delta["wins"], delta["losses"], delta["ties"]) == (0, 3, 3)
+    missing = report.model_copy(
+        update={
+            "predictions": tuple(p for p in report.predictions if not (p.case_id == "tea@delete" and p.repeat == 1))
+        }
+    )
+    assert summarize(missing)["update"]["metrics"]["accuracy"]["n_scored"] == 5
+    assert compare_reports(report, missing)["categories"]["update"]["metrics"]["accuracy"]["n_unpaired"] == 1
+
+
+@pytest.mark.parametrize("failure_stage", ["parse", "extract", "build", "index", "judge", "chat"])
+def test_update_failure_privacy_cleanup_and_original_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure_stage: str
+) -> None:
+    settings = memory_settings(tmp_path)
+    seed_memory(settings)
+    before = settings.db_path.read_bytes()
+    paths: list[Path] = []
+    secret = "INVENTED-QUESTION 我选择桂花茶。 INVENTED-ANSWER"
+    original_init = PersonaStore.__init__
+
+    def init(store: PersonaStore, path: Any) -> None:
+        paths.append(Path(path))
+        original_init(store, path)
+
+    def fails(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(secret)
+
+    def backend(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if (
+            (failure_stage == "extract" and schema is ExtractDraft)
+            or (failure_stage == "judge" and schema.__name__ in {"_Accuracy", "_Refusal"})
+            or (failure_stage == "chat" and schema is ChatDraft)
+        ):
+            raise RuntimeError(secret)
+        return memory_grade(system, user, schema)
+
+    monkeypatch.setattr(PersonaStore, "__init__", init)
+    if failure_stage in {"parse", "build", "index"}:
+        monkeypatch.setattr(
+            "twin.evals.personal."
+            + {"parse": "parse_text", "build": "build_profile", "index": "index_persona"}[failure_stage],
+            fails,
+        )
+    llm = FakeLLM(backend)
+    panel = (Judge(llm, "low"),)
+    cases = update_cases(tmp_path)
+    if failure_stage in {"judge", "chat"}:
+        report = run_persona_evaluation(cases, llm, HashingEmbedder(), settings, panel, FIXTURE / "persona.txt")
+        data = summarize(report)["update"]
+        assert data["metrics"]["accuracy"]["mean"] is None
+        assert data["judge_failures"] == (6 if failure_stage == "judge" else 0)
+        assert data["prediction_failures"] == (6 if failure_stage == "chat" else 0)
+        assert secret not in report.model_dump_json()
+    else:
+        with pytest.raises(RuntimeError, match="详情已隐藏") as caught:
+            run_persona_evaluation(cases, llm, HashingEmbedder(), settings, panel, FIXTURE / "persona.txt")
+        assert secret not in str(caught.value) and caught.value.__suppress_context__
+    assert secret not in caplog.text
+    assert settings.db_path.read_bytes() == before
+    assert paths and all(not path.parent.exists() for path in paths)
+
+
+def test_update_adapter_backups_live_wal_without_writing_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = memory_settings(tmp_path)
+    llm = FakeLLM(memory_grade)
+    original_index = index_persona
+    copies: list[Path] = []
+
+    def index(copy: PersonaStore, embedder: Any, local: Settings) -> Any:
+        copies.append(copy.path)
+        assert any(source.title == "wal" for source in copy.list_sources())
+        assert any(expr.text == "虚构背景：只用干净画笔。" for expr in copy.list_expressions())
+        return original_index(copy, embedder, local)
+
+    monkeypatch.setattr("twin.evals.personal.index_persona", index)
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_text(SourceKind.DOCUMENT, "wal.txt", "虚构背景：只用干净画笔。", settings))
+        before = settings.db_path.read_bytes()
+        wal = settings.db_path.with_name(settings.db_path.name + "-wal")
+        wal_before = wal.read_bytes()
+        report = run_evaluation(
+            update_cases(tmp_path),
+            PersonaSystem(PersonaChat(store, llm, HashingEmbedder(), settings)),
+            (Judge(llm, "low"),),
+            FIXTURE / "persona.txt",
+            max_workers=8,
+        )
+        assert summarize(report)["update"]["metrics"]["accuracy"]["mean"] == 1
+        assert settings.db_path.read_bytes() == before and wal.read_bytes() == wal_before
+        assert len(store.list_sources()) == 1 and not store.list_items()
+        # The CLI entry uses a separate mode=ro connection rather than the live store handle.
+        cli_report = run_persona_evaluation(
+            update_cases(tmp_path),
+            llm,
+            HashingEmbedder(),
+            settings,
+            (Judge(llm, "low"),),
+            FIXTURE / "persona.txt",
+        )
+        assert summarize(cli_report)["update"]["metrics"]["accuracy"]["mean"] == 1
+        assert settings.db_path.read_bytes() == before and wal.read_bytes() == wal_before
+    assert len(set(copies)) == 2 and all(not path.parent.exists() for path in copies)
+
+
+def test_cli_update_category_excluded_does_not_edit_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "twin.toml"
+    config.write_text('target_name = "虚构林沐"\ndb_path = "fixture.db"\n')
+    llm = FakeLLM(grade)
+    monkeypatch.setattr("twin.cli.make_llm", lambda s: llm)
+    monkeypatch.setattr("twin.evals.personal.make_llm", lambda s, section: llm)
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "eval",
+            "--evalset",
+            str(FIXTURE / "evalset.json"),
+            "--persona-ref",
+            str(FIXTURE / "persona.txt"),
+            "--out",
+            str(tmp_path / "out"),
+            "--categories",
+            "fact",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    report = read_records(tmp_path / "out" / "records.json")
+    assert report.skipped == {"update": 0} and report.warnings == ()
+    assert {schema for schema, _, _ in llm.calls} == {"ChatDraft", "_Accuracy"}
+    assert "update 已" not in result.output
+
+
+def test_update_retrieves_document_expressions_without_profile_items(tmp_path: Path) -> None:
+    settings = memory_settings(tmp_path)
+    seed_memory(settings)
+
+    def backend(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is ExtractDraft:
+            return {"items": []}
+        return memory_grade(system, user, schema)
+
+    llm = FakeLLM(backend)
+    report = run_persona_evaluation(
+        update_cases(tmp_path),
+        llm,
+        HashingEmbedder(),
+        settings,
+        (Judge(llm, "low"),),
+        FIXTURE / "persona.txt",
+    )
+    assert summarize(report)["update"]["metrics"]["accuracy"]["mean"] == 1
+    assert all(not any(c.ref_id.startswith("pi_") for c in p.citations) for p in report.predictions)
+    assert all(p.citations for p in report.predictions if not p.case_id.endswith("@delete"))

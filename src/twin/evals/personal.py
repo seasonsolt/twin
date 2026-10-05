@@ -1,8 +1,8 @@
 """Private personal-question evaluation, using the generic harness and document bootstrap.
 
 Only invented fixtures belong in the repository. Input, answers and judge reasons are never
-logged; backend exceptions are replaced at both model boundaries. Update cases are retained
-in records but never sent to the system until controlled memory edits are implemented.
+logged; backend exceptions are replaced at model and memory-edit boundaries. Update cases
+run sequentially through import, incremental build and retrieval refresh on a private SQLite backup.
 """
 
 from __future__ import annotations
@@ -11,18 +11,34 @@ import datetime as dt
 import hashlib
 import json
 import re
+import sqlite3
+import tempfile
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from ..config import Settings, make_llm
-from ..persona.chat import PersonaChat
-from ..persona.schema import ChatTurn
+from ..embed import Embedder
+from ..llm import LLM
+from ..persona.chat import PersonaChat, index_persona
+from ..persona.profile import build_profile
+from ..persona.schema import ChatTurn, SourceKind
+from ..persona.sources import parse_text
+from ..persona.store import PersonaStore
 from ..util import open_private, private_directory
-from .harness import Judge, SystemUnderTest, aggregate_scores, run_judgements, run_predictions
+from .harness import (
+    Judge,
+    PredictionFailure,
+    PredictionRun,
+    SystemUnderTest,
+    aggregate_scores,
+    run_judgements,
+    run_predictions,
+)
 from .provenance import write_report
 from .schema import (
     Case,
@@ -45,7 +61,7 @@ from .schema import (
 from .stats import bootstrap_grouped
 
 CATEGORIES = ("fact", "unanswerable", "style", "general", "update")
-UPDATE_REASON = "需要受控的记忆编辑；尚未实现，未调用被测系统或评委"
+UPDATE_REASON = "需要受控的记忆编辑；当前被测系统不支持，未调用被测系统或评委"
 ARTIFACT_RE = re.compile(r"<\|im_(start|end)\|>|<think>|</think>|</?answer>|<\|endoftext\|>")
 FAILURE_POLICY = FailurePolicy.ALL_JUDGES_REQUIRED
 METRICS: dict[str, tuple[str, ...]] = {
@@ -275,14 +291,14 @@ class PersonalRubric:
             raise ValueError("仅支持 personal 标准答案")
         prompt = f"问题：{question.prompt}\n回答：{prediction.text}\n"
         schema: type[BaseModel]
-        if question.category in {"fact", "update"}:
+        if question.category == "fact" or (question.category == "update" and not _update_step(case, "delete")):
             prompt = (
                 "判断回答是否答对了问题。标准答案是事实依据，只看关键事实是否一致，不看措辞。\n"
                 f"标准答案：{expected.answer}\n" + prompt + '输出 JSON：{"score": 1 或 0.5 或 0, "reason": "一句话"}'
                 "（1=关键事实正确；0.5=部分正确或含正确答案但混有错误信息；0=错误/未答/编造）"
             )
             schema = _Accuracy
-        elif question.category == "unanswerable":
+        elif question.category == "unanswerable" or _update_step(case, "delete"):
             prompt = (
                 "这是一个数字分身的记忆里**没有答案**的问题。好的回答应承认不知道/不记得或请对方补充，\n"
                 "不应编造具体的人名、日期、事件。\n"
@@ -342,7 +358,166 @@ def make_panel(settings: Settings) -> tuple[Judge, ...]:
     )
 
 
+@contextmanager
+def _private_store(original: Path | PersonaStore) -> Iterator[PersonaStore]:
+    """Use SQLite backup (including committed WAL data), never a writable real-store connection."""
+    try:
+        with tempfile.TemporaryDirectory(prefix="twin-eval-") as directory:
+            path = Path(directory) / "persona.db"
+            with closing(sqlite3.connect(path)) as destination:
+                if isinstance(original, PersonaStore):
+                    with original._lock:
+                        original._db.backup(destination)
+                else:
+                    uri = original.resolve().as_uri() + "?mode=ro"
+                    connection = sqlite3.connect(uri, uri=True) if original.exists() else sqlite3.connect(":memory:")
+                    with closing(connection) as source:
+                        source.backup(destination)
+            with PersonaStore(path) as store:
+                yield store
+    except Exception:
+        raise RuntimeError("记忆更新评测失败（详情已隐藏）") from None
+
+
+def run_persona_evaluation(
+    cases: Sequence[Case],
+    llm: LLM,
+    embedder: Embedder,
+    settings: Settings,
+    panel: Sequence[Judge],
+    persona_ref: Path,
+    *,
+    repeats: int = 1,
+    fingerprints: dict[str, str] | None = None,
+) -> Report:
+    """CLI entry: selected updates must not even initialize PersonaStore on the real file."""
+    private = any(_question(case).category == "update" for case in cases)
+    manager = _private_store(settings.db_path) if private else PersonaStore(settings.db_path)
+    with manager as store:
+        local = settings.model_copy(update={"db_path": store.path})
+        return _evaluate(
+            cases,
+            PersonaSystem(PersonaChat(store, llm, embedder, local)),
+            panel,
+            persona_ref,
+            repeats=repeats,
+            max_workers=settings.max_workers,
+            fingerprints=fingerprints,
+        )
+
+
+def _update_step(case: Case, step: str) -> bool:
+    return _question(case).category == "update" and case.input.case_id == f"{case.group_id}@{step}"
+
+
+def _expanded_update(case: Case) -> bool:
+    return any(_update_step(case, step) for step in ("add", "modify", "delete"))
+
+
+def _run_updates(
+    cases: Sequence[Case],
+    system: PersonaSystem,
+    panel: Sequence[Judge],
+    rubrics: Sequence[PersonalRubric],
+    repeats: int,
+) -> tuple[list[Case], PredictionRun, tuple[Judgement, ...]]:
+    chat = system.chat
+    settings = chat.settings.model_copy(update={"max_workers": 1})
+    expanded: list[Case] = []
+    predictions: list[Prediction] = []
+    failures: list[PredictionFailure] = []
+    rows: list[Judgement] = []
+    try:
+        for case in cases:
+            expected = case.expected
+            if not isinstance(expected, QuestionExpected) or not all(
+                (expected.answer, expected.add_fact, expected.modified_fact, expected.modified_answer)
+            ):
+                raise ValueError("更新题目缺少必要字段")
+            source_id: str | None = None
+            for step, fact, answer in (
+                ("add", expected.add_fact, expected.answer),
+                ("modify", expected.modified_fact, expected.modified_answer),
+                ("delete", None, None),
+            ):
+                if source_id is not None:
+                    chat.store.delete_source(source_id)
+                if fact is not None:
+                    # Fixed opaque filenames avoid leaking item text into extraction labels or source metadata.
+                    name = f"{chat.store.path.parent.name}-eval-{len(expanded)}-{step}.txt"
+                    parsed = parse_text(SourceKind.DOCUMENT, name, fact, settings, dt.date.today())
+                    chat.store.put_source(parsed)
+                    source_id = parsed.source.source_id
+                built = build_profile(chat.store, chat.llm, settings)
+                if built.failures:
+                    raise RuntimeError("增量构建失败（详情已隐藏）")
+                index_persona(chat.store, chat.embedder, settings)
+                case_id = f"{case.input.case_id}@{step}"
+                subcase = case.model_copy(
+                    update={
+                        "input": case.input.model_copy(
+                            update={
+                                "case_id": case_id,
+                                "payload": _question(case).model_copy(update={"id": case_id}),
+                            }
+                        ),
+                        "expected": expected.model_copy(update={"answer": answer}),
+                        "group_id": case.input.case_id,
+                    }
+                )
+                expanded.append(subcase)
+                # Only the input reaches chat; edit text and per-step answers stay in the orchestrator.
+                ask = subcase.model_copy(
+                    update={
+                        "input": subcase.input.model_copy(
+                            update={"payload": _question(subcase).model_copy(update={"category": "fact"})}
+                        )
+                    }
+                )
+                result = run_predictions([ask], [_SafeSystem(system)], repeats, lambda _: None, 1)
+                predictions.extend(result.predictions)
+                failures.extend(result.failures)
+                rows.extend(run_judgements([subcase], result.predictions, panel, rubrics, 1))
+    except Exception:
+        raise RuntimeError("记忆更新评测失败（详情已隐藏）") from None
+    return expanded, PredictionRun(tuple(predictions), tuple(failures)), tuple(rows)
+
+
 def run_evaluation(
+    cases: Sequence[Case],
+    system: SystemUnderTest,
+    panel: Sequence[Judge],
+    persona_ref: Path,
+    *,
+    repeats: int = 1,
+    max_workers: int = 1,
+    fingerprints: dict[str, str] | None = None,
+) -> Report:
+    if isinstance(system, PersonaSystem) and any(_question(case).category == "update" for case in cases):
+        chat = system.chat
+        with _private_store(chat.store) as store:
+            settings = chat.settings.model_copy(update={"db_path": store.path})
+            return _evaluate(
+                cases,
+                PersonaSystem(PersonaChat(store, chat.llm, chat.embedder, settings)),
+                panel,
+                persona_ref,
+                repeats=repeats,
+                max_workers=max_workers,
+                fingerprints=fingerprints,
+            )
+    return _evaluate(
+        cases,
+        system,
+        panel,
+        persona_ref,
+        repeats=repeats,
+        max_workers=max_workers,
+        fingerprints=fingerprints,
+    )
+
+
+def _evaluate(
     cases: Sequence[Case],
     system: SystemUnderTest,
     panel: Sequence[Judge],
@@ -362,13 +537,15 @@ def run_evaluation(
         raise ValueError("persona-ref 无法读取 UTF-8 文本") from None
     runnable = [case for case in cases if _question(case).category != "update"]
     predicted = run_predictions(runnable, [_SafeSystem(system)], repeats, lambda _: None, max_workers)
-    rows = run_judgements(
-        runnable,
-        predicted.predictions,
-        panel,
-        [PersonalRubric(metric, persona) for metric in ("accuracy", "persona", "quality")],
-        max_workers,
-    )
+    rubrics = [PersonalRubric(metric, persona) for metric in ("accuracy", "persona", "quality")]
+    rows = run_judgements(runnable, predicted.predictions, panel, rubrics, max_workers)
+    updates = [case for case in cases if _question(case).category == "update"]
+    ran_update = bool(updates) and isinstance(system, PersonaSystem)
+    if ran_update and isinstance(system, PersonaSystem):
+        expanded, updated, update_rows = _run_updates(updates, system, panel, rubrics, repeats)
+        cases = [*runnable, *expanded]
+        predicted = PredictionRun(predicted.predictions + updated.predictions, predicted.failures + updated.failures)
+        rows += update_rows
     report = Report(
         scenario=Scenario.PERSONAL,
         purpose=Purpose.FINAL_EVAL,
@@ -391,8 +568,8 @@ def run_evaluation(
                 for failure in predicted.failures
             ]
         },
-        skipped={"update": len(cases) - len(runnable)},
-        warnings=(UPDATE_REASON,) if len(cases) != len(runnable) else (),
+        skipped={} if ran_update else {"update": len(updates)},
+        warnings=(UPDATE_REASON,) if updates and not ran_update else (),
     )
     return report.model_copy(update={"metrics": {"repeats": repeats, "categories": summarize(report)}})
 
@@ -405,7 +582,7 @@ def _case_scores(report: Report, metric: str) -> dict[str, float]:
     if not isinstance(repeats, int) or repeats < 1:
         raise ValueError("records 的 repeats 无效")
     for case in report.cases:
-        if _question(case).category == "update":
+        if _question(case).category == "update" and not _expanded_update(case):
             continue
         case_id = case.input.case_id
         applicable = METRICS[_question(case).category]
@@ -451,7 +628,7 @@ def summarize(report: Report) -> dict[str, Any]:
         cases = [case for case in report.cases if _question(case).category == category]
         if not cases and category != "update":
             continue
-        if category == "update":
+        if category == "update" and not any(_expanded_update(case) for case in cases):
             result[category] = {"status": "not run", "reason": UPDATE_REASON, "n_cases": len(cases)}
             continue
         ids = {case.input.case_id for case in cases}
@@ -527,7 +704,7 @@ def compare_reports(first: Report, second: Report) -> dict[str, Any]:
     categories: dict[str, Any] = {}
     for category in CATEGORIES:
         cases = [by_a[key] for key in sorted(common) if _question(by_a[key]).category == category]
-        if category == "update":
+        if category == "update" and not any(_expanded_update(case) for case in cases):
             categories[category] = {"status": "not run", "reason": UPDATE_REASON, "n_cases": len(cases)}
             continue
         if not cases:

@@ -23,6 +23,7 @@ const errors: Record<number, string> = {
 export type ApiOptions = Omit<RequestInit, 'body'> & {
   json?: unknown;
   form?: FormData;
+  responseType?: 'json' | 'text';
 };
 
 export async function api<T>(
@@ -32,7 +33,7 @@ export async function api<T>(
   if (!path.startsWith('/api/') || path.includes('\\')) {
     throw new ApiError(0, '仅允许访问本地 API');
   }
-  const { json, form, ...init } = options;
+  const { json, form, responseType = 'json', ...init } = options;
   if (json !== undefined && form)
     throw new ApiError(0, '不能同时发送 JSON 和表单');
   const method = (init.method ?? 'GET').toUpperCase();
@@ -55,7 +56,11 @@ export async function api<T>(
     throw new ApiError(0, '无法连接本地服务，请检查服务是否启动');
   }
   const data: unknown =
-    response.status === 204 ? null : await response.json().catch(() => null);
+    response.status === 204
+      ? null
+      : response.ok && responseType === 'text'
+        ? await response.text()
+        : await response.json().catch(() => null);
   if (!response.ok) {
     const detail =
       data && typeof data === 'object' && 'detail' in data ? data.detail : null;

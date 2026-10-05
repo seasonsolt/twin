@@ -24,7 +24,7 @@ export const navItems = [
   { route: 'questionnaire', title: '建档问卷', icon: ClipboardList },
   { route: 'persona', title: '人格档案', icon: BookUser },
   { route: 'sources', title: '记忆资料', icon: Folder },
-  { route: 'identity', title: '身份与授权', icon: Fingerprint },
+  { route: 'identity', title: '身份', icon: Fingerprint },
   { route: 'gallery', title: '组件画廊', icon: Shapes },
 ];
 
@@ -232,11 +232,10 @@ export function AppShell() {
                 .map((row, i) => (
                   <Badge
                     key={`${row.kind}-${i}`}
-                    tone={row.granted ? 'info' : 'warning'}
-                    title={`${row.provider} · ${row.host ?? row.provider}`}
+                    tone="info"
+                    title={`${row.kind} · ${row.provider} · ${row.host ?? row.provider}`}
                   >
-                    {row.kind} · {row.host ?? row.provider} ·{' '}
-                    {row.granted ? '外部已授权' : '外部未授权'}
+                    外部 · {row.host ?? row.provider}
                   </Badge>
                 ))}
               <span className="ml-auto text-xs text-tertiary">

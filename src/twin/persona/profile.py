@@ -41,7 +41,7 @@ MAX_QUOTES = 3
 STYLE_DIMENSION = "D6"
 
 
-STALE_PROFILE_NOTICE = "资料或授权有变化，尚未重新构建；档案和聊天仍基于上次构建"
+STALE_PROFILE_NOTICE = "资料有变化，尚未重新构建；档案和聊天仍基于上次构建"
 
 
 def profile_stale(store: PersonaStore) -> bool:

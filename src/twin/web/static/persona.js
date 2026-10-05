@@ -15,7 +15,7 @@ const KIND_OPTIONS = [
   ["biography", "传记与他人记述", "别人写的关于本人的传记、年谱、报道；标题里的年份作为下面段落的日期"],
 ];
 const LEVEL_TONES = { 0: "neutral", 1: "info", 2: "go", 3: "accent" };
-const STALE_PROFILE_NOTICE = "资料或授权有变化，尚未重新构建；档案和聊天仍基于上次构建";
+const STALE_PROFILE_NOTICE = "资料有变化，尚未重新构建；档案和聊天仍基于上次构建";
 const CHAT_KEY = "persona.chat";
 const POLL_MS = 1000;
 

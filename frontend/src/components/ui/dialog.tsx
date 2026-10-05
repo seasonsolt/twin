@@ -1,5 +1,5 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, type Transition } from 'motion/react';
 import { X } from 'lucide-react';
 import {
   createContext,
@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { exitDurations, useMotionPreset } from '../../design/motion';
 import { Button, IconButton } from './controls';
+import { cn } from '../../lib/utils';
 
 export function Dialog({
   open,
@@ -20,6 +21,8 @@ export function Dialog({
   children,
   onCloseAutoFocus,
   onOpenAutoFocus,
+  className,
+  exitTransition,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -28,6 +31,8 @@ export function Dialog({
   children?: ReactNode;
   onCloseAutoFocus?: (event: Event) => void;
   onOpenAutoFocus?: (event: Event) => void;
+  className?: string;
+  exitTransition?: Transition;
 }) {
   const { reduced, transition, exit: fade } = useMotionPreset('gentle');
   const exit = { ...fade, duration: exitDurations.dialog };
@@ -62,10 +67,13 @@ export function Dialog({
                 exit={{
                   opacity: 0,
                   scale: reduced ? 1 : 0.98,
-                  transition: exit,
+                  transition: exitTransition ?? exit,
                 }}
                 transition={transition}
-                className="fixed top-1/2 left-1/2 z-50 max-h-[85dvh] w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-6 shadow-elevation-3"
+                className={cn(
+                  'fixed top-1/2 left-1/2 z-50 max-h-[85dvh] w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-6 shadow-elevation-3',
+                  className,
+                )}
               >
                 <div className="mb-3 flex items-center justify-between gap-4">
                   <RadixDialog.Title className="text-lg font-semibold">

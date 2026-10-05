@@ -3,6 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { useReducedMotion } from 'motion/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  segmentReply,
+  replyUnitDelay,
+} from '../components/effects/ReplyReveal';
+import {
   FlowStepper,
   MessageList,
   MetricNumber,
@@ -143,6 +147,35 @@ it('keeps full text accessible while the animated reply and loading spans are ar
   for (const span of container.querySelectorAll('.blur-text span, [style]')) {
     expect(span.closest('[aria-hidden="true"]')).not.toBeNull();
   }
+});
+
+it('segments Chinese into multiple reveal units without changing visible or screen-reader text', () => {
+  vi.mocked(useReducedMotion).mockReturnValue(false);
+  const text = '我会先听大家的意见。 Hello world!';
+  const { container } = render(<ReplyReveal text={text} />);
+  expect(
+    container.querySelectorAll('[data-reveal-unit]').length,
+  ).toBeGreaterThan(4);
+  expect(container.querySelector('.sr-only')?.textContent).toBe(text);
+  expect(container.querySelector('.blur-text')?.textContent).toBe(text);
+  expect(segmentReply('中文句子').length).toBeGreaterThan(1);
+  expect(replyUnitDelay(1000) * 999 + 0.12).toBeLessThanOrEqual(1.200001);
+});
+
+it('falls back to CJK characters and space-delimited Latin runs', () => {
+  vi.stubGlobal('Intl', { ...Intl, Segmenter: undefined });
+  expect(segmentReply('中文 hello world 日本語')).toEqual([
+    '中',
+    '文',
+    ' ',
+    'hello',
+    ' ',
+    'world',
+    ' ',
+    '日',
+    '本',
+    '語',
+  ]);
 });
 
 it('never intercepts global Tab navigation through the upstream list', () => {

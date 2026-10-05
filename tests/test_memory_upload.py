@@ -268,6 +268,7 @@ def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> 
         assert not client.get("/api/persona/state").json()["stale"]
         assert client.get("/api/persona/items").json() == []
         js = client.get("/static/persona.js").text
+        assert pf.STALE_PROFILE_NOTICE == "资料有变化，尚未重新构建；档案和聊天仍基于上次构建"
         assert pf.STALE_PROFILE_NOTICE in js and "buildDiffView(r)" in js and "sourceMemoryLine(s)" in js
 
 

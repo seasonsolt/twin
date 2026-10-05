@@ -12,7 +12,6 @@ export interface Status {
     host: string | null;
     external: boolean;
     declared: boolean;
-    granted: boolean;
   }[];
   labels: { explicit: string; disclaimer: string; chat_notice: string };
 }
@@ -39,11 +38,13 @@ export function startStatusPolling() {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let controller: AbortController | undefined;
   let stopped = false;
+  let initialLoading = true;
   const poll = async () => {
-    if (stopped || document.hidden) return;
+    if (stopped || (document.hidden && !initialLoading)) return;
     const active = new AbortController();
     controller = active;
     await useStatus.getState().refresh(active.signal);
+    initialLoading = false;
     if (
       !stopped &&
       !document.hidden &&
@@ -54,6 +55,7 @@ export function startStatusPolling() {
   };
   const visibility = () => {
     clearTimeout(timer);
+    if (initialLoading) return;
     controller?.abort();
     if (!document.hidden) void poll();
   };

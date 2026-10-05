@@ -35,17 +35,17 @@ describe('local API client', () => {
   it('maps Chinese detail to a typed error and preserves its status', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ detail: '尚未授权' }), { status: 403 }),
-        ),
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: '请求被安全策略拒绝' }), {
+          status: 403,
+        }),
+      ),
     );
     await expect(api('/api/example')).rejects.toMatchObject({
       name: 'ApiError',
       status: 403,
-      message: '尚未授权',
-      detail: '尚未授权',
+      message: '请求被安全策略拒绝',
+      detail: '请求被安全策略拒绝',
     });
   });
 

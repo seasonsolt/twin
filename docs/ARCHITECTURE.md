@@ -14,7 +14,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | --- | --- | --- | --- |
 | Identity 身份 | 这个分身是谁、哪些维度允许采集、用什么音色和形象、对外怎么标识、数据能否出境 | L0 契约，加治理（横切） | **已完成：契约、台账、出境许可、预置音色、统一标识** |
 | Memory upload 记忆上传 | 上传聊天、文档、问卷、访谈、传记、会议转写，看到"记住了什么、还缺什么" | L1 语料、L2 认知 | 已有：多来源导入、化名处理、人格档案、细项完成度、审核 |
-| Service 服务 | 对话；听它说；以后看它讲、通过 API 调用 | L3 运行时、L4 展示、L5 接入 | 已有：对话、逐句回放、朗读、形象；未做：视频片段、API |
+| Service 服务 | 对话；听它说；通过 API/MCP 调用，以后看它讲 | L3 运行时、L4 展示、L5 接入 | 已有：对话、逐句回放、朗读、形象、API/MCP；未做：视频片段 |
 
 服务的"内容"只来自 L3 运行时；声音、形象、视频是"呈现通道"，只能呈现已经有依据的回答，不能生成新内容。
 
@@ -28,8 +28,8 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.transcripts`、`persona.questionnaire` |
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |
-| L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render` |
-| L5 接入（9） | 命令行、网页 | `cli`、`web.*` |
+| L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render`、`service` |
+| L5 接入（9） | 命令行、网页、API/MCP | `cli`、`web.*`、`api`、`mcp_server` |
 | 横切：评测（8） | 执行框架、评委、统计、来源记录、回听评测 | `evals.harness`、`evals.provenance`、`evals.personal`、`media.check` |
 | 横切：治理 | 授权、标识、隐私、数据出境 | 规则见第 4 节；身份契约、授权台账、出境许可、预置音色与统一标识已完成 |
 
@@ -40,7 +40,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 3. **每个边界一个契约加一组适配器。** 上游类型只出现在适配器里，换实现只改适配器和它的测试。现有边界：
    - L1 → L2：`Expression`（谁、何时、什么场合、原文、来源类型）
    - L2 → L3：人格档案条目（带细项编号、证据、来源类型）
-   - L3 → L4：`ChatReply` 经 `media.adapters` 变成 `PresentableAnswer`
+   - L3 → L4：`ChatReply` 经 `media.adapters` 变成 `PresentableAnswer`；服务经 `service` 变成 `ServiceAnswer`
    - L4 → 语音、识别后端：`SpeechSynthesizer` / `SpeechResult`、`SpeechRecognizer` / `Transcription`
    - 评测 → 被测系统：`SystemUnderTest`
 4. **契约带版本、只增不删。** 新字段有默认值；改变含义就升版本，并保留旧版本的读取。
@@ -76,4 +76,4 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 1. **本人资料评测场景**：把现有题库接进评测框架，作为之后所有改动的记分板。
 2. **Identity（已完成）**：契约、台账、出境许可、预置音色、统一标识。配置音色经后端预置列表校验，网页标识统一来自媒体契约；本人声音复刻与照片驱动形象仍禁止（M4 门槛）。
 3. **Memory upload（进行中）**：上传后的"记住了什么、还缺什么"视图，与细项完成度打通。已接入每份来源支撑条目/细项摘要、构建条目变化计数，以及资料/授权变动后的过期档案提示。
-4. **Service**：风格化形象、对话片段导出、对外 API。
+4. **Service（进行中）**：已接入风格化形象、对话回放导出、令牌保护的 HTTP API 与 stdio MCP（共用有据、带标识的回答契约，见 [SERVICE.md](SERVICE.md)）；视频片段仍未做。

@@ -119,7 +119,11 @@ twin persona coverage                               # 各维度的完成度，�
 twin persona chat "你怎么看远程办公？"
 twin persona chat --as-of 2025-12-31 "那时候你怎么看？"
 twin ui                                             # 本机网页：问卷、导入、档案、完成度、聊天、回放与朗读
+twin api                                            # 令牌保护的本机 HTTP API（先设置 TWIN_API_TOKEN）
+twin mcp                                            # stdio MCP，供其他工具和 Agent 使用
 ```
+
+API/MCP 配置、接口与隐私规则见 [docs/SERVICE.md](docs/SERVICE.md)。
 
 **语音（可选）**
 

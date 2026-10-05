@@ -187,6 +187,30 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   outputs and failure records are identical for serial and parallel execution.
 
 
+## Service presentation and access (S2)
+
+- `service`（代码层 7）拥有冻结、禁止额外字段的 `ServiceCitation` / `ServiceAnswer` v1；字段只增不删。
+  `answer_question(chat, question, as_of)` 是服务路径唯一的 ChatReply 适配器，调用
+  `PersonaChat.reply([ChatTurn(role="user", content=question)], as_of=as_of, persist=False)`；
+  问题超过 2000 字符时抛出不含输入的中文 ValueError。
+- 引用按 L3 顺序解析，条目复用聊天 `_visible_items`（含 `item_as_of` 与证据隐私视图），
+  表达复用 `expression_view(target_only=True, until=as_of)`；条目取最后可见证据，表达取本人文本，
+  沿用聊天的空白整理/截断。返回 ref_id/kind/quote/date/source_kind，不暴露来源路径或审核备注。
+- ServiceAnswer 包含 schema_version/answer/abstain/abstain_reason/confidence/citations/as_of/label/
+  persona_name/generated_at（UTC）；文本、弃权与置信度保持 L3 原值，label 与 EXPLICIT_LABEL 的 Literal 一致。
+  `ServiceIdentity` 仅含 name/avatar/voice/label，不输出授权或备注。
+- `api` / `mcp_server`（代码层 9）共用懒 ServiceBackend，配置 LLM 与 embed 均在构造前执行
+  `require_configured_egress`；注入 chat_factory 是可信测试接缝。后端缓存需重启才能应用撤回。
+  每次默认请求关闭临时 store，不写聊天日志；进程内 UsageRecorder 使用 service 阶段、pricing 与累计 budget，
+  不记录原文、不写追踪文件。
+- HTTP 的 /v1/health 无鉴权；/v1/identity、/v1/ask 使用 Bearer + compare_digest。
+  `[api] token_env` 默认 TWIN_API_TOKEN（至少 32 字符）；rate_per_minute 默认 30，
+  单令牌 60 秒滑动窗口，429 附 Retry-After。Host 默认仅 loopback 名称，额外主机显式允许，
+  非本机监听需 --allow-remote；请求体 16 KiB，问题 2000 字符。所有响应带 X-AI-Generated: twin。
+- 官方 mcp SDK FastMCP 通过 stdio 提供 ask_twin 与 twin_identity，公布结构化输出 schema，
+  文本以显式 AI 标识开头；拒绝出境是中文工具错误，后端错误固定中文消息，不记录个人文本。
+  命令、请求/输出格式与客户端配置见 [SERVICE.md](SERVICE.md)。
+
 ## Media presentation (M0)
 
 - `media.schema` (layer 1) defines frozen `PresentableAnswer`, `Segment`, `MediaCitation`, `MediaScript` and

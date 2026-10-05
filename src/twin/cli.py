@@ -62,6 +62,10 @@ api_key_env = "TWIN_LLM_KEY"
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
+# [api] # 对外服务：令牌值仅放环境变量，至少 32 个字符，见 docs/SERVICE.md。
+# token_env = "TWIN_API_TOKEN"
+# rate_per_minute = 30 # 每个令牌每分钟最多请求数（滑动窗口）。
+
 # [avatar] # 风格化插画，不支持照片或视频输入（M4 门槛）。
 # preset = "default" # 可选 default、ink、dawn。
 
@@ -281,7 +285,7 @@ def _open_when_started(server: Any, url: str) -> None:
         webbrowser.open(url)
 
 
-def _serve(application: Any, host: str, port: int, url: str, open_browser: bool) -> None:
+def _serve(application: Any, host: str, port: int, url: str, open_browser: bool, title: str = "网页界面") -> None:
     """Bind first, so a busy port is reported in Chinese before uvicorn starts, then serve until Ctrl-C."""
     import uvicorn
 
@@ -290,9 +294,9 @@ def _serve(application: Any, host: str, port: int, url: str, open_browser: bool)
     try:
         sock = socket.create_server((address, port), family=family)
     except OSError as e:
-        raise _fail(f"无法在 {host}:{port} 上启动网页界面：{e}（端口可能已被占用，可以用 --port 换一个端口）") from e
+        raise _fail(f"无法在 {host}:{port} 上启动{title}：{e}（端口可能已被占用，可以用 --port 换一个端口）") from e
     server = uvicorn.Server(uvicorn.Config(application, log_level="warning"))
-    _say(f"网页界面：{url}（按 Ctrl-C 停止）")
+    _say(f"{title}：{url}（按 Ctrl-C 停止）")
     if open_browser:
         threading.Thread(target=_open_when_started, args=(server, url), daemon=True).start()
     with sock:
@@ -347,6 +351,42 @@ def ui(
     url_host = "127.0.0.1" if address in _WILDCARD_HOSTS else (f"[{address}]" if ":" in address else address)
     application = create_app(settings, allowed_hosts=(*extra_hosts, *(allow_host or ())))
     _serve(application, host, port, f"http://{url_host}:{port}", open_browser)
+
+
+@app.command("api")
+def api_command(
+    ctx: typer.Context,
+    host: Annotated[str, typer.Option("--host", help="监听地址，默认只监听本机")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="端口")] = 8780,
+    allow_host: Annotated[list[str] | None, typer.Option("--allow-host", help="额外接受的主机名，可重复")] = None,
+    allow_remote: Annotated[bool, typer.Option("--allow-remote", help="明确允许非本机监听，远程访问须用 TLS")] = False,
+) -> None:
+    """启动 Bearer 令牌保护的 HTTP API，见 docs/SERVICE.md。"""
+    from .api import api_token, create_api
+
+    settings = _settings(ctx)
+    with _errors():
+        token = api_token(settings)
+    if not _is_loopback(host) and not allow_remote:
+        raise _fail("非本机监听需显式指定 --allow-remote；默认仅监听 127.0.0.1")
+    if not _is_loopback(host):
+        _progress("警告：API 将允许远程连接；请使用可信网络和 TLS 代理保护 Bearer 令牌")
+    address = host.strip().strip("[]")
+    url_host = "127.0.0.1" if address in _WILDCARD_HOSTS else (f"[{address}]" if ":" in address else address)
+    application = create_api(settings, token=token, allowed_hosts=allow_host or ())
+    _serve(application, host, port, f"http://{url_host}:{port}", False, title="服务 API")
+
+
+@app.command("mcp")
+def mcp_command(ctx: typer.Context) -> None:
+    """启动 stdio MCP 服务，不监听网络端口，见 docs/SERVICE.md。"""
+    from .mcp_server import create_mcp_server
+
+    settings = _settings(ctx)
+    try:
+        create_mcp_server(settings).run(transport="stdio")
+    except Exception:
+        raise _fail("MCP 服务暂时不可用，请检查配置后重试") from None
 
 
 persona_app = typer.Typer(

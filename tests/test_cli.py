@@ -53,7 +53,7 @@ def test_remaining_commands() -> None:
     assert set(
         cli.app.registered_commands[i].name or cli.app.registered_commands[i].callback.__name__
         for i in range(len(cli.app.registered_commands))
-    ) == {"init", "ui", "eval", "eval-compare"}
+    ) == {"init", "ui", "api", "mcp", "eval", "eval-compare"}
 
 
 @pytest.fixture(autouse=True)

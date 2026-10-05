@@ -164,6 +164,11 @@ class BudgetSettings(BaseModel):
     max_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
+class ApiSettings(BaseModel):
+    token_env: str = Field(default="TWIN_API_TOKEN", min_length=1)
+    rate_per_minute: int = Field(default=30, gt=0)
+
+
 class Settings(BaseModel):
     db_path: Path = Path("data/twin.db")
     target_name: str = "本人"
@@ -181,6 +186,7 @@ class Settings(BaseModel):
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
 
     def is_target(self, speaker: str) -> bool:
         return speaker == self.target_name or speaker in self.target_aliases

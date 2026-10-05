@@ -116,9 +116,9 @@ def test_old_part_manifest_and_identity_load() -> None:
         )
     )
     assert manifest.segments[0].parts[0].lipsync is None
-    identity = Identity.model_validate_json('{"name":"合成人物","aliases":[],"consents":{}}')
+    identity = Identity.model_validate_json('{"name":"合成人物","aliases":[]}')
     assert identity.avatar is None
-    assert Identity.from_parts("合成人物", [], [], avatar="ink").avatar == "ink"
+    assert Identity(name="合成人物", aliases=[], avatar="ink").avatar == "ink"
 
 
 @pytest.mark.parametrize(

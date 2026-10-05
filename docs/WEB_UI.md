@@ -10,7 +10,7 @@
 | `#/questionnaire` | 建档问卷、草稿、提交与重测 |
 | `#/persona` | 人格档案、条目审核、完成度与采集建议 |
 | `#/sources` | 记忆资料导入、删除与人格构建 |
-| `#/identity` | 身份与授权：名字、预置音色、细项许可、出境与生物特征限制 |
+| `#/identity` | 身份：名字、预置音色与形象、出境状态（只读） |
 
 顶栏显示目标姓名、资料/条目数量及模型后端。所有生成内容均标注模拟性质，不代表本人意见。
 
@@ -50,16 +50,11 @@
 
 错误返回 `{detail}`：400 参数/资料前置条件，403 安全检查，404 不存在，409 构建冲突（带 job_id），413 太大，429 待处理过多，503 后端配置错误，500 内部错误。
 
-## 身份与授权
+## 身份
 
-`#/identity` 只展示配置中的名字、别名与预置音色，不展示个人资料或台账备注。细项表显示最新决定、UTC 时间和来源；无记录时显示“未记录”及旧问卷推导状态。授权/撤回只追加台账，撤回先确认，变更后提示重建并链接到 `#/sources`。
+`#/identity` 只读：显示配置中的名字、别名、预置音色、预置形象，以及各后端的出境状态（类型、提供方、主机、本机/外部、声明/推断）。配置了外部后端即视为同意出境，页面和顶部状态栏如实标出。本人声音复刻与照片驱动形象不支持（由配置校验保证）。细项是否采集由问卷推导，见人格档案页的“未授权”标记。
 
-出境表显示类型、提供方、主机、本机/外部、声明/推断和许可，仅外部行提供授权/撤回。授权前必须确认数据将发送到哪些外部主机；同类型许可共享，包括 `llm` 评委。出境许可在下一进程或下一次懒构造后端时生效，已构造的网页后端需重启，不热更新。生物特征只读、按钮禁用，显示 M4 禁止原因。AI 标识和隐私说明从 `/api/status.labels` 读取，不在页面中复制文案；授权后刷新顶部状态及说明。
-
-- `GET /api/identity` 返回 `{name, aliases, voice, consents, egress, biometric}`。`consents` 包含每个需授权的细项，以及台账中其他范围的最新记录，按 scope 排序。每行字段为 `{scope, name, decision, label, at, origin, granted, derived_decision}`；有记录时 decision 为 `grant/revoke/decline`，无记录时 decision/at/origin 为 null、label 为“未记录”，derived_decision 为旧问卷推导的 `grant/decline`（有记录时为 null）。granted 是当前有效状态。
-- `egress` 直接来自 `egress_status`，每行 `{kind, provider, host, external, declared, granted}`，含评委；仅返回主机，不返回端点路径、查询参数或密钥。`biometric` 固定 `{voice_clone: false, face: false, reason: <中文 M4 禁止原因>}`。
-- `POST /api/identity/consent` 接收 `{scope, decision: "grant"|"revoke", note?: str}`，note 最多 200 字，写入台账的 origin 为 `web`。沿用 `X-Twin: 1`、Host 和请求体大小保护。不支持无须授权的细项；无效范围或生物特征 grant 返回 400 `{detail}`，采用身份契约的中文错误，不回显备注。生物特征 revoke 可记入台账，但不能启用该能力。
-- 成功返回 `{seq, scope, decision, at, origin, rebuild_needed, restart_needed, message}`，无 note。facet 的 rebuild_needed 为 true，message 提示 `twin persona build`；egress 的 rebuild_needed 为 false、restart_needed 为 false（下一次懒构造无需重启），但 message 明确提醒已构造的网页后端需重启。所有范围的 restart_needed 均为 false；接口不自动构建、不重启进程。
+- `GET /api/identity` 返回 `{name, aliases, voice, avatar, egress}`；`egress` 每行 `{kind, provider, host, external, declared}`，含评委；仅返回主机，不返回端点路径、查询参数或密钥。
 
 ## 播放、语音和导出
 
@@ -85,7 +80,7 @@ Node 22、pnpm 10.32.1、React 19、严格 TypeScript、Vite、Tailwind CSS v4�
 frontend/
 ├── src/
 │   ├── design/       # tokens.css、motion.ts
-│   ├── components/   # ui/、motion/、layout/
+│   ├── components/   # ui/、motion/、layout/、effects/、reactbits/
 │   ├── lib/          # 同源 API、格式化与样式合并
 │   ├── stores/       # 状态与可见性轮询
 │   ├── pages/        # 占位页、组件画廊
@@ -152,6 +147,26 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pi
 
 所有 AI 标签及免责声明必须来自 `/api/status.labels`（explicit/disclaimer/chat_notice），不能在前端复制或兜底硬编码；未加载显示 Skeleton/留空。API 客户端仅接受本地 `/api/`，JSON/form 编码，所有非 GET 请求带 `X-Twin: 1`，错误为带 status/detail 的 `ApiError`，保留中文 detail，其他错误映射为中文。
 
+### React Bits（F0b）
+
+使用官方 shadcn registry 的 **TypeScript + Tailwind** 变体，配置在 `frontend/components.json`。安装命令为 `pnpm -C frontend dlx shadcn@latest add --cwd frontend @react-bits/<Name>-TS-TW --yes`（本次 CLI 4.21.2）；安装日期 2026-10-05。7 个源文件均与 React Bits 提交 `ca44b3f9ee180676a06d7de8ec6bea84cddff85b` 的 `src/ts-tailwind/` 字节一致，之后仅做一处带行内说明的 Stepper 空 interface lint 修复。源文件保存在 `frontend/src/components/reactbits/`，保留上游格式（仅排除 Prettier，ESLint 仍检查）。完整 **MIT + Commons Clause** 许可、来源及版本在该目录的 `NOTICE.md`：仅用于本应用，不单独销售、再许可或作为组件库再分发。
+
+页面只从 `frontend/src/components/effects/` 导入应用 wrapper；ESLint `no-restricted-imports` 禁止该目录之外的应用代码直接导入 vendored 组件（含相对路径、`@/` 别名），测试验证规则及页面导入。继续复用现有 Motion、设计令牌和 UI，不安装其他装饰组件。新增运行依赖只有精确版本 `gsap@3.15.0`（AnimatedContent/ScrollTrigger）；`motion@12.34.0` 保持原版本。资源全部本地打包，无 CDN 或运行时网络资源。
+
+| 上游组件 / wrapper | 应用 API | 默认行为 | 减少动态效果 |
+| --- | --- | --- | --- |
+| BlurText / `ReplyReveal` | `text, className?` | 按空格分词，≤25ms 交错、总等待≤150ms，3px 模糊/2px 位移、120ms 揭示；中文无空格片段整体揭示 | 全文立即显示 |
+| ShinyText / `ThinkingLabel` | `text?`（默认“思考中…”） | 次级/主文字令牌间的柔和高光，3s 播放、2s 间隔，polite status | 静态文字 |
+| CountUp / `MetricNumber` | `value, from?, suffix?` | 0.6s spring 计数，千位分隔；网格预留起点/终点宽度 | 最终值立即显示 |
+| AnimatedList / `MessageList` | `items: {id,text}[], label, className?` | 使用稳定 ID 的语义列表；上游淡入、现有 Motion 150ms 淡出；禁用全局方向键/Tab 监听、缩放和渐变，无列表交错 | 直接显示，无入场动画；退出仅淡出 |
+| SpotlightCard / `SpotlightAction` | `children, label, onClick, disabled?` | 语义按钮、键盘入口；accent 6% 光斑 × 上游 0.6 opacity，原配色由 wrapper 覆盖 | 完全关闭光斑 |
+| Stepper / `FlowStepper` | `steps: {id,title,content}[], onComplete?, completedText?` | 应用令牌、可聚焦的步骤按钮、中文导航与完成状态；为后续问卷预备 | 同样的步骤导航，直接切换，无滑动/高度动画 |
+| AnimatedContent / `SectionReveal` | `children, className?` | 首次滚动进入时 8px/250ms 揭示，无缩放 | 区块立即可见，不创建滚动触发器 |
+
+文字与数值使用完整的 visually hidden 文本，所有动态呈现均 `aria-hidden`，避免重复或逐词/逐帧播报；文字动画不改变布局，指标预留宽度。Gallery 的“React Bits 动效”区展示全部 7 个 wrapper，各有重播按钮和减少动态效果说明；列表支持添加/移除，流程支持切换与完成。其他页面尚未迁移，不填充虚构的聊天/指标业务。
+
+确认弹窗打开时明确聚焦**取消**，不自动聚焦破坏性动作；程序化 `confirm()` 将打开前的 `document.activeElement` 保存在请求中，并在关闭动画卸载后恢复仍连接的元素，关闭时通过独立 ref 保留焦点，避免 request 清空后丢失目标。通知只通过 polite live region 播报，新增通知不主动移动焦点。测试覆盖无 trigger 的输入框焦点恢复，以及通知显示期间首个 Escape 关闭且返回入口。
+
 ### 迁移状态
 
 | 新路由 | 状态 | 旧界面 |
@@ -161,6 +176,6 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pi
 | `#/persona` | F0 占位 | `/#/persona` |
 | `#/sources` | F0 占位 | `/#/sources` |
 | `#/identity` | F0 占位 | `/#/identity` |
-| `#/gallery` | F0 组件与动效示例已实现 | 不适用 |
+| `#/gallery` | F0 UI + F0b React Bits wrapper 示例已实现 | 不适用 |
 
 测试覆盖 API CSRF/编码/错误、确认 true/false/关闭/Escape、IME 安全、Tabs、Switch/loading、通知、减少动态效果与双色对比度；`tests/test_web_next.py` 检查页面/资源 MIME、安全头、无内联脚本或外部资源、缺少构建的回退。

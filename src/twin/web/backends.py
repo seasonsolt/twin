@@ -4,7 +4,6 @@ import threading
 from collections.abc import Callable
 
 from ..config import Settings, make_embedder, make_llm
-from ..egress import EgressDenied, require_configured_egress
 from ..embed import Embedder
 from ..evals.harness import Judge
 from ..llm import LLM
@@ -25,8 +24,6 @@ class Backends:
         self, settings: Settings, llm_factory: LLMFactory | None, embedder_factory: EmbedderFactory | None
     ) -> None:
         self._settings = settings
-        self._check_llm = llm_factory is None
-        self._check_embedder = embedder_factory is None
         self._llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.llm))
         self._embedder_factory: EmbedderFactory = embedder_factory or (lambda: make_embedder(settings.embed))
         self._lock = threading.Lock()
@@ -38,11 +35,7 @@ class Backends:
         with self._lock:
             if self._llm is None:
                 try:
-                    if self._check_llm:
-                        require_configured_egress(self._settings, self._settings.llm)
                     self._llm = self._llm_factory()
-                except EgressDenied:
-                    raise
                 except Exception as e:
                     raise BackendUnavailable(
                         f"无法初始化大模型后端 {self._settings.llm.provider}：{e}"
@@ -54,11 +47,7 @@ class Backends:
         with self._lock:
             if self._embedder is None:
                 try:
-                    if self._check_embedder:
-                        require_configured_egress(self._settings, self._settings.embed)
                     self._embedder = self._embedder_factory()
-                except EgressDenied:
-                    raise
                 except Exception as e:
                     raise BackendUnavailable(f"无法初始化向量化后端 {self._settings.embed.provider}：{e}") from e
             return self._embedder
@@ -70,10 +59,7 @@ class Backends:
                 panel: list[Judge] = []
                 for k, judge in enumerate(self._settings.judges, 1):
                     try:
-                        require_configured_egress(self._settings, judge)
                         backend = make_llm(judge, f"judges #{k}")
-                    except EgressDenied:
-                        raise
                     except Exception as e:
                         raise BackendUnavailable(f"无法初始化第 {k} 个评委（[[judges]]，{judge.provider}）：{e}") from e
                     panel.append(Judge(backend, judge.effort_extract))
@@ -86,6 +72,6 @@ class Backends:
         for key, get in (("llm", self.llm), ("embed", self.embedder)):
             try:
                 out[key] = {"name": get().name, "error": None}
-            except (BackendUnavailable, EgressDenied) as e:
+            except BackendUnavailable as e:
                 out[key] = {"name": None, "error": str(e)}
         return out

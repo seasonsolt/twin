@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 from twin import cli
 from twin.api import BACKEND_UNAVAILABLE
-from twin.config import LLMSettings, Settings
+from twin.config import EmbedSettings, LLMSettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.mcp_server import TwinTools, create_mcp_server
@@ -109,22 +109,44 @@ def test_memory_session_round_trip(chat: PersonaChat, capsys: pytest.CaptureFixt
     assert chat.store.chat_demand() == {}
 
 
-def test_egress_denial_is_tool_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_external_backends_construct_without_grant(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings = Settings(
-        db_path=tmp_path / "twin.db", llm=LLMSettings(egress="external", base_url="https://external.invalid")
+        db_path=tmp_path / "twin.db",
+        llm=LLMSettings(egress="external", base_url="https://external.invalid"),
+        embed=EmbedSettings(provider="openai_compat", base_url="https://external.invalid"),
     )
+    constructed: list[str] = []
+    monkeypatch.setattr(
+        "twin.api.make_llm",
+        lambda _: (
+            constructed.append("llm")
+            or FakeLLM(
+                lambda *_: {
+                    "reply": "需要本人确认。",
+                    "citations": [],
+                    "confidence": 0.2,
+                    "abstain": True,
+                    "abstain_reason": "没有依据",
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr("twin.api.make_embedder", lambda _: constructed.append("embed") or HashingEmbedder())
     tools = TwinTools(settings)
-    assert not settings.db_path.exists()
-    with pytest.raises(ToolError, match="twin identity grant egress:llm"):
-        tools.ask_twin("私密问题")
+    assert not settings.db_path.exists() and not constructed
+    assert tools.ask_twin("私密问题").structuredContent
+    assert constructed == ["llm", "embed"]
 
     async def run() -> None:
         async with create_connected_server_and_client_session(create_mcp_server(settings)) as session:
             result = await session.call_tool("ask_twin", {"question": "私密问题"})
-            assert result.isError and "twin identity grant egress:llm" in str(result)
+            assert not result.isError and result.structuredContent
             assert "私密问题" not in str(result)
 
     asyncio.run(run())
+    assert constructed == ["llm", "embed", "llm", "embed"]
     assert "私密问题" not in capsys.readouterr().err
 
 

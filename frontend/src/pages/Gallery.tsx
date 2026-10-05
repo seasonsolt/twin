@@ -33,6 +33,15 @@ import {
 import { useMotionPreset } from '../design/motion';
 import { useStatus } from '../stores/status';
 import { formatNumber } from '../lib/utils';
+import {
+  ReplyReveal,
+  ThinkingLabel,
+  MetricNumber,
+  MessageList,
+  SpotlightAction,
+  FlowStepper,
+  SectionReveal,
+} from '../components/effects';
 
 function Story({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -416,6 +425,144 @@ export function Gallery() {
           </motion.button>
         </Story>
       </div>
+      <ReactBitsGallery />
     </div>
+  );
+}
+
+function EffectStory({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note: string;
+  children: ReactNode;
+}) {
+  const [replay, setReplay] = useState(0);
+  return (
+    <Story title={title}>
+      <div key={replay}>{children}</div>
+      <p className="text-sm text-secondary">减少动态效果：{note}</p>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => setReplay(replay + 1)}
+        aria-label={`重播 ${title}`}
+      >
+        重播
+      </Button>
+    </Story>
+  );
+}
+
+function ListDemo() {
+  const [extra, setExtra] = useState(false);
+  return (
+    <div className="space-y-3">
+      <MessageList
+        label="消息与资料示例"
+        items={[
+          { id: 'message', text: '消息：我会先整理已有资料。' },
+          { id: 'source', text: '资料：一次访谈记录' },
+          ...(extra ? [{ id: 'new', text: '新资料：一段日常记忆' }] : []),
+        ]}
+      />
+      <Button size="sm" variant="secondary" onClick={() => setExtra(!extra)}>
+        {extra ? '移除资料' : '添加资料'}
+      </Button>
+    </div>
+  );
+}
+
+function ReactBitsGallery() {
+  return (
+    <section aria-labelledby="react-bits-heading" className="space-y-6">
+      <h2 id="react-bits-heading" className="text-xl font-semibold">
+        React Bits 动效
+      </h2>
+      <p className="text-secondary">
+        短暂、局部的动效；页面只使用应用 wrapper，不直接依赖上游组件。
+      </p>
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <EffectStory
+          title="BlurText · 助手回复"
+          note="全文立即显示，不模糊、不逐词播放。"
+        >
+          <ReplyReveal text="我会先整理资料，再给出回答。 A quiet word-level reveal." />
+        </EffectStory>
+        <EffectStory title="ShinyText · 思考中" note="静态文字，不流动高光。">
+          <ThinkingLabel />
+        </EffectStory>
+        <EffectStory
+          title="CountUp · 指标"
+          note="立即显示最终值，保留数字宽度。"
+        >
+          <div className="flex gap-8">
+            <p>
+              覆盖率 <MetricNumber value={86} suffix="%" />
+            </p>
+            <p>
+              资料 <MetricNumber value={1280} />
+            </p>
+          </div>
+        </EffectStory>
+        <EffectStory
+          title="AnimatedList · 消息与资料"
+          note="直接显示列表，无缩放或交错；退出仅淡出。"
+        >
+          <ListDemo />
+        </EffectStory>
+        <EffectStory
+          title="SpotlightCard · 交互卡片"
+          note="关闭光斑；保留键盘与点击操作。"
+        >
+          <SpotlightAction
+            label="查看示例资料"
+            onClick={() => toast('这是示例资料', 'info')}
+          >
+            <h3 className="font-semibold">查看示例资料</h3>
+            <p className="text-sm text-secondary">
+              移动光标查看低强度蓝色光斑，也可用键盘打开。
+            </p>
+          </SpotlightAction>
+        </EffectStory>
+        <EffectStory
+          title="Stepper · 多步流程"
+          note="步骤直接切换，不滑动；按钮操作不变。"
+        >
+          <FlowStepper
+            steps={[
+              {
+                id: 'intro',
+                title: '准备',
+                content: <p>第一步：确认准备情况。</p>,
+              },
+              {
+                id: 'answer',
+                title: '回答',
+                content: <p>第二步：填写示例答案。</p>,
+              },
+              {
+                id: 'review',
+                title: '检查',
+                content: <p>第三步：检查后完成。</p>,
+              },
+            ]}
+            onComplete={() => toast('示例流程已完成', 'success')}
+          />
+        </EffectStory>
+        <EffectStory
+          title="AnimatedContent · 滚动揭示"
+          note="内容立即可见，无位移或滚动触发动画。"
+        >
+          <SectionReveal>
+            <p className="rounded-md border border-border bg-canvas p-4">
+              滚动到这里时，区块轻移 8px 并淡入；重播会重新触发。
+            </p>
+          </SectionReveal>
+        </EffectStory>
+      </div>
+    </section>
   );
 }

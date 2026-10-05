@@ -18,7 +18,7 @@ CHAT_NOTICE: Final = (
 
 
 def disclaimer(name: str, external: bool) -> str:
-    storage = "部分数据经已授权的外部服务处理，详见页面顶部的出境提示。" if external else "数据只保存在本机。"
+    storage = "部分数据经配置的外部服务处理，详见页面顶部的出境提示。" if external else "数据只保存在本机。"
     return f"所有推演结果均为模拟，供个人使用参考，不代表{name}本人的意见或决定。{storage}"
 
 

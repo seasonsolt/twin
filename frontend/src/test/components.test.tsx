@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   Button,
   ConfirmProvider,
+  Input,
   Switch,
   Tabs,
   Textarea,
@@ -76,6 +77,78 @@ describe('confirmation', () => {
     await user.click(screen.getByText('打开确认'));
     await user.keyboard('{Escape}');
     await waitFor(() => expect(result).toHaveBeenCalledWith(false));
+  });
+
+  it('restores the focused input after a programmatic confirm without a trigger', async () => {
+    let confirm!: ReturnType<typeof useConfirm>;
+    function Capture() {
+      confirm = useConfirm();
+      return <Input aria-label="原焦点" />;
+    }
+    render(
+      <ConfirmProvider>
+        <Capture />
+      </ConfirmProvider>,
+    );
+    const input = screen.getByRole('textbox', { name: '原焦点' });
+    input.focus();
+    let result!: Promise<boolean>;
+    act(() => {
+      result = confirm({
+        title: '程序确认',
+        body: '无需触发器',
+        confirmLabel: '删除',
+        tone: 'danger',
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '取消' })).toHaveFocus(),
+    );
+    expect(screen.getByRole('button', { name: '删除' })).not.toHaveFocus();
+    await userEvent.setup().keyboard('{Escape}');
+    expect(await result).toBe(false);
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it('focuses cancel and closes on the first Escape with a toast present', async () => {
+    const result = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConfirmProvider>
+        <ConfirmDemo result={result} />
+        <ToastViewport />
+      </ConfirmProvider>,
+    );
+    const trigger = screen.getByRole('button', { name: '打开确认' });
+    trigger.focus();
+    let dismiss!: () => void;
+    act(() => {
+      dismiss = toast('仍在显示的通知', 'info', 0);
+    });
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '取消' })).toHaveFocus(),
+    );
+    expect(screen.getByRole('button', { name: '确定' })).not.toHaveFocus();
+    let dismissNew!: () => void;
+    act(() => {
+      dismissNew = toast('打开后到达的通知', 'info', 0);
+    });
+    expect(screen.getByRole('button', { name: '取消' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(result).toHaveBeenCalledExactlyOnceWith(false));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+    act(() => {
+      dismiss();
+      dismissNew();
+    });
   });
 
   it('settles an outstanding promise when the provider unmounts', async () => {

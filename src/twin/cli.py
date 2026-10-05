@@ -21,18 +21,16 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from pydantic import ValidationError
 
 from .config import Settings, check_config_rename, load_settings, make_embedder, make_llm
-from .egress import egress_status, require_configured_egress
+from .egress import egress_status
 from .embed import Embedder, EmbedError
-from .identity import Decision, Identity
+from .identity import Identity
 from .llm import CallTally, LLMError
 from .media.schema import MediaScript
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
-from .persona.dimensions import FACETS, requires_consent
 from .persona.profile import STALE_PROFILE_NOTICE, build_profile, consented_facets, profile_stale, source_memories
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import parse_source
@@ -48,7 +46,7 @@ db_path = "data/twin.db"
 max_workers = 4
 
 [llm]
-# egress = "local" 或 "external"：未声明时按提供方/主机推断；外部服务需台账授权 egress:llm。
+# egress = "local" 或 "external"：未声明时按提供方/主机推断；外部服务按配置使用，界面如实标出。
 # 本机代理若转发到境外 API，应设置 egress = "external"。
 provider = "openai_compat"
 # 请设置内网模型名及端点；未配置不会调用公网默认端点。
@@ -57,7 +55,7 @@ provider = "openai_compat"
 api_key_env = "TWIN_LLM_KEY"
 
 [embed]
-# egress = "local" 或 "external"：hashing 默认为本机；外部向量服务需授权 egress:embed。
+# egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。
 # 本机转发代理应设置 egress = "external"。
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
@@ -71,17 +69,17 @@ api_key_env = "TWIN_EMBED_KEY"
 
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
 # [tts]
-# egress = "local" 或 "external"：silent 默认为本机；外部朗读服务需授权 egress:tts。
+# egress = "local" 或 "external"：silent 默认为本机；外部朗读服务按配置使用。
 # 本机转发代理应设置 egress = "external"。
 # provider = "silent"
 
 # [asr]
-# egress = "local" 或 "external"：非本机地址默认外部；个人数据需授权 egress:asr。
+# egress = "local" 或 "external"：非本机地址默认外部；外部识别服务按配置使用。
 # 本机转发代理应设置 egress = "external"；media check 只用于合成句集，不用于个人数据。
 # provider = "openai_compat"
 
 # [[judges]]
-# egress = "local" 或 "external"：每位评委也单独分类，共享 egress:llm 的台账授权。
+# egress = "local" 或 "external"：每位评委也单独分类，外部服务按配置使用。
 # 本机转发代理应设置 egress = "external"。
 # provider = "openai_compat"
 # model = "your-judge-model"
@@ -174,8 +172,6 @@ def _require_working_calls(llm: CallTally, stage: str) -> None:
 
 
 def _llm(settings: Settings) -> CallTally:
-    with _errors():
-        require_configured_egress(settings, settings.llm)
     try:
         llm = make_llm(settings.llm)
     except Exception as e:
@@ -186,8 +182,6 @@ def _llm(settings: Settings) -> CallTally:
 
 
 def _embedder(settings: Settings) -> Embedder:
-    with _errors():
-        require_configured_egress(settings, settings.embed)
     try:
         return make_embedder(settings.embed)
     except Exception as e:
@@ -399,80 +393,31 @@ def _persona_store(settings: Settings) -> PersonaStore:
     return PersonaStore(settings.db_path)
 
 
-identity_app = typer.Typer(help="身份与授权台账：查看、授权或撤回；记录只追加不删除。", no_args_is_help=True)
+identity_app = typer.Typer(help="查看配置的只读身份与出境状态。", no_args_is_help=True)
 app.add_typer(identity_app, name="identity")
 
 
 @identity_app.command("show")
 def identity_show(ctx: typer.Context) -> None:
-    """查看名字、别名及最新授权状态，不显示个人资料或备注。"""
+    """查看名字、别名、预置音色、预置形象与出境分类。"""
     settings = _settings(ctx)
-    with _errors(), _persona_store(settings) as store:
-        events = store.consent_events()
-        identity = Identity.from_parts(
-            settings.target_name,
-            settings.target_aliases,
-            events,
-            voice=settings.tts.voice,
-            avatar=settings.avatar.preset,
-        )
-        latest = {event.scope: event for event in events}
-        allowed = consented_facets(store)
+    identity = Identity(
+        name=settings.target_name,
+        aliases=settings.target_aliases,
+        voice=settings.tts.voice,
+        avatar=settings.avatar.preset,
+    )
     _say(f"名字：{identity.name}")
     _say(f"别名：{'、'.join(identity.aliases) or '—'}")
     _say(f"音色：{identity.voice}（预置音色；声音复刻与照片驱动形象在本版本禁止）")
     _say(f"形象：{identity.avatar}（风格化插画，不使用照片）")
-    _say("范围 | 最新决定 | 时间（UTC） | 来源")
-    scopes = set(latest) | {f"facet:{f.facet_id}" for f in FACETS if requires_consent(f.facet_id)}
-    labels = {Decision.GRANT: "已授权", Decision.REVOKE: "已撤回", Decision.DECLINE: "未授权"}
-    for scope in sorted(scopes):
-        if event := latest.get(scope):
-            _say(
-                f"{scope} | {labels[event.decision]}（{event.decision.value}） | "
-                f"{event.at.isoformat()} | {event.origin}"
-            )
-        else:
-            derived = "已授权" if scope.removeprefix("facet:") in allowed else "未授权"
-            _say(f"{scope} | 未记录（按问卷推导：{derived}） | — | —")
-    _say("出境：类型 | 提供方 | 主机 | 本机/外部 | 声明 | 许可")
-    for index, row in enumerate(egress_status(settings, identity)):
+    _say("出境：类型 | 提供方 | 主机 | 本机/外部 | 声明/推断")
+    for index, row in enumerate(egress_status(settings)):
         kind = row["kind"] if index < 4 else f"llm（评委 {index - 3}）"
-        permission = "无需" if not row["external"] else ("已授权" if row["granted"] else "未授权")
         _say(
             f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
-            f"{'外部' if row['external'] else '本机'} | {'已声明' if row['declared'] else '推断'} | "
-            f"{permission}"
+            f"{'外部' if row['external'] else '本机'} | {'声明' if row['declared'] else '推断'}"
         )
-
-
-IdentityScopeArgument = Annotated[str, typer.Argument(help="授权范围，如 facet:9.1 或 egress:llm")]
-IdentityNoteOption = Annotated[str, typer.Option("--note", help="备注（最多 200 字，不在输出中显示）")]
-
-
-def _identity_change(ctx: typer.Context, scope: str, decision: Decision, note: str) -> None:
-    with _errors(), _persona_store(_settings(ctx)) as store:
-        try:
-            event = store.append_consent(scope, decision, "cli", note)
-        except ValidationError as error:
-            # Validation diagnostics must not echo potentially personal note text.
-            raise _fail("；".join(e["msg"] for e in error.errors(include_input=False))) from error
-    _say(f"{event.scope}：{'已授权' if decision is Decision.GRANT else '已撤回'}（记录 {event.seq}）")
-    if event.scope.startswith("facet:"):
-        _say("请运行 `twin persona build`，使细项授权变更生效。")
-    if event.scope.startswith("egress:"):
-        _say("出境许可在下一进程或下一次懒构造后端时生效；已构造的网页后端需重启，不热更新。")
-
-
-@identity_app.command("grant")
-def identity_grant(ctx: typer.Context, scope: IdentityScopeArgument, note: IdentityNoteOption = "") -> None:
-    """追加授权记录；本版本禁止授权声音复刻或照片驱动形象。"""
-    _identity_change(ctx, scope, Decision.GRANT, note)
-
-
-@identity_app.command("revoke")
-def identity_revoke(ctx: typer.Context, scope: IdentityScopeArgument, note: IdentityNoteOption = "") -> None:
-    """追加撤回记录，保留全部历史。"""
-    _identity_change(ctx, scope, Decision.REVOKE, note)
 
 
 @persona_app.command("import")
@@ -634,10 +579,6 @@ def personal_eval_command(
     cases = select_cases(load_evalset(evalset), selected)
     settings = _settings(ctx)
     _usage_output.set(out)
-    require_configured_egress(settings, settings.llm)
-    require_configured_egress(settings, settings.embed)
-    for judge in settings.judges:
-        require_configured_egress(settings, judge)
     try:
         llm = make_llm(settings.llm)
         embedder = make_embedder(settings.embed)
@@ -746,7 +687,6 @@ def media_speak_command(
     with _errors():
         script = _media_source(ctx, source, kind, name)
         settings = _settings(ctx)
-        require_configured_egress(settings, settings.tts)
         try:
             synthesizer = make_synthesizer(settings.tts)
         except RenameError as e:
@@ -782,7 +722,6 @@ def media_check_command(
     with _errors():
         settings = _settings(ctx)
         texts = load_sentences(sentences) if sentences is not None else DEFAULT_SENTENCES
-        # Synthetic speech-evaluation sentences, not persona data: no egress grant is required.
         try:
             synthesizer = make_synthesizer(settings.tts)
             recognizer = make_recognizer(settings.asr)

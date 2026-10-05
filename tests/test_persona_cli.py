@@ -9,11 +9,9 @@ from pydantic import BaseModel
 from typer.testing import CliRunner, Result
 
 from twin import cli
-from twin.identity import Decision
 from twin.llm import FakeLLM
 from twin.persona import profile as pf
 from twin.persona.schema import ChatDraft
-from twin.persona.store import PersonaStore
 
 QUESTIONNAIRE = """**4. 排序。**　*偏好 · 2.1*
 
@@ -50,8 +48,6 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cli, "make_llm", lambda _: FakeLLM(handler))
     path = tmp_path / "twin.toml"
     path.write_text('target_name = "张明"\ndb_path = "twin.db"\nmax_workers = 2\n', encoding="utf-8")
-    with PersonaStore(tmp_path / "twin.db") as store:
-        store.append_consent("egress:llm", Decision.GRANT, "cli")
     (tmp_path / "问卷_2026-08-30.md").write_text(QUESTIONNAIRE, encoding="utf-8")
     (tmp_path / "群聊.txt").write_text(CHAT, encoding="utf-8")
     return path

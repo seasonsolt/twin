@@ -19,7 +19,6 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import Settings, make_embedder, make_llm
-from .egress import EgressDenied, require_configured_egress
 from .embed import Embedder
 from .llm import LLM
 from .persona.chat import PersonaChat
@@ -44,7 +43,7 @@ def api_token(settings: Settings, token: str | None = None) -> str:
 
 
 class ServiceBackend:
-    """Injected chat factories are trusted offline seams; configured backends are always gated."""
+    """Lazy configured backends with an injectable offline chat factory."""
 
     def __init__(self, settings: Settings, chat_factory: ChatFactory | None = None) -> None:
         self.settings = settings
@@ -60,8 +59,6 @@ class ServiceBackend:
                 return answer_question(self.chat_factory(), question, as_of)
             with self._lock:
                 if self._llm is None or self._embedder is None:
-                    require_configured_egress(self.settings, self.settings.llm)
-                    require_configured_egress(self.settings, self.settings.embed)
                     llm = make_llm(self.settings.llm)
                     embedder = make_embedder(self.settings.embed)
                     self._llm, self._embedder = llm, embedder
@@ -187,8 +184,6 @@ def create_api(
     def ask(body: AskRequest) -> ServiceAnswer | JSONResponse:
         try:
             return backend.ask(body.question, body.as_of)
-        except EgressDenied as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=403)
         except Exception:
             return JSONResponse({"detail": BACKEND_UNAVAILABLE}, status_code=503)
 

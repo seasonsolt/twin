@@ -46,7 +46,6 @@ from twin.evals.schema import (
     SystemSpec,
 )
 from twin.evals.stats import bootstrap_grouped
-from twin.identity import Decision
 from twin.llm import FakeLLM
 from twin.persona.chat import PersonaChat, index_persona
 from twin.persona.profile import ExtractDraft, build_profile
@@ -433,13 +432,17 @@ def test_cli_fake_llm_outputs_and_captured_logs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    with PersonaStore(tmp_path / "fixture.db") as store:
-        store.append_consent("egress:llm", Decision.GRANT, "cli")
     config = tmp_path / "twin.toml"
-    config.write_text('target_name = "虚构林沐"\ndb_path = "fixture.db"\n')
+    config.write_text(
+        'target_name = "虚构林沐"\ndb_path = "fixture.db"\n'
+        '[llm]\negress = "external"\n[[judges]]\negress = "external"\n'
+        '[embed]\nprovider = "openai_compat"\nbase_url = "https://embed.invalid/v1"\n'
+    )
     llm = FakeLLM(grade)
-    monkeypatch.setattr("twin.cli.make_llm", lambda s: llm)
-    monkeypatch.setattr("twin.evals.personal.make_llm", lambda s, section: llm)
+    constructed: list[str] = []
+    monkeypatch.setattr("twin.cli.make_llm", lambda s: constructed.append("llm") or llm)
+    monkeypatch.setattr("twin.cli.make_embedder", lambda s: constructed.append("embed") or HashingEmbedder())
+    monkeypatch.setattr("twin.evals.personal.make_llm", lambda s, section: constructed.append("judge") or llm)
     runner = CliRunner()
     out = tmp_path / "run"
     result = runner.invoke(
@@ -461,13 +464,13 @@ def test_cli_fake_llm_outputs_and_captured_logs(
         ],
     )
     assert result.exit_code == 0, result.output
+    assert constructed == ["llm", "embed", "judge"]
     report = read_records(out / "records.json")
     assert len(report.predictions) == 18 and report.metrics["repeats"] == 2
     assert summarize(report)["update"]["n_cases"] == 3
     assert "update 已在临时副本上运行" in result.output
     with PersonaStore(tmp_path / "fixture.db") as store:
         assert not store.list_sources() and not store.list_items()
-        assert len(store.consent_events()) == 1
     text = result.output + caplog.text
     for case in report.cases:
         assert case.input.payload.prompt not in text
@@ -832,8 +835,6 @@ def test_update_adapter_backups_live_wal_without_writing_original(
 
 
 def test_cli_update_category_excluded_does_not_edit_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with PersonaStore(tmp_path / "fixture.db") as store:
-        store.append_consent("egress:llm", Decision.GRANT, "cli")
     config = tmp_path / "twin.toml"
     config.write_text('target_name = "虚构林沐"\ndb_path = "fixture.db"\n')
     llm = FakeLLM(grade)

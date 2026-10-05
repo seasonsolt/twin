@@ -11,7 +11,6 @@ from mcp.types import CallToolResult, TextContent
 
 from .api import BACKEND_UNAVAILABLE, ChatFactory, ServiceBackend
 from .config import Settings
-from .egress import EgressDenied
 from .service import MAX_QUESTION_CHARS, QUESTION_TOO_LONG, ServiceAnswer, ServiceIdentity, public_identity
 
 ASK_DESCRIPTION = (
@@ -38,8 +37,6 @@ class TwinTools:
             raise ToolError("as_of 日期格式应为 YYYY-MM-DD") from None
         try:
             answer = self.backend.ask(question, horizon)
-        except EgressDenied as exc:
-            raise ToolError(str(exc)) from None
         except Exception:
             raise ToolError(BACKEND_UNAVAILABLE) from None
         text = f"{answer.label}\n{answer.answer}"

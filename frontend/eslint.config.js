@@ -12,4 +12,22 @@ export default tseslint.config(
       'react-hooks/exhaustive-deps': 'error',
     },
   },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/components/effects/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '(^|/)reactbits(/|$)',
+              message:
+                'Import application wrappers from components/effects, not React Bits sources.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

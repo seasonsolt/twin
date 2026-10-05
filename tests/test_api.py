@@ -77,7 +77,9 @@ def test_health_auth_identity_and_answer(token: str, chat: PersonaChat) -> None:
 
 
 @pytest.mark.parametrize("kind", ["llm", "embed"])
-def test_lazy_egress_refusal(token: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+def test_external_backends_construct_lazily_without_grant(
+    token: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
     settings = Settings(
         db_path=tmp_path / "twin.db",
         llm=LLMSettings(model="offline", base_url="http://127.0.0.1:8000/v1"),
@@ -87,15 +89,35 @@ def test_lazy_egress_refusal(token: str, tmp_path: Path, monkeypatch: pytest.Mon
     else:
         settings.embed = EmbedSettings(provider="openai_compat", base_url="https://external.invalid/v1")
     constructed: list[str] = []
-    monkeypatch.setattr(api, "make_llm", lambda _: constructed.append("llm"))
-    monkeypatch.setattr(api, "make_embedder", lambda _: constructed.append("embed"))
+    monkeypatch.setattr(
+        api,
+        "make_llm",
+        lambda _: (
+            constructed.append("llm")
+            or FakeLLM(
+                lambda *_: {
+                    "reply": "需要本人确认。",
+                    "citations": [],
+                    "confidence": 0.2,
+                    "abstain": True,
+                    "abstain_reason": "没有依据",
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(api, "make_embedder", lambda _: constructed.append("embed") or HashingEmbedder())
     client = TestClient(api.create_api(settings), base_url="http://127.0.0.1")
     assert client.get("/v1/health").status_code == 200
     assert not constructed and not settings.db_path.exists()
     response = client.post("/v1/ask", json={"question": "私密问题"}, headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 403 and f"twin identity grant egress:{kind}" in response.text
+    assert response.status_code == 200 and response.json()["answer"] == "需要本人确认。"
     assert response.headers["X-AI-Generated"] == "twin"
-    assert "私密问题" not in response.text and not constructed
+    assert "私密问题" not in response.text and constructed == ["llm", "embed"]
+    assert (
+        client.post("/v1/ask", json={"question": "私密问题"}, headers={"Authorization": f"Bearer {token}"}).status_code
+        == 200
+    )
+    assert constructed == ["llm", "embed"]
 
 
 def test_backend_failure_sanitized(token: str, capsys: pytest.CaptureFixture[str]) -> None:

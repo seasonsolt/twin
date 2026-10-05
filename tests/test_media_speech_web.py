@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 
 from twin.cli import app
 from twin.config import Settings, TTSSettings
-from twin.identity import Decision
 from twin.media.schema import AVATAR_PRESETS, OPENING_NOTICE
 from twin.media.tts import (
     MediaError,
@@ -26,7 +25,6 @@ from twin.media.tts import (
     SilentSynthesizer,
     SpeechSynthesizer,
 )
-from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.app import MAX_JSON_BYTES
 
@@ -182,8 +180,6 @@ def test_default_misconfiguration_only_affects_speech(tmp_path: Path, monkeypatc
             provider="cloudflare", base_url="https://speech.invalid/ai", api_key_env="TWIN_MISSING_TTS_KEY"
         ),
     )
-    with PersonaStore(settings.db_path) as store:
-        store.append_consent("egress:tts", Decision.GRANT, "cli")
     with TestClient(create_app(settings), base_url="http://localhost") as client:
         assert client.get("/").status_code == 200
         assert client.post("/api/media/script", json=BODY, headers=HEADERS).status_code == 200

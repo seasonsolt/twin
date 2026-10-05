@@ -98,8 +98,7 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 ```
 
 密钥只放在环境变量里（`TWIN_LLM_KEY`、`TWIN_EMBED_KEY` 等），配置文件只写变量名。
-外部后端处理本人资料前需运行 `twin identity grant egress:<kind>`（llm、embed、tts、asr）。
-用 `twin identity show` 查看各后端的出境分类和当前授权；本机转发代理需声明 `egress = "external"`。
+外部后端按配置使用，界面如实展示出境分类；用 `twin identity show` 查看，本机转发代理需声明 `egress = "external"`。
 
 **记忆上传**
 
@@ -127,7 +126,7 @@ API/MCP 配置、接口与隐私规则见 [docs/SERVICE.md](docs/SERVICE.md)。
 
 **语音（可选）**
 
-在 `twin.toml` 的 `[tts]` 里配置语音后端：自托管的 MOSS-TTS-Nano（见 [deploy/tts-moss](deploy/tts-moss/README.md)）或 Cloudflare MeloTTS（外部服务，朗读本人回复前需授权 `egress:tts`）。
+在 `twin.toml` 的 `[tts]` 里配置语音后端：自托管的 MOSS-TTS-Nano（见 [deploy/tts-moss](deploy/tts-moss/README.md)）或 Cloudflare MeloTTS（外部服务，按配置使用）。
 
 ```bash
 twin media speak 回复.json --out 音频目录/            # 带标识的分段语音和清单

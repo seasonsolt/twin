@@ -60,8 +60,11 @@ class ServiceIdentity(BaseModel):
 
 
 def public_identity(settings: Settings) -> ServiceIdentity:
-    identity = Identity.from_parts(
-        settings.target_name, [], [], voice=settings.tts.voice, avatar=settings.avatar.preset
+    identity = Identity(
+        name=settings.target_name,
+        aliases=settings.target_aliases,
+        voice=settings.tts.voice,
+        avatar=settings.avatar.preset,
     )
     return ServiceIdentity(name=identity.name, avatar=identity.avatar, voice=identity.voice)
 

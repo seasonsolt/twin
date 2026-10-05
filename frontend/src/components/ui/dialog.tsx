@@ -19,6 +19,7 @@ export function Dialog({
   body,
   children,
   onCloseAutoFocus,
+  onOpenAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -26,6 +27,7 @@ export function Dialog({
   body: string;
   children?: ReactNode;
   onCloseAutoFocus?: (event: Event) => void;
+  onOpenAutoFocus?: (event: Event) => void;
 }) {
   const { reduced, transition, exit: fade } = useMotionPreset('gentle');
   const exit = { ...fade, duration: exitDurations.dialog };
@@ -51,6 +53,7 @@ export function Dialog({
               forceMount
               asChild
               onCloseAutoFocus={onCloseAutoFocus}
+              onOpenAutoFocus={onOpenAutoFocus}
             >
               <motion.div
                 key="dialog"
@@ -104,6 +107,8 @@ const ConfirmContext = createContext<
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const queue = useRef<Request[]>([]);
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef<Element | null>(null);
   const [request, setRequest] = useState<Request | null>(null);
   const confirm = (options: ConfirmOptions) =>
     new Promise<boolean>((resolve) => {
@@ -112,8 +117,12 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       if (queue.current.length === 1) setRequest(next);
     });
   const finish = (result: boolean) => {
-    queue.current.shift()?.resolve(result);
+    const finished = queue.current.shift();
+    if (!finished) return;
+    restoreFocus.current = finished.focus;
+    finished.resolve(result);
     setRequest(queue.current[0] ?? null);
+    if (queue.current.length) cancelButton.current?.focus();
   };
   useEffect(
     () => () => {
@@ -131,17 +140,27 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         }}
         title={request?.options.title ?? ''}
         body={request?.options.body ?? ''}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          cancelButton.current?.focus();
+        }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
+          const target = restoreFocus.current;
           if (
-            request?.focus instanceof HTMLElement &&
-            request.focus.isConnected
+            !queue.current.length &&
+            target instanceof HTMLElement &&
+            target.isConnected
           )
-            request.focus.focus();
+            target.focus();
         }}
       >
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => finish(false)}>
+          <Button
+            ref={cancelButton}
+            variant="secondary"
+            onClick={() => finish(false)}
+          >
             取消
           </Button>
           <Button

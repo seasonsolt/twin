@@ -11,27 +11,21 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `config.Settings`: target name/aliases, privacy, database, concurrency, LLM, embedding, optional judges/pricing/budget, TTS and synthetic-speech ASR. OpenAI-compatible LLM endpoints require explicit model/base URL and never silently target a public default.
 - Tests are offline with `FakeLLM`, `HashingEmbedder`, fake HTTP transports and temporary databases. Python 3.12, strict mypy and ruff are required.
 
-## Identity 与授权台账
+## 只读 Identity
 
-- `identity`（代码层 1）是无 I/O 的冻结契约，后续只增不删。`Scope` 仅接受需授权细项的
-  `facet:<facet_id>`、`egress:llm|embed|tts|asr`、`biometric:voice_clone|face`。
-- `PersonaStore` 打开时以 `CREATE TABLE IF NOT EXISTS` 增加 `p_consent`；事件按自增 `seq` 只追加，
-  包含 `grant|revoke|decline`、UTC 时间、来源 `questionnaire|cli|web` 和可选备注，删除资料不删除授权历史。
-- `Identity.voice: str | None = None` 是追加的预置音色 ID，旧 JSON 缺失时为 `None`；
-  `Identity.from_parts(..., voice=...)` 可从配置填入，不构造语音后端。
-- `Identity.avatar: str | None = None` 追加风格化预置 ID，旧 JSON 默认 `None`；
-  `Identity.from_parts(..., avatar=...)` 可从配置填入，CLI 与 `/api/identity.avatar` 显示配置预置，不涉及真人资产。
-- `Identity.from_parts` 按 `seq` 折叠，每个范围以最新决定为准，只有 `grant` 算授权。
-  gated facet 无台账事件时保持旧问卷推导（回答且未拒绝）；非 gated facet 始终允许。
-- 问卷提交与文件导入在保存来源的同一事务中追加已回答细项的 `grant`、跳过细项的 `decline`；
-  重复导入视为再次提交。保留 `Source.declined_facets`。撤回后运行 `twin persona build` 删除该细项条目，
-  再由 `index_persona` 清除对应条目向量；不删除原始语料。
-- 生物特征范围在本版本永不可 `grant`（M4：不支持本人声音复刻、照片驱动形象）。
-  出境许可、预置音色校验与统一标识已接入。
-- `twin identity show` 仅显示名字、别名、配置音色及预置音色/M4 提示、授权状态/时间/来源；`grant <scope>`、`revoke <scope>`
-  可带 `--note`，备注不输出。
+- `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、
+  `voice: str | None = None`、`avatar: str | None = None`。预置 ID 从配置填入，不构造媒体后端。
+- **预发布 breaking change（I4）**：此前声明契约只增不删；本次按用户明确决定移除授权账本。
+  删除 `ConsentEvent`、`Decision`、`Scope`、`Origin`、生物特征 scopes，以及 `Identity.consents`、
+  `granted`、`from_parts` 和 `PersonaStore` 的授权读写方法。不再创建 `p_consent`；已有表不读取、不删除。
+- `consented_facets` 仅由问卷推导：非 gated facet 始终允许；gated facet 必须回答且未拒绝。
+  保留 `Source.declined_facets`；跨来源的拒绝优先于回答。问卷变化后重建档案并清理对应条目向量。
+- 生物特征规则仅作配置/后端预置音色校验：不支持真人声音复刻或照片驱动形象，形象必须为预置。
+- `twin identity show` 显示名字、别名、预置音色、预置形象与出境表（类型、提供方、主机、本机/外部、声明/推断）。
+  `GET /api/identity` 返回 name/aliases/voice/avatar/egress，不再返回 consents 或 biometric；
+  移除 CLI grant/revoke 和 `POST /api/identity/consent`。细项未授权状态仍在档案/覆盖页面展示。
 
-## 出境许可（EgressInfo）
+## 出境分类（EgressInfo）
 
 - `config.egress_of(section)`（代码层 2）返回冻结的 `EgressInfo`：`kind`（llm/embed/tts/asr）、
   `external`、`declared`、`host`、中文 `reason`。仅输出主机名，不含 URL 凭据、路径或查询串。
@@ -39,13 +33,11 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   为本机，anthropic/claude_cli/cloudflare 为外部。OpenAI 兼容地址只有 localhost、127.0.0.0/8、::1
   为本机（理由为“本机地址，未声明是否转发”），LAN 和未知地址均为外部。LLM/embed 与工厂一样
   回退到 `OPENAI_BASE_URL`；TTS/ASR 只使用配置地址。本机转发代理必须声明 external。
-- `egress.require_egress`（代码层 9）读取 Identity 或 PersonaStore 的最新台账决定：只有 grant
-  允许外部服务，无记录、decline、revoke 均拒绝；本机不需授权。CLI 在构造 LLM、embed、每位评委
-  和回复朗读 TTS 前检查；Web 默认懒工厂同样检查，拒绝返回 403 `{"detail": "中文原因与授权命令"}`。
-  `/api/status` 增加各后端（含评委）的 `egress` 列表，包含 kind/provider/host/external/declared/granted。
-- 检查在首次构造而非应用启动；撤回对下一进程/下一次懒构造生效，已有 Web 缓存需重启，不热更新。
-  Web 注入工厂是可信测试接缝，仅绕过该工厂的检查；默认工厂和所有配置评委仍强制执行。
-  `media check` 仅用于非个人数据的合成评测句集（含自定义句集），不需出境授权。
+- 出境由配置决定，界面如实标出；CLI、Web、API、MCP 和评测按配置正常构造外部后端，
+  不读取授权、不设出境门禁或对应 403。`egress.egress_status(settings)`（代码层 9）仅提供展示行。
+  `/api/status` 和 `/api/identity` 的 egress 列表含 kind/provider/host/external/declared（含评委），无 granted。
+- 后端仍懒构造并缓存，配置变更后重启；注入工厂仍用于离线测试。
+  `media check` 仍仅用于合成评测句集（含自定义句集）。
 
 ## Transcript parsing (code layer 4)
 
@@ -148,12 +140,12 @@ def source_to_meeting(parsed: ParsedSource) -> Meeting
 
 ## Memory upload queries and builds (code layers 3/5)
 
-- `PersonaStore` 的 `p_meta.sources_changed_at` 为带 UTC 时区的 ISO 时间（微秒精度），在新增/替换来源、实际删除来源及 `facet:` 授权决定改变时，与对应写入同事务更新；重复相同授权决定及非 facet 授权不更新。删除来源保留授权历史。`source_pending:<source_id>` 是来源等待构建的内部标记，成功构建后清除。
+- `PersonaStore` 的 `p_meta.sources_changed_at` 为带 UTC 时区的 ISO 时间（微秒精度），仅在新增/替换来源、实际删除来源时，与对应写入同事务更新。`source_pending:<source_id>` 是来源等待构建的内部标记，成功构建后清除。
 - `profile.source_memories(store) -> dict[str, SourceMemory]` 是纯查询：每个来源返回 `expressions_total/target/others`（包括 held_out）、`items_supported`、`facets`（facet_id/name）、`contributes_nothing`、`build_status`（not_built/remembered/no_items）。按证据 expression_id 查询实际来源，重复引用和跨来源条目对每个来源只计一次；未拒绝条目口径与完成度一致。仍存于上次档案的条目也计入支撑，过期状态独立展示。
-- `profile.profile_stale(store) -> bool`：sources_changed_at 晚于 built_at，或来源非空而 built_at 缺失；旧无 sources_changed_at 的库兼容，旧 built_at 无时区时按本机时间解析。这个状态只覆盖来源/细项授权，不追踪配置变化。
+- `profile.profile_stale(store) -> bool`：sources_changed_at 晚于 built_at，或来源非空而 built_at 缺失；旧无 sources_changed_at 的库兼容，旧 built_at 无时区时按本机时间解析。这个状态只覆盖来源变化，不追踪配置变化。
 - `BuildReport` 保留原字段并追加 `facet_diffs: dict[str, FacetItemDiff]`；`FacetItemDiff` 含 `added/changed/removed`。比较 replace_facet_items 前后的原始 item_id 与 statement，不受人工审核替换表述影响；相同 ID 仅 statement 改变算 changed，ID 改变算 removed + added，证据/情境改变不算 statement diff。包含成功合并但零变化的细项，不包含失败或跳过的细项。
 - BuildReport 提供派生总计 `items_added/items_changed/items_removed/facets_changed` 和 `change_summary()`。facets_changed 只计算有非零 diff 的细项；无变化增量构建总计为零。构建日志仅使用编号、计数及错误类型，不记录条目文本、来源标题或异常正文。
-- 只有无失败且输入版本仍未变的构建，才由 `mark_profile_built` 同事务更新 built_at 并清除 pending 标记；built_at 记录本次构建开始时间。部分失败或构建期间来源/授权改变仍保持 stale，已完成结果保留供重试。CLI build/chat 在 stale 时向 stderr 提示，chat 仍运行。
+- 只有无失败且输入版本仍未变的构建，才由 `mark_profile_built` 同事务更新 built_at 并清除 pending 标记；built_at 记录本次构建开始时间。部分失败或构建期间来源改变仍保持 stale，已完成结果保留供重试。CLI build/chat 在 stale 时向 stderr 提示，chat 仍运行。
 
 ## Generic evaluation schema (code layer 1)
 
@@ -199,8 +191,8 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
 - ServiceAnswer 包含 schema_version/answer/abstain/abstain_reason/confidence/citations/as_of/label/
   persona_name/generated_at（UTC）；文本、弃权与置信度保持 L3 原值，label 与 EXPLICIT_LABEL 的 Literal 一致。
   `ServiceIdentity` 仅含 name/avatar/voice/label，不输出授权或备注。
-- `api` / `mcp_server`（代码层 9）共用懒 ServiceBackend，配置 LLM 与 embed 均在构造前执行
-  `require_configured_egress`；注入 chat_factory 是可信测试接缝。后端缓存需重启才能应用撤回。
+- `api` / `mcp_server`（代码层 9）共用懒 ServiceBackend，配置 LLM 与 embed 均
+  按配置使用外部后端，无出境授权门禁；注入 chat_factory 是可信测试接缝。后端配置变更需重启。
   每次默认请求关闭临时 store，不写聊天日志；进程内 UsageRecorder 使用 service 阶段、pricing 与累计 budget，
   不记录原文、不写追踪文件。
 - HTTP 的 /v1/health 无鉴权；/v1/identity、/v1/ask 使用 Bearer + compare_digest。
@@ -208,7 +200,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   单令牌 60 秒滑动窗口，429 附 Retry-After。Host 默认仅 loopback 名称，额外主机显式允许，
   非本机监听需 --allow-remote；请求体 16 KiB，问题 2000 字符。所有响应带 X-AI-Generated: twin。
 - 官方 mcp SDK FastMCP 通过 stdio 提供 ask_twin 与 twin_identity，公布结构化输出 schema，
-  文本以显式 AI 标识开头；拒绝出境是中文工具错误，后端错误固定中文消息，不记录个人文本。
+  文本以显式 AI 标识开头；后端错误固定中文消息，不记录个人文本。
   命令、请求/输出格式与客户端配置见 [SERVICE.md](SERVICE.md)。
 
 ## Media presentation (M0)
@@ -222,7 +214,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   `MediaScript.explicit_label` / `MediaManifest.label` 保留原 `Literal` 契约，并测试其与常量一致。
   `/api/status.labels` 追加 `{explicit, disclaimer, chat_notice}`，网页回放、页脚、聊天标题读取这些字段，
   静态 HTML 仅用中性占位符。页脚的 `external` 来自 `egress_status`（含评委）：任一配置后端
-  同时为外部且已授权则说明 `部分数据经已授权的外部服务处理，详见页面顶部的出境提示。`，否则使用本机措辞。
+  分类为外部则说明 `部分数据经配置的外部服务处理，详见页面顶部的出境提示。`，否则使用本机措辞。
 - `media.adapters` (layer 7) is the only media module that knows `ChatReply`; it validates raw JSON
   and produces `PresentableAnswer` with unchanged text and the upstream fingerprint.
   `media.script` (layer 7) converts only this boundary contract, without models, retrieval or rewriting.

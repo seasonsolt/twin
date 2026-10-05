@@ -24,7 +24,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..identity import Decision
 from ..llm import LLM, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
@@ -128,8 +127,7 @@ def render_entry(n: int, e: Expression) -> str:
 
 
 def consented_facets(store: PersonaStore) -> frozenset[str]:
-    """Latest ledger decision per gated facet; without an event, retain legacy questionnaire derivation."""
-    latest = {event.scope: event.decision for event in store.consent_events()}
+    """Allow gated facets only when answered in a questionnaire and not declined."""
     answered: set[str] = set()
     declined: set[str] = set()
     for source in store.list_sources(SourceKind.QUESTIONNAIRE):
@@ -137,14 +135,7 @@ def consented_facets(store: PersonaStore) -> frozenset[str]:
         for e in store.list_expressions(source.source_id):
             answered.update(e.facets_hint)
     return frozenset(
-        f.facet_id
-        for f in FACETS
-        if not requires_consent(f.facet_id)
-        or (
-            latest[f"facet:{f.facet_id}"] is Decision.GRANT
-            if f"facet:{f.facet_id}" in latest
-            else f.facet_id in answered - declined
-        )
+        f.facet_id for f in FACETS if not requires_consent(f.facet_id) or f.facet_id in answered - declined
     )
 
 

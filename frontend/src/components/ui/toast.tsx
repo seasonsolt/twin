@@ -60,6 +60,7 @@ function Toast({ item }: { item: ToastMessage }) {
 }
 
 export function ToastViewport() {
+  // Announce via the live region only; arriving toasts must never move focus.
   const items = useToasts((state) => state.items);
   return (
     <>

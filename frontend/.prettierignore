@@ -1,2 +1,4 @@
 node_modules
 pnpm-lock.yaml
+# Preserve upstream vendored sources verbatim.
+src/components/reactbits/*.tsx

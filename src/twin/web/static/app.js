@@ -11,7 +11,7 @@ const ROUTES = {
   questionnaire: { title: "建档问卷", render: personaQuestionnairePage },
   persona: { title: "人格档案", render: personaProfilePage },
   sources: { title: "资料与构建", render: personaSourcesPage },
-  identity: { title: "身份与授权", render: async (ctx) => (await import("./identity.js")).identityPage(ctx) },
+  identity: { title: "身份", render: async (ctx) => (await import("./identity.js")).identityPage(ctx) },
 };
 
 let currentScope = null;
@@ -112,7 +112,7 @@ function renderStatus() {
       : chip("模型", [llm.provider, llm.model].filter(Boolean).join(" · ") || "未配置"),
   );
   const external = (status.egress || []).filter((entry) => entry.external);
-  if (external.length) bar.append(h("span", { class: "status-error" }, `出境（外部服务）：${external.map((entry) => `${entry.kind}/${entry.provider} ${entry.host || "未知主机"}（${entry.granted ? "已授权" : "未授权"}）`).join("；")}`));
+  if (external.length) bar.append(h("span", { class: "status-error" }, `外部服务：${external.map((entry) => `${entry.kind}/${entry.provider} ${entry.host || "未知主机"}`).join("；")}`));
 }
 
 function boot() {

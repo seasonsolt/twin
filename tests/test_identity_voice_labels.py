@@ -27,7 +27,6 @@ from twin.media.schema import (
     disclaimer,
 )
 from twin.media.tts import MediaRejected, MediaTimeout, MediaUnavailable, OpenAICompatSpeech
-from twin.persona.store import PersonaStore
 from twin.web.app import STATIC_DIR, create_app
 
 BASE = "https://speech.invalid/v1"
@@ -205,9 +204,9 @@ def test_voice_discovery_failures_can_be_retried() -> None:
 
 
 def test_identity_voice_is_additive_and_cli_reads_configuration(tmp_path: Path) -> None:
-    legacy = {"name": "虚构人物", "aliases": [], "consents": {}}
+    legacy = {"name": "虚构人物", "aliases": []}
     assert Identity.model_validate(legacy).voice is None
-    identity = Identity.from_parts("虚构人物", [], [], voice="Junhao")
+    identity = Identity(name="虚构人物", aliases=[], voice="Junhao")
     assert Identity.model_validate_json(identity.model_dump_json()).voice == "Junhao"
     config = tmp_path / "twin.toml"
     config.write_text('target_name = "虚构人物"\ndb_path = "identity.db"\n[tts]\nvoice = "Junhao"\n', encoding="utf-8")
@@ -235,7 +234,7 @@ def test_static_assets_do_not_duplicate_labels_or_privacy_claims() -> None:
 def test_disclaimer_wording() -> None:
     prefix = "所有推演结果均为模拟，供个人使用参考，不代表虚构人物本人的意见或决定。"
     assert disclaimer("虚构人物", False) == prefix + "数据只保存在本机。"
-    assert disclaimer("虚构人物", True) == prefix + "部分数据经已授权的外部服务处理，详见页面顶部的出境提示。"
+    assert disclaimer("虚构人物", True) == prefix + "部分数据经配置的外部服务处理，详见页面顶部的出境提示。"
     assert CHAT_NOTICE == (
         "分身以本人身份、第一人称作答，只依据人格档案和本人原话；"
         "没有依据时会直说并标注“需要本人确认”。回复是模拟，不代表本人意见。"
@@ -243,8 +242,7 @@ def test_disclaimer_wording() -> None:
 
 
 @pytest.mark.parametrize("backend", ["llm", "embed", "tts", "asr", "judge"])
-@pytest.mark.parametrize("decision", [None, "grant", "revoke", "decline"])
-def test_status_labels_follow_external_and_granted_backends(backend: str, decision: str | None, tmp_path: Path) -> None:
+def test_status_labels_follow_configured_external_backends(backend: str, tmp_path: Path) -> None:
     configuration: dict[str, Any] = {
         "target_name": "虚构人物",
         "db_path": tmp_path / "status.db",
@@ -258,24 +256,18 @@ def test_status_labels_follow_external_and_granted_backends(backend: str, decisi
     else:
         configuration[backend] = {"base_url": BASE, "egress": "external"}
     settings = Settings.model_validate(configuration)
-    kind = "llm" if backend == "judge" else backend
-    with PersonaStore(settings.db_path) as store:
-        if decision is not None:
-            store.append_consent(f"egress:{kind}", "grant", "cli")
-            if decision != "grant":
-                store.append_consent(f"egress:{kind}", decision, "cli")
     with TestClient(create_app(settings), base_url="http://localhost") as client:
         response = client.get("/api/status")
     assert response.status_code == 200
     status = response.json()
     assert status["labels"] == {
         "explicit": EXPLICIT_LABEL,
-        "disclaimer": disclaimer("虚构人物", decision == "grant"),
+        "disclaimer": disclaimer("虚构人物", True),
         "chat_notice": CHAT_NOTICE,
     }
 
 
-def test_local_backend_grant_does_not_claim_external_processing(tmp_path: Path) -> None:
+def test_local_backends_do_not_claim_external_processing(tmp_path: Path) -> None:
     settings = Settings.model_validate(
         {
             "db_path": tmp_path / "local.db",
@@ -283,8 +275,6 @@ def test_local_backend_grant_does_not_claim_external_processing(tmp_path: Path) 
             "asr": {"egress": "local"},
         }
     )
-    with PersonaStore(settings.db_path) as store:
-        store.append_consent("egress:tts", "grant", "cli")
     with TestClient(create_app(settings), base_url="http://localhost") as client:
         assert client.get("/api/status").json()["labels"]["disclaimer"] == disclaimer(settings.target_name, False)
 

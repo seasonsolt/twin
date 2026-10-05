@@ -17,7 +17,6 @@ from typer.testing import CliRunner
 from twin import cli
 from twin.config import Settings
 from twin.embed import HashingEmbedder
-from twin.identity import Decision
 from twin.llm import CallTally, FakeLLM
 from twin.persona import profile as pf
 from twin.persona.items import PersonaCandidate, PersonaItem, PEvidence, PReview
@@ -145,21 +144,11 @@ def test_source_without_target_expressions_is_built_without_llm_calls(settings: 
         assert memory.build_status == "no_items" and memory.contributes_nothing
 
 
-def test_stale_consent_and_timestamp_compatibility(settings: Settings) -> None:
+def test_stale_timestamp_compatibility(settings: Settings) -> None:
     with PersonaStore(":memory:") as store:
         imported(store, settings)
         pf.build_profile(store, FakeLLM(handler), settings)
-        old = store.get_meta("sources_changed_at")
-        store.append_consent("egress:llm", Decision.GRANT, "cli")
-        assert store.get_meta("sources_changed_at") == old and not pf.profile_stale(store)
-        store.append_consent("facet:9.1", Decision.GRANT, "web")
-        assert pf.profile_stale(store)
-        changed = store.get_meta("sources_changed_at")
-        store.append_consent("facet:9.1", Decision.GRANT, "web")
-        assert store.get_meta("sources_changed_at") == changed
-        pf.build_profile(store, FakeLLM(handler), settings)
-        store.append_consent("facet:9.1", Decision.REVOKE, "cli")
-        assert pf.profile_stale(store)
+        assert not pf.profile_stale(store)
         store.set_meta("built_at", "2026-01-01T01:00:00+01:00")
         store.set_meta("sources_changed_at", "2026-01-01T00:00:00+00:00")
         assert not pf.profile_stale(store)  # equal instants, different ISO strings
@@ -227,7 +216,7 @@ def test_failures_and_midbuild_changes_do_not_acknowledge_stale_input(settings: 
         assert pf.source_memories(store)[sid].build_status == "not_built"
 
         def mutate(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
-            store.append_consent("facet:9.1", Decision.GRANT, "web")
+            imported(store, settings)
             return handler(system, user, schema)
 
         report = pf.build_profile(store, FakeLLM(mutate), settings)
@@ -302,7 +291,7 @@ def test_cli_sources_build_and_stale_chat(settings: Settings, monkeypatch: pytes
     assert "支撑档案 1 条" in runner.invoke(cli.app, [*args, "sources"]).stdout
     assert pf.STALE_PROFILE_NOTICE not in runner.invoke(cli.app, [*args, "chat", "合成问题"]).stderr
     with PersonaStore(settings.db_path) as store:
-        store.append_consent("facet:9.1", Decision.GRANT, "cli")
+        imported(store, settings, "新增.md")
     chat = runner.invoke(cli.app, [*args, "chat", "合成问题"])
     assert chat.exit_code == 0 and pf.STALE_PROFILE_NOTICE in chat.stderr
     assert "合成测试回复" in chat.stdout

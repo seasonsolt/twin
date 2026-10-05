@@ -52,6 +52,12 @@ class PrivateAudioMiddleware:
                 and str(scope.get("path", "")).startswith("/api/media/audio/")
             ):
                 MutableHeaders(scope=message)["Cache-Control"] = "private, no-store"
+            if (
+                message["type"] == "http.response.start"
+                and 200 <= message["status"] < 300
+                and scope.get("path") == "/api/media/avatar.vrm"
+            ):
+                MutableHeaders(scope=message)["Cache-Control"] = "no-cache"
             await send(message)
 
         await self.app(scope, receive, send_private)
@@ -101,15 +107,28 @@ def register(
         status, detail = speech_error(exc)
         return JSONResponse({"detail": detail}, status_code=status)
 
+    @app.get("/api/media/avatar.vrm")
+    def avatar_file() -> FileResponse:
+        if settings.avatar.vrm_path is None:
+            raise HTTPException(404, "未配置 VRM 形象模型")
+        path = Path(settings.avatar.vrm_path)
+        if not path.is_file():
+            raise HTTPException(404, "找不到 VRM 形象模型")
+        return FileResponse(path, media_type="model/gltf-binary", headers={"Cache-Control": "no-cache"})
+
     @app.get("/api/media/capabilities")
     def capabilities() -> dict[str, Any]:
         avatar = AVATAR_PRESETS[settings.avatar.preset].model_dump(mode="json")
+        avatar_model = (
+            {"format": "vrm", "url": "/api/media/avatar.vrm"} if settings.avatar.vrm_path is not None else None
+        )
         try:
             synth = speech()
             declared = synth.capabilities
         except MediaError as exc:
             return {
                 "avatar": avatar,
+                "avatar_model": avatar_model,
                 "available": False,
                 "backend": None,
                 "label": EXPLICIT_LABEL,
@@ -119,6 +138,7 @@ def register(
             }
         return {
             "avatar": avatar,
+            "avatar_model": avatar_model,
             "available": synth.name != "silent",
             "backend": synth.name,
             "label": EXPLICIT_LABEL,

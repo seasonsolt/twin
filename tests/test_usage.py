@@ -357,7 +357,11 @@ def test_pricing_config_template_and_cli_option(tmp_path: Path) -> None:
     settings = load_settings(path)
     assert settings.pricing["model"] == Price(input_per_m=1, output_per_m=2)
     assert settings.budget.max_cost_usd == 3
-    assert CONFIG_TEMPLATE.encode() == Path("twin.toml.example").read_bytes()
+    example = Path("twin.toml.example").read_text(encoding="utf-8")
+    assert (
+        "".join(line for line in example.splitlines(keepends=True) if not line.startswith("# vrm_path = "))
+        == CONFIG_TEMPLATE
+    )
 
 
 def retry_error(status: int = 429, headers: dict[str, str] | None = None) -> openai.APIStatusError:

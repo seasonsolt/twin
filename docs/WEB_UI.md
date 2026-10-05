@@ -116,6 +116,8 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先展示开头提示，再逐句呈现原回答，弃权不讲述回答；引用按脚本顺序解析。Space 播放/暂停、左右键切句、Escape 关闭并返回入口；聚焦按钮时 Space 保持原生行为。音频有序分片由 ended 推进，暂停保留时间，口型按 currentTime × lipsync.fps 取值；暂停、等待、纯文字播放时闭嘴。形象只使用 API 的预置调色板、四级口型和常驻标签，无图片输入。关闭释放音频、计时器、rAF、请求及下载 URL；语音失败显示中文 detail 并退回文字，可重试合成。
 
+可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, label, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；AI 标签常驻，署名来自模型元数据。回放复用既有口型驱动，身份页保持闭口，画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败回退 2D，MP4 导出仍为 2D。CSP 仅 img-src 增加 blob: 以加载内嵌纹理；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
+
 资料页支持问卷、聊天、访谈、文档、他人记述和通用转录，multipart 多文件及可选日期。来源摘要显示本人/他人原话、支撑条目、涉及细项与 not_built/remembered/no_items；删除需确认，乐观更新失败回滚。构建汇总保留计数与非零 facet_diffs，不新增个人文本日志。useJob 可恢复运行中的构建，409 跟踪冲突 job_id，断线重试并提供重新连接；重启后任务不续跑。
 
 档案页按维度/细项分组，显示授权、覆盖/充分/验证比例、矛盾、API 等级标签、来源矩阵与建议。review 支持确认/修改/驳回/撤销，失败回滚并保留编辑草稿；审核后刷新完成度。≤300 个可见条目用普通列表，更多时用可变高度窗口列表并保留焦点行。as_of 只影响 coverage，items 不是历史快照。
@@ -145,7 +147,8 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
 | `POST /api/persona/questionnaire/submit` | 初次导入并尝试构建；重测仅记录 |
 | `GET /api/identity` | name/aliases/voice/avatar/egress；无授权账本 |
-| `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar |
+| `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null |
+| `GET /api/media/avatar.vrm` | 配置的本地 VRM 流，model/gltf-binary、no-cache；未配置中文 JSON 404 |
 | `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}` |
 | `GET /api/media/audio/{name}` | SHA-256 命名 WAV/MP3 分片，验证目录边界 |
 

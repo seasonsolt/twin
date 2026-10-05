@@ -1,13 +1,25 @@
+import { useCallback, useState } from 'react';
 import { useLocation } from 'react-router';
 import { Badge, Button, Card, Skeleton, Table } from '../components/ui';
 import { useIdentity } from '../features/identity/useIdentity';
-import { Avatar } from '../features/playback/Avatar';
+import { AvatarPreview } from '../features/avatar/AvatarPreview';
 import { useStatus } from '../stores/status';
 
 export function Identity() {
   const identity = useIdentity(useLocation().pathname === '/identity');
   const labels = useStatus((state) => state.data?.labels);
   const data = identity.data;
+  const modelUrl = identity.capabilities?.avatar_model?.url;
+  const [model, setModel] = useState<{ url?: string; name: string | null }>({
+    name: null,
+  });
+  const onModelNameChange = useCallback(
+    (name: string | null) => {
+      setModel({ url: modelUrl, name });
+    },
+    [modelUrl],
+  );
+  const modelName = modelUrl && model.url === modelUrl ? model.name : null;
   return (
     <div className="space-y-6">
       <header>
@@ -39,11 +51,19 @@ export function Identity() {
                 <dt className="text-secondary">音色</dt>
                 <dd>{data.voice || '—'}（预置音色）</dd>
                 <dt className="text-secondary">形象</dt>
-                <dd>{data.avatar || '—'}（风格化插画）</dd>
+                <dd>
+                  {modelName
+                    ? `${modelName}（3D 模型）`
+                    : `${data.avatar || '—'}（风格化形象）`}
+                </dd>
               </dl>
               {identity.capabilities?.avatar && (
-                <div className="w-28">
-                  <Avatar spec={identity.capabilities.avatar} mouthLevel={0} />
+                <div className="w-48">
+                  <AvatarPreview
+                    capabilities={identity.capabilities}
+                    label={labels?.explicit}
+                    onModelNameChange={onModelNameChange}
+                  />
                 </div>
               )}
             </div>

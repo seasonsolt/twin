@@ -134,6 +134,8 @@ twin media clip 回复.json --out clip.mp4              # 形象、字幕与标�
 twin media check --out 评测目录/                      # 合成句集回听评测：字错率与延迟
 ```
 
+浏览器 3D 形象可在 `[avatar]` 设置 `vrm_path` 指向本地风格化 VRM 文件（不入库）；未配置或加载失败时保留 2D 形象，见 [docs/MEDIA.md](docs/MEDIA.md)。
+
 ## 文档
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：产品形态、分层、层间规则、治理、路线

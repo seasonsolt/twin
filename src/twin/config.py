@@ -86,6 +86,29 @@ class MediaSettings(BaseModel):
 
 class AvatarSettings(BaseModel):
     preset: str = "default"
+    vrm_path: str | None = None
+
+    @field_validator("vrm_path")
+    @classmethod
+    def local_vrm(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = Path(value).expanduser()
+        try:
+            if not path.exists():
+                raise ValueError("VRM 模型文件不存在")
+            if not path.is_file():
+                raise ValueError("VRM 模型路径必须是文件")
+            if path.suffix.lower() != ".vrm":
+                raise ValueError("模型文件后缀必须为 .vrm")
+            if path.stat().st_size > 64 * 1024 * 1024:
+                raise ValueError("VRM 模型文件不能超过 64 MB")
+            with path.open("rb") as model:
+                if model.read(4) != b"glTF":
+                    raise ValueError("VRM 模型必须以 glTF 二进制标记开头")
+        except OSError:
+            raise ValueError("无法读取 VRM 模型文件") from None
+        return str(path.resolve())
 
     @field_validator("preset")
     @classmethod

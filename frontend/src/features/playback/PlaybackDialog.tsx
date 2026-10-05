@@ -5,7 +5,7 @@ import { useMotionPreset } from '../../design/motion';
 import { useStatus } from '../../stores/status';
 import type { ChatReply } from '../chat/types';
 import { CitationCard } from '../chat/Citations';
-import { Avatar } from './Avatar';
+import { AvatarPreview } from '../avatar/AvatarPreview';
 import { usePlayback } from './usePlayback';
 
 export function PlaybackDialog({
@@ -146,9 +146,11 @@ export function PlaybackDialog({
             </p>
             <div className="flex flex-col gap-5 sm:flex-row">
               {open && capabilities?.avatar && (
-                <Avatar
-                  spec={capabilities.avatar}
-                  mouthLevel={playback.mouth}
+                <AvatarPreview
+                  capabilities={capabilities}
+                  mouth={playback.mouth}
+                  speaking={speaking && playing}
+                  label={label}
                 />
               )}
               <div className="min-w-0 flex-1">

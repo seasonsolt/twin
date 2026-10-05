@@ -31,6 +31,7 @@ import {
   StaggerItem,
 } from '../components/motion';
 import { useMotionPreset } from '../design/motion';
+import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { useStatus } from '../stores/status';
 import { formatNumber } from '../lib/utils';
 import {
@@ -80,6 +81,9 @@ export function Gallery() {
           {reduced ? '减少动态效果：仅淡入淡出' : '弹簧动效已启用'}
         </Badge>
       </div>
+      <Story title="形象对比">
+        <AvatarComparison />
+      </Story>
       <Switch
         label="禁用交互控件"
         checked={disabled}

@@ -20,6 +20,7 @@ export interface Capabilities {
   backend: string | null;
   label: string;
   avatar?: AvatarSpec;
+  avatar_model?: { format: 'vrm'; url: string } | null;
   error?: string;
 }
 

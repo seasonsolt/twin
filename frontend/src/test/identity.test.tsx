@@ -95,7 +95,7 @@ it('renders configured identity, exact API egress kinds/providers/hosts and a cl
   expect(await screen.findByText('配置姓名')).toBeVisible();
   expect(screen.getByText('别名甲、别名乙')).toBeVisible();
   expect(screen.getByText('configured-voice（预置音色）')).toBeVisible();
-  expect(screen.getByText('configured-avatar（风格化插画）')).toBeVisible();
+  expect(screen.getByText('configured-avatar（风格化形象）')).toBeVisible();
   const rows = within(
     screen.getByRole('table', { name: '出境状态' }),
   ).getAllByRole('row');

@@ -47,24 +47,36 @@ export function Badge({
   );
 }
 
-export function Meter({ value, label }: { value: number; label: string }) {
+export function Meter({
+  value,
+  label,
+  hideLabel = false,
+}: {
+  value: number | null;
+  label: string;
+  hideLabel?: boolean;
+}) {
   const { reduced, transition } = useMotionPreset('gentle');
-  const percent = Math.max(0, Math.min(100, value));
+  const percent = value === null ? null : Math.max(0, Math.min(100, value));
   return (
     <div className="space-y-2">
-      <div className="flex justify-between text-sm">
+      <div className={hideLabel ? 'sr-only' : 'flex justify-between text-sm'}>
         <span>{label}</span>
-        <span className="text-secondary">{Math.round(percent)}%</span>
+        <span className="text-secondary">
+          {percent === null ? '正在处理…' : `${Math.round(percent)}%`}
+        </span>
       </div>
       <div
         role="progressbar"
         aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
+        aria-valuemin={percent === null ? undefined : 0}
+        aria-valuemax={percent === null ? undefined : 100}
+        aria-valuenow={percent ?? undefined}
         className="h-2 overflow-hidden rounded-full bg-border"
       >
-        {reduced ? (
+        {percent === null ? (
+          <div className="h-full w-full rounded-full bg-accent/30" />
+        ) : reduced ? (
           <motion.div
             key={percent}
             initial={{ opacity: 0 }}

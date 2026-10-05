@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import AnimatedList from '../reactbits/AnimatedList';
 import { cn } from '../../lib/utils';
-import { crossfade, useMotionPreset } from '../../design/motion';
+import { crossfade, springs, useMotionPreset } from '../../design/motion';
 import type { ReactNode } from 'react';
 
 export interface MessageListItem {
@@ -14,24 +14,39 @@ export function MessageList({
   items,
   label,
   className,
+  layout = false,
 }: {
   items: MessageListItem[];
   label: string;
   className?: string;
+  layout?: boolean;
 }) {
   const { reduced, transition } = useMotionPreset('gentle');
   return (
-    <ul aria-label={label} className={cn('effects-list space-y-2', className)}>
-      <AnimatePresence initial={false}>
+    <ul
+      aria-label={label}
+      className={cn('effects-list space-y-2', layout && 'relative', className)}
+    >
+      <AnimatePresence initial={false} mode={layout ? 'popLayout' : 'sync'}>
         {items.map((item) => (
           <motion.li
             key={item.id}
-            initial={item.content && !reduced ? { opacity: 0, y: 8 } : false}
+            layout={layout && !reduced ? 'position' : false}
+            initial={
+              item.content && (!reduced || layout)
+                ? { opacity: 0, ...(reduced ? {} : { y: 8 }) }
+                : false
+            }
             animate={
-              item.content && !reduced ? { opacity: 1, y: 0 } : undefined
+              item.content && (!reduced || layout)
+                ? { opacity: 1, ...(reduced ? {} : { y: 0 }) }
+                : undefined
             }
             exit={{ opacity: 0, transition: crossfade }}
-            transition={transition}
+            transition={{
+              ...transition,
+              layout: reduced ? crossfade : springs.layout,
+            }}
           >
             {item.content ??
               (reduced ? (

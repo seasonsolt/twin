@@ -143,7 +143,7 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   ).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '去重新构建' })).toHaveAttribute(
     'href',
-    '/#/sources',
+    '#/sources',
   );
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   const init = fetchMock.mock.calls.find(

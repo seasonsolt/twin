@@ -101,7 +101,7 @@ export function Chat() {
           className="rounded-md border border-warning/20 bg-warning/5 px-4 py-2 text-sm text-secondary"
         >
           资料有变化，尚未重新构建；档案和聊天仍基于上次构建。{' '}
-          <a className="text-accent underline" href="/#/sources">
+          <a className="text-accent underline" href="#/sources">
             去重新构建
           </a>
         </p>

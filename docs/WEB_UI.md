@@ -83,8 +83,8 @@ frontend/
 │   ├── components/   # ui/、motion/、layout/、effects/、reactbits/
 │   ├── lib/          # 同源 API、格式化与样式合并
 │   ├── stores/       # 状态与可见性轮询
-│   ├── features/     # chat/、playback/（含 SVG 形象与音频生命周期）
-│   ├── pages/        # 聊天、占位页、组件画廊
+│   ├── features/     # chat/、playback/、jobs/、sources/、profile/
+│   ├── pages/        # 聊天、记忆资料、人格档案、占位页、组件画廊
 │   ├── test/         # setup 与行为/对比度测试
 │   └── main.tsx
 ├── package.json / pnpm-lock.yaml
@@ -164,7 +164,7 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pi
 | Stepper / `FlowStepper` | `steps: {id,title,content}[], onComplete?, completedText?` | 应用令牌、可聚焦的步骤按钮、中文导航与完成状态；为后续问卷预备 | 同样的步骤导航，直接切换，无滑动/高度动画 |
 | AnimatedContent / `SectionReveal` | `children, className?` | 首次滚动进入时 8px/250ms 揭示，无缩放 | 区块立即可见，不创建滚动触发器 |
 
-文字与数值使用完整的 visually hidden 文本，所有动态呈现均 `aria-hidden`，避免重复或逐词/逐帧播报；文字动画不改变布局，指标预留宽度。Gallery 的“React Bits 动效”区展示全部 7 个 wrapper，各有重播按钮和减少动态效果说明；列表支持添加/移除，流程支持切换与完成。聊天使用真实 API，其他业务页尚未迁移；不填充虚构业务数据。
+文字与数值使用完整的 visually hidden 文本，所有动态呈现均 `aria-hidden`，避免重复或逐词/逐帧播报；文字动画不改变布局，指标预留宽度。Gallery 的“React Bits 动效”区展示全部 7 个 wrapper，各有重播按钮和减少动态效果说明；列表支持添加/移除，流程支持切换与完成。聊天、记忆资料、人格档案使用真实 API，其余业务页尚未迁移；不填充虚构业务数据。
 
 确认弹窗打开时明确聚焦**取消**，不自动聚焦破坏性动作；程序化 `confirm()` 将打开前的 `document.activeElement` 保存在请求中，并在关闭动画卸载后恢复仍连接的元素，关闭时通过独立 ref 保留焦点，避免 request 清空后丢失目标。通知只通过 polite live region 播报，新增通知不主动移动焦点。测试覆盖无 trigger 的输入框焦点恢复，以及通知显示期间首个 Escape 关闭且返回入口。
 
@@ -175,14 +175,14 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pi
 | `#/chat` | 已迁移（/next） | `/#/chat` |
 | 聊天回复 → 回放面板（含形象） | 已迁移（/next） | 旧聊天页回放面板 |
 | `#/questionnaire` | F0 占位 | `/#/questionnaire` |
-| `#/persona` | F0 占位 | `/#/persona` |
-| `#/sources` | F0 占位 | `/#/sources` |
+| `#/persona` | 已迁移（/next） | `/#/persona` |
+| `#/sources` | 已迁移（/next） | `/#/sources` |
 | `#/identity` | F0 占位 | `/#/identity` |
 | `#/gallery` | F0 UI + F0b React Bits wrapper 示例已实现 | 不适用 |
 
 ### F1 聊天与回放
 
-`/next/#/chat` 使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea 和确认弹窗；旧回复（包括恢复的历史）静态显示。会话仅在本标签页的 sessionStorage 保存完成的往返；失败回退用户消息并恢复输入，支持原请求重试，不恢复后台任务。发送时传完整 messages 和可选 as_of，每秒轮询任务，路由变化/卸载/清空时停止等待并 Abort 请求（不取消服务端任务）。进入和发送时检查 stale，重建入口暂指向 `/#/sources`。
+`/next/#/chat` 使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea 和确认弹窗；旧回复（包括恢复的历史）静态显示。会话仅在本标签页的 sessionStorage 保存完成的往返；失败回退用户消息并恢复输入，支持原请求重试，不恢复后台任务。发送时传完整 messages 和可选 as_of，每秒轮询任务，路由变化/卸载/清空时停止等待并 Abort 请求（不取消服务端任务）。进入和发送时检查 stale，重建入口指向新前端 `#/sources`。
 
 中文分段使用 `Intl.Segmenter(undefined, {granularity: 'word'})`；无此 API 时，CJK 逐字符、其他文字按空白分隔。拼接视觉单元等于原文，屏幕阅读器只读取完整文本；交错延迟按单元数缩放，总揭示≤约1.2s。为避免 BlurText 的空格分割和自动插空格，适配只在 effects wrapper 中使用现有 motion 逐单元揭示，不修改 vendored 源码。减少动态效果直接显示全文。
 
@@ -193,3 +193,40 @@ Avatar 是旧 SVG 的 React 移植，保留调色板验证、四级口型、随�
 有意差异：Enter 发送、Shift+Enter 换行（旧版 Ctrl/⌘+Enter）；清空增加确认；显示时间戳和 as_of；依据改为键盘按钮加弹簧卡片；仅最新回复揭示；朗读合成失败可再次请求。旧 UI 与后端完全不变。
 
 测试覆盖 API CSRF/编码/错误、确认 true/false/关闭/Escape、IME 安全、Tabs、Switch/loading、通知、减少动态效果与双色对比度，以及发送/轮询/失败重试/会话清空/路由取消、中文分段与完整阅读文本、依据键盘展开收起、回放快捷键/焦点恢复/有序分片/暂停续播/口型/眨眼/关闭清理/导出/API 标签。业务测试模拟 fetch 和视觉 Motion 层以隔离计时器，既有 primitive/motion/effects 测试保留真实 Motion。`tests/test_web_next.py` 检查页面/资源 MIME、安全头、无内联脚本或外部资源、缺少构建的回退。
+
+### F2 记忆资料与人格档案
+
+组件树：
+
+```text
+AppShell（HashRouter，按页 lazy）
+├── Sources → useSources + useJob
+│   ├── 导入 Card → KindSelector / DropZone / 日期 Field / 每文件结果
+│   ├── 资料 Card → LayoutScope / MessageList(layout) / SourceRow / ConfirmDialog
+│   └── 构建 Card → stale 提示 / JobProgress(Meter) / BuildSummary
+└── Profile → useProfile
+    ├── 日期 Field → CoverageOverview（维度指标 / 细项矩阵 / 建议）
+    └── 条目 Card → 审核筛选 / include_rejected Switch
+        └── MessageList(layout) 或 VirtualItemList → ItemCard（证据 / 内联修改 / 审核）
+```
+
+`useJob` 每秒读取任务快照；阶段优先使用 API `stage`，未提供时回读最后一条 `[n/N]` 日志；阶段进度为 `(current-1)/total`，否则使用 tally（含失败项），完成为 100%。无法估算时 Meter 不设置 aria-valuenow，不伪装成 0%。保留状态、用时、里程碑、英文日志、失败原因和构建缓存补跑提示。网络错误每 2 秒重试，累计 15 次后停止并提供“重新连接”；新任务 404 提示服务重启，过期的恢复记录静默清除。提交 409 时 API 客户端保留 job_id 并跟踪冲突任务；非构建任务完成不显示构建汇总。进入页先 GET /api/jobs 查找 queued/running 的 persona_build，再恢复本标签页保存的编号；已结束的恢复结果不重复成功通知。路由失活/卸载清理请求和计时器，不取消服务端工作。
+
+资料导入保留六种类型和原帮助文案、可选日期、multipart files、逐文件已导入/已更新/未导入及原因；全部跳过时沿用后端 400 中文 detail，显示内联错误和通知并保留文件选择。来源显示原话（本人/他人）、本人/全部、支撑条目、涉及细项、日期、未授权细项以及两种未记忆状态。删除通过 danger ConfirmDialog，乐观移除、失败回滚（无撤销按钮）；导入、删除、构建完成刷新资料、stale 和状态 store。构建汇总保留资料/块/候选/条目/失败数、总差异与按 ID 排序的非零细项差异，不记录或新增日志输出个人文本。
+
+人格档案保留维度授权计数、覆盖/充分/验证比例、矛盾、API level_labels、未授权标记、细项 × 来源矩阵、前 15 条建议、适用条件、原提炼和审核状态。确认/修改/驳回/撤销审核均调用 review API，乐观更新且失败回滚；失败编辑保留草稿。审核成功重新读取完成度。按维度/细项分组，≤300 个可见条目使用普通列表，>300 才用无依赖的可变高度窗口列表（ResizeObserver、预估高度、overscan、焦点行保留、aria-setsize/posinset、可键盘滚动区域）。
+
+| 与旧页对照 | 状态 |
+| --- | --- |
+| 六种导入、日期、结果/跳过原因、资料记忆摘要、删除、stale、构建/恢复/重试/差异 | 已完成 |
+| 维度比例/授权数/矛盾、等级标签、来源矩阵、建议、四种审核操作与筛选 | 已完成 |
+| 下拉类型与文件框 → 原生 radio 分段指示器和可键盘操作的多文件 drop zone | 有意不同；转录选择器开放后端已支持的 SRT/VTT |
+| 表格 → 维度/细项/来源卡片；末条证据预览 → 可展开全部证据 | 有意不同 |
+| 默认待核实筛选 → 默认全部非否决条目；否决需开启 include_rejected | 有意不同；原审核筛选仍可用 |
+| 完成度 as_of 日期 | 新增；仅传给 coverage，当前条目不是历史快照（items API 无日期参数） |
+| 大列表窗口化、乐观回滚、审核后完成度刷新 | 新增；普通列表删除以 layout spring 合拢，窗口列表直接更新位置 |
+| 未迁移能力 | 本任务两页无缺失；问卷仍链接旧界面 |
+
+动效使用现有 gentle/layout 弹簧：drop zone 轻缩放/边框、Meter、证据高度、普通列表间隙；阶段文本 crossfade。没有列表 stagger，刷新/审核不会重新交错入场。减少动态效果关闭共享布局、位移、缩放和高度动画，仅保留淡入淡出与立即更新；未知进度不使用移动条纹。效果只从 effects wrapper 导入，按具体模块导入避免将画廊的 GSAP 带入业务路由。无新增运行时依赖，旧 UI 与后端不改。
+
+F2 测试：`jobs.test.tsx` 覆盖轮询/阶段与 tally/自动重试/重新连接/运行任务恢复/过期记录/提交失败与 409/清理；`persona.test.tsx` 覆盖导入成功与跳过/上传失败/键盘 picker/拖放/来源摘要/删除确认与回滚/构建差异与 stale/失败提示/覆盖率与 API 等级/确认修改驳回撤销及回滚/证据键盘展开/as_of 重取/include_rejected/300 与 301 条窗口化边界/请求取消。聊天 stale 链接测试同步改为新路由。

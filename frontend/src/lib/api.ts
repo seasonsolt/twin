@@ -3,6 +3,7 @@ export class ApiError extends Error {
     public readonly status: number,
     message: string,
     public readonly detail: unknown = null,
+    public readonly jobId: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -70,6 +71,12 @@ export async function api<T>(
         ? detail
         : (errors[response.status] ?? '请求失败，请重试'),
       detail,
+      data &&
+        typeof data === 'object' &&
+        'job_id' in data &&
+        typeof data.job_id === 'string'
+        ? data.job_id
+        : null,
     );
   }
   return data as T;

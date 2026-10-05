@@ -15,6 +15,12 @@ import './design/tokens.css';
 const Chat = lazy(() =>
   import('./pages/Chat').then((module) => ({ default: module.Chat })),
 );
+const Sources = lazy(() =>
+  import('./pages/Sources').then((module) => ({ default: module.Sources })),
+);
+const Profile = lazy(() =>
+  import('./pages/Profile').then((module) => ({ default: module.Profile })),
+);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
@@ -36,15 +42,29 @@ createRoot(document.getElementById('root')!).render(
                     </Suspense>
                   }
                 />
-                {['questionnaire', 'persona', 'sources', 'identity'].map(
-                  (route) => (
-                    <Route
-                      key={route}
-                      path={route}
-                      element={<Placeholder route={route} />}
-                    />
-                  ),
-                )}
+                <Route
+                  path="sources"
+                  element={
+                    <Suspense fallback={<Skeleton className="h-40" />}>
+                      <Sources />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="persona"
+                  element={
+                    <Suspense fallback={<Skeleton className="h-40" />}>
+                      <Profile />
+                    </Suspense>
+                  }
+                />
+                {['questionnaire', 'identity'].map((route) => (
+                  <Route
+                    key={route}
+                    path={route}
+                    element={<Placeholder route={route} />}
+                  />
+                ))}
                 <Route
                   path="gallery"
                   element={

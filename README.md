@@ -2,6 +2,8 @@
 
 **A personal digital twin, grounded in a person's own material.**
 
+[![CI](https://github.com/seasonsolt/twin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/seasonsolt/twin/actions/workflows/ci.yml)
+
 English | [简体中文](#简体中文)
 
 > **Status: early.** Interfaces will still change.

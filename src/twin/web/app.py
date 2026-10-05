@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -57,7 +57,7 @@ _SECURITY_HEADERS = {
 _PLACEHOLDER_PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>twin</title></head>
 <body><h1>twin 本地服务已启动</h1>
-<p>没有找到网页界面的前端文件（twin/web/static/index.html）。</p>
+<p>没有找到网页界面的前端文件（twin/web/static/index.html）。请运行 <code>pnpm -C frontend build</code>。</p>
 <p>接口仍然可用，例如 <a href="/api/status">/api/status</a>。</p>
 </body></html>
 """
@@ -129,8 +129,7 @@ class SecurityMiddleware:
                 if is_api or int(message.get("status", 200)) >= 500:
                     response_headers["Cache-Control"] = "no-store"
                 else:
-                    # The page is a set of ES modules: a browser mixing a cached old module with a new one after an
-                    # upgrade fails on a missing export, so static files are revalidated on every load.
+                    # Revalidate the page and its assets on every load after an upgrade.
                     response_headers.setdefault("Cache-Control", "no-cache")
             await send(message)
 
@@ -299,31 +298,19 @@ def create_app(
 
     # ------------------------------------------------------------ front end
 
-    next_dir = STATIC_DIR / "next"
+    @app.api_route("/next", methods=["GET", "HEAD"])
+    @app.api_route("/next/", methods=["GET", "HEAD"])
+    def next_redirect() -> RedirectResponse:
+        return RedirectResponse("/", status_code=308)
 
-    @app.get("/next", response_class=HTMLResponse)
-    @app.get("/next/", response_class=HTMLResponse)
-    def next_page() -> HTMLResponse:
-        index = next_dir / "index.html"
+    @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+    def frontend_page() -> Response:
+        index = STATIC_DIR / "index.html"
         if index.is_file():
-            return HTMLResponse(index.read_text(encoding="utf-8"))
-        return HTMLResponse(
-            '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>twin 新前端</title>'
-            "<h1>新前端正在迁移</h1><p>没有找到新前端文件，请先构建 frontend。</p>"
-            '<p><a href="/">打开旧界面</a></p></html>'
-        )
+            return FileResponse(index, media_type="text/html")
+        return HTMLResponse(_PLACEHOLDER_PAGE)
 
-    if (next_dir / "assets").is_dir():
-        app.mount("/next/assets", StaticFiles(directory=next_dir / "assets"), name="next-assets")
-
-    if (STATIC_DIR / "index.html").is_file():
-        files = StaticFiles(directory=STATIC_DIR, html=True)
-        app.mount("/static", files, name="static-assets")
-        app.mount("/", files, name="static")
-    else:
-
-        @app.get("/", response_class=HTMLResponse)
-        def placeholder() -> str:
-            return _PLACEHOLDER_PAGE
+    if (STATIC_DIR / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="frontend-assets")
 
     return app

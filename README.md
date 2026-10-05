@@ -142,8 +142,16 @@ twin media check --out 评测目录/                      # 合成句集回听�
 
 ## 开发
 
+前端需要 Node 22 和 pnpm 10；构建产物随 Python 包分发，`twin ui` 在 `/` 提供唯一的 React 界面。
+
 ```bash
-ruff check src tests deploy && ruff format --check src tests deploy
-mypy
-pytest -q
+pnpm -C frontend install && pnpm -C frontend build
+pnpm -C frontend typecheck
+pnpm -C frontend lint
+pnpm -C frontend test
+uv run ruff check src tests deploy && uv run ruff format --check src tests deploy
+uv run mypy
+uv run pytest -q
 ```
+
+开发时先运行 `uv run twin ui`（默认 `127.0.0.1:8765`），再在另一个终端运行 `pnpm -C frontend dev`，打开 Vite 打印的地址（默认 `http://127.0.0.1:5173/`）。Vite 将 `/api` 代理到后端；若改变后端端口，调整 `frontend/vite.config.ts` 的 proxy target。前端改动后重新 build，并同步 `src/twin/web/static/` 产物。布局、动效与安全契约见 [docs/WEB_UI.md](docs/WEB_UI.md)。

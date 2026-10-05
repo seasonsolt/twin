@@ -203,6 +203,19 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   文本以显式 AI 标识开头；后端错误固定中文消息，不记录个人文本。
   命令、请求/输出格式与客户端配置见 [SERVICE.md](SERVICE.md)。
 
+## Web frontend serving
+
+- `frontend/` is the only UI: React + TypeScript, HashRouter, built by Vite with base `/` into
+  `src/twin/web/static/index.html` and hashed `assets/`. `web.app` serves `/` and `/assets/*`;
+  `/next` and `/next/` are 308 redirects to `/`. There is no `/static` mount or non-API SPA fallback.
+- Missing index returns a Chinese build hint (`pnpm -C frontend build`) while APIs remain available.
+  Unknown APIs retain JSON 404s. StaticFiles contains asset paths and rejects escaping symlinks.
+- Security headers and CSP are unchanged; API/5xx use no-store, frontend responses use no-cache.
+  Client API requests stay same-origin and non-GET requests carry `X-Twin: 1`.
+  The Vite dev server proxies `/api` to the default `twin ui` backend at 127.0.0.1:8765.
+- UI behavior is covered by `frontend/src/test/`; build/HTTP contracts by `tests/test_web_frontend.py`.
+  Frontend layout, tokens, motion, pages and endpoint details: [WEB_UI.md](WEB_UI.md).
+
 ## Media presentation (M0)
 
 - `media.schema` (layer 1) defines frozen `PresentableAnswer`, `Segment`, `MediaCitation`, `MediaScript` and
@@ -213,7 +226,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   `CHAT_NOTICE` 保留聊天页提示，`disclaimer(name, external)` 生成页脚。
   `MediaScript.explicit_label` / `MediaManifest.label` 保留原 `Literal` 契约，并测试其与常量一致。
   `/api/status.labels` 追加 `{explicit, disclaimer, chat_notice}`，网页回放、页脚、聊天标题读取这些字段，
-  静态 HTML 仅用中性占位符。页脚的 `external` 来自 `egress_status`（含评委）：任一配置后端
+  React 前端未加载标签时使用 Skeleton/留空，不在构建 HTML 中复制文案。页脚的 `external` 来自 `egress_status`（含评委）：任一配置后端
   分类为外部则说明 `部分数据经配置的外部服务处理，详见页面顶部的出境提示。`，否则使用本机措辞。
 - `media.adapters` (layer 7) is the only media module that knows `ChatReply`; it validates raw JSON
   and produces `PresentableAnswer` with unchanged text and the upstream fingerprint.
@@ -248,7 +261,8 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   and display an idle avatar. HTTP audio segments carry the same nullable track.
 - `Settings.avatar` defaults to `AvatarSettings(preset="default")`; unknown presets produce a Chinese
   preset list and photo/video prohibition (M4). Capabilities always include the selected `AvatarSpec`,
-  even when speech is unavailable. SVG uses DOM calls, a permanent `spec.label` badge and no asset inputs.
+  even when speech is unavailable. `frontend/src/features/playback/Avatar.tsx` renders inline SVG with a
+  permanent `spec.label` badge and no asset inputs.
   Playback samples the current part by audio time; pause/stop/text-only closes the mouth, close releases
   rAF and blink timers. Reduced motion disables blinking and limits openness to 0/1.
 

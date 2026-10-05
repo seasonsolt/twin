@@ -14,7 +14,6 @@ from typer.testing import CliRunner
 
 from twin import cli
 from twin.config import Settings
-from twin.web import app as web_app
 from twin.web import create_app
 from twin.web.jobs import JobManager, describe_error
 
@@ -48,35 +47,6 @@ def test_extra_allowed_host(settings: Settings) -> None:
     client = make_client(settings, allowed_hosts=["192.168.1.5"])
     assert client.get("/api/status", headers={"Host": "192.168.1.5:8765"}).status_code == 200
     assert client.get("/api/status", headers={"Host": "192.168.1.6:8765"}).status_code == 403
-
-
-def test_root_without_front_end_files_shows_a_hint(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(web_app, "STATIC_DIR", tmp_path / "missing")
-    client = make_client(settings)
-    response = client.get("/")
-    assert response.status_code == 200 and "前端文件" in response.text
-    assert client.get("/api/status").status_code == 200
-
-
-def test_front_end_files_are_served(settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    static = tmp_path / "static"
-    static.mkdir()
-    (static / "index.html").write_text('<!doctype html><title>分身</title><script type="module" src="app.js"></script>')
-    (static / "app.js").write_text("export {};\n")
-    monkeypatch.setattr(web_app, "STATIC_DIR", static)
-    client = make_client(settings)
-
-    page = client.get("/")
-    assert page.status_code == 200 and "<title>分身</title>" in page.text
-    assert "script-src 'self'" in page.headers["content-security-policy"]
-    script = client.get("/app.js")
-    assert script.status_code == 200 and "javascript" in script.headers["content-type"]
-    assert client.get("/static/app.js").status_code == 200
-    missing = client.get("/api/nope")
-    assert missing.status_code == 404 and missing.json()["detail"] == "找不到请求的资源"
-    assert client.get("/static/%2E%2E/data/twin.db").status_code == 404
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")

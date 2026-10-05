@@ -1,2 +1,3 @@
 tests/golden/** -text
-src/twin/web/static/next/** linguist-generated=true -diff
+src/twin/web/static/assets/** linguist-generated=true -diff
+src/twin/web/static/index.html linguist-generated=true -diff

@@ -66,7 +66,7 @@ M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/R
 
 `SpeechResult` 只在展示层转换：`LipSyncTrack` v1 默认 `fps=25`，`levels` 每帧为 0–3（闭嘴到大开口），长度不超过 `fps × 600`，更长音频仅生成前 600 秒。`source` 为 timings / energy / pattern；时间戳对应各音频分片的朗读文本，词间闭嘴、词内按字符位置交替 2/3。WAV 能量支持 8/16-bit PCM 单/双声道，以每帧全部声道样本的 RMS、三帧移动平均、片内第 95 百分位为基准，按严格大于 10% / 35% / 70% 分成四档；纯静音全零，稀疏非静音导致基准为零时退回最大 RMS。MP3 或不支持/损坏的 WAV 使用明确合成的 pattern；未知时长默认 1 秒，不猜测音素。
 
-`AvatarSpec` v1 只有预置 ID、同源常驻标识、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 仅接受 default / ink / dawn；不支持照片或视频输入（M4 门槛）。浏览器以 DOM 构造内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
+`AvatarSpec` v1 只有预置 ID、同源常驻标识、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 仅接受 default / ink / dawn；不支持照片或视频输入（M4 门槛）。React 组件 `frontend/src/features/playback/Avatar.tsx` 渲染内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
 
 回放以各分片的 `audio.currentTime` 驱动口型；暂停、停止、纯文字播放时闭嘴，关闭时释放动画与眨眼计时。正常情况下每 3–6 秒眨眼；减少动态效果时不眨眼，口型限于 0/1，保留正在说话的提示。弃权仅呈现提示，不生成讲述内容。
 
@@ -90,7 +90,7 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 可枚举时，配置音色在读取能力（最迟首次合成）时检查；每次合成也检查请求音色。不在列表中就用中文拒绝，包含配置 ID 和预置数，绝不提交合成文本。查询延迟到媒体能力/朗读入口，应用启动、身份查看及纯文字功能不访问语音后端。`Identity.voice` 默认 `None` 兼容旧契约，`twin identity show` 从配置填入 ID 并显示预置音色与 M4 禁止项。
 
-标识单一来源是 `media.schema`：`EXPLICIT_LABEL`、`OPENING_NOTICE`、保留现有聊天提示措辞的 `CHAT_NOTICE`，以及页脚函数 `disclaimer(name, external)`。`MediaScript.explicit_label` / `MediaManifest.label` 的 `Literal` 不变，以测试防止与常量漂移。`GET /api/status` 的 `labels: {explicit, disclaimer, chat_notice}` 供回放角标、页脚和聊天标题读取；静态文件不复制文案，HTML 的初始页脚仅为“加载中…”。导出、音频开头与元数据仍使用契约中的同源标识。
+标识单一来源是 `media.schema`：`EXPLICIT_LABEL`、`OPENING_NOTICE`、保留现有聊天提示措辞的 `CHAT_NOTICE`，以及页脚函数 `disclaimer(name, external)`。`MediaScript.explicit_label` / `MediaManifest.label` 的 `Literal` 不变，以测试防止与常量漂移。`GET /api/status` 的 `labels: {explicit, disclaimer, chat_notice}` 供回放角标、页脚和聊天标题读取；React 前端不复制文案，`frontend/src/components/layout/AppShell.tsx` 在标签未加载时显示 Skeleton/留空。导出、音频开头与元数据仍使用契约中的同源标识。
 
 页脚按 `egress_status`（所有配置后端，含评委）判定是否存在**配置的外部**服务：
 
@@ -113,4 +113,5 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 - persona 聊天气泡提供播放入口；输入 `ChatReply` 原回答，按 `chat_reply` 适配，不生成新措辞。
 - `twin media script/export/speak REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
+- `/` 的 React 前端通过 `frontend/src/features/playback/PlaybackDialog.tsx` 和 `usePlayback.ts` 管理文字/音频、请求与资源生命周期；形象使用同目录 `Avatar.tsx`，样式令牌在 `frontend/src/design/tokens.css`。构建资源由 `/assets/*` 提供，独立导出 HTML 不依赖这些资源。
 - 本地 API、访问保护和播放控件见 [WEB_UI.md](WEB_UI.md)。

@@ -12,6 +12,7 @@ from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.web import create_app
+from twin.web.app import MAX_JSON_BYTES
 
 TARGET = "本人"
 ACCEPT = {"Accept": "application/json"}
@@ -178,3 +179,54 @@ def test_questionnaire_page(tmp_path: Path) -> None:
         retest["job_id"] is None
         and len(browser.get("/api/persona/questionnaire", {"round": "retest"})["questions"]) == 6
     )
+
+
+def test_offline_browsing_import_and_media_api_contracts(tmp_path: Path) -> None:
+    app = create_app(Settings(target_name="合成人物", db_path=tmp_path / "persona.db"))
+    headers = {"X-Twin": "1"}
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        for api in (
+            "/api/status",
+            "/api/jobs",
+            "/api/persona/sources",
+            "/api/persona/items",
+            "/api/persona/coverage",
+            "/api/persona/questionnaire",
+            "/api/persona/questionnaire?round=retest",
+            "/api/media/capabilities",
+        ):
+            assert client.get(api).status_code == 200, api
+        assert client.get("/api/media/capabilities").json()["available"] is False
+        assert client.post("/api/persona/build").status_code == 403
+        assert client.post("/api/persona/chat", json={}, headers=headers).status_code == 400
+        assert client.post("/api/persona/chat", content=b"x" * (MAX_JSON_BYTES + 1), headers=headers).status_code == 413
+        assert client.get("/api/status", headers={"Host": "untrusted.invalid"}).status_code == 403
+
+        imported = client.post(
+            "/api/persona/import?kind=meeting",
+            files={"files": ("2026-01-01_访谈.txt", "合成人物：我喜欢先核对来源。".encode())},
+            headers=headers,
+        )
+        assert imported.status_code == 200, imported.text
+        source = imported.json()["imported"][0]
+        assert source["kind"] == "meeting" and source["n_target"] == 1
+        assert client.get("/api/status").json()["counts"]["sources"] == 1
+        assert client.delete(f"/api/persona/sources/{source['source_id']}", headers=headers).status_code == 200
+
+        body = {
+            "kind": "chat_reply",
+            "answer": {
+                "reply": "先核对来源。",
+                "confidence": 0.7,
+                "abstain": False,
+                "abstain_reason": "",
+                "citations": [],
+                "retrieved_ids": [],
+            },
+        }
+        for api in ("script", "export", "audio"):
+            response = client.post(f"/api/media/{api}", json=body, headers=headers)
+            assert response.status_code == 200, response.text
+        audio = client.post("/api/media/audio", json=body, headers=headers).json()
+        for part in audio["segments"]:
+            assert client.get(part["url"]).status_code == 200

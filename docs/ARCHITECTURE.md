@@ -29,9 +29,11 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |
 | L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render`、`service` |
-| L5 接入（9） | 命令行、网页、API/MCP | `cli`、`web.*`、`api`、`mcp_server` |
+| L5 接入（9） | 命令行、网页、API/MCP | `cli`、`web.*`、`frontend/`（React）、`api`、`mcp_server` |
 | 横切：评测（8） | 执行框架、评委、统计、来源记录、回听评测 | `evals.harness`、`evals.provenance`、`evals.personal`、`media.check` |
 | 横切：治理 | 授权、标识、隐私、数据出境 | 规则见第 4 节；只读身份契约、出境分类、预置音色与统一标识已完成 |
+
+网页只有 `frontend/` 的 React + TypeScript 应用，使用 HashRouter；Vite 构建到 `src/twin/web/static/index.html` 和 `assets/`。`web.app` 在 `/` 提供页面、`/assets/*` 提供资源，`/next` 与 `/next/` 为 308 书签重定向，不再提供另一套静态 UI。播放与形象实现位于 `frontend/src/features/playback/`，设计令牌位于 `frontend/src/design/tokens.css`。开发代理、构建命令与安全头见 [WEB_UI.md](WEB_UI.md)。
 
 ## 3. 层间规则
 

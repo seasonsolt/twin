@@ -49,4 +49,6 @@ jobs:
       - run: pnpm -C frontend lint
       - run: pnpm -C frontend test
       - run: pnpm -C frontend build
-      - run: git diff --exit-code src/twin/web/static/next
+      - run: |
+          git diff --exit-code src/twin/web/static
+          test -z "$(git status --porcelain src/twin/web/static)"

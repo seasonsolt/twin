@@ -1,4 +1,4 @@
-"""Offline read-only identity API and page contracts."""
+"""Offline read-only identity API contracts."""
 
 from __future__ import annotations
 
@@ -45,18 +45,6 @@ def test_identity_consent_endpoint_is_removed(tmp_path: Path) -> None:
         response = client.post(
             "/api/identity/consent", json={"scope": "egress:llm", "decision": "grant"}, headers={"X-Twin": "1"}
         )
-        assert response.status_code == 405  # static GET mount, not a consent endpoint
+        assert response.status_code == 404
+        assert response.json() == {"detail": "找不到请求的资源"}
     assert not settings.db_path.exists()
-
-
-def test_identity_page_static_contract(tmp_path: Path) -> None:
-    with TestClient(create_app(Settings(db_path=tmp_path / "identity.db")), base_url="http://localhost") as client:
-        page = client.get("/static/identity.js")
-        assert page.status_code == 200
-        assert '/api/identity"' in page.text
-        assert "名字与音色/形象" in page.text and "声明/推断" in page.text
-        assert "不支持真人声音复刻或照片驱动形象" in page.text
-        for removed in ("/api/identity/consent", "data.consents", "data.biometric", "granted", "window.confirm"):
-            assert removed not in page.text
-        assert 'identity: { title: "身份"' in client.get("/static/app.js").text
-        assert "#/identity" in client.get("/").text

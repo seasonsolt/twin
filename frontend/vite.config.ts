@@ -2,10 +2,10 @@ import { defineConfig } from 'vitest/config';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  base: '/next/',
+  base: '/',
   plugins: [tailwindcss()],
   build: {
-    outDir: '../src/twin/web/static/next',
+    outDir: '../src/twin/web/static',
     emptyOutDir: true,
     sourcemap: false,
     modulePreload: { polyfill: false },
@@ -18,7 +18,9 @@ export default defineConfig({
       },
     },
   },
-  server: { proxy: { '/api': 'http://127.0.0.1:8765' } },
+  server: {
+    proxy: { '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true } },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

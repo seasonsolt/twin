@@ -227,8 +227,6 @@ def test_static_assets_do_not_duplicate_labels_or_privacy_claims() -> None:
             content = path.read_bytes()
             for text in (EXPLICIT_LABEL, "不代表", "数据只保存在本机"):
                 assert text.encode() not in content, path
-    for file, key in (("app.js", "disclaimer"), ("playback.js", "explicit"), ("persona.js", "chat_notice")):
-        assert f"labels?.{key}" in (STATIC_DIR / file).read_text(encoding="utf-8")
 
 
 def test_disclaimer_wording() -> None:

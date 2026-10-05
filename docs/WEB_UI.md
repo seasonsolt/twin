@@ -83,8 +83,8 @@ frontend/
 │   ├── components/   # ui/、motion/、layout/、effects/、reactbits/
 │   ├── lib/          # 同源 API、格式化与样式合并
 │   ├── stores/       # 状态与可见性轮询
-│   ├── features/     # chat/、playback/、jobs/、sources/、profile/
-│   ├── pages/        # 聊天、记忆资料、人格档案、占位页、组件画廊
+│   ├── features/     # chat/、playback/、jobs/、sources/、profile/、questionnaire/、identity/
+│   ├── pages/        # 聊天、记忆资料、人格档案、建档问卷、身份、组件画廊
 │   ├── test/         # setup 与行为/对比度测试
 │   └── main.tsx
 ├── package.json / pnpm-lock.yaml
@@ -144,7 +144,7 @@ Vite base 为 `/next/`，输出到 `src/twin/web/static/next`，清空旧输出�
 
 UI：Button（4 变体/3 尺寸/loading）、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Badge、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider/useConfirm、Toast/toast、Tooltip。动效：Pressable、Reveal/Stagger/StaggerItem、PageTransition、LayoutScope/LayoutItem（隔离 LayoutGroup）、DragDismiss。每项在 gallery 有最小可交互示例。确认使用 `const confirm = useConfirm(); await confirm({title, body, confirmLabel, tone})`，返回 boolean，Escape/取消/关闭返回 false；卸载会结清待处理请求。Radix 提供焦点约束、键盘操作与 ARIA；通知包含 polite live region。
 
-AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pill；<768px 从顶栏打开弹簧底部抽屉，可下拖关闭。顶栏展示姓名、模型与外部 egress 主机（`外部 · <host>`，info 色调），不显示本机后端；身份导航与占位页标题为“身份”。`stores/status.ts` 首次获取 `/api/status` 总会执行，即使标签页处于后台也不跳过或因隐藏而取消；此后可见时每 10 秒刷新，隐藏时暂停定期刷新并取消后续请求，恢复可见后立即刷新，卸载清理计时器与监听。
+AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pill；<768px 从顶栏打开弹簧底部抽屉，可下拖关闭。顶栏展示姓名、模型与外部 egress 主机（`外部 · <host>`，info 色调），不显示本机后端；身份导航与页面标题为“身份”。`stores/status.ts` 首次获取 `/api/status` 总会执行，即使标签页处于后台也不跳过或因隐藏而取消；此后可见时每 10 秒刷新，隐藏时暂停定期刷新并取消后续请求，恢复可见后立即刷新，卸载清理计时器与监听。
 
 所有 AI 标签及免责声明必须来自 `/api/status.labels`（explicit/disclaimer/chat_notice），不能在前端复制或兜底硬编码；未加载显示 Skeleton/留空。API 客户端仅接受本地 `/api/`，JSON/form 编码，所有非 GET 请求带 `X-Twin: 1`，错误为带 status/detail 的 `ApiError`，保留中文 detail，其他错误映射为中文。HTML 导出使用 `responseType: 'text'`；错误仍按 JSON detail 解析。
 
@@ -161,10 +161,10 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pi
 | CountUp / `MetricNumber` | `value, from?, suffix?` | 0.6s spring 计数，千位分隔；网格预留起点/终点宽度 | 最终值立即显示 |
 | AnimatedList / `MessageList` | `items: {id,text,content?}[], label, className?` | 使用稳定 ID 的语义列表；文本使用上游淡入，富消息 content 使用 gentle 入场；150ms 淡出；禁用全局方向键/Tab 监听、缩放和渐变，无列表交错 | 直接显示，无入场动画；退出仅淡出 |
 | SpotlightCard / `SpotlightAction` | `children, label, onClick, disabled?` | 语义按钮、键盘入口；accent 6% 光斑 × 上游 0.6 opacity，原配色由 wrapper 覆盖 | 完全关闭光斑 |
-| Stepper / `FlowStepper` | `steps: {id,title,content}[], onComplete?, completedText?` | 应用令牌、可聚焦的步骤按钮、中文导航与完成状态；为后续问卷预备 | 同样的步骤导航，直接切换，无滑动/高度动画 |
+| Stepper / `FlowStepper` | `steps: {id,title,content}[], onComplete?, completedText?, initialStep?, completeOnLast?` | 应用令牌、可聚焦的步骤按钮、中文导航与完成状态；为后续问卷预备 | 同样的步骤导航，直接切换，无滑动/高度动画 |
 | AnimatedContent / `SectionReveal` | `children, className?` | 首次滚动进入时 8px/250ms 揭示，无缩放 | 区块立即可见，不创建滚动触发器 |
 
-文字与数值使用完整的 visually hidden 文本，所有动态呈现均 `aria-hidden`，避免重复或逐词/逐帧播报；文字动画不改变布局，指标预留宽度。Gallery 的“React Bits 动效”区展示全部 7 个 wrapper，各有重播按钮和减少动态效果说明；列表支持添加/移除，流程支持切换与完成。聊天、记忆资料、人格档案使用真实 API，其余业务页尚未迁移；不填充虚构业务数据。
+文字与数值使用完整的 visually hidden 文本，所有动态呈现均 `aria-hidden`，避免重复或逐词/逐帧播报；文字动画不改变布局，指标预留宽度。Gallery 的“React Bits 动效”区展示全部 7 个 wrapper，各有重播按钮和减少动态效果说明；列表支持添加/移除，流程支持切换与完成。聊天、记忆资料、人格档案、建档问卷和身份均使用真实 API；业务路由无占位页，gallery 保留组件示例，不填充虚构业务数据。
 
 确认弹窗打开时明确聚焦**取消**，不自动聚焦破坏性动作；程序化 `confirm()` 将打开前的 `document.activeElement` 保存在请求中，并在关闭动画卸载后恢复仍连接的元素，关闭时通过独立 ref 保留焦点，避免 request 清空后丢失目标。通知只通过 polite live region 播报，新增通知不主动移动焦点。测试覆盖无 trigger 的输入框焦点恢复，以及通知显示期间首个 Escape 关闭且返回入口。
 
@@ -174,10 +174,10 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航有共享 pi
 | --- | --- | --- |
 | `#/chat` | 已迁移（/next） | `/#/chat` |
 | 聊天回复 → 回放面板（含形象） | 已迁移（/next） | 旧聊天页回放面板 |
-| `#/questionnaire` | F0 占位 | `/#/questionnaire` |
+| `#/questionnaire` | 已迁移（/next） | `/#/questionnaire` |
 | `#/persona` | 已迁移（/next） | `/#/persona` |
 | `#/sources` | 已迁移（/next） | `/#/sources` |
-| `#/identity` | F0 占位 | `/#/identity` |
+| `#/identity` | 已迁移（/next） | `/#/identity` |
 | `#/gallery` | F0 UI + F0b React Bits wrapper 示例已实现 | 不适用 |
 
 ### F1 聊天与回放
@@ -225,8 +225,30 @@ AppShell（HashRouter，按页 lazy）
 | 默认待核实筛选 → 默认全部非否决条目；否决需开启 include_rejected | 有意不同；原审核筛选仍可用 |
 | 完成度 as_of 日期 | 新增；仅传给 coverage，当前条目不是历史快照（items API 无日期参数） |
 | 大列表窗口化、乐观回滚、审核后完成度刷新 | 新增；普通列表删除以 layout spring 合拢，窗口列表直接更新位置 |
-| 未迁移能力 | 本任务两页无缺失；问卷仍链接旧界面 |
+| 未迁移能力 | 本任务两页无缺失；问卷入口由 F3 接入新前端 |
 
 动效使用现有 gentle/layout 弹簧：drop zone 轻缩放/边框、Meter、证据高度、普通列表间隙；阶段文本 crossfade。没有列表 stagger，刷新/审核不会重新交错入场。减少动态效果关闭共享布局、位移、缩放和高度动画，仅保留淡入淡出与立即更新；未知进度不使用移动条纹。效果只从 effects wrapper 导入，按具体模块导入避免将画廊的 GSAP 带入业务路由。无新增运行时依赖，旧 UI 与后端不改。
 
 F2 测试：`jobs.test.tsx` 覆盖轮询/阶段与 tally/自动重试/重新连接/运行任务恢复/过期记录/提交失败与 409/清理；`persona.test.tsx` 覆盖导入成功与跳过/上传失败/键盘 picker/拖放/来源摘要/删除确认与回滚/构建差异与 stale/失败提示/覆盖率与 API 等级/确认修改驳回撤销及回滚/证据键盘展开/as_of 重取/include_rejected/300 与 301 条窗口化边界/请求取消。聊天 stale 链接测试同步改为新路由。
+
+### F3 建档问卷与身份
+
+`/next/#/questionnaire` 用 `useQuestionnaire` 读取第一轮或 `?round=retest` 的服务端草稿，按 API `section` 分组，通过 FlowStepper 切换；进入时定位第一道未答题所在组。保留题号、题干、种类、对应细项、情境/开放题帮助、测试题留出提示、4000 字限制和已答/总题数。Textarea 自动增高、IME 安全，Enter 仅换行，不触发提交。可跳过题的“跳过”清空答案；空答案不计已答，提交时仍由旧后端推导 declined_facets，不发送新的授权字段。
+
+草稿 800ms 防抖 PUT，按版本串行保存不可变快照；保存中继续编辑会接着保存最新版本，“已保存”轻淡入淡出。保存失败保留输入并提供重试；提交先等待最新草稿保存成功，失败时不 POST。换轮或路由卸载会清掉防抖计时器、取消读取但继续完成写入，快速返回同一轮先等退出时的写入再读取，避免恢复旧快照。小于 60KB 的退出写入启用 keepalive，大草稿使用普通请求以避免浏览器 64KB 限制；关闭标签页时的写入只能尽力完成。只有仍有未保存修改且写入正在进行时，刷新/关闭页才出现浏览器原生警告，应用内导航链接/轮次切换才出现 ConfirmDialog；单纯等待防抖或已保存不弹警告。
+
+交卷使用 ConfirmDialog，说明导入为问卷来源、需要重新构建、后端尝试自动开始、测试题不进档案、可跳过题不授权，以及重新提交会替换上次答案。成功展示 API notice、Toast、`#/sources` 的构建/进度入口；返回 job_id 时复用 F2 的 useJob、JobProgress、构建恢复、完成摘要与细项差异，以及档案/聊天链接。重测恢复已存答案，保留提交日期、建议重测日期、修改后重新提交与 API notice；**旧页和接口都没有重测评分，故不计算或展示分数**，重测也不启动构建。
+
+`/next/#/identity` 用 `useIdentity` 独立读取 `/api/identity` 和 `/api/media/capabilities`。只读展示名字、别名、预置音色/形象、出境表及不支持真人声音复刻/照片驱动形象的说明；类型、提供方、主机原样来自 API（包括评委行，不按下标改写类型）。小形象复用 playback 的 Avatar 和 capabilities 中的配置 spec，口型始终为 0，允许眨眼，减少动态效果关闭眨眼。身份读取失败可重试；预览失败不影响身份表格。AI 标识只来自 status.labels.explicit 和 avatar.spec.label，未加载不硬编码兜底。卸载取消读取并清理眨眼计时器。
+
+| 与旧页对照 | 状态 |
+| --- | --- |
+| 第一轮/重测、草稿恢复/保存、题干/细项/种类、留出测试题、可跳过细项授权、进度 | 已完成 |
+| 确认提交/替换、API notice、自动构建跟踪/恢复/差异、提交日期与重测建议日期 | 已完成 |
+| 一题一屏和题号总览 → 按旧 section 分组的键盘可操作 FlowStepper | 有意不同；组内同时展示题目 |
+| 1500ms 保存 → 800ms 串行防抖、保存失败重试、仅写入中离开警告 | 有意不同；不增加本地个人答案存储或日志 |
+| 身份只读字段、出境表、限制说明和 API 模拟标识 | 已完成 |
+| 身份页形象预览、出境 kind 不按行号改写 | 新增/修正；使用配置的预置 spec 与真实 API kind |
+| 重测评分 | 不适用；按旧页只恢复答案与展示提交状态，无后端改动 |
+
+F3 测试：`questionnaire.test.tsx` 覆盖草稿恢复/首个未答分组、两种动态偏好的步骤导航/键盘、800ms 假计时防抖/X-Twin/IME、跳过与进度、串行保存中编辑、离开警告/取消/确认、卸载保存/计时清理、快速换轮返回、保存失败/重试、交卷取消/确认/替换/成功/错误、自动构建摘要与链接、重测恢复/提交状态（无评分）、轮次隔离与加载重试；`identity.test.tsx` 覆盖 API 数据与逐行出境、配置 Avatar/闭口/眨眼/减少动态效果/清理、API 标签无硬编码、读取与预览失败重试/取消。AppShell 身份测试改为真实新页面，档案的问卷入口不再链接旧 UI。无新增运行时依赖，旧 UI 与后端不改，构建产物仍在 `src/twin/web/static/next/`。

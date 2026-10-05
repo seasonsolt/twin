@@ -9,7 +9,6 @@ import {
   ToastViewport,
   TooltipProvider,
 } from './components/ui';
-import { Placeholder } from './pages/Placeholder';
 import './design/tokens.css';
 
 const Chat = lazy(() =>
@@ -20,6 +19,14 @@ const Sources = lazy(() =>
 );
 const Profile = lazy(() =>
   import('./pages/Profile').then((module) => ({ default: module.Profile })),
+);
+const Questionnaire = lazy(() =>
+  import('./pages/Questionnaire').then((module) => ({
+    default: module.Questionnaire,
+  })),
+);
+const Identity = lazy(() =>
+  import('./pages/Identity').then((module) => ({ default: module.Identity })),
 );
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
@@ -58,13 +65,22 @@ createRoot(document.getElementById('root')!).render(
                     </Suspense>
                   }
                 />
-                {['questionnaire', 'identity'].map((route) => (
-                  <Route
-                    key={route}
-                    path={route}
-                    element={<Placeholder route={route} />}
-                  />
-                ))}
+                <Route
+                  path="questionnaire"
+                  element={
+                    <Suspense fallback={<Skeleton className="h-40" />}>
+                      <Questionnaire />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="identity"
+                  element={
+                    <Suspense fallback={<Skeleton className="h-40" />}>
+                      <Identity />
+                    </Suspense>
+                  }
+                />
                 <Route
                   path="gallery"
                   element={

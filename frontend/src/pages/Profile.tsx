@@ -181,8 +181,8 @@ export function Profile() {
             <a href="#/sources" className="text-accent underline">
               去导入资料
             </a>
-            <a href="/#/questionnaire" className="text-accent underline">
-              去答问卷（旧界面）
+            <a href="#/questionnaire" className="text-accent underline">
+              去答问卷
             </a>
           </EmptyState>
         )}

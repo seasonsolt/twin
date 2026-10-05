@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useReducedMotion } from 'motion/react';
+import { useMotionPreset } from '../../design/motion';
 import Stepper from '../reactbits/Stepper';
 import { Button } from '../ui/controls';
 
@@ -13,13 +13,17 @@ export function FlowStepper({
   steps,
   onComplete,
   completedText = '已完成',
+  initialStep = 1,
+  completeOnLast = true,
 }: {
   steps: FlowStep[];
   onComplete?: () => void;
   completedText?: string;
+  initialStep?: number;
+  completeOnLast?: boolean;
 }) {
-  const reduced = useReducedMotion();
-  const [current, setCurrent] = useState(1);
+  const { reduced } = useMotionPreset();
+  const [current, setCurrent] = useState(initialStep);
   const [completed, setCompleted] = useState(false);
   const finish = () => {
     setCompleted(true);
@@ -47,7 +51,7 @@ export function FlowStepper({
         <p role="status">{completedText}</p>
       ) : reduced ? (
         <div className="rounded-xl border border-border bg-surface p-4">
-          <div aria-label="流程步骤" className="mb-4 flex gap-3">
+          <div aria-label="流程步骤" className="mb-4 flex flex-wrap gap-3">
             {steps.map((step, index) => (
               <span key={step.id}>
                 {indicators(index + 1, current, setCurrent)}
@@ -65,11 +69,16 @@ export function FlowStepper({
               </Button>
             )}
             <Button
+              disabled={!completeOnLast && current === steps.length}
               onClick={() =>
                 current === steps.length ? finish() : setCurrent(current + 1)
               }
             >
-              {current === steps.length ? '完成' : '继续'}
+              {current === steps.length
+                ? completeOnLast
+                  ? '完成'
+                  : '到最后了'
+                : '继续'}
             </Button>
           </div>
         </div>
@@ -80,7 +89,7 @@ export function FlowStepper({
           onFinalStepCompleted={finish}
           className="!block !p-0"
           stepCircleContainerClassName="!max-w-none !rounded-xl !shadow-none"
-          stepContainerClassName="!p-4"
+          stepContainerClassName="!p-4 !overflow-x-auto"
           contentClassName="!px-4"
           footerClassName="!px-4 !pb-4"
           backButtonText="上一步"
@@ -93,10 +102,21 @@ export function FlowStepper({
           nextButtonProps={
             {
               type: 'button',
-              'aria-label': current === steps.length ? '完成' : '继续',
+              disabled: !completeOnLast && current === steps.length,
+              'aria-label':
+                current === steps.length
+                  ? completeOnLast
+                    ? '完成'
+                    : '到最后了'
+                  : '继续',
               className:
-                'effects-stepper-next rounded-md bg-accent px-3 py-2 text-on-accent',
-              'data-label': current === steps.length ? '完成' : '继续',
+                'effects-stepper-next rounded-md bg-accent px-3 py-2 text-on-accent disabled:opacity-50',
+              'data-label':
+                current === steps.length
+                  ? completeOnLast
+                    ? '完成'
+                    : '到最后了'
+                  : '继续',
             } as React.ButtonHTMLAttributes<HTMLButtonElement>
           }
           renderStepIndicator={({ step, currentStep, onStepClick }) =>

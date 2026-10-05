@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { TooltipProvider } from '../components/ui';
-import { Placeholder } from '../pages/Placeholder';
+import { Identity } from '../pages/Identity';
 import { useStatus, type Status } from '../stores/status';
 
 it('loads labels in a background tab, shows only external hosts, and names identity consistently', async () => {
@@ -39,21 +39,39 @@ it('loads labels in a background tab, shows only external hosts, and names ident
   useStatus.setState({ data: null, error: null });
   vi.stubGlobal(
     'fetch',
-    vi.fn().mockResolvedValue(new Response(JSON.stringify(status))),
+    vi.fn((path: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            path === '/api/status'
+              ? status
+              : path === '/api/identity'
+                ? {
+                    name: '身份测试人',
+                    aliases: [],
+                    voice: null,
+                    avatar: null,
+                    egress: [],
+                  }
+                : { available: false, backend: null, label: 'API媒体标识' },
+          ),
+        ),
+      ),
+    ),
   );
   const rendered = render(
     <TooltipProvider>
       <MemoryRouter initialEntries={['/identity']}>
         <Routes>
           <Route element={<AppShell />}>
-            <Route path="identity" element={<Placeholder route="identity" />} />
+            <Route path="identity" element={<Identity />} />
           </Route>
         </Routes>
       </MemoryRouter>
     </TooltipProvider>,
   );
   try {
-    expect(await screen.findByText('API 标识')).toBeVisible();
+    expect((await screen.findAllByText('API 标识')).length).toBeGreaterThan(0);
     expect(screen.getByText('API 页脚')).toBeVisible();
     expect(screen.getByText('测试人')).toBeVisible();
     const chip = screen.getByText('外部 · example.test');

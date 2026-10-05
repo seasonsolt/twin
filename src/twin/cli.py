@@ -45,6 +45,9 @@ target_aliases = []
 db_path = "data/twin.db"
 max_workers = 4
 
+[media]
+# font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体
+
 [llm]
 # egress = "local" 或 "external"：未声明时按提供方/主机推断；外部服务按配置使用，界面如实标出。
 # 本机代理若转发到境外 API，应设置 egress = "external"。
@@ -705,6 +708,39 @@ def media_speak_command(
         except MediaError:
             raise _fail("语音合成失败，请检查语音服务、预置音色和语言配置后重试") from None
     _say(f"已写入语音与清单：{out / rendered.manifest_file}")
+
+
+@media_app.command("clip")
+def media_clip_command(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
+    out: Annotated[Path, typer.Option("--out", help="带标识的 MP4 输出（仅本人可读写）")],
+    kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
+    name: Annotated[str | None, typer.Option("--name", help="默认配置中的目标人物")] = None,
+) -> None:
+    """Export an existing reply with a stylized avatar, subtitles and permanent labels."""
+    from .config import make_synthesizer
+    from .media.clip import render_clip
+    from .media.schema import AVATAR_PRESETS
+    from .media.tts import MediaError
+
+    with _errors():
+        try:
+            script = _media_source(ctx, source, kind, name)
+        except (ValueError, OSError):
+            raise _fail("无法读取回答，请检查输入文件是否为有效的 ChatReply JSON") from None
+        settings = _settings(ctx)
+        try:
+            synthesizer = make_synthesizer(settings.tts)
+        except (MediaError, ValueError):
+            raise _fail("语音未配置或不可用，请检查 [tts] 配置和密钥环境变量") from None
+        try:
+            render_clip(
+                script, synthesizer, AVATAR_PRESETS[settings.avatar.preset], out, font_path=settings.media.font_path
+            )
+        except MediaError as exc:
+            raise _fail(str(exc)) from None
+    _say(f"已写入 {out}")
 
 
 @media_app.command("check", help="合成句集回听评测：字错率、延迟与后端指纹。")

@@ -24,6 +24,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-cjk
       - run: uv sync --frozen
       - run: uv run ruff check src tests deploy
       - run: uv run ruff format --check src tests deploy

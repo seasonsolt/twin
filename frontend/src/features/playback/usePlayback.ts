@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
+import { toast } from '../../components/ui';
 import type { ChatReply } from '../chat/types';
 import type { AudioPart, Capabilities, MediaScript } from './types';
 
@@ -11,6 +12,7 @@ interface PlaybackView {
   speaking: boolean;
   voiceLoading: boolean;
   exporting: boolean;
+  exportingVideo: boolean;
   error: string;
   voiceNotice: string;
 }
@@ -22,6 +24,7 @@ const initial: PlaybackView = {
   speaking: false,
   voiceLoading: false,
   exporting: false,
+  exportingVideo: false,
   error: '',
   voiceNotice: '',
 };
@@ -32,6 +35,7 @@ const noActions = {
   },
   voice() {},
   export() {},
+  exportVideo() {},
   retry() {},
   stop() {},
 };
@@ -286,23 +290,41 @@ export function usePlayback(
           publish({ voiceNotice: `${message(error)}，可继续文字回放。` });
       }
     };
-    const download = async () => {
-      if (state.exporting) return;
-      publish({ exporting: true, error: '' });
+    const download = async (video = false) => {
+      if (state.exporting || state.exportingVideo) return;
+      publish(
+        video ? { exportingVideo: true } : { exporting: true, error: '' },
+      );
       try {
-        const html = await api<string>('/api/media/export', {
-          method: 'POST',
-          json: body,
-          responseType: 'text',
-          signal: controller.signal,
-        });
+        let blob: Blob;
+        if (video) {
+          const response = await fetch('/api/media/clip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Twin': '1' },
+            body: JSON.stringify(body),
+            credentials: 'same-origin',
+            redirect: 'error',
+            signal: controller.signal,
+          });
+          if (!response.ok)
+            throw new Error(
+              '视频导出失败，请检查 ffmpeg、字体和语音配置后重试',
+            );
+          blob = await response.blob();
+        } else {
+          const html = await api<string>('/api/media/export', {
+            method: 'POST',
+            json: body,
+            responseType: 'text',
+            signal: controller.signal,
+          });
+          blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        }
         if (!alive) return;
-        const url = URL.createObjectURL(
-          new Blob([html], { type: 'text/html;charset=utf-8' }),
-        );
+        const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'twin-media.html';
+        link.download = video ? 'twin-media.mp4' : 'twin-media.html';
         document.body.append(link);
         link.click();
         link.remove();
@@ -314,9 +336,17 @@ export function usePlayback(
           }, 1000),
         );
       } catch (error) {
-        if (alive) publish({ error: message(error) });
+        if (alive) {
+          if (video)
+            toast(
+              '视频导出失败，请检查 ffmpeg、字体和语音配置后重试',
+              'danger',
+            );
+          else publish({ error: message(error) });
+        }
       } finally {
-        if (alive) publish({ exporting: false });
+        if (alive)
+          publish(video ? { exportingVideo: false } : { exporting: false });
       }
     };
     actions.current = {
@@ -324,6 +354,7 @@ export function usePlayback(
       step,
       voice: () => void voice(),
       export: () => void download(),
+      exportVideo: () => void download(true),
       retry: () => {
         void load();
         void loadCapabilities();

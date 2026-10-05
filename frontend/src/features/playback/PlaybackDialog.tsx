@@ -109,8 +109,17 @@ export function PlaybackDialog({
                 variant="secondary"
                 onClick={actions.export}
                 loading={playback.exporting}
+                disabled={playback.exportingVideo}
               >
                 导出
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={actions.exportVideo}
+                loading={playback.exportingVideo}
+                disabled={playback.exporting}
+              >
+                导出视频
               </Button>
             </div>
             {capabilities?.available && (

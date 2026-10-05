@@ -146,12 +146,14 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 | `POST /api/persona/questionnaire/submit` | 初次导入并尝试构建；重测仅记录 |
 | `GET /api/identity` | name/aliases/voice/avatar/egress；无授权账本 |
 | `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar |
-| `POST /api/media/script`、`/export`、`/audio` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}` |
+| `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}` |
 | `GET /api/media/audio/{name}` | SHA-256 命名 WAV/MP3 分片，验证目录边界 |
 
 任务状态 queued/running/done/failed，日志最近 500 行，里程碑另存；人格构建互斥，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
 
-脚本与独立 HTML 导出不调用模型，音频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含 AI 标识和来源指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息。
+回放面板在 HTML“导出”旁提供“导出视频”：显示加载状态，下载 `twin-media.mp4`，失败显示中文 toast；标识仍只来自 API。`POST /api/media/clip` 同步返回 `video/mp4`，`Content-Disposition: attachment`、`X-AI-Generated: twin`；复用现有安全与请求体限制，脚本最多 100,000 字符、视频最多 600 秒。需系统 ffmpeg 与中文字体（见 [MEDIA.md](MEDIA.md)），临时 MP4 在响应完成后清理。
+
+脚本与独立 HTML 导出不调用模型，音频与视频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含 AI 标识和来源指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息。
 
 ## 安全与服务路由
 

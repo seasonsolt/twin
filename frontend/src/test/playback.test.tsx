@@ -12,6 +12,7 @@ import { useReducedMotion } from 'motion/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { PlaybackDialog } from '../features/playback/PlaybackDialog';
+import * as ui from '../components/ui';
 import { Avatar } from '../features/playback/Avatar';
 import { useStatus } from '../stores/status';
 import type { ChatReply } from '../features/chat/types';
@@ -570,6 +571,69 @@ it('downloads the returned HTML through the API client and revokes URLs on close
   fireEvent.click(screen.getByRole('button', { name: '关闭' }));
   expect(revoke).toHaveBeenCalledWith('blob:export');
   click.mockRestore();
+});
+it('exports video with a loading state, download, Chinese error toast and URL cleanup', async () => {
+  const create = vi.fn((blob: Blob) => {
+    void blob;
+    return 'blob:video';
+  });
+  const revoke = vi.fn();
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: create,
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: revoke,
+  });
+  const click = vi
+    .spyOn(HTMLAnchorElement.prototype, 'click')
+    .mockImplementation(() => {});
+  const toast = vi.spyOn(ui, 'toast').mockImplementation(() => () => {});
+  await open();
+  let resolve: (response: Response) => void = () => {};
+  fetchMock.mockImplementation(
+    () =>
+      new Promise<Response>((done) => {
+        resolve = done;
+      }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: '导出视频' }));
+  expect(screen.getByRole('button', { name: '导出视频' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '导出' })).toBeDisabled();
+  const init = fetchMock.mock.calls.find(
+    ([url]) => url === '/api/media/clip',
+  )![1] as RequestInit;
+  expect(init.method).toBe('POST');
+  expect(new Headers(init.headers).get('X-Twin')).toBe('1');
+  expect(JSON.parse(init.body as string)).toEqual({
+    kind: 'chat_reply',
+    answer,
+    persona_name: '测试人',
+  });
+  await act(async () => {
+    resolve(
+      new Response('mp4 bytes', { headers: { 'Content-Type': 'video/mp4' } }),
+    );
+  });
+  expect(create.mock.calls[0][0].type).toBe('video/mp4');
+  expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe(
+    'twin-media.mp4',
+  );
+  expect(screen.getByRole('button', { name: '导出视频' })).toBeEnabled();
+  fetchMock.mockResolvedValue(
+    json({ detail: 'private backend response' }, 503),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '导出视频' }));
+  });
+  expect(toast).toHaveBeenCalledWith(
+    '视频导出失败，请检查 ffmpeg、字体和语音配置后重试',
+    'danger',
+  );
+  expect(screen.getByRole('button', { name: '导出视频' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+  expect(revoke).toHaveBeenCalledWith('blob:video');
 });
 it('aborts pending requests on close and does not play late audio', async () => {
   await open();

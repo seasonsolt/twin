@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -13,11 +14,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ValidationError
+from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..config import Settings, make_synthesizer
 from ..media.adapters import presentable_from_payload
+from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
 from ..media.schema import AVATAR_PRESETS, EXPLICIT_LABEL, AudioManifest, MediaScript
 from ..media.script import script_from_presentable
@@ -179,6 +182,31 @@ def register(
     @app.post("/api/media/script")
     def script(body: MediaBody) -> MediaScript:
         return make_script(body)
+
+    @app.post("/api/media/clip")
+    def clip(body: MediaBody) -> FileResponse:
+        script = make_script(body)
+        path: Path | None = None
+        try:
+            private_directory(cache_dir)
+            with tempfile.NamedTemporaryFile(dir=cache_dir.parent, suffix=".mp4", delete=False) as output:
+                path = Path(output.name)
+            render_clip(
+                script, speech(), AVATAR_PRESETS[settings.avatar.preset], path, font_path=settings.media.font_path
+            )
+            return FileResponse(
+                path,
+                media_type="video/mp4",
+                filename="twin-media.mp4",
+                headers={"X-AI-Generated": "twin", "Cache-Control": "private, no-store"},
+                background=BackgroundTask(path.unlink, missing_ok=True),
+            )
+        except (MediaError, OSError) as exc:
+            if path is not None:
+                path.unlink(missing_ok=True)
+            if isinstance(exc, OSError):
+                raise MediaUnavailable("无法保存视频文件") from None
+            raise
 
     @app.post("/api/media/export", response_class=HTMLResponse)
     def export(body: MediaBody) -> HTMLResponse:

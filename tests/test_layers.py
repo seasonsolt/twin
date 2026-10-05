@@ -25,6 +25,7 @@ LAYERS: dict[str, int] = {
     "media.script": 7,
     "media.adapters": 7,
     "media.render": 7,
+    "media.clip": 7,
     "media.lipsync": 7,
     "media.speech_text": 7,
     "web.media": 9,

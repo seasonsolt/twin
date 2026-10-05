@@ -4,6 +4,9 @@ target_aliases = []
 db_path = "data/twin.db"
 max_workers = 4
 
+[media]
+# font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体
+
 [llm]
 # egress = "local" 或 "external"：未声明时按提供方/主机推断；外部服务按配置使用，界面如实标出。
 # 本机代理若转发到境外 API，应设置 egress = "external"。

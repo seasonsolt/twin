@@ -80,6 +80,10 @@ class TTSSettings(BaseModel):
         return value
 
 
+class MediaSettings(BaseModel):
+    font_path: str | None = None
+
+
 class AvatarSettings(BaseModel):
     preset: str = "default"
 
@@ -186,6 +190,7 @@ class Settings(BaseModel):
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
+    media: MediaSettings = Field(default_factory=MediaSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
 
     def is_target(self, speaker: str) -> bool:

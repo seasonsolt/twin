@@ -121,6 +121,15 @@ def test_render_imports_only_contract_protocol_speech_text_lipsync_and_util() ->
             assert target.split(".")[0] in sys.stdlib_module_names, target
 
 
+def test_clip_imports_only_render_contract_protocol_and_pillow() -> None:
+    targets = _imports((MEDIA_ROOT / "clip.py").read_text(encoding="utf-8"), "twin.media")
+    for target in targets:
+        if target.startswith("twin"):
+            assert target in {"twin.media.render", "twin.media.schema", "twin.media.tts"}, target
+        else:
+            assert target.split(".")[0] in sys.stdlib_module_names | {"PIL"}, target
+
+
 @pytest.mark.parametrize(
     "source",
     [

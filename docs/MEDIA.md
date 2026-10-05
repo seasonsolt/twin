@@ -29,6 +29,7 @@
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
 | `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（开头提示、按句切分、弃权只出提示） |
 | `media.lipsync` | 与 L4 同级（7） | 纯函数：时间戳、PCM 能量或合成节奏到版本化口型轨 |
+| `media.clip` | 与 L4 同级（7） | Pillow 平涂形象与字幕、条件静音片头与静音片尾、ffmpeg MP4 编码；复用语音缓存与口型轨 |
 | `media.render` | 与 L4 同级（7） | 按脚本调用 `SpeechSynthesizer`、拼接音频、写入标识、生成 `LipSyncTrack`、缓存与导出 |
 | `web.media` / `cli` | L5 接入（9） | API、回放面板、`twin media ...` 命令 |
 
@@ -99,6 +100,23 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 任一配置后端分类为外部即使用外部措辞；全部为本机时使用本机措辞，不存在独立授权状态。
 
+### 3.3 MP4 片段导出（M3）
+
+`twin media clip REPLY.json --out clip.mp4` / `POST /api/media/clip` 仅展示已保存的回答，不生成新措辞。默认 1280×720、25 fps；左侧沿用浏览器形象的平涂几何与配色（四档口型，无眨眼），右侧按字符实际宽度换行显示当前段原文。口型取各音频分片的 `lipsync`，缺失时闭嘴；弃权不显示形象，只展示提示。全程保留 `EXPLICIT_LABEL` 角标。
+
+若脚本首段为 `kind="notice"` 且文本为 `OPENING_NOTICE`，直接从该段开始播放（带形象与开头语音提示），不再添加重复的静音片头。否则保留约 2 秒的静音片头，显示 `OPENING_NOTICE`。随后按顺序播放 `render_audio` 的全部分片，复用输出目录旁的 `media-cache`。片尾约 3 秒，静音显示“回答依据”和标识。当前 `MediaScript.citations` 仅有编号与理由，没有原话或引用日期，因此不伪造引用原话卡片，也不把 `as_of` 当作引用日期。视频文字不写日志。
+
+Pillow 绘制 RGB 帧，经 ffmpeg stdin 编码 H.264（libx264、yuv420p、CRF 23、veryfast）+ AAC，启用 faststart。音频统一为 48 kHz 单声道 PCM，再用 concat demuxer 拼接片尾静音及需要时的片头静音。MP4 `title` 为显式标识，`comment` 为 `AI-generated; twin; source <回答指纹>`；指纹不是签名。输出文件为 0600，中间文件完成/失败后清理；缓存保留。文本上限 100,000 字符，完整视频上限 600 秒。
+
+系统依赖 **ffmpeg**（含 ffprobe）：macOS `brew install ffmpeg`；Ubuntu `sudo apt-get install -y ffmpeg fonts-noto-cjk`。Python 依赖 Pillow。字体按 `[media].font_path`（可选字符串路径）优先，否则依次查找 macOS Hiragino Sans GB / STHeiti、Linux Noto Sans CJK / WenQuanYi；找不到时用中文提示配置字体。自定义示例：
+
+```toml
+[media]
+font_path = "/path/to/chinese-font.ttc"
+```
+
+ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录字幕或后端原始响应。静音合成器可离线导出，真实朗读需配置 `[tts]`。
+
 ## 4. 阶段
 
 | 阶段 | 内容 | 验收 |
@@ -106,12 +124,12 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 | M0 展示内核（不用模型，已完成） | `media.schema`、`media.script`；网页"回放"视图：逐句显示 `reply`，同步高亮对应引用和原话，常驻显式标识；导出带隐式标识的独立 HTML | 弃权回答不产生讲述段；每句的引用都能在原回答中找到；标识在所有视图和导出物中存在；分层测试通过；不依赖任何模型或网络 |
 | M1 语音（已完成，含 M1b–M1d：自托管服务、朗读规范化、回听评测、确定性与截断防护） | `media.tts` 协议与适配器；预置音色；开头语音提示；音频元数据标识；缓存 | 用语音识别回听（Workers AI whisper 或本地 ASR）计算字错率；首句延迟；元数据标识可读出；中文 `melotts` 的效果先实测再决定是否作为默认 |
 | M2 形象（已完成（浏览器端）） | 风格化 2D 形象：浏览器端 Canvas/SVG，口型由音频能量或音素时间戳驱动；不用照片 | 无真人照片或视频输入；角标标识常驻；低端机也能流畅播放 |
-| M3 片段导出 | 对话片段导出为 mp4：形象、字幕、引用卡片和标识，用 ffmpeg 合成，元数据写入隐式标识 | 导出物能追溯到来源回答；标识无法通过裁剪画面去掉（角标加片头片尾） |
+| M3 片段导出（已完成） | 对话片段导出为 mp4：形象、字幕、回答依据片尾和标识，用 ffmpeg 合成，元数据写入隐式标识 | 导出物能追溯到来源回答；常驻角标、开头提示与片尾标识（不是防篡改或防裁剪保护） |
 | M4 真人声音与形象（门槛） | 声音复刻、真人形象驱动 | 暂不开发。进入前需要：本人单独书面同意、模型资产隔离与审计、一键熔断、对外使用的审批流程 |
 
 ## 5. 接入
 
 - persona 聊天气泡提供播放入口；输入 `ChatReply` 原回答，按 `chat_reply` 适配，不生成新措辞。
-- `twin media script/export/speak REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
+- `twin media script/export/speak/clip REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
 - `/` 的 React 前端通过 `frontend/src/features/playback/PlaybackDialog.tsx` 和 `usePlayback.ts` 管理文字/音频、请求与资源生命周期；形象使用同目录 `Avatar.tsx`，样式令牌在 `frontend/src/design/tokens.css`。构建资源由 `/assets/*` 提供，独立导出 HTML 不依赖这些资源。
 - 本地 API、访问保护和播放控件见 [WEB_UI.md](WEB_UI.md)。

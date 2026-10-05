@@ -1,0 +1,25 @@
+{"text":"以下内容由 AI 合成，是模拟推演，不代表本人意见。","category":"opening"}
+{"text":"今天我们先核对材料，再讨论下一步安排。","category":"plain"}
+{"text":"请把结论和依据分别说明。","category":"plain"}
+{"text":"我们需要2个方案和3位同事。","category":"numbers"}
+{"text":"库存有12000件，今天发出250件。","category":"numbers"}
+{"text":"本月完成率是3.5%。","category":"percentages"}
+{"text":"预算增加12%，成本下降2%。","category":"percentages"}
+{"text":"增长率从-2%变为5%。","category":"percentages"}
+{"text":"测量结果是3.14米。","category":"decimal"}
+{"text":"总金额为1,200元。","category":"currency"}
+{"text":"这个项目预算是¥300万元。","category":"currency"}
+{"text":"资料截至2026年10月4日。","category":"date"}
+{"text":"请在2026-10-04前提交报告。","category":"date"}
+{"text":"会议从18:30开始。","category":"time"}
+{"text":"明天9:05我们再核对一次。","category":"time"}
+{"text":"预计需要3-5个工作日。","category":"range"}
+{"text":"请检查第3项任务。","category":"ordinal"}
+{"text":"这个判断有足够的证据吗？","category":"question"}
+{"text":"如果条件改变，我们应该如何调整？","category":"question"}
+{"text":"请用AI辅助整理，但不要生成新的事实。","category":"acronym"}
+{"text":"API和GPU只是工具，不是决策依据。","category":"acronym"}
+{"text":"请核对KPI，但不要只看单一指标。","category":"acronym"}
+{"text":"版本v1.2与编号A3需要保持原样。","category":"codes"}
+{"text":"一方面要控制风险，另一方面要保留选择。","category":"plain"}
+{"text":"目前证据不足，暂时不能给出确定结论。","category":"abstention"}

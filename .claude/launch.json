@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "twin-ui-demo",
+      "runtimeExecutable": ".venv/bin/twin",
+      "runtimeArgs": [
+        "--config",
+        "twin.toml",
+        "ui",
+        "--port",
+        "8765"
+      ],
+      "port": 8765
+    },
+    {
+      "name": "twin-persona-smoke",
+      "runtimeExecutable": ".venv/bin/twin",
+      "runtimeArgs": [
+        "--config",
+        "twin.toml",
+        "ui",
+        "--port",
+        "8771"
+      ],
+      "port": 8771
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+# 通用个人分身：身份 → 记忆资料 → 服务。密钥仅从环境变量读取。
+target_name = "本人"
+target_aliases = []
+db_path = "data/twin.db"
+max_workers = 4
+
+[llm]
+provider = "openai_compat"
+# 请设置内网模型名及端点；未配置不会调用公网默认端点。
+# model = "your-model"
+# base_url = "http://127.0.0.1:8000/v1"
+api_key_env = "TWIN_LLM_KEY"
+
+[embed]
+provider = "hashing"
+api_key_env = "TWIN_EMBED_KEY"
+
+# 可选 [tts] / [asr] 配置见 docs/MEDIA.md。

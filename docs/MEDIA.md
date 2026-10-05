@@ -1,0 +1,90 @@
+# 多媒体展示专线（M 线）
+
+状态：通用个人分身的展示层。分层规则见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+目标：把分身已经得出、并通过引用校验的回答，用文字、语音、形象和视频片段呈现出来，用于个人对话播放和展示。媒体层是一个展示层，不是另一个"会说话的模型"。
+
+## 1. 原则
+
+1. **只改写呈现方式，不生成内容。** 媒体层的输入只有运行时层的输出：`ChatReply`（对话），以及它们的引用、置信度和弃权状态。媒体层不调用大模型改写措辞；分身弃权时，只展示弃权说明，不配音，也不出镜。
+2. **不碰真人生物特征。** 只用预置音色和风格化（非写实）形象，不做声音克隆，不驱动真人照片或视频。真人的声音和形象属于敏感个人信息（《个人信息保护法》第 28、29 条），放在 M4，前提是本人单独书面同意，并满足资产隔离、访问审计和一键熔断要求。
+3. **合成内容必须标识。** 按《人工智能生成合成内容标识办法》（2025-09-01 施行）：
+   - 显式标识：画面常驻角标"AI 合成 · 模拟推演，不代表本人意见"；音频开头有一句语音提示；
+   - 隐式标识：音频、视频和导出文件的元数据里写入生成方、"AI 生成合成"标记和来源回答的指纹。
+4. **可追溯。** 每个产出物都记录它来自哪一次回答（运行快照或回答指纹）、用了哪些引用，以及音色和形象配置。
+5. **人物无关、数据不出境。** `src/` 里不出现具体人物的专属内容；用本人资料评测和展示时，语音与识别只走本地或本人指定的服务，境外服务（如 Cloudflare）必须显式打开。
+
+已确定（2026-10-04）：形象用风格化插画，不做写实；语音后端两种都接，Cloudflare `melotts` 用于合成数据和公开数据，本地自托管服务（MOSS-TTS-Nano 起步，可换 CosyVoice3）用于内网。
+
+## 2. 分层
+
+媒体线横跨 L0 和 L4/L5，不进入 L1 语料、L2 认知、L3 运行时：契约和语音后端放在 L0 基础设施，展示编排放在 L3 之上、与 L4 场景同级（以后的场景，例如代参会时开口提问，也能直接使用），接入放在 L5。代码层号（0–9）只用于 `tests/test_layers.py`，对应关系见 ARCHITECTURE.md 第 1 节。
+
+| 模块 | 所属层（代码层号） | 内容 |
+| --- | --- | --- |
+| `media.schema` | L0 数据契约（1） | 全部媒体契约：`PresentableAnswer`、`MediaScript`、`MediaManifest`、`SpeechRequest`、`SpeechResult`、`LipSyncTrack`、`AvatarSpec`；只依赖标准库、pydantic 和 `util` |
+| `media.tts` | L0 模型后端（2） | `SpeechSynthesizer` 协议、两个后端适配器（Cloudflare `melotts`、自托管 HTTP）、测试用的静音实现 |
+| `media.asr` | L0 模型后端（2） | 仅用于评测的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
+| `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
+| `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
+| `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（开头提示、按句切分、弃权只出提示） |
+| `media.render` | 与 L4 同级（7） | 按脚本调用 `SpeechSynthesizer`、拼接音频、写入标识、生成 `LipSyncTrack`、缓存与导出 |
+| `web.media` / `cli` | L5 接入（9） | API、回放面板、`twin media ...` 命令 |
+
+## 3. 层间解耦规则
+
+依赖方向服从 [ARCHITECTURE.md](ARCHITECTURE.md) 第 1 节，由 `tests/test_layers.py` 强制。在此之上，媒体线有五个边界，每个边界只通过**一个契约加一组适配器**连接：
+
+| 边界 | 上游 | 契约（第 1 层） | 适配器 | 下游只依赖 |
+| --- | --- | --- | --- | --- |
+| B1 运行时 → 媒体 | `ChatReply` | `PresentableAnswer`：口语文本、弃权与原因、置信度、截至日期、答案级引用、来源指纹 | `media.adapters`，每种运行时输出一个函数 | `media.script` 只认 `PresentableAnswer` |
+| B2 媒体 → 语音后端 | Cloudflare、自托管服务 | `SpeechRequest`（文本、音色、格式）/ `SpeechResult`（音频、格式、采样率、时长、可选的逐字时间戳） | `media.tts` 里每个后端一个类，实现 `SpeechSynthesizer` | `media.render` 只认协议和契约 |
+| B3 语音 → 形象 | `SpeechResult` | `LipSyncTrack`（时间到口型开合，版本化）、`AvatarSpec`（插画图层与口型帧） | `media.render` 生成口型轨：有时间戳就用时间戳，没有就用音频能量包络 | 前端只认 `AvatarSpec` 和 `LipSyncTrack`，不知道是哪个语音后端 |
+| B4 媒体 → 接入层 | `media.render` 的产出 | `MediaScript`、`MediaManifest`、音频与口型轨文件 | `web.media`、`cli` 只做序列化和权限 | 浏览器和命令行只收契约 JSON 和文件 |
+| B5 媒体 → 语音识别（仅用于评测） | Cloudflare Whisper、自托管 FunASR/SenseVoice shim | `TranscriptionRequest`（音频、格式、语言、可选提示）/ `Transcription`（文本、语言、时长、extras），均带版本 | `media.asr` 每个后端一个类，实现 `SpeechRecognizer` 并声明 `ASRCapabilities` | `media.check` 只认协议和契约，不读取厂商 extras |
+
+具体规则：
+
+1. **单向知情。** 上游不知道下游存在：运行时不导入媒体模块，语音后端不知道脚本和形象，前端不知道语音后端是哪家。
+2. **只在适配器里认识对方。** 上游类型（`ChatReply`、厂商 API 字段）只出现在对应的适配器里。运行时演进、或者换语音厂商时，只改适配器和它的测试。
+3. **契约带版本、只增不删。** 每个契约有 `schema_version`；新增字段必须有默认值；删除或改变含义要升版本，并保留旧版本的读取。
+4. **能力用声明，不靠猜。** 适配器在 `capabilities` 里声明能力（是否给逐字时间戳、单次最大字数、支持的格式和采样率、是否流式）。上层按声明选择处理路径，例如口型轨在没有时间戳时退回能量包络。
+5. **错误统一。** 适配器把后端错误转成 `MediaError` 的子类（不可用、拒绝、超时、输入过长），错误信息隐藏密钥和服务地址，和 `llm.LLMError` 的做法一致。厂商原始字段只放在 `extras` 里，上层不读。
+6. **配置只经工厂。** B5 与 B2 相同：`[asr]` 只保存密钥环境变量名，`config.make_recognizer(settings)` 是唯一识别构造入口；识别不进入运行时。新增 `[tts]` 配置段，`config.make_synthesizer(settings)` 是唯一构造入口，与 `make_llm` 一样只写环境变量名、不写密钥。
+7. **每个边界都有契约测试。** 同一套一致性测试参数化地跑过每个适配器：两个语音后端用录制或伪造的 HTTP 响应，测试不联网；运行时适配器用真实的 `ChatReply` 样本。新增后端必须先通过这套测试。B5 两个识别适配器同样共用离线一致性测试，统一复用 `media.tts.MediaError` 错误层次，禁止泄漏密钥或地址。
+
+`twin media check [--sentences FILE] [--repeats N] --out DIR` 使用固定合成句集（可用含 `text` 的 JSONL 替换），逐句调用 `render_audio` 并识别全部有序分片。报告文件 `report.json` / `report.md` 为 0600；记录两个后端的无密钥指纹。CER 双方先经可选 `media.speech_text.speech_text`（懒加载并记录是否应用及版本），再 NFKC、小写、去标点和空白；总 CER 按总编辑距离/总参考字数计算，空参考分母取一。简体中文提示用于中文识别；常见繁体专用字仅标记，不转换。合成墙钟秒/音频秒使用独立空缓存，包含渲染与写盘，时长未知则不计算比率。
+
+M1d：`--repeats` 默认 1，必须至少为 1；每句每次重复都有独立空缓存，即使句集有相同文本也实际调用合成器，再识别全部有序分片。`report.json` 为 `schema_version=3`，保留旧字段：逐句旧识别、score、分片和计时字段描述第一次重复；`repeat_checks` 保留每次识别、CER、分片、计时及零基 `repeat_index`。逐句 `mean_cer` / `worst_cer` 为各次 CER 的算术平均 / 最大值。`INCOMPLETE_LENGTH_RATIO = 0.8`：规范化识别长度 **严格小于** 规范化参考长度的 80% 即为 `incomplete`，恰好 80% 或空参考不算；逐句和总体 `incomplete_repeats` 记录次数，这只是截断启发式，不等同语义完整性。
+
+总 `edits`、`reference_chars`、`cer` 及计时覆盖所有重复；`repeat_cers` 按相同重复序号组成整轮、以总编辑距离 / 总参考字数（空参考总分母取一）计算。总体 `mean_cer` 是各整轮 CER 的算术平均，`worst_repeat_cer` 是最差整轮 CER，`worst_sentence_repeat_cer` 另报所有单句重复中的最大 CER；总体平均仍按参考长度加权，不是逐句 CER 的简单平均。`traditional_sentence_count` 为任一次重复含疑似繁体的句子数，不重复计句。报告 Markdown 展示每次识别，不把多次识别拼成一条假设。
+
+M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/README.md`。OpenAI 适配器将 `X-Speech-Warning` 脱敏保存到 `SpeechResult.extras['warning']`，并将已知的 `possibly-truncated` 提升到追加的通用 `SpeechResult.warnings` 契约字段（默认空列表）；渲染层不读取 extras，只将通用警告写到 `AudioPart.warnings`（默认空列表，旧清单仍可读）。缓存不保存 extras，但保存通用警告。报告 v3 追加各次、逐句及总 `warning_parts`，计携带 `possibly-truncated` 的音频分片数；逐句与总计覆盖所有重复，区别于 ASR 长度判断的 `incomplete_repeats`，不把服务内部尝试计为独立分片。
+
+### 3.1 朗读文本规范化（M1c-tn / M1d v3）
+
+`media.speech_text`（代码层 7）是纯函数，`SPEECH_TEXT_VERSION = 3`。仅对 `language="zh"` 的合成输入规范化：百分数、小数、中文分组整数、量词前及独立的“两”、逐位年份、月日、时分、范围、序数、千分位和人民币金额（如 `¥1,200` → “一千二百元”）。原始 `MediaScript`、展示、HTML 和文本导出不变；不生成或改写回答内容。
+
+v2 新增有效公历日期：`YYYY-MM-DD` / `YYYY/MM/DD`（含长句中的日期）读为逐位年份加数量月日，如 `2026-10-04` → “二零二六年十月四日”。`M/D` 仅在前接“于/在/到/至”或后接“前/后/起/截止/日”时按日期读（不猜年份；用闰年 2000 校验无年份的月日，允许 2/29），已有“日”不重复添加。无效日期如 `2026-13-40`、`2026-02-29`、`在4/31` 原样保留。拉丁词、版本、混合编号、URL、邮箱和 ISO 时间戳（如 `2026-10-04T18:30:00Z`）仍原样保留；`v2026-10-04` 等编号不当作日期。歧义 `10/4` 无日期上下文时保持 v1 的数字规则。除此以外沿用 v1 行为，不把日期误作范围。前导零数字串、裸的 7/8 位本地号码及 11 位以 1 开头的号码逐位读；带量词或金额单位时按数量读，区号及 `+86` 电话保留原有分隔符。其他整数按万/亿分组。此规则保守处理歧义，不猜测编号含义。
+
+v3 在规范化后、切分前，为 CJK 统一/兼容表意字符与 Latin 字母/十进制数字的每个相邻边界加一个 ASCII 空格，如“请用AI辅助整理” → “请用 AI 辅助整理”。已有空白不重复添加，Latin 词、数字、版本和 URL 内部不插空格（包括 URL 的中文路径）；URL 的外侧边界可加空格。插入空格的原文 span 为空，分片仍可拼回原文；仅影响朗读文本，函数保持幂等。无效日期/编号的数字内容不变，但其与中文相邻的外侧边界也加空格，如“在4/31核对” → “在 4/31 核对”。v2 的无年份日期上下文兼容该单个边界空格，以保持无效月日的幂等性。
+
+缩写默认不展开。B2 的 `SynthCapabilities.reads_latin_acronyms` 默认 `True`，Cloudflare MeloTTS 声明 `False`；编排只按声明将独立的 2–5 位大写缩写分字母加空格（`AI` → `A I`），不按后端名称猜测。静音和 OpenAI 兼容后端保持默认。
+
+先规范化整段再按后端字数上限切分，避免切坏数字或使展开后的请求超限。音频清单及各片段记录 `speech_text_version`，片段的 `spoken_text` 是实际发送的文本，`text` 保留原文并可顺序拼回原段；若单个数字展开超过上限，后续音频片段的原文可为空。旧清单字段默认版本 `0`、朗读文本为空，仍可读取。缓存及音频清单文件指纹包含规范化版本；逐字时间戳对应朗读文本而非原文。
+
+## 4. 阶段
+
+| 阶段 | 内容 | 验收 |
+| --- | --- | --- |
+| M0 展示内核（不用模型，已完成） | `media.schema`、`media.script`；网页"回放"视图：逐句显示 `reply`，同步高亮对应引用和原话，常驻显式标识；导出带隐式标识的独立 HTML | 弃权回答不产生讲述段；每句的引用都能在原回答中找到；标识在所有视图和导出物中存在；分层测试通过；不依赖任何模型或网络 |
+| M1 语音（已完成，含 M1b–M1d：自托管服务、朗读规范化、回听评测、确定性与截断防护） | `media.tts` 协议与适配器；预置音色；开头语音提示；音频元数据标识；缓存 | 用语音识别回听（Workers AI whisper 或本地 ASR）计算字错率；首句延迟；元数据标识可读出；中文 `melotts` 的效果先实测再决定是否作为默认 |
+| M2 形象 | 风格化 2D 形象：浏览器端 Canvas/SVG，口型由音频能量或音素时间戳驱动；不用照片 | 无真人照片或视频输入；角标标识常驻；低端机也能流畅播放 |
+| M3 片段导出 | 对话片段导出为 mp4：形象、字幕、引用卡片和标识，用 ffmpeg 合成，元数据写入隐式标识 | 导出物能追溯到来源回答；标识无法通过裁剪画面去掉（角标加片头片尾） |
+| M4 真人声音与形象（门槛） | 声音复刻、真人形象驱动 | 暂不开发。进入前需要：本人单独书面同意、模型资产隔离与审计、一键熔断、对外使用的审批流程 |
+
+## 5. 接入
+
+- persona 聊天气泡提供播放入口；输入 `ChatReply` 原回答，按 `chat_reply` 适配，不生成新措辞。
+- `twin media script/export/speak REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
+- 本地 API、访问保护和播放控件见 [WEB_UI.md](WEB_UI.md)。

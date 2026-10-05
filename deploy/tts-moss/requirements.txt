@@ -1,0 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+# Official inference pins, with the CPU-only wheel build selected explicitly.
+torch==2.7.0+cpu
+torchaudio==2.7.0+cpu
+transformers==4.57.1
+# Shim/runtime pins; upstream lists ranges for these rather than exact versions.
+huggingface-hub==0.36.0
+numpy==2.2.6
+sentencepiece==0.2.0
+soundfile==0.13.1
+fastapi==0.115.12
+pydantic==2.11.4
+uvicorn==0.34.2

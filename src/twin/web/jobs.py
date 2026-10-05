@@ -1,0 +1,305 @@
+"""In-memory background jobs of the web UI.
+
+Each job runs in its own daemon thread, so stopping the server never waits for a long build.
+Profile builds are exclusive (a second submission raises ``JobConflict``).
+Chats run side by side, at most ``answer_workers`` at once, the rest stay queued, and at most
+``MAX_PENDING_ANSWERS`` of them may be unfinished (one more raises ``TooManyJobs``). Jobs live only in memory.
+
+Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (from the ``[n/N]`` lines), a tally of the
+``ok`` / ``FAILED`` lines of the current stage and, separately, its milestones (stage markers and Chinese summaries).
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import re
+import secrets
+import sqlite3
+import subprocess
+import sys
+import threading
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
+
+from ..embed import EmbedError
+from ..llm import LLMError
+
+JobKind = Literal["persona_build", "chat"]
+JobStatus = Literal["queued", "running", "done", "failed"]
+Log = Callable[[str], None]
+JobFn = Callable[[Log], object]
+
+JOB_LABELS: dict[JobKind, str] = {
+    "persona_build": "构建人格档案",
+    "chat": "和分身聊天",
+}
+EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
+MAX_PROGRESS_LINES = 500
+MAX_MILESTONES = 2000
+MAX_PENDING_ANSWERS = 20
+LISTED_JOBS = 50
+KEPT_JOBS = 200
+
+logger = logging.getLogger(__name__)
+
+# "[2/4] 抽取候选条目": the start of a pipeline stage.
+STAGE_LINE = re.compile(r"^\[(\d+)/(\d+)\]\s*(.*)$")
+
+CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_HOME_SEP = r"(?=[/\\]|$|[^\w.-])"
+
+
+def hide_home(text: str) -> str:
+    """``text`` with this account's home directory written as ``~``, so no absolute local path reaches the page."""
+    try:
+        home = str(Path.home()).rstrip("/\\")
+    except RuntimeError:
+        return text
+    if not home:
+        return text
+    return re.sub(re.escape(home) + _HOME_SEP, "~", text)
+
+
+def is_milestone(line: str) -> bool:
+    """Stage markers and the Chinese summary lines the web jobs write themselves (the library's own per-call lines
+    such as ``ok ...`` / ``FAILED ...`` are English)."""
+    return STAGE_LINE.match(line) is not None or CJK.match(line.lstrip()) is not None
+
+
+class JobError(Exception):
+    """A job failure whose message already explains, in Chinese, what went wrong and what to do."""
+
+
+class TooManyJobs(Exception):
+    """Too many chats are waiting or running (answered with 429)."""
+
+
+class JobConflict(Exception):
+    def __init__(self, job: Job, message: str | None = None) -> None:
+        label = JOB_LABELS[job.kind]
+        super().__init__(
+            message or f"已有{label}任务在运行（{job.job_id}），同一时间只能运行一个人格构建任务，请等它结束后再提交"
+        )
+        self.job = job
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.now().replace(microsecond=0)
+
+
+def _iso(value: dt.datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+@dataclass(eq=False)
+class Job:
+    job_id: str
+    kind: JobKind
+    title: str
+    created: dt.datetime
+    status: JobStatus = "queued"
+    started: dt.datetime | None = None
+    finished: dt.datetime | None = None
+    progress: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_PROGRESS_LINES))
+    milestones: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_MILESTONES))
+    stage: dict[str, Any] | None = None
+    tally_done: int = 0
+    tally_failed: int = 0
+    tally_total: int | None = None
+    result: object = None
+    error: str | None = None
+    done: threading.Event = field(default_factory=threading.Event)
+
+    @property
+    def active(self) -> bool:
+        return self.status in ("queued", "running")
+
+
+class JobManager:
+    """``describe_error`` turns an exception raised by a job into the Chinese explanation stored in ``error``."""
+
+    def __init__(self, answer_workers: int, describe_error: Callable[[Exception], str]) -> None:
+        self._lock = threading.Lock()
+        self._jobs: dict[str, Job] = {}
+        self._exclusive: Job | None = None
+        self._answer_slots = threading.BoundedSemaphore(max(1, answer_workers))
+        self._describe_error = describe_error
+
+    def submit(
+        self,
+        kind: JobKind,
+        title: str,
+        fn: JobFn,
+        *,
+        prepare: Callable[[Job], None] | None = None,
+        require_idle: bool = False,
+    ) -> Job:
+        """Accept a bounded background job; profile builds are mutually exclusive."""
+        exclusive = kind in EXCLUSIVE_KINDS
+        with self._lock:
+            if (exclusive or require_idle) and self._exclusive is not None and self._exclusive.active:
+                raise JobConflict(self._exclusive)
+            if not exclusive:
+                pending = sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
+                if pending >= MAX_PENDING_ANSWERS:
+                    raise TooManyJobs(
+                        f"已有 {pending} 个聊天任务在排队或运行（上限 {MAX_PENDING_ANSWERS} 个），"
+                        "请等前面的任务完成后再提交"
+                    )
+            job = Job(job_id=self._new_id(), kind=kind, title=title, created=_now())
+            # Capture input and persist acceptance before a worker can run, under the same admission lock as builds.
+            if prepare is not None:
+                prepare(job)
+            self._jobs[job.job_id] = job
+            if exclusive:
+                self._exclusive = job
+            self._evict()
+        try:
+            threading.Thread(target=self._run, args=(job, fn), name=f"twin-{job.job_id}", daemon=True).start()
+        except BaseException:
+            with self._lock:
+                job.status, job.finished = "failed", _now()
+                job.error = "无法启动后台任务，请稍后重试"
+            job.done.set()
+            raise
+        return job
+
+    def active_exclusive(self, kinds: frozenset[JobKind] = EXCLUSIVE_KINDS) -> Job | None:
+        """The running (or queued) exclusive job whose kind is in ``kinds``, if any."""
+        with self._lock:
+            job = self._exclusive
+            return job if job is not None and job.active and job.kind in kinds else None
+
+    def snapshot(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return self._view(job, with_result=True) if job is not None else None
+
+    def recent(self, n: int = LISTED_JOBS) -> list[dict[str, Any]]:
+        with self._lock:
+            jobs = list(self._jobs.values())[-n:]
+            return [self._view(job, with_result=False) for job in reversed(jobs)]
+
+    def wait(self, job_id: str, timeout: float | None = None) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+        return job is not None and job.done.wait(timeout)
+
+    def _new_id(self) -> str:
+        while True:
+            job_id = f"j_{_now():%Y%m%d_%H%M%S}_{secrets.token_hex(2)}"
+            if job_id not in self._jobs:
+                return job_id
+
+    def _evict(self) -> None:
+        excess = len(self._jobs) - KEPT_JOBS
+        for job_id in [j.job_id for j in self._jobs.values() if not j.active][: max(0, excess)]:
+            del self._jobs[job_id]
+
+    @staticmethod
+    def _view(job: Job, *, with_result: bool) -> dict[str, Any]:
+        view: dict[str, Any] = {
+            "job_id": job.job_id,
+            "kind": job.kind,
+            "kind_label": JOB_LABELS[job.kind],
+            "title": job.title,
+            "status": job.status,
+            "created": _iso(job.created),
+            "started": _iso(job.started),
+            "finished": _iso(job.finished),
+            "progress": list(job.progress),
+            "milestones": list(job.milestones),
+            "stage": dict(job.stage) if job.stage is not None else None,
+            "tally": {"done": job.tally_done, "failed": job.tally_failed, "total": job.tally_total},
+            "error": job.error,
+        }
+        if with_result:
+            view["result"] = job.result
+        return view
+
+    def _log(self, job: Job, message: str) -> None:
+        lines = [line for line in hide_home(str(message)).splitlines() if line.strip()]
+        with self._lock:
+            for line in lines:
+                job.progress.append(line)
+                self._track(job, line)
+
+    @staticmethod
+    def _track(job: Job, line: str) -> None:
+        """Stage, per-stage tally of ``ok`` / ``FAILED`` calls and milestones, from one progress line."""
+        if is_milestone(line):
+            job.milestones.append(line)
+        stage = STAGE_LINE.match(line)
+        if stage is not None:
+            job.stage = {"current": int(stage[1]), "total": int(stage[2]), "label": stage[3].strip()}
+            job.tally_done = job.tally_failed = 0
+            job.tally_total = None
+        elif line.startswith("ok "):
+            job.tally_done += 1
+        elif line.startswith("FAILED "):
+            job.tally_failed += 1
+
+    def _run(self, job: Job, fn: JobFn) -> None:
+        slot = None if job.kind in EXCLUSIVE_KINDS else self._answer_slots
+        if slot is not None:
+            slot.acquire()
+        try:
+            with self._lock:
+                job.status, job.started = "running", _now()
+            try:
+                result = fn(lambda message: self._log(job, message))
+            except Exception as e:
+                logger.exception("job %s (%s) failed", job.job_id, job.kind)
+                error = hide_home(f"{JOB_LABELS[job.kind]}失败：{self._describe_error(e)}")
+                with self._lock:
+                    job.status, job.error, job.finished = "failed", error, _now()
+            else:
+                with self._lock:
+                    job.status, job.result, job.finished = "done", result, _now()
+        finally:
+            # A BaseException (SystemExit raised inside a job) must not leave the job running for ever, which would
+            # block every later profile build with 409.
+            with self._lock:
+                if job.active:
+                    job.status, job.finished = "failed", _now()
+                    job.error = f"{JOB_LABELS[job.kind]}失败：任务意外中断（详细信息见运行 twin ui 的终端）"
+            if slot is not None:
+                slot.release()
+            job.done.set()
+
+
+def _backend_errors() -> tuple[type[Exception], ...]:
+    """Base exceptions of the model / embedding SDKs and of the claude CLI subprocess; an SDK exception can only exist
+    if its module was imported, so they are looked up in ``sys.modules``."""
+    errors: list[type[Exception]] = [subprocess.SubprocessError]
+    for module, name in (("anthropic", "AnthropicError"), ("openai", "OpenAIError")):
+        if module in sys.modules:
+            errors.append(getattr(sys.modules[module], name))
+    return tuple(errors)
+
+
+def describe_error(e: Exception) -> str:
+    """Chinese explanation of an exception raised by a job, the home directory written as ``~``."""
+    return hide_home(_describe(e))
+
+
+def _describe(e: Exception) -> str:
+    if isinstance(e, JobError):
+        return str(e)
+    if isinstance(e, LLMError):
+        return f"调用大模型失败：{e}。请检查模型服务地址、密钥、网络和限流情况"
+    if isinstance(e, EmbedError):
+        return f"调用向量化服务失败：{e}。请检查 [embed] 配置和向量服务"
+    if isinstance(e, sqlite3.Error):
+        return f"资料库读写失败：{e}"
+    if isinstance(e, OSError):
+        return f"文件读写失败：{e}"
+    if isinstance(e, ValueError):
+        return f"数据或参数有误：{e}"
+    if isinstance(e, _backend_errors()):
+        return f"调用模型服务失败：{type(e).__name__}: {e}"
+    return f"内部错误：{type(e).__name__}: {e}（详细信息见运行 twin ui 的终端）"

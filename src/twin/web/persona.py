@@ -1,0 +1,334 @@
+"""Web routes of the general digital twin (``/api/persona/...``): import sources, build the profile, browse it,
+read its completeness and chat."""
+
+from __future__ import annotations
+
+import datetime as dt
+import email.parser
+import email.policy
+import json
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Annotated, Any
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+
+from ..config import Settings
+from ..embed import Embedder
+from ..llm import LLM
+from ..persona.chat import PersonaChat, index_persona
+from ..persona.coverage import LEVEL_LABELS, coverage_report
+from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
+from ..persona.items import PReview
+from ..persona.profile import build_profile, consented_facets
+from ..persona.questionnaire import Round, round_view, save_draft, submit_initial, submit_retest
+from ..persona.schema import SOURCE_KIND_LABELS, ChatTurn, ReviewStatus, SourceKind, evidence_class
+from ..persona.sources import parse_text
+from ..persona.store import PersonaStore
+from .backends import Backends
+from .jobs import JobManager
+
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_UPLOAD_FILES = 500
+MAX_CHAT_TURNS = 40
+MAX_MESSAGE_CHARS = 4000
+SUFFIXES = {
+    SourceKind.MEETING: frozenset({".txt", ".md", ".srt", ".vtt", ".json"}),
+    SourceKind.CHAT: frozenset({".txt", ".csv", ".json"}),
+    SourceKind.INTERVIEW: frozenset({".txt", ".md"}),
+    SourceKind.DOCUMENT: frozenset({".txt", ".md"}),
+    SourceKind.BIOGRAPHY: frozenset({".txt", ".md"}),
+    SourceKind.QUESTIONNAIRE: frozenset({".txt", ".md"}),
+}
+
+Log = Callable[[str], None]
+
+
+class QuestionnaireBody(BaseModel):
+    round: Round = "initial"
+    answers: dict[str, str] = Field(default_factory=dict)
+
+
+class ReviewBody(BaseModel):
+    status: ReviewStatus
+    statement: str | None = Field(default=None, max_length=1000)
+    note: str = Field(default="", max_length=1000)
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatTurn] = Field(min_length=1, max_length=MAX_CHAT_TURNS)
+    as_of: str | None = None
+
+
+def _date(value: str | None, field: str) -> dt.date | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return dt.date.fromisoformat(value.strip())
+    except ValueError as e:
+        raise HTTPException(400, f"{field} 的日期格式应为 YYYY-MM-DD") from e
+
+
+def source_view(s: Any) -> dict[str, Any]:
+    return {
+        **s.model_dump(mode="json"),
+        "kind_label": SOURCE_KIND_LABELS[s.kind],
+        "evidence_class": evidence_class(s.kind).value,
+    }
+
+
+def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log) -> dict[str, Any]:
+    with PersonaStore(settings.db_path) as store:
+        log("[1/2] 抽取并合并人格档案")
+        report = build_profile(store, llm, settings, log)
+        for failure in report.failures:
+            log(f"FAILED {failure}")
+        log("[2/2] 更新检索向量")
+        index_persona(store, embedder, settings, log)
+    if report.failures and report.chunks_extracted == 0 and report.facets_merged == 0:
+        raise RuntimeError(f"模型调用全部失败：{report.failures[-1]}")
+    return {
+        "sources": report.sources,
+        "chunks": report.chunks_total,
+        "chunks_extracted": report.chunks_extracted,
+        "candidates": report.candidates,
+        "facets_merged": report.facets_merged,
+        "items": report.items,
+        "failures": report.failures,
+    }
+
+
+def run_chat(
+    settings: Settings, llm: LLM, embedder: Embedder, messages: list[ChatTurn], as_of: dt.date | None, log: Log
+) -> dict[str, Any]:
+    with PersonaStore(settings.db_path) as store:
+        log("检索档案并作答")
+        reply = PersonaChat(store, llm, embedder, settings).reply(messages, as_of)
+        items = {i.item_id: i for i in store.list_items()}
+        cited: list[dict[str, Any]] = []
+        for ref in reply.citations:
+            if (item := items.get(ref)) is not None:
+                facet = FACET_BY_ID[item.facet_id].name
+                cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
+            elif (e := store.get_expression(ref)) is not None:
+                day = e.date.isoformat() if e.date else None
+                cited.append({"id": ref, "kind": "expression", "date": day, "channel": e.channel, "text": e.text})
+    return {**reply.model_dump(mode="json"), "cited": cited}
+
+
+def register(
+    app: FastAPI,
+    settings: Settings,
+    backends: Backends,
+    jobs: JobManager,
+    read_uploads: Callable[[Request], Awaitable[list[tuple[str, bytes]]]],
+) -> None:
+    @contextmanager
+    def open_store() -> Iterator[PersonaStore]:
+        with PersonaStore(settings.db_path) as store:
+            yield store
+
+    @app.get("/api/persona/sources")
+    def list_sources() -> list[dict[str, Any]]:
+        with open_store() as store:
+            return [source_view(s) for s in store.list_sources()]
+
+    @app.post("/api/persona/import")
+    async def import_sources(
+        request: Request, kind: Annotated[SourceKind, Query()], date: Annotated[str | None, Query()] = None
+    ) -> dict[str, Any]:
+        when = _date(date, "date")
+        received = await read_uploads(request)
+        imported: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        with open_store() as store:
+            for raw_name, data in received:
+                name = Path(raw_name.replace("\\", "/")).name
+                if Path(name).suffix.lower() not in SUFFIXES[kind]:
+                    skipped.append(
+                        {"file": raw_name, "reason": f"不支持的文件类型，可用 {'、'.join(sorted(SUFFIXES[kind]))}"}
+                    )
+                    continue
+                try:
+                    parsed = parse_text(kind, name, data.decode("utf-8-sig"), settings, when)
+                except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                    skipped.append({"file": raw_name, "reason": str(e)})
+                    continue
+                new = store.put_source(parsed)
+                imported.append({**source_view(parsed.source), "new": new, "skipped_lines": len(parsed.skipped_lines)})
+        if not imported and skipped:
+            raise HTTPException(400, "没有可导入的文件：" + "；".join(f"{s['file']}：{s['reason']}" for s in skipped))
+        return {"imported": imported, "skipped": skipped}
+
+    @app.delete("/api/persona/sources/{source_id}")
+    def delete_source(source_id: str) -> dict[str, bool]:
+        with open_store() as store:
+            if not store.delete_source(source_id):
+                raise HTTPException(404, f"找不到资料 {source_id}")
+        return {"deleted": True}
+
+    @app.post("/api/persona/build", status_code=202)
+    def start_build() -> dict[str, str]:
+        llm, embedder = backends.llm(), backends.embedder()
+        with open_store() as store:
+            if not store.list_sources():
+                raise HTTPException(400, "还没有导入资料：请先导入问卷、聊天记录、访谈或文档")
+        job = jobs.submit("persona_build", "构建人格档案", lambda log: run_persona_build(settings, llm, embedder, log))
+        return {"job_id": job.job_id}
+
+    def item_view(i: Any) -> dict[str, Any]:
+        facet = FACET_BY_ID[i.facet_id]
+        return {
+            **i.model_dump(mode="json"),
+            "facet_name": facet.name,
+            "dimension_id": facet.dimension_id,
+            "dimension_name": DIMENSION_BY_ID[facet.dimension_id].name,
+            "occasions": i.occasions(),
+        }
+
+    @app.get("/api/persona/items")
+    def list_items(include_rejected: bool = False) -> list[dict[str, Any]]:
+        with open_store() as store:
+            return [item_view(i) for i in store.list_items(include_rejected=include_rejected)]
+
+    @app.post("/api/persona/items/{item_id}/review")
+    def review_item(item_id: str, body: ReviewBody) -> dict[str, Any]:
+        """Confirm, edit (with a new statement), reject, or with ``unreviewed`` clear the review of an item."""
+        statement = (body.statement or "").strip()
+        if body.status is ReviewStatus.EDITED and not statement:
+            raise HTTPException(400, "修改时必须给出新的表述")
+        review = None
+        if body.status is not ReviewStatus.UNREVIEWED:
+            review = PReview(
+                status=body.status,
+                statement=statement if body.status is ReviewStatus.EDITED else None,
+                note=body.note.strip(),
+                reviewed_at=dt.datetime.now().isoformat(timespec="seconds"),
+            )
+        with open_store() as store:
+            try:
+                store.set_review(item_id, review)
+            except KeyError as e:
+                raise HTTPException(404, f"找不到档案条目 {item_id}（可能已在重新构建时合并）") from e
+            item = store.get_item(item_id)
+        assert item is not None
+        return item_view(item)
+
+    @app.get("/api/persona/coverage")
+    def get_coverage(as_of: str | None = None) -> dict[str, Any]:
+        with open_store() as store:
+            report = coverage_report(
+                store.list_items(), consented_facets(store), _date(as_of, "as_of"), demand=store.chat_demand()
+            )
+        data = report.model_dump(mode="json")
+        data["level_labels"] = LEVEL_LABELS
+        data["kind_labels"] = {k.value: v for k, v in SOURCE_KIND_LABELS.items()}
+        data["taxonomy"] = TAXONOMY_VERSION
+        return data
+
+    @app.post("/api/persona/chat", status_code=202)
+    def start_chat(body: ChatBody) -> dict[str, str]:
+        messages = body.messages
+        if messages[-1].role != "user" or not messages[-1].content.strip():
+            raise HTTPException(400, "最后一条消息必须是你说的话，且不能为空")
+        if any(len(m.content) > MAX_MESSAGE_CHARS for m in messages):
+            raise HTTPException(400, f"单条消息不能超过 {MAX_MESSAGE_CHARS} 字")
+        as_of = _date(body.as_of, "as_of")
+        llm, embedder = backends.llm(), backends.embedder()
+        with open_store() as store:
+            if not store.list_items():
+                raise HTTPException(400, "还没有人格档案：请先导入资料并构建")
+        flat = " ".join(messages[-1].content.split())
+        job = jobs.submit(
+            "chat", "聊天：" + flat[:40], lambda log: run_chat(settings, llm, embedder, messages, as_of, log)
+        )
+        return {"job_id": job.job_id}
+
+    @app.get("/api/persona/questionnaire")
+    def get_questionnaire(round: Round = "initial") -> dict[str, Any]:
+        with open_store() as store:
+            return round_view(store, round)
+
+    @app.put("/api/persona/questionnaire/draft")
+    def put_draft(body: QuestionnaireBody) -> dict[str, Any]:
+        with open_store() as store:
+            try:
+                state = save_draft(store, body.round, body.answers)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+        return {"status": state.status, "updated_at": state.updated_at, "answered": len(state.answers)}
+
+    @app.post("/api/persona/questionnaire/submit")
+    def submit_questionnaire(body: QuestionnaireBody) -> dict[str, Any]:
+        """The initial round is imported as a questionnaire source and a profile build starts when the model is
+        configured and no other build is running; the retest round is only recorded."""
+        with open_store() as store:
+            try:
+                if body.round == "retest":
+                    submit_retest(store, body.answers)
+                    return {"round": "retest", "job_id": None, "notice": "重测已提交"}
+                parsed = submit_initial(store, settings, body.answers)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+        notice = f"已导入 {parsed.source.n_expressions} 条回答"
+        try:
+            llm, embedder = backends.llm(), backends.embedder()
+            job = jobs.submit(
+                "persona_build", "构建人格档案", lambda log: run_persona_build(settings, llm, embedder, log)
+            )
+        except Exception as e:
+            # Model not configured or another build running: the answers are saved, the build can start later.
+            return {"round": "initial", "job_id": None, "notice": f"{notice}；构建没有自动开始：{e}"}
+        return {"round": "initial", "job_id": job.job_id, "notice": f"{notice}，正在构建人格档案"}
+
+
+def parse_multipart(content_type: str, body: bytes) -> list[tuple[str, bytes]]:
+    """``(file name as sent, content)`` of every file part named ``files`` of a multipart/form-data body. Raises
+    ``ValueError`` when the body is not multipart."""
+    head = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("latin-1", "replace")
+    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(head + body)
+    if not message.is_multipart():
+        raise ValueError("请求体不是 multipart/form-data")
+    files: list[tuple[str, bytes]] = []
+    for part in message.iter_parts():
+        filename = part.get_filename()
+        if part.get_param("name", header="content-disposition") != "files" or filename is None:
+            continue
+        payload = part.get_payload(decode=True)
+        files.append((str(filename), payload if isinstance(payload, bytes) else b""))
+    return files
+
+
+async def read_uploads(request: Request) -> list[tuple[str, bytes]]:
+    """The ``files`` parts of a multipart/form-data request, within the size and count limits."""
+    content_type = request.headers.get("content-type", "")
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise HTTPException(400, "请用 multipart/form-data 上传文件，字段名为 files")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+        raise _too_large()
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_UPLOAD_BYTES:
+            raise _too_large()
+        chunks.append(chunk)
+    try:
+        received = await run_in_threadpool(parse_multipart, content_type, b"".join(chunks))
+    except ValueError as e:
+        raise HTTPException(400, f"无法解析上传内容：{e}") from e
+    if not received:
+        raise HTTPException(400, "没有收到文件：请用字段名 files 上传一个或多个文件")
+    if len(received) > MAX_UPLOAD_FILES:
+        raise HTTPException(400, f"一次最多上传 {MAX_UPLOAD_FILES} 个文件")
+    return received
+
+
+def _too_large() -> HTTPException:
+    return HTTPException(
+        status_code=413, detail=f"上传内容太大（上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB），请分批上传"
+    )

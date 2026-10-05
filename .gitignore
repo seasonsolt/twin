@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# 会议原文与认知模型（敏感数据）、评测输出
+data/
+*.db
+*.db-wal
+*.db-shm
+eval-*/
+
+# 验证测试记录中的评测报告要保留（上面的 eval-*/ 规则只针对工作目录下的临时评测输出）
+!validation/runs/**/eval-out/
+
+# Local secrets (API keys); never commit
+.env

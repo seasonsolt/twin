@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import tempfile
+import unicodedata
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
@@ -24,10 +25,11 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from ..config import Settings, make_llm
 from ..embed import Embedder
 from ..llm import LLM
-from ..persona.chat import PersonaChat, index_persona
+from ..persona.chat import PersonaChat, _visible_items, index_persona
+from ..persona.items import item_as_of
 from ..persona.profile import build_profile
-from ..persona.schema import ChatTurn, SourceKind
-from ..persona.sources import parse_text
+from ..persona.schema import ChatReply, ChatTurn, SourceKind
+from ..persona.sources import expression_view, parse_text
 from ..persona.store import PersonaStore
 from ..util import open_private, private_directory
 from .harness import (
@@ -178,6 +180,85 @@ def _question(case: Case) -> QuestionInput:
     return case.input.payload
 
 
+def normalize_quote(text: str) -> str:
+    """NFKC, no whitespace/punctuation, and case-insensitive Latin letters."""
+    return "".join(
+        char.lower() if "LATIN" in unicodedata.name(char, "") else char
+        for char in unicodedata.normalize("NFKC", text)
+        if not char.isspace() and not unicodedata.category(char).startswith("P")
+    )
+
+
+def extract_quotes(text: str) -> list[str]:
+    """Return balanced spans in source order, including nested spans and repeated occurrences.
+
+    Mismatched closers and unfinished pairs are ignored; balanced inner pairs still count.
+    Backslash-escaped ASCII quotes are not delimiters. Terms under four normalized characters
+    are ignored. Returned text is transient only, never prediction metadata.
+    """
+    pairs = {"「": "」", "『": "』", "“": "”", '"': '"'}
+    stack: list[tuple[str, int]] = []
+    spans: list[tuple[int, int]] = []
+    backslashes = 0
+    for index, char in enumerate(text):
+        escaped = char == '"' and backslashes % 2 == 1
+        backslashes = backslashes + 1 if char == "\\" else 0
+        if escaped:
+            continue
+        if stack and char == pairs[stack[-1][0]]:
+            _, start = stack.pop()
+            spans.append((start + 1, index))
+        elif char in pairs:
+            stack.append((char, index))
+    return [text[start:end] for start, end in sorted(spans) if len(normalize_quote(text[start:end])) >= 4]
+
+
+def _quote_counts(chat: PersonaChat, reply: ChatReply, as_of: dt.date | None, prompt: str) -> dict[str, int]:
+    spans = [normalize_quote(span) for span in extract_quotes(reply.reply)]
+    counts = {"total": len(spans), "cited": 0, "elsewhere": 0, "question": 0, "unverified": 0}
+    if not spans:
+        return counts
+    normalized_prompt = normalize_quote(prompt)
+    cited_ids = set(reply.citations)
+    cited: set[str] = set()
+    corpus: set[str] = set()
+
+    def add(text: str, *, is_cited: bool, in_corpus: bool = True) -> None:
+        normalized = normalize_quote(text)
+        if is_cited:
+            cited.add(normalized)
+        if in_corpus:
+            corpus.add(normalized)
+
+    # Use chat's boundary view, and the corresponding raw text, not a second retrieval/model call.
+    expressions = chat.store.list_expressions(target_only=True, until=as_of)
+    viewed = expression_view(chat.store, chat.settings, expressions=expressions)
+    for entry in [*expressions, *viewed]:
+        add(entry.text, is_cited=entry.expression_id in cited_ids)
+    items = chat.store.list_items()
+    if as_of is not None:
+        items = [visible for item in items if (visible := item_as_of(item, as_of)) is not None]
+    for item in [*items, *_visible_items(chat.store, chat.settings, as_of)]:
+        is_cited = item.item_id in cited_ids
+        # Uncited profile statements are inferences, not a corpus of verbatim words.
+        add(item.statement, is_cited=is_cited, in_corpus=False)
+        add(item.applies_when, is_cited=is_cited, in_corpus=False)
+        for evidence in item.evidence:
+            add(evidence.quote, is_cited=is_cited)
+    for span in spans:
+        category = (
+            "cited"
+            if any(span in text for text in cited)
+            else "elsewhere"
+            if any(span in text for text in corpus)
+            else "question"
+            if span in normalized_prompt
+            else "unverified"
+        )
+        counts[category] += 1
+    return counts
+
+
 class PersonaSystem:
     """Answer-free adapter; independent turns, no chat-log writes or memory edits."""
 
@@ -197,6 +278,7 @@ class PersonaSystem:
             raise ValueError("不支持此题目类型；update 需要受控记忆编辑")
         try:
             reply = self.chat.reply([ChatTurn(role="user", content=payload.prompt)], as_of=as_of, persist=False)
+            quotes = _quote_counts(self.chat, reply, as_of, payload.prompt)
         except Exception:
             raise RuntimeError("分身调用失败（详情已隐藏）") from None
         return Prediction(
@@ -210,7 +292,7 @@ class PersonaSystem:
             abstain_reason=reply.abstain_reason,
             citations=[Citation(ref_id=ref, reason="") for ref in reply.citations],
             payload=QuestionOutput(reply=reply.reply),
-            raw={"artifacts": bool(ARTIFACT_RE.search(reply.reply))},
+            raw={"artifacts": bool(ARTIFACT_RE.search(reply.reply)), "quotes": quotes},
         )
 
 
@@ -621,6 +703,39 @@ def _estimate(values: dict[str, float], cases: Sequence[Case], seed: str) -> dic
     }
 
 
+def _quotes_summary(predictions: Sequence[Prediction]) -> dict[str, Any] | None:
+    measured = [prediction.raw["quotes"] for prediction in predictions if "quotes" in prediction.raw]
+    if not measured:
+        return None
+    counts = {"total": 0, "cited": 0, "elsewhere": 0, "question": 0, "unverified": 0}
+    for block in measured:
+        if not isinstance(block, dict):
+            raise ValueError("records 原话计数无效（详情已隐藏）")
+        block = {"question": 0, **block}
+        if any(type(block.get(key)) is not int or block[key] < 0 for key in counts) or block["total"] != sum(
+            block[key] for key in counts if key != "total"
+        ):
+            raise ValueError("records 原话计数无效（详情已隐藏）")
+        for key in counts:
+            counts[key] += block[key]
+    return {
+        "n_replies": len(measured),
+        "n_missing": len(predictions) - len(measured),
+        "replies_with_quotes": sum(block["total"] > 0 for block in measured),
+        **counts,
+        **{
+            f"{key}_rate": counts[key] / counts["total"] if counts["total"] else None
+            for key in counts
+            if key != "total"
+        },
+    }
+
+
+def _add_quotes(data: dict[str, Any], predictions: Sequence[Prediction]) -> None:
+    if (quotes := _quotes_summary(predictions)) is not None:
+        data["quotes"] = quotes
+
+
 def summarize(report: Report) -> dict[str, Any]:
     _check_report(report)
     result: dict[str, Any] = {}
@@ -651,6 +766,13 @@ def summarize(report: Report) -> dict[str, Any]:
                 for metric in METRICS[category]
             },
         }
+        _add_quotes(result[category], [p for p in report.predictions if p.case_id in ids])
+    result["overall"] = {
+        "status": "run",
+        "n_cases": sum(_question(case).category != "update" or _expanded_update(case) for case in report.cases),
+        "metrics": {},
+    }
+    _add_quotes(result["overall"], report.predictions)
     return result
 
 
@@ -688,6 +810,12 @@ def _check_report(report: Report) -> None:
             raise ValueError("records 评分身份与题目或评委团不一致")
 
 
+def _comparison_quotes(first: Report, second: Report, ids: set[str]) -> dict[str, Any]:
+    a = _quotes_summary([p for p in first.predictions if p.case_id in ids])
+    b = _quotes_summary([p for p in second.predictions if p.case_id in ids])
+    return {"quotes": {"A": a, "B": b}} if a is not None or b is not None else {}
+
+
 def compare_reports(first: Report, second: Report) -> dict[str, Any]:
     """Paired case-score deltas B-A, resampling whole documents, not judge calls."""
     _check_report(first)
@@ -722,7 +850,18 @@ def compare_reports(first: Report, second: Report) -> dict[str, Any]:
                 "ties": sum(diff == 0 for diff in diffs.values()),
                 "n_unpaired": len(ids) - len(paired),
             }
-        categories[category] = {"status": "compared", "n_cases": len(cases), "metrics": metrics}
+        categories[category] = {
+            "status": "compared",
+            "n_cases": len(cases),
+            "metrics": metrics,
+            **_comparison_quotes(first, second, ids),
+        }
+    categories["overall"] = {
+        "status": "compared",
+        "n_cases": sum(_question(by_a[key]).category != "update" or _expanded_update(by_a[key]) for key in common),
+        "metrics": {},
+        **_comparison_quotes(first, second, set(common)),
+    }
     return {
         "direction": "B - A (wins: B > A)",
         "categories": categories,
@@ -756,6 +895,18 @@ def ensure_output_directory(out: Path, *, allow_in_repo: bool = False) -> None:
         raise ValueError("个人评测输出文件不能是符号链接")
 
 
+def _quote_line(block: dict[str, Any] | None) -> str:
+    if block is None:
+        return "absent"
+    return (
+        f"replies={block['replies_with_quotes']}/{block['n_replies']}, spans={block['total']}, "
+        f"cited={block['cited']} ({block['cited_rate']}), "
+        f"elsewhere={block['elsewhere']} ({block['elsewhere_rate']}), "
+        f"question={block['question']} ({block['question_rate']}), "
+        f"unverified={block['unverified']} ({block['unverified_rate']}), missing={block['n_missing']}"
+    )
+
+
 def _markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# 本人资料评测",
@@ -769,10 +920,16 @@ def _markdown(summary: dict[str, Any]) -> str:
     for category, data in summary["categories"].items():
         lines += [f"## {category}", f"状态：{data['status']}；题目数：{data['n_cases']}"]
         if data["status"] == "not run":
-            lines += [data["reason"], ""]
+            lines += [data["reason"], "原话：absent", ""]
             continue
         if "judge_failure_rate" in data:
             lines += [f"评委失败率：{data['judge_failure_rate']}；模板/控制标记回答：{data['artifact_answers']}"]
+        quotes = data.get("quotes")
+        if data["status"] == "compared":
+            quotes = quotes or {}
+            lines += [f"原话：A {_quote_line(quotes.get('A'))}；B {_quote_line(quotes.get('B'))}"]
+        else:
+            lines += [f"原话：{_quote_line(quotes)}"]
         for metric, value in data["metrics"].items():
             lines += [
                 f"- {metric}: mean={value['mean']}, CI95={value['ci95']}, n={value['n_scored']}, "

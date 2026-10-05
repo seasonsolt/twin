@@ -21,14 +21,17 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import ValidationError
 
 from .config import Settings, check_config_rename, load_settings, make_embedder, make_llm
 from .embed import Embedder, EmbedError
+from .identity import Decision, Identity
 from .llm import CallTally, LLMError
 from .media.schema import MediaScript
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
+from .persona.dimensions import FACETS, requires_consent
 from .persona.profile import build_profile, consented_facets
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import parse_source
@@ -326,6 +329,63 @@ app.add_typer(persona_app, name="persona")
 
 def _persona_store(settings: Settings) -> PersonaStore:
     return PersonaStore(settings.db_path)
+
+
+identity_app = typer.Typer(help="身份与授权台账：查看、授权或撤回；记录只追加不删除。", no_args_is_help=True)
+app.add_typer(identity_app, name="identity")
+
+
+@identity_app.command("show")
+def identity_show(ctx: typer.Context) -> None:
+    """查看名字、别名及最新授权状态，不显示个人资料或备注。"""
+    settings = _settings(ctx)
+    with _errors(), _persona_store(settings) as store:
+        events = store.consent_events()
+        identity = Identity.from_parts(settings.target_name, settings.target_aliases, events)
+        latest = {event.scope: event for event in events}
+        allowed = consented_facets(store)
+    _say(f"名字：{identity.name}")
+    _say(f"别名：{'、'.join(identity.aliases) or '—'}")
+    _say("范围 | 最新决定 | 时间（UTC） | 来源")
+    scopes = set(latest) | {f"facet:{f.facet_id}" for f in FACETS if requires_consent(f.facet_id)}
+    labels = {Decision.GRANT: "已授权", Decision.REVOKE: "已撤回", Decision.DECLINE: "未授权"}
+    for scope in sorted(scopes):
+        if event := latest.get(scope):
+            _say(
+                f"{scope} | {labels[event.decision]}（{event.decision.value}） | "
+                f"{event.at.isoformat()} | {event.origin}"
+            )
+        else:
+            derived = "已授权" if scope.removeprefix("facet:") in allowed else "未授权"
+            _say(f"{scope} | 未记录（按问卷推导：{derived}） | — | —")
+
+
+IdentityScopeArgument = Annotated[str, typer.Argument(help="授权范围，如 facet:9.1 或 egress:llm")]
+IdentityNoteOption = Annotated[str, typer.Option("--note", help="备注（最多 200 字，不在输出中显示）")]
+
+
+def _identity_change(ctx: typer.Context, scope: str, decision: Decision, note: str) -> None:
+    with _errors(), _persona_store(_settings(ctx)) as store:
+        try:
+            event = store.append_consent(scope, decision, "cli", note)
+        except ValidationError as error:
+            # Validation diagnostics must not echo potentially personal note text.
+            raise _fail("；".join(e["msg"] for e in error.errors(include_input=False))) from error
+    _say(f"{event.scope}：{'已授权' if decision is Decision.GRANT else '已撤回'}（记录 {event.seq}）")
+    if event.scope.startswith("facet:"):
+        _say("请运行 `twin persona build`，使细项授权变更生效。")
+
+
+@identity_app.command("grant")
+def identity_grant(ctx: typer.Context, scope: IdentityScopeArgument, note: IdentityNoteOption = "") -> None:
+    """追加授权记录；本版本禁止授权声音复刻或照片驱动形象。"""
+    _identity_change(ctx, scope, Decision.GRANT, note)
+
+
+@identity_app.command("revoke")
+def identity_revoke(ctx: typer.Context, scope: IdentityScopeArgument, note: IdentityNoteOption = "") -> None:
+    """追加撤回记录，保留全部历史。"""
+    _identity_change(ctx, scope, Decision.REVOKE, note)
 
 
 @persona_app.command("import")

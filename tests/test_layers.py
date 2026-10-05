@@ -27,6 +27,7 @@ LAYERS: dict[str, int] = {
     "media.render": 7,
     "media.speech_text": 7,
     "web.media": 9,
+    "identity": 1,
     "persona": 1,
     "persona.dimensions": 1,
     "persona.schema": 1,

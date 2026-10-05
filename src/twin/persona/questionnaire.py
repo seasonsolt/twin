@@ -256,7 +256,8 @@ def render_markdown(answers: dict[str, str]) -> str:
 
 
 def submit_initial(store: PersonaStore, settings: Settings, answers: dict[str, str]) -> ParsedSource:
-    """Import the answers as the questionnaire source, replacing the one an earlier submission created."""
+    """Import answers and append questionnaire consent via ``put_source``, replacing an earlier submission's source
+    without deleting its consent history."""
     state = load_round(store, "initial")
     cleaned = clean_answers("initial", answers)
     if not any(not QUESTION_BY_ID[k].test for k in cleaned):

@@ -11,6 +11,22 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `config.Settings`: target name/aliases, privacy, database, concurrency, LLM, embedding, optional judges/pricing/budget, TTS and synthetic-speech ASR. OpenAI-compatible LLM endpoints require explicit model/base URL and never silently target a public default.
 - Tests are offline with `FakeLLM`, `HashingEmbedder`, fake HTTP transports and temporary databases. Python 3.12, strict mypy and ruff are required.
 
+## Identity 与授权台账
+
+- `identity`（代码层 1）是无 I/O 的冻结契约，后续只增不删。`Scope` 仅接受需授权细项的
+  `facet:<facet_id>`、`egress:llm|embed|tts|asr`、`biometric:voice_clone|face`。
+- `PersonaStore` 打开时以 `CREATE TABLE IF NOT EXISTS` 增加 `p_consent`；事件按自增 `seq` 只追加，
+  包含 `grant|revoke|decline`、UTC 时间、来源 `questionnaire|cli|web` 和可选备注，删除资料不删除授权历史。
+- `Identity.from_parts` 按 `seq` 折叠，每个范围以最新决定为准，只有 `grant` 算授权。
+  gated facet 无台账事件时保持旧问卷推导（回答且未拒绝）；非 gated facet 始终允许。
+- 问卷提交与文件导入在保存来源的同一事务中追加已回答细项的 `grant`、跳过细项的 `decline`；
+  重复导入视为再次提交。保留 `Source.declined_facets`。撤回后运行 `twin persona build` 删除该细项条目，
+  再由 `index_persona` 清除对应条目向量；不删除原始语料。
+- 生物特征范围在本版本永不可 `grant`（M4：不支持本人声音复刻、照片驱动形象）。
+  出境许可执行、音色接入和标识统一是后续任务，本台账尚不实施这些策略。
+- `twin identity show` 仅显示名字、别名和授权状态/时间/来源；`grant <scope>`、`revoke <scope>`
+  可带 `--note`，备注不输出。
+
 ## Transcript parsing (code layer 4)
 
 `persona.transcripts.parse_transcript` supports line transcripts, timestamped speaker blocks, SRT/WebVTT, normalized transcript JSON and pre-existing FunASR JSON. This is pure format conversion, not audio transcription. Local speaker sidecars map labels before target aliases are normalized. Dates come from explicit arguments, JSON or filenames; ambiguous/missing dates and unrecognized formats raise `ValueError`. Consecutive turns can be merged and renumbered. Uploaded text uses `parse_transcript_text` and never reads server-side paths.

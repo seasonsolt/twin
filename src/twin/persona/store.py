@@ -17,7 +17,9 @@ from pathlib import Path
 import numpy as np
 
 from ..embed import Matrix
+from ..identity import ConsentEvent, Decision, Origin, Scope
 from ..util import prepare_private_file
+from .dimensions import requires_consent
 from .items import PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
 from .schema import ChatReply, Expression, ParsedSource, ReviewStatus, Source, SourceKind
 
@@ -34,6 +36,9 @@ CREATE TABLE IF NOT EXISTS p_candidates (
 CREATE INDEX IF NOT EXISTS p_candidates_facet ON p_candidates(facet_id);
 CREATE TABLE IF NOT EXISTS p_items (item_id TEXT PRIMARY KEY, facet_id TEXT NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS p_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS p_consent (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, decision TEXT NOT NULL,
+    at TEXT NOT NULL, origin TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS p_reviews (item_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS p_chat_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, abstain INTEGER NOT NULL, json TEXT NOT NULL);
@@ -67,11 +72,43 @@ class PersonaStore:
         with self._lock, self._db:
             yield self._db
 
+    # ------------------------------------------------------------ consent (append-only)
+
+    def _append_consent(
+        self, db: sqlite3.Connection, scope: Scope, decision: Decision, origin: Origin, note: str = ""
+    ) -> ConsentEvent:
+        event = ConsentEvent(
+            seq=1, scope=scope, decision=decision, at=dt.datetime.now(dt.UTC), origin=origin, note=note
+        )
+        cursor = db.execute(
+            "INSERT INTO p_consent (scope, decision, at, origin, note) VALUES (?, ?, ?, ?, ?)",
+            (event.scope, event.decision.value, event.at.isoformat(), event.origin, event.note),
+        )
+        assert cursor.lastrowid is not None
+        return event.model_copy(update={"seq": cursor.lastrowid})
+
+    def append_consent(self, scope: Scope, decision: Decision, origin: Origin, note: str = "") -> ConsentEvent:
+        with self._tx() as db:
+            return self._append_consent(db, scope, decision, origin, note)
+
+    def consent_events(self) -> list[ConsentEvent]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT seq, scope, decision, at, origin, note FROM p_consent ORDER BY seq"
+            ).fetchall()
+        return [
+            ConsentEvent.model_validate(
+                dict(zip(("seq", "scope", "decision", "at", "origin", "note"), row, strict=True))
+            )
+            for row in rows
+        ]
+
     # ------------------------------------------------------------ sources
 
     def put_source(self, parsed: ParsedSource) -> bool:
         """Store a parsed source and its expressions, replacing a source with the same id (the same file and
-        content). Returns False when it was already stored."""
+        content). Returns False when it was already stored. Questionnaire submissions also append consent decisions
+        in the same transaction, including skipped optional facets; re-importing is a new submission."""
         source = parsed.source
         with self._tx() as db:
             existed = db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source.source_id,)).fetchone()
@@ -100,6 +137,17 @@ class PersonaStore:
                     for e in parsed.expressions
                 ],
             )
+            if source.kind is SourceKind.QUESTIONNAIRE:
+                answered = {f for e in parsed.expressions if not e.held_out for f in e.facets_hint}
+                declined = set(source.declined_facets)
+                for facet in sorted(answered | declined):
+                    if requires_consent(facet):
+                        self._append_consent(
+                            db,
+                            f"facet:{facet}",
+                            Decision.DECLINE if facet in declined else Decision.GRANT,
+                            "questionnaire",
+                        )
         return existed is None
 
     def list_sources(self, kind: SourceKind | None = None) -> list[Source]:

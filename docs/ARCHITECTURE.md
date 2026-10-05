@@ -12,7 +12,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 | 阶段 | 用户看到的 | 对应的层 | 现状 |
 | --- | --- | --- | --- |
-| Identity 身份 | 这个分身是谁、哪些维度允许采集、用什么音色和形象、对外怎么标识、数据能否出境 | L0 契约，加治理（横切） | **缺口**：分散在配置（`target_name`、别名、`[tts]`）和人格维度的授权分级里，没有统一的身份对象和授权台账 |
+| Identity 身份 | 这个分身是谁、哪些维度允许采集、用什么音色和形象、对外怎么标识、数据能否出境 | L0 契约，加治理（横切） | **进行中：契约与台账已有，出境许可与音色待接入** |
 | Memory upload 记忆上传 | 上传聊天、文档、问卷、访谈、传记、会议转写，看到"记住了什么、还缺什么" | L1 语料、L2 认知 | 已有：多来源导入、化名处理、人格档案、细项完成度、审核 |
 | Service 服务 | 对话；听它说；以后看它讲、通过 API 调用 | L3 运行时、L4 展示、L5 接入 | 已有：对话、逐句回放、朗读；未做：形象、视频片段、API |
 
@@ -24,14 +24,14 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 | 层 | 职责 | 模块 |
 | --- | --- | --- |
-| L0 基础设施 | 工具函数、数据契约、模型后端与配置、存储 | 工具（0）：`util`、`usage`、`evals.stats`；契约（1）：`persona.schema`、`persona.dimensions`、`persona.items`、`persona.transcript_schema`、`media.schema`、`evals.schema`；后端与配置（2）：`llm`、`embed`、`config`、`media.tts`、`media.asr`；存储（3）：`persona.store` |
+| L0 基础设施 | 工具函数、数据契约、模型后端与配置、存储 | 工具（0）：`util`、`usage`、`evals.stats`；契约（1）：`identity`、`persona.schema`、`persona.dimensions`、`persona.items`、`persona.transcript_schema`、`media.schema`、`evals.schema`；后端与配置（2）：`llm`、`embed`、`config`、`media.tts`、`media.asr`；存储（3）：`persona.store` |
 | L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.transcripts`、`persona.questionnaire` |
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |
 | L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.render` |
 | L5 接入（9） | 命令行、网页 | `cli`、`web.*` |
 | 横切：评测（8） | 执行框架、评委、统计、来源记录、回听评测 | `evals.harness`、`evals.provenance`、`evals.personal`、`media.check` |
-| 横切：治理 | 授权、标识、隐私、数据出境 | 规则见第 4 节；身份与授权台账待建 |
+| 横切：治理 | 授权、标识、隐私、数据出境 | 规则见第 4 节；身份契约与授权台账已有，执行策略待接入 |
 
 ## 3. 层间规则
 
@@ -74,6 +74,6 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 按产品形态推进，每一步独立可评测：
 
 1. **本人资料评测场景**：把现有题库接进评测框架，作为之后所有改动的记分板。
-2. **Identity**：身份契约与授权台账；运行时与媒体统一从身份读取名字、授权、音色和出境许可。
+2. **Identity**：进行中：契约与台账已有，出境许可与音色待接入；后续运行时与媒体统一从身份读取名字、授权、音色和出境许可。
 3. **Memory upload**：上传后的"记住了什么、还缺什么"视图，与细项完成度打通。
 4. **Service**：风格化形象、对话片段导出、对外 API。

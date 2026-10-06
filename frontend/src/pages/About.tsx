@@ -38,6 +38,7 @@ const backendNames: Record<string, string> = {
   tts: '朗读',
   asr: '语音识别',
   video: '视频生成',
+  vision: '形象提取',
   judge: '回答检查',
 };
 

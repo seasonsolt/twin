@@ -199,8 +199,14 @@ class ASRSettings(BaseModel):
     egress: Literal["local", "external"] | None = None
 
 
-EgressKind = Literal["llm", "embed", "tts", "asr", "video"]
-BackendSettings = LLMSettings | EmbedSettings | TTSSettings | ASRSettings | VideoSettings
+class VisionSettings(BaseModel):
+    provider: Literal["command"] = "command"
+    command: str | None = None
+    egress: Literal["local", "external"] | None = None
+
+
+EgressKind = Literal["llm", "embed", "tts", "asr", "video", "vision"]
+BackendSettings = LLMSettings | EmbedSettings | TTSSettings | ASRSettings | VideoSettings | VisionSettings
 
 
 @dataclass(frozen=True)
@@ -215,6 +221,8 @@ class EgressInfo:
 def egress_of(section: BackendSettings) -> EgressInfo:
     """Conservative endpoint classification; never expose URL userinfo, paths or queries."""
     kind: EgressKind
+    if isinstance(section, VisionSettings):
+        return EgressInfo("vision", section.egress == "external", section.egress is not None, None, "本机命令")
     if isinstance(section, VideoSettings):
         external = (
             section.provider == "remote" and bool(section.host)
@@ -283,6 +291,39 @@ class ApiSettings(BaseModel):
     rate_per_minute: int = Field(default=30, gt=0)
 
 
+class SMTPSettings(BaseModel):
+    host: str = ""
+    port: Literal[465, 587] = 465
+    username: str = ""
+    from_address: str = ""
+    from_name: str = "twin"
+    password_env: str = "TWIN_SMTP_PASSWORD"
+
+
+class AuthSettings(BaseModel):
+    enabled: bool = False
+    allowed_domains: list[str] = Field(default_factory=lambda: ["xjjk.com"])
+    allowed_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
+    admin_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
+    session_days: int = Field(default=30, gt=0)
+    max_personas_per_member: int = Field(default=3, gt=0)
+    smtp: SMTPSettings = Field(default_factory=SMTPSettings)
+
+    @field_validator("allowed_domains", "allowed_emails", "admin_emails")
+    @classmethod
+    def lowercase(cls, values: list[str]) -> list[str]:
+        return [value.strip().lower() for value in values]
+
+    @model_validator(mode="after")
+    def smtp_required(self) -> AuthSettings:
+        if self.enabled and not all(
+            value.strip()
+            for value in (self.smtp.host, self.smtp.username, self.smtp.from_address, self.smtp.password_env)
+        ):
+            raise ValueError("[auth] enabled = true 必须配置 [auth.smtp] host、username、from_address、password_env")
+        return self
+
+
 class Settings(BaseModel):
     db_path: Path = Path("data/twin.db")
     target_name: str = "本人"
@@ -299,10 +340,12 @@ class Settings(BaseModel):
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
+    vision: VisionSettings = Field(default_factory=VisionSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     media: MediaSettings = Field(default_factory=MediaSettings)
     video: VideoSettings = Field(default_factory=VideoSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
 
     def is_target(self, speaker: str) -> bool:
         return speaker == self.target_name or speaker in self.target_aliases

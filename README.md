@@ -120,11 +120,23 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 
 手机和桌面顶栏均可点击头像与名字切换分身；列表显示记忆数，可“新建分身”或进入“管理”重命名、确认删除。
 新建后自动切换并进入四步引导。每个分身的介绍、记忆、照片、声音、聊天和音视频上传相互独立；切换停止播放，但后台任务继续为原分身处理。
-这是单管理员工具，不提供账号或权限系统；公网部署需 Cloudflare Access 等认证。
+默认 `[auth].enabled = false` 保持无登录、所有人都是管理员的本机模式。启用邮箱登录后，成员只看到自己的分身，默认最多创建 3 个；管理员可管理全部分身，列表标出其他拥有者的邮箱。旧分身（含 default）归管理员。
 
-数据根目录为 `db_path.parent`。`personas.json` 只记录 ID、创建时间和默认 ID；原数据库和 `assets/`、`media-cache/`、`media-sources/`、`uploads/` 原地保留为 `default`，无需迁移。
+数据根目录为 `db_path.parent`。`personas.json` 记录 ID、owner（邮箱或 null）、创建时间和默认 ID；原数据库和 `assets/`、`media-cache/`、`media-sources/`、`uploads/` 原地保留为 `default`，无需迁移。
 新分身使用 `personas/p-<10位hex>/twin.db` 和同布局的私有目录。默认分身不能删除；有运行或排队任务的分身暂不能删除。
 CLI/MCP/评测继续使用配置数据库，不新增选择参数。
+
+**公网部署与邮箱登录**
+
+Cloudflare Access 已移除，不读取任何 `Cf-Access-*` 身份头；应用本身是认证边界。保持服务只绑定 `127.0.0.1`，Cloudflare Tunnel 的 HTTPS 公网域名指向本机端口，并保留原 Host。用 `twin ui --allow-host twin.example.com` 接受自己的域名，不要将开发服务器或本机端口直接暴露到公网。
+
+1. 在 `twin.toml` 配置 `[auth] enabled = true`，填写 `allowed_domains`、`allowed_emails` 和 `admin_emails`（完整示例见 `twin.toml.example`）。域名仅匹配最后一个 `@` 后的完整部分，大小写不敏感；管理员邮箱也须在允许范围内。
+2. 配置 `[auth.smtp]` 的 host、port（465 SSL / 587 STARTTLS）、username、from_address、from_name。`password_env = "TWIN_SMTP_PASSWORD"` 只写变量名；通过服务进程的环境安全传入密码，不存入配置或源码。启用登录但缺少 SMTP 配置/密码时启动失败。
+3. 重启服务应用配置变更。允许的用户收到 6 位验证码（10 分钟有效、5 次错误后失效）；未允许的邮箱加入等候名单，不发邮件。发送限额：每邮箱 60 秒一次、每小时 5 次，每客户端 IP 每小时 20 次（隧道使用 `CF-Connecting-IP`，否则使用连接地址）。内存限额按进程计算，部署使用单进程。
+
+会话默认 30 天，只存于 HttpOnly、Secure、SameSite=Lax cookie（本机 HTTP 开发可非 Secure），不在 localStorage 保存 token。`<数据根>/auth.db` 以 0600 保存验证码哈希、会话哈希及去重的等候邮箱；备份时视作私有资料。所有 API/媒体需会话，写操作仍需 `X-Twin: 1`。顶栏切换页提供“退出登录”。
+
+管理员登录后可用同源 `GET /api/admin/waitlist` 查看等候名单；放行用户就是把邮箱加入配置 `allowed_emails` 并重启，没有审批 UI。不要在启用 auth 前移除原有外层保护，也不要在公网关闭 auth。
 
 **记忆上传**
 

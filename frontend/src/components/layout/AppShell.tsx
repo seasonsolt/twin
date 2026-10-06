@@ -13,7 +13,8 @@ import { startStatusPolling, useStatus } from '../../stores/status';
 import { IconButton, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
+import { usePersonas } from '../../stores/personas';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Onboarding = lazy(() =>
@@ -111,6 +112,7 @@ export function AppShell() {
   const outlet = useOutlet();
   const [onboarding, setOnboarding] = useState<IdentityData | null>(null);
   const [checked, setChecked] = useState(false);
+  const [noPersona, setNoPersona] = useState(false);
   useEffect(startStatusPolling, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -128,12 +130,32 @@ export function AppShell() {
         )
           setOnboarding(identity);
       })
-      .catch(() => {})
+      .catch((failure: unknown) => {
+        if (
+          !controller.signal.aborted &&
+          failure instanceof ApiError &&
+          failure.code === 'no_persona'
+        ) {
+          setNoPersona(true);
+          void usePersonas
+            .getState()
+            .refresh()
+            .catch(() => {});
+        }
+      })
       .finally(() => {
         if (!controller.signal.aborted) setChecked(true);
       });
     return () => controller.abort();
   }, []);
+  if (noPersona)
+    return (
+      <main className="mx-auto max-w-sm space-y-6 px-4 py-12">
+        <p className="text-lg font-semibold text-accent">twin</p>
+        <h1 className="text-xl font-semibold">先新建一个分身</h1>
+        <PersonaSwitcher createOnly />
+      </main>
+    );
   if (location.pathname !== '/gallery') {
     if (!checked) return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
     if (onboarding)

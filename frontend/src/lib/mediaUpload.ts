@@ -1,4 +1,4 @@
-import { ApiError } from './api';
+import { ApiError, handleApiFailure } from './api';
 import { getPersonaId, personaKey } from './persona';
 
 const CHUNK_SIZE = 8 * 1024 * 1024;
@@ -108,6 +108,7 @@ async function request(
         },
       });
       const data = (await response.json()) as Record<string, unknown>;
+      if (!response.ok) handleApiFailure(response.status, data);
       if (!response.ok && response.status !== 409)
         throw new ApiError(
           response.status,

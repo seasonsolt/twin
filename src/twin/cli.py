@@ -69,6 +69,21 @@ api_key_env = "TWIN_EMBED_KEY"
 # token_env = "TWIN_API_TOKEN"
 # rate_per_minute = 30 # 每个令牌每分钟最多请求数（滑动窗口）。
 
+# [auth] # 公网网页必须启用；默认 false 为无登录、管理员模式（仅本机开发）。
+# enabled = true
+# allowed_domains = ["xjjk.com"] # 只匹配 @ 后的完整域名，不匹配子域名
+# allowed_emails = ["seasonsolt@gmail.com"]
+# admin_emails = ["seasonsolt@gmail.com"]
+# session_days = 30
+# max_personas_per_member = 3
+# [auth.smtp] # 465 使用 SSL，587 使用 STARTTLS；启用 auth 时必填
+# host = "smtp.example.com"
+# port = 465
+# username = "your-smtp-account"
+# from_address = "twin@example.com"
+# from_name = "twin"
+# password_env = "TWIN_SMTP_PASSWORD" # 密码只在环境变量，绝不写入文件
+
 # [video] # 可选真人视频通道，默认关闭
 # provider = "remote" # 执行配置的 SSH 或本机任务
 # command 必须配置；host 省略或为空时本机执行并复制输出，否则使用 SSH/scp；出境声明与契约见 docs/MEDIA.md
@@ -92,12 +107,20 @@ api_key_env = "TWIN_EMBED_KEY"
 # api_key_env = "TWIN_ASR_KEY"
 # language = "zh"
 
-# 音视频记忆的命令识别：stdin JSON audio/language；stdout 最后一行 ok/segments。
+# 音视频记忆的命令识别：stdin JSON audio/language/diarize，已有本人声音时附 reference。
+# stdout 最后一行 ok/segments（可附 speaker）、speakers（id/seconds/similarity）；旧驱动仍可用。
 # [asr]
 # provider = "command"
 # command = "python /path/to/transcribe.py"
 # language = "zh"
 # egress = "local"
+
+# 视频形象候选（可选）：stdin video/intervals/out_dir/max_candidates；stdout ok/candidates。
+# 仅返回 out_dir 内的普通图片，详情与可选 face_box 见 docs/MEDIA.md。
+# [vision]
+# provider = "command"
+# command = "python /path/to/portraits.py"
+# egress = "local" # 命令调用外部服务时改为 external。
 
 # [[judges]]
 # egress = "local" 或 "external"：每位评委也单独分类，外部服务按配置使用。
@@ -331,7 +354,7 @@ def ui(
         typer.Option(
             "--allow-host",
             help="额外接受的主机名（可重复），用于反向代理或隧道后面的公网域名；只放行主机名，不改变监听地址。"
-            "公网访问前必须在代理层加登录保护",
+            "公网访问前必须配置 [auth] enabled = true 及 SMTP 邮箱验证码登录",
         ),
     ] = None,
 ) -> None:
@@ -353,7 +376,9 @@ def ui(
                 [
                     bar,
                     f"警告：网页界面将监听 {host}:{port}，不只是本机可以访问。",
-                    "同一网络里能连到这台机器的人，不需要登录就能查看个人资料、人格档案和聊天结果，",
+                    "已启用邮箱登录；只有允许的用户可访问其分身，管理员可管理全部分身。"
+                    if settings.auth.enabled
+                    else "同一网络里能连到这台机器的人，不需要登录就能查看个人资料、人格档案和聊天结果，",
                     "还能导入转写、修改审核结果、发起构建和聊天（会调用模型、产生费用）。",
                     "服务只接受用 localhost、127.0.0.1、[::1]"
                     + (f" 或 {address}" if extra_hosts else "")
@@ -434,7 +459,7 @@ def identity_show(ctx: typer.Context) -> None:
     _say(f"形象：{identity.avatar}（风格化插画，不使用照片）")
     _say("出境：类型 | 提供方 | 主机 | 本机/外部 | 声明/推断")
     for index, row in enumerate(egress_status(settings)):
-        kind = row["kind"] if index < 5 else f"llm（评委 {index - 4}）"
+        kind = f"llm（评委 {index - 4}）" if 5 <= index < 5 + len(settings.judges) else row["kind"]
         _say(
             f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
             f"{'外部' if row['external'] else '本机'} | {'声明' if row['declared'] else '推断'}"

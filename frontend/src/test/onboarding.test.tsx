@@ -48,6 +48,14 @@ beforeEach(() => {
     egress: [],
   };
   fetcher = vi.fn((url: string, init: RequestInit) => {
+    if (url === '/api/whoami')
+      return Promise.resolve(
+        json({ email: null, admin: true, auth_enabled: false }),
+      );
+    if (url === '/api/personas')
+      return Promise.resolve(
+        json([{ id: 'default', name: identity.name, is_default: true }]),
+      );
     if (url === '/api/identity') {
       if (init.method === 'PUT') {
         identity = {

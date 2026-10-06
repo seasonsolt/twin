@@ -4,6 +4,7 @@ import { FlowStepper } from '../components/effects/FlowStepper';
 import { Button } from '../components/ui';
 import { IdentityForm } from '../features/identity/IdentityForm';
 import { SelfAssets } from '../features/assets/SelfAssets';
+import { RecordingShortcut } from '../features/sources/MediaClaim';
 import type { IdentityData } from '../features/identity/useIdentity';
 import { api } from '../lib/api';
 import { useStatus } from '../stores/status';
@@ -90,6 +91,7 @@ export function Onboarding({
                 <p className="text-secondary">
                   可以现在设置，也可以直接继续，以后在关于你里更换。
                 </p>
+                <RecordingShortcut />
                 <SelfAssets />
               </div>
             ),

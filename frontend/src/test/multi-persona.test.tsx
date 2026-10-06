@@ -72,6 +72,8 @@ beforeEach(() => {
   usePersonas.setState({ id: 'default', items: [] });
   useStatus.setState({ data: null, error: null });
   fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === '/api/whoami')
+      return json({ email: null, admin: true, auth_enabled: false });
     const persona =
       items.find((item) => item.id === selected(init)) ?? items[0];
     if (path === '/api/personas') {

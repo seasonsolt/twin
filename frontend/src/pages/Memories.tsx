@@ -20,6 +20,7 @@ import {
 import { api } from '../lib/api';
 import { isMedia, uploadMedia, type UploadProgress } from '../lib/mediaUpload';
 import { useStatus } from '../stores/status';
+import { MediaClaim } from '../features/sources/MediaClaim';
 
 const accept =
   '.txt,.md,.pdf,.docx,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus';
@@ -36,12 +37,14 @@ export interface Memory {
     | 'queued'
     | 'extracting'
     | 'transcribing'
-    | 'needs_asr';
+    | 'needs_asr'
+    | 'needs_speaker';
   remembered: number;
   kind?: string;
   duration_s?: number | null;
   transcribed_s?: number;
   media_sha?: string | null;
+  candidates_pending?: boolean;
 }
 interface Processing {
   state: 'idle' | 'queued' | 'running';
@@ -66,6 +69,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
     [],
   );
   const [preview, setPreview] = useState<{
+    memory: Memory;
     title: string;
     text: string;
   } | null>(null);
@@ -92,8 +96,10 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       setError('');
       if (
         state.state !== 'idle' ||
-        rows.some((row) =>
-          ['queued', 'extracting', 'transcribing'].includes(row.status),
+        rows.some(
+          (row) =>
+            ['queued', 'extracting', 'transcribing'].includes(row.status) ||
+            row.candidates_pending,
         )
       )
         timer.current = setTimeout(() => void reload(), 2000);
@@ -217,17 +223,18 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
     previewRequest.current?.abort();
     const controller = new AbortController();
     previewRequest.current = controller;
-    setPreview({ title: memory.title, text: '正在读取…' });
+    setPreview({ memory, title: memory.title, text: '正在读取…' });
     try {
       const value = await api<string>(
         `/api/persona/sources/${encodeURIComponent(memory.source_id)}/text`,
         { responseType: 'text', signal: controller.signal },
       );
       if (alive.current && !controller.signal.aborted)
-        setPreview({ title: memory.title, text: value });
+        setPreview({ memory, title: memory.title, text: value });
     } catch (err) {
       if (alive.current && !controller.signal.aborted)
         setPreview({
+          memory,
           title: memory.title,
           text: err instanceof Error ? err.message : '读取失败',
         });
@@ -375,6 +382,24 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
           </p>
         )}
       </header>
+      {memories.some((memory) => memory.status === 'needs_speaker') && (
+        <Button
+          variant="secondary"
+          className="min-h-11 w-full text-left"
+          onClick={() =>
+            void view(
+              memories.find((memory) => memory.status === 'needs_speaker')!,
+            )
+          }
+        >
+          有{' '}
+          {
+            memories.filter((memory) => memory.status === 'needs_speaker')
+              .length
+          }{' '}
+          段录音需要确认哪位是你
+        </Button>
+      )}
       {(!mobile || embedded) && <Card>{addContent}</Card>}
       {(!mobile || !adding) && progressUI}
       {error && !adding && (
@@ -441,7 +466,9 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                       <Badge
                         tone={memory.status === 'failed' ? 'danger' : 'neutral'}
                       >
-                        {memory.status === 'needs_asr' ? (
+                        {memory.status === 'needs_speaker' ? (
+                          '待确认'
+                        ) : memory.status === 'needs_asr' ? (
                           '需要配置语音识别'
                         ) : memory.status === 'queued' ? (
                           '等待转写'
@@ -595,6 +622,16 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         title={preview?.title ?? ''}
         body="这是分身看到的文字，最多显示 20000 字。"
       >
+        {preview?.memory.media_sha && (
+          <MediaClaim
+            key={preview.memory.source_id}
+            sourceId={preview.memory.source_id}
+            onChanged={() => {
+              void refresh();
+              void view(preview.memory);
+            }}
+          />
+        )}
         <pre className="whitespace-pre-wrap break-words font-sans text-sm">
           {preview?.text}
         </pre>

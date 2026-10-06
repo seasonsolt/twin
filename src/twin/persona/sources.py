@@ -106,7 +106,7 @@ def expression_view(
         e
         for e in (corpus if expressions is None else expressions)
         if (source_id is None or e.source_id == source_id)
-        and (not target_only or e.is_target)
+        and (not target_only or (e.is_target and sources[e.source_id].media_status in (None, "ready")))
         and (until is None or (e.date is not None and e.date <= until))
     ]
     if not settings.pseudonymize_others:
@@ -123,7 +123,7 @@ def expression_view(
         and not e.is_target
         and not settings.is_target(e.speaker)
         and len(e.speaker) >= MIN_NAME_CHARS
-        and not re.fullmatch(r"他人[0-9A-F]{4}", e.speaker)
+        and not re.fullmatch(r"他人[0-9A-F]{4}|其他人\d+", e.speaker)
     }
     if not others:
         return entries
@@ -420,6 +420,36 @@ def parse_questionnaire(path_name: str, raw: str, settings: Settings, date: dt.d
         _source(SourceKind.QUESTIONNAIRE, title, path_name, source_id, expressions, sorted(set(declined))),
         expressions,
     )
+
+
+def parse_media(source: Source, lines: list[tuple[str, str, bool]]) -> ParsedSource:
+    """Use the same context assembly as chats, with an explicitly claimed target."""
+    recent: list[str] = []
+    expressions = [
+        Expression(
+            expression_id=f"{source.source_id}#{i:05d}",
+            source_id=source.source_id,
+            idx=i,
+            date=parse_date(source.creation_time or ""),
+            speaker=speaker,
+            is_target=target,
+            text=text,
+            context=_message_context(recent, speaker, text, target),
+            channel=source.title,
+        )
+        for i, (speaker, text, target) in enumerate(lines)
+        if text.strip()
+    ]
+    dates = [e.date for e in expressions if e.date]
+    source = source.model_copy(
+        update={
+            "n_expressions": len(expressions),
+            "n_target": sum(e.is_target for e in expressions),
+            "first_date": min(dates, default=None),
+            "last_date": max(dates, default=None),
+        }
+    )
+    return ParsedSource(source, expressions)
 
 
 def parse_text(kind: SourceKind, name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:

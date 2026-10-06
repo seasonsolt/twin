@@ -22,6 +22,7 @@ from ..egress import egress_status
 from ..media.tts import SpeechSynthesizer
 from ..persona.store import PersonaStore, stored_identity
 from . import assets, media, persona
+from .auth import Auth, AuthMiddleware
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
@@ -249,9 +250,13 @@ def create_app(
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
     backends = Backends(settings, llm_factory, embedder_factory)
     jobs = JobManager(settings.max_workers, describe_error)
+    auth = Auth(settings.auth, settings.db_path.parent)
     registry = Personas(settings, jobs)
     app.state.personas = registry
+    app.state.auth = auth
+    auth.register(app)
     app.add_middleware(PersonaMiddleware, registry=registry)
+    app.add_middleware(AuthMiddleware, auth=auth)
     app.add_middleware(
         SecurityMiddleware, allowed_hosts=LOOPBACK_HOSTS | {_allowed_form(h) for h in allowed_hosts if h.strip()}
     )

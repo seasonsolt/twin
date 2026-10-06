@@ -102,6 +102,24 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 回复动画文本/数值使用完整的 visually hidden 文本，视觉动态层 `aria-hidden`，避免逐词逐帧播报。ThinkingLabel 只渲染一份可访问文字，避免重复的处理提示。`#/gallery` 提供所有 UI、Motion 与七个 wrapper 的可交互示例及重播入口，不填充虚构业务数据。
 
+## 邮箱登录与认证边界
+
+本机默认 `[auth].enabled = false`，所有请求为管理员；公网部署启用 auth，使用应用内邮箱验证码登录，不依赖 Cloudflare Access，也不读取 `Cf-Access-*`。SMTP 设置、环境密码、隧道与 allowlist 部署步骤见 README。
+
+`AuthGate` 先读取 `/api/whoami`，`401 {code:"login_required"}` 显示“twin / 用邮箱登录”。邮箱输入 type=email、autocomplete=email，16px；获取验证码后显示 6 位 inputmode=numeric、autocomplete=one-time-code 输入，支持粘贴和前导零。“重新发送”按实际截止时间倒计时 60 秒，“换个邮箱”返回。未允许用户看到“已加入等候名单”、邮箱与“开放后会第一时间通知你”，不显示验证码输入。错误使用中文普通文本，沿用中性底色、白卡和单一强调色。
+
+会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号邮箱和“退出登录”。身份恢复后先加载可见分身，再挂载页面；no_persona 显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。
+
+| 方法/路径 | 契约 |
+| --- | --- |
+| `POST /api/auth/request` | `{email}` → `{status:"code_sent"}` 或 `{status:"waitlist"}`；邮件只含验证码，无链接 |
+| `POST /api/auth/verify` | `{email,code}` → `{email,admin}` 并设置 twin_session cookie；代码 10 分钟有效，5 次错误后销毁 |
+| `POST /api/auth/logout` | 删除服务端会话并清 cookie |
+| `GET /api/whoami` | `{email,admin,auth_enabled}`；启用登录且未登录返回 401 |
+| `GET /api/admin/waitlist` | 仅管理员，`[{email,created_at}]`（Unix 秒时间戳）；添加允许邮箱需改配置并重启 |
+
+启用 auth 时 `/api/*` 除 auth 路径和 whoami 外全部需会话，包含媒体 GET/HEAD；静态页面公开，API 无登录返回 `401 {detail:"请先登录",code:"login_required"}`。所有写请求仍必须带 X-Twin。`auth.db` 权限 0600；验证码仅存带随机盐哈希、expiry 和 attempts，会话仅存 32-byte 随机 token 的哈希、email 与 expiry，过期行按请求清理。发送限流每邮箱 60 秒一次、每小时 5 次，每客户端 IP 每小时 20 次；SMTP TLS 连接，测试只使用 mock。
+
 ## 多分身
 
 `stores/personas.ts` 管理列表及当前 ID；`lib/persona.ts` 对 localStorage 读写使用 try/catch，禁用存储仍可切换。
@@ -113,8 +131,16 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 “新建分身”询问名字，创建后自动切换并进入“你是谁 → 形象和声音 → 添加记忆 → 开始聊天”；
 新分身的 `onboarding_pending` 即使刷新也会继续显示引导，完成/跳过后清除。
 “管理”复用 PUT identity 重命名并保留介绍；删除二次确认，默认分身不显示删除，运行/排队任务或请求存在时服务器拒绝删除。
-列表恢复时若所存 ID 已被删除则切换默认分身。只有默认分身可回退到 `[avatar].image_path` 和视频驱动内置素材；
+列表恢复时若所存 ID 已被删除或不可访问则选择首个可见分身；管理员优先 default。成员没有分身时打开新建流程。只有默认分身可回退到 `[avatar].image_path` 和视频驱动内置素材；
 其他分身需自己的肖像和声音才能生成真人视频，否则能力包含 `reason: "先在「关于你」上传形象和声音"`，语音使用 `[tts].voice`。
+
+## 音视频人物确认
+
+记忆页有 `needs_speaker` 来源时显示“有 N 段录音需要确认哪位是你”紧凑横幅，点开第一条；列表显示“待确认”芯片。媒体详情提供说话人行（编号、时长、轮换短片段试听、建议者“像你”、单选）和“都不是我（旁观资料）”。只有一人自动确认，多人高置信度自动识别显示“已自动识别，可修改”，其余来源在确认前不进入记忆构建。修改后自动重新整理，详情文字同步更新。
+
+确认后显示最多 3 个声音候选播放器和“用这段做声音”，最多 6 张形象候选缩略图和“用这张做形象”；后台提取时轮询进度，采纳后 toast 通知并触发与手动上传相同的资产刷新/缓存失效事件。API 契约见 [MEDIA.md](MEDIA.md)。单选、按钮至少 44px 触控区，输入 16px，播放器不自动播放。所有请求带当前分身，试听/候选 audio/img URL 使用 `personaUrl()`。
+
+首次引导“形象和声音”步骤在本分身已有候选时显示“从你的视频里挑一个”，打开同一候选选择器，仍可正常手动上传。
 
 ## 页面
 
@@ -123,7 +149,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 主导航恰好三个入口：聊天、记忆、关于你。
 
 | `#/chat`（默认） | 多轮聊天、依据、内联语音与真人视频；无日期输入或资料截止提示 |
-| `#/memories` | 写一段、上传文件/文件夹、自动记住、文字预览和删除 |
+| `#/memories` | 写一段、上传文件/文件夹、自动记住、说话人确认、声音/形象候选采纳、文字预览和删除 |
 | `#/about` | 编辑名字与介绍、形象/音色、我了解到的你、还想多了解、外部服务 |
 | `#/sources` | 重定向至 `#/memories`，兼容旧书签 |
 | `#/persona`、`#/identity` | 重定向至 `#/about` |
@@ -154,12 +180,12 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 ## API 与任务契约
 
-客户端只接受同源 `/api/`，非 GET 请求带 `X-Twin: 1`；全部分身数据请求带 `X-Twin-Persona`，GET/HEAD 支持等价 `?persona=`（header 优先）；缺省选择默认，未知 ID 返回 404“分身不存在”。JSON/form 编码，错误为含 status/detail 的 ApiError，保留中文 detail。
+客户端只接受同源 `/api/`，非 GET 请求带 `X-Twin: 1`；全部分身数据请求带 `X-Twin-Persona`，GET/HEAD 支持等价 `?persona=`（header 优先）；管理员缺省选择默认；成员缺省选自己的首个分身，没有时返回 409 `{detail:"先新建一个分身",code:"no_persona"}`。未知或跨拥有者 ID 返回 404“分身不存在”（所有 route families 在路由前统一检查）。JSON/form 编码，错误为含 status/detail/code 的 ApiError，保留中文 detail。
 
 | 方法/路径 | 契约 |
 | --- | --- |
-| `GET /api/personas` | `[{id,name,avatar_url|null,sources,created_at,is_default}]`，全局管理员列表，名字来自各自 db |
-| `POST /api/personas` | `{name}`，201 返回新分身；私有目录及 identity，不写个人内容到 registry |
+| `GET /api/personas` | `[{id,name,owner|null,avatar_url|null,sources,created_at,is_default}]`，管理员看全部，成员仅看自己的；owner 为 null 的旧分身归管理员 |
+| `POST /api/personas` | `{name}`，201 返回新分身，owner 为当前邮箱（auth 关闭则 null）；成员达到 max_personas_per_member 时 409“最多可以建 3 个分身”；私有目录及 identity，registry 仅增加拥有者邮箱 |
 | `DELETE /api/personas/{id}` | 删除该目录；默认分身 400，运行/排队任务或请求存在时 409 |
 | `POST /api/identity/onboarding-complete` | 完成当前分身的新建引导 |
 | `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）；无数据库路径或密钥 |

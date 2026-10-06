@@ -86,6 +86,7 @@ def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: 
     entries = web.get("/api/personas").json()
     assert entries[0] == {
         "id": "default",
+        "owner": None,
         "name": "原主人",
         "avatar_url": None,
         "sources": 0,

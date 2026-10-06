@@ -149,7 +149,8 @@ def test_dedupe_retry_transcript_and_delete(
     assert [s for s in job["progress"] if "提取音频" in s]
     assert [s for s in job["progress"] if "整理记忆" in s]
     text = client.get(f"/api/persona/sources/{result['source_id']}/text").text
-    assert "转写自音视频，未区分说话人" in text and "[00:00] 我喜欢核对" in text
+    assert "本人：[00:00] 我喜欢核对" in text
+    assert "未区分说话人" not in text
     with PersonaStore(tmp_path / "twin.db") as store:
         assert all(e.source_id == result["source_id"] for e in store.list_expressions())
         source = store.get_source(result["source_id"])

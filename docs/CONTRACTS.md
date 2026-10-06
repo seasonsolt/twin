@@ -227,6 +227,29 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   文本直接呈现回答或姓名；后端错误固定中文消息，不记录个人文本。
   命令、请求/输出格式与客户端配置见 [SERVICE.md](SERVICE.md)。
 
+## Web authentication and ownership
+
+- `[auth] enabled = false` preserves local development, CLI and test behavior: no login, admin identity.
+  Enabled auth requires SMTP configuration and an environment password, never Cloudflare Access headers.
+- `web.auth` (layer 9) provides `/api/auth/request`, `/verify`, `/logout` and `/api/whoami`.
+  Allowed email/domain comparisons are lowercase and exact; disallowed addresses dedupe into the waitlist without mail.
+  Six-digit codes use secrets, salted hashes, 10-minute expiry and a five-wrong-attempt burn; successful consumption is atomic.
+  Requests are limited per email (60 seconds / 5 per hour) and per IP (20 per hour, CF-Connecting-IP or peer).
+  Sessions use random 32-byte tokens stored only as hashes, with email/expiry in private `auth.db` (0600).
+  Cookie flags: HttpOnly, Secure except plain HTTP localhost, SameSite=Lax, Path=/, configured Max-Age.
+- All `/api/*` routes except `/api/auth/*` and `/api/whoami` require a valid session when enabled,
+  including media GETs. Missing sessions return `401 {detail:"请先登录",code:"login_required"}`.
+  State-changing requests still require `X-Twin: 1`; static frontend serving stays public.
+  `/api/admin/waitlist` is admin-only; allowing a user means changing config and restarting.
+- Registry entries add `owner: email|null`; missing owner migrates to null (admin-owned, including default).
+  Admins see/manage all; members only their own. Creating assigns the session email and enforces
+  max_personas_per_member (default 3, 409). Cross-owner persona selection or deletion returns 404.
+  Members with no selection use their first twin, never default; none returns 409/no_persona.
+  CLI/MCP keep using the configured database. Default portrait/voice fallbacks remain unchanged.
+- Frontend checks whoami, shows email/code/waitlist screens, resends after a 60-second countdown,
+  and returns to login on login_required, including upload/media requests. No token is stored in browser storage.
+  no_persona opens creation; stale selections resolve to the first visible twin; the switcher supports logout.
+
 ## Web frontend serving
 
 - `frontend/` is the only UI: React + TypeScript, HashRouter, built by Vite with base `/` into

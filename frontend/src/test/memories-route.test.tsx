@@ -19,17 +19,21 @@ it('redirects the old #/sources bookmark to #/memories and labels navigation 记
       async (url: string) =>
         new Response(
           JSON.stringify(
-            url === '/api/persona/sources'
-              ? []
-              : url === '/api/persona/processing'
-                ? { state: 'idle' }
-                : {
-                    target_name: '测试人',
-                    counts: { sources: 0, items: 0 },
-                    llm: { provider: 'mock', model: 'mock' },
-                    embed: { provider: 'local' },
-                    egress: [],
-                  },
+            url === '/api/whoami'
+              ? { email: null, admin: true, auth_enabled: false }
+              : url === '/api/personas'
+                ? [{ id: 'default', name: '测试人', is_default: true }]
+                : url === '/api/persona/sources'
+                  ? []
+                  : url === '/api/persona/processing'
+                    ? { state: 'idle' }
+                    : {
+                        target_name: '测试人',
+                        counts: { sources: 0, items: 0 },
+                        llm: { provider: 'mock', model: 'mock' },
+                        embed: { provider: 'local' },
+                        egress: [],
+                      },
           ),
         ),
     ),

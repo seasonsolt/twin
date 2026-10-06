@@ -20,11 +20,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from ..assets import AssetStore
 from ..config import Settings
-from ..media.ingest import MEDIA_EXTENSIONS, VIDEO_EXTENSIONS, extract_audio, make_transcriber, transcript_text
+from ..media.claim import Analysis, analyse, vision_candidates, voice_candidates
+from ..media.ingest import MEDIA_EXTENSIONS, VIDEO_EXTENSIONS, CommandTranscriber, extract_audio, make_transcriber
 from ..persona.schema import ParsedSource, Source, SourceKind
-from ..persona.sources import parse_date, parse_text
-from ..persona.store import PersonaStore
+from ..persona.sources import parse_media
+from ..persona.store import PersonaStore, stored_identity
 from ..util import private_directory
 from .jobs import Job, JobError, JobManager, Log
 
@@ -146,7 +148,7 @@ class MediaIngestion:
             source = self.update(source_id, job_id, media_status="extracting")
             if not source or not source.media_sha:
                 return {"deleted": True}
-            log("[1/3] 提取音频")
+            log("[1/6] 提取音频")
             folder = self.settings.db_path.parent / "media-sources" / source.media_sha
             original = next(folder.glob("original.*"))
             transcriber = make_transcriber(self.settings.asr)
@@ -168,37 +170,78 @@ class MediaIngestion:
 
             def progress(done: float, total: float) -> None:
                 self.update(source_id, job_id, media_status="transcribing", transcribed_s=done)
-                log(f"[2/3] 转写（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
+                log(f"[2/6] 转写（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
 
+            reference = AssetStore(self.settings.db_path).path("voice")
+            if isinstance(transcriber, CommandTranscriber):
+                transcriber.diarize, transcriber.reference = True, reference
             segments = transcriber.transcribe(audio, duration, progress)
-            text = transcript_text(source.origin, duration, creation, segments)
-            parsed = parse_text(source.kind, source.origin, text, self.settings, parse_date(creation or ""))
-            parsed.source = source.model_copy(
-                update={
-                    "media_status": "ready",
-                    "transcribed_s": duration,
-                    "n_expressions": len(parsed.expressions),
-                    "n_target": len(parsed.expressions),
-                    "first_date": parsed.source.first_date,
-                    "last_date": parsed.source.last_date,
-                }
-            )
-            for i, expression in enumerate(parsed.expressions):
-                expression.expression_id = f"{source_id}#{i:05d}"
-                expression.source_id = source_id
-                expression.channel = source.title
+            log("[3/6] 区分说话人")
+            analysis = analyse(segments, getattr(transcriber, "speakers", []), reference is not None)
             with self.lock, PersonaStore(self.settings.db_path) as store:
                 current = store.get_source(source_id)
                 if current is None or current.media_job_id != job_id:
                     return {"deleted": True}
-                store.put_source(parsed)
-                store.set_meta(f"source_error:{source_id}", "")
-            log("[3/3] 整理记忆")
+                analysis.save(folder)
+                self.store_analysis(store, current, analysis)
+            if not analysis.confirmed:
+                log("请确认哪位是你")
+                return {"source_id": source_id, "status": "needs_speaker"}
+            log("[4/6] 整理记忆")
             self.queue_build()
+            self.candidates(source_id, analysis.revision, log)
             return {"source_id": source_id}
         except Exception:
             self.update(source_id, job_id, media_status="failed")
             raise JobError("音视频转写失败，请检查 ffmpeg 和语音识别配置后重试") from None
+
+    def store_analysis(self, store: PersonaStore, source: Source, analysis: Analysis) -> None:
+        source = source.model_copy(
+            update={
+                "media_status": "ready" if analysis.confirmed else "needs_speaker",
+                "transcribed_s": source.duration_s or 0,
+                "voice_candidates": len(analysis.voices),
+                "portrait_candidates": len(analysis.portraits),
+                "candidates_pending": analysis.confirmed and analysis.speaker is not None,
+            }
+        )
+        name = stored_identity(self.settings.db_path)[0] or self.settings.target_name
+        parsed = parse_media(source, analysis.lines(name) if analysis.confirmed else [])
+        store.put_source(parsed)
+        store.set_meta(f"source_error:{source.source_id}", "")
+
+    def candidates(self, source_id: str, revision: str, log: Log) -> dict[str, Any]:
+        with self.lock, PersonaStore(self.settings.db_path) as store:
+            source = store.get_source(source_id)
+            if source is None or not source.media_sha:
+                return {"deleted": True}
+            folder = self.settings.db_path.parent / "media-sources" / source.media_sha
+            analysis = Analysis.load(folder)
+            if analysis.revision != revision:
+                return {"superseded": True}
+        if analysis.speaker is not None:
+            log("[5/6] 提取声音候选")
+        try:
+            analysis.voices = voice_candidates(analysis, folder)
+        except Exception:
+            analysis.candidate_error = "声音候选提取失败，可重新确认说话人后重试"
+        if source.kind == SourceKind.VIDEO and analysis.speaker and self.settings.vision.command:
+            log("[6/6] 提取形象候选")
+            try:
+                analysis.portraits = vision_candidates(
+                    analysis, next(folder.glob("original.*")), folder, self.settings.vision
+                )
+            except Exception:
+                analysis.candidate_error = "形象候选提取失败，请检查形象提取配置后重试"
+        with self.lock, PersonaStore(self.settings.db_path) as store:
+            source = store.get_source(source_id)
+            if source is None or Analysis.load(folder).revision != revision:
+                return {"superseded": True}
+            analysis.save(folder)
+            source.voice_candidates, source.portrait_candidates = len(analysis.voices), len(analysis.portraits)
+            source.candidates_pending = False
+            store.update_source(source)
+        return {"source_id": source_id}
 
     def finish(self, uploads: Uploads, upload_id: str) -> dict[str, Any]:
         info = uploads.load(upload_id)

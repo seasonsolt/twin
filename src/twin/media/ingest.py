@@ -30,12 +30,19 @@ class Segment(BaseModel):
     start: float = Field(ge=0, allow_inf_nan=False)
     end: float = Field(ge=0, allow_inf_nan=False)
     text: str
+    speaker: str = Field(default="S1", min_length=1, max_length=80)
 
     @model_validator(mode="after")
     def ordered(self) -> Segment:
         if self.end < self.start:
             raise ValueError("无效时间段")
         return self
+
+
+class Speaker(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    seconds: float = Field(ge=0, allow_inf_nan=False)
+    similarity: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
 class Transcriber(Protocol):
@@ -45,13 +52,22 @@ class Transcriber(Protocol):
 class CommandTranscriber:
     def __init__(self, command: str, language: str = "zh") -> None:
         self.command, self.language = command, language
+        self.diarize = False
+        self.reference: Path | None = None
+        self.speakers: list[Speaker] = []
 
     def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
         progress(0, duration)
+        request: dict[str, object] = {"audio": str(audio.resolve()), "language": self.language}
+        if self.diarize:
+            request["diarize"] = True
+        if self.reference:
+            request["reference"] = str(self.reference.resolve())
+        self.speakers = []
         try:
             result = subprocess.run(
                 ["bash", "-lc", self.command],
-                input=json.dumps({"audio": str(audio.resolve()), "language": self.language}),
+                input=json.dumps(request),
                 text=True,
                 capture_output=True,
                 check=True,
@@ -61,6 +77,9 @@ class CommandTranscriber:
             if payload.get("ok") is not True or not isinstance(payload.get("segments"), list):
                 raise ValueError()
             segments = [Segment.model_validate(s) for s in payload["segments"]]
+            self.speakers = [Speaker.model_validate(s) for s in payload.get("speakers", [])]
+            if len({s.id for s in self.speakers}) != len(self.speakers):
+                raise ValueError()
         except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
             raise RuntimeError("语音识别失败，请检查语音识别配置后重试") from None
         progress(duration, duration)

@@ -10,6 +10,7 @@ export interface Persona {
   sources: number;
   created_at: string;
   is_default: boolean;
+  owner?: string | null;
 }
 let refreshVersion = 0;
 export const usePersonas = create<{
@@ -17,9 +18,15 @@ export const usePersonas = create<{
   items: Persona[];
   refresh: () => Promise<void>;
   switchTo: (id: string) => void;
+  reset: () => void;
 }>((set, get) => ({
   id: getPersonaId(),
   items: [],
+  reset() {
+    ++refreshVersion;
+    get().switchTo('');
+    set({ items: [] });
+  },
   switchTo(id) {
     setPersonaId(id);
     useStatus.setState({ data: null, error: null });
@@ -28,13 +35,13 @@ export const usePersonas = create<{
   async refresh() {
     const version = ++refreshVersion;
     // The registry is global, including when a persisted persona was deleted.
-    const items = await api<Persona[]>('/api/personas', {
-      headers: { 'X-Twin-Persona': 'default' },
-    });
+    const items = await api<Persona[]>('/api/personas');
     if (version !== refreshVersion) return;
     if (!Array.isArray(items)) throw new Error('无法加载分身列表');
     set({ items });
     if (!items.some((item) => item.id === get().id))
-      get().switchTo(items.find((item) => item.is_default)?.id ?? 'default');
+      get().switchTo(
+        items.find((item) => item.is_default)?.id ?? items[0]?.id ?? '',
+      );
   },
 }));

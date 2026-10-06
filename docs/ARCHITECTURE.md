@@ -37,13 +37,13 @@ twin 是个人工具，不添加免责声明。
 
 ### 多分身存储与请求边界
 
-单管理员可管理全部分身，不增加账户、角色或权限体系。L5 的 `web.personas.Personas` 管理
-`db_path.parent/personas.json`（`{default, personas: [{id, created_at}]}`）；名字和介绍只存在各自数据库。
+本机默认无登录、所有人是管理员；公网启用 `[auth]` 后，L5 的 `web.auth` 负责邮箱验证码、允许名单、等候名单和 HttpOnly 会话，身份来自会话邮箱，不读取 Cloudflare Access 头。管理员可管理全部分身，成员仅管理自己的分身。
+L5 的 `web.personas.Personas` 管理 `db_path.parent/personas.json`（`{default, personas: [{id, owner, created_at}]}`）；名字和介绍只存在各自数据库。旧记录的 owner 补为 null，归管理员。认证数据库 `auth.db` 权限 0600，验证码和 session token 只存哈希。
 `settings_for(id)` 返回独立 Settings：默认分身保留原配置数据库及媒体目录；其他分身使用
 `personas/p-<10位hex>/twin.db`，目录 0700，禁用配置肖像和主人别名回退。
 
 安全中间件内的统一请求解析器根据 `X-Twin-Persona` 选择绑定具体 Settings 的路由上下文；
-GET/HEAD 也接受 `?persona=`（header 优先），省略为默认，未知 ID 返回 404“分身不存在”。
+GET/HEAD 也接受 `?persona=`（header 优先）。会话验证先于分身路由；管理员省略为默认，成员省略选自己的首个分身，无分身返回 409/no_persona。未知或跨拥有者 ID 统一返回 404“分身不存在”，包含图片、音频、视频和所有其他 API。成员创建时设置 owner，默认最多 3 个；管理员不受此限。
 共享模型后端，但每个上下文独立持有 processing、ingestion、上传锁、语音选择和媒体缓存路径。
 `AssetStore`、`media.ingest` 不读取全局当前分身，而从传入数据库路径/原件路径派生私有目录。
 所有 JobManager 视图按 persona_id 隔离；构建、转写和视频分别全局串行，聊天共享并发额度。

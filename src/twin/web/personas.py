@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import Headers
@@ -42,11 +42,15 @@ class Personas:
             if not self.path.exists():
                 self.data: dict[str, Any] = {
                     "default": "default",
-                    "personas": [{"id": "default", "created_at": dt.datetime.now(dt.UTC).isoformat()}],
+                    "personas": [{"id": "default", "owner": None, "created_at": dt.datetime.now(dt.UTC).isoformat()}],
                 }
                 self.save()
             else:
                 self.data = json.loads(self.path.read_text(encoding="utf-8"))
+                if any("owner" not in entry for entry in self.data["personas"]):
+                    for entry in self.data["personas"]:
+                        entry.setdefault("owner", None)
+                    self.save()
 
     def save(self) -> None:
         private_directory(self.root)
@@ -91,15 +95,33 @@ class Personas:
             "is_default": persona_id == self.data["default"],
         }
 
+    def accessible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
+        return bool(identity["admin"] or (entry.get("owner") and entry["owner"] == identity["email"]))
+
+    def check_owner(self, persona_id: str, identity: dict[str, Any]) -> None:
+        if not any(p["id"] == persona_id and self.accessible(p, identity) for p in self.data["personas"]):
+            raise HTTPException(404, "分身不存在")
+
     def register(self, app: FastAPI) -> None:
         @app.get("/api/personas")
-        def list_personas() -> list[dict[str, Any]]:
+        def list_personas(request: Request) -> list[dict[str, Any]]:
             with self.lock:
-                return [self.view(entry) for entry in self.data["personas"]]
+                return [
+                    self.view(entry)
+                    for entry in self.data["personas"]
+                    if self.accessible(entry, request.scope["twin_identity"])
+                ]
 
         @app.post("/api/personas", status_code=201)
-        def create_persona(body: NameBody) -> dict[str, Any]:
+        def create_persona(body: NameBody, request: Request) -> dict[str, Any]:
             with self.lock:
+                identity = request.scope["twin_identity"]
+                limit = self.settings.auth.max_personas_per_member
+                if (
+                    not identity["admin"]
+                    and sum(p.get("owner") == identity["email"] for p in self.data["personas"]) >= limit
+                ):
+                    raise HTTPException(409, f"最多可以建 {limit} 个分身")
                 persona_id = "p-" + secrets.token_hex(5)
                 directory = self.root / "personas" / persona_id
                 private_directory(directory.parent)
@@ -108,14 +130,19 @@ class Personas:
                 with PersonaStore(directory / "twin.db") as store:
                     store.set_identity(body.name, "", None)
                     store.set_meta("onboarding_pending", "1")
-                entry = {"id": persona_id, "created_at": dt.datetime.now(dt.UTC).isoformat()}
+                entry = {
+                    "id": persona_id,
+                    "owner": identity["email"],
+                    "created_at": dt.datetime.now(dt.UTC).isoformat(),
+                }
                 self.data["personas"].append(entry)
                 self.save()
                 return self.view(entry)
 
         @app.delete("/api/personas/{persona_id}")
-        def delete_persona(persona_id: str) -> dict[str, bool]:
+        def delete_persona(persona_id: str, request: Request) -> dict[str, bool]:
             with self.lock:
+                self.check_owner(persona_id, request.scope["twin_identity"])
                 settings = self.settings_for(persona_id)
                 if persona_id == self.data["default"]:
                     raise HTTPException(400, "默认分身不能删除")
@@ -142,18 +169,43 @@ class PersonaMiddleware:
         if scope["type"] != "http" or not path.startswith("/api/"):
             await self.app(scope, receive, send)
             return
+        if path.startswith("/api/auth/") or path == "/api/whoami" or path.startswith("/api/admin/"):
+            await self.app(scope, receive, send)
+            return
+        identity = scope["twin_identity"]
         # Headers take precedence; queries support media elements that cannot send headers.
         persona_id = Headers(scope=scope).get("x-twin-persona")
-        if persona_id is None and scope["method"] in {"GET", "HEAD"}:
+        if persona_id is None:
             persona_id = parse_qs(scope.get("query_string", b"").decode(), keep_blank_values=True).get(
                 "persona", [None]
             )[0]
-        persona_id = persona_id if persona_id is not None else self.registry.data["default"]
         management = path == "/api/personas" or path.startswith("/api/personas/")
         try:
             with self.registry.lock:
-                context = self.registry.application(persona_id)
-                if not management:
+                if persona_id is not None:
+                    self.registry.check_owner(persona_id, identity)
+                if management:
+                    context = None
+                else:
+                    if persona_id is None:
+                        persona_id = (
+                            self.registry.data["default"]
+                            if identity["admin"]
+                            else next(
+                                (
+                                    p["id"]
+                                    for p in self.registry.data["personas"]
+                                    if self.registry.accessible(p, identity)
+                                ),
+                                None,
+                            )
+                        )
+                    if persona_id is None:
+                        await JSONResponse({"detail": "先新建一个分身", "code": "no_persona"}, status_code=409)(
+                            scope, receive, send
+                        )
+                        return
+                    context = self.registry.application(persona_id)
                     self.registry.requests[persona_id] = self.registry.requests.get(persona_id, 0) + 1
         except HTTPException as exc:
             await JSONResponse({"detail": exc.detail}, status_code=exc.status_code)(scope, receive, send)
@@ -161,6 +213,7 @@ class PersonaMiddleware:
         if management:
             await self.app(scope, receive, send)
         else:
+            assert context is not None and persona_id is not None
             try:
                 await context(scope, receive, send)
             finally:

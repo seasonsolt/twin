@@ -10,7 +10,11 @@ twin 是个人工具，不添加免责声明。
 
 记忆页可上传 MP4/MOV/M4V/WebM/MKV/AVI/3GP、M4A/MP3/WAV/AAC/OGG/Opus/FLAC/CAF/AMR，单文件最多 4 GiB。需系统 `ffmpeg`、`ffprobe`。原件保存在数据库同目录的 `media-sources/<sha256>/original.<ext>`，同 SHA 不重复添加；目录 0700、原件与单声道 16 kHz `audio.wav` 为 0600。删除来源会删除该目录。
 
-`media_ingest` 复用 JobManager，每次只处理一个音视频，后台线程运行提取与识别；列表显示提取音频、转写 x/y 分钟、整理中、已加入或失败。转写是一条 audio/video 来源，标题为原文件名去后缀；头部记录文件名、时长、可获得的 creation_time 和“转写自音视频，未区分说话人”。正文按约 200 字合并段落，保留首个 `[mm:ss]` / `[h:mm:ss]` 时间戳，引用带来源标题。不区分说话人，之后仍走原有 persona 抽取/检索构建。
+`media_ingest` 复用 JobManager，每次只处理一个音视频，后台线程运行提取、识别、区分说话人和候选提取；列表显示转写进度、待确认、整理中、已加入或失败。转写是一条 audio/video 来源，标题为原文件名去后缀，保存时长与可获得的 creation_time。`analysis.json`（0600）保留每段 start/end/text/speaker、说话人时长/相似度、确认结果和候选。
+
+只有一位说话人时自动认领；多位且有当前分身的参考声音时，最高相似度至少 0.6、所有说话人均有相似度且领先第二位至少 0.1，则自动认领并显示“已自动识别，可修改”。否则来源进入 `needs_speaker`，不参与记忆抽取/检索，其他来源正常处理。确认后每段显示 `本人姓名：[mm:ss] 原话` 或 `其他人1/2…：[mm:ss] 原话`，沿用聊天来源的本人/他人标记与他人语境机制。选“都不是我（旁观资料）”时所有表达均为他人。之后修改选择会替换表达、使旧候选失效并排队重建。
+
+声音候选由 twin 从本人的片段中生成：合并间隔小于 0.6 秒的连续发言，剔除他人重叠片段，优先较长、响度高且稳定的窗口，最多 3 段、每段 8–20 秒。从提取的 16 kHz WAV 切出 24 kHz 单声道 WAV；采纳时再走手动上传的高通/响度/去静音归一化。试听为约 5 秒的最多 3 个片段，按需切出并缓存。候选提取失败不阻塞记忆构建。所有资料、参考声音和候选都只属于当前分身。
 
 未配置 `[asr]` 时也保存原件，显示“需要配置语音识别”；配置并重启后点“重新转写”。HTTP 的 `provider = "openai_compat"`（还需 model、base_url）或 `"cloudflare"`（base_url、api_key_env）复用现有识别器，先通过 ffmpeg silencedetect 选停顿，将 WAV 切成不超过 25 秒的识别请求，无停顿则硬切；每段保留全局时间偏移。
 
@@ -23,7 +27,24 @@ command = "python /path/to/transcribe.py"
 language = "zh"
 ```
 
-命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh"}`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容"}]}`，时间单位为秒；失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
+命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
+
+### 视频形象候选命令
+
+可选 `[vision] provider = "command"`、`command = "python /path/to/portraits.py"`、`egress = "local"`（或 external）。未配置时不生成形象候选，其他功能不受影响。人物确认后复用媒体任务后台执行，进度显示“提取形象候选”。stdin：
+
+```json
+{"video": "<绝对原件路径>", "intervals": [[0.0, 12.0]], "out_dir": "<绝对输出目录>", "max_candidates": 6}
+```
+
+stdout 最后一行：`{"ok": true, "candidates": [{"time": 2.5, "image": "<out_dir 内的绝对 PNG 路径>", "score": 0.83}]}` 或 `{"ok": false, "error": "..."}`。超时 30 分钟。可选 `face_box: [x, y, w, h]`，均为相对于原图片的 0–1 归一化值。twin 校验每个图片为输出目录内的普通文件，拒绝目录越界与任意路径组件的符号链接；最多保存 6 张，用 Pillow 重编码为去元数据、长边不超过 1024px 的私有 PNG。采纳默认裁成 3:4，有 face_box 则以人脸中心为中心，否则居中；裁剪后的短边仍需至少 320px，与手动照片上传一致。
+
+### 说话人与候选 API
+
+- `GET /api/persona/sources/{id}/speakers`：speaker、confirmed、automatic、pending、speakers（id/seconds/similarity/suggested/samples）、voices/portraits（id/url 等）、candidate_error。
+- `PUT /api/persona/sources/{id}/speaker {"speaker": "S1"}`，或 null 表示旁观资料；返回新确认结果与候选处理 job_id，自动排队重建。
+- `POST .../adopt-voice {"candidate": "<id>"}` / `POST .../adopt-portrait {"candidate": "<id>"}`：复用本人的 AssetStore 与手动处理，返回更新后的资产 profile。
+- 试听与候选 URL 为同源 GET，支持 `?persona=<id>`，与其他媒体 GET 使用相同的分身路由；候选 ID 随每次确认更换，旧 URL 返回 404。前端每个 audio/img URL 都显式携带 persona。
 
 ## 1. 原则
 
@@ -44,8 +65,8 @@ language = "zh"
 | `media.schema` | L0 数据契约（1） | 全部媒体契约：`PresentableAnswer`、`MediaScript`、`MediaManifest`、`SpeechRequest`、`SpeechResult`、`LipSyncTrack`、`AvatarSpec`；只依赖标准库、pydantic 和 `util` |
 | `media.tts` | L0 模型后端（2） | `SpeechSynthesizer` 协议、两个后端适配器（Cloudflare `melotts`、自托管 HTTP）、测试用的静音实现 |
 | `media.asr` | L0 模型后端（2） | 语音评测与音视频记忆共用的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
-| `media.ingest` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、带时间戳的转写文本 |
-| `web.uploads` | L5 接入（9） | 分片上传、原件保存、串行媒体任务与普通 persona 构建衔接 |
+| `media.ingest` / `media.claim` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、说话人决策、声音/形象候选 |
+| `web.uploads` / `web.claims` | L5 接入（9） | 分片上传、原件保存、说话人确认/采纳、串行媒体任务与普通 persona 构建衔接 |
 | `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
 | `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（按句切分、弃权只出提示） |

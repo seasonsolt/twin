@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import { forgetPersona, personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useStatus } from '../../stores/status';
+import { useAuth } from '../../stores/auth';
 
 function Portrait({ persona }: { persona?: Persona }) {
   return persona?.avatar_url ? (
@@ -24,11 +25,18 @@ function Portrait({ persona }: { persona?: Persona }) {
   );
 }
 
-export function PersonaSwitcher() {
+export function PersonaSwitcher({
+  createOnly = false,
+}: {
+  createOnly?: boolean;
+}) {
+  const identity = useAuth((state) => state.identity);
   const { id, items, refresh, switchTo } = usePersonas();
   const current = items.find((item) => item.id === id);
   const name = useStatus((state) => state.data?.target_name);
-  const [mode, setMode] = useState<'list' | 'create' | 'manage' | null>(null);
+  const [mode, setMode] = useState<'list' | 'create' | 'manage' | null>(
+    createOnly ? 'create' : null,
+  );
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -69,11 +77,14 @@ export function PersonaSwitcher() {
     await work(async () => {
       await api(`/api/personas/${persona.id}`, {
         method: 'DELETE',
-        headers: { 'X-Twin-Persona': 'default' },
       });
       forgetPersona(persona.id);
       if (id === persona.id)
-        switchTo(items.find((item) => item.is_default)?.id ?? 'default');
+        switchTo(
+          items.find((item) => item.is_default)?.id ??
+            items.find((item) => item.id !== persona.id)?.id ??
+            '',
+        );
       await refresh();
     });
   };
@@ -107,18 +118,18 @@ export function PersonaSwitcher() {
     <>
       <button
         type="button"
-        aria-label="切换分身"
+        aria-label={createOnly ? '新建分身' : '切换分身'}
         aria-expanded={mode !== null}
         className="flex min-h-11 items-center gap-2 rounded-md px-2 text-base hover:bg-accent/10"
         onClick={() => {
-          setMode('list');
+          setMode(createOnly ? 'create' : 'list');
           setError('');
           void work(refresh);
         }}
       >
         <Portrait persona={current} />
         <span className="max-w-52 truncate">
-          {name || current?.name || '本人'}
+          {createOnly ? '新建分身' : name || current?.name || '本人'}
         </span>
         <ChevronDown className="size-4" aria-hidden />
       </button>
@@ -159,6 +170,13 @@ export function PersonaSwitcher() {
                     <span className="text-sm text-secondary">
                       {persona.sources} 条记忆
                     </span>
+                    {identity?.admin &&
+                      persona.owner &&
+                      persona.owner !== identity.email && (
+                        <span className="block truncate text-xs text-secondary">
+                          {persona.owner}
+                        </span>
+                      )}
                   </span>
                   {persona.id === id && (
                     <Check
@@ -248,6 +266,20 @@ export function PersonaSwitcher() {
             >
               返回列表
             </Button>
+          )}
+          {identity?.auth_enabled && (
+            <div className="border-t border-border pt-3">
+              <p className="break-all text-sm text-secondary">
+                {identity.email}
+              </p>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => void work(() => useAuth.getState().logout())}
+              >
+                退出登录
+              </Button>
+            </div>
           )}
           {error && (
             <p role="alert" className="text-danger">

@@ -432,7 +432,7 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
         if progress:
             progress(": ".join(message.split(": ")[:2]) if message.startswith("FAILED ") else message)
 
-    sources = store.list_sources()
+    sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
     report.sources = len(sources)
     chunks = [c for s in sources for c in chunks_for(store, s, allowed, settings)]
     report.chunks_total = len(chunks)

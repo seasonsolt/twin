@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import 'react-easy-crop/react-easy-crop.css';
 import { Button } from '../../components/ui';
-import { api } from '../../lib/api';
+import { api, handleApiFailure } from '../../lib/api';
 import { getPersonaId, personaUrl } from '../../lib/persona';
 import type { Capabilities } from '../avatar/types';
 import { useRecorder } from './useRecorder';
@@ -44,7 +44,8 @@ export function uploadAsset(
         return;
       }
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else
+      else {
+        handleApiFailure(xhr.status, data);
         reject(
           new Error(
             typeof data.detail === 'string' &&
@@ -53,6 +54,7 @@ export function uploadAsset(
               : '上传失败，请重试',
           ),
         );
+      }
     };
     xhr.onerror = () => {
       finish();
@@ -171,6 +173,15 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
       request.current?.abort();
     };
   }, [active, attempt]);
+
+  useEffect(() => {
+    if (!active) return;
+    const refresh = () => {
+      if (!busy) setAttempt((value) => value + 1);
+    };
+    window.addEventListener(ASSETS_CHANGED, refresh);
+    return () => window.removeEventListener(ASSETS_CHANGED, refresh);
+  }, [active, busy]);
 
   const changed = async (next: Profile, signal: AbortSignal) => {
     if (signal.aborted) return;

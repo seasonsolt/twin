@@ -6,6 +6,7 @@ export class ApiError extends Error {
     message: string,
     public readonly detail: unknown = null,
     public readonly jobId: string | null = null,
+    public readonly code: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -22,6 +23,14 @@ const errors: Record<number, string> = {
   500: '服务器内部错误',
   503: '服务暂时不可用',
 };
+
+export function handleApiFailure(status: number, data: unknown) {
+  if (!data || typeof data !== 'object') return;
+  if (status === 401 && 'code' in data && data.code === 'login_required')
+    window.dispatchEvent(new Event('twin-login-required'));
+  if (status === 404 && 'detail' in data && data.detail === '分身不存在')
+    window.dispatchEvent(new Event('twin-persona-stale'));
+}
 
 export type ApiOptions = Omit<RequestInit, 'body'> & {
   json?: unknown;
@@ -42,7 +51,11 @@ export async function api<T>(
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
   headers.delete('X-Twin');
-  if (!headers.has('X-Twin-Persona'))
+  if (
+    !headers.has('X-Twin-Persona') &&
+    getPersonaId() &&
+    !/^\/api\/(auth\/|whoami(?:$|\?)|personas(?:$|\/|\?)|admin\/)/u.test(path)
+  )
     headers.set('X-Twin-Persona', getPersonaId());
   if (method !== 'GET') headers.set('X-Twin', '1');
   if (json !== undefined) headers.set('Content-Type', 'application/json');
@@ -69,6 +82,14 @@ export async function api<T>(
   if (!response.ok) {
     const detail =
       data && typeof data === 'object' && 'detail' in data ? data.detail : null;
+    const code =
+      data &&
+      typeof data === 'object' &&
+      'code' in data &&
+      typeof data.code === 'string'
+        ? data.code
+        : null;
+    handleApiFailure(response.status, data);
     throw new ApiError(
       response.status,
       typeof detail === 'string' && /[\u3400-\u9fff]/u.test(detail)
@@ -81,6 +102,7 @@ export async function api<T>(
         typeof data.job_id === 'string'
         ? data.job_id
         : null,
+      code,
     );
   }
   return data as T;

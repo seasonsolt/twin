@@ -80,7 +80,12 @@ class Source(BaseModel):
     media_sha: str | None = None
     duration_s: float | None = None
     creation_time: str | None = None
-    media_status: Literal["queued", "extracting", "transcribing", "needs_asr", "ready", "failed"] | None = None
+    media_status: (
+        Literal["queued", "extracting", "transcribing", "needs_asr", "needs_speaker", "ready", "failed"] | None
+    ) = None
+    voice_candidates: int = 0
+    portrait_candidates: int = 0
+    candidates_pending: bool = False
     transcribed_s: float = 0
     media_job_id: str | None = None
 

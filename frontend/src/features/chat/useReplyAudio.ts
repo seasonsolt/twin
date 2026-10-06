@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from '../../lib/api';
+import { api, handleApiFailure } from '../../lib/api';
 import { getPersonaId, personaUrl } from '../../lib/persona';
 import type { AudioPart } from '../avatar/types';
 import type { ChatReply } from './types';
@@ -266,7 +266,13 @@ export function useReplyAudio(active: boolean) {
                 credentials: 'same-origin',
                 redirect: 'error',
               });
-              if (!response.ok) throw new Error('语音文件不可用，请重试');
+              if (!response.ok) {
+                handleApiFailure(
+                  response.status,
+                  await response.json().catch(() => null),
+                );
+                throw new Error('语音文件不可用，请重试');
+              }
               const buffer = await player.decode(await response.arrayBuffer());
               if (!valid()) return;
               buffers.current.set(item.url, buffer);

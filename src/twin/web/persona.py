@@ -9,6 +9,7 @@ import email.policy
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -139,9 +140,12 @@ def register(
             ids = [
                 s.source_id
                 for s in store.list_sources()
-                if store.get_meta("built_at") is None
-                or store.get_meta(f"source_pending:{s.source_id}") is not None
-                or store.get_meta(f"source_error:{s.source_id}")
+                if s.media_status in (None, "ready")
+                and (
+                    store.get_meta("built_at") is None
+                    or store.get_meta(f"source_pending:{s.source_id}") is not None
+                    or store.get_meta(f"source_error:{s.source_id}")
+                )
             ]
             version = store.get_meta("sources_changed_at")
             store.clear_source_errors()
@@ -174,6 +178,9 @@ def register(
     from . import uploads
 
     ingestion = uploads.register(app, settings, jobs, queue_build)
+    from . import claims
+
+    claims.register(app, settings, ingestion)
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():
@@ -183,8 +190,19 @@ def register(
             interrupted = [
                 s.source_id for s in store.list_sources() if s.media_status in {"queued", "extracting", "transcribing"}
             ]
+            pending_candidates = [s for s in store.list_sources() if s.candidates_pending and s.media_status == "ready"]
         for source_id in interrupted:
             ingestion.queue(source_id)
+        from ..media.claim import Analysis
+
+        for source in pending_candidates:
+            folder = settings.db_path.parent / "media-sources" / str(source.media_sha)
+            revision = Analysis.load(folder).revision
+            jobs.submit(
+                "media_ingest",
+                source.title,
+                partial(ingestion.candidates, source.source_id, revision),
+            )
         if stale:
             processing.queue()
 
@@ -227,9 +245,10 @@ def register(
             if source is None:
                 raise HTTPException(404, "找不到这条记忆")
             expressions = expression_view(store, settings, source_id=source_id)
-            speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW}
+            speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.AUDIO, SourceKind.VIDEO}
             return "\n\n".join(
-                (f"{e.context}\n" if e.context else "") + (f"{e.speaker}：{e.text}" if speaker_lines else e.text)
+                (f"{e.context}\n" if e.context and not source.media_sha else "")
+                + (f"{e.speaker}：{e.text}" if speaker_lines else e.text)
                 for e in expressions
             )[:20000]
 

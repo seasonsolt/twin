@@ -25,7 +25,7 @@ def test_init_writes_template_identical_to_example_with_code_defaults(tmp_path: 
         "".join(
             line
             for line in example.splitlines(keepends=True)
-            if not line.startswith(("# vrm_path = ", "# reasoning_effort = "))
+            if not line.startswith(("# vrm_path = ", "# image_path = ", "# reasoning_effort = "))
         )
         == cli.CONFIG_TEMPLATE
     )

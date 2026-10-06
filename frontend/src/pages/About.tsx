@@ -95,18 +95,23 @@ export function About() {
                 形象：
                 {modelName
                   ? `${modelName}（3D 模型）`
-                  : `${identity.data.avatar || '未设置'}（风格化形象）`}
+                  : identity.capabilities?.avatar_image
+                    ? '肖像照片'
+                    : `${identity.data.avatar || '未设置'}（风格化形象）`}
               </p>
             </div>
-            {identity.capabilities?.avatar && (
-              <div className="w-48">
-                <AvatarPreview
-                  capabilities={identity.capabilities}
-                  label={status?.labels.explicit}
-                  onModelNameChange={onModelNameChange}
-                />
-              </div>
-            )}
+            {identity.capabilities &&
+              (identity.capabilities.avatar ||
+                identity.capabilities.avatar_model ||
+                identity.capabilities.avatar_image) && (
+                <div className="w-48">
+                  <AvatarPreview
+                    capabilities={identity.capabilities}
+                    label={status?.labels.explicit}
+                    onModelNameChange={onModelNameChange}
+                  />
+                </div>
+              )}
           </div>
         )}
         {identity.avatarError && (

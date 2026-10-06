@@ -120,6 +120,38 @@ class MediaSettings(BaseModel):
 class AvatarSettings(BaseModel):
     preset: str = "default"
     vrm_path: str | None = None
+    image_path: str | None = None
+
+    @field_validator("image_path")
+    @classmethod
+    def local_image(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = Path(value).expanduser()
+        try:
+            if not path.exists():
+                raise ValueError("肖像图片文件不存在")
+            if not path.is_file():
+                raise ValueError("肖像图片路径必须是文件")
+            suffix = path.suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                raise ValueError("肖像图片后缀必须为 .png、.jpg、.jpeg 或 .webp")
+            if path.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("肖像图片文件不能超过 10 MB")
+            with path.open("rb") as image:
+                header = image.read(12)
+            valid = (
+                header.startswith(b"\x89PNG\r\n\x1a\n")
+                if suffix == ".png"
+                else header.startswith(b"\xff\xd8\xff")
+                if suffix in {".jpg", ".jpeg"}
+                else header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+            )
+            if not valid:
+                raise ValueError("肖像图片必须包含与后缀匹配的真实图片魔数")
+        except OSError:
+            raise ValueError("无法读取肖像图片文件") from None
+        return str(path.resolve())
 
     @field_validator("vrm_path")
     @classmethod

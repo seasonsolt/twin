@@ -364,7 +364,7 @@ def test_pricing_config_template_and_cli_option(tmp_path: Path) -> None:
         "".join(
             line
             for line in example.splitlines(keepends=True)
-            if not line.startswith(("# vrm_path = ", "# reasoning_effort = "))
+            if not line.startswith(("# vrm_path = ", "# image_path = ", "# reasoning_effort = "))
         )
         == CONFIG_TEMPLATE
     )

@@ -7,14 +7,6 @@ export interface AvatarSpec {
   stylized: true;
 }
 
-export interface MediaScript {
-  persona_name: string;
-  explicit_label: string;
-  abstain: boolean;
-  segments: { index: number; kind: 'notice' | 'speech'; text: string }[];
-  citations: { ref_id: string; reason: string }[];
-}
-
 export interface Capabilities {
   available: boolean;
   video?: { available: boolean };
@@ -22,11 +14,13 @@ export interface Capabilities {
   label: string;
   avatar?: AvatarSpec;
   avatar_model?: { format: 'vrm'; url: string } | null;
+  avatar_image?: { url: string } | null;
   error?: string;
 }
 
 export interface AudioPart {
   index: number;
   url: string;
+  duration_s: number;
   lipsync: { fps: number; levels: number[] } | null;
 }

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Button } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useMotionPreset } from '../../design/motion';
-import { Avatar } from '../playback/Avatar';
-import type { Capabilities } from '../playback/types';
+import { Avatar } from './Avatar';
+import type { Capabilities } from './types';
 import { AvatarPreview } from './AvatarPreview';
 
 const DEMO_TRACK = [0, 1, 2, 3, 2, 1, 0, 0, 2, 3, 2, 1, 0, 1, 2, 1, 0];

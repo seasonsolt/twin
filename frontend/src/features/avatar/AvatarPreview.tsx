@@ -7,8 +7,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Avatar } from '../playback/Avatar';
-import type { Capabilities } from '../playback/types';
+import { Avatar, PortraitAvatar } from './Avatar';
+import type { Capabilities } from './types';
 
 const Avatar3D = lazy(() => import('./Avatar3D'));
 
@@ -43,6 +43,8 @@ export function AvatarPreview({
 }) {
   const url = capabilities.avatar_model?.url;
   const [failedUrl, setFailedUrl] = useState<string | undefined>();
+  const imageUrl = capabilities.avatar_image?.url;
+  const [failedImageUrl, setFailedImageUrl] = useState<string | undefined>();
   const onFallback = useCallback(() => {
     setFailedUrl(url);
     onModelNameChange?.(null);
@@ -53,10 +55,19 @@ export function AvatarPreview({
   useEffect(() => {
     onModelNameChange?.(null);
   }, [url, onModelNameChange]);
-  const fallback = capabilities.avatar ? (
-    <Avatar spec={capabilities.avatar} mouthLevel={mouth} />
-  ) : null;
   const badge = label || capabilities.label || capabilities.avatar?.label;
+  const fallback =
+    imageUrl && failedImageUrl !== imageUrl && badge ? (
+      <PortraitAvatar
+        url={imageUrl}
+        mouthLevel={mouth}
+        speaking={speaking}
+        label={badge}
+        onError={() => setFailedImageUrl(imageUrl)}
+      />
+    ) : capabilities.avatar ? (
+      <Avatar spec={capabilities.avatar} mouthLevel={mouth} />
+    ) : null;
   if (!url || failedUrl === url || !badge) return fallback;
   return (
     <ModelBoundary key={url} fallback={fallback} onFallback={onFallback}>

@@ -90,6 +90,13 @@ beforeEach(async () => {
         },
       });
     if (url === '/api/persona/state') return json({ stale: true });
+    if (url === '/api/media/capabilities')
+      return json({
+        available: true,
+        backend: null,
+        label: 'API标识',
+        video: { available: true },
+      });
     if (url === '/api/persona/chat') {
       if (fail) {
         fail = false;
@@ -199,7 +206,9 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   expect(screen.getByText('证据不足')).toBeVisible();
   expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
   expect(document.querySelector('input[type="date"]')).toBeNull();
-  expect(screen.getByRole('button', { name: '回放' })).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: /语音|视频/ }),
+  ).not.toBeInTheDocument();
   expect(
     JSON.parse(sessionStorage.getItem(CHAT_KEY)!).map(
       (turn: { role: string }) => turn.role,
@@ -230,6 +239,8 @@ it('shows a neutral general badge next to confidence without an abstention marke
   expect(badge).toBeVisible();
   expect(badge.previousElementSibling).toHaveTextContent('置信度 50%');
   expect(screen.queryByText('需要本人确认')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '播放语音' })).toBeVisible();
+  expect(await screen.findByRole('button', { name: '生成视频' })).toBeVisible();
 });
 it('shows Chinese detail and retries without duplicating the failed user turn', async () => {
   fail = true;

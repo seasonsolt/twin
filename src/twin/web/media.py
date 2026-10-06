@@ -59,7 +59,7 @@ class PrivateAudioMiddleware:
             if (
                 message["type"] == "http.response.start"
                 and 200 <= message["status"] < 300
-                and scope.get("path") == "/api/media/avatar.vrm"
+                and scope.get("path") in {"/api/media/avatar.vrm", "/api/media/avatar-image"}
             ):
                 MutableHeaders(scope=message)["Cache-Control"] = "no-cache"
             await send(message)
@@ -124,12 +124,28 @@ def register(
             raise HTTPException(404, "找不到 VRM 形象模型")
         return FileResponse(path, media_type="model/gltf-binary", headers={"Cache-Control": "no-cache"})
 
+    @app.get("/api/media/avatar-image")
+    def avatar_image_file() -> FileResponse:
+        if settings.avatar.image_path is None:
+            raise HTTPException(404, "未配置肖像图片")
+        path = Path(settings.avatar.image_path)
+        if not path.is_file():
+            raise HTTPException(404, "找不到肖像图片")
+        content_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }[path.suffix.lower()]
+        return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-cache"})
+
     @app.get("/api/media/capabilities")
     def capabilities() -> dict[str, Any]:
         avatar = AVATAR_PRESETS[settings.avatar.preset].model_dump(mode="json")
         avatar_model = (
             {"format": "vrm", "url": "/api/media/avatar.vrm"} if settings.avatar.vrm_path is not None else None
         )
+        avatar_image = {"url": "/api/media/avatar-image"} if settings.avatar.image_path is not None else None
         try:
             synth = speech()
             declared = synth.capabilities
@@ -137,6 +153,7 @@ def register(
             return {
                 "avatar": avatar,
                 "avatar_model": avatar_model,
+                "avatar_image": avatar_image,
                 "video": {"available": video_available},
                 "available": False,
                 "backend": None,
@@ -148,6 +165,7 @@ def register(
         return {
             "avatar": avatar,
             "avatar_model": avatar_model,
+            "avatar_image": avatar_image,
             "video": {"available": video_available},
             "available": synth.name != "silent",
             "backend": synth.name,

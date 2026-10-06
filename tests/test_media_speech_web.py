@@ -65,6 +65,7 @@ def test_capabilities_are_lazy_and_secret_free(tmp_path: Path) -> None:
         assert response.json() == {
             "avatar": AVATAR_PRESETS["default"].model_dump(mode="json"),
             "avatar_model": None,
+            "avatar_image": None,
             "video": {"available": False},
             "available": True,
             "backend": "openai_compat:speech",

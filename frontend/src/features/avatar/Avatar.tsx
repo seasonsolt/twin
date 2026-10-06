@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMotionPreset } from '../../design/motion';
+import { SpeakingGlow } from './SpeakingGlow';
 import type { AvatarSpec } from './types';
 
 export function Avatar({
@@ -40,7 +41,7 @@ export function Avatar({
     ? Math.max(0, Math.min(reduced ? 1 : 3, mouthLevel))
     : 0;
   return (
-    <div className="mx-auto w-full max-w-48 shrink-0">
+    <div className="relative mx-auto w-full max-w-48 shrink-0">
       <svg
         viewBox="0 0 220 240"
         role="img"
@@ -110,9 +111,41 @@ export function Avatar({
       </svg>
       <p
         role="note"
-        className="mt-2 rounded-md border border-border bg-canvas px-2 py-1 text-center text-xs text-secondary"
+        className="absolute inset-x-2 bottom-2 rounded-md border border-border bg-canvas px-2 py-1 text-center text-xs text-secondary"
       >
         {spec.label}
+      </p>
+    </div>
+  );
+}
+
+export function PortraitAvatar({
+  url,
+  mouthLevel,
+  speaking,
+  label,
+  onError,
+}: {
+  url: string;
+  mouthLevel: number;
+  speaking: boolean;
+  label: string;
+  onError(): void;
+}) {
+  return (
+    <div className="relative mx-auto w-full max-w-48 shrink-0">
+      <SpeakingGlow level={mouthLevel} speaking={speaking} />
+      <img
+        src={url}
+        alt="肖像形象"
+        onError={onError}
+        className="aspect-[11/12] w-full rounded-[22px] object-cover object-[50%_30%]"
+      />
+      <p
+        role="note"
+        className="absolute inset-x-2 bottom-2 rounded-md border border-border bg-canvas px-2 py-1 text-center text-xs text-secondary"
+      >
+        {label}
       </p>
     </div>
   );

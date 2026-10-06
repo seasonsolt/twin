@@ -35,6 +35,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
 # preset = "default" # 可选 default、ink、dawn。
 # vrm_path = "/path/to/stylized.vrm" # 可选本地风格化 3D 模型，≤ 64 MB；不提交模型文件。
+# image_path = "/path/to/portrait.png" # 可选本地肖像，PNG/JPEG/WebP ≤ 10 MB；优先级 VRM > 肖像 > 2D。
 
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
 # [tts]

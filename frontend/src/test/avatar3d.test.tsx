@@ -80,7 +80,8 @@ vi.mock('@pixiv/three-vrm', async (original) => {
     },
   };
 });
-vi.mock('../design/motion', () => ({
+vi.mock('../design/motion', async (original) => ({
+  ...(await original<typeof import('../design/motion')>()),
   useMotionPreset: () => ({ reduced: mocks.reduced }),
 }));
 
@@ -159,6 +160,26 @@ const load = async () => {
     await Promise.resolve();
   });
 };
+
+it('renders the chat VRM preview once without a motion loop and disposes it', async () => {
+  const view = renderView(
+    <Avatar3D {...props} mouth={0} speaking={false} still />,
+  );
+  await load();
+  expect(mocks.render).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText('VRM 静态头像')).toHaveAttribute(
+    'title',
+    '模型：配置模型 · 作者甲、作者乙',
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+  expect(mocks.render).toHaveBeenCalledTimes(1);
+  expect(mocks.expression).not.toHaveBeenCalled();
+  view.unmount();
+  expect(mocks.dispose).toHaveBeenCalledTimes(1);
+  expect(mocks.loss).toHaveBeenCalledTimes(1);
+});
 
 it('maps the four mouth levels and uses frame-rate-independent critical damping', () => {
   expect([0, 1, 2, 3].map((level) => mouthWeight(level, true, false))).toEqual([
@@ -384,6 +405,28 @@ it('renders 2D without loading three when the model is unset, and after a 3D fai
   expect(screen.getByRole('note')).toHaveTextContent(capabilities.label);
 });
 
+it('prefers VRM over a portrait and falls back to the portrait after context loss', async () => {
+  renderView(
+    <AvatarPreview
+      capabilities={{
+        ...capabilities,
+        avatar_image: { url: '/api/media/avatar-image' },
+        avatar_model: { format: 'vrm', url: props.url },
+      }}
+    />,
+  );
+  await load();
+  expect(screen.getByRole('img', { name: '风格化 3D 形象' })).toBeVisible();
+  expect(
+    screen.queryByRole('img', { name: '肖像形象' }),
+  ).not.toBeInTheDocument();
+  act(() =>
+    screen.getByRole('img').dispatchEvent(new Event('webglcontextlost')),
+  );
+  expect(screen.getByRole('img', { name: '肖像形象' })).toBeVisible();
+  expect(screen.getByRole('note')).toHaveTextContent(capabilities.label);
+});
+
 it('shares the demo lip track between both previews, replays and releases its timer', async () => {
   vi.stubGlobal(
     'fetch',
@@ -424,9 +467,16 @@ it('allows blob textures only in img-src without relaxing the remaining CSP', ()
   ).toEqual([" img-src 'self' data: blob:"]);
 });
 
-it.each(['0', '1'])(
-  'shows VRM %s metadata in About and restores the preset on fallback',
-  async (metaVersion) => {
+it.each([
+  ['0', false],
+  ['1', false],
+  ['1', true],
+] as const)(
+  'shows VRM %s metadata in About and restores the fallback (portrait=%s)',
+  async (metaVersion, portrait) => {
+    const fallbackName = portrait
+      ? '形象：肖像照片'
+      : '形象：default（风格化形象）';
     if (metaVersion === '0') {
       Object.defineProperty(model, 'meta', {
         value: { metaVersion: '0', title: '配置模型', author: '配置作者' },
@@ -452,6 +502,9 @@ it.each(['0', '1'])(
                       }
                     : {
                         ...capabilities,
+                        avatar_image: portrait
+                          ? { url: '/api/media/avatar-image' }
+                          : null,
                         avatar_model: { format: 'vrm', url: props.url },
                       },
             ),
@@ -472,19 +525,19 @@ it.each(['0', '1'])(
       </MemoryRouter>,
     );
     await load();
-    expect(screen.getByText('形象：default（风格化形象）')).toBeVisible();
+    expect(screen.getByText(fallbackName)).toBeVisible();
     resolve({ scene: model.scene, userData: { vrm: model } });
     await load();
     expect(screen.getByText('形象：配置模型（3D 模型）')).toBeVisible();
-    expect(
-      screen.queryByText('形象：default（风格化形象）'),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(fallbackName)).not.toBeInTheDocument();
     act(() =>
       screen
         .getByRole('img', { name: '风格化 3D 形象' })
         .dispatchEvent(new Event('webglcontextlost')),
     );
-    expect(screen.getByText('形象：default（风格化形象）')).toBeVisible();
+    expect(screen.getByText(fallbackName)).toBeVisible();
+    if (portrait)
+      expect(screen.getByRole('img', { name: '肖像形象' })).toBeVisible();
     expect(
       screen.queryByText('形象：配置模型（3D 模型）'),
     ).not.toBeInTheDocument();

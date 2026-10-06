@@ -13,7 +13,7 @@
 3. **可追溯。** 每个产出物都记录它来自哪一次回答（运行快照或回答指纹）、用了哪些引用，以及音色和形象配置。
 4. **人物无关、出境由配置决定。** `src/` 里不出现具体人物的专属内容；用本人资料评测和展示时，语音与识别只走本地或本人指定的服务，外部服务（如 Cloudflare）按配置使用，界面如实展示出境分类。
 
-风格化形象通道使用插画；可选的本人视频通道仅通过下述通用远端任务接入。
+聊天使用肖像、VRM 静态头像或姓名首字，真人视频直接内联于回复。2D 插画仅保留在关于你/画廊预览和 CLI/API 片段导出；本人视频通道通过下述通用远端任务接入。
 
 已确定（2026-10-04）：默认形象用风格化插画，不做写实；语音后端两种都接，Cloudflare `melotts` 用于合成数据和公开数据，本地自托管服务（MOSS-TTS-Nano 起步，可换 CosyVoice3）用于内网。
 
@@ -33,7 +33,7 @@
 | `media.clip` | 与 L4 同级（7） | Pillow 平涂形象与字幕、条件静音片头与静音片尾、ffmpeg MP4 编码；复用语音缓存与口型轨 |
 | `media.video` | 与 L4 同级（7） | 通用 SSH 视频任务协议、本地常驻标识与 MP4 后处理；不包含远端实现 |
 | `media.render` | 与 L4 同级（7） | 按脚本调用 `SpeechSynthesizer`、拼接音频、写入标识、生成 `LipSyncTrack`、缓存与导出 |
-| `web.media` / `cli` | L5 接入（9） | API、回放面板、`twin media ...` 命令 |
+| `web.media` / `cli` | L5 接入（9） | API、聊天内联媒体操作、`twin media ...` 命令 |
 
 ## 3. 层间解耦规则
 
@@ -67,7 +67,7 @@ M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/R
 
 ### 通用知识回答提示
 
-`ChatReply.mode="general"` 可以正常回放、朗读、导出片段及视频。`media.adapters` 将 mode
+`ChatReply.mode="general"` 可以正常内联朗读和生成视频，也支持 CLI/API 导出片段。`media.adapters` 将 mode
 保留到追加字段 `PresentableAnswer.mode`（默认 grounded），`media.script` 仅对 general 回答在原有
 开头提示之后追加一行 `kind="notice"`：**以下是通用知识，不代表本人观点。**
 这行同时显示和朗读；回答正文不改写，段落编号连续。grounded / abstain 不追加此提示，弃权处理不变。
@@ -77,9 +77,17 @@ M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/R
 
 `SpeechResult` 只在展示层转换：`LipSyncTrack` v1 默认 `fps=25`，`levels` 每帧为 0–3（闭嘴到大开口），长度不超过 `fps × 600`，更长音频仅生成前 600 秒。`source` 为 timings / energy / pattern；时间戳对应各音频分片的朗读文本，词间闭嘴、词内按字符位置交替 2/3。WAV 能量支持 8/16-bit PCM 单/双声道，以每帧全部声道样本的 RMS、三帧移动平均、片内第 95 百分位为基准，按严格大于 10% / 35% / 70% 分成四档；纯静音全零，稀疏非静音导致基准为零时退回最大 RMS。MP3 或不支持/损坏的 WAV 使用明确合成的 pattern；未知时长默认 1 秒，不猜测音素。
 
-`AvatarSpec` v1 只有预置 ID、同源常驻标识、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 仅接受 default / ink / dawn。React 组件 `frontend/src/features/playback/Avatar.tsx` 渲染内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
+`AvatarSpec` v1 只有预置 ID、同源常驻标识、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 仅接受 default / ink / dawn。React 组件 `frontend/src/features/avatar/Avatar.tsx` 渲染内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
 
-回放以各分片的 `audio.currentTime` 驱动口型；暂停、停止、纯文字播放时闭嘴，关闭时释放动画与眨眼计时。正常情况下每 3–6 秒眨眼；减少动态效果时不眨眼，口型限于 0/1，保留正在说话的提示。弃权仅呈现提示，不生成讲述内容。
+聊天用各分片的 `audio.currentTime` 读取 lipsync level，仅驱动小圆头像的柔和光环，不显示 2D 动画或伪造照片嘴部。关于你/画廊仍可预览 2D 形象，正常情况下每 3–6 秒眨眼，减少动态效果时不眨眼。弃权仅呈现回复，不生成讲述内容。
+
+### 浏览器肖像形象
+
+可选 `[avatar].image_path = "/path/to/portrait.png"`：文件须存在、为普通文件，后缀为 `.png` / `.jpg` / `.jpeg` / `.webp`（大小写均可），不超过 10 MB（10 × 1024² 字节），且包含与后缀匹配的 PNG/JPEG/WebP 魔数；不做完整图片解码校验。校验错误为中文，路径支持 `~`，相对路径按服务工作目录解析。照片属于个人资产，不应提交仓库。
+
+`GET /api/media/avatar-image` 同源返回配置照片及正确的 `image/png`、`image/jpeg` 或 `image/webp` 类型，`Cache-Control: no-cache`；未配置或文件已删除返回中文 JSON 404。能力接口追加 `avatar_image: {url: "/api/media/avatar-image"} | null`，包括语音不可用时，不暴露本地路径。
+
+聊天每条分身回复左侧为小圆头像，按 **肖像 > VRM 静态预览 > 姓名首字** 选择，图片/模型失败继续回退，绝不回退 2D。“关于你”仍按 **VRM > 肖像 > 2D 预置** 选择。照片 object-cover、偏向面部裁切，始终静止、不伪造嘴部；聊天朗读时柔和 accent 光环按当前口型轨 0–3 的强度变化并经弹簧平滑，暂停后淡出。减少动态效果时取消光环，仅显示静态“正在说话”圆点。AI 标识从 API 读取，聊天由标题/页脚及视频标识呈现，形象预览保留角标，前端不硬编码标识。肖像也作为聊天真人视频的 poster，不改变 CLI/API MP4 导出形象。
 
 ### 浏览器 3D 形象（V1）
 
@@ -93,11 +101,11 @@ vrm_path = "/path/to/stylized.vrm"
 
 文件须存在、为普通文件、后缀 `.vrm`、不超过 64 MiB，并以 glTF 二进制魔数开头；配置校验不是完整的 VRM 解析，内容不合法时浏览器回退。路径按服务工作目录解析（支持 `~`），建议使用绝对路径。模型资产不提交仓库（`.gitignore` 忽略 `*.vrm`）；配置者负责确认风格化限制、使用许可及作者署名要求，程序不自动判定是否写实。`GET /api/media/avatar.vrm` 同源流式返回 `model/gltf-binary`、`Cache-Control: no-cache`，未配置返回中文 JSON 404。能力接口追加 `avatar_model: {format: "vrm", url: "/api/media/avatar.vrm"} | null`，不暴露本地路径。
 
-回放、身份预览及画廊“形象对比”按需懒加载 `three` / `@pixiv/three-vrm`。摄像机按头骨和模型高度框选上半身，透明抗锯齿画布，DPR ≤ 2，三点柔光使用浅/深色设计令牌。既有口型 0/1/2/3 映射 `aa` 为 0/.35/.65/1，临界阻尼弹簧频率 24 s⁻¹；`oh` / `ih` 最大叠加 .12/.10，停止说话后平滑闭嘴，不推断音素。
+聊天 VRM 静态头像、关于你预览及画廊“形象对比”按需懒加载 `three` / `@pixiv/three-vrm`。摄像机按头骨和模型高度框选上半身，透明抗锯齿画布，DPR ≤ 2，三点柔光使用浅/深色设计令牌。既有口型 0/1/2/3 映射 `aa` 为 0/.35/.65/1，临界阻尼弹簧频率 24 s⁻¹；`oh` / `ih` 最大叠加 .12/.10，停止说话后平滑闭嘴，不推断音素。
 
 呼吸 0.4 Hz、胸部转角 ±.008 rad；头部微动俯仰 ±.018、偏航 ±.025 rad，以 10 s⁻¹ 临界阻尼平滑，说话额外 ±.025 rad 点头（角频率 3.4 s⁻¹）。眼睛通过 lookAt 注视摄像机，每 .7–2.2 秒小幅扫视（水平 ±.0175、垂直 ±.0125 倍模型高度）；眨眼间隔 2.5–6 秒、单次 .16 秒、15% 双眨眼。`vrm.update(delta)` 驱动模型自带 SpringBones 的头发/衣服物理。减少动态效果时停用呼吸、头动、扫视、点头和元音变化，口型限 0/1，眨眼降为 8–14 秒。画布离屏或文档隐藏时停止渲染，最高 60 fps；恢复时限制 delta ≤ .05 秒，卸载释放 GPU 资源。
 
-API 的 AI 标签始终覆盖在画布上，不提供隐藏开关。模型名/作者从 `vrm.meta` 读取并始终显示“模型：名称 · 作者”，兼容 VRM 0.x 的 title/author；许可链接只接受 HTTP(S)，不硬编码模型名称。无配置、WebGL 不可用、模型/3D 模块加载错误或上下文丢失时回退既有 2D。CSP **仅**在 `img-src 'self' data:` 增加 `blob:`，用于 glTF 内嵌纹理；GLTFLoader 显式使用 TextureLoader（HTML 图片），避免默认 ImageBitmapLoader 的 blob fetch 触及 connect-src。脚本/连接等策略不放宽；模型应自包含，不依赖外部纹理服务。
+关于你/画廊预览中，API 的 AI 标签始终覆盖在画布上，不提供隐藏开关。模型名/作者从 `vrm.meta` 读取并显示“模型：名称 · 作者”，兼容 VRM 0.x 的 title/author；许可链接只接受 HTTP(S)，不硬编码模型名称。聊天使用 `still` 模式，只渲染一帧、没有动画循环，署名保留于头像 title。无配置、WebGL 不可用、模型/3D 模块加载错误或上下文丢失时，关于你/画廊先回退配置肖像、再回退 2D，聊天则回退姓名首字。CSP **仅**在 `img-src 'self' data:` 增加 `blob:`，用于 glTF 内嵌纹理；GLTFLoader 显式使用 TextureLoader（HTML 图片），避免默认 ImageBitmapLoader 的 blob fetch 触及 connect-src。脚本/连接等策略不放宽；模型应自包含，不依赖外部纹理服务。
 
 MP4 导出仍为 2D；浏览器端录制 3D 画布及音频是后续工作，本次不改变视频导出链路。
 
@@ -121,7 +129,7 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 可枚举时，配置音色在读取能力（最迟首次合成）时检查；每次合成也检查请求音色。不在列表中就用中文拒绝，包含配置 ID 和预置数，绝不提交合成文本。查询延迟到媒体能力/朗读入口，应用启动、身份查看及纯文字功能不访问语音后端。`Identity.voice` 默认 `None` 兼容旧契约，`twin identity show` 从配置填入 ID 并显示预置音色。
 
-标识单一来源是 `media.schema`：`EXPLICIT_LABEL`、`OPENING_NOTICE`、保留现有聊天提示措辞的 `CHAT_NOTICE`，以及页脚函数 `disclaimer(name, external)`。预发布标签改为 `AI 合成，不代表本人意见`，开头提示改为 `以下内容由 AI 合成，不代表本人意见。`。`MediaScript.explicit_label` / `MediaManifest.label`、形象及服务输出使用新的 Literal；读取旧值 `AI 合成 · 模拟推演，不代表本人意见` 时规范化为新值，因此旧清单仍能读取，再写出时只使用新标识。`GET /api/status` 的 `labels: {explicit, disclaimer, chat_notice}` 供回放角标、页脚和聊天标题读取；React 前端不复制文案，`frontend/src/components/layout/AppShell.tsx` 在标签未加载时显示 Skeleton/留空。导出、音频开头与元数据仍使用契约中的同源标识。
+标识单一来源是 `media.schema`：`EXPLICIT_LABEL`、`OPENING_NOTICE`、保留现有聊天提示措辞的 `CHAT_NOTICE`，以及页脚函数 `disclaimer(name, external)`。预发布标签改为 `AI 合成，不代表本人意见`，开头提示改为 `以下内容由 AI 合成，不代表本人意见。`。`MediaScript.explicit_label` / `MediaManifest.label`、形象及服务输出使用新的 Literal；读取旧值 `AI 合成 · 模拟推演，不代表本人意见` 时规范化为新值，因此旧清单仍能读取，再写出时只使用新标识。`GET /api/status` 的 `labels: {explicit, disclaimer, chat_notice}` 供预览/视频标识、页脚和聊天标题读取；React 前端不复制文案，`frontend/src/components/layout/AppShell.tsx` 在标签未加载时显示 Skeleton/留空。导出、音频开头与元数据仍使用契约中的同源标识。
 
 页脚按 `egress_status`（所有配置后端，含评委）判定是否存在**配置的外部**服务：
 
@@ -175,20 +183,23 @@ ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录
 
 `VideoSynthesizer` / `VideoResult` 为展示层协议与版本化契约；`config.make_video_synthesizer(settings)` 是唯一配置构造入口，仅在调用时加载适配器。CLI 显示时长，回听警告仅打印 ID 和 CER，不输出原文或识别文本。超过 max_cer 的分段进入 warnings；远端自由文本警告只提升为通用提示，避免泄露原文或路径。stderr 和远端错误文本从不回显，也不写个人文本日志，拒绝、超时和不可用统一为中文媒体错误。
 
-网页能力追加 `video: {available: bool}`；“生成真人视频”先确认“在本人 GPU 主机上生成，通常需要几分钟”，后台串行处理，复用 JobManager 与 JobProgress，完成后内联播放及下载，回听出入用小字提示。界面标签仅来自 API，下载文件同时带画面与元数据标识。API 详情见 [WEB_UI.md](WEB_UI.md)。
+网页能力提供 `video: {available: bool}`。非弃权聊天回复下方显示“听”，可用时另显示“视频”，均为图标＋短标签、至少 44px 点击区域，窄屏同组换行。通用知识回复保留两种操作及已生成的语音提示，弃权不提供媒体操作。“听”POST 音频接口，通过全聊天共享 `<audio>` 顺序播放分片，可暂停/继续，开始另一回复会停止前一回复，并在回复下显示细进度线与头像光环。语音失败显示内联中文小字。
+
+“视频”点击立即在本人 GPU 主机开始任务，无确认步骤；内联卡片显示“正在生成视频…”、任务进度与“通常约 30 秒”。完成后显示宽度 100%、最大 360px 的圆角 `<video controls playsInline preload="metadata">`（肖像 poster），附“保存”下载链接和 visually hidden 回复文本替代。成品按回复在标签页会话中缓存，重按不重新生成；失败显示中文错误与“重试”，回听出入用小字提示。逐句导航、快捷键帮助、HTML/2D 片段导出等旧网页入口已移除，后端接口和 CLI 保留。界面 AI 标签仅来自 API，下载文件同时带画面与元数据标识。API 详情见 [WEB_UI.md](WEB_UI.md)。
 
 ## 4. 阶段
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| M0 展示内核（不用模型，已完成） | `media.schema`、`media.script`；网页"回放"视图：逐句显示 `reply`，同步高亮对应引用和原话，常驻显式标识；导出带隐式标识的独立 HTML | 弃权回答不产生讲述段；每句的引用都能在原回答中找到；标识在所有视图和导出物中存在；分层测试通过；不依赖任何模型或网络 |
+| M0 展示内核（不用模型，已完成） | `media.schema`、`media.script`；聊天显示原回复和引用；CLI/API 支持导出带显式/隐式标识的独立 HTML | 弃权回答不产生讲述段；每句的引用都能在原回答中找到；标识在所有视图和导出物中存在；分层测试通过；不依赖任何模型或网络 |
 | M1 语音（已完成，含 M1b–M1d：自托管服务、朗读规范化、回听评测、确定性与截断防护） | `media.tts` 协议与适配器；预置音色；开头语音提示；音频元数据标识；缓存 | 用语音识别回听（Workers AI whisper 或本地 ASR）计算字错率；首句延迟；元数据标识可读出；中文 `melotts` 的效果先实测再决定是否作为默认 |
-| M2 形象（已完成（浏览器端）） | 风格化 2D 形象：浏览器端 Canvas/SVG，口型由音频能量或音素时间戳驱动；不用照片 | 无真人照片或视频输入；角标标识常驻；低端机也能流畅播放 |
+| M2 形象（已完成（浏览器端）） | 风格化 2D 形象：浏览器端 Canvas/SVG，口型由音频能量或音素时间戳驱动；可选浏览器静态肖像 | 肖像不伪造嘴部；角标标识常驻；低端机也能流畅播放 |
 | M3 片段导出（已完成） | 对话片段导出为 mp4：形象、字幕、回答依据片尾和标识，用 ffmpeg 合成，元数据写入隐式标识 | 导出物能追溯到来源回答；常驻角标、开头提示与片尾标识（不是防篡改或防裁剪保护） |
+| M5 聊天内联媒体（已完成） | 肖像优先圆头像、共享语音播放器、内联真人视频任务与会话缓存；移除旧网页逐句/导出入口 | grounded/general 可听和生成可用视频，弃权无操作；顺序播放、暂停/切换、光环、进度、缓存/重试、无障碍与窄屏布局测试 |
 
 ## 5. 接入
 
 - persona 聊天气泡提供播放入口；输入 `ChatReply` 原回答，按 `chat_reply` 适配，不生成新措辞。
 - `twin media script/export/speak/clip/video REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
-- `/` 的 React 前端通过 `frontend/src/features/playback/PlaybackDialog.tsx` 和 `usePlayback.ts` 管理文字/音频、请求与资源生命周期；形象使用同目录 `Avatar.tsx`，样式令牌在 `frontend/src/design/tokens.css`。构建资源由 `/assets/*` 提供，独立导出 HTML 不依赖这些资源。
+- `/` 的 React 前端通过 `frontend/src/features/chat/useReplyAudio.ts`、`ReplyVideo.tsx` 管理内联媒体及资源生命周期；聊天头像使用 `ChatAvatar.tsx`，预览与共享光环位于 `features/avatar/`，样式令牌在 `frontend/src/design/tokens.css`。构建资源由 `/assets/*` 提供，CLI/API 的独立导出 HTML 不依赖这些资源。
 - 本地 API、访问保护和播放控件见 [WEB_UI.md](WEB_UI.md)。

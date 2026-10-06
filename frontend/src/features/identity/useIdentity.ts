@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
-import type { Capabilities } from '../playback/types';
+import type { Capabilities } from '../avatar/types';
 import type { Status } from '../../stores/status';
 
 export interface IdentityData {

@@ -19,6 +19,7 @@ export interface Avatar3DProps {
   label: string;
   onFallback(): void;
   onModelNameChange?(name: string | null): void;
+  still?: boolean;
 }
 
 export function modelCredit(meta: VRMMeta) {
@@ -173,6 +174,7 @@ export default function Avatar3D(props: Avatar3DProps) {
               width / canvasHeight,
             );
             renderer.setSize(width, canvasHeight, false);
+            if (props.still) renderer.render(scene, camera);
           };
           resize = new ResizeObserver(fit);
           resize.observe(element);
@@ -184,6 +186,7 @@ export default function Avatar3D(props: Avatar3DProps) {
           const metadata = modelCredit(vrm.meta);
           setCredit(metadata);
           latest.current.onModelNameChange?.(metadata.name);
+          if (props.still) return;
           stopLoop = visibleRenderLoop(element, (delta) => {
             if (!vrm || !renderer) return;
             const state = latest.current;
@@ -228,11 +231,20 @@ export default function Avatar3D(props: Avatar3DProps) {
       alive = false;
       dispose();
     };
-  }, [props.url]);
+  }, [props.url, props.still]);
   const licenseUrl =
     credit?.license && /^https?:\/\//i.test(credit.license)
       ? credit.license
       : undefined;
+  if (props.still)
+    return (
+      <div
+        ref={host}
+        className="size-full"
+        title={credit?.text}
+        aria-label="VRM 静态头像"
+      />
+    );
   return (
     <div className="mx-auto w-full max-w-64 shrink-0">
       <div className="relative aspect-[4/5]">

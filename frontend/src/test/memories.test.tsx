@@ -170,7 +170,7 @@ it('uploads multiple files and dropped files with no kind query', async () => {
   expect(input).toHaveAttribute('multiple');
   expect(input).toHaveAttribute(
     'accept',
-    '.txt,.md,.pdf,.docx,.html,.htm,.csv,.json,.srt,.vtt',
+    '.txt,.md,.pdf,.docx,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus',
   );
   await user.upload(input, [
     new File(['hello'], 'a.pdf'),

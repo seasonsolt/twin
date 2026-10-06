@@ -24,6 +24,8 @@ def configured_backends(settings: Settings) -> list[BackendSettings]:
 def _is_configured(section: BackendSettings) -> bool:
     if isinstance(section, VideoSettings):
         return section.provider == "remote" and bool(section.command)
+    if isinstance(section, ASRSettings) and section.provider == "command":
+        return bool(section.command and section.command.strip())
     if section.provider in {"silent", "hashing"}:
         return False
     if isinstance(section, LLMSettings) and section.provider in {"anthropic", "claude_cli"}:

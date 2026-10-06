@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
-import { MoreHorizontal, Plus } from 'lucide-react';
+import { MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
@@ -18,16 +18,30 @@ import {
   useConfirm,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { isMedia, uploadMedia, type UploadProgress } from '../lib/mediaUpload';
 import { useStatus } from '../stores/status';
 
-const accept = '.txt,.md,.pdf,.docx,.html,.htm,.csv,.json,.srt,.vtt';
+const accept =
+  '.txt,.md,.pdf,.docx,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus';
 export interface Memory {
   source_id: string;
   title: string;
   first_date: string | null;
   detected_kind_label: string;
-  status: 'processing' | 'remembered' | 'nothing_found' | 'failed';
+  status:
+    | 'processing'
+    | 'remembered'
+    | 'nothing_found'
+    | 'failed'
+    | 'queued'
+    | 'extracting'
+    | 'transcribing'
+    | 'needs_asr';
   remembered: number;
+  kind?: string;
+  duration_s?: number | null;
+  transcribed_s?: number;
+  media_sha?: string | null;
 }
 interface Processing {
   state: 'idle' | 'queued' | 'running';
@@ -44,6 +58,10 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
+    null,
+  );
+  const failedFiles = useRef<File[]>([]);
   const [skipped, setSkipped] = useState<{ file: string; reason: string }[]>(
     [],
   );
@@ -72,7 +90,12 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       setMemories(rows);
       setProcessing(state);
       setError('');
-      if (state.state !== 'idle')
+      if (
+        state.state !== 'idle' ||
+        rows.some((row) =>
+          ['queued', 'extracting', 'transcribing'].includes(row.status),
+        )
+      )
         timer.current = setTimeout(() => void reload(), 2000);
       else void useStatus.getState().refresh();
     } catch (err) {
@@ -118,23 +141,78 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   const upload = (files: File[]) =>
     void mutate(async (signal) => {
       if (!files.length) return;
-      const form = new FormData();
-      files.forEach((file) =>
-        form.append('files', file, file.webkitRelativePath || file.name),
-      );
-      const result = await api<{
-        imported: Memory[];
-        skipped: { file: string; reason: string }[];
-      }>('/api/persona/import', { method: 'POST', form, signal });
-      if (alive.current) {
-        setSkipped(result.skipped);
-        if (result.imported.length) toast('已添加，正在记住…', 'success');
+      failedFiles.current = files;
+      const documents: File[] = [];
+      const ignored: { file: string; reason: string }[] = [];
+      try {
+        for (const file of files) {
+          if (
+            (file.webkitRelativePath || file.name)
+              .split('/')
+              .some((part) => part.startsWith('.'))
+          ) {
+            ignored.push({ file: file.name, reason: '已跳过隐藏文件' });
+          } else if (isMedia(file)) {
+            await uploadMedia(file, signal, (value) => {
+              if (alive.current) setUploadProgress(value);
+            });
+            await refresh();
+          } else documents.push(file);
+        }
+        if (documents.length) {
+          const form = new FormData();
+          documents.forEach((file) =>
+            form.append('files', file, file.webkitRelativePath || file.name),
+          );
+          const result = await api<{
+            imported: Memory[];
+            skipped: { file: string; reason: string }[];
+          }>('/api/persona/import', { method: 'POST', form, signal });
+          ignored.push(...result.skipped);
+          if (alive.current && result.imported.length)
+            toast('已添加，正在记住…', 'success');
+        }
+        failedFiles.current = [];
+        if (alive.current) setSkipped(ignored);
+      } finally {
+        if (alive.current) setUploadProgress(null);
       }
     });
   const retry = () =>
     void mutate((signal) =>
       api('/api/persona/build', { method: 'POST', signal }),
     );
+  const retranscribe = (memory: Memory) =>
+    void mutate((signal) =>
+      api(
+        `/api/persona/sources/${encodeURIComponent(memory.source_id)}/transcribe`,
+        { method: 'POST', signal },
+      ),
+    );
+  const progressUI = uploadProgress && (
+    <div
+      role="status"
+      className="space-y-2 rounded-lg border border-border p-3"
+    >
+      <p className="truncate font-medium">{uploadProgress.name}</p>
+      <p className="text-sm text-secondary">
+        {uploadProgress.paused
+          ? '网络已断开，联网后继续上传'
+          : '上传中，请保持页面打开'}
+      </p>
+      <progress
+        className="h-2 w-full"
+        aria-label="上传进度"
+        max={uploadProgress.size}
+        value={uploadProgress.offset}
+      />
+      <p className="text-sm text-secondary">
+        上传中 {Math.floor((uploadProgress.offset / uploadProgress.size) * 100)}
+        % · {(uploadProgress.offset / 1024 ** 2).toFixed(1)} /{' '}
+        {(uploadProgress.size / 1024 ** 2).toFixed(1)} MB
+      </p>
+    </div>
+  );
   const view = async (memory: Memory) => {
     previewRequest.current?.abort();
     const controller = new AbortController();
@@ -175,6 +253,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         multiple
         accept={accept}
         disabled={busy}
+        className="min-h-11 max-w-full text-base"
         {...(folder ? { webkitdirectory: '' } : {})}
         onChange={(event) => {
           upload(Array.from(event.target.files ?? []));
@@ -183,7 +262,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       />
       <p className="text-xs text-tertiary">
         TXT、Markdown、PDF、Word、HTML、CSV、JSON、SRT、VTT；每个文件最多 50
-        MB。扫描 PDF 暂不支持。
+        MB。音频、视频最多 4 GB，支持断点续传。刷新后重新选择同一文件即可继续。
       </p>
     </div>
   );
@@ -221,7 +300,12 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                   onChange={(event) => setText(event.target.value)}
                   placeholder="写下你的经历、想法或偏好…"
                 />
-                <Button type="submit" loading={busy} disabled={!text.trim()}>
+                <Button
+                  type="submit"
+                  className="min-h-11"
+                  loading={busy}
+                  disabled={!text.trim()}
+                >
                   保存
                 </Button>
               </form>
@@ -231,6 +315,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
           { value: 'folder', label: '上传文件夹', content: fileInput(true) },
         ]}
       />
+      {mobile && progressUI}
       {skipped.length > 0 && (
         <ul aria-label="跳过的文件" className="mt-3 text-sm text-secondary">
           {skipped.map((row, i) => (
@@ -278,18 +363,33 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         {processing.last_error && (
           <p className="text-sm text-danger">
             {processing.last_error}{' '}
-            <Button size="sm" variant="ghost" disabled={busy} onClick={retry}>
+            <Button
+              className="min-h-11"
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={retry}
+            >
               重新处理
             </Button>
           </p>
         )}
       </header>
       {(!mobile || embedded) && <Card>{addContent}</Card>}
+      {(!mobile || !adding) && progressUI}
       {error && !adding && (
         <p role="alert" className="text-danger">
           {error}{' '}
-          <Button size="sm" variant="ghost" onClick={() => void refresh()}>
-            重试加载
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              failedFiles.current.length
+                ? upload(failedFiles.current)
+                : void refresh()
+            }
+          >
+            {failedFiles.current.length ? '重试上传' : '重试加载'}
           </Button>
         </p>
       )}
@@ -318,33 +418,69 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                 content: (
                   <article className="flex items-start justify-between gap-2 border-b border-border py-2 md:py-3">
                     <div className="min-w-0 flex-1">
-                      <h3 className="truncate font-medium">{memory.title}</h3>
+                      <h3 className="flex items-center gap-2 font-medium">
+                        {memory.kind === 'video' && (
+                          <Video size={18} aria-label="视频" />
+                        )}
+                        {memory.kind === 'audio' && (
+                          <AudioLines size={18} aria-label="音频" />
+                        )}
+                        <span className="truncate">{memory.title}</span>
+                      </h3>
                       <p className="text-xs text-secondary">
-                        {[memory.detected_kind_label, memory.first_date]
+                        {[
+                          memory.detected_kind_label,
+                          memory.first_date,
+                          memory.duration_s != null
+                            ? `${(memory.duration_s / 60).toFixed(1)} 分钟`
+                            : null,
+                        ]
                           .filter(Boolean)
                           .join(' · ')}
                       </p>
                       <Badge
                         tone={memory.status === 'failed' ? 'danger' : 'neutral'}
                       >
-                        {memory.status === 'processing' ? (
-                          <ThinkingLabel text="正在记住…" />
+                        {memory.status === 'needs_asr' ? (
+                          '需要配置语音识别'
+                        ) : memory.status === 'queued' ? (
+                          '等待转写'
+                        ) : memory.status === 'extracting' ? (
+                          '提取音频'
+                        ) : memory.status === 'transcribing' ? (
+                          `转写中 ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
+                        ) : memory.status === 'processing' ? (
+                          <ThinkingLabel
+                            text={memory.media_sha ? '整理中' : '正在记住…'}
+                          />
                         ) : memory.status === 'remembered' ? (
-                          `已记住 ${memory.remembered} 条`
+                          memory.media_sha ? (
+                            `已加入 · 已记住 ${memory.remembered} 条`
+                          ) : (
+                            `已记住 ${memory.remembered} 条`
+                          )
                         ) : memory.status === 'nothing_found' ? (
-                          '没找到关于你的内容'
+                          memory.media_sha ? (
+                            '已加入'
+                          ) : (
+                            '没找到关于你的内容'
+                          )
                         ) : (
                           '处理失败'
                         )}
                       </Badge>
-                      {memory.status === 'failed' && (
+                      {(memory.status === 'failed' ||
+                        memory.status === 'needs_asr') && (
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={retry}
+                          onClick={() =>
+                            memory.media_sha ? retranscribe(memory) : retry()
+                          }
                           disabled={busy}
+                          className="min-h-11"
                         >
-                          重试
+                          {memory.media_sha ? '重新转写' : '重试'}
                         </Button>
                       )}
                     </div>
@@ -360,6 +496,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                           <Button
                             size="sm"
                             variant="ghost"
+                            className="min-h-11"
                             onClick={(event) => {
                               event.currentTarget
                                 .closest('details')
@@ -372,6 +509,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                           <Button
                             size="sm"
                             variant="ghost"
+                            className="min-h-11"
                             disabled={busy}
                             onClick={(event) => {
                               event.currentTarget
@@ -389,6 +527,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                         <Button
                           size="sm"
                           variant="ghost"
+                          className="min-h-11"
                           onClick={() => void view(memory)}
                         >
                           查看
@@ -396,6 +535,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                         <Button
                           size="sm"
                           variant="ghost"
+                          className="min-h-11"
                           disabled={busy}
                           onClick={() => void remove(memory)}
                         >
@@ -430,6 +570,15 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
             {error && (
               <p role="alert" className="mt-3 text-danger">
                 {error}
+                {failedFiles.current.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => upload(failedFiles.current)}
+                  >
+                    重试上传
+                  </Button>
+                )}
               </p>
             )}
           </Dialog>

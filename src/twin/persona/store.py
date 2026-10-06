@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
+import shutil
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -149,10 +151,21 @@ class PersonaStore:
             row = self._db.execute("SELECT json FROM p_sources WHERE source_id = ?", (source_id,)).fetchone()
         return Source.model_validate_json(row[0]) if row else None
 
+    def update_source(self, source: Source) -> bool:
+        """Update metadata without marking transcript expressions as changed."""
+        with self._tx() as db:
+            return (
+                db.execute(
+                    "UPDATE p_sources SET json = ? WHERE source_id = ?", (source.model_dump_json(), source.source_id)
+                ).rowcount
+                > 0
+            )
+
     def delete_source(self, source_id: str) -> bool:
         """Remove a source, its expressions and the candidates extracted from it (the profile is rebuilt from the
         remaining candidates on the next build)."""
         with self._tx() as db:
+            source = self.get_source(source_id)
             chunks = [r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE source_id = ?", (source_id,))]
             db.executemany("DELETE FROM p_candidates WHERE chunk_id = ?", [(c,) for c in chunks])
             db.execute("DELETE FROM p_chunks WHERE source_id = ?", (source_id,))
@@ -160,7 +173,12 @@ class PersonaStore:
             deleted = db.execute("DELETE FROM p_sources WHERE source_id = ?", (source_id,)).rowcount > 0
             if deleted:
                 self._sources_changed(db)
-                db.execute("DELETE FROM p_meta WHERE key = ?", (f"source_pending:{source_id}",))
+                db.execute(
+                    "DELETE FROM p_meta WHERE key IN (?, ?)",
+                    (f"source_pending:{source_id}", f"source_error:{source_id}"),
+                )
+                if source and source.media_sha and re.fullmatch(r"[0-9a-f]{64}", source.media_sha):
+                    shutil.rmtree(self.path.parent / "media-sources" / source.media_sha, ignore_errors=True)
             return deleted
 
     # ------------------------------------------------------------ expressions
@@ -305,6 +323,9 @@ class PersonaStore:
                 db.execute("DELETE FROM p_meta WHERE key LIKE 'source_pending:%'")
 
     def source_status(self, source_id: str, remembered: int) -> str:
+        source = self.get_source(source_id)
+        if source and source.media_status not in (None, "ready"):
+            return source.media_status
         if self.get_meta(f"source_error:{source_id}"):
             return "failed"
         if self.get_meta("built_at") is None or self.get_meta(f"source_pending:{source_id}") is not None:

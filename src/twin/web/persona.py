@@ -170,11 +170,20 @@ def register(
 
     identity.register(app, settings, queue_build)
 
+    from . import uploads
+
+    ingestion = uploads.register(app, settings, jobs, queue_build)
+
     def resume_processing() -> None:
         if not settings.db_path.is_file():
             return
         with open_store() as store:
             stale = profile_stale(store)
+            interrupted = [
+                s.source_id for s in store.list_sources() if s.media_status in {"queued", "extracting", "transcribing"}
+            ]
+        for source_id in interrupted:
+            ingestion.queue(source_id)
         if stale:
             processing.queue()
 
@@ -276,7 +285,7 @@ def register(
 
     @app.delete("/api/persona/sources/{source_id}")
     def delete_source(source_id: str) -> dict[str, bool]:
-        with open_store() as store:
+        with ingestion.lock, open_store() as store:
             if not store.delete_source(source_id):
                 raise HTTPException(404, f"找不到资料 {source_id}")
         queue_build()

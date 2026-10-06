@@ -44,10 +44,21 @@ api_key_env = "TWIN_EMBED_KEY"
 # 本机转发代理应设置 egress = "external"。
 # provider = "silent"
 
+# 音视频记忆 + 合成语音评测的 HTTP 识别（与下面命令示例二选一）。
 # [asr]
-# egress = "local" 或 "external"：非本机地址默认外部；外部识别服务按配置使用。
-# 本机转发代理应设置 egress = "external"；media check 只用于合成句集，不用于个人数据。
-# provider = "openai_compat"
+# egress = "local" # 或 "external"；外部服务/本机转发代理按实际情况声明。
+# provider = "openai_compat" # 也支持 cloudflare，见 docs/MEDIA.md。
+# model = "your-asr-model"
+# base_url = "http://127.0.0.1:8001/v1"
+# api_key_env = "TWIN_ASR_KEY"
+# language = "zh"
+
+# 音视频记忆的命令识别：stdin JSON audio/language；stdout 最后一行 ok/segments。
+# [asr]
+# provider = "command"
+# command = "python /path/to/transcribe.py"
+# language = "zh"
+# egress = "local"
 
 # [[judges]]
 # egress = "local" 或 "external"：每位评委也单独分类，外部服务按配置使用。

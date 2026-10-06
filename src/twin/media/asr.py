@@ -1,4 +1,4 @@
-"""Evaluation-only B5 recognition adapters, sharing B2's sanitized MediaError hierarchy.
+"""B5 recognition for speech evaluation and media memories, sharing B2's sanitized MediaError hierarchy.
 
 Cloudflare schemas (read 2026-10-04):
 https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/schema-input.json

@@ -6,6 +6,25 @@
 
 twin 是个人工具，不添加免责声明。
 
+## 音视频记忆
+
+记忆页可上传 MP4/MOV/M4V/WebM/MKV/AVI/3GP、M4A/MP3/WAV/AAC/OGG/Opus/FLAC/CAF/AMR，单文件最多 4 GiB。需系统 `ffmpeg`、`ffprobe`。原件保存在数据库同目录的 `media-sources/<sha256>/original.<ext>`，同 SHA 不重复添加；目录 0700、原件与单声道 16 kHz `audio.wav` 为 0600。删除来源会删除该目录。
+
+`media_ingest` 复用 JobManager，每次只处理一个音视频，后台线程运行提取与识别；列表显示提取音频、转写 x/y 分钟、整理中、已加入或失败。转写是一条 audio/video 来源，标题为原文件名去后缀；头部记录文件名、时长、可获得的 creation_time 和“转写自音视频，未区分说话人”。正文按约 200 字合并段落，保留首个 `[mm:ss]` / `[h:mm:ss]` 时间戳，引用带来源标题。不区分说话人，之后仍走原有 persona 抽取/检索构建。
+
+未配置 `[asr]` 时也保存原件，显示“需要配置语音识别”；配置并重启后点“重新转写”。HTTP 的 `provider = "openai_compat"`（还需 model、base_url）或 `"cloudflare"`（base_url、api_key_env）复用现有识别器，先通过 ffmpeg silencedetect 选停顿，将 WAV 切成不超过 25 秒的识别请求，无停顿则硬切；每段保留全局时间偏移。
+
+也可配置本机命令（仅用于记忆转写，合成语音评测仍用 HTTP）：
+
+```toml
+[asr]
+provider = "command"
+command = "python /path/to/transcribe.py"
+language = "zh"
+```
+
+命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh"}`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容"}]}`，时间单位为秒；失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
+
 ## 1. 原则
 
 1. **只改写呈现方式，不生成内容。** 媒体层的输入只有运行时层的输出：`ChatReply`（对话），以及它们的引用、置信度和弃权状态。媒体层不调用大模型改写措辞；分身弃权时，只展示弃权说明，不配音，也不出镜。
@@ -18,13 +37,15 @@ twin 是个人工具，不添加免责声明。
 
 ## 2. 分层
 
-媒体线横跨 L0 和 L4/L5，不进入 L1 语料、L2 认知、L3 运行时：契约和语音后端放在 L0 基础设施，展示编排放在 L3 之上、与 L4 场景同级（以后的场景，例如代参会时开口提问，也能直接使用），接入放在 L5。代码层号（0–9）只用于 `tests/test_layers.py`，对应关系见 ARCHITECTURE.md 第 1 节。
+媒体展示线横跨 L0 和 L4/L5，不进入 L1 语料、L2 认知、L3 运行时；音视频记忆入口则通过转写接入已有 L1 来源与 L2 整理（见下文）：契约和语音后端放在 L0 基础设施，展示编排放在 L3 之上、与 L4 场景同级（以后的场景，例如代参会时开口提问，也能直接使用），接入放在 L5。代码层号（0–9）只用于 `tests/test_layers.py`，对应关系见 ARCHITECTURE.md 第 1 节。
 
 | 模块 | 所属层（代码层号） | 内容 |
 | --- | --- | --- |
 | `media.schema` | L0 数据契约（1） | 全部媒体契约：`PresentableAnswer`、`MediaScript`、`MediaManifest`、`SpeechRequest`、`SpeechResult`、`LipSyncTrack`、`AvatarSpec`；只依赖标准库、pydantic 和 `util` |
 | `media.tts` | L0 模型后端（2） | `SpeechSynthesizer` 协议、两个后端适配器（Cloudflare `melotts`、自托管 HTTP）、测试用的静音实现 |
-| `media.asr` | L0 模型后端（2） | 仅用于评测的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
+| `media.asr` | L0 模型后端（2） | 语音评测与音视频记忆共用的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
+| `media.ingest` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、带时间戳的转写文本 |
+| `web.uploads` | L5 接入（9） | 分片上传、原件保存、串行媒体任务与普通 persona 构建衔接 |
 | `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
 | `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（按句切分、弃权只出提示） |
@@ -44,7 +65,7 @@ twin 是个人工具，不添加免责声明。
 | B2 媒体 → 语音后端 | Cloudflare、自托管服务 | `SpeechRequest`（文本、音色、格式）/ `SpeechResult`（音频、格式、采样率、时长、可选的逐字时间戳） | `media.tts` 里每个后端一个类，实现 `SpeechSynthesizer` | `media.render` 只认协议和契约 |
 | B3 语音 → 形象 | `SpeechResult` | `LipSyncTrack`（时间到口型开合，版本化）、`AvatarSpec`（插画图层与口型帧） | `media.render` 经 `media.lipsync` 生成口型轨：优先逐字时间戳（timings），其次 WAV PCM 能量（energy），否则合成节奏（pattern） | 前端只认 `AvatarSpec` 和 `LipSyncTrack`，不知道是哪个语音后端 |
 | B4 媒体 → 接入层 | `media.render` 的产出 | `MediaScript`、`MediaManifest`、音频与口型轨文件 | `web.media`、`cli` 只做序列化和权限 | 浏览器和命令行只收契约 JSON 和文件 |
-| B5 媒体 → 语音识别（仅用于评测） | Cloudflare Whisper、自托管 FunASR/SenseVoice shim | `TranscriptionRequest`（音频、格式、语言、可选提示）/ `Transcription`（文本、语言、时长、extras），均带版本 | `media.asr` 每个后端一个类，实现 `SpeechRecognizer` 并声明 `ASRCapabilities` | `media.check` 只认协议和契约，不读取厂商 extras |
+| B5 媒体 → 语音识别（评测与记忆转写） | Cloudflare Whisper、自托管 FunASR/SenseVoice shim | `TranscriptionRequest`（音频、格式、语言、可选提示）/ `Transcription`（文本、语言、时长、extras），均带版本 | `media.asr` 每个后端一个类，实现 `SpeechRecognizer` 并声明 `ASRCapabilities` | `media.check` 只认协议和契约，不读取厂商 extras |
 
 具体规则：
 
@@ -53,7 +74,7 @@ twin 是个人工具，不添加免责声明。
 3. **契约带版本、只增不删。** 每个契约有 `schema_version`；新增字段必须有默认值；删除或改变含义要升版本，并保留旧版本的读取。
 4. **能力用声明，不靠猜。** 适配器在 `capabilities` 里声明能力（是否给逐字时间戳、单次最大字数、支持的格式和采样率、是否流式）。上层按声明选择处理路径，例如口型轨在没有时间戳时退回能量包络。
 5. **错误统一。** 适配器把后端错误转成 `MediaError` 的子类（不可用、拒绝、超时、输入过长），错误信息隐藏密钥和服务地址，和 `llm.LLMError` 的做法一致。厂商原始字段只放在 `extras` 里，上层不读。
-6. **配置只经工厂。** B5 与 B2 相同：`[asr]` 只保存密钥环境变量名，`config.make_recognizer(settings)` 是唯一识别构造入口；识别不进入运行时。新增 `[tts]` 配置段，`config.make_synthesizer(settings)` 是唯一构造入口，与 `make_llm` 一样只写环境变量名、不写密钥。
+6. **配置只经工厂。** B5 与 B2 相同：`[asr]` 只保存密钥环境变量名，HTTP 识别经 `config.make_recognizer(settings)` 构造；长音频记忆经 `media.ingest.make_transcriber` 选择命令或 HTTP 后端；识别不进入聊天运行时。新增 `[tts]` 配置段，`config.make_synthesizer(settings)` 是唯一构造入口，与 `make_llm` 一样只写环境变量名、不写密钥。
 7. **每个边界都有契约测试。** 同一套一致性测试参数化地跑过每个适配器：两个语音后端用录制或伪造的 HTTP 响应，测试不联网；运行时适配器用真实的 `ChatReply` 样本。新增后端必须先通过这套测试。B5 两个识别适配器同样共用离线一致性测试，统一复用 `media.tts.MediaError` 错误层次，禁止泄漏密钥或地址。
 
 `twin media check [--sentences FILE] [--repeats N] --out DIR` 使用固定合成句集（可用含 `text` 的 JSONL 替换），逐句调用 `render_audio` 并识别全部有序分片。报告文件 `report.json` / `report.md` 为 0600；记录两个后端的无密钥指纹。CER 双方先经可选 `media.speech_text.speech_text`（懒加载并记录是否应用及版本），再 NFKC、小写、去标点和空白；总 CER 按总编辑距离/总参考字数计算，空参考分母取一。简体中文提示用于中文识别；常见繁体专用字仅标记，不转换。合成墙钟秒/音频秒使用独立空缓存，包含渲染与写盘，时长未知则不计算比率。

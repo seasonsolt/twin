@@ -185,9 +185,10 @@ class AvatarSettings(BaseModel):
 
 
 class ASRSettings(BaseModel):
-    """Recognition is opt-in and used only for synthetic speech evaluation."""
+    """Opt-in recognition for media memories and synthetic speech evaluation."""
 
-    provider: Literal["cloudflare", "openai_compat"] = "openai_compat"
+    provider: Literal["cloudflare", "openai_compat", "command"] = "openai_compat"
+    command: str | None = None
     model: str | None = None
     base_url: str | None = None
     api_key_env: str = "TWIN_ASR_KEY"
@@ -261,7 +262,7 @@ def egress_of(section: BackendSettings) -> EgressInfo:
             pass
     if section.egress is not None:
         return EgressInfo(kind, section.egress == "external", True, host, "配置显式声明")
-    if section.provider in {"hashing", "silent"}:
+    if section.provider in {"hashing", "silent", "command"}:
         return EgressInfo(kind, False, False, host, "本机后端")
     if section.provider in {"anthropic", "claude_cli", "cloudflare"}:
         return EgressInfo(kind, True, False, host, "外部服务")
@@ -460,7 +461,9 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
 
 
 def make_recognizer(s: ASRSettings) -> SpeechRecognizer:
-    """Construct an explicit evaluation backend without an implicit public endpoint."""
+    """Construct an HTTP recognizer without an implicit public endpoint."""
+    if s.provider == "command":
+        raise ValueError("命令语音识别用于音视频记忆，语音评测请配置 HTTP 识别服务")
     key_from_env(s.api_key_env)
     if not s.base_url:
         raise ValueError(f'[asr] provider = "{s.provider}" 必须设置 base_url')

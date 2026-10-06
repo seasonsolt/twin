@@ -128,9 +128,9 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；署名来自模型元数据。关于你页保持闭口，仍按 VRM > 肖像 > 2D 选择；画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。聊天的 VRM `still` 模式仅渲染一帧，不启动眨眼、头动或口型循环。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败先回退配置肖像、再回退 2D，MP4 导出仍为 2D。CSP 的 img-src 允许 blob: 加载内嵌纹理，media-src 允许本地与 blob: 录音回放；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
 
-记忆页（`Memories.tsx`）有“写一段”“上传文件”“上传文件夹”三个标签，不选择类型或日期。支持 .txt/.md/.pdf/.docx/.html/.htm/.csv/.json/.srt/.vtt，每文件最多 50 MB；PDF 只读文字层，不做 OCR。文件夹以相对文件名发送，服务端只保存 basename，隐藏文件和未知格式显示跳过原因。添加后提示“已添加，正在记住…”。
+记忆页（`Memories.tsx`）有“写一段”“上传文件”“上传文件夹”三个标签，不选择类型或日期。支持 .txt/.md/.pdf/.docx/.html/.htm/.csv/.json/.srt/.vtt，每文件最多 50 MB；PDF 只读文字层，不做 OCR。文件夹以相对文件名发送，服务端只保存 basename，隐藏文件和未知格式显示跳过原因。添加后提示“已添加，正在记住…”。同一文件选择器还接受音频/视频（≤4 GiB），走 `lib/mediaUpload.ts` 而非文档 multipart 路径；顺序 8 MiB 分片、网络/5xx 指数退避、409 按服务端 offset 重同步。断网暂停，online/页面可见时唤醒；localStorage 仅保存 id/name/size/lastModified，刷新后重选同一文件继续。显示文件名、百分比与 MB 和“上传中，请保持页面打开”，16px 文件输入、44px 点击区域，适配 iPhone 底部标签布局。
 
-记忆列表用 MessageList 展示标题、可选日期（无日期不显示前导分隔符）、笔记/文档/聊天记录/问卷/访谈和状态：正在记住…（ThinkingLabel）、已记住 N 条、没找到关于你的内容、处理失败＋重试。“查看”打开只读 Dialog，展示隐私视图的前 20000 字；“删除”通过 ConfirmDialog 确认，成功后自动重新处理。页头显示精简处理指示，非 idle 时每 2 秒轮询 processing 与列表；只在 last_error 存在时显示小的“重新处理”，无构建卡片或构建汇总。离页清理请求和计时器。
+记忆列表用 MessageList 展示标题、可选日期（无日期不显示前导分隔符）、笔记/文档/聊天记录/问卷/访谈和状态：正在记住…（ThinkingLabel）、已记住 N 条、没找到关于你的内容、处理失败＋重试。“查看”打开只读 Dialog，展示隐私视图的前 20000 字；“删除”通过 ConfirmDialog 确认，成功后自动重新处理。页头显示精简处理指示，非 idle 时每 2 秒轮询 processing 与列表；只在 last_error 存在时显示小的“重新处理”，无构建卡片或构建汇总。离页清理请求和计时器。媒体行另有音频/视频图标、时长、等待转写/提取音频/转写中 x/y 分钟/整理中/已加入/失败状态；未配置 ASR 显示“需要配置语音识别”，可点“重新转写”。媒体任务未结束时也每 2 秒轮询列表，详情为时间戳转写正文。
 
 关于你页（About.tsx）用名字与介绍的内联表单调用 PUT identity。其下「形象」可选择照片，在 3:4 框内拖动/双指缩放并用 XHR 上传；「声音」可录制（朗读提示、计时/音量、30 秒自动停、回放/重录/使用）或上传录音/视频，保存后可播放处理后的参考 WAV，有语音服务时自动准备试听。两者均可恢复默认，上传时禁用按钮并显示进度，输入 16px、点击区域至少 44px。本人上传肖像优先；无上传时保留配置 VRM/肖像/2D 预览。聊天头像立即使用带 sha 版本的肖像 URL，声音变更清空客户端音频缓存。"我了解到的你"按九个口语主题分组：经历与身份、看重什么、怎么做决定、怎么思考、擅长什么、说话方式、和人相处、最近在关注、生活与喜好。每条显示表述和“依据”折叠引用，用“对 / 改一下 / 不对”调用原 review API，状态显示待确认 / 已确认 / 已修改 / 已否定；失败回滚并保留修改草稿。隐藏内部编号、比例、等级与来源矩阵。“还想多了解”从 coverage suggestions 映射为主题建议，去重后最多五条，链接到记忆。不再保留 Profile、Identity 页面和 CoverageOverview/虚拟档案列表。
 
@@ -146,7 +146,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | --- | --- |
 | `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）；无数据库路径或密钥 |
 | `GET /api/jobs`、`/api/jobs/{id}` | 状态、时间、进度日志、阶段、计数、里程碑、结果/错误 |
-| `GET /api/persona/sources` | 保留原字段，追加 detected_kind/label、status（processing/remembered/nothing_found/failed）、remembered；不含 preview |
+| `GET /api/persona/sources` | 保留原字段，追加 detected_kind/label、status（processing/remembered/nothing_found/failed；媒体另有 queued/extracting/transcribing/needs_asr）、remembered；媒体追加 media_sha/duration_s/creation_time/transcribed_s/media_job_id；不含 preview |
 | `GET /api/persona/sources/{id}/text` | text/plain，隐私视图，最多 20000 字，不存在 404 |
 | `POST /api/persona/notes` | `{text: str, title?: str}`，text 1–20000 字，空白拒绝；默认标题“笔记 YYYY-MM-DD HH:MM”，当天日期 |
 | `GET /api/persona/processing` | `{state: idle/queued/running, job_id?, last_finished_at?, last_error?}` |
@@ -154,6 +154,11 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `POST /api/persona/import` | multipart files；kind 可选（默认逐文件自动识别），显式 kind/date 兼容；返回 imported/skipped 原因，逐文件追加 detected_kind 和 detected_kind_label |
 | `DELETE /api/persona/sources/{id}` | 删除记忆并自动重新处理，返回 deleted |
 | `POST /api/persona/build` | 构建与向量更新，202 job_id |
+| `POST /api/uploads` | JSON `{filename,size,type}`，拒绝空文件、不支持后缀、超过 4 GiB；返回 `{id,offset:0,chunk_size:8388608}`；创建时清理超过 24 小时未活动的上传 |
+| `PUT /api/uploads/{id}?offset=N` | octet-stream 流式追加，≤16 MiB；不匹配时 409 `{offset}`，成功 `{offset}`；中断或超限回滚本次分片 |
+| `GET /api/uploads/{id}` / `DELETE /api/uploads/{id}` | `{offset,size}` / 取消并删除分片；不存在 GET 返回中文 404 |
+| `POST /api/uploads/{id}/finish` | 完成后 SHA 去重、保留原件、排队 media_ingest；返回来源字段、new、job_id；可重复调用 |
+| `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数 |
 | `POST /api/persona/items/{id}/review` | confirmed/edited/rejected/unreviewed；edited 必须非空 |
 | `GET /api/persona/coverage?as_of=...` | 完成度、来源矩阵、等级标签、分类版本、建议 |
@@ -186,7 +191,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 ## 安全与服务路由
 
-`web.app.create_app` 懒创建后端，测试可注入离线工厂。默认仅接受 localhost、127.0.0.1、[::1] Host，显式 `--host/--allow-host` 可扩展；公网必须另加认证。所有非 GET/HEAD 请求要求 `X-Twin: 1`，不开 CORS，WebSocket 一律关闭（1008）。JSON 上限 1 MB，上传总上限 100 MB、500 文件，单文件 50 MB；上传只取 basename，内存解析，不读客户端指定的服务器路径。
+`web.app.create_app` 懒创建后端，测试可注入离线工厂。默认仅接受 localhost、127.0.0.1、[::1] Host，显式 `--host/--allow-host` 可扩展；公网必须另加认证。所有非 GET/HEAD 请求要求 `X-Twin: 1`，不开 CORS，WebSocket 一律关闭（1008）。JSON 上限 1 MB，上传总上限 100 MB、500 文件，单文件 50 MB；文档上传只取 basename，内存解析，不读客户端指定的服务器路径。音视频 PUT 分片路径豁免 JSON 体积限制，但仍要求 X-Twin，由端点流式检查 16 MiB 上限，写入私有 uploads/<id>.part；JSON 创建请求仍受 1 MB 限制。音视频原件以 SHA 命名的私有目录保存，删除来源同时删除媒体。
 
 所有响应（页面、资源、重定向及错误）保留以下安全头：
 

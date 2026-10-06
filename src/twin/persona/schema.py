@@ -15,6 +15,8 @@ class SourceKind(StrEnum):
     INTERVIEW = "interview"
     CHAT = "chat"
     DOCUMENT = "document"
+    VIDEO = "video"
+    AUDIO = "audio"
 
 
 def document_kind(value: object) -> object:
@@ -31,6 +33,8 @@ SOURCE_KIND_LABELS: dict[SourceKind, str] = {
     SourceKind.INTERVIEW: "访谈",
     SourceKind.CHAT: "聊天记录",
     SourceKind.DOCUMENT: "文档与邮件",
+    SourceKind.VIDEO: "视频",
+    SourceKind.AUDIO: "音频",
 }
 
 _SELF_REPORT = frozenset({SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW})
@@ -72,6 +76,13 @@ class Source(BaseModel):
     declined_facets: list[str] = Field(default_factory=list)
     # Missing on legacy rows: their names may already be irreversibly pseudonymized.
     text_state: Literal["raw", "pseudonymized"] = "pseudonymized"
+
+    media_sha: str | None = None
+    duration_s: float | None = None
+    creation_time: str | None = None
+    media_status: Literal["queued", "extracting", "transcribing", "needs_asr", "ready", "failed"] | None = None
+    transcribed_s: float = 0
+    media_job_id: str | None = None
 
     _legacy_kind = field_validator("kind", mode="before")(document_kind)
 

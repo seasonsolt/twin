@@ -148,7 +148,12 @@ class SecurityMiddleware:
                 detail = "文件太大，请选择较小的文件"
                 await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send_hardened)
                 return
-        if scope["method"] not in SAFE_METHODS and scope.get("path") not in {UPLOAD_PATH, *assets.UPLOAD_PATHS}:
+        media_chunk = scope["method"] == "PUT" and str(scope.get("path", "")).startswith("/api/uploads/")
+        if (
+            scope["method"] not in SAFE_METHODS
+            and scope.get("path") not in {UPLOAD_PATH, *assets.UPLOAD_PATHS}
+            and not media_chunk
+        ):
             declared = headers.get("content-length", "")
             too_large = declared.isdigit() and int(declared) > MAX_JSON_BYTES
             if not too_large:

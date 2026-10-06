@@ -28,7 +28,7 @@ from typing import Any, Literal
 from ..embed import EmbedError
 from ..llm import LLMError
 
-JobKind = Literal["persona_build", "chat", "video"]
+JobKind = Literal["persona_build", "chat", "video", "media_ingest"]
 JobStatus = Literal["queued", "running", "done", "failed"]
 Log = Callable[[str], None]
 JobFn = Callable[[Log], object]
@@ -37,6 +37,7 @@ JOB_LABELS: dict[JobKind, str] = {
     "persona_build": "构建人格档案",
     "chat": "和分身聊天",
     "video": "生成视频",
+    "media_ingest": "转写音视频",
 }
 EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
 MAX_PROGRESS_LINES = 500
@@ -128,6 +129,7 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._exclusive: Job | None = None
         self._answer_slots = threading.BoundedSemaphore(max(1, answer_workers))
+        self._media_slot = threading.BoundedSemaphore(1)
         self._describe_error = describe_error
 
     def submit(
@@ -245,7 +247,11 @@ class JobManager:
             job.tally_failed += 1
 
     def _run(self, job: Job, fn: JobFn) -> None:
-        slot = None if job.kind in EXCLUSIVE_KINDS else self._answer_slots
+        slot = (
+            self._media_slot
+            if job.kind == "media_ingest"
+            else (None if job.kind in EXCLUSIVE_KINDS else self._answer_slots)
+        )
         if slot is not None:
             slot.acquire()
         try:

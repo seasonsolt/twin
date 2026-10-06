@@ -427,6 +427,8 @@ def parse_text(kind: SourceKind, name: str, raw: str, settings: Settings, date: 
         return parse_chat(name, raw, settings)
     if kind is SourceKind.INTERVIEW:
         return parse_interview(name, raw, settings, date)
+    if kind in {SourceKind.VIDEO, SourceKind.AUDIO}:
+        return _paragraphs(kind, name, raw, settings, date)
     if kind is SourceKind.DOCUMENT:
         return parse_document(name, raw, settings, date)
     return parse_questionnaire(name, raw, settings, date)
@@ -437,6 +439,8 @@ MEMORY_KIND_LABELS = {
     SourceKind.CHAT: "聊天记录",
     SourceKind.QUESTIONNAIRE: "问卷",
     SourceKind.INTERVIEW: "访谈",
+    SourceKind.VIDEO: "视频",
+    SourceKind.AUDIO: "音频",
 }
 
 

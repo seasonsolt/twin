@@ -161,6 +161,7 @@ it('crops at 3:4, uploads fractions with progress, disables controls and cache-b
     target: { value: '2' },
   });
   fireEvent.click(screen.getByRole('button', { name: '使用这张' }));
+  await waitFor(() => expect(Xhr.last?.path).toBe('/api/me/portrait'));
   const xhr = Xhr.last;
   expect(xhr.method).toBe('PUT');
   expect(xhr.path).toBe('/api/me/portrait');
@@ -194,6 +195,39 @@ it('crops at 3:4, uploads fractions with progress, disables controls and cache-b
   );
   fireEvent.click(screen.getByRole('button', { name: '恢复默认' }));
   await screen.findByLabelText('肖像占位');
+});
+
+it('re-encodes an iPhone HEIC photo as JPEG before uploading', async () => {
+  Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+    configurable: true,
+    value: vi.fn().mockResolvedValue(undefined),
+  });
+  const context = vi
+    .spyOn(HTMLCanvasElement.prototype, 'getContext')
+    .mockReturnValue({ drawImage: vi.fn() } as never);
+  const toBlob = vi
+    .spyOn(HTMLCanvasElement.prototype, 'toBlob')
+    .mockImplementation((callback) =>
+      callback(new Blob(['jpeg'], { type: 'image/jpeg' })),
+    );
+  render(<SelfAssets />);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: '换一张' })).toBeEnabled(),
+  );
+  const heic = new File(['heic'], 'IMG_0001.HEIC', { type: 'image/heic' });
+  fireEvent.change(screen.getByLabelText('选择照片'), {
+    target: { files: [heic] },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: '裁剪 0.75' }));
+  fireEvent.click(screen.getByRole('button', { name: '使用这张' }));
+  await waitFor(() => expect(Xhr.last?.path).toBe('/api/me/portrait'));
+  const sent = Xhr.last.body?.get('file') as File;
+  expect(sent.type).toBe('image/jpeg');
+  expect(sent.name).toBe('portrait.jpg');
+  expect(Xhr.last.body?.get('w')).toBe('0.6');
+  delete (HTMLImageElement.prototype as { decode?: unknown }).decode;
+  context.mockRestore();
+  toBlob.mockRestore();
 });
 
 it('uploads a video as voice, plays the processed reference and offers synthesis with the new voice', async () => {

@@ -72,6 +72,37 @@ export function uploadAsset(
   });
 }
 
+const SERVER_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+// iPhone photos are often HEIC: the browser can show them but the server can't
+// read them, so re-encode anything else as JPEG (crop fractions stay valid).
+export async function toUploadableImage(file: File): Promise<File> {
+  if (SERVER_IMAGE_TYPES.has(file.type)) return file;
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const scale = Math.min(
+      1,
+      4096 / Math.max(image.naturalWidth, image.naturalHeight),
+    );
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(image.naturalWidth * scale);
+    canvas.height = Math.round(image.naturalHeight * scale);
+    canvas
+      .getContext('2d')
+      ?.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.92),
+    );
+    if (!blob) throw new Error('无法转换照片，请换一张 JPEG 或 PNG 照片');
+    return new File([blob], 'portrait.jpg', { type: 'image/jpeg' });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function useObjectUrl(blob: Blob | null) {
   const [url, setUrl] = useState('');
   useEffect(() => {
@@ -206,7 +237,10 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
     }
     void operation(async (signal) => {
       const form = new FormData();
-      form.append('file', file);
+      form.append(
+        'file',
+        kind === 'portrait' ? await toUploadableImage(file) : file,
+      );
       if (kind === 'portrait' && area) {
         for (const [key, value] of Object.entries({
           x: area.x,

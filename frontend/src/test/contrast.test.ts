@@ -32,8 +32,24 @@ const themes = [...css.matchAll(/:root\s*\{([^}]+)\}/g)]
   .filter((theme) => theme.canvas);
 
 describe('WCAG AA tokens', () => {
-  it('defines both light and dark themes', () => {
-    expect(themes).toHaveLength(2);
+  it('uses the warm palette even when the system is dark', () => {
+    expect(themes).toHaveLength(1);
+    expect(themes[0]).toMatchObject({
+      canvas: '#fff4ea',
+      accent: '#c9432c',
+      'text-primary': '#2b1d16',
+      'text-secondary': '#6b4a3a',
+      border: '#f2dfcf',
+      soft: '#fbe9dd',
+      sun: '#f5b83d',
+    });
+    expect(css).not.toContain('prefers-color-scheme: dark');
+    expect(
+      contrast(themes[0]['text-primary'], themes[0].sun),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(themes[0].canvas, themes[0]['text-primary']),
+    ).toBeGreaterThanOrEqual(4.5);
   });
   for (const [index, theme] of themes.entries()) {
     it(`${index === 0 ? 'light' : 'dark'} text and status colors have 4.5:1 on every surface`, () => {
@@ -41,7 +57,7 @@ describe('WCAG AA tokens', () => {
         'text-primary',
         'text-secondary',
         'text-tertiary',
-        'accent',
+        'accent-ink',
         'success',
         'warning',
         'danger',

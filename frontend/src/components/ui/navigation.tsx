@@ -26,14 +26,14 @@ export function Tabs({
       <TabsPrimitive.Root value={value} onValueChange={setValue}>
         <TabsPrimitive.List
           aria-label="内容分类"
-          className="mb-4 inline-flex gap-1 rounded-md border border-border bg-canvas p-1"
+          className="mb-4 inline-flex gap-1 rounded-full border border-border bg-soft p-1"
         >
           {items.map((item) => (
             <TabsPrimitive.Trigger
               key={item.value}
               value={item.value}
               disabled={item.disabled}
-              className="relative rounded-sm px-4 py-1.5 text-secondary data-[state=active]:text-primary disabled:opacity-40"
+              className="relative min-h-11 rounded-full px-4 py-1.5 text-secondary data-[state=active]:text-canvas disabled:opacity-40"
             >
               {value === item.value && (
                 <motion.span
@@ -41,7 +41,7 @@ export function Tabs({
                   initial={reduced ? { opacity: 0 } : false}
                   animate={{ opacity: 1 }}
                   transition={transition}
-                  className="absolute inset-0 rounded-sm bg-surface shadow-elevation-1"
+                  className="absolute inset-0 rounded-full bg-primary shadow-elevation-1"
                 />
               )}
               <span className="relative">{item.label}</span>

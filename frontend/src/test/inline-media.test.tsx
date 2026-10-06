@@ -8,16 +8,19 @@ import {
   within,
 } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { Chat } from '../pages/Chat';
 import { ChatAvatar } from '../features/chat/ChatAvatar';
-import { ReplyVideo } from '../features/chat/ReplyVideo';
+import { ReplyVideo as FullscreenVideo } from '../features/chat/ReplyVideo';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
-import { useReplyVideos } from '../features/chat/useReplyVideos';
+import {
+  useReplyVideos,
+  type ReplyVideoState,
+} from '../features/chat/useReplyVideos';
 import type { Turn } from '../features/chat/types';
 import { personaUrl } from '../lib/persona';
 import { CHAT_KEY } from '../features/chat/useConversation';
@@ -244,29 +247,23 @@ it.each(['grounded', 'general', 'abstain'] as const)(
       ).not.toBeInTheDocument();
       expect(count('/api/media/video')).toBe(0);
     } else {
-      expect(article).toHaveClass('flex', 'w-full', 'min-w-0');
-      expect(article.firstElementChild).toHaveAttribute(
-        'aria-label',
-        '分身头像',
-      );
-      expect(screen.getByRole('button', { name: '播放语音' })).toHaveClass(
+      expect(article).toHaveClass('min-w-0');
+      expect(article.querySelector('img, video')).toBeNull();
+      expect(screen.getByRole('button', { name: '让本人说这句' })).toHaveClass(
         'min-h-11',
         'min-w-11',
       );
       expect(
-        screen.getByRole('button', { name: '播放语音' }),
-      ).toHaveTextContent('播放');
+        screen.getByRole('button', { name: '让本人说这句' }),
+      ).not.toHaveTextContent('播放');
       expect(
         screen.queryByRole('button', { name: '生成视频' }),
       ).not.toBeInTheDocument();
       await waitFor(() => expect(count('/api/media/video')).toBe(1));
-      expect(screen.getByRole('button', { name: '真人版生成中' })).toHaveClass(
-        'h-20',
-        'w-16',
-        'rounded-md',
-      );
+      expect(
+        screen.getByRole('button', { name: '让本人说这句' }),
+      ).toHaveAttribute('data-generating', 'true');
       expect(screen.getByRole('group', { name: '回复媒体' })).toHaveClass(
-        'flex-wrap',
         'min-w-0',
       );
     }
@@ -302,10 +299,146 @@ it('hides video without capability, but keeps the voice action', async () => {
     </ConfirmProvider>,
   );
   await screen.findAllByRole('img', { name: '本人的肖像' });
-  expect(screen.getByRole('button', { name: '播放语音' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '让本人说这句' })).toBeVisible();
   expect(
     screen.queryByRole('button', { name: '生成视频' }),
   ).not.toBeInTheDocument();
+});
+function mountStage() {
+  sessionStorage.setItem(CHAT_KEY, JSON.stringify(videoTurns));
+  return render(
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={['/chat']}>
+        <Chat />
+      </MemoryRouter>
+    </ConfirmProvider>,
+  );
+}
+it('reply icons speak on the stage, update live captions and rings, and defer a ready video to the next play', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  vi.stubGlobal('innerWidth', 390);
+  const original = fetchMock.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/media/audio') return original(url, init);
+    return json({
+      segment_count: 2,
+      script: {
+        segments: [
+          { index: 0, text: '第一句。' },
+          { index: 1, text: '第二句。' },
+        ],
+      },
+      segments: parts.filter((part) =>
+        JSON.parse(init!.body as string).segments.includes(part.index),
+      ),
+    });
+  });
+  const view = mountStage();
+  await act(async () => {});
+  const reply = screen.getByRole('article', { name: '分身回复' });
+  expect(reply.querySelector('img, video')).toBeNull();
+  expect(within(reply).getAllByRole('button')).toHaveLength(1);
+  fireEvent.click(within(reply).getByRole('button', { name: '让本人说这句' }));
+  await act(async () => {});
+  const audio = view.container.querySelector('audio')!;
+  expect(screen.getByTestId('stage-caption')).toHaveAttribute(
+    'aria-live',
+    'polite',
+  );
+  expect(screen.getByTestId('stage-caption')).toHaveTextContent('第一句。');
+  audio.currentTime = 1.5;
+  tick();
+  expect(
+    view.container.querySelector('.chat-stage [data-portrait-glow]'),
+  ).toHaveAttribute('data-glow-level', '3');
+  expect(reply.querySelector('.twin-bubble')).toHaveAttribute(
+    'data-speaking',
+    'true',
+  );
+  fireEvent.ended(audio);
+  expect(screen.getByTestId('stage-caption')).toHaveTextContent('第二句。');
+  jobStatus = 'done';
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(screen.queryByLabelText('舞台真人视频')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '正在说这句，点击暂停' }));
+  fireEvent.click(screen.getByRole('button', { name: '让本人说这句' }));
+  const player = screen.getByLabelText('舞台真人视频');
+  expect(player).toHaveAttribute('playsinline');
+  expect(player).toHaveClass('object-cover');
+  expect(audio).not.toHaveAttribute('src');
+  expect(screen.getByText('真人 · 0:06')).toBeVisible();
+  expect(reply.querySelector('video, img')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '打开真人视频全屏' }));
+  expect(screen.getByRole('dialog', { name: '真人版' })).toBeVisible();
+  expect(screen.getByRole('link', { name: '保存' })).toHaveAttribute(
+    'download',
+    'twin-video.mp4',
+  );
+  fireEvent.click(screen.getByRole('button', { name: '关闭视频' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+it.each([375, 390, 1023, 1024, 1440])(
+  'collapses on composer focus or scrolling away, expands on the circle, and uses a column at %spx',
+  async (width) => {
+    vi.stubGlobal('innerWidth', width);
+    vi.stubGlobal('scrollY', 1000);
+    const view = mountStage();
+    await act(async () => {});
+    const stage = screen.getByRole('banner', { name: '本人的舞台' });
+    expect(stage).toHaveAttribute('data-desktop', String(width >= 1024));
+    fireEvent.focus(screen.getByRole('textbox', { name: '你说' }));
+    expect(stage).toHaveAttribute('data-collapsed', String(width < 1024));
+    if (width < 1024) {
+      fireEvent.click(screen.getByRole('button', { name: '展开舞台' }));
+      expect(stage).toHaveAttribute('data-collapsed', 'false');
+      Object.defineProperty(document.documentElement, 'scrollHeight', {
+        configurable: true,
+        value: 3000,
+      });
+      vi.stubGlobal('scrollY', 900);
+      fireEvent.scroll(window);
+      expect(stage).toHaveAttribute('data-collapsed', 'true');
+      expect(
+        view.container.querySelector('.stage-space')?.getAttribute('style'),
+      ).toBe(stage.getAttribute('style'));
+    }
+    const css = readFileSync('src/design/tokens.css', 'utf8');
+    expect(css).toContain('@media (min-width: 1024px)');
+    expect(css).toContain('grid-template-columns: 320px minmax(0, 1fr)');
+  },
+);
+it('jumps to collapsed/expanded heights with reduced motion and retains static speaking cues', async () => {
+  preference.reduced = true;
+  vi.stubGlobal('innerWidth', 375);
+  const view = mountStage();
+  await act(async () => {});
+  fireEvent.focus(screen.getByRole('textbox', { name: '你说' }));
+  const stage = screen.getByRole('banner', { name: '本人的舞台' });
+  expect(stage).toHaveStyle({ height: '96px' });
+  fireEvent.click(screen.getByRole('button', { name: '让本人说这句' }));
+  await screen.findByRole('status', { name: '正在说话' });
+  expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '展开舞台' }));
+  expect(stage).toHaveStyle({ height: '360px' });
+});
+it('ships only self-hosted unicode-range font slices, with swap and no body webfont', () => {
+  const css = readFileSync('public/fonts/ma-shan-zheng/font.css', 'utf8');
+  expect(css).not.toMatch(/https?:|\/\//);
+  expect(css.match(/font-display: swap/g)).toHaveLength(92);
+  expect(css.match(/unicode-range:/g)).toHaveLength(92);
+  const files = readdirSync('public/fonts/ma-shan-zheng').filter((file) =>
+    file.endsWith('.woff2'),
+  );
+  expect(files).toHaveLength(92);
+  for (const file of files)
+    expect(css).toContain(`/fonts/ma-shan-zheng/${file}`);
+  const tokens = readFileSync('src/design/tokens.css', 'utf8');
+  expect(tokens).toContain(
+    "'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', serif",
+  );
 });
 it('plays all ordered parts, pauses/resumes, follows lipsync with glow and tracks duration progress', async () => {
   const view = render(<AudioHarness />);
@@ -479,6 +612,61 @@ it('prefers portrait, then a VRM still, then an initial, never a cartoon', async
   );
   expect(view.container.querySelector('svg')).toBeNull();
 });
+function ReplyVideo({
+  id,
+  answer,
+  portrait,
+  state,
+  speaking,
+  onRetry,
+  onError,
+}: {
+  id: string;
+  answer: ChatReply;
+  portrait?: string;
+  state?: ReplyVideoState;
+  speaking: boolean;
+  onRetry(): void;
+  onError(): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (state?.status === 'done' && !speaking) setRevealed(true);
+    if (state?.status !== 'done') setRevealed(false);
+  }, [state?.status, speaking]);
+  const failed = state?.status === 'failed';
+  const ready = state?.status === 'done' && revealed;
+  return (
+    <>
+      <button
+        ref={trigger}
+        className="min-h-11 min-w-11"
+        aria-label={
+          failed ? '重试生成视频' : ready ? '播放真人视频' : '真人版生成中'
+        }
+        disabled={!ready && !failed}
+        onClick={() => (failed ? onRetry() : setOpen(true))}
+      >
+        {ready
+          ? `0:${String(Math.round(state?.result?.duration_s ?? 0)).padStart(2, '0')}`
+          : '生成中'}
+      </button>
+      {failed && <p role="alert">真人版生成失败 · 重试</p>}
+      <FullscreenVideo
+        id={id}
+        answer={answer}
+        portrait={portrait}
+        state={state}
+        open={open}
+        onOpenChange={setOpen}
+        trigger={trigger}
+        onError={onError}
+      />
+    </>
+  );
+}
 const videoTurns: Turn[] = [
   {
     id: 'one',
@@ -565,7 +753,7 @@ it('starts video once, renders only a thumbnail, opens fullscreen playback and c
     await vi.advanceTimersByTimeAsync(1000);
   });
   const thumbnail = screen.getByRole('button', { name: '播放真人视频' });
-  expect(thumbnail).toHaveClass('h-20', 'w-16', 'rounded-md');
+  expect(thumbnail).toHaveClass('min-h-11', 'min-w-11');
   expect(thumbnail).toHaveTextContent('0:06');
   expect(view.container.querySelector('video')).toBeNull();
   fireEvent.click(thumbnail);

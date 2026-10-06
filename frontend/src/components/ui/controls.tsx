@@ -47,11 +47,11 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center gap-2 rounded-md font-medium disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex shrink-0 items-center justify-center gap-2 rounded-full font-medium disabled:cursor-not-allowed disabled:opacity-50',
         variants[variant],
         {
-          sm: 'min-h-8 px-3 text-sm',
-          md: 'min-h-10 px-4',
+          sm: 'min-h-11 px-3 text-sm',
+          md: 'min-h-11 px-4',
           lg: 'min-h-12 px-5 text-md',
         }[size],
         className,
@@ -78,7 +78,7 @@ export function IconButton({
       variant="ghost"
       {...props}
       aria-label={label}
-      className={cn('size-10 p-0', props.className)}
+      className={cn('size-11 p-0', props.className)}
     >
       {children}
     </Button>
@@ -90,7 +90,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
     <input
       {...props}
       className={cn(
-        'min-h-11 w-full rounded-md border border-border bg-surface px-3 text-md text-primary placeholder:text-tertiary disabled:opacity-50 md:text-base',
+        'min-h-11 w-full rounded-md border border-border bg-surface px-3 text-md text-primary placeholder:text-tertiary disabled:opacity-50',
         className,
       )}
     />
@@ -127,7 +127,7 @@ export function Textarea({
       value={value}
       rows={rows}
       className={cn(
-        'w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-md leading-6 placeholder:text-tertiary disabled:opacity-50 md:text-base',
+        'w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-md leading-6 placeholder:text-tertiary disabled:opacity-50',
         className,
       )}
       onChange={(event) => {

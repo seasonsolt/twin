@@ -71,8 +71,8 @@ def test_assets_and_csp_safe_build(client: TestClient) -> None:
     assert all(script.get("src") for script in parser.scripts)
     assert not "".join(parser.inline_script).strip()
     for reference in parser.references:
-        assert reference.startswith("/assets/")
-        assert re.fullmatch(r"/assets/[\w-]+-[\w-]+\.(js|css)", reference)
+        bundled = re.fullmatch(r"/assets/[\w-]+-[\w-]+\.(js|css)", reference)
+        assert bundled or reference == "/fonts/ma-shan-zheng/font.css"
         response = client.get(reference)
         assert response.status_code == 200, reference
         expected = "text/javascript" if reference.endswith(".js") else "text/css"
@@ -91,7 +91,19 @@ def test_assets_and_csp_safe_build(client: TestClient) -> None:
         css = stylesheet.read_text(encoding="utf-8")
         assert not re.search(r"(?:@import\s+(?:url\(\s*)?|url\(\s*)[\"']?(?:[a-z][\w+.-]*:|//)", css, re.IGNORECASE)
     assert not list(assets.glob("*.map"))
-    assert {path.name for path in web_app.STATIC_DIR.iterdir()} == {"index.html", "assets"}
+    assert {path.name for path in web_app.STATIC_DIR.iterdir()} == {"index.html", "assets", "fonts"}
+    font_css = client.get("/fonts/ma-shan-zheng/font.css")
+    assert font_css.status_code == 200
+    assert_security(font_css)
+    assert "font-display: swap" in font_css.text and "unicode-range:" in font_css.text
+    urls = re.findall(r"url\(([^)]+)\)", font_css.text)
+    assert len(urls) == 92
+    for url in urls:
+        assert re.fullmatch(r"/fonts/ma-shan-zheng/slice-\d{3}\.woff2", url)
+        response = client.get(url)
+        assert response.status_code == 200 and response.content.startswith(b"wOF2")
+        assert response.headers["content-type"].startswith("font/woff2")
+        assert_security(response)
 
 
 @pytest.mark.parametrize("path", ["/next", "/next/"])
@@ -140,6 +152,9 @@ def test_without_build_shows_placeholder(
         "/static/app.js",
         "/next/assets/missing.js",
         "/assets/missing.js",
+        "/fonts/missing.woff2",
+        "/fonts/%2E%2E/index.html",
+        "/fonts/%2E%2E%2F%2E%2E%2Fapp.py",
         "/assets/%2E%2E/index.html",
         "/assets/%2E%2E/%2E%2E/app.py",
         "/assets/%2E%2E%2F%2E%2E%2Fapp.py",

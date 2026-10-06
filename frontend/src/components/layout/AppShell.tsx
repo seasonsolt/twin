@@ -47,7 +47,7 @@ function Navigation({
               to={`/${route}`}
               onClick={onNavigate}
               aria-label={collapsed ? title : undefined}
-              className="relative flex min-h-11 items-center gap-3 rounded-md px-3 text-secondary hover:text-primary"
+              className="relative flex min-h-11 items-center gap-3 rounded-full px-3 text-secondary hover:text-primary aria-[current=page]:text-canvas"
             >
               {({ isActive }) => (
                 <>
@@ -57,7 +57,7 @@ function Navigation({
                       initial={reduced ? { opacity: 0 } : false}
                       animate={{ opacity: 1 }}
                       transition={transition}
-                      className="absolute inset-0 rounded-md border border-accent/10 bg-accent/10"
+                      className="absolute inset-0 rounded-full bg-primary"
                     />
                   )}
                   <Icon aria-hidden className="relative size-5 shrink-0" />
@@ -85,14 +85,14 @@ function BottomTabs() {
   return (
     <nav
       aria-label="底部导航"
-      className="mobile-tabs fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-border bg-surface/95 backdrop-blur-xl md:hidden"
+      className="mobile-tabs fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden"
     >
       {navItems.map(({ route, title, icon: Icon }) => (
         <NavLink
           key={route}
           to={`/${route}`}
           className={({ isActive }) =>
-            `flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs ${isActive ? 'font-semibold text-accent' : 'text-secondary'}`
+            `flex min-h-11 items-center justify-center gap-2 rounded-full text-sm ${isActive ? 'bg-primary font-semibold text-canvas' : 'text-secondary'}`
           }
         >
           <Icon className="size-5" aria-hidden />
@@ -225,9 +225,11 @@ export function AppShell() {
         </div>
       </motion.aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex min-h-16 items-center gap-3 border-b border-border px-4 py-2 md:px-8">
-          <PersonaSwitcher />
-        </header>
+        {location.pathname !== '/chat' && (
+          <header className="flex min-h-16 items-center gap-3 border-b border-border px-4 py-2 md:px-8">
+            <PersonaSwitcher />
+          </header>
+        )}
         {error && (
           <div
             role="alert"
@@ -239,7 +241,7 @@ export function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className="app-main mx-auto w-full max-w-6xl flex-1 px-4 pt-4 outline-none md:px-8 md:py-8"
+          className={`app-main mx-auto w-full flex-1 outline-none ${location.pathname === '/chat' ? 'chat-main' : 'max-w-6xl px-4 pt-4 md:px-8 md:py-8'}`}
         >
           {location.pathname === '/chat' ? (
             outlet

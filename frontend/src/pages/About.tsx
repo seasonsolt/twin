@@ -8,7 +8,6 @@ import { useIdentity } from '../features/identity/useIdentity';
 import { ItemCard } from '../features/profile/ItemCard';
 import { useProfile } from '../features/profile/useProfile';
 import { useStatus } from '../stores/status';
-import { useMobile } from '../lib/useMobile';
 
 export const topics: Record<string, string> = {
   D1: '经历与身份',
@@ -45,7 +44,6 @@ const backendNames: Record<string, string> = {
 export function About() {
   const active = useLocation().pathname === '/about';
   const identity = useIdentity(active);
-  const mobile = useMobile();
   const profile = useProfile(active);
   const status = useStatus((state) => state.data);
   const modelUrl = identity.capabilities?.avatar_model?.url;
@@ -73,29 +71,21 @@ export function About() {
   return (
     <div className="about-page space-y-4 md:space-y-6">
       <header className="flex items-center gap-4">
-        {mobile && identity.capabilities && (
+        {identity.capabilities && (
           <div
-            className="size-24 shrink-0 overflow-hidden rounded-xl"
+            className="about-portrait w-[120px] shrink-0"
             aria-label="你的形象"
           >
-            {identity.capabilities.avatar_image ? (
-              <img
-                src={identity.capabilities.avatar_image.url}
-                alt={`${identity.data?.name || '你'}的肖像`}
-                className="size-full object-cover object-[50%_30%]"
-              />
-            ) : (
-              <AvatarPreview
-                capabilities={identity.capabilities}
-                onModelNameChange={onModelNameChange}
-              />
-            )}
+            <AvatarPreview
+              capabilities={identity.capabilities}
+              onModelNameChange={onModelNameChange}
+            />
           </div>
         )}
         <div>
           <h1 className="text-lg font-semibold md:text-2xl">关于你</h1>
-          {mobile && identity.data && (
-            <p className="mt-1 text-md font-medium">{identity.data.name}</p>
+          {identity.data && (
+            <p className="persona-name mt-1 text-2xl">{identity.data.name}</p>
           )}
         </div>
       </header>
@@ -129,18 +119,6 @@ export function About() {
                     : `${identity.data.avatar || '未设置'}（风格化形象）`}
               </p>
             </div>
-            {!mobile &&
-              identity.capabilities &&
-              (identity.capabilities.avatar ||
-                identity.capabilities.avatar_model ||
-                identity.capabilities.avatar_image) && (
-                <div className="w-48">
-                  <AvatarPreview
-                    capabilities={identity.capabilities}
-                    onModelNameChange={onModelNameChange}
-                  />
-                </div>
-              )}
           </div>
         )}
         {identity.avatarError && (

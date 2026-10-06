@@ -44,7 +44,7 @@ export function FlowStepper({
       aria-current={step === active ? 'step' : undefined}
       disabled={step > maxStep}
       onClick={() => select(step)}
-      className="size-8 shrink-0 rounded-full border border-border bg-surface text-secondary aria-[current=step]:border-accent aria-[current=step]:bg-accent aria-[current=step]:text-on-accent"
+      className="size-11 shrink-0 rounded-full border border-border bg-surface text-secondary aria-[current=step]:border-accent aria-[current=step]:bg-accent aria-[current=step]:text-on-accent"
     >
       {step}
     </button>
@@ -111,7 +111,7 @@ export function FlowStepper({
           backButtonProps={{
             type: 'button',
             className:
-              'rounded-md border border-border px-3 py-2 text-secondary',
+              'min-h-11 rounded-full border border-border px-3 py-2 text-secondary',
           }}
           nextButtonProps={
             {
@@ -120,7 +120,7 @@ export function FlowStepper({
                 (current >= maxStep && current < steps.length) ||
                 (!completeOnLast && current === steps.length),
               className:
-                'rounded-md bg-accent px-3 py-2 text-on-accent disabled:opacity-50',
+                'min-h-11 rounded-full bg-accent px-3 py-2 text-on-accent disabled:opacity-50',
             } as React.ButtonHTMLAttributes<HTMLButtonElement>
           }
           renderStepIndicator={({ step, currentStep, onStepClick }) =>

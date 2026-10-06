@@ -27,8 +27,10 @@ function Portrait({ persona }: { persona?: Persona }) {
 
 export function PersonaSwitcher({
   createOnly = false,
+  stage = false,
 }: {
   createOnly?: boolean;
+  stage?: boolean;
 }) {
   const identity = useAuth((state) => state.identity);
   const { id, items, refresh, switchTo } = usePersonas();
@@ -120,16 +122,20 @@ export function PersonaSwitcher({
         type="button"
         aria-label={createOnly ? '新建分身' : '切换分身'}
         aria-expanded={mode !== null}
-        className="flex min-h-11 items-center gap-2 rounded-md px-2 text-base hover:bg-accent/10"
+        className={`flex min-h-11 items-center gap-2 rounded-full px-3 text-base ${stage ? 'stage-switch' : 'hover:bg-soft'}`}
         onClick={() => {
           setMode(createOnly ? 'create' : 'list');
           setError('');
           void work(refresh);
         }}
       >
-        <Portrait persona={current} />
-        <span className="max-w-52 truncate">
-          {createOnly ? '新建分身' : name || current?.name || '本人'}
+        {!stage && <Portrait persona={current} />}
+        <span className={stage ? '' : 'persona-name max-w-52 truncate'}>
+          {createOnly
+            ? '新建分身'
+            : stage
+              ? '切换'
+              : name || current?.name || '本人'}
         </span>
         <ChevronDown className="size-4" aria-hidden />
       </button>
@@ -166,7 +172,9 @@ export function PersonaSwitcher({
                 >
                   <Portrait persona={persona} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">{persona.name}</span>
+                    <span className="persona-name block truncate text-xl">
+                      {persona.name}
+                    </span>
                     <span className="text-sm text-secondary">
                       {persona.sources} 条记忆
                     </span>

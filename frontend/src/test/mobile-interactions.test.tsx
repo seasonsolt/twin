@@ -108,8 +108,9 @@ it.each([375, 390, 767])(
       'page',
     );
     expect(within(tabs).getByRole('link', { name: '聊天' })).toHaveClass(
-      'min-h-14',
-      'text-accent',
+      'min-h-11',
+      'bg-primary',
+      'text-canvas',
     );
     expect(
       screen.queryByRole('button', { name: '打开导航' }),

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { LoaderCircle, Play, RotateCcw, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { personaUrl } from '../../lib/persona';
 import type { ChatReply } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
@@ -10,89 +10,45 @@ export function ReplyVideo({
   answer,
   portrait,
   state,
-  speaking,
-  onRetry,
+  open,
+  onOpenChange,
+  trigger,
   onError,
+  startTime = 0,
+  onTimeUpdate,
+  onEnded,
+  onPlaying,
+  onPause,
 }: {
   id: string;
   answer: ChatReply;
   portrait?: string;
   state?: ReplyVideoState;
-  speaking: boolean;
-  onRetry(): void;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  trigger: RefObject<HTMLButtonElement | null>;
   onError(): void;
+  startTime?: number;
+  onTimeUpdate?(time: number): void;
+  onEnded?(): void;
+  onPlaying?(): void;
+  onPause?(): void;
 }) {
   portrait = portrait ? personaUrl(portrait) : undefined;
-  const [revealed, setRevealed] = useState(false);
-  const [open, setOpen] = useState(false);
   const touch = useRef<{ x: number; y: number } | null>(null);
-  const thumbnail = useRef<HTMLButtonElement>(null);
   const url = state?.status === 'done' ? videoUrl(state.result) : null;
-  useEffect(() => {
-    if (url && !speaking) setRevealed(true);
-    if (!url) {
-      setRevealed(false);
-      setOpen(false);
-    }
-  }, [url, speaking]);
   if (answer.abstain || answer.mode === 'abstain') return null;
-  const failed = state?.status === 'failed';
-  const ready = !!url && revealed;
-  const duration = Math.round(state?.result?.duration_s ?? 0);
+  const ready = !!url;
+  const setOpen = onOpenChange;
   return (
     <Dialog.Root open={open && ready} onOpenChange={setOpen}>
-      <button
-        ref={thumbnail}
-        type="button"
-        aria-label={
-          failed ? '重试生成视频' : ready ? '播放真人视频' : '真人版生成中'
-        }
-        aria-busy={!ready && !failed}
-        disabled={!ready && !failed}
-        onClick={() => (failed ? onRetry() : setOpen(true))}
-        className="relative h-20 w-16 shrink-0 overflow-hidden rounded-md bg-accent/10 text-white"
-      >
-        {portrait && (
-          <img
-            src={portrait}
-            alt=""
-            className="absolute inset-0 size-full object-cover object-[50%_30%]"
-          />
-        )}
-        <span className="absolute inset-0 bg-black/25" />
-        <span className="relative grid place-items-center">
-          {failed ? (
-            <RotateCcw size={18} aria-hidden />
-          ) : ready ? (
-            <Play size={20} fill="currentColor" aria-hidden />
-          ) : (
-            <LoaderCircle
-              size={18}
-              aria-hidden
-              className="animate-spin motion-reduce:animate-none"
-            />
-          )}
-        </span>
-        <span className="absolute inset-x-0 bottom-0 bg-black/40 py-0.5 text-center text-xs">
-          {failed
-            ? '重试'
-            : ready
-              ? `${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, '0')}`
-              : '生成中'}
-        </span>
-      </button>
-      {failed && (
-        <span role="alert" className="text-xs text-secondary">
-          真人版生成失败 · 重试
-        </span>
-      )}
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/90" />
         <Dialog.Content
           aria-describedby={`video-text-${id}`}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            thumbnail.current?.focus();
+            trigger.current?.focus();
           }}
           className="video-overlay fixed inset-0 z-50 flex h-dvh flex-col bg-black/90 px-4 text-white outline-none"
           onClick={(event) => {
@@ -146,6 +102,15 @@ export function ReplyVideo({
                 preload="metadata"
                 poster={portrait}
                 src={url}
+                onLoadedMetadata={(event) => {
+                  event.currentTarget.currentTime = startTime;
+                }}
+                onTimeUpdate={(event) =>
+                  onTimeUpdate?.(event.currentTarget.currentTime)
+                }
+                onEnded={onEnded}
+                onPlaying={onPlaying}
+                onPause={onPause}
                 onError={() => {
                   setOpen(false);
                   onError();

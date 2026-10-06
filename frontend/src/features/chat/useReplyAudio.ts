@@ -12,6 +12,7 @@ const initial = {
   speaking: false,
   level: 0,
   progress: 0,
+  caption: '',
   errors: {} as Record<string, string>,
 };
 const idle = {
@@ -25,6 +26,7 @@ const idle = {
 interface AudioReply {
   count: number;
   segments: Map<number, AudioPart[]>;
+  captions?: Map<number, string>;
 }
 
 export function useReplyAudio(active: boolean) {
@@ -66,7 +68,7 @@ export function useReplyAudio(active: boolean) {
     const quiet = () => {
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
-      publish({ speaking: false, level: 0 });
+      publish({ speaking: false, level: 0, caption: '' });
     };
     const pause = () => {
       version += 1;
@@ -124,6 +126,7 @@ export function useReplyAudio(active: boolean) {
         speaking: true,
         level: track?.levels[Math.floor(currentTime() * track.fps)] ?? 0,
         progress: progress(),
+        caption: reply.captions?.get(segment) ?? '',
       });
       frame = requestAnimationFrame(sample);
     };
@@ -160,7 +163,7 @@ export function useReplyAudio(active: boolean) {
         return;
       }
       waiting = false;
-      publish({ loading: false });
+      publish({ loading: false, caption: reply.captions?.get(segment) ?? '' });
       if (audio.getAttribute('src') !== currentPart.url) {
         audio.src = currentPart.url;
         audio.currentTime = 0;
@@ -203,6 +206,7 @@ export function useReplyAudio(active: boolean) {
       reply = cache.current.get(id) ?? { count: 0, segments: new Map() };
       cache.current.set(id, reply);
       const entry = reply;
+      entry.captions ??= new Map([[0, answer.reply]]);
       const controller = new AbortController();
       request = controller;
       const current = ++version;
@@ -232,6 +236,7 @@ export function useReplyAudio(active: boolean) {
           : await api<{
               segment_count: number;
               segments: AudioPart[];
+              script?: { segments: { index: number; text: string }[] };
             }>('/api/media/audio', {
               method: 'POST',
               json: {
@@ -245,6 +250,10 @@ export function useReplyAudio(active: boolean) {
         if (!valid()) return;
         if (!result.segments.length)
           throw new Error('没有可播放的语音，请重试');
+        if ('script' in result && result.script)
+          entry.captions = new Map(
+            result.script.segments.map((item) => [item.index, item.text]),
+          );
         entry.count = result.segment_count;
         result.segments = result.segments.map((item) => ({
           ...item,

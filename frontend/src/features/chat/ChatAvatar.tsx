@@ -23,11 +23,13 @@ export function ChatAvatar({
   capabilities,
   level = 0,
   speaking = false,
+  className = 'size-9',
 }: {
   name: string;
   capabilities: Capabilities | null;
   level?: number;
   speaking?: boolean;
+  className?: string;
 }) {
   const portrait = capabilities?.avatar_image?.url
     ? personaUrl(capabilities.avatar_image.url)
@@ -47,7 +49,7 @@ export function ChatAvatar({
     </span>
   );
   return (
-    <div className="relative size-9 shrink-0" aria-label="分身头像">
+    <div className={`relative shrink-0 ${className}`} aria-label="分身头像">
       <div className="size-full overflow-hidden rounded-full">
         {portrait && failedPortrait !== portrait ? (
           <img

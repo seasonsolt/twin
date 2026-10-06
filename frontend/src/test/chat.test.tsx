@@ -243,10 +243,14 @@ it('renders general reply text without mode or confidence badges', async () => {
     screen.queryByText(/通用回答|置信度|需要本人确认/),
   ).not.toBeInTheDocument();
   expect(document.querySelector('time')).toBeNull();
-  expect(await screen.findByRole('button', { name: '播放语音' })).toBeVisible();
   expect(
-    await screen.findByRole('button', { name: '真人版生成中' }),
+    await screen.findByRole('button', { name: '让测试人说这句' }),
   ).toBeVisible();
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: '让测试人说这句' }),
+    ).toHaveAttribute('data-generating', 'true'),
+  );
   expect(
     screen.queryByRole('button', { name: '生成视频' }),
   ).not.toBeInTheDocument();
@@ -321,7 +325,7 @@ it('restores static history and clears immediately without confirmation', async 
   const { container } = mount();
   const user = userEvent.setup();
   expect(container.querySelector('.blur-text')).toBeNull();
-  await user.click(screen.getByRole('button', { name: '清空对话' }));
+  await user.click(screen.getByRole('button', { name: '新对话' }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   await waitFor(() =>
     expect(screen.queryByLabelText('分身回复')).not.toBeInTheDocument(),
@@ -393,7 +397,8 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
   );
   const input = screen.getByRole('textbox', { name: '你说' });
   expect(input).toHaveAttribute('rows', '1');
-  expect(input).toHaveClass('text-md', 'md:text-base');
+  expect(input).toHaveClass('text-md');
+  expect(input).not.toHaveClass('md:text-base');
   expect(view.container.querySelector('time')).toBeNull();
   const css = readFileSync('src/design/tokens.css', 'utf8');
   expect(css).toContain('font-size: 16px !important');

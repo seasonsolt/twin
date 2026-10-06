@@ -383,5 +383,7 @@ def create_app(
 
     if (STATIC_DIR / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="frontend-assets")
+    if (STATIC_DIR / "fonts").is_dir():
+        app.mount("/fonts", StaticFiles(directory=STATIC_DIR / "fonts"), name="frontend-fonts")
 
     return app

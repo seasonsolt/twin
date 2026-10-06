@@ -6,7 +6,7 @@
 
 ## 回答契约
 
-`ServiceAnswer` v1 为冻结、只增不删的契约：
+`ServiceAnswer` v1 为冻结契约；旧记录中的 label 字段读取时忽略：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -16,7 +16,6 @@
 | `confidence` | L3 给出的置信度，不提高 |
 | `citations` | 已解析的证据引用，保持 L3 顺序 |
 | `as_of` | 截止日期（含当天），未指定为 `null` |
-| `label` | `AI 合成，不代表本人意见` |
 | `persona_name` | 配置的本人名字 |
 | `generated_at` | 带时区的 UTC 生成时间 |
 
@@ -54,11 +53,11 @@ rate_per_minute = 30
 | 方法与路径 | 授权 | 返回 |
 | --- | --- | --- |
 | `GET /v1/health` | 无 | `{"status":"ok"}`，不构造后端 |
-| `GET /v1/identity` | Bearer | `name`、预置 `avatar`、预置 `voice`、`label`；无授权/备注 |
+| `GET /v1/identity` | Bearer | `name`、预置 `avatar`、预置 `voice`；无授权/备注 |
 | `POST /v1/ask` | Bearer | `ServiceAnswer`；输入 `{"question":"…","as_of":"YYYY-MM-DD"}`，日期可省略或为 `null` |
 
 问题最多 2000 字符；HTTP 请求体最多 16 KiB。所有 HTTP 响应（包括错误）均带
-`X-AI-Generated: twin`、`Cache-Control: no-store` 与安全加固响应头。不支持 WebSocket。
+`Cache-Control: no-store` 与安全加固响应头。不支持 WebSocket。
 身份及提问请求使用 `Authorization: Bearer <令牌>`，通过 `hmac.compare_digest` 比较。
 不要求网页接口的 `X-Twin` 请求头。
 
@@ -89,8 +88,8 @@ HTTP Bearer 令牌不用于 MCP；启动进程的本机权限就是访问边界�
 
 | 工具 | 参数 | 返回 |
 | --- | --- | --- |
-| `ask_twin` | `question: str`，可选 `as_of: str | null`（`YYYY-MM-DD`） | `structuredContent` 为 `ServiceAnswer`，并附以显式 AI 标识开头的简短文本 |
-| `twin_identity` | 无 | `structuredContent` 为 `name`、`avatar`、`voice`、`label`，并附带标识的文本 |
+| `ask_twin` | `question: str`，可选 `as_of: str | null`（`YYYY-MM-DD`） | `structuredContent` 为 `ServiceAnswer`，并附简短回答文本 |
+| `twin_identity` | 无 | `structuredContent` 为 `name`、`avatar`、`voice`，并附姓名文本 |
 
 两个工具均公布输出 schema；错误通过 MCP 工具错误返回（`isError: true`）。
 后端异常使用固定中文消息，日期/长度错误不回显输入。
@@ -113,6 +112,8 @@ HTTP Bearer 令牌不用于 MCP；启动进程的本机权限就是访问边界�
 让客户端继承这些变量，或通过客户端的秘密管理功能提供值。无需 `TWIN_API_TOKEN`。
 注意 `uv` 必须在客户端的 PATH 中，配置文件默认从项目目录读取。
 
+twin 是个人工具，不添加免责声明。
+
 ## 隐私与治理
 
 - 两个入口都以 `persist=False` 调用聊天，不保存问题、回答或聊天日志。
@@ -123,5 +124,3 @@ HTTP Bearer 令牌不用于 MCP；启动进程的本机权限就是访问边界�
 - 后端仍懒构造并缓存；配置变更后重启 API/MCP 进程。注入的 `chat_factory` 仅是可信离线测试接缝。
 - 复用 `usage.py`，按 `service` 阶段记录无提示词的调用行、用量和错误类型，仅保存在进程内；
   使用配置 pricing 与进程累计 budget，不写追踪文件，不把统计加入回答契约。重启清零，未知价格仍无法预算。
-- 答案和身份均带统一显式 AI 标识；HTTP 还带隐式响应头。调用方呈现结果时必须保留标识，
-  不得当作本人承诺或意见。

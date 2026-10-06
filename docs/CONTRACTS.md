@@ -204,17 +204,17 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
 
 ## Service presentation and access (S2)
 
-- `service`（代码层 7）拥有冻结、禁止额外字段的 `ServiceCitation` / `ServiceAnswer` v1；字段只增不删。
+- `service`（代码层 7）拥有冻结、禁止额外字段的 `ServiceCitation` / `ServiceAnswer` v1（ServiceAnswer 忽略旧 label 字段）。
   `answer_question(chat, question, as_of)` 是服务路径唯一的 ChatReply 适配器，调用
   `PersonaChat.reply([ChatTurn(role="user", content=question)], as_of=as_of, persist=False)`；
   问题超过 2000 字符时抛出不含输入的中文 ValueError。
 - 引用按 L3 顺序解析，条目复用聊天 `_visible_items`（含 `item_as_of` 与证据隐私视图），
   表达复用 `expression_view(target_only=True, until=as_of)`；条目取最后可见证据，表达取本人文本，
   沿用聊天的空白整理/截断。返回 ref_id/kind/quote/date/source_kind，不暴露来源路径或审核备注。
-- ServiceAnswer 包含 schema_version/answer/abstain/abstain_reason/confidence/citations/as_of/label/
+- ServiceAnswer 包含 schema_version/answer/abstain/abstain_reason/confidence/citations/as_of/
   persona_name/generated_at（UTC），追加 `mode: Literal["grounded", "general", "abstain"] = "grounded"`；
-  文本、弃权、置信度和 mode 保持 L3 原值，label 与 EXPLICIT_LABEL 的 Literal 一致。
-  `ServiceIdentity` 仅含 name/avatar/voice/label，不输出授权或备注。
+  文本、弃权、置信度和 mode 保持 L3 原值。
+  `ServiceIdentity` 仅含 name/avatar/voice，不输出授权或备注。
 - `api` / `mcp_server`（代码层 9）共用懒 ServiceBackend，配置 LLM 与 embed 均
   按配置使用外部后端，无出境授权门禁；注入 chat_factory 是可信测试接缝。后端配置变更需重启。
   每次默认请求关闭临时 store，不写聊天日志；进程内 UsageRecorder 使用 service 阶段、pricing 与累计 budget，
@@ -222,9 +222,9 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
 - HTTP 的 /v1/health 无鉴权；/v1/identity、/v1/ask 使用 Bearer + compare_digest。
   `[api] token_env` 默认 TWIN_API_TOKEN（至少 32 字符）；rate_per_minute 默认 30，
   单令牌 60 秒滑动窗口，429 附 Retry-After。Host 默认仅 loopback 名称，额外主机显式允许，
-  非本机监听需 --allow-remote；请求体 16 KiB，问题 2000 字符。所有响应带 X-AI-Generated: twin。
+  非本机监听需 --allow-remote；请求体 16 KiB，问题 2000 字符。
 - 官方 mcp SDK FastMCP 通过 stdio 提供 ask_twin 与 twin_identity，公布结构化输出 schema，
-  文本以显式 AI 标识开头；后端错误固定中文消息，不记录个人文本。
+  文本直接呈现回答或姓名；后端错误固定中文消息，不记录个人文本。
   命令、请求/输出格式与客户端配置见 [SERVICE.md](SERVICE.md)。
 
 ## Web frontend serving
@@ -244,16 +244,8 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
 
 - `media.schema` (layer 1) defines frozen `PresentableAnswer`, `Segment`, `MediaCitation`, `MediaScript` and
   `MediaManifest`, version 1. It depends only on stdlib, pydantic and util; `PresentableAnswer` forbids extra fields.
-  The explicit label is `AI 合成，不代表本人意见`; the first segment always contains
-  `以下内容由 AI 合成，不代表本人意见。`.
-- `media.schema.EXPLICIT_LABEL` / `OPENING_NOTICE` 是显式标识与开头提示的唯一来源；
-  `CHAT_NOTICE` 保留聊天页提示，`disclaimer(name, external)` 生成页脚。
-  预发布 Literal 改为新标识，`MediaScript.explicit_label` / `MediaManifest.label`、形象与服务契约的
-  读取校验兼容旧值 `AI 合成 · 模拟推演，不代表本人意见`，规范化后写出新值；版本号仍为 1。
-  `disclaimer` 的前缀为 `内容由 AI 根据{name}的记忆生成，不代表{name}本人的意见或决定。`。
-  `/api/status.labels` 追加 `{explicit, disclaimer, chat_notice}`，网页回放、页脚、聊天标题读取这些字段，
-  React 前端未加载标签时使用 Skeleton/留空，不在构建 HTML 中复制文案。页脚的 `external` 来自 `egress_status`（含评委）：任一配置后端
-  分类为外部则说明 `部分数据经配置的外部服务处理，详见关于你页面的外部服务说明。`，否则使用本机措辞。
+- twin 是个人工具，不添加免责声明。
+- 预发布契约移除媒体、形象与服务的 label/explicit_label 字段；旧清单和记录读取时接受并忽略这些字段，重新序列化不再输出，版本号仍为 1。保留导出文件的来源元数据 comment，不写 title 标签。
 - `media.adapters` (layer 7) is the only media module that knows `ChatReply`; it validates raw JSON
   and produces `PresentableAnswer` with unchanged text and the upstream fingerprint.
   `media.script` (layer 7) converts only this boundary contract, without models, retrieval or rewriting.
@@ -261,14 +253,13 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   ASCII periods end a sentence only before whitespace, a closing quote or end of text, never between two digits.
   Only segment-edge whitespace is trimmed. Unclosed quotes conservatively retain the remainder together.
   `PresentableAnswer` appends `mode: Literal["grounded", "general", "abstain"] = "grounded"`, preserved by the
-  ChatReply adapter. Only general replies add a second spoken-and-shown notice in `media.script` immediately after
-  the opening: `以下是通用知识，不代表本人观点。`. Playback, speech, clip and video keep this script notice;
-  the video adapter preserves notices rather than filtering them out.
-  Abstention produces the opening notice and an abstention notice, never speech; an empty reason has a neutral default.
+  ChatReply adapter. General replies preserve all model content, including the first sentence, without added notices.
+  The video adapter sends only speech segments.
+  Abstention produces only an abstention notice, never speech; an empty reason has a neutral default.
 - `source_fingerprint = util.fingerprint(source.model_dump(mode="json"))`: all validated source fields, excluding
   web-only resolved views, and independent of JSON key order. Persona display names do not change the source hash.
   Citations remain answer-level `(ref_id, reason)` objects; chat references have empty reasons. There is no inferred
-  sentence-to-citation mapping. The manifest records the source hash, UTC creation time, generator and AI labels;
+  sentence-to-citation mapping. The manifest records the source hash, UTC creation time, generator and AI-generation metadata;
   it is provenance metadata, not a signature or verification of supplied answers.
 - `twin media script ANSWER.json --out script.json [--kind chat_reply] [--persona-name NAME]` and
   `twin media export ANSWER.json --out playback.html` with the same options are offline, owner-only (0600) outputs.
@@ -283,23 +274,21 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   (strict integers 0–3, at most `fps × 600`), and `source: Literal["timings", "energy", "pattern"]`.
   `media.lipsync` (layer 7) prioritizes timings, then sniffed WAV energy, then synthetic rhythm;
   `render_audio` attaches the track without reading backend extras. Track time is local to each file.
-- `AvatarSpec` v1 is frozen and forbids extras: `avatar_id`, `label` (the exact same Literal and default
-  `EXPLICIT_LABEL` as MediaScript), `palette` (exactly skin/hair/outfit/background/accent, six-digit hex),
+- `AvatarSpec` v1 is frozen and forbids extras except ignored legacy labels: `avatar_id`, `palette` (exactly skin/hair/outfit/background/accent, six-digit hex),
   `mouth_states: Literal[4] = 4`, `stylized: Literal[True] = True`. No URL, path or image fields exist.
   `AVATAR_PRESETS` contains three invented flat palettes: default, ink and dawn.
 - `AudioPart.lipsync: LipSyncTrack | None = None` is append-only; old manifests load with null tracks
   and display an idle avatar. HTTP audio segments carry the same nullable track.
 - `Settings.avatar` defaults to `AvatarSettings(preset="default")`; unknown presets produce a Chinese
   preset list. Capabilities always include the selected `AvatarSpec`,
-  even when speech is unavailable. `frontend/src/features/playback/Avatar.tsx` renders inline SVG with a
-  permanent `spec.label` badge and no asset inputs.
+  even when speech is unavailable. `frontend/src/features/avatar/Avatar.tsx` renders inline SVG with no asset inputs.
   Playback samples the current part by audio time; pause/stop/text-only closes the mouth, close releases
   rAF and blink timers. Reduced motion disables blinking and limits openness to 0/1.
 
 ## Speech access (M1)
 
 - `create_app(..., synthesizer_factory=...)` lazily defaults to `config.make_synthesizer(settings.tts)`.
-  `silent` declares speech unavailable in the UI; HTTP capabilities expose backend, AI label, languages and formats.
+  `silent` declares speech unavailable in the UI; HTTP capabilities expose backend, languages and formats.
 - `TTSSettings.voice` accepts only preset IDs matching `^[A-Za-z0-9_.-]{1,64}$` (not `.` / `..`), rejecting
   paths, URLs and data references with a Chinese preset-only error.
   `SynthCapabilities.voices: list[str] | None = None` is additive; `None` means enumeration is unsupported,
@@ -315,13 +304,12 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   on failure; the self-hosted OpenAI-compatible shim keeps credentials optional.
 - `POST /api/media/audio` uses the same source adapters and script contract, then `render_audio` into the database
   directory's `media-cache/`. Its ordered segment URLs may repeat a script index for split sentences; manifest
-  and labelled files retain the source fingerprint. Abstention speaks only notices, never answer content.
+  and exported files retain the source fingerprint. Abstention speaks only notices, never answer content.
   Cache-file GET accepts only lowercase SHA-256 names with `.wav` / `.mp3`, resolves containment and retains
   security headers with `private, no-store`. POST keeps the 1 MB limit and `X-Twin: 1` rule. Backend-neutral
   unavailable / rejected / timeout / too-long errors map to 503 / 502 / 504 / 413 with fixed Chinese messages.
 - `twin media speak ANSWER.json --out DIR [--kind chat_reply] [--name NAME]` calls only the configured
   speech factory and renderer, writing 0700 directories and 0600 audio, cache and manifest files. An unconfigured
   (silent) backend exits with a Chinese configuration error. Voice presets only; no rewriting or voice cloning.
-- Browser speech starts with the audible AI notice; audio completion drives highlighting, including under reduced
-  motion. Pause preserves the playhead, steps reset it, closure releases playback, and failures fall back to text.
-  The persistent visible AI label and a backend-neutral speech label remain near the controls.
+- Browser speech starts directly with the reply content. Pause preserves the playhead, closure releases playback,
+  and failures fall back to text.

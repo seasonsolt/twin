@@ -11,12 +11,10 @@ vi.mock('../design/motion', async (original) => ({
 const capabilities: Capabilities = {
   available: false,
   backend: null,
-  label: 'API 肖像标识',
   avatar_image: { url: '/api/media/avatar-image' },
   avatar: {
     schema_version: 1,
     avatar_id: 'default',
-    label: 'API 预置标识',
     palette: {},
     mouth_states: 4,
     stylized: true,
@@ -26,15 +24,12 @@ beforeEach(() => {
   preference.reduced = false;
 });
 
-it('prefers a static portrait to the preset with an API badge overlay and falls back on image error', () => {
-  const view = render(
-    <AvatarPreview capabilities={capabilities} label="API 状态标识" />,
-  );
+it('prefers a static portrait to the preset and falls back on image error', () => {
+  const view = render(<AvatarPreview capabilities={capabilities} />);
   const image = screen.getByRole('img', { name: '肖像形象' });
   expect(image).toHaveAttribute('src', '/api/media/avatar-image');
   expect(image).toHaveClass('object-cover', 'object-[50%_30%]');
-  expect(screen.getByRole('note')).toHaveTextContent('API 状态标识');
-  expect(screen.getByRole('note')).toHaveClass('absolute');
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
   expect(
     screen.queryByRole('img', { name: '风格化插画' }),
   ).not.toBeInTheDocument();
@@ -71,14 +66,13 @@ it('spring-smooths glow intensity from the lipsync level and fades it when not s
   expect(screen.getByRole('img')).not.toHaveAttribute('data-mouth-level');
 });
 
-it('uses only a static speaking dot for reduced motion and retains its badge', () => {
+it('uses only a static speaking dot for reduced motion', () => {
   preference.reduced = true;
   const view = render(
     <AvatarPreview capabilities={capabilities} mouth={3} speaking />,
   );
   expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
   expect(screen.getByRole('status', { name: '正在说话' })).toBeVisible();
-  expect(screen.getByRole('note')).toHaveTextContent(capabilities.label);
   view.rerender(<AvatarPreview capabilities={capabilities} mouth={3} />);
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });

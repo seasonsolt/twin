@@ -46,11 +46,6 @@ beforeEach(() => {
     llm: { provider: 'mock', model: 'mock' },
     embed: { provider: 'local' },
     egress: [],
-    labels: {
-      explicit: 'API标签',
-      disclaimer: 'API说明',
-      chat_notice: 'API聊天说明',
-    },
   };
   fetcher = vi.fn((url: string, init: RequestInit) => {
     if (url === '/api/identity') {

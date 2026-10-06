@@ -276,12 +276,7 @@ export function AppShell() {
           <MobileDrawer open={drawer} setOpen={setDrawer} />
           <span className="mr-auto font-semibold md:hidden">twin</span>
           {data ? (
-            <>
-              <Badge>{data.target_name}</Badge>
-              <span className="ml-auto text-xs text-tertiary">
-                {data.labels.explicit}
-              </span>
-            </>
+            <Badge>{data.target_name}</Badge>
           ) : (
             <Skeleton className="w-40" />
           )}
@@ -301,9 +296,6 @@ export function AppShell() {
         >
           <PageTransition route={location.pathname}>{outlet}</PageTransition>
         </main>
-        <footer className="border-t border-border px-5 py-5 text-xs leading-relaxed text-secondary md:px-8">
-          {data?.labels.disclaimer ?? <Skeleton className="max-w-lg" />}
-        </footer>
       </div>
     </div>
   );

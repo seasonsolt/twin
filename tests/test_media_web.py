@@ -19,7 +19,7 @@ from twin.cli import app
 from twin.config import Settings
 from twin.media.adapters import presentable_from_chat_reply
 from twin.media.render import EXPORT_CSP, export_html
-from twin.media.schema import EXPLICIT_LABEL, OPENING_NOTICE, MediaManifest, MediaScript
+from twin.media.schema import MediaManifest, MediaScript
 from twin.media.script import script_from_presentable
 from twin.persona.schema import ChatReply
 from twin.web import create_app
@@ -91,8 +91,7 @@ def check_export(text: str, expected_fingerprint: str, created_at: dt.datetime |
     assert not any(key.startswith("on") for _, attrs in parser.tags for key in attrs)
     assert ("meta", {"name": "ai-generated", "content": "true"}) in parser.tags
     assert ("meta", {"name": "generator", "content": "twin"}) in parser.tags
-    assert EXPLICIT_LABEL in text and OPENING_NOTICE in text
-    assert "position:fixed" in text
+    assert not any(tag in {"header", "footer"} for tag, _ in parser.tags)
     assert ATTACK not in text
     manifest = re.search(r'<script type="application/json" id="media-manifest">(.*?)</script>', text)
     assert manifest is not None

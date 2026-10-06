@@ -95,7 +95,6 @@ const props = {
   url: '/api/media/avatar.vrm',
   mouth: 3,
   speaking: true,
-  label: 'API 合成标识',
   onFallback: vi.fn(),
 };
 
@@ -282,19 +281,12 @@ it('starts and stops rendering with intersection and document visibility and cle
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('keeps the API label overlaid, reads credit and releases GPU resources on unmount', async () => {
+it('reads credit and releases GPU resources on unmount', async () => {
   const geometryDispose = vi.spyOn(geometry, 'dispose');
   const materialDispose = vi.spyOn(material, 'dispose');
   const textureDispose = vi.spyOn(texture, 'dispose');
   const view = renderView(<Avatar3D {...props} />);
-  expect(screen.getByRole('note')).toHaveTextContent(props.label);
-  expect(screen.getByRole('note')).toHaveClass(
-    'bottom-2',
-    'left-2',
-    'whitespace-nowrap',
-    'bg-surface/80',
-  );
-  expect(screen.getByRole('note').parentElement).toHaveClass('aspect-[4/5]');
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
   await load();
   expect(mocks.parser.textureLoader).toBeInstanceOf(THREE.TextureLoader);
   expect(
@@ -311,7 +303,6 @@ it('keeps the API label overlaid, reads credit and releases GPU resources on unm
   expect(mocks.render).toHaveBeenCalled();
   expect(mocks.expression).toHaveBeenCalledWith('aa', expect.any(Number));
   expect(model.lookAt?.target).toBeDefined();
-  expect(screen.getByRole('note')).toBeVisible();
   view.unmount();
   expect(geometryDispose).toHaveBeenCalledOnce();
   expect(materialDispose).toHaveBeenCalledOnce();
@@ -341,7 +332,6 @@ it('falls back on unavailable WebGL, loading errors and context loss', async () 
   mocks.unavailable = true;
   const first = renderView(<Avatar3D {...props} />);
   expect(props.onFallback).toHaveBeenCalledOnce();
-  expect(screen.getByRole('note')).toBeVisible();
   first.unmount();
   props.onFallback.mockClear();
   mocks.unavailable = false;
@@ -377,11 +367,9 @@ it('disposes a model that finishes loading after unmount', async () => {
 const capabilities = {
   available: false,
   backend: null,
-  label: 'API 合成标识',
   avatar: {
     schema_version: 1 as const,
     avatar_id: 'default',
-    label: 'API 合成标识',
     palette: {},
     mouth_states: 4 as const,
     stylized: true as const,
@@ -402,7 +390,6 @@ it('renders 2D without loading three when the model is unset, and after a 3D fai
   );
   await load();
   expect(screen.getByRole('img', { name: '风格化插画' })).toBeVisible();
-  expect(screen.getByRole('note')).toHaveTextContent(capabilities.label);
 });
 
 it('prefers VRM over a portrait and falls back to the portrait after context loss', async () => {
@@ -424,7 +411,6 @@ it('prefers VRM over a portrait and falls back to the portrait after context los
     screen.getByRole('img').dispatchEvent(new Event('webglcontextlost')),
   );
   expect(screen.getByRole('img', { name: '肖像形象' })).toBeVisible();
-  expect(screen.getByRole('note')).toHaveTextContent(capabilities.label);
 });
 
 it('shares the demo lip track between both previews, replays and releases its timer', async () => {

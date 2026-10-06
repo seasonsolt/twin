@@ -1,4 +1,4 @@
-"""Versioned, frozen contracts for labelled AI presentations."""
+"""Versioned, frozen presentation contracts."""
 
 from __future__ import annotations
 
@@ -7,28 +7,9 @@ import re
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION: Final = 1
-EXPLICIT_LABEL: Final = "AI 合成，不代表本人意见"
-OPENING_NOTICE = "以下内容由 AI 合成，不代表本人意见。"
-LEGACY_LABEL: Final = "AI 合成 · 模拟推演，不代表本人意见"
-
-
-def _current_label(value: object) -> object:
-    return EXPLICIT_LABEL if value == LEGACY_LABEL else value
-
-
-ExplicitLabel = Annotated[Literal["AI 合成，不代表本人意见"], BeforeValidator(_current_label)]
-CHAT_NOTICE: Final = (
-    "分身以本人身份、第一人称作答，只依据人格档案和本人原话；"
-    "没有依据时会直说并标注“需要本人确认”。回复是模拟，不代表本人意见。"
-)
-
-
-def disclaimer(name: str, external: bool) -> str:
-    storage = "部分数据经配置的外部服务处理，详见关于你页面的外部服务说明。" if external else "数据只保存在本机。"
-    return f"内容由 AI 根据{name}的记忆生成，不代表{name}本人的意见或决定。{storage}"
 
 
 class Segment(BaseModel):
@@ -73,7 +54,6 @@ class MediaScript(BaseModel):
     abstain: bool
     segments: list[Segment]
     citations: list[MediaCitation]
-    explicit_label: ExplicitLabel = EXPLICIT_LABEL
 
 
 class MediaManifest(BaseModel):
@@ -82,7 +62,6 @@ class MediaManifest(BaseModel):
     schema_version: Literal[1] = SCHEMA_VERSION
     generator: Literal["twin"] = "twin"
     ai_generated: Literal[True] = True
-    label: ExplicitLabel = EXPLICIT_LABEL
     source_fingerprint: str
     created_at: dt.datetime
 
@@ -167,10 +146,16 @@ class AvatarSpec(BaseModel):
 
     schema_version: Literal[1] = SCHEMA_VERSION
     avatar_id: str
-    label: ExplicitLabel = EXPLICIT_LABEL
     palette: dict[str, str]
     mouth_states: Literal[4] = 4
     stylized: Literal[True] = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_label(cls, value: object) -> object:
+        if isinstance(value, dict):
+            return {key: val for key, val in value.items() if key != "label"}
+        return value
 
     @field_validator("palette")
     @classmethod

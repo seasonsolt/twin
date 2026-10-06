@@ -14,7 +14,6 @@ from twin import api, cli
 from twin.config import ApiSettings, EmbedSettings, LLMSettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
-from twin.media.schema import EXPLICIT_LABEL
 from twin.persona.chat import PersonaChat
 from twin.persona.store import PersonaStore
 
@@ -52,7 +51,7 @@ def test_health_auth_identity_and_answer(token: str, chat: PersonaChat) -> None:
     with TestClient(app, base_url="http://localhost") as client:
         health = client.get("/v1/health")
         assert health.json() == {"status": "ok"}
-        assert health.headers["X-AI-Generated"] == "twin"
+        assert "X-AI-Generated" not in health.headers
         for authorization in (None, "Bearer wrong", "Basic wrong", "Bearer 非令牌"):
             headers = {} if authorization is None else {"Authorization": authorization}
             # HTTP transports restrict header text to ASCII; exercise UTF-8 comparison via raw bytes.
@@ -61,16 +60,14 @@ def test_health_auth_identity_and_answer(token: str, chat: PersonaChat) -> None:
             response = client.post("/v1/ask", json={"question": "私密问题"}, headers=headers)
             assert response.status_code == 401
             assert "私密问题" not in response.text and token not in response.text
-            assert response.headers["X-AI-Generated"] == "twin"
         client.headers["Authorization"] = f"Bearer {token}"
         identity = client.get("/v1/identity")
-        assert identity.json() == {"name": "本人", "avatar": "default", "voice": "default", "label": EXPLICIT_LABEL}
+        assert identity.json() == {"name": "本人", "avatar": "default", "voice": "default"}
         response = client.post("/v1/ask", json={"question": "私密问题", "as_of": "2025-01-01"})
         assert response.status_code == 200
         assert response.json()["as_of"] == "2025-01-01"
         assert response.json()["answer"] == "需要本人确认。" and response.json()["abstain"]
-        assert response.json()["label"] == EXPLICIT_LABEL
-        assert response.headers["X-AI-Generated"] == "twin"
+        assert "label" not in response.json()
         assert response.headers["Cache-Control"] == "no-store"
         assert chat.store.chat_demand() == {}
         assert app.state.backend.usage.summary()["totals"]["calls"] == 2
@@ -111,7 +108,6 @@ def test_external_backends_construct_lazily_without_grant(
     assert not constructed and not settings.db_path.exists()
     response = client.post("/v1/ask", json={"question": "私密问题"}, headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200 and response.json()["answer"] == "需要本人确认。"
-    assert response.headers["X-AI-Generated"] == "twin"
     assert "私密问题" not in response.text and constructed == ["llm", "embed"]
     assert (
         client.post("/v1/ask", json={"question": "私密问题"}, headers={"Authorization": f"Bearer {token}"}).status_code
@@ -129,7 +125,6 @@ def test_backend_failure_sanitized(token: str, capsys: pytest.CaptureFixture[str
     client = TestClient(api.create_api(Settings(), broken), base_url="http://localhost")
     response = client.post("/v1/ask", json={"question": question}, headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 503 and response.json()["detail"] == api.BACKEND_UNAVAILABLE
-    assert response.headers["X-AI-Generated"] == "twin"
     assert question not in response.text and token not in response.text and "secret.invalid" not in response.text
     assert not capsys.readouterr().err
 
@@ -144,7 +139,7 @@ def test_sliding_rate_limit(token: str, monkeypatch: pytest.MonkeyPatch) -> None
     assert client.get("/v1/identity", headers=headers).status_code == 200
     response = client.post("/v1/ask", headers=headers, json={"question": "私密问题"})
     assert response.status_code == 429 and response.headers["Retry-After"] == "50"
-    assert response.headers["X-AI-Generated"] == "twin" and "私密问题" not in response.text
+    assert "私密问题" not in response.text
     assert client.get("/v1/health").status_code == 200
     assert client.get("/v1/identity").status_code == 401
     now[0] += 50
@@ -163,7 +158,6 @@ def test_host_allowlist_and_hardening(token: str) -> None:
     for host, status in [("attacker.example", 403), ("twin.example:8780", 200)]:
         response = client.get("/v1/health", headers={"Host": host})
         assert response.status_code == status
-        assert response.headers["X-AI-Generated"] == "twin"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
     with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect("/v1/ask", headers={"Host": "localhost"}):
         pytest.fail("websockets must be refused")
@@ -178,14 +172,12 @@ def test_validation_never_echoes_input(token: str, body: object) -> None:
     client = TestClient(api.create_api(Settings()), base_url="http://localhost")
     response = client.post("/v1/ask", json=body, headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 400 and "私" not in response.text
-    assert response.headers["X-AI-Generated"] == "twin"
 
 
 def test_body_limit(token: str) -> None:
     client = TestClient(api.create_api(Settings()), base_url="http://localhost")
     response = client.post("/v1/ask", content="私" * api.MAX_BODY_BYTES, headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 413 and "私" not in response.text
-    assert response.headers["X-AI-Generated"] == "twin"
 
 
 def test_configurable_token_env(token: str, monkeypatch: pytest.MonkeyPatch) -> None:

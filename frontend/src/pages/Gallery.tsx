@@ -32,7 +32,6 @@ import {
 } from '../components/motion';
 import { useMotionPreset } from '../design/motion';
 import { AvatarComparison } from '../features/avatar/AvatarComparison';
-import { useStatus } from '../stores/status';
 import { formatNumber } from '../lib/utils';
 import {
   ReplyReveal,
@@ -66,7 +65,6 @@ export function Gallery() {
   const trigger = useRef<HTMLElement | null>(null);
   const confirm = useConfirm();
   const { reduced, transition } = useMotionPreset('bouncy');
-  const labels = useStatus((state) => state.data?.labels);
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -197,7 +195,6 @@ export function Gallery() {
               }}
             />
           </Field>
-          <p className="text-xs text-secondary">{labels?.chat_notice}</p>
         </Story>
         <Story title="进度与加载">
           <Meter label="迁移进度示例" value={meter} />

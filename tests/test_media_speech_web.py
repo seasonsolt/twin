@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from twin.cli import app
 from twin.config import Settings, TTSSettings
-from twin.media.schema import AVATAR_PRESETS, OPENING_NOTICE
+from twin.media.schema import AVATAR_PRESETS
 from twin.media.tts import (
     MediaError,
     MediaInputTooLong,
@@ -69,7 +69,6 @@ def test_capabilities_are_lazy_and_secret_free(tmp_path: Path) -> None:
             "video": {"available": False},
             "available": True,
             "backend": "openai_compat:speech",
-            "label": "AI 合成，不代表本人意见",
             "languages": ["zh"],
             "audio_formats": ["wav"],
         }
@@ -89,13 +88,12 @@ def test_audio_urls_metadata_and_hardening(tmp_path: Path) -> None:
         response = client.post("/api/media/audio", json=BODY, headers=HEADERS)
         assert response.status_code == 200, response.text
         result = response.json()
-        assert result["script"]["segments"][0]["text"] == OPENING_NOTICE
+        assert result["script"]["segments"][0]["text"] == "先验证。"
         assert result["segments"][0]["index"] == 0
         assert result["manifest"]["ai_generated"] is True
         assert result["manifest"]["generator"] == "twin"
-        assert "AI 合成" in result["manifest"]["label"]
         assert response.headers["cache-control"] == "no-store"
-        assert len(result["segments"]) == 3
+        assert len(result["segments"]) == 2
         for segment in result["segments"]:
             audio = client.get(segment["url"])
             assert audio.status_code == 200

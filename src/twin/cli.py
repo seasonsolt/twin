@@ -643,7 +643,7 @@ def personal_eval_compare_command(
     _say("配对比较报告已写入（B - A）。")
 
 
-media_app = typer.Typer(help="已保存回答的带标识展示、语音合成与合成句集回听评测。")
+media_app = typer.Typer(help="已保存回答的展示、语音合成与合成句集回听评测。")
 app.add_typer(media_app, name="media")
 
 
@@ -667,7 +667,7 @@ def media_script_command(
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
     persona_name: Annotated[str | None, typer.Option("--persona-name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
-    """Write a labelled presentation script without calling a model."""
+    """Write a presentation script without calling a model."""
     with _errors():
         script = _media_source(ctx, source, kind, persona_name)
         _write(out, script.model_dump_json(indent=2) + "\n")
@@ -682,7 +682,7 @@ def media_export_command(
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
     persona_name: Annotated[str | None, typer.Option("--persona-name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
-    """Export standalone HTML with visible and implicit AI labels and no JavaScript."""
+    """Export standalone HTML with source metadata and no JavaScript."""
     from .media.render import export_html
 
     with _errors():
@@ -698,7 +698,7 @@ def media_speak_command(
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
     name: Annotated[str | None, typer.Option("--name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
-    """Render labelled speech files and a manifest from a validated saved answer."""
+    """Render speech files and a manifest from a validated saved answer."""
     from .config import make_synthesizer
     from .media.render import render_audio
     from .media.tts import MediaError
@@ -730,11 +730,11 @@ def media_speak_command(
 def media_clip_command(
     ctx: typer.Context,
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
-    out: Annotated[Path, typer.Option("--out", help="带标识的 MP4 输出（仅本人可读写）")],
+    out: Annotated[Path, typer.Option("--out", help="MP4 输出（仅本人可读写）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
     name: Annotated[str | None, typer.Option("--name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
-    """Export an existing reply with a stylized avatar, subtitles and permanent labels."""
+    """Export an existing reply with a stylized avatar and subtitles."""
     from .config import make_synthesizer
     from .media.clip import render_clip
     from .media.schema import AVATAR_PRESETS
@@ -763,11 +763,11 @@ def media_clip_command(
 def media_video_command(
     ctx: typer.Context,
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
-    out: Annotated[Path, typer.Option("--out", help="带标识的 MP4 输出（仅本人可读写）")],
+    out: Annotated[Path, typer.Option("--out", help="MP4 输出（仅本人可读写）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
     name: Annotated[str | None, typer.Option("--name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
-    """Generate a labelled video through a configured, generic remote job."""
+    """Generate a video through a configured, generic remote job."""
     from .config import make_video_synthesizer
     from .media.tts import MediaError
 

@@ -23,7 +23,7 @@ from ..config import Settings, make_synthesizer, make_video_synthesizer
 from ..media.adapters import presentable_from_payload
 from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
-from ..media.schema import AVATAR_PRESETS, EXPLICIT_LABEL, AudioManifest, MediaScript
+from ..media.schema import AVATAR_PRESETS, AudioManifest, MediaScript
 from ..media.script import script_from_presentable
 from ..media.tts import (
     MediaError,
@@ -96,7 +96,7 @@ def register(
     factory = synthesizer_factory or (lambda: make_synthesizer(settings.tts))
     synthesizer: SpeechSynthesizer | None = None
     lock = threading.Lock()
-    video_jobs = JobManager(1, lambda _: "视频生成失败，请检查 [video]、ffmpeg 和字体配置")
+    video_jobs = JobManager(1, lambda _: "视频生成失败，请检查 [video] 和 ffmpeg 配置")
     video = video_factory or (lambda: make_video_synthesizer(settings))
     video_available = video_factory is not None or settings.video.provider == "remote"
 
@@ -157,7 +157,6 @@ def register(
                 "video": {"available": video_available},
                 "available": False,
                 "backend": None,
-                "label": EXPLICIT_LABEL,
                 "languages": [],
                 "audio_formats": [],
                 "error": speech_error(exc)[1],
@@ -169,7 +168,6 @@ def register(
             "video": {"available": video_available},
             "available": synth.name != "silent",
             "backend": synth.name,
-            "label": EXPLICIT_LABEL,
             "languages": declared.languages,
             "audio_formats": declared.audio_formats,
         }
@@ -246,7 +244,7 @@ def register(
                 path,
                 media_type="video/mp4",
                 filename="twin-media.mp4",
-                headers={"X-AI-Generated": "twin", "Cache-Control": "private, no-store"},
+                headers={"Cache-Control": "private, no-store"},
                 background=BackgroundTask(path.unlink, missing_ok=True),
             )
         except (MediaError, OSError) as exc:
@@ -304,9 +302,7 @@ def register(
                 raise HTTPException(404, "找不到视频文件")
         except (OSError, RuntimeError):
             raise HTTPException(404, "找不到视频文件") from None
-        return FileResponse(
-            path, media_type="video/mp4", headers={"X-AI-Generated": "twin", "Cache-Control": "private, no-store"}
-        )
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, no-store"})
 
     @app.post("/api/media/export", response_class=HTMLResponse)
     def export(body: MediaBody) -> HTMLResponse:

@@ -102,9 +102,6 @@ export function Chat() {
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
       <header>
         <h1 className="text-2xl font-semibold">和{name}的分身聊天</h1>
-        <p className="mt-2 text-sm text-secondary">
-          {status?.labels.chat_notice}
-        </p>
       </header>
       {stale && (
         <p
@@ -250,9 +247,6 @@ export function Chat() {
                                 answer={turn.reply}
                                 name={name}
                                 portrait={capabilities.avatar_image?.url}
-                                label={
-                                  capabilities.label || status?.labels.explicit
-                                }
                               />
                             )}
                           </div>

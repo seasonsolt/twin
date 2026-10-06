@@ -32,13 +32,11 @@ export function AvatarPreview({
   capabilities,
   mouth = 0,
   speaking = false,
-  label,
   onModelNameChange,
 }: {
   capabilities: Capabilities;
   mouth?: number;
   speaking?: boolean;
-  label?: string;
   onModelNameChange?(name: string | null): void;
 }) {
   const url = capabilities.avatar_model?.url;
@@ -55,20 +53,18 @@ export function AvatarPreview({
   useEffect(() => {
     onModelNameChange?.(null);
   }, [url, onModelNameChange]);
-  const badge = label || capabilities.label || capabilities.avatar?.label;
   const fallback =
-    imageUrl && failedImageUrl !== imageUrl && badge ? (
+    imageUrl && failedImageUrl !== imageUrl ? (
       <PortraitAvatar
         url={imageUrl}
         mouthLevel={mouth}
         speaking={speaking}
-        label={badge}
         onError={() => setFailedImageUrl(imageUrl)}
       />
     ) : capabilities.avatar ? (
       <Avatar spec={capabilities.avatar} mouthLevel={mouth} />
     ) : null;
-  if (!url || failedUrl === url || !badge) return fallback;
+  if (!url || failedUrl === url) return fallback;
   return (
     <ModelBoundary key={url} fallback={fallback} onFallback={onFallback}>
       <Suspense fallback={fallback}>
@@ -76,7 +72,6 @@ export function AvatarPreview({
           url={url}
           mouth={mouth}
           speaking={speaking}
-          label={badge}
           onFallback={onFallback}
           onModelNameChange={onModelNameChange}
         />

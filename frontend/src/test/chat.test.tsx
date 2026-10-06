@@ -83,18 +83,12 @@ beforeEach(async () => {
       return json({
         target_name: '测试人',
         counts: { sources: 0, items: 0 },
-        labels: {
-          explicit: 'API标识',
-          disclaimer: 'API免责声明',
-          chat_notice: 'API聊天说明',
-        },
       });
     if (url === '/api/persona/state') return json({ stale: true });
     if (url === '/api/media/capabilities')
       return json({
         available: true,
         backend: null,
-        label: 'API标识',
         video: { available: true },
       });
     if (url === '/api/persona/chat') {
@@ -173,7 +167,6 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   mount();
   await submit();
   expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
-  expect(screen.getByText('API聊天说明')).toBeInTheDocument();
   expect(screen.getByText(/新添加的记忆正在处理中/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看记忆' })).toHaveAttribute(
     'href',

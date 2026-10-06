@@ -17,7 +17,6 @@ from twin.config import EmbedSettings, LLMSettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.mcp_server import TwinTools, create_mcp_server
-from twin.media.schema import EXPLICIT_LABEL
 from twin.persona.chat import PersonaChat
 from twin.persona.store import PersonaStore
 from twin.service import ServiceAnswer, answer_question
@@ -49,13 +48,12 @@ def test_direct_tools_match_service_contract(chat: PersonaChat) -> None:
     answer = ServiceAnswer.model_validate(result.structuredContent)
     expected = answer_question(chat, "未知问题", answer.as_of)
     assert answer.model_dump(exclude={"generated_at"}) == expected.model_dump(exclude={"generated_at"})
-    assert isinstance(result.content[0], TextContent) and result.content[0].text.startswith(EXPLICIT_LABEL)
+    assert isinstance(result.content[0], TextContent) and result.content[0].text.startswith(answer.answer)
     identity = tools.twin_identity()
     assert identity.structuredContent == {
         "name": "张三",
         "avatar": "default",
         "voice": "default",
-        "label": EXPLICIT_LABEL,
     }
     assert chat.store.chat_demand() == {}
     assert tools.backend.usage.summary()["totals"]["calls"] == 2
@@ -87,19 +85,19 @@ def test_memory_session_round_trip(chat: PersonaChat, capsys: pytest.CaptureFixt
         async with create_connected_server_and_client_session(server) as session:
             tools = (await session.list_tools()).tools
             assert {tool.name for tool in tools} == {"ask_twin", "twin_identity"}
-            assert all("AI" in (tool.description or "") and "may abstain" in (tool.description or "") for tool in tools)
+            assert all(tool.description for tool in tools)
             assert all(tool.outputSchema for tool in tools)
             result = await session.call_tool("ask_twin", {"question": "私密问题", "as_of": "2025-01-01"})
             assert not result.isError and result.structuredContent
-            assert result.structuredContent["label"] == EXPLICIT_LABEL
             assert result.structuredContent["as_of"] == "2025-01-01"
-            assert isinstance(result.content[0], TextContent) and result.content[0].text.startswith(EXPLICIT_LABEL)
+            assert isinstance(result.content[0], TextContent) and result.content[0].text.startswith(
+                result.structuredContent["answer"]
+            )
             identity = await session.call_tool("twin_identity", {})
             assert identity.structuredContent and set(identity.structuredContent) == {
                 "name",
                 "avatar",
                 "voice",
-                "label",
             }
             bad = await session.call_tool("ask_twin", {"question": "私密问题", "as_of": "私密日期"})
             assert bad.isError and "私" not in str(bad)

@@ -29,11 +29,6 @@ it('keeps only name/AI label in the header and describes external hosts only on 
         declared: false,
       },
     ],
-    labels: {
-      explicit: 'API 标识',
-      disclaimer: 'API 页脚',
-      chat_notice: 'API 聊天说明',
-    },
   };
   const previous = useStatus.getState();
   useStatus.setState({ data: null, error: null });
@@ -57,7 +52,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
                         avatar: null,
                         egress: [],
                       }
-                    : { available: false, backend: null, label: 'API媒体标识' },
+                    : { available: false, backend: null },
           ),
         ),
       ),
@@ -75,12 +70,10 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     </TooltipProvider>,
   );
   try {
-    expect(await screen.findByText('API 标识')).toBeVisible();
-    expect(screen.getByText('API 页脚')).toBeVisible();
-    expect(screen.getByText('测试人')).toBeVisible();
+    expect(await screen.findByText('测试人')).toBeVisible();
+    expect(rendered.container.querySelector('footer')).toBeNull();
     const header = within(rendered.container.querySelector('header')!);
     expect(header.getByText('测试人')).toBeVisible();
-    expect(header.getByText('API 标识')).toBeVisible();
     expect(
       header.queryByText(/mock-model|example.test|remote-provider|外部/),
     ).not.toBeInTheDocument();

@@ -109,12 +109,6 @@ export function Avatar({
           />
         ))}
       </svg>
-      <p
-        role="note"
-        className="absolute inset-x-2 bottom-2 rounded-md border border-border bg-canvas px-2 py-1 text-center text-xs text-secondary"
-      >
-        {spec.label}
-      </p>
     </div>
   );
 }
@@ -123,13 +117,11 @@ export function PortraitAvatar({
   url,
   mouthLevel,
   speaking,
-  label,
   onError,
 }: {
   url: string;
   mouthLevel: number;
   speaking: boolean;
-  label: string;
   onError(): void;
 }) {
   return (
@@ -141,12 +133,6 @@ export function PortraitAvatar({
         onError={onError}
         className="aspect-[11/12] w-full rounded-[22px] object-cover object-[50%_30%]"
       />
-      <p
-        role="note"
-        className="absolute inset-x-2 bottom-2 rounded-md border border-border bg-canvas px-2 py-1 text-center text-xs text-secondary"
-      >
-        {label}
-      </p>
     </div>
   );
 }

@@ -251,7 +251,7 @@ def test_unknown_duration_does_not_report_partial_latency(tmp_path: Path) -> Non
 def test_default_fixture_matches_packaged_sentence_set() -> None:
     path = Path(__file__).parent / "fixtures" / "media" / "speech_check_zh.jsonl"
     assert load_sentences(path) == list(DEFAULT_SENTENCES)
-    assert len(DEFAULT_SENTENCES) == 25
+    assert len(DEFAULT_SENTENCES) == 24
 
 
 @pytest.mark.parametrize("content", ["", "{", "{}\n", '{"text": " "}\n', '{"text": 7}\n'])

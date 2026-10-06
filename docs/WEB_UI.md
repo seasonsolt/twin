@@ -53,7 +53,7 @@ CI 前端任务运行四项检查后执行 `git diff --exit-code src/twin/web/st
 
 ## 布局、令牌与可访问性
 
-AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享 pill；小于 768px 时从顶栏打开底部抽屉，支持下拖和键盘关闭。顶栏只显示姓名与 AI 标识，不显示模型或外部服务角标；外部服务只在“关于你”中说明。状态首次读取 `/api/status`，之后可见时每 10 秒刷新，隐藏时暂停定期刷新，恢复可见后立即读取；卸载清理请求、计时器和监听。
+AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享 pill；小于 768px 时从顶栏打开底部抽屉，支持下拖和键盘关闭。顶栏只显示姓名，不显示模型或外部服务角标；外部服务只在“关于你”中说明。状态首次读取 `/api/status`，之后可见时每 10 秒刷新，隐藏时暂停定期刷新，恢复可见后立即读取；卸载清理请求、计时器和监听。
 
 设计令牌集中在 `frontend/src/design/tokens.css`，经 Tailwind v4 `@theme inline` 接入。使用系统字体，不加载外部字体或资产。
 
@@ -73,7 +73,7 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享
 
 UI primitives 包含 Button、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Badge、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider、Toast 和 Tooltip。Radix 提供焦点约束、键盘操作与 ARIA；确认默认聚焦取消，关闭后恢复原入口。通知只用 polite live region，不抢焦点。
 
-所有 AI 标签及免责声明来自 `/api/status.labels`（explicit/disclaimer/chat_notice）或媒体 API 的标签字段，不在前端硬编码或兜底复制。未加载时显示 Skeleton/留空。React 按文本渲染服务端内容，不执行用户 HTML，不输出个人文本日志。
+twin 是个人工具，不添加免责声明。React 按文本渲染服务端内容，不执行用户 HTML，不输出个人文本日志。
 
 ## 动效与 React Bits wrappers
 
@@ -126,7 +126,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 `features/chat/useReplyAudio.ts` 管理全聊天唯一的 `<audio>`。“听”直接 POST `/api/media/audio`，按返回顺序播放全部分片（包括开头提示），按钮切换为“暂停”；ARIA 名称为“播放语音”/“暂停语音”。暂停保留分片与时间，开始另一条回复先停止前一条。回复下方细进度线按分片时长和 currentTime 累计；当前头像复用 `features/avatar/SpeakingGlow.tsx` 的弹簧光环，强度取 currentTime × lipsync.fps 的 level，不伪造嘴部。暂停、等待或结束时光环淡出，减少动态效果时仅显示静态说话圆点。错误显示回复内的中文小字，可再次点击“听”；离页、清空和卸载停止音频并释放请求与 rAF。聊天仅保留原生按钮键盘行为，不提供逐句导航、快捷键帮助或 HTML/2D 片段导出入口；相关后端接口保留供 API/CLI 使用。
 
-可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, label, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；AI 标签常驻，署名来自模型元数据。关于你页保持闭口，仍按 VRM > 肖像 > 2D 选择；画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。聊天的 VRM `still` 模式仅渲染一帧，不启动眨眼、头动或口型循环。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败先回退配置肖像、再回退 2D，MP4 导出仍为 2D。CSP 仅 img-src 增加 blob: 以加载内嵌纹理；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
+可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；署名来自模型元数据。关于你页保持闭口，仍按 VRM > 肖像 > 2D 选择；画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。聊天的 VRM `still` 模式仅渲染一帧，不启动眨眼、头动或口型循环。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败先回退配置肖像、再回退 2D，MP4 导出仍为 2D。CSP 仅 img-src 增加 blob: 以加载内嵌纹理；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
 
 记忆页（`Memories.tsx`）有“写一段”“上传文件”“上传文件夹”三个标签，不选择类型或日期。支持 .txt/.md/.pdf/.docx/.html/.htm/.csv/.json/.srt/.vtt，每文件最多 50 MB；PDF 只读文字层，不做 OCR。文件夹以相对文件名发送，服务端只保存 basename，隐藏文件和未知格式显示跳过原因。添加后提示“已添加，正在记住…”。
 
@@ -144,7 +144,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 | 方法/路径 | 契约 |
 | --- | --- |
-| `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）、labels；无数据库路径或密钥 |
+| `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）；无数据库路径或密钥 |
 | `GET /api/jobs`、`/api/jobs/{id}` | 状态、时间、进度日志、阶段、计数、里程碑、结果/错误 |
 | `GET /api/persona/sources` | 保留原字段，追加 detected_kind/label、status（processing/remembered/nothing_found/failed）、remembered；不含 preview |
 | `GET /api/persona/sources/{id}/text` | text/plain，隐私视图，最多 20000 字，不存在 404 |
@@ -163,22 +163,22 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `POST /api/persona/questionnaire/submit` | 导入全部回答并尝试构建；只支持 initial |
 | `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/egress；name 是有效名字；无授权账本 |
 | `PUT /api/identity` | X-Twin: 1；`{name, about}`；去除首尾空白后名字 1–20 字，介绍 ≤200 字；返回完整 identity；介绍变化会替换“自我介绍”笔记并自动处理 |
-| `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null；avatar_image 为 `{url: "/api/media/avatar-image"}` 或 null（语音失败时仍返回） |
+| `GET /api/media/capabilities` | available/backend/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null；avatar_image 为 `{url: "/api/media/avatar-image"}` 或 null（语音失败时仍返回） |
 | `GET /api/media/avatar.vrm` | 配置的本地 VRM 流，model/gltf-binary、no-cache；未配置中文 JSON 404 |
 | `GET /api/media/avatar-image` | 配置的本地肖像，image/png、image/jpeg 或 image/webp、no-cache；未配置或已删除中文 JSON 404；配置校验详见 MEDIA.md |
 | `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}` |
 | `GET /api/media/audio/{name}` | SHA-256 命名 WAV/MP3 分片，验证目录边界 |
 | `POST /api/media/video` | 与 clip 相同的请求体，返回 `{job_id}`；弃权回答 400，未配置 503 |
 | `GET /api/media/video/jobs/{job_id}` | 视频专用 JobManager 的任务状态；done 结果 `{file, duration_s, warnings}`，重启清空 |
-| `GET /api/media/video/{name}` | 64 位十六进制文件名的 MP4 流，校验目录与符号链接；video/mp4、X-AI-Generated: twin、private/no-store；不存在 404 |
+| `GET /api/media/video/{name}` | 64 位十六进制文件名的 MP4 流，校验目录与符号链接；video/mp4、private/no-store；不存在 404 |
 
 任务状态 queued/running/done/failed，日志最近 500 行，里程碑另存；人格构建互斥，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空；UI 启动时发现 stale 会重新排队。导入、笔记、删除和介绍变化后约 3 秒防抖自动处理；运行中发生多次变化只排一个后续处理，复用 run_persona_build 和 JobManager。完成时间与错误持久化，失败可以 POST build 重试。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
 
-`POST /api/media/clip` 保留供 CLI/API 使用，网页不提供 2D 片段或 HTML 导出操作。clip 同步返回 `video/mp4`，`Content-Disposition: attachment`、`X-AI-Generated: twin`；复用现有安全与请求体限制，脚本最多 100,000 字符、视频最多 600 秒。需系统 ffmpeg 与中文字体（见 [MEDIA.md](MEDIA.md)），临时 MP4 在响应完成后清理。
+`POST /api/media/clip` 保留供 CLI/API 使用，网页不提供 2D 片段或 HTML 导出操作。clip 同步返回 `video/mp4`，`Content-Disposition: attachment`；复用现有安全与请求体限制，脚本最多 100,000 字符、视频最多 600 秒。需系统 ffmpeg 与中文字体（见 [MEDIA.md](MEDIA.md)），临时 MP4 在响应完成后清理。
 
-仅 `video.available=true` 时显示“视频”（ARIA 名称“生成视频”）。`features/chat/ReplyVideo.tsx` 点击即 POST `/api/media/video`，在本人 GPU 主机生成，无确认步骤。回复内卡片显示“正在生成视频…”、任务进度条和“通常约 30 秒”；每秒轮询专用任务接口。完成后替换为 `<video controls playsInline preload="metadata">`，宽度 100%、最大 360px、圆角，poster 为肖像；附“保存”下载链接及 visually hidden 的完整回复文本作为描述。成功结果按回复 ID 缓存于组件和本标签页 sessionStorage，重按或返回聊天无需再次生成。失败显示内联中文错误和“重试”；离页取消请求与计时器，不取消远端任务。超阈值分段用小字提示回听出入，不展示识别文本。标签仅从 API 读取。远端 JSON 契约和本地永久标识见 [MEDIA.md](MEDIA.md#34-本人视频通道v2)。
+仅 `video.available=true` 时显示“视频”（ARIA 名称“生成视频”）。`features/chat/ReplyVideo.tsx` 点击即 POST `/api/media/video`，在本人 GPU 主机生成，无确认步骤。回复内卡片显示“正在生成视频…”、任务进度条和“通常约 30 秒”；每秒轮询专用任务接口。完成后替换为 `<video controls playsInline preload="metadata">`，宽度 100%、最大 360px、圆角，poster 为肖像；附“保存”下载链接及 visually hidden 的完整回复文本作为描述。成功结果按回复 ID 缓存于组件和本标签页 sessionStorage，重按或返回聊天无需再次生成。失败显示内联中文错误和“重试”；离页取消请求与计时器，不取消远端任务。超阈值分段用小字提示回听出入，不展示识别文本。远端 JSON 契约和本地后处理见 [MEDIA.md](MEDIA.md#34-本人视频通道v2)。
 
-脚本与独立 HTML 导出不调用模型，音频与视频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含 AI 标识和来源指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息。
+脚本与独立 HTML 导出不调用模型，音频与视频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含来源元数据和指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息。
 
 ## 安全与服务路由
 

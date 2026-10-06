@@ -8,7 +8,7 @@ English | [简体中文](#简体中文)
 
 > **Status: early.** Interfaces will still change.
 
-twin builds a persona from freely added memories — notes, chats, documents, optional questions and interviews — where every trait carries a verbatim, dated quote, and serves it as conversation and speech: **Identity → Memory upload → Service**. Answers cite their evidence or abstain; every output is labelled as AI-generated and does not represent the person. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Chinese).
+twin builds a persona from freely added memories — notes, chats, documents, optional questions and interviews — where every trait carries a verbatim, dated quote, and serves it as conversation and speech: **Identity → Memory upload → Service**. Answers cite their evidence or abstain. twin is a personal tool and does not add disclaimers. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Chinese).
 
 **Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, and rely on LoRA training that is slow to update. twin answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (Second Me after its base upgrade: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 1.7B–4B model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
 
@@ -24,7 +24,6 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 - **有据可查。** 档案里每一条都带逐字核对过的原话和日期；回答引用不到依据时降低置信度或弃权，不硬编。
 - **随时添加记忆。** 写一段、上传文件或文件夹，自动整理；问卷可以不填。
-- **明确标识。** 所有输出都是 AI 模拟，不代表本人意见；语音和导出文件带显式与隐式的 AI 合成标识。
 - **隐私优先。** 他人姓名在进入档案时统一化名；对他人的评价不进档案；本人资料默认不发往境外服务。
 
 架构与规则见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
@@ -48,7 +47,6 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | 没有证据 | 每条档案条目都带逐字核对过的原话、日期和来源；引用不到的条目会被剔除 |
 | 更新要重新训练 | 不做 LoRA；新资料导入后增量抽取、重建索引即可生效。微调只能作为默认关闭的风格插件，在评测上显著胜出才允许打开 |
 | 没有可信评测 | 内置评测框架：题库与资料留在仓库外，评委团、重复作答、按来源分组的置信区间、每次运行的来源记录 |
-| 合成内容不标识 | 语音、导出文件都带显式和隐式的 AI 合成标识 |
 
 ### 评测能体现什么
 
@@ -151,9 +149,9 @@ API/MCP 保留高级（advanced）可选参数 `as_of`，评测也保留日期�
 在 `twin.toml` 的 `[tts]` 里配置语音后端：自托管的 MOSS-TTS-Nano（见 [deploy/tts-moss](deploy/tts-moss/README.md)）或 Cloudflare MeloTTS（外部服务，按配置使用）。
 
 ```bash
-twin media speak 回复.json --out 音频目录/            # 带标识的分段语音和清单
-twin media clip 回复.json --out clip.mp4              # 形象、字幕与标识；需系统 ffmpeg 和中文字体
-twin media video 回复.json --out out.mp4              # [video] 通用 SSH 视频任务；常驻标识，见 docs/MEDIA.md
+twin media speak 回复.json --out 音频目录/            # 分段语音和清单
+twin media clip 回复.json --out clip.mp4              # 形象与字幕；需系统 ffmpeg 和中文字体
+twin media video 回复.json --out out.mp4              # [video] 通用 SSH 视频任务，见 docs/MEDIA.md
 twin media check --out 评测目录/                      # 合成句集回听评测：字错率与延迟
 ```
 

@@ -94,7 +94,6 @@ class ApiSecurityMiddleware:
                 for name, value in _SECURITY_HEADERS.items():
                     headers.setdefault(name, value)
                 headers["Cache-Control"] = "no-store"
-                headers["X-AI-Generated"] = "twin"
             await send(message)
 
         async def refuse(status: int, detail: str, headers: dict[str, str] | None = None) -> None:

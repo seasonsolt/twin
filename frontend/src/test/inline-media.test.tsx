@@ -53,7 +53,6 @@ const answer: ChatReply = {
 const caps: Capabilities = {
   available: true,
   backend: 'local',
-  label: 'API 合成标识',
   avatar_image: { url: '/api/media/avatar-image' },
   avatar_model: { format: 'vrm', url: '/api/media/avatar.vrm' },
   video: { available: true },
@@ -455,7 +454,6 @@ function video() {
       answer={answer}
       name="测试人"
       portrait={caps.avatar_image!.url}
-      label={caps.label}
     />
   );
 }
@@ -491,7 +489,6 @@ it('starts video immediately, reports progress, renders accessible inline video 
     `/api/media/video/${'a'.repeat(64)}.mp4`,
   );
   expect(screen.getByText('第 1 句回听与原文有出入')).toBeVisible();
-  expect(screen.getByText(caps.label)).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: '生成视频' }));
   expect(count('/api/media/video')).toBe(1);
   view.unmount();

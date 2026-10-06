@@ -13,7 +13,6 @@ export interface Status {
     external: boolean;
     declared: boolean;
   }[];
-  labels: { explicit: string; disclaimer: string; chat_notice: string };
 }
 
 export const useStatus = create<{

@@ -30,13 +30,11 @@ export function ReplyVideo({
   answer,
   name,
   portrait,
-  label,
 }: {
   id: string;
   answer: ChatReply;
   name: string;
   portrait?: string;
-  label?: string;
 }) {
   const key = `twin.reply-video:${id}`;
   const [job, setJob] = useState<Job<VideoResult> | null>(() => restore(key));
@@ -154,11 +152,6 @@ export function ReplyVideo({
           )}
           {url && (
             <div className="max-w-[360px] space-y-2">
-              {label && (
-                <p role="note" className="text-xs text-secondary">
-                  {label}
-                </p>
-              )}
               <video
                 controls
                 playsInline

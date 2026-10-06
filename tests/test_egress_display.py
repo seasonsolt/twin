@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from twin.config import Settings
 from twin.egress import egress_status
-from twin.media.schema import disclaimer
 from twin.web import create_app
 
 
@@ -30,7 +29,6 @@ def test_default_and_disabled_backends_do_not_claim_external_services(
         assert client.get("/api/identity").json()["egress"] == []
         status = client.get("/api/status").json()
         assert status["egress"] == []
-        assert status["labels"]["disclaimer"] == disclaimer(settings.target_name, False)
 
 
 def test_configured_external_services_include_judges_and_sanitized_hosts(

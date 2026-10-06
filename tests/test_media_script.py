@@ -14,12 +14,9 @@ from twin.media.adapters import (
 )
 from twin.media.render import export_html, render_audio
 from twin.media.schema import (
-    EXPLICIT_LABEL,
-    OPENING_NOTICE,
     MediaManifest,
     MediaScript,
     PresentableAnswer,
-    Segment,
 )
 from twin.media.script import script_from_presentable, split_sentences
 from twin.media.tts import SilentSynthesizer
@@ -74,7 +71,7 @@ def test_chat_provenance(reply: ChatReply) -> None:
     assert MediaScript.model_validate_json(script.model_dump_json()) == script
     assert script.source_kind == "chat_reply"
     assert script.source_fingerprint == fingerprint(reply.model_dump(mode="json"))
-    assert script.segments[0].text == OPENING_NOTICE
+    assert [s.text for s in script.segments] == split_sentences(reply.reply)
     assert [c.ref_id for c in script.citations] == reply.citations
     assert all(c.reason == "" for c in script.citations)
     assert (script.as_of, script.confidence) == (reply.as_of, reply.confidence)
@@ -86,43 +83,34 @@ def test_abstain_no_speech(reply: ChatReply, reason: str) -> None:
     reply.abstain_reason = reason
     for p in [presentable_from_chat_reply(reply)]:
         script = script_from_presentable(p, "合成人物")
-        assert len(script.segments) == 2
-        assert script.segments[0].text == OPENING_NOTICE
+        assert len(script.segments) == 1
         assert all(s.kind == "notice" for s in script.segments)
-        assert script.segments[1].text == (reason.strip() or "资料不足以判断，请向本人确认。")
+        assert script.segments[0].text == (reason.strip() or "资料不足以判断，请向本人确认。")
         assert script.citations
 
 
-def test_empty_speech_still_has_notice(reply: ChatReply) -> None:
+def test_empty_speech_has_no_segments(reply: ChatReply) -> None:
     reply.reply = "  "
-    assert script_from_presentable(presentable_from_chat_reply(reply), "合成人物").segments == [
-        Segment(index=0, kind="notice", text=OPENING_NOTICE)
-    ]
+    assert script_from_presentable(presentable_from_chat_reply(reply), "合成人物").segments == []
 
 
-def test_general_notice_is_shown_and_spoken(reply: ChatReply, tmp_path: Path) -> None:
-    general = ChatReply.model_validate({**reply.model_dump(), "mode": "general"})
+def test_general_content_is_shown_and_spoken_unchanged(reply: ChatReply, tmp_path: Path) -> None:
+    general = ChatReply.model_validate({**reply.model_dump(), "mode": "general", "reply": "这是通用知识。先验证。"})
     presentable = presentable_from_chat_reply(general)
     assert presentable.mode == "general"
     script = script_from_presentable(presentable, "合成人物")
     assert not script.abstain
     assert [s.index for s in script.segments] == list(range(len(script.segments)))
-    assert [s.kind for s in script.segments] == ["notice", "notice", "speech", "speech"]
-    notice = "以下是通用知识，不代表本人观点。"
-    assert script.segments[0].text == OPENING_NOTICE and script.segments[1].text == notice
-    assert [s.text for s in script.segments[2:]] == split_sentences(reply.reply)
-    assert notice in export_html(script, clock=lambda: dt.datetime(2026, 1, 2, tzinfo=dt.UTC))
+    assert [s.kind for s in script.segments] == ["speech", "speech"]
+    assert [s.text for s in script.segments] == split_sentences(general.reply)
+    assert "这是通用知识。" in export_html(script, clock=lambda: dt.datetime(2026, 1, 2, tzinfo=dt.UTC))
     audio = render_audio(script, SilentSynthesizer(), tmp_path)
-    assert "".join(p.spoken_text for p in audio.segments[1].parts) == notice
-    assert notice not in "".join(
-        s.text for s in script_from_presentable(presentable_from_chat_reply(reply), "人").segments
-    )
+    assert "".join(p.text for s in audio.segments for p in s.parts) == general.reply
 
 
 def test_manifest_roundtrip() -> None:
     manifest = MediaManifest(source_fingerprint="abc", created_at=dt.datetime.now(dt.UTC))
     assert MediaManifest.model_validate_json(manifest.model_dump_json()) == manifest
-    assert manifest.label == EXPLICIT_LABEL
     assert manifest.schema_version == 1
     with pytest.raises(ValidationError):
         manifest.ai_generated = False  # type: ignore[assignment]

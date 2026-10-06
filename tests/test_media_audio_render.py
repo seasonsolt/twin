@@ -16,7 +16,6 @@ import pytest
 from twin.media import render
 from twin.media.render import export_html, render_audio
 from twin.media.schema import (
-    OPENING_NOTICE,
     AudioManifest,
     AudioPart,
     AudioRender,
@@ -85,9 +84,8 @@ def make_script(
         confidence=0.8,
         abstain=abstain,
         segments=[
-            Segment(index=0, kind="notice", text=OPENING_NOTICE),
             Segment(
-                index=1, kind="notice" if abstain else "speech", text="资料不足，请向本人确认。" if abstain else text
+                index=0, kind="notice" if abstain else "speech", text="资料不足，请向本人确认。" if abstain else text
             ),
         ],
         citations=[],
@@ -140,7 +138,6 @@ def test_cache_hit_has_zero_calls_and_manifest_is_private(synth: Recorder, tmp_p
     result = render_audio(script, synth, tmp_path / "nested" / "audio")
     calls = len(synth.calls)
     assert calls == len(script.segments)
-    assert synth.calls[0].text == speech_text(OPENING_NOTICE, synth.voice.language, capabilities=synth.capabilities)
     assert [call.text for call in synth.calls] == [
         speech_text(segment.text, synth.voice.language, capabilities=synth.capabilities) for segment in script.segments
     ]
@@ -148,7 +145,6 @@ def test_cache_hit_has_zero_calls_and_manifest_is_private(synth: Recorder, tmp_p
     raw = (directory / result.manifest_file).read_text()
     manifest = AudioManifest.model_validate_json(raw)
     assert manifest.ai_generated
-    assert manifest.label == script.explicit_label
     assert manifest.source_fingerprint == script.source_fingerprint
     assert manifest.voice == synth.voice
     assert manifest.backend == synth.name
@@ -170,28 +166,24 @@ def test_cache_hit_has_zero_calls_and_manifest_is_private(synth: Recorder, tmp_p
 def test_abstain_speaks_notices_only_even_with_stray_speech(synth: Recorder, tmp_path: Path) -> None:
     script = make_script(abstain=True)
     script = script.model_copy(
-        update={"segments": [*script.segments, Segment(index=2, kind="speech", text="不可播放。")]}
+        update={"segments": [*script.segments, Segment(index=1, kind="speech", text="不可播放。")]}
     )
     result = render_audio(script, synth, tmp_path)
-    assert [segment.kind for segment in result.segments] == ["notice", "notice"]
-    assert [call.text for call in synth.calls] == [
-        speech_text(OPENING_NOTICE, synth.voice.language, capabilities=synth.capabilities),
-        "资料不足，请向本人确认。",
-    ]
+    assert [segment.kind for segment in result.segments] == ["notice"]
+    assert [call.text for call in synth.calls] == ["资料不足，请向本人确认。"]
 
 
 def test_split_order_and_sentence_comma_preference(synth: Recorder, tmp_path: Path) -> None:
     synth.capabilities = synth.capabilities.model_copy(update={"max_chars": 8})
     text = "第一句。第二句，第三句特别长没有标点结束。"
     result = render_audio(make_script(text=text), synth, tmp_path)
-    pieces = result.segments[1].parts
+    pieces = result.segments[0].parts
     assert [part.text for part in pieces] == ["第一句。", "第二句，", "第三句特别长没有", "标点结束。"]
     assert "".join(part.text for part in pieces) == text
     assert all(len(call.text) <= 8 for call in synth.calls)
     assert [call.text for call in synth.calls] == [
         part.spoken_text for segment in result.segments for part in segment.parts
     ]
-    assert "".join(part.text for part in result.segments[0].parts) == OPENING_NOTICE
     synth.calls.clear()
     render_audio(make_script(text=text), synth, tmp_path)
     assert not synth.calls
@@ -346,7 +338,7 @@ def test_spoken_text_is_recorded_without_rewriting_script_or_html(synth: Recorde
     result = render_audio(script, synth, tmp_path)
     manifest = AudioManifest.model_validate_json((tmp_path / result.manifest_file).read_bytes())
     assert script.model_dump_json() == before
-    assert script.segments[1].text == text
+    assert script.segments[0].text == text
     assert text in html
     assert export_html(script, clock=lambda: dt.datetime(2026, 10, 4, tzinfo=dt.UTC)) == html
     assert manifest.speech_text_version == SPEECH_TEXT_VERSION
@@ -359,8 +351,8 @@ def test_spoken_text_is_recorded_without_rewriting_script_or_html(synth: Recorde
             original.text, synth.voice.language, capabilities=synth.capabilities
         )
         assert all(part.speech_text_version == SPEECH_TEXT_VERSION for part in segment.parts)
-    assert "百分之三点五" in synth.calls[1].text
-    assert synth.calls[1].text.startswith("AI" if synth.capabilities.reads_latin_acronyms else "A I")
+    assert "百分之三点五" in synth.calls[0].text
+    assert synth.calls[0].text.startswith("AI" if synth.capabilities.reads_latin_acronyms else "A I")
 
 
 @pytest.mark.parametrize("max_chars", [2, 3, 5, 8, 20])
@@ -389,13 +381,13 @@ def test_capability_not_backend_name_controls_acronyms(tmp_path: Path) -> None:
     synth = Recorder(SilentSynthesizer())
     synth.name = "cloudflare:melotts"
     first = render_audio(make_script(text="AI有3个项目。"), synth, tmp_path)
-    assert synth.calls[1].text == "AI 有三个项目。"
+    assert synth.calls[0].text == "AI 有三个项目。"
     synth.name = "custom-backend"
     synth.capabilities = synth.capabilities.model_copy(update={"reads_latin_acronyms": False})
     synth.calls.clear()
     second = render_audio(make_script(text="AI有3个项目。"), synth, tmp_path)
-    assert synth.calls[1].text == "A I 有三个项目。"
-    assert first.segments[1].parts[0].file_name != second.segments[1].parts[0].file_name
+    assert synth.calls[0].text == "A I 有三个项目。"
+    assert first.segments[0].parts[0].file_name != second.segments[0].parts[0].file_name
     assert first.manifest_file != second.manifest_file
 
 

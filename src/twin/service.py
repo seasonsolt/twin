@@ -1,15 +1,14 @@
-"""Append-only service contracts and the sole ChatReply adapter for API/MCP."""
+"""Service contracts and the sole ChatReply adapter for API/MCP."""
 
 from __future__ import annotations
 
 import datetime as dt
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .config import Settings
 from .identity import Identity
-from .media.schema import EXPLICIT_LABEL, ExplicitLabel
 from .persona.chat import QUOTE_CHARS, TEXT_CHARS, PersonaChat, _clip, _visible_items
 from .persona.schema import ChatTurn
 from .persona.sources import expression_view
@@ -39,10 +38,16 @@ class ServiceAnswer(BaseModel):
     confidence: float
     citations: list[ServiceCitation]
     as_of: dt.date | None
-    label: ExplicitLabel = EXPLICIT_LABEL
     persona_name: str
     generated_at: dt.datetime
     mode: Literal["grounded", "general", "abstain"] = "grounded"
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_label(cls, value: object) -> object:
+        if isinstance(value, dict):
+            return {key: val for key, val in value.items() if key != "label"}
+        return value
 
     @field_validator("generated_at")
     @classmethod
@@ -58,7 +63,13 @@ class ServiceIdentity(BaseModel):
     name: str
     avatar: str | None
     voice: str | None
-    label: ExplicitLabel = EXPLICIT_LABEL
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_label(cls, value: object) -> object:
+        if isinstance(value, dict):
+            return {key: val for key, val in value.items() if key != "label"}
+        return value
 
 
 def public_identity(settings: Settings) -> ServiceIdentity:

@@ -15,7 +15,6 @@ const identity = {
 const spec = {
   schema_version: 1,
   avatar_id: 'default',
-  label: 'API形象标签',
   mouth_states: 4,
   stylized: true,
   palette: {
@@ -36,11 +35,6 @@ const status: Status = {
   counts: { sources: 1, items: 0 },
   llm: { provider: 'mock', model: 'mock' },
   embed: { provider: 'local' },
-  labels: {
-    explicit: 'API标签',
-    disclaimer: 'API说明',
-    chat_notice: 'API聊天',
-  },
   egress: [
     {
       kind: 'tts',
@@ -109,7 +103,6 @@ it('edits name/about inline and saves with X-Twin, previews a closed-mouth avata
   expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
   const avatar = await screen.findByRole('img', { name: '风格化插画' });
   expect(avatar).toHaveAttribute('data-mouth-level', '0');
-  expect(screen.getByText('API形象标签')).toBeVisible();
   fireEvent.change(screen.getByLabelText('名字'), {
     target: { value: '新名字' },
   });
@@ -213,10 +206,4 @@ it('retries identity failures and aborts reads on unmount', async () => {
       .filter(([, options]) => options.signal)
       .every(([, options]) => options.signal.aborted),
   ).toBe(true);
-});
-it('does not hard-code AI labels while status is unavailable', async () => {
-  useStatus.setState({ data: null });
-  setup();
-  await screen.findByDisplayValue(identity.name);
-  expect(screen.queryByText(/AI 合成|不代表本人意见/)).not.toBeInTheDocument();
 });

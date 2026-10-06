@@ -1,11 +1,10 @@
-"""Offline preset-only speech and shared identity-label checks, using invented data."""
+"""Offline preset-only speech and identity checks, using invented data."""
 
 from __future__ import annotations
 
 import json
 import traceback
 from pathlib import Path
-from typing import Any, get_args
 
 import httpx
 import pytest
@@ -16,18 +15,9 @@ from typer.testing import CliRunner
 from twin.cli import app as cli
 from twin.config import Settings, TTSSettings, make_synthesizer
 from twin.identity import Identity
-from twin.media.schema import (
-    CHAT_NOTICE,
-    EXPLICIT_LABEL,
-    MediaManifest,
-    MediaScript,
-    SpeechRequest,
-    SynthCapabilities,
-    VoiceSpec,
-    disclaimer,
-)
+from twin.media.schema import SpeechRequest, SynthCapabilities, VoiceSpec
 from twin.media.tts import MediaRejected, MediaTimeout, MediaUnavailable, OpenAICompatSpeech
-from twin.web.app import STATIC_DIR, create_app
+from twin.web.app import create_app
 
 BASE = "https://speech.invalid/v1"
 KEY = "invented-voice-test-secret"
@@ -213,73 +203,6 @@ def test_identity_voice_is_additive_and_cli_reads_configuration(tmp_path: Path) 
     result = CliRunner().invoke(cli, ["--config", str(config), "identity", "show"])
     assert result.exit_code == 0, result.exception
     assert "音色：Junhao（预置音色）" in result.stdout
-
-
-def test_literal_contracts_match_label_source() -> None:
-    for model, field in ((MediaScript, "explicit_label"), (MediaManifest, "label")):
-        assert get_args(model.model_fields[field].annotation) == (EXPLICIT_LABEL,)
-        assert model.model_fields[field].default == EXPLICIT_LABEL
-
-
-def test_static_assets_do_not_duplicate_labels_or_privacy_claims() -> None:
-    for path in STATIC_DIR.rglob("*"):
-        if path.is_file():
-            content = path.read_bytes()
-            for text in (EXPLICIT_LABEL, "不代表", "数据只保存在本机"):
-                assert text.encode() not in content, path
-
-
-def test_disclaimer_wording() -> None:
-    prefix = "内容由 AI 根据虚构人物的记忆生成，不代表虚构人物本人的意见或决定。"
-    assert disclaimer("虚构人物", False) == prefix + "数据只保存在本机。"
-    assert disclaimer("虚构人物", True) == prefix + "部分数据经配置的外部服务处理，详见关于你页面的外部服务说明。"
-    assert CHAT_NOTICE == (
-        "分身以本人身份、第一人称作答，只依据人格档案和本人原话；"
-        "没有依据时会直说并标注“需要本人确认”。回复是模拟，不代表本人意见。"
-    )
-
-
-@pytest.mark.parametrize("backend", ["llm", "embed", "tts", "asr", "judge"])
-def test_status_labels_follow_configured_external_backends(backend: str, tmp_path: Path) -> None:
-    configuration: dict[str, Any] = {
-        "target_name": "虚构人物",
-        "db_path": tmp_path / "status.db",
-        "llm": {"egress": "local"},
-        "embed": {"egress": "local"},
-        "tts": {"egress": "local"},
-        "asr": {"egress": "local"},
-    }
-    if backend == "judge":
-        configuration["judges"] = [{"model": "test-model", "base_url": BASE, "egress": "external"}]
-    else:
-        configuration[backend] = {
-            "model": "test-model",
-            "base_url": BASE,
-            "egress": "external",
-            "provider": "openai_compat",
-        }
-    settings = Settings.model_validate(configuration)
-    with TestClient(create_app(settings), base_url="http://localhost") as client:
-        response = client.get("/api/status")
-    assert response.status_code == 200
-    status = response.json()
-    assert status["labels"] == {
-        "explicit": EXPLICIT_LABEL,
-        "disclaimer": disclaimer("虚构人物", True),
-        "chat_notice": CHAT_NOTICE,
-    }
-
-
-def test_local_backends_do_not_claim_external_processing(tmp_path: Path) -> None:
-    settings = Settings.model_validate(
-        {
-            "db_path": tmp_path / "local.db",
-            "llm": {"egress": "local"},
-            "asr": {"egress": "local"},
-        }
-    )
-    with TestClient(create_app(settings), base_url="http://localhost") as client:
-        assert client.get("/api/status").json()["labels"]["disclaimer"] == disclaimer(settings.target_name, False)
 
 
 def test_web_capability_discovery_stays_lazy_and_errors_are_contained(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""Generic SSH video jobs, followed by local, permanent AI labelling."""
+"""Generic SSH video jobs, followed by local MP4 processing."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ import tempfile
 from pathlib import Path
 from typing import Literal, Protocol
 
-from PIL import Image, ImageFont
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .clip import _font_path, draw_badge, ffmpeg_path, label_metadata
-from .schema import AVATAR_PRESETS, OPENING_NOTICE, MediaScript, VideoResult, VideoSegment
+from .clip import ffmpeg_path, label_metadata
+from .schema import MediaScript, VideoResult, VideoSegment
 from .tts import MediaInputTooLong, MediaRejected, MediaTimeout, MediaUnavailable
 
 
@@ -71,7 +70,6 @@ class RemoteVideo:
         max_rounds: int = 4,
         max_cer: float = 0.05,
         pause_s: float = 0.25,
-        font_path: str | Path | None = None,
         runner: Runner = run,
     ) -> None:
         if (
@@ -80,7 +78,7 @@ class RemoteVideo:
             raise MediaRejected("远端视频配置无效，请检查 [video]")
         self.host, self.command = host, command
         self.timeout_s, self.max_rounds, self.max_cer, self.pause_s = timeout_s, max_rounds, max_cer, pause_s
-        self.font_path, self.runner = font_path, runner
+        self.runner = runner
 
     def _run(self, command: list[str], input: str | None = None) -> str:
         try:
@@ -96,9 +94,7 @@ class RemoteVideo:
     def synthesize(self, script: MediaScript, out_path: Path) -> VideoResult:
         if script.abstain:
             raise MediaRejected("分身已弃权，不能生成讲述视频")
-        texts = [s.text for s in script.segments]
-        if not texts or texts[0] != OPENING_NOTICE:
-            texts.insert(0, OPENING_NOTICE)
+        texts = [s.text for s in script.segments if s.kind == "speech"]
         if sum(map(len, texts)) > 100_000:
             raise MediaInputTooLong("视频内容过长，请缩短回答")
         segments = [{"id": f"s{i:02d}", "text": text} for i, text in enumerate(texts, 1)]
@@ -110,13 +106,7 @@ class RemoteVideo:
             "max_cer": self.max_cer,
             "pause_s": self.pause_s,
         }
-        # Fail locally before transmitting personal text when labelling dependencies are missing.
         ffmpeg = ffmpeg_path()
-        font = _font_path(self.font_path)
-        try:
-            ImageFont.truetype(str(font), 20)
-        except OSError:
-            raise MediaUnavailable("无法读取中文字体，请检查 [media] font_path") from None
         probe = shutil.which("ffprobe")
         if probe is None:
             raise MediaUnavailable("找不到 ffprobe，请安装 ffmpeg")
@@ -142,7 +132,7 @@ class RemoteVideo:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=out_path.parent, prefix=".video-") as directory:
                 work = Path(directory)
-                raw, badge, labelled = work / "remote.mp4", work / "badge.png", work / "labelled.mp4"
+                raw, processed = work / "remote.mp4", work / "processed.mp4"
                 if self.host:
                     self._run(["scp", "-o", "BatchMode=yes", f"{self.host}:{response.output}", str(raw)])
                 else:
@@ -169,9 +159,6 @@ class RemoteVideo:
                         raise ValueError
                 except (ValueError, KeyError, IndexError, TypeError):
                     raise MediaUnavailable("远端视频文件无效，请检查任务输出") from None
-                image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-                draw_badge(image, font, AVATAR_PRESETS["default"].palette["hair"], bottom=True)
-                image.save(badge)
                 self._run(
                     [
                         ffmpeg,
@@ -180,12 +167,10 @@ class RemoteVideo:
                         "-y",
                         "-i",
                         str(raw),
-                        "-i",
-                        str(badge),
-                        "-filter_complex",
-                        "[0:v:0][1:v:0]overlay=0:0,pad=ceil(iw/2)*2:ceil(ih/2)*2[v]",
+                        "-vf",
+                        "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                         "-map",
-                        "[v]",
+                        "0:v:0",
                         "-map",
                         "0:a:0",
                         "-map_metadata",
@@ -203,11 +188,11 @@ class RemoteVideo:
                         "-movflags",
                         "+faststart",
                         *label_metadata(script),
-                        str(labelled),
+                        str(processed),
                     ]
                 )
-                labelled.chmod(0o600)
-                labelled.replace(out_path)
+                processed.chmod(0o600)
+                processed.replace(out_path)
         except OSError:
             raise MediaUnavailable("无法处理或保存视频，请检查媒体配置和输出目录") from None
         # Do not reflect free-form backend warnings (they may contain personal text or remote paths).

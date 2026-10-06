@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 from ..util import fingerprint, open_private, private_directory
 from .asr import SpeechRecognizer
 from .render import render_audio
-from .schema import OPENING_NOTICE, MediaScript, Segment, TranscriptionRequest
+from .schema import MediaScript, Segment, TranscriptionRequest
 from .speech_text import SPEECH_TEXT_VERSION, speech_text
 from .tts import SpeechSynthesizer
 
@@ -25,7 +25,6 @@ TRADITIONAL_ONLY = frozenset(
     "這個們來說話語聽聲識別開關會議為與時間國體學習經濟業務發現應該實際數據問題風險萬億點後臺灣龍讓選擇無從對於過還進麼"
 )
 DEFAULT_SENTENCES: tuple[str, ...] = (
-    OPENING_NOTICE,
     "今天我们先核对材料，再讨论下一步安排。",
     "请把结论和依据分别说明。",
     "我们需要2个方案和3位同事。",
@@ -247,7 +246,7 @@ def run_check(
                 as_of=None,
                 confidence=1.0,
                 abstain=False,
-                segments=[Segment(index=0, kind="notice" if text == OPENING_NOTICE else "speech", text=text)],
+                segments=[Segment(index=0, kind="speech", text=text)],
                 citations=[],
             )
             checks: list[RepeatCheck] = []

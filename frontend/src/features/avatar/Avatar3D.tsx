@@ -16,7 +16,6 @@ export interface Avatar3DProps {
   url: string;
   mouth: number;
   speaking: boolean;
-  label: string;
   onFallback(): void;
   onModelNameChange?(name: string | null): void;
   still?: boolean;
@@ -249,12 +248,6 @@ export default function Avatar3D(props: Avatar3DProps) {
     <div className="mx-auto w-full max-w-64 shrink-0">
       <div className="relative aspect-[4/5]">
         <div ref={host} className="absolute inset-0" />
-        <p
-          role="note"
-          className="absolute bottom-2 left-2 whitespace-nowrap rounded-sm border border-border/50 bg-surface/80 px-1.5 py-0.5 text-[10px] leading-tight text-secondary"
-        >
-          {props.label}
-        </p>
       </div>
       {credit && (
         <p className="mt-1 text-center text-xs text-tertiary">

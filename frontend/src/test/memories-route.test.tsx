@@ -29,11 +29,6 @@ it('redirects the old #/sources bookmark to #/memories and labels navigation 记
                     llm: { provider: 'mock', model: 'mock' },
                     embed: { provider: 'local' },
                     egress: [],
-                    labels: {
-                      explicit: 'API 标识',
-                      disclaimer: 'API 页脚',
-                      chat_notice: 'API 聊天说明',
-                    },
                   },
           ),
         ),

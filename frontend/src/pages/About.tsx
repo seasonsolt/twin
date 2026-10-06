@@ -107,7 +107,6 @@ export function About() {
                 <div className="w-48">
                   <AvatarPreview
                     capabilities={identity.capabilities}
-                    label={status?.labels.explicit}
                     onModelNameChange={onModelNameChange}
                   />
                 </div>

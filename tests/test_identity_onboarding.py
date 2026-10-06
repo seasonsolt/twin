@@ -9,30 +9,54 @@ from fastapi.testclient import TestClient
 from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
-from twin.media.schema import EXPLICIT_LABEL, LEGACY_LABEL, OPENING_NOTICE, MediaManifest
+from twin.media.schema import AVATAR_PRESETS, AvatarSpec, MediaManifest, MediaScript
 from twin.persona.chat import PersonaChat
 from twin.persona.schema import ChatTurn
 from twin.persona.sources import parse_chat, parse_note
 from twin.persona.store import PersonaStore
-from twin.service import ServiceIdentity, answer_question, public_identity
+from twin.service import ServiceAnswer, ServiceIdentity, answer_question, public_identity
 from twin.web import create_app
 from twin.web.jobs import PersonaProcessing
 
 
-def test_labels_and_legacy_manifest() -> None:
-    assert EXPLICIT_LABEL == "AI 合成，不代表本人意见"
-    assert OPENING_NOTICE == "以下内容由 AI 合成，不代表本人意见。"
-    manifest = MediaManifest.model_validate(
-        {"label": LEGACY_LABEL, "source_fingerprint": "test", "created_at": "2025-01-01T00:00:00Z"}
-    )
-    assert manifest.label == EXPLICIT_LABEL
-    assert manifest.model_dump()["label"] == EXPLICIT_LABEL
-    assert MediaManifest.model_validate_json(manifest.model_dump_json()).label == EXPLICIT_LABEL
-    assert ServiceIdentity(name="测试", avatar=None, voice=None, label=LEGACY_LABEL).label == EXPLICIT_LABEL
-    with pytest.raises(ValueError):
-        MediaManifest.model_validate(
-            {"label": "unlabelled", "source_fingerprint": "test", "created_at": "2025-01-01T00:00:00Z"}
-        )
+@pytest.mark.parametrize("label", ["AI 合成 · 模拟推演，不代表本人意见", "AI 合成，不代表本人意见", "other"])
+def test_legacy_labels_are_ignored(label: str) -> None:
+    records = [
+        (MediaManifest, {"source_fingerprint": "test", "created_at": "2025-01-01T00:00:00Z"}),
+        (ServiceIdentity, {"name": "测试", "avatar": None, "voice": None}),
+        (AvatarSpec, AVATAR_PRESETS["default"].model_dump()),
+        (
+            MediaScript,
+            {
+                "source_kind": "chat_reply",
+                "source_fingerprint": "test",
+                "persona_name": "测试",
+                "as_of": None,
+                "confidence": 0.8,
+                "abstain": False,
+                "segments": [],
+                "citations": [],
+            },
+        ),
+        (
+            ServiceAnswer,
+            {
+                "answer": "测试。",
+                "abstain": False,
+                "abstain_reason": "",
+                "confidence": 0.8,
+                "citations": [],
+                "as_of": None,
+                "persona_name": "测试",
+                "generated_at": "2025-01-01T00:00:00Z",
+            },
+        ),
+    ]
+    for model, data in records:
+        field = "explicit_label" if model is MediaScript else "label"
+        record = model.model_validate({**data, field: label})
+        assert field not in record.model_dump()
+        assert model.model_validate_json(record.model_dump_json()) == record
 
 
 def test_identity_persistence_replacement_and_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,7 +88,6 @@ def test_identity_persistence_replacement_and_alias(tmp_path: Path, monkeypatch:
             assert store.list_expressions()[0].text == "喜欢做饭"
         status = client.get("/api/status").json()
         assert status["target_name"] == "新名字"
-        assert "根据新名字的记忆" in status["labels"]["disclaimer"]
     assert settings.target_name == "配置名字"
     assert public_identity(settings).name == "新名字"
     for name in ("新名字", "配置名字", "旧别名"):

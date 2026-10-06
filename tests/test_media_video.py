@@ -1,4 +1,4 @@
-"""Offline generic SSH jobs and permanently labelled video output."""
+"""Offline generic SSH jobs and video postprocessing."""
 
 from __future__ import annotations
 
@@ -24,10 +24,9 @@ from twin.cli import app as cli
 from twin.config import Settings, VideoSettings, egress_of, make_video_synthesizer
 from twin.egress import egress_status
 from twin.media.adapters import presentable_from_payload
-from twin.media.clip import _font_path
-from twin.media.schema import EXPLICIT_LABEL, OPENING_NOTICE, MediaScript, Segment, VideoResult, VideoSegment
+from twin.media.schema import MediaScript, Segment, VideoResult, VideoSegment
 from twin.media.script import script_from_presentable
-from twin.media.tts import MediaError, MediaRejected, MediaTimeout, MediaUnavailable
+from twin.media.tts import MediaRejected, MediaTimeout, MediaUnavailable
 from twin.media.video import RemoteVideo, run
 from twin.web.media import register
 
@@ -53,8 +52,8 @@ def script() -> MediaScript:
         abstain=False,
         citations=[],
         segments=[
-            Segment(index=0, kind="notice", text=OPENING_NOTICE),
-            Segment(index=1, kind="speech", text="有依据的测试回答。"),
+            Segment(index=0, kind="speech", text="有依据的测试回答。"),
+            Segment(index=1, kind="speech", text="第二句。"),
         ],
     )
 
@@ -97,8 +96,6 @@ class FakeRunner:
 @pytest.fixture
 def dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("twin.media.video.ffmpeg_path", lambda: "ffmpeg")
-    monkeypatch.setattr("twin.media.video._font_path", lambda _: Path("font.ttc"))
-    monkeypatch.setattr("twin.media.video.ImageFont.truetype", lambda *_: None)
     monkeypatch.setattr("twin.media.video.shutil.which", lambda name: name)
 
 
@@ -142,18 +139,14 @@ def test_transport_errors_are_generic(dependencies: None, error: Exception, tmp_
     assert SECRET not in str(exc.value)
 
 
-def test_general_video_keeps_script_notices(dependencies: None, tmp_path: Path) -> None:
+def test_general_video_keeps_content(dependencies: None, tmp_path: Path) -> None:
     general = script_from_presentable(presentable_from_payload("chat_reply", {**SOURCE, "mode": "general"}), "人")
     runner = FakeRunner(stdout="{}")
     with pytest.raises(MediaUnavailable, match="响应无效"):
         RemoteVideo(host="test-alias", command="configured-command", runner=runner).synthesize(
             general, tmp_path / "out.mp4"
         )
-    assert [s["text"] for s in runner.request["segments"]] == [
-        OPENING_NOTICE,
-        "以下是通用知识，不代表本人观点。",
-        SOURCE["reply"],
-    ]
+    assert [s["text"] for s in runner.request["segments"]] == [SOURCE["reply"]]
 
 
 def test_abstention_never_calls_runner(tmp_path: Path) -> None:
@@ -248,7 +241,6 @@ def test_local_runner_contract_and_copy(
         Path(command[-1]).write_bytes(b"labelled mp4")
         return subprocess.CompletedProcess(command, 0, "")
 
-    monkeypatch.setattr("twin.media.video.draw_badge", lambda *args, **kwargs: None)
     command = f"test -d ~ && {shlex.quote(sys.executable)} {shlex.quote(str(job))}"
     out = tmp_path / "out.mp4"
     result = RemoteVideo(host=host, command=command, timeout_s=10, runner=runner).synthesize(script(), out)
@@ -269,7 +261,7 @@ def test_local_runner_contract_and_copy(
 def test_success_validation(dependencies: None, change: str, tmp_path: Path) -> None:
     segments = [
         {"id": f"s{i:02d}", "text": text, "heard": text, "cer": 0.0, "seed": i}
-        for i, text in enumerate([OPENING_NOTICE, script().segments[1].text], 1)
+        for i, text in enumerate([s.text for s in script().segments], 1)
     ]
     payload: dict[str, Any] = {
         "ok": True,
@@ -299,11 +291,7 @@ def test_success_validation(dependencies: None, change: str, tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg required")
-def test_real_postprocess_badge_metadata_and_contract(tmp_path: Path) -> None:
-    try:
-        font = _font_path(None)
-    except MediaError:
-        pytest.skip("Chinese font required")
+def test_real_postprocess_metadata_and_contract(tmp_path: Path) -> None:
     raw = tmp_path / "raw.mp4"
     subprocess.run(
         [
@@ -332,13 +320,11 @@ def test_real_postprocess_badge_metadata_and_contract(tmp_path: Path) -> None:
     )
     runner = FakeRunner(raw=raw)
     out = tmp_path / "out.mp4"
-    result = RemoteVideo(host="test-alias", command="configured-command", runner=runner, font_path=font).synthesize(
-        script(), out
-    )
+    result = RemoteVideo(host="test-alias", command="configured-command", runner=runner).synthesize(script(), out)
     assert result.output == out and result.duration_s == 1
     assert result.warnings == ["s02: cer=0.1", "远端生成有提示，请检查回听结果"]
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", runner.request["job_id"])
-    assert runner.request["segments"][0] == {"id": "s01", "text": OPENING_NOTICE}
+    assert runner.request["segments"][0] == {"id": "s01", "text": script().segments[0].text}
     assert runner.request["max_rounds"] == 4 and runner.request["max_cer"] == 0.05 and runner.request["pause_s"] == 0.25
     assert runner.calls[0][0] == ["ssh", "-o", "BatchMode=yes", "test-alias", "configured-command"]
     assert runner.calls[1][0][:-1] == ["scp", "-o", "BatchMode=yes", "test-alias:/jobs/result.mp4"]
@@ -350,7 +336,7 @@ def test_real_postprocess_badge_metadata_and_contract(tmp_path: Path) -> None:
             ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(out)], input=None, timeout=10
         ).stdout
     )
-    assert info["format"]["tags"]["title"] == EXPLICIT_LABEL
+    assert "title" not in info["format"]["tags"]
     assert info["format"]["tags"]["comment"] == "AI-generated; twin; source test-source"
     assert {stream["codec_name"] for stream in info["streams"]} == {"h264", "aac"}
     assert info["streams"][0]["pix_fmt"] == "yuv420p"
@@ -376,7 +362,7 @@ def test_real_postprocess_badge_metadata_and_contract(tmp_path: Path) -> None:
             capture_output=True,
         ).stdout
         image = Image.frombytes("RGB", (640, 360), pixels)
-        assert max(image.getpixel((20, 335))) < 200  # permanent bottom-left badge, not white source
+        assert min(image.getpixel((20, 335))) > 240
         assert min(image.getpixel((20, 20))) > 240
 
 
@@ -408,7 +394,6 @@ def test_web_job_flow_streaming_and_abstention(tmp_path: Path) -> None:
         response = client.get(f"/api/media/video/{result['file']}")
         assert response.content == b"fake labelled mp4"
         assert response.headers["content-type"] == "video/mp4"
-        assert response.headers["x-ai-generated"] == "twin"
         assert response.headers["cache-control"] == "private, no-store"
         assert client.get("/api/media/video/invalid.mp4").status_code == 404
         assert client.get(f"/api/media/video/{'f' * 64}.mp4").status_code == 404
@@ -442,7 +427,7 @@ def test_disabled_web_and_failed_jobs_are_generic(tmp_path: Path, caplog: pytest
             time.sleep(0.01)
         assert job["status"] == "failed" and SECRET not in str(job)
         assert job["kind"] == "video"
-        assert job["error"] == "生成视频失败：视频生成失败，请检查 [video]、ffmpeg 和字体配置"
+        assert job["error"] == "生成视频失败：视频生成失败，请检查 [video] 和 ffmpeg 配置"
         assert "和分身聊天" not in job["error"]
         assert SECRET not in caplog.text
 
@@ -466,16 +451,16 @@ def test_failed_fetch_preserves_output_and_cleans_temp(dependencies: None, tmp_p
     assert not list(tmp_path.glob(".video-*"))
 
 
-def test_notice_is_first_even_when_missing_from_script(dependencies: None, tmp_path: Path) -> None:
+def test_video_sends_only_speech(dependencies: None, tmp_path: Path) -> None:
     runner = FakeRunner(stdout="{}")
+    source = script().model_copy(
+        update={"segments": [Segment(index=0, kind="notice", text="旧提示。"), script().segments[1]]}
+    )
     with pytest.raises(MediaUnavailable):
         RemoteVideo(host="test-alias", command="configured-command", runner=runner).synthesize(
-            script().model_copy(update={"segments": script().segments[1:]}), tmp_path / "out.mp4"
+            source, tmp_path / "out.mp4"
         )
-    assert runner.request["segments"] == [
-        {"id": "s01", "text": OPENING_NOTICE},
-        {"id": "s02", "text": script().segments[1].text},
-    ]
+    assert runner.request["segments"] == [{"id": "s01", "text": script().segments[1].text}]
 
 
 def test_cli_reports_only_ids_and_cer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

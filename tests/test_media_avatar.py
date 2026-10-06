@@ -17,7 +17,6 @@ from twin.identity import Identity
 from twin.media.render import render_audio
 from twin.media.schema import (
     AVATAR_PRESETS,
-    EXPLICIT_LABEL,
     AudioManifest,
     AudioPart,
     AvatarSpec,
@@ -68,19 +67,17 @@ def test_track_length_cap_frozen_and_roundtrip() -> None:
         track.fps = 3
 
 
-def test_avatar_presets_fields_and_label() -> None:
+def test_avatar_presets_fields() -> None:
     assert set(AVATAR_PRESETS) == {"default", "ink", "dawn"}
     assert set(AvatarSpec.model_fields) == {
         "schema_version",
         "avatar_id",
-        "label",
         "palette",
         "mouth_states",
         "stylized",
     }
-    assert AvatarSpec.model_fields["label"].annotation == MediaScript.model_fields["explicit_label"].annotation
     for name, preset in AVATAR_PRESETS.items():
-        assert preset.avatar_id == name and preset.label == EXPLICIT_LABEL
+        assert preset.avatar_id == name
         assert preset.stylized is True and preset.mouth_states == 4
         assert AvatarSpec.model_validate_json(preset.model_dump_json()) == preset
         with pytest.raises(ValidationError):
@@ -89,7 +86,6 @@ def test_avatar_presets_fields_and_label() -> None:
             with pytest.raises(ValidationError):
                 AvatarSpec.model_validate({**preset.model_dump(), extra: "input"})
         for fields in (
-            {"label": "unlabelled"},
             {"stylized": False},
             {"mouth_states": 5},
             {"palette": {"skin": "#ffffff"}},

@@ -21,8 +21,6 @@ from twin.media import clip
 from twin.media.adapters import presentable_from_payload
 from twin.media.schema import (
     AVATAR_PRESETS,
-    EXPLICIT_LABEL,
-    OPENING_NOTICE,
     AvatarSpec,
     LipSyncTrack,
     MediaScript,
@@ -57,7 +55,7 @@ def font() -> Path:
         pytest.skip("Chinese font not installed")
 
 
-def test_frames_are_deterministic_and_every_card_keeps_the_badge(font: Path) -> None:
+def test_frames_are_deterministic_and_have_no_badge(font: Path) -> None:
     avatar = AVATAR_PRESETS["default"]
     hashes = []
     for level in range(4):
@@ -69,15 +67,12 @@ def test_frames_are_deterministic_and_every_card_keeps_the_badge(font: Path) -> 
     assert clip._draw_frame(avatar, "另一句。", 0, font, (1280, 720)).tobytes() != first.tobytes()
     background = ImageColor.getrgb(avatar.palette["background"])
     for text, card in [
-        (OPENING_NOTICE, False),
-        (OPENING_NOTICE, True),
         ("你好。", False),
-        (f"回答依据\n{EXPLICIT_LABEL}", True),
+        ("回答依据", True),
     ]:
         image = clip._draw_frame(avatar, text, 0, font, (1280, 720), card=card)
         region = image.crop((25, 25, 500, 65))
-        assert any(pixel != background for pixel in region.get_flattened_data())
-        assert any(pixel == (255, 255, 255) for pixel in region.get_flattened_data())
+        assert all(pixel == background for pixel in region.get_flattened_data())
     abstention = clip._draw_frame(avatar, "资料不足。", 0, font, (1280, 720), show_avatar=False)
     assert abstention.getpixel((200, 400)) == background
 
@@ -179,7 +174,7 @@ def test_invalid_font_and_excessive_text_fail_before_synthesis(
             script(), SilentSynthesizer(), AVATAR_PRESETS["default"], tmp_path / "clip.mp4", font_path=invalid
         )
     overlong = script().model_copy(
-        update={"segments": [script().segments[1].model_copy(update={"text": "字" * 100_001})]}
+        update={"segments": [script().segments[0].model_copy(update={"text": "字" * 100_001})]}
     )
     with pytest.raises(MediaInputTooLong, match="过长"):
         clip.render_clip(
@@ -188,22 +183,14 @@ def test_invalid_font_and_excessive_text_fail_before_synthesis(
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
-@pytest.mark.parametrize("opening", ["notice", "missing", "other_notice"])
 def test_real_ffmpeg_clip(
     font: Path,
     tmp_path: Path,
     record_property: Any,
     monkeypatch: pytest.MonkeyPatch,
-    opening: str,
 ) -> None:
     out = tmp_path / "clip.mp4"
     source = script()
-    if opening == "missing":
-        source = source.model_copy(update={"segments": source.segments[1:]})
-    elif opening == "other_notice":
-        source = source.model_copy(
-            update={"segments": [source.segments[0].model_copy(update={"text": "其他提示。"}), *source.segments[1:]]}
-        )
     draw = clip._draw_frame
     frames: list[tuple[str, bool]] = []
 
@@ -213,12 +200,8 @@ def test_real_ffmpeg_clip(
 
     monkeypatch.setattr(clip, "_draw_frame", capture)
     result = clip.render_clip(source, SilentSynthesizer(), AVATAR_PRESETS["default"], out, font_path=font)
-    assert frames[0] == (OPENING_NOTICE, opening != "notice")
-    assert frames[-1] == (f"回答依据\n{EXPLICIT_LABEL}", True)
-    if opening == "notice":
-        assert (OPENING_NOTICE, True) not in frames
-    else:
-        assert (source.segments[0].text, False) in frames
+    assert frames[0] == (source.segments[0].text, False)
+    assert frames[-1] == ("回答依据", True)
     assert result == out and out.stat().st_size > 0
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
     probe = subprocess.run(
@@ -230,12 +213,10 @@ def test_real_ffmpeg_clip(
     assert {stream["codec_name"] for stream in info["streams"]} == {"h264", "aac"}
     assert info["streams"][0]["pix_fmt"] == "yuv420p"
     expected = clip.ENDING_SECONDS + sum(len(segment.text) * 0.08 for segment in source.segments)
-    if opening != "notice":
-        expected += clip.OPENING_SECONDS
     duration = float(info["format"]["duration"])
     assert duration == pytest.approx(expected, abs=0.1)
     assert info["format"]["tags"]["comment"] == f"AI-generated; twin; source {source.source_fingerprint}"
-    assert info["format"]["tags"]["title"] == EXPLICIT_LABEL
+    assert "title" not in info["format"]["tags"]
     record_property("clip_duration_s", duration)
     record_property("clip_size_bytes", out.stat().st_size)
     print(f"sample clip: {duration:.3f}s, {out.stat().st_size} bytes")
@@ -324,7 +305,6 @@ def test_web_clip_and_security(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         response = client.post("/api/media/clip", json=BODY, headers={"X-Twin": "1"})
         assert response.status_code == 200 and response.content == b"fake mp4"
         assert response.headers["content-type"] == "video/mp4"
-        assert response.headers["x-ai-generated"] == "twin"
         assert response.headers["content-disposition"] == 'attachment; filename="twin-media.mp4"'
         assert response.headers["cache-control"] == "no-store"
     assert not list(tmp_path.glob("*.mp4"))

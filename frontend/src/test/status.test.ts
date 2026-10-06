@@ -15,11 +15,6 @@ const status: Status = {
       declared: true,
     },
   ],
-  labels: {
-    explicit: 'API 标识',
-    disclaimer: 'API 页脚',
-    chat_notice: 'API 聊天说明',
-  },
 };
 
 let stop: (() => void) | undefined;

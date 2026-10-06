@@ -46,7 +46,6 @@ beforeEach(() => {
       return json({
         counts: { sources: rows.length, items: 3 },
         egress: [],
-        labels: {},
       });
     if (url === '/api/persona/notes') {
       state = { state: 'queued' };

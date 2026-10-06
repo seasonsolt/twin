@@ -1,4 +1,4 @@
-"""Minimal labelled MP4 presentation, with no content generation or upstream types."""
+"""Minimal MP4 presentation, with no content generation or upstream types."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from .render import render_audio
-from .schema import EXPLICIT_LABEL, OPENING_NOTICE, AvatarSpec, MediaScript
+from .schema import AvatarSpec, MediaScript
 from .tts import MediaError, MediaInputTooLong, SpeechSynthesizer
 
 FONT_PATHS = (
@@ -23,7 +23,6 @@ FONT_PATHS = (
     "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 )
-OPENING_SECONDS = 2
 ENDING_SECONDS = 3
 
 
@@ -124,24 +123,7 @@ def label_metadata(script: MediaScript) -> list[str]:
     return [
         "-metadata",
         f"comment=AI-generated; twin; source {script.source_fingerprint}",
-        "-metadata",
-        f"title={EXPLICIT_LABEL}",
     ]
-
-
-def draw_badge(image: Image.Image, font_path: Path, color: str, *, bottom: bool = False) -> None:
-    draw = ImageDraw.Draw(image)
-    width, height = image.size
-    font = ImageFont.truetype(str(font_path), max(10, round(height * 0.028)))
-    pad = max(1, round(width * 0.02))
-    while font.size > 10 and font.getlength(EXPLICIT_LABEL) + 4 * pad > width:
-        font = ImageFont.truetype(str(font_path), font.size - 1)
-    if font.getlength(EXPLICIT_LABEL) + 4 * pad > width or font.size * 2 + 2 * pad > height:
-        raise MediaError("视频尺寸过小，无法完整显示 AI 标识")
-    badge_width = math.ceil(font.getlength(EXPLICIT_LABEL)) + 2 * pad
-    top = height - pad - font.size * 2 if bottom else pad
-    draw.rounded_rectangle((pad, top, pad + badge_width, top + font.size * 2), radius=pad / 3, fill=color)
-    draw.text((pad * 2, top + font.size * 0.3), EXPLICIT_LABEL, font=font, fill="white")
 
 
 def _draw_frame(
@@ -159,7 +141,6 @@ def _draw_frame(
         _avatar(image, avatar, mouth)
     draw = ImageDraw.Draw(image)
     width, height = size
-    draw_badge(image, font_path, avatar.palette["hair"])
     left = width * (0.08 if card or not show_avatar else 0.42)
     top, available_height = height * 0.25, height * 0.65
     font_size = max(10, round(height * 0.045))
@@ -208,20 +189,11 @@ def render_clip(
         rendered = render_audio(script, synthesizer, cache_dir)
         with tempfile.TemporaryDirectory(dir=out_path.parent, prefix=".clip-") as directory:
             work = Path(directory)
-            opening_seconds = (
-                0
-                if script.segments and script.segments[0].kind == "notice" and script.segments[0].text == OPENING_NOTICE
-                else OPENING_SECONDS
-            )
             ending = work / "ending.wav"
             _silence(ending, ENDING_SECONDS)
-            files = []
-            if opening_seconds:
-                opening = work / "opening.wav"
-                _silence(opening, opening_seconds)
-                files.append(opening)
+            files: list[Path] = []
             timeline = []
-            end = float(opening_seconds)
+            end = 0.0
             texts = {segment.index: segment.text for segment in script.segments}
             for segment in rendered.segments:
                 for part in segment.parts:
@@ -324,13 +296,11 @@ def render_clip(
                         time = frame / fps
                         while position < len(timeline) and time >= timeline[position][1]:
                             position += 1
-                        card = time < opening_seconds or position == len(timeline)
+                        card = position == len(timeline)
                         mouth = 0
-                        if time < opening_seconds:
-                            text = OPENING_NOTICE
-                        elif position == len(timeline):
+                        if position == len(timeline):
                             # The current script contract carries no verbatim quotes or citation dates.
-                            text = f"回答依据\n{EXPLICIT_LABEL}"
+                            text = "回答依据"
                         else:
                             start, _, text, track = timeline[position]
                             if track is not None:

@@ -59,7 +59,6 @@ export function ChatAvatar({
                 still
                 mouth={0}
                 speaking={false}
-                label={capabilities?.label ?? ''}
                 onFallback={() => setFailedModel(model)}
               />
             </Suspense>

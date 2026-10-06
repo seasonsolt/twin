@@ -14,13 +14,10 @@ from .config import Settings
 from .service import MAX_QUESTION_CHARS, QUESTION_TOO_LONG, ServiceAnswer, ServiceIdentity, public_identity
 
 ASK_DESCRIPTION = (
-    "询问此人的数字分身：答案是依据本人资料的 AI 模拟，不代表本人意见，依据不足时可能弃权。"
-    " Answers are AI simulations grounded in the person's material and may abstain."
+    "询问此人的数字分身：答案依据本人资料，依据不足时可能弃权。"
+    " Answers are grounded in the person's material and may abstain."
 )
-IDENTITY_DESCRIPTION = (
-    "查看分身的名字、预置形象、音色和 AI 标识，不返回授权或备注；回答是本人资料支撑的 AI 模拟，可能弃权。"
-    " This twin provides AI simulations grounded in the person's material and may abstain."
-)
+IDENTITY_DESCRIPTION = "查看分身的名字、预置形象和音色，不返回授权或备注。 View the twin's name, avatar and voice."
 
 
 class TwinTools:
@@ -39,7 +36,7 @@ class TwinTools:
             answer = self.backend.ask(question, horizon)
         except Exception:
             raise ToolError(BACKEND_UNAVAILABLE) from None
-        text = f"{answer.label}\n{answer.answer}"
+        text = answer.answer
         if answer.abstain:
             text += f"\n弃权：{answer.abstain_reason}"
         return CallToolResult(
@@ -49,7 +46,7 @@ class TwinTools:
     def twin_identity(self) -> Annotated[CallToolResult, ServiceIdentity]:
         identity = public_identity(self.settings)
         return CallToolResult(
-            content=[TextContent(type="text", text=f"{identity.label}\n{identity.name}")],
+            content=[TextContent(type="text", text=identity.name)],
             structuredContent=identity.model_dump(mode="json"),
         )
 

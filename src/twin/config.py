@@ -446,7 +446,6 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
         max_rounds=video.max_rounds,
         max_cer=video.max_cer,
         pause_s=video.pause_s,
-        font_path=settings.media.font_path,
     )
 
 

@@ -14,7 +14,6 @@ from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.mcp_server import TwinTools
-from twin.media.schema import EXPLICIT_LABEL
 from twin.persona.chat import PersonaChat, index_persona
 from twin.persona.items import PersonaItem, PEvidence
 from twin.persona.schema import EvidenceClass, SourceKind
@@ -73,7 +72,7 @@ def test_resolves_privacy_view_citations_and_label(grounded_chat: tuple[PersonaC
     chat, refs = grounded_chat
     answer = answer_question(chat, "怎么做？", None)
     assert answer.answer == "先核实证据。" and answer.confidence == 0.9
-    assert answer.schema_version == 1 and answer.label == EXPLICIT_LABEL and answer.mode == "grounded"
+    assert answer.schema_version == 1 and answer.mode == "grounded"
     assert answer.persona_name == "张三" and answer.generated_at.utcoffset() == dt.timedelta(0)
     assert [c.ref_id for c in answer.citations] == refs
     assert [c.kind for c in answer.citations] == ["item", "expression", "expression"]

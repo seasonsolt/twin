@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { NavLink, useLocation, useOutlet } from 'react-router';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useDragControls } from 'motion/react';
 import * as Drawer from '@radix-ui/react-dialog';
 import {
   BookUser,
@@ -89,6 +89,7 @@ function MobileDrawer({
   setOpen: (open: boolean) => void;
 }) {
   const { reduced, transition, exit } = useMotionPreset('layout');
+  const controls = useDragControls();
   return (
     <Drawer.Root open={open} onOpenChange={setOpen}>
       <Drawer.Trigger asChild>
@@ -106,6 +107,7 @@ function MobileDrawer({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={exit}
+                onClick={() => setOpen(false)}
                 className="fixed inset-0 z-40 bg-black/25 backdrop-blur-sm"
               />
             </Drawer.Overlay>
@@ -119,6 +121,8 @@ function MobileDrawer({
                 exit={{ opacity: 0, y: reduced ? 0 : '100%', transition: exit }}
                 transition={transition}
                 drag={reduced ? false : 'y'}
+                dragControls={controls}
+                dragListener={false}
                 dragConstraints={{ top: 0, bottom: 0 }}
                 dragElastic={{ top: 0.05, bottom: 0.5 }}
                 dragSnapToOrigin
@@ -131,21 +135,30 @@ function MobileDrawer({
                     setOpen(false);
                 }}
                 className="fixed right-0 bottom-0 left-0 z-50 rounded-t-xl border border-border bg-surface p-5 pb-[max(20px,env(safe-area-inset-bottom))] shadow-elevation-3"
-                style={{ touchAction: 'pan-x' }}
               >
                 <div
-                  aria-hidden
-                  className="mx-auto mb-4 h-1 w-10 rounded-full bg-border"
-                />
-                <div className="mb-3 flex items-center justify-between">
-                  <Drawer.Title className="text-lg font-semibold">
-                    导航
-                  </Drawer.Title>
-                  <Drawer.Close asChild>
-                    <IconButton label="关闭导航">
-                      <X className="size-5" />
-                    </IconButton>
-                  </Drawer.Close>
+                  className="touch-none"
+                  onPointerDown={(event) => {
+                    if (!reduced) controls.start(event);
+                  }}
+                >
+                  <div
+                    aria-hidden
+                    className="mx-auto mb-4 h-1 w-10 rounded-full bg-border"
+                  />
+                  <div className="mb-3 flex items-center justify-between">
+                    <Drawer.Title className="text-lg font-semibold">
+                      导航
+                    </Drawer.Title>
+                    <Drawer.Close asChild>
+                      <IconButton
+                        label="关闭导航"
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
+                        <X className="size-5" />
+                      </IconButton>
+                    </Drawer.Close>
+                  </div>
                 </div>
                 <Drawer.Description className="sr-only">
                   选择要打开的页面

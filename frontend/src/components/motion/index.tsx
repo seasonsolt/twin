@@ -2,6 +2,7 @@ import {
   AnimatePresence,
   LayoutGroup,
   motion,
+  useDragControls,
   type HTMLMotionProps,
   type PanInfo,
 } from 'motion/react';
@@ -121,10 +122,12 @@ export function shouldDismissDrag(offset: number, velocity: number) {
 
 export function DragDismiss({
   onDismiss,
+  onPointerDown,
   children,
   ...props
 }: HTMLMotionProps<'div'> & { onDismiss: () => void }) {
   const { reduced, transition } = useMotionPreset('layout');
+  const controls = useDragControls();
   const end = (_: unknown, info: PanInfo) => {
     if (shouldDismissDrag(info.offset.x, info.velocity.x)) {
       onDismiss();
@@ -134,6 +137,8 @@ export function DragDismiss({
     <motion.div
       layout={!reduced}
       drag={reduced ? false : 'x'}
+      dragControls={controls}
+      dragListener={false}
       dragConstraints={{ left: 0, right: 0 }}
       dragElastic={0.45}
       dragMomentum
@@ -147,6 +152,18 @@ export function DragDismiss({
       transition={transition}
       style={{ touchAction: 'pan-y' }}
       {...props}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        if (
+          !reduced &&
+          !event.defaultPrevented &&
+          !(event.target as Element).closest(
+            'button, a, input, textarea, select, [role="button"], [role="link"], [contenteditable="true"]',
+          )
+        ) {
+          controls.start(event);
+        }
+      }}
     >
       {children}
     </motion.div>

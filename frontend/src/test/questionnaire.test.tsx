@@ -199,7 +199,7 @@ it('restores the draft, progress, API prompts/kinds/facets, group navigation and
     '100',
   );
   expect(screen.getByText('已答 3 / 3 题')).toBeInTheDocument();
-  expect(screen.getByText('对应细项：1.1 角色')).toBeInTheDocument();
+  expect(screen.getByText('相关内容：1.1 角色')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: '继续' }));
   expect(
     screen.getByText('测试题：不进档案，只用来检验分身'),
@@ -430,11 +430,11 @@ it('attaches the automatic build job and retains the old completion/diff links',
     }),
   );
   expect(
-    await screen.findByText(/新增 2 条、修改 1 条、删除 0 条，涉及 1 个细项/),
+    await screen.findByText(/新增 2 条、修改 1 条、删除 0 条/),
   ).toBeInTheDocument();
   expect(
-    screen.getByRole('link', { name: '查看人格档案与完成度' }),
-  ).toHaveAttribute('href', '#/persona');
+    screen.getAllByRole('link', { name: '看看我了解到的你' })[0],
+  ).toHaveAttribute('href', '#/about');
   expect(screen.getByRole('link', { name: '去和分身聊天' })).toHaveAttribute(
     'href',
     '#/chat',

@@ -95,14 +95,14 @@ class VideoSettings(BaseModel):
     @field_validator("host")
     @classmethod
     def ssh_alias(cls, value: str | None) -> str | None:
-        if value is not None and (re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) is None or value.startswith("-")):
+        if value and (re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) is None or value.startswith("-")):
             raise ValueError("视频主机须为 SSH 别名，不能包含路径或选项")
         return value
 
     @model_validator(mode="after")
     def remote_config(self) -> VideoSettings:
-        if self.provider == "remote" and (not self.host or not self.command or not self.command.strip()):
-            raise ValueError("[video] 远端视频须配置 host 和非空 command")
+        if self.provider == "remote" and (not self.command or not self.command.strip()):
+            raise ValueError("[video] 视频须配置非空 command")
         return self
 
 
@@ -174,13 +174,23 @@ def egress_of(section: BackendSettings) -> EgressInfo:
     """Conservative endpoint classification; never expose URL userinfo, paths or queries."""
     kind: EgressKind
     if isinstance(section, VideoSettings):
-        external = section.provider == "remote" if section.egress is None else section.egress == "external"
+        external = (
+            section.provider == "remote" and bool(section.host)
+            if section.egress is None
+            else section.egress == "external"
+        )
         return EgressInfo(
             "video",
             external,
             section.egress is not None,
             section.host,
-            "配置显式声明" if section.egress else "SSH 主机默认视为外部" if external else "未启用",
+            "配置显式声明"
+            if section.egress
+            else "SSH 主机默认视为外部"
+            if external
+            else "本机命令"
+            if section.provider == "remote"
+            else "未启用",
         )
     if isinstance(section, LLMSettings):
         kind = "llm"
@@ -389,7 +399,7 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
     from .media.video import RemoteVideo
 
     video = settings.video
-    assert video.host is not None and video.command is not None
+    assert video.command is not None
     return RemoteVideo(
         host=video.host,
         command=video.command,

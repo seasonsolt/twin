@@ -35,9 +35,16 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(target_name="测试本人", target_aliases=["测试别名"], db_path=tmp_path / "persona.db", max_workers=1)
 
 
-def test_identity_read_only_shape() -> None:
+def test_identity_shape() -> None:
     identity = Identity(name="测试", aliases=["别名"], voice="default", avatar="ink")
-    assert identity.model_dump() == {"name": "测试", "aliases": ["别名"], "voice": "default", "avatar": "ink"}
+    assert identity.model_dump() == {
+        "name": "测试",
+        "aliases": ["别名"],
+        "voice": "default",
+        "avatar": "ink",
+        "about": "",
+        "name_source": "config",
+    }
     assert Identity.model_validate_json(identity.model_dump_json()) == identity
     assert Identity(name="测试", aliases=[]).voice is None
     with pytest.raises(ValidationError, match="frozen"):

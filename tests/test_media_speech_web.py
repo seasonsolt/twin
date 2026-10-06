@@ -68,7 +68,7 @@ def test_capabilities_are_lazy_and_secret_free(tmp_path: Path) -> None:
             "video": {"available": False},
             "available": True,
             "backend": "openai_compat:speech",
-            "label": "AI 合成 · 模拟推演，不代表本人意见",
+            "label": "AI 合成，不代表本人意见",
             "languages": ["zh"],
             "audio_formats": ["wav"],
         }

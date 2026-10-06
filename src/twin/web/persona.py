@@ -28,7 +28,7 @@ from ..persona.profile import build_profile, consented_facets, profile_stale, so
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial, submit_retest
 from ..persona.schema import SOURCE_KIND_LABELS, ChatTurn, ReviewStatus, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
-from ..persona.store import PersonaStore
+from ..persona.store import PersonaStore, stored_identity
 from .backends import Backends
 from .jobs import JobManager, PersonaProcessing
 
@@ -81,6 +81,7 @@ def source_view(s: Any) -> dict[str, Any]:
 
 
 def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log) -> dict[str, Any]:
+    settings = settings.model_copy(update={"target_name": stored_identity(settings.db_path)[0] or settings.target_name})
     with PersonaStore(settings.db_path) as store:
         log("[1/2] 抽取并合并人格档案")
         report = build_profile(store, llm, settings, log)
@@ -167,6 +168,10 @@ def register(
         with open_store() as store:
             store.clear_source_errors()
         processing.queue()
+
+    from . import identity
+
+    identity.register(app, settings, queue_build)
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():

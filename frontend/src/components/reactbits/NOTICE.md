@@ -7,7 +7,7 @@
   All seven registry files were byte-for-byte checked against `src/ts-tailwind/` at this commit before the one marked lint fix.
 - Registry: `https://reactbits.dev/r/{Name}-TS-TW.json`.
 - Components: BlurText, ShinyText, CountUp (`TextAnimations/`); AnimatedList, SpotlightCard, Stepper (`Components/`); AnimatedContent (`Animations/`). Each upstream file is `{category}/{Name}/{Name}.tsx`.
-- Local change: Stepper's empty CheckIconProps interface becomes an equivalent type alias (marked inline). No other source changes; upstream formatting is preserved via Prettier ignore, ESLint still checks all sources.
+- Local changes: Stepper's empty CheckIconProps interface becomes an equivalent type alias (marked inline); button defaults are Chinese, and `completeButtonText` makes the final action configurable. Upstream formatting is preserved via Prettier ignore; ESLint still checks all sources.
 - Use only inside this application. Do not sell, sublicense, or redistribute these components as a library or standalone bundle.
 
 ## Licence (upstream LICENSE.md, verbatim)

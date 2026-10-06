@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -130,10 +132,11 @@ def test_failure_response_is_not_reflected(dependencies: None, tmp_path: Path) -
         OSError(SECRET),
     ],
 )
-def test_transport_errors_are_generic(dependencies: None, error: Exception, tmp_path: Path) -> None:
+@pytest.mark.parametrize("host", ["test-alias", None, ""])
+def test_transport_errors_are_generic(dependencies: None, error: Exception, tmp_path: Path, host: str | None) -> None:
     expected = MediaTimeout if isinstance(error, subprocess.TimeoutExpired) else MediaUnavailable
     with pytest.raises(expected) as exc:
-        RemoteVideo(host="test-alias", command="configured-command", runner=FakeRunner(error=error)).synthesize(
+        RemoteVideo(host=host, command="configured-command", runner=FakeRunner(error=error)).synthesize(
             script(), tmp_path / "out.mp4"
         )
     assert SECRET not in str(exc.value)
@@ -169,7 +172,9 @@ def test_abstention_never_calls_runner(tmp_path: Path) -> None:
         {"host": "a/b"},
         {"host": "-option"},
         {"host": "x" * 65},
-        {"host": ""},
+        {"host": " "},
+        {"command": None},
+        {"command": ""},
         {"command": " "},
         {"timeout_s": 0},
         {"timeout_s": float("inf")},
@@ -200,6 +205,64 @@ def test_settings_factory_and_egress() -> None:
     assert not egress_of(settings.video).external and egress_of(settings.video).declared
     assert next(row for row in egress_status(settings) if row["kind"] == "video")["provider"] == "remote"
     assert not egress_of(VideoSettings()).external
+
+
+@pytest.mark.parametrize("host", [None, ""])
+def test_local_settings_factory_and_egress(host: str | None) -> None:
+    video = VideoSettings(provider="remote", host=host, command="configured-command")
+    settings = Settings(video=video)
+    synth = make_video_synthesizer(settings)
+    assert isinstance(synth, RemoteVideo) and synth.host == host
+    info = egress_of(video)
+    assert not info.external and not info.declared and info.reason == "本机命令"
+    row = next(row for row in egress_status(settings) if row["kind"] == "video")
+    assert row == {"kind": "video", "provider": "remote", "host": host, "external": False, "declared": False}
+
+
+@pytest.mark.parametrize("host", [None, ""])
+def test_local_runner_contract_and_copy(
+    dependencies: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str | None
+) -> None:
+    job = tmp_path / "job.py"
+    raw = tmp_path / "raw.mp4"
+    request_path = tmp_path / "request.json"
+    job.write_text(
+        "import json, pathlib, sys\n"
+        "request = json.load(sys.stdin)\n"
+        f"pathlib.Path({str(request_path)!r}).write_text(json.dumps(request))\n"
+        f"pathlib.Path({str(raw)!r}).write_bytes(b'fake mp4')\n"
+        "print(json.dumps(request))\n"
+        f"print(json.dumps({{'ok': True, 'output': {str(raw)!r}, 'duration_s': 1.0, 'warnings': [], "
+        "'segments': [{**s, 'heard': s['text'], 'cer': 0.0, 'seed': 1} for s in request['segments']]}))\n"
+    )
+    calls: list[tuple[list[str], str | None, float]] = []
+
+    def runner(command: list[str], *, input: str | None, timeout: float) -> subprocess.CompletedProcess[str]:
+        calls.append((command, input, timeout))
+        if command[0] == "bash":
+            return run(command, input=input, timeout=timeout)
+        if command[0] == "ffprobe":
+            assert Path(command[-1]).read_bytes() == b"fake mp4"
+            return subprocess.CompletedProcess(command, 0, '{"streams":[{"width":64,"height":64}]}')
+        assert command[0] == "ffmpeg"
+        Path(command[-1]).write_bytes(b"labelled mp4")
+        return subprocess.CompletedProcess(command, 0, "")
+
+    monkeypatch.setattr("twin.media.video.draw_badge", lambda *args, **kwargs: None)
+    command = f"test -d ~ && {shlex.quote(sys.executable)} {shlex.quote(str(job))}"
+    out = tmp_path / "out.mp4"
+    result = RemoteVideo(host=host, command=command, timeout_s=10, runner=runner).synthesize(script(), out)
+    assert result.output == out and result.duration_s == 1 and not result.warnings
+    assert out.read_bytes() == b"labelled mp4" and raw.read_bytes() == b"fake mp4"
+    assert calls[0][0] == ["bash", "-lc", command]
+    assert [call[0][0] for call in calls] == ["bash", "ffprobe", "ffmpeg"]
+    assert all(timeout == 10 for _, _, timeout in calls)
+    request = json.loads(request_path.read_text())
+    assert request == json.loads(calls[0][1] or "")
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request["job_id"])
+    assert request["segments"] == [{"id": f"s{i:02d}", "text": s.text} for i, s in enumerate(script().segments, 1)]
+    assert request["max_rounds"] == 4 and request["max_cer"] == 0.05 and request["pause_s"] == 0.25
+    assert not list(tmp_path.glob(".video-*"))
 
 
 @pytest.mark.parametrize("change", ["path", "order", "text", "missing", "nan", "seed"])

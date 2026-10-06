@@ -49,13 +49,12 @@ function wait(signal: AbortSignal) {
 export function useConversation(active: boolean) {
   const [turns, setTurns] = useState(loadHistory);
   const [draft, setDraft] = useState('');
-  const [asOf, setAsOf] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [newest, setNewest] = useState<string | null>(null);
   const mounted = useRef(false);
   const request = useRef<AbortController | null>(null);
-  const failed = useRef<{ text: string; asOf: string } | null>(null);
+  const failed = useRef<string | null>(null);
   useEffect(() => {
     mounted.current = active;
     return () => {
@@ -64,7 +63,7 @@ export function useConversation(active: boolean) {
       request.current = null;
     };
   }, [active]);
-  const send = async (text = draft, date = asOf) => {
+  const send = async (text = draft) => {
     text = text.trim();
     if (!text || request.current || !mounted.current) return;
     const controller = new AbortController();
@@ -88,7 +87,7 @@ export function useConversation(active: boolean) {
           method: 'POST',
           json: {
             messages: pending.map(({ role, content }) => ({ role, content })),
-            as_of: date || null,
+            as_of: null,
           },
           signal: controller.signal,
         },
@@ -133,8 +132,7 @@ export function useConversation(active: boolean) {
       if (!controller.signal.aborted && mounted.current) {
         setTurns(turns);
         setDraft(text);
-        setAsOf(date);
-        failed.current = { text, asOf: date };
+        failed.current = text;
         setError(
           error instanceof Error ? error.message : '分身没能回复，请重试',
         );
@@ -158,14 +156,12 @@ export function useConversation(active: boolean) {
     turns,
     draft,
     setDraft,
-    asOf,
-    setAsOf,
     busy,
     error,
     newest,
     send,
     retry: () => {
-      if (failed.current) void send(failed.current.text, failed.current.asOf);
+      if (failed.current) void send(failed.current);
     },
     clear,
   };

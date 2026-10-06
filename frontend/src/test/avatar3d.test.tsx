@@ -6,7 +6,7 @@ import {
 } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { MemoryRouter } from 'react-router';
-import { Identity } from '../pages/Identity';
+import { About } from '../pages/About';
 import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
@@ -425,7 +425,7 @@ it('allows blob textures only in img-src without relaxing the remaining CSP', ()
 });
 
 it.each(['0', '1'])(
-  'shows VRM %s metadata in Identity and restores the preset on fallback',
+  'shows VRM %s metadata in About and restores the preset on fallback',
   async (metaVersion) => {
     if (metaVersion === '0') {
       Object.defineProperty(model, 'meta', {
@@ -438,18 +438,22 @@ it.each(['0', '1'])(
         Promise.resolve(
           new Response(
             JSON.stringify(
-              path === '/api/identity'
-                ? {
-                    name: '配置身份',
-                    aliases: [],
-                    avatar: 'default',
-                    voice: null,
-                    egress: [],
-                  }
-                : {
-                    ...capabilities,
-                    avatar_model: { format: 'vrm', url: props.url },
-                  },
+              path.startsWith('/api/persona/items')
+                ? []
+                : path.startsWith('/api/persona/coverage')
+                  ? { facets: [], suggestions: [], kind_labels: {} }
+                  : path === '/api/identity'
+                    ? {
+                        name: '配置身份',
+                        aliases: [],
+                        avatar: 'default',
+                        voice: null,
+                        egress: [],
+                      }
+                    : {
+                        ...capabilities,
+                        avatar_model: { format: 'vrm', url: props.url },
+                      },
             ),
             { headers: { 'Content-Type': 'application/json' } },
           ),
@@ -463,22 +467,26 @@ it.each(['0', '1'])(
       }),
     );
     renderView(
-      <MemoryRouter initialEntries={['/identity']}>
-        <Identity />
+      <MemoryRouter initialEntries={['/about']}>
+        <About />
       </MemoryRouter>,
     );
     await load();
-    expect(screen.getByText('default（风格化形象）')).toBeVisible();
+    expect(screen.getByText('形象：default（风格化形象）')).toBeVisible();
     resolve({ scene: model.scene, userData: { vrm: model } });
     await load();
-    expect(screen.getByText('配置模型（3D 模型）')).toBeVisible();
-    expect(screen.queryByText('default（风格化形象）')).not.toBeInTheDocument();
+    expect(screen.getByText('形象：配置模型（3D 模型）')).toBeVisible();
+    expect(
+      screen.queryByText('形象：default（风格化形象）'),
+    ).not.toBeInTheDocument();
     act(() =>
       screen
         .getByRole('img', { name: '风格化 3D 形象' })
         .dispatchEvent(new Event('webglcontextlost')),
     );
-    expect(screen.getByText('default（风格化形象）')).toBeVisible();
-    expect(screen.queryByText('配置模型（3D 模型）')).not.toBeInTheDocument();
+    expect(screen.getByText('形象：default（风格化形象）')).toBeVisible();
+    expect(
+      screen.queryByText('形象：配置模型（3D 模型）'),
+    ).not.toBeInTheDocument();
   },
 );

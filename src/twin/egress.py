@@ -2,24 +2,55 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from .config import BackendSettings, Settings, egress_of
+from .config import (
+    ASRSettings,
+    BackendSettings,
+    EmbedSettings,
+    LLMSettings,
+    Settings,
+    TTSSettings,
+    VideoSettings,
+    egress_of,
+)
 
 
 def configured_backends(settings: Settings) -> list[BackendSettings]:
     return [settings.llm, settings.embed, settings.tts, settings.asr, settings.video, *settings.judges]
 
 
-def egress_status(settings: Settings) -> list[dict[str, Any]]:
-    return [
-        {
-            "kind": info.kind,
-            "provider": section.provider,
-            "host": info.host,
-            "external": info.external,
-            "declared": info.declared,
-        }
-        for section in configured_backends(settings)
-        for info in [egress_of(section)]
-    ]
+def _is_configured(section: BackendSettings) -> bool:
+    if isinstance(section, VideoSettings):
+        return section.provider == "remote" and bool(section.command)
+    if section.provider in {"silent", "hashing"}:
+        return False
+    if isinstance(section, LLMSettings) and section.provider in {"anthropic", "claude_cli"}:
+        return True
+    endpoint = section.base_url
+    if isinstance(section, (LLMSettings, EmbedSettings)):
+        endpoint = endpoint or os.environ.get("OPENAI_BASE_URL")
+    if not endpoint or not endpoint.strip():
+        return False
+    if section.provider == "openai_compat" and isinstance(section, (LLMSettings, TTSSettings, ASRSettings)):
+        return bool(section.model and section.model.strip())
+    return True
+
+
+def egress_status(settings: Settings, *, external_only: bool = False) -> list[dict[str, Any]]:
+    rows = []
+    for index, section in enumerate(configured_backends(settings)):
+        info = egress_of(section)
+        if external_only and (not _is_configured(section) or not info.external):
+            continue
+        rows.append(
+            {
+                "kind": "judge" if external_only and index >= 5 else info.kind,
+                "provider": section.provider,
+                "host": info.host,
+                "external": info.external,
+                "declared": info.declared,
+            }
+        )
+    return rows

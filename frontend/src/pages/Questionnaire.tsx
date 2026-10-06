@@ -90,7 +90,7 @@ export function Questionnaire() {
     if (
       !(await confirm({
         title: round === 'retest' ? '提交重测？' : '提交建档问卷？',
-        body: `已答 ${answered} / ${questions.length} 题。${round === 'retest' ? '重测仅记录答案，不导入人格档案。' : '答案会导入为问卷资料；需要重新构建人格档案，后端会尝试自动开始。测试题不进档案，可跳过题留空即不授权采集对应细项。'}${replaces ? '会替换上次提交的答案，并重新构建档案。' : ''}`,
+        body: `已答 ${answered} / ${questions.length} 题。${round === 'retest' ? '重测仅记录答案，不导入人格档案。' : '答案会导入为问卷资料；需要重新构建人格档案，后端会尝试自动开始。测试题不进档案，可跳过题留空即不授权采集相关内容。'}${replaces ? '会替换上次提交的答案，并重新构建档案。' : ''}`,
         confirmLabel: '确认提交',
       }))
     )
@@ -113,7 +113,7 @@ export function Questionnaire() {
         <p className="mt-2 text-sm text-secondary">
           {round === 'retest'
             ? `再答一次 ${questions.length} 道测试题，不要翻看上次的答案。重测仅记录答案，不进入建档证据。${draft.data?.retest_from ? `建议 ${draft.data.retest_from} 之后再做。` : ''}`
-            : '按维度分组，回答自动保存成草稿，可以分几次填完。情境题请写你会说出口的原话。测试题不进档案；可跳过题不填即不授权。'}
+            : '按主题分组，回答自动保存成草稿，可以分几次填完。情境题请写你会说出口的原话。测试题不进档案；可跳过题不填即不授权。'}
         </p>
         <nav aria-label="问卷轮次" className="mt-3 flex gap-4 text-accent">
           <a
@@ -229,7 +229,7 @@ export function Questionnaire() {
                             id={`${id}-facets`}
                             className="text-sm text-secondary"
                           >
-                            对应细项：{q.facets.join('、')}
+                            相关内容：{q.facets.join('、')}
                           </p>
                           <Field id={id} label="回答" help={help}>
                             <Textarea
@@ -261,7 +261,7 @@ export function Questionnaire() {
                               >
                                 {skipped
                                   ? `留空即跳过，不采集：${q.facets.join('、')}`
-                                  : '跳过会清空此题回答，提交后不采集对应细项。'}
+                                  : '跳过会清空此题回答，提交后不采集相关内容。'}
                               </p>
                             </div>
                           )}
@@ -297,8 +297,8 @@ export function Questionnaire() {
             <Card>
               <p className="mb-3 text-success">
                 构建完成。{' '}
-                <a href="#/persona" className="text-accent">
-                  查看人格档案与完成度
+                <a href="#/about" className="text-accent">
+                  看看我了解到的你
                 </a>
                 ，或者{' '}
                 <a href="#/chat" className="text-accent">

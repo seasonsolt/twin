@@ -1,12 +1,12 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { TooltipProvider } from '../components/ui';
-import { Identity } from '../pages/Identity';
+import { About } from '../pages/About';
 import { useStatus, type Status } from '../stores/status';
 
-it('loads labels in a background tab, shows only external hosts, and names identity consistently', async () => {
+it('keeps only name/AI label in the header and describes external hosts only on About', async () => {
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
   const status: Status = {
     target_name: '测试人',
@@ -43,17 +43,21 @@ it('loads labels in a background tab, shows only external hosts, and names ident
       Promise.resolve(
         new Response(
           JSON.stringify(
-            path === '/api/status'
-              ? status
-              : path === '/api/identity'
-                ? {
-                    name: '身份测试人',
-                    aliases: [],
-                    voice: null,
-                    avatar: null,
-                    egress: [],
-                  }
-                : { available: false, backend: null, label: 'API媒体标识' },
+            path.startsWith('/api/persona/items')
+              ? []
+              : path.startsWith('/api/persona/coverage')
+                ? { facets: [], suggestions: [], kind_labels: {} }
+                : path === '/api/status'
+                  ? status
+                  : path === '/api/identity'
+                    ? {
+                        name: '身份测试人',
+                        aliases: [],
+                        voice: null,
+                        avatar: null,
+                        egress: [],
+                      }
+                    : { available: false, backend: null, label: 'API媒体标识' },
           ),
         ),
       ),
@@ -61,33 +65,40 @@ it('loads labels in a background tab, shows only external hosts, and names ident
   );
   const rendered = render(
     <TooltipProvider>
-      <MemoryRouter initialEntries={['/identity']}>
+      <MemoryRouter initialEntries={['/about']}>
         <Routes>
           <Route element={<AppShell />}>
-            <Route path="identity" element={<Identity />} />
+            <Route path="about" element={<About />} />
           </Route>
         </Routes>
       </MemoryRouter>
     </TooltipProvider>,
   );
   try {
-    expect((await screen.findAllByText('API 标识')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('API 标识')).toBeVisible();
     expect(screen.getByText('API 页脚')).toBeVisible();
     expect(screen.getByText('测试人')).toBeVisible();
-    const chip = screen.getByText('外部 · example.test');
-    expect(chip).toHaveClass('text-info');
-    expect(chip).toHaveAttribute(
-      'title',
-      'llm · remote-provider · example.test',
-    );
+    const header = within(rendered.container.querySelector('header')!);
+    expect(header.getByText('测试人')).toBeVisible();
+    expect(header.getByText('API 标识')).toBeVisible();
+    expect(
+      header.queryByText(/mock-model|example.test|remote-provider|外部/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('大模型：example.test')).toBeVisible();
+    expect(
+      screen.queryByText(/外部 ·|remote-provider/),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText(/localhost|local-provider/),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '身份' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '关于你' })).toHaveAttribute(
       'href',
-      '/identity',
+      '/about',
     );
-    expect(screen.getByRole('heading', { name: '身份' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '关于你' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
+    ).toHaveLength(3);
   } finally {
     rendered.unmount();
     useStatus.setState({ data: previous.data, error: previous.error });

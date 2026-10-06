@@ -59,10 +59,8 @@ describe('reduced-motion effects', () => {
   it('renders a static thinking label and no animated spans', () => {
     render(<ThinkingLabel />);
     const status = screen.getByRole('status');
-    expect(status.querySelector('.sr-only')).toHaveTextContent('思考中…');
-    expect(status.querySelector('[aria-hidden="true"]')).toHaveTextContent(
-      '思考中…',
-    );
+    expect(status.textContent).toBe('思考中…');
+    expect(status.querySelector('.sr-only, [aria-hidden="true"]')).toBeNull();
     expect(status.querySelector('[style]')).toBeNull();
   });
 
@@ -131,7 +129,7 @@ describe('reduced-motion effects', () => {
   });
 });
 
-it('keeps full text accessible while the animated reply and loading spans are aria-hidden', () => {
+it('keeps replies/metrics accessible and renders animated thinking text exactly once', () => {
   vi.mocked(useReducedMotion).mockReturnValue(false);
   const { container } = render(
     <>
@@ -143,8 +141,12 @@ it('keeps full text accessible while the animated reply and loading spans are ar
   const copies = [...container.querySelectorAll('.sr-only')].map(
     (node) => node.textContent,
   );
-  expect(copies).toEqual(['A full assistant reply', '思考中…', '86%']);
+  expect(copies).toEqual(['A full assistant reply', '86%']);
+  const thinking = screen.getByRole('status');
+  expect(thinking.textContent).toBe('思考中…');
+  expect(screen.getAllByText('思考中…')).toHaveLength(1);
   for (const span of container.querySelectorAll('.blur-text span, [style]')) {
+    if (thinking.contains(span)) continue;
     expect(span.closest('[aria-hidden="true"]')).not.toBeNull();
   }
 });

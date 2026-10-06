@@ -31,8 +31,8 @@ interface Processing {
   last_error?: string | null;
 }
 
-export function Memories() {
-  const active = useLocation().pathname === '/memories';
+export function Memories({ embedded = false }: { embedded?: boolean }) {
+  const active = useLocation().pathname === '/memories' || embedded;
   const confirm = useConfirm();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
@@ -185,7 +185,11 @@ export function Memories() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">记忆</h1>
+        {embedded ? (
+          <h2 className="text-xl font-semibold">添加记忆</h2>
+        ) : (
+          <h1 className="text-2xl font-semibold">记忆</h1>
+        )}
         <p className="my-2 text-sm text-secondary">
           写一段话，或上传文件、文件夹。添加后会自动处理。
         </p>
@@ -261,93 +265,97 @@ export function Memories() {
           </Button>
         </p>
       )}
-      <Card>
-        <h2 className="mb-4 text-lg font-semibold">已添加的记忆</h2>
-        {!memories.length && (
-          <EmptyState
-            title="还没有记忆"
-            body="从上面写一段话或上传文件开始。"
-          />
-        )}
-        <LayoutScope>
-          <MessageList
-            layout
-            label="记忆列表"
-            items={memories.map((memory) => ({
-              id: memory.source_id,
-              text: memory.title,
-              content: (
-                <article className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-3">
-                  <div>
-                    <h3 className="font-medium">{memory.title}</h3>
-                    <p className="text-sm text-secondary">
-                      {memory.first_date} · {memory.detected_kind_label}
-                    </p>
-                    <Badge
-                      tone={memory.status === 'failed' ? 'danger' : 'neutral'}
-                    >
-                      {memory.status === 'processing' ? (
-                        <ThinkingLabel text="正在记住…" />
-                      ) : memory.status === 'remembered' ? (
-                        `已记住 ${memory.remembered} 条`
-                      ) : memory.status === 'nothing_found' ? (
-                        '没找到关于你的内容'
-                      ) : (
-                        '处理失败'
+      {!embedded && (
+        <Card>
+          <h2 className="mb-4 text-lg font-semibold">已添加的记忆</h2>
+          {!memories.length && (
+            <EmptyState
+              title="还没有记忆"
+              body="从上面写一段话或上传文件开始。"
+            />
+          )}
+          <LayoutScope>
+            <MessageList
+              layout
+              label="记忆列表"
+              items={memories.map((memory) => ({
+                id: memory.source_id,
+                text: memory.title,
+                content: (
+                  <article className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-3">
+                    <div>
+                      <h3 className="font-medium">{memory.title}</h3>
+                      <p className="text-sm text-secondary">
+                        {[memory.first_date, memory.detected_kind_label]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                      <Badge
+                        tone={memory.status === 'failed' ? 'danger' : 'neutral'}
+                      >
+                        {memory.status === 'processing' ? (
+                          <ThinkingLabel text="正在记住…" />
+                        ) : memory.status === 'remembered' ? (
+                          `已记住 ${memory.remembered} 条`
+                        ) : memory.status === 'nothing_found' ? (
+                          '没找到关于你的内容'
+                        ) : (
+                          '处理失败'
+                        )}
+                      </Badge>
+                      {memory.status === 'failed' && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={retry}
+                          disabled={busy}
+                        >
+                          重试
+                        </Button>
                       )}
-                    </Badge>
-                    {memory.status === 'failed' && (
+                    </div>
+                    <div className="flex gap-2">
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={retry}
-                        disabled={busy}
+                        onClick={() => void view(memory)}
                       >
-                        重试
+                        查看
                       </Button>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void view(memory)}
-                    >
-                      查看
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() =>
-                        void (async () => {
-                          if (
-                            (await confirm({
-                              title: '删除记忆？',
-                              body: `删除“${memory.title}”？删除后会自动重新处理。`,
-                              confirmLabel: '确认删除',
-                              tone: 'danger',
-                            })) &&
-                            alive.current
-                          )
-                            await mutate((signal) =>
-                              api(
-                                `/api/persona/sources/${encodeURIComponent(memory.source_id)}`,
-                                { method: 'DELETE', signal },
-                              ),
-                            );
-                        })()
-                      }
-                    >
-                      删除
-                    </Button>
-                  </div>
-                </article>
-              ),
-            }))}
-          />
-        </LayoutScope>
-      </Card>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() =>
+                          void (async () => {
+                            if (
+                              (await confirm({
+                                title: '删除记忆？',
+                                body: `删除“${memory.title}”？删除后会自动重新处理。`,
+                                confirmLabel: '确认删除',
+                                tone: 'danger',
+                              })) &&
+                              alive.current
+                            )
+                              await mutate((signal) =>
+                                api(
+                                  `/api/persona/sources/${encodeURIComponent(memory.source_id)}`,
+                                  { method: 'DELETE', signal },
+                                ),
+                              );
+                          })()
+                        }
+                      >
+                        删除
+                      </Button>
+                    </div>
+                  </article>
+                ),
+              }))}
+            />
+          </LayoutScope>
+        </Card>
+      )}
       <Dialog
         open={preview !== null && active}
         onOpenChange={(open) => {

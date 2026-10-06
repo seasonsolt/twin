@@ -100,6 +100,13 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 密钥只放在环境变量里（`TWIN_LLM_KEY`、`TWIN_EMBED_KEY` 等），配置文件只写变量名。
 外部后端按配置使用，界面如实展示出境分类；用 `twin identity show` 查看，本机转发代理需声明 `egress = "external"`。
 
+**网页快速开始**
+
+运行 `twin ui`，按打印的本机地址**打开页面 → 你是谁 → 添加记忆 → 聊天**。
+首次填写名字和一段介绍（也可以跳过）；介绍自动保存为“自我介绍”记忆，添加的内容会自动整理。
+主导航只有“聊天 / 记忆 / 关于你”。在“关于你”随时修改名字与介绍、核对我了解到的你，也可选择“回答几个问题”。
+名字保存后不再显示首次引导；没有记忆时聊天页会提示先添加。
+
 **记忆上传**
 
 ```bash
@@ -121,7 +128,7 @@ twin persona coverage                               # 各维度的完成度，�
 ```bash
 twin persona chat "你怎么看远程办公？"
 twin persona chat --as-of 2025-12-31 "那时候你怎么看？"
-twin ui                                             # 本机网页：问卷、导入、档案、完成度、聊天、回放与朗读
+twin ui                                             # 本机网页：聊天、记忆、关于你；支持回放与朗读
 twin api                                            # 令牌保护的本机 HTTP API（先设置 TWIN_API_TOKEN）
 twin mcp                                            # stdio MCP，供其他工具和 Agent 使用
 ```

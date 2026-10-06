@@ -42,9 +42,12 @@ it('redirects the old #/sources bookmark to #/memories and labels navigation 记
   await import('../main');
   const page = render(mountRoot.mock.calls[0][0] as ReactNode);
   try {
-    expect(
-      await screen.findByRole('heading', { name: '记忆', level: 1 }),
-    ).toBeVisible();
+    await screen.findByRole('heading', { name: '记忆', level: 1 });
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: '记忆', level: 1 }),
+      ).toBeVisible(),
+    );
     await waitFor(() => expect(window.location.hash).toBe('#/memories'));
     expect(screen.getByRole('link', { name: '记忆' })).toHaveAttribute(
       'href',

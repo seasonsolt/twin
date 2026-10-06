@@ -165,7 +165,7 @@ def test_external_web_chat_and_status_without_grant(tmp_path: Path, monkeypatch:
             "/api/persona/chat", json={"messages": [{"role": "user", "content": "虚构问题"}]}, headers=HEADERS
         )
         assert response.status_code == 202
-        assert client.get("/api/status").json()["egress"] == egress_status(settings)
+        assert client.get("/api/status").json()["egress"] == egress_status(settings, external_only=True)
 
 
 def test_external_tts_is_lazy_and_cached_without_grant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

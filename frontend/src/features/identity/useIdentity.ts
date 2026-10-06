@@ -5,6 +5,8 @@ import type { Status } from '../../stores/status';
 
 export interface IdentityData {
   name: string;
+  about: string;
+  name_source: 'config' | 'user';
   aliases: string[];
   voice: string | null;
   avatar: string | null;

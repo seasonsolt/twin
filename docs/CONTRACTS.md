@@ -11,10 +11,15 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `config.Settings`: target name/aliases, privacy, database, concurrency, LLM, embedding, optional judges/pricing/budget, TTS and synthetic-speech ASR. OpenAI-compatible LLM endpoints require explicit model/base URL and never silently target a public default.
 - Tests are offline with `FakeLLM`, `HashingEmbedder`, fake HTTP transports and temporary databases. Python 3.12, strict mypy and ruff are required.
 
-## 只读 Identity
+## Identity 与用户建档
 
 - `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、
+  `about: str = ""`、`name_source: Literal["config", "user"] = "config"`、
   `voice: str | None = None`、`avatar: str | None = None`。预置 ID 从配置填入，不构造媒体后端。
+- p_meta 保存 `identity:name` / `identity:about`。Web、API/MCP 身份、聊天与网页生成提示使用保存名，
+  缺省回退配置 target_name；说话人匹配增加保存名作为别名，不替换配置名字/别名。
+  `PUT /api/identity` 要求 X-Twin: 1，输入 `{name, about}`，去除首尾空白后名字 1–20 字、介绍 ≤200 字。
+  名字与介绍事务保存，介绍改变时替换标题为“自我介绍”的笔记并排队自动处理；清空删除旧笔记。
 - **预发布 breaking change（I4）**：此前声明契约只增不删；本次按用户明确决定移除授权账本。
   删除 `ConsentEvent`、`Decision`、`Scope`、`Origin`、生物特征 scopes，以及 `Identity.consents`、
   `granted`、`from_parts` 和 `PersonaStore` 的授权读写方法。不再创建 `p_consent`；已有表不读取、不删除。
@@ -22,8 +27,8 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   保留 `Source.declined_facets`；跨来源的拒绝优先于回答。问卷变化后重建档案并清理对应条目向量。
 - 音色校验仅是后端预置音色的格式与列表检查；2D 形象必须为预置，3D 形象由 `vrm_path` 指定。
 - `twin identity show` 显示名字、别名、预置音色、预置形象与出境表（类型、提供方、主机、本机/外部、声明/推断）。
-  `GET /api/identity` 返回 name/aliases/voice/avatar/egress，不再返回 consents 或 biometric；
-  移除 CLI grant/revoke 和 `POST /api/identity/consent`。细项未授权状态仍在档案/覆盖页面展示。
+  `GET /api/identity` 返回 name/aliases/about/name_source/voice/avatar/egress，不再返回 consents 或 biometric；
+  移除 CLI grant/revoke 和 `POST /api/identity/consent`。问卷授权规则不变，关于你页不展示技术覆盖指标。
 
 ## 出境分类（EgressInfo）
 
@@ -35,7 +40,9 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   回退到 `OPENAI_BASE_URL`；TTS/ASR 只使用配置地址。本机转发代理必须声明 external。
 - 出境由配置决定，界面如实标出；CLI、Web、API、MCP 和评测按配置正常构造外部后端，
   不读取授权、不设出境门禁或对应 403。`egress.egress_status(settings)`（代码层 9）仅提供展示行。
-  `/api/status` 和 `/api/identity` 的 egress 列表含 kind/provider/host/external/declared（含评委），无 granted。
+  `/api/status` 和 `/api/identity` 的 egress 列表含 kind/provider/host/external/declared，仅列实际配置且外部的服务（评委 kind=judge），无 granted。
+  hashing/silent 和未启用的视频不出现在网页外部服务列表中；OpenAI 兼容后端要求模型和有效配置的端点。
+  LLM/向量可用 OPENAI_BASE_URL，TTS/ASR 与工厂一致要求各自 base_url；不将默认 ASR 当作已配置的外部服务。
 - 后端仍懒构造并缓存，配置变更后重启；注入工厂仍用于离线测试。
   `media check` 仍仅用于合成评测句集（含自定义句集）。
 
@@ -247,14 +254,16 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
 
 - `media.schema` (layer 1) defines frozen `PresentableAnswer`, `Segment`, `MediaCitation`, `MediaScript` and
   `MediaManifest`, version 1. It depends only on stdlib, pydantic and util; `PresentableAnswer` forbids extra fields.
-  The explicit label is `AI 合成 · 模拟推演，不代表本人意见`; the first segment always contains
-  `以下内容由 AI 合成，是模拟推演，不代表本人意见。`.
+  The explicit label is `AI 合成，不代表本人意见`; the first segment always contains
+  `以下内容由 AI 合成，不代表本人意见。`.
 - `media.schema.EXPLICIT_LABEL` / `OPENING_NOTICE` 是显式标识与开头提示的唯一来源；
   `CHAT_NOTICE` 保留聊天页提示，`disclaimer(name, external)` 生成页脚。
-  `MediaScript.explicit_label` / `MediaManifest.label` 保留原 `Literal` 契约，并测试其与常量一致。
+  预发布 Literal 改为新标识，`MediaScript.explicit_label` / `MediaManifest.label`、形象与服务契约的
+  读取校验兼容旧值 `AI 合成 · 模拟推演，不代表本人意见`，规范化后写出新值；版本号仍为 1。
+  `disclaimer` 的前缀为 `内容由 AI 根据{name}的记忆生成，不代表{name}本人的意见或决定。`。
   `/api/status.labels` 追加 `{explicit, disclaimer, chat_notice}`，网页回放、页脚、聊天标题读取这些字段，
   React 前端未加载标签时使用 Skeleton/留空，不在构建 HTML 中复制文案。页脚的 `external` 来自 `egress_status`（含评委）：任一配置后端
-  分类为外部则说明 `部分数据经配置的外部服务处理，详见页面顶部的出境提示。`，否则使用本机措辞。
+  分类为外部则说明 `部分数据经配置的外部服务处理，详见关于你页面的外部服务说明。`，否则使用本机措辞。
 - `media.adapters` (layer 7) is the only media module that knows `ChatReply`; it validates raw JSON
   and produces `PresentableAnswer` with unchanged text and the upstream fingerprint.
   `media.script` (layer 7) converts only this boundary contract, without models, retrieval or rewriting.

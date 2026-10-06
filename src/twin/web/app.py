@@ -20,8 +20,8 @@ from ..config import Settings
 from ..egress import egress_status
 from ..media.schema import CHAT_NOTICE, EXPLICIT_LABEL, disclaimer
 from ..media.tts import SpeechSynthesizer
-from ..persona.store import PersonaStore
-from . import identity, media, persona
+from ..persona.store import PersonaStore, stored_identity
+from . import media, persona
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 
@@ -266,17 +266,18 @@ def create_app(
     def get_status() -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
             counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
-            egress = egress_status(settings)
+            egress = egress_status(settings, external_only=True)
         description = backends.describe()
+        name = stored_identity(settings.db_path)[0] or settings.target_name
         return {
-            "target_name": settings.target_name,
+            "target_name": name,
             "counts": counts,
             "llm": {"provider": settings.llm.provider, "model": settings.llm.model, **description["llm"]},
             "embed": {"provider": settings.embed.provider, **description["embed"]},
             "egress": egress,
             "labels": {
                 "explicit": EXPLICIT_LABEL,
-                "disclaimer": disclaimer(settings.target_name, any(row["external"] for row in egress)),
+                "disclaimer": disclaimer(name, any(row["external"] for row in egress)),
                 "chat_notice": CHAT_NOTICE,
             },
         }
@@ -294,7 +295,6 @@ def create_app(
 
     persona.register(app, settings, backends, jobs, persona.read_uploads)
     media.register(app, settings, synthesizer_factory)
-    identity.register(app, settings)
 
     # ------------------------------------------------------------ front end
 

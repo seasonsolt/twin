@@ -205,6 +205,15 @@ it('renders all four memory statuses in plain words', async () => {
   );
 });
 
+it('renders dateless rows without a leading separator', async () => {
+  rows = [{ ...memory, first_date: null }];
+  mount();
+  await loaded();
+  expect(
+    screen.getByRole('list', { name: '记忆列表' }).querySelector('article p'),
+  ).toHaveTextContent(/^文档$/);
+});
+
 it('opens a read-only privacy preview and confirms deletion', async () => {
   mount();
   await loaded();

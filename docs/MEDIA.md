@@ -8,7 +8,7 @@
 
 1. **只改写呈现方式，不生成内容。** 媒体层的输入只有运行时层的输出：`ChatReply`（对话），以及它们的引用、置信度和弃权状态。媒体层不调用大模型改写措辞；分身弃权时，只展示弃权说明，不配音，也不出镜。
 2. **合成内容必须标识。** 按《人工智能生成合成内容标识办法》（2025-09-01 施行）：
-   - 显式标识：画面常驻角标"AI 合成 · 模拟推演，不代表本人意见"；音频开头有一句语音提示；
+   - 显式标识：画面常驻角标"AI 合成，不代表本人意见"；音频开头有一句语音提示；
    - 隐式标识：音频、视频和导出文件的元数据里写入生成方、"AI 生成合成"标记和来源回答的指纹。
 3. **可追溯。** 每个产出物都记录它来自哪一次回答（运行快照或回答指纹）、用了哪些引用，以及音色和形象配置。
 4. **人物无关、出境由配置决定。** `src/` 里不出现具体人物的专属内容；用本人资料评测和展示时，语音与识别只走本地或本人指定的服务，外部服务（如 Cloudflare）按配置使用，界面如实展示出境分类。
@@ -121,12 +121,14 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 可枚举时，配置音色在读取能力（最迟首次合成）时检查；每次合成也检查请求音色。不在列表中就用中文拒绝，包含配置 ID 和预置数，绝不提交合成文本。查询延迟到媒体能力/朗读入口，应用启动、身份查看及纯文字功能不访问语音后端。`Identity.voice` 默认 `None` 兼容旧契约，`twin identity show` 从配置填入 ID 并显示预置音色。
 
-标识单一来源是 `media.schema`：`EXPLICIT_LABEL`、`OPENING_NOTICE`、保留现有聊天提示措辞的 `CHAT_NOTICE`，以及页脚函数 `disclaimer(name, external)`。`MediaScript.explicit_label` / `MediaManifest.label` 的 `Literal` 不变，以测试防止与常量漂移。`GET /api/status` 的 `labels: {explicit, disclaimer, chat_notice}` 供回放角标、页脚和聊天标题读取；React 前端不复制文案，`frontend/src/components/layout/AppShell.tsx` 在标签未加载时显示 Skeleton/留空。导出、音频开头与元数据仍使用契约中的同源标识。
+标识单一来源是 `media.schema`：`EXPLICIT_LABEL`、`OPENING_NOTICE`、保留现有聊天提示措辞的 `CHAT_NOTICE`，以及页脚函数 `disclaimer(name, external)`。预发布标签改为 `AI 合成，不代表本人意见`，开头提示改为 `以下内容由 AI 合成，不代表本人意见。`。`MediaScript.explicit_label` / `MediaManifest.label`、形象及服务输出使用新的 Literal；读取旧值 `AI 合成 · 模拟推演，不代表本人意见` 时规范化为新值，因此旧清单仍能读取，再写出时只使用新标识。`GET /api/status` 的 `labels: {explicit, disclaimer, chat_notice}` 供回放角标、页脚和聊天标题读取；React 前端不复制文案，`frontend/src/components/layout/AppShell.tsx` 在标签未加载时显示 Skeleton/留空。导出、音频开头与元数据仍使用契约中的同源标识。
 
 页脚按 `egress_status`（所有配置后端，含评委）判定是否存在**配置的外部**服务：
 
-- 没有：`所有推演结果均为模拟，供个人使用参考，不代表{name}本人的意见或决定。数据只保存在本机。`
-- 有：`所有推演结果均为模拟，供个人使用参考，不代表{name}本人的意见或决定。部分数据经配置的外部服务处理，详见页面顶部的出境提示。`
+- 没有：`内容由 AI 根据{name}的记忆生成，不代表{name}本人的意见或决定。数据只保存在本机。`
+- 有：`内容由 AI 根据{name}的记忆生成，不代表{name}本人的意见或决定。部分数据经配置的外部服务处理，详见关于你页面的外部服务说明。`
+
+网页中的 name 使用保存的名字，否则使用配置 target_name。
 
 任一配置后端分类为外部即使用外部措辞；全部为本机时使用本机措辞，不存在独立授权状态。
 
@@ -151,7 +153,7 @@ ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录
 
 `twin media video REPLY.json --out out.mp4` 只呈现已保存、已有依据的回答，不生成或改写内容；弃权脚本直接拒绝，绝不朗读弃权说明。此通道不依赖 `[tts]`，仓库仅提供通用远端命令适配器，不包含远端生成实现。
 
-`[video]` 默认 `provider = "none"`，启用时设为 `"remote"`，并配置 `host`（SSH 别名，1–64 位字母、数字、点、下划线或连字符，不能以连字符开头）及非空 `command`。使用本人已有的 SSH 配置和凭据，不在配置或源码中保存密码。可选参数：`timeout_s = 3600`（正数，每次命令的超时）、`max_rounds = 4`（正整数）、`max_cer = 0.05`（非负有限数）、`pause_s = 0.25`（非负有限秒数）。`egress = "local"` / `"external"` 可显式声明；未声明的远端 SSH 一律推断为外部，并以 kind `video` 展示。
+`[video]` 默认 `provider = "none"`，启用时设为 `"remote"` 并配置非空 `command`，可选 `host`（SSH 别名，1–64 位字母、数字、点、下划线或连字符，不能以连字符开头）；省略或为空时通过 `bash -lc` 本机执行并复制输出文件，出境默认推断为本机，否则使用 SSH/scp。使用本人已有的 SSH 配置和凭据，不在配置或源码中保存密码。可选参数：`timeout_s = 3600`（正数，每次命令的超时）、`max_rounds = 4`（正整数）、`max_cer = 0.05`（非负有限数）、`pause_s = 0.25`（非负有限秒数）。`egress = "local"` / `"external"` 可显式声明；未声明的远端 SSH 一律推断为外部，并以 kind `video` 展示。
 
 #### 通用 SSH JSON 任务契约
 

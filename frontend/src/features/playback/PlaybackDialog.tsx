@@ -34,7 +34,7 @@ export function PlaybackDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={`${script?.persona_name || personaName} · 模拟推演回放`}
+      title={`${script?.persona_name || personaName} · 回放`}
       body="空格播放 / 暂停，左右方向键逐句切换；减少动态效果时仅朗读可自动推进。"
       className="w-[min(760px,calc(100%_-_32px))]"
       exitTransition={transition}

@@ -82,6 +82,7 @@ beforeEach(async () => {
     if (url === '/api/status')
       return json({
         target_name: '测试人',
+        counts: { sources: 0, items: 0 },
         labels: {
           explicit: 'API标识',
           disclaimer: 'API免责声明',
@@ -124,9 +125,6 @@ function mount() {
 async function submit() {
   fireEvent.change(screen.getByLabelText('你说'), {
     target: { value: '你怎么看？' },
-  });
-  fireEvent.change(screen.getByLabelText('只用这一天及以前的资料'), {
-    target: { value: '2025-01-01' },
   });
   await act(async () => {
     fireEvent.keyDown(screen.getByLabelText('你说'), { key: 'Enter' });
@@ -180,7 +178,7 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   )![1] as RequestInit;
   expect(JSON.parse(init.body as string)).toEqual({
     messages: [{ role: 'user', content: '你怎么看？' }],
-    as_of: '2025-01-01',
+    as_of: null,
   });
   expect(new Headers(init.headers).get('X-Twin')).toBe('1');
   jobStatus = 'running';
@@ -200,7 +198,8 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   expect(screen.getByText('置信度 60%')).toBeVisible();
   expect(screen.getByText('需要本人确认')).toBeVisible();
   expect(screen.getByText('证据不足')).toBeVisible();
-  expect(screen.getByText('资料截至 2025-01-01')).toBeVisible();
+  expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
+  expect(document.querySelector('input[type="date"]')).toBeNull();
   expect(screen.getByRole('button', { name: '回放' })).toBeVisible();
   expect(
     JSON.parse(sessionStorage.getItem(CHAT_KEY)!).map(

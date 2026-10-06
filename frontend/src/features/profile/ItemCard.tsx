@@ -36,14 +36,13 @@ export function ItemCard({
   };
   return (
     <article
-      aria-label={`档案条目 ${item.item_id}`}
+      aria-label={item.statement}
       className="space-y-3 rounded-md border border-border bg-surface p-4"
     >
       <div className="flex flex-wrap gap-2">
         <Badge tone={reviewTones[item.review]}>
           {reviewLabels[item.review]}
         </Badge>
-        <Badge tone="info">{item.facet_name}</Badge>
       </div>
       <p className="whitespace-pre-wrap break-words">{item.statement}</p>
       {item.extracted_statement && (
@@ -64,7 +63,7 @@ export function ItemCard({
         aria-controls={`${id}-evidence`}
         onClick={() => setOpen(!open)}
       >
-        证据 {item.occasions} 处 · {open ? '收起' : '展开'}
+        依据 · {open ? '收起' : '展开'}
       </Button>
       <AnimatePresence initial={false}>
         {open && (
@@ -145,59 +144,43 @@ export function ItemCard({
         </form>
       ) : (
         <div className="flex flex-wrap gap-2" aria-label="条目审核操作">
-          {item.review === 'unreviewed' ? (
-            <>
-              <Button
-                size="sm"
-                disabled={pending}
-                onClick={() => send('confirmed')}
-              >
-                确认
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={pending}
-                onClick={() => {
-                  setDraft(item.statement);
-                  setEditing(true);
-                }}
-              >
-                修改
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                disabled={pending}
-                onClick={() => send('rejected')}
-              >
-                驳回
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={pending}
-                onClick={() => send('unreviewed')}
-              >
-                撤销审核
-              </Button>
-              {item.review !== 'rejected' && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={pending}
-                  onClick={() => {
-                    setDraft(item.statement);
-                    setEditing(true);
-                  }}
-                >
-                  修改
-                </Button>
-              )}
-            </>
+          <Button
+            size="sm"
+            disabled={
+              pending || item.review === 'confirmed' || item.review === 'edited'
+            }
+            onClick={() => send('confirmed')}
+          >
+            对
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={pending}
+            onClick={() => {
+              setDraft(item.statement);
+              setEditing(true);
+            }}
+          >
+            改一下
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={pending}
+            onClick={() => send('rejected')}
+          >
+            不对
+          </Button>
+          {item.review !== 'unreviewed' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => send('unreviewed')}
+            >
+              撤销审核
+            </Button>
           )}
         </div>
       )}

@@ -1,31 +1,32 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { NavLink, useLocation, useOutlet } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import * as Drawer from '@radix-ui/react-dialog';
 import {
   BookUser,
-  ClipboardList,
-  Fingerprint,
   Folder,
   Menu,
   MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
-  Shapes,
   X,
 } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { Badge, IconButton, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition, shouldDismissDrag } from '../motion';
+import { api } from '../../lib/api';
+import type { IdentityData } from '../../features/identity/useIdentity';
+const Onboarding = lazy(() =>
+  import('../../pages/Onboarding').then((module) => ({
+    default: module.Onboarding,
+  })),
+);
 
 export const navItems = [
   { route: 'chat', title: '聊天', icon: MessageCircle },
-  { route: 'questionnaire', title: '建档问卷', icon: ClipboardList },
-  { route: 'persona', title: '人格档案', icon: BookUser },
   { route: 'memories', title: '记忆', icon: Folder },
-  { route: 'identity', title: '身份', icon: Fingerprint },
-  { route: 'gallery', title: '组件画廊', icon: Shapes },
+  { route: 'about', title: '关于你', icon: BookUser },
 ];
 
 function Navigation({
@@ -166,7 +167,31 @@ export function AppShell() {
   const { reduced, transition } = useMotionPreset('layout');
   const location = useLocation();
   const outlet = useOutlet();
+  const [onboarding, setOnboarding] = useState<IdentityData | null>(null);
+  const [checked, setChecked] = useState(false);
   useEffect(startStatusPolling, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.all([
+      api<IdentityData>('/api/identity', { signal: controller.signal }),
+      api<{ counts: { sources: number } }>('/api/status', {
+        signal: controller.signal,
+      }),
+    ])
+      .then(([identity, status]) => {
+        if (
+          !controller.signal.aborted &&
+          identity.name_source === 'config' &&
+          status.counts.sources === 0
+        )
+          setOnboarding(identity);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!controller.signal.aborted) setChecked(true);
+      });
+    return () => controller.abort();
+  }, []);
   useEffect(() => {
     const desktop = window.matchMedia('(min-width: 768px)');
     const change = () => {
@@ -175,6 +200,20 @@ export function AppShell() {
     desktop.addEventListener('change', change);
     return () => desktop.removeEventListener('change', change);
   }, []);
+  if (location.pathname !== '/gallery') {
+    if (!checked) return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
+    if (onboarding)
+      return (
+        <Suspense
+          fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
+        >
+          <Onboarding
+            identity={onboarding}
+            onDone={() => setOnboarding(null)}
+          />
+        </Suspense>
+      );
+  }
   return (
     <div className="flex min-h-dvh">
       <a
@@ -226,18 +265,6 @@ export function AppShell() {
           {data ? (
             <>
               <Badge>{data.target_name}</Badge>
-              <Badge>{data.llm.model || data.llm.provider}</Badge>
-              {data.egress
-                .filter((row) => row.external)
-                .map((row, i) => (
-                  <Badge
-                    key={`${row.kind}-${i}`}
-                    tone="info"
-                    title={`${row.kind} · ${row.provider} · ${row.host ?? row.provider}`}
-                  >
-                    外部 · {row.host ?? row.provider}
-                  </Badge>
-                ))}
               <span className="ml-auto text-xs text-tertiary">
                 {data.labels.explicit}
               </span>

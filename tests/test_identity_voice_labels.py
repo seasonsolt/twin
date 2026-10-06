@@ -230,9 +230,9 @@ def test_static_assets_do_not_duplicate_labels_or_privacy_claims() -> None:
 
 
 def test_disclaimer_wording() -> None:
-    prefix = "所有推演结果均为模拟，供个人使用参考，不代表虚构人物本人的意见或决定。"
+    prefix = "内容由 AI 根据虚构人物的记忆生成，不代表虚构人物本人的意见或决定。"
     assert disclaimer("虚构人物", False) == prefix + "数据只保存在本机。"
-    assert disclaimer("虚构人物", True) == prefix + "部分数据经配置的外部服务处理，详见页面顶部的出境提示。"
+    assert disclaimer("虚构人物", True) == prefix + "部分数据经配置的外部服务处理，详见关于你页面的外部服务说明。"
     assert CHAT_NOTICE == (
         "分身以本人身份、第一人称作答，只依据人格档案和本人原话；"
         "没有依据时会直说并标注“需要本人确认”。回复是模拟，不代表本人意见。"
@@ -250,9 +250,14 @@ def test_status_labels_follow_configured_external_backends(backend: str, tmp_pat
         "asr": {"egress": "local"},
     }
     if backend == "judge":
-        configuration["judges"] = [{"base_url": BASE, "egress": "external"}]
+        configuration["judges"] = [{"model": "test-model", "base_url": BASE, "egress": "external"}]
     else:
-        configuration[backend] = {"base_url": BASE, "egress": "external"}
+        configuration[backend] = {
+            "model": "test-model",
+            "base_url": BASE,
+            "egress": "external",
+            "provider": "openai_compat",
+        }
     settings = Settings.model_validate(configuration)
     with TestClient(create_app(settings), base_url="http://localhost") as client:
         response = client.get("/api/status")

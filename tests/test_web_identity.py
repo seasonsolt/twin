@@ -1,4 +1,4 @@
-"""Offline read-only identity API contracts."""
+"""Offline identity API contracts."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def test_get_identity_shape_without_constructing_backends(tmp_path: Path) -> Non
             "target_name": "合成人物",
             "target_aliases": ["合成别名"],
             "db_path": tmp_path / "identity.db",
-            "llm": {"base_url": "https://llm.invalid/v1", "egress": "external"},
+            "llm": {"model": "test-model", "base_url": "https://llm.invalid/v1", "egress": "external"},
             "tts": {"voice": "invented-preset"},
             "avatar": {"preset": "ink"},
             "judges": [{"base_url": "https://judge.invalid/v1"}],
@@ -29,9 +29,11 @@ def test_get_identity_shape_without_constructing_backends(tmp_path: Path) -> Non
         assert response.json() == {
             "name": "合成人物",
             "aliases": ["合成别名"],
+            "about": "",
+            "name_source": "config",
             "voice": "invented-preset",
             "avatar": "ink",
-            "egress": egress_status(settings),
+            "egress": egress_status(settings, external_only=True),
         }
     assert not settings.db_path.exists()
     assert all(set(row) == {"kind", "provider", "host", "external", "declared"} for row in egress_status(settings))

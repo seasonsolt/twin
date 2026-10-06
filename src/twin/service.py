@@ -9,10 +9,11 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from .config import Settings
 from .identity import Identity
-from .media.schema import EXPLICIT_LABEL
+from .media.schema import EXPLICIT_LABEL, ExplicitLabel
 from .persona.chat import QUOTE_CHARS, TEXT_CHARS, PersonaChat, _clip, _visible_items
 from .persona.schema import ChatTurn
 from .persona.sources import expression_view
+from .persona.store import stored_identity
 
 MAX_QUESTION_CHARS = 2000
 QUESTION_TOO_LONG = "问题不能超过 2000 个字符"
@@ -38,7 +39,7 @@ class ServiceAnswer(BaseModel):
     confidence: float
     citations: list[ServiceCitation]
     as_of: dt.date | None
-    label: Literal["AI 合成 · 模拟推演，不代表本人意见"] = EXPLICIT_LABEL
+    label: ExplicitLabel = EXPLICIT_LABEL
     persona_name: str
     generated_at: dt.datetime
     mode: Literal["grounded", "general", "abstain"] = "grounded"
@@ -57,12 +58,12 @@ class ServiceIdentity(BaseModel):
     name: str
     avatar: str | None
     voice: str | None
-    label: Literal["AI 合成 · 模拟推演，不代表本人意见"] = EXPLICIT_LABEL
+    label: ExplicitLabel = EXPLICIT_LABEL
 
 
 def public_identity(settings: Settings) -> ServiceIdentity:
     identity = Identity(
-        name=settings.target_name,
+        name=stored_identity(settings.db_path)[0] or settings.target_name,
         aliases=settings.target_aliases,
         voice=settings.tts.voice,
         avatar=settings.avatar.preset,
@@ -111,7 +112,7 @@ def answer_question(chat: PersonaChat, question: str, as_of: dt.date | None) -> 
         confidence=reply.confidence,
         citations=citations,
         as_of=reply.as_of,
-        persona_name=chat.settings.target_name,
+        persona_name=chat.store.get_meta("identity:name") or chat.settings.target_name,
         generated_at=dt.datetime.now(dt.UTC),
         mode=reply.mode,
     )

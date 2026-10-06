@@ -16,7 +16,7 @@
 | `confidence` | L3 给出的置信度，不提高 |
 | `citations` | 已解析的证据引用，保持 L3 顺序 |
 | `as_of` | 截止日期（含当天），未指定为 `null` |
-| `label` | `AI 合成 · 模拟推演，不代表本人意见` |
+| `label` | `AI 合成，不代表本人意见` |
 | `persona_name` | 配置的本人名字 |
 | `generated_at` | 带时区的 UTC 生成时间 |
 

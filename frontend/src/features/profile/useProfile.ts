@@ -4,11 +4,7 @@ import { toast } from '../../components/ui';
 import { useStatus } from '../../stores/status';
 import type { Coverage, ProfileItem, ReviewStatus } from './types';
 
-export function useProfile(
-  active: boolean,
-  asOf: string,
-  includeRejected: boolean,
-) {
+export function useProfile(active: boolean) {
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [items, setItems] = useState<ProfileItem[]>([]);
   const [coverageError, setCoverageError] = useState('');
@@ -26,10 +22,9 @@ export function useProfile(
     const request = new AbortController();
     coverageRequest.current = request;
     try {
-      const report = await api<Coverage>(
-        `/api/persona/coverage${asOf ? `?${new URLSearchParams({ as_of: asOf })}` : ''}`,
-        { signal: request.signal },
-      );
+      const report = await api<Coverage>('/api/persona/coverage', {
+        signal: request.signal,
+      });
       if (!request.signal.aborted && alive.current) {
         setCoverage(report);
         setCoverageError('');
@@ -37,10 +32,10 @@ export function useProfile(
     } catch (failure) {
       if (!request.signal.aborted && alive.current)
         setCoverageError(
-          failure instanceof Error ? failure.message : '完成度加载失败',
+          failure instanceof Error ? failure.message : '建议加载失败',
         );
     }
-  }, [asOf]);
+  }, []);
   const latestCoverageRefresh = useRef(refreshCoverage);
   useEffect(() => {
     latestCoverageRefresh.current = refreshCoverage;
@@ -53,7 +48,7 @@ export function useProfile(
     setLoading(true);
     try {
       const rows = await api<ProfileItem[]>(
-        `/api/persona/items?include_rejected=${includeRejected}`,
+        '/api/persona/items?include_rejected=false',
         { signal: request.signal },
       );
       if (!request.signal.aborted && alive.current) {
@@ -73,7 +68,7 @@ export function useProfile(
     } finally {
       if (!request.signal.aborted && alive.current) setLoading(false);
     }
-  }, [includeRejected]);
+  }, []);
   const latestItemsRefresh = useRef(refreshItems);
   useEffect(() => {
     latestItemsRefresh.current = refreshItems;

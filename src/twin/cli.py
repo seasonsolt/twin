@@ -69,8 +69,8 @@ api_key_env = "TWIN_EMBED_KEY"
 # rate_per_minute = 30 # 每个令牌每分钟最多请求数（滑动窗口）。
 
 # [video] # 可选真人视频通道，默认关闭
-# provider = "remote" # 仅执行配置的 SSH 任务
-# host 与 command 必须同时配置；出境声明与契约见 docs/MEDIA.md
+# provider = "remote" # 执行配置的 SSH 或本机任务
+# command 必须配置；host 省略或为空时本机执行并复制输出，否则使用 SSH/scp；出境声明与契约见 docs/MEDIA.md
 
 # [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
 # preset = "default" # 可选 default、ink、dawn。

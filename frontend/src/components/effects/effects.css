@@ -18,10 +18,3 @@
 .effects-stepper .bg-neutral-600 > div {
   background-color: var(--accent) !important;
 }
-.effects-stepper-next {
-  font-size: 0;
-}
-.effects-stepper-next::after {
-  content: attr(data-label);
-  font-size: 14px;
-}

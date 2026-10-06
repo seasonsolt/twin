@@ -38,7 +38,7 @@ from ..config import Settings
 from ..util import date_from_name
 from .dimensions import FACET_BY_ID
 from .schema import Expression, ParsedSource, Source, SourceKind
-from .store import PersonaStore
+from .store import PersonaStore, stored_identity
 from .text import MAX_FILE_BYTES, extract_text
 from .transcript_schema import Meeting, Utterance
 from .transcripts import parse_transcript, parse_transcript_text
@@ -119,7 +119,11 @@ def expression_view(
     ]
     if not settings.pseudonymize_others:
         return entries
-    protected = {settings.target_name, *settings.target_aliases}
+    protected = {
+        settings.target_name,
+        store.get_meta("identity:name") or settings.target_name,
+        *settings.target_aliases,
+    }
     others = {
         e.speaker
         for e in corpus
@@ -223,6 +227,7 @@ def _source(
 
 def meeting_to_source(meeting: Meeting, settings: Settings) -> ParsedSource:
     """Convert without re-normalising speakers, trimming text or dropping utterances."""
+    settings = _with_identity_alias(settings)
     source_id = source_id_for(SourceKind.MEETING, meeting.source, meeting.model_dump_json())
     expressions: list[Expression] = []
     recent: list[str] = []
@@ -334,7 +339,13 @@ def _text_to_messages(
     return messages, skipped
 
 
+def _with_identity_alias(settings: Settings) -> Settings:
+    name = stored_identity(settings.db_path)[0]
+    return settings.model_copy(update={"target_aliases": [*settings.target_aliases, name]}) if name else settings
+
+
 def parse_chat(path_name: str, raw: str, settings: Settings, channel: str = "") -> ParsedSource:
+    settings = _with_identity_alias(settings)
     suffix = Path(path_name).suffix.lower()
     if suffix == ".csv":
         messages, skipped = _rows_to_messages(list(csv.DictReader(io.StringIO(raw))))
@@ -356,6 +367,7 @@ def parse_chat(path_name: str, raw: str, settings: Settings, channel: str = "") 
 
 
 def parse_interview(path_name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
+    settings = _with_identity_alias(settings)
     date = date or date_from_name(Path(path_name).stem)
     messages, skipped = _text_to_messages(raw, date, speaker_lines=True)
     for m in messages:
@@ -526,7 +538,7 @@ MEMORY_KIND_LABELS = {
 
 
 def detect_kind(name: str, text: str, settings: Settings | None = None) -> SourceKind:
-    settings = settings or Settings()
+    settings = _with_identity_alias(settings or Settings())
     lines = [line for line in text.splitlines() if line.strip()]
     if any(_QUESTION.match(line) and _TAGS.search(line) for line in lines) and any(
         _ANSWER.match(line) for line in lines

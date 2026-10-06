@@ -9,7 +9,6 @@ import {
   Card,
   EmptyState,
   Field,
-  Input,
   Textarea,
   useConfirm,
 } from '../components/ui';
@@ -122,8 +121,12 @@ export function Chat() {
         {!chat.turns.length && (
           <>
             <EmptyState
-              title="还没有对话"
-              body="在下面输入一句话开始，也可以先添加记忆。"
+              title={status?.counts.sources === 0 ? '还没有记忆' : '还没有对话'}
+              body={
+                status?.counts.sources === 0
+                  ? '先添加一些关于你的记忆，再来聊聊。'
+                  : '在下面输入一句话开始，也可以先添加记忆。'
+              }
             />
             <a className="text-accent underline" href="#/memories">
               添加记忆
@@ -180,11 +183,6 @@ export function Chat() {
                             {turn.reply.abstain_reason}
                           </span>
                         </>
-                      )}
-                      {turn.reply.as_of && (
-                        <span className="text-xs text-tertiary">
-                          资料截至 {turn.reply.as_of}
-                        </span>
                       )}
                     </div>
                     <Citations cited={turn.reply.cited} />
@@ -255,15 +253,6 @@ export function Chat() {
               onSend={send}
               aria-describedby="chat-input-description"
               placeholder={`和${name}的分身聊点什么…`}
-            />
-          </Field>
-          <Field id="chat-asof" label="只用这一天及以前的资料" help="可选">
-            <Input
-              id="chat-asof"
-              type="date"
-              className="max-w-64"
-              value={chat.asOf}
-              onChange={(event) => chat.setAsOf(event.target.value)}
             />
           </Field>
           <div className="flex flex-wrap justify-end gap-2">

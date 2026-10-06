@@ -219,7 +219,7 @@ class PersonaChat:
         query = "\n".join(users[-2:])
         ctx = self.retrieve(query, as_of)
         draft = self.llm.structured(
-            system=chat_system_prompt(self.settings.target_name, ctx),
+            system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
             user=chat_user_message(messages, ctx),
             schema=ChatDraft,
             effort=self.settings.llm.effort_twin,

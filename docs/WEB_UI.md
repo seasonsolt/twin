@@ -14,9 +14,10 @@ frontend/
 │   ├── lib/          # 同源 API、格式化与样式合并
 │   ├── stores/       # 状态与可见性轮询
 │   ├── features/     # chat/、playback/、jobs/、sources/、profile/、questionnaire/、identity/
-│   ├── pages/        # 五个业务页面及组件画廊
+│   ├── pages/        # 聊天、记忆、关于你；首次引导、可选问卷与开发画廊
 │   ├── test/         # 行为、动效、可访问性及对比度测试
-│   └── main.tsx      # HashRouter 与按页 lazy 加载
+│   ├── App.tsx       # HashRouter 与按页 lazy 加载
+│   └── main.tsx      # React 入口
 ├── package.json / pnpm-lock.yaml
 ├── vite.config.ts / tsconfig.json
 ├── eslint.config.js / .prettierrc.json
@@ -52,7 +53,7 @@ CI 前端任务运行四项检查后执行 `git diff --exit-code src/twin/web/st
 
 ## 布局、令牌与可访问性
 
-AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享 pill；小于 768px 时从顶栏打开底部抽屉，支持下拖和键盘关闭。顶栏显示姓名、模型与外部 egress 主机，不暴露端点路径或密钥。状态首次读取 `/api/status`，之后可见时每 10 秒刷新，隐藏时暂停定期刷新，恢复可见后立即读取；卸载清理请求、计时器和监听。
+AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享 pill；小于 768px 时从顶栏打开底部抽屉，支持下拖和键盘关闭。顶栏只显示姓名与 AI 标识，不显示模型或外部服务角标；外部服务只在“关于你”中说明。状态首次读取 `/api/status`，之后可见时每 10 秒刷新，隐藏时暂停定期刷新，恢复可见后立即读取；卸载清理请求、计时器和监听。
 
 设计令牌集中在 `frontend/src/design/tokens.css`，经 Tailwind v4 `@theme inline` 接入。使用系统字体，不加载外部字体或资产。
 
@@ -99,35 +100,41 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | FlowStepper | Stepper | 可聚焦步骤按钮、中文导航；减少动态效果直接切换 |
 | SectionReveal | AnimatedContent | 首次滚动进入 8px/250ms 揭示；减少动态效果不创建滚动触发器 |
 
-动画文本/数值使用完整的 visually hidden 文本，视觉动态层 `aria-hidden`，避免逐词逐帧播报。`#/gallery` 提供所有 UI、Motion 与七个 wrapper 的可交互示例及重播入口，不填充虚构业务数据。
+回复动画文本/数值使用完整的 visually hidden 文本，视觉动态层 `aria-hidden`，避免逐词逐帧播报。ThinkingLabel 只渲染一份可访问文字，避免重复的处理提示。`#/gallery` 提供所有 UI、Motion 与七个 wrapper 的可交互示例及重播入口，不填充虚构业务数据。
 
 ## 页面
 
 | Hash 路由 | 功能 |
 | --- | --- |
-| `#/chat`（默认） | 多轮聊天、as_of、依据、回放、朗读与导出 |
-| `#/memories` | 写一段、上传文件/文件夹、自动记住、文字预览和删除 |
-| `#/sources` | 重定向至 `#/memories`，兼容旧书签 |
-| `#/persona` | 维度/细项完成度、来源矩阵、采集建议、条目审核与修改 |
-| `#/questionnaire` | 建档问卷、服务端草稿、交卷、自动构建与重测 |
-| `#/identity` | 名字、别名、预置音色/形象及出境表，只读 |
-| `#/gallery` | 组件与动效画廊 |
+主导航恰好三个入口：聊天、记忆、关于你。
 
-聊天使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空需确认。进入/发送时检查 stale，空对话与记忆入口指向 `#/memories`。没有档案时直接显示友好的弃权回复（200），不创建聊天任务；正常聊天任务每秒轮询，离页取消等待和请求，不取消服务端任务。
+| `#/chat`（默认） | 多轮聊天、依据、回放、朗读与导出；无日期输入或资料截止提示 |
+| `#/memories` | 写一段、上传文件/文件夹、自动记住、文字预览和删除 |
+| `#/about` | 编辑名字与介绍、形象/音色、我了解到的你、还想多了解、外部服务 |
+| `#/sources` | 重定向至 `#/memories`，兼容旧书签 |
+| `#/persona`、`#/identity` | 重定向至 `#/about` |
+| `#/questionnaire` | 可选问卷，关于你中的“回答几个问题”链接；不在主导航中 |
+| `#/gallery` | 开发组件与动效画廊，仅通过 URL 访问 |
+
+首次读取 identity 和 status：没有用户保存的名字（name_source=config）且没有记忆时，显示全页引导，不显示侧栏。FlowStepper 的三步为“你是谁”（名字与一段介绍、示例占位符）、“添加记忆”（嵌入记忆页添加区）、“开始聊天”。步骤内容有 p-5 / sm:p-6 内边距，两种动效模式均使用中文按钮，最后只保留一个“开始聊天”动作。第一步保存成功后才能继续；记忆可以不添加。可用“跳过”直接进入聊天，跳过会保存当前配置名（最多前 20 字），不添加介绍。保存名字后，即使删除全部记忆或刷新页面也不再出现引导；已有记忆的用户也不显示。开发画廊不受引导阻挡。
+
+名字保存到 p_meta 的 identity:name，介绍保存到 identity:about；有效名字为用户保存值，否则为配置 target_name。用户保存的名字也参与说话人匹配，配置名字与别名仍有效。介绍设定或变化时，事务内替换标题为“自我介绍”的笔记，并触发自动处理；清空介绍删除旧笔记。单独改名字不重复添加笔记。
+
+聊天使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空需确认。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。界面不发送截止日期，API 仍兼容 as_of。没有档案时直接显示友好的弃权回复（200），不创建聊天任务；正常聊天任务每秒轮询，离页取消等待和请求，不取消服务端任务。
 
 PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先展示开头提示，再逐句呈现原回答，弃权不讲述回答；引用按脚本顺序解析。Space 播放/暂停、左右键切句、Escape 关闭并返回入口；聚焦按钮时 Space 保持原生行为。音频有序分片由 ended 推进，暂停保留时间，口型按 currentTime × lipsync.fps 取值；暂停、等待、纯文字播放时闭嘴。形象只使用 API 的预置调色板、四级口型和常驻标签，无图片输入。关闭释放音频、计时器、rAF、请求及下载 URL；语音失败显示中文 detail 并退回文字，可重试合成。
 
-可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, label, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；AI 标签常驻，署名来自模型元数据。回放复用既有口型驱动，身份页保持闭口，画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败回退 2D，MP4 导出仍为 2D。CSP 仅 img-src 增加 blob: 以加载内嵌纹理；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
+可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, label, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；AI 标签常驻，署名来自模型元数据。回放复用既有口型驱动，关于你页保持闭口，画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败回退 2D，MP4 导出仍为 2D。CSP 仅 img-src 增加 blob: 以加载内嵌纹理；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
 
 记忆页（`Memories.tsx`）有“写一段”“上传文件”“上传文件夹”三个标签，不选择类型或日期。支持 .txt/.md/.pdf/.docx/.html/.htm/.csv/.json/.srt/.vtt，每文件最多 50 MB；PDF 只读文字层，不做 OCR。文件夹以相对文件名发送，服务端只保存 basename，隐藏文件和未知格式显示跳过原因。添加后提示“已添加，正在记住…”。
 
-记忆列表用 MessageList 展示标题、日期、笔记/文档/聊天记录/问卷/访谈和状态：正在记住…（ThinkingLabel）、已记住 N 条、没找到关于你的内容、处理失败＋重试。“查看”打开只读 Dialog，展示隐私视图的前 20000 字；“删除”通过 ConfirmDialog 确认，成功后自动重新处理。页头显示精简处理指示，非 idle 时每 2 秒轮询 processing 与列表；只在 last_error 存在时显示小的“重新处理”，无构建卡片或构建汇总。离页清理请求和计时器。
+记忆列表用 MessageList 展示标题、可选日期（无日期不显示前导分隔符）、笔记/文档/聊天记录/问卷/访谈和状态：正在记住…（ThinkingLabel）、已记住 N 条、没找到关于你的内容、处理失败＋重试。“查看”打开只读 Dialog，展示隐私视图的前 20000 字；“删除”通过 ConfirmDialog 确认，成功后自动重新处理。页头显示精简处理指示，非 idle 时每 2 秒轮询 processing 与列表；只在 last_error 存在时显示小的“重新处理”，无构建卡片或构建汇总。离页清理请求和计时器。
 
-档案页按维度/细项分组，显示授权、覆盖/充分/验证比例、矛盾、API 等级标签、来源矩阵与建议。review 支持确认/修改/驳回/撤销，失败回滚并保留编辑草稿；审核后刷新完成度。≤300 个可见条目用普通列表，更多时用可变高度窗口列表并保留焦点行。as_of 只影响 coverage，items 不是历史快照。
+关于你页（About.tsx）用名字与介绍的内联表单调用 PUT identity，预览现有 3D/2D 形象并显示预置音色。"我了解到的你"按九个口语主题分组：经历与身份、看重什么、怎么做决定、怎么思考、擅长什么、说话方式、和人相处、最近在关注、生活与喜好。每条显示表述和“依据”折叠引用，用“对 / 改一下 / 不对”调用原 review API，状态显示待确认 / 已确认 / 已修改 / 已否定；失败回滚并保留修改草稿。隐藏内部编号、比例、等级与来源矩阵。“还想多了解”从 coverage suggestions 映射为主题建议，去重后最多五条，链接到记忆。不再保留 Profile、Identity 页面和 CoverageOverview/虚拟档案列表。
 
 问卷按 API section 分组，用 FlowStepper 导航到首个未答组；可跳过题清空答案，空答案不计已答。草稿 800ms 防抖、版本化串行 PUT；提交等待保存成功，需确认且说明替换、授权与测试题留出规则。离页完成待写草稿，小于 60KB 时尽力 keepalive，不另存个人答案。仅未保存且写入中的离开才警告。重测只恢复答案和提交状态，无评分、不构建。
 
-身份页独立读取 identity 与 media capabilities，逐行原样展示 kind/provider/host/external/declared，含评委。预览失败不影响身份表；形象闭口、减少动态效果不眨眼。
+关于你独立读取 identity 与 media capabilities；预览失败不影响名字编辑。小的“外部服务”区域读取 status.egress，仅列实际配置且外部的服务，用“大模型 / 向量 / 朗读 / 语音识别 / 视频生成 / 回答检查”和主机描述，不显示提供方 ID；不展示技术分类表。3D 署名仍来自模型元数据；形象闭口、减少动态效果不眨眼。
 
 ## API 与任务契约
 
@@ -135,7 +142,7 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 
 | 方法/路径 | 契约 |
 | --- | --- |
-| `GET /api/status` | target_name、counts、llm/embed、egress、labels；无数据库路径或密钥 |
+| `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）、labels；无数据库路径或密钥 |
 | `GET /api/jobs`、`/api/jobs/{id}` | 状态、时间、进度日志、阶段、计数、里程碑、结果/错误 |
 | `GET /api/persona/sources` | 保留原字段，追加 detected_kind/label、status（processing/remembered/nothing_found/failed）、remembered；不含 preview |
 | `GET /api/persona/sources/{id}/text` | text/plain，隐私视图，最多 20000 字，不存在 404 |
@@ -152,7 +159,8 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 | `GET /api/persona/questionnaire?round=initial/retest` | 问题、答案、提交状态 |
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
 | `POST /api/persona/questionnaire/submit` | 初次导入并尝试构建；重测仅记录 |
-| `GET /api/identity` | name/aliases/voice/avatar/egress；无授权账本 |
+| `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/egress；name 是有效名字；无授权账本 |
+| `PUT /api/identity` | X-Twin: 1；`{name, about}`；去除首尾空白后名字 1–20 字，介绍 ≤200 字；返回完整 identity；介绍变化会替换“自我介绍”笔记并自动处理 |
 | `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null |
 | `GET /api/media/avatar.vrm` | 配置的本地 VRM 流，model/gltf-binary、no-cache；未配置中文 JSON 404 |
 | `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}` |
@@ -161,7 +169,7 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 | `GET /api/media/video/jobs/{job_id}` | 视频专用 JobManager 的任务状态；done 结果 `{file, duration_s, warnings}`，重启清空 |
 | `GET /api/media/video/{name}` | 64 位十六进制文件名的 MP4 流，校验目录与符号链接；video/mp4、X-AI-Generated: twin、private/no-store；不存在 404 |
 
-任务状态 queued/running/done/failed，日志最近 500 行，里程碑另存；人格构建互斥，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空；UI 启动时发现 stale 会重新排队。导入、笔记、删除后约 3 秒防抖自动处理；运行中发生多次变化只排一个后续处理，复用 run_persona_build 和 JobManager。完成时间与错误持久化，失败可以 POST build 重试。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
+任务状态 queued/running/done/failed，日志最近 500 行，里程碑另存；人格构建互斥，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空；UI 启动时发现 stale 会重新排队。导入、笔记、删除和介绍变化后约 3 秒防抖自动处理；运行中发生多次变化只排一个后续处理，复用 run_persona_build 和 JobManager。完成时间与错误持久化，失败可以 POST build 重试。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
 
 回放面板在 HTML“导出”旁提供“导出视频”：显示加载状态，下载 `twin-media.mp4`，失败显示中文 toast；标识仍只来自 API。`POST /api/media/clip` 同步返回 `video/mp4`，`Content-Disposition: attachment`、`X-AI-Generated: twin`；复用现有安全与请求体限制，脚本最多 100,000 字符、视频最多 600 秒。需系统 ffmpeg 与中文字体（见 [MEDIA.md](MEDIA.md)），临时 MP4 在响应完成后清理。
 

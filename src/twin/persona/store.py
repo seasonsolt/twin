@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS p_vectors (
 """
 
 
+def stored_identity(path: Path) -> tuple[str | None, str]:
+    if not path.is_file():
+        return None, ""
+    with PersonaStore(path) as store:
+        return store.get_meta("identity:name") or None, store.get_meta("identity:about") or ""
+
+
 class PersonaStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -64,8 +71,30 @@ class PersonaStore:
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
-        with self._lock, self._db:
-            yield self._db
+        with self._lock:
+            if self._db.in_transaction:
+                yield self._db
+            else:
+                with self._db:
+                    yield self._db
+
+    def set_identity(self, name: str, about: str, note: ParsedSource | None) -> bool:
+        with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old_about = self.get_meta("identity:about") or ""
+            self.set_meta("identity:name", name)
+            self.set_meta("identity:about", about)
+            if about == old_about:
+                return False
+            changed = False
+            for source in self.list_sources():
+                if source.title == "自我介绍" and source.origin.startswith("note:"):
+                    self.delete_source(source.source_id)
+                    changed = True
+            if note is not None:
+                self.put_source(note)
+                changed = True
+            return changed
 
     # ------------------------------------------------------------ sources
 

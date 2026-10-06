@@ -65,7 +65,7 @@ class RemoteVideo:
     def __init__(
         self,
         *,
-        host: str,
+        host: str | None = None,
         command: str,
         timeout_s: float = 3600,
         max_rounds: int = 4,
@@ -74,7 +74,9 @@ class RemoteVideo:
         font_path: str | Path | None = None,
         runner: Runner = run,
     ) -> None:
-        if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", host) is None or host.startswith("-") or not command.strip():
+        if (
+            host and (re.fullmatch(r"[A-Za-z0-9._-]{1,64}", host) is None or host.startswith("-"))
+        ) or not command.strip():
             raise MediaRejected("远端视频配置无效，请检查 [video]")
         self.host, self.command = host, command
         self.timeout_s, self.max_rounds, self.max_cer, self.pause_s = timeout_s, max_rounds, max_cer, pause_s
@@ -118,9 +120,10 @@ class RemoteVideo:
         probe = shutil.which("ffprobe")
         if probe is None:
             raise MediaUnavailable("找不到 ffprobe，请安装 ffmpeg")
-        stdout = self._run(
-            ["ssh", "-o", "BatchMode=yes", self.host, self.command], json.dumps(request, ensure_ascii=False)
+        command = (
+            ["ssh", "-o", "BatchMode=yes", self.host, self.command] if self.host else ["bash", "-lc", self.command]
         )
+        stdout = self._run(command, json.dumps(request, ensure_ascii=False))
         try:
             payload = json.loads(stdout.splitlines()[-1])
             if isinstance(payload, dict) and payload.get("ok") is False:
@@ -140,7 +143,10 @@ class RemoteVideo:
             with tempfile.TemporaryDirectory(dir=out_path.parent, prefix=".video-") as directory:
                 work = Path(directory)
                 raw, badge, labelled = work / "remote.mp4", work / "badge.png", work / "labelled.mp4"
-                self._run(["scp", "-o", "BatchMode=yes", f"{self.host}:{response.output}", str(raw)])
+                if self.host:
+                    self._run(["scp", "-o", "BatchMode=yes", f"{self.host}:{response.output}", str(raw)])
+                else:
+                    shutil.copy(response.output, raw)
                 try:
                     info = json.loads(
                         self._run(

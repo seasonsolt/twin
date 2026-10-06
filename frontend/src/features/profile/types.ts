@@ -1,10 +1,10 @@
 import type { SourceKind } from '../sources/types';
 export type ReviewStatus = 'unreviewed' | 'confirmed' | 'edited' | 'rejected';
 export const reviewLabels: Record<ReviewStatus, string> = {
-  unreviewed: '未审核',
+  unreviewed: '待确认',
   confirmed: '已确认',
   edited: '已修改',
-  rejected: '已否决',
+  rejected: '已否定',
 };
 export interface ProfileItem {
   item_id: string;

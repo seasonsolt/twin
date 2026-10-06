@@ -11,13 +11,13 @@ import {
   EmptyState,
   Field,
   Textarea,
-  useConfirm,
 } from '../components/ui';
 import { Citations } from '../features/chat/Citations';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatAvatar } from '../features/chat/ChatAvatar';
 import { ReplyVideo } from '../features/chat/ReplyVideo';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
+import { useReplyVideos } from '../features/chat/useReplyVideos';
 import type { Capabilities } from '../features/avatar/types';
 import { api } from '../lib/api';
 import { useStatus } from '../stores/status';
@@ -26,13 +26,17 @@ export function Chat() {
   const { pathname } = useLocation();
   const active = pathname === '/chat';
   const chat = useConversation(active);
-  const confirm = useConfirm();
   const status = useStatus((state) => state.data);
   const name = status?.target_name || '本人';
   const [stale, setStale] = useState(false);
   const [stateError, setStateError] = useState('');
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const audio = useReplyAudio(active);
+  const video = useReplyVideos(
+    active && !!capabilities?.video?.available,
+    chat.turns,
+    name,
+  );
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -83,19 +87,9 @@ export function Chat() {
     void refreshState();
     void chat.send();
   };
-  const clear = async () => {
-    if (
-      (await confirm({
-        title: '清空对话？',
-        body: '此标签页中的对话将被清除，无法恢复。',
-        confirmLabel: '确认清空',
-        tone: 'danger',
-      })) &&
-      alive.current
-    ) {
-      chat.clear();
-      audio.stop();
-    }
+  const clear = () => {
+    chat.clear();
+    audio.stop();
   };
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -216,7 +210,6 @@ export function Chat() {
                           >
                             {capabilities?.available && (
                               <Button
-                                variant="ghost"
                                 size="sm"
                                 className="min-h-11 min-w-11"
                                 aria-label={
@@ -238,15 +231,18 @@ export function Chat() {
                                 )}
                                 {audio.id === turn.id && audio.playing
                                   ? '暂停'
-                                  : '听'}
+                                  : '播放'}
                               </Button>
                             )}
                             {capabilities?.video?.available && (
                               <ReplyVideo
                                 id={turn.id}
                                 answer={turn.reply}
-                                name={name}
                                 portrait={capabilities.avatar_image?.url}
+                                state={video.videos[turn.id]}
+                                speaking={audio.id === turn.id && audio.playing}
+                                onRetry={() => video.retry(turn.id)}
+                                onError={() => video.invalidate(turn.id)}
                               />
                             )}
                           </div>
@@ -323,7 +319,7 @@ export function Chat() {
             />
           </Field>
           <div className="flex flex-wrap justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => void clear()}>
+            <Button type="button" variant="ghost" onClick={clear}>
               清空对话
             </Button>
             <Button

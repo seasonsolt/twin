@@ -8,6 +8,7 @@ import {
   within,
 } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { StrictMode } from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -16,6 +17,8 @@ import { Chat } from '../pages/Chat';
 import { ChatAvatar } from '../features/chat/ChatAvatar';
 import { ReplyVideo } from '../features/chat/ReplyVideo';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
+import { useReplyVideos } from '../features/chat/useReplyVideos';
+import type { Turn } from '../features/chat/types';
 import { CHAT_KEY } from '../features/chat/useConversation';
 import { useStatus } from '../stores/status';
 import type { Capabilities } from '../features/avatar/types';
@@ -119,13 +122,18 @@ beforeEach(() => {
   });
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   useStatus.setState({ data: null, error: null });
-  fetchMock = vi.fn(async (url: string) => {
+  fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/persona/state') return json({ stale: false });
     if (url === '/api/media/capabilities') return json(caps);
     if (url === '/api/media/audio')
       return audioFail
         ? json({ detail: '语音暂不可用' }, 503)
-        : json({ segments: parts });
+        : json({
+            segment_count: 2,
+            segments: parts.filter((part) =>
+              JSON.parse(init!.body as string).segments.includes(part.index),
+            ),
+          });
     if (url === '/api/media/video')
       return submitFail
         ? json({ detail: '无法提交视频任务' }, 503)
@@ -233,12 +241,20 @@ it.each(['grounded', 'general', 'abstain'] as const)(
       expect(
         screen.queryByRole('group', { name: '回复媒体' }),
       ).not.toBeInTheDocument();
+      expect(count('/api/media/video')).toBe(0);
     } else {
-      for (const label of ['播放语音', '生成视频'])
-        expect(screen.getByRole('button', { name: label })).toHaveClass(
-          'min-h-11',
-          'min-w-11',
-        );
+      expect(screen.getByRole('button', { name: '播放语音' })).toHaveClass(
+        'min-h-11',
+        'min-w-11',
+      );
+      expect(
+        screen.getByRole('button', { name: '播放语音' }),
+      ).toHaveTextContent('播放');
+      expect(
+        screen.queryByRole('button', { name: '生成视频' }),
+      ).not.toBeInTheDocument();
+      await waitFor(() => expect(count('/api/media/video')).toBe(1));
+      expect(screen.getByText('真人版生成中…')).toBeVisible();
       expect(screen.getByRole('group', { name: '回复媒体' })).toHaveClass(
         'flex-wrap',
         'min-w-0',
@@ -293,7 +309,13 @@ it('plays all ordered parts, pauses/resumes, follows lipsync with glow and track
   const body = JSON.parse(
     fetchMock.mock.calls.find(([url]) => url === '/api/media/audio')![1].body,
   );
-  expect(body).toEqual({ kind: 'chat_reply', answer, persona_name: '测试人' });
+  expect(body).toEqual({
+    kind: 'chat_reply',
+    answer,
+    persona_name: '测试人',
+    segments: [0],
+  });
+  await waitFor(() => expect(count('/api/media/audio')).toBe(2));
   audio.currentTime = 1.5;
   tick();
   expect(one.getByRole('progressbar')).toHaveAttribute('value', '0.25');
@@ -320,7 +342,7 @@ it('plays all ordered parts, pauses/resumes, follows lipsync with glow and track
   expect(frames.size).toBe(0);
   fireEvent.click(one.getByRole('button', { name: '播放语音' }));
   expect(audio.currentTime).toBe(1.5);
-  expect(count('/api/media/audio')).toBe(1);
+  expect(count('/api/media/audio')).toBe(2);
   fireEvent.ended(audio);
   expect(audio).toHaveAttribute('src', parts[1].url);
   fireEvent.ended(audio);
@@ -332,7 +354,7 @@ it('plays all ordered parts, pauses/resumes, follows lipsync with glow and track
   expect(one.getByRole('progressbar')).toHaveAttribute('value', '1');
   fireEvent.click(one.getByRole('button', { name: '播放语音' }));
   expect(audio).toHaveAttribute('src', parts[0].url);
-  expect(count('/api/media/audio')).toBe(1);
+  expect(count('/api/media/audio')).toBe(2);
 });
 it('stops the previous reply and releases audio, requests and frames on leaving', async () => {
   const view = render(<AudioHarness />);
@@ -341,7 +363,7 @@ it('stops the previous reply and releases audio, requests and frames on leaving'
   fireEvent.click(one.getByRole('button', { name: '播放语音' }));
   await waitFor(() => expect(paused).toBe(false));
   fireEvent.click(two.getByRole('button', { name: '播放语音' }));
-  await waitFor(() => expect(count('/api/media/audio')).toBe(2));
+  await waitFor(() => expect(count('/api/media/audio')).toBe(4));
   expect(one.getByRole('button', { name: '播放语音' })).toHaveTextContent('听');
   expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
   expect(one.queryByRole('progressbar')).not.toBeInTheDocument();
@@ -398,7 +420,7 @@ it('can pause while synthesis is pending and ignores the cancelled response', as
   expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   fireEvent.click(one.getByRole('button', { name: '播放语音' }));
   await waitFor(() => expect(paused).toBe(false));
-  expect(count('/api/media/audio')).toBe(2);
+  expect(count('/api/media/audio')).toBe(3);
 });
 
 it.each(['request', 'play', 'element'])(
@@ -447,27 +469,51 @@ it('prefers portrait, then a VRM still, then an initial, never a cartoon', async
   );
   expect(view.container.querySelector('svg')).toBeNull();
 });
-function video() {
+const videoTurns: Turn[] = [
+  {
+    id: 'one',
+    role: 'twin',
+    content: answer.reply,
+    reply: answer,
+    timestamp: '2025-01-01T12:00:00Z',
+  },
+];
+function VideoHarness({
+  speaking = false,
+  turns = videoTurns,
+}: {
+  speaking?: boolean;
+  turns?: Turn[];
+}) {
+  const video = useReplyVideos(true, turns, '测试人');
   return (
-    <ReplyVideo
-      id="one"
-      answer={answer}
-      name="测试人"
-      portrait={caps.avatar_image!.url}
-    />
+    <>
+      {turns.map((turn) => (
+        <ReplyVideo
+          key={turn.id}
+          id={turn.id}
+          answer={turn.reply!}
+          portrait={caps.avatar_image!.url}
+          state={video.videos[turn.id]}
+          speaking={speaking}
+          onRetry={() => video.retry(turn.id)}
+          onError={() => video.invalidate(turn.id)}
+        />
+      ))}
+    </>
   );
 }
-it('starts video immediately, reports progress, renders accessible inline video and caches it for the session', async () => {
+function video() {
+  return <VideoHarness />;
+}
+it('starts video automatically once, renders accessible inline video and caches it for the session', async () => {
   vi.useFakeTimers();
   const view = render(video());
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: '生成视频' })),
-  );
+  await act(async () => {});
   expect(count('/api/media/video')).toBe(1);
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  expect(screen.getByText('正在生成视频…')).toBeVisible();
-  expect(screen.getByText('通常约 30 秒')).toBeVisible();
-  expect(screen.getByRole('progressbar')).toHaveAttribute('value', '0.25');
+  expect(screen.getByText('真人版生成中…')).toBeVisible();
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   jobStatus = 'done';
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
@@ -489,11 +535,10 @@ it('starts video immediately, reports progress, renders accessible inline video 
     `/api/media/video/${'a'.repeat(64)}.mp4`,
   );
   expect(screen.getByText('第 1 句回听与原文有出入')).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: '生成视频' }));
+  view.rerender(video());
   expect(count('/api/media/video')).toBe(1);
   view.unmount();
   render(video());
-  fireEvent.click(screen.getByRole('button', { name: '生成视频' }));
   expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
   expect(count('/api/media/video')).toBe(1);
 });
@@ -510,9 +555,10 @@ it.each(['submit', 'job', 'poll'])(
           : json({ detail: '视频任务不存在' }, 404),
       );
     render(video());
-    fireEvent.click(screen.getByRole('button', { name: '生成视频' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/视频/);
-    expect(screen.queryByText('正在生成视频…')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '真人版生成失败',
+    );
+    expect(screen.queryByText('真人版生成中…')).not.toBeInTheDocument();
     submitFail = false;
     jobStatus = 'done';
     fetchMock.mockImplementation(originalFetch);
@@ -525,10 +571,11 @@ it.each(['submit', 'job', 'poll'])(
 it('evicts an unavailable video from cache and lets the owner retry inline', async () => {
   jobStatus = 'done';
   render(video());
-  fireEvent.click(screen.getByRole('button', { name: '生成视频' }));
   fireEvent.error(await screen.findByLabelText('回复的真人视频'));
-  expect(screen.getByRole('alert')).toHaveTextContent('视频播放失败，请重试');
-  expect(sessionStorage.getItem('twin.reply-video:one')).toBeNull();
+  expect(screen.getByRole('alert')).toHaveTextContent('真人版生成失败 · 重试');
+  expect(
+    JSON.parse(sessionStorage.getItem('twin.reply-video:one')!).status,
+  ).toBe('failed');
   fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
   expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
   expect(count('/api/media/video')).toBe(2);
@@ -537,18 +584,157 @@ it('evicts an unavailable video from cache and lets the owner retry inline', asy
 it('cancels video polling and in-flight requests on unmount', async () => {
   vi.useFakeTimers();
   const view = render(video());
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: '生成视频' })),
-  );
+  await act(async () => {});
   view.unmount();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(5000);
   });
   expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
-  expect(fetchMock.mock.calls.every(([, init]) => init.signal.aborted)).toBe(
-    true,
-  );
+  expect(
+    fetchMock.mock.calls
+      .filter(([url]) => url !== '/api/media/video')
+      .every(([, init]) => init.signal.aborted),
+  ).toBe(true);
 });
+it('defers the completed video until voice ends, then keeps it visible on replay', async () => {
+  jobStatus = 'done';
+  const view = render(<VideoHarness speaking />);
+  await waitFor(() => expect(count('/api/media/video/jobs/video%2F1')).toBe(1));
+  expect(screen.queryByLabelText('回复的真人视频')).not.toBeInTheDocument();
+  expect(screen.getByText('真人版生成中…')).toBeVisible();
+  view.rerender(<VideoHarness speaking={false} />);
+  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(screen.getByText('真人版')).toBeVisible();
+  view.rerender(<VideoHarness speaking />);
+  expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+  expect(count('/api/media/video')).toBe(1);
+});
+
+it('serializes background jobs and chooses the newest queued reply, skipping both forms of abstention', async () => {
+  vi.useFakeTimers();
+  const submitted: string[] = [];
+  const states = new Map<string, string>();
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/media/video') {
+      const text = JSON.parse(init!.body as string).answer.reply;
+      submitted.push(text);
+      return json({ job_id: text });
+    }
+    const id = url.split('/').at(-1)!;
+    return json({
+      status: states.get(id) ?? 'running',
+      result: { file: `${'a'.repeat(64)}.mp4`, warnings: [], duration_s: 2 },
+    });
+  });
+  const turn = (id: string): Turn => ({
+    ...videoTurns[0],
+    id,
+    content: id,
+    reply: { ...answer, reply: id },
+  });
+  const one = turn('one');
+  const view = render(<VideoHarness turns={[one]} />);
+  await act(async () => {});
+  const turns = [
+    one,
+    turn('two'),
+    turn('three'),
+    { ...turn('abstain'), reply: { ...answer, abstain: true } },
+    { ...turn('mode-only'), reply: { ...answer, mode: 'abstain' as const } },
+  ];
+  view.rerender(<VideoHarness turns={turns} />);
+  await act(async () => {});
+  expect(submitted).toEqual(['one']);
+  states.set('one', 'done');
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(submitted).toEqual(['one', 'three']);
+  states.set('three', 'failed');
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(submitted).toEqual(['one', 'three', 'two']);
+  states.set('two', 'done');
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  view.rerender(<VideoHarness turns={[...turns]} />);
+  await act(async () => {});
+  expect(submitted).toEqual(['one', 'three', 'two']);
+});
+
+it('resumes an existing running session job before submitting a newer reply', async () => {
+  sessionStorage.setItem(
+    'twin.reply-video:one',
+    JSON.stringify({ status: 'generating', jobId: 'video/1' }),
+  );
+  vi.useFakeTimers();
+  render(
+    <VideoHarness turns={[...videoTurns, { ...videoTurns[0], id: 'two' }]} />,
+  );
+  await act(async () => {});
+  expect(count('/api/media/video')).toBe(0);
+  expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
+  jobStatus = 'done';
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(count('/api/media/video')).toBe(1);
+});
+
+it('submits only once across StrictMode effects and rerenders', async () => {
+  jobStatus = 'done';
+  const view = render(
+    <StrictMode>
+      <VideoHarness />
+    </StrictMode>,
+  );
+  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  view.rerender(
+    <StrictMode>
+      <VideoHarness turns={[...videoTurns]} />
+    </StrictMode>,
+  );
+  expect(count('/api/media/video')).toBe(1);
+});
+
+it('retains a pending submission across unmount rather than starting a second GPU job', async () => {
+  let resolve!: (response: Response) => void;
+  const original = fetchMock.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+    url === '/api/media/video'
+      ? new Promise<Response>((done) => {
+          resolve = done;
+        })
+      : original(url, init),
+  );
+  const view = render(video());
+  await waitFor(() => expect(count('/api/media/video')).toBe(1));
+  view.unmount();
+  render(video());
+  await act(async () => resolve(json({ job_id: 'video/1' })));
+  expect(count('/api/media/video')).toBe(1);
+  expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
+});
+
+it('blocks later submissions after a polling connection failure and retries the same job', async () => {
+  const original = fetchMock.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+    url.startsWith('/api/media/video/jobs/')
+      ? Promise.reject(new Error('offline'))
+      : original(url, init),
+  );
+  const view = render(video());
+  expect(await screen.findByRole('alert')).toHaveTextContent('真人版生成失败');
+  const next: Turn = { ...videoTurns[0], id: 'two' };
+  view.rerender(<VideoHarness turns={[...videoTurns, next]} />);
+  await act(async () => {});
+  expect(count('/api/media/video')).toBe(1);
+  fetchMock.mockImplementation(original);
+  fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
+  await waitFor(() => expect(count('/api/media/video/jobs/video%2F1')).toBe(2));
+  expect(count('/api/media/video')).toBe(1);
+});
+
 it('has no legacy playback dialog or panel references anywhere in frontend source', () => {
   const forbidden = [
     ['Playback', 'Dialog'].join(''),

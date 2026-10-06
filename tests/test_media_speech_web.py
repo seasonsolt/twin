@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from twin.cli import app
 from twin.config import Settings, TTSSettings
-from twin.media.schema import AVATAR_PRESETS
+from twin.media.schema import AVATAR_PRESETS, SpeechRequest, SpeechResult
 from twin.media.tts import (
     MediaError,
     MediaInputTooLong,
@@ -114,6 +114,51 @@ def test_audio_urls_metadata_and_hardening(tmp_path: Path) -> None:
         assert all(segment["kind"] == "notice" for segment in result["manifest"]["segments"])
         for path in (tmp_path / "media-cache").rglob("*"):
             assert stat.S_IMODE(path.stat().st_mode) == (0o700 if path.is_dir() else 0o600)
+
+
+def test_audio_selected_segments_reuse_full_render_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    synth = configured_silence()
+    synthesize = synth.synthesize
+    spoken: list[str] = []
+
+    def record(request: SpeechRequest) -> SpeechResult:
+        spoken.append(request.text)
+        return synthesize(request)
+
+    monkeypatch.setattr(synth, "synthesize", record)
+    settings = Settings(db_path=tmp_path / "twin.db")
+    with TestClient(create_app(settings, synthesizer_factory=lambda: synth), base_url="http://localhost") as client:
+        first = client.post("/api/media/audio", json={**BODY, "segments": [0]}, headers=HEADERS).json()
+        assert spoken == ["先验证。"]
+        assert first["segment_count"] == 2
+        assert [part["index"] for part in first["segments"]] == [0]
+        assert len(first["script"]["segments"]) == 2
+        assert [part["index"] for part in first["manifest"]["segments"]] == [0]
+        last = client.post("/api/media/audio", json={**BODY, "segments": [1, 1]}, headers=HEADERS).json()
+        assert spoken == ["先验证。", "再推进。"]
+        assert [part["index"] for part in last["segments"]] == [1]
+        full = client.post("/api/media/audio", json=BODY, headers=HEADERS).json()
+        assert full["segments"] == [*first["segments"], *last["segments"]]
+        assert len(spoken) == 2
+        reversed_selection = client.post("/api/media/audio", json={**BODY, "segments": [1, 0]}, headers=HEADERS).json()
+        assert reversed_selection["segments"] == full["segments"]
+        empty = client.post("/api/media/audio", json={**BODY, "segments": []}, headers=HEADERS).json()
+        assert empty["segments"] == [] and empty["segment_count"] == 2
+        assert len(spoken) == 2
+        manifests = [json.loads(path.read_bytes()) for path in (tmp_path / "media-cache").glob("*.audio.json")]
+        assert sorted(len(manifest["segments"]) for manifest in manifests) == [0, 1, 1, 2, 2]
+
+
+@pytest.mark.parametrize("segments", [[-1], [2], [0.5], [True], ["0"], "0"])
+def test_audio_rejects_invalid_segment_indices(tmp_path: Path, segments: Any) -> None:
+    def factory() -> SpeechSynthesizer:
+        pytest.fail("Invalid selection must not start speech")
+
+    with TestClient(
+        create_app(Settings(db_path=tmp_path / "twin.db"), synthesizer_factory=factory), base_url="http://localhost"
+    ) as client:
+        response = client.post("/api/media/audio", json={**BODY, "segments": segments}, headers=HEADERS)
+        assert response.status_code == 400
 
 
 def test_audio_validation_and_cache_containment(tmp_path: Path) -> None:

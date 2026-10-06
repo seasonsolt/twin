@@ -98,6 +98,8 @@ beforeEach(async () => {
       }
       return json({ job_id: 'j/1' }, 202);
     }
+    if (url === '/api/media/video') return json({ job_id: 'v1' });
+    if (url === '/api/media/video/jobs/v1') return json({ status: 'running' });
     if (url === '/api/jobs/j%2F1')
       return json({ status: jobStatus, result: reply });
     throw new Error(`Unexpected API: ${url}`);
@@ -233,7 +235,15 @@ it('shows a neutral general badge next to confidence without an abstention marke
   expect(badge.previousElementSibling).toHaveTextContent('置信度 50%');
   expect(screen.queryByText('需要本人确认')).not.toBeInTheDocument();
   expect(await screen.findByRole('button', { name: '播放语音' })).toBeVisible();
-  expect(await screen.findByRole('button', { name: '生成视频' })).toBeVisible();
+  expect(await screen.findByText('真人版生成中…')).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: '生成视频' }),
+  ).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === '/api/media/video'),
+    ).toHaveLength(1),
+  );
 });
 it('shows Chinese detail and retries without duplicating the failed user turn', async () => {
   fail = true;
@@ -282,7 +292,7 @@ it('does not send on composition, keyCode 229, or Shift+Enter', async () => {
     fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat'),
   ).toBe(false);
 });
-it('restores static history and clears only after confirmation', async () => {
+it('restores static history and clears immediately without confirmation', async () => {
   sessionStorage.setItem(
     CHAT_KEY,
     JSON.stringify([
@@ -299,14 +309,7 @@ it('restores static history and clears only after confirmation', async () => {
   const user = userEvent.setup();
   expect(container.querySelector('.blur-text')).toBeNull();
   await user.click(screen.getByRole('button', { name: '清空对话' }));
-  expect(screen.getByRole('button', { name: '取消' })).toHaveFocus();
-  await user.click(screen.getByRole('button', { name: '取消' }));
-  await waitFor(() =>
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
-  );
-  expect(screen.getByLabelText('分身回复')).toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: '清空对话' }));
-  await user.click(screen.getByRole('button', { name: '确认清空' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   await waitFor(() =>
     expect(screen.queryByLabelText('分身回复')).not.toBeInTheDocument(),
   );

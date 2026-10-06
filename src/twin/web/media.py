@@ -9,12 +9,12 @@ import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -82,6 +82,10 @@ class MediaBody(BaseModel):
     kind: Literal["chat_reply"]
     answer: dict[str, Any]
     persona_name: str | None = None
+
+
+class AudioBody(MediaBody):
+    segments: list[Annotated[int, Field(strict=True, ge=0)]] | None = None
 
 
 def register(
@@ -182,8 +186,10 @@ def register(
         return script_from_presentable(presentable, name)
 
     @app.post("/api/media/audio")
-    def audio(body: MediaBody) -> dict[str, Any]:
+    def audio(body: AudioBody) -> dict[str, Any]:
         script = make_script(body)
+        if body.segments is not None and any(index >= len(script.segments) for index in body.segments):
+            raise HTTPException(400, "语音分段索引超出范围")
         try:
             synth = speech()
             private_directory(cache_dir)
@@ -191,12 +197,13 @@ def register(
             requests = cache_dir / "requests"
             private_directory(requests)
             requests.chmod(0o700)
-            rendered = render_audio(script, synth, cache_dir)
+            rendered = render_audio(script, synth, cache_dir, segments=body.segments)
             manifest = AudioManifest.model_validate_json((cache_dir / rendered.manifest_file).read_bytes())
         except OSError:
             raise MediaUnavailable("无法保存语音文件") from None
         return {
             "script": script.model_dump(mode="json"),
+            "segment_count": len(script.segments),
             "segments": [
                 {
                     "index": segment.index,

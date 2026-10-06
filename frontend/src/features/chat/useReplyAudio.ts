@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import type { AudioPart } from '../avatar/types';
 import type { ChatReply } from './types';
+import { GaplessAudio } from './GaplessAudio';
 
 const initial = {
   id: '',
@@ -20,10 +21,16 @@ const idle = {
   },
   stop() {},
 };
+interface AudioReply {
+  count: number;
+  segments: Map<number, AudioPart[]>;
+}
 
 export function useReplyAudio(active: boolean) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const actions = useRef(idle);
+  const cache = useRef(new Map<string, AudioReply>());
+  const buffers = useRef(new Map<string, AudioBuffer>());
   const [view, setView] = useState(initial);
   useEffect(() => {
     const audio = audioRef.current;
@@ -33,9 +40,14 @@ export function useReplyAudio(active: boolean) {
     let request: AbortController | null = null;
     let frame: number | null = null;
     let version = 0;
-    let parts: AudioPart[] = [];
+    let reply: AudioReply = { count: 0, segments: new Map() };
+    let segment = 0;
     let position = 0;
-    const cache = new Map<string, AudioPart[]>();
+    let waiting = false;
+    let player: GaplessAudio | null = null;
+    const key = () => `${segment}:${position}`;
+    const currentTime = () =>
+      player ? player.elapsed(key()) : audio.currentTime;
     const publish = (patch: Partial<typeof initial> = {}) => {
       state = { ...state, ...patch };
       if (alive) setView(state);
@@ -49,6 +61,7 @@ export function useReplyAudio(active: boolean) {
       version += 1;
       request?.abort();
       request = null;
+      if (player) void player.pause().catch(() => {});
       if (audio.hasAttribute('src') || !audio.paused) audio.pause();
       quiet();
       publish({ playing: false, loading: false });
@@ -59,8 +72,10 @@ export function useReplyAudio(active: boolean) {
         audio.removeAttribute('src');
         audio.load();
       }
-      parts = [];
-      position = 0;
+      player?.reset();
+      reply = { count: 0, segments: new Map() };
+      segment = position = 0;
+      waiting = false;
       publish({ id: '', progress: 0 });
     };
     const fail = (detail = '语音播放失败，请重试') => {
@@ -68,21 +83,35 @@ export function useReplyAudio(active: boolean) {
       stop();
       publish({ errors: { ...state.errors, [id]: detail } });
     };
+    const part = () => reply.segments.get(segment)?.[position];
     const progress = () => {
-      const total = parts.reduce((sum, part) => sum + part.duration_s, 0);
-      const elapsed = parts
-        .slice(0, position)
-        .reduce((sum, part) => sum + part.duration_s, 0);
-      return total > 0 ? Math.min(1, (elapsed + audio.currentTime) / total) : 0;
+      const known = [...reply.segments.values()].flat();
+      const duration = known.reduce((sum, item) => sum + item.duration_s, 0);
+      const total = duration * (reply.count / (reply.segments.size || 1));
+      let elapsed = 0;
+      for (let index = 0; index <= segment; index++) {
+        const items = reply.segments.get(index) ?? [];
+        elapsed += (
+          index === segment ? items.slice(0, position) : items
+        ).reduce((sum, item) => sum + item.duration_s, 0);
+      }
+      return total > 0
+        ? Math.min(1, (elapsed + (waiting ? 0 : currentTime())) / total)
+        : 0;
     };
     const sample = () => {
       frame = null;
-      if (!alive || !state.playing || audio.paused || audio.ended)
+      if (
+        !alive ||
+        !state.playing ||
+        waiting ||
+        (!player && (audio.paused || audio.ended))
+      )
         return quiet();
-      const track = parts[position]?.lipsync;
+      const track = part()?.lipsync;
       publish({
         speaking: true,
-        level: track?.levels[Math.floor(audio.currentTime * track.fps)] ?? 0,
+        level: track?.levels[Math.floor(currentTime() * track.fps)] ?? 0,
         progress: progress(),
       });
       frame = requestAnimationFrame(sample);
@@ -92,13 +121,40 @@ export function useReplyAudio(active: boolean) {
       sample();
     };
     const play = () => {
-      const part = parts[position];
-      if (!part) return fail('没有可播放的语音，请重试');
-      if (audio.getAttribute('src') !== part.url) {
-        audio.src = part.url;
+      const currentPart = part();
+      if (player) {
+        for (let index = segment; index < reply.count; index++) {
+          const items = reply.segments.get(index);
+          if (!items) break;
+          for (
+            let offset = index === segment ? position : 0;
+            offset < items.length;
+            offset++
+          ) {
+            const buffer = buffers.current.get(items[offset].url);
+            if (!buffer) break;
+            player.schedule(`${index}:${offset}`, buffer, onEnded);
+          }
+          if (items.some((item) => !buffers.current.has(item.url))) break;
+        }
+        waiting = !player.has(key());
+        publish({ loading: waiting });
+        if (waiting) quiet();
+        else onPlaying();
+        return;
+      }
+      if (!currentPart) {
+        waiting = true;
+        publish({ loading: true });
+        return;
+      }
+      waiting = false;
+      publish({ loading: false });
+      if (audio.getAttribute('src') !== currentPart.url) {
+        audio.src = currentPart.url;
         audio.currentTime = 0;
       }
-      const current = ++version;
+      const current = version;
       try {
         Promise.resolve(audio.play()).catch(() => {
           if (alive && current === version) fail();
@@ -109,15 +165,19 @@ export function useReplyAudio(active: boolean) {
     };
     const onEnded = () => {
       quiet();
-      if (!state.playing) return;
+      if (!state.playing && !player) return;
       position += 1;
-      if (position === parts.length) {
+      if (position === reply.segments.get(segment)?.length) {
+        segment += 1;
+        position = 0;
+      }
+      if (segment === reply.count) {
         pause();
         audio.removeAttribute('src');
         audio.load();
-        position = 0;
+        segment = position = 0;
         publish({ progress: 1 });
-      } else play();
+      } else if (state.playing) play();
     };
     const onError = () => {
       if (state.playing) fail();
@@ -129,37 +189,98 @@ export function useReplyAudio(active: boolean) {
       if (answer.abstain || answer.mode === 'abstain') return;
       if (state.id === id && state.playing) return pause();
       if (state.id !== id) stop();
+      reply = cache.current.get(id) ?? { count: 0, segments: new Map() };
+      cache.current.set(id, reply);
+      const entry = reply;
+      const controller = new AbortController();
+      request = controller;
+      const current = ++version;
+      const valid = () =>
+        alive && !controller.signal.aborted && current === version;
       publish({ id, playing: true, errors: { ...state.errors, [id]: '' } });
-      if (!parts.length) {
-        parts = cache.get(id) ?? [];
-        if (!parts.length) {
-          const controller = new AbortController();
-          request = controller;
-          audio.load();
-          publish({ loading: true });
-          try {
-            const result = await api<{ segments: AudioPart[] }>(
-              '/api/media/audio',
-              {
-                method: 'POST',
-                json: { kind: 'chat_reply', answer, persona_name: name },
-                signal: controller.signal,
-              },
-            );
-            if (!alive || controller.signal.aborted) return;
-            parts = result.segments;
-            cache.set(id, parts);
-            publish({ loading: false });
-          } catch (error) {
-            if (alive && !controller.signal.aborted)
-              fail(
-                error instanceof Error ? error.message : '语音暂不可用，请重试',
-              );
-            return;
-          }
+      if (!player && typeof AudioContext !== 'undefined') {
+        try {
+          player = new GaplessAudio();
+        } catch {
+          return fail();
         }
       }
-      play();
+      if (player)
+        void player.resume().catch(() => {
+          if (valid()) fail();
+        });
+      if (part()) play();
+      else {
+        audio.load();
+        waiting = true;
+        publish({ loading: true });
+      }
+      const fetchSegment = async (index: number) => {
+        const result = entry.segments.has(index)
+          ? { segment_count: entry.count, segments: entry.segments.get(index)! }
+          : await api<{
+              segment_count: number;
+              segments: AudioPart[];
+            }>('/api/media/audio', {
+              method: 'POST',
+              json: {
+                kind: 'chat_reply',
+                answer,
+                persona_name: name,
+                segments: [index],
+              },
+              signal: controller.signal,
+            });
+        if (!valid()) return;
+        if (!result.segments.length)
+          throw new Error('没有可播放的语音，请重试');
+        entry.count = result.segment_count;
+        entry.segments.set(index, result.segments);
+        if (player) {
+          for (const item of result.segments) {
+            if (!buffers.current.has(item.url)) {
+              if (
+                !/^\/api\/media\/audio\/[0-9a-f]{64}\.(wav|mp3)$/.test(item.url)
+              )
+                throw new Error('语音文件不可用，请重试');
+              const response = await fetch(item.url, {
+                signal: controller.signal,
+                credentials: 'same-origin',
+                redirect: 'error',
+              });
+              if (!response.ok) throw new Error('语音文件不可用，请重试');
+              const buffer = await player.decode(await response.arrayBuffer());
+              if (!valid()) return;
+              buffers.current.set(item.url, buffer);
+            }
+            play();
+          }
+        } else if (waiting && index === segment) play();
+      };
+      try {
+        await fetchSegment(0);
+        if (!valid()) return;
+        const remaining = Array.from(
+          { length: entry.count },
+          (_, index) => index,
+        ).filter(
+          (index) =>
+            !entry.segments.has(index) ||
+            (player &&
+              entry.segments
+                .get(index)!
+                .some((item) => !buffers.current.has(item.url))),
+        );
+        const worker = async () => {
+          while (valid() && remaining.length) {
+            await fetchSegment(remaining.shift()!);
+          }
+        };
+        await Promise.all([worker(), worker()]);
+      } catch (error) {
+        if (valid())
+          fail(error instanceof Error ? error.message : '语音暂不可用，请重试');
+      }
     };
     audio.addEventListener('playing', onPlaying);
     audio.addEventListener('pause', quiet);
@@ -175,6 +296,7 @@ export function useReplyAudio(active: boolean) {
     return () => {
       alive = false;
       stop();
+      if (player) void player.close().catch(() => {});
       audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('pause', quiet);
       audio.removeEventListener('waiting', quiet);

@@ -179,7 +179,13 @@ def _cached_speech(request: SpeechRequest, synthesizer: SpeechSynthesizer, direc
     return key, result
 
 
-def render_audio(script: MediaScript, synthesizer: SpeechSynthesizer, cache_dir: Path) -> AudioRender:
+def render_audio(
+    script: MediaScript,
+    synthesizer: SpeechSynthesizer,
+    cache_dir: Path,
+    *,
+    segments: list[int] | None = None,
+) -> AudioRender:
     """Speak notices and non-abstaining speech, cache requests, and label every exported file.
 
     Cache entries store only normalized contract fields (audio as base64 JSON); exports are
@@ -195,6 +201,8 @@ def render_audio(script: MediaScript, synthesizer: SpeechSynthesizer, cache_dir:
     rendered: list[AudioSegment] = []
     label = f"AI-generated; twin; source {script.source_fingerprint}"
     for segment in script.segments:
+        if segments is not None and segment.index not in segments:
+            continue
         if script.abstain and segment.kind != "notice":
             continue
         parts: list[AudioPart] = []
@@ -235,6 +243,7 @@ def render_audio(script: MediaScript, synthesizer: SpeechSynthesizer, cache_dir:
                 "voice": synthesizer.voice.model_dump(mode="json"),
                 "speech_text_version": SPEECH_TEXT_VERSION,
                 "capabilities": synthesizer.capabilities.model_dump(mode="json"),
+                **({"segments": sorted(set(segments))} if segments is not None else {}),
             }
         )
         + ".audio.json"

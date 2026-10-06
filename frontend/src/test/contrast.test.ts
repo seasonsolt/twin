@@ -20,14 +20,16 @@ function contrast(a: string, b: string) {
   return (light + 0.05) / (dark + 0.05);
 }
 
-const themes = [...css.matchAll(/:root\s*\{([^}]+)\}/g)].map((root) =>
-  Object.fromEntries(
-    [...root[1].matchAll(/--([\w-]+):\s*(#[\da-f]{6})/gi)].map((pair) => [
-      pair[1],
-      pair[2],
-    ]),
-  ),
-);
+const themes = [...css.matchAll(/:root\s*\{([^}]+)\}/g)]
+  .map((root) =>
+    Object.fromEntries(
+      [...root[1].matchAll(/--([\w-]+):\s*(#[\da-f]{6})/gi)].map((pair) => [
+        pair[1],
+        pair[2],
+      ]),
+    ),
+  )
+  .filter((theme) => theme.canvas);
 
 describe('WCAG AA tokens', () => {
   it('defines both light and dark themes', () => {

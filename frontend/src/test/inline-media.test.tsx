@@ -233,16 +233,21 @@ it.each(['grounded', 'general', 'abstain'] as const)(
         </MemoryRouter>
       </ConfirmProvider>,
     );
-    await screen.findByRole('img', { name: '本人的肖像' });
+    await screen.findAllByRole('img', { name: '本人的肖像' });
     const article = screen.getByRole('article', { name: '分身回复' });
-    expect(article).toHaveClass('flex', 'w-full', 'min-w-0');
-    expect(article.firstElementChild).toHaveAttribute('aria-label', '分身头像');
     if (mode === 'abstain') {
+      expect(article).toHaveClass('text-secondary');
+      expect(article.querySelector('img, time, button')).toBeNull();
       expect(
         screen.queryByRole('group', { name: '回复媒体' }),
       ).not.toBeInTheDocument();
       expect(count('/api/media/video')).toBe(0);
     } else {
+      expect(article).toHaveClass('flex', 'w-full', 'min-w-0');
+      expect(article.firstElementChild).toHaveAttribute(
+        'aria-label',
+        '分身头像',
+      );
       expect(screen.getByRole('button', { name: '播放语音' })).toHaveClass(
         'min-h-11',
         'min-w-11',
@@ -254,7 +259,11 @@ it.each(['grounded', 'general', 'abstain'] as const)(
         screen.queryByRole('button', { name: '生成视频' }),
       ).not.toBeInTheDocument();
       await waitFor(() => expect(count('/api/media/video')).toBe(1));
-      expect(screen.getByText('真人版生成中…')).toBeVisible();
+      expect(screen.getByRole('button', { name: '真人版生成中' })).toHaveClass(
+        'h-20',
+        'w-16',
+        'rounded-md',
+      );
       expect(screen.getByRole('group', { name: '回复媒体' })).toHaveClass(
         'flex-wrap',
         'min-w-0',
@@ -291,7 +300,7 @@ it('hides video without capability, but keeps the voice action', async () => {
       </MemoryRouter>
     </ConfirmProvider>,
   );
-  await screen.findByRole('img', { name: '本人的肖像' });
+  await screen.findAllByRole('img', { name: '本人的肖像' });
   expect(screen.getByRole('button', { name: '播放语音' })).toBeVisible();
   expect(
     screen.queryByRole('button', { name: '生成视频' }),
@@ -506,24 +515,34 @@ function VideoHarness({
 function video() {
   return <VideoHarness />;
 }
-it('starts video automatically once, renders accessible inline video and caches it for the session', async () => {
+it('starts video once, renders only a thumbnail, opens fullscreen playback and caches it for the session', async () => {
   vi.useFakeTimers();
   const view = render(video());
   await act(async () => {});
   expect(count('/api/media/video')).toBe(1);
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  expect(screen.getByText('真人版生成中…')).toBeVisible();
+  expect(screen.getByRole('button', { name: '真人版生成中' })).toBeDisabled();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   jobStatus = 'done';
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
   });
+  const thumbnail = screen.getByRole('button', { name: '播放真人视频' });
+  expect(thumbnail).toHaveClass('h-20', 'w-16', 'rounded-md');
+  expect(thumbnail).toHaveTextContent('0:06');
+  expect(view.container.querySelector('video')).toBeNull();
+  fireEvent.click(thumbnail);
+  expect(screen.getByRole('dialog', { name: '真人版' })).toHaveClass(
+    'fixed',
+    'inset-0',
+    'h-dvh',
+  );
   const player = screen.getByLabelText('回复的真人视频');
   for (const attr of ['controls', 'playsinline'])
     expect(player).toHaveAttribute(attr);
   expect(player).toHaveAttribute('preload', 'metadata');
   expect(player).toHaveAttribute('poster', caps.avatar_image!.url);
-  expect(player).toHaveClass('w-full', 'max-w-[360px]', 'rounded-lg');
+  expect(player).toHaveClass('max-h-full', 'max-w-full', 'rounded-lg');
   expect(player).toHaveAccessibleDescription(answer.reply);
   expect(screen.getByText(answer.reply)).toHaveClass('sr-only');
   expect(screen.getByRole('link', { name: '保存' })).toHaveAttribute(
@@ -539,9 +558,44 @@ it('starts video automatically once, renders accessible inline video and caches 
   expect(count('/api/media/video')).toBe(1);
   view.unmount();
   render(video());
-  expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+  expect(screen.getByRole('button', { name: '播放真人视频' })).toBeVisible();
+  expect(screen.queryByLabelText('回复的真人视频')).not.toBeInTheDocument();
   expect(count('/api/media/video')).toBe(1);
 });
+it.each(['close', 'Escape', 'backdrop', 'swipe'])(
+  'closes fullscreen video via %s and returns focus to the thumbnail',
+  async (method) => {
+    jobStatus = 'done';
+    render(video());
+    const thumbnail = await screen.findByRole('button', {
+      name: '播放真人视频',
+    });
+    fireEvent.click(thumbnail);
+    const dialog = screen.getByRole('dialog', { name: '真人版' });
+    expect(screen.getByLabelText('回复的真人视频')).toHaveAttribute(
+      'playsinline',
+    );
+    if (method === 'close')
+      fireEvent.click(screen.getByRole('button', { name: '关闭视频' }));
+    else if (method === 'Escape') fireEvent.keyDown(dialog, { key: 'Escape' });
+    else if (method === 'backdrop') fireEvent.click(dialog);
+    else {
+      const handle = screen.getByTestId('video-swipe-area');
+      fireEvent.touchStart(handle, {
+        touches: [{ clientX: 120, clientY: 30 }],
+        changedTouches: [{ clientX: 120, clientY: 30 }],
+      });
+      fireEvent.touchEnd(handle, {
+        changedTouches: [{ clientX: 125, clientY: 150 }],
+      });
+    }
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText('回复的真人视频')).not.toBeInTheDocument();
+    expect(thumbnail).toHaveFocus();
+  },
+);
 it.each(['submit', 'job', 'poll'])(
   'offers inline video retry on %s failure',
   async (failure) => {
@@ -558,12 +612,16 @@ it.each(['submit', 'job', 'poll'])(
     expect(await screen.findByRole('alert')).toHaveTextContent(
       '真人版生成失败',
     );
-    expect(screen.queryByText('真人版生成中…')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '真人版生成中' }),
+    ).not.toBeInTheDocument();
     submitFail = false;
     jobStatus = 'done';
     fetchMock.mockImplementation(originalFetch);
     fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
-    expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: '播放真人视频' }),
+    ).toBeVisible();
     expect(count('/api/media/video')).toBe(failure === 'job' ? 1 : 2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   },
@@ -571,13 +629,16 @@ it.each(['submit', 'job', 'poll'])(
 it('evicts an unavailable video from cache and lets the owner retry inline', async () => {
   jobStatus = 'done';
   render(video());
-  fireEvent.error(await screen.findByLabelText('回复的真人视频'));
+  fireEvent.click(await screen.findByRole('button', { name: '播放真人视频' }));
+  fireEvent.error(screen.getByLabelText('回复的真人视频'));
   expect(screen.getByRole('alert')).toHaveTextContent('真人版生成失败 · 重试');
   expect(
     JSON.parse(sessionStorage.getItem('twin.reply-video:one')!).status,
   ).toBe('failed');
   fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
-  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: '播放真人视频' }),
+  ).toBeVisible();
   expect(count('/api/media/video')).toBe(2);
 });
 
@@ -601,12 +662,14 @@ it('defers the completed video until voice ends, then keeps it visible on replay
   const view = render(<VideoHarness speaking />);
   await waitFor(() => expect(count('/api/media/video/jobs/video%2F1')).toBe(1));
   expect(screen.queryByLabelText('回复的真人视频')).not.toBeInTheDocument();
-  expect(screen.getByText('真人版生成中…')).toBeVisible();
+  expect(screen.getByRole('button', { name: '真人版生成中' })).toBeVisible();
   view.rerender(<VideoHarness speaking={false} />);
-  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
-  expect(screen.getByText('真人版')).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: '播放真人视频' }),
+  ).toBeVisible();
   view.rerender(<VideoHarness speaking />);
-  expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+  expect(screen.getByRole('button', { name: '播放真人视频' })).toBeVisible();
+  expect(screen.queryByLabelText('回复的真人视频')).not.toBeInTheDocument();
   expect(count('/api/media/video')).toBe(1);
 });
 
@@ -682,7 +745,9 @@ it('submits only once across StrictMode effects and rerenders', async () => {
       <VideoHarness />
     </StrictMode>,
   );
-  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: '播放真人视频' }),
+  ).toBeVisible();
   view.rerender(
     <StrictMode>
       <VideoHarness turns={[...videoTurns]} />
@@ -732,7 +797,7 @@ it.each(['network', 'abort', 500, 502, 503, 408, 429])(
     jobStatus = 'done';
     render(video());
     await act(async () => {});
-    expect(screen.getByText('真人版生成中…')).toBeVisible();
+    expect(screen.getByRole('button', { name: '真人版生成中' })).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(JSON.parse(sessionStorage.getItem('twin.reply-video:one')!)).toEqual(
       {
@@ -743,7 +808,7 @@ it.each(['network', 'abort', 500, 502, 503, 408, 429])(
     await act(async () => vi.advanceTimersByTimeAsync(999));
     expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
     await act(async () => vi.advanceTimersByTimeAsync(1));
-    expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+    expect(screen.getByRole('button', { name: '播放真人视频' })).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(count('/api/media/video')).toBe(0);
     expect(
@@ -789,7 +854,9 @@ it('does not let a failed session job block the next generating reply', async ()
   render(
     <VideoHarness turns={[...videoTurns, { ...videoTurns[0], id: 'two' }]} />,
   );
-  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: '播放真人视频' }),
+  ).toBeVisible();
   expect(screen.getByRole('alert')).toHaveTextContent('真人版生成失败');
   expect(count('/api/media/video')).toBe(1);
   expect(count('/api/media/video/jobs/old-job')).toBe(0);
@@ -814,7 +881,9 @@ it.each(['failed', 'unknown'])(
     jobStatus = 'done';
     render(video());
     fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
-    expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: '播放真人视频' }),
+    ).toBeVisible();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       '/api/media/video/jobs/old-job',
       '/api/media/video',
@@ -831,7 +900,9 @@ it('reuses a finished job when retrying a persisted failed record', async () => 
   jobStatus = 'done';
   render(video());
   fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
-  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: '播放真人视频' }),
+  ).toBeVisible();
   expect(count('/api/media/video')).toBe(0);
   expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
 });
@@ -879,7 +950,7 @@ it.each(['running', 'backoff', 'in-flight'])(
     fireEvent(document, new Event('visibilitychange'));
     await act(async () => {});
     expect(count('/api/media/video/jobs/video%2F1')).toBe(polls + 1);
-    expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+    expect(screen.getByRole('button', { name: '播放真人视频' })).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   },
 );

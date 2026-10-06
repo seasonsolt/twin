@@ -9,7 +9,7 @@ import {
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import type { HTMLMotionProps, PanInfo } from 'motion/react';
+import type { HTMLMotionProps } from 'motion/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { DragDismiss } from '../components/motion';
@@ -25,7 +25,6 @@ const { dragStart, divProps, reducedMotion } = vi.hoisted(() => ({
   divProps: vi.fn<(props: HTMLMotionProps<'div'>) => void>(),
   reducedMotion: vi.fn(() => false),
 }));
-
 vi.mock('motion/react', async (original) => {
   const actual = await original<typeof import('motion/react')>();
   const { createElement, forwardRef } = await import('react');
@@ -49,7 +48,6 @@ vi.mock('motion/react', async (original) => {
     }),
   };
 });
-
 vi.mock('../stores/status', () => ({
   startStatusPolling: vi.fn(),
   useStatus: () => ({ data: null, error: null }),
@@ -64,128 +62,86 @@ beforeEach(() => {
     ),
   );
 });
-
-async function openDrawer() {
-  render(
+function mount() {
+  return render(
     <TooltipProvider>
-      <MemoryRouter initialEntries={['/gallery']}>
+      <MemoryRouter initialEntries={['/chat']}>
         <Routes>
           <Route element={<AppShell />}>
-            <Route path="gallery" element={<p>Gallery</p>} />
+            <Route path="chat" element={<p>Chat destination</p>} />
             <Route path="memories" element={<p>Memories destination</p>} />
+            <Route path="about" element={<p>About destination</p>} />
           </Route>
         </Routes>
       </MemoryRouter>
     </TooltipProvider>,
   );
-  await userEvent
-    .setup()
-    .click(screen.getByRole('button', { name: '打开导航' }));
-  return screen.findByRole('dialog', { name: '导航' });
 }
-
+it.each([375, 390, 767])(
+  'shows fixed bottom tabs instead of a drawer at %spx, with touch navigation and active state',
+  async (width) => {
+    vi.stubGlobal('innerWidth', width);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 767px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    mount();
+    const tabs = await screen.findByRole('navigation', { name: '底部导航' });
+    expect(tabs).toHaveClass('fixed', 'bottom-0', 'mobile-tabs', 'md:hidden');
+    expect(
+      within(tabs)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual(['聊天', '记忆', '关于你']);
+    expect(within(tabs).getByRole('link', { name: '聊天' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(tabs).getByRole('link', { name: '聊天' })).toHaveClass(
+      'min-h-14',
+      'text-accent',
+    );
+    expect(
+      screen.queryByRole('button', { name: '打开导航' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: '主导航' }),
+    ).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.pointer([
+      {
+        keys: '[TouchA>]',
+        target: within(tabs).getByRole('link', { name: '记忆' }),
+      },
+      { keys: '[/TouchA]' },
+    ]);
+    await screen.findByText('Memories destination');
+    expect(within(tabs).getByRole('link', { name: '记忆' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await user.click(within(tabs).getByRole('link', { name: '关于你' }));
+    await screen.findByText('About destination');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  },
+);
+it('keeps the sidebar navigation on desktop', async () => {
+  mount();
+  const nav = await screen.findByRole('navigation', { name: '主导航' });
+  expect(within(nav).getAllByRole('link')).toHaveLength(3);
+  expect(
+    screen.queryByRole('navigation', { name: '底部导航' }),
+  ).not.toBeInTheDocument();
+});
 function latestDragProps(axis: 'x' | 'y') {
   return [...divProps.mock.calls]
     .reverse()
     .find(([props]) => props.drag === axis)![0];
 }
-
-it.each(['X', 'backdrop', 'navigation', 'Escape'])(
-  'closes the drawer via %s',
-  async (method) => {
-    const dialog = await openDrawer();
-    const user = userEvent.setup();
-    if (method === 'X') {
-      await user.pointer([
-        { keys: '[TouchA>]', target: within(dialog).getByRole('button') },
-        { keys: '[/TouchA]' },
-      ]);
-    } else if (method === 'backdrop') {
-      const overlay = document.querySelector('.backdrop-blur-sm')!;
-      // A click alone must close even without Radix's outside-pointer handler.
-      fireEvent.click(overlay);
-    } else if (method === 'navigation') {
-      await user.pointer([
-        {
-          keys: '[TouchA>]',
-          target: within(dialog).getByRole('link', { name: '记忆' }),
-        },
-        { keys: '[/TouchA]' },
-      ]);
-      await waitFor(() =>
-        expect(screen.getByText('Memories destination')).toBeVisible(),
-      );
-    } else {
-      await user.keyboard('{Escape}');
-    }
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
-    );
-    expect(dragStart).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: '打开导航' })).toHaveFocus();
-  },
-);
-
-it('starts drawer drag only on the grab handle and header, not controls or content', async () => {
-  const dialog = await openDrawer();
-  const props = latestDragProps('y');
-  expect(props.dragListener).toBe(false);
-  expect(props.dragControls).toBeDefined();
-  expect(props.style?.touchAction).toBeUndefined();
-  const header = dialog.querySelector('.touch-none')!;
-  const handle = header.querySelector('[aria-hidden]')!;
-  fireEvent.pointerDown(handle, { pointerType: 'touch' });
-  fireEvent.pointerDown(within(dialog).getByRole('heading'), {
-    pointerType: 'touch',
-  });
-  expect(dragStart).toHaveBeenCalledTimes(2);
-  dragStart.mockClear();
-  for (const target of [
-    dialog,
-    within(dialog).getByRole('button'),
-    within(dialog).getByRole('button').querySelector('svg')!,
-    within(dialog).getByRole('link', { name: '记忆' }),
-  ]) {
-    fireEvent.pointerDown(target, { pointerType: 'touch' });
-  }
-  expect(dragStart).not.toHaveBeenCalled();
-});
-
-it.each([
-  [101, 0, true],
-  [50, 650, true],
-  [50, 500, false],
-  [-101, -650, false],
-])(
-  'drawer drag offset %s velocity %s dismisses: %s',
-  async (offset, velocity, dismisses) => {
-    await openDrawer();
-    const props = latestDragProps('y');
-    act(() => {
-      props.onDragEnd!(new MouseEvent('pointerup'), {
-        offset: { x: 0, y: offset },
-        velocity: { x: 0, y: velocity },
-      } as PanInfo);
-    });
-    if (dismisses) {
-      await waitFor(() =>
-        expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
-      );
-    } else {
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
-    }
-  },
-);
-
-it('does not start drawer drag with reduced motion', async () => {
-  reducedMotion.mockReturnValue(true);
-  const dialog = await openDrawer();
-  fireEvent.pointerDown(within(dialog).getByRole('heading'), {
-    pointerType: 'touch',
-  });
-  expect(dragStart).not.toHaveBeenCalled();
-});
-
 it('forwards IconButton ref, click, pointer props, and attributes to the button', async () => {
   const ref = createRef<HTMLButtonElement>();
   const click = vi.fn();
@@ -208,7 +164,6 @@ it('forwards IconButton ref, click, pointer props, and attributes to the button'
   expect(click).toHaveBeenCalledOnce();
   expect(pointerDown).toHaveBeenCalledOnce();
 });
-
 it('keeps the toast close button tappable without starting a drag', async () => {
   render(<ToastViewport />);
   act(() => {
@@ -217,9 +172,7 @@ it('keeps the toast close button tappable without starting a drag', async () => 
   expect(latestDragProps('x').dragListener).toBe(false);
   fireEvent.pointerDown(
     screen.getByText('Touch notification', { selector: 'p' }),
-    {
-      pointerType: 'touch',
-    },
+    { pointerType: 'touch' },
   );
   expect(dragStart).toHaveBeenCalledOnce();
   dragStart.mockClear();
@@ -237,7 +190,6 @@ it('keeps the toast close button tappable without starting a drag', async () => 
     ).not.toBeInTheDocument(),
   );
 });
-
 it('skips interactive children in DragDismiss and preserves their clicks', async () => {
   const click = vi.fn();
   render(

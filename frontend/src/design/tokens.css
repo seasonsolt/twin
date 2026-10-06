@@ -102,9 +102,13 @@
     letter-spacing: -0.025em;
     line-height: 1.35;
   }
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
   button,
   input,
-  textarea {
+  textarea,
+  select {
     font: inherit;
   }
   button:not(:disabled),
@@ -117,6 +121,65 @@
   }
   ::selection {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+}
+
+:root {
+  --mobile-tabs-height: calc(57px + env(safe-area-inset-bottom, 0px));
+}
+.app-main {
+  padding-bottom: calc(var(--mobile-tabs-height) + 20px);
+}
+.mobile-tabs {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.chat-composer {
+  bottom: calc(var(--mobile-tabs-height) + var(--keyboard-inset, 0px));
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+}
+.video-overlay {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+:root[data-keyboard='true'] {
+  --mobile-tabs-height: 0px;
+}
+:root[data-keyboard='true'] .mobile-tabs {
+  display: none;
+}
+@layer base {
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
+    button,
+    [role='button'],
+    [role='tab'],
+    summary,
+    input,
+    select {
+      min-height: 44px;
+    }
+    button,
+    [role='button'],
+    summary {
+      min-width: 44px;
+    }
+    a {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+  }
+}
+@media (min-width: 768px) {
+  :root {
+    --mobile-tabs-height: 0px;
+  }
+  .chat-composer {
+    bottom: 0;
   }
 }
 

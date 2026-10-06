@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
+import { MoreHorizontal, Plus } from 'lucide-react';
+import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { LayoutScope } from '../components/motion';
@@ -9,6 +11,7 @@ import {
   Card,
   Dialog,
   EmptyState,
+  IconButton,
   Tabs,
   Textarea,
   toast,
@@ -34,6 +37,8 @@ interface Processing {
 export function Memories({ embedded = false }: { embedded?: boolean }) {
   const active = useLocation().pathname === '/memories' || embedded;
   const confirm = useConfirm();
+  const mobile = useMobile();
+  const [adding, setAdding] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
   const [text, setText] = useState('');
@@ -182,8 +187,80 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       </p>
     </div>
   );
+  const addContent = (
+    <>
+      <Tabs
+        items={[
+          {
+            value: 'note',
+            label: '写一段',
+            content: (
+              <form
+                className="space-y-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const saved = text;
+                  void mutate(async (signal) => {
+                    await api('/api/persona/notes', {
+                      signal,
+                      method: 'POST',
+                      json: { text: saved },
+                    });
+                    if (alive.current) {
+                      setText('');
+                      setAdding(false);
+                    }
+                  }, true);
+                }}
+              >
+                <Textarea
+                  aria-label="要记住的文字"
+                  maxLength={20000}
+                  value={text}
+                  disabled={busy}
+                  onChange={(event) => setText(event.target.value)}
+                  placeholder="写下你的经历、想法或偏好…"
+                />
+                <Button type="submit" loading={busy} disabled={!text.trim()}>
+                  保存
+                </Button>
+              </form>
+            ),
+          },
+          { value: 'files', label: '上传文件', content: fileInput(false) },
+          { value: 'folder', label: '上传文件夹', content: fileInput(true) },
+        ]}
+      />
+      {skipped.length > 0 && (
+        <ul aria-label="跳过的文件" className="mt-3 text-sm text-secondary">
+          {skipped.map((row, i) => (
+            <li key={i}>
+              {row.file}：{row.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+  const remove = async (memory: Memory) => {
+    if (
+      (await confirm({
+        title: '删除记忆？',
+        body: `删除“${memory.title}”？删除后会自动重新处理。`,
+        confirmLabel: '确认删除',
+        tone: 'danger',
+      })) &&
+      alive.current
+    )
+      await mutate((signal) =>
+        api(`/api/persona/sources/${encodeURIComponent(memory.source_id)}`, {
+          method: 'DELETE',
+          signal,
+        }),
+      );
+  };
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <header>
         {embedded ? (
           <h2 className="text-xl font-semibold">添加记忆</h2>
@@ -207,57 +284,8 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
           </p>
         )}
       </header>
-      <Card>
-        <Tabs
-          items={[
-            {
-              value: 'note',
-              label: '写一段',
-              content: (
-                <form
-                  className="space-y-3"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const saved = text;
-                    void mutate(async (signal) => {
-                      await api('/api/persona/notes', {
-                        signal,
-                        method: 'POST',
-                        json: { text: saved },
-                      });
-                      if (alive.current) setText('');
-                    }, true);
-                  }}
-                >
-                  <Textarea
-                    aria-label="要记住的文字"
-                    maxLength={20000}
-                    value={text}
-                    disabled={busy}
-                    onChange={(event) => setText(event.target.value)}
-                    placeholder="写下你的经历、想法或偏好…"
-                  />
-                  <Button type="submit" loading={busy} disabled={!text.trim()}>
-                    保存
-                  </Button>
-                </form>
-              ),
-            },
-            { value: 'files', label: '上传文件', content: fileInput(false) },
-            { value: 'folder', label: '上传文件夹', content: fileInput(true) },
-          ]}
-        />
-        {skipped.length > 0 && (
-          <ul aria-label="跳过的文件" className="mt-3 text-sm text-secondary">
-            {skipped.map((row, i) => (
-              <li key={i}>
-                {row.file}：{row.reason}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-      {error && (
+      {(!mobile || embedded) && <Card>{addContent}</Card>}
+      {error && !adding && (
         <p role="alert" className="text-danger">
           {error}{' '}
           <Button size="sm" variant="ghost" onClick={() => void refresh()}>
@@ -266,12 +294,18 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         </p>
       )}
       {!embedded && (
-        <Card>
-          <h2 className="mb-4 text-lg font-semibold">已添加的记忆</h2>
+        <Card className="px-3 py-2 md:p-6">
+          <h2 className="mb-2 text-md font-semibold md:mb-4 md:text-lg">
+            已添加的记忆
+          </h2>
           {!memories.length && (
             <EmptyState
               title="还没有记忆"
-              body="从上面写一段话或上传文件开始。"
+              body={
+                mobile
+                  ? '点 + 写一段话或上传文件。'
+                  : '从上面写一段话或上传文件开始。'
+              }
             />
           )}
           <LayoutScope>
@@ -282,11 +316,11 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                 id: memory.source_id,
                 text: memory.title,
                 content: (
-                  <article className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-3">
-                    <div>
-                      <h3 className="font-medium">{memory.title}</h3>
-                      <p className="text-sm text-secondary">
-                        {[memory.first_date, memory.detected_kind_label]
+                  <article className="flex items-start justify-between gap-2 border-b border-border py-2 md:py-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate font-medium">{memory.title}</h3>
+                      <p className="text-xs text-secondary">
+                        {[memory.detected_kind_label, memory.first_date]
                           .filter(Boolean)
                           .join(' · ')}
                       </p>
@@ -314,47 +348,92 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                         </Button>
                       )}
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void view(memory)}
-                      >
-                        查看
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() =>
-                          void (async () => {
-                            if (
-                              (await confirm({
-                                title: '删除记忆？',
-                                body: `删除“${memory.title}”？删除后会自动重新处理。`,
-                                confirmLabel: '确认删除',
-                                tone: 'danger',
-                              })) &&
-                              alive.current
-                            )
-                              await mutate((signal) =>
-                                api(
-                                  `/api/persona/sources/${encodeURIComponent(memory.source_id)}`,
-                                  { method: 'DELETE', signal },
-                                ),
-                              );
-                          })()
-                        }
-                      >
-                        删除
-                      </Button>
-                    </div>
+                    {mobile ? (
+                      <details className="relative shrink-0">
+                        <summary
+                          aria-label={`${memory.title}的操作`}
+                          className="grid size-11 cursor-pointer list-none place-items-center rounded-md text-secondary [&::-webkit-details-marker]:hidden"
+                        >
+                          <MoreHorizontal size={20} aria-hidden />
+                        </summary>
+                        <div className="absolute right-0 z-10 grid min-w-28 rounded-md border border-border bg-surface p-1 shadow-elevation-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(event) => {
+                              event.currentTarget
+                                .closest('details')
+                                ?.removeAttribute('open');
+                              void view(memory);
+                            }}
+                          >
+                            查看
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={(event) => {
+                              event.currentTarget
+                                .closest('details')
+                                ?.removeAttribute('open');
+                              void remove(memory);
+                            }}
+                          >
+                            删除
+                          </Button>
+                        </div>
+                      </details>
+                    ) : (
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void view(memory)}
+                        >
+                          查看
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => void remove(memory)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    )}
                   </article>
                 ),
               }))}
             />
           </LayoutScope>
         </Card>
+      )}
+      {mobile && !embedded && (
+        <>
+          <IconButton
+            label="添加记忆"
+            onClick={() => setAdding(true)}
+            className="fixed right-4 bottom-[calc(var(--mobile-tabs-height)+16px)] z-20 size-12 rounded-full bg-accent text-on-accent shadow-elevation-2"
+          >
+            <Plus size={24} aria-hidden />
+          </IconButton>
+          <Dialog
+            open={adding && active}
+            onOpenChange={setAdding}
+            title="添加记忆"
+            body="写一段话，或上传文件、文件夹。"
+            className="top-auto right-0 bottom-0 left-0 max-h-[85dvh] w-full translate-x-0 translate-y-0 rounded-b-none rounded-t-xl p-4 pb-[max(16px,env(safe-area-inset-bottom))]"
+          >
+            {addContent}
+            {error && (
+              <p role="alert" className="mt-3 text-danger">
+                {error}
+              </p>
+            )}
+          </Dialog>
+        </>
       )}
       <Dialog
         open={preview !== null && active}

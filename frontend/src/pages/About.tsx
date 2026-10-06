@@ -7,6 +7,7 @@ import { useIdentity } from '../features/identity/useIdentity';
 import { ItemCard } from '../features/profile/ItemCard';
 import { useProfile } from '../features/profile/useProfile';
 import { useStatus } from '../stores/status';
+import { useMobile } from '../lib/useMobile';
 
 export const topics: Record<string, string> = {
   D1: '经历与身份',
@@ -42,6 +43,7 @@ const backendNames: Record<string, string> = {
 export function About() {
   const active = useLocation().pathname === '/about';
   const identity = useIdentity(active);
+  const mobile = useMobile();
   const profile = useProfile(active);
   const status = useStatus((state) => state.data);
   const modelUrl = identity.capabilities?.avatar_model?.url;
@@ -67,10 +69,38 @@ export function About() {
     ),
   ].slice(0, 5);
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">关于你</h1>
-      <Card>
-        <h2 className="mb-4 text-lg font-semibold">名字与介绍</h2>
+    <div className="about-page space-y-4 md:space-y-6">
+      <header className="flex items-center gap-4">
+        {mobile && identity.capabilities && (
+          <div
+            className="size-24 shrink-0 overflow-hidden rounded-xl"
+            aria-label="你的形象"
+          >
+            {identity.capabilities.avatar_image ? (
+              <img
+                src={identity.capabilities.avatar_image.url}
+                alt={`${identity.data?.name || '你'}的肖像`}
+                className="size-full object-cover object-[50%_30%]"
+              />
+            ) : (
+              <AvatarPreview
+                capabilities={identity.capabilities}
+                onModelNameChange={onModelNameChange}
+              />
+            )}
+          </div>
+        )}
+        <div>
+          <h1 className="text-lg font-semibold md:text-2xl">关于你</h1>
+          {mobile && identity.data && (
+            <p className="mt-1 text-md font-medium">{identity.data.name}</p>
+          )}
+        </div>
+      </header>
+      <Card className="p-4 md:p-6">
+        <h2 className="mb-3 text-md font-semibold md:mb-4 md:text-lg">
+          名字与介绍
+        </h2>
         {identity.loading && <Skeleton className="h-40" />}
         {identity.error && (
           <p role="alert" className="text-danger">
@@ -81,8 +111,8 @@ export function About() {
           </p>
         )}
         {identity.data && (
-          <div className="flex flex-wrap items-start gap-6">
-            <div className="min-w-64 flex-1">
+          <div className="flex flex-wrap items-start gap-3 md:gap-6">
+            <div className="min-w-0 flex-1 md:min-w-64">
               <IdentityForm
                 key={`${identity.data.name}-${identity.data.about}`}
                 identity={identity.data}
@@ -100,7 +130,8 @@ export function About() {
                     : `${identity.data.avatar || '未设置'}（风格化形象）`}
               </p>
             </div>
-            {identity.capabilities &&
+            {!mobile &&
+              identity.capabilities &&
               (identity.capabilities.avatar ||
                 identity.capabilities.avatar_model ||
                 identity.capabilities.avatar_image) && (
@@ -122,8 +153,10 @@ export function About() {
           </p>
         )}
       </Card>
-      <Card>
-        <h2 className="mb-4 text-lg font-semibold">我了解到的你</h2>
+      <Card className="p-4 md:p-6">
+        <h2 className="mb-3 text-md font-semibold md:mb-4 md:text-lg">
+          我了解到的你
+        </h2>
         {profile.loading && <Skeleton className="h-24" />}
         {profile.itemsError && (
           <p role="alert" className="text-danger">
@@ -149,7 +182,11 @@ export function About() {
           );
           return (
             items.length > 0 && (
-              <section key={id} className="mt-5 space-y-3" aria-label={title}>
+              <section
+                key={id}
+                className="mt-3 space-y-2 md:mt-5 md:space-y-3"
+                aria-label={title}
+              >
                 <h3 className="font-semibold">{title}</h3>
                 {items.map((item) => (
                   <ItemCard
@@ -165,8 +202,8 @@ export function About() {
           );
         })}
       </Card>
-      <Card>
-        <h2 className="mb-3 text-lg font-semibold">还想多了解</h2>
+      <Card className="p-4 md:p-6">
+        <h2 className="mb-3 text-md font-semibold md:text-lg">还想多了解</h2>
         {profile.coverageError && (
           <p role="alert">
             {profile.coverageError}{' '}

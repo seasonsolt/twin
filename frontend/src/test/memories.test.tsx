@@ -87,6 +87,56 @@ async function loaded() {
   await screen.findByRole('heading', { name: memory.title });
 }
 
+it('puts the list first on mobile, adds through a bottom sheet, and exposes row actions in an overflow menu', async () => {
+  vi.stubGlobal('innerWidth', 390);
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+  mount();
+  await loaded();
+  expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  const add = screen.getByRole('button', { name: '添加记忆' });
+  expect(add).toHaveClass('fixed', 'size-12');
+  await user.click(add);
+  const sheet = screen.getByRole('dialog', { name: '添加记忆' });
+  expect(sheet).toHaveClass('bottom-0', 'top-auto', 'w-full');
+  expect(
+    within(sheet)
+      .getAllByRole('tab')
+      .map((tab) => tab.textContent),
+  ).toEqual(['写一段', '上传文件', '上传文件夹']);
+  expect(within(sheet).getByRole('textbox')).toHaveClass('text-md');
+  await user.type(within(sheet).getByRole('textbox'), '手机上的记忆');
+  await user.click(within(sheet).getByRole('button', { name: '保存' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+  );
+  const summary = screen.getByLabelText('我的经历的操作');
+  await user.click(summary);
+  expect(summary.parentElement).toHaveAttribute('open');
+  await user.click(screen.getByRole('button', { name: '查看' }));
+  const preview = await screen.findByRole('dialog', { name: memory.title });
+  await waitFor(() => expect(preview).toHaveTextContent('隐私视图中的文字'));
+  await user.click(within(preview).getByRole('button', { name: '关闭' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+  );
+  await user.click(summary);
+  await user.click(screen.getByRole('button', { name: '删除' }));
+  await user.click(screen.getByRole('button', { name: '确认删除' }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('heading', { name: memory.title }),
+    ).not.toBeInTheDocument(),
+  );
+});
 it('has three add tabs without kind, date or manual build controls; saves notes', async () => {
   mount();
   await loaded();
@@ -188,7 +238,7 @@ it('renders all four memory statuses in plain words', async () => {
   mount();
   await loaded();
   const list = screen.getByRole('list', { name: '记忆列表' });
-  expect(list).toHaveTextContent('2024-01-01 · 文档');
+  expect(list).toHaveTextContent('文档 · 2024-01-01');
   expect(list).toHaveTextContent('已记住 3 条');
   expect(list).toHaveTextContent('正在记住…');
   expect(list).toHaveTextContent('没找到关于你的内容');

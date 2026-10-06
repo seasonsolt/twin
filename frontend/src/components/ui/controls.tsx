@@ -90,7 +90,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
     <input
       {...props}
       className={cn(
-        'min-h-10 w-full rounded-md border border-border bg-surface px-3 text-primary placeholder:text-tertiary disabled:opacity-50',
+        'min-h-11 w-full rounded-md border border-border bg-surface px-3 text-md text-primary placeholder:text-tertiary disabled:opacity-50 md:text-base',
         className,
       )}
     />
@@ -102,24 +102,32 @@ export function Textarea({
   onKeyDown,
   className,
   value,
+  rows = 2,
+  maxRows,
   ...props
-}: ComponentProps<'textarea'> & { onSend?: () => void }) {
+}: ComponentProps<'textarea'> & { onSend?: () => void; maxRows?: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
   const resize = () => {
     if (!ref.current) return;
     ref.current.style.height = 'auto';
-    ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
+    const style = window.getComputedStyle(ref.current);
+    const lineHeight = parseFloat(style.lineHeight) || 24;
+    const padding =
+      (parseFloat(style.paddingTop) || 0) +
+      (parseFloat(style.paddingBottom) || 0);
+    const maximum = maxRows ? lineHeight * maxRows + padding + 2 : 240;
+    ref.current.style.height = `${Math.min(Math.max(ref.current.scrollHeight, lineHeight * rows + padding + 2), maximum)}px`;
   };
-  useLayoutEffect(resize, [value]);
+  useLayoutEffect(resize, [value, maxRows, rows]);
   return (
     <textarea
       {...props}
       ref={ref}
       value={value}
-      rows={2}
+      rows={rows}
       className={cn(
-        'w-full resize-none rounded-md border border-border bg-surface px-3 py-2 placeholder:text-tertiary disabled:opacity-50',
+        'w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-md leading-6 placeholder:text-tertiary disabled:opacity-50 md:text-base',
         className,
       )}
       onChange={(event) => {

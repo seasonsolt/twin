@@ -26,15 +26,16 @@ export function Citations({ cited = [] }: { cited?: Citation[] }) {
   const { reduced, transition, exit } = useMotionPreset('gentle');
   if (!cited.length) return null;
   return (
-    <div>
+    <div className="contents">
       <Button
         variant="ghost"
         size="sm"
+        className="min-h-11 px-2"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen(!open)}
       >
-        依据 {cited.length} 条
+        依据 {cited.length}
       </Button>
       <AnimatePresence initial={false}>
         {open && (
@@ -48,7 +49,7 @@ export function Citations({ cited = [] }: { cited?: Citation[] }) {
               transition: exit,
             }}
             transition={transition}
-            className="overflow-hidden"
+            className="order-last w-full overflow-hidden"
           >
             <ul aria-label="回答依据" className="space-y-2 py-2">
               {cited.map((citation) => (

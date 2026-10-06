@@ -1,20 +1,18 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type CSSProperties } from 'react';
 import { NavLink, useLocation, useOutlet } from 'react-router';
-import { AnimatePresence, motion, useDragControls } from 'motion/react';
-import * as Drawer from '@radix-ui/react-dialog';
+import { motion } from 'motion/react';
 import {
   BookUser,
   Folder,
-  Menu,
   MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
-  X,
 } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { Badge, IconButton, Skeleton, Tooltip } from '../ui';
-import { LayoutScope, PageTransition, shouldDismissDrag } from '../motion';
+import { LayoutScope, PageTransition } from '../motion';
+import { useMobile } from '../../lib/useMobile';
 import { api } from '../../lib/api';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Onboarding = lazy(() =>
@@ -81,101 +79,31 @@ function Navigation({
   );
 }
 
-function MobileDrawer({
-  open,
-  setOpen,
-}: {
-  open: boolean;
-  setOpen: (open: boolean) => void;
-}) {
-  const { reduced, transition, exit } = useMotionPreset('layout');
-  const controls = useDragControls();
+function BottomTabs() {
   return (
-    <Drawer.Root open={open} onOpenChange={setOpen}>
-      <Drawer.Trigger asChild>
-        <IconButton label="打开导航" className="md:hidden">
-          <Menu className="size-5" />
-        </IconButton>
-      </Drawer.Trigger>
-      <Drawer.Portal forceMount>
-        <AnimatePresence>
-          {open && (
-            <Drawer.Overlay key="backdrop" forceMount asChild>
-              <motion.div
-                key="backdrop"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={exit}
-                onClick={() => setOpen(false)}
-                className="fixed inset-0 z-40 bg-black/25 backdrop-blur-sm"
-              />
-            </Drawer.Overlay>
-          )}
-          {open && (
-            <Drawer.Content key="drawer" forceMount asChild>
-              <motion.div
-                key="drawer"
-                initial={{ opacity: 0, y: reduced ? 0 : '100%' }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: reduced ? 0 : '100%', transition: exit }}
-                transition={transition}
-                drag={reduced ? false : 'y'}
-                dragControls={controls}
-                dragListener={false}
-                dragConstraints={{ top: 0, bottom: 0 }}
-                dragElastic={{ top: 0.05, bottom: 0.5 }}
-                dragSnapToOrigin
-                dragMomentum
-                onDragEnd={(_, info) => {
-                  if (
-                    info.offset.y > 0 &&
-                    shouldDismissDrag(info.offset.y, info.velocity.y)
-                  )
-                    setOpen(false);
-                }}
-                className="fixed right-0 bottom-0 left-0 z-50 rounded-t-xl border border-border bg-surface p-5 pb-[max(20px,env(safe-area-inset-bottom))] shadow-elevation-3"
-              >
-                <div
-                  className="touch-none"
-                  onPointerDown={(event) => {
-                    if (!reduced) controls.start(event);
-                  }}
-                >
-                  <div
-                    aria-hidden
-                    className="mx-auto mb-4 h-1 w-10 rounded-full bg-border"
-                  />
-                  <div className="mb-3 flex items-center justify-between">
-                    <Drawer.Title className="text-lg font-semibold">
-                      导航
-                    </Drawer.Title>
-                    <Drawer.Close asChild>
-                      <IconButton
-                        label="关闭导航"
-                        onPointerDown={(event) => event.stopPropagation()}
-                      >
-                        <X className="size-5" />
-                      </IconButton>
-                    </Drawer.Close>
-                  </div>
-                </div>
-                <Drawer.Description className="sr-only">
-                  选择要打开的页面
-                </Drawer.Description>
-                <Navigation onNavigate={() => setOpen(false)} />
-              </motion.div>
-            </Drawer.Content>
-          )}
-        </AnimatePresence>
-      </Drawer.Portal>
-    </Drawer.Root>
+    <nav
+      aria-label="底部导航"
+      className="mobile-tabs fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-border bg-surface/95 backdrop-blur-xl md:hidden"
+    >
+      {navItems.map(({ route, title, icon: Icon }) => (
+        <NavLink
+          key={route}
+          to={`/${route}`}
+          className={({ isActive }) =>
+            `flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs ${isActive ? 'font-semibold text-accent' : 'text-secondary'}`
+          }
+        >
+          <Icon className="size-5" aria-hidden />
+          <span>{title}</span>
+        </NavLink>
+      ))}
+    </nav>
   );
 }
 
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
-  const [drawer, setDrawer] = useState(false);
+  const mobile = useMobile();
   const { data, error } = useStatus();
   const { reduced, transition } = useMotionPreset('layout');
   const location = useLocation();
@@ -205,14 +133,6 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, []);
-  useEffect(() => {
-    const desktop = window.matchMedia('(min-width: 768px)');
-    const change = () => {
-      if (desktop.matches) setDrawer(false);
-    };
-    desktop.addEventListener('change', change);
-    return () => desktop.removeEventListener('change', change);
-  }, []);
   if (location.pathname !== '/gallery') {
     if (!checked) return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
     if (onboarding)
@@ -228,7 +148,12 @@ export function AppShell() {
       );
   }
   return (
-    <div className="flex min-h-dvh">
+    <div
+      className="flex min-h-dvh"
+      style={
+        { '--sidebar-width': collapsed ? '76px' : '228px' } as CSSProperties
+      }
+    >
       <a
         href="#main"
         onClick={(event) => {
@@ -254,7 +179,7 @@ export function AppShell() {
           </span>
           {!collapsed && <span className="text-lg font-semibold">twin</span>}
         </div>
-        <Navigation collapsed={collapsed} />
+        {!mobile && <Navigation collapsed={collapsed} />}
         <div className="mt-auto pt-8">
           <Tooltip label={collapsed ? '展开侧栏' : '收起侧栏'}>
             <IconButton
@@ -272,9 +197,7 @@ export function AppShell() {
         </div>
       </motion.aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex min-h-20 flex-wrap items-center gap-3 border-b border-border px-5 py-4 md:px-8">
-          <MobileDrawer open={drawer} setOpen={setDrawer} />
-          <span className="mr-auto font-semibold md:hidden">twin</span>
+        <header className="hidden min-h-16 flex-wrap items-center gap-3 border-b border-border px-8 py-3 md:flex">
           {data ? (
             <Badge>{data.target_name}</Badge>
           ) : (
@@ -292,11 +215,16 @@ export function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className="mx-auto w-full max-w-6xl flex-1 px-5 py-8 outline-none md:px-8 md:py-10"
+          className="app-main mx-auto w-full max-w-6xl flex-1 px-4 pt-4 outline-none md:px-8 md:py-8"
         >
-          <PageTransition route={location.pathname}>{outlet}</PageTransition>
+          {location.pathname === '/chat' ? (
+            outlet
+          ) : (
+            <PageTransition route={location.pathname}>{outlet}</PageTransition>
+          )}
         </main>
       </div>
+      {mobile && <BottomTabs />}
     </div>
   );
 }

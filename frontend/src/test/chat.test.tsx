@@ -6,6 +6,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { readFileSync } from 'node:fs';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { useReducedMotion } from 'motion/react';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
@@ -143,6 +144,7 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
           json({
             ...reply,
             reply: '记忆还在处理中，等我记住后再聊吧。',
+            abstain_reason: '记忆还在处理中，等我记住后再聊吧。',
             citations: [],
             cited: [],
           }),
@@ -164,7 +166,7 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
   expect(sessionStorage.getItem(CHAT_KEY)).toContain('记忆还在处理中');
 });
 
-it('sends, polls queued/running jobs, renders metadata and persists only complete turns per tab', async () => {
+it('sends, polls queued/running jobs, renders only the abstention reason and persists complete turns', async () => {
   vi.useFakeTimers();
   mount();
   await submit();
@@ -195,10 +197,14 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
   });
-  expect(screen.getByLabelText('分身回复')).toHaveTextContent(reply.reply);
-  expect(screen.getByText('置信度 60%')).toBeVisible();
-  expect(screen.getByText('需要本人确认')).toBeVisible();
-  expect(screen.getByText('证据不足')).toBeVisible();
+  const abstention = screen.getByLabelText('分身回复');
+  expect(abstention).toHaveTextContent(/^证据不足$/);
+  expect(abstention.children).toHaveLength(1);
+  expect(abstention).toHaveClass('text-secondary');
+  expect(abstention.querySelector('time, button, img')).toBeNull();
+  expect(
+    screen.queryByText(/置信度|需要本人确认|通用回答/),
+  ).not.toBeInTheDocument();
   expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
   expect(document.querySelector('input[type="date"]')).toBeNull();
   expect(
@@ -210,7 +216,7 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
     ),
   ).toEqual(['user', 'twin']);
 });
-it('shows a neutral general badge next to confidence without an abstention marker', async () => {
+it('renders general reply text without mode or confidence badges', async () => {
   sessionStorage.setItem(
     CHAT_KEY,
     JSON.stringify([
@@ -230,12 +236,17 @@ it('shows a neutral general badge next to confidence without an abstention marke
     ]),
   );
   mount();
-  const badge = screen.getByText('通用回答 · 非本人观点');
-  expect(badge).toBeVisible();
-  expect(badge.previousElementSibling).toHaveTextContent('置信度 50%');
-  expect(screen.queryByText('需要本人确认')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent(
+    '这不是我本人的经验，一般来说先做预算。',
+  );
+  expect(
+    screen.queryByText(/通用回答|置信度|需要本人确认/),
+  ).not.toBeInTheDocument();
+  expect(document.querySelector('time')).toBeNull();
   expect(await screen.findByRole('button', { name: '播放语音' })).toBeVisible();
-  expect(await screen.findByText('真人版生成中…')).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: '真人版生成中' }),
+  ).toBeVisible();
   expect(
     screen.queryByRole('button', { name: '生成视频' }),
   ).not.toBeInTheDocument();
@@ -270,7 +281,9 @@ it('shows Chinese detail and retries without duplicating the failed user turn', 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
   });
-  expect(screen.getByLabelText('分身回复')).toHaveTextContent(reply.reply);
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent(
+    reply.abstain_reason,
+  );
   expect(
     screen.getAllByLabelText('你说', { selector: 'article' }),
   ).toHaveLength(1);
@@ -363,6 +376,96 @@ it('renders job failure inline with retry', async () => {
   expect(screen.getByRole('alert')).toHaveTextContent('模型暂时不可用');
   expect(screen.getByRole('button', { name: '重试' })).toBeEnabled();
 });
+it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', () => {
+  const view = mount();
+  const messages = screen.getByTestId('chat-messages');
+  expect(messages.className).not.toMatch(/overflow-y|(?:max-)?h-\[/);
+  for (
+    let parent = messages.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    expect(parent.className).not.toMatch(/overflow-y-(auto|scroll)/);
+  }
+  expect(screen.getByRole('form', { name: '消息输入' })).toHaveClass(
+    'fixed',
+    'chat-composer',
+  );
+  const input = screen.getByRole('textbox', { name: '你说' });
+  expect(input).toHaveAttribute('rows', '1');
+  expect(input).toHaveClass('text-md', 'md:text-base');
+  expect(view.container.querySelector('time')).toBeNull();
+  const css = readFileSync('src/design/tokens.css', 'utf8');
+  expect(css).toContain('font-size: 16px !important');
+  expect(css).toContain('env(safe-area-inset-bottom');
+  expect(css).toContain('-webkit-tap-highlight-color: transparent');
+});
+it('caps composer growth at five lines', () => {
+  mount();
+  const input = screen.getByRole('textbox', { name: '你说' });
+  Object.defineProperty(input, 'scrollHeight', {
+    configurable: true,
+    value: 600,
+  });
+  fireEvent.change(input, {
+    target: { value: 'one\ntwo\nthree\nfour\nfive\nsix' },
+  });
+  const style = getComputedStyle(input);
+  const line = parseFloat(style.lineHeight) || 24;
+  const padding =
+    (parseFloat(style.paddingTop) || 0) +
+    (parseFloat(style.paddingBottom) || 0);
+  expect(parseFloat(input.style.height)).toBe(line * 5 + padding + 2);
+});
+it('moves the composer above the visual viewport keyboard and cleans up on leaving', () => {
+  vi.stubGlobal('innerHeight', 800);
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+  const viewport = Object.assign(new EventTarget(), {
+    height: 800,
+    offsetTop: 0,
+  });
+  vi.stubGlobal('visualViewport', viewport);
+  const view = mount();
+  const input = screen.getByRole('textbox', { name: '你说' });
+  act(() => input.focus());
+  viewport.height = 460;
+  act(() => viewport.dispatchEvent(new Event('resize')));
+  expect(document.documentElement).toHaveAttribute('data-keyboard', 'true');
+  expect(
+    document.documentElement.style.getPropertyValue('--keyboard-inset'),
+  ).toBe('340px');
+  viewport.height = 800;
+  act(() => viewport.dispatchEvent(new Event('resize')));
+  expect(document.documentElement).toHaveAttribute('data-keyboard', 'false');
+  view.unmount();
+  expect(document.documentElement).not.toHaveAttribute('data-keyboard');
+  expect(
+    document.documentElement.style.getPropertyValue('--keyboard-inset'),
+  ).toBe('');
+});
+it('scrolls to the newest message on both send and receive', async () => {
+  vi.useFakeTimers();
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scroll,
+  });
+  mount();
+  const initial = scroll.mock.calls.length;
+  await submit();
+  expect(scroll.mock.calls.length).toBeGreaterThan(initial);
+  const sent = scroll.mock.calls.length;
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(scroll.mock.calls.length).toBeGreaterThan(sent);
+  delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+});
 it('citation disclosure expands and collapses using keyboard and shows both citation kinds', async () => {
   render(
     <Citations
@@ -373,7 +476,7 @@ it('citation disclosure expands and collapses using keyboard and shows both cita
     />,
   );
   const user = userEvent.setup();
-  const disclosure = screen.getByRole('button', { name: '依据 2 条' });
+  const disclosure = screen.getByRole('button', { name: '依据 2' });
   expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await user.tab();
   await user.keyboard('{Enter}');

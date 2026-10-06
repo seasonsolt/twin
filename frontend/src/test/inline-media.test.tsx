@@ -564,7 +564,7 @@ it.each(['submit', 'job', 'poll'])(
     fetchMock.mockImplementation(originalFetch);
     fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
     expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
-    expect(count('/api/media/video')).toBe(2);
+    expect(count('/api/media/video')).toBe(failure === 'job' ? 1 : 2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   },
 );
@@ -713,27 +713,176 @@ it('retains a pending submission across unmount rather than starting a second GP
   expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
 });
 
-it('blocks later submissions after a polling connection failure and retries the same job', async () => {
-  const original = fetchMock.getMockImplementation() as (
-    url: string,
-    init?: RequestInit,
-  ) => Promise<Response>;
-  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
-    url.startsWith('/api/media/video/jobs/')
-      ? Promise.reject(new Error('offline'))
-      : original(url, init),
+it.each(['network', 'abort', 500, 502, 503, 408, 429])(
+  'keeps generating after a transient %s polling error, then shows the video without a failure flash',
+  async (failure) => {
+    vi.useFakeTimers();
+    sessionStorage.setItem(
+      'twin.reply-video:one',
+      JSON.stringify({ status: 'generating', jobId: 'video/1' }),
+    );
+    const saved = vi.spyOn(Storage.prototype, 'setItem');
+    if (failure === 'network')
+      fetchMock.mockRejectedValueOnce(new TypeError('offline'));
+    else if (failure === 'abort')
+      fetchMock.mockRejectedValueOnce(
+        new DOMException('background', 'AbortError'),
+      );
+    else fetchMock.mockResolvedValueOnce(json({}, failure as number));
+    jobStatus = 'done';
+    render(video());
+    await act(async () => {});
+    expect(screen.getByText('真人版生成中…')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(JSON.parse(sessionStorage.getItem('twin.reply-video:one')!)).toEqual(
+      {
+        status: 'generating',
+        jobId: 'video/1',
+      },
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(999));
+    expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(count('/api/media/video')).toBe(0);
+    expect(
+      saved.mock.calls.some(
+        ([, value]) => JSON.parse(value).status === 'failed',
+      ),
+    ).toBe(false);
+  },
+);
+
+it('backs off polling at 1s, 2s, 4s and at most 8s, then resets after a successful poll', async () => {
+  vi.useFakeTimers();
+  sessionStorage.setItem(
+    'twin.reply-video:one',
+    JSON.stringify({ status: 'generating', jobId: 'video/1' }),
   );
-  const view = render(video());
-  expect(await screen.findByRole('alert')).toHaveTextContent('真人版生成失败');
-  const next: Turn = { ...videoTurns[0], id: 'two' };
-  view.rerender(<VideoHarness turns={[...videoTurns, next]} />);
+  fetchMock.mockRejectedValue(new TypeError('offline'));
+  render(video());
   await act(async () => {});
-  expect(count('/api/media/video')).toBe(1);
-  fetchMock.mockImplementation(original);
-  fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
-  await waitFor(() => expect(count('/api/media/video/jobs/video%2F1')).toBe(2));
-  expect(count('/api/media/video')).toBe(1);
+  let polls = 1;
+  for (const delay of [1000, 2000, 4000, 8000, 8000]) {
+    await act(async () => vi.advanceTimersByTimeAsync(delay - 1));
+    expect(fetchMock).toHaveBeenCalledTimes(polls);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(fetchMock).toHaveBeenCalledTimes(++polls);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  }
+  fetchMock.mockResolvedValueOnce(json({ status: 'running' }));
+  await act(async () => vi.advanceTimersByTimeAsync(8000));
+  expect(fetchMock).toHaveBeenCalledTimes(++polls);
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(fetchMock).toHaveBeenCalledTimes(++polls);
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(fetchMock).toHaveBeenCalledTimes(++polls);
 });
+
+it('does not let a failed session job block the next generating reply', async () => {
+  sessionStorage.setItem(
+    'twin.reply-video:one',
+    JSON.stringify({ status: 'failed', jobId: 'old-job' }),
+  );
+  jobStatus = 'done';
+  render(
+    <VideoHarness turns={[...videoTurns, { ...videoTurns[0], id: 'two' }]} />,
+  );
+  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(screen.getByRole('alert')).toHaveTextContent('真人版生成失败');
+  expect(count('/api/media/video')).toBe(1);
+  expect(count('/api/media/video/jobs/old-job')).toBe(0);
+});
+
+it.each(['failed', 'unknown'])(
+  'rechecks a failed record before replacing its %s job',
+  async (status) => {
+    sessionStorage.setItem(
+      'twin.reply-video:one',
+      JSON.stringify({ status: 'failed', jobId: 'old-job' }),
+    );
+    const original = fetchMock.getMockImplementation() as (
+      url: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      url.endsWith('/old-job')
+        ? json({ status: 'failed' }, status === 'unknown' ? 404 : 200)
+        : original(url, init),
+    );
+    jobStatus = 'done';
+    render(video());
+    fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
+    expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/media/video/jobs/old-job',
+      '/api/media/video',
+      '/api/media/video/jobs/video%2F1',
+    ]);
+  },
+);
+
+it('reuses a finished job when retrying a persisted failed record', async () => {
+  sessionStorage.setItem(
+    'twin.reply-video:one',
+    JSON.stringify({ status: 'failed', jobId: 'video/1' }),
+  );
+  jobStatus = 'done';
+  render(video());
+  fireEvent.click(screen.getByRole('button', { name: '重试生成视频' }));
+  expect(await screen.findByLabelText('回复的真人视频')).toBeVisible();
+  expect(count('/api/media/video')).toBe(0);
+  expect(count('/api/media/video/jobs/video%2F1')).toBe(1);
+});
+
+it.each(['running', 'backoff', 'in-flight'])(
+  'polls immediately on visibility resume during %s',
+  async (phase) => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('visible');
+    sessionStorage.setItem(
+      'twin.reply-video:one',
+      JSON.stringify({ status: 'generating', jobId: 'video/1' }),
+    );
+    if (phase === 'backoff')
+      fetchMock.mockRejectedValue(new TypeError('offline'));
+    if (phase === 'in-flight')
+      fetchMock.mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init!.signal!.addEventListener('abort', () =>
+              reject(new DOMException('cancelled', 'AbortError')),
+            );
+          }),
+      );
+    render(video());
+    await act(async () => {});
+    if (phase === 'backoff') {
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(count('/api/media/video/jobs/video%2F1')).toBe(3);
+    }
+    const polls = count('/api/media/video/jobs/video%2F1');
+    visibility.mockReturnValue('hidden');
+    fireEvent(document, new Event('visibilitychange'));
+    await act(async () => {});
+    expect(count('/api/media/video/jobs/video%2F1')).toBe(polls);
+    jobStatus = 'done';
+    fetchMock.mockResolvedValue(
+      json({
+        status: 'done',
+        result: { file: `${'a'.repeat(64)}.mp4`, duration_s: 6, warnings: [] },
+      }),
+    );
+    visibility.mockReturnValue('visible');
+    fireEvent(document, new Event('visibilitychange'));
+    await act(async () => {});
+    expect(count('/api/media/video/jobs/video%2F1')).toBe(polls + 1);
+    expect(screen.getByLabelText('回复的真人视频')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  },
+);
 
 it('has no legacy playback dialog or panel references anywhere in frontend source', () => {
   const forbidden = [

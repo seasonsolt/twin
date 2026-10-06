@@ -38,15 +38,20 @@ function save(id: string, state: ReplyVideoState) {
     // Keep the mounted page's cache when storage is unavailable.
   }
 }
-function wait(signal: AbortSignal) {
+function wait(signal: AbortSignal, delay: number) {
   return new Promise<void>((resolve) => {
+    const visible = () => {
+      if (document.visibilityState === 'visible') finish();
+    };
     const finish = () => {
       clearTimeout(timer);
       signal.removeEventListener('abort', finish);
+      document.removeEventListener('visibilitychange', visible);
       resolve();
     };
-    const timer = setTimeout(finish, 1000);
+    const timer = setTimeout(finish, delay);
     signal.addEventListener('abort', finish, { once: true });
+    document.addEventListener('visibilitychange', visible);
     if (signal.aborted) finish();
   });
 }
@@ -89,6 +94,15 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
     let persona = '';
     let running = false;
     const controller = new AbortController();
+    const retries = new Set<string>();
+    let pollController: AbortController | undefined;
+    let resumeVersion = 0;
+    const visible = () => {
+      if (document.visibilityState !== 'visible') return;
+      resumeVersion += 1;
+      pollController?.abort();
+    };
+    document.addEventListener('visibilitychange', visible);
     const publish = (id: string, state: ReplyVideoState) => {
       records.current.set(id, state);
       save(id, state);
@@ -96,69 +110,93 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
     };
     const run = async (id: string, turn?: Turn) => {
       let state = records.current.get(id)!;
+      let replaceFailedJob = retries.delete(id);
+      let backoff = 1000;
       try {
-        if (!state.jobId) {
-          let submission = submissions.get(id);
-          if (!submission) {
-            submission = api<{ job_id: string }>('/api/media/video', {
-              method: 'POST',
-              json: {
-                kind: 'chat_reply',
-                answer: turn!.reply,
-                persona_name: persona,
-              },
-            });
-            submissions.set(id, submission);
-          }
-          const result = await submission;
-          submissions.delete(id);
-          state = { status: 'generating', jobId: result.job_id };
-          publish(id, state);
-        }
         while (alive) {
-          const job = await api<Job<VideoResult>>(
-            `/api/media/video/jobs/${encodeURIComponent(state.jobId!)}`,
-            { signal: controller.signal },
-          );
-          if (!alive) return;
-          if (job.status === 'done') {
-            state = { status: 'done', result: job.result };
-            if (!videoUrl(job.result)) throw new Error('视频文件不可用');
+          if (!state.jobId) {
+            let submission = submissions.get(id);
+            if (!submission) {
+              submission = api<{ job_id: string }>('/api/media/video', {
+                method: 'POST',
+                json: {
+                  kind: 'chat_reply',
+                  answer: turn!.reply,
+                  persona_name: persona,
+                },
+              });
+              submissions.set(id, submission);
+            }
+            const result = await submission;
+            submissions.delete(id);
+            state = { status: 'generating', jobId: result.job_id };
             publish(id, state);
-            return;
+            if (!alive) return;
           }
-          if (job.status === 'failed') {
-            state = { status: 'failed' };
-            throw new Error('视频生成失败');
+          const version = resumeVersion;
+          pollController = new AbortController();
+          let unknown = false;
+          try {
+            const job = await api<Job<VideoResult>>(
+              `/api/media/video/jobs/${encodeURIComponent(state.jobId!)}`,
+              { signal: pollController.signal },
+            );
+            if (!alive) return;
+            if (version !== resumeVersion) continue;
+            if (job.status === 'done') {
+              if (!videoUrl(job.result)) throw new Error('视频文件不可用');
+              publish(id, { status: 'done', result: job.result });
+              return;
+            }
+            backoff = 1000;
+            if (job.status !== 'failed') {
+              await wait(controller.signal, 1000);
+              continue;
+            }
+          } catch (error) {
+            if (!alive) return;
+            if (version !== resumeVersion) continue;
+            if (!(error instanceof ApiError && error.status === 404)) {
+              const delay = backoff;
+              backoff = Math.min(backoff * 2, 8000);
+              await wait(controller.signal, delay);
+              continue;
+            }
+            unknown = true;
           }
-          await wait(controller.signal);
-        }
-      } catch (error) {
-        submissions.delete(id);
-        if (alive)
+          if (replaceFailedJob && turn) {
+            replaceFailedJob = false;
+            state = { status: 'generating' };
+            publish(id, state);
+            continue;
+          }
           publish(id, {
             status: 'failed',
-            jobId:
-              error instanceof ApiError && error.status === 404
-                ? undefined
-                : state.jobId,
+            jobId: unknown ? undefined : state.jobId,
           });
+          return;
+        }
+      } catch {
+        submissions.delete(id);
+        if (alive) publish(id, { status: 'failed', jobId: state.jobId });
       }
     };
     const pump = async () => {
       if (!alive || running) return;
       const unresolved = [...records.current].find(
         ([id, state]) =>
-          (state.jobId || submissions.has(id)) && state.status !== 'done',
+          (state.jobId || submissions.has(id)) && state.status === 'generating',
       );
-      if (unresolved?.[1].status === 'failed') return;
       const next = [...pending]
         .reverse()
         .find((turn) => records.current.get(turn.id)?.status === 'generating');
       const id = unresolved?.[0] ?? next?.id;
       if (!id) return;
       running = true;
-      await run(id, next);
+      await run(
+        id,
+        pending.find((turn) => turn.id === id),
+      );
       running = false;
       if (alive) void pump();
     };
@@ -184,6 +222,7 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
       },
       retry(id) {
         if (records.current.get(id)?.status !== 'failed') return;
+        retries.add(id);
         publish(id, {
           status: 'generating',
           jobId: records.current.get(id)?.jobId,
@@ -194,6 +233,8 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
     return () => {
       alive = false;
       controller.abort();
+      pollController?.abort();
+      document.removeEventListener('visibilitychange', visible);
       actions.current = { update() {}, retry() {} };
     };
   }, [active]);

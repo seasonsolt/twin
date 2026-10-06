@@ -59,8 +59,6 @@ LAYERS: dict[str, int] = {
     "web.jobs": 9,
     "web.persona": 9,
     "web.identity": 9,
-    "persona.transcripts": 4,
-    "persona.transcript_schema": 1,
 }
 
 

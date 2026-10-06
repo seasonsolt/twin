@@ -180,7 +180,7 @@ export function useQuestionnaire(round: Round, active = true) {
       );
       if (!draft.alive) return null;
       setResult(submitted);
-      // Read the server's submission timestamp; retest has no scoring endpoint.
+      // Read the server's submission timestamp.
       const loaded = await api<QuestionnaireData>(
         `/api/persona/questionnaire?round=${draft.round}`,
         { signal: draft.signal },

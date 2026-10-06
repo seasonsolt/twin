@@ -75,7 +75,6 @@ def test_source_support_is_deduplicated_and_joins_expression_ids(settings: Setti
         chat = parse_text(
             SourceKind.CHAT, "群聊.txt", "2026-01-01 10:00 配角：测试\n2026-01-01 10:01 合成人物：核对", settings
         )
-        chat.expressions[1] = chat.expressions[1].model_copy(update={"held_out": True})
         store.put_source(chat)
         c = chat.source.source_id
         ea, eb = store.list_expressions(a)[0].expression_id, store.list_expressions(b)[0].expression_id
@@ -134,7 +133,10 @@ def test_stale_lifecycle_empty_build_and_replaced_source(settings: Settings) -> 
 
 def test_source_without_target_expressions_is_built_without_llm_calls(settings: Settings) -> None:
     with PersonaStore(":memory:") as store:
-        parsed = parse_text(SourceKind.MEETING, "2026-01-01_其他人.txt", "配角：合成数据", settings)
+        parsed = parse_text(SourceKind.DOCUMENT, "2026-01-01_其他人.txt", "合成数据", settings)
+        parsed.expressions[0].speaker = "配角"
+        parsed.expressions[0].is_target = False
+        parsed.source.n_target = 0
         store.put_source(parsed)
         llm = FakeLLM(handler)
         report = pf.build_profile(store, llm, settings)

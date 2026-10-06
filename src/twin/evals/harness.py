@@ -241,7 +241,7 @@ def paired_case_ids(
 
     ALL_SYSTEMS_INTERSECTION gives every system the same common cases.
     PER_CONTROL_INTERSECTION intersects each system independently with the required control,
-    as biography's content comparison does; the control need not be in systems. Relative
+    which need not be in systems. Relative
     scores (against_system_id is not None) are already paired and are not absolute scores.
     """
     if policy is PairingPolicy.PER_CONTROL_INTERSECTION and control is None:

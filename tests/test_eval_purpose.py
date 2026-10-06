@@ -6,13 +6,13 @@ import pytest
 from pydantic import ValidationError
 
 from twin.evals.schema import (
-    BiographyExpected,
-    BiographyInput,
     Case,
     CaseInput,
     FailurePolicy,
     PairingPolicy,
     Purpose,
+    QuestionExpected,
+    QuestionInput,
     Report,
     Scenario,
     Split,
@@ -23,11 +23,11 @@ def _case(purpose: Purpose, split: Split = Split.DEV, case_id: str = "case-1") -
     return Case(
         input=CaseInput(
             case_id=case_id,
-            scenario=Scenario.BIOGRAPHY,
+            scenario=Scenario.PERSONAL,
             mode="named",
-            payload=BiographyInput(id=case_id, type="stance", prompt="Answer-free question"),
+            payload=QuestionInput(id=case_id, category="fact", prompt="Answer-free question"),
         ),
-        expected=BiographyExpected(gold="Human-approved answer"),
+        expected=QuestionExpected(answer="Human-approved answer"),
         split=split,
         purpose=purpose,
         group_id="source-1",
@@ -37,7 +37,7 @@ def _case(purpose: Purpose, split: Split = Split.DEV, case_id: str = "case-1") -
 
 def _report(purpose: Purpose, cases: tuple[Case, ...] = ()) -> Report:
     return Report(
-        scenario=cases[0].input.scenario if cases else Scenario.BIOGRAPHY,
+        scenario=cases[0].input.scenario if cases else Scenario.PERSONAL,
         purpose=purpose,
         systems=(),
         judges=(),

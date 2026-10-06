@@ -20,7 +20,7 @@ def test_report_redaction_preserves_json_numbers_and_redacts_secrets_of_any_leng
     settings.llm.api_key_env = "REPORT_REDACTION_TEST_KEY"
     monkeypatch.setenv(settings.llm.api_key_env, secret)
     report = Report(
-        scenario=Scenario.BIOGRAPHY,
+        scenario=Scenario.PERSONAL,
         purpose=Purpose.FINAL_EVAL,
         systems=(),
         judges=(),
@@ -58,6 +58,13 @@ def test_configuration_identity_is_safe_and_sensitive_to_answer_settings(monkeyp
     settings.llm.reasoning_effort = "low"
     assert configuration_fingerprint(settings, llm, embedder, panel) not in {initial, no_reasoning}
     settings.llm.reasoning_effort = None
+    assert configuration_fingerprint(settings, llm, embedder, panel) == initial
+    settings.llm.reasoning_effort_extract = "low"
+    extraction_low = configuration_fingerprint(settings, llm, embedder, panel)
+    assert extraction_low != initial
+    settings.llm.reasoning_effort_extract = "none"
+    assert configuration_fingerprint(settings, llm, embedder, panel) not in {initial, extraction_low}
+    settings.llm.reasoning_effort_extract = None
     assert configuration_fingerprint(settings, llm, embedder, panel) == initial
     settings.judges = [LLMSettings(model="judge")]
     judge_default = configuration_fingerprint(settings, llm, embedder, panel)

@@ -91,7 +91,7 @@ def test_inline_schema_keeps_properties_named_like_keywords() -> None:
 
 def test_fake_llm_validates_dicts_and_records_calls() -> None:
     fake = FakeLLM(lambda system, user, schema: VALID_RESULT)
-    out = fake.structured(system="系统", user="用户", schema=StructuredResult)
+    out = fake.structured(system="系统", user="用户", schema=StructuredResult, reasoning_effort="low")
     assert isinstance(out, StructuredResult)
     assert out.episodes[0].topic == "预算"
     assert fake.calls == [("StructuredResult", "系统", "用户")]
@@ -176,12 +176,20 @@ class _FakeAnthropic:
         self.beta = SimpleNamespace(messages=self.messages)
 
 
-def test_anthropic_llm_request_parameters() -> None:
+@pytest.mark.parametrize("reasoning_effort", [None, "low"])
+def test_anthropic_llm_request_parameters(reasoning_effort: str | None) -> None:
     parsed = StructuredResult.model_validate(VALID_RESULT)
     client = _FakeAnthropic(_Message(stop_reason="end_turn", parsed_output=parsed))
     llm = AnthropicLLM(model="claude-opus-5-5", client=client)
 
-    out = llm.structured(system="系统提示", user="会议内容", schema=StructuredResult, effort="high", max_tokens=321)
+    out = llm.structured(
+        system="系统提示",
+        user="会议内容",
+        schema=StructuredResult,
+        effort="high",
+        max_tokens=321,
+        reasoning_effort=reasoning_effort,
+    )
 
     assert out is parsed
     assert llm.name == "anthropic:claude-opus-5-5"
@@ -193,6 +201,7 @@ def test_anthropic_llm_request_parameters() -> None:
     assert "server-side-fallback-2026-07-01" in kwargs["betas"]
     assert kwargs["fallbacks"] == "default"
     assert kwargs["output_config"]["effort"] == "high"
+    assert "reasoning_effort" not in kwargs
     assert kwargs["output_config"]["format"] == {
         "type": "json_schema",
         "schema": anthropic.transform_schema(StructuredResult),
@@ -464,6 +473,17 @@ def test_openai_compat_reasoning_effort_on_every_request(reasoning_effort: Any, 
         assert "effort" not in call
 
 
+@pytest.mark.parametrize("override", ["none", "minimal", "low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("json_mode", ["json_schema", "json_object", "none"])
+def test_openai_compat_call_effort_overrides_default_without_mutating_it(override: str, json_mode: Any) -> None:
+    client = _FakeOpenAI([("invalid JSON", "stop"), (_FULL_JSON, "stop"), (_FULL_JSON, "stop")])
+    llm = OpenAICompatLLM(model="m", client=client, json_mode=json_mode, reasoning_effort="none")
+    assert llm.structured(system="s", user="u", schema=StructuredResult, reasoning_effort=override).episodes
+    assert llm.structured(system="s", user="u", schema=StructuredResult).episodes
+    assert [call["reasoning_effort"] for call in client.completions.calls] == [override, override, "none"]
+    assert llm.reasoning_effort == "none"
+
+
 def test_openai_compat_retries_once_after_invalid_output() -> None:
     client = _FakeOpenAI([("这不是 JSON", "stop"), (_FULL_JSON, "stop")])
     out = OpenAICompatLLM(model="m", client=client).structured(system="s", user="u", schema=StructuredResult)
@@ -621,10 +641,15 @@ def _opt(cmd: list[str], flag: str) -> str:
     return cmd[cmd.index(flag) + 1]
 
 
-def test_claude_cli_command_line_and_structured_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("reasoning_effort", [None, "low"])
+def test_claude_cli_command_line_and_structured_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, reasoning_effort: str | None
+) -> None:
     run = _FakeRun(stdout=json.dumps({"is_error": False, "structured_output": VALID_RESULT, "result": ""}))
     llm = _cli(monkeypatch, tmp_path, run)
-    out = llm.structured(system="系统提示", user="会议内容", schema=StructuredResult, effort="xhigh")
+    out = llm.structured(
+        system="系统提示", user="会议内容", schema=StructuredResult, effort="xhigh", reasoning_effort=reasoning_effort
+    )
 
     assert out == StructuredResult.model_validate(VALID_RESULT)
     assert llm.name == "claude_cli:claude-opus-5-5"
@@ -638,6 +663,7 @@ def test_claude_cli_command_line_and_structured_output(monkeypatch: pytest.Monke
     assert _opt(cmd, "--setting-sources") == ""
     assert _opt(cmd, "--model") == "claude-opus-5-5"
     assert _opt(cmd, "--effort") == "xhigh"
+    assert "--reasoning-effort" not in cmd
     assert _opt(cmd, "--system-prompt") == "系统提示"
     assert json.loads(_opt(cmd, "--json-schema")) == inline_schema(StructuredResult)
     assert "会议内容" not in cmd
@@ -812,6 +838,23 @@ def test_llm_settings_accepts_reasoning_effort(reasoning_effort: Any) -> None:
 def test_llm_settings_rejects_invalid_reasoning_effort(reasoning_effort: Any) -> None:
     with pytest.raises(ValidationError):
         LLMSettings(reasoning_effort=reasoning_effort)
+
+
+@pytest.mark.parametrize("default", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("override", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
+def test_llm_settings_effective_extraction_effort(default: Any, override: Any) -> None:
+    settings = LLMSettings(reasoning_effort=default, reasoning_effort_extract=override)
+    assert settings.reasoning_effort_extract == override
+    expected = override if override is not None else "low" if default == "none" else default
+    assert settings.effective_reasoning_effort_extract == expected
+    assert settings.reasoning_effort == default
+    assert list(LLMSettings.model_fields)[-1] == "reasoning_effort_extract"
+
+
+@pytest.mark.parametrize("override", ["max", "", "LOW", 0, False])
+def test_llm_settings_rejects_invalid_extraction_effort(override: Any) -> None:
+    with pytest.raises(ValidationError):
+        LLMSettings(reasoning_effort_extract=override)
 
 
 def test_make_llm_variants(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

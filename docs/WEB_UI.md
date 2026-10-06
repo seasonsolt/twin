@@ -120,7 +120,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 名字保存到 p_meta 的 identity:name，介绍保存到 identity:about；有效名字为用户保存值，否则为配置 target_name。用户保存的名字也参与说话人匹配，配置名字与别名仍有效。介绍设定或变化时，事务内替换标题为“自我介绍”的笔记，并触发自动处理；清空介绍删除旧笔记。单独改名字不重复添加笔记。
 
-聊天使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空需确认。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。界面不发送截止日期，API 仍兼容 as_of。没有档案时直接显示友好的弃权回复（200），不创建聊天任务；正常聊天任务每秒轮询，离页取消等待和请求，不取消服务端任务。
+聊天使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空需确认。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时直接显示友好的弃权回复（200），不创建聊天任务；正常聊天任务每秒轮询，离页取消等待和请求，不取消服务端任务。
 
 PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先展示开头提示，再逐句呈现原回答，弃权不讲述回答；引用按脚本顺序解析。Space 播放/暂停、左右键切句、Escape 关闭并返回入口；聚焦按钮时 Space 保持原生行为。音频有序分片由 ended 推进，暂停保留时间，口型按 currentTime × lipsync.fps 取值；暂停、等待、纯文字播放时闭嘴。形象只使用 API 的预置调色板、四级口型和常驻标签，无图片输入。关闭释放音频、计时器、rAF、请求及下载 URL；语音失败显示中文 detail 并退回文字，可重试合成。
 
@@ -132,7 +132,7 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 
 关于你页（About.tsx）用名字与介绍的内联表单调用 PUT identity，预览现有 3D/2D 形象并显示预置音色。"我了解到的你"按九个口语主题分组：经历与身份、看重什么、怎么做决定、怎么思考、擅长什么、说话方式、和人相处、最近在关注、生活与喜好。每条显示表述和“依据”折叠引用，用“对 / 改一下 / 不对”调用原 review API，状态显示待确认 / 已确认 / 已修改 / 已否定；失败回滚并保留修改草稿。隐藏内部编号、比例、等级与来源矩阵。“还想多了解”从 coverage suggestions 映射为主题建议，去重后最多五条，链接到记忆。不再保留 Profile、Identity 页面和 CoverageOverview/虚拟档案列表。
 
-问卷按 API section 分组，用 FlowStepper 导航到首个未答组；可跳过题清空答案，空答案不计已答。草稿 800ms 防抖、版本化串行 PUT；提交等待保存成功，需确认且说明替换、授权与测试题留出规则。离页完成待写草稿，小于 60KB 时尽力 keepalive，不另存个人答案。仅未保存且写入中的离开才警告。重测只恢复答案和提交状态，无评分、不构建。
+可选的“回答几个问题”有 20 题、九个日常主题，全部可以跳过，所有已答内容都成为记忆。按 API section 分组，用 FlowStepper 导航到首个未答组；跳过清空答案，空答案不计已答。草稿 800ms 防抖、版本化串行 PUT；保存回答等待草稿成功，确认说明记忆导入与替换。离页完成待写草稿，小于 60KB 时尽力 keepalive，不另存个人答案。仅未保存且写入中的离开才警告。没有轮次切换或重测入口。
 
 关于你独立读取 identity 与 media capabilities；预览失败不影响名字编辑。小的“外部服务”区域读取 status.egress，仅列实际配置且外部的服务，用“大模型 / 向量 / 朗读 / 语音识别 / 视频生成 / 回答检查”和主机描述，不显示提供方 ID；不展示技术分类表。3D 署名仍来自模型元数据；形象闭口、减少动态效果不眨眼。
 
@@ -155,10 +155,10 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数 |
 | `POST /api/persona/items/{id}/review` | confirmed/edited/rejected/unreviewed；edited 必须非空 |
 | `GET /api/persona/coverage?as_of=...` | 完成度、来源矩阵、等级标签、分类版本、建议 |
-| `POST /api/persona/chat` | messages（≤40 条、每条≤4000 字、最后非空 user）、as_of；有档案时 202 job_id，结果 ChatReply + cited；无档案时 200 直接返回友好弃权回复 |
-| `GET /api/persona/questionnaire?round=initial/retest` | 问题、答案、提交状态 |
+| `POST /api/persona/chat` | messages（≤40 条、每条≤4000 字、最后非空 user）；有档案时 202 job_id，结果 ChatReply + cited；无档案时 200 直接返回友好弃权回复 |
+| `GET /api/persona/questionnaire?round=initial` | 问题、答案、提交状态 |
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
-| `POST /api/persona/questionnaire/submit` | 初次导入并尝试构建；重测仅记录 |
+| `POST /api/persona/questionnaire/submit` | 导入全部回答并尝试构建；只支持 initial |
 | `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/egress；name 是有效名字；无授权账本 |
 | `PUT /api/identity` | X-Twin: 1；`{name, about}`；去除首尾空白后名字 1–20 字，介绍 ≤200 字；返回完整 identity；介绍变化会替换“自我介绍”笔记并自动处理 |
 | `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null |

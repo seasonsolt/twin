@@ -1,7 +1,6 @@
 """Persistence of the general persona core: sources and their expressions, extraction candidates and the profile.
 
-The tables live in the same SQLite file as the meeting scenario (``settings.db_path``), under a ``p_`` prefix, through
-a connection of their own; nothing here reads or writes the meeting tables.
+The tables live in ``settings.db_path`` under a ``p_`` prefix.
 """
 
 from __future__ import annotations
@@ -129,7 +128,7 @@ class PersonaStore:
                         e.idx,
                         e.date.isoformat() if e.date else None,
                         int(e.is_target),
-                        int(e.held_out),
+                        0,
                         e.model_dump_json(),
                     )
                     for e in parsed.expressions
@@ -140,10 +139,10 @@ class PersonaStore:
         return existed is None
 
     def list_sources(self, kind: SourceKind | None = None) -> list[Source]:
-        sql = "SELECT json FROM p_sources" + (" WHERE kind = ?" if kind else "") + " ORDER BY first_date, source_id"
         with self._lock:
-            rows = self._db.execute(sql, (kind.value,) if kind else ()).fetchall()
-        return [Source.model_validate_json(r[0]) for r in rows]
+            rows = self._db.execute("SELECT json FROM p_sources ORDER BY first_date, source_id").fetchall()
+        sources = [Source.model_validate_json(r[0]) for r in rows]
+        return [source for source in sources if kind is None or source.kind is kind]
 
     def get_source(self, source_id: str) -> Source | None:
         with self._lock:
@@ -172,10 +171,9 @@ class PersonaStore:
         *,
         target_only: bool = False,
         until: dt.date | None = None,
-        include_held_out: bool = False,
     ) -> list[Expression]:
         """Expressions in source order. ``until`` keeps the dated ones up to that day (undated ones are kept only
-        without ``until``); held-out questionnaire answers are left out unless asked for."""
+        without ``until``)."""
         clauses: list[str] = []
         params: list[object] = []
         if source_id is not None:
@@ -186,8 +184,6 @@ class PersonaStore:
         if until is not None:
             clauses.append("date IS NOT NULL AND date <= ?")
             params.append(until.isoformat())
-        if not include_held_out:
-            clauses.append("held_out = 0")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._lock:
             rows = self._db.execute(f"SELECT json FROM p_expressions{where} ORDER BY source_id, idx", params).fetchall()

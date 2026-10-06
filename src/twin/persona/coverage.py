@@ -38,7 +38,7 @@ LIKELY_SOURCES: dict[str, tuple[SourceKind, ...]] = {
     "D9": (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW),
 }
 
-LEVEL_LABELS = {0: "未覆盖", 1: "已覆盖", 2: "充分", 3: "已验证"}
+LEVEL_LABELS = {0: "还不了解", 1: "已了解一些", 2: "了解较多", 3: "回答经过检查"}
 
 
 class FacetCoverage(BaseModel):
@@ -155,7 +155,7 @@ def _share(values: Sequence[bool]) -> float | None:
 def _suggest(f: FacetCoverage) -> Suggestion | None:
     likely = list(LIKELY_SOURCES[f.dimension_id])
     if f.conflicts:
-        reason = f"有 {f.conflicts} 处自述与行为矛盾，需要访谈澄清"
+        reason = f"有 {f.conflicts} 处内容不一致，可以再聊聊"
         likely = [SourceKind.INTERVIEW]
     elif f.abstained:
         reason = f"聊天里被问到 {f.asked} 次，答不上 {f.abstained} 次"
@@ -164,17 +164,16 @@ def _suggest(f: FacetCoverage) -> Suggestion | None:
     elif f.level == 1:
         missing: list[str] = []
         if f.occasions < OCCASION_TARGET:
-            missing.append(f"场合不足（{f.occasions}/{OCCASION_TARGET}）")
+            missing.append(f"例子还不多（{f.occasions}/{OCCASION_TARGET}）")
         if not f.behavior:
-            missing.append("缺少实际行为证据")
+            missing.append("可以补一些实际做过的事")
         if len(f.source_kinds) < 2:
             missing.append("只有一类来源")
-        reason = "；".join(missing) or "证据不够充分"
+        reason = "；".join(missing) or "还可以多了解一些"
         if not f.behavior:
             likely = [k for k in likely if k not in (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW)] or likely
     elif f.level == 2 and f.accuracy is None:
-        reason = f"证据充分，测试题不足（{f.probes}/{MIN_PROBES}），还未验证"
-        likely = []
+        return None
     else:
         return None
     return Suggestion(facet_id=f.facet_id, name=f.name, reason=reason, sources=likely)
@@ -233,11 +232,11 @@ def _pct(v: float | None) -> str:
 def report_markdown(report: CoverageReport, max_suggestions: int = 12) -> str:
     kinds = list(SourceKind)
     lines = [
-        f"# 人格复刻完成度（维度体系 {report.taxonomy}，截至 {report.as_of.isoformat()}）",
+        f"# 分身了解到的你（截至 {report.as_of.isoformat()}）",
         "",
-        "## 维度汇总",
+        "## 各个方面",
         "",
-        "| 维度 | 细项（已授权） | 覆盖率 | 充分率 | 验证率 | 矛盾 |",
+        "| 方面 | 愿意分享的内容 | 已了解一些 | 了解较多 | 回答经过检查 | 内容不一致 |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for d in report.dimensions:
@@ -247,9 +246,11 @@ def report_markdown(report: CoverageReport, max_suggestions: int = 12) -> str:
         )
     lines += [
         "",
-        "## 细项 × 来源（证据场合数）",
+        "## 了解到什么、从哪里了解的",
         "",
-        "| 细项 | 等级 | 充分度 | 已确认 | 被问 / 答不上 | " + " | ".join(SOURCE_KIND_LABELS[k] for k in kinds) + " |",
+        "| 内容 | 了解情况 | 了解多少 | 本人确认 | 被问 / 答不上 | "
+        + " | ".join(SOURCE_KIND_LABELS[k] for k in kinds)
+        + " |",
         "| --- | --- | ---: | ---: | ---: | " + " | ".join("---:" for _ in kinds) + " |",
     ]
     for f in report.facets:
@@ -262,12 +263,12 @@ def report_markdown(report: CoverageReport, max_suggestions: int = 12) -> str:
             + " | ".join(cells)
             + " |"
         )
-    lines += ["", "## 下一步采集建议", ""]
+    lines += ["", "## 可以再分享什么", ""]
     if not report.suggestions:
-        lines.append("所有已授权细项都已验证。")
+        lines.append("目前没有需要补充的内容。")
     for s in report.suggestions[:max_suggestions]:
-        where = "、".join(SOURCE_KIND_LABELS[k] for k in s.sources) or "补测试题"
+        where = "、".join(SOURCE_KIND_LABELS[k] for k in s.sources) or "再聊聊"
         lines.append(f"- {s.facet_id} {s.name}：{s.reason}；建议来源：{where}")
     if len(report.suggestions) > max_suggestions:
-        lines.append(f"- 另有 {len(report.suggestions) - max_suggestions} 个细项待补")
+        lines.append(f"- 另有 {len(report.suggestions) - max_suggestions} 项内容可以补充")
     return "\n".join(lines) + "\n"

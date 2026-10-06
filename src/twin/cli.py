@@ -57,6 +57,7 @@ provider = "openai_compat"
 # model = "your-model"
 # base_url = "http://127.0.0.1:8000/v1"
 api_key_env = "TWIN_LLM_KEY"
+# reasoning_effort_extract = "low"  # 提取/合并的思考档位；不写则沿用 reasoning_effort，但 none 自动改为 low
 
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。
@@ -208,7 +209,7 @@ def _optional_date(value: str | None, option: str) -> dt.date | None:
 
 
 def _write(path: Path, text: str) -> None:
-    """Write an owner-only (0600) file: outputs quote meeting transcripts and the cognitive model."""
+    """Write an owner-only (0600) file: outputs quote personal memories and profile items."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open_private(path) as f:
         f.write(text)
@@ -526,7 +527,7 @@ def persona_coverage(
     as_of: Annotated[str | None, typer.Option("--as-of", help="按这一天计算（默认今天）")] = None,
     out: Annotated[Path | None, typer.Option("--out", help="把报告写入 Markdown 文件")] = None,
 ) -> None:
-    """人格复刻完成度：维度汇总、细项 × 来源矩阵、下一步采集建议。"""
+    """看看分身了解到什么，还有哪些内容可以补充。"""
     settings = _settings(ctx)
     with _persona_store(settings) as store:
         report = coverage_report(
@@ -545,11 +546,9 @@ def persona_coverage(
 def persona_chat(
     ctx: typer.Context,
     message: Annotated[str | None, typer.Argument(help="只问一句；不给则进入多轮对话，空行退出")] = None,
-    as_of: Annotated[str | None, typer.Option("--as-of", help="只用这一天及以前的资料")] = None,
 ) -> None:
     """和数字分身聊天。"""
     settings = _settings(ctx)
-    when = _optional_date(as_of, "--as-of")
     with _persona_store(settings) as store:
         if profile_stale(store):
             _progress(STALE_PROFILE_NOTICE)
@@ -561,7 +560,7 @@ def persona_chat(
                 return
             history.append(ChatTurn(role="user", content=text))
             try:
-                answer = twin.reply(history, as_of=when)
+                answer = twin.reply(history)
             except (LLMError, EmbedError) as e:
                 raise _fail(str(e)) from e
             history.append(ChatTurn(role="twin", content=answer.reply))
@@ -666,7 +665,7 @@ def media_script_command(
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
     out: Annotated[Path, typer.Option("--out", help="脚本 JSON 输出（仅本人可读写）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
-    persona_name: Annotated[str | None, typer.Option("--persona-name", help="默认配置中的目标人物")] = None,
+    persona_name: Annotated[str | None, typer.Option("--persona-name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
     """Write a labelled presentation script without calling a model."""
     with _errors():
@@ -681,7 +680,7 @@ def media_export_command(
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
     out: Annotated[Path, typer.Option("--out", help="独立 HTML 输出（仅本人可读写）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
-    persona_name: Annotated[str | None, typer.Option("--persona-name", help="默认配置中的目标人物")] = None,
+    persona_name: Annotated[str | None, typer.Option("--persona-name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
     """Export standalone HTML with visible and implicit AI labels and no JavaScript."""
     from .media.render import export_html
@@ -697,7 +696,7 @@ def media_speak_command(
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
     out: Annotated[Path, typer.Option("--out", help="语音与清单输出目录（仅本人可访问）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
-    name: Annotated[str | None, typer.Option("--name", help="默认配置中的目标人物")] = None,
+    name: Annotated[str | None, typer.Option("--name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
     """Render labelled speech files and a manifest from a validated saved answer."""
     from .config import make_synthesizer
@@ -733,7 +732,7 @@ def media_clip_command(
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
     out: Annotated[Path, typer.Option("--out", help="带标识的 MP4 输出（仅本人可读写）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
-    name: Annotated[str | None, typer.Option("--name", help="默认配置中的目标人物")] = None,
+    name: Annotated[str | None, typer.Option("--name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
     """Export an existing reply with a stylized avatar, subtitles and permanent labels."""
     from .config import make_synthesizer
@@ -766,7 +765,7 @@ def media_video_command(
     source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
     out: Annotated[Path, typer.Option("--out", help="带标识的 MP4 输出（仅本人可读写）")],
     kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
-    name: Annotated[str | None, typer.Option("--name", help="默认配置中的目标人物")] = None,
+    name: Annotated[str | None, typer.Option("--name", help="分身的名字（默认使用配置）")] = None,
 ) -> None:
     """Generate a labelled video through a configured, generic remote job."""
     from .config import make_video_synthesizer

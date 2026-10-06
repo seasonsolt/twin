@@ -178,7 +178,6 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
   )![1] as RequestInit;
   expect(JSON.parse(init.body as string)).toEqual({
     messages: [{ role: 'user', content: '你怎么看？' }],
-    as_of: null,
   });
   expect(new Headers(init.headers).get('X-Twin')).toBe('1');
   jobStatus = 'running';

@@ -504,6 +504,8 @@ def _run_updates(
                     source_id = parsed.source.source_id
                 built = build_profile(chat.store, chat.llm, settings)
                 if built.failures:
+                    built = build_profile(chat.store, chat.llm, settings)
+                if built.failures:
                     raise RuntimeError("增量构建失败（详情已隐藏）")
                 index_persona(chat.store, chat.embedder, settings)
                 case_id = f"{case.input.case_id}@{step}"

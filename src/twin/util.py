@@ -148,7 +148,7 @@ def private_directory(path: Path) -> None:
 
 
 def open_private(path: Path, encoding: str = "utf-8", newline: str | None = None) -> TextIO:
-    """Open ``path`` for writing as an owner-only (0600) file. Outputs quote meeting transcripts, so they must not
+    """Open ``path`` for writing as an owner-only (0600) file. Outputs quote personal memories, so they must not
     be readable by other local users whatever the umask; an existing file is truncated and tightened too."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -160,7 +160,7 @@ def open_private(path: Path, encoding: str = "utf-8", newline: str | None = None
 
 
 def prepare_private_file(path: Path) -> None:
-    """Meeting transcripts live here: create the database (and a new parent directory) owner-only, and tighten an
+    """Personal memories live here: create the database (and a new parent directory) owner-only, and tighten an
     existing database and its WAL files. SQLite gives -wal/-shm the database file's mode when it creates them, so a
     side file another connection deletes between the check and the chmod comes back owner-only and is skipped."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

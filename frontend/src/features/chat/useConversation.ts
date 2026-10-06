@@ -87,7 +87,6 @@ export function useConversation(active: boolean) {
           method: 'POST',
           json: {
             messages: pending.map(({ role, content }) => ({ role, content })),
-            as_of: null,
           },
           signal: controller.signal,
         },

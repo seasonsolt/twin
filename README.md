@@ -8,9 +8,9 @@ English | [简体中文](#简体中文)
 
 > **Status: early.** Interfaces will still change.
 
-twin builds a persona from someone's own material — questionnaires, chats, documents, interviews, transcripts — where every trait carries a verbatim, dated quote, and serves it as conversation and speech: **Identity → Memory upload → Service**. Answers cite their evidence or abstain; every output is labelled as AI-generated and does not represent the person. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Chinese).
+twin builds a persona from freely added memories — notes, chats, documents, optional questions and interviews — where every trait carries a verbatim, dated quote, and serves it as conversation and speech: **Identity → Memory upload → Service**. Answers cite their evidence or abstain; every output is labelled as AI-generated and does not represent the person. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Chinese).
 
-**Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, cannot answer "as of" a date, and rely on LoRA training that is slow to update. twin answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (Second Me after its base upgrade: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 1.7B–4B model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
+**Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, and rely on LoRA training that is slow to update. twin answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (Second Me after its base upgrade: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 1.7B–4B model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
 
 ---
 
@@ -23,7 +23,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 ```
 
 - **有据可查。** 档案里每一条都带逐字核对过的原话和日期；回答引用不到依据时降低置信度或弃权，不硬编。
-- **可以"穿越"。** `--as-of` 只用某一天及以前的资料作答。
+- **随时添加记忆。** 写一段、上传文件或文件夹，自动整理；问卷可以不填。
 - **明确标识。** 所有输出都是 AI 模拟，不代表本人意见；语音和导出文件带显式与隐式的 AI 合成标识。
 - **隐私优先。** 他人姓名在进入档案时统一化名；对他人的评价不进档案；本人资料默认不发往境外服务。
 
@@ -46,7 +46,6 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | --- | --- |
 | 编造 | 回答只能依据检索到的档案条目和本人原话；依据不足时降低置信度或直接弃权 |
 | 没有证据 | 每条档案条目都带逐字核对过的原话、日期和来源；引用不到的条目会被剔除 |
-| 不能回到过去 | `--as-of` 只用某一天及以前的资料作答 |
 | 更新要重新训练 | 不做 LoRA；新资料导入后增量抽取、重建索引即可生效。微调只能作为默认关闭的风格插件，在评测上显著胜出才允许打开 |
 | 没有可信评测 | 内置评测框架：题库与资料留在仓库外，评委团、重复作答、按来源分组的置信区间、每次运行的来源记录 |
 | 合成内容不标识 | 语音、导出文件都带显式和隐式的 AI 合成标识 |
@@ -65,22 +64,34 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 用 twin 自己的评测框架（3 次作答取平均、按来源文档 bootstrap）结果一致：事实 99.0%（95% 区间 94.7%–100%），不编造 96.7%（90%–100%），风格 4.23（4.0–4.5）。
 
+**当前版本（2026-10-06，twin 自己的评测框架）。** 作答用不开思考的快速模型（与线上部署一致），评委固定为 `gpt-6.1-sol`，每题作答 3 次，括号内为 95% 区间：
+
+| 类别 | twin |
+| --- | --- |
+| 事实准确率（32 题） | 97.4%（93.2%–100%） |
+| 资料里没有的问题不编造（10 题） | 100% |
+| 风格像本人（10 题，1–5） | 4.2（4.0–4.4） |
+| 通用问题质量（5 题，1–5） | 4.5（4.1–4.8） |
+| 记忆更新（2 题 × 增改删，6 分） | 6 |
+| 回答里加引号却在资料里找不到的"原话" | 0（运行时自动去掉了 26 处这样的引号） |
+
+通用问题从 2.6 提高到 4.5：与本人无关的问题，分身先说明"这不是本人的观点"，再给出一般性的回答，并在界面、语音和视频里标为"通用回答"。引号一项靠的是运行时检查：引号里的文字如果不在分身看到的资料里逐字出现，就去掉引号、保留文字，不把转述当成本人原话。
+
 读这组数字要注意：
 
 - **作答模型不同。** twin 用前沿大模型作答，Second Me 用本地微调的 1.7B–4B 小模型。差距有一部分来自模型而不是方法；用同一个作答模型的对比还没有做。
-- **评委与作答同源。** twin 的回答和评分都来自 `gpt-6.1-sol`，可能偏向自己；第二个不同家族的评委还没有加入。
-- **通用问题更弱，这是取舍。** twin 只依据本人资料作答，遇到与本人无关的通用问题会说资料里没有，而不是像通用助手那样回答。
+- **评委与作答同源。** 评委是 `gpt-6.1-sol`，可能偏向同家族的回答；第二个不同家族的评委还没有加入。
 - **题少。** 不编造、风格各 10 题，通用只有 5 题，区间都很宽。
 
 **早期原型的合成数据对比**（单次运行，题库按分身的验收点编写，有主场优势，只看方向）：
 
 - 不编造：twin 的"不知道就说不知道"平衡准确率 100%，Second Me 方法 75%，Distilly 方法 58%。
 - 口吻：**twin 明显不如 Distilly**，风格盲评中 Distilly 12 次胜 11 次。
-- 事实回忆：全部笔记都能放进上下文时，Second Me 方法在决策追溯、台账上更好；资料规模变大后这个优势难以保持。
+- 事实回忆：全部笔记都能放进上下文时，Second Me 方法更容易找回笔记里的具体细节；资料规模变大后这个优势难以保持。
 
 记忆更新一项是 twin 自己的评测框架在临时数据库副本上跑的：每步只导入或删除资料、增量构建，不重训；每步作答 3 次全对。只有 2 道题，样本很小。
 
-**还没有被评测证明的。** 按日期作答、回答中转述原话的逐字核对率、成本与延迟。它们在路线图的第一步，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+**还没有被评测证明的。** 成本与延迟、用同一个作答模型和 Second Me 对比。它们在路线图的第一步，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 安装
 
@@ -113,10 +124,10 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 twin persona import 问卷.md 聊天记录.csv 文章/*.md    # 自动识别类型，不用选择
 twin persona import 简历.pdf 想法.docx 网页.html
 twin persona note "我喜欢先核对事实，再做决定。"        # 写一段笔记
-twin persona import --kind meeting 会议转写.txt      # 也支持 interview、biography
+twin persona import --kind interview 访谈.txt        # 可选：明确指定类型
 twin persona sources                                # 看已导入的资料
 twin persona build                                  # 抽取并合并人格档案，只处理新增或变化的部分
-twin persona coverage                               # 各维度的完成度，以及下一步该补什么资料
+twin persona coverage                               # 看了解到什么，还可以分享什么
 ```
 
 支持 TXT、Markdown、PDF（文字层）、Word（.docx）、HTML、CSV、JSON、SRT、VTT，自动识别文字编码（含 GBK）；每个文件最多 50 MB，扫描 PDF 暂不支持。日期默认取文件名，聊天缺失日期时取第一条日期，再回退到添加当天。需要强制类型时仍可用 `--kind`。
@@ -127,13 +138,13 @@ twin persona coverage                               # 各维度的完成度，�
 
 ```bash
 twin persona chat "你怎么看远程办公？"
-twin persona chat --as-of 2025-12-31 "那时候你怎么看？"
 twin ui                                             # 本机网页：聊天、记忆、关于你；支持回放与朗读
 twin api                                            # 令牌保护的本机 HTTP API（先设置 TWIN_API_TOKEN）
 twin mcp                                            # stdio MCP，供其他工具和 Agent 使用
 ```
 
-API/MCP 配置、接口与隐私规则见 [docs/SERVICE.md](docs/SERVICE.md)。
+API/MCP 保留高级（advanced）可选参数 `as_of`，评测也保留日期筛选；CLI 和网页聊天不提供它。
+配置、接口与隐私规则见 [docs/SERVICE.md](docs/SERVICE.md)。
 
 **语音（可选）**
 
@@ -151,7 +162,7 @@ twin media check --out 评测目录/                      # 合成句集回听�
 ## 文档
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：产品形态、分层、层间规则、治理、路线
-- [docs/PERSONA_DIMENSIONS.md](docs/PERSONA_DIMENSIONS.md)：人格维度与完成度
+- [docs/PERSONA_DIMENSIONS.md](docs/PERSONA_DIMENSIONS.md)：分身可以了解你的哪些方面
 - [docs/MEDIA.md](docs/MEDIA.md)：语音与展示通道
 - [docs/CONTRACTS.md](docs/CONTRACTS.md)、[docs/WEB_UI.md](docs/WEB_UI.md)：模块与网页接口契约
 

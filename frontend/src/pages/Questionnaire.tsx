@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { FlowStepper } from '../components/effects/FlowStepper';
 import {
@@ -23,16 +23,14 @@ import { useStatus } from '../stores/status';
 
 export function Questionnaire() {
   const active = useLocation().pathname === '/questionnaire';
-  const [query] = useSearchParams();
-  const round = query.get('round') === 'retest' ? 'retest' : 'initial';
-  const draft = useQuestionnaire(round, active);
+  const draft = useQuestionnaire('initial', active);
   const confirm = useConfirm();
   const navigate = useNavigate();
   const [summary, setSummary] = useState<BuildResult | null>(null);
   const job = useJob<BuildResult>({
     kind: 'persona_build',
     storageKey: 'twin.next.job.personaBuild',
-    active: active && round === 'initial',
+    active,
     onDone: (done, { restored }) => {
       setSummary(done.result ?? {});
       void useStatus.getState().refresh();
@@ -86,11 +84,11 @@ export function Questionnaire() {
     error: '保存失败',
   }[draft.saveState];
   const submit = async () => {
-    const replaces = round === 'initial' && draft.data?.status === 'submitted';
+    const replaces = draft.data?.status === 'submitted';
     if (
       !(await confirm({
-        title: round === 'retest' ? '提交重测？' : '提交建档问卷？',
-        body: `已答 ${answered} / ${questions.length} 题。${round === 'retest' ? '重测仅记录答案，不导入人格档案。' : '答案会导入为问卷资料；需要重新构建人格档案，后端会尝试自动开始。测试题不进档案，可跳过题留空即不授权采集相关内容。'}${replaces ? '会替换上次提交的答案，并重新构建档案。' : ''}`,
+        title: '提交回答？',
+        body: `已答 ${answered} / ${questions.length} 题。答案会成为分身的记忆，保存后会尝试自动整理。任何题都可以跳过。${replaces ? '会替换上次提交的答案，并重新整理。' : ''}`,
         confirmLabel: '确认提交',
       }))
     )
@@ -107,28 +105,10 @@ export function Questionnaire() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">
-          {round === 'retest' ? '问卷重测' : '建档问卷'}
-        </h1>
+        <h1 className="text-2xl font-semibold">回答几个问题</h1>
         <p className="mt-2 text-sm text-secondary">
-          {round === 'retest'
-            ? `再答一次 ${questions.length} 道测试题，不要翻看上次的答案。重测仅记录答案，不进入建档证据。${draft.data?.retest_from ? `建议 ${draft.data.retest_from} 之后再做。` : ''}`
-            : '按主题分组，回答自动保存成草稿，可以分几次填完。情境题请写你会说出口的原话。测试题不进档案；可跳过题不填即不授权。'}
+          想答哪题就答哪题，也可以直接添加记忆。回答自动保存，可以分几次填完。
         </p>
-        <nav aria-label="问卷轮次" className="mt-3 flex gap-4 text-accent">
-          <a
-            href="#/questionnaire"
-            aria-current={round === 'initial' ? 'page' : undefined}
-          >
-            第一轮
-          </a>
-          <a
-            href="#/questionnaire?round=retest"
-            aria-current={round === 'retest' ? 'page' : undefined}
-          >
-            重测
-          </a>
-        </nav>
       </header>
       {draft.loading && <Skeleton className="h-40" />}
       {draft.error && (
@@ -147,17 +127,6 @@ export function Questionnaire() {
             <p role="status" className="text-info">
               已于 {draft.data.submitted_at?.replace('T', ' ').slice(0, 16)}{' '}
               提交。可以修改后重新提交。
-              {round === 'initial' && (
-                <>
-                  {' '}
-                  <a
-                    href="#/questionnaire?round=retest"
-                    className="text-accent"
-                  >
-                    三周后去做重测
-                  </a>
-                </>
-              )}
             </p>
           )}
           <Meter
@@ -190,7 +159,7 @@ export function Questionnaire() {
             </p>
           )}
           <FlowStepper
-            key={`${round}-${draft.data.round}`}
+            key={draft.data.round}
             initialStep={initialStep}
             completeOnLast={false}
             steps={sections.map((section) => ({
@@ -216,11 +185,6 @@ export function Questionnaire() {
                           </h3>
                           <div className="flex flex-wrap gap-2">
                             <Badge>{q.kind}</Badge>
-                            {q.test && (
-                              <Badge tone="warning">
-                                测试题：不进档案，只用来检验分身
-                              </Badge>
-                            )}
                             {q.optional && (
                               <Badge>可跳过：不填即不授权采集这一项</Badge>
                             )}
@@ -274,7 +238,7 @@ export function Questionnaire() {
           />
           <Card>
             <Button loading={draft.submitting} onClick={() => void submit()}>
-              {round === 'retest' ? '提交重测' : '交卷并构建档案'}
+              保存回答
             </Button>
             {draft.result && (
               <div role="status" className="mt-4 space-y-2 text-success">
@@ -287,30 +251,28 @@ export function Questionnaire() {
           </Card>
         </>
       )}
-      {round === 'initial' && (
-        <>
-          <JobProgress
-            state={job}
-            onRetry={() => void job.start('/api/persona/build')}
-          />
-          {summary && (
-            <Card>
-              <p className="mb-3 text-success">
-                构建完成。{' '}
-                <a href="#/about" className="text-accent">
-                  看看我了解到的你
-                </a>
-                ，或者{' '}
-                <a href="#/chat" className="text-accent">
-                  去和分身聊天
-                </a>
-                。
-              </p>
-              <BuildSummary result={summary} />
-            </Card>
-          )}
-        </>
-      )}
+      <>
+        <JobProgress
+          state={job}
+          onRetry={() => void job.start('/api/persona/build')}
+        />
+        {summary && (
+          <Card>
+            <p className="mb-3 text-success">
+              构建完成。{' '}
+              <a href="#/about" className="text-accent">
+                看看我了解到的你
+              </a>
+              ，或者{' '}
+              <a href="#/chat" className="text-accent">
+                去和分身聊天
+              </a>
+              。
+            </p>
+            <BuildSummary result={summary} />
+          </Card>
+        )}
+      </>
     </div>
   );
 }

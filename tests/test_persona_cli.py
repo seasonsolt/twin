@@ -70,7 +70,7 @@ def test_import_build_coverage_and_chat_end_to_end(config: Path, tmp_path: Path)
     cov = run(config, "coverage", "--as-of", "2026-10-03", "--out", "cov.md").stdout
     assert "已写入 cov.md" in cov
     md = (tmp_path / "cov.md").read_text(encoding="utf-8")
-    assert "| 2.1 核心价值排序 | 充分 | 0.83 |  |  | 1 |  | 1 |  |" in md  # questionnaire + chat, two occasions
+    assert "| 2.1 核心价值排序 | 了解较多 | 0.83 |  |  | 1 |  | 1 |  |" in md  # questionnaire + chat, two occasions
     assert "| 9.1 兴趣爱好 | 未授权 |" in md
     reply = run(config, "chat", "你看重什么？").stdout
     assert (
@@ -83,3 +83,18 @@ def test_import_reports_unparseable_files(config: Path, tmp_path: Path) -> None:
     result = run(config, "import", "空.md", "--kind", "questionnaire", code=1)
     assert "no questionnaire question" in result.stderr
     assert "找不到文件" in run(config, "import", "无.txt", "--kind", "chat", code=1).stderr
+
+
+def test_chat_help_has_no_time_travel_and_import_rejects_removed_kinds(config: Path) -> None:
+    assert "--as-of" not in run(config, "chat", "--help").stdout
+    run(config, "chat", "你好", "--as-of", "2026-01-01", code=2)
+    for kind in ("meeting", "biography"):
+        run(config, "import", "群聊.txt", "--kind", kind, code=2)
+    runner = CliRunner()
+    paths = [[], ["persona"], ["media"], ["identity"], ["api"]]
+    paths += [["persona", command] for command in ("import", "chat", "coverage", "build", "sources")]
+    paths += [["media", command] for command in ("script", "export", "speak", "clip", "video")]
+    for path in paths:
+        result = runner.invoke(cli.app, [*path, "--help"])
+        assert result.exit_code == 0, (path, result.stderr)
+        assert not any(word in result.stdout for word in ("目标人物", "推演", "会议转写", "传记"))

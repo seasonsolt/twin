@@ -30,7 +30,7 @@ def test_init_writes_template_identical_to_example_with_code_defaults(tmp_path: 
         == cli.CONFIG_TEMPLATE
     )
     assert load_settings(written) == Settings(db_path=tmp_path / "data" / "twin.db")
-    for marker in ("api_key_env", "TWIN_LLM_KEY", "openai_compat", "hashing"):
+    for marker in ("api_key_env", "TWIN_LLM_KEY", "openai_compat", "hashing", '# reasoning_effort_extract = "low"'):
         assert marker in cli.CONFIG_TEMPLATE
 
 

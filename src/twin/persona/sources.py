@@ -1,26 +1,20 @@
 """Sources of what a person said or wrote, normalised into ``Expression`` rows.
 
 Every source becomes a list of expressions: who said it, when, where (channel), what it answered (context) and the
-words. Each source kind is either *behavior* (what the person actually did: chats, documents, meetings) or *self
+words. Each source kind is either *behavior* (what the person actually did: chats, documents) or *self
 report* (what the person says about themself: questionnaires, interviews); completeness counts the two apart.
 
 Parsers here are pure: text in, ``ParsedSource`` out. Formats:
 
 - questionnaire: the 建档问卷 exported as Markdown or plain text. A question line starts with its number
-  (``**13.【测试题】…**　*情境 · 3.4 3.6*``), the answer follows ``回答：``. 【测试题】 answers are held out
-  (test probes, never profile evidence); an empty answer to a 【可跳过】 question means the person did not consent
+  (``**13.【可跳过】…**　*情境 · 3.4 3.6*``), the answer follows ``回答：``.
+  An empty answer to a 【可跳过】 question means the person did not consent
   to those facets.
 - chat: plain text with one message per ``<date time> <speaker>：<text>`` line (also ``[date time] speaker: text``),
   or WeChat-style blocks (a ``<speaker> <date time>`` header line, then the message lines); CSV or JSON with
   time / sender / content columns. Lines without a header continue the previous message.
 - interview: ``<speaker>：<text>`` lines (no times); the date comes from the file name or the caller.
 - document: Markdown or plain text written by the person; one expression per paragraph.
-- meeting: an already normalised ``Meeting``; one expression per utterance, with an exact inverse. No text parsing
-  or speaker pseudonymisation is done by the converter.
-- biography: Markdown or plain text written by someone else about the person (a biography, chronicle, obituary,
-  profile); one *narrated* expression per paragraph. The narration is evidence of what the person did, not their
-  words; extraction marks the spans that quote them. A Markdown heading carrying a date (or only a year: taken as
-  1 July) dates the paragraphs under it.
 """
 
 from __future__ import annotations
@@ -40,8 +34,6 @@ from .dimensions import FACET_BY_ID
 from .schema import Expression, ParsedSource, Source, SourceKind
 from .store import PersonaStore, stored_identity
 from .text import MAX_FILE_BYTES, extract_text
-from .transcript_schema import Meeting, Utterance
-from .transcripts import parse_transcript, parse_transcript_text
 
 CONTEXT_MESSAGES = 3
 CONTEXT_CHARS = 400
@@ -104,7 +96,7 @@ def expression_view(
     """The L2/L3 view, never written back to L1.
 
     Known names are non-target speakers in the raw corpus (not guessed from prose); the same name is replaced in
-    every source kind, including documents and meetings. Legacy sources bypass replacement entirely: their lost
+    every source kind, including documents. Legacy sources bypass replacement entirely: their lost
     names cannot be recovered, and hashing their codes again would change existing profiles. Target names/aliases
     and existing codes are protected even when they contain another speaker's name.
     """
@@ -222,68 +214,6 @@ def _source(
     )
 
 
-# ---------------------------------------------------------------- meeting
-
-
-def meeting_to_source(meeting: Meeting, settings: Settings) -> ParsedSource:
-    """Convert without re-normalising speakers, trimming text or dropping utterances."""
-    settings = _with_identity_alias(settings)
-    source_id = source_id_for(SourceKind.MEETING, meeting.source, meeting.model_dump_json())
-    expressions: list[Expression] = []
-    recent: list[str] = []
-    for i, utterance in enumerate(meeting.utterances):
-        target = settings.is_target(utterance.speaker)
-        expressions.append(
-            Expression(
-                expression_id=f"{source_id}#{i:05d}",
-                source_id=source_id,
-                idx=i,
-                date=meeting.date,
-                speaker=utterance.speaker,
-                is_target=target,
-                text=utterance.text,
-                context=_message_context(recent, utterance.speaker, utterance.text.strip(), target),
-                channel=meeting.title or meeting.meeting_id,
-                utterance_idx=utterance.idx,
-                start=utterance.start,
-                end=utterance.end,
-            )
-        )
-    source = _source(SourceKind.MEETING, meeting.title, meeting.source, source_id, expressions)
-    source.meeting_id = meeting.meeting_id
-    source.first_date = source.last_date = meeting.date
-    return ParsedSource(source, expressions)
-
-
-def source_to_meeting(parsed: ParsedSource) -> Meeting:
-    """Restore a source produced by ``meeting_to_source`` in its stored expression order."""
-    source = parsed.source
-    if source.kind is not SourceKind.MEETING:
-        raise ValueError("source_to_meeting requires a meeting source")
-    if source.meeting_id is None or source.first_date is None:
-        raise ValueError("meeting source is missing meeting_id or date")
-    utterances: list[Utterance] = []
-    for expression in parsed.expressions:
-        if expression.utterance_idx is None:
-            raise ValueError(f"{expression.expression_id}: missing utterance_idx")
-        utterances.append(
-            Utterance(
-                idx=expression.utterance_idx,
-                speaker=expression.speaker,
-                text=expression.text,
-                start=expression.start,
-                end=expression.end,
-            )
-        )
-    return Meeting(
-        meeting_id=source.meeting_id,
-        date=source.first_date,
-        title=source.title,
-        source=source.origin,
-        utterances=utterances,
-    )
-
-
 # ---------------------------------------------------------------- chat
 
 _SEP = r"\s*[：:]\s*"
@@ -381,9 +311,7 @@ def parse_interview(path_name: str, raw: str, settings: Settings, date: dt.date 
 # ---------------------------------------------------------------- document
 
 
-def _paragraphs(
-    kind: SourceKind, path_name: str, raw: str, settings: Settings, date: dt.date | None, narrated: bool
-) -> ParsedSource:
+def _paragraphs(kind: SourceKind, path_name: str, raw: str, settings: Settings, date: dt.date | None) -> ParsedSource:
     title = Path(path_name).stem
     source_id = source_id_for(kind, path_name, raw)
     expressions: list[Expression] = []
@@ -394,8 +322,6 @@ def _paragraphs(
             continue
         if m := re.match(r"^#{1,6}\s+(.+)$", text):
             heading = m[1].strip()
-            if narrated:
-                date = _heading_date(heading) or date
             if "\n" not in text:
                 continue
         i = len(expressions)
@@ -409,30 +335,15 @@ def _paragraphs(
                 is_target=True,
                 text=text,
                 channel=heading,
-                narrated=narrated,
             )
         )
     return ParsedSource(_source(kind, title, path_name, source_id, expressions), expressions)
 
 
-def _heading_date(heading: str) -> dt.date | None:
-    if full := parse_date(heading):
-        return full
-    m = re.search(r"(?<!\d)(1\d{3}|20\d{2})(?!\d)", heading)
-    return dt.date(int(m[1]), 7, 1) if m else None
-
-
 def parse_document(path_name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
     """A text the person wrote: every paragraph is theirs. Markdown headings become the channel of what follows."""
     date = date or date_from_name(Path(path_name).stem)
-    return _paragraphs(SourceKind.DOCUMENT, path_name, raw, settings, date, narrated=False)
-
-
-def parse_biography(path_name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
-    """A text about the person written by someone else: every paragraph is narration about them, dated by the
-    nearest dated heading above it (else the file name or ``date``)."""
-    date = date or date_from_name(Path(path_name).stem)
-    return _paragraphs(SourceKind.BIOGRAPHY, path_name, raw, settings, date, narrated=True)
+    return _paragraphs(SourceKind.DOCUMENT, path_name, raw, settings, date)
 
 
 # ---------------------------------------------------------------- questionnaire
@@ -448,7 +359,6 @@ class _Question:
     number: int
     text: str
     facets: list[str]
-    held_out: bool
     optional: bool
     answer: list[str] = field(default_factory=list)
 
@@ -466,8 +376,8 @@ def parse_questionnaire(path_name: str, raw: str, settings: Settings, date: dt.d
                 continue
             text = _MARKUP.sub("", body[: tags.start()]).strip()
             facets = [f for f in tags["facets"].split() if f in FACET_BY_ID]
-            current = _Question(int(m["n"]), text, facets, "【测试题】" in text, "【可跳过】" in text)
-            current.text = current.text.replace("【测试题】", "").replace("【可跳过】", "").strip()
+            current = _Question(int(m["n"]), text, facets, "【可跳过】" in text)
+            current.text = current.text.replace("【可跳过】", "").strip()
             questions.append(current)
             in_answer = False
         elif current is not None and (a := _ANSWER.match(line)):
@@ -501,9 +411,8 @@ def parse_questionnaire(path_name: str, raw: str, settings: Settings, date: dt.d
                 is_target=True,
                 text=answer,
                 context=f"问卷第 {q.number} 题：{q.text}",
-                channel="建档问卷",
+                channel="回答几个问题",
                 facets_hint=q.facets,
-                held_out=q.held_out,
             )
         )
     title = Path(path_name).stem
@@ -514,16 +423,12 @@ def parse_questionnaire(path_name: str, raw: str, settings: Settings, date: dt.d
 
 
 def parse_text(kind: SourceKind, name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
-    if kind is SourceKind.MEETING:
-        return meeting_to_source(parse_transcript_text(name, raw, settings, meeting_date=date), settings)
     if kind is SourceKind.CHAT:
         return parse_chat(name, raw, settings)
     if kind is SourceKind.INTERVIEW:
         return parse_interview(name, raw, settings, date)
     if kind is SourceKind.DOCUMENT:
         return parse_document(name, raw, settings, date)
-    if kind is SourceKind.BIOGRAPHY:
-        return parse_biography(name, raw, settings, date)
     return parse_questionnaire(name, raw, settings, date)
 
 
@@ -532,8 +437,6 @@ MEMORY_KIND_LABELS = {
     SourceKind.CHAT: "聊天记录",
     SourceKind.QUESTIONNAIRE: "问卷",
     SourceKind.INTERVIEW: "访谈",
-    SourceKind.MEETING: "会议记录",
-    SourceKind.BIOGRAPHY: "传记",
 }
 
 
@@ -597,6 +500,4 @@ def parse_note(text: str, settings: Settings, title: str | None = None) -> Parse
 def parse_source(kind: SourceKind | None, path: Path, settings: Settings, date: dt.date | None = None) -> ParsedSource:
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ValueError("每个文件最多 50 MB")
-    if kind is SourceKind.MEETING:
-        return meeting_to_source(parse_transcript(path, settings, meeting_date=date), settings)
     return parse_upload(path.name, path.read_bytes(), settings, kind, date)

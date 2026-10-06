@@ -69,8 +69,8 @@ def test_report_summarises_dimensions_matrix_and_suggestions() -> None:
     first = report.suggestions[0]
     assert first.facet_id == "6.1" and first.sources == [SourceKind.INTERVIEW]  # conflicts first
     q = next(s for s in report.suggestions if s.facet_id == "2.1")
-    assert "缺少实际行为证据" in q.reason and SourceKind.QUESTIONNAIRE not in q.sources
+    assert "可以补一些实际做过的事" in q.reason and SourceKind.QUESTIONNAIRE not in q.sources
     assert not any(s.facet_id.startswith("9.") for s in report.suggestions)
     md = report_markdown(report)
-    assert "| D2 价值观与原则 | 4/4 | 25% | 0% | 0% | 0 |" in md
-    assert "| 6.1 用词与口头禅（矛盾） | 已覆盖 | 0.42 |" in md and "| 9.1 兴趣爱好 | 未授权 |" in md
+    assert "| D2 看重什么 | 4/4 | 25% | 0% | 0% | 0 |" in md
+    assert "| 6.1 用词与口头禅（矛盾） | 已了解一些 | 0.42 |" in md and "| 9.1 兴趣爱好 | 未授权 |" in md

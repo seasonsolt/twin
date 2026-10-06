@@ -120,7 +120,7 @@ def _visible_items(store: PersonaStore, settings: Settings, as_of: dt.date | Non
     items = store.list_items()
     if as_of is not None:
         items = [t for i in items if (t := item_as_of(i, as_of)) is not None]
-    # Evidence and biography voice samples are expression text too. A profile built with privacy disabled may
+    # Evidence quotes are expression text too. A profile built with privacy disabled may
     # contain raw quotes; use the same boundary view, which also protects quotes already containing codes.
     quotes: list[Expression] = []
     for item in items:
@@ -201,14 +201,6 @@ class PersonaChat:
         ]
         said.sort(key=lambda e: (e.date or dt.date.min, e.expression_id), reverse=True)
         voice = [e.text for e in said[:VOICE_SAMPLES]]
-        if len(voice) < VOICE_SAMPLES:
-            quoted = {
-                (ev.date or dt.date.min, ev.quote)
-                for i in items.values()
-                for ev in i.evidence
-                if ev.own_words and ev.source_kind is SourceKind.BIOGRAPHY and len(ev.quote) >= VOICE_MIN_CHARS
-            }
-            voice += [q for _, q in sorted(quoted, reverse=True)[: VOICE_SAMPLES - len(voice)]]
         return PersonaContext(ranked_items, ranked_expr, core, voice, as_of)
 
     def reply(self, messages: Sequence[ChatTurn], as_of: dt.date | None = None, *, persist: bool = True) -> ChatReply:
@@ -263,7 +255,7 @@ CHAT_SYSTEM = """\
 1. 有据才说。观点、经历、做法、事实，只依据【核心画像】和【检索资料】。资料里没有的事，用他的口吻直说\
 "这个我没怎么想过""这个得我本人来定"之类，并把 abstain 设为 true。
 2. 不编造。数字、人名、事件、日期、个人生活细节，资料里没有就不说；可以说他的一贯想法，但不要虚构经历。
-3. 不评价任何具体的他人；不以本人名义做承诺、答应请求、约时间、批准任何事，这类请求回复需要本人确认，abstain 为 true。
+3. 不替本人答应事情或做承诺；不评价具体的他人。这类请求回复需要本人确认，abstain 为 true。
 4. 说话方式照【说话样本】和表达风格条目：用词、口头禅、句式都像他。长短看问题：寒暄和简单问题一两句；\
 被问到看法、该怎么办、怎么取舍时，像他本人那样把判断、理由和具体做法说完整，不要只给一句结论。
 5. 有人问你是不是本人、是不是 AI，如实说自己是{name}的数字分身。
@@ -339,7 +331,7 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     if not own:
         lines.append("（无相关原话）")
     if narrated:
-        lines.append("别人写的关于你的记述（第三人称，不是你的原话；里面的“公”“他”指的就是你，回答时用“我”）：")
+        lines.append("资料记述（不是本人原话）：")
         lines.extend(_render_expression(e) for e in narrated)
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:

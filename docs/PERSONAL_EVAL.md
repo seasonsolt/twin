@@ -64,7 +64,7 @@ JSON 和 Markdown 均展示。旧 records 没有 raw mode 时，按 abstain=true
 - **unverified**：材料和题目中都没有，无法核实（并不自动等于事实错误）。
 
 复用 chat 的 `as_of` 日期边界和隐私视图，同时匹配原始文本与模型看到的假名化文本；
-不把未来、无日期（指定 as_of 时）、留出的测试表达或非本人表达当作可用表达。
+不把未来、无日期（指定 as_of 时）或非本人表达当作可用表达。
 每分类及 overall 报告有引用的回答数、已测回答数、片段总数、四类原始计数及占比（含 `question_rate`），
 直接汇总全部重复的片段，不平均重复占比、不做 bootstrap，也不依赖评委是否成功。
 update 的 add / modify / delete 同样按当时的私有记忆状态核验。无片段时占比为 null；
@@ -122,7 +122,6 @@ B 胜 / B 负 / 平数、不可配对数及双方原始统计。这不是再调�
 ## 契约兼容决定
 
 `evals.schema.SCHEMA_VERSION` 升为 **2**。新场景使用 `QuestionInput`、
-`QuestionExpected`、`QuestionOutput`，场景为 personal。为架构要求的旧 records 可读性，
-保留明确标记为兼容用的 v1 biography 类型和枚举，以及联合读取契约；v1 文件不改写
-或重新解释，原版本和字段可无损 round-trip。新评测不使用这些旧类型。
-`eval-compare` 只接受单系统 personal 场景，不拿归档 biography 记录冒充本人评测。
+`QuestionExpected`、`QuestionOutput`，场景为 personal。预发布 P3 移除了未用于本人评测的
+旧 biography payload 与 decision/stance/voice/trap 分类；旧 biography records 不再支持。
+这不影响用户数据库读取。personal 记录仍保留原 schema_version，`eval-compare` 只接受单系统 personal 场景。

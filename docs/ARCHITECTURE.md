@@ -1,20 +1,18 @@
 # twin 架构
 
-twin 是通用的个人分身：从一个人的资料里提炼出有来源依据的人格档案，再以对话、语音等方式提供服务。它不是任何特定场景（会议、客服、决策）的工具；场景以后作为上层插件接入。
-
-早期原型中的会议决策场景和传记基准已经移除；具体场景以后作为插件接入（见第 5 节）。
+twin 是个人分身：自由添加关于自己的记忆，分身从中整理带原文依据的内容，再通过聊天、语音、视频和 API 提供服务。问卷只是可选的补充，不是使用前提。
 
 ## 1. 产品形态
 
 ```
-Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服务
+你是谁  ──►  添加记忆  ──►  聊天 / 语音 / 视频 / API
 ```
 
 | 阶段 | 用户看到的 | 对应的层 | 现状 |
 | --- | --- | --- | --- |
-| Identity 身份 | 只读身份：名字、别名、预置音色、预置形象、出境状态 | L0 契约，加治理（横切） | **已完成：只读契约、出境分类、预置音色、统一标识** |
-| Memory upload 记忆上传 | 上传聊天、文档、问卷、访谈、传记、会议转写，看到"记住了什么、还缺什么" | L1 语料、L2 认知 | 已有：多来源导入、化名处理、人格档案、细项完成度、审核 |
-| Service 服务 | 对话；听它说；通过 API/MCP 调用，以后看它讲 | L3 运行时、L4 展示、L5 接入 | 已有：对话、逐句回放、朗读、形象、API/MCP；未做：视频片段 |
+| 你是谁 | 名字和一段介绍，可跳过；在“关于你”随时修改 | L0 契约，加治理（横切） | 名字持久保存，介绍成为记忆；预置音色、形象、出境状态 |
+| 添加记忆 | 写一段、上传文件或文件夹，看到记住了什么 | L1 语料、L2 认知 | 自动识别文档、聊天、问卷、访谈；自动处理、预览、删除与重试；可选“回答几个问题” |
+| 聊天与服务 | 聊天、听它说、看视频、API/MCP 调用 | L3 运行时、L4 展示、L5 接入 | 有依据的回答、逐句回放、朗读、2D/3D 形象、带标识的导出与视频 |
 
 服务的"内容"只来自 L3 运行时；声音、形象、视频是"呈现通道"，只能呈现已经有依据的回答，不能生成新内容。
 
@@ -24,11 +22,11 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 | 层 | 职责 | 模块 |
 | --- | --- | --- |
-| L0 基础设施 | 工具函数、数据契约、模型后端与配置、存储 | 工具（0）：`util`、`usage`、`evals.stats`；契约（1）：`identity`、`persona.schema`、`persona.dimensions`、`persona.items`、`persona.transcript_schema`、`media.schema`、`evals.schema`；后端与配置（2）：`llm`、`embed`、`config`、`media.tts`、`media.asr`；存储（3）：`persona.store` |
-| L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.transcripts`、`persona.questionnaire` |
+| L0 基础设施 | 工具函数、数据契约、模型后端与配置、存储 | 工具（0）：`util`、`usage`、`evals.stats`；契约（1）：`identity`、`persona.schema`、`persona.dimensions`、`persona.items`、`media.schema`、`evals.schema`；后端与配置（2）：`llm`、`embed`、`config`、`media.tts`、`media.asr`；存储（3）：`persona.store` |
+| L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.questionnaire` |
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |
-| L4 展示（7） | 把回答变成可呈现的脚本、语音、以后的形象与片段 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render`、`service` |
+| L4 展示（7） | 把回答变成脚本、语音、形象与视频 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render`、`service` |
 | L5 接入（9） | 命令行、网页、API/MCP | `cli`、`web.*`、`frontend/`（React）、`api`、`mcp_server` |
 | 横切：评测（8） | 执行框架、评委、统计、来源记录、回听评测 | `evals.harness`、`evals.provenance`、`evals.personal`、`media.check` |
 | 横切：治理 | 授权、标识、隐私、数据出境 | 规则见第 4 节；只读身份契约、出境分类、预置音色与统一标识已完成 |
@@ -45,7 +43,7 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
    - L3 → L4：`ChatReply` 经 `media.adapters` 变成 `PresentableAnswer`；服务经 `service` 变成 `ServiceAnswer`
    - L4 → 语音、识别后端：`SpeechSynthesizer` / `SpeechResult`、`SpeechRecognizer` / `Transcription`
    - 评测 → 被测系统：`SystemUnderTest`
-4. **契约带版本、只增不删。** 新字段有默认值；改变含义就升版本，并保留旧版本的读取。
+4. **契约变更有记录。** 预发布接口可以删除；在 CONTRACTS.md 记录变化。已有用户数据库仍可打开，旧数据读取兼容。
 5. **能力用声明。** 后端在 `capabilities` 里声明能做什么，上层按声明选择处理路径。
 6. **错误统一、不泄密。** 后端错误转成统一的异常层级；报错与日志不含密钥、服务地址和原文。
 7. **配置只经工厂。** 后端由唯一的工厂构造；配置里只写环境变量名（`TWIN_*`），不写密钥。
@@ -62,13 +60,13 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 ## 5. 插件
 
 - **风格改写（L3，默认关闭）。** 输入已经带引用的回答，只改措辞，不增删事实；改写后重新做引用校验。LoRA 等微调方案只能以这种插件形式接入，并且必须在本人资料评测上显著提升口吻、且事实准确率不下降，才允许默认开启。
-- **场景（L4 之上）。** 会前预演、会中提示等具体场景以后作为插件，只依赖 L3 的回答契约，不进入核心层。
+- **外部接入。** 其他应用通过 API/MCP 使用回答契约，不把自身业务规则放进个人分身内核。
 
 ## 6. 评测
 
 - 主评测用**本人的真实资料**：题库按事实、记忆里没有的问题、风格、通用、记忆更新分类，题库与资料保存在仓库之外，配置里只写路径。
 - 统一用评测框架：被测系统接口、评委团（不同模型家族）、重复作答、按来源分组的 bootstrap 置信区间、每次运行的 `records.json` 来源记录。
-- 本人资料场景已接入：`twin eval`、`twin eval-compare`；命令、统计口径与隐私规则见 [PERSONAL_EVAL.md](PERSONAL_EVAL.md)。记忆更新分类暂不运行，等待受控记忆编辑。
+- 本人资料场景已接入：`twin eval`、`twin eval-compare`；命令、统计口径与隐私规则见 [PERSONAL_EVAL.md](PERSONAL_EVAL.md)。记忆更新在临时数据库副本中执行增改删，不修改用户原库。
 - 媒体另有回听评测（`twin media check`）：合成、识别、按字错率衡量。
 
 ## 7. 路线
@@ -76,6 +74,6 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 按产品形态推进，每一步独立可评测：
 
 1. **本人资料评测场景**：把现有题库接进评测框架，作为之后所有改动的记分板。
-2. **Identity（已完成）**：只读契约、出境分类、预置音色、统一标识。配置音色经后端预置列表校验，网页标识统一来自媒体契约。
-3. **Memory upload（进行中）**：上传后的"记住了什么、还缺什么"视图，与细项完成度打通。已接入每份来源支撑条目/细项摘要、构建条目变化计数，以及资料变动后的过期档案提示。
-4. **Service（进行中）**：已接入风格化形象、对话回放导出、令牌保护的 HTTP API 与 stdio MCP（共用有据、带标识的回答契约，见 [SERVICE.md](SERVICE.md)）；视频片段仍未做。
+2. **你是谁（已完成）**：名字与介绍可编辑，预置音色与形象、统一标识、如实展示外部服务。
+3. **添加记忆（已完成基础流程）**：自由添加、自动处理，关于你页核对内容；问卷可选。
+4. **服务（已接入）**：聊天、语音、形象、视频、令牌保护的 HTTP API 与 stdio MCP，共用有据且带标识的回答契约，见 [SERVICE.md](SERVICE.md)。CLI 和网页聊天不提供日期穿越；评测与服务 API/MCP 保留 advanced `as_of`。

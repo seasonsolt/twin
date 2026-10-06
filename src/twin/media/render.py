@@ -53,13 +53,13 @@ def export_html(script: MediaScript, *, clock: Callable[[], dt.datetime]) -> str
         '<meta name="ai-generated" content="true"><meta name="generator" content="twin">'
         '<meta name="referrer" content="no-referrer">'
         f'<meta http-equiv="Content-Security-Policy" content="{escape(EXPORT_CSP)}">'
-        "<title>模拟推演回放</title><style>"
+        "<title>分身回答回放</title><style>"
         "body{margin:0;padding:8rem 1rem 2rem;font-family:system-ui;overflow-wrap:anywhere}"
         ".media-label{position:fixed;top:0;left:0;right:0;padding:1rem;background:#19212d;color:white;z-index:1}"
         "main{max-width:50rem;margin:auto}p{white-space:pre-wrap}.notice{font-weight:bold}"
         "</style></head><body>"
         f'<header class="media-label">{escape(script.explicit_label)}</header><main>'
-        f"<h1>{escape(script.persona_name)} · 模拟推演回放</h1>"
+        f"<h1>{escape(script.persona_name)} · 分身回答回放</h1>"
         f"<p>资料截至：{escape(str(script.as_of or '未限定'))} · 模型自评置信度：{script.confidence}</p>"
         f"{segments}<h2>回答依据</h2><p>引用属于整份回答，不代表逐句对应。</p><ul>{citations}</ul>"
         f'<script type="application/json" id="media-manifest">{data}</script>'

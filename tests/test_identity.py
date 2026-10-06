@@ -106,13 +106,13 @@ def test_new_store_does_not_create_consent_table(settings: Settings) -> None:
 
 def test_questionnaire_submission_replaces_derivation(settings: Settings) -> None:
     with PersonaStore(":memory:") as store:
-        first = submit_initial(store, settings, {"q33": "周末做模型。"})
-        assert first.source.declined_facets == ["9.2", "9.3", "9.4", "9.5"]
+        first = submit_initial(store, settings, {"q19": "周末做模型。"})
+        assert {f for f in first.source.declined_facets if f.startswith("9.")} == {"9.2", "9.3", "9.4"}
         assert "9.1" in consented_facets(store)
-        second = submit_initial(store, settings, {"q01": "负责测试。", "q36": "虚构家庭信息。"})
+        second = submit_initial(store, settings, {"q01": "负责测试。", "q20": "虚构家庭信息。"})
         assert store.get_source(first.source.source_id) is None
         assert "9.1" not in consented_facets(store) and "9.3" in consented_facets(store)
-        assert second.source.declined_facets == ["9.1", "9.2", "9.4", "9.5"]
+        assert {f for f in second.source.declined_facets if f.startswith("9.")} == {"9.1", "9.5"}
 
 
 def extract_model(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:

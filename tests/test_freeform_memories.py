@@ -124,7 +124,7 @@ def test_file_text_formats() -> None:
 )
 def test_kind_detection(name: str, text: str, kind: SourceKind) -> None:
     assert detect_kind(name, text, Settings(target_name="林沐", target_aliases=["阿沐"])) is kind
-    assert kind not in (SourceKind.MEETING, SourceKind.BIOGRAPHY)
+    assert kind in set(SourceKind)
 
 
 def test_upload_dates() -> None:

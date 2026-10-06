@@ -70,6 +70,7 @@ class LLM(Protocol):
         schema: type[T],
         effort: Effort = "medium",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         """``max_tokens=None`` uses the backend's configured output budget."""
         ...
@@ -244,6 +245,7 @@ class AnthropicLLM:
         schema: type[T],
         effort: Effort = "medium",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         import anthropic
 
@@ -354,6 +356,7 @@ class OpenAICompatLLM:
         schema: type[T],
         effort: Effort = "medium",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         budget = self.max_tokens if max_tokens is None else max_tokens
         messages: list[Any] = [
@@ -361,8 +364,9 @@ class OpenAICompatLLM:
             {"role": "user", "content": user},
         ]
         kwargs: dict[str, Any] = {"model": self.model, "max_tokens": budget}
-        if self.reasoning_effort is not None:
-            kwargs["reasoning_effort"] = self.reasoning_effort
+        effective_effort = self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        if effective_effort is not None:
+            kwargs["reasoning_effort"] = effective_effort
         response_format = self._response_format(schema)
         if response_format is not None:
             kwargs["response_format"] = response_format
@@ -427,6 +431,7 @@ class ClaudeCLILLM:
         schema: type[T],
         effort: Effort = "medium",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         cmd = [
             self.binary,
@@ -512,6 +517,7 @@ class FakeLLM:
         schema: type[T],
         effort: Effort = "medium",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         self.calls.append((schema.__name__, system, user))
         out = self.handler(system, user, schema)

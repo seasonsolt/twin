@@ -1,4 +1,4 @@
-export type Round = 'initial' | 'retest';
+export type Round = 'initial';
 export interface Question {
   id: string;
   number: number;
@@ -6,7 +6,6 @@ export interface Question {
   text: string;
   kind: string;
   facets: string[];
-  test: boolean;
   optional: boolean;
 }
 export interface QuestionnaireData {
@@ -15,7 +14,6 @@ export interface QuestionnaireData {
   answers: Record<string, string>;
   updated_at: string | null;
   submitted_at: string | null;
-  retest_from: string | null;
   questions: Question[];
 }
 export interface Submission {

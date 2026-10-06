@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -10,12 +11,12 @@ from pydantic import BaseModel, ValidationError
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
-from twin.llm import FakeLLM
+from twin.llm import FakeLLM, OpenAICompatLLM
 from twin.persona import chat as pc
 from twin.persona import profile as pf
 from twin.persona.items import PersonaItem, PEvidence, PReview
 from twin.persona.schema import ChatDraft, ChatReply, ChatTurn, EvidenceClass, Expression, ReviewStatus, SourceKind
-from twin.persona.sources import parse_biography, parse_chat, parse_questionnaire
+from twin.persona.sources import parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
 
 D = dt.date
@@ -24,7 +25,7 @@ QUESTIONNAIRE = """**4. 排序。**　*偏好 · 2.1*
 
 回答：结果第一，钱进了账户才算数。
 
-**13.【测试题】大单第一句？**　*情境 · 3.4*
+**13.大单第一句？**　*情境 · 3.4*
 
 回答：首付多少？
 """
@@ -89,6 +90,38 @@ def test_chat_modes_and_legacy_compatibility(contract: type[ChatDraft] | type[Ch
         contract.model_validate({**data, "mode": "unknown"})
 
 
+@pytest.mark.parametrize("extract_effort", [None, "high"])
+def test_chat_keeps_instance_reasoning_effort_without_extraction_override(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch, extract_effort: Any
+) -> None:
+    settings.llm.reasoning_effort = "none"
+    settings.llm.reasoning_effort_extract = extract_effort
+    requests: list[dict[str, Any]] = []
+    options: list[dict[str, Any]] = []
+
+    def create(**kwargs: Any) -> Any:
+        requests.append(kwargs)
+        content = json.dumps({"reply": "资料里没有记录。", "citations": [], "confidence": 0.2, "abstain": True})
+        return SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=content))]
+        )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    llm = OpenAICompatLLM("m", client=client, reasoning_effort=settings.llm.reasoning_effort)
+    original = llm.structured
+
+    def structured(**kwargs: Any) -> BaseModel:
+        options.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(llm, "structured", structured)
+    chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
+    assert chat.reply([ChatTurn(role="user", content="我选择什么？")], persist=False).abstain
+    assert len(requests) == len(options) == 1
+    assert "reasoning_effort" not in options[0]
+    assert requests[0]["reasoning_effort"] == "none"
+
+
 def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Settings) -> None:
     ctx = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings).retrieve("问题")
     prompt = pc.chat_system_prompt(settings.target_name, ctx)
@@ -135,22 +168,21 @@ def test_index_is_incremental_and_follows_the_embedding_space(store: PersonaStor
     first = pc.index_persona(store, embedder, settings)
     assert first == {
         "items": 2,
-        "expressions": 3,
-    }  # one questionnaire answer and two chat messages; held-out answers are not indexed
+        "expressions": 4,
+    }  # two questionnaire answers and two chat messages
     assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0}
     other = HashingEmbedder(dim=256)
-    assert pc.index_persona(store, other, settings) == {"items": 2, "expressions": 3}
+    assert pc.index_persona(store, other, settings) == {"items": 2, "expressions": 4}
     assert store.get_vectors("items")[1].shape == (2, 256)
 
 
-def test_retrieve_respects_as_of_and_keeps_held_out_answers_out(store: PersonaStore, settings: Settings) -> None:
+def test_retrieve_respects_as_of(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     pc.index_persona(store, embedder, settings)
     chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), embedder, settings)
     ctx = chat.retrieve("对照组和数据", as_of=D(2026, 9, 10))
     texts = [e.text for e, _ in ctx.expressions]
     assert all("对照组" not in t for t in texts)  # said on 09-20, after as_of
-    assert all("首付多少" not in t for t in texts)  # held-out test answer
     assert {i.facet_id for i, _ in ctx.items} | {i.facet_id for i in ctx.core} == {"2.1"}
     assert ctx.voice == ["首付不到 30% 不开工，说白了钱进了账户才叫收入"]  # chat words only
     full = chat.retrieve("对照组")
@@ -214,32 +246,6 @@ def test_reviews_edit_and_reject_what_the_twin_sees(store: PersonaStore, setting
     assert probe.item_id not in ctx.ids and money.item_id in ctx.trusted
     with pytest.raises(KeyError):
         store.set_review("pi_missing", None)
-
-
-def test_biography_narration_is_marked_untrusted_and_its_quotes_become_voice(settings: Settings) -> None:
-    store = PersonaStore(":memory:")
-    store.put_source(
-        parse_biography("年谱.md", "# 1854 年\n\n众请速攻。公曰：宁可屯兵不进，不可轻进致败。\n", settings)
-    )
-
-    def bio(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
-        if schema is pf.ExtractDraft:
-            quote = {"n": 1, "quote": "宁可屯兵不进，不可轻进致败", "own_words": True}
-            return {"items": [{"facet_id": "3.1", "statement": "他宁守勿冒进", "quotes": [quote]}]}
-        return {"reply": "宁可屯兵不进。", "citations": [], "confidence": 0.9, "abstain": False}
-
-    llm = FakeLLM(bio)
-    pf.build_profile(store, llm, settings)
-    embedder = HashingEmbedder()
-    pc.index_persona(store, embedder, settings)
-    chat = pc.PersonaChat(store, llm, embedder, settings)
-    ctx = chat.retrieve("要不要速攻")
-    narrated = [e for e, _ in ctx.expressions if e.narrated]
-    assert narrated and not ctx.trusted & {e.expression_id for e in narrated}
-    assert ctx.voice == ["宁可屯兵不进，不可轻进致败"]
-    message = pc.chat_user_message([ChatTurn(role="user", content="要不要速攻")], ctx)
-    assert "别人写的关于你的记述（第三人称" in message and "（无相关原话）" in message
-    assert "宁可屯兵不进，不可轻进致败" in pc.chat_system_prompt("张三", ctx)
 
 
 @pytest.mark.parametrize("material", ["item", "core", "expression", "narrated", "voice", "question"])

@@ -15,7 +15,6 @@ type QuestionCategory = Literal["fact", "unanswerable", "style", "general", "upd
 
 class Scenario(StrEnum):
     PERSONAL = "personal"
-    BIOGRAPHY = "biography"  # Read-only compatibility with archived v1 records.
 
 
 class Split(StrEnum):
@@ -74,22 +73,13 @@ class QuestionOutput(_Contract):
     reply: str
 
 
-class BiographyInput(_Contract):
-    """Legacy v1 payload, retained only for lossless archived-record reading."""
-
-    kind: Literal["biography"] = "biography"
-    id: str
-    type: Literal["decision", "stance", "voice", "trap"]
-    prompt: str
-
-
 class CaseInput(_Contract):
     """The only case data exposed to a system under test."""
 
     case_id: str
     scenario: Scenario
     mode: str
-    payload: QuestionInput | BiographyInput
+    payload: QuestionInput
 
     @model_validator(mode="after")
     def _check_scenario(self) -> Self:
@@ -98,21 +88,9 @@ class CaseInput(_Contract):
         return self
 
 
-class BiographyEvidence(_Contract):
-    source: str
-    quote: str
-
-
-class BiographyExpected(_Contract):
-    kind: Literal["biography"] = "biography"
-    gold: str
-    key_points: list[str] = Field(default_factory=list)
-    evidence: list[BiographyEvidence] = Field(default_factory=list)
-
-
 class Case(_Contract):
     input: CaseInput
-    expected: QuestionExpected | BiographyExpected
+    expected: QuestionExpected
     split: Split
     purpose: Purpose
     group_id: str
@@ -153,11 +131,6 @@ class Citation(_Contract):
     reason: str
 
 
-class BiographyOutput(_Contract):
-    kind: Literal["biography"] = "biography"
-    reply: str
-
-
 class Prediction(_Contract):
     """Absent capabilities remain None; raw preserves the legacy system output."""
 
@@ -171,7 +144,7 @@ class Prediction(_Contract):
     abstain: bool | None = None
     abstain_reason: str | None = None
     citations: list[Citation] = Field(default_factory=list)
-    payload: QuestionOutput | BiographyOutput
+    payload: QuestionOutput
     raw: dict[str, Any] = Field(default_factory=dict)
 
 

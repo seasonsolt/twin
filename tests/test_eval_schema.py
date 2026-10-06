@@ -1,4 +1,4 @@
-"""Generic question/answer evaluation contracts (temporary biography-shaped payload)."""
+"""Generic personal question/answer evaluation contracts."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from twin.evals import schema
-from twin.evals.schema import BiographyEvidence, BiographyExpected, CaseInput, Judgement, JudgeStatus
+from twin.evals.schema import CaseInput, Judgement, JudgeStatus, QuestionExpected
 
 
-def _input_data(kind: str = "biography") -> dict[str, Any]:
+def _input_data(kind: str = "personal") -> dict[str, Any]:
     return {
         "case_id": "case-1",
         "scenario": kind,
         "mode": "named",
-        "payload": {"kind": kind, "id": "b1", "type": "stance", "prompt": "question"},
+        "payload": {"kind": kind, "id": "b1", "category": "fact", "prompt": "question"},
     }
 
 
@@ -89,7 +89,7 @@ def test_pairwise_voice_and_trap_verdicts_are_lossless() -> None:
         )
     )
     assert trap.verdict == {"fabricated": False}
-    _round_trip(BiographyExpected(gold="gold", evidence=[BiographyEvidence(source="letter-1", quote="quote")]))
+    _round_trip(QuestionExpected(answer="gold", evidence="quote"))
 
 
 def test_all_contract_models_are_frozen_and_forbid_extras() -> None:
@@ -102,10 +102,10 @@ def test_all_contract_models_are_frozen_and_forbid_extras() -> None:
     for model in models:
         assert model.model_config["frozen"] is True
         assert model.model_config["extra"] == "forbid"
-    request = CaseInput.model_validate(_input_data("biography"))
+    request = CaseInput.model_validate(_input_data())
     with pytest.raises(ValidationError, match="frozen"):
         request.case_id = "changed"
     with pytest.raises(ValidationError, match="frozen"):
-        request.payload.kind = "biography"
+        request.payload.kind = "personal"
     with pytest.raises(ValidationError, match="extra_forbidden"):
         schema.Citation.model_validate({"ref_id": "item-1", "reason": "reason", "secret": "not allowed"})

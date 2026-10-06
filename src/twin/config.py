@@ -47,6 +47,13 @@ class LLMSettings(BaseModel):
     max_retries: int = Field(default=2, ge=0)
     egress: Literal["local", "external"] | None = None
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort_extract: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+
+    @property
+    def effective_reasoning_effort_extract(self) -> str | None:
+        if self.reasoning_effort_extract is not None:
+            return self.reasoning_effort_extract
+        return "low" if self.reasoning_effort == "none" else self.reasoning_effort
 
 
 class EmbedSettings(BaseModel):

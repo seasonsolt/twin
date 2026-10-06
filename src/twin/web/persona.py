@@ -25,7 +25,7 @@ from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
 from ..persona.profile import build_profile, consented_facets, profile_stale, source_memories
-from ..persona.questionnaire import Round, round_view, save_draft, submit_initial, submit_retest
+from ..persona.questionnaire import Round, round_view, save_draft, submit_initial
 from ..persona.schema import SOURCE_KIND_LABELS, ChatTurn, ReviewStatus, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
@@ -58,7 +58,6 @@ class ReviewBody(BaseModel):
 
 class ChatBody(BaseModel):
     messages: list[ChatTurn] = Field(min_length=1, max_length=MAX_CHAT_TURNS)
-    as_of: str | None = None
 
 
 def _date(value: str | None, field: str) -> dt.date | None:
@@ -107,12 +106,10 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
     }
 
 
-def run_chat(
-    settings: Settings, llm: LLM, embedder: Embedder, messages: list[ChatTurn], as_of: dt.date | None, log: Log
-) -> dict[str, Any]:
+def run_chat(settings: Settings, llm: LLM, embedder: Embedder, messages: list[ChatTurn], log: Log) -> dict[str, Any]:
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
-        reply = PersonaChat(store, llm, embedder, settings).reply(messages, as_of)
+        reply = PersonaChat(store, llm, embedder, settings).reply(messages)
         items = {i.item_id: i for i in store.list_items()}
         cited: list[dict[str, Any]] = []
         for ref in reply.citations:
@@ -220,7 +217,7 @@ def register(
             if source is None:
                 raise HTTPException(404, "找不到这条记忆")
             expressions = expression_view(store, settings, source_id=source_id)
-            speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.MEETING}
+            speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW}
             return "\n\n".join(
                 (f"{e.context}\n" if e.context else "") + (f"{e.speaker}：{e.text}" if speaker_lines else e.text)
                 for e in expressions
@@ -350,13 +347,12 @@ def register(
             raise HTTPException(400, "最后一条消息必须是你说的话，且不能为空")
         if any(len(m.content) > MAX_MESSAGE_CHARS for m in messages):
             raise HTTPException(400, f"单条消息不能超过 {MAX_MESSAGE_CHARS} 字")
-        as_of = _date(body.as_of, "as_of")
         with open_store() as store:
             if not store.list_items():
-                reply = no_profile_reply(store, as_of)
+                reply = no_profile_reply(store)
                 return JSONResponse({**reply.model_dump(mode="json"), "cited": []}, status_code=200)
         llm, embedder = backends.llm(), backends.embedder()
-        job = jobs.submit("chat", "和分身聊天", lambda log: run_chat(settings, llm, embedder, messages, as_of, log))
+        job = jobs.submit("chat", "和分身聊天", lambda log: run_chat(settings, llm, embedder, messages, log))
         return {"job_id": job.job_id}
 
     @app.get("/api/persona/questionnaire")
@@ -375,13 +371,9 @@ def register(
 
     @app.post("/api/persona/questionnaire/submit")
     def submit_questionnaire(body: QuestionnaireBody) -> dict[str, Any]:
-        """The initial round is imported as a questionnaire source and a profile build starts when the model is
-        configured and no other build is running; the retest round is only recorded."""
+        """Import optional answers and start a build when a model is configured and no build is running."""
         with open_store() as store:
             try:
-                if body.round == "retest":
-                    submit_retest(store, body.answers)
-                    return {"round": "retest", "job_id": None, "notice": "重测已提交"}
                 parsed = submit_initial(store, settings, body.answers)
             except ValueError as e:
                 raise HTTPException(400, str(e)) from e

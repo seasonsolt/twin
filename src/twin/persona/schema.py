@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SourceKind(StrEnum):
@@ -15,8 +15,10 @@ class SourceKind(StrEnum):
     INTERVIEW = "interview"
     CHAT = "chat"
     DOCUMENT = "document"
-    BIOGRAPHY = "biography"
-    MEETING = "meeting"
+
+
+def document_kind(value: object) -> object:
+    return SourceKind.DOCUMENT if value in ("meeting", "biography") else value
 
 
 class EvidenceClass(StrEnum):
@@ -29,8 +31,6 @@ SOURCE_KIND_LABELS: dict[SourceKind, str] = {
     SourceKind.INTERVIEW: "访谈",
     SourceKind.CHAT: "聊天记录",
     SourceKind.DOCUMENT: "文档与邮件",
-    SourceKind.BIOGRAPHY: "传记与他人记述",
-    SourceKind.MEETING: "会议转写",
 }
 
 _SELF_REPORT = frozenset({SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW})
@@ -54,15 +54,8 @@ class Expression(BaseModel):
     channel: str = ""
     # Facet ids a questionnaire question was written for (a hint, not a verdict).
     facets_hint: list[str] = Field(default_factory=list)
-    # A questionnaire test question: kept for testing the twin, never used as profile evidence.
-    held_out: bool = False
-    # Someone else's account of the person (a biography paragraph), not the person's own words.
+    # Preserve provenance on legacy third-party records without treating narration as the person's own words.
     narrated: bool = False
-    # Original meeting utterance index, independent of this expression's position.
-    utterance_idx: int | None = None
-    # Seconds from the start of a recorded meeting.
-    start: float | None = None
-    end: float | None = None
 
 
 class Source(BaseModel):
@@ -77,9 +70,10 @@ class Source(BaseModel):
     n_target: int
     # Facets the person declined by skipping their questions (questionnaire only).
     declined_facets: list[str] = Field(default_factory=list)
-    meeting_id: str | None = None
     # Missing on legacy rows: their names may already be irreversibly pseudonymized.
     text_state: Literal["raw", "pseudonymized"] = "pseudonymized"
+
+    _legacy_kind = field_validator("kind", mode="before")(document_kind)
 
 
 @dataclass

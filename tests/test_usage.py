@@ -79,7 +79,7 @@ def call(llm: Any) -> Answer:
 
 def report() -> Report:
     return Report(
-        scenario=Scenario.BIOGRAPHY,
+        scenario=Scenario.PERSONAL,
         purpose=Purpose.FINAL_EVAL,
         systems=(),
         judges=(),
@@ -114,9 +114,11 @@ def test_schema_retry_sums_tokens_and_counts_attempts() -> None:
     recorder = UsageRecorder({"model": Price(input_per_m=1, output_per_m=2)})
     client = Client(response("not JSON"), response())
     with record_usage(recorder):
-        call(OpenAICompatLLM("model", client=client))
+        llm = OpenAICompatLLM("model", client=client, reasoning_effort="none")
+        assert llm.structured(system="s", user="u", schema=Answer, reasoning_effort="low").value == "ok"
     row = recorder.rows[0]
     assert len(recorder.rows) == 1 and client.count == row.attempts == 2
+    assert row.success and row.error_type is None
     assert (row.input_tokens, row.output_tokens, row.reasoning_tokens, row.cached_tokens) == (200, 100, 20, 40)
     assert row.estimated_cost_usd == pytest.approx(400 / 1_000_000)
     assert recorder.spent == pytest.approx(row.estimated_cost_usd)

@@ -4,7 +4,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 
 ## Shared rules and backends
 
-- `persona.schema` owns `ReviewStatus`; `persona.transcript_schema` owns `Meeting` and `Utterance`, exclusively for lossless transcript corpus conversion.
+- `persona.schema` owns `ReviewStatus` and the source/chat contracts.
 - All model calls go through `llm.structured`; Chinese prompts use stable system instructions and per-call user data. Quotes are verified against the privacy view actually sent to extraction.
 - `util.run_parallel` preserves order, scopes usage context and persists completed results via `on_result`; failures do not abort a batch. Outputs quoting personal data use `open_private` (0600); new private directories use 0700.
 - `llm.LLMError` and `embed.EmbedError` are the public backend error boundaries. Embedding responses must include one indexed finite nonzero vector per input with stable dimensions. Fingerprints identify the vector space without secrets.
@@ -46,10 +46,6 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - 后端仍懒构造并缓存，配置变更后重启；注入工厂仍用于离线测试。
   `media check` 仍仅用于合成评测句集（含自定义句集）。
 
-## Transcript parsing (code layer 4)
-
-`persona.transcripts.parse_transcript` supports line transcripts, timestamped speaker blocks, SRT/WebVTT, normalized transcript JSON and pre-existing FunASR JSON. This is pure format conversion, not audio transcription. Local speaker sidecars map labels before target aliases are normalized. Dates come from explicit arguments, JSON or filenames; ambiguous/missing dates and unrecognized formats raise `ValueError`. Consecutive turns can be merged and renumbered. Uploaded text uses `parse_transcript_text` and never reads server-side paths.
-
 ## usage.py (tool layer 0)
 
 - `UsageRecorder(pricing=None, max_cost_usd=None)` is thread-safe; `record_usage(recorder)` scopes a run,
@@ -87,9 +83,8 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
                     expressions: list[Expression] | None = None) -> list[Expression]
 ```
 
-- All six converters (chat, interview, document, biography, questionnaire, meeting) store original expression
-  text and speaker names, irrespective of `settings.pseudonymize_others`; existing parsing/whitespace rules are
-  unchanged. L1 reads and the meeting inverse remain raw.
+- The four converters (chat, interview, document, questionnaire) store original expression text and speaker names,
+  irrespective of `settings.pseudonymize_others`. L1 reads remain raw.
 - `Source.text_state: Literal["raw", "pseudonymized"]` is additive JSON metadata, with no SQLite column migration.
   New converters explicitly write `"raw"`. Missing metadata loads as `"pseudonymized"`: pre-change sources are
   left untouched, including when mixed with raw sources, because their original names cannot be recovered.
@@ -97,11 +92,11 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   expressions; there is no attempt to reverse the hashes or to guess which legacy rows retained raw text.
 - `expression_view` is the sole expression privacy transform for profile extraction and PersonaChat context
   (retrieved expressions, channels, context, voice samples and evidence quotes). It never writes to L1 or changes
-  IDs, dates or meeting timestamps. `expressions` can supply evidence-quote spans for the same transformation.
+  IDs or dates. `expressions` can supply evidence-quote spans for the same transformation.
   With privacy disabled, raw sources stay raw; legacy sources still cannot recover their lost names.
 - Known other names come from non-target speakers in **all raw corpus sources**, not guessed from prose. The same
-  catalog applies to every source kind: a name learned from chat/interview/meeting is also replaced in documents,
-  biographies and questionnaire answers/questions. Names never observed as speakers are not detected (this is not
+  catalog applies to every source kind: a name learned from chat/interview is also replaced in documents
+  and questionnaire answers/questions. Names never observed as speakers are not detected (this is not
   NER). Target names and aliases are protected, including occurrences inside other names; existing `他人XXXX`
   codes are never hashed again. Stable codes retain `pseudonym(name)`'s original SHA-256 first-four-hex algorithm.
 - `index_persona(store, embedder, settings, progress=None)` requires the same settings as profile/chat and embeds
@@ -128,44 +123,39 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - Chat log JSON appends `mode` without a SQLite migration. `chat_demand()` excludes general questions from both
   asked and abstained facet counts; legacy logs without mode retain their previous demand behaviour.
 
-### Meeting corpus conversion (L1)
+### Pre-release removals (P3)
 
-```python
-def meeting_to_source(meeting: Meeting, settings: Settings) -> ParsedSource
-def source_to_meeting(parsed: ParsedSource) -> Meeting
-```
-
-- `SourceKind.MEETING = "meeting"`, label **会议转写**, is `EvidenceClass.BEHAVIOR` (actual behaviour),
-  not self-report or narration. Its expressions have `narrated=False`.
-- The converter accepts an already parsed, speaker-normalised `Meeting`; it does not parse transcripts again, merge turns,
-  strip text, drop empty utterances or pseudonymise speakers/text, even when `settings.pseudonymize_others=True`.
-  One expression per utterance in list order; `idx` is its zero-based position, `is_target` comes from
-  `settings.is_target`, `date` is the meeting date, `channel` is its title or, if empty, its meeting ID.
-- Context reuses the chat rule: only target expressions receive context, from the last `CONTEXT_MESSAGES=3`
-  non-target utterances since the preceding target utterance, rendered `speaker：text`. Context whitespace is
-  collapsed and clipped to `CONTEXT_CHARS=400` (a leading ellipsis and the tail); verbatim expression text is untouched.
-- `source_id_for(MEETING, meeting.source, meeting.model_dump_json())` derives a content-stable source ID;
-  expression IDs are `f"{source_id}#{position:05d}"`. Settings and import time do not affect IDs.
-  `imported_at` uses the existing source import-time rule.
-- Additive optional fields, all defaulting to `None`: `Source.meeting_id: str | None`,
-  `Expression.utterance_idx: int | None`, `Expression.start: float | None`, `Expression.end: float | None`.
-  The latter two retain the utterance timestamps in seconds. Existing serialized sources/expressions load without
-  these fields; all other converters leave them unset and retain their existing behaviour.
-- Existing source fields retain meeting metadata exactly: `title` retains even an empty title, `origin` retains
-  the full `Meeting.source` path, and `first_date=last_date=Meeting.date`, including for an empty meeting.
-  `source_to_meeting(meeting_to_source(meeting, settings)) == meeting`, also after source/expression JSON serialization:
-  it restores meeting ID, date, title, source path and each utterance's original index, speaker, text and timestamps
-  in stored list order. Non-target-only meetings are accepted. The inverse raises `ValueError` for a non-meeting
-  source or missing meeting ID/date/utterance index rather than fabricating lost metadata.
-- `parse_source(MEETING, path, settings, date)` parses a transcript via `persona.transcripts`, including local speaker sidecars. `parse_text` uses the pure `parse_transcript_text` for web uploads without accessing filesystem paths. CLI and web both accept this generic corpus kind; no meeting runtime or derived meeting store exists.
+- Deleted `persona.transcripts`, `persona.transcript_schema`, `Meeting`, `Utterance`, meeting converters,
+  `SourceKind.MEETING/BIOGRAPHY`, `parse_biography`, `Source.meeting_id` and expression utterance/timestamp fields.
+  CLI/API import rejects `meeting` and `biography`; existing database source rows and nested candidate/item
+  evidence of either kind normalize to `document` on read, including document-filtered queries. IDs and text
+  are preserved; old JSON/SQL rows are not rewritten. Unknown removed JSON fields are ignored.
+  Legacy `narrated`/`own_words` provenance remains so third-party text is not presented as the owner's own words.
+  Dedicated third-person/classical-Chinese prompt rules and biography voice fallback are removed.
+- Removed questionnaire `round=retest`, held-out question flags/filtering and retest UI. Only `initial` is accepted;
+  every submitted answer is profile evidence. The unused SQLite `held_out` column remains solely for opening old
+  databases and receives zero on new writes; no query uses it. Legacy rows remain readable, including former
+  held-out answers. Old retest metadata is ignored.
+- Questionnaire version is `q-v1`: 20 optional everyday questions covering nine topics. Old `q-v0` answers are
+  not displayed under new questions; previously imported sources remain and are replaced on next submission.
+  Facet IDs stay stable; names use general-life wording (`taxonomy v1`). Extraction/merge statements omit pronoun
+  subjects, and `persona-v3` causes re-extraction on the next explicit build. Existing profiles can still be read.
+- Removed CLI chat `--as-of` and Web `ChatBody.as_of`; Web chat always uses current material. Eval and service
+  HTTP/MCP retain optional advanced `as_of`. Coverage date filtering is unchanged.
+- Removed archived biography eval payloads and their `decision/stance/voice/trap` type discriminator.
+  Only the personal scenario and question input/expected/output contracts remain; old biography eval reports are
+  no longer supported (this does not affect user databases).
+- Unused `[twin] k_principles/k_question_patterns/k_tradeoffs/k_stances/k_cases/k_directives`,
+  `persona_principles`, `segment_window_chars` are not settings. Old/unknown keys are silently ignored,
+  without warnings. CLI `persona coverage` remains with plain-language output.
 
 ## Free-form memory ingestion (code layer 4; Web layer 9)
 
 - `sources.extract_text(name, data) -> str` delegates to `persona.text`: pypdf reads PDF text layers (empty → `这个 PDF 没有可提取的文字（可能是扫描件）`), python-docx reads paragraphs/table cells, stdlib HTMLParser drops script/style and preserves paragraph breaks. Text/Markdown/CSV/JSON/SRT/VTT use charset-normalizer, preferring Unicode/GB18030 for short Chinese exports. Single-file limit: 50 MB; unsupported suffixes are skipped with Chinese reasons. No OCR or personal-text logging.
-- `detect_kind(name, text, settings=None) -> SourceKind`: questionnaire uses existing numbered-question/facet-tag and answer markers; chat uses ≥60% non-empty lines matching existing timestamped chat patterns, or CSV/JSON rows with time+sender+content aliases from the chat parser; interview uses ≥60% speaker lines and a configured target name/alias as speaker; otherwise document. Meeting/biography require explicit kind and are never auto-detected. Import date defaults to filename, then first chat date-like line, then today; existing dated expressions retain their dates.
+- `detect_kind(name, text, settings=None) -> SourceKind`: questionnaire uses existing numbered-question/facet-tag and answer markers; chat uses ≥60% non-empty lines matching existing timestamped chat patterns, or CSV/JSON rows with time+sender+content aliases from the chat parser; interview uses ≥60% speaker lines and a configured target name/alias as speaker; otherwise document. Import date defaults to filename, then first chat date-like line, then today; existing dated expressions retain their dates.
 - `POST /api/persona/import`: multipart `files`; optional `kind` (omitted means auto per file), legacy explicit `date` retained. Relative folder names are reduced to basename; any hidden path component is skipped. Response `{imported, skipped}` always lists per-file outcomes, including when all are skipped; imported entries append `detected_kind` and `detected_kind_label` (plain Chinese).
 - `POST /api/persona/notes`: `{text, title?}`, text length 1–20000 and non-whitespace. Document source dated today, default title `笔记 YYYY-MM-DD HH:MM`; given title retained. Note origin has a `note:` prefix so its plain label is 笔记.
-- `GET /api/persona/sources` appends `status: processing|remembered|nothing_found|failed` and `remembered: int` (distinct supported, non-rejected items), plus detected kind/label. Existing source-memory fields remain compatible; no preview is included. Failed processing is persisted separately from pending/built markers. `GET /api/persona/sources/{id}/text` returns text/plain from `expression_view`, excluding held-out answers, first 20000 characters; missing source → 404. Raw L1 is never exposed by this endpoint.
+- `GET /api/persona/sources` appends `status: processing|remembered|nothing_found|failed` and `remembered: int` (distinct supported, non-rejected items), plus detected kind/label. Existing source-memory fields remain compatible; no preview is included. Failed processing is persisted separately from pending/built markers. `GET /api/persona/sources/{id}/text` returns text/plain from `expression_view`, first 20000 characters; missing source → 404. Raw L1 is never exposed by this endpoint.
 - After successful Web import/note/delete, `PersonaProcessing` debounces about 3 s. It uses cancellable scheduling (injectable for tests) and JobManager exclusivity; edits during a running build coalesce into exactly one follow-up. Backend construction occurs inside the job, so adding memories works before models are configured. Failures remain retryable via `POST /api/persona/build` (202 job_id). Last finish/error survive restart; queued/running jobs do not. UI startup requeues stale memory, including imports/notes saved by CLI.
 - `GET /api/persona/processing` returns `{state: idle|queued|running, job_id?, last_finished_at?, last_error?}`; a build in progress takes precedence over a queued follow-up. Error messages are sanitized; an old input-version failure is not assigned to newly added memories.
 - Web chat without items returns 200 `ChatReply + cited`, friendly Chinese abstention explaining processing/no memories, before constructing backends. Persisting PersonaChat with no built profile also abstains without model calls. Non-persisting service/eval retrieval remains unchanged, including expression-only corpora.
@@ -174,7 +164,7 @@ def source_to_meeting(parsed: ParsedSource) -> Meeting
 ## Memory upload queries and builds (code layers 3/5)
 
 - `PersonaStore` 的 `p_meta.sources_changed_at` 为带 UTC 时区的 ISO 时间（微秒精度），仅在新增/替换来源、实际删除来源时，与对应写入同事务更新。`source_pending:<source_id>` 是来源等待构建的内部标记，成功构建后清除。
-- `profile.source_memories(store) -> dict[str, SourceMemory]` 是纯查询：每个来源返回 `expressions_total/target/others`（包括 held_out）、`items_supported`、`facets`（facet_id/name）、`contributes_nothing`、`build_status`（not_built/remembered/no_items）。按证据 expression_id 查询实际来源，重复引用和跨来源条目对每个来源只计一次；未拒绝条目口径与完成度一致。仍存于上次档案的条目也计入支撑，过期状态独立展示。
+- `profile.source_memories(store) -> dict[str, SourceMemory]` 是纯查询：每个来源返回 `expressions_total/target/others`、`items_supported`、`facets`（facet_id/name）、`contributes_nothing`、`build_status`（not_built/remembered/no_items）。按证据 expression_id 查询实际来源，重复引用和跨来源条目对每个来源只计一次；未拒绝条目口径与完成度一致。仍存于上次档案的条目也计入支撑，过期状态独立展示。
 - `profile.profile_stale(store) -> bool`：sources_changed_at 晚于 built_at，或来源非空而 built_at 缺失；旧无 sources_changed_at 的库兼容，旧 built_at 无时区时按本机时间解析。这个状态只覆盖来源变化，不追踪配置变化。
 - `BuildReport` 保留原字段并追加 `facet_diffs: dict[str, FacetItemDiff]`；`FacetItemDiff` 含 `added/changed/removed`。比较 replace_facet_items 前后的原始 item_id 与 statement，不受人工审核替换表述影响；相同 ID 仅 statement 改变算 changed，ID 改变算 removed + added，证据/情境改变不算 statement diff。包含成功合并但零变化的细项，不包含失败或跳过的细项。
 - BuildReport 提供派生总计 `items_added/items_changed/items_removed/facets_changed` 和 `change_summary()`。facets_changed 只计算有非零 diff 的细项；无变化增量构建总计为零。构建日志仅使用编号、计数及错误类型，不记录条目文本、来源标题或异常正文。
@@ -182,7 +172,7 @@ def source_to_meeting(parsed: ParsedSource) -> Meeting
 
 ## Generic evaluation schema (code layer 1)
 
-All contracts are frozen and forbid extras. `CaseInput` exposes only identity, scenario, mode and `BiographyInput(id, type, prompt)`; answers live separately in `BiographyExpected`. The biography-shaped question/answer contracts remain temporarily for the next personal-evaluation task, without any biography runner or benchmark. `Prediction` has `BiographyOutput(reply)`, nullable capabilities and explicit raw data. `Judgement` retains rubric verdicts; failed/uncalled rows have `score=None`. `Report` preserves records, policies, purposes, fingerprints, generic statistics and warnings. Development purpose requires a dev split; reports cannot mix purposes. Aggregation order is judge → repeat → case → group.
+All contracts are frozen and forbid extras. `CaseInput` exposes only identity, personal scenario, mode and `QuestionInput(id, category, prompt)`; answers live separately in `QuestionExpected`. `Prediction` has `QuestionOutput(reply)`, nullable capabilities and explicit raw data. `Judgement` retains rubric verdicts; failed/uncalled rows have `score=None`. `Report` preserves records, policies, purposes, fingerprints, generic statistics and warnings. Development purpose requires a dev split; reports cannot mix purposes. Aggregation order is judge → repeat → case → group.
 
 ## evals/harness.py (layer 8)
 

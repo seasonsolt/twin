@@ -118,7 +118,7 @@ def test_persona_pages(tmp_path: Path) -> None:
     assert money["level"] == 2 and money["by_kind"] == {"questionnaire": 1, "chat": 1}
 
     messages = [{"role": "user", "content": "你看重什么？"}]
-    chat = browser.run("/api/persona/chat", json={"messages": messages, "as_of": None})["result"]
+    chat = browser.run("/api/persona/chat", json={"messages": messages})["result"]
     assert chat["reply"] == "钱到账才算。" and {c["kind"] for c in chat["cited"]} == {"item", "expression"}
     bad = browser.client.post(
         "/api/persona/chat", headers=headers, json={"messages": [{"role": "twin", "content": "x"}]}
@@ -154,7 +154,7 @@ def test_questionnaire_page(tmp_path: Path) -> None:
     browser = make_browser(make_settings(tmp_path), persona_handler)
     headers = {**ACCEPT, "X-Twin": "1"}
     empty = browser.get("/api/persona/questionnaire", {"round": "initial"})
-    assert empty["status"] == "empty" and len(empty["questions"]) == 36
+    assert empty["status"] == "empty" and len(empty["questions"]) == 20
 
     draft = browser.client.put(
         "/api/persona/questionnaire/draft",
@@ -173,12 +173,16 @@ def test_questionnaire_page(tmp_path: Path) -> None:
     assert browser.get("/api/persona/items")[0]["facet_id"] == "2.1"
 
     after = browser.get("/api/persona/questionnaire")
-    assert after["status"] == "submitted" and after["retest_from"]
-    retest = browser.post("/api/persona/questionnaire/submit", json={"round": "retest", "answers": {"q13": "先问首付"}})
-    assert (
-        retest["job_id"] is None
-        and len(browser.get("/api/persona/questionnaire", {"round": "retest"})["questions"]) == 6
-    )
+    assert after["status"] == "submitted" and "retest_from" not in after
+    for endpoint in ("/api/persona/questionnaire/draft", "/api/persona/questionnaire/submit"):
+        response = browser.client.request(
+            "PUT" if endpoint.endswith("draft") else "POST",
+            endpoint,
+            headers=headers,
+            json={"round": "retest", "answers": {}},
+        )
+        assert response.status_code == 400
+    assert browser.client.get("/api/persona/questionnaire?round=retest").status_code == 400
 
 
 def test_offline_browsing_import_and_media_api_contracts(tmp_path: Path) -> None:
@@ -192,7 +196,6 @@ def test_offline_browsing_import_and_media_api_contracts(tmp_path: Path) -> None
             "/api/persona/items",
             "/api/persona/coverage",
             "/api/persona/questionnaire",
-            "/api/persona/questionnaire?round=retest",
             "/api/media/capabilities",
         ):
             assert client.get(api).status_code == 200, api
@@ -203,13 +206,13 @@ def test_offline_browsing_import_and_media_api_contracts(tmp_path: Path) -> None
         assert client.get("/api/status", headers={"Host": "untrusted.invalid"}).status_code == 403
 
         imported = client.post(
-            "/api/persona/import?kind=meeting",
+            "/api/persona/import?kind=interview",
             files={"files": ("2026-01-01_访谈.txt", "合成人物：我喜欢先核对来源。".encode())},
             headers=headers,
         )
         assert imported.status_code == 200, imported.text
         source = imported.json()["imported"][0]
-        assert source["kind"] == "meeting" and source["n_target"] == 1
+        assert source["kind"] == "interview" and source["n_target"] == 1
         assert client.get("/api/status").json()["counts"]["sources"] == 1
         assert client.delete(f"/api/persona/sources/{source['source_id']}", headers=headers).status_code == 200
 

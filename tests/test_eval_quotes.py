@@ -263,7 +263,7 @@ def test_cited_item_statement_and_uncited_evidence() -> None:
         }
 
 
-@pytest.mark.parametrize("hidden_kind", ["future", "undated", "held_out", "other_speaker"])
+@pytest.mark.parametrize("hidden_kind", ["future", "undated", "other_speaker"])
 def test_hidden_expression_is_not_elsewhere(hidden_kind: str) -> None:
     settings = Settings(target_name="虚构林沐")
     quote = "我曾驾驶虚构飞船。"
@@ -273,7 +273,6 @@ def test_hidden_expression_is_not_elsewhere(hidden_kind: str) -> None:
         updates: dict[str, Any] = {
             "future": {"date": DAY + dt.timedelta(days=1)},
             "undated": {"date": None},
-            "held_out": {"held_out": True},
             "other_speaker": {"is_target": False, "speaker": "虚构许舟"},
         }[hidden_kind]
         parsed.expressions[0] = parsed.expressions[0].model_copy(update=updates)

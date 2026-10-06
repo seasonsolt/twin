@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sqlite3
 import stat
 from pathlib import Path
 
 import pytest
 
-from twin.config import Settings
+from twin.config import Settings, load_settings
 from twin.persona.dimensions import (
     DIMENSIONS,
     FACET_BY_ID,
@@ -17,10 +18,10 @@ from twin.persona.dimensions import (
     facets_of,
     requires_consent,
 )
+from twin.persona.items import PersonaCandidate, PersonaItem, PEvidence
 from twin.persona.schema import EvidenceClass, SourceKind, evidence_class
 from twin.persona.sources import (
     expression_view,
-    parse_biography,
     parse_chat,
     parse_document,
     parse_interview,
@@ -39,15 +40,15 @@ def settings() -> Settings:
 
 
 def test_taxonomy_has_nine_dimensions_and_39_unique_facets() -> None:
-    assert TAXONOMY_VERSION == "v0" and len(DIMENSIONS) == 9 and len(FACETS) == 39
+    assert TAXONOMY_VERSION == "v1" and len(DIMENSIONS) == 9 and len(FACETS) == 39
     assert len(FACET_BY_ID) == 39
     assert all(facets_of(d.dimension_id) for d in DIMENSIONS)
     assert requires_consent("9.3") and not requires_consent("3.1")
     guide = facet_guide(frozenset({"3.1", "6.1"}))
     assert guide.splitlines() == [
-        "D3 决策与判断",
-        "  3.1 风险偏好：面对不确定收益和损失时敢不敢押、押多少",
-        "D6 表达风格",
+        "D3 怎么做决定",
+        "  3.1 风险偏好：面对不确定的选择时，愿意尝试到什么程度",
+        "D6 说话方式",
         "  6.1 用词与口头禅：高频词、口头禅、行话",
     ]
 
@@ -61,7 +62,7 @@ QUESTIONNAIRE = """# 数字分身建档问卷 v0
 回答：我负责运营中心。
 向 CEO 汇报。
 
-**13.【测试题】合作方提出一个大单，你第一句会说什么？**　*情境 · 3.4 3.6*
+**13.合作方提出一个大单，你第一句会说什么？**　*情境 · 3.4 3.6*
 
 回答：首付多少？
 
@@ -82,7 +83,6 @@ def test_questionnaire_answers_become_self_report_expressions_with_facet_hints(s
     assert [r.text for r in rows] == ["我负责运营中心。\n向 CEO 汇报。", "首付多少？", "六点起，跑步。"]
     assert rows[0].context == "问卷第 1 题：用三五句话介绍你现在的角色：负责什么。"
     assert rows[0].facets_hint == ["1.1", "1.4"] and rows[0].date == D(2026, 10, 5) and rows[0].is_target
-    assert rows[1].held_out and "测试题" not in rows[1].context  # a test question never becomes evidence
     assert src.declined_facets == ["9.1"]  # skipped optional question = no consent for its facets
     assert src.n_expressions == 3 and src.n_target == 3
 
@@ -147,22 +147,6 @@ def test_interview_and_document(settings: Settings) -> None:
     assert all(e.is_target and e.date == D(2026, 8, 1) for e in doc.expressions)
 
 
-def test_biography_paragraphs_are_narration_dated_by_their_headings(settings: Settings) -> None:
-    raw = (
-        "开篇的话。\n\n# 1853 年\n\n公在衡州练兵。\n\n# 1854年3月5日 出征\n\n公曰：不可轻进。\n\n# 后记\n\n作者评述。\n"
-    )
-    bio = parse_biography("曾公年谱.md", raw, settings, D(1900, 1, 1))
-    assert bio.source.kind is SourceKind.BIOGRAPHY and evidence_class(bio.source.kind) is EvidenceClass.BEHAVIOR
-    assert [(e.date, e.text) for e in bio.expressions] == [
-        (D(1900, 1, 1), "开篇的话。"),
-        (D(1853, 7, 1), "公在衡州练兵。"),  # a year alone is taken as mid-year
-        (D(1854, 3, 5), "公曰：不可轻进。"),
-        (D(1854, 3, 5), "作者评述。"),  # an undated heading keeps the last date
-    ]
-    assert all(e.narrated and e.is_target and e.speaker == "张三" for e in bio.expressions)
-    assert not any(e.narrated for e in parse_document("d.md", "收入翻倍。", settings).expressions)
-
-
 def test_store_round_trip_replace_filters_and_delete(settings: Settings, tmp_path: Path) -> None:
     path = tmp_path / "twin.db"
     store = PersonaStore(path)
@@ -172,9 +156,7 @@ def test_store_round_trip_replace_filters_and_delete(settings: Settings, tmp_pat
     assert store.put_source(q) is False  # the same file again replaces, not duplicates
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert [s.kind for s in store.list_sources()] == [SourceKind.CHAT, SourceKind.QUESTIONNAIRE]
-    everything = store.list_expressions(include_held_out=True)
-    assert len(everything) == len(q.expressions) + len(chat.expressions)
-    assert all(not e.held_out for e in store.list_expressions())
+    assert len(store.list_expressions()) == len(q.expressions) + len(chat.expressions)
     assert {e.speaker for e in store.list_expressions(target_only=True)} == {"张三", "老张"}
     assert [e.date for e in store.list_expressions(source_id=chat.source.source_id, until=D(2026, 9, 1))] == [
         D(2026, 9, 1)
@@ -213,3 +195,73 @@ def test_other_speakers_are_pseudonymized_consistently_and_the_person_kept() -> 
     viewed = expression_view(store, settings, source_id=interview.source.source_id)
     assert viewed[0].speaker == code and viewed[1].speaker == "老张"
     store.close()
+
+
+@pytest.mark.parametrize("kind", ["meeting", "biography"])
+def test_legacy_kinds_load_as_documents_without_losing_text(kind: str, tmp_path: Path, settings: Settings) -> None:
+    path = tmp_path / "legacy.db"
+    parsed = parse_document("legacy.txt", "旧资料里的文字。", settings)
+    evidence = PEvidence(
+        expression_id=parsed.expressions[0].expression_id,
+        source_id=parsed.source.source_id,
+        source_kind=SourceKind.DOCUMENT,
+        evidence_class=EvidenceClass.BEHAVIOR,
+        quote="旧资料里的文字。",
+    )
+    with PersonaStore(path) as store:
+        store.put_source(parsed)
+        store.put_chunk(
+            "old-chunk",
+            parsed.source.source_id,
+            [
+                PersonaCandidate(
+                    candidate_id="old-candidate",
+                    chunk_id="old-chunk",
+                    facet_id="1.1",
+                    statement="旧结论",
+                    evidence=[evidence],
+                )
+            ],
+        )
+        store.replace_facet_items(
+            "1.1",
+            [
+                PersonaItem(
+                    item_id="old-item",
+                    facet_id="1.1",
+                    statement="旧结论",
+                    evidence=[evidence],
+                )
+            ],
+        )
+    with sqlite3.connect(path) as db:
+        source = parsed.source.model_dump(mode="json") | {"kind": kind, "meeting_id": "old-id"}
+        db.execute("UPDATE p_sources SET kind = ?, json = ?", (kind, json.dumps(source)))
+        for table in ("p_candidates", "p_items"):
+            raw = json.loads(db.execute(f"SELECT json FROM {table}").fetchone()[0])
+            raw["evidence"][0]["source_kind"] = kind
+            db.execute(f"UPDATE {table} SET json = ?", (json.dumps(raw),))
+    with PersonaStore(path) as store:
+        source = store.get_source(parsed.source.source_id)
+        assert source is not None and source.kind is SourceKind.DOCUMENT
+        assert store.list_sources(SourceKind.DOCUMENT) == [source]
+        assert store.list_expressions()[0].text == "旧资料里的文字。"
+        assert expression_view(store, settings)[0].text == "旧资料里的文字。"
+        assert store.list_candidates()[0].evidence[0].source_kind is SourceKind.DOCUMENT
+        assert store.list_items()[0].evidence[0].source_kind is SourceKind.DOCUMENT
+
+
+def test_old_config_ignores_unused_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "twin.toml"
+    path.write_text(
+        'target_name = "小林"\nsegment_window_chars = 4000\npersona_principles = 8\n'
+        "[twin]\nk_principles = 8\nk_question_patterns = 8\nk_tradeoffs = 8\n"
+        "k_stances = 8\nk_cases = 8\nk_directives = 8\nsegment_window_chars = 4000\n"
+    )
+    settings = load_settings(path)
+    assert settings.target_name == "小林"
+    assert "segment_window_chars" not in settings.model_dump() and "twin" not in settings.model_dump()
+    assert not caplog.records

@@ -10,7 +10,7 @@ it('keeps product source text free of the old technical labels', () => {
         if (entry.name !== 'test') check(path);
       } else if (/\.(tsx?|css)$/.test(entry.name)) {
         expect(readFileSync(path, 'utf8'), path).not.toMatch(
-          /维度|细项|完成度|充分率|验证率|目标人物|推演|本人\s*\d+\s*条|支撑档案/,
+          /维度|细项|完成度|充分率|验证率|目标人物|推演|会议转写|传记|本人\s*\d+\s*条|支撑档案/,
         );
       }
     }

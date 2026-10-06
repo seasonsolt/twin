@@ -24,9 +24,6 @@ from twin.evals.harness import (
     run_predictions,
 )
 from twin.evals.schema import (
-    BiographyExpected,
-    BiographyInput,
-    BiographyOutput,
     Case,
     CaseInput,
     FailurePolicy,
@@ -35,6 +32,9 @@ from twin.evals.schema import (
     PairingPolicy,
     Prediction,
     Purpose,
+    QuestionExpected,
+    QuestionInput,
+    QuestionOutput,
     Scenario,
     Split,
     SystemSpec,
@@ -56,6 +56,7 @@ class UnusedLLM:
         schema: type[T],
         effort: Effort = "medium",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         raise AssertionError("the test must not call an LLM")
 
@@ -64,11 +65,11 @@ def make_case(case_id: str, horizon: date | None = None) -> Case:
     return Case(
         input=CaseInput(
             case_id=case_id,
-            scenario=Scenario.BIOGRAPHY,
+            scenario=Scenario.PERSONAL,
             mode="named",
-            payload=BiographyInput(id=case_id, type="decision", prompt="What would you do?"),
+            payload=QuestionInput(id=case_id, category="fact", prompt="What would you do?"),
         ),
-        expected=BiographyExpected(gold="SECRET ANSWER", key_points=["SECRET SCORING POINT"]),
+        expected=QuestionExpected(answer="SECRET ANSWER", evidence="SECRET SCORING POINT"),
         split=Split.DEV,
         purpose=Purpose.DEVELOPMENT_REGRESSION,
         group_id=case_id,
@@ -110,7 +111,7 @@ class FakeSystem:
             mode=case_input.mode,
             repeat=repeat,
             text=text,
-            payload=BiographyOutput(reply=text),
+            payload=QuestionOutput(reply=text),
         )
 
 
@@ -132,7 +133,7 @@ class FakeRubric:
         return case.input.case_id not in self.excluded_cases
 
     def __call__(self, judge: Judge, case: Case, prediction: Prediction, against: Prediction | None) -> Judgement:
-        assert case.expected == BiographyExpected(gold="SECRET ANSWER", key_points=["SECRET SCORING POINT"])
+        assert case.expected == QuestionExpected(answer="SECRET ANSWER", evidence="SECRET SCORING POINT")
         against_id = against.system_id if against is not None else None
         with self.lock:
             self.calls.append((prediction.case_id, judge.llm.name, prediction.repeat, against_id))

@@ -12,7 +12,7 @@ from twin.llm import FakeLLM, LLMTruncated
 from twin.persona import profile as pf
 from twin.persona.items import item_as_of
 from twin.persona.schema import EvidenceClass
-from twin.persona.sources import parse_biography, parse_chat, parse_questionnaire
+from twin.persona.sources import parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
 
 D = dt.date
@@ -21,7 +21,7 @@ QUESTIONNAIRE = """**4. 把下面几项排序。**　*偏好 · 2.1*
 
 回答：结果第一，钱进了账户才算数。
 
-**13.【测试题】合作方提出一个大单，你第一句会说什么？**　*情境 · 3.4 3.6*
+**13.合作方提出一个大单，你第一句会说什么？**　*情境 · 3.4 3.6*
 
 回答：首付多少？
 
@@ -99,7 +99,7 @@ def test_build_extracts_verified_candidates_merges_per_facet_and_is_incremental(
     report = pf.build_profile(store, llm, settings)
     assert report.failures == [] and report.sources == 2 and report.chunks_extracted == 2
     users = [u for name, _, u in llm.calls if name == "ExtractDraft"]
-    assert all("首付多少" not in u for u in users)  # held-out test answers never reach extraction
+    assert any("首付多少" in u for u in users)
     candidates = store.list_candidates()
     assert sorted(c.facet_id for c in candidates) == [
         "2.1",
@@ -123,6 +123,42 @@ def test_build_extracts_verified_candidates_merges_per_facet_and_is_incremental(
     pf.build_profile(store, llm, settings)
     assert {i.facet_id for i in store.list_items()} == {"2.1", "9.1"}  # 4.2 lost its only source
     assert store.list_items("2.1")[0].classes() == {EvidenceClass.SELF_REPORT}
+
+
+@pytest.mark.parametrize(
+    "default, override, expected",
+    [
+        (None, None, None),
+        ("none", None, "low"),
+        ("high", None, "high"),
+        ("none", "medium", "medium"),
+        ("high", "none", "none"),
+    ],
+)
+def test_extract_and_merge_use_effective_reasoning_effort(
+    store: PersonaStore,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    default: Any,
+    override: Any,
+    expected: str | None,
+) -> None:
+    settings.llm.reasoning_effort = default
+    settings.llm.reasoning_effort_extract = override
+    llm = FakeLLM(handler)
+    original = llm.structured
+    options: list[dict[str, Any]] = []
+
+    def structured(**kwargs: Any) -> BaseModel:
+        options.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(llm, "structured", structured)
+    report = pf.build_profile(store, llm, settings)
+    assert report.failures == []
+    assert {call["schema"] for call in options} == {pf.ExtractDraft, pf.MergeDraft}
+    assert all(call["reasoning_effort"] == expected for call in options)
+    assert all(call["effort"] == settings.llm.effort_extract for call in options)
 
 
 def test_failed_chunk_is_reported_and_retried_next_build(store: PersonaStore, settings: Settings) -> None:
@@ -191,34 +227,10 @@ def test_reviews_follow_items_through_a_re_merge(store: PersonaStore, settings: 
     assert store.reviews() == {"pi_grown": review}  # the old item's review moved, nothing left dangling
 
 
-BIOGRAPHY = "# 1854 年\n\n公议进兵，众请速攻。公曰：宁可屯兵不进，不可轻进致败。遂坚守不出。\n"
-
-
-def test_biography_narration_is_labelled_and_only_own_words_carry_style(settings: Settings) -> None:
-    store = PersonaStore(":memory:")
-    store.put_source(parse_biography("年谱.md", BIOGRAPHY, settings))
-    seen: list[tuple[str, str]] = []
-
-    def bio(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
-        seen.append((system, user))
-        if schema is pf.MergeDraft:
-            return {"items": [{"statement": "合并", "candidate_ids": re.findall(r"\[(pc_[0-9a-f]+)\]", user)}]}
-        return {
-            "items": [
-                {"facet_id": "3.1", "statement": "他宁守勿冒进", "quotes": [{"n": 1, "quote": "遂坚守不出"}]},
-                {
-                    "facet_id": "6.3",
-                    "statement": "他用对举句",
-                    "quotes": [{"n": 1, "quote": "宁可屯兵不进，不可轻进致败", "own_words": True}],
-                },
-                {"facet_id": "6.1", "statement": "他说话简短", "quotes": [{"n": 1, "quote": "众请速攻"}]},
-            ]
-        }
-
-    report = pf.build_profile(store, FakeLLM(bio), settings)
-    system, user = seen[0]
-    assert "记述：公议进兵" in user and "本人：" not in user and "第三人称的传记类资料" in system
-    items = {i.facet_id: i for i in store.list_items()}
-    assert set(items) == {"3.1", "6.3"}  # the style claim resting on narration alone is dropped
-    assert items["3.1"].evidence[0].own_words is False and items["3.1"].evidence[0].date == D(1854, 7, 1)
-    assert items["6.3"].evidence[0].own_words is True and report.failures == []
+def test_statement_prompts_omit_pronoun_subjects() -> None:
+    assert "不加人称代词主语" in pf.EXTRACT_SYSTEM and "不加人称代词主语" in pf.MERGE_SYSTEM
+    assert "不加人称代词主语" in pf.CandidateDraft.model_fields["statement"].description
+    assert "不加人称代词主语" in pf.MergedDraft.model_fields["statement"].description
+    assert "在成都做产品经理" in pf.EXTRACT_SYSTEM
+    assert "做决定前喜欢先睡一觉" in pf.EXTRACT_SYSTEM
+    assert not any(word in pf.EXTRACT_SYSTEM for word in ("回款", "首付", "公曰", "奏称", "升迁"))

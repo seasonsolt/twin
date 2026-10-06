@@ -48,7 +48,7 @@ from twin.evals.schema import (
 from twin.evals.stats import bootstrap_grouped
 from twin.llm import FakeLLM
 from twin.persona.chat import PersonaChat, index_persona
-from twin.persona.profile import ExtractDraft, build_profile
+from twin.persona.profile import BuildReport, ExtractDraft, build_profile
 from twin.persona.schema import ChatDraft, SourceKind
 from twin.persona.sources import parse_text
 from twin.persona.store import PersonaStore
@@ -564,7 +564,7 @@ def test_v1_readable_and_v2_generic_contract() -> None:
 
     legacy = Report(
         schema_version=1,
-        scenario=Scenario.BIOGRAPHY,
+        scenario=Scenario.PERSONAL,
         purpose=Purpose.FINAL_EVAL,
         systems=(),
         judges=(),
@@ -634,6 +634,45 @@ def seed_memory(settings: Settings) -> None:
         store.put_source(parse_text(SourceKind.DOCUMENT, "background.txt", "虚构背景：只用干净画笔。", settings))
         build_profile(store, FakeLLM(memory_grade), settings)
         index_persona(store, HashingEmbedder(), settings)
+
+
+@pytest.mark.parametrize("failed_builds", [0, 1, 2])
+def test_update_build_retries_reported_failures_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_builds: int
+) -> None:
+    settings = memory_settings(tmp_path)
+    seed_memory(settings)
+    before = settings.db_path.read_bytes()
+    events: list[str] = []
+    builds = 0
+
+    def build(store: PersonaStore, llm: Any, local: Settings) -> BuildReport:
+        nonlocal builds
+        builds += 1
+        events.append("build")
+        assert store.path == local.db_path != settings.db_path and local.max_workers == 1
+        if builds <= failed_builds:
+            return BuildReport(failures=["extract failed: LLMInvalidOutput"])
+        return build_profile(store, llm, local)
+
+    def index(store: PersonaStore, embedder: Any, local: Settings) -> Any:
+        events.append("index")
+        return index_persona(store, embedder, local)
+
+    monkeypatch.setattr("twin.evals.personal.build_profile", build)
+    monkeypatch.setattr("twin.evals.personal.index_persona", index)
+    llm = FakeLLM(memory_grade)
+    args = (update_cases(tmp_path), llm, HashingEmbedder(), settings, (Judge(llm, "low"),), FIXTURE / "persona.txt")
+    if failed_builds == 2:
+        with pytest.raises(RuntimeError, match="详情已隐藏"):
+            run_persona_evaluation(*args)
+        assert builds == 2 and events == ["build", "build"]
+    else:
+        report = run_persona_evaluation(*args)
+        assert builds == 6 + failed_builds
+        assert events == ["build"] * failed_builds + ["build", "index"] * 6
+        assert summarize(report)["update"]["metrics"]["accuracy"]["mean"] == 1
+    assert settings.db_path.read_bytes() == before
 
 
 def test_update_protocol_six_scores_private_db_and_incremental_indexes(

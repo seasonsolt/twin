@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from .schema import EvidenceClass, ReviewStatus, SourceKind
+from .schema import EvidenceClass, ReviewStatus, SourceKind, document_kind
 
 
 class PEvidence(BaseModel):
@@ -18,6 +18,8 @@ class PEvidence(BaseModel):
     # Verbatim text located in the expression: the person's words, or narration about them (``own_words`` False).
     quote: str
     own_words: bool = True
+
+    _legacy_kind = field_validator("source_kind", mode="before")(document_kind)
 
 
 class PersonaCandidate(BaseModel):

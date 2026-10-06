@@ -6,7 +6,7 @@
    without evidence. Facets of consent-gated dimensions are offered only after the person answered such a
    questionnaire question.
 3. Merge: per facet, one LLM call groups candidates that state the same underlying trait and flags a contradiction
-   between what the person says about themself and what they do.
+   between incompatible conclusions.
 
 Both steps are incremental: a chunk already extracted (same source, entries and prompt version) is not sent again,
 and a facet whose candidates did not change is not merged again.
@@ -32,7 +32,7 @@ from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
 from .store import PersonaStore
 
-PROMPT_VERSION = "persona-v2"
+PROMPT_VERSION = "persona-v3"
 CHUNK_CHARS = 6000
 ENTRY_CHARS = 1500
 CONTEXT_CHARS = 300
@@ -70,7 +70,7 @@ class SourceMemory:
 
 def source_memories(store: PersonaStore) -> dict[str, SourceMemory]:
     """Query current, non-rejected profile support via expression IDs, once per source and item."""
-    expressions = store.list_expressions(include_held_out=True)
+    expressions = store.list_expressions()
     owners = {e.expression_id: e.source_id for e in expressions}
     totals: dict[str, int] = {}
     targets: dict[str, int] = {}
@@ -171,13 +171,13 @@ class QuoteRefDraft(BaseModel):
     n: int = Field(description="引用的条目编号，即方括号里的数字")
     quote: str = Field(description="从该条目“本人：”或“记述：”之后逐字复制的片段，不改写、不拼接")
     own_words: bool = Field(
-        default=False, description="“记述”条目里，这段引文是他本人说的话或写的文字（直接引语、书信、奏折）时为 true"
+        default=False, description="“记述”条目里，这段引文是他本人说的话或写的文字（直接引语、书信）时为 true"
     )
 
 
 class CandidateDraft(BaseModel):
     facet_id: str = Field(description="细项编号，如 3.1")
-    statement: str = Field(description="用第三人称写的一条具体结论，以“他”开头，一句话")
+    statement: str = Field(description="一条具体结论，一句话，不加人称代词主语（我、他、她等）")
     applies_when: str = Field(default="", description="这条结论适用的情境；普遍适用时留空")
     quotes: list[QuoteRefDraft] = Field(description=f"支持这条结论的原话，1 到 {MAX_QUOTES} 条")
 
@@ -189,7 +189,6 @@ class ExtractDraft(BaseModel):
 EXTRACT_SYSTEM = """\
 你在为{name}建立人格档案。用户消息里是关于{name}的一组资料，每条有编号，"语境"是这句话在回应什么，\
 "本人"后面是{name}自己的原话，"记述"后面是别人写的关于{name}的叙述。来源类型：{source_kind}（{evidence_note}）。
-{source_rules}
 
 请从中提炼关于{name}这个人的结论，每条归入下面一个细项：
 {facets}
@@ -197,23 +196,12 @@ EXTRACT_SYSTEM = """\
 规则：
 1. 只写有原文支撑的结论，每条至少引用 1 条、最多 {max_quotes} 条。quote 必须从对应编号条目"本人："或"记述："之后\
 逐字复制，不改写、不拼接、不加省略号；不能引用"语境"里别人说的话。
-2. 结论要具体，能指导别人预测他会怎么想、怎么说、怎么做。写"他看重回款，首付不到账不开工"，不写"他做事认真"。
+2. 结论要具体，不加人称代词主语（我、他、她等）。例如"在成都做产品经理"、"做决定前喜欢先睡一觉"，不写"他做事认真"。
 3. 一条结论只讲一件事，只归一个细项；同一件事有多处原话就合在一条里引用。
 4. 不写对任何具体他人的评价，不记录别人的隐私；涉及他人时只记录{name}自己的做法和观点。
 5. 寒暄、事务性的只言片语（"好的""收到"）不提炼。表达风格类细项（6.x）可以根据他的用词、句式、语气提炼，\
 引用最能体现这种风格的原话。
 6. 没有值得提炼的内容时，返回空列表。"""
-
-_SOURCE_RULES = {
-    SourceKind.BIOGRAPHY: """
-这是第三人称的传记类资料，读的时候注意：
-- 叙述里的"公""他""其"等指的就是{name}；作者的评论、赞誉和事后总结不是{name}的想法，不要据此下结论。
-- 重点提炼他做选择时的取舍和理由、坚持的原则、看问题的方式、待人处事的做法：从他做了什么、在两难时选了什么、\
-他自己怎么说的来推断。任职、升迁、年龄、荣誉、行程等履历事实，只有体现了他的选择或态度时才写。
-- 引文是他本人说的话或写的文字（"公曰""奏称""谕""致书"后面的内容、书信、奏折、日记）时，own_words 设为 true；\
-作者的叙述设为 false。表达风格类细项（6.x）只能引用 own_words 为 true 的引文。
-""",
-}
 
 _EVIDENCE_NOTES = {
     "self_report": "本人自述：这是他对自己的描述，结论照实记录他怎么说",
@@ -231,12 +219,17 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
         name=settings.target_name,
         source_kind=chunk.source.kind.value,
         evidence_note=_EVIDENCE_NOTES[klass.value],
-        source_rules=_SOURCE_RULES.get(chunk.source.kind, "").format(name=settings.target_name),
         facets=facet_guide(allowed),
         max_quotes=MAX_QUOTES,
     )
     draft = retry_truncated(
-        lambda: llm.structured(system=system, user=chunk.text, schema=ExtractDraft, effort=settings.llm.effort_extract)
+        lambda: llm.structured(
+            system=system,
+            user=chunk.text,
+            schema=ExtractDraft,
+            effort=settings.llm.effort_extract,
+            reasoning_effort=settings.llm.effective_reasoning_effort_extract,
+        )
     )
     candidates: list[PersonaCandidate] = []
     for i, item in enumerate(draft.items):
@@ -283,12 +276,12 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
 
 
 class MergedDraft(BaseModel):
-    statement: str = Field(description="合并后的结论，第三人称，以“他”开头，一句话")
+    statement: str = Field(description="合并后的结论，一句话，不加人称代词主语（我、他、她等）")
     applies_when: str = Field(default="")
     candidate_ids: list[str] = Field(description="归入这一条的候选编号")
     conflict: str = Field(
         default="",
-        description="成员之间互相矛盾时（尤其是本人自述与实际行为不一致）用一句话说明矛盾；没有矛盾留空",
+        description="成员内容有冲突时用一句话说明差别；没有冲突留空",
     )
 
 
@@ -302,9 +295,8 @@ MERGE_SYSTEM = """\
 
 请把讲同一个底层特点的结论归为一组，每组写一条合并后的结论：
 1. 每个候选编号必须归入且只归入一组；讲的不是同一件事就不要合并。
-2. 合并后的结论要保留各成员的具体内容，不要概括成空话；适用情境不同时写进 applies_when。
-3. 同一组里本人自述和实际行为方向相反（例如自述"看重数据"，行为上总是凭直觉拍板），或者两次行为互相矛盾，\
-在 conflict 里用一句话写明矛盾，结论按实际行为写；没有矛盾时 conflict 留空。"""
+2. 合并后的结论要保留具体内容，不加人称代词主语，不要概括成空话；适用情境不同时写进 applies_when。
+3. 内容冲突时，优先参考本人实际做过的事；在 conflict 里简短说明差别，不确定时不要替本人下定论。没有冲突时留空。"""
 
 
 def _render_candidates(candidates: Sequence[PersonaCandidate]) -> str:
@@ -360,6 +352,7 @@ def merge_facet(
             user=_render_candidates(batch),
             schema=MergeDraft,
             effort=settings.llm.effort_extract,
+            reasoning_effort=settings.llm.effective_reasoning_effort_extract,
         )
         draft = retry_truncated(call)
         by_id = {c.candidate_id: c for c in batch}

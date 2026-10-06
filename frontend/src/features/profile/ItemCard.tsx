@@ -37,14 +37,16 @@ export function ItemCard({
   return (
     <article
       aria-label={item.statement}
-      className="space-y-3 rounded-md border border-border bg-surface p-4"
+      className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
     >
       <div className="flex flex-wrap gap-2">
         <Badge tone={reviewTones[item.review]}>
           {reviewLabels[item.review]}
         </Badge>
       </div>
-      <p className="whitespace-pre-wrap break-words">{item.statement}</p>
+      <p className="whitespace-pre-wrap break-words text-md">
+        {item.statement}
+      </p>
       {item.extracted_statement && (
         <p className="text-sm text-secondary">
           原提炼：{item.extracted_statement}

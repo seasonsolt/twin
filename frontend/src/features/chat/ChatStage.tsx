@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, useSpring } from 'motion/react';
 import { PersonaSwitcher } from '../../components/layout/PersonaSwitcher';
+import { StageHeader } from '../../components/layout/StageHeader';
 import { useMotionPreset, springs } from '../../design/motion';
 import type { Capabilities } from '../avatar/types';
 import { ChatAvatar } from './ChatAvatar';
@@ -134,23 +135,20 @@ export function ChatStage({
       className="stage-space"
       style={{ height: reduced ? targetHeight : height }}
     >
-      <motion.header
-        aria-label={`${name}的舞台`}
-        className="chat-stage"
+      <StageHeader
+        variant="chat"
+        name={name}
         data-collapsed={small}
         data-desktop={desktop}
         data-reduced-motion={reduced}
         style={{ height: reduced ? targetHeight : height }}
-      >
-        <span aria-hidden className="stage-sun" />
-        <span aria-hidden className="stage-coral" />
-        <div className="stage-actions">
-          <PersonaSwitcher stage />
+        left={<PersonaSwitcher stage />}
+        right={
           <button type="button" className="stage-new" onClick={onClear}>
             新对话
           </button>
-        </div>
-        <div className="stage-person">
+        }
+        portrait={
           <motion.button
             ref={circle}
             type="button"
@@ -212,7 +210,8 @@ export function ChatStage({
               </span>
             )}
           </motion.button>
-          <h1 className="persona-name stage-name">{name}</h1>
+        }
+        intro={
           <p
             className="stage-caption"
             aria-live="polite"
@@ -221,13 +220,15 @@ export function ChatStage({
           >
             {caption}
           </p>
-        </div>
+        }
+      >
         {turn?.reply && url && (
           <ReplyVideo
             id={turn.id}
             answer={turn.reply}
             state={videoState}
             portrait={capabilities?.avatar_image?.url}
+            name={name}
             open={open}
             trigger={circle}
             onOpenChange={(value) => {
@@ -245,7 +246,7 @@ export function ChatStage({
             }}
           />
         )}
-      </motion.header>
+      </StageHeader>
     </motion.div>
   );
 }

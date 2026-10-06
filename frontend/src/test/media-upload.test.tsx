@@ -196,7 +196,7 @@ it('shows upload percent/MB and all media row states with retranscription', asyn
       </MemoryRouter>
     </ConfirmProvider>,
   );
-  await screen.findByText('转写中 1.0/2.0 分钟');
+  await screen.findByText('转写中 50% · 1.0/2.0 分钟');
   expect(screen.getByText('提取音频')).toBeInTheDocument();
   expect(screen.getByText('整理中')).toBeInTheDocument();
   expect(screen.getByText('已加入 · 已记住 2 条')).toBeInTheDocument();

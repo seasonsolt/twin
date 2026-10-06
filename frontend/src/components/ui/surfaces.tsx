@@ -17,10 +17,7 @@ export function Card({
   className?: string;
   children: ReactNode;
 }) {
-  const styles = cn(
-    'rounded-lg border border-border bg-surface p-5 shadow-card',
-    className,
-  );
+  const styles = cn('rounded-xl bg-surface p-5 shadow-card', className);
   return interactive ? (
     <Pressable onClick={onClick} className={cn(styles, 'text-left')}>
       {children}

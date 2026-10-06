@@ -71,7 +71,7 @@ export function Dialog({
                 }}
                 transition={transition}
                 className={cn(
-                  'fixed top-1/2 left-1/2 z-50 max-h-[85dvh] w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-6 shadow-elevation-3',
+                  'fixed top-1/2 left-1/2 z-50 max-h-[85dvh] w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-canvas p-6 text-primary shadow-elevation-3',
                   className,
                 )}
               >
@@ -171,10 +171,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           >
             取消
           </Button>
-          <Button
-            variant={request?.options.tone ?? 'primary'}
-            onClick={() => finish(true)}
-          >
+          <Button variant="primary" onClick={() => finish(true)}>
             {request?.options.confirmLabel}
           </Button>
         </div>

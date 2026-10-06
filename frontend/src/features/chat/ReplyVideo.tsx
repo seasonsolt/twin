@@ -9,6 +9,7 @@ export function ReplyVideo({
   id,
   answer,
   portrait,
+  name = '分身',
   state,
   open,
   onOpenChange,
@@ -23,6 +24,7 @@ export function ReplyVideo({
   id: string;
   answer: ChatReply;
   portrait?: string;
+  name?: string;
   state?: ReplyVideoState;
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -43,14 +45,14 @@ export function ReplyVideo({
   return (
     <Dialog.Root open={open && ready} onOpenChange={setOpen}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/90" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-primary" />
         <Dialog.Content
           aria-describedby={`video-text-${id}`}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             trigger.current?.focus();
           }}
-          className="video-overlay fixed inset-0 z-50 flex h-dvh flex-col bg-black/90 px-4 text-white outline-none"
+          className="video-overlay fixed inset-0 z-50 flex h-dvh flex-col bg-primary px-4 text-canvas outline-none"
           onClick={(event) => {
             if (event.target === event.currentTarget) setOpen(false);
           }}
@@ -75,11 +77,14 @@ export function ReplyVideo({
             className="flex shrink-0 items-center justify-between py-2"
             data-testid="video-swipe-area"
           >
-            <Dialog.Title className="text-sm">真人版</Dialog.Title>
+            <div>
+              <p className="persona-name text-xl">{name}</p>
+              <Dialog.Title className="text-sm">真人版</Dialog.Title>
+            </div>
             <Dialog.Close asChild>
               <button
                 aria-label="关闭视频"
-                className="grid size-11 place-items-center rounded-full bg-white/10"
+                className="grid size-11 place-items-center rounded-full bg-canvas text-primary"
               >
                 <X size={20} aria-hidden />
               </button>
@@ -125,14 +130,14 @@ export function ReplyVideo({
             <a
               href={url ?? undefined}
               download="twin-video.mp4"
-              className="inline-flex min-h-11 items-center px-3 text-sm underline"
+              className="inline-flex min-h-11 items-center rounded-full bg-canvas px-5 text-sm text-primary"
             >
               保存
             </a>
             {state?.result?.warnings.map((warning, index) => {
               const sentence = /^s(\d+): cer=/.exec(warning);
               return (
-                <p key={index} role="note" className="text-xs text-white/70">
+                <p key={index} role="note" className="text-xs text-canvas">
                   {sentence
                     ? Number(sentence[1]) === 1
                       ? '开头提示回听与原文有出入'

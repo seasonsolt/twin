@@ -294,18 +294,21 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
 
   return (
     <div className="self-assets space-y-5 [&_button]:min-h-11 [&_input]:text-base [&_label]:min-h-11">
-      <section aria-label="形象" className="space-y-3">
+      <section
+        aria-label="形象"
+        className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
+      >
         <h2 className="text-md font-semibold">形象</h2>
         <div className="flex items-center gap-3">
           {currentPortrait ? (
             <img
               src={currentPortrait}
               alt="当前肖像"
-              className="h-24 w-18 rounded-lg object-cover"
+              className="size-18 rounded-full object-cover"
             />
           ) : (
             <div
-              className="flex h-24 w-18 items-center justify-center rounded-lg bg-background text-secondary"
+              className="flex size-18 items-center justify-center rounded-full bg-background text-secondary"
               aria-label="肖像占位"
             >
               未设置
@@ -414,7 +417,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
       </section>
       <section
         aria-label="声音"
-        className="space-y-3 border-t border-border pt-4"
+        className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
       >
         <h2 className="text-md font-semibold">声音</h2>
         <p>
@@ -474,20 +477,33 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
           安静环境下说话至少 5 秒，会保留前 20 秒。
         </p>
         {recorder.state !== 'idle' && (
-          <div className="space-y-3 rounded-lg border border-border p-3">
-            <p className="text-base leading-relaxed">{passage}</p>
+          <div className="recording-card space-y-3 rounded-xl p-4">
+            <p className="text-md leading-relaxed">{passage}</p>
             {recorder.state === 'requesting' && (
               <p role="status">正在打开麦克风…</p>
             )}
             {recorder.state === 'recording' && (
               <>
-                <p role="timer">{recorder.seconds} / 30 秒</p>
+                <p role="timer" className="flex items-center gap-2">
+                  <span className="recording-live" aria-hidden />
+                  {recorder.seconds} / 30 秒
+                </p>
+                <div className="recording-bars" aria-hidden>
+                  {Array.from({ length: 12 }, (_, index) => (
+                    <i
+                      key={index}
+                      style={{
+                        height: `${8 + recorder.level * ((index % 3) + 1) * 12}px`,
+                      }}
+                    />
+                  ))}
+                </div>
                 <meter
                   aria-label="录音音量"
                   value={recorder.level}
                   min={0}
                   max={1}
-                  className="h-4 w-full"
+                  className="sr-only"
                 />
                 <Button onClick={recorder.stop}>停止录音</Button>
               </>

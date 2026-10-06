@@ -20,6 +20,8 @@ import { useQuestionnaire } from '../features/questionnaire/useQuestionnaire';
 import { BuildSummary } from '../features/sources/SourceCards';
 import type { BuildResult } from '../features/sources/types';
 import { useStatus } from '../stores/status';
+import { StageHeader } from '../components/layout/StageHeader';
+import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 
 export function Questionnaire() {
   const active = useLocation().pathname === '/questionnaire';
@@ -103,176 +105,179 @@ export function Questionnaire() {
     }
   };
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">回答几个问题</h1>
-        <p className="mt-2 text-sm text-secondary">
-          想答哪题就答哪题，也可以直接添加记忆。回答自动保存，可以分几次填完。
-        </p>
-      </header>
-      {draft.loading && <Skeleton className="h-40" />}
-      {draft.error && (
-        <div role="alert" className="text-danger">
-          {draft.error}
-          {!draft.data && (
-            <Button variant="secondary" onClick={draft.reload}>
-              重试加载
-            </Button>
-          )}
-        </div>
-      )}
-      {draft.data && !draft.loading && (
-        <>
-          {draft.data.status === 'submitted' && (
-            <p role="status" className="text-info">
-              已于 {draft.data.submitted_at?.replace('T', ' ').slice(0, 16)}{' '}
-              提交。可以修改后重新提交。
-            </p>
-          )}
-          <Meter
-            value={questions.length ? (answered / questions.length) * 100 : 0}
-            label={`已答 ${answered} / ${questions.length} 题`}
-          />
-          <div role="status" className="min-h-6 text-sm text-secondary">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.span
-                key={statusText}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={crossfade}
-              >
-                {statusText}
-              </motion.span>
-            </AnimatePresence>
-          </div>
-          {draft.saveError && (
-            <p role="alert" className="text-danger">
-              {draft.saveError}{' '}
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void draft.flush()}
-              >
-                重试保存
+    <div>
+      <StageHeader left={<PersonaSwitcher stage />} />
+      <div className="page-content space-y-6">
+        <header>
+          <h2 className="text-2xl font-semibold">回答几个问题</h2>
+          <p className="mt-2 text-sm text-secondary">
+            想答哪题就答哪题，也可以直接添加记忆。回答自动保存，可以分几次填完。
+          </p>
+        </header>
+        {draft.loading && <Skeleton className="h-40" />}
+        {draft.error && (
+          <div role="alert" className="text-danger">
+            {draft.error}
+            {!draft.data && (
+              <Button variant="secondary" onClick={draft.reload}>
+                重试加载
               </Button>
-            </p>
-          )}
-          <FlowStepper
-            key={draft.data.round}
-            initialStep={initialStep}
-            completeOnLast={false}
-            steps={sections.map((section) => ({
-              id: section,
-              title: section,
-              content: (
-                <section className="space-y-6 py-3" aria-label={section}>
-                  <h2 className="text-lg font-semibold">{section}</h2>
-                  {questions
-                    .filter((q) => q.section === section)
-                    .map((q) => {
-                      const id = `answer-${q.id}`;
-                      const skipped =
-                        q.optional && !draft.answers[q.id]?.trim();
-                      const help =
-                        q.kind === '情境'
-                          ? '写你当时真正会说出口的原话'
-                          : '尽量举真实的例子';
-                      return (
-                        <div key={q.id} className="space-y-3">
-                          <h3 id={`${id}-prompt`} className="font-medium">
-                            {q.number}. {q.text}
-                          </h3>
-                          <div className="flex flex-wrap gap-2">
-                            <Badge>{q.kind}</Badge>
+            )}
+          </div>
+        )}
+        {draft.data && !draft.loading && (
+          <>
+            {draft.data.status === 'submitted' && (
+              <p role="status" className="text-info">
+                已于 {draft.data.submitted_at?.replace('T', ' ').slice(0, 16)}{' '}
+                提交。可以修改后重新提交。
+              </p>
+            )}
+            <Meter
+              value={questions.length ? (answered / questions.length) * 100 : 0}
+              label={`已答 ${answered} / ${questions.length} 题`}
+            />
+            <div role="status" className="min-h-6 text-sm text-secondary">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={statusText}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={crossfade}
+                >
+                  {statusText}
+                </motion.span>
+              </AnimatePresence>
+            </div>
+            {draft.saveError && (
+              <p role="alert" className="text-danger">
+                {draft.saveError}{' '}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void draft.flush()}
+                >
+                  重试保存
+                </Button>
+              </p>
+            )}
+            <FlowStepper
+              key={draft.data.round}
+              initialStep={initialStep}
+              completeOnLast={false}
+              steps={sections.map((section) => ({
+                id: section,
+                title: section,
+                content: (
+                  <section className="space-y-6 py-3" aria-label={section}>
+                    <h2 className="text-lg font-semibold">{section}</h2>
+                    {questions
+                      .filter((q) => q.section === section)
+                      .map((q) => {
+                        const id = `answer-${q.id}`;
+                        const skipped =
+                          q.optional && !draft.answers[q.id]?.trim();
+                        const help =
+                          q.kind === '情境'
+                            ? '写你当时真正会说出口的原话'
+                            : '尽量举真实的例子';
+                        return (
+                          <div key={q.id} className="space-y-3">
+                            <h3 id={`${id}-prompt`} className="font-medium">
+                              {q.number}. {q.text}
+                            </h3>
+                            <div className="flex flex-wrap gap-2">
+                              <Badge>{q.kind}</Badge>
+                              {q.optional && (
+                                <Badge>可跳过：不填即不授权采集这一项</Badge>
+                              )}
+                            </div>
+                            <p
+                              id={`${id}-facets`}
+                              className="text-sm text-secondary"
+                            >
+                              相关内容：{q.facets.join('、')}
+                            </p>
+                            <Field id={id} label="回答" help={help}>
+                              <Textarea
+                                id={id}
+                                maxLength={4000}
+                                value={draft.answers[q.id] ?? ''}
+                                disabled={draft.submitting}
+                                aria-labelledby={`${id}-prompt`}
+                                aria-describedby={`${id}-description ${id}-facets${q.optional ? ` ${id}-skip` : ''}`}
+                                placeholder={help}
+                                onChange={(event) =>
+                                  draft.change(q.id, event.target.value)
+                                }
+                              />
+                            </Field>
                             {q.optional && (
-                              <Badge>可跳过：不填即不授权采集这一项</Badge>
+                              <div className="space-y-2">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={draft.submitting}
+                                  onClick={() => draft.change(q.id, '')}
+                                >
+                                  跳过
+                                </Button>
+                                <p
+                                  id={`${id}-skip`}
+                                  className="text-sm text-secondary"
+                                >
+                                  {skipped
+                                    ? `留空即跳过，不采集：${q.facets.join('、')}`
+                                    : '跳过会清空此题回答，提交后不采集相关内容。'}
+                                </p>
+                              </div>
                             )}
                           </div>
-                          <p
-                            id={`${id}-facets`}
-                            className="text-sm text-secondary"
-                          >
-                            相关内容：{q.facets.join('、')}
-                          </p>
-                          <Field id={id} label="回答" help={help}>
-                            <Textarea
-                              id={id}
-                              maxLength={4000}
-                              value={draft.answers[q.id] ?? ''}
-                              disabled={draft.submitting}
-                              aria-labelledby={`${id}-prompt`}
-                              aria-describedby={`${id}-description ${id}-facets${q.optional ? ` ${id}-skip` : ''}`}
-                              placeholder={help}
-                              onChange={(event) =>
-                                draft.change(q.id, event.target.value)
-                              }
-                            />
-                          </Field>
-                          {q.optional && (
-                            <div className="space-y-2">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                disabled={draft.submitting}
-                                onClick={() => draft.change(q.id, '')}
-                              >
-                                跳过
-                              </Button>
-                              <p
-                                id={`${id}-skip`}
-                                className="text-sm text-secondary"
-                              >
-                                {skipped
-                                  ? `留空即跳过，不采集：${q.facets.join('、')}`
-                                  : '跳过会清空此题回答，提交后不采集相关内容。'}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                </section>
-              ),
-            }))}
-          />
-          <Card>
-            <Button loading={draft.submitting} onClick={() => void submit()}>
-              保存回答
-            </Button>
-            {draft.result && (
-              <div role="status" className="mt-4 space-y-2 text-success">
-                <p>{draft.result.notice}</p>
-                <a href="#/sources" className="text-accent">
-                  去资料与构建查看进度或构建
-                </a>
-              </div>
-            )}
-          </Card>
-        </>
-      )}
-      <>
-        <JobProgress
-          state={job}
-          onRetry={() => void job.start('/api/persona/build')}
-        />
-        {summary && (
-          <Card>
-            <p className="mb-3 text-success">
-              构建完成。{' '}
-              <a href="#/about" className="text-accent">
-                看看我了解到的你
-              </a>
-              ，或者{' '}
-              <a href="#/chat" className="text-accent">
-                去和分身聊天
-              </a>
-              。
-            </p>
-            <BuildSummary result={summary} />
-          </Card>
+                        );
+                      })}
+                  </section>
+                ),
+              }))}
+            />
+            <Card>
+              <Button loading={draft.submitting} onClick={() => void submit()}>
+                保存回答
+              </Button>
+              {draft.result && (
+                <div role="status" className="mt-4 space-y-2 text-success">
+                  <p>{draft.result.notice}</p>
+                  <a href="#/sources" className="text-accent">
+                    去资料与构建查看进度或构建
+                  </a>
+                </div>
+              )}
+            </Card>
+          </>
         )}
-      </>
+        <>
+          <JobProgress
+            state={job}
+            onRetry={() => void job.start('/api/persona/build')}
+          />
+          {summary && (
+            <Card>
+              <p className="mb-3 text-success">
+                构建完成。{' '}
+                <a href="#/about" className="text-accent">
+                  看看我了解到的你
+                </a>
+                ，或者{' '}
+                <a href="#/chat" className="text-accent">
+                  去和分身聊天
+                </a>
+                。
+              </p>
+              <BuildSummary result={summary} />
+            </Card>
+          )}
+        </>
+      </div>
     </div>
   );
 }

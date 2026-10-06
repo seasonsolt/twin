@@ -6,6 +6,7 @@ import {
 } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { MemoryRouter } from 'react-router';
+import { ConfirmProvider } from '../components/ui';
 import { About } from '../pages/About';
 import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -521,9 +522,11 @@ it.each([
       }),
     );
     renderView(
-      <MemoryRouter initialEntries={['/about']}>
-        <About />
-      </MemoryRouter>,
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/about']}>
+          <About />
+        </MemoryRouter>
+      </ConfirmProvider>,
     );
     await load();
     expect(screen.getByText(fallbackName)).toBeVisible();

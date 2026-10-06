@@ -16,6 +16,7 @@ import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
 import { usePersonas } from '../../stores/personas';
 import { PersonaSwitcher } from './PersonaSwitcher';
+import { StageHeader } from './StageHeader';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Onboarding = lazy(() =>
   import('../../pages/Onboarding').then((module) => ({
@@ -150,10 +151,12 @@ export function AppShell() {
   }, []);
   if (noPersona)
     return (
-      <main className="mx-auto max-w-sm space-y-6 px-4 py-12">
-        <p className="text-lg font-semibold text-accent">twin</p>
-        <h1 className="text-xl font-semibold">先新建一个分身</h1>
-        <PersonaSwitcher createOnly />
+      <main className="min-h-dvh">
+        <StageHeader variant="brand" />
+        <section className="mx-auto max-w-sm space-y-6 px-4 py-8">
+          <h2 className="text-xl font-semibold">先新建一个分身</h2>
+          <PersonaSwitcher createOnly />
+        </section>
       </main>
     );
   if (location.pathname !== '/gallery') {
@@ -161,9 +164,6 @@ export function AppShell() {
     if (onboarding)
       return (
         <>
-          <header className="border-b border-border px-4 py-2">
-            <PersonaSwitcher />
-          </header>
           <Suspense
             fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
           >
@@ -225,11 +225,6 @@ export function AppShell() {
         </div>
       </motion.aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        {location.pathname !== '/chat' && (
-          <header className="flex min-h-16 items-center gap-3 border-b border-border px-4 py-2 md:px-8">
-            <PersonaSwitcher />
-          </header>
-        )}
         {error && (
           <div
             role="alert"
@@ -241,12 +236,21 @@ export function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className={`app-main mx-auto w-full flex-1 outline-none ${location.pathname === '/chat' ? 'chat-main' : 'max-w-6xl px-4 pt-4 md:px-8 md:py-8'}`}
+          className={`app-main mx-auto w-full flex-1 outline-none ${location.pathname === '/chat' ? 'chat-main' : 'max-w-6xl'}`}
         >
           {location.pathname === '/chat' ? (
             outlet
           ) : (
-            <PageTransition route={location.pathname}>{outlet}</PageTransition>
+            <PageTransition route={location.pathname}>
+              {location.pathname === '/gallery' ? (
+                <>
+                  <StageHeader left={<PersonaSwitcher stage />} />
+                  <div className="page-content">{outlet}</div>
+                </>
+              ) : (
+                outlet
+              )}
+            </PageTransition>
           )}
         </main>
       </div>

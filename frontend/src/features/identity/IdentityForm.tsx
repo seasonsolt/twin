@@ -7,9 +7,11 @@ import type { IdentityData } from './useIdentity';
 export function IdentityForm({
   identity,
   onSaved,
+  onDraftChange,
 }: {
   identity: Pick<IdentityData, 'name' | 'about'>;
   onSaved?: (saved: IdentityData) => void;
+  onDraftChange?: (draft: Pick<IdentityData, 'name' | 'about'>) => void;
 }) {
   const [name, setName] = useState(identity.name);
   const [about, setAbout] = useState(identity.about || '');
@@ -46,7 +48,10 @@ export function IdentityForm({
           maxLength={20}
           value={name}
           disabled={busy}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            setName(event.target.value);
+            onDraftChange?.({ name: event.target.value, about });
+          }}
         />
       </Field>
       <Field
@@ -59,7 +64,10 @@ export function IdentityForm({
           maxLength={200}
           value={about}
           disabled={busy}
-          onChange={(event) => setAbout(event.target.value)}
+          onChange={(event) => {
+            setAbout(event.target.value);
+            onDraftChange?.({ name, about: event.target.value });
+          }}
           placeholder="例如：我叫小林，在杭州做设计。喜欢徒步和做饭，最近在学摄影。做事时我很看重真诚，也希望多留些时间陪家人。"
         />
       </Field>

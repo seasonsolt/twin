@@ -72,10 +72,12 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     </TooltipProvider>,
   );
   try {
-    expect(await screen.findByText('测试人')).toBeVisible();
+    expect(
+      await screen.findByRole('heading', { name: '身份测试人' }),
+    ).toBeVisible();
     expect(rendered.container.querySelector('footer')).toBeNull();
     const header = within(rendered.container.querySelector('header')!);
-    expect(header.getByText('测试人')).toBeVisible();
+    expect(header.getByText('身份测试人')).toBeVisible();
     expect(
       header.queryByText(/mock-model|example.test|remote-provider|外部/),
     ).not.toBeInTheDocument();

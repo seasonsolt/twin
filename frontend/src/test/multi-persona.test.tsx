@@ -224,7 +224,8 @@ it('creates, switches and opens onboarding even though the new identity already 
     '新的分身',
   );
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
-  await screen.findByRole('heading', { name: '让我们认识一下' });
+  await screen.findByRole('heading', { name: '你是谁' });
+  expect(screen.getByRole('heading', { name: '新的分身' })).toBeVisible();
   expect(getPersonaId()).toBe(NEW);
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('新的分身');
   expect(screen.getByRole('button', { name: '切换分身' })).toBeVisible();

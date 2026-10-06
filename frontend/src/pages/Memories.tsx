@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
-import { MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
+import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
+import { StageHeader } from '../components/layout/StageHeader';
+import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
@@ -240,6 +242,20 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         });
     }
   };
+  const addPanel = useRef<HTMLElement>(null);
+  const openAdd = () => {
+    if (mobile) setAdding(true);
+    else {
+      addPanel.current?.scrollIntoView({
+        block: 'center',
+        behavior: 'instant',
+      });
+      addPanel.current?.querySelector<HTMLElement>('textarea, input')?.focus();
+    }
+  };
+  const recordingHours =
+    memories.reduce((total, memory) => total + (memory.duration_s ?? 0), 0) /
+    3600;
   const fileInput = (folder: boolean) => (
     <div
       className="space-y-3 rounded-lg border border-dashed border-border p-6"
@@ -352,184 +368,246 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       );
   };
   return (
-    <div className="space-y-4 md:space-y-6">
-      <header>
-        {embedded ? (
-          <h2 className="text-xl font-semibold">添加记忆</h2>
-        ) : (
-          <h1 className="text-2xl font-semibold">记忆</h1>
+    <div className="memories-page">
+      {!embedded && (
+        <StageHeader
+          left={<PersonaSwitcher stage />}
+          right={
+            mobile ? undefined : (
+              <button
+                type="button"
+                className="stage-add"
+                aria-label="从舞台添加记忆"
+                onClick={openAdd}
+              >
+                <Plus size={24} aria-hidden />
+              </button>
+            )
+          }
+        />
+      )}
+      <div
+        className={
+          embedded ? 'space-y-4' : 'page-content space-y-4 md:space-y-6'
+        }
+      >
+        <header>
+          {embedded ? (
+            <h2 className="text-xl font-semibold">添加记忆</h2>
+          ) : (
+            <h2 className="text-2xl font-semibold">他记得的事</h2>
+          )}
+          {!embedded && (
+            <p className="mt-2 text-secondary">
+              {memories.length} 条 · {Number(recordingHours.toFixed(1))}{' '}
+              小时录音
+            </p>
+          )}
+          <p className="my-2 text-sm text-secondary">
+            写一段话，或上传文件、文件夹。添加后会自动处理。
+          </p>
+          {processing.state !== 'idle' && (
+            <ThinkingLabel
+              text={processing.state === 'queued' ? '等待记住…' : '正在记住…'}
+            />
+          )}
+          {processing.last_error && (
+            <p className="text-sm text-danger">
+              {processing.last_error}{' '}
+              <Button
+                className="min-h-11"
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={retry}
+              >
+                重新处理
+              </Button>
+            </p>
+          )}
+        </header>
+        {memories.some((memory) => memory.status === 'needs_speaker') && (
+          <Button
+            variant="secondary"
+            className="speaker-banner min-h-11 w-full text-left"
+            onClick={() =>
+              void view(
+                memories.find((memory) => memory.status === 'needs_speaker')!,
+              )
+            }
+          >
+            有{' '}
+            {
+              memories.filter((memory) => memory.status === 'needs_speaker')
+                .length
+            }{' '}
+            段录音需要确认哪位是你
+          </Button>
         )}
-        <p className="my-2 text-sm text-secondary">
-          写一段话，或上传文件、文件夹。添加后会自动处理。
-        </p>
-        {processing.state !== 'idle' && (
-          <ThinkingLabel
-            text={processing.state === 'queued' ? '等待记住…' : '正在记住…'}
-          />
+        {(!mobile || embedded) && (
+          <section ref={addPanel}>
+            <Card>{addContent}</Card>
+          </section>
         )}
-        {processing.last_error && (
-          <p className="text-sm text-danger">
-            {processing.last_error}{' '}
+        {(!mobile || !adding) && progressUI}
+        {error && !adding && (
+          <p role="alert" className="text-danger">
+            {error}{' '}
             <Button
-              className="min-h-11"
               size="sm"
               variant="ghost"
-              disabled={busy}
-              onClick={retry}
+              onClick={() =>
+                failedFiles.current.length
+                  ? upload(failedFiles.current)
+                  : void refresh()
+              }
             >
-              重新处理
+              {failedFiles.current.length ? '重试上传' : '重试加载'}
             </Button>
           </p>
         )}
-      </header>
-      {memories.some((memory) => memory.status === 'needs_speaker') && (
-        <Button
-          variant="secondary"
-          className="min-h-11 w-full text-left"
-          onClick={() =>
-            void view(
-              memories.find((memory) => memory.status === 'needs_speaker')!,
-            )
-          }
-        >
-          有{' '}
-          {
-            memories.filter((memory) => memory.status === 'needs_speaker')
-              .length
-          }{' '}
-          段录音需要确认哪位是你
-        </Button>
-      )}
-      {(!mobile || embedded) && <Card>{addContent}</Card>}
-      {(!mobile || !adding) && progressUI}
-      {error && !adding && (
-        <p role="alert" className="text-danger">
-          {error}{' '}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() =>
-              failedFiles.current.length
-                ? upload(failedFiles.current)
-                : void refresh()
-            }
-          >
-            {failedFiles.current.length ? '重试上传' : '重试加载'}
-          </Button>
-        </p>
-      )}
-      {!embedded && (
-        <Card className="px-3 py-2 md:p-6">
-          <h2 className="mb-2 text-md font-semibold md:mb-4 md:text-lg">
-            已添加的记忆
-          </h2>
-          {!memories.length && (
-            <EmptyState
-              title="还没有记忆"
-              body={
-                mobile
-                  ? '点 + 写一段话或上传文件。'
-                  : '从上面写一段话或上传文件开始。'
-              }
-            />
-          )}
-          <LayoutScope>
-            <MessageList
-              layout
-              label="记忆列表"
-              items={memories.map((memory) => ({
-                id: memory.source_id,
-                text: memory.title,
-                content: (
-                  <article className="flex items-start justify-between gap-2 border-b border-border py-2 md:py-3">
-                    <div className="min-w-0 flex-1">
-                      <h3 className="flex items-center gap-2 font-medium">
-                        {memory.kind === 'video' && (
-                          <Video size={18} aria-label="视频" />
-                        )}
-                        {memory.kind === 'audio' && (
-                          <AudioLines size={18} aria-label="音频" />
-                        )}
-                        <span className="truncate">{memory.title}</span>
-                      </h3>
-                      <p className="text-xs text-secondary">
-                        {[
-                          memory.detected_kind_label,
-                          memory.first_date,
-                          memory.duration_s != null
-                            ? `${(memory.duration_s / 60).toFixed(1)} 分钟`
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </p>
-                      <Badge
-                        tone={memory.status === 'failed' ? 'danger' : 'neutral'}
-                      >
-                        {memory.status === 'needs_speaker' ? (
-                          '待确认'
-                        ) : memory.status === 'needs_asr' ? (
-                          '需要配置语音识别'
-                        ) : memory.status === 'queued' ? (
-                          '等待转写'
-                        ) : memory.status === 'extracting' ? (
-                          '提取音频'
-                        ) : memory.status === 'transcribing' ? (
-                          `转写中 ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
-                        ) : memory.status === 'processing' ? (
-                          <ThinkingLabel
-                            text={memory.media_sha ? '整理中' : '正在记住…'}
-                          />
-                        ) : memory.status === 'remembered' ? (
-                          memory.media_sha ? (
-                            `已加入 · 已记住 ${memory.remembered} 条`
-                          ) : (
-                            `已记住 ${memory.remembered} 条`
-                          )
-                        ) : memory.status === 'nothing_found' ? (
-                          memory.media_sha ? (
-                            '已加入'
-                          ) : (
-                            '没找到关于你的内容'
-                          )
-                        ) : (
-                          '处理失败'
-                        )}
-                      </Badge>
-                      {(memory.status === 'failed' ||
-                        memory.status === 'needs_asr') && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() =>
-                            memory.media_sha ? retranscribe(memory) : retry()
+        {!embedded && (
+          <section className="memory-list">
+            <h2 className="mb-2 text-md font-semibold md:mb-4 md:text-lg">
+              已添加的记忆
+            </h2>
+            {!memories.length && (
+              <EmptyState
+                title="还没有记忆"
+                body={
+                  mobile
+                    ? '点 + 写一段话或上传文件。'
+                    : '从上面写一段话或上传文件开始。'
+                }
+              />
+            )}
+            <LayoutScope>
+              <MessageList
+                layout
+                label="记忆列表"
+                items={memories.map((memory) => ({
+                  id: memory.source_id,
+                  text: memory.title,
+                  content: (
+                    <article className="memory-card flex items-start justify-between gap-2 rounded-xl bg-surface p-4 shadow-card">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="flex items-center gap-2 font-medium">
+                          {memory.kind === 'video' && (
+                            <Video size={18} aria-label="视频" />
+                          )}
+                          {memory.kind === 'audio' && (
+                            <AudioLines size={18} aria-label="音频" />
+                          )}
+                          <span className="truncate">{memory.title}</span>
+                        </h3>
+                        <p className="text-xs text-secondary">
+                          {[
+                            memory.detected_kind_label,
+                            memory.first_date,
+                            memory.duration_s != null
+                              ? `${(memory.duration_s / 60).toFixed(1)} 分钟`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                        <Badge
+                          tone={
+                            memory.status === 'failed' ? 'danger' : 'neutral'
                           }
-                          disabled={busy}
-                          className="min-h-11"
+                          className={`memory-status status-${memory.status}`}
                         >
-                          {memory.media_sha ? '重新转写' : '重试'}
-                        </Button>
-                      )}
-                    </div>
-                    {mobile ? (
-                      <details className="relative shrink-0">
-                        <summary
-                          aria-label={`${memory.title}的操作`}
-                          className="grid size-11 cursor-pointer list-none place-items-center rounded-md text-secondary [&::-webkit-details-marker]:hidden"
-                        >
-                          <MoreHorizontal size={20} aria-hidden />
-                        </summary>
-                        <div className="absolute right-0 z-10 grid min-w-28 rounded-md border border-border bg-surface p-1 shadow-elevation-2">
+                          {(memory.status === 'remembered' ||
+                            (memory.status === 'nothing_found' &&
+                              memory.media_sha)) && (
+                            <Check size={14} aria-hidden />
+                          )}
+                          {memory.status === 'needs_speaker' ? (
+                            '待确认'
+                          ) : memory.status === 'needs_asr' ? (
+                            '需要配置语音识别'
+                          ) : memory.status === 'queued' ? (
+                            '等待转写'
+                          ) : memory.status === 'extracting' ? (
+                            '提取音频'
+                          ) : memory.status === 'transcribing' ? (
+                            `转写中 ${Math.min(100, Math.floor(((memory.transcribed_s ?? 0) / (memory.duration_s || 1)) * 100))}% · ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
+                          ) : memory.status === 'processing' ? (
+                            <ThinkingLabel
+                              text={memory.media_sha ? '整理中' : '正在记住…'}
+                            />
+                          ) : memory.status === 'remembered' ? (
+                            `已加入 · 已记住 ${memory.remembered} 条`
+                          ) : memory.status === 'nothing_found' ? (
+                            memory.media_sha ? (
+                              '已加入'
+                            ) : (
+                              '没找到关于你的内容'
+                            )
+                          ) : (
+                            '处理失败'
+                          )}
+                        </Badge>
+                        {(memory.status === 'failed' ||
+                          memory.status === 'needs_asr') && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              memory.media_sha ? retranscribe(memory) : retry()
+                            }
+                            disabled={busy}
+                            className="min-h-11"
+                          >
+                            {memory.media_sha ? '重新转写' : '重试'}
+                          </Button>
+                        )}
+                      </div>
+                      {mobile ? (
+                        <details className="relative shrink-0">
+                          <summary
+                            aria-label={`${memory.title}的操作`}
+                            className="grid size-11 cursor-pointer list-none place-items-center rounded-md text-secondary [&::-webkit-details-marker]:hidden"
+                          >
+                            <MoreHorizontal size={20} aria-hidden />
+                          </summary>
+                          <div className="absolute right-0 z-10 grid min-w-28 rounded-md border border-border bg-surface p-1 shadow-elevation-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="min-h-11"
+                              onClick={(event) => {
+                                event.currentTarget
+                                  .closest('details')
+                                  ?.removeAttribute('open');
+                                void view(memory);
+                              }}
+                            >
+                              查看
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="min-h-11"
+                              disabled={busy}
+                              onClick={(event) => {
+                                event.currentTarget
+                                  .closest('details')
+                                  ?.removeAttribute('open');
+                                void remove(memory);
+                              }}
+                            >
+                              删除
+                            </Button>
+                          </div>
+                        </details>
+                      ) : (
+                        <div className="flex gap-2">
                           <Button
                             size="sm"
                             variant="ghost"
                             className="min-h-11"
-                            onClick={(event) => {
-                              event.currentTarget
-                                .closest('details')
-                                ?.removeAttribute('open');
-                              void view(memory);
-                            }}
+                            onClick={() => void view(memory)}
                           >
                             查看
                           </Button>
@@ -538,104 +616,79 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                             variant="ghost"
                             className="min-h-11"
                             disabled={busy}
-                            onClick={(event) => {
-                              event.currentTarget
-                                .closest('details')
-                                ?.removeAttribute('open');
-                              void remove(memory);
-                            }}
+                            onClick={() => void remove(memory)}
                           >
                             删除
                           </Button>
                         </div>
-                      </details>
-                    ) : (
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="min-h-11"
-                          onClick={() => void view(memory)}
-                        >
-                          查看
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="min-h-11"
-                          disabled={busy}
-                          onClick={() => void remove(memory)}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    )}
-                  </article>
-                ),
-              }))}
-            />
-          </LayoutScope>
-        </Card>
-      )}
-      {mobile && !embedded && (
-        <>
-          <IconButton
-            label="添加记忆"
-            onClick={() => setAdding(true)}
-            className="fixed right-4 bottom-[calc(var(--mobile-tabs-height)+16px)] z-20 size-12 rounded-full bg-accent text-on-accent shadow-elevation-2"
-          >
-            <Plus size={24} aria-hidden />
-          </IconButton>
-          <Dialog
-            open={adding && active}
-            onOpenChange={setAdding}
-            title="添加记忆"
-            body="写一段话，或上传文件、文件夹。"
-            className="top-auto right-0 bottom-0 left-0 max-h-[85dvh] w-full translate-x-0 translate-y-0 rounded-b-none rounded-t-xl p-4 pb-[max(16px,env(safe-area-inset-bottom))]"
-          >
-            {addContent}
-            {error && (
-              <p role="alert" className="mt-3 text-danger">
-                {error}
-                {failedFiles.current.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => upload(failedFiles.current)}
-                  >
-                    重试上传
-                  </Button>
-                )}
-              </p>
-            )}
-          </Dialog>
-        </>
-      )}
-      <Dialog
-        open={preview !== null && active}
-        onOpenChange={(open) => {
-          if (!open) {
-            previewRequest.current?.abort();
-            setPreview(null);
-          }
-        }}
-        title={preview?.title ?? ''}
-        body="这是分身看到的文字，最多显示 20000 字。"
-      >
-        {preview?.memory.media_sha && (
-          <MediaClaim
-            key={preview.memory.source_id}
-            sourceId={preview.memory.source_id}
-            onChanged={() => {
-              void refresh();
-              void view(preview.memory);
-            }}
-          />
+                      )}
+                    </article>
+                  ),
+                }))}
+              />
+            </LayoutScope>
+          </section>
         )}
-        <pre className="whitespace-pre-wrap break-words font-sans text-sm">
-          {preview?.text}
-        </pre>
-      </Dialog>
+        {mobile && !embedded && (
+          <>
+            <IconButton
+              label="添加记忆"
+              onClick={() => setAdding(true)}
+              className="memory-add fixed right-4 bottom-[calc(var(--mobile-tabs-height)+16px)] z-20 size-12 rounded-full bg-sun text-primary shadow-elevation-2"
+            >
+              <Plus size={24} aria-hidden />
+            </IconButton>
+            <Dialog
+              open={adding && active}
+              onOpenChange={setAdding}
+              title="添加记忆"
+              body="写一段话，或上传文件、文件夹。"
+              className="top-auto right-0 bottom-0 left-0 max-h-[85dvh] w-full translate-x-0 translate-y-0 rounded-b-none rounded-t-xl p-4 pb-[max(16px,env(safe-area-inset-bottom))]"
+            >
+              {addContent}
+              {error && (
+                <p role="alert" className="mt-3 text-danger">
+                  {error}
+                  {failedFiles.current.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => upload(failedFiles.current)}
+                    >
+                      重试上传
+                    </Button>
+                  )}
+                </p>
+              )}
+            </Dialog>
+          </>
+        )}
+        <Dialog
+          open={preview !== null && active}
+          onOpenChange={(open) => {
+            if (!open) {
+              previewRequest.current?.abort();
+              setPreview(null);
+            }
+          }}
+          title={preview?.title ?? ''}
+          body="这是分身看到的文字，最多显示 20000 字。"
+        >
+          {preview?.memory.media_sha && (
+            <MediaClaim
+              key={preview.memory.source_id}
+              sourceId={preview.memory.source_id}
+              onChanged={() => {
+                void refresh();
+                void view(preview.memory);
+              }}
+            />
+          )}
+          <pre className="whitespace-pre-wrap break-words font-sans text-sm">
+            {preview?.text}
+          </pre>
+        </Dialog>
+      </div>
     </div>
   );
 }

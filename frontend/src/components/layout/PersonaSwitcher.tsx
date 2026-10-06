@@ -7,17 +7,18 @@ import { forgetPersona, personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useStatus } from '../../stores/status';
 import { useAuth } from '../../stores/auth';
+import { StageHeader } from './StageHeader';
 
 function Portrait({ persona }: { persona?: Persona }) {
   return persona?.avatar_url ? (
     <img
       src={personaUrl(persona.avatar_url, persona.id)}
       alt=""
-      className="size-8 rounded-full object-cover"
+      className="size-12 shrink-0 rounded-full border-2 border-canvas object-cover"
     />
   ) : (
     <span
-      className="grid size-8 shrink-0 place-items-center rounded-full bg-accent/10"
+      className="persona-name grid size-12 shrink-0 place-items-center rounded-full bg-soft text-2xl"
       aria-hidden
     >
       {Array.from(persona?.name || '本人')[0]}
@@ -152,18 +153,26 @@ export function PersonaSwitcher({
               : '切换分身'
         }
         body="每个分身都有独立的记忆、形象、声音和聊天。"
-        className="[&_button]:min-h-11 [&_button]:min-w-11"
+        className={
+          mode === 'create'
+            ? 'create-twin-sheet [&_button]:min-h-11 [&_button]:min-w-11'
+            : 'persona-sheet [&_button]:min-h-11 [&_button]:min-w-11'
+        }
       >
+        {mode === 'create' && (
+          <StageHeader
+            variant="future"
+            name={draft.trim() || '新分身'}
+            intro={<p className="stage-caption">给未来的分身一个名字</p>}
+          />
+        )}
         <div className="space-y-3 [&_button]:min-h-11 [&_input]:text-base">
           {mode !== 'create' &&
             items.map((persona) => (
-              <div
-                key={persona.id}
-                className="space-y-2 rounded-md border border-border p-2"
-              >
+              <div key={persona.id} className="space-y-2">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-3 text-left"
+                  className={`persona-row flex w-full items-center gap-3 rounded-full p-3 text-left ${persona.id === id ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
                   disabled={busy}
                   onClick={() => {
                     setMode(null);
@@ -175,13 +184,21 @@ export function PersonaSwitcher({
                     <span className="persona-name block truncate text-xl">
                       {persona.name}
                     </span>
-                    <span className="text-sm text-secondary">
+                    <span
+                      className={
+                        persona.id === id
+                          ? 'text-sm text-canvas'
+                          : 'text-sm text-secondary'
+                      }
+                    >
                       {persona.sources} 条记忆
                     </span>
                     {identity?.admin &&
                       persona.owner &&
                       persona.owner !== identity.email && (
-                        <span className="block truncate text-xs text-secondary">
+                        <span
+                          className={`block truncate text-xs ${persona.id === id ? 'text-canvas' : 'text-secondary'}`}
+                        >
                           {persona.owner}
                         </span>
                       )}
@@ -189,7 +206,7 @@ export function PersonaSwitcher({
                   {persona.id === id && (
                     <Check
                       aria-label="当前分身"
-                      className="size-5 text-accent"
+                      className="size-5 text-canvas"
                     />
                   )}
                 </button>
@@ -234,7 +251,7 @@ export function PersonaSwitcher({
                   onChange={(event) => setDraft(event.target.value)}
                   maxLength={20}
                   required
-                  className="block min-h-11 w-full rounded-md border border-border bg-background px-3"
+                  className="block min-h-11 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md"
                 />
               </label>
               <Button type="submit" loading={busy} disabled={!draft.trim()}>
@@ -277,7 +294,7 @@ export function PersonaSwitcher({
           )}
           {identity?.auth_enabled && (
             <div className="border-t border-border pt-3">
-              <p className="break-all text-sm text-secondary">
+              <p className="break-all text-xs text-secondary">
                 {identity.email}
               </p>
               <Button

@@ -8,6 +8,7 @@ vi.mock('motion/react', async (original) => ({
 }));
 import { beforeEach, expect, it, vi } from 'vitest';
 import { About } from '../pages/About';
+import { ConfirmProvider } from '../components/ui';
 import { reviewLabels, type ProfileItem } from '../features/profile/types';
 import { useStatus } from '../stores/status';
 
@@ -89,9 +90,11 @@ beforeEach(() => {
 });
 const mount = () =>
   render(
-    <MemoryRouter initialEntries={['/about']}>
-      <About />
-    </MemoryRouter>,
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={['/about']}>
+        <About />
+      </MemoryRouter>
+    </ConfirmProvider>,
   );
 const article = () => within(screen.getByRole('article'));
 async function complete(

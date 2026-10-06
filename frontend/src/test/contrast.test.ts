@@ -51,6 +51,30 @@ describe('WCAG AA tokens', () => {
       contrast(themes[0].canvas, themes[0]['text-primary']),
     ).toBeGreaterThanOrEqual(4.5);
   });
+  it('covers stage, yellow cards, status chips, outline inputs and video controls', () => {
+    const theme = themes[0];
+    for (const [foreground, background] of [
+      ['text-primary', 'note'],
+      ['text-secondary', 'note'],
+      ['text-primary', 'sun'],
+      ['text-primary', 'soft'],
+      ['on-accent', 'accent'],
+      ['canvas', 'text-primary'],
+      ['success', 'surface'],
+      ['accent-ink', 'surface'],
+    ]) {
+      expect(
+        contrast(theme[foreground], theme[background]),
+        `${foreground} on ${background}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const surface of ['canvas', 'surface', 'accent']) {
+      const outline = surface === 'accent' ? 'canvas' : 'text-primary';
+      expect(contrast(theme[outline], theme[surface])).toBeGreaterThanOrEqual(
+        3,
+      );
+    }
+  });
   for (const [index, theme] of themes.entries()) {
     it(`${index === 0 ? 'light' : 'dark'} text and status colors have 4.5:1 on every surface`, () => {
       for (const text of [

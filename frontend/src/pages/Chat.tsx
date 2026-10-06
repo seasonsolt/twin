@@ -21,13 +21,17 @@ import { useReplyVideos } from '../features/chat/useReplyVideos';
 import type { Capabilities } from '../features/avatar/types';
 import { api } from '../lib/api';
 import { useStatus } from '../stores/status';
+import { usePersonas } from '../stores/personas';
 
 export function Chat() {
   const { pathname } = useLocation();
   const active = pathname === '/chat';
   const chat = useConversation(active);
   const status = useStatus((state) => state.data);
-  const name = status?.target_name || '本人';
+  const persona = usePersonas((state) =>
+    state.items.find((item) => item.id === state.id),
+  );
+  const name = status?.target_name || persona?.name || '本人';
   const [stale, setStale] = useState(false);
   const [stateError, setStateError] = useState('');
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);

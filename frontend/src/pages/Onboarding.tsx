@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { FlowStepper } from '../components/effects/FlowStepper';
 import { Button } from '../components/ui';
+import { StageHeader } from '../components/layout/StageHeader';
+import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 import { IdentityForm } from '../features/identity/IdentityForm';
 import { SelfAssets } from '../features/assets/SelfAssets';
 import { RecordingShortcut } from '../features/sources/MediaClaim';
@@ -18,6 +20,10 @@ export function Onboarding({
   onDone: () => void;
 }) {
   const [saved, setSaved] = useState(false);
+  const [twin, setTwin] = useState({
+    name: identity.name,
+    about: identity.about,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -58,9 +64,19 @@ export function Onboarding({
     }
   };
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl space-y-6 px-5 py-12">
-      <h1 className="text-2xl font-semibold">让我们认识一下</h1>
+    <main className="onboarding-page min-h-dvh">
       <FlowStepper
+        stageHeader={
+          <StageHeader
+            variant="expanded"
+            className="onboarding-stage"
+            name={twin.name.trim() || '新分身'}
+            left={<PersonaSwitcher stage />}
+            intro={
+              <p className="stage-caption">{twin.about || '让我们认识一下'}</p>
+            }
+          />
+        }
         maxStep={saved ? 4 : 1}
         onComplete={() => void finish()}
         finalActionText="开始聊天"
@@ -76,7 +92,11 @@ export function Onboarding({
                     name: identity.onboarding_pending ? identity.name : '',
                     about: identity.about,
                   }}
-                  onSaved={() => setSaved(true)}
+                  onDraftChange={setTwin}
+                  onSaved={(next) => {
+                    setTwin(next);
+                    setSaved(true);
+                  }}
                 />
                 {saved && <p role="status">已保存，可以继续添加记忆。</p>}
               </div>
@@ -110,11 +130,16 @@ export function Onboarding({
         ]}
       />
       {error && (
-        <p role="alert" className="text-danger">
+        <p role="alert" className="px-5 text-danger">
           {error}
         </p>
       )}
-      <Button variant="ghost" loading={busy} onClick={() => void skip()}>
+      <Button
+        className="mx-5 my-6"
+        variant="ghost"
+        loading={busy}
+        onClick={() => void skip()}
+      >
         跳过
       </Button>
     </main>

@@ -36,7 +36,8 @@ export function Button({
   const variants = {
     primary:
       'bg-accent text-on-accent hover:bg-accent-hover active:bg-accent-pressed',
-    secondary: 'border border-border bg-surface text-primary hover:bg-canvas',
+    secondary:
+      'border-2 border-primary bg-transparent text-primary hover:bg-soft',
     ghost: 'bg-transparent text-secondary hover:bg-surface-raised',
     danger:
       'border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20',
@@ -90,7 +91,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
     <input
       {...props}
       className={cn(
-        'min-h-11 w-full rounded-md border border-border bg-surface px-3 text-md text-primary placeholder:text-tertiary disabled:opacity-50',
+        'min-h-11 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md text-primary placeholder:text-tertiary disabled:opacity-50',
         className,
       )}
     />
@@ -127,7 +128,7 @@ export function Textarea({
       value={value}
       rows={rows}
       className={cn(
-        'w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-md leading-6 placeholder:text-tertiary disabled:opacity-50',
+        'w-full resize-none rounded-lg border-2 border-primary bg-surface px-3 py-2 text-md leading-6 placeholder:text-tertiary disabled:opacity-50',
         className,
       )}
       onChange={(event) => {

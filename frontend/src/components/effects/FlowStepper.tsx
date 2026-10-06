@@ -17,6 +17,7 @@ export function FlowStepper({
   initialStep = 1,
   completeOnLast = true,
   maxStep = steps.length,
+  stageHeader,
 }: {
   steps: FlowStep[];
   onComplete?: () => void;
@@ -25,6 +26,7 @@ export function FlowStepper({
   initialStep?: number;
   completeOnLast?: boolean;
   maxStep?: number;
+  stageHeader?: ReactNode;
 }) {
   const { reduced } = useMotionPreset();
   const [current, setCurrent] = useState(initialStep);
@@ -44,21 +46,28 @@ export function FlowStepper({
       aria-current={step === active ? 'step' : undefined}
       disabled={step > maxStep}
       onClick={() => select(step)}
-      className="size-11 shrink-0 rounded-full border border-border bg-surface text-secondary aria-[current=step]:border-accent aria-[current=step]:bg-accent aria-[current=step]:text-on-accent"
+      className={
+        stageHeader
+          ? 'stage-step size-11 shrink-0 rounded-full'
+          : 'size-11 shrink-0 rounded-full border border-border bg-surface text-secondary aria-[current=step]:border-accent aria-[current=step]:bg-accent aria-[current=step]:text-on-accent'
+      }
     >
-      {step}
+      <span className={stageHeader ? 'sr-only' : undefined}>{step}</span>
     </button>
   );
   if (!steps.length) return null;
   return (
-    <div className="effects-stepper min-h-64 text-primary">
+    <div
+      className={`effects-stepper min-h-64 text-primary ${stageHeader ? 'stage-flow' : ''}`}
+    >
+      {stageHeader}
       {completed ? (
         <p role="status">{completedText}</p>
       ) : reduced ? (
-        <div className="rounded-xl border border-border bg-surface">
+        <div className="flow-static rounded-xl border border-border bg-surface">
           <div
             aria-label="流程步骤"
-            className="flex flex-wrap gap-3 p-5 sm:p-6"
+            className="flow-indicators flex flex-wrap gap-3 p-5 sm:p-6"
           >
             {steps.map((step, index) => (
               <span key={step.id}>
@@ -100,9 +109,9 @@ export function FlowStepper({
           initialStep={current}
           onStepChange={setCurrent}
           onFinalStepCompleted={finish}
-          className="!block !p-0"
+          className="flow-animated !block !p-0"
           stepCircleContainerClassName="!max-w-none !rounded-xl !shadow-none"
-          stepContainerClassName="!p-5 sm:!p-6 !overflow-x-auto"
+          stepContainerClassName="flow-indicators !p-5 sm:!p-6 !overflow-x-auto"
           contentClassName="!px-0"
           footerClassName="!px-5 !pb-5 sm:!px-6 sm:!pb-6"
           backButtonText="上一步"

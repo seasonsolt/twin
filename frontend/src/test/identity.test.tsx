@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { About } from '../pages/About';
+import { ConfirmProvider } from '../components/ui';
 import { useStatus, type Status } from '../stores/status';
 
 const identity = {
@@ -91,9 +92,11 @@ beforeEach(() => {
 });
 const setup = () =>
   render(
-    <MemoryRouter initialEntries={['/about']}>
-      <About />
-    </MemoryRouter>,
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={['/about']}>
+        <About />
+      </MemoryRouter>
+    </ConfirmProvider>,
   );
 
 it('edits name/about inline and saves with X-Twin, previews a closed-mouth avatar and names external services plainly', async () => {
@@ -198,7 +201,7 @@ it('keeps identity editable when the preview fails and supports retry', async ()
   expect(screen.getByRole('alert')).toHaveTextContent('预览暂不可用');
   failAvatar = false;
   fireEvent.click(screen.getByRole('button', { name: '重试预览' }));
-  expect(await screen.findByRole('img')).toBeVisible();
+  expect(await screen.findByRole('img', { name: '风格化插画' })).toBeVisible();
 });
 it('retries identity failures and aborts reads on unmount', async () => {
   failIdentity = true;

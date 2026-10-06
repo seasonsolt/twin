@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button } from '../../components/ui';
+import { StageHeader } from '../../components/layout/StageHeader';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
 
@@ -47,14 +48,17 @@ export function Login() {
       await useAuth.getState().login();
     });
   return (
-    <main className="grid min-h-dvh place-items-center bg-background px-4 py-8">
-      <section className="w-full max-w-sm space-y-6 rounded-xl border border-border bg-surface p-6">
-        <p className="text-lg font-semibold text-accent">twin</p>
-        <h1 className="text-xl font-semibold">
+    <main className="auth-page min-h-dvh bg-background">
+      <StageHeader
+        variant="brand"
+        intro={<p className="stage-caption">留住记忆，让对话继续。</p>}
+      />
+      <section className="mx-auto my-6 w-[calc(100%_-_32px)] max-w-sm space-y-6 rounded-xl bg-surface p-6 shadow-card">
+        <h2 className="text-xl font-semibold">
           {step === 'waitlist' ? '已加入等候名单' : '用邮箱登录'}
-        </h1>
+        </h2>
         {step === 'waitlist' ? (
-          <div className="space-y-3">
+          <div className="waitlist-message space-y-3 rounded-xl bg-canvas p-4">
             <p className="break-all">{email}</p>
             <p className="text-secondary">开放后会第一时间通知你</p>
           </div>
@@ -77,7 +81,7 @@ export function Login() {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   maxLength={254}
-                  className="block min-h-12 w-full rounded-md border border-border bg-background px-3 text-base"
+                  className="block min-h-12 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md"
                 />
               </label>
             ) : (
@@ -100,7 +104,7 @@ export function Login() {
                     }
                     pattern="[0-9]{6}"
                     maxLength={6}
-                    className="block min-h-12 w-full rounded-md border border-border bg-background px-3 text-base tracking-widest"
+                    className="block min-h-12 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md tracking-widest"
                   />
                 </label>
               </>

@@ -3,8 +3,7 @@ import { X } from 'lucide-react';
 import { useEffect } from 'react';
 import { create } from 'zustand';
 import { DragDismiss } from '../motion';
-import { IconButton, toneClasses, type Tone } from './controls';
-import { cn } from '../../lib/utils';
+import { IconButton, type Tone } from './controls';
 import { useMotionPreset } from '../../design/motion';
 
 type ToastMessage = {
@@ -49,9 +48,9 @@ function Toast({ item }: { item: ToastMessage }) {
       initial={{ opacity: 0, y: reduced ? 0 : 12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, transition: exit }}
-      className="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-surface p-3 shadow-elevation-2"
+      className="pointer-events-auto flex items-center gap-3 rounded-xl border border-border bg-canvas p-3 shadow-elevation-2"
     >
-      <p className={cn('flex-1', toneClasses[item.tone])}>{item.message}</p>
+      <p className="flex-1 text-primary">{item.message}</p>
       <IconButton label="关闭通知" onClick={() => remove(item.id)}>
         <X className="size-4" />
       </IconButton>

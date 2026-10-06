@@ -82,14 +82,37 @@ export function useConversation(active: boolean) {
     setError('');
     setNewest(null);
     try {
-      const { job_id } = await api<{ job_id: string }>('/api/persona/chat', {
-        method: 'POST',
-        json: {
-          messages: pending.map(({ role, content }) => ({ role, content })),
-          as_of: date || null,
+      const response = await api<{ job_id: string } | ChatReply>(
+        '/api/persona/chat',
+        {
+          method: 'POST',
+          json: {
+            messages: pending.map(({ role, content }) => ({ role, content })),
+            as_of: date || null,
+          },
+          signal: controller.signal,
         },
-        signal: controller.signal,
-      });
+      );
+      const finish = (reply: ChatReply) => {
+        if (controller.signal.aborted || !mounted.current) return;
+        const twin: Turn = {
+          id: crypto.randomUUID(),
+          role: 'twin',
+          content: reply.reply,
+          reply,
+          timestamp: new Date().toISOString(),
+        };
+        const complete = [...pending, twin];
+        setTurns(complete);
+        setNewest(twin.id);
+        saveHistory(complete);
+        failed.current = null;
+      };
+      if ('reply' in response) {
+        finish(response);
+        return;
+      }
+      const { job_id } = response;
       if (!job_id) throw new Error('服务没有返回任务编号');
       for (;;) {
         await wait(controller.signal);
@@ -103,19 +126,7 @@ export function useConversation(active: boolean) {
         if (controller.signal.aborted || !mounted.current) return;
         if (job.status === 'failed') throw new Error(job.error || '任务失败');
         if (job.status !== 'done') continue;
-        const reply = job.result;
-        const twin: Turn = {
-          id: crypto.randomUUID(),
-          role: 'twin',
-          content: reply.reply,
-          reply,
-          timestamp: new Date().toISOString(),
-        };
-        const complete = [...pending, twin];
-        setTurns(complete);
-        setNewest(twin.id);
-        saveHistory(complete);
-        failed.current = null;
+        finish(job.result);
         break;
       }
     } catch (error) {

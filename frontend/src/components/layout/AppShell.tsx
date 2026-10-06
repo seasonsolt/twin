@@ -23,7 +23,7 @@ export const navItems = [
   { route: 'chat', title: '聊天', icon: MessageCircle },
   { route: 'questionnaire', title: '建档问卷', icon: ClipboardList },
   { route: 'persona', title: '人格档案', icon: BookUser },
-  { route: 'sources', title: '记忆资料', icon: Folder },
+  { route: 'memories', title: '记忆', icon: Folder },
   { route: 'identity', title: '身份', icon: Fingerprint },
   { route: 'gallery', title: '组件画廊', icon: Shapes },
 ];

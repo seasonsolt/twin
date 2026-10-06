@@ -279,6 +279,31 @@ class PersonaStore:
             if saved.rowcount:
                 db.execute("DELETE FROM p_meta WHERE key LIKE 'source_pending:%'")
 
+    def source_status(self, source_id: str, remembered: int) -> str:
+        if self.get_meta(f"source_error:{source_id}"):
+            return "failed"
+        if self.get_meta("built_at") is None or self.get_meta(f"source_pending:{source_id}") is not None:
+            return "processing"
+        return "remembered" if remembered else "nothing_found"
+
+    def processing_result(self, source_ids: list[str], version: str | None, error: str | None) -> None:
+        """Do not assign an old build's failure to memories added while it ran."""
+        with self._tx() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO p_meta VALUES ('processing_last_finished_at', ?)",
+                (dt.datetime.now(dt.UTC).isoformat(),),
+            )
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES ('processing_last_error', ?)", (error or "",))
+            if self.get_meta("sources_changed_at") == version:
+                for source_id in source_ids:
+                    db.execute(
+                        "INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_error:{source_id}", error or "")
+                    )
+
+    def clear_source_errors(self) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM p_meta WHERE key LIKE 'source_error:%'")
+
     # ------------------------------------------------------------ vectors
 
     def vector_shas(self, namespace: str) -> dict[str, str]:

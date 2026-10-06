@@ -448,6 +448,22 @@ def test_openai_compat_parses_json_object_mode() -> None:
     assert user == {"role": "user", "content": "用户"}
 
 
+@pytest.mark.parametrize("reasoning_effort", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("json_mode", ["json_schema", "json_object", "none"])
+def test_openai_compat_reasoning_effort_on_every_request(reasoning_effort: Any, json_mode: Any) -> None:
+    client = _FakeOpenAI([("invalid JSON", "stop"), (_FULL_JSON, "stop"), (_FULL_JSON, "stop")])
+    llm = OpenAICompatLLM(model="m", client=client, json_mode=json_mode, reasoning_effort=reasoning_effort)
+    for effort in ("max", "low"):
+        assert llm.structured(system="s", user="u", schema=StructuredResult, effort=effort).episodes
+    assert len(client.completions.calls) == 3
+    for call in client.completions.calls:
+        if reasoning_effort is None:
+            assert "reasoning_effort" not in call
+        else:
+            assert call["reasoning_effort"] == reasoning_effort
+        assert "effort" not in call
+
+
 def test_openai_compat_retries_once_after_invalid_output() -> None:
     client = _FakeOpenAI([("这不是 JSON", "stop"), (_FULL_JSON, "stop")])
     out = OpenAICompatLLM(model="m", client=client).structured(system="s", user="u", schema=StructuredResult)
@@ -786,6 +802,18 @@ def test_load_settings_rejects_invalid_values(tmp_path: Path, toml: str) -> None
         load_settings(path)
 
 
+@pytest.mark.parametrize("reasoning_effort", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
+def test_llm_settings_accepts_reasoning_effort(reasoning_effort: Any) -> None:
+    assert LLMSettings(reasoning_effort=reasoning_effort).reasoning_effort == reasoning_effort
+    assert LLMSettings().reasoning_effort is None
+
+
+@pytest.mark.parametrize("reasoning_effort", ["max", "", "LOW", 0, False])
+def test_llm_settings_rejects_invalid_reasoning_effort(reasoning_effort: Any) -> None:
+    with pytest.raises(ValidationError):
+        LLMSettings(reasoning_effort=reasoning_effort)
+
+
 def test_make_llm_variants(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     constructed: list[dict[str, Any]] = []
 
@@ -824,6 +852,7 @@ def test_make_llm_variants(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         8192,
     )
     assert (o._client.timeout, o._client.max_retries, o.max_retries) == (600.0, 0, 2)
+    assert o.reasoning_effort is None
 
     tuned = make_llm(
         LLMSettings(
@@ -833,10 +862,12 @@ def test_make_llm_variants(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
             max_tokens=4096,
             timeout=1800,
             max_retries=0,
+            reasoning_effort="none",
         )
     )
     assert isinstance(tuned, OpenAICompatLLM)
     assert (tuned.max_tokens, tuned._client.timeout, tuned._client.max_retries) == (4096, 1800.0, 0)
+    assert tuned.reasoning_effort == "none"
 
     monkeypatch.setattr("twin.llm.tempfile.mkdtemp", lambda prefix="": str(tmp_path))
     monkeypatch.setattr("twin.llm.shutil.which", lambda binary: f"/usr/local/bin/{binary}")

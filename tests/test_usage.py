@@ -359,7 +359,11 @@ def test_pricing_config_template_and_cli_option(tmp_path: Path) -> None:
     assert settings.budget.max_cost_usd == 3
     example = Path("twin.toml.example").read_text(encoding="utf-8")
     assert (
-        "".join(line for line in example.splitlines(keepends=True) if not line.startswith("# vrm_path = "))
+        "".join(
+            line
+            for line in example.splitlines(keepends=True)
+            if not line.startswith(("# vrm_path = ", "# reasoning_effort = "))
+        )
         == CONFIG_TEMPLATE
     )
 

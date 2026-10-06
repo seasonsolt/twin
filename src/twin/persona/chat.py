@@ -153,6 +153,24 @@ def _rank[T](
     return [(candidates[ref], s) for s, ref in reversed(order[-k:])]
 
 
+def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:
+    text = (
+        "记忆还在处理中，等我记住后再聊吧。你也可以继续添加记忆。"
+        if store.list_sources()
+        else "还没有添加记忆，我暂时不够了解你。先写一段话或上传文件，再来聊吧。"
+    )
+    return ChatReply(
+        reply=text,
+        abstain=True,
+        abstain_reason=text,
+        confidence=0,
+        mode="abstain",
+        as_of=as_of,
+        citations=[],
+        retrieved_ids=[],
+    )
+
+
 class PersonaChat:
     def __init__(self, store: PersonaStore, llm: LLM, embedder: Embedder, settings: Settings) -> None:
         self.store = store
@@ -195,6 +213,8 @@ class PersonaChat:
     def reply(self, messages: Sequence[ChatTurn], as_of: dt.date | None = None, *, persist: bool = True) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
+        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
+            return no_profile_reply(self.store, as_of)
         users = [m.content for m in messages if m.role == "user"]
         query = "\n".join(users[-2:])
         ctx = self.retrieve(query, as_of)

@@ -132,18 +132,47 @@ async function submit() {
     fireEvent.keyDown(screen.getByLabelText('你说'), { key: 'Enter' });
   });
 }
+it('links empty chat to memories and accepts a friendly no-profile reply without polling', async () => {
+  const original = fetchMock.getMockImplementation()! as (
+    url: string,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string) =>
+    url === '/api/persona/chat'
+      ? Promise.resolve(
+          json({
+            ...reply,
+            reply: '记忆还在处理中，等我记住后再聊吧。',
+            citations: [],
+            cited: [],
+          }),
+        )
+      : original(url),
+  );
+  mount();
+  expect(screen.getByRole('link', { name: '添加记忆' })).toHaveAttribute(
+    'href',
+    '#/memories',
+  );
+  await submit();
+  expect(
+    await screen.findByRole('article', { name: '分身回复' }),
+  ).toHaveTextContent('记忆还在处理中');
+  expect(
+    fetchMock.mock.calls.some(([url]) => url.startsWith('/api/jobs/')),
+  ).toBe(false);
+  expect(sessionStorage.getItem(CHAT_KEY)).toContain('记忆还在处理中');
+});
+
 it('sends, polls queued/running jobs, renders metadata and persists only complete turns per tab', async () => {
   vi.useFakeTimers();
   mount();
   await submit();
   expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
   expect(screen.getByText('API聊天说明')).toBeInTheDocument();
-  expect(
-    screen.getByText(/资料有变化，尚未重新构建；档案和聊天仍基于上次构建/),
-  ).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: '去重新构建' })).toHaveAttribute(
+  expect(screen.getByText(/新添加的记忆正在处理中/)).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '查看记忆' })).toHaveAttribute(
     'href',
-    '#/sources',
+    '#/memories',
   );
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   const init = fetchMock.mock.calls.find(

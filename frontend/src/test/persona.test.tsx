@@ -11,7 +11,7 @@ import { MemoryRouter } from 'react-router';
 import { useReducedMotion } from 'motion/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, toast } from '../components/ui';
-import { Sources } from '../pages/Sources';
+import { Memories } from '../pages/Memories';
 import { Profile } from '../pages/Profile';
 import type { Source } from '../features/sources/types';
 import type { Coverage, ProfileItem } from '../features/profile/types';
@@ -162,25 +162,7 @@ let fetcher: ReturnType<typeof vi.fn>;
 let sourceRows: Source[];
 let itemRows: ProfileItem[];
 let stale: boolean;
-let jobStatus: string;
-let importFailure: boolean;
 let reviewResponse: ((response: Response) => void) | undefined;
-let deleteResponse: ((response: Response) => void) | undefined;
-const buildResult = {
-  sources: 1,
-  chunks_extracted: 2,
-  candidates: 3,
-  items: 4,
-  items_added: 2,
-  items_changed: 1,
-  items_removed: 3,
-  facets_changed: 2,
-  facet_diffs: {
-    'D2.1': { added: 0, changed: 1, removed: 0 },
-    'D1.1': { added: 2, changed: 0, removed: 3 },
-    'D3.1': { added: 0, changed: 0, removed: 0 },
-  },
-};
 beforeEach(() => {
   vi.mocked(useReducedMotion).mockReturnValue(true);
   vi.mocked(toast).mockClear();
@@ -188,39 +170,23 @@ beforeEach(() => {
   sourceRows = structuredClone([source]);
   itemRows = structuredClone([item]);
   stale = true;
-  jobStatus = 'running';
-  importFailure = false;
   reviewResponse = undefined;
-  deleteResponse = undefined;
-  fetcher = vi.fn(async (url: string, init: RequestInit) => {
-    if (url === '/api/persona/sources') return json(sourceRows);
+  fetcher = vi.fn(async (url: string) => {
+    if (url === '/api/persona/sources')
+      return json(
+        sourceRows.map((row) => ({
+          ...row,
+          status: 'remembered',
+          remembered: row.items_supported,
+          detected_kind_label: row.kind_label,
+        })),
+      );
+    if (url === '/api/persona/processing') return json({ state: 'idle' });
     if (url === '/api/persona/state') return json({ stale });
     if (url === '/api/jobs') return json([]);
     if (url === '/api/status')
       return json({
         counts: { sources: sourceRows.length, items: itemRows.length },
-      });
-    if (url.startsWith('/api/persona/import?'))
-      return importFailure
-        ? json({ detail: '没有可导入的文件：编码错误' }, 400)
-        : json({
-            imported: [{ ...source, new: true }],
-            skipped: [{ file: 'bad.txt', reason: '编码错误' }],
-          });
-    if (url === '/api/persona/sources/s%2F1' && init.method === 'DELETE')
-      return new Promise<Response>((resolve) => {
-        deleteResponse = resolve;
-      });
-    if (url === '/api/persona/build') return json({ job_id: 'j/1' }, 202);
-    if (url === '/api/jobs/j%2F1')
-      return json({
-        job_id: 'j/1',
-        kind: 'persona_build',
-        status: jobStatus,
-        progress: ['[1/2] 抽取', '[2/2] 向量', 'call complete'],
-        milestones: ['[2/2] 向量', '已合并 3 个细项'],
-        result: buildResult,
-        error: '模型调用失败',
       });
     if (url.startsWith('/api/persona/coverage'))
       return json({
@@ -247,8 +213,8 @@ afterEach(() => vi.useRealTimers());
 function mountSources() {
   return render(
     <ConfirmProvider>
-      <MemoryRouter initialEntries={['/sources']}>
-        <Sources />
+      <MemoryRouter initialEntries={['/memories']}>
+        <Memories />
       </MemoryRouter>
     </ConfirmProvider>,
   );
@@ -261,7 +227,7 @@ function mountProfile() {
   );
 }
 async function loadedSources() {
-  await screen.findByRole('article', { name: source.title });
+  await screen.findByRole('heading', { name: source.title });
 }
 async function loadedProfile() {
   await screen.findByRole('article', { name: '档案条目 i/1' });
@@ -281,173 +247,6 @@ async function completeReview(
   itemRows = [updated];
   await act(async () => reviewResponse!(json(updated)));
 }
-it('imports multipart with kind/date, renders per-file imported/skipped reasons, and keeps labelled keyboard picker accessible', async () => {
-  mountSources();
-  await loadedSources();
-  const user = userEvent.setup();
-  await user.click(screen.getByRole('radio', { name: '转录文本' }));
-  expect(screen.getByText(/有说话人的 TXT/)).toBeVisible();
-  const input = screen.getByLabelText('文件（可多选）');
-  expect(input).toHaveAttribute('multiple');
-  expect(input).toHaveAttribute('accept', '.txt,.md,.srt,.vtt,.json');
-  const click = vi.spyOn(input, 'click');
-  const zone = screen.getByRole('button', { name: '选择或拖入文件（可多选）' });
-  zone.focus();
-  await user.keyboard('{Enter}');
-  await user.keyboard(' ');
-  expect(click).toHaveBeenCalledTimes(2);
-  fireEvent.change(screen.getByLabelText('资料日期（可选）'), {
-    target: { value: '2024-03-01' },
-  });
-  await user.upload(input, [
-    new File(['test'], 'good.txt'),
-    new File(['test'], 'bad.txt'),
-  ]);
-  await user.click(screen.getByRole('button', { name: '导入' }));
-  expect(
-    await screen.findByRole('list', { name: '导入结果' }),
-  ).toHaveTextContent('已导入：访谈稿（本人 2 条）');
-  expect(screen.getByRole('list', { name: '导入结果' })).toHaveTextContent(
-    '未导入：bad.txt：编码错误',
-  );
-  const [url, init] = fetcher.mock.calls.find(([url]) =>
-    url.startsWith('/api/persona/import?'),
-  )! as [string, RequestInit];
-  expect(url).toBe('/api/persona/import?kind=meeting&date=2024-03-01');
-  expect(new Headers(init.headers).get('X-Twin')).toBe('1');
-  expect(new Headers(init.headers).has('Content-Type')).toBe(false);
-  expect((init.body as FormData).getAll('files')).toHaveLength(2);
-  expect(toast).toHaveBeenCalledWith(
-    '已导入或更新 1 份资料，跳过 1 份',
-    'warning',
-  );
-  await waitFor(() =>
-    expect(
-      screen.queryByRole('list', { name: '待导入文件' }),
-    ).not.toBeInTheDocument(),
-  );
-});
-it('shows drag-over feedback, accepts multiple dropped files, and retains selection on import errors', async () => {
-  mountSources();
-  await loadedSources();
-  const zone = screen.getByRole('button', { name: '选择或拖入文件（可多选）' });
-  fireEvent.dragEnter(zone);
-  expect(zone).toHaveTextContent('松开以选择文件');
-  fireEvent.dragLeave(zone);
-  expect(zone).toHaveTextContent('拖入文件');
-  fireEvent.drop(zone, {
-    dataTransfer: { files: [new File([''], 'a.txt'), new File([''], 'b.txt')] },
-  });
-  expect(
-    screen.getByRole('list', { name: '待导入文件' }).children,
-  ).toHaveLength(2);
-  importFailure = true;
-  fireEvent.click(screen.getByRole('button', { name: '导入' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent('编码错误');
-  expect(screen.getByRole('list', { name: '待导入文件' })).toBeInTheDocument();
-});
-it('renders remembered counts, facets, dates, declined notes and both unbuilt/no-items states', async () => {
-  sourceRows.push(
-    { ...source, source_id: 's2', title: '新资料', build_status: 'not_built' },
-    {
-      ...source,
-      source_id: 's3',
-      title: '空提炼',
-      build_status: 'no_items',
-      facets: [],
-      items_supported: 0,
-    },
-  );
-  mountSources();
-  await loadedSources();
-  const row = screen
-    .getByRole('article', { name: '访谈稿' })
-    .cloneNode(true) as HTMLElement;
-  row.querySelectorAll('[aria-hidden="true"]').forEach((node) => node.remove());
-  expect(row).toHaveTextContent('本人 / 全部：2 / 3');
-  expect(row).toHaveTextContent(
-    '原话 3 条（本人 2 / 他人 1） · 支撑档案 1 条 · 涉及：价值观',
-  );
-  expect(row).toHaveTextContent('2024-01-01 至 2024-02-01');
-  expect(row).toHaveTextContent('未授权细项：D9.1');
-  expect(screen.getByText(/尚未构建$/)).toBeVisible();
-  expect(screen.getByText(/构建后未产生档案条目$/)).toBeVisible();
-});
-it('requires danger confirmation, optimistically deletes, rolls back errors and refreshes after success', async () => {
-  mountSources();
-  await loadedSources();
-  const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: '删除 访谈稿' }));
-  expect(screen.getByRole('button', { name: '取消' })).toHaveFocus();
-  await user.click(screen.getByRole('button', { name: '取消' }));
-  expect(deleteResponse).toBeUndefined();
-  await user.click(screen.getByRole('button', { name: '删除 访谈稿' }));
-  await user.click(screen.getByRole('button', { name: '确认删除' }));
-  expect(
-    screen.queryByRole('article', { name: source.title }),
-  ).not.toBeInTheDocument();
-  await act(async () => deleteResponse!(json({ detail: '删除失败' }, 500)));
-  await loadedSources();
-  expect(toast).toHaveBeenCalledWith('删除失败', 'danger');
-  await user.click(screen.getByRole('button', { name: '删除 访谈稿' }));
-  await user.click(screen.getByRole('button', { name: '确认删除' }));
-  sourceRows = [];
-  await act(async () => deleteResponse!(json({ deleted: true })));
-  expect(await screen.findByText('还没有导入资料')).toBeVisible();
-});
-it('builds with progress/stage/logs, clears stale and shows sorted nonzero facet diffs', async () => {
-  mountSources();
-  await loadedSources();
-  expect(screen.getByText(/资料有变化，尚未重新构建/)).toBeVisible();
-  vi.useFakeTimers();
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: '构建人格档案' })),
-  );
-  expect(screen.getByRole('progressbar', { name: '构建进度' })).toHaveAttribute(
-    'aria-valuenow',
-    '50',
-  );
-  expect(screen.getByText('第 2/2 步：向量')).toBeVisible();
-  expect(screen.getByText('已合并 3 个细项')).toBeVisible();
-  jobStatus = 'done';
-  stale = false;
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
-  });
-  expect(
-    screen.getByText('新增 2 条、修改 1 条、删除 3 条，涉及 2 个细项'),
-  ).toBeVisible();
-  expect(
-    screen.getByText('D1.1：新增 2 条、修改 0 条、删除 3 条'),
-  ).toBeVisible();
-  expect(
-    screen.getByText('D2.1：新增 0 条、修改 1 条、删除 0 条'),
-  ).toBeVisible();
-  expect(screen.queryByText(/D3.1：新增/)).not.toBeInTheDocument();
-  expect(
-    screen.queryByText(/资料有变化，尚未重新构建/),
-  ).not.toBeInTheDocument();
-  expect(
-    screen.getByRole('link', { name: '查看档案与完成度' }),
-  ).toHaveAttribute('href', '#/persona');
-});
-it('shows build failure hints and allows resubmission', async () => {
-  jobStatus = 'failed';
-  mountSources();
-  await loadedSources();
-  fireEvent.click(screen.getByRole('button', { name: '构建人格档案' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    '已经完成的模型调用都保存在资料库里',
-  );
-  jobStatus = 'done';
-  fireEvent.click(screen.getByRole('button', { name: '重试' }));
-  expect(
-    await screen.findByText('新增 2 条、修改 1 条、删除 3 条，涉及 2 个细项'),
-  ).toBeVisible();
-  expect(
-    fetcher.mock.calls.filter(([url]) => url === '/api/persona/build'),
-  ).toHaveLength(2);
-});
 it('renders coverage metrics, API level labels, unconsented badges, matrix and suggestions', async () => {
   mountProfile();
   await loadedProfile();
@@ -636,26 +435,10 @@ it.each([300, 301])(
     }
   },
 );
-it('aborts source loads/imports and profile reviews on unmount', async () => {
+it('aborts source loads and profile reviews on unmount', async () => {
   const sources = mountSources();
   await loadedSources();
-  const file = screen.getByLabelText('文件（可多选）');
-  fireEvent.change(file, { target: { files: [new File(['test'], 'a.txt')] } });
-  let signal: AbortSignal | null | undefined;
-  const original = fetcher.getMockImplementation()! as (
-    url: string,
-    init: RequestInit,
-  ) => Promise<Response>;
-  fetcher.mockImplementation((url: string, init: RequestInit) => {
-    if (url.startsWith('/api/persona/import?')) {
-      signal = init.signal;
-      return new Promise<Response>(() => {});
-    }
-    return original(url, init);
-  });
-  fireEvent.click(screen.getByRole('button', { name: '导入' }));
   sources.unmount();
-  expect(signal?.aborted).toBe(true);
   const profile = mountProfile();
   await loadedProfile();
   fireEvent.click(article().getByRole('button', { name: '确认' }));

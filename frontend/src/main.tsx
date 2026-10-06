@@ -14,8 +14,8 @@ import './design/tokens.css';
 const Chat = lazy(() =>
   import('./pages/Chat').then((module) => ({ default: module.Chat })),
 );
-const Sources = lazy(() =>
-  import('./pages/Sources').then((module) => ({ default: module.Sources })),
+const Memories = lazy(() =>
+  import('./pages/Memories').then((module) => ({ default: module.Memories })),
 );
 const Profile = lazy(() =>
   import('./pages/Profile').then((module) => ({ default: module.Profile })),
@@ -50,12 +50,16 @@ createRoot(document.getElementById('root')!).render(
                   }
                 />
                 <Route
-                  path="sources"
+                  path="memories"
                   element={
                     <Suspense fallback={<Skeleton className="h-40" />}>
-                      <Sources />
+                      <Memories />
                     </Suspense>
                   }
+                />
+                <Route
+                  path="sources"
+                  element={<Navigate to="/memories" replace />}
                 />
                 <Route
                   path="persona"

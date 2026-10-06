@@ -103,14 +103,18 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 **记忆上传**
 
 ```bash
-twin persona import --kind questionnaire 问卷.md
-twin persona import --kind chat 聊天记录.csv
-twin persona import --kind document 文章/*.md
+twin persona import 问卷.md 聊天记录.csv 文章/*.md    # 自动识别类型，不用选择
+twin persona import 简历.pdf 想法.docx 网页.html
+twin persona note "我喜欢先核对事实，再做决定。"        # 写一段笔记
 twin persona import --kind meeting 会议转写.txt      # 也支持 interview、biography
 twin persona sources                                # 看已导入的资料
 twin persona build                                  # 抽取并合并人格档案，只处理新增或变化的部分
 twin persona coverage                               # 各维度的完成度，以及下一步该补什么资料
 ```
+
+支持 TXT、Markdown、PDF（文字层）、Word（.docx）、HTML、CSV、JSON、SRT、VTT，自动识别文字编码（含 GBK）；每个文件最多 50 MB，扫描 PDF 暂不支持。日期默认取文件名，聊天缺失日期时取第一条日期，再回退到添加当天。需要强制类型时仍可用 `--kind`。
+
+网页 `#/memories`（导航“记忆”）可以写一段、上传多个文件或整个文件夹。添加、删除后自动处理，不必点构建；可以查看分身看到的文字、记住的条数和失败重试。CLI 导入或笔记保存后，可运行 `twin persona build`，也可启动网页让它自动处理。
 
 **服务**
 

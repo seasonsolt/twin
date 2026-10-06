@@ -21,8 +21,13 @@ def test_init_writes_template_identical_to_example_with_code_defaults(tmp_path: 
     assert "已生成配置文件 twin.toml" in result.stdout
     assert written.read_text(encoding="utf-8") == cli.CONFIG_TEMPLATE
     example = (ROOT / "twin.toml.example").read_text(encoding="utf-8")
-    assert "".join(line for line in example.splitlines(keepends=True) if not line.startswith("# vrm_path = ")) == (
-        cli.CONFIG_TEMPLATE
+    assert (
+        "".join(
+            line
+            for line in example.splitlines(keepends=True)
+            if not line.startswith(("# vrm_path = ", "# reasoning_effort = "))
+        )
+        == cli.CONFIG_TEMPLATE
     )
     assert load_settings(written) == Settings(db_path=tmp_path / "data" / "twin.db")
     for marker in ("api_key_env", "TWIN_LLM_KEY", "openai_compat", "hashing"):

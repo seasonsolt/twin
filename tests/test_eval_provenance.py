@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from twin.config import Settings, configuration_fingerprint
+from twin.config import LLMSettings, Settings, configuration_fingerprint
 from twin.embed import HashingEmbedder
 from twin.evals.provenance import write_report
 from twin.evals.schema import FailurePolicy, PairingPolicy, Purpose, Report, Scenario
@@ -52,6 +52,18 @@ def test_configuration_identity_is_safe_and_sensitive_to_answer_settings(monkeyp
     monkeypatch.setenv("TEST_KEY_NAME", "SECRET")
     monkeypatch.setenv("TEST_EMBED_KEY_NAME", "EMBED_SECRET")
     assert configuration_fingerprint(settings, llm, embedder, panel) == initial
+    settings.llm.reasoning_effort = "none"
+    no_reasoning = configuration_fingerprint(settings, llm, embedder, panel)
+    assert no_reasoning != initial
+    settings.llm.reasoning_effort = "low"
+    assert configuration_fingerprint(settings, llm, embedder, panel) not in {initial, no_reasoning}
+    settings.llm.reasoning_effort = None
+    assert configuration_fingerprint(settings, llm, embedder, panel) == initial
+    settings.judges = [LLMSettings(model="judge")]
+    judge_default = configuration_fingerprint(settings, llm, embedder, panel)
+    settings.judges[0].reasoning_effort = "none"
+    assert configuration_fingerprint(settings, llm, embedder, panel) != judge_default
+    settings.judges.clear()
     settings.target_aliases.append("alias")
     assert configuration_fingerprint(settings, llm, embedder, panel) != initial
     settings.target_aliases.clear()

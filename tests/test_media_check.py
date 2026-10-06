@@ -301,8 +301,17 @@ def test_cli_check_requires_asr_configuration(tmp_path: Path, monkeypatch: pytes
     assert "[asr]" in result.output
 
 
-def test_config_examples_only_differ_in_optional_vrm_documentation() -> None:
+def test_config_examples_only_differ_in_optional_documentation() -> None:
     example = (Path(__file__).parents[1] / "twin.toml.example").read_text()
-    extra = [line for line in example.splitlines(keepends=True) if line.startswith("# vrm_path = ")]
-    assert extra == ['# vrm_path = "/path/to/stylized.vrm" # 可选本地风格化 3D 模型，≤ 64 MB；不提交模型文件。\n']
-    assert example.replace(extra[0], "") == CONFIG_TEMPLATE
+    extra = [
+        line
+        for line in example.splitlines(keepends=True)
+        if line.startswith(("# vrm_path = ", "# reasoning_effort = "))
+    ]
+    assert extra == [
+        '# reasoning_effort = "none"  # OpenAI 兼容端点的思考档位；不写则用模型默认，none 最快\n',
+        '# vrm_path = "/path/to/stylized.vrm" # 可选本地风格化 3D 模型，≤ 64 MB；不提交模型文件。\n',
+    ]
+    for line in extra:
+        example = example.replace(line, "")
+    assert example == CONFIG_TEMPLATE

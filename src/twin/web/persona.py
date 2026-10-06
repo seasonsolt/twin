@@ -6,46 +6,43 @@ from __future__ import annotations
 import datetime as dt
 import email.parser
 import email.policy
-import json
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
 from ..embed import Embedder
 from ..llm import LLM
-from ..persona.chat import PersonaChat, index_persona
+from ..persona.chat import PersonaChat, index_persona, no_profile_reply
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
 from ..persona.profile import build_profile, consented_facets, profile_stale, source_memories
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial, submit_retest
 from ..persona.schema import SOURCE_KIND_LABELS, ChatTurn, ReviewStatus, SourceKind, evidence_class
-from ..persona.sources import parse_text
+from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore
 from .backends import Backends
-from .jobs import JobManager
+from .jobs import JobManager, PersonaProcessing
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_UPLOAD_FILES = 500
 MAX_CHAT_TURNS = 40
 MAX_MESSAGE_CHARS = 4000
-SUFFIXES = {
-    SourceKind.MEETING: frozenset({".txt", ".md", ".srt", ".vtt", ".json"}),
-    SourceKind.CHAT: frozenset({".txt", ".csv", ".json"}),
-    SourceKind.INTERVIEW: frozenset({".txt", ".md"}),
-    SourceKind.DOCUMENT: frozenset({".txt", ".md"}),
-    SourceKind.BIOGRAPHY: frozenset({".txt", ".md"}),
-    SourceKind.QUESTIONNAIRE: frozenset({".txt", ".md"}),
-}
 
 Log = Callable[[str], None]
+
+
+class NoteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+    title: str | None = Field(default=None, max_length=200)
 
 
 class QuestionnaireBody(BaseModel):
@@ -77,6 +74,8 @@ def source_view(s: Any) -> dict[str, Any]:
     return {
         **s.model_dump(mode="json"),
         "kind_label": SOURCE_KIND_LABELS[s.kind],
+        "detected_kind": s.kind.value,
+        "detected_kind_label": "笔记" if s.origin.startswith("note:") else MEMORY_KIND_LABELS[s.kind],
         "evidence_class": evidence_class(s.kind).value,
     }
 
@@ -137,11 +136,104 @@ def register(
         with PersonaStore(settings.db_path) as store:
             yield store
 
+    def automatic_build(log: Log) -> dict[str, Any]:
+        with open_store() as store:
+            ids = [
+                s.source_id
+                for s in store.list_sources()
+                if store.get_meta("built_at") is None
+                or store.get_meta(f"source_pending:{s.source_id}") is not None
+                or store.get_meta(f"source_error:{s.source_id}")
+            ]
+            version = store.get_meta("sources_changed_at")
+            store.clear_source_errors()
+        error = None
+        try:
+            result = run_persona_build(settings, backends.llm(), backends.embedder(), log)
+            if result.get("failures"):
+                error = "部分记忆处理失败，请重新处理"
+            return result
+        except Exception:
+            error = "记忆处理失败，请检查模型配置后重试"
+            # Backend exceptions can contain prompts. Do not pass them to job logs.
+            raise RuntimeError(error) from None
+        finally:
+            with open_store() as store:
+                store.processing_result(ids, version, error)
+
+    processing = PersonaProcessing(jobs, automatic_build, lambda snapshot: None)
+
+    def queue_build() -> None:
+        with open_store() as store:
+            store.clear_source_errors()
+        processing.queue()
+
+    def resume_processing() -> None:
+        if not settings.db_path.is_file():
+            return
+        with open_store() as store:
+            stale = profile_stale(store)
+        if stale:
+            processing.queue()
+
+    previous_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        async with previous_lifespan(app):
+            resume_processing()
+            try:
+                yield
+            finally:
+                processing.close()
+
+    app.router.lifespan_context = lifespan
+
+    @app.get("/api/persona/processing")
+    def get_processing() -> dict[str, Any]:
+        view = processing.view()
+        with open_store() as store:
+            view["last_finished_at"] = store.get_meta("processing_last_finished_at") or view["last_finished_at"]
+            view["last_error"] = store.get_meta("processing_last_error") or view["last_error"]
+        return view
+
+    @app.post("/api/persona/notes")
+    def add_note(body: NoteBody) -> dict[str, Any]:
+        try:
+            parsed = parse_note(body.text, settings, body.title)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        with open_store() as store:
+            new = store.put_source(parsed)
+        queue_build()
+        return {**source_view(parsed.source), "new": new}
+
+    @app.get("/api/persona/sources/{source_id}/text", response_class=PlainTextResponse)
+    def source_text(source_id: str) -> str:
+        with open_store() as store:
+            source = store.get_source(source_id)
+            if source is None:
+                raise HTTPException(404, "找不到这条记忆")
+            expressions = expression_view(store, settings, source_id=source_id)
+            speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.MEETING}
+            return "\n\n".join(
+                (f"{e.context}\n" if e.context else "") + (f"{e.speaker}：{e.text}" if speaker_lines else e.text)
+                for e in expressions
+            )[:20000]
+
     @app.get("/api/persona/sources")
     def list_sources() -> list[dict[str, Any]]:
         with open_store() as store:
             memories = source_memories(store)
-            return [{**source_view(s), **asdict(memories[s.source_id])} for s in store.list_sources()]
+            return [
+                {
+                    **source_view(s),
+                    **asdict(memories[s.source_id]),
+                    "status": store.source_status(s.source_id, memories[s.source_id].items_supported),
+                    "remembered": memories[s.source_id].items_supported,
+                }
+                for s in store.list_sources()
+            ]
 
     @app.get("/api/persona/state")
     def get_state() -> dict[str, Any]:
@@ -154,7 +246,9 @@ def register(
 
     @app.post("/api/persona/import")
     async def import_sources(
-        request: Request, kind: Annotated[SourceKind, Query()], date: Annotated[str | None, Query()] = None
+        request: Request,
+        kind: Annotated[SourceKind | None, Query()] = None,
+        date: Annotated[str | None, Query()] = None,
     ) -> dict[str, Any]:
         when = _date(date, "date")
         received = await read_uploads(request)
@@ -162,21 +256,20 @@ def register(
         skipped: list[dict[str, str]] = []
         with open_store() as store:
             for raw_name, data in received:
-                name = Path(raw_name.replace("\\", "/")).name
-                if Path(name).suffix.lower() not in SUFFIXES[kind]:
-                    skipped.append(
-                        {"file": raw_name, "reason": f"不支持的文件类型，可用 {'、'.join(sorted(SUFFIXES[kind]))}"}
-                    )
+                relative = Path(raw_name.replace("\\", "/"))
+                name = relative.name
+                if any(part.startswith(".") for part in relative.parts):
+                    skipped.append({"file": raw_name, "reason": "已跳过隐藏文件"})
                     continue
                 try:
-                    parsed = parse_text(kind, name, data.decode("utf-8-sig"), settings, when)
-                except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                    parsed = parse_upload(name, data, settings, kind, when)
+                except ValueError as e:
                     skipped.append({"file": raw_name, "reason": str(e)})
                     continue
                 new = store.put_source(parsed)
                 imported.append({**source_view(parsed.source), "new": new, "skipped_lines": len(parsed.skipped_lines)})
-        if not imported and skipped:
-            raise HTTPException(400, "没有可导入的文件：" + "；".join(f"{s['file']}：{s['reason']}" for s in skipped))
+        if imported:
+            queue_build()
         return {"imported": imported, "skipped": skipped}
 
     @app.delete("/api/persona/sources/{source_id}")
@@ -184,15 +277,15 @@ def register(
         with open_store() as store:
             if not store.delete_source(source_id):
                 raise HTTPException(404, f"找不到资料 {source_id}")
+        queue_build()
         return {"deleted": True}
 
     @app.post("/api/persona/build", status_code=202)
     def start_build() -> dict[str, str]:
-        llm, embedder = backends.llm(), backends.embedder()
         with open_store() as store:
             if not store.list_sources() and not profile_stale(store):
-                raise HTTPException(400, "还没有导入资料：请先导入问卷、聊天记录、访谈或文档")
-        job = jobs.submit("persona_build", "构建人格档案", lambda log: run_persona_build(settings, llm, embedder, log))
+                raise HTTPException(400, "还没有导入资料，请先添加记忆")
+        job = processing.start()
         return {"job_id": job.job_id}
 
     def item_view(i: Any) -> dict[str, Any]:
@@ -246,21 +339,19 @@ def register(
         return data
 
     @app.post("/api/persona/chat", status_code=202)
-    def start_chat(body: ChatBody) -> dict[str, str]:
+    def start_chat(body: ChatBody) -> Any:
         messages = body.messages
         if messages[-1].role != "user" or not messages[-1].content.strip():
             raise HTTPException(400, "最后一条消息必须是你说的话，且不能为空")
         if any(len(m.content) > MAX_MESSAGE_CHARS for m in messages):
             raise HTTPException(400, f"单条消息不能超过 {MAX_MESSAGE_CHARS} 字")
         as_of = _date(body.as_of, "as_of")
-        llm, embedder = backends.llm(), backends.embedder()
         with open_store() as store:
             if not store.list_items():
-                raise HTTPException(400, "还没有人格档案：请先导入资料并构建")
-        flat = " ".join(messages[-1].content.split())
-        job = jobs.submit(
-            "chat", "聊天：" + flat[:40], lambda log: run_chat(settings, llm, embedder, messages, as_of, log)
-        )
+                reply = no_profile_reply(store, as_of)
+                return JSONResponse({**reply.model_dump(mode="json"), "cited": []}, status_code=200)
+        llm, embedder = backends.llm(), backends.embedder()
+        job = jobs.submit("chat", "和分身聊天", lambda log: run_chat(settings, llm, embedder, messages, as_of, log))
         return {"job_id": job.job_id}
 
     @app.get("/api/persona/questionnaire")

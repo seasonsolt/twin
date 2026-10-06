@@ -39,6 +39,7 @@ from ..util import date_from_name
 from .dimensions import FACET_BY_ID
 from .schema import Expression, ParsedSource, Source, SourceKind
 from .store import PersonaStore
+from .text import MAX_FILE_BYTES, extract_text
 from .transcript_schema import Meeting, Utterance
 from .transcripts import parse_transcript, parse_transcript_text
 
@@ -514,7 +515,76 @@ def parse_text(kind: SourceKind, name: str, raw: str, settings: Settings, date: 
     return parse_questionnaire(name, raw, settings, date)
 
 
-def parse_source(kind: SourceKind, path: Path, settings: Settings, date: dt.date | None = None) -> ParsedSource:
+MEMORY_KIND_LABELS = {
+    SourceKind.DOCUMENT: "文档",
+    SourceKind.CHAT: "聊天记录",
+    SourceKind.QUESTIONNAIRE: "问卷",
+    SourceKind.INTERVIEW: "访谈",
+    SourceKind.MEETING: "会议记录",
+    SourceKind.BIOGRAPHY: "传记",
+}
+
+
+def detect_kind(name: str, text: str, settings: Settings | None = None) -> SourceKind:
+    settings = settings or Settings()
+    lines = [line for line in text.splitlines() if line.strip()]
+    if any(_QUESTION.match(line) and _TAGS.search(line) for line in lines) and any(
+        _ANSWER.match(line) for line in lines
+    ):
+        return SourceKind.QUESTIONNAIRE
+    suffix = Path(name).suffix.lower()
+    rows: list[dict[str, str]] = []
+    if suffix == ".csv":
+        rows = list(csv.DictReader(io.StringIO(text)))
+    elif suffix == ".json":
+        try:
+            data = json.loads(text)
+            data = data.get("messages", data) if isinstance(data, dict) else data
+            if isinstance(data, list):
+                rows = [row for row in data if isinstance(row, dict)]
+        except ValueError:
+            pass
+    if any(_pick(row, _CSV_TIME) and _pick(row, _CSV_SENDER) and _pick(row, _CSV_TEXT) for row in rows):
+        return SourceKind.CHAT
+    if lines and sum(bool(_INLINE.match(line) or _HEADER.match(line)) for line in lines) / len(lines) >= 0.6:
+        return SourceKind.CHAT
+    speakers = [m["speaker"].strip() for line in lines if (m := _PLAIN.match(line))]
+    if lines and len(speakers) / len(lines) >= 0.6 and any(settings.is_target(s) for s in speakers):
+        return SourceKind.INTERVIEW
+    return SourceKind.DOCUMENT
+
+
+def parse_upload(
+    name: str, data: bytes, settings: Settings, kind: SourceKind | None = None, date: dt.date | None = None
+) -> ParsedSource:
+    raw = extract_text(name, data)
+    detected = kind or detect_kind(name, raw, settings)
+    when = date or date_from_name(Path(name).stem)
+    if when is None and detected is SourceKind.CHAT:
+        when = next((day for line in raw.splitlines() if (day := parse_date(line)) is not None), None)
+    when = when or dt.date.today()
+    parsed = parse_text(detected, name, raw, settings, when)
+    for expression in parsed.expressions:
+        expression.date = expression.date or when
+    dates = [e.date for e in parsed.expressions if e.date is not None]
+    parsed.source.first_date = min(dates, default=when)
+    parsed.source.last_date = max(dates, default=when)
+    return parsed
+
+
+def parse_note(text: str, settings: Settings, title: str | None = None) -> ParsedSource:
+    if not 1 <= len(text) <= 20000 or not text.strip():
+        raise ValueError("笔记需要 1–20000 个字")
+    title = (title or "").strip() or f"笔记 {dt.datetime.now():%Y-%m-%d %H:%M}"
+    parsed = parse_document(title + ".txt", text, settings, dt.date.today())
+    parsed.source.title = title
+    parsed.source.origin = "note:" + parsed.source.source_id
+    return parsed
+
+
+def parse_source(kind: SourceKind | None, path: Path, settings: Settings, date: dt.date | None = None) -> ParsedSource:
+    if path.stat().st_size > MAX_FILE_BYTES:
+        raise ValueError("每个文件最多 50 MB")
     if kind is SourceKind.MEETING:
         return meeting_to_source(parse_transcript(path, settings, meeting_date=date), settings)
-    return parse_text(kind, path.name, path.read_text(encoding="utf-8-sig"), settings, date)
+    return parse_upload(path.name, path.read_bytes(), settings, kind, date)

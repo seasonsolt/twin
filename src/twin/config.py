@@ -46,6 +46,7 @@ class LLMSettings(BaseModel):
     timeout: float = Field(default=600.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     egress: Literal["local", "external"] | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
 
 
 class EmbedSettings(BaseModel):
@@ -268,6 +269,7 @@ def configuration_fingerprint(
         {
             "llm": {**settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}), "name": llm.name},
             "judges": [{"id": judge_id, "effort": effort} for judge_id, effort in judges],
+            "judge_reasoning_effort": [judge.reasoning_effort for judge in settings.judges],
             "embed": {
                 **settings.embed.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
                 "fingerprint": embedder_fingerprint(embedder),
@@ -346,6 +348,7 @@ def make_llm(s: LLMSettings, section: str = "llm") -> LLM:
             max_tokens=s.max_tokens,
             timeout=s.timeout,
             max_retries=s.max_retries,
+            reasoning_effort=s.reasoning_effort,
         )
     return ClaudeCLILLM(model=s.model or CLAUDE_DEFAULT_MODEL)
 

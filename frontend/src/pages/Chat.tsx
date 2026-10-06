@@ -100,9 +100,9 @@ export function Chat() {
           role="status"
           className="rounded-md border border-warning/20 bg-warning/5 px-4 py-2 text-sm text-secondary"
         >
-          资料有变化，尚未重新构建；档案和聊天仍基于上次构建。{' '}
-          <a className="text-accent underline" href="#/sources">
-            去重新构建
+          新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
+          <a className="text-accent underline" href="#/memories">
+            查看记忆
           </a>
         </p>
       )}
@@ -120,10 +120,15 @@ export function Chat() {
         aria-relevant="additions text"
       >
         {!chat.turns.length && (
-          <EmptyState
-            title="还没有对话"
-            body="在下面输入一句话开始。分身只依据已构建的人格档案作答。"
-          />
+          <>
+            <EmptyState
+              title="还没有对话"
+              body="在下面输入一句话开始，也可以先添加记忆。"
+            />
+            <a className="text-accent underline" href="#/memories">
+              添加记忆
+            </a>
+          </>
         )}
         <MessageList
           label="对话记录"

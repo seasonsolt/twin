@@ -33,8 +33,9 @@ from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
 from .persona.profile import STALE_PROFILE_NOTICE, build_profile, consented_facets, profile_stale, source_memories
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
-from .persona.sources import parse_source
+from .persona.sources import MEMORY_KIND_LABELS, parse_note, parse_source
 from .persona.store import PersonaStore
+from .persona.text import SUPPORTED_SUFFIXES
 from .usage import BudgetExceeded, UsageRecorder, active_recorder, call_stage, failure_directory, record_usage
 from .util import RenameError, open_private, private_directory
 
@@ -431,7 +432,7 @@ def identity_show(ctx: typer.Context) -> None:
 def persona_import(
     ctx: typer.Context,
     paths: Annotated[list[Path], typer.Argument(help="要导入的文件，可以多个")],
-    kind: Annotated[SourceKind, typer.Option("--kind", help="资料类型")],
+    kind: Annotated[SourceKind | None, typer.Option("--kind", help="资料类型（默认自动识别）")] = None,
     date: Annotated[str | None, typer.Option("--date", help="资料日期（问卷、访谈、文档；默认从文件名识别）")] = None,
 ) -> None:
     """导入资料。同一个文件内容不变时重复导入只会覆盖，不会重复。"""
@@ -441,6 +442,9 @@ def persona_import(
         for path in paths:
             if not path.is_file():
                 raise _fail(f"找不到文件 {path}")
+            if path.name.startswith(".") or path.suffix.lower() not in SUPPORTED_SUFFIXES:
+                _say(f"跳过 {path.name}：隐藏文件或不支持的文件类型")
+                continue
             try:
                 parsed = parse_source(kind, path, settings, when)
             except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -449,11 +453,20 @@ def persona_import(
             s = parsed.source
             span = f"{s.first_date or '—'} 至 {s.last_date or '—'}"
             _say(
-                f"{'导入' if new else '已更新'} {path.name}（{SOURCE_KIND_LABELS[s.kind]}）：{s.n_expressions} 条，"
+                f"{'导入' if new else '已更新'} {path.name}（{MEMORY_KIND_LABELS[s.kind]}）：{s.n_expressions} 条，"
                 f"本人 {s.n_target} 条，{span}"
                 + (f"；未授权细项 {'、'.join(s.declined_facets)}" if s.declined_facets else "")
                 + (f"；无法识别的行 {len(parsed.skipped_lines)} 行" if parsed.skipped_lines else "")
             )
+
+
+@persona_app.command("note")
+def persona_note(ctx: typer.Context, text: Annotated[str, typer.Argument(help="要记住的文字")]) -> None:
+    settings = _settings(ctx)
+    with _errors(), _persona_store(settings) as store:
+        parsed = parse_note(text, settings)
+        store.put_source(parsed)
+    _say(f"已添加 {parsed.source.title}")
 
 
 @persona_app.command("sources")

@@ -15,6 +15,7 @@ provider = "openai_compat"
 # model = "your-model"
 # base_url = "http://127.0.0.1:8000/v1"
 api_key_env = "TWIN_LLM_KEY"
+# reasoning_effort = "none"  # OpenAI 兼容端点的思考档位；不写则用模型默认，none 最快
 
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。

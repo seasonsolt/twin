@@ -272,6 +272,119 @@ class JobManager:
             job.done.set()
 
 
+class PersonaProcessing:
+    """Debounced builds with one coalesced follow-up, including builds submitted elsewhere."""
+
+    def __init__(
+        self,
+        jobs: JobManager,
+        build: JobFn,
+        finished: Callable[[dict[str, Any]], None],
+        *,
+        schedule: Callable[[float, Callable[[], None]], Any] | None = None,
+        delay: float = 3.0,
+    ) -> None:
+        self.jobs, self.build, self.finished = jobs, build, finished
+        self.delay = delay
+        self._schedule = schedule or self._timer
+        self._lock = threading.RLock()
+        self._pending = False
+        self._timer_handle: Any = None
+        self._job: Job | None = None
+        self._last: dict[str, Any] = {}
+        self._generation = 0
+        self._closed = False
+
+    @staticmethod
+    def _timer(delay: float, fn: Callable[[], None]) -> threading.Timer:
+        timer = threading.Timer(delay, fn)
+        timer.daemon = True
+        timer.start()
+        return timer
+
+    def queue(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._pending = True
+            self._generation += 1
+            if self._timer_handle is not None:
+                self._timer_handle.cancel()
+                self._timer_handle = None
+            active = self.jobs.active_exclusive()
+            if active is not None:
+                self._watch(active)
+            else:
+                generation = self._generation
+                self._timer_handle = self._schedule(self.delay, lambda: self._launch(generation))
+
+    def start(self) -> Job:
+        with self._lock:
+            self._generation += 1
+            if self._timer_handle is not None:
+                self._timer_handle.cancel()
+                self._timer_handle = None
+            active = self.jobs.active_exclusive()
+            if active is not None:
+                self._pending = True
+                self._watch(active)
+                return active
+            self._pending = False
+            job = self.jobs.submit("persona_build", "重新处理记忆", self.build)
+            self._watch(job)
+            return job
+
+    def _launch(self, generation: int) -> None:
+        with self._lock:
+            if generation != self._generation or not self._pending:
+                return
+            self._timer_handle = None
+            try:
+                self.start()
+            except JobConflict as conflict:
+                self._pending = True
+                self._watch(conflict.job)
+
+    def _watch(self, job: Job) -> None:
+        if self._job is job:
+            return
+        self._job = job
+        threading.Thread(target=self._complete, args=(job,), daemon=True).start()
+
+    def _complete(self, job: Job) -> None:
+        job.done.wait()
+        with self._lock:
+            snapshot = self.jobs.snapshot(job.job_id)
+            if snapshot is not None:
+                self._last = snapshot
+                self.finished(snapshot)
+            if self._job is job:
+                self._job = None
+            if self._pending and not self._closed and self.jobs.active_exclusive() is None:
+                if self._timer_handle is not None:
+                    self._timer_handle.cancel()
+                generation = self._generation
+                self._timer_handle = self._schedule(self.delay, lambda: self._launch(generation))
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._pending = False
+            self._generation += 1
+            if self._timer_handle is not None:
+                self._timer_handle.cancel()
+
+    def view(self) -> dict[str, Any]:
+        with self._lock:
+            active = self.jobs.active_exclusive()
+            return {
+                "state": "running" if active is not None else "queued" if self._pending else "idle",
+                "job_id": active.job_id if active is not None else None,
+                "last_finished_at": self._last.get("finished"),
+                "last_error": self._last.get("error"),
+            }
+
+
 def _backend_errors() -> tuple[type[Exception], ...]:
     """Base exceptions of the model / embedding SDKs and of the claude CLI subprocess; an SDK exception can only exist
     if its module was imported, so they are looked up in ``sys.modules``."""

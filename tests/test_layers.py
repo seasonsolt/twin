@@ -40,6 +40,7 @@ LAYERS: dict[str, int] = {
     "config": 2,
     "persona.store": 3,
     "persona.sources": 4,
+    "persona.text": 4,
     "persona.questionnaire": 4,
     "persona.profile": 5,
     "persona.coverage": 5,

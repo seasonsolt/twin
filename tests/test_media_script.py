@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ from twin.media.adapters import (
     presentable_from_chat_reply,
     presentable_from_payload,
 )
+from twin.media.render import export_html, render_audio
 from twin.media.schema import (
     EXPLICIT_LABEL,
     OPENING_NOTICE,
@@ -20,6 +22,7 @@ from twin.media.schema import (
     Segment,
 )
 from twin.media.script import script_from_presentable, split_sentences
+from twin.media.tts import SilentSynthesizer
 from twin.persona.schema import ChatReply
 from twin.util import fingerprint
 
@@ -95,6 +98,25 @@ def test_empty_speech_still_has_notice(reply: ChatReply) -> None:
     assert script_from_presentable(presentable_from_chat_reply(reply), "合成人物").segments == [
         Segment(index=0, kind="notice", text=OPENING_NOTICE)
     ]
+
+
+def test_general_notice_is_shown_and_spoken(reply: ChatReply, tmp_path: Path) -> None:
+    general = ChatReply.model_validate({**reply.model_dump(), "mode": "general"})
+    presentable = presentable_from_chat_reply(general)
+    assert presentable.mode == "general"
+    script = script_from_presentable(presentable, "合成人物")
+    assert not script.abstain
+    assert [s.index for s in script.segments] == list(range(len(script.segments)))
+    assert [s.kind for s in script.segments] == ["notice", "notice", "speech", "speech"]
+    notice = "以下是通用知识，不代表本人观点。"
+    assert script.segments[0].text == OPENING_NOTICE and script.segments[1].text == notice
+    assert [s.text for s in script.segments[2:]] == split_sentences(reply.reply)
+    assert notice in export_html(script, clock=lambda: dt.datetime(2026, 1, 2, tzinfo=dt.UTC))
+    audio = render_audio(script, SilentSynthesizer(), tmp_path)
+    assert "".join(p.spoken_text for p in audio.segments[1].parts) == notice
+    assert notice not in "".join(
+        s.text for s in script_from_presentable(presentable_from_chat_reply(reply), "人").segments
+    )
 
 
 def test_manifest_roundtrip() -> None:

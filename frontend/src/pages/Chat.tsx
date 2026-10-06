@@ -165,6 +165,9 @@ export function Chat() {
                       <Badge tone={turn.reply.abstain ? 'warning' : 'neutral'}>
                         置信度 {Math.round((turn.reply.confidence ?? 0) * 100)}%
                       </Badge>
+                      {turn.reply.mode === 'general' && (
+                        <Badge tone="neutral">通用回答 · 非本人观点</Badge>
+                      )}
                       {turn.reply.abstain && (
                         <>
                           <Badge tone="warning">需要本人确认</Badge>

@@ -17,6 +17,7 @@ export interface ChatReply {
   retrieved_ids: string[];
   as_of?: string | null;
   cited?: Citation[];
+  mode?: 'grounded' | 'general' | 'abstain';
 }
 
 export interface Turn {

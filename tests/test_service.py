@@ -73,7 +73,7 @@ def test_resolves_privacy_view_citations_and_label(grounded_chat: tuple[PersonaC
     chat, refs = grounded_chat
     answer = answer_question(chat, "怎么做？", None)
     assert answer.answer == "先核实证据。" and answer.confidence == 0.9
-    assert answer.schema_version == 1 and answer.label == EXPLICIT_LABEL
+    assert answer.schema_version == 1 and answer.label == EXPLICIT_LABEL and answer.mode == "grounded"
     assert answer.persona_name == "张三" and answer.generated_at.utcoffset() == dt.timedelta(0)
     assert [c.ref_id for c in answer.citations] == refs
     assert [c.kind for c in answer.citations] == ["item", "expression", "expression"]
@@ -116,8 +116,25 @@ def test_abstention_passthrough(grounded_chat: tuple[PersonaChat, list[str]]) ->
     }
     chat.llm = FakeLLM(lambda *args: draft)
     answer = answer_question(chat, "未知问题", None)
-    assert answer.abstain and answer.abstain_reason == draft["abstain_reason"]
+    assert answer.abstain and answer.abstain_reason == draft["abstain_reason"] and answer.mode == "abstain"
     assert answer.answer == draft["reply"] and answer.confidence == 0.2 and not answer.citations
+    assert chat.store.chat_demand() == {}
+
+
+def test_general_mode_passthrough(grounded_chat: tuple[PersonaChat, list[str]]) -> None:
+    chat, _ = grounded_chat
+    chat.llm = FakeLLM(
+        lambda *args: {
+            "reply": "这不是我本人的经验，一般来说先做预算。",
+            "mode": "general",
+            "confidence": 0.9,
+            "citations": [],
+        }
+    )
+    answer = answer_question(chat, "如何做预算？", None)
+    assert answer.mode == "general" and not answer.abstain and not answer.abstain_reason
+    assert answer.confidence == 0.5 and not answer.citations
+    assert ServiceAnswer.model_validate_json(answer.model_dump_json()) == answer
     assert chat.store.chat_demand() == {}
 
 

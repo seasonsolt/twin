@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SourceKind(StrEnum):
@@ -97,15 +97,37 @@ class ChatTurn(BaseModel):
     content: str
 
 
+def _chat_mode_defaults(data: object) -> object:
+    if isinstance(data, dict):
+        data = dict(data)
+        if "mode" not in data:
+            data["mode"] = "abstain" if data.get("abstain") else "grounded"
+        if "abstain" not in data:
+            data["abstain"] = data["mode"] == "abstain"
+    return data
+
+
 class ChatDraft(BaseModel):
     reply: str = Field(description="以本人身份、第一人称、他平时的说话方式写的回复")
     citations: list[str] = Field(description="回复依据的资料编号，原样复制方括号里的编号；没有依据时为空列表")
     confidence: float = Field(description="0 到 1：你对“本人会这样回答”的把握")
-    abstain: bool = Field(description="资料里没有依据、只能回答不知道或需要本人确认时为 true")
+    abstain: bool = Field(default=False, description="mode 为 abstain 时为 true；省略时由 mode 推导")
     abstain_reason: str = Field(default="", description="abstain 为 true 时写明原因")
     topic_facets: list[str] = Field(
         default_factory=list, description=f"对方这句话涉及的细项编号，最多 {MAX_TOPIC_FACETS} 个，从【细项列表】里选"
     )
+    mode: Literal["grounded", "general", "abstain"] = "grounded"
+
+    @model_validator(mode="before")
+    @classmethod
+    def mode_defaults(cls, data: object) -> object:
+        return _chat_mode_defaults(data)
+
+    @model_validator(mode="after")
+    def consistent_mode(self) -> ChatDraft:
+        if self.abstain != (self.mode == "abstain"):
+            raise ValueError("abstain must match mode")
+        return self
 
 
 class ChatReply(BaseModel):
@@ -117,6 +139,20 @@ class ChatReply(BaseModel):
     topic_facets: list[str] = Field(default_factory=list)
     retrieved_ids: list[str]
     as_of: dt.date | None = None
+    mode: Literal["grounded", "general", "abstain"] = "grounded"
+
+    @model_validator(mode="before")
+    @classmethod
+    def mode_defaults(cls, data: object) -> object:
+        return _chat_mode_defaults(data)
+
+    @model_validator(mode="after")
+    def consistent_mode(self) -> ChatReply:
+        if self.abstain != (self.mode == "abstain"):
+            raise ValueError("abstain must match mode")
+        if self.mode == "general":
+            self.confidence = min(self.confidence, 0.5)
+        return self
 
 
 class ReviewStatus(StrEnum):

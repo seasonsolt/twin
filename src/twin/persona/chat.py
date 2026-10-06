@@ -206,7 +206,9 @@ class PersonaChat:
         )
         citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
-        if draft.abstain or not citations:
+        if draft.mode == "general":
+            confidence = min(confidence, 0.5)
+        elif draft.abstain or not citations:
             confidence = min(confidence, UNCITED_CONFIDENCE_CAP)
         elif not any(c in ctx.trusted for c in citations):
             confidence = min(confidence, UNVERIFIED_CONFIDENCE_CAP)
@@ -220,6 +222,7 @@ class PersonaChat:
             topic_facets=topics[:MAX_TOPIC_FACETS],
             retrieved_ids=sorted(ctx.ids),
             as_of=as_of,
+            mode=draft.mode,
         )
         if persist:
             self.store.log_chat(messages[-1].content, reply)
@@ -244,6 +247,12 @@ CHAT_SYSTEM = """\
 6. citations 填你用到的资料编号（方括号里的原样复制，如 pi_1a2b3c4d5e6f）；confidence 是你对"他本人会这样回答"的\
 把握，资料直接支持时高，只能类推时不超过 0.5，弃权时不超过 0.3。标了"本人已确认"的条目最可靠，优先依据它们。
 7. topic_facets 填对方这句话涉及的细项编号（见【细项列表】），最多 2 个；寒暄等不涉及任何细项时为空列表。
+8. 引号（「」『』“”\"\"）只能包住逐字出现在【说话样本】或【检索资料】中的文字；强调、转述或术语不要加引号；\
+绝不能把转述当作本人的原话。
+9. 如果问题不涉及本人的观点、经历、工作或生活，而是通用知识或方法问题，应提供有帮助的回答，开头用一句简短的话\
+说明这是通用知识、不是本人观点，例如：这不是我本人的经验，一般来说……；mode 设为 general，abstain 为 false，\
+citations 可以为空，confidence 不超过 0.5。涉及本人但无资料支持的问题仍按规则 1 弃权，承诺和评价具体他人仍按规则 3 \
+弃权，mode 设为 abstain、abstain 为 true；有资料依据的本人回答 mode 设为 grounded、abstain 为 false。
 
 ## 核心画像（证据最多的条目）
 {core}

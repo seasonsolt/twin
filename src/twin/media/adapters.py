@@ -18,6 +18,7 @@ def presentable_from_chat_reply(reply: ChatReply) -> PresentableAnswer:
         confidence=reply.confidence,
         as_of=reply.as_of,
         citations=[MediaCitation(ref_id=ref, reason="") for ref in reply.citations],
+        mode=reply.mode,
     )
 
 

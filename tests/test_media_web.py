@@ -115,8 +115,10 @@ def test_api_export(client: TestClient, source: ChatReply) -> None:
     assert "attachment" in response.headers["content-disposition"]
     check_export(response.text, presentable_from_chat_reply(source).source_fingerprint)
     source.abstain = True
+    source.mode = "abstain"
     source.abstain_reason = "没有依据"
     result = client.post("/api/media/export", json={**body, "answer": source.model_dump(mode="json")}, headers=HEADERS)
+    assert result.status_code == 200
     assert '<p class="speech">' not in result.text
     assert '<p class="notice">没有依据</p>' in result.text
 

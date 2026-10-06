@@ -155,7 +155,8 @@ def test_classification_fabrication_elsewhere_and_repeated_quotes(caplog: pytest
         prediction = adapter.predict(question(), as_of=None, repeat=0)
         assert prediction.raw["quotes"] == {"total": 5, "cited": 3, "elsewhere": 1, "question": 0, "unverified": 1}
         assert len(adapter.chat.llm.calls) == 1
-        assert set(prediction.raw) == {"artifacts", "quotes"}
+        assert set(prediction.raw) == {"artifacts", "quotes", "mode"}
+        assert prediction.raw["mode"] == "grounded"
         assert "飞船" not in json.dumps(prediction.raw, ensure_ascii=False)
         assert "飞船" not in caplog.text and "虚构问题" not in caplog.text
         assert store._db.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 0

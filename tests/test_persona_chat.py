@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
@@ -13,7 +14,7 @@ from twin.llm import FakeLLM
 from twin.persona import chat as pc
 from twin.persona import profile as pf
 from twin.persona.items import PReview
-from twin.persona.schema import ChatTurn, ReviewStatus
+from twin.persona.schema import ChatDraft, ChatReply, ChatTurn, ReviewStatus
 from twin.persona.sources import parse_biography, parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
 
@@ -65,6 +66,65 @@ def store(settings: Settings) -> PersonaStore:
     s.put_source(parse_chat("群.txt", CHAT, settings))
     pf.build_profile(s, FakeLLM(extract_handler), settings)
     return s
+
+
+@pytest.mark.parametrize("contract", [ChatDraft, ChatReply])
+@pytest.mark.parametrize("mode", ["grounded", "general", "abstain"])
+def test_chat_modes_and_legacy_compatibility(contract: type[ChatDraft] | type[ChatReply], mode: str) -> None:
+    data = {"reply": "测试回答", "citations": [], "confidence": 0.9, "abstain_reason": "", "retrieved_ids": []}
+    answer = contract.model_validate({**data, "mode": mode})
+    assert answer.mode == mode and answer.abstain == (mode == "abstain")
+    assert contract.model_validate_json(answer.model_dump_json()) == answer
+    if isinstance(answer, ChatReply) and mode == "general":
+        assert answer.confidence == 0.5
+    for abstain in (True, False):
+        legacy = contract.model_validate({**data, "abstain": abstain})
+        assert legacy.mode == ("abstain" if abstain else "grounded")
+    with pytest.raises(ValidationError, match="abstain must match mode"):
+        contract.model_validate({**data, "mode": mode, "abstain": mode != "abstain"})
+    with pytest.raises(ValidationError):
+        contract.model_validate({**data, "mode": "unknown"})
+
+
+def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Settings) -> None:
+    ctx = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings).retrieve("问题")
+    prompt = pc.chat_system_prompt(settings.target_name, ctx)
+    assert '引号（「」『』“”""）只能包住逐字出现在【说话样本】或【检索资料】中的文字' in prompt
+    assert "强调、转述或术语不要加引号" in prompt and "绝不能把转述当作本人的原话" in prompt
+    assert "不涉及本人的观点、经历、工作或生活" in prompt
+    assert "开头用一句简短的话说明这是通用知识、不是本人观点" in prompt
+    assert "mode 设为 general" in prompt and "citations 可以为空" in prompt
+    assert "涉及本人但无资料支持的问题仍按规则 1 弃权" in prompt
+    assert "承诺和评价具体他人仍按规则 3 弃权" in prompt
+
+
+@pytest.mark.parametrize("cited", [True, False])
+def test_general_reply_confidence_and_demand(store: PersonaStore, settings: Settings, cited: bool) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    llm = FakeLLM(
+        lambda *a: {
+            "reply": "这不是我本人的经验，一般来说先列预算。",
+            "mode": "general",
+            "citations": [item_id] if cited else [],
+            "confidence": 0.9,
+            "topic_facets": ["2.1"],
+            "abstain_reason": "不应保留",
+        }
+    )
+    chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="如何做预算？")])
+    assert reply.mode == "general" and not reply.abstain and not reply.abstain_reason
+    assert reply.confidence == 0.5 and reply.topic_facets == ["2.1"]
+    entry = json.loads(store._db.execute("SELECT json FROM p_chat_log").fetchone()[0])
+    assert entry["mode"] == "general" and entry["abstain"] is False
+    assert store.chat_demand() == {}
+    # Legacy logs have no mode and still contribute demand.
+    with store._tx() as db:
+        db.execute(
+            "INSERT INTO p_chat_log (at, abstain, json) VALUES (?, ?, ?)",
+            ("2026-01-01", 1, json.dumps({"abstain": True, "topic_facets": ["2.1"]})),
+        )
+    assert store.chat_demand() == {"2.1": (1, 1)}
 
 
 def test_index_is_incremental_and_follows_the_embedding_space(store: PersonaStore, settings: Settings) -> None:

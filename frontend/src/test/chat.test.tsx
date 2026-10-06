@@ -179,6 +179,31 @@ it('sends, polls queued/running jobs, renders metadata and persists only complet
     ),
   ).toEqual(['user', 'twin']);
 });
+it('shows a neutral general badge next to confidence without an abstention marker', async () => {
+  sessionStorage.setItem(
+    CHAT_KEY,
+    JSON.stringify([
+      {
+        id: 'general',
+        role: 'twin',
+        content: '这不是我本人的经验，一般来说先做预算。',
+        reply: {
+          ...reply,
+          mode: 'general',
+          abstain: false,
+          abstain_reason: '',
+          confidence: 0.5,
+        },
+        timestamp: '2025-01-01T12:00:00Z',
+      },
+    ]),
+  );
+  mount();
+  const badge = screen.getByText('通用回答 · 非本人观点');
+  expect(badge).toBeVisible();
+  expect(badge.previousElementSibling).toHaveTextContent('置信度 50%');
+  expect(screen.queryByText('需要本人确认')).not.toBeInTheDocument();
+});
 it('shows Chinese detail and retries without duplicating the failed user turn', async () => {
   fail = true;
   mount();

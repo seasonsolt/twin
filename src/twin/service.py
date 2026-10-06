@@ -41,6 +41,7 @@ class ServiceAnswer(BaseModel):
     label: Literal["AI 合成 · 模拟推演，不代表本人意见"] = EXPLICIT_LABEL
     persona_name: str
     generated_at: dt.datetime
+    mode: Literal["grounded", "general", "abstain"] = "grounded"
 
     @field_validator("generated_at")
     @classmethod
@@ -112,4 +113,5 @@ def answer_question(chat: PersonaChat, question: str, as_of: dt.date | None) -> 
         as_of=reply.as_of,
         persona_name=chat.settings.target_name,
         generated_at=dt.datetime.now(dt.UTC),
+        mode=reply.mode,
     )

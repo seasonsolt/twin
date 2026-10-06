@@ -21,8 +21,10 @@ from typer.testing import CliRunner
 from twin.cli import app as cli
 from twin.config import Settings, VideoSettings, egress_of, make_video_synthesizer
 from twin.egress import egress_status
+from twin.media.adapters import presentable_from_payload
 from twin.media.clip import _font_path
 from twin.media.schema import EXPLICIT_LABEL, OPENING_NOTICE, MediaScript, Segment, VideoResult, VideoSegment
+from twin.media.script import script_from_presentable
 from twin.media.tts import MediaError, MediaRejected, MediaTimeout, MediaUnavailable
 from twin.media.video import RemoteVideo, run
 from twin.web.media import register
@@ -135,6 +137,20 @@ def test_transport_errors_are_generic(dependencies: None, error: Exception, tmp_
             script(), tmp_path / "out.mp4"
         )
     assert SECRET not in str(exc.value)
+
+
+def test_general_video_keeps_script_notices(dependencies: None, tmp_path: Path) -> None:
+    general = script_from_presentable(presentable_from_payload("chat_reply", {**SOURCE, "mode": "general"}), "人")
+    runner = FakeRunner(stdout="{}")
+    with pytest.raises(MediaUnavailable, match="响应无效"):
+        RemoteVideo(host="test-alias", command="configured-command", runner=runner).synthesize(
+            general, tmp_path / "out.mp4"
+        )
+    assert [s["text"] for s in runner.request["segments"]] == [
+        OPENING_NOTICE,
+        "以下是通用知识，不代表本人观点。",
+        SOURCE["reply"],
+    ]
 
 
 def test_abstention_never_calls_runner(tmp_path: Path) -> None:

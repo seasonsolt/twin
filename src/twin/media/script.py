@@ -41,11 +41,17 @@ def split_sentences(text: str) -> list[str]:
     return pieces
 
 
-def _segments(text: str, abstain: bool, reason: str) -> list[Segment]:
+def _segments(text: str, abstain: bool, reason: str, general: bool) -> list[Segment]:
     opening = Segment(index=0, kind="notice", text=OPENING_NOTICE)
     if abstain:
         return [opening, Segment(index=1, kind="notice", text=reason.strip() or _DEFAULT_ABSTENTION)]
-    return [opening, *(Segment(index=i, kind="speech", text=s) for i, s in enumerate(split_sentences(text), 1))]
+    notices = [opening]
+    if general:
+        notices.append(Segment(index=1, kind="notice", text="以下是通用知识，不代表本人观点。"))
+    return [
+        *notices,
+        *(Segment(index=i, kind="speech", text=s) for i, s in enumerate(split_sentences(text), len(notices))),
+    ]
 
 
 def script_from_presentable(p: PresentableAnswer, persona_name: str) -> MediaScript:
@@ -57,6 +63,6 @@ def script_from_presentable(p: PresentableAnswer, persona_name: str) -> MediaScr
         as_of=p.as_of,
         confidence=p.confidence,
         abstain=p.abstain,
-        segments=_segments(p.text, p.abstain, p.abstain_reason),
+        segments=_segments(p.text, p.abstain, p.abstain_reason, p.mode == "general"),
         citations=list(p.citations),
     )

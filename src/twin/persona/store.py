@@ -329,6 +329,7 @@ class PersonaStore:
         entry = {
             "question": question[:2000],
             "abstain": reply.abstain,
+            "mode": reply.mode,
             "confidence": reply.confidence,
             "topic_facets": reply.topic_facets,
             "as_of": reply.as_of.isoformat() if reply.as_of else None,
@@ -349,7 +350,10 @@ class PersonaStore:
             rows = self._db.execute("SELECT abstain, json FROM p_chat_log").fetchall()
         demand: dict[str, list[int]] = {}
         for abstain, raw in rows:
-            for facet in json.loads(raw).get("topic_facets", []):
+            entry = json.loads(raw)
+            if entry.get("mode") == "general":
+                continue
+            for facet in entry.get("topic_facets", []):
                 counts = demand.setdefault(facet, [0, 0])
                 counts[0] += 1
                 counts[1] += int(abstain)

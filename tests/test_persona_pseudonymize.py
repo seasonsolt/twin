@@ -397,8 +397,10 @@ def test_old_code_database_loads_and_keeps_profile_and_chat_output_unchanged(
         assert ctx.voice == [raw[1].text] and ctx.expressions[0][0] == raw[1]
         assert chat.reply(HISTORY).reply == "先看数据再决定"
         _, system, user = llm.calls[-1]
+        # Only the two appended chat rules may differ from the legacy prompt.
+        legacy_system = system[: system.index("\n8.")] + system[system.index("\n\n## 核心画像") :]
         assert (
-            hashlib.sha256(system.encode()).hexdigest()
+            hashlib.sha256(legacy_system.encode()).hexdigest()
             == "f331ef7842c6e5744a94d29432a0fc98f409c83f14367812b54da5cd0f8d3650"
         )
         assert (

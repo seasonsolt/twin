@@ -28,7 +28,7 @@
 | `media.asr` | L0 模型后端（2） | 仅用于评测的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
 | `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
-| `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（开头提示、按句切分、弃权只出提示） |
+| `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（开头提示、通用知识提示、按句切分、弃权只出提示） |
 | `media.lipsync` | 与 L4 同级（7） | 纯函数：时间戳、PCM 能量或合成节奏到版本化口型轨 |
 | `media.clip` | 与 L4 同级（7） | Pillow 平涂形象与字幕、条件静音片头与静音片尾、ffmpeg MP4 编码；复用语音缓存与口型轨 |
 | `media.video` | 与 L4 同级（7） | 通用 SSH 视频任务协议、本地常驻标识与 MP4 后处理；不包含远端实现 |
@@ -64,6 +64,14 @@ M1d：`--repeats` 默认 1，必须至少为 1；每句每次重复都有独立�
 总 `edits`、`reference_chars`、`cer` 及计时覆盖所有重复；`repeat_cers` 按相同重复序号组成整轮、以总编辑距离 / 总参考字数（空参考总分母取一）计算。总体 `mean_cer` 是各整轮 CER 的算术平均，`worst_repeat_cer` 是最差整轮 CER，`worst_sentence_repeat_cer` 另报所有单句重复中的最大 CER；总体平均仍按参考长度加权，不是逐句 CER 的简单平均。`traditional_sentence_count` 为任一次重复含疑似繁体的句子数，不重复计句。报告 Markdown 展示每次识别，不把多次识别拼成一条假设。
 
 M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/README.md`。OpenAI 适配器将 `X-Speech-Warning` 脱敏保存到 `SpeechResult.extras['warning']`，并将已知的 `possibly-truncated` 提升到追加的通用 `SpeechResult.warnings` 契约字段（默认空列表）；渲染层不读取 extras，只将通用警告写到 `AudioPart.warnings`（默认空列表，旧清单仍可读）。缓存不保存 extras，但保存通用警告。报告 v3 追加各次、逐句及总 `warning_parts`，计携带 `possibly-truncated` 的音频分片数；逐句与总计覆盖所有重复，区别于 ASR 长度判断的 `incomplete_repeats`，不把服务内部尝试计为独立分片。
+
+### 通用知识回答提示
+
+`ChatReply.mode="general"` 可以正常回放、朗读、导出片段及视频。`media.adapters` 将 mode
+保留到追加字段 `PresentableAnswer.mode`（默认 grounded），`media.script` 仅对 general 回答在原有
+开头提示之后追加一行 `kind="notice"`：**以下是通用知识，不代表本人观点。**
+这行同时显示和朗读；回答正文不改写，段落编号连续。grounded / abstain 不追加此提示，弃权处理不变。
+本人视频适配器保留脚本提示并按顺序发送，不再只保留 speech 段。
 
 ### B3 口型与风格化形象（M2）
 

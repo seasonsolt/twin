@@ -292,7 +292,7 @@ class PersonaSystem:
             abstain_reason=reply.abstain_reason,
             citations=[Citation(ref_id=ref, reason="") for ref in reply.citations],
             payload=QuestionOutput(reply=reply.reply),
-            raw={"artifacts": bool(ARTIFACT_RE.search(reply.reply)), "quotes": quotes},
+            raw={"artifacts": bool(ARTIFACT_RE.search(reply.reply)), "quotes": quotes, "mode": reply.mode},
         )
 
 
@@ -731,6 +731,16 @@ def _quotes_summary(predictions: Sequence[Prediction]) -> dict[str, Any] | None:
     }
 
 
+def _mode_counts(predictions: Sequence[Prediction]) -> dict[str, int]:
+    counts = {"grounded": 0, "general": 0, "abstain": 0}
+    for prediction in predictions:
+        mode = prediction.raw.get("mode", "abstain" if prediction.abstain else "grounded")
+        if mode not in counts:
+            raise ValueError("records 回答模式无效（详情已隐藏）")
+        counts[mode] += 1
+    return counts
+
+
 def _add_quotes(data: dict[str, Any], predictions: Sequence[Prediction]) -> None:
     if (quotes := _quotes_summary(predictions)) is not None:
         data["quotes"] = quotes
@@ -744,7 +754,12 @@ def summarize(report: Report) -> dict[str, Any]:
         if not cases and category != "update":
             continue
         if category == "update" and not any(_expanded_update(case) for case in cases):
-            result[category] = {"status": "not run", "reason": UPDATE_REASON, "n_cases": len(cases)}
+            result[category] = {
+                "status": "not run",
+                "reason": UPDATE_REASON,
+                "n_cases": len(cases),
+                "modes": _mode_counts([]),
+            }
             continue
         ids = {case.input.case_id for case in cases}
         rows = [row for row in report.judgements if row.case_id in ids and row.status is not JudgeStatus.NOT_CALLED]
@@ -752,6 +767,7 @@ def summarize(report: Report) -> dict[str, Any]:
         result[category] = {
             "status": "run",
             "n_cases": len(cases),
+            "modes": _mode_counts([p for p in report.predictions if p.case_id in ids]),
             "judge_calls": len(rows),
             "judge_failures": failures,
             "judge_failure_rate": failures / len(rows) if rows else None,
@@ -771,6 +787,7 @@ def summarize(report: Report) -> dict[str, Any]:
         "status": "run",
         "n_cases": sum(_question(case).category != "update" or _expanded_update(case) for case in report.cases),
         "metrics": {},
+        "modes": _mode_counts(report.predictions),
     }
     _add_quotes(result["overall"], report.predictions)
     return result
@@ -810,10 +827,16 @@ def _check_report(report: Report) -> None:
             raise ValueError("records 评分身份与题目或评委团不一致")
 
 
-def _comparison_quotes(first: Report, second: Report, ids: set[str]) -> dict[str, Any]:
+def _comparison_counts(first: Report, second: Report, ids: set[str]) -> dict[str, Any]:
     a = _quotes_summary([p for p in first.predictions if p.case_id in ids])
     b = _quotes_summary([p for p in second.predictions if p.case_id in ids])
-    return {"quotes": {"A": a, "B": b}} if a is not None or b is not None else {}
+    return {
+        "modes": {
+            "A": _mode_counts([p for p in first.predictions if p.case_id in ids]),
+            "B": _mode_counts([p for p in second.predictions if p.case_id in ids]),
+        },
+        **({"quotes": {"A": a, "B": b}} if a is not None or b is not None else {}),
+    }
 
 
 def compare_reports(first: Report, second: Report) -> dict[str, Any]:
@@ -833,7 +856,12 @@ def compare_reports(first: Report, second: Report) -> dict[str, Any]:
     for category in CATEGORIES:
         cases = [by_a[key] for key in sorted(common) if _question(by_a[key]).category == category]
         if category == "update" and not any(_expanded_update(case) for case in cases):
-            categories[category] = {"status": "not run", "reason": UPDATE_REASON, "n_cases": len(cases)}
+            categories[category] = {
+                "status": "not run",
+                "reason": UPDATE_REASON,
+                "n_cases": len(cases),
+                **_comparison_counts(first, second, set()),
+            }
             continue
         if not cases:
             continue
@@ -854,13 +882,13 @@ def compare_reports(first: Report, second: Report) -> dict[str, Any]:
             "status": "compared",
             "n_cases": len(cases),
             "metrics": metrics,
-            **_comparison_quotes(first, second, ids),
+            **_comparison_counts(first, second, ids),
         }
     categories["overall"] = {
         "status": "compared",
         "n_cases": sum(_question(by_a[key]).category != "update" or _expanded_update(by_a[key]) for key in common),
         "metrics": {},
-        **_comparison_quotes(first, second, set(common)),
+        **_comparison_counts(first, second, set(common)),
     }
     return {
         "direction": "B - A (wins: B > A)",
@@ -919,6 +947,8 @@ def _markdown(summary: dict[str, Any]) -> str:
         lines += [summary["direction"], ""]
     for category, data in summary["categories"].items():
         lines += [f"## {category}", f"状态：{data['status']}；题目数：{data['n_cases']}"]
+        if "modes" in data:
+            lines += [f"回答模式：{json.dumps(data['modes'], ensure_ascii=False)}"]
         if data["status"] == "not run":
             lines += [data["reason"], "原话：absent", ""]
             continue

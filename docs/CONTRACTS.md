@@ -107,6 +107,20 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   a changed privacy setting or known-name catalog invalidates affected chunks on the next build without changing
   `PROMPT_VERSION` or invalidating unchanged legacy chunks. Rebuild the profile after changing privacy settings.
 
+### Chat answer modes (L3)
+
+- `ChatDraft.mode` / append-only `ChatReply.mode` are `Literal["grounded", "general", "abstain"]`,
+  defaulting to `"grounded"`. Missing mode on legacy drafts/replies becomes `"abstain"` when `abstain=true`,
+  otherwise `"grounded"`; missing `abstain` is derived as `mode == "abstain"`. Explicit inconsistencies are rejected.
+- Owner-specific answers remain evidence-grounded; unsupported owner questions, commitments and judgements of
+  specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, begin with a short
+  general-knowledge/non-owner-view notice, may omit citations, and have confidence capped at 0.5.
+  The frontend adds a neutral `通用回答 · 非本人观点` badge; `需要本人确认` is reserved for abstention.
+- Quotation marks may enclose only verbatim text from speaking samples or retrieved material, never emphasis,
+  terms or paraphrases presented as the owner's words. The other grounding rules remain unchanged.
+- Chat log JSON appends `mode` without a SQLite migration. `chat_demand()` excludes general questions from both
+  asked and abstained facet counts; legacy logs without mode retain their previous demand behaviour.
+
 ### Meeting corpus conversion (L1)
 
 ```python
@@ -189,7 +203,8 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   表达复用 `expression_view(target_only=True, until=as_of)`；条目取最后可见证据，表达取本人文本，
   沿用聊天的空白整理/截断。返回 ref_id/kind/quote/date/source_kind，不暴露来源路径或审核备注。
 - ServiceAnswer 包含 schema_version/answer/abstain/abstain_reason/confidence/citations/as_of/label/
-  persona_name/generated_at（UTC）；文本、弃权与置信度保持 L3 原值，label 与 EXPLICIT_LABEL 的 Literal 一致。
+  persona_name/generated_at（UTC），追加 `mode: Literal["grounded", "general", "abstain"] = "grounded"`；
+  文本、弃权、置信度和 mode 保持 L3 原值，label 与 EXPLICIT_LABEL 的 Literal 一致。
   `ServiceIdentity` 仅含 name/avatar/voice/label，不输出授权或备注。
 - `api` / `mcp_server`（代码层 9）共用懒 ServiceBackend，配置 LLM 与 embed 均
   按配置使用外部后端，无出境授权门禁；注入 chat_factory 是可信测试接缝。后端配置变更需重启。
@@ -234,6 +249,10 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
   Sentence boundaries are Chinese/ASCII terminal punctuation clusters or line breaks outside `「」` / `“”` quotes;
   ASCII periods end a sentence only before whitespace, a closing quote or end of text, never between two digits.
   Only segment-edge whitespace is trimmed. Unclosed quotes conservatively retain the remainder together.
+  `PresentableAnswer` appends `mode: Literal["grounded", "general", "abstain"] = "grounded"`, preserved by the
+  ChatReply adapter. Only general replies add a second spoken-and-shown notice in `media.script` immediately after
+  the opening: `以下是通用知识，不代表本人观点。`. Playback, speech, clip and video keep this script notice;
+  the video adapter preserves notices rather than filtering them out.
   Abstention produces the opening notice and an abstention notice, never speech; an empty reason has a neutral default.
 - `source_fingerprint = util.fingerprint(source.model_dump(mode="json"))`: all validated source fields, excluding
   web-only resolved views, and independent of JSON key order. Persona display names do not change the source hash.

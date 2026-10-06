@@ -52,7 +52,7 @@ export function AvatarPreview({
   }, [url, onFallback]);
   useEffect(() => {
     onModelNameChange?.(null);
-  }, [url, onModelNameChange]);
+  }, [url, imageUrl, onModelNameChange]);
   const fallback =
     imageUrl && failedImageUrl !== imageUrl ? (
       <PortraitAvatar
@@ -64,7 +64,12 @@ export function AvatarPreview({
     ) : capabilities.avatar ? (
       <Avatar spec={capabilities.avatar} mouthLevel={mouth} />
     ) : null;
-  if (!url || failedUrl === url) return fallback;
+  if (
+    (imageUrl?.includes('?v=') && failedImageUrl !== imageUrl) ||
+    !url ||
+    failedUrl === url
+  )
+    return fallback;
   return (
     <ModelBoundary key={url} fallback={fallback} onFallback={onFallback}>
       <Suspense fallback={fallback}>

@@ -3,6 +3,7 @@ import { useLocation } from 'react-router';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui';
 import { AvatarPreview } from '../features/avatar/AvatarPreview';
 import { IdentityForm } from '../features/identity/IdentityForm';
+import { SelfAssets } from '../features/assets/SelfAssets';
 import { useIdentity } from '../features/identity/useIdentity';
 import { ItemCard } from '../features/profile/ItemCard';
 import { useProfile } from '../features/profile/useProfile';
@@ -119,9 +120,6 @@ export function About() {
                 onSaved={identity.reload}
               />
               <p className="mt-4 text-sm text-secondary">
-                音色：{identity.data.voice || '未设置'}（预置音色）
-              </p>
-              <p className="text-sm text-secondary">
                 形象：
                 {modelName
                   ? `${modelName}（3D 模型）`
@@ -152,6 +150,9 @@ export function About() {
             </Button>
           </p>
         )}
+        <div className="mt-5 border-t border-border pt-4">
+          <SelfAssets active={active} />
+        </div>
       </Card>
       <Card className="p-4 md:p-6">
         <h2 className="mb-3 text-md font-semibold md:mb-4 md:text-lg">

@@ -155,6 +155,14 @@ twin media video 回复.json --out out.mp4              # [video] 通用 SSH 视
 twin media check --out 评测目录/                      # 合成句集回听评测：字错率与延迟
 ```
 
+网页「关于你」可裁剪上传本人照片、录一段声音或上传录音/视频，首次引导也可设置或跳过。
+照片用于聊天头像和真人视频；声音用于视频，配置 `[tts].voice_dir` 后也用于听和试听。
+素材保存在数据目录的私有 `assets/` 中，恢复默认会回退到配置。声音处理需系统 ffmpeg；
+语音容器需将 `voice_dir` 只读挂载到 `/voices`，见 [deploy/tts-moss](deploy/tts-moss/README.md)。
+
+视频驱动 JSON 契约新增可选 `portrait`、`voice_ref`：本机为绝对路径，SSH 模式先 scp 到远端 home 的
+`.cache/twin-assets/<sha>.<ext>` 后传相对路径。缺省时驱动沿用自己的素材，完整契约见 [docs/MEDIA.md](docs/MEDIA.md)。
+
 浏览器 3D 形象可在 `[avatar]` 设置 `vrm_path` 指向本地风格化 VRM 文件（不入库）；未配置或加载失败时保留 2D 形象，见 [docs/MEDIA.md](docs/MEDIA.md)。
 
 ## 文档

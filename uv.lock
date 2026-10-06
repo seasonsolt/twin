@@ -1638,6 +1638,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pypdf" },
     { name = "python-docx" },
+    { name = "python-multipart" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -1662,6 +1663,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pypdf", specifier = ">=6.0" },
     { name = "python-docx", specifier = ">=1.2" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

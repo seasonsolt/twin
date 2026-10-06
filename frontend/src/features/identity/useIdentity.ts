@@ -21,6 +21,11 @@ export function useIdentity(active = true) {
   const [avatarError, setAvatarError] = useState('');
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    const changed = () => setAttempt((value) => value + 1);
+    window.addEventListener('twin-assets-changed', changed);
+    return () => window.removeEventListener('twin-assets-changed', changed);
+  }, []);
+  useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
     setLoading(true);

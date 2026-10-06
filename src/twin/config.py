@@ -69,13 +69,14 @@ class EmbedSettings(BaseModel):
 
 
 class TTSSettings(BaseModel):
-    """Only preset voice identifiers and credential environment-variable names are stored."""
+    """Preset fallback, optional shared reference directory, and credential environment-variable names."""
 
     provider: Literal["silent", "cloudflare", "openai_compat"] = "silent"
     model: str | None = None
     base_url: str | None = None
     api_key_env: str = "TWIN_TTS_KEY"
     voice: str = "default"
+    voice_dir: Path | None = None
     language: str = "zh"
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
@@ -352,6 +353,10 @@ def load_settings(path: Path | None = None) -> Settings:
         settings.db_path = settings.db_path.expanduser()
         if not settings.db_path.is_absolute():
             settings.db_path = path.parent / settings.db_path
+    if settings.tts.voice_dir is not None:
+        settings.tts.voice_dir = settings.tts.voice_dir.expanduser()
+        if not settings.tts.voice_dir.is_absolute():
+            settings.tts.voice_dir = path.parent / settings.tts.voice_dir
     for key_env in [
         settings.llm.api_key_env,
         settings.embed.api_key_env,
@@ -439,7 +444,12 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
 
     video = settings.video
     assert video.command is not None
+    from .assets import AssetStore
+
+    assets = AssetStore(settings.db_path)
     return RemoteVideo(
+        portrait=assets.path("portrait"),
+        voice_ref=assets.path("voice"),
         host=video.host,
         command=video.command,
         timeout_s=video.timeout_s,

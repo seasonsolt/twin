@@ -12,7 +12,7 @@ twin 是个人工具，不添加免责声明。
 
 | 阶段 | 用户看到的 | 对应的层 | 现状 |
 | --- | --- | --- | --- |
-| 你是谁 | 名字和一段介绍，可跳过；在“关于你”随时修改 | L0 契约，加治理（横切） | 名字持久保存，介绍成为记忆；预置音色、形象、出境状态 |
+| 你是谁 | 名字和一段介绍，可跳过；在“关于你”随时修改 | L0 契约，加治理（横切） | 名字持久保存，介绍成为记忆；本人肖像/声音（可跳过）、预置回退、出境状态 |
 | 添加记忆 | 写一段、上传文件或文件夹，看到记住了什么 | L1 语料、L2 认知 | 自动识别文档、聊天、问卷、访谈；自动处理、预览、删除与重试；可选“回答几个问题” |
 | 聊天与服务 | 聊天、听它说、看视频、API/MCP 调用 | L3 运行时、L4 展示、L5 接入 | 有依据的回答、逐句回放、朗读、2D/3D 形象、导出与视频 |
 
@@ -24,7 +24,7 @@ twin 是个人工具，不添加免责声明。
 
 | 层 | 职责 | 模块 |
 | --- | --- | --- |
-| L0 基础设施 | 工具函数、数据契约、模型后端与配置、存储 | 工具（0）：`util`、`usage`、`evals.stats`；契约（1）：`identity`、`persona.schema`、`persona.dimensions`、`persona.items`、`media.schema`、`evals.schema`；后端与配置（2）：`llm`、`embed`、`config`、`media.tts`、`media.asr`；存储（3）：`persona.store` |
+| L0 基础设施 | 工具函数、数据契约、模型后端与配置、存储 | 工具（0）：`util`、`usage`、`evals.stats`、`assets`（私有素材文件与 profile 的原子持久化）；契约（1）：`identity`、`persona.schema`、`persona.dimensions`、`persona.items`、`media.schema`、`evals.schema`；后端与配置（2）：`llm`、`embed`、`config`、`media.tts`、`media.asr`；存储（3）：`persona.store` |
 | L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.questionnaire` |
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |

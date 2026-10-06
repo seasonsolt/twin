@@ -111,7 +111,7 @@ v3 中文朗读文本会在 CJK 与 Latin 字母/数字的相邻边界加 ASCII 
 可用 `twin media check --repeats 4 --out <私有目录>` 检查；每次重复使用新的渲染缓存并实际调用后端。
 升级此 shim 后须移除上游旧音频缓存，避免缓存掩盖行为变化。
 
-## 预置音色与合规边界
+## 预置音色与本人的参考声音
 
 HF TTS 仓库没有独立 speaker-id 音色权重；官方所谓预置音色实际来自 GitHub `assets/audio/`。
 为保证资源不漂移，这些固定资源也锁定到 GitHub commit
@@ -139,12 +139,13 @@ HF TTS 仓库没有独立 speaker-id 音色权重；官方所谓预置音色实�
 不会下载或暴露**；`Sakura` 的资源是 MP3，本镜像不装 ffmpeg，因此也不开放。
 `default`、`alloy` 等不是官方预置名称，不做静默映射。请先查询 `/v1/voices`。
 
-官方内部为固定预置资源使用 `inference(mode="voice_clone", prompt_audio_path=<固定资源>)`；
-这只是官方实现预置音色的机制。**HTTP 接口不接受 mode、参考音频、路径、上传、参考转录或克隆参数**；
-额外字段统一拒绝，不提供任何真人声音克隆入口，也不能用 `voice` 注入任意文件路径。
-其他预置名称只能作为通用音色使用，不得宣称代表某个真人；部署前仍须核验资产授权，
-不得自行替换预置文件为真人录音。HF 模型卡声明 Apache-2.0，但 GitHub README 的许可证部分
-仍提示以根目录 LICENSE 为准；分发镜像/预置资源前需核对其实际授权，勿将该提示当作已获授权。
+预置和本人的声音都使用 `inference(mode="voice_clone", prompt_audio_path=<参考 WAV>)`。
+`TTS_VOICE_DIR` 默认为 `/voices`；每次请求重新扫描其中匹配
+`^self-[0-9a-f]{16}\.wav$` 的普通文件（不接受符号链接）。`/v1/voices` 为已加载预置与这些 ID 的并集。
+选择本人的 ID 时，参考路径为 `<TTS_VOICE_DIR>/<id>.wav`，新增文件不需重启。
+HTTP 仍不接受 mode、音频、任意路径、上传或参考转录，额外字段统一拒绝；严格 ID 校验阻止路径穿越。
+twin 的网页负责处理本人录音，并通过 `[tts].voice_dir` 发布 0644 WAV；将同一个目录只读挂载到 `/voices`。
+宿主机目录及其祖先需允许容器 UID 10001 遍历，不要直接挂载私有 `assets/` 目录。
 
 AI 合成显式提示、隐式元数据、回答指纹与引用追溯由 twin 的 renderer 添加。
 单独调用本服务得到的是未加标识的原始 WAV，不能替代 renderer 的合规导出；弃权时是否配音
@@ -157,12 +158,15 @@ AI 合成显式提示、隐式元数据、回答指纹与引用追溯由 twin �
 
 ```bash
 docker build -t twin-tts:moss-nano deploy/tts-moss
+export TWIN_VOICE_DIR="$HOME/twin-voices"
+mkdir -p "$TWIN_VOICE_DIR"; chmod 755 "$TWIN_VOICE_DIR"
 # 在本地安全设置 SHIM_API_KEY；不要把真实值写进仓库或命令历史。
 read -r -s -p '语音服务令牌: ' SHIM_API_KEY; echo
 export SHIM_API_KEY
 docker run -d --name twin-tts --restart unless-stopped \
   -p 127.0.0.1:8001:8001 \
   -v twin-hf:/cache \
+  -v "$TWIN_VOICE_DIR:/voices:ro" \
   -e SHIM_API_KEY \
   --cpus 4 --memory 8g \
   twin-tts:moss-nano
@@ -197,6 +201,10 @@ CPU 首次请求和长文本可能较慢；模型按约 75 文本 token 自动�
 即约 30 秒，过长的单段可能截断。建议 renderer 按短句调用，1000 字符只是 HTTP 上限，不保证
 一次高质量朗读 1000 字。实际音质、完整性、首句延迟与字错率必须另行在目标机器验收。
 
+也可使用 `docker compose -f deploy/tts-moss/compose.yaml up -d --build`；设置 `TWIN_VOICE_DIR` 和
+`SHIM_API_KEY` 环境变量，compose 将声音目录只读挂载到 `/voices`。若 twin 与容器位于不同主机，
+`voice_dir` 需为共享/同步目录；HTTP 隧道本身不会同步 WAV。视频通道的 SSH 素材传输与此独立。
+
 ## Mac SSH 隧道与 twin 配置
 
 Mac 上保持此会话运行（本地端口需空闲）：
@@ -213,7 +221,8 @@ provider = "openai_compat"
 model = "MOSS-TTS-Nano"
 base_url = "http://127.0.0.1:8001/v1"
 api_key_env = "TWIN_TTS_KEY"
-voice = "Junhao"
+voice = "Junhao" # 未设置本人声音时的回退
+voice_dir = "/path/to/twin-voices" # 与容器 /voices 相同的宿主机目录
 language = "zh"
 timeout = 600
 max_retries = 0
@@ -228,7 +237,7 @@ renderer 使用 WAV。通用 OpenAI 适配器也能请求 MP3，但**本镜像�
 - `POST /v1/audio/speech`：`model`、`input`、`voice` 必填，`response_format` 可省略（默认 `wav`）；
   成功为 `audio/wav`，单声道 PCM16，`Cache-Control: no-store`。
 - `GET /v1/models`：OpenAI 风格模型列表，仅注册 `MOSS-TTS-Nano`。
-- `GET /v1/voices`：`{"voices": ["Junhao", ...]}`，仅含白名单中已成功加载的音色，全部缺失时为空列表。
+- `GET /v1/voices`：`{"voices": ["Junhao", ..., "self-0123456789abcdef"]}`，已加载预置加参考目录中严格匹配的 ID。
 - `GET /healthz`：有任一可用音色时 200 `{"status": "ok"}`；无可用音色时 503
   `{"status": "degraded", "reason": "no voices available"}`。模型/tokenizer 启动加载失败时服务不会就绪；
   此端点不做真实合成探针。

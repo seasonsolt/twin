@@ -71,6 +71,15 @@ beforeEach(() => {
       return Promise.resolve(
         json({ facets: [], suggestions: [], kind_labels: {} }),
       );
+    if (url === '/api/me/assets')
+      return Promise.resolve(
+        json({
+          portrait: null,
+          voice: null,
+          speech_clone: false,
+          video: false,
+        }),
+      );
     if (url === '/api/media/capabilities')
       return Promise.resolve(json({ available: false }));
     if (url === '/api/persona/notes')
@@ -81,7 +90,7 @@ beforeEach(() => {
 });
 
 it.each([true, false])(
-  'shows a padded three-step flow with one Chinese final action (reduced motion: %s), then never shows again',
+  'shows a padded four-step flow with one Chinese final action (reduced motion: %s), then never shows again',
   async (reduced) => {
     vi.mocked(useReducedMotion).mockReturnValue(reduced);
     const view = render(<App />);
@@ -102,6 +111,10 @@ it.each([true, false])(
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await screen.findByText('已保存，可以继续添加记忆。');
+    fireEvent.click(screen.getByRole('button', { name: '继续' }));
+    await screen.findByRole('heading', { name: '形象和声音' });
+    expect(await screen.findByRole('button', { name: '换一张' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '录一段' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: '继续' }));
     await screen.findByRole('heading', { name: '添加记忆' });
     expect(await screen.findAllByText('等待记住…')).toHaveLength(1);

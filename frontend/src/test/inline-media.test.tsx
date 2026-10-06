@@ -490,11 +490,13 @@ const videoTurns: Turn[] = [
 function VideoHarness({
   speaking = false,
   turns = videoTurns,
+  assets = '',
 }: {
   speaking?: boolean;
   turns?: Turn[];
+  assets?: string;
 }) {
-  const video = useReplyVideos(true, turns, '测试人');
+  const video = useReplyVideos(true, turns, '测试人', assets);
   return (
     <>
       {turns.map((turn) => (
@@ -515,6 +517,40 @@ function VideoHarness({
 function video() {
   return <VideoHarness />;
 }
+it('keys video session results by both portrait sha and owner voice ID', async () => {
+  jobStatus = 'done';
+  const view = render(
+    <VideoHarness assets="portrait-a:self-0123456789abcdef" />,
+  );
+  await screen.findByRole('button', { name: '播放真人视频' });
+  expect(count('/api/media/video')).toBe(1);
+  expect(
+    sessionStorage.getItem(
+      'twin.reply-video:portrait-a:self-0123456789abcdef|one',
+    ),
+  ).toContain('done');
+  view.rerender(<VideoHarness assets="portrait-a:self-fedcba9876543210" />);
+  await waitFor(() => expect(count('/api/media/video')).toBe(2));
+  await waitFor(() =>
+    expect(
+      sessionStorage.getItem(
+        'twin.reply-video:portrait-a:self-fedcba9876543210|one',
+      ),
+    ).toContain('done'),
+  );
+  view.rerender(<VideoHarness assets="portrait-b:self-fedcba9876543210" />);
+  await waitFor(() => expect(count('/api/media/video')).toBe(3));
+  await waitFor(() =>
+    expect(
+      sessionStorage.getItem(
+        'twin.reply-video:portrait-b:self-fedcba9876543210|one',
+      ),
+    ).toContain('done'),
+  );
+  view.rerender(<VideoHarness assets="portrait-a:self-0123456789abcdef" />);
+  await screen.findByRole('button', { name: '播放真人视频' });
+  expect(count('/api/media/video')).toBe(3);
+});
 it('starts video once, renders only a thumbnail, opens fullscreen playback and caches it for the session', async () => {
   vi.useFakeTimers();
   const view = render(video());

@@ -78,6 +78,7 @@ api_key_env = "TWIN_EMBED_KEY"
 
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
 # [tts]
+# voice_dir = "data/voices" # 可选：发布本人参考 WAV；与 TTS 容器只读 /voices 挂载共享。
 # egress = "local" 或 "external"：silent 默认为本机；外部朗读服务按配置使用。
 # 本机转发代理应设置 egress = "external"。
 # provider = "silent"

@@ -69,10 +69,14 @@ def test_vrm_endpoint_and_capabilities(client: TestClient) -> None:
     csp = response.headers["content-security-policy"]
     assert csp == (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-        "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+        "font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; "
+        "base-uri 'none'; frame-ancestors 'none'; "
         "form-action 'self'"
     )
-    assert [directive.strip() for directive in csp.split(";") if "blob:" in directive] == ["img-src 'self' data: blob:"]
+    assert [directive.strip() for directive in csp.split(";") if "blob:" in directive] == [
+        "img-src 'self' data: blob:",
+        "media-src 'self' blob:",
+    ]
 
 
 def test_model_available_without_speech(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@ from ..config import Settings
 from ..egress import egress_status
 from ..media.tts import SpeechSynthesizer
 from ..persona.store import PersonaStore, stored_identity
-from . import media, persona
+from . import assets, media, persona
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 
@@ -48,7 +48,8 @@ _SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-        "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+        "font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; "
+        "frame-ancestors 'none'; "
         "form-action 'self'"
     ),
 }
@@ -140,7 +141,14 @@ class SecurityMiddleware:
             detail = "缺少请求头 X-Twin: 1（用于防止跨站请求伪造），请在本服务的页面上操作"
             await JSONResponse({"detail": detail}, status_code=403)(scope, receive, send_hardened)
             return
-        if scope["method"] not in SAFE_METHODS and scope.get("path") != UPLOAD_PATH:
+        if scope["method"] == "PUT" and scope.get("path") in assets.UPLOAD_PATHS:
+            limit = assets.PORTRAIT_LIMIT if scope["path"] == "/api/me/portrait" else assets.VOICE_LIMIT
+            declared = headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > limit + 16384:
+                detail = "文件太大，请选择较小的文件"
+                await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send_hardened)
+                return
+        if scope["method"] not in SAFE_METHODS and scope.get("path") not in {UPLOAD_PATH, *assets.UPLOAD_PATHS}:
             declared = headers.get("content-length", "")
             too_large = declared.isdigit() and int(declared) > MAX_JSON_BYTES
             if not too_large:
@@ -240,11 +248,20 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        if request.url.path in assets.UPLOAD_PATHS and any(error["loc"] == ("body", "file") for error in exc.errors()):
+            return JSONResponse({"detail": "请上传文件，字段名为 file"}, status_code=400)
         return JSONResponse({"detail": _validation_detail(exc)}, status_code=400)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail
+        if (
+            request.url.path in assets.UPLOAD_PATHS
+            and exc.status_code == 400
+            and isinstance(detail, str)
+            and detail.isascii()
+        ):
+            detail = "上传格式无效，请重新选择文件"
         if exc.status_code in _HTTP_DETAILS and detail in (None, "", "Not Found", "Method Not Allowed"):
             detail = _HTTP_DETAILS[exc.status_code]
         return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=exc.headers)
@@ -288,6 +305,7 @@ def create_app(
         return snapshot
 
     persona.register(app, settings, backends, jobs, persona.read_uploads)
+    assets.register(app, settings)
     media.register(app, settings, synthesizer_factory)
 
     # ------------------------------------------------------------ front end

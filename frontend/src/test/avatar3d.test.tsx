@@ -413,6 +413,21 @@ it('prefers VRM over a portrait and falls back to the portrait after context los
   expect(screen.getByRole('img', { name: '肖像形象' })).toBeVisible();
 });
 
+it('prefers a newly uploaded, cache-busted portrait over the configured VRM', async () => {
+  renderView(
+    <AvatarPreview
+      capabilities={{
+        ...capabilities,
+        avatar_image: { url: '/api/media/avatar-image?v=portrait-sha' },
+        avatar_model: { format: 'vrm', url: props.url },
+      }}
+    />,
+  );
+  await load();
+  expect(screen.getByRole('img', { name: '肖像形象' })).toBeVisible();
+  expect(mocks.load).not.toHaveBeenCalled();
+});
+
 it('shares the demo lip track between both previews, replays and releases its timer', async () => {
   vi.stubGlobal(
     'fetch',
@@ -437,7 +452,7 @@ it('shares the demo lip track between both previews, replays and releases its ti
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('allows blob textures only in img-src without relaxing the remaining CSP', () => {
+it('allows blob textures and local recording playback without relaxing script/connect CSP', () => {
   const source = readFileSync('../src/twin/web/app.py', 'utf8');
   const block = source.match(
     /"Content-Security-Policy": \(([\s\S]*?)\n    \)/,
@@ -446,11 +461,11 @@ it('allows blob textures only in img-src without relaxing the remaining CSP', ()
     .map((match) => match[1])
     .join('');
   expect(csp).toBe(
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   );
   expect(
     csp.split(';').filter((directive) => directive.includes('blob:')),
-  ).toEqual([" img-src 'self' data: blob:"]);
+  ).toEqual([" img-src 'self' data: blob:", " media-src 'self' blob:"]);
 });
 
 it.each([

@@ -311,7 +311,7 @@ def test_config_examples_only_differ_in_optional_documentation() -> None:
     assert extra == [
         '# reasoning_effort = "none"  # OpenAI 兼容端点的思考档位；不写则用模型默认，none 最快\n',
         '# vrm_path = "/path/to/stylized.vrm" # 可选本地风格化 3D 模型，≤ 64 MB；不提交模型文件。\n',
-        '# image_path = "/path/to/portrait.png" # 可选本地肖像，PNG/JPEG/WebP ≤ 10 MB；优先级 VRM > 肖像 > 2D。\n',
+        '# image_path = "/path/to/portrait.png" # 未上传本人肖像时的回退，PNG/JPEG/WebP ≤ 10 MB。\n',
     ]
     for line in extra:
         example = example.replace(line, "")

@@ -1,4 +1,8 @@
-"""CPU-only OpenAI speech shim exposing a fixed, non-person-specific voice allowlist."""
+"""CPU-only OpenAI speech shim with presets and the owner's own reference voices.
+
+TTS_VOICE_DIR (default /voices) is re-scanned per request for self-<sha16>.wav;
+HTTP still accepts only strict voice IDs, never arbitrary paths or reference uploads.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import tempfile
 import time
 import unicodedata
@@ -69,6 +74,25 @@ def speakable_characters(text: str) -> int:
     )
 
 
+SELF_VOICE = re.compile(r"self-[0-9a-f]{16}\.wav")
+
+
+def voice_directory() -> Path:
+    return Path(os.environ.get("TTS_VOICE_DIR", "/voices"))
+
+
+def reference_voices() -> list[str]:
+    directory = voice_directory()
+    try:
+        return sorted(
+            path.stem
+            for path in directory.iterdir()
+            if SELF_VOICE.fullmatch(path.name) and path.is_file() and not path.is_symlink()
+        )
+    except OSError:
+        return []
+
+
 class Engine(Protocol):
     """Return mono, little-endian signed int16 PCM and its sample rate."""
 
@@ -81,7 +105,7 @@ class FakeEngine:
     """Deterministic 48 kHz silence, 80 milliseconds per input character."""
 
     def voices(self) -> list[str]:
-        return list(PRESET_FILES)
+        return [*PRESET_FILES, *reference_voices()]
 
     def synthesize(self, text: str, voice: str, *, seed: int) -> tuple[bytes, int]:
         if voice not in self.voices():
@@ -91,7 +115,7 @@ class FakeEngine:
 
 
 class MossNanoEngine:
-    """Load pinned remote code on CPU; only bundled generic WAV presets are accepted."""
+    """Load pinned remote code on CPU; presets and strict owner reference IDs are accepted."""
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         self.cache_dir = cache_dir or Path(os.environ.get("HF_HOME", "/cache"))
@@ -101,7 +125,7 @@ class MossNanoEngine:
         self._available_voices: list[str] = []
 
     def voices(self) -> list[str]:
-        return list(self._available_voices)
+        return [*self._available_voices, *reference_voices()]
 
     def load(self) -> None:
         """Download weights and preset assets at startup, never during image build."""
@@ -196,7 +220,11 @@ class MossNanoEngine:
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
-        preset = self.cache_dir / "presets" / PRESET_REVISION / PRESET_FILES[voice]
+        preset = (
+            self.cache_dir / "presets" / PRESET_REVISION / PRESET_FILES[voice]
+            if voice in PRESET_FILES
+            else voice_directory() / f"{voice}.wav"
+        )
         with tempfile.TemporaryDirectory(prefix="tts-") as directory, torch.inference_mode():
             result = self._model.inference(
                 text=text,
@@ -221,7 +249,7 @@ class MossNanoEngine:
 
 
 class SpeechBody(BaseModel):
-    """Reject all vendor extensions, especially audio inputs and cloning controls."""
+    """Accept a preset or owner reference ID, not paths or arbitrary vendor extensions."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     model: str
@@ -316,7 +344,7 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         try:
             with lock:
                 if body.voice not in selected_engine.voices():
-                    raise HTTPException(400, "不支持的预置音色，请查询 /v1/voices")
+                    raise HTTPException(400, "不支持的音色，请查询 /v1/voices")
                 longest_duration = -1.0
                 encoded = b""
                 for attempt in range(MAX_SYNTHESIS_ATTEMPTS):

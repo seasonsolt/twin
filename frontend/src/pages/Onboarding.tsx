@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { FlowStepper } from '../components/effects/FlowStepper';
 import { Button } from '../components/ui';
 import { IdentityForm } from '../features/identity/IdentityForm';
+import { SelfAssets } from '../features/assets/SelfAssets';
 import type { IdentityData } from '../features/identity/useIdentity';
 import { api } from '../lib/api';
 import { useStatus } from '../stores/status';
@@ -49,7 +50,7 @@ export function Onboarding({
     <main className="mx-auto min-h-dvh max-w-3xl space-y-6 px-5 py-12">
       <h1 className="text-2xl font-semibold">让我们认识一下</h1>
       <FlowStepper
-        maxStep={saved ? 3 : 1}
+        maxStep={saved ? 4 : 1}
         onComplete={finish}
         finalActionText="开始聊天"
         steps={[
@@ -64,6 +65,19 @@ export function Onboarding({
                   onSaved={() => setSaved(true)}
                 />
                 {saved && <p role="status">已保存，可以继续添加记忆。</p>}
+              </div>
+            ),
+          },
+          {
+            id: 'assets',
+            title: '形象和声音',
+            content: (
+              <div className="space-y-4">
+                <h2 className="text-xl font-semibold">形象和声音</h2>
+                <p className="text-secondary">
+                  可以现在设置，也可以直接继续，以后在关于你里更换。
+                </p>
+                <SelfAssets />
               </div>
             ),
           },

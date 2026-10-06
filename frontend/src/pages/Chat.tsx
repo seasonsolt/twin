@@ -30,11 +30,21 @@ export function Chat() {
   const [stale, setStale] = useState(false);
   const [stateError, setStateError] = useState('');
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [assetVersion, setAssetVersion] = useState(0);
+  useEffect(() => {
+    const changed = () => {
+      setCapabilities(null);
+      setAssetVersion((value) => value + 1);
+    };
+    window.addEventListener('twin-assets-changed', changed);
+    return () => window.removeEventListener('twin-assets-changed', changed);
+  }, []);
   const audio = useReplyAudio(active);
   const video = useReplyVideos(
     active && !!capabilities?.video?.available,
     chat.turns,
     name,
+    capabilities?.video?.asset_key ?? '',
   );
   useEffect(() => {
     if (!active) return;
@@ -47,7 +57,7 @@ export function Chat() {
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [active]);
+  }, [active, assetVersion]);
   const stateRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
   const end = useRef<HTMLDivElement>(null);

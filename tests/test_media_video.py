@@ -461,6 +461,64 @@ def test_video_sends_only_speech(dependencies: None, tmp_path: Path) -> None:
             source, tmp_path / "out.mp4"
         )
     assert runner.request["segments"] == [{"id": "s01", "text": script().segments[1].text}]
+    assert "portrait" not in runner.request and "voice_ref" not in runner.request
+
+
+@pytest.mark.parametrize("host", [None, "test-alias"])
+def test_asset_paths_and_scp_before_request(dependencies: None, tmp_path: Path, host: str | None) -> None:
+    portrait, voice = tmp_path / "portrait.png", tmp_path / "voice.wav"
+    portrait.write_bytes(b"portrait")
+    voice.write_bytes(b"voice")
+    calls: list[list[str]] = []
+    request: dict[str, Any] = {}
+
+    def runner(command: list[str], *, input: str | None, timeout: float) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if input is not None:
+            request.update(json.loads(input))
+            return subprocess.CompletedProcess(command, 0, "{}")
+        return subprocess.CompletedProcess(command, 0, "")
+
+    with pytest.raises(MediaUnavailable, match="响应无效"):
+        RemoteVideo(host=host, command="driver", runner=runner, portrait=portrait, voice_ref=voice).synthesize(
+            script(), tmp_path / "out.mp4"
+        )
+    if host:
+        assert all(
+            re.fullmatch(r"\.cache/twin-assets/[0-9a-f]{64}\.(png|wav)", request[key])
+            for key in ("portrait", "voice_ref")
+        )
+        uploads = [call for call in calls if call[0] == "scp"]
+        assert len(uploads) == 2
+        assert uploads[0][-2:] == [str(portrait), f"{host}:{request['portrait']}"]
+        assert uploads[1][-2:] == [str(voice), f"{host}:{request['voice_ref']}"]
+        assert calls[-1] == ["ssh", "-o", "BatchMode=yes", host, "driver"]
+    else:
+        assert request["portrait"] == str(portrait.resolve()) and request["voice_ref"] == str(voice.resolve())
+        assert calls == [["bash", "-lc", "driver"]]
+
+
+def test_video_asset_validation(dependencies: None, tmp_path: Path) -> None:
+    asset = tmp_path / "not-a-portrait.sh"
+    asset.write_bytes(b"bad")
+    runner = FakeRunner()
+    with pytest.raises(MediaRejected, match="素材无效"):
+        RemoteVideo(host="test-alias", command="driver", runner=runner, portrait=asset).synthesize(
+            script(), tmp_path / "out.mp4"
+        )
+    assert not runner.calls
+
+
+def test_video_factory_uses_stored_assets(tmp_path: Path) -> None:
+    from twin.assets import AssetStore
+
+    settings = Settings(db_path=tmp_path / "twin.db", video=VideoSettings(provider="remote", command="driver"))
+    store = AssetStore(settings.db_path)
+    store.save("portrait", b"portrait")
+    store.save("voice", b"voice", 6)
+    synth = make_video_synthesizer(settings)
+    assert isinstance(synth, RemoteVideo)
+    assert synth.portrait == store.path("portrait") and synth.voice_ref == store.path("voice")
 
 
 def test_cli_reports_only_ids_and_cer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

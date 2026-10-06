@@ -1,7 +1,13 @@
-"""Generic SSH video jobs, followed by local MP4 processing."""
+"""Generic SSH video jobs, followed by local MP4 processing.
+
+Request JSON optionally includes ``portrait`` and ``voice_ref`` asset paths. Local drivers
+receive absolute paths; SSH drivers receive validated ``.cache/twin-assets/<sha>.<ext>``
+paths relative to the remote home, uploaded before invocation. Absent keys use driver defaults.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -71,6 +77,8 @@ class RemoteVideo:
         max_cer: float = 0.05,
         pause_s: float = 0.25,
         runner: Runner = run,
+        portrait: Path | None = None,
+        voice_ref: Path | None = None,
     ) -> None:
         if (
             host and (re.fullmatch(r"[A-Za-z0-9._-]{1,64}", host) is None or host.startswith("-"))
@@ -79,6 +87,7 @@ class RemoteVideo:
         self.host, self.command = host, command
         self.timeout_s, self.max_rounds, self.max_cer, self.pause_s = timeout_s, max_rounds, max_cer, pause_s
         self.runner = runner
+        self.portrait, self.voice_ref = portrait, voice_ref
 
     def _run(self, command: list[str], input: str | None = None) -> str:
         try:
@@ -90,6 +99,26 @@ class RemoteVideo:
             raise MediaTimeout("视频生成超时，请稍后重试") from None
         except (OSError, subprocess.SubprocessError):
             raise MediaUnavailable("视频生成失败，请检查远端服务和媒体配置") from None
+
+    def _asset(self, path: Path, extensions: set[str]) -> str:
+        path = Path(path).expanduser()
+        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in extensions:
+            raise MediaRejected("视频素材无效")
+        path = path.resolve()
+        if not self.host:
+            return str(path)
+        try:
+            with path.open("rb") as source:
+                sha = hashlib.file_digest(source, "sha256").hexdigest()
+        except OSError:
+            raise MediaUnavailable("无法读取视频素材") from None
+        name = sha + path.suffix.lower()
+        if re.fullmatch(r"[0-9a-f]{64}\.(png|jpg|jpeg|webp|wav)", name) is None:
+            raise MediaRejected("视频素材名称无效")
+        remote = ".cache/twin-assets/" + name
+        self._run(["ssh", "-o", "BatchMode=yes", self.host, "umask 077; mkdir -p .cache/twin-assets"])
+        self._run(["scp", "-o", "BatchMode=yes", str(path), f"{self.host}:{remote}"])
+        return remote
 
     def synthesize(self, script: MediaScript, out_path: Path) -> VideoResult:
         if script.abstain:
@@ -106,6 +135,12 @@ class RemoteVideo:
             "max_cer": self.max_cer,
             "pause_s": self.pause_s,
         }
+        for key, asset, extensions in (
+            ("portrait", self.portrait, {".png", ".jpg", ".jpeg", ".webp"}),
+            ("voice_ref", self.voice_ref, {".wav"}),
+        ):
+            if asset is not None:
+                request[key] = self._asset(asset, extensions)
         ffmpeg = ffmpeg_path()
         probe = shutil.which("ffprobe")
         if probe is None:

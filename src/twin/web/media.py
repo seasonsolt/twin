@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import re
 import secrets
@@ -19,11 +20,12 @@ from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from ..assets import AssetStore
 from ..config import Settings, make_synthesizer, make_video_synthesizer
 from ..media.adapters import presentable_from_payload
 from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
-from ..media.schema import AVATAR_PRESETS, AudioManifest, MediaScript
+from ..media.schema import AVATAR_PRESETS, AudioManifest, MediaScript, VoiceSpec
 from ..media.script import script_from_presentable
 from ..media.tts import (
     MediaError,
@@ -97,21 +99,31 @@ def register(
     """Register under the application's existing security middleware with lazy speech."""
     app.add_middleware(PrivateAudioMiddleware)
     cache_dir = settings.db_path.parent / "media-cache"
-    factory = synthesizer_factory or (lambda: make_synthesizer(settings.tts))
+    assets = AssetStore(settings.db_path)
     synthesizer: SpeechSynthesizer | None = None
+    selected_voice: str | None = None
     lock = threading.Lock()
     video_jobs = JobManager(1, lambda _: "视频生成失败，请检查 [video] 和 ffmpeg 配置")
     video = video_factory or (lambda: make_video_synthesizer(settings))
     video_available = video_factory is not None or settings.video.provider == "remote"
 
     def speech() -> SpeechSynthesizer:
-        nonlocal synthesizer
+        nonlocal synthesizer, selected_voice
         with lock:
-            if synthesizer is None:
-                try:
-                    synthesizer = factory()
-                except (ValueError, OSError):
-                    raise MediaUnavailable("语音配置无效") from None
+            try:
+                voice_id = assets.publish_voice(settings.tts.voice_dir) or settings.tts.voice
+                if synthesizer is None or voice_id != selected_voice:
+                    if synthesizer_factory is None:
+                        synthesizer = make_synthesizer(settings.tts.model_copy(update={"voice": voice_id}))
+                    else:
+                        synthesizer = copy.copy(synthesizer_factory())
+                        if voice_id.startswith("self-"):
+                            synthesizer.voice = VoiceSpec(
+                                voice_id=voice_id, language=settings.tts.language, label="我的声音"
+                            )
+                    selected_voice = voice_id
+            except (ValueError, OSError):
+                raise MediaUnavailable("语音配置无效") from None
             return synthesizer
 
     @app.exception_handler(MediaError)
@@ -130,9 +142,10 @@ def register(
 
     @app.get("/api/media/avatar-image")
     def avatar_image_file() -> FileResponse:
-        if settings.avatar.image_path is None:
+        uploaded = assets.path("portrait")
+        if uploaded is None and settings.avatar.image_path is None:
             raise HTTPException(404, "未配置肖像图片")
-        path = Path(settings.avatar.image_path)
+        path = uploaded or Path(settings.avatar.image_path or "")
         if not path.is_file():
             raise HTTPException(404, "找不到肖像图片")
         content_type = {
@@ -149,7 +162,20 @@ def register(
         avatar_model = (
             {"format": "vrm", "url": "/api/media/avatar.vrm"} if settings.avatar.vrm_path is not None else None
         )
-        avatar_image = {"url": "/api/media/avatar-image"} if settings.avatar.image_path is not None else None
+        portrait = assets.profile()["portrait"] if assets.path("portrait") else None
+        avatar_image = (
+            {"url": f"/api/media/avatar-image?v={portrait['sha']}"}
+            if portrait
+            else {"url": "/api/media/avatar-image"}
+            if settings.avatar.image_path is not None
+            else None
+        )
+        profile = assets.profile()
+        asset_key = f"{portrait['sha'] if portrait else ''}:{profile['voice']['id'] if profile['voice'] else ''}"
+        video_capability = {
+            "available": video_available,
+            **({"asset_key": asset_key} if portrait or profile["voice"] else {}),
+        }
         try:
             synth = speech()
             declared = synth.capabilities
@@ -158,7 +184,7 @@ def register(
                 "avatar": avatar,
                 "avatar_model": avatar_model,
                 "avatar_image": avatar_image,
-                "video": {"available": video_available},
+                "video": video_capability,
                 "available": False,
                 "backend": None,
                 "languages": [],
@@ -169,7 +195,7 @@ def register(
             "avatar": avatar,
             "avatar_model": avatar_model,
             "avatar_image": avatar_image,
-            "video": {"available": video_available},
+            "video": video_capability,
             "available": synth.name != "silent",
             "backend": synth.name,
             "languages": declared.languages,

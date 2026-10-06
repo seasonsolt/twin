@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import type { Job } from '../jobs/useJob';
 import type { Turn } from './types';
@@ -17,11 +17,12 @@ export const videoUrl = (result?: VideoResult) =>
   result && /^[0-9a-f]{64}\.mp4$/.test(result.file)
     ? `/api/media/video/${result.file}`
     : null;
-const key = (id: string) => `twin.reply-video:${id}`;
+const key = (id: string, assets = '') =>
+  `twin.reply-video:${assets ? `${assets}|` : ''}${id}`;
 const submissions = new Map<string, Promise<{ job_id: string }>>();
-function restore(id: string): ReplyVideoState | undefined {
+function restore(id: string, assets = ''): ReplyVideoState | undefined {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(key(id)) ?? 'null');
+    const saved = JSON.parse(sessionStorage.getItem(key(id, assets)) ?? 'null');
     if (saved?.status === 'done' && videoUrl(saved.result)) return saved;
     if (saved?.status === 'failed')
       return { status: 'failed', jobId: saved.jobId };
@@ -31,9 +32,9 @@ function restore(id: string): ReplyVideoState | undefined {
     // Session storage is optional.
   }
 }
-function save(id: string, state: ReplyVideoState) {
+function save(id: string, state: ReplyVideoState, assets = '') {
   try {
-    sessionStorage.setItem(key(id), JSON.stringify(state));
+    sessionStorage.setItem(key(id, assets), JSON.stringify(state));
   } catch {
     // Keep the mounted page's cache when storage is unavailable.
   }
@@ -56,16 +57,22 @@ function wait(signal: AbortSignal, delay: number) {
   });
 }
 
-function runningJobs() {
+function runningJobs(assets = '') {
+  const prefix = key('', assets);
   const records = new Map<string, ReplyVideoState>(
-    [...submissions.keys()].map((id) => [id, { status: 'generating' }]),
+    [...submissions.keys()]
+      .filter(
+        (id) => id.startsWith(prefix) && !id.slice(prefix.length).includes('|'),
+      )
+      .map((id) => [id.slice(prefix.length), { status: 'generating' }]),
   );
   try {
     for (let index = 0; index < sessionStorage.length; index++) {
       const storedKey = sessionStorage.key(index);
-      if (!storedKey?.startsWith('twin.reply-video:')) continue;
-      const id = storedKey.slice('twin.reply-video:'.length);
-      const state = restore(id);
+      if (!storedKey?.startsWith(prefix)) continue;
+      const id = storedKey.slice(prefix.length);
+      if (id.includes('|')) continue;
+      const state = restore(id, assets);
       if (state?.jobId && state.status !== 'done') records.set(id, state);
     }
   } catch {
@@ -74,9 +81,13 @@ function runningJobs() {
   return records;
 }
 
-export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
-  const [cache] = useState(runningJobs);
-  const records = useRef(cache);
+export function useReplyVideos(
+  active: boolean,
+  turns: Turn[],
+  name: string,
+  assets = '',
+) {
+  const records = useMemo(() => ({ current: runningJobs(assets) }), [assets]);
   const [view, setView] = useState<Record<string, ReplyVideoState>>({});
   const actions = useRef({
     update(_turns: Turn[], _name: string) {
@@ -105,7 +116,7 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
     document.addEventListener('visibilitychange', visible);
     const publish = (id: string, state: ReplyVideoState) => {
       records.current.set(id, state);
-      save(id, state);
+      save(id, state, assets);
       if (alive) setView(Object.fromEntries(records.current));
     };
     const run = async (id: string, turn?: Turn) => {
@@ -115,7 +126,7 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
       try {
         while (alive) {
           if (!state.jobId) {
-            let submission = submissions.get(id);
+            let submission = submissions.get(key(id, assets));
             if (!submission) {
               submission = api<{ job_id: string }>('/api/media/video', {
                 method: 'POST',
@@ -125,10 +136,10 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
                   persona_name: persona,
                 },
               });
-              submissions.set(id, submission);
+              submissions.set(key(id, assets), submission);
             }
             const result = await submission;
-            submissions.delete(id);
+            submissions.delete(key(id, assets));
             state = { status: 'generating', jobId: result.job_id };
             publish(id, state);
             if (!alive) return;
@@ -177,7 +188,7 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
           return;
         }
       } catch {
-        submissions.delete(id);
+        submissions.delete(key(id, assets));
         if (alive) publish(id, { status: 'failed', jobId: state.jobId });
       }
     };
@@ -185,7 +196,8 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
       if (!alive || running) return;
       const unresolved = [...records.current].find(
         ([id, state]) =>
-          (state.jobId || submissions.has(id)) && state.status === 'generating',
+          (state.jobId || submissions.has(key(id, assets))) &&
+          state.status === 'generating',
       );
       const next = [...pending]
         .reverse()
@@ -214,7 +226,7 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
           if (!records.current.has(turn.id))
             records.current.set(
               turn.id,
-              restore(turn.id) ?? { status: 'generating' },
+              restore(turn.id, assets) ?? { status: 'generating' },
             );
         }
         setView(Object.fromEntries(records.current));
@@ -237,17 +249,17 @@ export function useReplyVideos(active: boolean, turns: Turn[], name: string) {
       document.removeEventListener('visibilitychange', visible);
       actions.current = { update() {}, retry() {} };
     };
-  }, [active]);
+  }, [active, assets, records]);
   useEffect(() => {
     actions.current.update(turns, name);
-  }, [active, turns, name]);
+  }, [active, turns, name, assets]);
   return {
     videos: view,
     retry: (id: string) => actions.current.retry(id),
     invalidate: (id: string) => {
       const state: ReplyVideoState = { status: 'failed' };
       records.current.set(id, state);
-      save(id, state);
+      save(id, state, assets);
       setView(Object.fromEntries(records.current));
     },
   };

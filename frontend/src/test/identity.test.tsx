@@ -69,15 +69,22 @@ beforeEach(() => {
                   }
                 : identity,
             )
-        : path === '/api/media/capabilities'
-          ? failAvatar
-            ? json({ detail: '预览暂不可用' }, 503)
-            : json({ available: false, avatar: spec })
-          : path === '/api/persona/items?include_rejected=false'
-            ? json([])
-            : path === '/api/persona/coverage'
-              ? json({ facets: [], suggestions: [], kind_labels: {} })
-              : json(status),
+        : path === '/api/me/assets'
+          ? json({
+              portrait: null,
+              voice: null,
+              speech_clone: false,
+              video: false,
+            })
+          : path === '/api/media/capabilities'
+            ? failAvatar
+              ? json({ detail: '预览暂不可用' }, 503)
+              : json({ available: false, avatar: spec })
+            : path === '/api/persona/items?include_rejected=false'
+              ? json([])
+              : path === '/api/persona/coverage'
+                ? json({ facets: [], suggestions: [], kind_labels: {} })
+                : json(status),
     ),
   );
   vi.stubGlobal('fetch', fetcher);
@@ -98,7 +105,7 @@ it('edits name/about inline and saves with X-Twin, previews a closed-mouth avata
     'maxlength',
     '200',
   );
-  expect(screen.getByText('音色：configured-voice（预置音色）')).toBeVisible();
+  expect(screen.getByText('预置音色')).toBeVisible();
   expect(screen.getByText('朗读：speech.test')).toBeVisible();
   expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
   const avatar = await screen.findByRole('img', { name: '风格化插画' });

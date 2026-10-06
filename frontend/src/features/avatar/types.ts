@@ -8,7 +8,7 @@ export interface AvatarSpec {
 
 export interface Capabilities {
   available: boolean;
-  video?: { available: boolean };
+  video?: { available: boolean; asset_key?: string };
   backend: string | null;
   avatar?: AvatarSpec;
   avatar_model?: { format: 'vrm'; url: string } | null;

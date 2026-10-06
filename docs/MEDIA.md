@@ -124,6 +124,24 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 可枚举时，配置音色在读取能力（最迟首次合成）时检查；每次合成也检查请求音色。不在列表中就用中文拒绝，包含配置 ID 和预置数，绝不提交合成文本。查询延迟到媒体能力/朗读入口，应用启动、身份查看及纯文字功能不访问语音后端。`Identity.voice` 默认 `None` 兼容旧契约，`twin identity show` 从配置填入 ID 并显示预置音色。
 
+### 本人形象与声音
+
+网页「关于你」和首次引导提供照片裁剪、录音、上传录音或视频及恢复默认。
+`<db_path.parent>/assets/` 为 0700，素材和原子替换的 `profile.json` 为 0600。
+照片经 EXIF 方向修正、裁剪（默认居中 3:4）、去元数据后保存 PNG；短边至少 320px，长边最多 1024px。
+声音用 CPU ffmpeg 处理为单声道 24kHz PCM16 WAV，高通、响度归一、首尾去静音，保留最多 20 秒；不足 5 秒拒绝。
+
+API：`GET /api/me/assets`（profile、speech_clone、video），`PUT /api/me/portrait`（multipart file，最多 15MB；可选 x/y/w/h 归一化裁剪），
+`DELETE /api/me/portrait`，`PUT /api/me/voice`（multipart file，最多 95MB），
+`GET /api/me/voice/reference`，`DELETE /api/me/voice`。Content-Length 超限在解析前拒绝；FastAPI/Starlette 解析上传（大文件落盘），再按块校验大小并复制到数据目录临时文件，失败后清理。
+`/api/media/avatar-image` 优先返回本人肖像，能力 URL 加 `?v=<sha>` 避免旧头像缓存。
+
+`[tts].voice_dir` 为可选路径（相对 TOML 目录）；配置后发布 `<id>.wav`（0644）给语音容器，
+ID 为 `self-<processed-wav-sha256 前 16 位>`，听和试听使用该 ID，否则仍使用 `[tts].voice`。
+`speech_clone` 表示是否配置共享目录，不表示语音服务在线。
+音频渲染键已包含 VoiceSpec；浏览器声音变更后清空音频缓存，视频会话缓存按肖像 sha + 声音 ID 隔离。
+视频不依赖语音共享目录，直接传递本人素材。部署详见 [tts-moss](../deploy/tts-moss/README.md)。
+
 ### 3.3 MP4 片段导出（M3）
 
 `twin media clip REPLY.json --out clip.mp4` / `POST /api/media/clip` 仅展示已保存的回答，不生成新措辞。默认 1280×720、25 fps；左侧沿用浏览器形象的平涂几何与配色（四档口型，无眨眼），右侧按字符实际宽度换行显示当前段原文。口型取各音频分片的 `lipsync`，缺失时闭嘴；弃权不显示形象，只展示提示。
@@ -154,6 +172,11 @@ ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录
 ```json
 {"job_id":"<1–64 位 A-Za-z0-9_- 标识>","segments":[{"id":"s01","text":"..."}],"max_rounds":4,"max_cer":0.05,"pause_s":0.25}
 ```
+
+可选键 `portrait`、`voice_ref` 为本人上传的肖像 PNG 和处理后参考 WAV 路径。
+本机命令收到绝对路径；SSH 模式先通过 scp 上传至远端 home 下
+`.cache/twin-assets/<sha256>.<ext>`，再传入该相对路径。文件名严格限制为摘要与已知扩展名，
+不从上传名称构造 shell 参数。没有本人素材时省略相应键，由驱动使用自己的默认肖像/声音。
 
 本地生成随机 job_id；按顺序编号 s01、s02……。仅发送脚本的 speech 段，保持原文。成功响应：
 

@@ -33,6 +33,15 @@ export function useReplyAudio(active: boolean) {
   const buffers = useRef(new Map<string, AudioBuffer>());
   const [view, setView] = useState(initial);
   useEffect(() => {
+    const changed = () => {
+      actions.current.stop();
+      cache.current.clear();
+      buffers.current.clear();
+    };
+    window.addEventListener('twin-assets-changed', changed);
+    return () => window.removeEventListener('twin-assets-changed', changed);
+  }, []);
+  useEffect(() => {
     const audio = audioRef.current;
     if (!active || !audio) return;
     let alive = true;

@@ -1,0 +1,16 @@
+services:
+  tts:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      SHIM_API_KEY: ${SHIM_API_KEY:-}
+      TTS_VOICE_DIR: /voices
+    volumes:
+      - hf:/cache
+      - ${TWIN_VOICE_DIR:?Set TWIN_VOICE_DIR to the shared reference directory}:/voices:ro
+    cpus: 4
+    mem_limit: 8g
+volumes:
+  hf:

@@ -165,8 +165,9 @@ def test_speakable_nfkc_count_and_exact_duration_threshold(shim: ModuleType) -> 
     assert "X-Speech-Warning" not in response.headers
 
 
+@pytest.mark.parametrize("voice", ["Junhao", "self-0123456789abcdef"])
 def test_moss_resets_all_rngs_before_inference_without_changing_sampling(
-    shim: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    shim: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, voice: str
 ) -> None:
     torch_seeds: list[int] = []
     torch_stub = SimpleNamespace(manual_seed=torch_seeds.append, inference_mode=nullcontext)
@@ -181,6 +182,10 @@ def test_moss_resets_all_rngs_before_inference_without_changing_sampling(
         observations.append((random.random(), float(np.random.random()), kwargs))
         raise RuntimeError("Stop before waveform handling; no real model in this test")
 
+    monkeypatch.setenv("TTS_VOICE_DIR", str(tmp_path / "voices"))
+    (tmp_path / "voices").mkdir()
+    reference = tmp_path / "voices" / "self-0123456789abcdef.wav"
+    reference.write_bytes(b"reference")
     engine = shim.MossNanoEngine(tmp_path)
     engine._model = SimpleNamespace(inference=inference)
     engine._available_voices = ["Junhao"]
@@ -189,14 +194,18 @@ def test_moss_resets_all_rngs_before_inference_without_changing_sampling(
         monkeypatch.setattr(builtins, "__import__", mocked_import)
         with TestClient(shim.create_app(engine)) as instance:
             for text in ["第一句", "另一句", "第一句"]:
-                assert instance.post("/v1/audio/speech", json=payload(shim, input=text)).status_code == 503
+                assert instance.post("/v1/audio/speech", json=payload(shim, input=text, voice=voice)).status_code == 503
         assert torch_seeds[0] == torch_seeds[2] != torch_seeds[1]
         assert observations[0][:2] == observations[2][:2] != observations[1][:2]
-        assert torch_seeds[0] == shim.synthesis_seed(shim.MODEL_REVISION, "Junhao", "第一句")
+        assert torch_seeds[0] == shim.synthesis_seed(shim.MODEL_REVISION, voice, "第一句")
         for _, _, kwargs in observations:
             assert kwargs["do_sample"] is True
             assert kwargs["max_new_frames"] == 375
             assert kwargs["device"] == "cpu"
+            expected = (
+                reference if voice.startswith("self-") else tmp_path / "presets" / shim.PRESET_REVISION / "zh_1.wav"
+            )
+            assert kwargs["prompt_audio_path"] == str(expected)
             assert not any("temperature" in key or "top_" in key or "repetition_penalty" in key for key in kwargs)
     finally:
         random.setstate(python_state)
@@ -499,6 +508,30 @@ def test_engine_calls_are_serialized(shim: ModuleType) -> None:
         responses = list(pool.map(lambda _: instance.post("/v1/audio/speech", json=payload(shim)), range(12)))
     assert all(response.status_code == 200 for response in responses)
     assert engine.maximum == 1
+
+
+def test_owner_voice_directory_is_rescanned_and_rejects_paths(
+    shim: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TTS_VOICE_DIR", str(tmp_path))
+    engine = shim.MossNanoEngine(tmp_path / "cache")
+    engine._available_voices = ["Junhao"]
+    with TestClient(shim.create_app(shim.FakeEngine())) as instance:
+        assert instance.get("/v1/voices").json()["voices"] == list(shim.PRESET_FILES)
+        valid = tmp_path / "self-0123456789abcdef.wav"
+        valid.write_bytes(b"reference")
+        for name in ("self-abcd.wav", "self-0123456789ABCDEF.wav", "self-0123456789abcdef.mp3", "preset.wav"):
+            (tmp_path / name).write_bytes(b"invalid name")
+        (tmp_path / "self-1111111111111111.wav").mkdir()
+        (tmp_path / "self-2222222222222222.wav").symlink_to(valid)
+        assert engine.voices() == ["Junhao", valid.stem]
+        assert instance.get("/v1/voices").json()["voices"] == [*shim.PRESET_FILES, valid.stem]
+        assert instance.post("/v1/audio/speech", json=payload(shim, voice=valid.stem)).status_code == 200
+        for voice in ("../" + valid.stem, str(valid), valid.name, "self-0123456789ABCDEF"):
+            assert instance.post("/v1/audio/speech", json=payload(shim, voice=voice)).status_code == 400
+        valid.unlink()
+        assert instance.post("/v1/audio/speech", json=payload(shim, voice=valid.stem)).status_code == 400
+        assert engine.voices() == ["Junhao"]
 
 
 def test_end_to_end_openai_adapter_contract(shim: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

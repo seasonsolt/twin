@@ -217,29 +217,33 @@ export function Chat() {
                             aria-label="回复媒体"
                             className="flex min-w-0 flex-wrap items-center gap-2"
                           >
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="min-h-11 min-w-11"
-                              aria-label={
-                                audio.id === turn.id && audio.playing
-                                  ? '暂停语音'
-                                  : '播放语音'
-                              }
-                              aria-busy={audio.id === turn.id && audio.loading}
-                              onClick={() =>
-                                audio.toggle(turn.id, turn.reply!, name)
-                              }
-                            >
-                              {audio.id === turn.id && audio.playing ? (
-                                <Pause size={16} aria-hidden />
-                              ) : (
-                                <Volume2 size={16} aria-hidden />
-                              )}
-                              {audio.id === turn.id && audio.playing
-                                ? '暂停'
-                                : '听'}
-                            </Button>
+                            {capabilities?.available && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="min-h-11 min-w-11"
+                                aria-label={
+                                  audio.id === turn.id && audio.playing
+                                    ? '暂停语音'
+                                    : '播放语音'
+                                }
+                                aria-busy={
+                                  audio.id === turn.id && audio.loading
+                                }
+                                onClick={() =>
+                                  audio.toggle(turn.id, turn.reply!, name)
+                                }
+                              >
+                                {audio.id === turn.id && audio.playing ? (
+                                  <Pause size={16} aria-hidden />
+                                ) : (
+                                  <Volume2 size={16} aria-hidden />
+                                )}
+                                {audio.id === turn.id && audio.playing
+                                  ? '暂停'
+                                  : '听'}
+                              </Button>
+                            )}
                             {capabilities?.video?.available && (
                               <ReplyVideo
                                 id={turn.id}

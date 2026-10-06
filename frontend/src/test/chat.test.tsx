@@ -239,7 +239,7 @@ it('shows a neutral general badge next to confidence without an abstention marke
   expect(badge).toBeVisible();
   expect(badge.previousElementSibling).toHaveTextContent('置信度 50%');
   expect(screen.queryByText('需要本人确认')).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '播放语音' })).toBeVisible();
+  expect(await screen.findByRole('button', { name: '播放语音' })).toBeVisible();
   expect(await screen.findByRole('button', { name: '生成视频' })).toBeVisible();
 });
 it('shows Chinese detail and retries without duplicating the failed user turn', async () => {

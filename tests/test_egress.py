@@ -270,5 +270,5 @@ def test_identity_show_and_status_include_every_backend_and_judges(tmp_path: Pat
     assert all(text not in result.output for text in ("invented-password", "已授权", "未授权"))
     assert not (tmp_path / "persona.db").exists()
     rows = egress_status(Settings(judges=[LLMSettings(), LLMSettings()]))
-    assert len(rows) == 6
+    assert len(rows) == 7
     assert all(set(row) == {"kind", "provider", "host", "external", "declared"} for row in rows)

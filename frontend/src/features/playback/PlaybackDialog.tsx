@@ -7,6 +7,7 @@ import type { ChatReply } from '../chat/types';
 import { CitationCard } from '../chat/Citations';
 import { AvatarPreview } from '../avatar/AvatarPreview';
 import { usePlayback } from './usePlayback';
+import { RemoteVideoPanel } from './RemoteVideoPanel';
 
 export function PlaybackDialog({
   open,
@@ -52,7 +53,14 @@ export function PlaybackDialog({
         className="space-y-4 outline-none"
         aria-label="回放控制"
         onKeyDown={(event) => {
-          if (!script || event.altKey || event.ctrlKey || event.metaKey) return;
+          if (
+            !script ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.target instanceof HTMLVideoElement
+          )
+            return;
           if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
             event.preventDefault();
             actions.step(event.key === 'ArrowLeft' ? -1 : 1);
@@ -122,6 +130,17 @@ export function PlaybackDialog({
                 导出视频
               </Button>
             </div>
+            {open &&
+              capabilities?.video?.available &&
+              !script.abstain &&
+              label && (
+                <RemoteVideoPanel
+                  key={JSON.stringify(answer)}
+                  answer={answer}
+                  personaName={personaName}
+                  label={label}
+                />
+              )}
             {capabilities?.available && (
               <div className="flex flex-wrap items-center gap-2">
                 <Button

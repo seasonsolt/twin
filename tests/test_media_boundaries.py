@@ -130,6 +130,29 @@ def test_clip_imports_only_render_contract_protocol_and_pillow() -> None:
             assert target.split(".")[0] in sys.stdlib_module_names | {"PIL"}, target
 
 
+def test_video_imports_only_media_contract_helpers_and_pillow() -> None:
+    targets = _imports((MEDIA_ROOT / "video.py").read_text(encoding="utf-8"), "twin.media")
+    for target in targets:
+        if target.startswith("twin"):
+            assert target in {"twin.media.schema", "twin.media.tts", "twin.media.clip"}, target
+        else:
+            assert target.split(".")[0] in sys.stdlib_module_names | {"PIL", "pydantic"}, target
+
+
+def test_config_video_import_is_only_type_checking_or_lazy_factory() -> None:
+    tree = ast.parse((PACKAGE_ROOT / "config.py").read_text(encoding="utf-8"))
+    for statement in tree.body:
+        imports = [
+            node for node in ast.walk(statement) if isinstance(node, ast.ImportFrom) and node.module == "media.video"
+        ]
+        if imports:
+            assert (isinstance(statement, ast.FunctionDef) and statement.name == "make_video_synthesizer") or (
+                isinstance(statement, ast.If)
+                and isinstance(statement.test, ast.Name)
+                and statement.test.id == "TYPE_CHECKING"
+            )
+
+
 @pytest.mark.parametrize(
     "source",
     [

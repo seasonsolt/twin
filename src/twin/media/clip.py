@@ -94,6 +94,37 @@ def _avatar(image: Image.Image, avatar: AvatarSpec, mouth: int) -> None:
         ellipse(110, (140, 141, 143)[mouth - 1], 11 + mouth, (3, 7, 12)[mouth - 1], "hair")
 
 
+def ffmpeg_path() -> str:
+    executable = shutil.which("ffmpeg")
+    if executable is None:
+        raise MediaError("找不到 ffmpeg，请用 brew install ffmpeg 或 sudo apt-get install ffmpeg 安装")
+    return executable
+
+
+def label_metadata(script: MediaScript) -> list[str]:
+    return [
+        "-metadata",
+        f"comment=AI-generated; twin; source {script.source_fingerprint}",
+        "-metadata",
+        f"title={EXPLICIT_LABEL}",
+    ]
+
+
+def draw_badge(image: Image.Image, font_path: Path, color: str, *, bottom: bool = False) -> None:
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    font = ImageFont.truetype(str(font_path), max(10, round(height * 0.028)))
+    pad = max(1, round(width * 0.02))
+    while font.size > 10 and font.getlength(EXPLICIT_LABEL) + 4 * pad > width:
+        font = ImageFont.truetype(str(font_path), font.size - 1)
+    if font.getlength(EXPLICIT_LABEL) + 4 * pad > width or font.size * 2 + 2 * pad > height:
+        raise MediaError("视频尺寸过小，无法完整显示 AI 标识")
+    badge_width = math.ceil(font.getlength(EXPLICIT_LABEL)) + 2 * pad
+    top = height - pad - font.size * 2 if bottom else pad
+    draw.rounded_rectangle((pad, top, pad + badge_width, top + font.size * 2), radius=pad / 3, fill=color)
+    draw.text((pad * 2, top + font.size * 0.3), EXPLICIT_LABEL, font=font, fill="white")
+
+
 def _draw_frame(
     avatar: AvatarSpec,
     text: str,
@@ -109,13 +140,7 @@ def _draw_frame(
         _avatar(image, avatar, mouth)
     draw = ImageDraw.Draw(image)
     width, height = size
-    badge_font = ImageFont.truetype(str(font_path), max(10, round(height * 0.028)))
-    pad = round(width * 0.02)
-    badge_width = math.ceil(badge_font.getlength(EXPLICIT_LABEL)) + 2 * pad
-    draw.rounded_rectangle(
-        (pad, pad, pad + badge_width, pad + badge_font.size * 2), radius=pad / 3, fill=avatar.palette["hair"]
-    )
-    draw.text((pad * 2, pad + badge_font.size * 0.3), EXPLICIT_LABEL, font=badge_font, fill="white")
+    draw_badge(image, font_path, avatar.palette["hair"])
     left = width * (0.08 if card or not show_avatar else 0.42)
     top, available_height = height * 0.25, height * 0.65
     font_size = max(10, round(height * 0.045))
@@ -147,9 +172,7 @@ def render_clip(
     size: tuple[int, int] = (1280, 720),
     fps: int = 25,
 ) -> Path:
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise MediaError("找不到 ffmpeg，请用 brew install ffmpeg 或 sudo apt-get install ffmpeg 安装")
+    ffmpeg = ffmpeg_path()
     font = _font_path(font_path)
     if fps <= 0 or any(n <= 0 or n % 2 for n in size):
         raise MediaError("视频尺寸须为正偶数，帧率须为正数")
@@ -260,10 +283,7 @@ def render_clip(
                 "aac",
                 "-movflags",
                 "+faststart",
-                "-metadata",
-                f"comment=AI-generated; twin; source {script.source_fingerprint}",
-                "-metadata",
-                f"title={EXPLICIT_LABEL}",
+                *label_metadata(script),
                 str(temporary),
             ]
             # A file captures stderr without filling a pipe while RGB frames are written.

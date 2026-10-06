@@ -13,7 +13,9 @@
 3. **可追溯。** 每个产出物都记录它来自哪一次回答（运行快照或回答指纹）、用了哪些引用，以及音色和形象配置。
 4. **人物无关、出境由配置决定。** `src/` 里不出现具体人物的专属内容；用本人资料评测和展示时，语音与识别只走本地或本人指定的服务，外部服务（如 Cloudflare）按配置使用，界面如实展示出境分类。
 
-已确定（2026-10-04）：形象用风格化插画，不做写实；语音后端两种都接，Cloudflare `melotts` 用于合成数据和公开数据，本地自托管服务（MOSS-TTS-Nano 起步，可换 CosyVoice3）用于内网。
+风格化形象通道使用插画；可选的本人视频通道仅通过下述通用远端任务接入。
+
+已确定（2026-10-04）：默认形象用风格化插画，不做写实；语音后端两种都接，Cloudflare `melotts` 用于合成数据和公开数据，本地自托管服务（MOSS-TTS-Nano 起步，可换 CosyVoice3）用于内网。
 
 ## 2. 分层
 
@@ -29,6 +31,7 @@
 | `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（开头提示、按句切分、弃权只出提示） |
 | `media.lipsync` | 与 L4 同级（7） | 纯函数：时间戳、PCM 能量或合成节奏到版本化口型轨 |
 | `media.clip` | 与 L4 同级（7） | Pillow 平涂形象与字幕、条件静音片头与静音片尾、ffmpeg MP4 编码；复用语音缓存与口型轨 |
+| `media.video` | 与 L4 同级（7） | 通用 SSH 视频任务协议、本地常驻标识与 MP4 后处理；不包含远端实现 |
 | `media.render` | 与 L4 同级（7） | 按脚本调用 `SpeechSynthesizer`、拼接音频、写入标识、生成 `LipSyncTrack`、缓存与导出 |
 | `web.media` / `cli` | L5 接入（9） | API、回放面板、`twin media ...` 命令 |
 
@@ -136,6 +139,34 @@ font_path = "/path/to/chinese-font.ttc"
 
 ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录字幕或后端原始响应。静音合成器可离线导出，真实朗读需配置 `[tts]`。
 
+### 3.4 本人视频通道（V2）
+
+`twin media video REPLY.json --out out.mp4` 只呈现已保存、已有依据的回答，不生成或改写内容；弃权脚本直接拒绝，绝不朗读弃权说明。此通道不依赖 `[tts]`，仓库仅提供通用远端命令适配器，不包含远端生成实现。
+
+`[video]` 默认 `provider = "none"`，启用时设为 `"remote"`，并配置 `host`（SSH 别名，1–64 位字母、数字、点、下划线或连字符，不能以连字符开头）及非空 `command`。使用本人已有的 SSH 配置和凭据，不在配置或源码中保存密码。可选参数：`timeout_s = 3600`（正数，每次命令的超时）、`max_rounds = 4`（正整数）、`max_cer = 0.05`（非负有限数）、`pause_s = 0.25`（非负有限秒数）。`egress = "local"` / `"external"` 可显式声明；未声明的远端 SSH 一律推断为外部，并以 kind `video` 展示。
+
+#### 通用 SSH JSON 任务契约
+
+运行 `ssh -o BatchMode=yes <host> <command>`，请求 JSON 通过 stdin 传入（不作为命令参数），**最后一行 stdout** 必须是响应 JSON，前面的进度输出丢弃。请求：
+
+```json
+{"job_id":"<1–64 位 A-Za-z0-9_- 标识>","segments":[{"id":"s01","text":"..."}],"max_rounds":4,"max_cer":0.05,"pause_s":0.25}
+```
+
+本地生成随机 job_id；按顺序编号 s01、s02……。s01 始终朗读 `OPENING_NOTICE`，之后仅发送脚本的 speech 段，保持原文。成功响应：
+
+```json
+{"ok":true,"output":"<remote path to mp4>","duration_s":1.0,"warnings":[],"segments":[{"id":"s01","text":"...","heard":"...","cer":0.0,"seed":1}]}
+```
+
+失败响应为 `{"ok":false,"error":"<中文消息>"}`。适配器校验必需字段、有限正时长、非负有限 CER，以及分段 ID、原文和顺序完全一致；seed 为整数。获取文件时执行 `scp -o BatchMode=yes <host>:<output> <local tmp>`。output 须为绝对 `.mp4` 路径，仅含字母、数字、下划线、点、斜线、连字符，避免 scp 解释远端 shell 语法。服务负责包含开头语音提示和全部讲述内容；回听信息不是内容真实性的证明。
+
+取回后由本地 ffmpeg 强制覆盖常驻左下角 `EXPLICIT_LABEL`，复用片段导出的 Pillow 角标、字体发现和元数据函数；H.264 / yuv420p + AAC、faststart，移除远端元数据后写入 `title=EXPLICIT_LABEL`、`comment="AI-generated; twin; source <script fingerprint>"`。必须包含视频和音频轨，不直接向用户提供未经标识的远端文件。产出为 0600，本地临时文件成功或失败均清理，失败不替换已有输出。适配器不负责清理远端文件。
+
+`VideoSynthesizer` / `VideoResult` 为展示层协议与版本化契约；`config.make_video_synthesizer(settings)` 是唯一配置构造入口，仅在调用时加载适配器。CLI 显示时长，回听警告仅打印 ID 和 CER，不输出原文或识别文本。超过 max_cer 的分段进入 warnings；远端自由文本警告只提升为通用提示，避免泄露原文或路径。stderr 和远端错误文本从不回显，也不写个人文本日志，拒绝、超时和不可用统一为中文媒体错误。
+
+网页能力追加 `video: {available: bool}`；“生成真人视频”先确认“在本人 GPU 主机上生成，通常需要几分钟”，后台串行处理，复用 JobManager 与 JobProgress，完成后内联播放及下载，回听出入用小字提示。界面标签仅来自 API，下载文件同时带画面与元数据标识。API 详情见 [WEB_UI.md](WEB_UI.md)。
+
 ## 4. 阶段
 
 | 阶段 | 内容 | 验收 |
@@ -148,6 +179,6 @@ ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录
 ## 5. 接入
 
 - persona 聊天气泡提供播放入口；输入 `ChatReply` 原回答，按 `chat_reply` 适配，不生成新措辞。
-- `twin media script/export/speak/clip REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
+- `twin media script/export/speak/clip/video REPLY.json --out PATH` 默认来源为 `chat_reply`。静音后端支持离线文字展示；朗读需配置 `[tts]`，合成回听测试另需 `[asr]`。
 - `/` 的 React 前端通过 `frontend/src/features/playback/PlaybackDialog.tsx` 和 `usePlayback.ts` 管理文字/音频、请求与资源生命周期；形象使用同目录 `Avatar.tsx`，样式令牌在 `frontend/src/design/tokens.css`。构建资源由 `/assets/*` 提供，独立导出 HTML 不依赖这些资源。
 - 本地 API、访问保护和播放控件见 [WEB_UI.md](WEB_UI.md)。

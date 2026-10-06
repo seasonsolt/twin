@@ -11,10 +11,13 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    from .media.video import VideoSynthesizer
 
 from .embed import Embedder, HashingEmbedder, OpenAICompatEmbedder, embedder_fingerprint
 from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, OpenAICompatLLM
@@ -78,6 +81,30 @@ class TTSSettings(BaseModel):
         return value
 
 
+class VideoSettings(BaseModel):
+    provider: Literal["none", "remote"] = "none"
+    host: str | None = None
+    command: str | None = None
+    timeout_s: float = Field(default=3600, gt=0, allow_inf_nan=False)
+    max_rounds: int = Field(default=4, ge=1, strict=True)
+    max_cer: float = Field(default=0.05, ge=0, allow_inf_nan=False)
+    pause_s: float = Field(default=0.25, ge=0, allow_inf_nan=False)
+    egress: Literal["local", "external"] | None = None
+
+    @field_validator("host")
+    @classmethod
+    def ssh_alias(cls, value: str | None) -> str | None:
+        if value is not None and (re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) is None or value.startswith("-")):
+            raise ValueError("视频主机须为 SSH 别名，不能包含路径或选项")
+        return value
+
+    @model_validator(mode="after")
+    def remote_config(self) -> VideoSettings:
+        if self.provider == "remote" and (not self.host or not self.command or not self.command.strip()):
+            raise ValueError("[video] 远端视频须配置 host 和非空 command")
+        return self
+
+
 class MediaSettings(BaseModel):
     font_path: str | None = None
 
@@ -129,8 +156,8 @@ class ASRSettings(BaseModel):
     egress: Literal["local", "external"] | None = None
 
 
-EgressKind = Literal["llm", "embed", "tts", "asr"]
-BackendSettings = LLMSettings | EmbedSettings | TTSSettings | ASRSettings
+EgressKind = Literal["llm", "embed", "tts", "asr", "video"]
+BackendSettings = LLMSettings | EmbedSettings | TTSSettings | ASRSettings | VideoSettings
 
 
 @dataclass(frozen=True)
@@ -145,6 +172,15 @@ class EgressInfo:
 def egress_of(section: BackendSettings) -> EgressInfo:
     """Conservative endpoint classification; never expose URL userinfo, paths or queries."""
     kind: EgressKind
+    if isinstance(section, VideoSettings):
+        external = section.provider == "remote" if section.egress is None else section.egress == "external"
+        return EgressInfo(
+            "video",
+            external,
+            section.egress is not None,
+            section.host,
+            "配置显式声明" if section.egress else "SSH 主机默认视为外部" if external else "未启用",
+        )
     if isinstance(section, LLMSettings):
         kind = "llm"
     elif isinstance(section, EmbedSettings):
@@ -212,6 +248,7 @@ class Settings(BaseModel):
     asr: ASRSettings = Field(default_factory=ASRSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     media: MediaSettings = Field(default_factory=MediaSettings)
+    video: VideoSettings = Field(default_factory=VideoSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
 
     def is_target(self, speaker: str) -> bool:
@@ -339,6 +376,25 @@ def make_synthesizer(s: TTSSettings) -> SpeechSynthesizer:
         voice=voice,
         timeout=s.timeout,
         max_retries=s.max_retries,
+    )
+
+
+def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
+    """Lazy presentation factory; no remote work is performed during construction."""
+    if settings.video.provider == "none":
+        return None
+    from .media.video import RemoteVideo
+
+    video = settings.video
+    assert video.host is not None and video.command is not None
+    return RemoteVideo(
+        host=video.host,
+        command=video.command,
+        timeout_s=video.timeout_s,
+        max_rounds=video.max_rounds,
+        max_cer=video.max_cer,
+        pause_s=video.pause_s,
+        font_path=settings.media.font_path,
     )
 
 

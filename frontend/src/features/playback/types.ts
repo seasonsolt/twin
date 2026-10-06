@@ -17,6 +17,7 @@ export interface MediaScript {
 
 export interface Capabilities {
   available: boolean;
+  video?: { available: boolean };
   backend: string | null;
   label: string;
   avatar?: AvatarSpec;

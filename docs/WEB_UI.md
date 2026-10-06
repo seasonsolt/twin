@@ -147,14 +147,19 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
 | `POST /api/persona/questionnaire/submit` | 初次导入并尝试构建；重测仅记录 |
 | `GET /api/identity` | name/aliases/voice/avatar/egress；无授权账本 |
-| `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null |
+| `GET /api/media/capabilities` | available/backend/label/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null |
 | `GET /api/media/avatar.vrm` | 配置的本地 VRM 流，model/gltf-binary、no-cache；未配置中文 JSON 404 |
 | `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}` |
 | `GET /api/media/audio/{name}` | SHA-256 命名 WAV/MP3 分片，验证目录边界 |
+| `POST /api/media/video` | 与 clip 相同的请求体，返回 `{job_id}`；弃权回答 400，未配置 503 |
+| `GET /api/media/video/jobs/{job_id}` | 视频专用 JobManager 的任务状态；done 结果 `{file, duration_s, warnings}`，重启清空 |
+| `GET /api/media/video/{name}` | 64 位十六进制文件名的 MP4 流，校验目录与符号链接；video/mp4、X-AI-Generated: twin、private/no-store；不存在 404 |
 
 任务状态 queued/running/done/failed，日志最近 500 行，里程碑另存；人格构建互斥，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
 
 回放面板在 HTML“导出”旁提供“导出视频”：显示加载状态，下载 `twin-media.mp4`，失败显示中文 toast；标识仍只来自 API。`POST /api/media/clip` 同步返回 `video/mp4`，`Content-Disposition: attachment`、`X-AI-Generated: twin`；复用现有安全与请求体限制，脚本最多 100,000 字符、视频最多 600 秒。需系统 ffmpeg 与中文字体（见 [MEDIA.md](MEDIA.md)），临时 MP4 在响应完成后清理。
+
+配置 `[video]` 后，回放面板另显示“生成真人视频”（弃权时隐藏）。先确认“在本人 GPU 主机上生成，通常需要几分钟”，再用 JobProgress 展示串行后台任务；每秒轮询视频专用任务接口，关闭面板取消请求和计时器，不取消远端任务。完成后内联 `<video controls>` 及下载链接，超阈值分段显示“第 N 句回听与原文有出入”（开头提示单独提示），不展示识别文本。标签仅从 API 读取。远端 JSON 契约和本地永久标识见 [MEDIA.md](MEDIA.md#34-本人视频通道v2)。
 
 脚本与独立 HTML 导出不调用模型，音频与视频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含 AI 标识和来源指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息。
 

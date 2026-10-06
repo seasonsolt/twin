@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import secrets
 import tempfile
 import threading
 from collections.abc import Callable
@@ -18,7 +19,7 @@ from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from ..config import Settings, make_synthesizer
+from ..config import Settings, make_synthesizer, make_video_synthesizer
 from ..media.adapters import presentable_from_payload
 from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
@@ -32,9 +33,12 @@ from ..media.tts import (
     MediaUnavailable,
     SpeechSynthesizer,
 )
+from ..media.video import VideoSynthesizer
 from ..util import private_directory
+from .jobs import JobError, JobManager
 
 AUDIO_NAME = re.compile(r"[0-9a-f]{64}\.(wav|mp3)")
+VIDEO_NAME = re.compile(r"[0-9a-f]{64}\.mp4")
 
 
 class PrivateAudioMiddleware:
@@ -84,6 +88,7 @@ def register(
     app: FastAPI,
     settings: Settings,
     synthesizer_factory: Callable[[], SpeechSynthesizer] | None = None,
+    video_factory: Callable[[], VideoSynthesizer | None] | None = None,
 ) -> None:
     """Register under the application's existing security middleware with lazy speech."""
     app.add_middleware(PrivateAudioMiddleware)
@@ -91,6 +96,9 @@ def register(
     factory = synthesizer_factory or (lambda: make_synthesizer(settings.tts))
     synthesizer: SpeechSynthesizer | None = None
     lock = threading.Lock()
+    video_jobs = JobManager(1, lambda _: "视频生成失败，请检查 [video]、ffmpeg 和字体配置")
+    video = video_factory or (lambda: make_video_synthesizer(settings))
+    video_available = video_factory is not None or settings.video.provider == "remote"
 
     def speech() -> SpeechSynthesizer:
         nonlocal synthesizer
@@ -129,6 +137,7 @@ def register(
             return {
                 "avatar": avatar,
                 "avatar_model": avatar_model,
+                "video": {"available": video_available},
                 "available": False,
                 "backend": None,
                 "label": EXPLICIT_LABEL,
@@ -139,6 +148,7 @@ def register(
         return {
             "avatar": avatar,
             "avatar_model": avatar_model,
+            "video": {"available": video_available},
             "available": synth.name != "silent",
             "backend": synth.name,
             "label": EXPLICIT_LABEL,
@@ -227,6 +237,58 @@ def register(
             if isinstance(exc, OSError):
                 raise MediaUnavailable("无法保存视频文件") from None
             raise
+
+    @app.post("/api/media/video")
+    def submit_video(body: MediaBody) -> dict[str, str]:
+        script = make_script(body)
+        if script.abstain:
+            raise HTTPException(400, "分身已弃权，不能生成讲述视频")
+        if not video_available:
+            raise HTTPException(503, "视频未配置，请设置 [video]")
+
+        def generate(log: Callable[[str], None]) -> dict[str, Any]:
+            name = f"{secrets.token_hex(32)}.mp4"
+            path = cache_dir / name
+            try:
+                synth = video()
+                if synth is None:
+                    raise MediaUnavailable("视频未配置")
+                private_directory(cache_dir)
+                cache_dir.chmod(0o700)
+                log("正在生成视频，通常需要几分钟")
+                result = synth.synthesize(script, path)
+                path.chmod(0o600)
+                return {"file": name, "duration_s": result.duration_s, "warnings": result.warnings}
+            except Exception:
+                path.unlink(missing_ok=True)
+                # JobManager logs exceptions; never let transport responses or personal text escape.
+                raise JobError("视频生成失败，请检查视频和媒体配置") from None
+
+        job = video_jobs.submit("chat", "生成真人视频", generate)
+        return {"job_id": job.job_id}
+
+    @app.get("/api/media/video/jobs/{job_id}")
+    def video_job(job_id: str) -> dict[str, Any]:
+        snapshot = video_jobs.snapshot(job_id)
+        if snapshot is None:
+            raise HTTPException(404, "找不到视频任务，服务重启后记录会清空")
+        return {**snapshot, "kind": "video", "kind_label": "生成真人视频"}
+
+    @app.get("/api/media/video/{name}")
+    def video_file(name: str) -> FileResponse:
+        if VIDEO_NAME.fullmatch(name) is None:
+            raise HTTPException(404, "找不到视频文件")
+        try:
+            directory = cache_dir.resolve()
+            candidate = directory / name
+            path = candidate.resolve()
+            if candidate.is_symlink() or not path.is_relative_to(directory) or not path.is_file():
+                raise HTTPException(404, "找不到视频文件")
+        except (OSError, RuntimeError):
+            raise HTTPException(404, "找不到视频文件") from None
+        return FileResponse(
+            path, media_type="video/mp4", headers={"X-AI-Generated": "twin", "Cache-Control": "private, no-store"}
+        )
 
     @app.post("/api/media/export", response_class=HTMLResponse)
     def export(body: MediaBody) -> HTMLResponse:

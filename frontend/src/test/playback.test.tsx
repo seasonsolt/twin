@@ -107,6 +107,8 @@ let scriptFail = false;
 let exportFail = false;
 let failPlay = false;
 let frameId = 0;
+let remoteAvailable = false;
+let remoteDone = false;
 beforeEach(() => {
   vi.mocked(useReducedMotion).mockReturnValue(false);
   useStatus.setState({ data: null, error: null });
@@ -115,6 +117,8 @@ beforeEach(() => {
   exportFail = false;
   failPlay = false;
   paused = true;
+  remoteAvailable = false;
+  remoteDone = false;
   fetchMock = vi.fn(async (url: string) => {
     if (url === '/api/media/script')
       return scriptFail ? json({ detail: '无法准备回放' }, 400) : json(script);
@@ -122,8 +126,24 @@ beforeEach(() => {
       return json({
         available: true,
         backend: 'mock-tts',
+        video: { available: remoteAvailable },
         label: 'API能力标识',
         avatar: spec,
+      });
+    if (url === '/api/media/video') return json({ job_id: 'j_video_test' });
+    if (url === '/api/media/video/jobs/j_video_test')
+      return json({
+        job_id: 'j_video_test',
+        kind: 'video',
+        status: remoteDone ? 'done' : 'running',
+        progress: ['正在生成视频'],
+        result: remoteDone
+          ? {
+              file: `${'a'.repeat(64)}.mp4`,
+              duration_s: 3,
+              warnings: ['s02: cer=0.1'],
+            }
+          : null,
       });
     if (url === '/api/media/audio')
       return voiceFail
@@ -225,6 +245,66 @@ function tick() {
     callbacks.forEach(([, callback]) => callback(0));
   });
 }
+it('confirms remote video, shows job progress, then inline video and read-back warnings', async () => {
+  remoteAvailable = true;
+  await open();
+  fireEvent.click(await screen.findByRole('button', { name: '生成真人视频' }));
+  expect(
+    screen.getByText('在本人 GPU 主机上生成，通常需要几分钟'),
+  ).toBeVisible();
+  expect(fetchMock.mock.calls.some(([url]) => url === '/api/media/video')).toBe(
+    false,
+  );
+  fireEvent.click(screen.getByRole('button', { name: '确认生成' }));
+  await screen.findByText('正在生成视频');
+  expect(
+    fetchMock.mock.calls.filter(([url]) => url === '/api/media/video'),
+  ).toHaveLength(1);
+  remoteDone = true;
+  const video = await screen.findByLabelText(
+    '带标识的真人视频',
+    {},
+    { timeout: 2500 },
+  );
+  expect(video.tagName).toBe('VIDEO');
+  expect(video).toHaveAttribute('controls');
+  expect(video).toHaveAttribute(
+    'src',
+    `/api/media/video/${'a'.repeat(64)}.mp4`,
+  );
+  expect(
+    screen.getByRole('link', { name: '下载视频（3 秒）' }),
+  ).toHaveAttribute('download', 'twin-video.mp4');
+  expect(screen.getByText('第 1 句回听与原文有出入')).toBeVisible();
+  expect(screen.getAllByText('API能力标识').length).toBeGreaterThan(0);
+});
+
+it('does not offer remote video when disabled or abstained; cancelling sends no job', async () => {
+  const first = await open();
+  expect(
+    screen.queryByRole('button', { name: '生成真人视频' }),
+  ).not.toBeInTheDocument();
+  first.unmount();
+  remoteAvailable = true;
+  const second = await open();
+  fireEvent.click(await screen.findByRole('button', { name: '生成真人视频' }));
+  fireEvent.click(screen.getByRole('button', { name: '取消' }));
+  expect(fetchMock.mock.calls.some(([url]) => url === '/api/media/video')).toBe(
+    false,
+  );
+  second.unmount();
+  const original = script.abstain;
+  script.abstain = true;
+  try {
+    await open({ ...answer, abstain: true });
+    expect(
+      screen.queryByRole('button', { name: '生成真人视频' }),
+    ).not.toBeInTheDocument();
+  } finally {
+    script.abstain = original;
+  }
+});
+
 it('opens with API labels and opening notice, supports Space/arrows/Escape and restores trigger focus', async () => {
   await useStatus.getState().refresh();
   await open();

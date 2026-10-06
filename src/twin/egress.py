@@ -8,7 +8,7 @@ from .config import BackendSettings, Settings, egress_of
 
 
 def configured_backends(settings: Settings) -> list[BackendSettings]:
-    return [settings.llm, settings.embed, settings.tts, settings.asr, *settings.judges]
+    return [settings.llm, settings.embed, settings.tts, settings.asr, settings.video, *settings.judges]
 
 
 def egress_status(settings: Settings) -> list[dict[str, Any]]:

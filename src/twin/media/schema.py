@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from pathlib import Path
 from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -269,6 +270,26 @@ class Transcription(BaseModel):
     language: str | None = None
     duration_s: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     extras: dict[str, str] = Field(default_factory=dict)
+
+
+class VideoSegment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = SCHEMA_VERSION
+    id: str = Field(pattern=r"^s[0-9]+$")
+    text: str
+    heard: str
+    cer: float = Field(ge=0, allow_inf_nan=False)
+
+
+class VideoResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = SCHEMA_VERSION
+    output: Path
+    duration_s: float = Field(ge=0, allow_inf_nan=False)
+    segments: list[VideoSegment] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ASRCapabilities(BaseModel):

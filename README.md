@@ -131,6 +131,7 @@ API/MCP 配置、接口与隐私规则见 [docs/SERVICE.md](docs/SERVICE.md)。
 ```bash
 twin media speak 回复.json --out 音频目录/            # 带标识的分段语音和清单
 twin media clip 回复.json --out clip.mp4              # 形象、字幕与标识；需系统 ffmpeg 和中文字体
+twin media video 回复.json --out out.mp4              # [video] 通用 SSH 视频任务；常驻标识，见 docs/MEDIA.md
 twin media check --out 评测目录/                      # 合成句集回听评测：字错率与延迟
 ```
 

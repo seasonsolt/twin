@@ -67,6 +67,10 @@ api_key_env = "TWIN_EMBED_KEY"
 # token_env = "TWIN_API_TOKEN"
 # rate_per_minute = 30 # 每个令牌每分钟最多请求数（滑动窗口）。
 
+# [video] # 可选真人视频通道，默认关闭
+# provider = "remote" # 仅执行配置的 SSH 任务
+# host 与 command 必须同时配置；出境声明与契约见 docs/MEDIA.md
+
 # [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
 # preset = "default" # 可选 default、ink、dawn。
 
@@ -416,7 +420,7 @@ def identity_show(ctx: typer.Context) -> None:
     _say(f"形象：{identity.avatar}（风格化插画，不使用照片）")
     _say("出境：类型 | 提供方 | 主机 | 本机/外部 | 声明/推断")
     for index, row in enumerate(egress_status(settings)):
-        kind = row["kind"] if index < 4 else f"llm（评委 {index - 3}）"
+        kind = row["kind"] if index < 5 else f"llm（评委 {index - 4}）"
         _say(
             f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
             f"{'外部' if row['external'] else '本机'} | {'声明' if row['declared'] else '推断'}"
@@ -741,6 +745,38 @@ def media_clip_command(
         except MediaError as exc:
             raise _fail(str(exc)) from None
     _say(f"已写入 {out}")
+
+
+@media_app.command("video")
+def media_video_command(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(help="已保存的 ChatReply JSON")],
+    out: Annotated[Path, typer.Option("--out", help="带标识的 MP4 输出（仅本人可读写）")],
+    kind: Annotated[str, typer.Option("--kind", help="chat_reply")] = "chat_reply",
+    name: Annotated[str | None, typer.Option("--name", help="默认配置中的目标人物")] = None,
+) -> None:
+    """Generate a labelled video through a configured, generic remote job."""
+    from .config import make_video_synthesizer
+    from .media.tts import MediaError
+
+    with _errors():
+        try:
+            script = _media_source(ctx, source, kind, name)
+        except (ValueError, OSError):
+            raise _fail("无法读取回答，请检查输入文件是否为有效的 ChatReply JSON") from None
+        try:
+            synthesizer = make_video_synthesizer(_settings(ctx))
+            if synthesizer is None:
+                raise _fail("视频未配置，请先设置 [video]")
+            result = synthesizer.synthesize(script, out)
+        except MediaError as exc:
+            raise _fail(str(exc)) from None
+    _say(f"已写入 {out}，时长 {result.duration_s:g} 秒")
+    for segment in result.segments:
+        if segment.cer > _settings(ctx).video.max_cer:
+            _say(f"回听警告：{segment.id} cer={segment.cer:g}")
+    if result.warnings and not any(s.cer > _settings(ctx).video.max_cer for s in result.segments):
+        _say("视频生成有提示，请检查回听结果")
 
 
 @media_app.command("check", help="合成句集回听评测：字错率、延迟与后端指纹。")

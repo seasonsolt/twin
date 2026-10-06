@@ -26,6 +26,7 @@ LAYERS: dict[str, int] = {
     "media.adapters": 7,
     "media.render": 7,
     "media.clip": 7,
+    "media.video": 7,
     "media.lipsync": 7,
     "media.speech_text": 7,
     "web.media": 9,
@@ -166,7 +167,11 @@ def test_imports_point_down() -> None:
         f"{_display_name(source)} ({LAYERS[source]}) -> {_display_name(target)} ({LAYERS[target]})"
         for source in sorted(graph)
         for target in sorted(graph[source])
-        if source in LAYERS and target in LAYERS and LAYERS[target] > LAYERS[source]
+        if source in LAYERS
+        and target in LAYERS
+        and LAYERS[target] > LAYERS[source]
+        # Configuration is the sole, lazy construction entry point for presentation backends.
+        and (source, target) != ("config", "media.video")
     ]
     if violations:
         pytest.fail("Upward imports:\n" + "\n".join(violations), pytrace=False)

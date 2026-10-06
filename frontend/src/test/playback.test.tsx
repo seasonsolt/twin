@@ -279,6 +279,31 @@ it('confirms remote video, shows job progress, then inline video and read-back w
   expect(screen.getAllByText('API能力标识').length).toBeGreaterThan(0);
 });
 
+it('shows the video job error unchanged without a chat or duplicate prefix', async () => {
+  remoteAvailable = true;
+  const message =
+    '生成视频失败：视频生成失败，请检查 [video]、ffmpeg 和字体配置';
+  const defaultFetch = fetchMock.getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation(async (url: string) =>
+    url === '/api/media/video/jobs/j_video_test'
+      ? json({
+          job_id: 'j_video_test',
+          kind: 'video',
+          status: 'failed',
+          error: message,
+        })
+      : defaultFetch(url),
+  );
+  await open();
+  fireEvent.click(await screen.findByRole('button', { name: '生成真人视频' }));
+  fireEvent.click(screen.getByRole('button', { name: '确认生成' }));
+  expect(await screen.findByText(message, { exact: true })).toBeVisible();
+  expect(screen.queryByText(/和分身聊天失败/)).not.toBeInTheDocument();
+  expect(screen.queryByText(`任务失败：${message}`)).not.toBeInTheDocument();
+});
+
 it('does not offer remote video when disabled or abstained; cancelling sends no job', async () => {
   const first = await open();
   expect(

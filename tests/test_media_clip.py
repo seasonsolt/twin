@@ -94,8 +94,71 @@ def test_missing_ffmpeg_is_chinese_and_does_not_synthesize(monkeypatch: pytest.M
     assert not (tmp_path / "media-cache").exists()
 
 
+@pytest.mark.parametrize("filename", clip.FONT_PATHS)
+def test_font_candidates(monkeypatch: pytest.MonkeyPatch, filename: str) -> None:
+    monkeypatch.setattr(Path, "is_file", lambda path: str(path) == filename)
+    monkeypatch.setattr(clip.shutil, "which", lambda _: pytest.fail("candidate must precede fc-match"))
+    assert clip._font_path(None) == Path(filename)
+
+
+def test_explicit_font_precedes_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "is_file", lambda _: True)
+    monkeypatch.setattr(clip.shutil, "which", lambda _: pytest.fail("explicit font must precede fc-match"))
+    assert clip._font_path("~/chosen.ttc") == Path("~/chosen.ttc").expanduser()
+
+
+@pytest.mark.parametrize("first", ["valid", "missing", "empty", "directory", "timeout", "error", "oserror"])
+def test_fontconfig_discovery(monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+    monkeypatch.setattr(clip, "FONT_PATHS", ())
+    monkeypatch.setattr(clip.shutil, "which", lambda name: "/bin/fc-match" if name == "fc-match" else None)
+    monkeypatch.setattr(Path, "exists", lambda path: str(path) in {"/fonts/cjk.ttc", "/fonts/fallback.ttc", "/fonts"})
+    monkeypatch.setattr(Path, "is_file", lambda path: str(path) in {"/fonts/cjk.ttc", "/fonts/fallback.ttc"})
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert kwargs == {"capture_output": True, "text": True, "check": True, "timeout": 2}
+        calls.append(command)
+        if len(calls) == 1:
+            if first == "timeout":
+                raise subprocess.TimeoutExpired(command, 2)
+            if first == "error":
+                raise subprocess.CalledProcessError(1, command)
+            if first == "oserror":
+                raise OSError("unavailable")
+            output = {"valid": "/fonts/cjk.ttc\n", "missing": "/missing.ttc", "empty": "", "directory": "/fonts"}[first]
+        else:
+            output = "/fonts/fallback.ttc\n"
+        return subprocess.CompletedProcess(command, 0, stdout=output)
+
+    monkeypatch.setattr(clip.subprocess, "run", run)
+    assert clip._font_path(None) == Path("/fonts/cjk.ttc" if first == "valid" else "/fonts/fallback.ttc")
+    assert calls == [
+        ["/bin/fc-match", "-f", "%{file}", pattern]
+        for pattern in (
+            ["Noto Sans CJK SC:style=Regular"] if first == "valid" else ["Noto Sans CJK SC:style=Regular", ":lang=zh"]
+        )
+    ]
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_fontconfig_without_existing_fonts(monkeypatch: pytest.MonkeyPatch, available: bool) -> None:
+    monkeypatch.setattr(clip, "FONT_PATHS", ())
+    monkeypatch.setattr(clip.shutil, "which", lambda _: "/bin/fc-match" if available else None)
+    monkeypatch.setattr(Path, "exists", lambda _: False)
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="/missing.ttc")
+
+    monkeypatch.setattr(clip.subprocess, "run", run)
+    with pytest.raises(MediaError, match="找不到中文字体"):
+        clip._font_path(None)
+    assert len(calls) == (2 if available else 0)
+
+
 def test_missing_font_is_chinese(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(clip.shutil, "which", lambda _: "/fake/ffmpeg")
+    monkeypatch.setattr(clip.shutil, "which", lambda name: "/fake/ffmpeg" if name == "ffmpeg" else None)
     monkeypatch.setattr(clip, "FONT_PATHS", ())
     with pytest.raises(MediaError, match=r"找不到中文字体.*\[media\] font_path"):
         clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["default"], tmp_path / "clip.mp4")

@@ -28,7 +28,7 @@ from typing import Any, Literal
 from ..embed import EmbedError
 from ..llm import LLMError
 
-JobKind = Literal["persona_build", "chat"]
+JobKind = Literal["persona_build", "chat", "video"]
 JobStatus = Literal["queued", "running", "done", "failed"]
 Log = Callable[[str], None]
 JobFn = Callable[[Log], object]
@@ -36,6 +36,7 @@ JobFn = Callable[[Log], object]
 JOB_LABELS: dict[JobKind, str] = {
     "persona_build": "构建人格档案",
     "chat": "和分身聊天",
+    "video": "生成视频",
 }
 EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
 MAX_PROGRESS_LINES = 500

@@ -18,6 +18,7 @@ export interface Job<Result = unknown> {
 export const jobLabels: Record<string, string> = {
   persona_build: '构建人格档案',
   chat: '和分身聊天',
+  video: '生成视频',
 };
 export const statusLabels = {
   queued: '排队中',

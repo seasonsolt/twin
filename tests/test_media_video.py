@@ -441,6 +441,9 @@ def test_disabled_web_and_failed_jobs_are_generic(tmp_path: Path, caplog: pytest
                 break
             time.sleep(0.01)
         assert job["status"] == "failed" and SECRET not in str(job)
+        assert job["kind"] == "video"
+        assert job["error"] == "生成视频失败：视频生成失败，请检查 [video]、ffmpeg 和字体配置"
+        assert "和分身聊天" not in job["error"]
         assert SECRET not in caplog.text
 
 

@@ -18,7 +18,9 @@ from .tts import MediaError, MediaInputTooLong, SpeechSynthesizer
 FONT_PATHS = (
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
     "/System/Library/Fonts/STHeiti Light.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 )
 OPENING_SECONDS = 2
@@ -30,6 +32,23 @@ def _font_path(font_path: str | Path | None) -> Path:
     for path in candidates:
         if path.is_file():
             return path
+    if font_path is None and (fc_match := shutil.which("fc-match")):
+        for pattern in ("Noto Sans CJK SC:style=Regular", ":lang=zh"):
+            try:
+                result = subprocess.run(
+                    [fc_match, "-f", "%{file}", pattern],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            filename = result.stdout.strip()
+            if filename:
+                path = Path(filename)
+                if path.exists() and path.is_file():
+                    return path
     raise MediaError("找不到中文字体，请设置 [media] font_path 指向中文字体文件")
 
 

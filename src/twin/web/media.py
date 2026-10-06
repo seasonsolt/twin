@@ -264,7 +264,7 @@ def register(
                 # JobManager logs exceptions; never let transport responses or personal text escape.
                 raise JobError("视频生成失败，请检查视频和媒体配置") from None
 
-        job = video_jobs.submit("chat", "生成真人视频", generate)
+        job = video_jobs.submit("video", "生成真人视频", generate)
         return {"job_id": job.job_id}
 
     @app.get("/api/media/video/jobs/{job_id}")

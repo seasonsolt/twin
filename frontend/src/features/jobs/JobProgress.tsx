@@ -157,7 +157,8 @@ export function JobProgress({
         <div role="alert" className="space-y-2 text-sm text-danger">
           <p>
             {error ||
-              `${jobLabels[job?.kind ?? ''] || '任务'}失败：${job?.error || '任务失败'}`}
+              job?.error ||
+              `${jobLabels[job?.kind ?? ''] || '任务'}失败：任务失败`}
           </p>
           {job?.status === 'failed' && (
             <p className="text-secondary">{failureHint}</p>

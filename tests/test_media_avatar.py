@@ -125,7 +125,7 @@ def test_config_rejects_nonpreset(preset: str) -> None:
         AvatarSettings(preset=preset)
     message = str(error.value)
     assert all(name in message for name in AVATAR_PRESETS)
-    assert "不支持照片或视频输入" in message and "M4" in message
+    assert "形象仅支持预置" in message
     assert Settings().avatar.preset == "default"
 
 
@@ -211,6 +211,6 @@ def test_identity_show_and_init_template(tmp_path: Path) -> None:
     example = (Path(__file__).resolve().parents[1] / "twin.toml.example").read_text(encoding="utf-8")
     for template in (CONFIG_TEMPLATE, example):
         assert (
-            "# [avatar] # 风格化插画，不支持照片或视频输入（M4 门槛）。\n"
+            "# [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。\n"
             '# preset = "default" # 可选 default、ink、dawn。' in template
         )

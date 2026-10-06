@@ -20,7 +20,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   `granted`、`from_parts` 和 `PersonaStore` 的授权读写方法。不再创建 `p_consent`；已有表不读取、不删除。
 - `consented_facets` 仅由问卷推导：非 gated facet 始终允许；gated facet 必须回答且未拒绝。
   保留 `Source.declined_facets`；跨来源的拒绝优先于回答。问卷变化后重建档案并清理对应条目向量。
-- 生物特征规则仅作配置/后端预置音色校验：不支持真人声音复刻或照片驱动形象，形象必须为预置。
+- 音色校验仅是后端预置音色的格式与列表检查；2D 形象必须为预置，3D 形象由 `vrm_path` 指定。
 - `twin identity show` 显示名字、别名、预置音色、预置形象与出境表（类型、提供方、主机、本机/外部、声明/推断）。
   `GET /api/identity` 返回 name/aliases/voice/avatar/egress，不再返回 consents 或 biometric；
   移除 CLI grant/revoke 和 `POST /api/identity/consent`。细项未授权状态仍在档案/覆盖页面展示。
@@ -260,7 +260,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
 - `AudioPart.lipsync: LipSyncTrack | None = None` is append-only; old manifests load with null tracks
   and display an idle avatar. HTTP audio segments carry the same nullable track.
 - `Settings.avatar` defaults to `AvatarSettings(preset="default")`; unknown presets produce a Chinese
-  preset list and photo/video prohibition (M4). Capabilities always include the selected `AvatarSpec`,
+  preset list. Capabilities always include the selected `AvatarSpec`,
   even when speech is unavailable. `frontend/src/features/playback/Avatar.tsx` renders inline SVG with a
   permanent `spec.label` badge and no asset inputs.
   Playback samples the current part by audio time; pause/stop/text-only closes the mouth, close releases
@@ -271,7 +271,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, s
 - `create_app(..., synthesizer_factory=...)` lazily defaults to `config.make_synthesizer(settings.tts)`.
   `silent` declares speech unavailable in the UI; HTTP capabilities expose backend, AI label, languages and formats.
 - `TTSSettings.voice` accepts only preset IDs matching `^[A-Za-z0-9_.-]{1,64}$` (not `.` / `..`), rejecting
-  paths, URLs and data references with a Chinese preset-only / M4 error.
+  paths, URLs and data references with a Chinese preset-only error.
   `SynthCapabilities.voices: list[str] | None = None` is additive; `None` means enumeration is unsupported,
   an empty list means no presets. Silent and Cloudflare declare `["default"]` and validate at construction;
   Cloudflare does not support speaker selection.

@@ -104,9 +104,6 @@ export function Identity() {
           </Card>
         </>
       )}
-      <p className="text-sm text-secondary">
-        本版本不支持真人声音复刻或照片驱动形象。
-      </p>
     </div>
   );
 }

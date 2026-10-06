@@ -74,9 +74,7 @@ class TTSSettings(BaseModel):
     @classmethod
     def preset_voice(cls, value: str) -> str:
         if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value) is None or value in {".", ".."}:
-            raise ValueError(
-                "仅支持预置音色 ID（1–64 位字母、数字、下划线、点或连字符）；本版本禁止声音复刻（M4 门槛）"
-            )
+            raise ValueError("仅支持预置音色 ID（1–64 位字母、数字、下划线、点或连字符）")
         return value
 
 
@@ -114,7 +112,7 @@ class AvatarSettings(BaseModel):
     @classmethod
     def stylized_preset(cls, value: str) -> str:
         if value not in AVATAR_PRESETS:
-            raise ValueError(f"形象仅支持预置：{'、'.join(AVATAR_PRESETS)}；不支持照片或视频输入（M4 门槛）")
+            raise ValueError(f"形象仅支持预置：{'、'.join(AVATAR_PRESETS)}")
         return value
 
 

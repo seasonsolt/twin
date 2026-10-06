@@ -124,7 +124,7 @@ PlaybackDialog 使用 `features/playback/usePlayback.ts` 和 `Avatar.tsx`。先�
 
 问卷按 API section 分组，用 FlowStepper 导航到首个未答组；可跳过题清空答案，空答案不计已答。草稿 800ms 防抖、版本化串行 PUT；提交等待保存成功，需确认且说明替换、授权与测试题留出规则。离页完成待写草稿，小于 60KB 时尽力 keepalive，不另存个人答案。仅未保存且写入中的离开才警告。重测只恢复答案和提交状态，无评分、不构建。
 
-身份页独立读取 identity 与 media capabilities，逐行原样展示 kind/provider/host/external/declared，含评委。预览失败不影响身份表；形象闭口、减少动态效果不眨眼。不支持真人声音复刻或照片驱动形象，由配置校验保证。
+身份页独立读取 identity 与 media capabilities，逐行原样展示 kind/provider/host/external/declared，含评委。预览失败不影响身份表；形象闭口、减少动态效果不眨眼。
 
 ## API 与任务契约
 

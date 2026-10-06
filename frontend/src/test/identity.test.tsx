@@ -113,9 +113,6 @@ it('renders configured identity, exact API egress kinds/providers/hosts and a cl
   expect(avatar).toHaveAttribute('data-mouth-level', '0');
   expect(avatar.querySelector('rect')).toHaveAttribute('fill', '#fedcba');
   expect(screen.getByText('API形象专属标签')).toBeVisible();
-  expect(
-    screen.getByText('本版本不支持真人声音复刻或照片驱动形象。'),
-  ).toBeVisible();
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   expect(
     fetcher.mock.calls.every(([, options]) => options.method === 'GET'),

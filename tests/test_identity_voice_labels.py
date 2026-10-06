@@ -74,7 +74,7 @@ def test_voice_paths_urls_and_data_are_rejected_in_chinese(voice: str) -> None:
     with pytest.raises(ValidationError) as caught:
         TTSSettings(voice=voice)
     message = caught.value.errors(include_input=False)[0]["msg"]
-    assert "仅支持预置音色" in message and "禁止声音复刻" in message
+    assert "仅支持预置音色" in message
 
 
 @pytest.mark.parametrize("provider", ["silent", "cloudflare"])
@@ -212,7 +212,7 @@ def test_identity_voice_is_additive_and_cli_reads_configuration(tmp_path: Path) 
     config.write_text('target_name = "虚构人物"\ndb_path = "identity.db"\n[tts]\nvoice = "Junhao"\n', encoding="utf-8")
     result = CliRunner().invoke(cli, ["--config", str(config), "identity", "show"])
     assert result.exit_code == 0, result.exception
-    assert "音色：Junhao（预置音色；声音复刻与照片驱动形象在本版本禁止）" in result.stdout
+    assert "音色：Junhao（预置音色）" in result.stdout
 
 
 def test_literal_contracts_match_label_source() -> None:

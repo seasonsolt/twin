@@ -67,7 +67,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # token_env = "TWIN_API_TOKEN"
 # rate_per_minute = 30 # 每个令牌每分钟最多请求数（滑动窗口）。
 
-# [avatar] # 风格化插画，不支持照片或视频输入（M4 门槛）。
+# [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
 # preset = "default" # 可选 default、ink、dawn。
 
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
@@ -412,7 +412,7 @@ def identity_show(ctx: typer.Context) -> None:
     )
     _say(f"名字：{identity.name}")
     _say(f"别名：{'、'.join(identity.aliases) or '—'}")
-    _say(f"音色：{identity.voice}（预置音色；声音复刻与照片驱动形象在本版本禁止）")
+    _say(f"音色：{identity.voice}（预置音色）")
     _say(f"形象：{identity.avatar}（风格化插画，不使用照片）")
     _say("出境：类型 | 提供方 | 主机 | 本机/外部 | 声明/推断")
     for index, row in enumerate(egress_status(settings)):

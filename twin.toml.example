@@ -26,7 +26,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # token_env = "TWIN_API_TOKEN"
 # rate_per_minute = 30 # 每个令牌每分钟最多请求数（滑动窗口）。
 
-# [avatar] # 风格化插画，不支持照片或视频输入（M4 门槛）。
+# [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
 # preset = "default" # 可选 default、ink、dawn。
 # vrm_path = "/path/to/stylized.vrm" # 可选本地风格化 3D 模型，≤ 64 MB；不提交模型文件。
 

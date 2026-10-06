@@ -34,7 +34,21 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
             voice=settings.tts.voice,
             avatar=settings.avatar.preset,
         )
-        return {**identity.model_dump(), "egress": egress_status(settings, external_only=True)}
+        onboarding_pending = False
+        if settings.db_path.is_file():
+            with PersonaStore(settings.db_path) as store:
+                onboarding_pending = store.get_meta("onboarding_pending") == "1"
+        return {
+            **identity.model_dump(),
+            "egress": egress_status(settings, external_only=True),
+            **({"onboarding_pending": True} if onboarding_pending else {}),
+        }
+
+    @app.post("/api/identity/onboarding-complete")
+    def complete_onboarding() -> dict[str, bool]:
+        with PersonaStore(settings.db_path) as store:
+            store.set_meta("onboarding_pending", "0")
+        return {"completed": True}
 
     @app.put("/api/identity")
     def put_identity(body: IdentityBody) -> dict[str, Any]:

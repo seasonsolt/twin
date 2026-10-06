@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import mimetypes
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from ..persona.store import PersonaStore, stored_identity
 from . import assets, media, persona
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
+from .personas import PersonaMiddleware, Personas
 
 STATIC_DIR = Path(__file__).with_name("static")
 # StaticFiles takes content types from the platform's mimetypes table, which on Windows comes from the registry and can
@@ -247,9 +249,14 @@ def create_app(
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
     backends = Backends(settings, llm_factory, embedder_factory)
     jobs = JobManager(settings.max_workers, describe_error)
+    registry = Personas(settings, jobs)
+    app.state.personas = registry
+    app.add_middleware(PersonaMiddleware, registry=registry)
     app.add_middleware(
         SecurityMiddleware, allowed_hosts=LOOPBACK_HOSTS | {_allowed_form(h) for h in allowed_hosts if h.strip()}
     )
+
+    app.add_middleware(media.PrivateAudioMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -283,35 +290,77 @@ def create_app(
     async def too_many_jobs(request: Request, exc: TooManyJobs) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=429)
 
-    @app.get("/api/status")
-    def get_status() -> dict[str, Any]:
-        with PersonaStore(settings.db_path) as store:
-            counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
-            egress = egress_status(settings, external_only=True)
-        description = backends.describe()
-        name = stored_identity(settings.db_path)[0] or settings.target_name
-        return {
-            "target_name": name,
-            "counts": counts,
-            "llm": {"provider": settings.llm.provider, "model": settings.llm.model, **description["llm"]},
-            "embed": {"provider": settings.embed.provider, **description["embed"]},
-            "egress": egress,
-        }
+    def persona_app(persona_id: str, resolved: Settings) -> FastAPI:
+        context = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        context.exception_handlers.update(app.exception_handlers)
 
-    @app.get("/api/jobs")
-    def get_jobs() -> list[dict[str, Any]]:
-        return jobs.recent()
+        @context.exception_handler(Exception)
+        async def internal_error(request: Request, exc: Exception) -> JSONResponse:
+            return JSONResponse({"detail": f"服务器内部错误：{describe_error(exc)}"}, status_code=500)
 
-    @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str) -> dict[str, Any]:
-        snapshot = jobs.snapshot(job_id)
-        if snapshot is None:
-            raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}（服务重启后任务记录会清空）")
-        return snapshot
+        scoped_jobs = jobs.scoped(persona_id)
 
-    persona.register(app, settings, backends, jobs, persona.read_uploads)
-    assets.register(app, settings)
-    media.register(app, settings, synthesizer_factory)
+        @context.exception_handler(JobConflict)
+        async def scoped_conflict(request: Request, exc: JobConflict) -> JSONResponse:
+            if exc.job.persona_id != persona_id:
+                return JSONResponse({"detail": "另一个分身正在处理记忆，请稍后重试"}, status_code=409)
+            return await job_conflict(request, exc)
+
+        @context.get("/api/status")
+        def get_status() -> dict[str, Any]:
+            with PersonaStore(resolved.db_path) as store:
+                counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
+                egress = egress_status(resolved, external_only=True)
+            description = backends.describe()
+            name = stored_identity(resolved.db_path)[0] or resolved.target_name
+            return {
+                "target_name": name,
+                "counts": counts,
+                "llm": {"provider": resolved.llm.provider, "model": resolved.llm.model, **description["llm"]},
+                "embed": {"provider": resolved.embed.provider, **description["embed"]},
+                "egress": egress,
+            }
+
+        @context.get("/api/jobs")
+        def get_jobs() -> list[dict[str, Any]]:
+            return scoped_jobs.recent()
+
+        @context.get("/api/jobs/{job_id}")
+        def get_job(job_id: str) -> dict[str, Any]:
+            snapshot = scoped_jobs.snapshot(job_id)
+            if snapshot is None:
+                raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}（服务重启后任务记录会清空）")
+            return snapshot
+
+        persona.register(context, resolved, backends, scoped_jobs, persona.read_uploads)
+        assets.register(context, resolved)
+        media.register(
+            context,
+            resolved,
+            synthesizer_factory,
+            jobs=scoped_jobs,
+            name_factory=lambda: stored_identity(resolved.db_path)[0] or resolved.target_name,
+        )
+        return context
+
+    registry.make_app = persona_app
+    registry.register(app)
+    previous_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(previous_lifespan(application))
+            for entry in registry.data["personas"]:
+                context = registry.application(entry["id"])
+                await stack.enter_async_context(context.router.lifespan_context(context))
+            try:
+                yield
+            finally:
+                for context in list(registry.apps.values()):
+                    context.state.processing.close()
+
+    app.router.lifespan_context = lifespan
 
     # ------------------------------------------------------------ front end
 

@@ -1,3 +1,5 @@
+import { getPersonaId } from './persona';
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -40,6 +42,8 @@ export async function api<T>(
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
   headers.delete('X-Twin');
+  if (!headers.has('X-Twin-Persona'))
+    headers.set('X-Twin-Persona', getPersonaId());
   if (method !== 'GET') headers.set('X-Twin', '1');
   if (json !== undefined) headers.set('Content-Type', 'application/json');
   let response: Response;

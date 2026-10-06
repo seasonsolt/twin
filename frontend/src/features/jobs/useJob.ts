@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
+import { personaKey } from '../../lib/persona';
 
 export interface Job<Result = unknown> {
   job_id: string;
@@ -90,6 +91,7 @@ export function useJob<Result>({
   active?: boolean;
   onDone?: (job: Job<Result>, context: { restored: boolean }) => void;
 }) {
+  storageKey = storageKey ? personaKey(storageKey) : undefined;
   const [job, setJob] = useState<Job<Result> | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');

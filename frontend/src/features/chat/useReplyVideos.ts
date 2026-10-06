@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
+import { personaKey, personaUrl } from '../../lib/persona';
 import type { Job } from '../jobs/useJob';
 import type { Turn } from './types';
 
@@ -15,7 +16,7 @@ export interface ReplyVideoState {
 }
 export const videoUrl = (result?: VideoResult) =>
   result && /^[0-9a-f]{64}\.mp4$/.test(result.file)
-    ? `/api/media/video/${result.file}`
+    ? personaUrl(`/api/media/video/${result.file}`)
     : null;
 const key = (id: string, assets = '') =>
   `twin.reply-video:${assets ? `${assets}|` : ''}${id}`;
@@ -87,6 +88,7 @@ export function useReplyVideos(
   name: string,
   assets = '',
 ) {
+  assets = personaKey(assets);
   const records = useMemo(() => ({ current: runningJobs(assets) }), [assets]);
   const [view, setView] = useState<Record<string, ReplyVideoState>>({});
   const actions = useRef({

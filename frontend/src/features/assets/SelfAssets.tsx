@@ -3,6 +3,7 @@ import Cropper, { type Area } from 'react-easy-crop';
 import 'react-easy-crop/react-easy-crop.css';
 import { Button } from '../../components/ui';
 import { api } from '../../lib/api';
+import { getPersonaId, personaUrl } from '../../lib/persona';
 import type { Capabilities } from '../avatar/types';
 import { useRecorder } from './useRecorder';
 
@@ -26,6 +27,7 @@ export function uploadAsset(
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', path);
     xhr.setRequestHeader('X-Twin', '1');
+    xhr.setRequestHeader('X-Twin-Persona', getPersonaId());
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable)
         progress(Math.round((event.loaded / event.total) * 100));
@@ -174,7 +176,8 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
         },
       },
     );
-    if (!signal.aborted) setSample(result.segments[0]?.url ?? null);
+    if (!signal.aborted)
+      setSample(result.segments[0] ? personaUrl(result.segments[0].url) : null);
   };
   const operation = async (work: (signal: AbortSignal) => Promise<void>) => {
     const controller = new AbortController();
@@ -239,8 +242,10 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
       if (kind === 'voice' && !signal.aborted) setSample(null);
     });
   const currentPortrait = profile?.portrait
-    ? `/api/media/avatar-image?v=${profile.portrait.sha}`
-    : caps?.avatar_image?.url;
+    ? personaUrl(`/api/media/avatar-image?v=${profile.portrait.sha}`)
+    : caps?.avatar_image?.url
+      ? personaUrl(caps.avatar_image.url)
+      : undefined;
 
   return (
     <div className="self-assets space-y-5 [&_button]:min-h-11 [&_input]:text-base [&_label]:min-h-11">
@@ -378,7 +383,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             controls
             preload="none"
             aria-label="播放声音参考"
-            src={`/api/me/voice/reference?v=${profile.voice.id}`}
+            src={personaUrl(`/api/me/voice/reference?v=${profile.voice.id}`)}
             className="w-full max-w-sm"
           />
         )}

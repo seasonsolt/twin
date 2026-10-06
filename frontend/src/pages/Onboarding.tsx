@@ -20,13 +20,23 @@ export function Onboarding({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
-  const finish = () => {
+  const finish = async () => {
+    if (identity.onboarding_pending) {
+      try {
+        await api('/api/identity/onboarding-complete', { method: 'POST' });
+      } catch (failure) {
+        setError(
+          failure instanceof Error ? failure.message : '保存失败，请重试',
+        );
+        return;
+      }
+    }
     onDone();
     navigate('/chat');
   };
   const skip = async () => {
     if (saved) {
-      finish();
+      await finish();
       return;
     }
     setBusy(true);
@@ -37,7 +47,7 @@ export function Onboarding({
         json: { name: identity.name.slice(0, 20), about: identity.about || '' },
       });
       await useStatus.getState().refresh();
-      finish();
+      await finish();
     } catch (failure) {
       setError(
         failure instanceof Error ? failure.message : '暂时无法跳过，请重试',
@@ -51,7 +61,7 @@ export function Onboarding({
       <h1 className="text-2xl font-semibold">让我们认识一下</h1>
       <FlowStepper
         maxStep={saved ? 4 : 1}
-        onComplete={finish}
+        onComplete={() => void finish()}
         finalActionText="开始聊天"
         steps={[
           {
@@ -61,7 +71,10 @@ export function Onboarding({
               <div className="space-y-4">
                 <h2 className="text-xl font-semibold">你是谁</h2>
                 <IdentityForm
-                  identity={{ name: '', about: '' }}
+                  identity={{
+                    name: identity.onboarding_pending ? identity.name : '',
+                    about: identity.about,
+                  }}
                   onSaved={() => setSaved(true)}
                 />
                 {saved && <p role="status">已保存，可以继续添加记忆。</p>}

@@ -1,4 +1,5 @@
 import { ApiError } from './api';
+import { getPersonaId, personaKey } from './persona';
 
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STORAGE_KEY = 'twin:media-uploads';
@@ -22,19 +23,22 @@ export interface UploadProgress {
   size: number;
   paused: boolean;
 }
-function savedUploads(): SavedUpload[] {
+function savedUploads(persona: string): SavedUpload[] {
   try {
     const value: unknown = JSON.parse(
-      localStorage.getItem(STORAGE_KEY) ?? '[]',
+      localStorage.getItem(personaKey(STORAGE_KEY, persona)) ?? '[]',
     );
     return Array.isArray(value) ? (value as SavedUpload[]) : [];
   } catch {
     return [];
   }
 }
-function save(uploads: SavedUpload[]) {
+function save(uploads: SavedUpload[], persona: string) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(uploads));
+    localStorage.setItem(
+      personaKey(STORAGE_KEY, persona),
+      JSON.stringify(uploads),
+    );
   } catch {
     // Uploading still works when Safari's storage is unavailable.
   }
@@ -80,6 +84,7 @@ async function request(
   options: RequestInit,
   signal: AbortSignal,
   onPause: (paused: boolean) => void,
+  persona: string,
 ): Promise<{ response: Response; data: Record<string, unknown> }> {
   for (let attempt = 0; ; attempt++) {
     while (!navigator.onLine) {
@@ -96,6 +101,7 @@ async function request(
         redirect: 'error',
         headers: {
           'X-Twin': '1',
+          'X-Twin-Persona': persona,
           ...(options.body instanceof Blob
             ? { 'Content-Type': 'application/octet-stream' }
             : { 'Content-Type': 'application/json' }),
@@ -133,12 +139,13 @@ export async function uploadMedia(
   progress: (value: UploadProgress) => void,
 ): Promise<void> {
   if (file.size > 4 * 1024 ** 3) throw new Error('音视频文件最多 4 GB');
+  const persona = getPersonaId();
   let offset = 0;
   const report = (paused = false) =>
     progress({ name: file.name, offset, size: file.size, paused });
   const send = (path: string, options: RequestInit = {}) =>
-    request(path, options, signal, report);
-  let saved = savedUploads().find((upload) => matches(upload, file));
+    request(path, options, signal, report, persona);
+  let saved = savedUploads(persona).find((upload) => matches(upload, file));
   report();
   if (saved) {
     try {
@@ -146,7 +153,10 @@ export async function uploadMedia(
       offset = offsetOf(data, file.size);
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
-      save(savedUploads().filter((upload) => !matches(upload, file)));
+      save(
+        savedUploads(persona).filter((upload) => !matches(upload, file)),
+        persona,
+      );
       saved = undefined;
     }
   }
@@ -166,7 +176,13 @@ export async function uploadMedia(
       size: file.size,
       lastModified: file.lastModified,
     };
-    save([...savedUploads().filter((upload) => !matches(upload, file)), saved]);
+    save(
+      [
+        ...savedUploads(persona).filter((upload) => !matches(upload, file)),
+        saved,
+      ],
+      persona,
+    );
   }
   report();
   let conflicts = 0;
@@ -189,5 +205,8 @@ export async function uploadMedia(
     report();
   }
   await send(`/api/uploads/${saved.id}/finish`, { method: 'POST' });
-  save(savedUploads().filter((upload) => upload.id !== saved.id));
+  save(
+    savedUploads(persona).filter((upload) => upload.id !== saved.id),
+    persona,
+  );
 }

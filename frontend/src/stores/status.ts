@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
+import { getPersonaId } from '../lib/persona';
 
 export interface Status {
   target_name: string;
@@ -23,11 +24,13 @@ export const useStatus = create<{
   data: null,
   error: null,
   refresh: async (signal) => {
+    const persona = getPersonaId();
     try {
       const data = await api<Status>('/api/status', { signal });
-      if (!signal?.aborted) set({ data, error: null });
+      if (!signal?.aborted && persona === getPersonaId())
+        set({ data, error: null });
     } catch (error) {
-      if (!signal?.aborted)
+      if (!signal?.aborted && persona === getPersonaId())
         set({ error: error instanceof Error ? error.message : '状态加载失败' });
     }
   },

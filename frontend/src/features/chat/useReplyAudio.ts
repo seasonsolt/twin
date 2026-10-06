@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
+import { getPersonaId, personaUrl } from '../../lib/persona';
 import type { AudioPart } from '../avatar/types';
 import type { ChatReply } from './types';
 import { GaplessAudio } from './GaplessAudio';
@@ -27,6 +28,7 @@ interface AudioReply {
 }
 
 export function useReplyAudio(active: boolean) {
+  const persona = getPersonaId();
   const audioRef = useRef<HTMLAudioElement>(null);
   const actions = useRef(idle);
   const cache = useRef(new Map<string, AudioReply>());
@@ -244,16 +246,23 @@ export function useReplyAudio(active: boolean) {
         if (!result.segments.length)
           throw new Error('没有可播放的语音，请重试');
         entry.count = result.segment_count;
+        result.segments = result.segments.map((item) => ({
+          ...item,
+          url: personaUrl(item.url, persona),
+        }));
         entry.segments.set(index, result.segments);
         if (player) {
           for (const item of result.segments) {
             if (!buffers.current.has(item.url)) {
               if (
-                !/^\/api\/media\/audio\/[0-9a-f]{64}\.(wav|mp3)$/.test(item.url)
+                !/^\/api\/media\/audio\/[0-9a-f]{64}\.(wav|mp3)(\?persona=[a-z0-9-]+)?$/.test(
+                  item.url,
+                )
               )
                 throw new Error('语音文件不可用，请重试');
               const response = await fetch(item.url, {
                 signal: controller.signal,
+                headers: { 'X-Twin-Persona': persona },
                 credentials: 'same-origin',
                 redirect: 'error',
               });
@@ -314,7 +323,7 @@ export function useReplyAudio(active: boolean) {
       audio.removeEventListener('error', onError);
       actions.current = idle;
     };
-  }, [active]);
+  }, [active, persona]);
   return {
     ...view,
     audioRef,

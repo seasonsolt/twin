@@ -19,6 +19,7 @@ import { ReplyVideo } from '../features/chat/ReplyVideo';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
 import { useReplyVideos } from '../features/chat/useReplyVideos';
 import type { Turn } from '../features/chat/types';
+import { personaUrl } from '../lib/persona';
 import { CHAT_KEY } from '../features/chat/useConversation';
 import { useStatus } from '../stores/status';
 import type { Capabilities } from '../features/avatar/types';
@@ -314,7 +315,7 @@ it('plays all ordered parts, pauses/resumes, follows lipsync with glow and track
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1),
   );
   const audio = view.container.querySelector('audio')!;
-  expect(audio).toHaveAttribute('src', parts[0].url);
+  expect(audio).toHaveAttribute('src', personaUrl(parts[0].url));
   const body = JSON.parse(
     fetchMock.mock.calls.find(([url]) => url === '/api/media/audio')![1].body,
   );
@@ -353,16 +354,16 @@ it('plays all ordered parts, pauses/resumes, follows lipsync with glow and track
   expect(audio.currentTime).toBe(1.5);
   expect(count('/api/media/audio')).toBe(2);
   fireEvent.ended(audio);
-  expect(audio).toHaveAttribute('src', parts[1].url);
+  expect(audio).toHaveAttribute('src', personaUrl(parts[1].url));
   fireEvent.ended(audio);
-  expect(audio).toHaveAttribute('src', parts[2].url);
+  expect(audio).toHaveAttribute('src', personaUrl(parts[2].url));
   fireEvent.ended(audio);
   expect(one.getByRole('button', { name: '播放语音' })).toHaveTextContent('听');
   expect(one.getByRole('progressbar')).toHaveAttribute('value', '1');
   fireEvent.timeUpdate(audio);
   expect(one.getByRole('progressbar')).toHaveAttribute('value', '1');
   fireEvent.click(one.getByRole('button', { name: '播放语音' }));
-  expect(audio).toHaveAttribute('src', parts[0].url);
+  expect(audio).toHaveAttribute('src', personaUrl(parts[0].url));
   expect(count('/api/media/audio')).toBe(2);
 });
 it('stops the previous reply and releases audio, requests and frames on leaving', async () => {
@@ -407,7 +408,7 @@ it('ignores a late audio response when another reply starts', async () => {
   );
   expect(view.container.querySelector('audio')).toHaveAttribute(
     'src',
-    parts[0].url,
+    personaUrl(parts[0].url),
   );
   expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
 });
@@ -577,7 +578,7 @@ it('starts video once, renders only a thumbnail, opens fullscreen playback and c
   for (const attr of ['controls', 'playsinline'])
     expect(player).toHaveAttribute(attr);
   expect(player).toHaveAttribute('preload', 'metadata');
-  expect(player).toHaveAttribute('poster', caps.avatar_image!.url);
+  expect(player).toHaveAttribute('poster', personaUrl(caps.avatar_image!.url));
   expect(player).toHaveClass('max-h-full', 'max-w-full', 'rounded-lg');
   expect(player).toHaveAccessibleDescription(answer.reply);
   expect(screen.getByText(answer.reply)).toHaveClass('sr-only');
@@ -587,7 +588,7 @@ it('starts video once, renders only a thumbnail, opens fullscreen playback and c
   );
   expect(screen.getByRole('link', { name: '保存' })).toHaveAttribute(
     'href',
-    `/api/media/video/${'a'.repeat(64)}.mp4`,
+    `/api/media/video/${'a'.repeat(64)}.mp4?persona=default`,
   );
   expect(screen.getByText('第 1 句回听与原文有出入')).toBeVisible();
   view.rerender(video());

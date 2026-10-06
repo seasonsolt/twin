@@ -35,6 +35,26 @@ twin 是个人工具，不添加免责声明。
 
 网页只有 `frontend/` 的 React + TypeScript 应用，使用 HashRouter；Vite 构建到 `src/twin/web/static/index.html` 和 `assets/`。`web.app` 在 `/` 提供页面、`/assets/*` 提供资源，`/next` 与 `/next/` 为 308 书签重定向，不再提供另一套静态 UI。播放与形象实现位于 `frontend/src/features/playback/`，设计令牌位于 `frontend/src/design/tokens.css`。开发代理、构建命令与安全头见 [WEB_UI.md](WEB_UI.md)。
 
+### 多分身存储与请求边界
+
+单管理员可管理全部分身，不增加账户、角色或权限体系。L5 的 `web.personas.Personas` 管理
+`db_path.parent/personas.json`（`{default, personas: [{id, created_at}]}`）；名字和介绍只存在各自数据库。
+`settings_for(id)` 返回独立 Settings：默认分身保留原配置数据库及媒体目录；其他分身使用
+`personas/p-<10位hex>/twin.db`，目录 0700，禁用配置肖像和主人别名回退。
+
+安全中间件内的统一请求解析器根据 `X-Twin-Persona` 选择绑定具体 Settings 的路由上下文；
+GET/HEAD 也接受 `?persona=`（header 优先），省略为默认，未知 ID 返回 404“分身不存在”。
+共享模型后端，但每个上下文独立持有 processing、ingestion、上传锁、语音选择和媒体缓存路径。
+`AssetStore`、`media.ingest` 不读取全局当前分身，而从传入数据库路径/原件路径派生私有目录。
+所有 JobManager 视图按 persona_id 隔离；构建、转写和视频分别全局串行，聊天共享并发额度。
+任务闭包捕获原分身上下文，切换不会改变归属；删除在请求和任务空闲时关闭防抖队列后移除目录。
+服务启动恢复所有已登记分身的待处理记忆和转写。CLI/MCP/评测继续使用配置数据库。
+
+前端当前 ID 可选持久化到 localStorage，请求带分身 header，媒体元素 URL 带分身 query。
+路由树按 ID 重挂载，停止音频、清理请求并重置页面状态；聊天、任务、视频、上传续传记录按分身隔离，
+保留旧默认分身的浏览器键。新建标记 `onboarding_pending`，完成或跳过引导后清除。
+非默认分身使用预置语音；真人视频只有自己的肖像和声音同时存在才可用，驱动不会收到主人素材回退。
+
 ## 3. 层间规则
 
 1. **依赖只向下。** 只能依赖同层或更低层，同层无循环；新模块必须先在 `tests/test_layers.py` 登记层号。

@@ -10,10 +10,11 @@ import {
 } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
-import { Badge, IconButton, Skeleton, Tooltip } from '../ui';
+import { IconButton, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api } from '../../lib/api';
+import { PersonaSwitcher } from './PersonaSwitcher';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Onboarding = lazy(() =>
   import('../../pages/Onboarding').then((module) => ({
@@ -104,7 +105,7 @@ function BottomTabs() {
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const mobile = useMobile();
-  const { data, error } = useStatus();
+  const { error } = useStatus();
   const { reduced, transition } = useMotionPreset('layout');
   const location = useLocation();
   const outlet = useOutlet();
@@ -122,8 +123,8 @@ export function AppShell() {
       .then(([identity, status]) => {
         if (
           !controller.signal.aborted &&
-          identity.name_source === 'config' &&
-          status.counts.sources === 0
+          (identity.onboarding_pending ||
+            (identity.name_source === 'config' && status.counts.sources === 0))
         )
           setOnboarding(identity);
       })
@@ -137,14 +138,19 @@ export function AppShell() {
     if (!checked) return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
     if (onboarding)
       return (
-        <Suspense
-          fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
-        >
-          <Onboarding
-            identity={onboarding}
-            onDone={() => setOnboarding(null)}
-          />
-        </Suspense>
+        <>
+          <header className="border-b border-border px-4 py-2">
+            <PersonaSwitcher />
+          </header>
+          <Suspense
+            fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
+          >
+            <Onboarding
+              identity={onboarding}
+              onDone={() => setOnboarding(null)}
+            />
+          </Suspense>
+        </>
       );
   }
   return (
@@ -197,12 +203,8 @@ export function AppShell() {
         </div>
       </motion.aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="hidden min-h-16 flex-wrap items-center gap-3 border-b border-border px-8 py-3 md:flex">
-          {data ? (
-            <Badge>{data.target_name}</Badge>
-          ) : (
-            <Skeleton className="w-40" />
-          )}
+        <header className="flex min-h-16 items-center gap-3 border-b border-border px-4 py-2 md:px-8">
+          <PersonaSwitcher />
         </header>
         {error && (
           <div

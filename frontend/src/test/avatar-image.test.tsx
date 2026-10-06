@@ -27,7 +27,10 @@ beforeEach(() => {
 it('prefers a static portrait to the preset and falls back on image error', () => {
   const view = render(<AvatarPreview capabilities={capabilities} />);
   const image = screen.getByRole('img', { name: '肖像形象' });
-  expect(image).toHaveAttribute('src', '/api/media/avatar-image');
+  expect(image).toHaveAttribute(
+    'src',
+    '/api/media/avatar-image?persona=default',
+  );
   expect(image).toHaveClass('object-cover', 'object-[50%_30%]');
   expect(screen.queryByRole('note')).not.toBeInTheDocument();
   expect(

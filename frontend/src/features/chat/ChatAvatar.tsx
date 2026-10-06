@@ -1,5 +1,6 @@
 import { Component, lazy, Suspense, useState, type ReactNode } from 'react';
 import type { Capabilities } from '../avatar/types';
+import { personaUrl } from '../../lib/persona';
 import { SpeakingGlow } from '../avatar/SpeakingGlow';
 
 const Avatar3D = lazy(() => import('../avatar/Avatar3D'));
@@ -28,8 +29,12 @@ export function ChatAvatar({
   level?: number;
   speaking?: boolean;
 }) {
-  const portrait = capabilities?.avatar_image?.url;
-  const model = capabilities?.avatar_model?.url;
+  const portrait = capabilities?.avatar_image?.url
+    ? personaUrl(capabilities.avatar_image.url)
+    : undefined;
+  const model = capabilities?.avatar_model?.url
+    ? personaUrl(capabilities.avatar_model.url)
+    : undefined;
   const [failedPortrait, setFailedPortrait] = useState<string>();
   const [failedModel, setFailedModel] = useState<string>();
   const initial = (

@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { MotionConfig } from 'motion/react';
+import { usePersonas } from './stores/personas';
 import { AppShell } from './components/layout/AppShell';
 import {
   ConfirmProvider,
@@ -28,13 +29,14 @@ const Gallery = lazy(() =>
 );
 
 export function App() {
+  const personaId = usePersonas((state) => state.id);
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delayDuration={300}>
         <ConfirmProvider>
           <HashRouter>
             <Suspense fallback={<Skeleton className="h-40" />}>
-              <Routes>
+              <Routes key={personaId}>
                 <Route element={<AppShell />}>
                   <Route index element={<Navigate to="/chat" replace />} />
                   <Route path="chat" element={<Chat />} />

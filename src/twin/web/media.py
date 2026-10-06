@@ -95,6 +95,9 @@ def register(
     settings: Settings,
     synthesizer_factory: Callable[[], SpeechSynthesizer] | None = None,
     video_factory: Callable[[], VideoSynthesizer | None] | None = None,
+    *,
+    jobs: JobManager | None = None,
+    name_factory: Callable[[], str] | None = None,
 ) -> None:
     """Register under the application's existing security middleware with lazy speech."""
     app.add_middleware(PrivateAudioMiddleware)
@@ -103,9 +106,13 @@ def register(
     synthesizer: SpeechSynthesizer | None = None
     selected_voice: str | None = None
     lock = threading.Lock()
-    video_jobs = JobManager(1, lambda _: "视频生成失败，请检查 [video] 和 ffmpeg 配置")
+    video_jobs = jobs or JobManager(1, lambda _: "视频生成失败，请检查 [video] 和 ffmpeg 配置")
     video = video_factory or (lambda: make_video_synthesizer(settings))
     video_available = video_factory is not None or settings.video.provider == "remote"
+    allow_video_fallback = not settings.video.require_assets
+
+    def own_video_assets() -> bool:
+        return assets.path("portrait") is not None and assets.path("voice") is not None
 
     def speech() -> SpeechSynthesizer:
         nonlocal synthesizer, selected_voice
@@ -172,8 +179,10 @@ def register(
         )
         profile = assets.profile()
         asset_key = f"{portrait['sha'] if portrait else ''}:{profile['voice']['id'] if profile['voice'] else ''}"
+        missing_assets = not allow_video_fallback and not own_video_assets()
         video_capability = {
-            "available": video_available,
+            "available": video_available and not missing_assets,
+            **({"reason": "先在「关于你」上传形象和声音"} if missing_assets else {}),
             **({"asset_key": asset_key} if portrait or profile["voice"] else {}),
         }
         try:
@@ -208,7 +217,13 @@ def register(
         except ValidationError as exc:
             errors = [{**error, "loc": ("body", "answer", *error["loc"])} for error in exc.errors()]
             raise RequestValidationError(errors) from exc
-        name = body.persona_name if body.persona_name is not None else settings.target_name
+        name = (
+            body.persona_name
+            if body.persona_name is not None
+            else name_factory()
+            if name_factory
+            else settings.target_name
+        )
         return script_from_presentable(presentable, name)
 
     @app.post("/api/media/audio")
@@ -292,14 +307,22 @@ def register(
         script = make_script(body)
         if script.abstain:
             raise HTTPException(400, "分身已弃权，不能生成讲述视频")
+        if not allow_video_fallback and not own_video_assets():
+            raise HTTPException(503, "先在「关于你」上传形象和声音")
         if not video_available:
             raise HTTPException(503, "视频未配置，请设置 [video]")
+        # Capture references before the job starts; later asset edits cannot select driver fallbacks.
+        try:
+            synth = video()
+        except MediaUnavailable:
+            if not allow_video_fallback:
+                raise HTTPException(503, "先在「关于你」上传形象和声音") from None
+            raise
 
         def generate(log: Callable[[str], None]) -> dict[str, Any]:
             name = f"{secrets.token_hex(32)}.mp4"
             path = cache_dir / name
             try:
-                synth = video()
                 if synth is None:
                     raise MediaUnavailable("视频未配置")
                 private_directory(cache_dir)

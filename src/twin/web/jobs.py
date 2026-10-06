@@ -11,6 +11,7 @@ Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (f
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import logging
 import re
@@ -103,6 +104,7 @@ class Job:
     kind: JobKind
     title: str
     created: dt.datetime
+    persona_id: str = "default"
     status: JobStatus = "queued"
     started: dt.datetime | None = None
     finished: dt.datetime | None = None
@@ -127,10 +129,22 @@ class JobManager:
     def __init__(self, answer_workers: int, describe_error: Callable[[Exception], str]) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
-        self._exclusive: Job | None = None
+        self._exclusive_slot: list[Job | None] = [None]
         self._answer_slots = threading.BoundedSemaphore(max(1, answer_workers))
         self._media_slot = threading.BoundedSemaphore(1)
+        self._video_slot = threading.BoundedSemaphore(1)
         self._describe_error = describe_error
+        self.persona_id: str | None = None
+
+    def scoped(self, persona_id: str) -> JobManager:
+        """A persona-filtered view sharing admission locks, job records and worker slots."""
+        scoped = copy.copy(self)
+        scoped.persona_id = persona_id
+        return scoped
+
+    def has_active(self, persona_id: str) -> bool:
+        with self._lock:
+            return any(j.active and j.persona_id == persona_id for j in self._jobs.values())
 
     def submit(
         self,
@@ -144,8 +158,8 @@ class JobManager:
         """Accept a bounded background job; profile builds are mutually exclusive."""
         exclusive = kind in EXCLUSIVE_KINDS
         with self._lock:
-            if (exclusive or require_idle) and self._exclusive is not None and self._exclusive.active:
-                raise JobConflict(self._exclusive)
+            if (exclusive or require_idle) and self._exclusive_slot[0] is not None and self._exclusive_slot[0].active:
+                raise JobConflict(self._exclusive_slot[0])
             if not exclusive:
                 pending = sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
                 if pending >= MAX_PENDING_ANSWERS:
@@ -153,13 +167,15 @@ class JobManager:
                         f"已有 {pending} 个聊天任务在排队或运行（上限 {MAX_PENDING_ANSWERS} 个），"
                         "请等前面的任务完成后再提交"
                     )
-            job = Job(job_id=self._new_id(), kind=kind, title=title, created=_now())
+            job = Job(
+                job_id=self._new_id(), kind=kind, title=title, created=_now(), persona_id=self.persona_id or "default"
+            )
             # Capture input and persist acceptance before a worker can run, under the same admission lock as builds.
             if prepare is not None:
                 prepare(job)
             self._jobs[job.job_id] = job
             if exclusive:
-                self._exclusive = job
+                self._exclusive_slot[0] = job
             self._evict()
         try:
             threading.Thread(target=self._run, args=(job, fn), name=f"twin-{job.job_id}", daemon=True).start()
@@ -174,17 +190,21 @@ class JobManager:
     def active_exclusive(self, kinds: frozenset[JobKind] = EXCLUSIVE_KINDS) -> Job | None:
         """The running (or queued) exclusive job whose kind is in ``kinds``, if any."""
         with self._lock:
-            job = self._exclusive
+            job = self._exclusive_slot[0]
             return job if job is not None and job.active and job.kind in kinds else None
 
     def snapshot(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return self._view(job, with_result=True) if job is not None else None
+            return (
+                self._view(job, with_result=True)
+                if job is not None and (self.persona_id is None or job.persona_id == self.persona_id)
+                else None
+            )
 
     def recent(self, n: int = LISTED_JOBS) -> list[dict[str, Any]]:
         with self._lock:
-            jobs = list(self._jobs.values())[-n:]
+            jobs = [j for j in self._jobs.values() if self.persona_id is None or j.persona_id == self.persona_id][-n:]
             return [self._view(job, with_result=False) for job in reversed(jobs)]
 
     def wait(self, job_id: str, timeout: float | None = None) -> bool:
@@ -207,6 +227,7 @@ class JobManager:
     def _view(job: Job, *, with_result: bool) -> dict[str, Any]:
         view: dict[str, Any] = {
             "job_id": job.job_id,
+            "persona_id": job.persona_id,
             "kind": job.kind,
             "kind_label": JOB_LABELS[job.kind],
             "title": job.title,
@@ -250,6 +271,8 @@ class JobManager:
         slot = (
             self._media_slot
             if job.kind == "media_ingest"
+            else self._video_slot
+            if job.kind == "video"
             else (None if job.kind in EXCLUSIVE_KINDS else self._answer_slots)
         )
         if slot is not None:
@@ -335,6 +358,8 @@ class PersonaProcessing:
             if active is not None:
                 self._pending = True
                 self._watch(active)
+                if self.jobs.persona_id is not None and active.persona_id != self.jobs.persona_id:
+                    raise JobConflict(active, "另一个分身正在处理记忆，这个分身已排队")
                 return active
             self._pending = False
             job = self.jobs.submit("persona_build", "重新处理记忆", self.build)
@@ -381,9 +406,18 @@ class PersonaProcessing:
             if self._timer_handle is not None:
                 self._timer_handle.cancel()
 
+    def close_if_idle(self) -> bool:
+        with self._lock:
+            if self.jobs.has_active(self.jobs.persona_id or "default"):
+                return False
+            self.close()
+            return True
+
     def view(self) -> dict[str, Any]:
         with self._lock:
             active = self.jobs.active_exclusive()
+            if active is not None and self.jobs.persona_id is not None and active.persona_id != self.jobs.persona_id:
+                active = None
             return {
                 "state": "running" if active is not None else "queued" if self._pending else "idle",
                 "job_id": active.job_id if active is not None else None,

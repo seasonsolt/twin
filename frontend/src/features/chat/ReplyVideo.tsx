@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { LoaderCircle, Play, RotateCcw, X } from 'lucide-react';
+import { personaUrl } from '../../lib/persona';
 import type { ChatReply } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
 
@@ -21,6 +22,7 @@ export function ReplyVideo({
   onRetry(): void;
   onError(): void;
 }) {
+  portrait = portrait ? personaUrl(portrait) : undefined;
   const [revealed, setRevealed] = useState(false);
   const [open, setOpen] = useState(false);
   const touch = useRef<{ x: number; y: number } | null>(null);

@@ -184,7 +184,10 @@ it('crops at 3:4, uploads fractions with progress, disables controls and cache-b
     xhr.complete({ ...empty, portrait: { sha: 'abc123', file: 'abc123.png' } }),
   );
   const preview = await screen.findByRole('img', { name: '当前肖像' });
-  expect(preview).toHaveAttribute('src', '/api/media/avatar-image?v=abc123');
+  expect(preview).toHaveAttribute(
+    'src',
+    '/api/media/avatar-image?v=abc123&persona=default',
+  );
   expect(changed).toHaveBeenCalledOnce();
   await waitFor(() =>
     expect(screen.getByRole('button', { name: '恢复默认' })).toBeEnabled(),
@@ -213,7 +216,7 @@ it('uploads a video as voice, plays the processed reference and offers synthesis
   await screen.findByText('我的声音（12.0 秒）');
   expect(screen.getByLabelText('播放声音参考')).toHaveAttribute(
     'src',
-    '/api/me/voice/reference?v=self-0123456789abcdef',
+    '/api/me/voice/reference?v=self-0123456789abcdef&persona=default',
   );
   await screen.findByLabelText('试听我的声音');
   expect(

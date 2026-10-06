@@ -25,6 +25,7 @@ from ..media.ingest import MEDIA_EXTENSIONS, VIDEO_EXTENSIONS, extract_audio, ma
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_date, parse_text
 from ..persona.store import PersonaStore
+from ..util import private_directory
 from .jobs import Job, JobError, JobManager, Log
 
 CHUNK_SIZE = 8 * 1024 * 1024
@@ -224,7 +225,7 @@ class MediaIngestion:
             if source is None:
                 extension = Path(info["filename"]).suffix.lower().lstrip(".")
                 folder = self.settings.db_path.parent / "media-sources" / sha
-                folder.mkdir(parents=True, mode=0o700, exist_ok=True)
+                private_directory(folder)
                 folder.chmod(0o700)
                 original = folder / f"original.{extension}"
                 part.replace(original)

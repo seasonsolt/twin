@@ -28,6 +28,7 @@ export function IdentityForm({
         })
           .then((saved) => {
             onSaved?.(saved);
+            window.dispatchEvent(new Event('twin-identity-changed'));
             void useStatus.getState().refresh();
           })
           .catch((failure: unknown) => {

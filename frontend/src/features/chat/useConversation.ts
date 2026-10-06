@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
+import { personaKey } from '../../lib/persona';
 import type { ChatReply, Turn } from './types';
 
 export const CHAT_KEY = 'twin.next.chat';
 function loadHistory(): Turn[] {
   try {
-    const saved: unknown = JSON.parse(sessionStorage.getItem(CHAT_KEY) ?? '[]');
+    const saved: unknown = JSON.parse(
+      sessionStorage.getItem(personaKey(CHAT_KEY)) ?? '[]',
+    );
     return Array.isArray(saved)
       ? saved.filter(
           (turn): turn is Turn =>
@@ -20,10 +23,10 @@ function loadHistory(): Turn[] {
     return [];
   }
 }
-function saveHistory(turns: Turn[]) {
+function saveHistory(turns: Turn[], key: string) {
   try {
-    if (turns.length) sessionStorage.setItem(CHAT_KEY, JSON.stringify(turns));
-    else sessionStorage.removeItem(CHAT_KEY);
+    if (turns.length) sessionStorage.setItem(key, JSON.stringify(turns));
+    else sessionStorage.removeItem(key);
   } catch {
     /* A disabled/full store must not block chat. */
   }
@@ -47,6 +50,7 @@ function wait(signal: AbortSignal) {
 }
 
 export function useConversation(active: boolean) {
+  const historyKey = personaKey(CHAT_KEY);
   const [turns, setTurns] = useState(loadHistory);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -103,7 +107,7 @@ export function useConversation(active: boolean) {
         const complete = [...pending, twin];
         setTurns(complete);
         setNewest(twin.id);
-        saveHistory(complete);
+        saveHistory(complete, historyKey);
         failed.current = null;
       };
       if ('reply' in response) {
@@ -149,7 +153,7 @@ export function useConversation(active: boolean) {
     setError('');
     setNewest(null);
     failed.current = null;
-    saveHistory([]);
+    saveHistory([], historyKey);
   };
   return {
     turns,

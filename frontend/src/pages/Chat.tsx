@@ -158,7 +158,7 @@ export function Chat() {
       }}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
-      <header className="flex items-center gap-2 border-b border-border pb-3">
+      <header className="sr-only items-center gap-2 border-b border-border pb-3 md:not-sr-only md:flex">
         <ChatAvatar name={name} capabilities={capabilities} />
         <h1 className="text-md font-semibold">{name}</h1>
         <IconButton

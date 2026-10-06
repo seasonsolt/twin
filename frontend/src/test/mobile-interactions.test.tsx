@@ -14,6 +14,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { DragDismiss } from '../components/motion';
 import {
+  ConfirmProvider,
   IconButton,
   ToastViewport,
   TooltipProvider,
@@ -50,7 +51,10 @@ vi.mock('motion/react', async (original) => {
 });
 vi.mock('../stores/status', () => ({
   startStatusPolling: vi.fn(),
-  useStatus: () => ({ data: null, error: null }),
+  useStatus: (selector?: (state: { data: null; error: null }) => unknown) =>
+    selector
+      ? selector({ data: null, error: null })
+      : { data: null, error: null },
 }));
 
 beforeEach(() => {
@@ -65,15 +69,17 @@ beforeEach(() => {
 function mount() {
   return render(
     <TooltipProvider>
-      <MemoryRouter initialEntries={['/chat']}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route path="chat" element={<p>Chat destination</p>} />
-            <Route path="memories" element={<p>Memories destination</p>} />
-            <Route path="about" element={<p>About destination</p>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="chat" element={<p>Chat destination</p>} />
+              <Route path="memories" element={<p>Memories destination</p>} />
+              <Route path="about" element={<p>About destination</p>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
     </TooltipProvider>,
   );
 }

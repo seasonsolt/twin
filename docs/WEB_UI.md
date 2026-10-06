@@ -53,7 +53,7 @@ CI 前端任务运行四项检查后执行 `git diff --exit-code src/twin/web/st
 
 ## 布局、令牌与可访问性
 
-AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享 pill；小于 768px 时从顶栏打开底部抽屉，支持下拖和键盘关闭。顶栏只显示姓名，不显示模型或外部服务角标；外部服务只在“关于你”中说明。状态首次读取 `/api/status`，之后可见时每 10 秒刷新，隐藏时暂停定期刷新，恢复可见后立即读取；卸载清理请求、计时器和监听。
+AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享 pill；小于 768px 时保留固定三项底部标签栏。手机和桌面顶栏都显示当前分身头像、姓名和箭头，点击打开可键盘操作的分身列表（记忆数、当前勾选、新建、管理）；输入 16px，触控目标至少 44px。顶栏不显示模型或外部服务角标；外部服务只在“关于你”中说明。状态首次读取 `/api/status`，之后可见时每 10 秒刷新，隐藏时暂停定期刷新，恢复可见后立即读取；卸载清理请求、计时器和监听。
 
 设计令牌集中在 `frontend/src/design/tokens.css`，经 Tailwind v4 `@theme inline` 接入。使用系统字体，不加载外部字体或资产。
 
@@ -102,6 +102,20 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 回复动画文本/数值使用完整的 visually hidden 文本，视觉动态层 `aria-hidden`，避免逐词逐帧播报。ThinkingLabel 只渲染一份可访问文字，避免重复的处理提示。`#/gallery` 提供所有 UI、Motion 与七个 wrapper 的可交互示例及重播入口，不填充虚构业务数据。
 
+## 多分身
+
+`stores/personas.ts` 管理列表及当前 ID；`lib/persona.ts` 对 localStorage 读写使用 try/catch，禁用存储仍可切换。
+`api()`、资产 XHR、原始媒体 fetch 均带 `X-Twin-Persona`；图片、VRM、声音参考、音频、视频和下载 URL 使用 `personaUrl()` 添加 `?persona=<id>`（已有 query 则追加）。
+切换按 ID 重挂载路由树，无整页刷新；停止音频/视频、取消旧请求、重置 status 并重新读取所选分身。
+聊天 sessionStorage、视频结果/提交缓存、任务记录、问卷离页写队列和上传 localStorage 续传记录均按 ID 隔离；保留默认分身旧键，旧数据无需迁移。
+离页问卷写入和仍未返回的视频提交保留原分身归属；服务端已接受任务继续运行，返回该分身后恢复查看。
+
+“新建分身”询问名字，创建后自动切换并进入“你是谁 → 形象和声音 → 添加记忆 → 开始聊天”；
+新分身的 `onboarding_pending` 即使刷新也会继续显示引导，完成/跳过后清除。
+“管理”复用 PUT identity 重命名并保留介绍；删除二次确认，默认分身不显示删除，运行/排队任务或请求存在时服务器拒绝删除。
+列表恢复时若所存 ID 已被删除则切换默认分身。只有默认分身可回退到 `[avatar].image_path` 和视频驱动内置素材；
+其他分身需自己的肖像和声音才能生成真人视频，否则能力包含 `reason: "先在「关于你」上传形象和声音"`，语音使用 `[tts].voice`。
+
 ## 页面
 
 | Hash 路由 | 功能 |
@@ -140,10 +154,14 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 ## API 与任务契约
 
-客户端只接受同源 `/api/`，非 GET 请求带 `X-Twin: 1`；JSON/form 编码，错误为含 status/detail 的 ApiError，保留中文 detail。
+客户端只接受同源 `/api/`，非 GET 请求带 `X-Twin: 1`；全部分身数据请求带 `X-Twin-Persona`，GET/HEAD 支持等价 `?persona=`（header 优先）；缺省选择默认，未知 ID 返回 404“分身不存在”。JSON/form 编码，错误为含 status/detail 的 ApiError，保留中文 detail。
 
 | 方法/路径 | 契约 |
 | --- | --- |
+| `GET /api/personas` | `[{id,name,avatar_url|null,sources,created_at,is_default}]`，全局管理员列表，名字来自各自 db |
+| `POST /api/personas` | `{name}`，201 返回新分身；私有目录及 identity，不写个人内容到 registry |
+| `DELETE /api/personas/{id}` | 删除该目录；默认分身 400，运行/排队任务或请求存在时 409 |
+| `POST /api/identity/onboarding-complete` | 完成当前分身的新建引导 |
 | `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）；无数据库路径或密钥 |
 | `GET /api/jobs`、`/api/jobs/{id}` | 状态、时间、进度日志、阶段、计数、里程碑、结果/错误 |
 | `GET /api/persona/sources` | 保留原字段，追加 detected_kind/label、status（processing/remembered/nothing_found/failed；媒体另有 queued/extracting/transcribing/needs_asr）、remembered；媒体追加 media_sha/duration_s/creation_time/transcribed_s/media_job_id；不含 preview |
@@ -166,7 +184,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `GET /api/persona/questionnaire?round=initial` | 问题、答案、提交状态 |
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
 | `POST /api/persona/questionnaire/submit` | 导入全部回答并尝试构建；只支持 initial |
-| `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/egress；name 是有效名字；无授权账本 |
+| `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/egress；name 是有效名字；新建未完成引导时追加 onboarding_pending=true；无授权账本 |
 | `PUT /api/identity` | X-Twin: 1；`{name, about}`；去除首尾空白后名字 1–20 字，介绍 ≤200 字；返回完整 identity；介绍变化会替换“自我介绍”笔记并自动处理 |
 | `GET /api/media/capabilities` | available/backend/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null；avatar_image 为 `{url: "/api/media/avatar-image"}` 或 null（语音失败时仍返回） |
 | `GET /api/media/avatar.vrm` | 配置的本地 VRM 流，model/gltf-binary、no-cache；未配置中文 JSON 404 |
@@ -178,10 +196,10 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}`；audio 可追加 `segments?: int[]`（零基脚本段索引，省略为全部），返回 `segment_count` 与所选分片 URL/口型轨、完整 script 和所选分片 manifest；非法索引 400 |
 | `GET /api/media/audio/{name}` | SHA-256 命名 WAV/MP3 分片，验证目录边界 |
 | `POST /api/media/video` | 与 clip 相同的请求体，返回 `{job_id}`；弃权回答 400，未配置 503 |
-| `GET /api/media/video/jobs/{job_id}` | 视频专用 JobManager 的任务状态；done 结果 `{file, duration_s, warnings}`，重启清空 |
+| `GET /api/media/video/jobs/{job_id}` | 当前分身的视频任务状态（与其他任务共用按分身隔离的 JobManager）；done 结果 `{file, duration_s, warnings}`，重启清空 |
 | `GET /api/media/video/{name}` | 64 位十六进制文件名的 MP4 流，校验目录与符号链接；video/mp4、private/no-store；不存在 404 |
 
-任务状态 queued/running/done/failed，日志最近 500 行，里程碑另存；人格构建互斥，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空；UI 启动时发现 stale 会重新排队。导入、笔记、删除和介绍变化后约 3 秒防抖自动处理；运行中发生多次变化只排一个后续处理，复用 run_persona_build 和 JobManager。完成时间与错误持久化，失败可以 POST build 重试。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
+任务状态 queued/running/done/failed，每个任务含 persona_id，查询仅返回当前分身的任务，跨分身任务编号返回 404。日志最近 500 行，里程碑另存；人格构建、转写、视频各自全局串行，聊天有并发及待处理数量限制。任务仅驻留内存，重启清空；UI 启动时发现 stale 会重新排队。导入、笔记、删除和介绍变化后约 3 秒防抖自动处理；运行中发生多次变化只排一个后续处理，复用 run_persona_build 和 JobManager。完成时间与错误持久化，失败可以 POST build 重试。stale 表示来源比档案新，不阻止聊天。构建结果包含 items_added/changed/removed、facets_changed 和 facet_diffs；失败不当作零分答案。
 
 `POST /api/media/clip` 保留供 CLI/API 使用，网页不提供 2D 片段或 HTML 导出操作。clip 同步返回 `video/mp4`，`Content-Disposition: attachment`；复用现有安全与请求体限制，脚本最多 100,000 字符、视频最多 600 秒。需系统 ffmpeg 与中文字体（见 [MEDIA.md](MEDIA.md)），临时 MP4 在响应完成后清理。
 

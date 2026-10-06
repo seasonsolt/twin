@@ -160,6 +160,7 @@ def register(
                 store.processing_result(ids, version, error)
 
     processing = PersonaProcessing(jobs, automatic_build, lambda snapshot: None)
+    app.state.processing = processing
 
     def queue_build() -> None:
         with open_store() as store:

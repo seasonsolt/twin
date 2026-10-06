@@ -91,6 +91,7 @@ class TTSSettings(BaseModel):
 
 
 class VideoSettings(BaseModel):
+    require_assets: bool = Field(default=False, exclude=True)
     provider: Literal["none", "remote"] = "none"
     host: str | None = None
     command: str | None = None
@@ -448,9 +449,14 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
     from .assets import AssetStore
 
     assets = AssetStore(settings.db_path)
+    portrait, voice_ref = assets.path("portrait"), assets.path("voice")
+    if video.require_assets and (portrait is None or voice_ref is None):
+        from .media.tts import MediaUnavailable
+
+        raise MediaUnavailable("先在「关于你」上传形象和声音")
     return RemoteVideo(
-        portrait=assets.path("portrait"),
-        voice_ref=assets.path("voice"),
+        portrait=portrait,
+        voice_ref=voice_ref,
         host=video.host,
         command=video.command,
         timeout_s=video.timeout_s,

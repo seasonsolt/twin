@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { Avatar, PortraitAvatar } from './Avatar';
 import type { Capabilities } from './types';
+import { personaUrl } from '../../lib/persona';
 
 const Avatar3D = lazy(() => import('./Avatar3D'));
 
@@ -39,9 +40,13 @@ export function AvatarPreview({
   speaking?: boolean;
   onModelNameChange?(name: string | null): void;
 }) {
-  const url = capabilities.avatar_model?.url;
+  const url = capabilities.avatar_model?.url
+    ? personaUrl(capabilities.avatar_model.url)
+    : undefined;
   const [failedUrl, setFailedUrl] = useState<string | undefined>();
-  const imageUrl = capabilities.avatar_image?.url;
+  const imageUrl = capabilities.avatar_image?.url
+    ? personaUrl(capabilities.avatar_image.url)
+    : undefined;
   const [failedImageUrl, setFailedImageUrl] = useState<string | undefined>();
   const onFallback = useCallback(() => {
     setFailedUrl(url);

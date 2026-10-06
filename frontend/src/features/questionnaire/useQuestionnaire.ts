@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
+import { getPersonaId, personaKey } from '../../lib/persona';
 import type { QuestionnaireData, Round, Submission } from './types';
 
 export const SAVE_DELAY_MS = 800;
-const leavingWrites = new Map<Round, Promise<boolean>>();
+const leavingWrites = new Map<string, Promise<boolean>>();
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 interface DraftSession {
+  persona: string;
   round: Round;
   answers: Record<string, string>;
   revision: number;
@@ -18,6 +20,7 @@ interface DraftSession {
 }
 
 export function useQuestionnaire(round: Round, active = true) {
+  const persona = getPersonaId();
   const [data, setData] = useState<QuestionnaireData | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -47,6 +50,7 @@ export function useQuestionnaire(round: Round, active = true) {
         try {
           await api('/api/persona/questionnaire/draft', {
             method: 'PUT',
+            headers: { 'X-Twin-Persona': draft.persona },
             json: { round: draft.round, answers: snapshot },
             keepalive:
               keepalive &&
@@ -79,7 +83,9 @@ export function useQuestionnaire(round: Round, active = true) {
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
+    const key = personaKey(round, persona);
     const draft: DraftSession = {
+      persona,
       round,
       answers: {},
       revision: 0,
@@ -97,12 +103,13 @@ export function useQuestionnaire(round: Round, active = true) {
     setResult(null);
     void (async () => {
       // A rapid round/route return must not restore an older server snapshot.
-      await leavingWrites.get(round);
+      await leavingWrites.get(key);
       if (!draft.alive) return null;
       return api<QuestionnaireData>(
         `/api/persona/questionnaire?round=${round}`,
         {
           signal: controller.signal,
+          headers: { 'X-Twin-Persona': draft.persona },
         },
       );
     })()
@@ -133,18 +140,18 @@ export function useQuestionnaire(round: Round, active = true) {
       clearTimeout(draft.timer);
       window.removeEventListener('beforeunload', beforeUnload);
       // Finish writes rather than aborting a personal draft on route changes.
-      const preceding = leavingWrites.get(round);
+      const preceding = leavingWrites.get(key);
       const finish = (async () => {
         await preceding;
         if (!(await save(draft, true))) return false;
         return save(draft, true);
       })();
-      leavingWrites.set(round, finish);
+      leavingWrites.set(key, finish);
       void finish.finally(() => {
-        if (leavingWrites.get(round) === finish) leavingWrites.delete(round);
+        if (leavingWrites.get(key) === finish) leavingWrites.delete(key);
       });
     };
-  }, [active, attempt, round, save]);
+  }, [active, attempt, round, save, persona]);
 
   const change = (id: string, value: string) => {
     const draft = session.current;
@@ -175,6 +182,7 @@ export function useQuestionnaire(round: Round, active = true) {
         '/api/persona/questionnaire/submit',
         {
           method: 'POST',
+          headers: { 'X-Twin-Persona': draft.persona },
           json: { round: draft.round, answers: draft.answers },
         },
       );
@@ -183,7 +191,7 @@ export function useQuestionnaire(round: Round, active = true) {
       // Read the server's submission timestamp.
       const loaded = await api<QuestionnaireData>(
         `/api/persona/questionnaire?round=${draft.round}`,
-        { signal: draft.signal },
+        { signal: draft.signal, headers: { 'X-Twin-Persona': draft.persona } },
       ).catch(() => null);
       if (loaded && draft.alive) setData(loaded);
       return draft.alive ? submitted : null;

@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
-import { TooltipProvider } from '../components/ui';
+import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { About } from '../pages/About';
 import { useStatus, type Status } from '../stores/status';
 
@@ -60,13 +60,15 @@ it('keeps only name/AI label in the header and describes external hosts only on 
   );
   const rendered = render(
     <TooltipProvider>
-      <MemoryRouter initialEntries={['/about']}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route path="about" element={<About />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/about']}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="about" element={<About />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
     </TooltipProvider>,
   );
   try {

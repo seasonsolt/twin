@@ -13,8 +13,8 @@ from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.persona import chat as pc
 from twin.persona import profile as pf
-from twin.persona.items import PReview
-from twin.persona.schema import ChatDraft, ChatReply, ChatTurn, ReviewStatus
+from twin.persona.items import PersonaItem, PEvidence, PReview
+from twin.persona.schema import ChatDraft, ChatReply, ChatTurn, EvidenceClass, Expression, ReviewStatus, SourceKind
 from twin.persona.sources import parse_biography, parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
 
@@ -75,8 +75,11 @@ def test_chat_modes_and_legacy_compatibility(contract: type[ChatDraft] | type[Ch
     answer = contract.model_validate({**data, "mode": mode})
     assert answer.mode == mode and answer.abstain == (mode == "abstain")
     assert contract.model_validate_json(answer.model_dump_json()) == answer
-    if isinstance(answer, ChatReply) and mode == "general":
-        assert answer.confidence == 0.5
+    if isinstance(answer, ChatReply):
+        assert answer.quotes_removed == 0
+        assert contract.model_validate({**data, "mode": mode, "quotes_removed": 2}).quotes_removed == 2
+        if mode == "general":
+            assert answer.confidence == 0.5
     for abstain in (True, False):
         legacy = contract.model_validate({**data, "abstain": abstain})
         assert legacy.mode == ("abstain" if abstain else "grounded")
@@ -237,3 +240,75 @@ def test_biography_narration_is_marked_untrusted_and_its_quotes_become_voice(set
     message = pc.chat_user_message([ChatTurn(role="user", content="要不要速攻")], ctx)
     assert "别人写的关于你的记述（第三人称" in message and "（无相关原话）" in message
     assert "宁可屯兵不进，不可轻进致败" in pc.chat_system_prompt("张三", ctx)
+
+
+@pytest.mark.parametrize("material", ["item", "core", "expression", "narrated", "voice", "question"])
+@pytest.mark.parametrize("cited", [False, True])
+def test_reply_quote_guard_uses_prompt_material(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch, material: str, cited: bool
+) -> None:
+    words = "先核对虚构数据"
+    item = PersonaItem(
+        item_id="pi_quote",
+        facet_id="4.2",
+        statement="他有虚构推断观点",
+        evidence=[
+            PEvidence(
+                expression_id="expr_quote",
+                source_id="source_quote",
+                source_kind=SourceKind.DOCUMENT,
+                evidence_class=EvidenceClass.BEHAVIOR,
+                quote=words,
+            )
+        ],
+    )
+    expression = Expression(
+        expression_id="expr_quote",
+        source_id="source_quote",
+        idx=0,
+        speaker=settings.target_name,
+        is_target=True,
+        text=words,
+        narrated=material == "narrated",
+    )
+    ctx = pc.PersonaContext(
+        items=[(item, 1.0)] if material == "item" else [],
+        core=[item] if material == "core" else [],
+        expressions=[(expression, 1.0)] if material in {"expression", "narrated"} else [],
+        voice=[words] if material == "voice" else [],
+    )
+    question = f"你怎么看{words}？" if material == "question" else "你怎么看？"
+    draft = f' \t「{words}」；“虚构飞船旅行”\n"他有虚构推断观点"、『术语』。 \n'
+    llm = FakeLLM(lambda *a: {"reply": draft, "citations": sorted(ctx.ids) if cited else [], "confidence": 0.9})
+    chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
+    monkeypatch.setattr(chat, "retrieve", lambda *a: ctx)
+    reply = chat.reply([ChatTurn(role="user", content=question)])
+    assert reply.reply == f" \t「{words}」；虚构飞船旅行\n他有虚构推断观点、『术语』。 \n"
+    assert reply.quotes_removed == 2
+    assert ChatReply.model_validate_json(reply.model_dump_json()) == reply
+    assert words in llm.calls[0][1] + llm.calls[0][2]
+
+
+def test_quote_guard_rejects_unseen_material(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = store.list_items("2.1")[0]
+    evidence = item.evidence[-1]
+    item = item.model_copy(
+        update={
+            "evidence": [
+                evidence.model_copy(update={"quote": "从未展示的旧证据"}),
+                evidence.model_copy(update={"quote": "甲" * pc.QUOTE_CHARS + "裁掉的证据尾巴"}),
+            ]
+        }
+    )
+    expression = store.list_expressions(target_only=True)[0].model_copy(
+        update={"text": "乙" * pc.TEXT_CHARS + "裁掉的表达尾巴"}
+    )
+    ctx = pc.PersonaContext([(item, 1.0)], [(expression, 1.0)], [], ["丙" * pc.VOICE_MAX_CHARS + "裁掉的样本尾巴"])
+    draft = "「从未展示的旧证据」「裁掉的证据尾巴」「裁掉的表达尾巴」「裁掉的样本尾巴」「问题以前的话」"
+    llm = FakeLLM(lambda *a: {"reply": draft, "citations": [], "confidence": 0.5})
+    chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
+    monkeypatch.setattr(chat, "retrieve", lambda *a: ctx)
+    reply = chat.reply([ChatTurn(role="user", content="问题以前的话"), ChatTurn(role="user", content="最后的问题")])
+    assert reply.reply == draft.replace("「", "").replace("」", "") and reply.quotes_removed == 5

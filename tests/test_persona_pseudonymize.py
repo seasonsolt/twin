@@ -264,6 +264,12 @@ def test_chat_evidence_and_biography_voice_use_the_view_even_for_raw_profile_quo
         assert ctx.items[0][0].evidence[0].quote == expected
         assert "李四" not in pc.chat_system_prompt(private.target_name, ctx) + pc.chat_user_message(HISTORY, ctx)
         assert store.list_items()[0].evidence[0].quote == WORDS
+        draft = f"「{expected}」；『{WORDS}』"
+        chat_llm = FakeLLM(lambda *a: {"reply": draft, "citations": [], "confidence": 0.5})
+        reply = pc.PersonaChat(store, chat_llm, embedder, private).reply(HISTORY)
+        assert reply.reply == f"「{expected}」；{WORDS}"
+        assert reply.quotes_removed == 1
+        assert "李四" not in chat_llm.calls[0][1] + chat_llm.calls[0][2]
 
 
 # Rows and output hashes captured by running the unmodified code at commit

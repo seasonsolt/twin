@@ -43,7 +43,7 @@ from twin.llm import FakeLLM
 from twin.persona.chat import PersonaChat, index_persona
 from twin.persona.items import PersonaItem, PEvidence
 from twin.persona.profile import ExtractDraft
-from twin.persona.schema import ChatDraft, EvidenceClass, SourceKind
+from twin.persona.schema import ChatDraft, ChatReply, EvidenceClass, SourceKind
 from twin.persona.sources import parse_text, pseudonym
 from twin.persona.store import PersonaStore
 
@@ -136,7 +136,14 @@ def system(store: PersonaStore, settings: Settings, text: str, citations: list[s
     )
     embedder = HashingEmbedder()
     index_persona(store, embedder, settings)
-    return PersonaSystem(PersonaChat(store, llm, embedder, settings))
+
+    class MetricChat(PersonaChat):
+        def reply(self, messages: Any, as_of: dt.date | None = None, *, persist: bool = True) -> ChatReply:
+            # Feed the original draft to the metric so its fixtures remain independent of the runtime guard.
+            reply = super().reply(messages, as_of, persist=persist)
+            return reply.model_copy(update={"reply": text, "quotes_removed": 0})
+
+    return PersonaSystem(MetricChat(store, llm, embedder, settings))
 
 
 def test_classification_fabrication_elsewhere_and_repeated_quotes(caplog: pytest.LogCaptureFixture) -> None:
@@ -155,7 +162,8 @@ def test_classification_fabrication_elsewhere_and_repeated_quotes(caplog: pytest
         prediction = adapter.predict(question(), as_of=None, repeat=0)
         assert prediction.raw["quotes"] == {"total": 5, "cited": 3, "elsewhere": 1, "question": 0, "unverified": 1}
         assert len(adapter.chat.llm.calls) == 1
-        assert set(prediction.raw) == {"artifacts", "quotes", "mode"}
+        assert set(prediction.raw) == {"artifacts", "quotes", "quotes_removed", "mode"}
+        assert prediction.raw["quotes_removed"] == 0
         assert prediction.raw["mode"] == "grounded"
         assert "飞船" not in json.dumps(prediction.raw, ensure_ascii=False)
         assert "飞船" not in caplog.text and "虚构问题" not in caplog.text
@@ -372,6 +380,7 @@ def test_summary_pools_spans_not_repeat_rates_or_judge_calls(tmp_path: Path) -> 
         "elsewhere": 1,
         "question": 1,
         "unverified": 1,
+        "quotes_removed": 0,
         "cited_rate": 2 / 5,
         "elsewhere_rate": 1 / 5,
         "question_rate": 1 / 5,
@@ -399,6 +408,42 @@ def test_summary_pools_spans_not_repeat_rates_or_judge_calls(tmp_path: Path) -> 
     assert "question=1 (0.2)" in markdown
     assert markdown.count("原话：") == len(summary)
     assert "虚构回答" not in markdown
+
+
+def test_runtime_quotes_removed_are_reported(tmp_path: Path) -> None:
+    settings = Settings(target_name="虚构林沐")
+    with PersonaStore(":memory:") as store:
+        ref = add_document(store, settings, "cited.txt", "我总是先核对数据。")
+        llm = FakeLLM(
+            lambda *a: {
+                "reply": "「我总是先核对数据」；『我曾驾驶飞船旅行』",
+                "citations": [ref],
+                "confidence": 0.8,
+            }
+        )
+        embedder = HashingEmbedder()
+        index_persona(store, embedder, settings)
+        prediction = PersonaSystem(PersonaChat(store, llm, embedder, settings)).predict(
+            question(), as_of=None, repeat=0
+        )
+        assert prediction.text == "「我总是先核对数据」；我曾驾驶飞船旅行"
+        assert prediction.raw["quotes_removed"] == 1
+        assert prediction.raw["quotes"] == {"total": 1, "cited": 1, "elsewhere": 0, "question": 0, "unverified": 0}
+    report = counted_report()
+    report = report.model_copy(
+        update={
+            "predictions": (
+                report.predictions[0].model_copy(update={"raw": prediction.raw}),
+                *report.predictions[1:],
+            )
+        }
+    )
+    assert summarize(report)["fact"]["quotes"]["quotes_removed"] == 1
+    assert summarize(report)["overall"]["quotes"]["quotes_removed"] == 1
+    write_outputs(tmp_path / "guarded", report, settings)
+    loaded = read_records(tmp_path / "guarded" / "records.json")
+    assert summarize(loaded)["overall"]["quotes"]["quotes_removed"] == 1
+    assert "quotes_removed=1" in (tmp_path / "guarded" / "report.md").read_text()
 
 
 def test_old_records_and_partial_coverage_compare_without_zero_filling(tmp_path: Path) -> None:
@@ -506,9 +551,9 @@ def test_update_quotes_use_current_private_memory(tmp_path: Path) -> None:
         repeats=2,
     )
     block = summarize(report)["update"]["quotes"]
-    assert block["n_replies"] == block["replies_with_quotes"] == block["total"] == 6
-    assert block["cited"] == 4 and block["elsewhere"] == 0 and block["unverified"] == 2
-    assert block["unverified_rate"] == 1 / 3
+    assert block["n_replies"] == 6 and block["replies_with_quotes"] == block["total"] == 4
+    assert block["cited"] == 4 and block["elsewhere"] == block["unverified"] == 0
+    assert block["unverified_rate"] == 0 and block["quotes_removed"] == 2
     assert summarize(report)["overall"]["quotes"] == block
     assert compare_reports(report, report)["categories"]["update"]["quotes"]["B"] == block
     assert not settings.db_path.exists()

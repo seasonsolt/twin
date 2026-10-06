@@ -13,7 +13,6 @@ import json
 import re
 import sqlite3
 import tempfile
-import unicodedata
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
@@ -28,6 +27,7 @@ from ..llm import LLM
 from ..persona.chat import PersonaChat, _visible_items, index_persona
 from ..persona.items import item_as_of
 from ..persona.profile import build_profile
+from ..persona.quotes import extract_quotes, normalize_quote
 from ..persona.schema import ChatReply, ChatTurn, SourceKind
 from ..persona.sources import expression_view, parse_text
 from ..persona.store import PersonaStore
@@ -180,39 +180,6 @@ def _question(case: Case) -> QuestionInput:
     return case.input.payload
 
 
-def normalize_quote(text: str) -> str:
-    """NFKC, no whitespace/punctuation, and case-insensitive Latin letters."""
-    return "".join(
-        char.lower() if "LATIN" in unicodedata.name(char, "") else char
-        for char in unicodedata.normalize("NFKC", text)
-        if not char.isspace() and not unicodedata.category(char).startswith("P")
-    )
-
-
-def extract_quotes(text: str) -> list[str]:
-    """Return balanced spans in source order, including nested spans and repeated occurrences.
-
-    Mismatched closers and unfinished pairs are ignored; balanced inner pairs still count.
-    Backslash-escaped ASCII quotes are not delimiters. Terms under four normalized characters
-    are ignored. Returned text is transient only, never prediction metadata.
-    """
-    pairs = {"「": "」", "『": "』", "“": "”", '"': '"'}
-    stack: list[tuple[str, int]] = []
-    spans: list[tuple[int, int]] = []
-    backslashes = 0
-    for index, char in enumerate(text):
-        escaped = char == '"' and backslashes % 2 == 1
-        backslashes = backslashes + 1 if char == "\\" else 0
-        if escaped:
-            continue
-        if stack and char == pairs[stack[-1][0]]:
-            _, start = stack.pop()
-            spans.append((start + 1, index))
-        elif char in pairs:
-            stack.append((char, index))
-    return [text[start:end] for start, end in sorted(spans) if len(normalize_quote(text[start:end])) >= 4]
-
-
 def _quote_counts(chat: PersonaChat, reply: ChatReply, as_of: dt.date | None, prompt: str) -> dict[str, int]:
     spans = [normalize_quote(span) for span in extract_quotes(reply.reply)]
     counts = {"total": len(spans), "cited": 0, "elsewhere": 0, "question": 0, "unverified": 0}
@@ -292,7 +259,12 @@ class PersonaSystem:
             abstain_reason=reply.abstain_reason,
             citations=[Citation(ref_id=ref, reason="") for ref in reply.citations],
             payload=QuestionOutput(reply=reply.reply),
-            raw={"artifacts": bool(ARTIFACT_RE.search(reply.reply)), "quotes": quotes, "mode": reply.mode},
+            raw={
+                "artifacts": bool(ARTIFACT_RE.search(reply.reply)),
+                "quotes": quotes,
+                "quotes_removed": reply.quotes_removed,
+                "mode": reply.mode,
+            },
         )
 
 
@@ -708,6 +680,12 @@ def _quotes_summary(predictions: Sequence[Prediction]) -> dict[str, Any] | None:
     if not measured:
         return None
     counts = {"total": 0, "cited": 0, "elsewhere": 0, "question": 0, "unverified": 0}
+    removed = 0
+    for prediction in predictions:
+        value = prediction.raw.get("quotes_removed", 0)
+        if type(value) is not int or value < 0:
+            raise ValueError("records 原话计数无效（详情已隐藏）")
+        removed += value
     for block in measured:
         if not isinstance(block, dict):
             raise ValueError("records 原话计数无效（详情已隐藏）")
@@ -723,6 +701,7 @@ def _quotes_summary(predictions: Sequence[Prediction]) -> dict[str, Any] | None:
         "n_missing": len(predictions) - len(measured),
         "replies_with_quotes": sum(block["total"] > 0 for block in measured),
         **counts,
+        "quotes_removed": removed,
         **{
             f"{key}_rate": counts[key] / counts["total"] if counts["total"] else None
             for key in counts
@@ -931,7 +910,8 @@ def _quote_line(block: dict[str, Any] | None) -> str:
         f"cited={block['cited']} ({block['cited_rate']}), "
         f"elsewhere={block['elsewhere']} ({block['elsewhere_rate']}), "
         f"question={block['question']} ({block['question_rate']}), "
-        f"unverified={block['unverified']} ({block['unverified_rate']}), missing={block['n_missing']}"
+        f"unverified={block['unverified']} ({block['unverified_rate']}), "
+        f"quotes_removed={block['quotes_removed']}, missing={block['n_missing']}"
     )
 
 

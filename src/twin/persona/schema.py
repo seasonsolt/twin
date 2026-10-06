@@ -140,6 +140,7 @@ class ChatReply(BaseModel):
     retrieved_ids: list[str]
     as_of: dt.date | None = None
     mode: Literal["grounded", "general", "abstain"] = "grounded"
+    quotes_removed: int = 0
 
     @model_validator(mode="before")
     @classmethod

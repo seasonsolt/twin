@@ -8,6 +8,7 @@ import { useIdentity } from '../features/identity/useIdentity';
 import { SelfAssets } from '../features/assets/SelfAssets';
 import { RecordingShortcut } from '../features/sources/MediaClaim';
 import { Overview } from '../features/profile/Overview';
+import { Channels } from '../features/profile/Channels';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
 import { forgetPersona } from '../lib/persona';
@@ -201,6 +202,7 @@ export function Profile() {
             </a>
           )}
           <Overview />
+          <Channels />
         </section>
         <section
           id="profile-memories"

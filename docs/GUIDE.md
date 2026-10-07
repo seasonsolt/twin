@@ -65,6 +65,22 @@ twin mcp                                            # stdio MCP，供其他工�
 API/MCP 保留高级（advanced）可选参数 `as_of`，评测也保留日期筛选；CLI 和网页聊天不提供它。
 配置、接口与隐私规则见 [SERVICE.md](SERVICE.md)。
 
+## 接入企业微信
+
+1. 企业微信管理后台 → 安全与管理/应用管理 → 智能机器人 → 创建，选择 **API 模式 + 长连接**，记下 BotID 和 Secret。
+2. 将 Secret 安全放入服务进程的环境变量 `TWIN_WECOM_SECRET`，不要写入配置文件；在 `twin.toml` 添加：
+
+```toml
+[[wecom.bots]]
+persona = "default"              # personas.json 中的分身 ID；default 为默认分身
+bot_id = "aibXXXX"
+secret_env = "TWIN_WECOM_SECRET"  # 只填环境变量名
+```
+
+3. 重启 `twin ui`；分身档案页的「接入」显示连接状态。同事可以单聊机器人，或在群里 @ 它；语音消息也支持（企业微信自动转成文字）。可见范围在企业微信管理后台设置，请只开放给可以查看该分身记忆的同事。
+
+每个机器人只能保持一条长连接，不要用同一 BotID 同时运行多个服务。回复沿用网页聊天的记忆检索与引用核验，聊天上下文仅保存在服务内存，重启后清空。
+
 ## 语音与视频（可选）
 
 在 `twin.toml` 的 `[tts]` 里配置语音后端：自托管的 MOSS-TTS-Nano（见 [deploy/tts-moss](../deploy/tts-moss/README.md)）或 Cloudflare MeloTTS（外部服务，按配置使用）。

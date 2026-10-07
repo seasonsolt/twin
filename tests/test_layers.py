@@ -60,6 +60,8 @@ LAYERS: dict[str, int] = {
     "mcp_server": 9,
     "cli": 9,
     "egress": 9,
+    "channels": 9,
+    "channels.wecom": 9,
     "web": 9,
     "web.app": 9,
     "web.auth": 9,

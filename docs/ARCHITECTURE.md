@@ -18,7 +18,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   P[服务 / 插件层<br/>聊天（默认） · 第二轮企业插件]
-  L5[L5 接入<br/>网页 · API · MCP · CLI · 登录 · 多分身]
+  L5[L5 接入<br/>网页 · 企业微信 · API · MCP · CLI · 登录 · 多分身]
   L4[L4 展示<br/>文字流 · 语音 · 视频 · 数字人界面]
   L3[L3 运行时<br/>检索 · 作答 · 引用 · 置信度 · 弃权]
   L2[L2 认知<br/>带证据的档案条目 · 完成度]
@@ -36,7 +36,7 @@ flowchart TB
 | L3 | 6 | `persona.chat` |
 | L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` |
 | 评测 | 8 | `evals.*` `media.check` |
-| L5 | 9 | `cli` `web.*` `frontend/` `api` `mcp_server` |
+| L5 | 9 | `cli` `web.*` `channels.wecom` `frontend/` `api` `mcp_server` |
 
 ## 3. 记忆：从资料到档案
 

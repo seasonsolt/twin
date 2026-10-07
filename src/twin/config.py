@@ -327,6 +327,30 @@ class AuthSettings(BaseModel):
         return self
 
 
+class WeComBot(BaseModel):
+    persona: str
+    bot_id: str
+    secret_env: str
+
+    @field_validator("persona", "bot_id", "secret_env")
+    @classmethod
+    def nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("企业微信配置不能为空")
+        return value.strip()
+
+
+class WeComSettings(BaseModel):
+    bots: list[WeComBot] = Field(default_factory=list)
+    url: str = "wss://openws.work.weixin.qq.com"
+
+    @model_validator(mode="after")
+    def unique_bots(self) -> WeComSettings:
+        if len({bot.bot_id for bot in self.bots}) != len(self.bots):
+            raise ValueError("企业微信 bot_id 不能重复")
+        return self
+
+
 class Settings(BaseModel):
     db_path: Path = Path("data/twin.db")
     target_name: str = "本人"
@@ -350,6 +374,7 @@ class Settings(BaseModel):
     video: VideoSettings = Field(default_factory=VideoSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
+    wecom: WeComSettings = Field(default_factory=WeComSettings)
 
     @property
     def effective_chat_llm(self) -> LLMSettings:

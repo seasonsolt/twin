@@ -17,6 +17,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from ..channels.wecom import WeComHub
 from ..config import Settings
 from ..egress import egress_status
 from ..media.tts import SpeechSynthesizer
@@ -254,6 +255,8 @@ def create_app(
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)
     registry = Personas(settings, jobs)
+    hub = WeComHub(settings, registry, backends) if settings.wecom.bots else None
+    app.state.channels = hub
     app.state.personas = registry
     app.state.auth = auth
     auth.register(app)
@@ -328,6 +331,10 @@ def create_app(
                 "egress": egress,
             }
 
+        @context.get("/api/channels")
+        def get_channels() -> dict[str, list[dict[str, str]]]:
+            return {"wecom": hub.status_for(persona_id) if hub else []}
+
         @context.get("/api/jobs")
         def get_jobs() -> list[dict[str, Any]]:
             return scoped_jobs.recent()
@@ -363,9 +370,13 @@ def create_app(
                     continue
                 context = registry.application(entry["id"])
                 await stack.enter_async_context(context.router.lifespan_context(context))
+            if hub:
+                await hub.start()
             try:
                 yield
             finally:
+                if hub:
+                    await hub.stop()
                 for context in list(registry.apps.values()):
                     context.state.processing.close()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -12,7 +13,7 @@ from .identity import Identity
 from .persona.chat import QUOTE_CHARS, TEXT_CHARS, PersonaChat, _clip, _visible_items
 from .persona.schema import ChatTurn
 from .persona.sources import expression_view
-from .persona.store import stored_identity
+from .persona.store import PersonaStore, stored_identity
 
 MAX_QUESTION_CHARS = 2000
 QUESTION_TOO_LONG = "问题不能超过 2000 个字符"
@@ -82,17 +83,14 @@ def public_identity(settings: Settings) -> ServiceIdentity:
     return ServiceIdentity(name=identity.name, avatar=identity.avatar, voice=identity.voice)
 
 
-def answer_question(chat: PersonaChat, question: str, as_of: dt.date | None) -> ServiceAnswer:
-    if len(question) > MAX_QUESTION_CHARS:
-        raise ValueError(QUESTION_TOO_LONG)
-    reply = chat.reply([ChatTurn(role="user", content=question)], as_of=as_of, persist=False)
-    items = {item.item_id: item for item in _visible_items(chat.store, chat.settings, as_of)}
-    expressions = {
-        e.expression_id: e for e in expression_view(chat.store, chat.settings, target_only=True, until=as_of)
-    }
-    sources = {source.source_id: source.kind.value for source in chat.store.list_sources()}
+def resolve_citations(
+    store: PersonaStore, settings: Settings, refs: Sequence[str], as_of: dt.date | None
+) -> list[ServiceCitation]:
+    items = {item.item_id: item for item in _visible_items(store, settings, as_of)}
+    expressions = {e.expression_id: e for e in expression_view(store, settings, target_only=True, until=as_of)}
+    sources = {source.source_id: source.kind.value for source in store.list_sources()}
     citations: list[ServiceCitation] = []
-    for ref in reply.citations:
+    for ref in refs:
         if ref in items:
             item = items[ref]
             evidence = item.evidence[-1] if item.evidence else None
@@ -116,6 +114,14 @@ def answer_question(chat: PersonaChat, question: str, as_of: dt.date | None) -> 
                     source_kind=sources.get(expression.source_id),
                 )
             )
+    return citations
+
+
+def answer_question(chat: PersonaChat, question: str, as_of: dt.date | None) -> ServiceAnswer:
+    if len(question) > MAX_QUESTION_CHARS:
+        raise ValueError(QUESTION_TOO_LONG)
+    reply = chat.reply([ChatTurn(role="user", content=question)], as_of=as_of, persist=False)
+    citations = resolve_citations(chat.store, chat.settings, reply.citations, as_of)
     return ServiceAnswer(
         answer=reply.reply,
         abstain=reply.abstain,

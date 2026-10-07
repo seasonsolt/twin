@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render as renderView,
   screen,
@@ -7,7 +8,7 @@ import {
 import { readFileSync } from 'node:fs';
 import { MemoryRouter } from 'react-router';
 import { ConfirmProvider } from '../components/ui';
-import { About } from '../pages/About';
+import { Profile } from '../pages/Profile';
 import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
@@ -153,6 +154,7 @@ beforeEach(() => {
   mocks.load.mockResolvedValue({ scene, userData: { vrm: model } });
 });
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
 });
 const load = async () => {
@@ -490,7 +492,8 @@ it.each([
         Promise.resolve(
           new Response(
             JSON.stringify(
-              path.startsWith('/api/persona/items')
+              path === '/api/persona/sources' ||
+                path.startsWith('/api/persona/items')
                 ? []
                 : path.startsWith('/api/persona/coverage')
                   ? { facets: [], suggestions: [], kind_labels: {} }
@@ -523,8 +526,8 @@ it.each([
     );
     renderView(
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/about']}>
-          <About />
+        <MemoryRouter initialEntries={['/profile']}>
+          <Profile />
         </MemoryRouter>
       </ConfirmProvider>,
     );

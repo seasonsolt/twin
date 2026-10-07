@@ -10,7 +10,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { NewTwin } from '../components/layout/NewTwin';
-import { About } from '../pages/About';
+import { Profile } from '../pages/Profile';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
 import { Questionnaire } from '../pages/Questionnaire';
@@ -124,7 +124,7 @@ function mount(page: React.ReactNode, route: string) {
 it.each([
   ['chat', Chat],
   ['memories', Memories],
-  ['about', About],
+  ['profile', Profile],
   ['questionnaire', Questionnaire],
 ] as const)(
   'shows the current name and round portrait on %s, with a working switcher',
@@ -150,15 +150,15 @@ it.each([
         '[aria-hidden].stage-sun, [aria-hidden].stage-coral',
       ),
     ).toHaveLength(2);
-    fireEvent.click(
-      within(header).getByRole('button', { name: '小林，快速切换分身' }),
-    );
+    fireEvent.click(within(header).getByRole('button', { name: '切换分身' }));
     const sheet = await screen.findByRole('dialog', { name: '切换分身' });
     expect(within(sheet).getByText('小林').closest('button')).toHaveClass(
       'bg-primary',
       'text-canvas',
     );
-    expect(within(sheet).getByRole('link', { name: '新建分身' })).toBeEnabled();
+    expect(
+      within(sheet).getByRole('link', { name: '＋ 新建分身' }),
+    ).toBeEnabled();
     expect(
       within(sheet).getByRole('link', { name: '全部分身' }),
     ).toHaveAttribute('href', '/twins');

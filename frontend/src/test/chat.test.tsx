@@ -181,7 +181,7 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
   mount();
   expect(screen.getByRole('link', { name: '添加记忆' })).toHaveAttribute(
     'href',
-    '#/memories',
+    '#/profile?section=memories',
   );
   await submit();
   expect(
@@ -219,7 +219,7 @@ it('streams progressively, hides thinking on the first delta, then replaces text
   expect(screen.getByText(/新添加的记忆正在处理中/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看记忆' })).toHaveAttribute(
     'href',
-    '#/memories',
+    '#/profile?section=memories',
   );
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   const init = fetchMock.mock.calls.find(

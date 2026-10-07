@@ -29,7 +29,7 @@ from .schema import (
     SpeechResult,
     SynthCapabilities,
 )
-from .speech_text import SPEECH_TEXT_VERSION, speech_text, speech_text_spans
+from .speech_text import SPEECH_SEGMENT_VERSION, SPEECH_TEXT_VERSION, speech_text, speech_text_spans
 from .tts import MediaUnavailable, SpeechSynthesizer
 
 EXPORT_CSP = (
@@ -242,6 +242,7 @@ def render_audio(
                 "identity": synthesizer.identity,
                 "voice": synthesizer.voice.model_dump(mode="json"),
                 "speech_text_version": SPEECH_TEXT_VERSION,
+                "speech_segment_version": SPEECH_SEGMENT_VERSION,
                 "capabilities": synthesizer.capabilities.model_dump(mode="json"),
                 **({"segments": sorted(set(segments))} if segments is not None else {}),
             }

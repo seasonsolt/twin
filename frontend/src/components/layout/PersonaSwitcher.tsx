@@ -6,8 +6,8 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Link, useNavigate } from 'react-router';
-import { Check, ChevronDown, UsersRound } from 'lucide-react';
+import { Link } from 'react-router';
+import { Check, ChevronDown } from 'lucide-react';
 import { Dialog } from '../ui';
 import { personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
@@ -54,8 +54,8 @@ export function PersonaSwitcher({
   returnFocus?: RefObject<HTMLButtonElement | null>;
 }) {
   const mobile = useMobile();
-  const navigate = useNavigate();
   const button = useRef<HTMLButtonElement>(null);
+  const navigating = useRef(false);
   const [localOpen, setLocalOpen] = useState(false);
   const open = controlledOpen ?? localOpen;
   const setOpen = (value: boolean) => {
@@ -64,7 +64,7 @@ export function PersonaSwitcher({
   };
   const [anchor, setAnchor] = useState<CSSProperties>();
   const [error, setError] = useState('');
-  const { id, items, refresh, switchTo } = usePersonas();
+  const { id, pendingId, items, refresh, switchTo } = usePersonas();
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   useEffect(() => {
@@ -104,17 +104,6 @@ export function PersonaSwitcher({
       window.removeEventListener('scroll', position, true);
     };
   }, [mobile, open, returnFocus]);
-  if (stage && mobile)
-    return (
-      <button
-        type="button"
-        className="stage-all"
-        aria-label="全部分身"
-        onClick={() => navigate('/twins')}
-      >
-        <UsersRound size={22} aria-hidden />
-      </button>
-    );
   return (
     <>
       <button
@@ -123,12 +112,14 @@ export function PersonaSwitcher({
         aria-label={label}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-busy={pendingId !== null}
         className={
           className ??
           `flex min-h-11 items-center gap-2 rounded-full px-3 text-base ${stage ? 'stage-switch' : 'hover:bg-soft'}`
         }
         onClick={() => {
           setError('');
+          navigating.current = false;
           setOpen(true);
         }}
       >
@@ -152,7 +143,8 @@ export function PersonaSwitcher({
         className={`${mobile ? 'persona-sheet' : 'persona-popover'} [&_button]:min-h-11 [&_button]:min-w-11`}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          (returnFocus?.current ?? button.current)?.focus();
+          if (!navigating.current)
+            (returnFocus?.current ?? button.current)?.focus();
         }}
       >
         <div className="space-y-3">
@@ -160,7 +152,7 @@ export function PersonaSwitcher({
             <button
               key={persona.id}
               type="button"
-              className={`persona-row flex w-full items-center gap-3 rounded-full p-3 text-left ${persona.id === id ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
+              className={`persona-row flex w-full items-center gap-3 rounded-full p-3 text-left ${persona.id === (pendingId ?? id) ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
               onClick={() => {
                 setOpen(false);
                 switchTo(persona.id);
@@ -180,7 +172,7 @@ export function PersonaSwitcher({
                     </span>
                   )}
               </span>
-              {persona.id === id && (
+              {persona.id === (pendingId ?? id) && (
                 <Check aria-label="当前分身" className="size-5" />
               )}
             </button>
@@ -189,16 +181,22 @@ export function PersonaSwitcher({
             <Link
               to="/twins"
               className="min-h-11 text-accent underline"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                navigating.current = true;
+                setOpen(false);
+              }}
             >
               全部分身
             </Link>
             <Link
               to="/twins?create=1"
               className="min-h-11 text-accent underline"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                navigating.current = true;
+                setOpen(false);
+              }}
             >
-              新建分身
+              ＋ 新建分身
             </Link>
           </div>
           {error && (

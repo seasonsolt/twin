@@ -22,7 +22,6 @@ import { BuildSummary } from '../features/sources/SourceCards';
 import type { BuildResult } from '../features/sources/types';
 import { useStatus } from '../stores/status';
 import { StageHeader } from '../components/layout/StageHeader';
-import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 
 export function Questionnaire() {
   const active = useLocation().pathname === '/questionnaire';
@@ -107,7 +106,7 @@ export function Questionnaire() {
   };
   return (
     <div>
-      <StageHeader left={<PersonaSwitcher stage />} />
+      <StageHeader />
       <div className="page-content space-y-6">
         <header>
           <h2 className="text-2xl font-semibold">回答几个问题</h2>
@@ -265,7 +264,7 @@ export function Questionnaire() {
             <Card>
               <p className="mb-3 text-success">
                 构建完成。{' '}
-                <a href="#/about" className="text-accent">
+                <a href="#/profile" className="text-accent">
                   看看我了解到的你
                 </a>
                 ，或者{' '}

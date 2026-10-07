@@ -46,9 +46,10 @@ export function Login() {
   const verify = () =>
     work(async () => {
       await api('/api/auth/verify', { method: 'POST', json: { email, code } });
+      window.location.hash = '#/chat';
       await useAuth.getState().login();
-      window.location.hash =
-        usePersonas.getState().items.length > 1 ? '#/twins' : '#/chat';
+      if (usePersonas.getState().items.length > 1)
+        window.location.hash = '#/twins';
     });
   return (
     <main className="auth-page min-h-dvh bg-background">

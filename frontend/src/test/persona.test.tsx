@@ -7,7 +7,7 @@ vi.mock('motion/react', async (original) => ({
   useReducedMotion: () => true,
 }));
 import { beforeEach, expect, it, vi } from 'vitest';
-import { About } from '../pages/About';
+import { Profile } from '../pages/Profile';
 import { ConfirmProvider } from '../components/ui';
 import { reviewLabels, type ProfileItem } from '../features/profile/types';
 import { useStatus } from '../stores/status';
@@ -55,6 +55,9 @@ beforeEach(() => {
           avatar: null,
         }),
       );
+    if (url === '/api/persona/sources') return Promise.resolve(json([]));
+    if (url === '/api/persona/processing')
+      return Promise.resolve(json({ state: 'idle' }));
     if (url === '/api/media/capabilities')
       return Promise.resolve(json({ available: false }));
     if (url === '/api/persona/coverage')
@@ -91,8 +94,8 @@ beforeEach(() => {
 const mount = () =>
   render(
     <ConfirmProvider>
-      <MemoryRouter initialEntries={['/about']}>
-        <About />
+      <MemoryRouter initialEntries={['/profile']}>
+        <Profile />
       </MemoryRouter>
     </ConfirmProvider>,
   );

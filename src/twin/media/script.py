@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .schema import MediaScript, PresentableAnswer, Segment
-from .speech_text import strip_markdown
+from .speech_text import split_speech, strip_markdown
 
 _ENDINGS = frozenset("。！？!?….\r\n")
 _QUOTES = {"「": "」", "“": "”"}
@@ -40,6 +40,16 @@ def split_sentences(text: str) -> list[str]:
     if piece := text[start:].strip():
         pieces.append(piece)
     return pieces
+
+
+def speech_script(script: MediaScript) -> MediaScript:
+    """Rechunk only audio scripts; presentation and video keep their sentence layout."""
+    if script.abstain:
+        return script
+    text = "\n".join(segment.text for segment in script.segments if segment.kind == "speech")
+    return script.model_copy(
+        update={"segments": [Segment(index=i, kind="speech", text=piece) for i, piece in enumerate(split_speech(text))]}
+    )
 
 
 def _segments(text: str, abstain: bool, reason: str) -> list[Segment]:

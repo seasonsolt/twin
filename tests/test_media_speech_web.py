@@ -30,7 +30,7 @@ from twin.web.app import MAX_JSON_BYTES
 
 HEADERS = {"X-Twin": "1"}
 SOURCE: dict[str, Any] = {
-    "reply": "先验证。再推进。",
+    "reply": "首先认真核对所有资料。随后根据实际结果逐项推进。",
     "citations": [],
     "confidence": 0.8,
     "abstain": False,
@@ -88,7 +88,7 @@ def test_audio_urls_metadata_and_hardening(tmp_path: Path) -> None:
         response = client.post("/api/media/audio", json=BODY, headers=HEADERS)
         assert response.status_code == 200, response.text
         result = response.json()
-        assert result["script"]["segments"][0]["text"] == "先验证。"
+        assert result["script"]["segments"][0]["text"] == "首先认真核对所有资料。"
         assert result["segments"][0]["index"] == 0
         assert result["manifest"]["ai_generated"] is True
         assert result["manifest"]["generator"] == "twin"
@@ -129,13 +129,13 @@ def test_audio_selected_segments_reuse_full_render_cache(tmp_path: Path, monkeyp
     settings = Settings(db_path=tmp_path / "twin.db")
     with TestClient(create_app(settings, synthesizer_factory=lambda: synth), base_url="http://localhost") as client:
         first = client.post("/api/media/audio", json={**BODY, "segments": [0]}, headers=HEADERS).json()
-        assert spoken == ["先验证。"]
+        assert spoken == ["首先认真核对所有资料。"]
         assert first["segment_count"] == 2
         assert [part["index"] for part in first["segments"]] == [0]
         assert len(first["script"]["segments"]) == 2
         assert [part["index"] for part in first["manifest"]["segments"]] == [0]
         last = client.post("/api/media/audio", json={**BODY, "segments": [1, 1]}, headers=HEADERS).json()
-        assert spoken == ["先验证。", "再推进。"]
+        assert spoken == ["首先认真核对所有资料。", "随后根据实际结果逐项推进。"]
         assert [part["index"] for part in last["segments"]] == [1]
         full = client.post("/api/media/audio", json=BODY, headers=HEADERS).json()
         assert full["segments"] == [*first["segments"], *last["segments"]]
@@ -147,6 +147,25 @@ def test_audio_selected_segments_reuse_full_render_cache(tmp_path: Path, monkeyp
         assert len(spoken) == 2
         manifests = [json.loads(path.read_bytes()) for path in (tmp_path / "media-cache").glob("*.audio.json")]
         assert sorted(len(manifest["segments"]) for manifest in manifests) == [0, 1, 1, 2, 2]
+
+
+def test_audio_selection_uses_speech_chunks_not_presentation_sentences(tmp_path: Path) -> None:
+    from twin.media.speech_text import split_speech
+
+    text = "首先核对所有的关键资料，然后再检查 API 和所有参数，随后运行 pytest 验证最终输出，最后记录验证结果。"
+    body = {**BODY, "answer": {**SOURCE, "reply": text}}
+    with TestClient(
+        create_app(Settings(db_path=tmp_path / "twin.db"), synthesizer_factory=SilentSynthesizer),
+        base_url="http://localhost",
+    ) as client:
+        original = client.post("/api/media/script", json=body, headers=HEADERS).json()
+        assert len(original["segments"]) == 1
+        result = client.post("/api/media/audio", json={**body, "segments": [1]}, headers=HEADERS).json()
+        assert result["segment_count"] == len(split_speech(text))
+        assert [segment["text"] for segment in result["script"]["segments"]] == split_speech(text)
+        assert [segment["index"] for segment in result["manifest"]["segments"]] == [1]
+        again = client.post("/api/media/script", json=body, headers=HEADERS).json()
+        assert again == original
 
 
 @pytest.mark.parametrize("segments", [[-1], [2], [0.5], [True], ["0"], "0"])

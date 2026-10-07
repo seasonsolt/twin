@@ -306,7 +306,7 @@ export function Chat() {
                   新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
                   <a
                     className="inline-flex min-h-11 items-center text-accent underline"
-                    href="#/memories"
+                    href="#/profile?section=memories"
                   >
                     查看记忆
                   </a>
@@ -367,7 +367,7 @@ export function Chat() {
                     </div>
                     <a
                       className="inline-flex min-h-11 items-center text-accent underline"
-                      href="#/memories"
+                      href="#/profile?section=memories"
                     >
                       添加记忆
                     </a>

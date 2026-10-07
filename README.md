@@ -10,7 +10,7 @@ English | [简体中文](#简体中文)
 
 twin builds a persona from freely added memories — notes, chats, documents, optional questions and interviews — where every trait carries a verbatim, dated quote, and serves it as conversation and speech: **Identity → Memory upload → Service**. Answers cite their evidence or abstain. twin is a personal tool and does not add disclaimers. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Chinese).
 
-**Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, and rely on LoRA training that is slow to update. twin answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (Second Me after its base upgrade: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 1.7B–4B model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
+**Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, and rely on LoRA training that is slow to update. The author first tried to fix this inside Second Me: the fork [seasonsolt/Second-Me](https://github.com/seasonsolt/Second-Me) swapped every replaceable module for the best option as of Q3 2026 (Qwen3, MLX LoRA, retrieval-first memory, 8K context) and still fell short, because the gap is architectural. twin was therefore designed from scratch: it answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (original Second Me: 4.7% and 10%; upgraded fork: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 0.5B (original) or 1.7B (upgraded) model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
 
 ---
 
@@ -34,10 +34,23 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 | 项目 | 做法 | 不足 |
 | --- | --- | --- |
-| [Second Me](https://github.com/mindverse/Second-Me)（Apache-2.0） | 文档洞察 → 画像（shade、bio）→ 用合成数据做 LoRA 微调，本地小模型作答 | 画像与回答没有可核对的原话证据；没有按日期作答；资料里没有的事会编造（作者资料上不编造率 70%）；每次更新都要重新合成数据并训练；1.0.1 版只有一个 shade 时画像会变成空回复，训练数据随之失效，且界面显示成功；代码自 2025-05 起不再更新 |
+| [Second Me](https://github.com/mindverse/Second-Me) 原始版本（Apache-2.0） | 文档洞察 → 画像（shade、bio）→ 用合成数据做 LoRA 微调，事实也训练进模型，本地 Qwen2.5-0.5B 作答，上下文 1024 token | 画像与回答没有可核对的原话证据；没有按日期作答；资料里没有的事会编造（作者资料上不编造率 10%）；每次更新都要重新合成数据并训练；1.0.1 版只有一个 shade 时画像会变成空回复，训练数据随之失效，且界面显示成功；代码自 2025-05 起不再更新 |
+| [Second Me 升级版](https://github.com/seasonsolt/Second-Me)（作者的第一次尝试，已冻结） | 同一架构，可替换模块升级到 2026 年第三季度的最好选择：Qwen3-1.7B、Apple Silicon 上 MLX LoRA、检索式记忆（事实来自检索，LoRA 只学风格）、8192 token 上下文、按 embedding 模型选检索阈值 | 仍然没有原话证据和按日期作答，置信度靠模型自评；不编造率最高 80%；检索式记忆按设计增删改不用重训，但评测中删除 0/2 生效 |
 | [Distilly](https://github.com/titanwings/distilly)（MIT，原名同事.skill） | 通读材料，生成一份人格与工作技能档案（Agent Skill），作答时只靠这份档案 | 没有检索和证据；档案一次性生成，更新靠重写；资料里没有的话题会用本人口吻编出立场（早期合成数据测试中，陷阱题 83% 被编造） |
 | [WeClone](https://github.com/xming521/WeClone)（AGPL-3.0） | 用聊天记录微调 LoRA，复刻口吻 | 只学口吻，不管事实是否有据；需要训练，许可为 AGPL |
 | mem0、Letta、Graphiti 等记忆框架 | 通用的智能体记忆 | 不是分身：没有人格维度、口吻和弃权规则；部分组件对中文支持差（例如 mem0 的 BM25 与实体抽取写死英文模型） |
+
+### 先试过升级 Second Me：为什么另起炉灶
+
+twin 不是第一次尝试。作者先 fork 了 Second Me（[seasonsolt/Second-Me](https://github.com/seasonsolt/Second-Me)），不改架构，只把能替换的模块都换成 2026 年第三季度最新、最好的选择：基座模型、训练框架、检索式记忆、上下文长度、检索阈值、推理运行时。目的是测出这套架构的上限。
+
+结果模块升级确实有效，但仍然达不到预期（见下面评测中的“原始版本”与“升级版本”）：事实准确率从 4.7% 提到最高 78.1%，不编造从 10% 提到最高 80%，风格只有 1.9–2.2 分，删除记忆 0/2 生效。剩下的差距来自架构本身，换更好的模块补不上：
+
+- 作答靠本地小模型加 LoRA，回答没有可核对的原话证据，也不按日期作答；
+- 置信度由模型自评，证据不足时不会主动弃权；
+- LoRA 的训练数据仍由资料合成，记忆改了，训练出的权重不会跟着改，删除无法保证生效。
+
+所以这个 fork 已冻结，twin 从头设计，把证据、日期、弃权和评测作为架构的一部分，而不是在 LoRA 管线上打补丁。
 
 ### twin 怎么解决
 
@@ -50,19 +63,21 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 ### 评测能体现什么
 
-**作者本人资料（59 题）。** 2026-10-05，同一套题库、同一个评分脚本和评委模型（Second Me 项目的 `judge.py`，`gpt-6.1-sol`）。twin 每题作答 3 次；表中 twin 取第 1 次回答，与 Second Me 每题一次的做法一致；Second Me 一栏取它几次运行中的最好值或区间：
+**作者本人资料（59 题）。** 2026-10-05，同一套题库、同一个评分脚本和评委模型（Second Me 项目的 `judge.py`，`gpt-6.1-sol`）。twin 每题作答 3 次；表中 twin 取第 1 次回答，与 Second Me 每题一次的做法一致；升级版本一栏取它修复前后几次运行中的最好值或区间：
 
-| 类别 | twin | Second Me（升级后的第一阶段版本） |
-| --- | --- | --- |
-| 事实准确率（32 题） | **98.4%** | 78.1% |
-| 资料里没有的问题不编造（10 题） | **100%** | 70% |
-| 风格像本人（10 题，1–5） | **4.0** | 1.9–2.2 |
-| 通用问题质量（5 题，1–5） | 2.6 | 3.0–3.2 |
-| 记忆更新（2 题 × 增改删，6 分） | **6** | 3.5（删除 0/2） |
+| 类别 | twin | Second Me 原始版本（Qwen2.5-0.5B） | Second Me 升级版本（Qwen3-1.7B） |
+| --- | --- | --- | --- |
+| 事实准确率（32 题） | **98.4%** | 4.7% | 78.1% |
+| 资料里没有的问题不编造（10 题） | **100%** | 10% | 70% |
+| 风格像本人（10 题，1–5） | **4.0** | 1.0 | 1.9–2.2 |
+| 通用问题质量（5 题，1–5） | 2.6 | 2.2 | 3.0–3.2 |
+| 记忆更新（2 题 × 增改删，6 分） | **6** | 0 | 3.5（删除 0/2） |
 
 用 twin 自己的评测框架（3 次作答取平均、按来源文档 bootstrap）结果一致：事实 99.0%（95% 区间 94.7%–100%），不编造 96.7%（90%–100%），风格 4.23（4.0–4.5）。
 
-**当前版本（2026-10-06，twin 自己的评测框架）。** 作答用不开思考的快速模型（与线上部署一致），评委固定为 `gpt-6.1-sol`，每题作答 3 次，括号内为 95% 区间：
+**换不同家族的评委复核。** 冻结 Second Me fork 时，用 `claude-sonnet-5-5`（与所有作答模型都不同家族）对同一份资料、57 道题（不含记忆更新）单次重评，方向一致：事实 twin 98.4% / 原始 6.2% / 升级 68.8%，不编造 100% / 10% / 80%，风格 3.9 / 1.0 / 1.9，通用 2.0 / 2.2 / 3.0。完整表格见 [seasonsolt/Second-Me](https://github.com/seasonsolt/Second-Me) 的 README。
+
+**当前版本（2026-10-06，twin 自己的评测框架）。** 作答用不开思考的快速模型（与当时线上部署一致；现在评测作答走 `[chat_llm]`，见 [docs/PERSONAL_EVAL.md](docs/PERSONAL_EVAL.md)），评委固定为 `gpt-6.1-sol`，每题作答 3 次，括号内为 95% 区间：
 
 | 类别 | twin |
 | --- | --- |
@@ -77,8 +92,8 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 
 读这组数字要注意：
 
-- **作答模型不同。** twin 用前沿大模型作答，Second Me 用本地微调的 1.7B–4B 小模型。差距有一部分来自模型而不是方法；用同一个作答模型的对比还没有做。
-- **评委与作答同源。** 评委是 `gpt-6.1-sol`，可能偏向同家族的回答；第二个不同家族的评委还没有加入。
+- **作答模型不同。** twin 用前沿大模型作答，Second Me 用本地微调的小模型（原始版本 0.5B，升级版本 1.7B）。差距有一部分来自模型而不是方法；用同一个作答模型的对比还没有做。
+- **评委与作答同源。** 主表评委是 `gpt-6.1-sol`，可能偏向同家族的回答；不同家族的 `claude-sonnet-5-5` 只单次复核过一次，twin 自己的评测框架还没有接入第二个评委。
 - **题少。** 不编造、风格各 10 题，通用只有 5 题，区间都很宽。
 
 **早期原型的合成数据对比**（单次运行，题库按分身的验收点编写，有主场优势，只看方向）：
@@ -107,6 +122,7 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 ```
 
 密钥只放在环境变量里（`TWIN_LLM_KEY`、`TWIN_EMBED_KEY` 等），配置文件只写变量名。
+可选的 `[chat_llm]` 让聊天（网页、CLI、API/MCP 与评测作答）用更快的模型，档案抽取和构建仍用 `[llm]`；未配置时聊天也用 `[llm]`，示例见 `twin.toml.example`。
 外部后端按配置使用，界面如实展示出境分类；用 `twin identity show` 查看，本机转发代理需声明 `egress = "external"`。
 
 **网页快速开始**
@@ -119,11 +135,11 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 **多个分身**
 
 手机和桌面顶栏均可点击头像与名字切换分身；列表显示记忆数，可“新建分身”或进入“管理”重命名、确认删除。
-新建后自动切换并进入四步引导。每个分身的介绍、记忆、照片、声音、聊天和音视频上传相互独立；切换停止播放，但后台任务继续为原分身处理。
+新建后自动切换并进入四步引导。每个分身的介绍、记忆、照片、声音、聊天记录和音视频上传相互独立；切换停止播放，但后台任务继续为原分身处理。
 默认 `[auth].enabled = false` 保持无登录、所有人都是管理员的本机模式。启用邮箱登录后，成员只看到自己的分身，默认最多创建 3 个；管理员可管理全部分身，列表标出其他拥有者的邮箱。旧分身（含 default）归管理员。
 
 数据根目录为 `db_path.parent`。`personas.json` 记录 ID、owner（邮箱或 null）、创建时间和默认 ID；原数据库和 `assets/`、`media-cache/`、`media-sources/`、`uploads/` 原地保留为 `default`，无需迁移。
-新分身使用 `personas/p-<10位hex>/twin.db` 和同布局的私有目录。默认分身不能删除；有运行或排队任务的分身暂不能删除。
+新分身使用 `personas/p-<10位hex>/twin.db` 和同布局的私有目录。聊天记录保存在各分身的 `twin.db` 里，可搜索、重命名、删除和继续；启用登录后按账号邮箱各自私有。默认分身不能删除；有运行或排队任务的分身暂不能删除。
 CLI/MCP/评测继续使用配置数据库，不新增选择参数。
 
 **公网部署与邮箱登录**
@@ -134,7 +150,7 @@ Cloudflare Access 已移除，不读取任何 `Cf-Access-*` 身份头；应用�
 2. 配置 `[auth.smtp]` 的 host、port（465 SSL / 587 STARTTLS）、username、from_address、from_name。`password_env = "TWIN_SMTP_PASSWORD"` 只写变量名；通过服务进程的环境安全传入密码，不存入配置或源码。启用登录但缺少 SMTP 配置/密码时启动失败。
 3. 重启服务应用配置变更。允许的用户收到 6 位验证码（10 分钟有效、5 次错误后失效）；未允许的邮箱加入等候名单，不发邮件。发送限额：每邮箱 60 秒一次、每小时 5 次，每客户端 IP 每小时 20 次（隧道使用 `CF-Connecting-IP`，否则使用连接地址）。内存限额按进程计算，部署使用单进程。
 
-会话默认 30 天，只存于 HttpOnly、Secure、SameSite=Lax cookie（本机 HTTP 开发可非 Secure），不在 localStorage 保存 token。`<数据根>/auth.db` 以 0600 保存验证码哈希、会话哈希及去重的等候邮箱；备份时视作私有资料。所有 API/媒体需会话，写操作仍需 `X-Twin: 1`。顶栏切换页提供“退出登录”。
+会话默认 30 天，只存于 HttpOnly、Secure、SameSite=Lax cookie（本机 HTTP 开发可非 Secure），不在 localStorage 保存 token。`<数据根>/auth.db` 以 0600 保存验证码哈希、会话哈希及去重的等候邮箱；备份时视作私有资料。所有 API/媒体需会话，写操作仍需 `X-Twin: 1`。账号菜单常驻页面，提供“退出登录”。
 
 管理员登录后可用同源 `GET /api/admin/waitlist` 查看等候名单；放行用户就是把邮箱加入配置 `allowed_emails` 并重启，没有审批 UI。不要在启用 auth 前移除原有外层保护，也不要在公网关闭 auth。
 
@@ -158,7 +174,7 @@ twin persona coverage                               # 看了解到什么，还�
 
 ```bash
 twin persona chat "你怎么看远程办公？"
-twin ui                                             # 本机网页：聊天、记忆、关于你；支持回放与朗读
+twin ui                                             # 本机网页：多个分身、流式聊天、保存的对话、记忆、朗读与真人视频
 twin api                                            # 令牌保护的本机 HTTP API（先设置 TWIN_API_TOKEN）
 twin mcp                                            # stdio MCP，供其他工具和 Agent 使用
 ```
@@ -177,7 +193,7 @@ twin media video 回复.json --out out.mp4              # [video] 通用 SSH 视
 twin media check --out 评测目录/                      # 合成句集回听评测：字错率与延迟
 ```
 
-网页「关于你」可裁剪上传本人照片、录一段声音或上传录音/视频，首次引导也可设置或跳过。
+网页上可裁剪上传本人照片（JPEG、PNG、WebP、HEIC，最大 15 MB）、录一段声音或上传录音/视频，首次引导也可设置或跳过。
 照片用于聊天头像和真人视频；声音用于视频，配置 `[tts].voice_dir` 后也用于听和试听。
 素材保存在各分身数据目录的私有 `assets/` 中。只有默认分身可回退到配置的本人肖像和视频驱动素材；
 其他分身无照片时使用首字/VRM，无声音时使用 `[tts].voice` 预置音色，真人视频必须先上传该分身自己的照片和声音。

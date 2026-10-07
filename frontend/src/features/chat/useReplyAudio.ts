@@ -64,6 +64,7 @@ export function useReplyAudio(active: boolean) {
     let position = 0;
     let waiting = false;
     let player: GaplessAudio | null = null;
+    let prefetch = () => {};
     const key = () => `${segment}:${position}`;
     const currentTime = () =>
       player ? player.elapsed(key()) : audio.currentTime;
@@ -78,6 +79,7 @@ export function useReplyAudio(active: boolean) {
     };
     const pause = () => {
       version += 1;
+      prefetch = () => {};
       request?.abort();
       request = null;
       if (player) void player.pause().catch(() => {});
@@ -146,7 +148,11 @@ export function useReplyAudio(active: boolean) {
     const play = () => {
       const currentPart = part();
       if (player) {
-        for (let index = segment; index < reply.count; index++) {
+        for (
+          let index = segment;
+          index < Math.min(reply.count, segment + 3);
+          index++
+        ) {
           const items = reply.segments.get(index);
           if (!items) break;
           for (
@@ -200,7 +206,10 @@ export function useReplyAudio(active: boolean) {
         audio.load();
         segment = position = 0;
         publish({ progress: 1 });
-      } else if (state.playing) play();
+      } else if (state.playing) {
+        play();
+        prefetch();
+      }
     };
     const onError = () => {
       if (state.playing) fail();
@@ -301,25 +310,35 @@ export function useReplyAudio(active: boolean) {
         } else if (waiting && index === segment) play();
       };
       try {
-        await fetchSegment(0);
+        await fetchSegment(segment);
         if (!valid()) return;
-        const remaining = Array.from(
-          { length: entry.count },
-          (_, index) => index,
-        ).filter(
-          (index) =>
-            !entry.segments.has(index) ||
-            (player &&
-              entry.segments
-                .get(index)!
-                .some((item) => !buffers.current.has(item.url))),
-        );
-        const worker = async () => {
-          while (valid() && remaining.length) {
-            await fetchSegment(remaining.shift()!);
+        let next = segment + 1;
+        const inFlight = new Set<number>();
+        prefetch = () => {
+          while (
+            valid() &&
+            inFlight.size < 2 &&
+            next < entry.count &&
+            next <= segment + 2
+          ) {
+            const index = next++;
+            inFlight.add(index);
+            void fetchSegment(index)
+              .then(() => {
+                inFlight.delete(index);
+                if (valid()) prefetch();
+              })
+              .catch((error: unknown) => {
+                if (valid())
+                  fail(
+                    error instanceof Error
+                      ? error.message
+                      : '语音暂不可用，请重试',
+                  );
+              });
           }
         };
-        await Promise.all([worker(), worker()]);
+        prefetch();
       } catch (error) {
         if (valid())
           fail(error instanceof Error ? error.message : '语音暂不可用，请重试');

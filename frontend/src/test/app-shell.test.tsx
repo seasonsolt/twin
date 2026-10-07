@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
-import { About } from '../pages/About';
+import { Profile } from '../pages/Profile';
 import { useStatus, type Status } from '../stores/status';
 
 it('keeps only name/AI label in the header and describes external hosts only on About', async () => {
@@ -38,7 +38,9 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       Promise.resolve(
         new Response(
           JSON.stringify(
-            path.startsWith('/api/persona/items')
+            path === '/api/persona/sources' ||
+              path === '/api/personas' ||
+              path.startsWith('/api/persona/items')
               ? []
               : path.startsWith('/api/persona/coverage')
                 ? { facets: [], suggestions: [], kind_labels: {} }
@@ -61,10 +63,10 @@ it('keeps only name/AI label in the header and describes external hosts only on 
   const rendered = render(
     <TooltipProvider>
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/about']}>
+        <MemoryRouter initialEntries={['/profile']}>
           <Routes>
             <Route element={<AppShell />}>
-              <Route path="about" element={<About />} />
+              <Route path="profile" element={<Profile />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -77,7 +79,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     ).toBeVisible();
     expect(rendered.container.querySelector('footer')).toBeNull();
     const header = within(rendered.container.querySelector('header')!);
-    expect(header.getByText('身份测试人')).toBeVisible();
+    expect(header.getByRole('heading', { name: '身份测试人' })).toBeVisible();
     expect(
       header.queryByText(/mock-model|example.test|remote-provider|外部/),
     ).not.toBeInTheDocument();
@@ -88,14 +90,14 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       screen.queryByText(/localhost|local-provider/),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '关于他' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '档案' })).toHaveAttribute(
       'href',
-      '/about',
+      '/profile',
     );
-    expect(screen.getByRole('heading', { name: '关于他' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '概览' })).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   } finally {
     rendered.unmount();
     useStatus.setState({ data: previous.data, error: previous.error });

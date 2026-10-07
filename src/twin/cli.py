@@ -752,10 +752,11 @@ def media_speak_command(
     """Render speech files and a manifest from a validated saved answer."""
     from .config import make_synthesizer
     from .media.render import render_audio
+    from .media.script import speech_script
     from .media.tts import MediaError
 
     with _errors():
-        script = _media_source(ctx, source, kind, name)
+        script = speech_script(_media_source(ctx, source, kind, name))
         settings = _settings(ctx)
         try:
             synthesizer = make_synthesizer(settings.tts)

@@ -411,6 +411,20 @@ def test_normalization_version_invalidates_unchanged_spoken_cache(
     assert all(part.speech_text_version == SPEECH_TEXT_VERSION + 1 for part in second.segments[0].parts)
 
 
+def test_segmentation_version_invalidates_manifest_but_reuses_identical_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synth = Recorder(SilentSynthesizer())
+    script = make_script()
+    first = render_audio(script, synth, tmp_path, segments=[0])
+    monkeypatch.setattr(render, "SPEECH_SEGMENT_VERSION", render.SPEECH_SEGMENT_VERSION + 1)
+    synth.calls.clear()
+    second = render_audio(script, synth, tmp_path, segments=[0])
+    assert first.manifest_file != second.manifest_file
+    assert not synth.calls
+    assert first.segments == second.segments
+
+
 def test_part_warnings_survive_manifest_and_cache_without_reading_extras(tmp_path: Path) -> None:
     class WarningSynth(SilentSynthesizer):
         calls = 0

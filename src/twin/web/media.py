@@ -26,7 +26,7 @@ from ..media.adapters import presentable_from_payload
 from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
 from ..media.schema import AVATAR_PRESETS, AudioManifest, MediaScript, VoiceSpec
-from ..media.script import script_from_presentable
+from ..media.script import script_from_presentable, speech_script
 from ..media.tts import (
     MediaError,
     MediaInputTooLong,
@@ -228,7 +228,7 @@ def register(
 
     @app.post("/api/media/audio")
     def audio(body: AudioBody) -> dict[str, Any]:
-        script = make_script(body)
+        script = speech_script(make_script(body))
         if body.segments is not None and any(index >= len(script.segments) for index in body.segments):
             raise HTTPException(400, "语音分段索引超出范围")
         try:

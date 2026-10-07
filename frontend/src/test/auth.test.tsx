@@ -214,7 +214,7 @@ it('routes no_persona to creation, then opens the app for the new twin', async (
     '我的分身',
   );
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
-  await screen.findByRole('button', { name: '切换到我的分身' });
+  await screen.findByRole('button', { name: '切换分身' });
   await waitFor(() => expect(usePersonas.getState().id).toBe(persona.id));
   expect(
     fetcher.mock.calls

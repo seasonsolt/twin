@@ -176,7 +176,7 @@ it('skips persistently without adding a self-introduction', async () => {
   expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
 });
 it.each(['user', 'memories'])(
-  'does not onboard when %s is already present; navigation has exactly three items',
+  'does not onboard when %s is already present; navigation has exactly two items',
   async (present) => {
     if (present === 'user') identity.name_source = 'user';
     else status.counts.sources = 1;
@@ -186,17 +186,17 @@ it.each(['user', 'memories'])(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '记忆', '关于他']);
+    ).toEqual(['聊天', '档案']);
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
   },
 );
 it.each(['persona', 'identity'])(
-  'redirects legacy %s to About',
+  'redirects legacy %s to Profile',
   async (route) => {
     identity.name_source = 'user';
     window.location.hash = `#/${route}`;
     render(<App />);
-    await screen.findByRole('heading', { name: '关于他' });
-    expect(window.location.hash).toBe('#/about');
+    await screen.findByRole('heading', { name: '概览' });
+    expect(window.location.hash).toBe('#/profile');
   },
 );

@@ -184,7 +184,7 @@ it.each(['desktop', 'tablet', 'mobile'])(
     expect(current.closest('li')).toHaveAttribute('data-current', 'true');
     const input = within(reopened).getByRole('searchbox', { name: '搜索对话' });
     fireEvent.change(input, { target: { value: '保存的回答' } });
-    expect(current).toBeVisible();
+    await waitFor(() => expect(current).toBeVisible());
     fireEvent.change(input, { target: { value: '不存在' } });
     expect(
       within(reopened).queryByRole('button', { name: /^第一个问题\s/ }),

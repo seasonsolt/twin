@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from bisect import bisect_right
 from datetime import date
 from difflib import SequenceMatcher
 from typing import Final
@@ -11,6 +12,7 @@ from typing import Final
 from .schema import SynthCapabilities
 
 SPEECH_TEXT_VERSION: Final = 4
+SPEECH_SEGMENT_VERSION: Final = 1
 
 _DIGITS = "零一二三四五六七八九"
 _MEASURES = (
@@ -262,6 +264,60 @@ def strip_markdown(text: str) -> str:
         if marker in (r"\*\*", r"\*", "~~"):
             text = re.sub(rf"{marker}(?=\S)(.+?)(?<=\S){marker}", r"\1", text)
     return re.sub(r"\\([\\`*_{}\[\]()#+.!>|~-])", r"\1", text)
+
+
+def split_speech(text: str) -> list[str]:
+    """Short lead-in, then bounded growth at clause or whole-word boundaries.
+
+    Indivisible clauses/words may exceed the soft limits: breaking a Chinese clause
+    without a word tokenizer would risk cutting a word in half.
+    """
+    text = strip_markdown(text).strip()
+    # Decimal/version periods and commas inside numbers are not speech boundaries.
+    boundaries = {len(text)}
+    preferred: set[int] = set()
+    for match in re.finditer(r"[，,。！？!?；;…\r\n]+[」”\"']*|\.(?=\s|$)|\s+", text):
+        start, end = match.span()
+        if text[start] == "," and start and text[start - 1].isdigit() and text[end : end + 1].isdigit():
+            continue
+        boundary = start if match.group().isspace() else end
+        boundaries.add(boundary)
+        if not match.group().isspace():
+            preferred.add(boundary)
+    ends = sorted(boundaries)
+    pieces: list[str] = []
+    offset = 0
+    while offset < len(text):
+        limit = 16 if not pieces else min(28, max(8, round(len(pieces[-1]) * 1.3)))
+        start = bisect_right(ends, offset)
+        candidates = ends[start : bisect_right(ends, offset + limit)]
+        substantial = [end for end in candidates if len(text[offset:end].strip()) >= 8]
+        clauses = [
+            end for end in substantial if end in preferred and (not pieces or len(text[offset:end].strip()) >= 16)
+        ]
+        choices = clauses or substantial
+        if choices:
+            cut = clauses[0] if not pieces and clauses else choices[-1]
+        else:
+            # Do not strand a tiny word/clause simply to meet a character budget.
+            cut = ends[start]
+            while cut < len(text) and len(text[offset:cut].strip()) < 8:
+                start += 1
+                cut = ends[start]
+        # Absorb a tiny tail only if doing so preserves the growth and size limits.
+        if 0 < len(text[cut:].strip()) < 8 and len(text[offset:].strip()) <= limit:
+            cut = len(text)
+        if piece := text[offset:cut].strip():
+            pieces.append(piece)
+        offset = cut
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+    if len(pieces) > 1 and len(pieces[-1]) < 8:
+        joined = pieces[-2] + (" " if pieces[-2][-1].isascii() and pieces[-1][0].isascii() else "") + pieces[-1]
+        limit = 16 if len(pieces) == 2 else min(28, round(len(pieces[-3]) * 1.3))
+        if len(joined) <= limit:
+            pieces[-2:] = [joined]
+    return pieces
 
 
 def speech_text_spans(

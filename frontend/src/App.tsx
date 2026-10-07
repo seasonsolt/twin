@@ -17,11 +17,8 @@ const Twins = lazy(() =>
 const Chat = lazy(() =>
   import('./pages/Chat').then((module) => ({ default: module.Chat })),
 );
-const Memories = lazy(() =>
-  import('./pages/Memories').then((module) => ({ default: module.Memories })),
-);
-const About = lazy(() =>
-  import('./pages/About').then((module) => ({ default: module.About })),
+const Profile = lazy(() =>
+  import('./pages/Profile').then((module) => ({ default: module.Profile })),
 );
 const Questionnaire = lazy(() =>
   import('./pages/Questionnaire').then((module) => ({
@@ -54,19 +51,30 @@ export function App() {
                     />
                     <Route path="twins" element={<Twins />} />
                     <Route path="chat" element={<Chat />} />
-                    <Route path="memories" element={<Memories />} />
-                    <Route path="about" element={<About />} />
+                    <Route path="profile" element={<Profile />} />
+                    <Route
+                      path="memories"
+                      element={
+                        <Navigate to="/profile?section=memories" replace />
+                      }
+                    />
+                    <Route
+                      path="about"
+                      element={<Navigate to="/profile" replace />}
+                    />
                     <Route
                       path="sources"
-                      element={<Navigate to="/memories" replace />}
+                      element={
+                        <Navigate to="/profile?section=memories" replace />
+                      }
                     />
                     <Route
                       path="persona"
-                      element={<Navigate to="/about" replace />}
+                      element={<Navigate to="/profile" replace />}
                     />
                     <Route
                       path="identity"
-                      element={<Navigate to="/about" replace />}
+                      element={<Navigate to="/profile" replace />}
                     />
                     <Route path="questionnaire" element={<Questionnaire />} />
                     <Route path="gallery" element={<Gallery />} />

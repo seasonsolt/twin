@@ -254,7 +254,8 @@ it('creates, switches and opens onboarding even though the new identity already 
   window.location.hash = '#/chat';
   const user = userEvent.setup();
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: '新建分身' }));
+  await user.click(await screen.findByRole('button', { name: '切换分身' }));
+  await user.click(screen.getByRole('link', { name: '＋ 新建分身' }));
   await user.type(
     await screen.findByRole('textbox', { name: '分身名字' }),
     '新的分身',
@@ -264,7 +265,7 @@ it('creates, switches and opens onboarding even though the new identity already 
   expect(screen.getByRole('heading', { name: '新的分身' })).toBeVisible();
   expect(getPersonaId()).toBe(NEW);
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('新的分身');
-  expect(screen.getByRole('button', { name: '切换分身' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: '新的分身' })).toBeVisible();
 });
 
 function Conversation() {
@@ -560,7 +561,7 @@ it('keeps the chat page and layout mounted through prefetch and its timeout, wit
   const view = render(<App />);
   const input = await screen.findByRole('textbox', { name: '你说' });
   const main = view.container.querySelector('#main');
-  const friend = await screen.findByRole('button', { name: '切换到朋友' });
+  const switcher = await screen.findByRole('button', { name: '切换分身' });
   const original = fetcher.getMockImplementation()! as (
     path: string,
     init?: RequestInit,
@@ -578,7 +579,7 @@ it('keeps the chat page and layout mounted through prefetch and its timeout, wit
   act(() => {
     switching = usePersonas.getState().switchTo(B);
   });
-  expect(friend).toHaveAttribute('aria-pressed', 'true');
+  expect(switcher).toHaveAttribute('aria-busy', 'true');
   expect(getPersonaId()).toBe('default');
   expect(screen.getByRole('textbox', { name: '你说' })).toBe(input);
   expect(view.container.querySelector('.skeleton')).toBeNull();

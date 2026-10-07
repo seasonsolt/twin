@@ -6,11 +6,11 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Link, NavLink, useLocation, useOutlet } from 'react-router';
+import { NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
-import { BookUser, Folder, MessageCircle, Plus } from 'lucide-react';
+import { BookUser, MessageCircle } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { Button, Skeleton, Tooltip } from '../ui';
@@ -31,8 +31,7 @@ const Onboarding = lazy(() =>
 
 export const navItems = [
   { route: 'chat', title: '聊天', icon: MessageCircle },
-  { route: 'memories', title: '记忆', icon: Folder },
-  { route: 'about', title: '关于他', icon: BookUser },
+  { route: 'profile', title: '档案', icon: BookUser },
 ];
 
 function Navigation() {
@@ -75,7 +74,7 @@ function BottomTabs() {
   return (
     <nav
       aria-label="底部导航"
-      className="mobile-tabs fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden"
+      className="mobile-tabs fixed inset-x-0 bottom-0 z-30 grid grid-cols-2 gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden"
     >
       {navItems.map(({ route, title, icon: Icon }) => (
         <NavLink
@@ -94,7 +93,8 @@ function BottomTabs() {
 }
 
 function TwinRail() {
-  const { id, pendingId, items, refresh, switchTo } = usePersonas();
+  const { id, items, refresh } = usePersonas();
+  const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountButton = useRef<HTMLButtonElement>(null);
@@ -112,37 +112,15 @@ function TwinRail() {
   }, [refresh]);
   return (
     <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col border-r border-border bg-canvas px-2 py-4 text-primary">
-      <Link
-        to="/twins"
-        aria-label="我的分身"
-        className="persona-name my-3 mb-6 text-center text-2xl"
-      >
-        twin
-      </Link>
-      <nav className="rail-twins" aria-label="分身导航">
-        {items.slice(0, 6).map((persona) => (
-          <Tooltip key={persona.id} label={persona.name}>
-            <button
-              type="button"
-              className="rail-twin rounded-full"
-              aria-label={`切换到${persona.name}`}
-              aria-pressed={(pendingId ?? id) === persona.id}
-              onClick={() => switchTo(persona.id)}
-            >
-              <PersonaPortrait persona={persona} />
-            </button>
-          </Tooltip>
-        ))}
-      </nav>
-      <Link
-        to="/twins"
-        className="rail-all min-h-11 rounded-full text-center text-xs"
-      >
-        全部
-      </Link>
-      <NewTwin className="rail-new grid min-h-11 place-items-center rounded-full">
-        <Plus size={22} aria-hidden />
-      </NewTwin>
+      <Tooltip label={current?.name || '本人'}>
+        <span className="mx-auto">
+          <PersonaSwitcher
+            label="切换分身"
+            className="rail-twin rounded-full"
+            trigger={<PersonaPortrait persona={current} />}
+          />
+        </span>
+      </Tooltip>
       <div className="my-3 border-t border-border" />
       <Navigation />
       {identity?.auth_enabled && (
@@ -317,7 +295,7 @@ export function AppShell() {
             <PageTransition route={location.pathname}>
               {location.pathname === '/gallery' ? (
                 <>
-                  <StageHeader left={<PersonaSwitcher stage />} />
+                  <StageHeader />
                   <div className="page-content">{outlet}</div>
                 </>
               ) : (

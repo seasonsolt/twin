@@ -6,7 +6,6 @@ import {
 import { useLocation } from 'react-router';
 import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
 import { StageHeader } from '../components/layout/StageHeader';
-import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
@@ -107,8 +106,16 @@ function MemoryWork({
   ) : null;
 }
 
-export function Memories({ embedded = false }: { embedded?: boolean }) {
-  const active = useLocation().pathname === '/memories' || embedded;
+export function Memories({
+  embedded = false,
+  profile = false,
+  onSpeakerCount,
+}: {
+  embedded?: boolean;
+  profile?: boolean;
+  onSpeakerCount?: (count: number) => void;
+}) {
+  const active = useLocation().pathname === '/memories' || embedded || profile;
   const personaId = usePersonaId();
   const confirm = useConfirm();
   const mobile = useMobile();
@@ -159,6 +166,9 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         ]);
         if (!alive.current || controller.signal.aborted) return;
         setMemories(rows);
+        onSpeakerCount?.(
+          rows.filter((row) => row.status === 'needs_speaker').length,
+        );
         setLoading(false);
         setProcessing(state);
         setError('');
@@ -176,7 +186,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         }
       }
     },
-    [personaId],
+    [personaId, onSpeakerCount],
   );
   useEffect(() => {
     alive.current = active;
@@ -472,9 +482,8 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   };
   return (
     <div className="memories-page">
-      {!embedded && (
+      {!embedded && !profile && (
         <StageHeader
-          left={<PersonaSwitcher stage />}
           right={
             mobile ? undefined : (
               <button
@@ -493,7 +502,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         className={
           embedded
             ? 'space-y-4'
-            : 'page-content memories-grid space-y-4 md:space-y-6'
+            : `${profile ? '' : 'page-content '}memories-grid space-y-4 md:space-y-6`
         }
       >
         <header>
@@ -511,6 +520,11 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
           <p className="my-2 text-sm text-secondary">
             写一段话，或上传文件、文件夹。添加后会自动处理。
           </p>
+          {profile && mobile && (
+            <Button onClick={openAdd} className="min-h-11">
+              添加记忆
+            </Button>
+          )}
           {processing.state !== 'idle' && (
             <ThinkingLabel
               text={processing.state === 'queued' ? '等待记住…' : '正在记住…'}
@@ -760,13 +774,15 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         )}
         {mobile && !embedded && (
           <>
-            <IconButton
-              label="添加记忆"
-              onClick={() => setAdding(true)}
-              className="memory-add fixed right-4 bottom-[calc(var(--mobile-tabs-height)+16px)] z-20 size-12 rounded-full bg-sun text-primary shadow-elevation-2"
-            >
-              <Plus size={24} aria-hidden />
-            </IconButton>
+            {!profile && (
+              <IconButton
+                label="添加记忆"
+                onClick={() => setAdding(true)}
+                className="memory-add fixed right-4 bottom-[calc(var(--mobile-tabs-height)+16px)] z-20 size-12 rounded-full bg-sun text-primary shadow-elevation-2"
+              >
+                <Plus size={24} aria-hidden />
+              </IconButton>
+            )}
             <Dialog
               open={adding && active}
               onOpenChange={(open) => {

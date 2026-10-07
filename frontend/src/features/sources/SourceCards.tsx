@@ -6,7 +6,7 @@ export function BuildSummary({ result: r }: { result: BuildResult }) {
       <p>
         已整理 {r.sources ?? 0} 份记忆。
         {r.failures?.length ? '有些内容没有处理成功，可以重试。' : ''}{' '}
-        <a href="#/about" className="text-accent underline">
+        <a href="#/profile" className="text-accent underline">
           看看我了解到的你
         </a>
       </p>

@@ -392,7 +392,7 @@ it('attaches the automatic build job and retains the old completion/diff links',
   ).toBeInTheDocument();
   expect(
     screen.getAllByRole('link', { name: '看看我了解到的你' })[0],
-  ).toHaveAttribute('href', '#/about');
+  ).toHaveAttribute('href', '#/profile');
   expect(screen.getByRole('link', { name: '去和分身聊天' })).toHaveAttribute(
     'href',
     '#/chat',

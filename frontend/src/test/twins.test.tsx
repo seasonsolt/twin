@@ -203,27 +203,31 @@ it('creates from the new-twin card and opens the created twin', async () => {
   ).toEqual({ name: '新伙伴' });
 });
 
-it.each(['chat', 'memories', 'about'])(
-  'switches from the rail while staying on %s',
-  async (route) => {
-    window.location.hash = `#/${route}`;
-    render(<App />);
-    await userEvent
-      .setup()
-      .click(await screen.findByRole('button', { name: '切换到朋友' }));
-    expect(usePersonas.getState().id).toBe(B);
-    expect(window.location.hash).toBe(`#/${route}`);
-    expect(
-      await screen.findByRole('banner', { name: '朋友的舞台' }),
-    ).toBeVisible();
-    expect(screen.getByRole('button', { name: '切换到朋友' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-  },
-);
+it.each([
+  'chat',
+  'profile',
+  'profile?section=memories',
+  'profile?section=assets',
+])('switches from the rail while staying on %s', async (route) => {
+  window.location.hash = `#/${route}`;
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: '切换分身' }));
+  await user.click(
+    await screen.findByRole('button', { name: /朋友.*3 条记忆/ }),
+  );
+  expect(usePersonas.getState().id).toBe(B);
+  expect(window.location.hash).toBe(`#/${route}`);
+  expect(
+    await screen.findByRole('banner', { name: '朋友的舞台' }),
+  ).toBeVisible();
+  expect(screen.getAllByRole('button', { name: '切换分身' })).toHaveLength(1);
+  expect(
+    screen.getByRole('button', { name: '切换分身' }).querySelector('img'),
+  ).toHaveAttribute('src', `/api/media/avatar-image?persona=${B}`);
+});
 
-it('caps the rail stack at six, offers all twins and creation, and shows the account', async () => {
+it('keeps one rail portrait, offers all twins and creation in its popover, and shows the account', async () => {
   items.push(
     ...Array.from({ length: 6 }, (_, index) => ({
       ...items[1],
@@ -233,15 +237,9 @@ it('caps the rail stack at six, offers all twins and creation, and shows the acc
   );
   window.location.hash = '#/chat';
   render(<App />);
-  const rail = await screen.findByRole('navigation', { name: '分身导航' });
-  await waitFor(() =>
-    expect(within(rail).getAllByRole('button')).toHaveLength(6),
-  );
-  expect(screen.getByRole('link', { name: '全部' })).toHaveAttribute(
-    'href',
-    '#/twins',
-  );
-  const aside = rail.closest('aside')!;
+  const switcher = await screen.findByRole('button', { name: '切换分身' });
+  expect(screen.getAllByRole('button', { name: '切换分身' })).toHaveLength(1);
+  const aside = switcher.closest('aside')!;
   expect(aside).toHaveClass('bg-canvas', 'text-primary', 'border-r');
   expect(aside).not.toHaveClass('bg-accent');
   expect(within(aside).queryByText(account.email)).not.toBeInTheDocument();
@@ -258,11 +256,22 @@ it('caps the rail stack at six, offers all twins and creation, and shows the acc
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
   );
   expect(accountButton).toHaveFocus();
-  await user.click(screen.getByRole('button', { name: '新建分身' }));
-  expect(screen.getByRole('dialog', { name: '新建分身' })).toBeInTheDocument();
+  await user.click(switcher);
+  const twins = screen.getByRole('dialog', { name: '切换分身' });
+  expect(within(twins).getAllByRole('button', { name: /条记忆/ })).toHaveLength(
+    8,
+  );
+  expect(within(twins).getByRole('link', { name: '全部分身' })).toHaveAttribute(
+    'href',
+    '#/twins',
+  );
+  await user.click(within(twins).getByRole('link', { name: '＋ 新建分身' }));
+  expect(
+    await screen.findByRole('dialog', { name: '新建分身' }),
+  ).toBeInTheDocument();
 });
 
-it('opens the quick sheet from the mobile stage name and opens the twin level from its all-twins button', async () => {
+it('opens the quick sheet from the mobile top-left portrait and opens all twins from that sheet', async () => {
   vi.stubGlobal(
     'matchMedia',
     vi.fn((query: string) => ({
@@ -274,19 +283,22 @@ it('opens the quick sheet from the mobile stage name and opens the twin level fr
   window.location.hash = '#/chat';
   render(<App />);
   const user = userEvent.setup();
-  await user.click(
-    await screen.findByRole('button', { name: '主人，快速切换分身' }),
-  );
+  await user.click(await screen.findByRole('button', { name: '切换分身' }));
   const quick = await screen.findByRole('dialog', { name: '切换分身' });
   await user.click(
     within(quick).getByRole('button', { name: /朋友.*3 条记忆/ }),
   );
   await screen.findByRole('banner', { name: '朋友的舞台' });
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: '切换分身' })).toBeNull(),
+  );
   expect(window.location.hash).toBe('#/chat');
   expect(
     screen.getByRole('navigation', { name: '底部导航' }),
   ).toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: '全部分身' }));
+  expect(screen.getAllByRole('button', { name: '切换分身' })).toHaveLength(1);
+  await user.click(screen.getByRole('button', { name: '切换分身' }));
+  await user.click(screen.getByRole('link', { name: '全部分身' }));
   expect(
     await screen.findByRole('heading', { name: '我的分身' }),
   ).toBeVisible();

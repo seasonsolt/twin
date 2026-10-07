@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { About } from '../pages/About';
+import { Profile } from '../pages/Profile';
 import { ConfirmProvider } from '../components/ui';
 import { useStatus, type Status } from '../stores/status';
 
@@ -70,22 +70,26 @@ beforeEach(() => {
                   }
                 : identity,
             )
-        : path === '/api/me/assets'
-          ? json({
-              portrait: null,
-              voice: null,
-              speech_clone: false,
-              video: false,
-            })
-          : path === '/api/media/capabilities'
-            ? failAvatar
-              ? json({ detail: '预览暂不可用' }, 503)
-              : json({ available: false, avatar: spec })
-            : path === '/api/persona/items?include_rejected=false'
-              ? json([])
-              : path === '/api/persona/coverage'
-                ? json({ facets: [], suggestions: [], kind_labels: {} })
-                : json(status),
+        : path === '/api/persona/sources'
+          ? json([])
+          : path === '/api/persona/processing'
+            ? json({ state: 'idle' })
+            : path === '/api/me/assets'
+              ? json({
+                  portrait: null,
+                  voice: null,
+                  speech_clone: false,
+                  video: false,
+                })
+              : path === '/api/media/capabilities'
+                ? failAvatar
+                  ? json({ detail: '预览暂不可用' }, 503)
+                  : json({ available: false, avatar: spec })
+                : path === '/api/persona/items?include_rejected=false'
+                  ? json([])
+                  : path === '/api/persona/coverage'
+                    ? json({ facets: [], suggestions: [], kind_labels: {} })
+                    : json(useStatus.getState().data ?? status),
     ),
   );
   vi.stubGlobal('fetch', fetcher);
@@ -93,14 +97,21 @@ beforeEach(() => {
 const setup = () =>
   render(
     <ConfirmProvider>
-      <MemoryRouter initialEntries={['/about']}>
-        <About />
+      <MemoryRouter initialEntries={['/profile']}>
+        <Profile />
       </MemoryRouter>
     </ConfirmProvider>,
   );
 
-it('edits name/about inline and saves with X-Twin, previews a closed-mouth avatar and names external services plainly', async () => {
+it('edits name/about in a dialog and saves with X-Twin, previews a closed-mouth avatar and names external services plainly', async () => {
   setup();
+  await screen.findByRole('heading', { name: identity.name });
+  expect(screen.getByText('预置音色')).toBeVisible();
+  expect(screen.getByText('朗读：speech.test')).toBeVisible();
+  expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
+  const avatar = await screen.findByRole('img', { name: '风格化插画' });
+  expect(avatar).toHaveAttribute('data-mouth-level', '0');
+  fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByDisplayValue(identity.name);
   expect(screen.getByLabelText('介绍一下自己')).toHaveValue(identity.about);
   expect(screen.getByLabelText('名字')).toHaveAttribute('maxlength', '20');
@@ -108,11 +119,6 @@ it('edits name/about inline and saves with X-Twin, previews a closed-mouth avata
     'maxlength',
     '200',
   );
-  expect(screen.getByText('预置音色')).toBeVisible();
-  expect(screen.getByText('朗读：speech.test')).toBeVisible();
-  expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
-  const avatar = await screen.findByRole('img', { name: '风格化插画' });
-  expect(avatar).toHaveAttribute('data-mouth-level', '0');
   fireEvent.change(screen.getByLabelText('名字'), {
     target: { value: '新名字' },
   });
@@ -179,7 +185,7 @@ it('describes external services using plain names, never provider ids or local s
     },
   });
   setup();
-  await screen.findByDisplayValue(identity.name);
+  await screen.findByRole('heading', { name: identity.name });
   for (const text of [
     '大模型：api.example.com',
     '向量：api.cloudflare.com',
@@ -197,15 +203,19 @@ it('describes external services using plain names, never provider ids or local s
 it('keeps identity editable when the preview fails and supports retry', async () => {
   failAvatar = true;
   setup();
-  await screen.findByDisplayValue(identity.name);
-  expect(screen.getByRole('alert')).toHaveTextContent('预览暂不可用');
+  await screen.findByRole('heading', { name: identity.name });
+  expect(await screen.findByRole('alert')).toHaveTextContent('预览暂不可用');
   failAvatar = false;
   fireEvent.click(screen.getByRole('button', { name: '重试预览' }));
   expect(await screen.findByRole('img', { name: '风格化插画' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+  await screen.findByDisplayValue(identity.name);
+  await waitFor(() => expect(screen.getByLabelText('名字')).toBeVisible());
 });
 it('retries identity failures and aborts reads on unmount', async () => {
   failIdentity = true;
   const view = setup();
+  fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByText('身份暂不可用');
   failIdentity = false;
   fireEvent.click(screen.getByRole('button', { name: '重试加载' }));

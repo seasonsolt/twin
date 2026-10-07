@@ -6,7 +6,6 @@ import {
   type MotionStyle,
 } from 'motion/react';
 import { History, LoaderCircle } from 'lucide-react';
-import { PersonaSwitcher } from '../../components/layout/PersonaSwitcher';
 import { StageHeader } from '../../components/layout/StageHeader';
 import { useMotionPreset, springs } from '../../design/motion';
 import type { Capabilities } from '../avatar/types';
@@ -14,7 +13,7 @@ import { ChatAvatar } from './ChatAvatar';
 import { ReplyVideo } from './ReplyVideo';
 import type { Turn } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
-import { useDesktop, useMobile } from '../../lib/useMobile';
+import { useDesktop } from '../../lib/useMobile';
 import { stripMarkdown } from './markdownText';
 import { usePersonaId } from '../../lib/usePersonaState';
 
@@ -68,10 +67,8 @@ export function ChatStage({
   const { reduced } = useMotionPreset();
   const personaId = usePersonaId();
   const desktop = useDesktop();
-  const mobile = useMobile();
   const [collapsed, setCollapsed] = useState(false);
   const [open, setOpen] = useState(false);
-  const [switching, setSwitching] = useState(false);
   const [time, setTime] = useState(0);
   const [videoShown, setVideoShown] = useState(false);
   const boundedLevel = Number.isFinite(level)
@@ -195,8 +192,6 @@ export function ChatStage({
         data-speaking={speaking}
         data-video-status={videoStatus}
         style={{ height: reduced ? targetHeight : height }}
-        switchable={mobile}
-        left={mobile ? <PersonaSwitcher stage /> : undefined}
         right={
           !desktop && (
             <div className="flex items-center gap-1">
@@ -249,9 +244,7 @@ export function ChatStage({
                     ? '展开舞台'
                     : url && videoPlaying
                       ? '打开真人视频全屏'
-                      : url || turn?.reply || !mobile
-                        ? '播放或暂停当前句'
-                        : `${name}的肖像，快速切换分身`
+                      : '播放或暂停当前句'
                 }
                 aria-expanded={!small}
                 onClick={() => {
@@ -263,8 +256,7 @@ export function ChatStage({
                   if (url && videoPlaying) {
                     player.current?.pause();
                     setOpen(true);
-                  } else if (url || turn?.reply || !mobile) onToggle();
-                  else setSwitching(true);
+                  } else onToggle();
                 }}
               >
                 {url && (videoPlaying || videoShown) ? (
@@ -342,15 +334,6 @@ export function ChatStage({
         }
       >
         {desktop && history}
-        {mobile && (
-          <PersonaSwitcher
-            open={switching}
-            onOpenChange={setSwitching}
-            returnFocus={circle}
-            className="sr-only"
-            label="舞台快速切换"
-          />
-        )}
         {turn?.reply && url && (
           <ReplyVideo
             id={turn.id}

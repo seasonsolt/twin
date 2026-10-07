@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,8 @@ from twin.media.schema import (
     MediaScript,
     PresentableAnswer,
 )
-from twin.media.script import script_from_presentable, split_sentences
+from twin.media.script import script_from_presentable, speech_script, split_sentences
+from twin.media.speech_text import split_speech
 from twin.media.tts import SilentSynthesizer
 from twin.persona.schema import ChatReply
 from twin.util import fingerprint
@@ -124,6 +126,55 @@ def test_markdown_script_strips_before_splitting_and_keeps_citations(reply: Chat
     assert script.citations == presentable.citations
     assert script.source_fingerprint == fingerprint(reply.model_dump(mode="json"))
     assert presentable.text == reply.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "首先我们需要确认当前目标，接下来逐步检查已有资料和关键假设，随后根据验证结果调整实施方案，最后记录风险并安排下一轮复核。",
+        "First review the facts, then check the assumptions carefully. "
+        "Keep each step small, and record the outcome for the next review.",
+        "首先核对所有的关键资料，然后再检查 API 和所有参数，随后运行 pytest 验证最终输出，最后记录验证结果。",
+        "**首先核对当前目标**，并确认相关资料是否完整。\n1. 再按优先级逐项验证，最后认真记录验证结果。",
+    ],
+)
+def test_speech_chunks_have_a_short_lead_and_bounded_growth(text: str) -> None:
+    from twin.media.speech_text import strip_markdown
+
+    pieces = split_speech(text)
+    assert 8 <= len(pieces[0]) <= 16
+    assert all(8 <= len(piece) <= 28 for piece in pieces)
+    assert all(len(right) <= round(len(left) * 1.3) for left, right in pairwise(pieces))
+    assert "".join("".join(pieces).split()) == "".join(strip_markdown(text).split())
+    assert all(piece[-1] in "，。,.!?" or piece[-1].isascii() for piece in pieces)
+
+
+def test_speech_keeps_words_numbers_and_indivisible_clauses_intact() -> None:
+    text = "Check API v1.2 and 1,200 records, then keep hyperparameterization intact."
+    pieces = split_speech(text)
+    assert all(token in " ".join(pieces) for token in ["API", "v1.2", "1,200", "hyperparameterization"])
+    assert " ".join(pieces) == text
+    assert split_speech("这是没有标点也没有空格的一整段中文内容不能为了长度把词切开") == [
+        "这是没有标点也没有空格的一整段中文内容不能为了长度把词切开"
+    ]
+    assert split_speech("  \n ") == []
+    assert split_speech("先验证。再推进。") == ["先验证。再推进。"]
+    assert split_speech("首先核对所有的关键资料，完成。") == ["首先核对所有的关键资料，完成。"]
+
+
+def test_audio_rechunking_does_not_change_video_or_presentation(reply: ChatReply) -> None:
+    reply.reply = "首先核对所有的关键资料，然后再检查 API 和所有参数，随后运行 pytest 验证最终输出，最后记录验证结果。"
+    original = script_from_presentable(presentable_from_chat_reply(reply), "合成人物")
+    before = original.model_dump_json()
+    spoken = speech_script(original)
+    assert original.model_dump_json() == before
+    assert len(original.segments) == 1
+    assert [segment.text for segment in spoken.segments] == split_speech(reply.reply)
+    assert [segment.index for segment in spoken.segments] == list(range(len(spoken.segments)))
+    assert spoken.citations == original.citations
+    assert spoken.source_fingerprint == original.source_fingerprint
+    notice = original.model_copy(update={"abstain": True})
+    assert speech_script(notice) is notice
 
 
 def test_manifest_roundtrip() -> None:

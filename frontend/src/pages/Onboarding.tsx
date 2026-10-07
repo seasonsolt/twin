@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router';
 import { FlowStepper } from '../components/effects/FlowStepper';
 import { Button } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
-import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 import { IdentityForm } from '../features/identity/IdentityForm';
 import { SelfAssets } from '../features/assets/SelfAssets';
 import { RecordingShortcut } from '../features/sources/MediaClaim';
@@ -106,7 +105,6 @@ export function Onboarding({
             variant="expanded"
             className="onboarding-stage"
             name={twin.name.trim() || '新分身'}
-            left={<PersonaSwitcher stage />}
             intro={
               <p className="stage-caption">{twin.about || '让我们认识一下'}</p>
             }
@@ -154,7 +152,7 @@ export function Onboarding({
               <div className="space-y-4">
                 <h2 className="text-xl font-semibold">形象和声音</h2>
                 <p className="text-secondary">
-                  可以现在设置，也可以直接继续，以后在关于他里更换。
+                  可以现在设置，也可以直接继续，以后在档案里更换。
                 </p>
                 <RecordingShortcut />
                 <SelfAssets />

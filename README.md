@@ -35,9 +35,22 @@
 
 *点哪句，舞台上的人就说哪句。*
 
+<table>
+  <tr>
+    <td width="30%" align="center">
+      <a href="docs/assets/talking.mp4"><img src="docs/assets/talking.gif" alt="作者的 3D 人像用克隆的声音说：我很少加班，也不鼓励团队加班" width="100%"></a>
+      <br><sub>▶ <a href="docs/assets/talking.mp4">带声音的视频</a>：一张照片 + 本人声音，3090 上 25 秒生成</sub>
+    </td>
+    <td>
+
 - **声音 →** 录一段话就能克隆，边生成边播放，约 0.5 秒开口。
 - **视频 →** 一张照片 + 克隆的声音，生成真人口播视频，在舞台的圆框里播放。
 - **快 →** 回答逐字流出，约 1 秒出第一个字。
+- **一个声音 →** 「听」和视频用同一个克隆声音，舞台上的人说话前后一致。
+
+</td>
+  </tr>
+</table>
 
 <table>
   <tr>

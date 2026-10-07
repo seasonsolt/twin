@@ -380,7 +380,7 @@ def register(
             if not store.list_items():
                 reply = no_profile_reply(store)
                 return JSONResponse({**reply.model_dump(mode="json"), "cited": []}, status_code=200)
-        llm, embedder = backends.llm(), backends.embedder()
+        llm, embedder = backends.chat_llm(), backends.embedder()
         job = jobs.submit("chat", "和分身聊天", lambda log: run_chat(settings, llm, embedder, messages, log))
         return {"job_id": job.job_id}
 

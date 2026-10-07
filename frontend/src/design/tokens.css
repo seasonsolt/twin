@@ -35,6 +35,7 @@
   --color-background: var(--canvas);
   --color-soft: var(--soft);
   --color-sun: var(--sun);
+  --color-note: var(--note);
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
   --color-border: var(--border);
@@ -213,8 +214,67 @@
   font-family: var(--font-persona);
   font-weight: 400;
 }
+.stage-name-switch {
+  pointer-events: auto;
+  display: block;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: inherit;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+.stage-portrait-target {
+  position: relative;
+}
+.stage-portrait-switch {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border-radius: 50%;
+  pointer-events: auto;
+}
+.stage-all {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--canvas);
+  color: var(--text-primary);
+}
+.twins-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 24px;
+}
+.twin-card {
+  min-width: 0;
+}
+.twin-card[data-current='true'] {
+  outline: 2px solid var(--accent);
+}
+.twin-card .persona-portrait {
+  width: 96px;
+  height: 96px;
+  font-size: 40px;
+}
 .chat-page {
   min-width: 0;
+  padding-bottom: calc(
+    var(--composer-height, 76px) + 12px + var(--keyboard-inset, 0px)
+  );
+}
+.chat-thread,
+.chat-scroll {
+  display: contents;
+}
+.about-grid {
+  display: grid;
+  gap: 16px;
 }
 .chat-conversation {
   padding: 20px 16px 0;
@@ -442,39 +502,6 @@
     animation: none;
   }
 }
-@media (min-width: 768px) and (max-width: 1023px) {
-  .chat-stage {
-    left: var(--sidebar-width, 0px);
-  }
-}
-@media (min-width: 1024px) {
-  .chat-page {
-    display: grid;
-    grid-template-columns: 320px minmax(0, 1fr);
-    gap: 24px;
-    padding: 24px;
-  }
-  .stage-space {
-    position: sticky;
-    top: 24px;
-    align-self: start;
-  }
-  .chat-stage {
-    position: relative;
-    border-radius: 36px;
-  }
-  .chat-stage .stage-person {
-    padding-top: 72px;
-  }
-  .chat-conversation {
-    width: 100%;
-    margin: 0;
-    padding: 0;
-  }
-  .chat-composer {
-    left: calc(var(--sidebar-width, 0px) + 368px);
-  }
-}
 
 .page-content {
   padding: 24px 16px;
@@ -664,8 +691,8 @@
   min-height: calc(360px + env(safe-area-inset-top, 0px));
   padding-bottom: 80px;
 }
-.stage-flow > .flow-static,
-.stage-flow > .flow-animated > div {
+.stage-flow .flow-static,
+.stage-flow .flow-animated > div {
   background: transparent;
   border: 0 !important;
 }
@@ -740,15 +767,407 @@
   border-radius: 999px;
   background: var(--text-primary);
 }
-@media (min-width: 1024px) {
+@media (hover: hover) and (pointer: fine) {
+  .rail-link:hover,
+  .rail-all:hover,
+  .rail-new:hover,
+  .stage-new:hover,
+  .stage-switch:hover {
+    background: var(--accent-pressed);
+  }
+  .starter-chip:hover,
+  .reply-play:hover {
+    background: var(--soft);
+  }
+  .rail-twin:hover,
+  .stage-circle:is(button):hover {
+    box-shadow: 0 0 0 4px rgb(255 244 234 / 0.35);
+  }
+  .twin-card-select:hover,
+  .twin-card-create:hover,
+  .stage-all:hover {
+    background: var(--soft);
+  }
+  .stage-name-switch:hover {
+    text-decoration: underline;
+  }
+  .rail-account button:hover {
+    background: var(--accent-pressed);
+    color: var(--canvas);
+  }
+  .send-button:hover:not(:disabled) {
+    filter: brightness(0.95);
+  }
+}
+@media (min-width: 768px) {
+  .composer-field:focus-within {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .app-shell {
+    --sidebar-width: 72px;
+  }
+  .nav-rail {
+    width: 72px;
+    z-index: 30;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .rail-twins {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-height: 0;
+    max-height: 336px;
+    flex-shrink: 1;
+    overflow-y: auto;
+    scrollbar-width: none;
+    margin-inline: -6px;
+    padding: 6px;
+  }
+  .rail-twin {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+  }
+  .rail-twin[aria-pressed='true'] {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 5px var(--canvas);
+  }
+  .rail-all,
+  .rail-new,
+  .nav-rail nav[aria-label='主导航'],
+  .rail-account {
+    flex-shrink: 0;
+  }
+  .nav-rail :focus-visible {
+    outline-color: var(--canvas);
+  }
+  .persona-popover {
+    translate: none;
+  }
+  .app-main {
+    padding-bottom: 0;
+  }
+  .content-main {
+    max-width: 768px;
+  }
+  .chat-stage {
+    left: var(--sidebar-width, 0px);
+  }
+  .chat-conversation {
+    max-width: 680px;
+    padding-inline: 24px;
+    box-sizing: content-box;
+    width: calc(100% - 48px);
+  }
+  .chat-composer {
+    padding-inline: 24px;
+  }
+  .chat-composer .composer-field {
+    max-width: 680px;
+  }
+  .memories-page,
+  .about-page,
+  .twins-page {
+    max-width: 768px;
+    margin-inline: auto;
+  }
   .page-content {
-    padding: 32px;
+    padding: 24px;
   }
   .stage-header:not(.chat-stage) {
     margin: 24px 24px 0;
     border-radius: 32px;
   }
+  .about-grid {
+    gap: 24px;
+  }
+  .memory-add-panel,
+  .memory-list,
+  .about-settings,
+  .about-knowledge {
+    min-width: 0;
+  }
+  .page-content :is(input:not([type='file']), textarea, select) {
+    max-width: 640px;
+  }
+  .auth-page > section,
+  .entry-page > section,
+  .stage-flow .flow-panel {
+    width: calc(100% - 48px);
+    max-width: 560px;
+    margin: 24px auto;
+    border-radius: 24px;
+    background: var(--surface);
+    box-shadow: var(--card-shadow);
+  }
+  .entry-page > section {
+    padding: 24px;
+  }
+  .auth-page > .stage-header,
+  .entry-page > .stage-header,
+  .stage-flow > .stage-header {
+    margin: 0;
+    border-radius: 0 0 32px 32px;
+  }
+  .stage-flow .flow-indicators {
+    margin-top: 0;
+    height: auto;
+  }
+  .stage-flow .stage-step::after {
+    background: var(--soft);
+    border-color: var(--accent);
+  }
+  .stage-flow .stage-step[aria-current='step']::after {
+    background: var(--accent);
+  }
+  .onboarding-stage {
+    min-height: 300px;
+    padding-bottom: 28px;
+  }
+  .create-twin-sheet {
+    display: flex;
+    flex-direction: column;
+    border: 0;
+    padding: 24px;
+  }
+  .create-twin-sheet > div:first-child,
+  .create-twin-sheet > p {
+    width: 100%;
+    max-width: 560px;
+    margin-inline: auto;
+  }
   .create-twin-sheet .stage-header {
-    margin: 0 -16px 24px;
+    order: -1;
+    flex-shrink: 0;
+    margin: -24px -24px 24px;
+    border-radius: 0 0 32px 32px;
+  }
+  .create-twin-sheet .stage-future {
+    min-height: 300px;
+  }
+  .create-twin-sheet > div:last-child {
+    max-width: 560px;
+    width: 100%;
+    padding: 24px;
+    border-radius: 24px;
+    background: var(--surface);
+    box-shadow: var(--card-shadow);
+  }
+}
+@media (min-width: 1200px) {
+  .content-main {
+    max-width: 1184px;
+  }
+  .chat-page {
+    display: grid;
+    grid-template-columns: clamp(360px, 28vw, 400px) minmax(0, 1fr);
+    padding-bottom: 0;
+    height: 100dvh;
+  }
+  .stage-space {
+    position: sticky;
+    top: 0;
+    height: 100dvh !important;
+  }
+  .chat-stage {
+    position: relative;
+    inset: auto;
+    height: 100dvh !important;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .chat-stage .stage-person {
+    padding-top: 0;
+  }
+  .chat-stage .stage-actions {
+    inset: auto 32px 32px;
+  }
+  .chat-stage .stage-new,
+  .chat-stage .stage-switch {
+    background: var(--text-primary);
+  }
+  .chat-stage .stage-sun {
+    width: 180px;
+    height: 180px;
+    top: 15%;
+    left: -70px;
+  }
+  .chat-stage .stage-coral {
+    width: 140px;
+    height: 140px;
+    top: 65%;
+    right: -55px;
+  }
+  .chat-thread {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .chat-scroll {
+    display: block;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+  .chat-conversation {
+    max-width: 760px;
+    width: calc(100% - 64px);
+    padding: 32px 32px 24px;
+    margin-inline: auto;
+  }
+  .chat-composer {
+    position: static;
+    flex-shrink: 0;
+    padding: 16px 32px 24px;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .chat-composer .composer-field {
+    max-width: 760px;
+  }
+  .memories-page,
+  .about-page,
+  .twins-page {
+    max-width: 1184px;
+  }
+  .page-content {
+    padding: 32px;
+  }
+  .memories-page > .stage-header,
+  .about-page > .stage-header,
+  .twins-page > .stage-header {
+    margin: 32px 32px 0;
+  }
+  .memories-page > .stage-header {
+    position: sticky;
+    top: 24px;
+    z-index: 10;
+  }
+  .memories-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    align-items: start;
+    gap: 24px 32px;
+  }
+  .memories-grid > * {
+    grid-column: 1;
+    margin: 0;
+    min-width: 0;
+  }
+  .memories-grid > header {
+    grid-column: 1 / -1;
+  }
+  .memories-grid > .memory-add-panel {
+    grid-column: 2;
+    grid-row: 2 / span 5;
+    position: sticky;
+    top: 160px;
+  }
+  .about-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 32px;
+  }
+  .auth-page,
+  .entry-page,
+  .onboarding-page .stage-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    min-height: 100dvh;
+  }
+  .auth-page > .stage-header,
+  .entry-page > .stage-header,
+  .stage-flow > .stage-header,
+  .create-twin-sheet .stage-header {
+    margin: 0;
+    border-radius: 0;
+    align-self: stretch;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-bottom: 0;
+  }
+  .auth-page > section,
+  .entry-page > section,
+  .stage-flow .flow-panel,
+  .create-twin-sheet > div:last-child {
+    max-width: 480px;
+    margin: 32px auto;
+    width: calc(100% - 64px);
+  }
+  :is(.auth-page, .entry-page) .stage-brand-mark {
+    width: 300px;
+    height: 200px;
+  }
+  :is(.auth-page, .entry-page) .stage-brand-mark span {
+    width: 200px;
+    height: 200px;
+  }
+  :is(.auth-page, .entry-page) .stage-brand-mark span + span {
+    left: 100px;
+  }
+  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
+    .stage-person {
+    padding-top: 0;
+  }
+  :is(.entry-page, .onboarding-page, .create-twin-sheet) .stage-portrait {
+    width: 240px;
+    height: 240px;
+  }
+  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
+    .stage-name {
+    font-size: 64px;
+  }
+  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
+    .stage-sun {
+    width: 200px;
+    height: 200px;
+    top: 15%;
+    left: -60px;
+  }
+  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
+    .stage-coral {
+    width: 160px;
+    height: 160px;
+    top: 65%;
+    right: -40px;
+  }
+  .create-twin-sheet {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    padding: 0;
+  }
+  .create-twin-sheet > div:first-child {
+    grid-column: 2;
+    grid-row: 1;
+    width: calc(100% - 64px);
+    margin: 24px 32px 12px;
+  }
+  .create-twin-sheet > p {
+    grid-column: 2;
+    grid-row: 2;
+    width: calc(100% - 64px);
+    margin-inline: 32px;
+  }
+  .create-twin-sheet .stage-header {
+    grid-column: 1;
+    grid-row: 1 / 4;
+  }
+  .create-twin-sheet > div:last-child {
+    grid-column: 2;
+    grid-row: 1 / 4;
+    align-self: center;
   }
 }

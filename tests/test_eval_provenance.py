@@ -13,12 +13,16 @@ from twin.llm import Effort, FakeLLM
 
 
 @pytest.mark.parametrize("secret", ["1", "abc", "abcdefg", "abcdefgh", 'long-secret-"value'])
+@pytest.mark.parametrize("chat", [False, True])
 def test_report_redaction_preserves_json_numbers_and_redacts_secrets_of_any_length(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, secret: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, secret: str, chat: bool
 ) -> None:
     settings = Settings()
-    settings.llm.api_key_env = "REPORT_REDACTION_TEST_KEY"
-    monkeypatch.setenv(settings.llm.api_key_env, secret)
+    if chat:
+        settings.chat_llm = LLMSettings(api_key_env="REPORT_REDACTION_TEST_KEY")
+    else:
+        settings.llm.api_key_env = "REPORT_REDACTION_TEST_KEY"
+    monkeypatch.setenv(settings.effective_chat_llm.api_key_env, secret)
     report = Report(
         scenario=Scenario.PERSONAL,
         purpose=Purpose.FINAL_EVAL,
@@ -77,5 +81,15 @@ def test_configuration_identity_is_safe_and_sensitive_to_answer_settings(monkeyp
     assert configuration_fingerprint(settings, llm, embedder, [("j0:judge", "high")]) != initial
     assert configuration_fingerprint(settings, llm, embedder, [("j0:other", "low")]) != initial
     assert configuration_fingerprint(settings, llm, HashingEmbedder(dim=512), panel) != initial
+    settings.chat_llm = LLMSettings(model="fast-chat")
+    chat_default = configuration_fingerprint(settings, llm, embedder, panel)
+    assert chat_default != initial
+    settings.chat_llm.extra_body = {"thinking": {"type": "disabled"}}
+    assert configuration_fingerprint(settings, llm, embedder, panel) != chat_default
+    settings.chat_llm.extra_body.clear()
+    settings.chat_llm.base_url = "https://private-chat.invalid"
+    settings.chat_llm.api_key_env = "CHAT_SECRET_KEY_NAME"
+    assert configuration_fingerprint(settings, llm, embedder, panel) == chat_default
+    settings.chat_llm = None
     llm.name = "other-answer-model"
     assert configuration_fingerprint(settings, llm, embedder, panel) != initial

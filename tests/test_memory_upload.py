@@ -276,7 +276,7 @@ def test_cli_sources_build_and_stale_chat(settings: Settings, monkeypatch: pytes
     config = tmp_path / "twin.toml"
     config.write_text('target_name = "合成人物"\n', encoding="utf-8")
     monkeypatch.setattr(cli, "_settings", lambda ctx: settings)
-    monkeypatch.setattr(cli, "_llm", lambda settings: CallTally(FakeLLM(handler)))
+    monkeypatch.setattr(cli, "_llm", lambda settings, **kwargs: CallTally(FakeLLM(handler)))
     monkeypatch.setattr(cli, "_embedder", lambda settings: HashingEmbedder())
     runner = CliRunner()
     args = ["--config", str(config), "persona"]

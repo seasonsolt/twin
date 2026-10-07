@@ -482,6 +482,7 @@ def _run_updates(
     failures: list[PredictionFailure] = []
     rows: list[Judgement] = []
     try:
+        build_llm = make_llm(settings.llm) if settings.chat_llm is not None else chat.llm
         for case in cases:
             expected = case.expected
             if not isinstance(expected, QuestionExpected) or not all(
@@ -502,9 +503,9 @@ def _run_updates(
                     parsed = parse_text(SourceKind.DOCUMENT, name, fact, settings, dt.date.today())
                     chat.store.put_source(parsed)
                     source_id = parsed.source.source_id
-                built = build_profile(chat.store, chat.llm, settings)
+                built = build_profile(chat.store, build_llm, settings)
                 if built.failures:
-                    built = build_profile(chat.store, chat.llm, settings)
+                    built = build_profile(chat.store, build_llm, settings)
                 if built.failures:
                     raise RuntimeError("增量构建失败（详情已隐藏）")
                 index_persona(chat.store, chat.embedder, settings)

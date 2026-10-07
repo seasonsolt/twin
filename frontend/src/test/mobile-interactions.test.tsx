@@ -102,7 +102,7 @@ it.each([375, 390, 767])(
       within(tabs)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '记忆', '关于你']);
+    ).toEqual(['聊天', '记忆', '关于他']);
     expect(within(tabs).getByRole('link', { name: '聊天' })).toHaveAttribute(
       'aria-current',
       'page',
@@ -131,19 +131,36 @@ it.each([375, 390, 767])(
       'aria-current',
       'page',
     );
-    await user.click(within(tabs).getByRole('link', { name: '关于你' }));
+    await user.click(within(tabs).getByRole('link', { name: '关于他' }));
     await screen.findByText('About destination');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   },
 );
-it('keeps the sidebar navigation on desktop', async () => {
-  mount();
-  const nav = await screen.findByRole('navigation', { name: '主导航' });
-  expect(within(nav).getAllByRole('link')).toHaveLength(3);
-  expect(
-    screen.queryByRole('navigation', { name: '底部导航' }),
-  ).not.toBeInTheDocument();
-});
+it.each([768, 1024, 1280, 1440])(
+  'shows the slim rail at %spx',
+  async (width) => {
+    vi.stubGlobal('innerWidth', width);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const view = mount();
+    const nav = await screen.findByRole('navigation', { name: '主导航' });
+    expect(within(nav).getAllByRole('link')).toHaveLength(3);
+    expect(view.container.querySelector('.nav-rail')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建分身' })).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /收起侧栏|展开侧栏/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: '底部导航' }),
+    ).not.toBeInTheDocument();
+  },
+);
 function latestDragProps(axis: 'x' | 'y') {
   return [...divProps.mock.calls]
     .reverse()

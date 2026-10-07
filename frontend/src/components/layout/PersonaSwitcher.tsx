@@ -1,24 +1,34 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Check, ChevronDown } from 'lucide-react';
-import { Button, Dialog, useConfirm } from '../ui';
-import { api } from '../../lib/api';
-import { forgetPersona, personaUrl } from '../../lib/persona';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import { Link, useNavigate } from 'react-router';
+import { Check, ChevronDown, UsersRound } from 'lucide-react';
+import { Dialog } from '../ui';
+import { personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
-import { useStatus } from '../../stores/status';
 import { useAuth } from '../../stores/auth';
-import { StageHeader } from './StageHeader';
+import { useMobile } from '../../lib/useMobile';
 
-function Portrait({ persona }: { persona?: Persona }) {
-  return persona?.avatar_url ? (
+export function PersonaPortrait({ persona }: { persona?: Persona }) {
+  const [failed, setFailed] = useState<string>();
+  const url = persona?.avatar_url
+    ? personaUrl(persona.avatar_url, persona.id)
+    : undefined;
+  return url && failed !== url ? (
     <img
-      src={personaUrl(persona.avatar_url, persona.id)}
+      src={url}
       alt=""
-      className="size-12 shrink-0 rounded-full border-2 border-canvas object-cover"
+      onError={() => setFailed(url)}
+      className="persona-portrait size-12 shrink-0 rounded-full border-2 border-canvas object-cover"
     />
   ) : (
     <span
-      className="persona-name grid size-12 shrink-0 place-items-center rounded-full bg-soft text-2xl"
+      className="persona-portrait persona-name grid size-12 shrink-0 place-items-center rounded-full bg-soft text-2xl text-primary"
       aria-hidden
     >
       {Array.from(persona?.name || '本人')[0]}
@@ -27,285 +37,170 @@ function Portrait({ persona }: { persona?: Persona }) {
 }
 
 export function PersonaSwitcher({
-  createOnly = false,
   stage = false,
+  trigger,
+  label = '切换分身',
+  className,
+  open: controlledOpen,
+  onOpenChange,
+  returnFocus,
 }: {
-  createOnly?: boolean;
   stage?: boolean;
+  trigger?: ReactNode;
+  label?: string;
+  className?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  returnFocus?: RefObject<HTMLButtonElement | null>;
 }) {
-  const identity = useAuth((state) => state.identity);
+  const mobile = useMobile();
+  const navigate = useNavigate();
+  const button = useRef<HTMLButtonElement>(null);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = (value: boolean) => {
+    setLocalOpen(value);
+    onOpenChange?.(value);
+  };
+  const [anchor, setAnchor] = useState<CSSProperties>();
+  const [error, setError] = useState('');
   const { id, items, refresh, switchTo } = usePersonas();
   const current = items.find((item) => item.id === id);
-  const name = useStatus((state) => state.data?.target_name);
-  const [mode, setMode] = useState<'list' | 'create' | 'manage' | null>(
-    createOnly ? 'create' : null,
-  );
-  const [draft, setDraft] = useState('');
-  const [editing, setEditing] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const confirm = useConfirm();
-  const navigate = useNavigate();
+  const identity = useAuth((state) => state.identity);
   useEffect(() => {
-    const load = () => void refresh().catch(() => {});
-    load();
-    window.addEventListener('twin-assets-changed', load);
-    window.addEventListener('twin-identity-changed', load);
-    return () => {
-      window.removeEventListener('twin-assets-changed', load);
-      window.removeEventListener('twin-identity-changed', load);
-    };
-  }, [refresh]);
-  const work = async (fn: () => Promise<void>) => {
-    setBusy(true);
-    setError('');
-    try {
-      await fn();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '操作失败，请重试');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const remove = async (persona: Persona) => {
-    if (
-      !(await confirm({
-        title: `删除「${persona.name}」？`,
-        body: '记忆、聊天、形象、声音和媒体将永久删除，无法恢复。',
-        confirmLabel: '删除分身',
-        tone: 'danger',
-      }))
-    )
-      return;
-    await work(async () => {
-      await api(`/api/personas/${persona.id}`, {
-        method: 'DELETE',
+    if (!open) return;
+    void refresh().catch((failure: unknown) =>
+      setError(failure instanceof Error ? failure.message : '无法加载分身'),
+    );
+  }, [open, refresh]);
+  useEffect(() => {
+    if (mobile || !open) return;
+    const position = () => {
+      const rect = (
+        returnFocus?.current ?? button.current
+      )?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(360, window.innerWidth - 48);
+      setAnchor({
+        left: Math.max(24, Math.min(rect.left, window.innerWidth - width - 24)),
+        ...(rect.top > window.innerHeight / 2
+          ? {
+              top: 'auto',
+              bottom: Math.max(24, window.innerHeight - rect.bottom),
+            }
+          : { top: rect.bottom + 8, bottom: 'auto' }),
+        width,
+        maxHeight:
+          rect.top > window.innerHeight / 2
+            ? window.innerHeight - 48
+            : window.innerHeight - rect.bottom - 32,
       });
-      forgetPersona(persona.id);
-      if (id === persona.id)
-        switchTo(
-          items.find((item) => item.is_default)?.id ??
-            items.find((item) => item.id !== persona.id)?.id ??
-            '',
-        );
-      await refresh();
-    });
-  };
-  const submit = () =>
-    work(async () => {
-      if (mode === 'create') {
-        const created = await api<Persona>('/api/personas', {
-          method: 'POST',
-          json: { name: draft },
-        });
-        await refresh();
-        navigate('/chat');
-        switchTo(created.id);
-        setMode(null);
-      } else if (editing) {
-        const headers = { 'X-Twin-Persona': editing };
-        const identity = await api<{ about: string }>('/api/identity', {
-          headers,
-        });
-        await api('/api/identity', {
-          method: 'PUT',
-          headers,
-          json: { name: draft, about: identity.about },
-        });
-        await refresh();
-        await useStatus.getState().refresh();
-        setEditing(null);
-      }
-    });
+    };
+    position();
+    window.addEventListener('resize', position);
+    window.addEventListener('scroll', position, true);
+    return () => {
+      window.removeEventListener('resize', position);
+      window.removeEventListener('scroll', position, true);
+    };
+  }, [mobile, open, returnFocus]);
+  if (stage && mobile)
+    return (
+      <button
+        type="button"
+        className="stage-all"
+        aria-label="全部分身"
+        onClick={() => navigate('/twins')}
+      >
+        <UsersRound size={22} aria-hidden />
+      </button>
+    );
   return (
     <>
       <button
+        ref={button}
         type="button"
-        aria-label={createOnly ? '新建分身' : '切换分身'}
-        aria-expanded={mode !== null}
-        className={`flex min-h-11 items-center gap-2 rounded-full px-3 text-base ${stage ? 'stage-switch' : 'hover:bg-soft'}`}
+        aria-label={label}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={
+          className ??
+          `flex min-h-11 items-center gap-2 rounded-full px-3 text-base ${stage ? 'stage-switch' : 'hover:bg-soft'}`
+        }
         onClick={() => {
-          setMode(createOnly ? 'create' : 'list');
           setError('');
-          void work(refresh);
+          setOpen(true);
         }}
       >
-        {!stage && <Portrait persona={current} />}
-        <span className={stage ? '' : 'persona-name max-w-52 truncate'}>
-          {createOnly
-            ? '新建分身'
-            : stage
-              ? '切换'
-              : name || current?.name || '本人'}
-        </span>
-        <ChevronDown className="size-4" aria-hidden />
+        {trigger ?? (
+          <>
+            {!stage && <PersonaPortrait persona={current} />}
+            <span className={stage ? '' : 'persona-name max-w-52 truncate'}>
+              {stage ? '切换' : current?.name || '本人'}
+            </span>
+            <ChevronDown className="size-4" aria-hidden />
+          </>
+        )}
       </button>
       <Dialog
-        open={mode !== null}
-        onOpenChange={(open) => {
-          if (!open) setMode(null);
-        }}
-        title={
-          mode === 'create'
-            ? '新建分身'
-            : mode === 'manage'
-              ? '管理分身'
-              : '切换分身'
-        }
+        open={open}
+        onOpenChange={setOpen}
+        title="切换分身"
         body="每个分身都有独立的记忆、形象、声音和聊天。"
-        className={
-          mode === 'create'
-            ? 'create-twin-sheet [&_button]:min-h-11 [&_button]:min-w-11'
-            : 'persona-sheet [&_button]:min-h-11 [&_button]:min-w-11'
-        }
+        popover={!mobile}
+        style={!mobile ? { ...anchor, translate: 'none' } : undefined}
+        className={`${mobile ? 'persona-sheet' : 'persona-popover'} [&_button]:min-h-11 [&_button]:min-w-11`}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          (returnFocus?.current ?? button.current)?.focus();
+        }}
       >
-        {mode === 'create' && (
-          <StageHeader
-            variant="future"
-            name={draft.trim() || '新分身'}
-            intro={<p className="stage-caption">给未来的分身一个名字</p>}
-          />
-        )}
-        <div className="space-y-3 [&_button]:min-h-11 [&_input]:text-base">
-          {mode !== 'create' &&
-            items.map((persona) => (
-              <div key={persona.id} className="space-y-2">
-                <button
-                  type="button"
-                  className={`persona-row flex w-full items-center gap-3 rounded-full p-3 text-left ${persona.id === id ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
-                  disabled={busy}
-                  onClick={() => {
-                    setMode(null);
-                    switchTo(persona.id);
-                  }}
-                >
-                  <Portrait persona={persona} />
-                  <span className="min-w-0 flex-1">
-                    <span className="persona-name block truncate text-xl">
-                      {persona.name}
-                    </span>
-                    <span
-                      className={
-                        persona.id === id
-                          ? 'text-sm text-canvas'
-                          : 'text-sm text-secondary'
-                      }
-                    >
-                      {persona.sources} 条记忆
-                    </span>
-                    {identity?.admin &&
-                      persona.owner &&
-                      persona.owner !== identity.email && (
-                        <span
-                          className={`block truncate text-xs ${persona.id === id ? 'text-canvas' : 'text-secondary'}`}
-                        >
-                          {persona.owner}
-                        </span>
-                      )}
-                  </span>
-                  {persona.id === id && (
-                    <Check
-                      aria-label="当前分身"
-                      className="size-5 text-canvas"
-                    />
-                  )}
-                </button>
-                {mode === 'manage' && (
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => {
-                        setEditing(persona.id);
-                        setDraft(persona.name);
-                      }}
-                    >
-                      重命名
-                    </Button>
-                    {!persona.is_default && (
-                      <Button
-                        variant="danger"
-                        disabled={busy}
-                        onClick={() => void remove(persona)}
-                      >
-                        删除
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          {(mode === 'create' || (mode === 'manage' && editing)) && (
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submit();
-              }}
-            >
-              <label className="block space-y-1">
-                分身名字
-                <input
-                  autoFocus
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  maxLength={20}
-                  required
-                  className="block min-h-11 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md"
-                />
-              </label>
-              <Button type="submit" loading={busy} disabled={!draft.trim()}>
-                {mode === 'create' ? '创建并开始' : '保存名字'}
-              </Button>
-            </form>
-          )}
-          {mode === 'list' && (
-            <div className="flex gap-2">
-              <Button
-                disabled={busy}
-                onClick={() => {
-                  setDraft('');
-                  setMode('create');
-                }}
-              >
-                新建分身
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setEditing(null);
-                  setMode('manage');
-                }}
-              >
-                管理
-              </Button>
-            </div>
-          )}
-          {mode !== 'list' && (
-            <Button
-              variant="ghost"
+        <div className="space-y-3">
+          {items.map((persona) => (
+            <button
+              key={persona.id}
+              type="button"
+              className={`persona-row flex w-full items-center gap-3 rounded-full p-3 text-left ${persona.id === id ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
               onClick={() => {
-                setEditing(null);
-                setMode('list');
+                setOpen(false);
+                switchTo(persona.id);
               }}
             >
-              返回列表
-            </Button>
-          )}
-          {identity?.auth_enabled && (
-            <div className="border-t border-border pt-3">
-              <p className="break-all text-xs text-secondary">
-                {identity.email}
-              </p>
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void work(() => useAuth.getState().logout())}
-              >
-                退出登录
-              </Button>
-            </div>
-          )}
+              <PersonaPortrait persona={persona} />
+              <span className="min-w-0 flex-1">
+                <span className="persona-name block truncate text-xl">
+                  {persona.name}
+                </span>
+                <span className="block text-sm">{persona.sources} 条记忆</span>
+                {identity?.admin &&
+                  persona.owner &&
+                  persona.owner !== identity.email && (
+                    <span className="block truncate text-xs">
+                      {persona.owner}
+                    </span>
+                  )}
+              </span>
+              {persona.id === id && (
+                <Check aria-label="当前分身" className="size-5" />
+              )}
+            </button>
+          ))}
+          <div className="flex flex-wrap gap-4">
+            <Link
+              to="/twins"
+              className="min-h-11 text-accent underline"
+              onClick={() => setOpen(false)}
+            >
+              全部分身
+            </Link>
+            <Link
+              to="/twins?create=1"
+              className="min-h-11 text-accent underline"
+              onClick={() => setOpen(false)}
+            >
+              新建分身
+            </Link>
+          </div>
           {error && (
             <p role="alert" className="text-danger">
               {error}

@@ -166,6 +166,24 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
   expect(sessionStorage.getItem(CHAT_KEY)).toContain('记忆还在处理中');
 });
 
+it('fills and focuses the composer from each starter without sending', async () => {
+  mount();
+  expect(screen.getByRole('heading', { name: '和测试人聊聊' })).toBeVisible();
+  const user = userEvent.setup();
+  for (const starter of [
+    '你最近在忙什么？',
+    '你周末一般怎么过？',
+    '遇到难事你会怎么做？',
+  ]) {
+    await user.click(screen.getByRole('button', { name: starter }));
+    expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue(starter);
+    expect(screen.getByRole('textbox', { name: '你说' })).toHaveFocus();
+  }
+  expect(
+    fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat'),
+  ).toBe(false);
+});
+
 it('sends, polls queued/running jobs, renders only the abstention reason and persists complete turns', async () => {
   vi.useFakeTimers();
   mount();

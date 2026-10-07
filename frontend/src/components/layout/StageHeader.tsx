@@ -4,6 +4,7 @@ import { usePersonas } from '../../stores/personas';
 import { useStatus } from '../../stores/status';
 import { personaUrl } from '../../lib/persona';
 import { cn } from '../../lib/utils';
+import { PersonaSwitcher } from './PersonaSwitcher';
 
 export function StageHeader({
   variant = 'compact',
@@ -38,6 +39,18 @@ export function StageHeader({
       ? personaUrl(current.avatar_url, current.id)
       : undefined;
   const [failed, setFailed] = useState<string>();
+  const portraitContent =
+    url && failed !== url ? (
+      <img src={url} alt={`${name}的肖像`} onError={() => setFailed(url)} />
+    ) : (
+      <span
+        role="img"
+        aria-label={`${name}的头像`}
+        className="persona-name stage-initial"
+      >
+        {Array.from(name.trim())[0] || '本'}
+      </span>
+    );
   return (
     <motion.header
       aria-label={brand ? 'twin 的舞台' : `${name}的舞台`}
@@ -60,28 +73,39 @@ export function StageHeader({
             <span />
             <span />
           </div>
-        ) : (
-          (portrait ?? (
-            <div className="stage-circle stage-portrait">
-              {url && failed !== url ? (
-                <img
-                  src={url}
-                  alt={`${name}的肖像`}
-                  onError={() => setFailed(url)}
-                />
-              ) : (
-                <span
-                  role="img"
-                  aria-label={`${name}的头像`}
-                  className="persona-name stage-initial"
-                >
-                  {Array.from(name.trim())[0] || '本'}
-                </span>
-              )}
+        ) : portrait ? (
+          variant === 'chat' || variant === 'future' ? (
+            portrait
+          ) : (
+            <div className="stage-portrait-target">
+              {portrait}
+              <PersonaSwitcher
+                label={`${name}的肖像，快速切换分身`}
+                className="stage-portrait-switch"
+                trigger={<span className="sr-only">切换分身</span>}
+              />
             </div>
-          ))
+          )
+        ) : variant === 'future' ? (
+          <div className="stage-circle stage-portrait">{portraitContent}</div>
+        ) : (
+          <PersonaSwitcher
+            label={`${name}的肖像，快速切换分身`}
+            className="stage-circle stage-portrait"
+            trigger={portraitContent}
+          />
         )}
-        <h1 className="persona-name stage-name">{name}</h1>
+        <h1 className="persona-name stage-name" aria-label={name}>
+          {brand || variant === 'future' ? (
+            name
+          ) : (
+            <PersonaSwitcher
+              label={`${name}，快速切换分身`}
+              className="stage-name-switch"
+              trigger={name}
+            />
+          )}
+        </h1>
         {intro}
       </div>
       {(footer || variant === 'future') && (

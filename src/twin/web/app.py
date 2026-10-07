@@ -385,5 +385,11 @@ def create_app(
         app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="frontend-assets")
     if (STATIC_DIR / "fonts").is_dir():
         app.mount("/fonts", StaticFiles(directory=STATIC_DIR / "fonts"), name="frontend-fonts")
+    if (STATIC_DIR / "icons").is_dir():
+        app.mount("/icons", StaticFiles(directory=STATIC_DIR / "icons"), name="frontend-icons")
+
+        @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+        def favicon() -> FileResponse:
+            return FileResponse(STATIC_DIR / "icons" / "favicon-32.png", media_type="image/png")
 
     return app

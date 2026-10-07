@@ -31,7 +31,15 @@ twin --config /private/path/twin.toml eval-compare \
 参考文本。每次重复是独立单轮对话；不持久化聊天日志，不编辑真实记忆。评测错误隐藏
 后端异常详情，进度及调用追踪不包含题目或回答文本；records 含完整题目及回答。
 
-评委由 `[[judges]]` 配置产生；未配置时回退 `[llm]`。
+回答使用可选 `[chat_llm]`，未配置时沿用 `[llm]`，与网页、CLI 聊天和 HTTP/MCP 服务一致。
+对同一已构建档案评测不同聊天模型，只需修改 `[chat_llm]` 并使用新的输出目录；
+排除 update 时无需重新构建档案。update 的增量提取/构建仍使用 `[llm]`。
+`[chat_llm]` 支持与 `[llm]` 相同的字段；两者都支持 `extra_body` 表，原样传入
+OpenAI 兼容请求（例如 `extra_body = { thinking = { type = "disabled" } }`）。
+DeepSeek 使用 `json_mode = "json_object"`，不设置 `reasoning_effort`（包括 `none`），
+通过上述 `extra_body` 关闭思考；完整可取消注释示例见 `twin.toml.example`。
+
+评委由 `[[judges]]` 配置产生；未配置时回退 `[llm]`，不随聊天模型改变。
 评委身份为 `j0:模型名`、`j1:模型名` 等，同名模型占不同位置仍是不同评委。
 评分沿用原评测脚本的通用措辞：
 

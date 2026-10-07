@@ -179,7 +179,7 @@ it.each(['user', 'memories'])(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '记忆', '关于你']);
+    ).toEqual(['聊天', '记忆', '关于他']);
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
   },
 );
@@ -189,7 +189,7 @@ it.each(['persona', 'identity'])(
     identity.name_source = 'user';
     window.location.hash = `#/${route}`;
     render(<App />);
-    await screen.findByRole('heading', { name: '关于你' });
+    await screen.findByRole('heading', { name: '关于他' });
     expect(window.location.hash).toBe('#/about');
   },
 );

@@ -78,6 +78,33 @@ def test_import_build_coverage_and_chat_end_to_end(config: Path, tmp_path: Path)
     )  # cites an unreviewed item only
 
 
+@pytest.mark.parametrize("configured", [False, True])
+def test_chat_selects_configured_model(config: Path, monkeypatch: pytest.MonkeyPatch, configured: bool) -> None:
+    run(config, "import", "群聊.txt", "--kind", "chat")
+    run(config, "build")
+    if configured:
+        config.write_text(config.read_text() + '\n[chat_llm]\nmodel = "fast-chat"\neffort_twin = "low"\n')
+    calls: list[tuple[str | None, str]] = []
+    efforts: list[str] = []
+
+    def factory(settings: Any, section: str = "llm") -> FakeLLM:
+        calls.append((settings.model, section))
+        llm = FakeLLM(handler)
+        original = llm.structured
+
+        def structured(**kwargs: Any) -> BaseModel:
+            efforts.append(kwargs["effort"])
+            return original(**kwargs)
+
+        monkeypatch.setattr(llm, "structured", structured)
+        return llm
+
+    monkeypatch.setattr(cli, "make_llm", factory)
+    assert "钱到账才算。" in run(config, "chat", "问题").stdout
+    assert calls == [("fast-chat", "chat_llm")] if configured else calls == [(None, "llm")]
+    assert efforts == ["low" if configured else "high"]
+
+
 def test_import_reports_unparseable_files(config: Path, tmp_path: Path) -> None:
     (tmp_path / "空.md").write_text("没有题目", encoding="utf-8")
     result = run(config, "import", "空.md", "--kind", "questionnaire", code=1)

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, JsonValue, field_validator, model_validator
 
 if TYPE_CHECKING:
     from .media.video import VideoSynthesizer
@@ -45,6 +45,7 @@ class LLMSettings(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
     timeout: float = Field(default=600.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
+    extra_body: dict[str, JsonValue] = Field(default_factory=dict)
     egress: Literal["local", "external"] | None = None
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
     reasoning_effort_extract: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
@@ -332,6 +333,7 @@ class Settings(BaseModel):
     pseudonymize_others: bool = True
     max_workers: int = 4
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    chat_llm: LLMSettings | None = None
     # Evaluation judges (``[[judges]]`` tables). Empty: the main ``llm`` judges. Use 2-3 models of families
     # other than the twin's, since a judge tends to prefer output resembling its own.
     judges: list[LLMSettings] = Field(default_factory=list)
@@ -346,6 +348,10 @@ class Settings(BaseModel):
     video: VideoSettings = Field(default_factory=VideoSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
+
+    @property
+    def effective_chat_llm(self) -> LLMSettings:
+        return self.chat_llm if self.chat_llm is not None else self.llm
 
     def is_target(self, speaker: str) -> bool:
         return speaker == self.target_name or speaker in self.target_aliases
@@ -362,8 +368,12 @@ def configuration_fingerprint(
     """Identify answer-affecting settings and the actual panel without serializing endpoints or credentials."""
     return fingerprint(
         {
-            "llm": {**settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}), "name": llm.name},
+            "llm": settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
             "judges": [{"id": judge_id, "effort": effort} for judge_id, effort in judges],
+            "chat_llm": {
+                **settings.effective_chat_llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
+                "name": llm.name,
+            },
             "judge_reasoning_effort": [judge.reasoning_effort for judge in settings.judges],
             "embed": {
                 **settings.embed.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
@@ -404,6 +414,7 @@ def load_settings(path: Path | None = None) -> Settings:
             settings.tts.voice_dir = path.parent / settings.tts.voice_dir
     for key_env in [
         settings.llm.api_key_env,
+        settings.effective_chat_llm.api_key_env,
         settings.embed.api_key_env,
         settings.tts.api_key_env,
         settings.asr.api_key_env,
@@ -448,6 +459,7 @@ def make_llm(s: LLMSettings, section: str = "llm") -> LLM:
             timeout=s.timeout,
             max_retries=s.max_retries,
             reasoning_effort=s.reasoning_effort,
+            extra_body=s.extra_body,
         )
     return ClaudeCLILLM(model=s.model or CLAUDE_DEFAULT_MODEL)
 

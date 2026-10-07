@@ -3,6 +3,7 @@ import { Button } from '../../components/ui';
 import { StageHeader } from '../../components/layout/StageHeader';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
+import { usePersonas } from '../../stores/personas';
 
 export function Login() {
   const [email, setEmail] = useState('');
@@ -46,6 +47,8 @@ export function Login() {
     work(async () => {
       await api('/api/auth/verify', { method: 'POST', json: { email, code } });
       await useAuth.getState().login();
+      window.location.hash =
+        usePersonas.getState().items.length > 1 ? '#/twins' : '#/chat';
     });
   return (
     <main className="auth-page min-h-dvh bg-background">

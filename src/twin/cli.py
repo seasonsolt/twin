@@ -59,6 +59,17 @@ provider = "openai_compat"
 api_key_env = "TWIN_LLM_KEY"
 # reasoning_effort_extract = "low"  # 提取/合并的思考档位；不写则沿用 reasoning_effort，但 none 自动改为 low
 
+# 可选聊天专用模型：不配置时沿用 [llm]；提取、构建、问卷及默认评委仍使用 [llm]。
+# [llm] 和 [chat_llm] 都支持 extra_body，原样传给 OpenAI 兼容请求。
+# DeepSeek 只支持 json_object；不要设置 reasoning_effort（包括 none），改用 extra_body。
+# [chat_llm]
+# provider = "openai_compat"
+# model = "deepseek-flash"
+# base_url = "https://api.deepseek.com"
+# api_key_env = "TWIN_LLM_KEY_DEEPSEEK"
+# json_mode = "json_object"
+# extra_body = { thinking = { type = "disabled" } }
+
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。
 # 本机转发代理应设置 egress = "external"。
@@ -199,7 +210,7 @@ def _settings(ctx: typer.Context) -> Settings:
         if recorder.max_cost_usd is None:
             recorder.max_cost_usd = settings.budget.max_cost_usd
         if recorder.max_cost_usd is not None:
-            models = [settings.llm, *settings.judges]
+            models = [settings.llm, settings.effective_chat_llm, *settings.judges]
             unpriced = {model.model or "claude-opus-5-5" for model in models} - settings.pricing.keys()
             if settings.embed.provider != "hashing" and settings.embed.model not in settings.pricing:
                 unpriced.add(settings.embed.model)
@@ -215,12 +226,13 @@ def _require_working_calls(llm: CallTally, stage: str) -> None:
         raise _fail(str(error)) from error
 
 
-def _llm(settings: Settings) -> CallTally:
+def _llm(settings: Settings, *, chat: bool = False) -> CallTally:
+    config = settings.effective_chat_llm if chat else settings.llm
     try:
-        llm = make_llm(settings.llm)
+        llm = make_llm(config, "chat_llm") if chat and settings.chat_llm is not None else make_llm(config)
     except Exception as e:
         raise _fail(
-            f"无法初始化大模型后端 {settings.llm.provider}：{e}（密钥只能通过环境变量提供，见 README 的配置一节）"
+            f"无法初始化大模型后端 {config.provider}：{e}（密钥只能通过环境变量提供，见 README 的配置一节）"
         ) from e
     return CallTally(llm)
 
@@ -589,7 +601,7 @@ def persona_chat(
     with _persona_store(settings) as store:
         if profile_stale(store):
             _progress(STALE_PROFILE_NOTICE)
-        twin = PersonaChat(store, _llm(settings), _embedder(settings), settings)
+        twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
         history: list[ChatTurn] = []
         while True:
             text = message if message is not None else typer.prompt("你", default="", show_default=False)
@@ -636,7 +648,7 @@ def personal_eval_command(
     settings = _settings(ctx)
     _usage_output.set(out)
     try:
-        llm = make_llm(settings.llm)
+        llm = make_llm(settings.chat_llm, "chat_llm") if settings.chat_llm is not None else make_llm(settings.llm)
         embedder = make_embedder(settings.embed)
         panel = make_panel(settings)
         identity = configuration_fingerprint(

@@ -25,9 +25,11 @@ class Backends:
     ) -> None:
         self._settings = settings
         self._llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.llm))
+        self._chat_llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.effective_chat_llm, "chat_llm"))
         self._embedder_factory: EmbedderFactory = embedder_factory or (lambda: make_embedder(settings.embed))
         self._lock = threading.Lock()
         self._llm: LLM | None = None
+        self._chat_llm: LLM | None = None
         self._embedder: Embedder | None = None
         self._judges: list[Judge] | None = None
 
@@ -42,6 +44,20 @@ class Backends:
                         "（密钥只能通过环境变量提供，见 README 的配置一节）"
                     ) from e
             return self._llm
+
+    def chat_llm(self) -> LLM:
+        if self._settings.chat_llm is None:
+            return self.llm()
+        with self._lock:
+            if self._chat_llm is None:
+                try:
+                    self._chat_llm = self._chat_llm_factory()
+                except Exception as e:
+                    raise BackendUnavailable(
+                        f"无法初始化聊天大模型后端 {self._settings.effective_chat_llm.provider}：{e}"
+                        "（密钥只能通过环境变量提供，见 README 的配置一节）"
+                    ) from e
+            return self._chat_llm
 
     def embedder(self) -> Embedder:
         with self._lock:
@@ -69,7 +85,7 @@ class Backends:
     def describe(self) -> dict[str, dict[str, str | None]]:
         """Backend name or configuration error of the LLM and the embedder, for the status bar."""
         out: dict[str, dict[str, str | None]] = {}
-        for key, get in (("llm", self.llm), ("embed", self.embedder)):
+        for key, get in (("llm", self.llm), ("chat_llm", self.chat_llm), ("embed", self.embedder)):
             try:
                 out[key] = {"name": get().name, "error": None}
             except BackendUnavailable as e:

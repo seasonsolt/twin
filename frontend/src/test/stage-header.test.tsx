@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
-import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
+import { NewTwin } from '../components/layout/NewTwin';
 import { About } from '../pages/About';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
@@ -148,12 +148,11 @@ it.each([
       'bg-primary',
       'text-canvas',
     );
+    expect(within(sheet).getByRole('link', { name: '新建分身' })).toBeEnabled();
     expect(
-      within(sheet).getByRole('button', { name: '新建分身' }),
-    ).toBeEnabled();
-    expect(within(sheet).getByRole('button', { name: '管理' })).toHaveClass(
-      'border-primary',
-    );
+      within(sheet).getByRole('link', { name: '全部分身' }),
+    ).toHaveAttribute('href', '/twins');
+    expect(within(sheet).queryByRole('button', { name: '管理' })).toBeNull();
     view.unmount();
   },
 );
@@ -198,9 +197,8 @@ it.each([true, false])(
 );
 
 it('shows a live future-twin preview and four pills when creating', async () => {
-  mount(<PersonaSwitcher />, '/chat');
-  fireEvent.click(screen.getByRole('button', { name: '切换分身' }));
-  fireEvent.click(await screen.findByRole('button', { name: '新建分身' }));
+  mount(<NewTwin />, '/chat');
+  fireEvent.click(screen.getByRole('button', { name: '新建分身' }));
   const sheet = screen.getByRole('dialog', { name: '新建分身' });
   fireEvent.change(within(sheet).getByRole('textbox', { name: '分身名字' }), {
     target: { value: '阿宁' },

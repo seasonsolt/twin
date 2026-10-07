@@ -59,7 +59,11 @@ class ServiceBackend:
                 return answer_question(self.chat_factory(), question, as_of)
             with self._lock:
                 if self._llm is None or self._embedder is None:
-                    llm = make_llm(self.settings.llm)
+                    llm = (
+                        make_llm(self.settings.chat_llm, "chat_llm")
+                        if self.settings.chat_llm is not None
+                        else make_llm(self.settings.llm)
+                    )
                     embedder = make_embedder(self.settings.embed)
                     self._llm, self._embedder = llm, embedder
             with PersonaStore(self.settings.db_path) as store:

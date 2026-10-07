@@ -215,7 +215,7 @@ class PersonaChat:
             system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
             user=chat_user_message(messages, ctx),
             schema=ChatDraft,
-            effort=self.settings.llm.effort_twin,
+            effort=self.settings.effective_chat_llm.effort_twin,
         )
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]

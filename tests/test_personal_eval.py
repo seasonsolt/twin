@@ -482,8 +482,9 @@ def test_cli_refuses_in_repo_before_reading_input(tmp_path: Path) -> None:
     ensure_output_directory(out, allow_in_repo=True)
 
 
+@pytest.mark.parametrize("chat_configured", [False, True])
 def test_cli_fake_llm_outputs_and_captured_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, chat_configured: bool
 ) -> None:
     caplog.set_level(logging.DEBUG)
     config = tmp_path / "twin.toml"
@@ -492,11 +493,35 @@ def test_cli_fake_llm_outputs_and_captured_logs(
         '[llm]\negress = "external"\n[[judges]]\negress = "external"\n'
         '[embed]\nprovider = "openai_compat"\nbase_url = "https://embed.invalid/v1"\n'
     )
-    llm = FakeLLM(grade)
+    if chat_configured:
+        config.write_text(config.read_text() + '\n[chat_llm]\nmodel = "fast-chat"\n')
+    chat_calls: list[type[BaseModel]] = []
+    build_calls: list[type[BaseModel]] = []
+
+    def chat_grade(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        assert schema is ChatDraft
+        chat_calls.append(schema)
+        return grade(system, user, schema)
+
+    def build_grade(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        assert not chat_configured or schema is not ChatDraft
+        build_calls.append(schema)
+        return grade(system, user, schema)
+
+    llm = FakeLLM(build_grade)
+    chat_llm = FakeLLM(chat_grade)
     constructed: list[str] = []
-    monkeypatch.setattr("twin.cli.make_llm", lambda s: constructed.append("llm") or llm)
+
+    def factory(settings: LLMSettings, section: str = "llm") -> FakeLLM:
+        constructed.append(section)
+        return chat_llm if section == "chat_llm" else llm
+
+    monkeypatch.setattr("twin.cli.make_llm", factory)
     monkeypatch.setattr("twin.cli.make_embedder", lambda s: constructed.append("embed") or HashingEmbedder())
-    monkeypatch.setattr("twin.evals.personal.make_llm", lambda s, section: constructed.append("judge") or llm)
+    monkeypatch.setattr(
+        "twin.evals.personal.make_llm",
+        lambda s, section="llm": constructed.append("judge" if section.startswith("judges") else "build") or llm,
+    )
     runner = CliRunner()
     out = tmp_path / "run"
     result = runner.invoke(
@@ -518,9 +543,12 @@ def test_cli_fake_llm_outputs_and_captured_logs(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert constructed == ["llm", "embed", "judge"]
+    assert constructed == (["chat_llm", "embed", "judge", "build"] if chat_configured else ["llm", "embed", "judge"])
     report = read_records(out / "records.json")
     assert len(report.predictions) == 18 and report.metrics["repeats"] == 2
+    if chat_configured:
+        assert len(chat_calls) == 18 and ChatDraft not in build_calls
+        assert ExtractDraft in build_calls
     assert summarize(report)["update"]["n_cases"] == 3
     assert "update 已在临时副本上运行" in result.output
     with PersonaStore(tmp_path / "fixture.db") as store:

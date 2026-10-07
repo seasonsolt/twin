@@ -380,18 +380,29 @@ it('reply icons speak on the stage, update live captions and rings, and defer a 
   fireEvent.click(screen.getByRole('button', { name: '关闭视频' }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
-it.each([375, 390, 1023, 1024, 1440])(
+it.each([375, 390, 768, 1024, 1199, 1200, 1280, 1440])(
   'collapses on composer focus or scrolling away, expands on the circle, and uses a column at %spx',
   async (width) => {
     vi.stubGlobal('innerWidth', width);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches:
+          query === '(min-width: 1200px)'
+            ? width >= 1200
+            : query === '(max-width: 767px)' && width < 768,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
     vi.stubGlobal('scrollY', 1000);
     const view = mountStage();
     await act(async () => {});
     const stage = screen.getByRole('banner', { name: '本人的舞台' });
-    expect(stage).toHaveAttribute('data-desktop', String(width >= 1024));
+    expect(stage).toHaveAttribute('data-desktop', String(width >= 1200));
     fireEvent.focus(screen.getByRole('textbox', { name: '你说' }));
-    expect(stage).toHaveAttribute('data-collapsed', String(width < 1024));
-    if (width < 1024) {
+    expect(stage).toHaveAttribute('data-collapsed', String(width < 1200));
+    if (width < 1200) {
       fireEvent.click(screen.getByRole('button', { name: '展开舞台' }));
       expect(stage).toHaveAttribute('data-collapsed', 'false');
       Object.defineProperty(document.documentElement, 'scrollHeight', {
@@ -406,8 +417,10 @@ it.each([375, 390, 1023, 1024, 1440])(
       ).toBe(stage.getAttribute('style'));
     }
     const css = readFileSync('src/design/tokens.css', 'utf8');
-    expect(css).toContain('@media (min-width: 1024px)');
-    expect(css).toContain('grid-template-columns: 320px minmax(0, 1fr)');
+    expect(css).toContain('@media (min-width: 1200px)');
+    expect(css).toContain(
+      'grid-template-columns: clamp(360px, 28vw, 400px) minmax(0, 1fr)',
+    );
   },
 );
 it('jumps to collapsed/expanded heights with reduced motion and retains static speaking cues', async () => {
@@ -787,9 +800,18 @@ it('starts video once, renders only a thumbnail, opens fullscreen playback and c
   expect(screen.queryByLabelText('回复的真人视频')).not.toBeInTheDocument();
   expect(count('/api/media/video')).toBe(1);
 });
-it.each(['close', 'Escape', 'backdrop', 'swipe'])(
-  'closes fullscreen video via %s and returns focus to the thumbnail',
-  async (method) => {
+it.each([
+  ['close', 390],
+  ['Escape', 390],
+  ['backdrop', 390],
+  ['swipe', 390],
+  ['close', 1280],
+  ['Escape', 1280],
+  ['Escape', 1440],
+] as const)(
+  'closes fullscreen video via %s at %spx and returns focus to the thumbnail',
+  async (method, width) => {
+    vi.stubGlobal('innerWidth', width);
     jobStatus = 'done';
     render(video());
     const thumbnail = await screen.findByRole('button', {

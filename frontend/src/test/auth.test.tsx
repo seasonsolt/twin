@@ -222,11 +222,10 @@ it('routes no_persona to creation, then opens the app for the new twin', async (
   ).toBe(true);
 });
 
-it('shows the email in the switcher and logs out', async () => {
+it('shows the signed-in email in the rail and logs out', async () => {
   loggedIn = true;
   const user = userEvent.setup();
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: '切换分身' }));
   await waitFor(() => expect(screen.getByText(member.email)).toBeVisible());
   await user.click(screen.getByRole('button', { name: '退出登录' }));
   expect(
@@ -234,6 +233,27 @@ it('shows the email in the switcher and logs out', async () => {
   ).toBeVisible();
   expect(loggedIn).toBe(false);
 });
+
+it.each([0, 1, 2])(
+  'lands on the new flow, chat, or twins after login with %s twins',
+  async (count) => {
+    items = Array.from({ length: count }, (_, index) => ({
+      ...persona,
+      id: `p-${index}`,
+      name: `分身${index}`,
+    }));
+    window.location.hash = '#/about';
+    const user = userEvent.setup();
+    render(<App />);
+    const code = await requestCode(user);
+    await user.type(code, '012345');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+    if (count === 0) await screen.findByRole('dialog', { name: '新建分身' });
+    else if (count === 1) await screen.findByRole('textbox', { name: '你说' });
+    else await screen.findByRole('heading', { name: '我的分身' });
+    expect(window.location.hash).toBe(count > 1 ? '#/twins' : '#/chat');
+  },
+);
 
 it('clears a stale persona and selects the first owned twin rather than default', async () => {
   loggedIn = true;

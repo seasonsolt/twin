@@ -27,6 +27,7 @@ def configured_backends(settings: Settings) -> list[BackendSettings]:
         settings.video,
         *settings.judges,
         *([settings.vision] if settings.vision.command else []),
+        *([settings.chat_llm] if settings.chat_llm is not None else []),
     ]
 
 
@@ -59,7 +60,11 @@ def egress_status(settings: Settings, *, external_only: bool = False) -> list[di
             continue
         rows.append(
             {
-                "kind": "judge" if external_only and 5 <= index < 5 + len(settings.judges) else info.kind,
+                "kind": "chat_llm"
+                if settings.chat_llm is not None and section is settings.chat_llm
+                else "judge"
+                if external_only and 5 <= index < 5 + len(settings.judges)
+                else info.kind,
                 "provider": section.provider,
                 "host": info.host,
                 "external": info.external,

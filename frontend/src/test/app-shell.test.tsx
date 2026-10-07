@@ -88,11 +88,11 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       screen.queryByText(/localhost|local-provider/),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '关于你' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '关于他' })).toHaveAttribute(
       'href',
       '/about',
     );
-    expect(screen.getByRole('heading', { name: '关于你' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '关于他' })).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
     ).toHaveLength(3);

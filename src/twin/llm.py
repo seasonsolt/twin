@@ -295,6 +295,7 @@ class OpenAICompatLLM:
         timeout: float = 600.0,
         max_retries: int = 2,
         reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         import openai
 
@@ -303,6 +304,7 @@ class OpenAICompatLLM:
         self.name = f"openai_compat:{model}"
         self.json_mode = json_mode
         self.reasoning_effort = reasoning_effort
+        self.extra_body = extra_body or {}
         self.max_retries = max_retries
         self.max_tokens = self.DEFAULT_MAX_TOKENS if max_tokens is None else max_tokens
         if client is not None and callable(getattr(client, "with_options", None)):
@@ -364,6 +366,8 @@ class OpenAICompatLLM:
             {"role": "user", "content": user},
         ]
         kwargs: dict[str, Any] = {"model": self.model, "max_tokens": budget}
+        if self.extra_body:
+            kwargs["extra_body"] = self.extra_body
         effective_effort = self.reasoning_effort if reasoning_effort is None else reasoning_effort
         if effective_effort is not None:
             kwargs["reasoning_effort"] = effective_effort

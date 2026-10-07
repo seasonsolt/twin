@@ -12,6 +12,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
+import { Twins } from '../pages/Twins';
 import { ConfirmProvider } from '../components/ui';
 import type { Turn } from '../features/chat/types';
 import { useConversation, CHAT_KEY } from '../features/chat/useConversation';
@@ -165,18 +166,32 @@ it('lists avatars and memory counts, switches without reload, persists and sends
   expect(selected(fetcher.mock.calls.at(-1)![1])).toBe(B);
 });
 
+function twinsPage() {
+  return render(
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={['/twins']}>
+        <Twins />
+      </MemoryRouter>
+    </ConfirmProvider>,
+  );
+}
+
 it('renames through the persona identity endpoint and preserves its introduction', async () => {
   const user = userEvent.setup();
-  switcher();
-  await user.click(screen.getByRole('button', { name: '切换分身' }));
-  await user.click(await screen.findByRole('button', { name: '管理' }));
+  twinsPage();
+  await user.click(await screen.findByLabelText('管理朋友'));
   expect(screen.getAllByRole('button', { name: '删除' })).toHaveLength(1);
-  await user.click(screen.getAllByRole('button', { name: '重命名' })[1]);
+  await user.click(
+    within(screen.getByLabelText('管理朋友').closest('article')!).getByRole(
+      'button',
+      { name: '重命名' },
+    ),
+  );
   const input = screen.getByRole('textbox', { name: '分身名字' });
   await user.clear(input);
   await user.type(input, '新朋友');
   await user.click(screen.getByRole('button', { name: '保存名字' }));
-  await screen.findByText('新朋友');
+  await screen.findByRole('button', { name: '和新朋友聊天' });
   const saved = fetcher.mock.calls.find(
     ([path, init]) => path === '/api/identity' && init?.method === 'PUT',
   )![1];
@@ -191,9 +206,8 @@ it('requires delete confirmation and purges only the deleted persona browser rec
   const user = userEvent.setup();
   sessionStorage.setItem(personaKey(CHAT_KEY, B), 'private');
   sessionStorage.setItem(CHAT_KEY, 'default history');
-  switcher();
-  await user.click(screen.getByRole('button', { name: '切换分身' }));
-  await user.click(await screen.findByRole('button', { name: '管理' }));
+  twinsPage();
+  await user.click(await screen.findByLabelText('管理朋友'));
   await user.click(screen.getByRole('button', { name: '删除' }));
   let dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
   await user.click(within(dialog).getByRole('button', { name: '取消' }));
@@ -205,6 +219,7 @@ it('requires delete confirmation and purges only the deleted persona browser rec
       screen.queryByRole('dialog', { name: '删除「朋友」？' }),
     ).not.toBeInTheDocument(),
   );
+  await user.click(screen.getByLabelText('管理朋友'));
   await user.click(screen.getByRole('button', { name: '删除' }));
   dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
   await user.click(within(dialog).getByRole('button', { name: '删除分身' }));
@@ -218,9 +233,9 @@ it('creates, switches and opens onboarding even though the new identity already 
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '切换分身' }));
-  await user.click(await screen.findByRole('button', { name: '新建分身' }));
+  await user.click(await screen.findByRole('link', { name: '新建分身' }));
   await user.type(
-    screen.getByRole('textbox', { name: '分身名字' }),
+    await screen.findByRole('textbox', { name: '分身名字' }),
     '新的分身',
   );
   await user.click(screen.getByRole('button', { name: '创建并开始' }));

@@ -11,6 +11,9 @@ import {
   TooltipProvider,
 } from './components/ui';
 
+const Twins = lazy(() =>
+  import('./pages/Twins').then((module) => ({ default: module.Twins })),
+);
 const Chat = lazy(() =>
   import('./pages/Chat').then((module) => ({ default: module.Chat })),
 );
@@ -31,6 +34,7 @@ const Gallery = lazy(() =>
 
 export function App() {
   const personaId = usePersonas((state) => state.id);
+  const personaCount = usePersonas((state) => state.items.length);
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delayDuration={300}>
@@ -40,7 +44,16 @@ export function App() {
               <Suspense fallback={<Skeleton className="h-40" />}>
                 <Routes key={personaId}>
                   <Route element={<AppShell />}>
-                    <Route index element={<Navigate to="/chat" replace />} />
+                    <Route
+                      index
+                      element={
+                        <Navigate
+                          to={personaCount > 1 ? '/twins' : '/chat'}
+                          replace
+                        />
+                      }
+                    />
+                    <Route path="twins" element={<Twins />} />
                     <Route path="chat" element={<Chat />} />
                     <Route path="memories" element={<Memories />} />
                     <Route path="about" element={<About />} />

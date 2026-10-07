@@ -8,6 +8,7 @@ import { ChatAvatar } from './ChatAvatar';
 import { ReplyVideo } from './ReplyVideo';
 import type { Turn } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
+import { useDesktop } from '../../lib/useMobile';
 
 export function videoCaption(text: string, time: number, duration: number) {
   const sentences = text.match(/[^。！？!?\r\n]+[。！？!?]*|[^\r\n]+$/gu) ?? [
@@ -53,9 +54,10 @@ export function ChatStage({
   onClear(): void;
 }) {
   const { reduced } = useMotionPreset();
-  const [desktop, setDesktop] = useState(() => window.innerWidth >= 1024);
+  const desktop = useDesktop();
   const [collapsed, setCollapsed] = useState(false);
   const [open, setOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [time, setTime] = useState(0);
   const circle = useRef<HTMLButtonElement>(null);
   const player = useRef<HTMLVideoElement>(null);
@@ -70,9 +72,9 @@ export function ChatStage({
     setTime(0);
   }, [url, turn?.id]);
   const height = useSpring(desktop ? 470 : 360, springs.snappy);
-  const size = useSpring(desktop ? 260 : 196, springs.snappy);
+  const size = useSpring(desktop ? 240 : 196, springs.snappy);
   const targetHeight = desktop ? 470 : collapsed ? 96 : 360;
-  const targetSize = desktop ? 260 : collapsed ? 60 : 196;
+  const targetSize = desktop ? 240 : collapsed ? 60 : 196;
   useEffect(() => {
     if (reduced) {
       height.jump(targetHeight);
@@ -84,7 +86,6 @@ export function ChatStage({
   }, [height, size, targetHeight, targetSize, reduced]);
   useEffect(() => {
     let lastScroll = window.scrollY;
-    const resize = () => setDesktop(window.innerWidth >= 1024);
     const scroll = () => {
       const distance =
         document.documentElement.scrollHeight -
@@ -102,11 +103,9 @@ export function ChatStage({
       if ((event.target as Element).closest('.chat-composer'))
         setCollapsed(true);
     };
-    window.addEventListener('resize', resize);
     window.addEventListener('scroll', scroll, { passive: true });
     document.addEventListener('focusin', focus);
     return () => {
-      window.removeEventListener('resize', resize);
       window.removeEventListener('scroll', scroll);
       document.removeEventListener('focusin', focus);
     };
@@ -162,7 +161,9 @@ export function ChatStage({
                 ? '展开舞台'
                 : url && videoPlaying
                   ? '打开真人视频全屏'
-                  : '播放或暂停当前句'
+                  : url
+                    ? '播放或暂停当前句'
+                    : `${name}的肖像，快速切换分身`
             }
             aria-expanded={!small}
             onClick={() => {
@@ -173,7 +174,8 @@ export function ChatStage({
               if (url && videoPlaying) {
                 player.current?.pause();
                 setOpen(true);
-              } else onToggle();
+              } else if (url) onToggle();
+              else setSwitching(true);
             }}
           >
             {url ? (
@@ -222,6 +224,13 @@ export function ChatStage({
           </p>
         }
       >
+        <PersonaSwitcher
+          open={switching}
+          onOpenChange={setSwitching}
+          returnFocus={circle}
+          className="sr-only"
+          label="舞台快速切换"
+        />
         {turn?.reply && url && (
           <ReplyVideo
             id={turn.id}

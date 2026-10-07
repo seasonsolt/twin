@@ -246,7 +246,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   const openAdd = () => {
     if (mobile) setAdding(true);
     else {
-      addPanel.current?.scrollIntoView({
+      addPanel.current?.scrollIntoView?.({
         block: 'center',
         behavior: 'instant',
       });
@@ -388,7 +388,9 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       )}
       <div
         className={
-          embedded ? 'space-y-4' : 'page-content space-y-4 md:space-y-6'
+          embedded
+            ? 'space-y-4'
+            : 'page-content memories-grid space-y-4 md:space-y-6'
         }
       >
         <header>
@@ -445,7 +447,11 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
           </Button>
         )}
         {(!mobile || embedded) && (
-          <section ref={addPanel}>
+          <section
+            ref={addPanel}
+            className="memory-add-panel"
+            aria-label="添加记忆"
+          >
             <Card>{addContent}</Card>
           </section>
         )}

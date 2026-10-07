@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type CSSProperties,
 } from 'react';
 import { exitDurations, useMotionPreset } from '../../design/motion';
 import { Button, IconButton } from './controls';
@@ -21,8 +22,11 @@ export function Dialog({
   children,
   onCloseAutoFocus,
   onOpenAutoFocus,
+  onInteractOutside,
   className,
   exitTransition,
+  popover = false,
+  style,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -31,16 +35,19 @@ export function Dialog({
   children?: ReactNode;
   onCloseAutoFocus?: (event: Event) => void;
   onOpenAutoFocus?: (event: Event) => void;
+  onInteractOutside?: RadixDialog.DialogContentProps['onInteractOutside'];
   className?: string;
   exitTransition?: Transition;
+  popover?: boolean;
+  style?: CSSProperties;
 }) {
   const { reduced, transition, exit: fade } = useMotionPreset('gentle');
   const exit = { ...fade, duration: exitDurations.dialog };
   return (
-    <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
+    <RadixDialog.Root open={open} onOpenChange={onOpenChange} modal={!popover}>
       <RadixDialog.Portal forceMount>
         <AnimatePresence>
-          {open && (
+          {open && !popover && (
             <RadixDialog.Overlay key="overlay" forceMount asChild>
               <motion.div
                 key="overlay"
@@ -59,9 +66,11 @@ export function Dialog({
               asChild
               onCloseAutoFocus={onCloseAutoFocus}
               onOpenAutoFocus={onOpenAutoFocus}
+              onInteractOutside={onInteractOutside}
             >
               <motion.div
                 key="dialog"
+                style={style}
                 initial={{ opacity: 0, scale: reduced ? 1 : 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{

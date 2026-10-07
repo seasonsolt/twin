@@ -77,6 +77,23 @@ export function Onboarding({
             }
           />
         }
+        footer={
+          <>
+            {error && (
+              <p role="alert" className="px-5 text-danger">
+                {error}
+              </p>
+            )}
+            <Button
+              className="mx-5 my-6"
+              variant="ghost"
+              loading={busy}
+              onClick={() => void skip()}
+            >
+              跳过
+            </Button>
+          </>
+        }
         maxStep={saved ? 4 : 1}
         onComplete={() => void finish()}
         finalActionText="开始聊天"
@@ -109,7 +126,7 @@ export function Onboarding({
               <div className="space-y-4">
                 <h2 className="text-xl font-semibold">形象和声音</h2>
                 <p className="text-secondary">
-                  可以现在设置，也可以直接继续，以后在关于你里更换。
+                  可以现在设置，也可以直接继续，以后在关于他里更换。
                 </p>
                 <RecordingShortcut />
                 <SelfAssets />
@@ -129,19 +146,6 @@ export function Onboarding({
           },
         ]}
       />
-      {error && (
-        <p role="alert" className="px-5 text-danger">
-          {error}
-        </p>
-      )}
-      <Button
-        className="mx-5 my-6"
-        variant="ghost"
-        loading={busy}
-        onClick={() => void skip()}
-      >
-        跳过
-      </Button>
     </main>
   );
 }

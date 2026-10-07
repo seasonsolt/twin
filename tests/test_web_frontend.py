@@ -70,14 +70,22 @@ def test_assets_and_csp_safe_build(client: TestClient) -> None:
     assert parser.scripts and parser.references
     assert all(script.get("src") for script in parser.scripts)
     assert not "".join(parser.inline_script).strip()
+    icons = {
+        "/icons/favicon.svg": "image/svg+xml",
+        "/icons/favicon-32.png": "image/png",
+        "/icons/apple-touch-icon.png": "image/png",
+    }
+    assert set(icons) <= set(parser.references)
     for reference in parser.references:
         bundled = re.fullmatch(r"/assets/[\w-]+-[\w-]+\.(js|css)", reference)
-        assert bundled or reference == "/fonts/ma-shan-zheng/font.css"
+        assert bundled or reference == "/fonts/ma-shan-zheng/font.css" or reference in icons
         response = client.get(reference)
         assert response.status_code == 200, reference
-        expected = "text/javascript" if reference.endswith(".js") else "text/css"
+        expected = icons.get(reference) or ("text/javascript" if reference.endswith(".js") else "text/css")
         assert response.headers["content-type"].startswith(expected)
         assert_security(response)
+    favicon = client.get("/favicon.ico")
+    assert favicon.status_code == 200 and favicon.headers["content-type"] == "image/png"
     assets = web_app.STATIC_DIR / "assets"
     # Include lazy-loaded page chunks and styles, not just index references.
     for asset in assets.iterdir():
@@ -91,7 +99,7 @@ def test_assets_and_csp_safe_build(client: TestClient) -> None:
         css = stylesheet.read_text(encoding="utf-8")
         assert not re.search(r"(?:@import\s+(?:url\(\s*)?|url\(\s*)[\"']?(?:[a-z][\w+.-]*:|//)", css, re.IGNORECASE)
     assert not list(assets.glob("*.map"))
-    assert {path.name for path in web_app.STATIC_DIR.iterdir()} == {"index.html", "assets", "fonts"}
+    assert {path.name for path in web_app.STATIC_DIR.iterdir()} == {"index.html", "assets", "fonts", "icons"}
     font_css = client.get("/fonts/ma-shan-zheng/font.css")
     assert font_css.status_code == 200
     assert_security(font_css)

@@ -17,9 +17,15 @@ from .schema import Report
 
 def write_report(path: Path, report: Report, settings: Settings) -> None:
     """Attach usage under metrics (preserving the strict Report contract), then redact runtime secrets."""
-    endpoints = [settings.llm.base_url, settings.embed.base_url, *(judge.base_url for judge in settings.judges)]
+    endpoints = [
+        settings.llm.base_url,
+        settings.effective_chat_llm.base_url,
+        settings.embed.base_url,
+        *(judge.base_url for judge in settings.judges),
+    ]
     names = {
         settings.llm.api_key_env,
+        settings.effective_chat_llm.api_key_env,
         settings.embed.api_key_env,
         *(judge.api_key_env for judge in settings.judges),
         "OPENAI_API_KEY",

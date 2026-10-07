@@ -132,7 +132,7 @@ export function Login() {
             )}
           </form>
         )}
-        {step !== 'email' && (
+        {step === 'code' && (
           <Button
             variant="ghost"
             disabled={busy}

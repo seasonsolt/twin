@@ -130,7 +130,7 @@ it('logs in via email and a paste-friendly code without persisting credentials',
   expect(Object.keys(localStorage)).toEqual(['twin:persona']);
 });
 
-it('shows the waitlist without a code form and can change email', async () => {
+it('shows the waitlist without a code form or a way to try another email', async () => {
   fetcher.mockResolvedValue(json({ status: 'waitlist' }));
   const user = userEvent.setup();
   render(<Login />);
@@ -145,8 +145,7 @@ it('shows the waitlist without a code form and can change email', async () => {
   expect(screen.getByText('wait@example.com')).toBeVisible();
   expect(screen.getByText('开放后会第一时间通知你')).toBeVisible();
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: '换个邮箱' }));
-  expect(screen.getByRole('textbox', { name: '邮箱' })).toBeVisible();
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
 });
 
 it('enables resend only after the 60-second countdown and restarts it', async () => {

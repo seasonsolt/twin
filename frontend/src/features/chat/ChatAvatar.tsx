@@ -23,6 +23,7 @@ export function ChatAvatar({
   capabilities,
   level = 0,
   speaking = false,
+  glow = true,
   className = 'size-9',
   personaId,
 }: {
@@ -30,6 +31,7 @@ export function ChatAvatar({
   capabilities: Capabilities | null;
   level?: number;
   speaking?: boolean;
+  glow?: boolean;
   className?: string;
   personaId?: string;
 }) {
@@ -76,7 +78,7 @@ export function ChatAvatar({
           initial
         )}
       </div>
-      <SpeakingGlow round level={level} speaking={speaking} />
+      {glow && <SpeakingGlow round level={level} speaking={speaking} />}
     </div>
   );
 }

@@ -1,10 +1,26 @@
 export class GaplessAudio {
   private context = new AudioContext();
+  private analyser = this.context.createAnalyser();
+  private samples = new Float32Array(512);
   private sources = new Map<
     string,
     { source: AudioBufferSourceNode; start: number }
   >();
   private end = 0;
+
+  constructor() {
+    this.analyser.fftSize = this.samples.length;
+    this.analyser.connect(this.context.destination);
+  }
+
+  level() {
+    this.analyser.getFloatTimeDomainData(this.samples);
+    const rms = Math.sqrt(
+      this.samples.reduce((sum, value) => sum + value * value, 0) /
+        this.samples.length,
+    );
+    return Math.min(3, rms * 12);
+  }
 
   resume() {
     return this.context.resume();
@@ -26,7 +42,7 @@ export class GaplessAudio {
     if (this.sources.has(key)) return;
     const source = this.context.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.context.destination);
+    source.connect(this.analyser);
     const start = Math.max(this.end, this.context.currentTime);
     this.end = start + buffer.duration;
     this.sources.set(key, { source, start });
@@ -48,6 +64,7 @@ export class GaplessAudio {
   }
   close() {
     this.reset();
+    this.analyser.disconnect();
     return this.context.close();
   }
 }

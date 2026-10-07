@@ -369,11 +369,76 @@
 .stage-circle:focus-visible {
   outline-color: white;
 }
-.stage-circle [data-portrait-glow] {
-  border-color: var(--canvas);
-  box-shadow:
-    0 0 0 7px rgb(255 244 234 / 0.28),
-    0 0 0 15px rgb(255 244 234 / 0.14);
+.stage-portrait-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.stage-speaking {
+  position: relative;
+  flex-shrink: 0;
+  overflow: visible;
+}
+.stage-speaking-ring {
+  position: absolute;
+  inset: -5px;
+  border: 2px solid var(--canvas);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: stage-speaking-ring 1.6s ease-out infinite;
+}
+.stage-speaking-ring + .stage-speaking-ring {
+  animation-delay: -0.8s;
+}
+@keyframes stage-speaking-ring {
+  from {
+    transform: scale(1);
+    opacity: var(--ring-opacity);
+  }
+  to {
+    transform: scale(var(--ring-expansion));
+    opacity: 0;
+  }
+}
+.stage-speaking-chip,
+.stage-video-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  background: var(--text-primary);
+  color: var(--canvas);
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.stage-speaking-chip {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.stage-video-status {
+  position: relative;
+  margin-top: 10px;
+}
+.stage-video-spinner {
+  animation: stage-video-spin 1s linear infinite;
+}
+.chat-stage[data-reduced-motion='true'] .stage-video-spinner {
+  animation: none;
+}
+@keyframes stage-video-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-speaking-ring,
+  .stage-video-spinner {
+    animation: none;
+  }
 }
 .stage-circle [role='img'] {
   font-family: var(--font-persona);
@@ -431,14 +496,20 @@
   top: calc(24px + env(safe-area-inset-top, 0px));
 }
 .chat-stage[data-collapsed='true'] .stage-person {
-  padding-top: 5px;
+  padding-top: 14px;
+}
+.chat-stage[data-collapsed='true'][data-video-status] .stage-name {
+  display: none;
+}
+.chat-stage[data-collapsed='true'] .stage-video-status {
+  margin-top: 6px;
 }
 .chat-stage[data-collapsed='true'] .stage-circle {
   border-width: 3px;
 }
 .chat-stage[data-collapsed='true'] .stage-name {
   font-size: 18px;
-  margin-top: 3px;
+  margin-top: 1px;
 }
 .chat-stage[data-collapsed='true'] .stage-caption {
   position: absolute;
@@ -1111,7 +1182,7 @@
   }
   .chat-stage .stage-person {
     flex-shrink: 0;
-    padding-top: clamp(12px, 3dvh, 28px);
+    padding-top: max(40px, 3dvh);
     padding-bottom: 8px;
   }
   .chat-stage .stage-caption {

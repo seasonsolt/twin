@@ -322,7 +322,7 @@ function mountStage() {
     </ConfirmProvider>,
   );
 }
-it('reply icons speak on the stage, update live captions and rings, and defer a ready video to the next play', async () => {
+it('reply icons speak on the stage, update live captions and rings, and play a ready video when the portrait is tapped', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   vi.stubGlobal('innerWidth', 390);
   const original = fetchMock.getMockImplementation() as (
@@ -357,11 +357,12 @@ it('reply icons speak on the stage, update live captions and rings, and defer a 
     'polite',
   );
   expect(screen.getByTestId('stage-caption')).toHaveTextContent('第一句。');
+  expect(screen.getByText('真人视频生成中')).toBeVisible();
   audio.currentTime = 1.5;
   tick();
   expect(
-    view.container.querySelector('.chat-stage [data-portrait-glow]'),
-  ).toHaveAttribute('data-glow-level', '3');
+    view.container.querySelector('.chat-stage [data-stage-level]'),
+  ).toHaveAttribute('data-stage-level', '3');
   expect(reply.querySelector('.twin-bubble')).toHaveAttribute(
     'data-speaking',
     'true',
@@ -371,8 +372,8 @@ it('reply icons speak on the stage, update live captions and rings, and defer a 
   jobStatus = 'done';
   await act(async () => vi.advanceTimersByTimeAsync(1000));
   expect(screen.queryByLabelText('舞台真人视频')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '正在说这句，点击暂停' }));
-  fireEvent.click(screen.getByRole('button', { name: '让本人说这句' }));
+  expect(screen.getByText('真人视频已就绪 · 点头像播放')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '播放或暂停当前句' }));
   const player = screen.getByLabelText('舞台真人视频');
   expect(player).toHaveAttribute('playsinline');
   expect(player).toHaveClass('object-cover');
@@ -443,7 +444,7 @@ it('jumps to collapsed/expanded heights with reduced motion and retains static s
   await screen.findByRole('status', { name: '正在说话' });
   expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '展开舞台' }));
-  expect(stage).toHaveStyle({ height: '360px' });
+  expect(stage).toHaveStyle({ height: '392px' });
 });
 it('ships only self-hosted unicode-range font slices, with swap and no body webfont', () => {
   const css = readFileSync('public/fonts/ma-shan-zheng/font.css', 'utf8');

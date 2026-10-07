@@ -203,20 +203,21 @@ export function Chat() {
     if (active) end.current?.scrollIntoView?.({ block: 'end' });
   }, [active, chat.turns, chat.busy, composerHeight]);
   const currentTurn = chat.turns.find(
-    (turn) => turn.id === (videoId || audio.id),
+    (turn) => turn.id === (videoId || audio.id || chat.newest),
   );
-  const toggleReply = (turn?: Turn) => {
+  const toggleReply = (turn?: Turn, preferVideo = false) => {
     if (!turn?.reply) return;
     if (videoId === turn.id && videoPlaying) {
       setVideoPlaying(false);
       return;
     }
-    if (audio.id === turn.id && audio.playing) {
+    const state = video.videos[turn.id];
+    const ready = state?.status === 'done' && videoUrl(state.result);
+    if (audio.id === turn.id && audio.playing && !(preferVideo && ready)) {
       audio.toggle(turn.id, turn.reply, name);
       return;
     }
-    const state = video.videos[turn.id];
-    if (state?.status === 'done' && videoUrl(state.result)) {
+    if (ready) {
       audio.stop();
       setVideoId(turn.id);
       setVideoPlaying(true);
@@ -263,7 +264,7 @@ export function Chat() {
         name={name}
         capabilities={capabilities}
         turn={currentTurn}
-        videoState={videoId ? video.videos[videoId] : undefined}
+        videoState={currentTurn ? video.videos[currentTurn.id] : undefined}
         videoPlaying={active && videoPlaying}
         voiceCaption={audio.caption}
         level={audio.level}
@@ -279,6 +280,7 @@ export function Chat() {
                     !turn.reply.abstain &&
                     turn.reply.mode !== 'abstain',
                 ),
+            true,
           )
         }
         onVideoPlaying={setVideoPlaying}

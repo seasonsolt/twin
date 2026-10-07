@@ -33,6 +33,7 @@ function Harness({ reply = answer }: { reply?: ChatReply }) {
       </button>
       <span data-testid="speaking">{String(audio.speaking)}</span>
       <span data-testid="loading">{String(audio.loading)}</span>
+      <span data-testid="level">{audio.level}</span>
       {audio.errors.one && <p role="alert">{audio.errors.one}</p>}
     </>
   );
@@ -42,7 +43,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it('requests zero first, starts it immediately, bounds synthesis at two, and schedules ready buffers without gaps in script order', async () => {
+it('bounds synthesis, schedules gapless buffers in script order, and falls back to live RMS when lipsync runs out or later segments lack levels', async () => {
   let now = 0;
   const sources: {
     buffer: AudioBuffer | null;
@@ -52,6 +53,19 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
     connect: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
   }[] = [];
+  let amplitude = 0.05;
+  const analyser = {
+    fftSize: 0,
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    getFloatTimeDomainData: vi.fn((samples: Float32Array) => {
+      samples.forEach((_, index) => {
+        samples[index] = index % 2 ? amplitude : -amplitude;
+      });
+    }),
+  };
+  let sampleFrame!: FrameRequestCallback;
+  const tick = () => act(() => sampleFrame(0));
   const resume = vi.fn(async () => {});
   const suspend = vi.fn(async () => {});
   const close = vi.fn(async () => {});
@@ -66,6 +80,7 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
       suspend = suspend;
       close = close;
       decodeAudioData = async () => ({ duration: 2 }) as AudioBuffer;
+      createAnalyser = () => analyser;
       createBufferSource() {
         const source = {
           buffer: null,
@@ -82,7 +97,10 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
   );
   vi.stubGlobal(
     'requestAnimationFrame',
-    vi.fn(() => 1),
+    vi.fn((callback: FrameRequestCallback) => {
+      sampleFrame = callback;
+      return 1;
+    }),
   );
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
@@ -107,7 +125,12 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
               index,
               url: `/api/media/audio/${String(index).repeat(64)}.wav`,
               duration_s: 2,
-              lipsync: null,
+              lipsync:
+                index === 0
+                  ? { fps: 2, levels: [0, 2] }
+                  : index === 1
+                    ? { fps: 2 }
+                    : null,
             },
           ],
         }),
@@ -121,6 +144,15 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
   await resolve(0);
   expect(sources).toHaveLength(1);
   expect(sources[0].start).toHaveBeenCalledWith(0);
+  expect(analyser.connect).toHaveBeenCalledWith({});
+  expect(sources[0].connect).toHaveBeenCalledWith(analyser);
+  expect(screen.getByTestId('level')).toHaveTextContent('0');
+  now = 0.5;
+  tick();
+  expect(screen.getByTestId('level')).toHaveTextContent('2');
+  now = 1.5;
+  tick();
+  expect(Number(screen.getByTestId('level').textContent)).toBeCloseTo(0.6);
   expect(screen.getByTestId('speaking')).toHaveTextContent('true');
   expect(requested).toEqual([0, 1, 2]);
   await resolve(2);
@@ -140,6 +172,15 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
   for (let index = 0; index < 4; index++) {
     now = (index + 1) * 2;
     act(() => sources[index].onended!());
+    if (index < 2) {
+      for (const sample of [0.05, 0.2, 0.4, 0]) {
+        amplitude = sample;
+        tick();
+        expect(Number(screen.getByTestId('level').textContent)).toBeCloseTo(
+          Math.min(3, sample * 12),
+        );
+      }
+    }
   }
   expect(screen.getByText('播放')).toBeVisible();
   expect(screen.getByTestId('speaking')).toHaveTextContent('false');
@@ -149,6 +190,7 @@ it('requests zero first, starts it immediately, bounds synthesis at two, and sch
   expect(fetchMock).toHaveBeenCalledTimes(8);
   view.unmount();
   expect(close).toHaveBeenCalled();
+  expect(analyser.disconnect).toHaveBeenCalled();
   expect(sources[4].stop).toHaveBeenCalled();
 });
 

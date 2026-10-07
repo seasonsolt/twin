@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { motion, useSpring } from 'motion/react';
-import { History } from 'lucide-react';
+import {
+  motion,
+  useSpring,
+  useTransform,
+  type MotionStyle,
+} from 'motion/react';
+import { History, LoaderCircle } from 'lucide-react';
 import { PersonaSwitcher } from '../../components/layout/PersonaSwitcher';
 import { StageHeader } from '../../components/layout/StageHeader';
 import { useMotionPreset, springs } from '../../design/motion';
@@ -68,6 +73,18 @@ export function ChatStage({
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [time, setTime] = useState(0);
+  const [videoShown, setVideoShown] = useState(false);
+  const boundedLevel = Number.isFinite(level)
+    ? Math.max(0, Math.min(3, level))
+    : 0;
+  const intensity = useSpring(0, springs.gentle);
+  const breathing = useTransform(intensity, (value) => 1 + value * 0.03);
+  const expansion = useTransform(intensity, (value) => 1.08 + value * 0.16);
+  const opacity = useTransform(intensity, (value) => 0.3 + value * 0.45);
+  useEffect(() => {
+    if (reduced) intensity.jump(0);
+    else intensity.set(speaking ? 0.25 + (boundedLevel / 3) * 0.75 : 0);
+  }, [intensity, boundedLevel, speaking, reduced]);
   const circle = useRef<HTMLButtonElement>(null);
   const player = useRef<HTMLVideoElement>(null);
   const playbackError = useRef(onVideoError);
@@ -79,10 +96,30 @@ export function ChatStage({
   useEffect(() => {
     setOpen(false);
     setTime(0);
+    setVideoShown(false);
   }, [url, turn?.id]);
+  useEffect(() => {
+    if (videoPlaying) setVideoShown(true);
+  }, [videoPlaying]);
+  const videoStatus =
+    capabilities?.video?.available && turn?.reply
+      ? videoState?.status === 'generating'
+        ? 'generating'
+        : url
+          ? 'done'
+          : undefined
+      : undefined;
   const height = useSpring(desktop ? 470 : 360, springs.snappy);
   const size = useSpring(desktop ? 210 : 196, springs.snappy);
-  const targetHeight = desktop ? 470 : collapsed ? 96 : 360;
+  const targetHeight = desktop
+    ? 470
+    : collapsed
+      ? videoStatus
+        ? 128
+        : 96
+      : videoStatus
+        ? 392
+        : 360;
   const targetSize = desktop ? 210 : collapsed ? 60 : 196;
   useEffect(() => {
     if (reduced) {
@@ -155,6 +192,8 @@ export function ChatStage({
         data-collapsed={small}
         data-desktop={desktop}
         data-reduced-motion={reduced}
+        data-speaking={speaking}
+        data-video-status={videoStatus}
         style={{ height: reduced ? targetHeight : height }}
         switchable={mobile}
         left={mobile ? <PersonaSwitcher stage /> : undefined}
@@ -178,71 +217,118 @@ export function ChatStage({
           )
         }
         portrait={
-          <motion.button
-            ref={circle}
-            type="button"
-            className="stage-circle"
-            style={{
-              width: reduced ? targetSize : size,
-              height: reduced ? targetSize : size,
-            }}
-            aria-label={
-              small
-                ? '展开舞台'
-                : url && videoPlaying
-                  ? '打开真人视频全屏'
-                  : url || !mobile
-                    ? '播放或暂停当前句'
-                    : `${name}的肖像，快速切换分身`
-            }
-            aria-expanded={!small}
-            onClick={() => {
-              if (small) {
-                setCollapsed(false);
-                return;
+          <div className="stage-portrait-content">
+            <motion.div
+              className="stage-speaking"
+              data-stage-level={speaking ? boundedLevel : 0}
+              style={
+                {
+                  width: reduced ? targetSize : size,
+                  height: reduced ? targetSize : size,
+                  '--ring-expansion': expansion,
+                  '--ring-opacity': opacity,
+                } as MotionStyle
               }
-              if (url && videoPlaying) {
-                player.current?.pause();
-                setOpen(true);
-              } else if (url || !mobile) onToggle();
-              else setSwitching(true);
-            }}
-          >
-            {url ? (
-              <video
-                key={`${turn?.id}:${url}`}
-                ref={player}
-                src={url}
-                playsInline
-                preload="metadata"
-                aria-label="舞台真人视频"
-                onLoadedMetadata={() => setTime(0)}
-                onTimeUpdate={(event) =>
-                  setTime(event.currentTarget.currentTime)
+            >
+              {speaking &&
+                !reduced &&
+                [0, 1].map((ring) => (
+                  <span
+                    key={ring}
+                    aria-hidden
+                    className="stage-speaking-ring"
+                  />
+                ))}
+              <motion.button
+                ref={circle}
+                type="button"
+                className="stage-circle size-full"
+                style={{ scale: reduced ? 1 : breathing }}
+                aria-label={
+                  small
+                    ? '展开舞台'
+                    : url && videoPlaying
+                      ? '打开真人视频全屏'
+                      : url || turn?.reply || !mobile
+                        ? '播放或暂停当前句'
+                        : `${name}的肖像，快速切换分身`
                 }
-                onEnded={() => onVideoPlaying(false)}
-                onError={onVideoError}
-                className="size-full rounded-full object-cover"
-              />
-            ) : (
-              <ChatAvatar
-                name={name}
-                personaId={personaId}
-                capabilities={capabilities}
-                className="size-full"
-                level={level}
-                speaking={speaking}
-              />
-            )}
-            {url && videoPlaying && (
-              <span className="stage-video-chip">
-                真人 · {Math.floor((videoState?.result?.duration_s ?? 0) / 60)}:
-                {String(
-                  Math.round(videoState?.result?.duration_s ?? 0) % 60,
-                ).padStart(2, '0')}
+                aria-expanded={!small}
+                onClick={() => {
+                  if (small) {
+                    setCollapsed(false);
+                    if (url && !videoPlaying) onToggle();
+                    return;
+                  }
+                  if (url && videoPlaying) {
+                    player.current?.pause();
+                    setOpen(true);
+                  } else if (url || turn?.reply || !mobile) onToggle();
+                  else setSwitching(true);
+                }}
+              >
+                {url && (videoPlaying || videoShown) ? (
+                  <video
+                    key={`${turn?.id}:${url}`}
+                    ref={player}
+                    src={url}
+                    playsInline
+                    preload="metadata"
+                    aria-label="舞台真人视频"
+                    onLoadedMetadata={() => setTime(0)}
+                    onTimeUpdate={(event) =>
+                      setTime(event.currentTarget.currentTime)
+                    }
+                    onEnded={() => onVideoPlaying(false)}
+                    onError={onVideoError}
+                    className="size-full rounded-full object-cover"
+                  />
+                ) : (
+                  <ChatAvatar
+                    name={name}
+                    personaId={personaId}
+                    capabilities={capabilities}
+                    className="size-full"
+                    glow={false}
+                  />
+                )}
+                {url && videoPlaying && (
+                  <span className="stage-video-chip">
+                    真人 ·{' '}
+                    {Math.floor((videoState?.result?.duration_s ?? 0) / 60)}:
+                    {String(
+                      Math.round(videoState?.result?.duration_s ?? 0) % 60,
+                    ).padStart(2, '0')}
+                  </span>
+                )}
+                {reduced && speaking && (
+                  <span
+                    role="status"
+                    aria-label="正在说话"
+                    className="stage-speaking-chip"
+                  >
+                    正在说
+                  </span>
+                )}
+              </motion.button>
+            </motion.div>
+            {videoStatus && (
+              <span role="status" className="stage-video-status">
+                {videoStatus === 'generating' ? (
+                  <>
+                    <LoaderCircle
+                      size={12}
+                      aria-hidden
+                      className="stage-video-spinner"
+                    />
+                    真人视频生成中
+                  </>
+                ) : (
+                  '真人视频已就绪 · 点头像播放'
+                )}
               </span>
             )}
-          </motion.button>
+          </div>
         }
         intro={
           <p

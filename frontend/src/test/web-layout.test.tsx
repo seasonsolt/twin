@@ -158,10 +158,11 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
   expect(
     within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
   ).toBeNull();
-  expect(stage.querySelector('.stage-circle')).toHaveStyle({
+  expect(stage.querySelector('.stage-speaking')).toHaveStyle({
     width: '210px',
     height: '210px',
   });
+  expect(stage.querySelector('.stage-circle')).toHaveClass('size-full');
   expect(stage.querySelector('.stage-name button')).toBeNull();
   expect(stage.querySelector('.stage-footer')).toBeNull();
   expect(stage.querySelector('.stage-history')).toContainElement(

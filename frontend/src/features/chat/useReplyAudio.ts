@@ -130,7 +130,10 @@ export function useReplyAudio(active: boolean) {
       const track = part()?.lipsync;
       publish({
         speaking: true,
-        level: track?.levels[Math.floor(currentTime() * track.fps)] ?? 0,
+        level:
+          track?.levels?.[Math.floor(currentTime() * track.fps)] ??
+          player?.level() ??
+          0,
         progress: progress(),
         caption: reply.captions?.get(segment) ?? '',
       });

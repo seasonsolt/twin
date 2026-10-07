@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Navigate, NavLink, useLocation, useOutlet } from 'react-router';
+import { Link, Navigate, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
@@ -99,7 +99,7 @@ function BottomTabs() {
 }
 
 function TwinRail() {
-  const { id, items, refresh } = usePersonas();
+  const { id, items, pendingId, refresh, switchTo } = usePersonas();
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -117,16 +117,52 @@ function TwinRail() {
     };
   }, [refresh]);
   return (
-    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col border-r border-border bg-canvas px-2 py-4 text-primary">
-      <Tooltip label={current?.name || '本人'}>
-        <span className="mx-auto">
-          <PersonaSwitcher
-            label="切换分身"
-            className="rail-twin rounded-full"
-            trigger={<PersonaPortrait persona={current} />}
-          />
-        </span>
-      </Tooltip>
+    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col overflow-y-auto border-r border-border bg-canvas px-2 py-4 text-primary">
+      <div
+        className="flex flex-col items-center gap-2"
+        aria-label="分身快捷切换"
+      >
+        <Tooltip label={current?.name || '本人'}>
+          <span>
+            <PersonaSwitcher
+              label="切换分身"
+              className="rail-twin rounded-full ring-2 ring-accent ring-offset-2 ring-offset-canvas"
+              trigger={<PersonaPortrait persona={current} />}
+            />
+          </span>
+        </Tooltip>
+        {items
+          .filter((item) => item.id !== id)
+          .slice(0, 4)
+          .map((persona) => (
+            <Tooltip key={persona.id} label={persona.name}>
+              <button
+                type="button"
+                aria-label={`切换到${persona.name}`}
+                aria-busy={pendingId === persona.id}
+                className="rail-twin rounded-full hover:bg-soft"
+                onClick={() => void switchTo(persona.id)}
+              >
+                <PersonaPortrait persona={persona} />
+              </button>
+            </Tooltip>
+          ))}
+        {items.length > 5 && (
+          <Link
+            to="/twins"
+            className="grid min-h-11 place-items-center text-xs text-accent"
+          >
+            全部
+          </Link>
+        )}
+        <Tooltip label="新建分身">
+          <span>
+            <NewTwin className="grid size-11 place-items-center rounded-full text-2xl hover:bg-soft">
+              ＋
+            </NewTwin>
+          </span>
+        </Tooltip>
+      </div>
       <div className="my-3 border-t border-border" />
       <Navigation />
       {identity?.auth_enabled && (
@@ -252,6 +288,9 @@ export function AppShell() {
         <StageHeader variant="brand" />
         <section className="mx-auto max-w-sm space-y-6 px-4 py-8">
           <h2 className="text-xl font-semibold">先新建一个分身</h2>
+          <Link to="/twins" className="text-sm text-accent underline">
+            返回我的分身
+          </Link>
           <NewTwin initialOpen />
         </section>
       </main>

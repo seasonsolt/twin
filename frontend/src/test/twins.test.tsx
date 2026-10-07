@@ -190,10 +190,19 @@ it('creates from the new-twin card and opens the created twin', async () => {
   mountTwins();
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: '新建分身' }));
+  expect(screen.getByRole('link', { name: '返回我的分身' })).toHaveAttribute(
+    'href',
+    '/twins',
+  );
   await user.type(screen.getByRole('textbox', { name: '分身名字' }), '新伙伴');
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
   expect(await screen.findByText(`聊天：${NEW}`)).toBeVisible();
   expect(usePersonas.getState().id).toBe(NEW);
+  expect(usePersonas.getState().items.map((persona) => persona.id)).toEqual([
+    'default',
+    B,
+    NEW,
+  ]);
   expect(
     JSON.parse(
       fetcher.mock.calls.find(
@@ -212,10 +221,7 @@ it.each([
   window.location.hash = `#/${route}`;
   render(<App />);
   const user = userEvent.setup();
-  await user.click(await screen.findByRole('button', { name: '切换分身' }));
-  await user.click(
-    await screen.findByRole('button', { name: /朋友.*3 条记忆/ }),
-  );
+  await user.click(await screen.findByRole('button', { name: '切换到朋友' }));
   expect(usePersonas.getState().id).toBe(B);
   expect(window.location.hash).toBe(`#/${route}`);
   expect(
@@ -227,7 +233,7 @@ it.each([
   ).toHaveAttribute('src', `/api/media/avatar-image?persona=${B}`);
 });
 
-it('keeps one rail portrait, offers all twins and creation in its popover, and shows the account', async () => {
+it('shows five rail portraits, all-twins and creation shortcuts, keeps its popover, and shows the account', async () => {
   items.push(
     ...Array.from({ length: 6 }, (_, index) => ({
       ...items[1],
@@ -242,6 +248,16 @@ it('keeps one rail portrait, offers all twins and creation in its popover, and s
   const aside = switcher.closest('aside')!;
   expect(aside).toHaveClass('bg-canvas', 'text-primary', 'border-r');
   expect(aside).not.toHaveClass('bg-accent');
+  expect(switcher).toHaveClass('ring-accent');
+  expect(aside.querySelectorAll('.persona-portrait')).toHaveLength(5);
+  expect(
+    within(aside).getAllByRole('button', { name: /^切换到/u }),
+  ).toHaveLength(4);
+  expect(within(aside).getByRole('link', { name: '全部' })).toHaveAttribute(
+    'href',
+    '#/twins',
+  );
+  expect(within(aside).getByRole('button', { name: '新建分身' })).toBeVisible();
   expect(within(aside).queryByText(account.email)).not.toBeInTheDocument();
   const user = userEvent.setup();
   const accountButton = screen.getByRole('button', { name: '账户' });
@@ -272,6 +288,13 @@ it('keeps one rail portrait, offers all twins and creation in its popover, and s
 });
 
 it('opens the quick sheet from the mobile top-left portrait and opens all twins from that sheet', async () => {
+  items.push(
+    ...Array.from({ length: 6 }, (_, index) => ({
+      ...items[1],
+      id: `p-mobile-${index}`,
+      name: `手机分身${index}`,
+    })),
+  );
   vi.stubGlobal(
     'matchMedia',
     vi.fn((query: string) => ({
@@ -285,6 +308,10 @@ it('opens the quick sheet from the mobile top-left portrait and opens all twins 
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: '切换分身' }));
   const quick = await screen.findByRole('dialog', { name: '切换分身' });
+  expect(screen.getByText('8 个分身')).toBeVisible();
+  expect(
+    within(quick).getAllByRole('button', { name: /条记忆/u }),
+  ).toHaveLength(items.length);
   await user.click(
     within(quick).getByRole('button', { name: /朋友.*3 条记忆/ }),
   );
@@ -352,4 +379,83 @@ it('lets the owner publish a twin and lists other members’ public twins withou
   expect(
     within(mine).getByRole('button', { name: '设为私有' }),
   ).toBeInTheDocument();
+});
+
+it('deletes recoverably and restores a twin from the collapsed recent-deletions section', async () => {
+  let deleted: Persona | undefined;
+  const original = fetcher.getMockImplementation() as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === `/api/personas/${B}` && init?.method === 'DELETE') {
+      deleted = items.find((persona) => persona.id === B);
+      items = items.filter((persona) => persona.id !== B);
+      return json({ deleted: true });
+    }
+    if (path === '/api/personas/trash')
+      return json(
+        deleted
+          ? [
+              {
+                id: deleted.id,
+                name: deleted.name,
+                deleted_at: '2026-01-01T00:00:00Z',
+                expires_at: '2026-01-08T00:00:00Z',
+              },
+            ]
+          : [],
+      );
+    if (path === `/api/personas/${B}/restore` && init?.method === 'POST') {
+      items.push(deleted!);
+      deleted = undefined;
+      return json(items.at(-1));
+    }
+    return original(path, init);
+  });
+  mountTwins();
+  const user = userEvent.setup();
+  const summary = screen.getByText('最近删除');
+  expect(summary.closest('details')).not.toHaveAttribute('open');
+  await user.click(screen.getByLabelText('管理朋友'));
+  await user.click(screen.getByRole('button', { name: '删除' }));
+  await waitFor(() =>
+    expect(
+      screen.getByText('删除后 7 天内可以在「最近删除」里恢复'),
+    ).toBeVisible(),
+  );
+  await user.click(screen.getByRole('button', { name: '删除分身' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: '和朋友聊天' })).toBeNull(),
+  );
+  await user.click(summary);
+  await user.click(await screen.findByRole('button', { name: '恢复朋友' }));
+  expect(
+    await screen.findByRole('button', { name: '和朋友聊天' }),
+  ).toBeVisible();
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: '恢复朋友' })).toBeNull(),
+  );
+  expect(
+    fetcher.mock.calls
+      .filter(([path]) => path.includes('/trash') || path.includes('/restore'))
+      .every(([, init]) => !new Headers(init?.headers).has('X-Twin-Persona')),
+  ).toBe(true);
+});
+
+it('offers a return-to-twins link during onboarding', async () => {
+  items.push({ ...items[1], id: NEW, name: '新伙伴' });
+  setPersonaId(NEW);
+  usePersonas.setState({ id: NEW, items });
+  window.location.hash = '#/chat';
+  render(<App />);
+  const link = await screen.findByRole('link', { name: '返回我的分身' });
+  expect(link).toHaveAttribute('href', '#/twins');
+  await userEvent.setup().click(link);
+  expect(
+    await screen.findByRole('heading', { name: '我的分身' }),
+  ).toBeVisible();
+  expect(screen.getAllByRole('button', { name: /^和.*聊天$/u })).toHaveLength(
+    3,
+  );
 });

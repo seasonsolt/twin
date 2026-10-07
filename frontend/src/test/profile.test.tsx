@@ -236,9 +236,7 @@ it('protects the default twin and confirms deletion before clearing only the del
   );
   await user.click(screen.getByRole('button', { name: '删除这个分身' }));
   dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
-  expect(dialog).toHaveTextContent(
-    '记忆、聊天、形象、声音和媒体将永久删除，无法恢复。',
-  );
+  expect(dialog).toHaveTextContent('删除后 7 天内可以在「最近删除」里恢复');
   await user.click(within(dialog).getByRole('button', { name: '删除分身' }));
   await waitFor(() => expect(window.location.hash).toBe('#/twins'));
   expect(usePersonas.getState().id).toBe('default');

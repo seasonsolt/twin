@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { FlowStepper } from '../components/effects/FlowStepper';
 import { Button } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
@@ -105,6 +105,11 @@ export function Onboarding({
             variant="expanded"
             className="onboarding-stage"
             name={twin.name.trim() || '新分身'}
+            right={
+              <Link to="/twins" className="text-sm text-accent underline">
+                返回我的分身
+              </Link>
+            }
             intro={
               <p className="stage-caption">{twin.about || '让我们认识一下'}</p>
             }

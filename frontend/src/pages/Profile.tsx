@@ -116,7 +116,7 @@ export function Profile() {
     if (
       !(await confirm({
         title: `删除「${deleting.name}」？`,
-        body: '记忆、聊天、形象、声音和媒体将永久删除，无法恢复。',
+        body: '删除后 7 天内可以在「最近删除」里恢复',
         confirmLabel: '删除分身',
         tone: 'danger',
       })) ||

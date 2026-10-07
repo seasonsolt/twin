@@ -359,6 +359,8 @@ def create_app(
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(previous_lifespan(application))
             for entry in registry.data["personas"]:
+                if entry.get("deleted_at"):
+                    continue
                 context = registry.application(entry["id"])
                 await stack.enter_async_context(context.router.lifespan_context(context))
             try:

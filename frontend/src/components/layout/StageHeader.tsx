@@ -73,8 +73,17 @@ export function StageHeader({
           {mobile && switchable && !brand && variant !== 'future' ? (
             <PersonaSwitcher
               label="切换分身"
-              className="stage-global-switch rounded-full"
-              trigger={<PersonaPortrait persona={current} />}
+              className="stage-global-switch flex items-center gap-2 rounded-full"
+              trigger={
+                <>
+                  <PersonaPortrait persona={current} />
+                  {items.length > 1 && (
+                    <span className="text-xs text-secondary">
+                      {items.length} 个分身
+                    </span>
+                  )}
+                </>
+              }
             />
           ) : (
             left

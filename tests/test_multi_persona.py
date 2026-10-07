@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import json
 import re
@@ -410,3 +411,64 @@ def test_delete_refuses_active_or_queued_jobs(web: TestClient, kind: Any) -> Non
         assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200
     finally:
         release.set()
+
+
+def test_delete_and_restore_preserve_all_persona_data(web: TestClient, tmp_path: Path) -> None:
+    persona = create(web, "保留的分身")
+    settings = registry(web).settings_for(persona)
+    web.post("/api/persona/notes", json={"text": "不能丢失的记忆"}, headers=headers(persona))
+    for folder in ("assets", "media-cache", "media-sources", "uploads"):
+        directory = settings.db_path.parent / folder
+        directory.mkdir(exist_ok=True)
+        (directory / "sentinel").write_bytes(b"intact")
+    assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200
+    assert not settings.db_path.parent.exists()
+    assert persona not in [p["id"] for p in web.get("/api/personas").json()]
+    [entry] = web.get("/api/personas/trash").json()
+    assert entry["id"] == persona and entry["name"] == "保留的分身"
+    assert dt.datetime.fromisoformat(entry["expires_at"]) - dt.datetime.fromisoformat(
+        entry["deleted_at"]
+    ) == dt.timedelta(days=7)
+    [trashed] = (tmp_path / "trash").iterdir()
+    assert trashed.name.startswith(persona + "-") and (trashed / "twin.db").is_file()
+    assert web.get("/api/identity", headers=headers(persona)).status_code == 404
+    assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 404
+    with TestClient(create_app(registry(web).settings), base_url="http://localhost") as reopened:
+        assert len(reopened.get("/api/personas").json()) == 1
+        restored = reopened.post(f"/api/personas/{persona}/restore", headers=CSRF)
+        assert restored.status_code == 200 and restored.json()["name"] == "保留的分身"
+        assert reopened.get("/api/personas/trash").json() == []
+        assert len(reopened.get("/api/personas").json()) == 2
+        assert len(reopened.get("/api/persona/sources", headers=headers(persona)).json()) == 1
+    assert not trashed.exists()
+    for folder in ("assets", "media-cache", "media-sources", "uploads"):
+        assert (settings.db_path.parent / folder / "sentinel").read_bytes() == b"intact"
+
+
+@pytest.mark.parametrize("path", ["/api/personas", "/api/personas/trash"])
+def test_trash_expires_after_seven_days(web: TestClient, tmp_path: Path, path: str) -> None:
+    now = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+    registry(web).clock = lambda: now
+    persona = create(web)
+    assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200
+    [trashed] = (tmp_path / "trash").iterdir()
+    now += dt.timedelta(days=7, microseconds=-1)
+    assert len(web.get("/api/personas/trash").json()) == 1
+    assert trashed.exists()
+    now += dt.timedelta(microseconds=1)
+    assert web.get(path).status_code == 200
+    assert not trashed.exists()
+    assert all(p["id"] != persona for p in registry(web).data["personas"])
+    assert web.post(f"/api/personas/{persona}/restore", headers=CSRF).status_code == 404
+
+
+def test_restore_refuses_id_clash_without_losing_trash(web: TestClient, tmp_path: Path) -> None:
+    persona = create(web)
+    directory = registry(web).settings_for(persona).db_path.parent
+    assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200
+    directory.mkdir()
+    (directory / "sentinel").write_text("other data")
+    assert web.post(f"/api/personas/{persona}/restore", headers=CSRF).status_code == 409
+    assert (directory / "sentinel").read_text() == "other data"
+    assert len(web.get("/api/personas/trash").json()) == 1
+    assert len(list((tmp_path / "trash").iterdir())) == 1

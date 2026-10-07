@@ -420,3 +420,27 @@ def test_public_twin_can_be_talked_to_but_not_changed_by_other_members(web: Test
     web.cookies.set("twin_session", as_other)
     assert web.get("/api/personas").json() == []
     assert web.get("/api/identity", headers=headers).status_code == 404
+
+
+def test_trash_and_restore_are_owner_scoped_even_for_public_twins(web: TestClient) -> None:
+    owner_token = login(web)
+    persona = create(web)
+    assert web.patch(f"/api/personas/{persona}", json={"public": True}, headers=CSRF).status_code == 200
+    assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200
+    assert [p["id"] for p in web.get("/api/personas/trash").json()] == [persona]
+    assert web.get("/api/status").json()["code"] == "no_persona"
+    other_token = login(web, OTHER)
+    assert web.get("/api/personas").json() == []
+    assert web.get("/api/personas/trash").json() == []
+    assert web.post(f"/api/personas/{persona}/restore", headers=CSRF).status_code == 404
+    assert web.get("/api/identity?persona=" + persona).status_code == 404
+    login(web, ADMIN)
+    assert [p["id"] for p in web.get("/api/personas/trash").json()] == [persona]
+    assert web.post(f"/api/personas/{persona}/restore", headers=CSRF).status_code == 200
+    assert web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200
+    web.cookies.set("twin_session", owner_token)
+    assert web.post(f"/api/personas/{persona}/restore", headers=CSRF).status_code == 200
+    assert [p["id"] for p in web.get("/api/personas").json()] == [persona]
+    web.cookies.set("twin_session", other_token)
+    assert web.get("/api/personas").json()[0]["can_manage"] is False
+    assert web.get("/api/personas/trash").json() == []

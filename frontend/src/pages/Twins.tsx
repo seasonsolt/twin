@@ -13,6 +13,13 @@ import { useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 
+interface TrashedPersona {
+  id: string;
+  name: string;
+  deleted_at: string;
+  expires_at: string;
+}
+
 function lastMessage(id: string) {
   try {
     const turns: unknown = JSON.parse(
@@ -40,6 +47,9 @@ export function Twins() {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trash, setTrash] = useState<TrashedPersona[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
   const confirm = useConfirm();
   useEffect(() => {
     let alive = true;
@@ -83,6 +93,30 @@ export function Twins() {
     });
     return () => controller.abort();
   }, [items]);
+  useEffect(() => {
+    if (!trashOpen) return;
+    const controller = new AbortController();
+    setTrashLoading(true);
+    void api<TrashedPersona[]>('/api/personas/trash', {
+      signal: controller.signal,
+    })
+      .then((entries) => {
+        if (!controller.signal.aborted) {
+          if (!Array.isArray(entries)) throw new Error('无法加载最近删除');
+          setTrash(entries);
+        }
+      })
+      .catch((failure: unknown) => {
+        if (!controller.signal.aborted)
+          setError(
+            failure instanceof Error ? failure.message : '无法加载最近删除',
+          );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTrashLoading(false);
+      });
+    return () => controller.abort();
+  }, [trashOpen, items]);
   const work = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError('');
@@ -120,7 +154,7 @@ export function Twins() {
     if (
       !(await confirm({
         title: `删除「${persona.name}」？`,
-        body: '记忆、聊天、形象、声音和媒体将永久删除，无法恢复。',
+        body: '删除后 7 天内可以在「最近删除」里恢复',
         confirmLabel: '删除分身',
         tone: 'danger',
       }))
@@ -294,6 +328,57 @@ export function Twins() {
             </div>
           </>
         )}
+        <details
+          onToggle={(event) => setTrashOpen(event.currentTarget.open)}
+          className="rounded-xl bg-surface p-4"
+        >
+          <summary className="min-h-11 cursor-pointer text-lg font-semibold">
+            最近删除
+          </summary>
+          <p className="mb-3 text-sm text-secondary">
+            删除后保留 7 天，到期后永久删除。
+          </p>
+          {trashLoading ? (
+            <Skeleton className="h-16" />
+          ) : trash.length === 0 ? (
+            <p className="text-sm text-secondary">暂无最近删除的分身</p>
+          ) : (
+            <ul className="space-y-3">
+              {trash.map((persona) => (
+                <li
+                  key={persona.id}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate">{persona.name}</p>
+                    <p className="text-xs text-secondary">
+                      删除于{' '}
+                      {new Date(persona.deleted_at).toLocaleDateString('zh-CN')}
+                      ，
+                      {new Date(persona.expires_at).toLocaleDateString('zh-CN')}{' '}
+                      到期
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    aria-label={`恢复${persona.name}`}
+                    onClick={() =>
+                      void work(async () => {
+                        await api(`/api/personas/${persona.id}/restore`, {
+                          method: 'POST',
+                        });
+                        await refresh();
+                      })
+                    }
+                  >
+                    恢复
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
         <Dialog
           open={editing !== null}
           onOpenChange={(open) => {

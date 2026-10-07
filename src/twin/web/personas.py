@@ -55,8 +55,9 @@ def visitor_route(method: str, path: str) -> bool:
 
 
 class Personas:
-    def __init__(self, settings: Settings, jobs: JobManager) -> None:
+    def __init__(self, settings: Settings, jobs: JobManager, *, clock: Callable[[], dt.datetime] | None = None) -> None:
         self.settings, self.jobs = settings, jobs
+        self.clock = clock or (lambda: dt.datetime.now(dt.UTC))
         self.root = settings.db_path.parent
         self.path = self.root / "personas.json"
         self.lock = threading.RLock()
@@ -81,8 +82,23 @@ class Personas:
         private_directory(self.root)
         AssetStore.write(self.path, json.dumps(self.data, ensure_ascii=False).encode())
 
+    def purge_trash(self) -> None:
+        expired = [
+            entry
+            for entry in self.data["personas"]
+            if entry.get("deleted_at")
+            and dt.datetime.fromisoformat(entry["deleted_at"]) + dt.timedelta(days=7) <= self.clock()
+        ]
+        for entry in expired:
+            directory = self.root / "trash" / entry["trash_directory"]
+            if directory.exists():
+                shutil.rmtree(directory)
+        if expired:
+            self.data["personas"] = [entry for entry in self.data["personas"] if entry not in expired]
+            self.save()
+
     def settings_for(self, persona_id: str) -> Settings:
-        if not any(p["id"] == persona_id for p in self.data["personas"]):
+        if not any(p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]):
             raise HTTPException(404, "分身不存在")
         if persona_id == self.data["default"]:
             return self.settings.model_copy()
@@ -126,10 +142,13 @@ class Personas:
         return bool(identity["admin"] or (entry.get("owner") and entry["owner"] == identity["email"]))
 
     def visible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
-        return bool(entry.get("public")) or self.accessible(entry, identity)
+        return not entry.get("deleted_at") and (bool(entry.get("public")) or self.accessible(entry, identity))
 
-    def check_owner(self, persona_id: str, identity: dict[str, Any]) -> None:
-        if not any(p["id"] == persona_id and self.accessible(p, identity) for p in self.data["personas"]):
+    def check_owner(self, persona_id: str, identity: dict[str, Any], *, deleted: bool = False) -> None:
+        if not any(
+            p["id"] == persona_id and bool(p.get("deleted_at")) == deleted and self.accessible(p, identity)
+            for p in self.data["personas"]
+        ):
             raise HTTPException(404, "分身不存在")
 
     def check_access(self, persona_id: str, identity: dict[str, Any], method: str, path: str) -> bool:
@@ -147,8 +166,46 @@ class Personas:
         @app.get("/api/personas")
         def list_personas(request: Request) -> list[dict[str, Any]]:
             with self.lock:
+                self.purge_trash()
                 identity = request.scope["twin_identity"]
                 return [self.view(entry, identity) for entry in self.data["personas"] if self.visible(entry, identity)]
+
+        @app.get("/api/personas/trash")
+        def list_trash(request: Request) -> list[dict[str, Any]]:
+            with self.lock:
+                self.purge_trash()
+                identity = request.scope["twin_identity"]
+                return [
+                    {
+                        "id": entry["id"],
+                        "name": entry["name"],
+                        "deleted_at": entry["deleted_at"],
+                        "expires_at": (
+                            dt.datetime.fromisoformat(entry["deleted_at"]) + dt.timedelta(days=7)
+                        ).isoformat(),
+                    }
+                    for entry in self.data["personas"]
+                    if entry.get("deleted_at") and self.accessible(entry, identity)
+                ]
+
+        @app.post("/api/personas/{persona_id}/restore")
+        def restore_persona(persona_id: str, request: Request) -> dict[str, Any]:
+            with self.lock:
+                self.purge_trash()
+                identity = request.scope["twin_identity"]
+                self.check_owner(persona_id, identity, deleted=True)
+                entry = next(p for p in self.data["personas"] if p["id"] == persona_id and p.get("deleted_at"))
+                directory = self.root / "personas" / persona_id
+                if directory.exists() or any(
+                    p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]
+                ):
+                    raise HTTPException(409, "分身 ID 已存在，无法恢复")
+                private_directory(directory.parent)
+                (self.root / "trash" / entry["trash_directory"]).rename(directory)
+                for key in ("deleted_at", "trash_directory", "name"):
+                    entry.pop(key)
+                self.save()
+                return self.view(entry, identity)
 
         @app.post("/api/personas", status_code=201)
         def create_persona(body: NameBody, request: Request) -> dict[str, Any]:
@@ -157,7 +214,10 @@ class Personas:
                 limit = self.settings.auth.max_personas_per_member
                 if (
                     not identity["admin"]
-                    and sum(p.get("owner") == identity["email"] for p in self.data["personas"]) >= limit
+                    and sum(
+                        p.get("owner") == identity["email"] and not p.get("deleted_at") for p in self.data["personas"]
+                    )
+                    >= limit
                 ):
                     raise HTTPException(409, f"最多可以建 {limit} 个分身")
                 persona_id = "p-" + secrets.token_hex(5)
@@ -201,9 +261,14 @@ class Personas:
                     or (context is not None and not context.state.processing.close_if_idle())
                 ):
                     raise HTTPException(409, "这个分身还有任务在运行，请等任务结束后再删除")
+                entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
+                name = stored_identity(settings.db_path)[0] or settings.target_name
+                deleted_at = self.clock()
+                trash_directory = f"{persona_id}-{deleted_at.strftime('%Y%m%dT%H%M%S%fZ')}"
+                private_directory(self.root / "trash")
+                settings.db_path.parent.rename(self.root / "trash" / trash_directory)
                 self.apps.pop(persona_id, None)
-                shutil.rmtree(settings.db_path.parent)
-                self.data["personas"] = [p for p in self.data["personas"] if p["id"] != persona_id]
+                entry.update(name=name, deleted_at=deleted_at.isoformat(), trash_directory=trash_directory)
                 self.save()
                 return {"deleted": True}
 
@@ -233,7 +298,7 @@ class PersonaMiddleware:
                 if persona_id is not None and not management:
                     scope["twin_visitor"] = self.registry.check_access(persona_id, identity, str(scope["method"]), path)
                 elif persona_id is not None:
-                    self.registry.check_owner(persona_id, identity)
+                    self.registry.check_owner(persona_id, identity, deleted=path.endswith("/restore"))
                 if management:
                     context = None
                 else:
@@ -245,7 +310,7 @@ class PersonaMiddleware:
                                 (
                                     p["id"]
                                     for p in self.registry.data["personas"]
-                                    if self.registry.accessible(p, identity)
+                                    if not p.get("deleted_at") and self.registry.accessible(p, identity)
                                 ),
                                 None,
                             )

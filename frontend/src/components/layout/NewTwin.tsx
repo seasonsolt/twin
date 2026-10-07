@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Button, Dialog } from '../ui';
 import { StageHeader } from './StageHeader';
 import { api } from '../../lib/api';
@@ -83,6 +83,13 @@ export function NewTwin({
           intro={<p className="stage-caption">给未来的分身一个名字</p>}
         />
         <div className="space-y-3">
+          <Link
+            to="/twins"
+            className="text-sm text-accent underline"
+            onClick={() => changeOpen(false)}
+          >
+            返回我的分身
+          </Link>
           <form
             className="space-y-3"
             onSubmit={(event) => {

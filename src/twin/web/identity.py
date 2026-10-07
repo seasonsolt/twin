@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
@@ -24,7 +24,7 @@ class IdentityBody(BaseModel):
 
 def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) -> None:
     @app.get("/api/identity")
-    def get_identity() -> dict[str, Any]:
+    def get_identity(request: Request) -> dict[str, Any]:
         name, about = stored_identity(settings.db_path)
         identity = Identity(
             name=name or settings.target_name,
@@ -34,14 +34,16 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
             voice=settings.tts.voice,
             avatar=settings.avatar.preset,
         )
+        visitor = bool(request.scope.get("twin_visitor"))
         onboarding_pending = False
-        if settings.db_path.is_file():
+        if not visitor and settings.db_path.is_file():
             with PersonaStore(settings.db_path) as store:
                 onboarding_pending = store.get_meta("onboarding_pending") == "1"
         return {
             **identity.model_dump(),
             "egress": egress_status(settings, external_only=True),
             **({"onboarding_pending": True} if onboarding_pending else {}),
+            **({"visitor": True} if visitor else {}),
         }
 
     @app.post("/api/identity/onboarding-complete")
@@ -51,11 +53,11 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
         return {"completed": True}
 
     @app.put("/api/identity")
-    def put_identity(body: IdentityBody) -> dict[str, Any]:
+    def put_identity(body: IdentityBody, request: Request) -> dict[str, Any]:
         named = settings.model_copy(update={"target_name": body.name})
         note = parse_note(body.about, named, "自我介绍") if body.about else None
         with PersonaStore(settings.db_path) as store:
             changed = store.set_identity(body.name, body.about, note)
         if changed:
             queue_build()
-        return get_identity()
+        return get_identity(request)

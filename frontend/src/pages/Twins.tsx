@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Check, MoreHorizontal, Plus } from 'lucide-react';
+import { Check, Globe, MoreHorizontal, Plus } from 'lucide-react';
 import { Button, Dialog, Skeleton, useConfirm } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { PersonaPortrait } from '../components/layout/PersonaSwitcher';
@@ -58,24 +58,26 @@ export function Twins() {
   useEffect(() => {
     const controller = new AbortController();
     void Promise.all(
-      items.map(async (persona) => {
-        try {
-          const sources = await api<{ status: string }[]>(
-            '/api/persona/sources',
-            {
-              headers: { 'X-Twin-Persona': persona.id },
-              signal: controller.signal,
-            },
-          );
-          return [
-            persona.id,
-            sources.filter((source) => source.status === 'needs_speaker')
-              .length,
-          ] as const;
-        } catch {
-          return [persona.id, 0] as const;
-        }
-      }),
+      items
+        .filter((persona) => persona.can_manage !== false)
+        .map(async (persona) => {
+          try {
+            const sources = await api<{ status: string }[]>(
+              '/api/persona/sources',
+              {
+                headers: { 'X-Twin-Persona': persona.id },
+                signal: controller.signal,
+              },
+            );
+            return [
+              persona.id,
+              sources.filter((source) => source.status === 'needs_speaker')
+                .length,
+            ] as const;
+          } catch {
+            return [persona.id, 0] as const;
+          }
+        }),
     ).then((counts) => {
       if (!controller.signal.aborted) setPending(Object.fromEntries(counts));
     });
@@ -106,6 +108,14 @@ export function Twins() {
       if (id === editing.id) await useStatus.getState().refresh();
       setEditing(null);
     });
+  const setPublic = (persona: Persona, value: boolean) =>
+    work(async () => {
+      await api(`/api/personas/${persona.id}`, {
+        method: 'PATCH',
+        json: { public: value },
+      });
+      await refresh();
+    });
   const remove = async (persona: Persona) => {
     if (
       !(await confirm({
@@ -122,6 +132,108 @@ export function Twins() {
       await refresh();
     });
   };
+  const mine = items.filter((persona) => persona.can_manage !== false);
+  const others = items.filter((persona) => persona.can_manage === false);
+  const card = (persona: Persona) => (
+    <article
+      key={persona.id}
+      className="twin-card relative rounded-xl bg-surface shadow-card"
+      data-current={persona.id === id}
+    >
+      <button
+        type="button"
+        className="twin-card-select flex h-full w-full min-w-0 flex-col items-center gap-3 rounded-xl p-6 text-center"
+        aria-label={`和${persona.name}聊天`}
+        onClick={() => {
+          navigate('/chat');
+          switchTo(persona.id);
+        }}
+      >
+        <PersonaPortrait persona={persona} />
+        <span className="persona-name max-w-full truncate text-2xl">
+          {persona.name}
+        </span>
+        <span className="text-sm text-secondary">{persona.sources} 条记忆</span>
+        {lastMessage(persona.id) && (
+          <span className="w-full truncate text-sm text-secondary">
+            {lastMessage(persona.id)}
+          </span>
+        )}
+        {!!pending[persona.id] && (
+          <span className="rounded-full bg-note px-3 py-1 text-xs text-primary">
+            有 {pending[persona.id]} 段待确认
+          </span>
+        )}
+        {persona.owner && persona.owner !== identity?.email && (
+          <span
+            className="max-w-full truncate text-xs text-tertiary"
+            title={persona.owner}
+          >
+            {persona.owner}
+          </span>
+        )}
+        {persona.public && persona.can_manage !== false && (
+          <span className="flex items-center gap-1 rounded-full bg-soft px-3 py-1 text-xs text-primary">
+            <Globe size={14} aria-hidden />
+            公开
+          </span>
+        )}
+        {persona.id === id && (
+          <span className="flex items-center gap-1 rounded-full bg-primary px-3 py-1 text-xs text-canvas">
+            <Check size={14} aria-hidden />
+            当前分身
+          </span>
+        )}
+      </button>
+      {persona.can_manage !== false && (
+        <details className="twin-card-menu absolute top-2 right-2">
+          <summary
+            aria-label={`管理${persona.name}`}
+            className="grid size-11 cursor-pointer list-none place-items-center rounded-full text-secondary hover:bg-soft [&::-webkit-details-marker]:hidden"
+          >
+            <MoreHorizontal size={20} aria-hidden />
+          </summary>
+          <div className="absolute right-0 z-10 grid min-w-28 rounded-lg border border-border bg-canvas p-1 shadow-elevation-2">
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={(event) => {
+                event.currentTarget.closest('details')?.removeAttribute('open');
+                setDraft(persona.name);
+                setEditing(persona);
+              }}
+            >
+              重命名
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={(event) => {
+                event.currentTarget.closest('details')?.removeAttribute('open');
+                void setPublic(persona, !persona.public);
+              }}
+            >
+              {persona.public ? '设为私有' : '设为公开'}
+            </Button>
+            {!persona.is_default && (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={(event) => {
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                  void remove(persona);
+                }}
+              >
+                删除
+              </Button>
+            )}
+          </div>
+        </details>
+      )}
+    </article>
+  );
   return (
     <div className="twins-page">
       <StageHeader
@@ -159,94 +271,7 @@ export function Twins() {
           </p>
         )}
         <div className="twins-grid" aria-label="分身列表">
-          {items.map((persona) => (
-            <article
-              key={persona.id}
-              className="twin-card relative rounded-xl bg-surface shadow-card"
-              data-current={persona.id === id}
-            >
-              <button
-                type="button"
-                className="twin-card-select flex h-full w-full min-w-0 flex-col items-center gap-3 rounded-xl p-6 text-center"
-                aria-label={`和${persona.name}聊天`}
-                onClick={() => {
-                  navigate('/chat');
-                  switchTo(persona.id);
-                }}
-              >
-                <PersonaPortrait persona={persona} />
-                <span className="persona-name max-w-full truncate text-2xl">
-                  {persona.name}
-                </span>
-                <span className="text-sm text-secondary">
-                  {persona.sources} 条记忆
-                </span>
-                {lastMessage(persona.id) && (
-                  <span className="w-full truncate text-sm text-secondary">
-                    {lastMessage(persona.id)}
-                  </span>
-                )}
-                {!!pending[persona.id] && (
-                  <span className="rounded-full bg-note px-3 py-1 text-xs text-primary">
-                    有 {pending[persona.id]} 段待确认
-                  </span>
-                )}
-                {identity?.admin &&
-                  persona.owner &&
-                  persona.owner !== identity.email && (
-                    <span
-                      className="max-w-full truncate text-xs text-tertiary"
-                      title={persona.owner}
-                    >
-                      {persona.owner}
-                    </span>
-                  )}
-                {persona.id === id && (
-                  <span className="flex items-center gap-1 rounded-full bg-primary px-3 py-1 text-xs text-canvas">
-                    <Check size={14} aria-hidden />
-                    当前分身
-                  </span>
-                )}
-              </button>
-              <details className="twin-card-menu absolute top-2 right-2">
-                <summary
-                  aria-label={`管理${persona.name}`}
-                  className="grid size-11 cursor-pointer list-none place-items-center rounded-full text-secondary hover:bg-soft [&::-webkit-details-marker]:hidden"
-                >
-                  <MoreHorizontal size={20} aria-hidden />
-                </summary>
-                <div className="absolute right-0 z-10 grid min-w-28 rounded-lg border border-border bg-canvas p-1 shadow-elevation-2">
-                  <Button
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={(event) => {
-                      event.currentTarget
-                        .closest('details')
-                        ?.removeAttribute('open');
-                      setDraft(persona.name);
-                      setEditing(persona);
-                    }}
-                  >
-                    重命名
-                  </Button>
-                  {!persona.is_default && (
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={(event) => {
-                        event.currentTarget
-                          .closest('details')
-                          ?.removeAttribute('open');
-                        void remove(persona);
-                      }}
-                    >
-                      删除
-                    </Button>
-                  )}
-                </div>
-              </details>
-            </article>
-          ))}
+          {mine.map(card)}
           <NewTwin
             initialOpen={params.get('create') === '1'}
             className="twin-card twin-card-create flex min-h-60 flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-primary bg-transparent p-6 text-primary"
@@ -261,6 +286,14 @@ export function Twins() {
             <span className="persona-name text-2xl">新建分身</span>
           </NewTwin>
         </div>
+        {others.length > 0 && (
+          <>
+            <h2 className="text-2xl font-semibold">公开分身</h2>
+            <div className="twins-grid" aria-label="公开分身列表">
+              {others.map(card)}
+            </div>
+          </>
+        )}
         <Dialog
           open={editing !== null}
           onOpenChange={(open) => {

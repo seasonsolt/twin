@@ -12,6 +12,7 @@ export interface IdentityData {
   about: string;
   name_source: 'config' | 'user';
   onboarding_pending?: boolean;
+  visitor?: boolean;
   aliases: string[];
   voice: string | null;
   avatar: string | null;

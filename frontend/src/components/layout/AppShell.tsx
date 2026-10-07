@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { NavLink, useLocation, useOutlet } from 'react-router';
+import { Navigate, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
@@ -17,7 +17,7 @@ import { Button, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
-import { usePersonas } from '../../stores/personas';
+import { useCanManage, usePersonas } from '../../stores/personas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
 import { useAuth } from '../../stores/auth';
@@ -34,12 +34,17 @@ export const navItems = [
   { route: 'profile', title: '档案', icon: BookUser },
 ];
 
+function useNavItems() {
+  return useCanManage() ? navItems : navItems.slice(0, 1);
+}
+
 function Navigation() {
   const { reduced, transition } = useMotionPreset('layout');
+  const items = useNavItems();
   return (
     <LayoutScope>
       <nav aria-label="主导航" className="space-y-1">
-        {navItems.map(({ route, title, icon: Icon }) => {
+        {items.map(({ route, title, icon: Icon }) => {
           const link = (
             <NavLink
               key={route}
@@ -71,12 +76,13 @@ function Navigation() {
 }
 
 function BottomTabs() {
+  const items = useNavItems();
   return (
     <nav
       aria-label="底部导航"
-      className="mobile-tabs fixed inset-x-0 bottom-0 z-30 grid grid-cols-2 gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden"
+      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${items.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
     >
-      {navItems.map(({ route, title, icon: Icon }) => (
+      {items.map(({ route, title, icon: Icon }) => (
         <NavLink
           key={route}
           to={`/${route}`}
@@ -195,6 +201,7 @@ export function AppShell() {
   const location = useLocation();
   const outlet = useOutlet();
   const twinLevel = location.pathname === '/twins';
+  const canManage = useCanManage();
   const [onboarding, setOnboarding] = usePersonaState<IdentityData | null>(
     null,
   );
@@ -213,6 +220,7 @@ export function AppShell() {
       .then(([identity, status]) => {
         if (
           !controller.signal.aborted &&
+          !identity.visitor &&
           (identity.onboarding_pending ||
             (identity.name_source === 'config' && status.counts.sources === 0))
         )
@@ -236,6 +244,8 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, [twinLevel, personaId, setOnboarding, setNoPersona]);
+  if (!canManage && !twinLevel && location.pathname !== '/chat')
+    return <Navigate to="/chat" replace />;
   if (noPersona && !twinLevel)
     return (
       <main className="entry-page min-h-dvh">

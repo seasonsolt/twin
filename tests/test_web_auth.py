@@ -377,3 +377,46 @@ def test_mail_failure_invalidates_code(web: TestClient) -> None:
     assert result.status_code == 503 and "sensitive" not in result.text
     with sqlite3.connect(auth(web).path) as db:
         assert db.execute("SELECT count(*) FROM codes").fetchone()[0] == 0
+
+
+def test_public_twin_can_be_talked_to_but_not_changed_by_other_members(web: TestClient) -> None:
+    login(web)
+    persona = create(web)
+    as_owner = web.cookies["twin_session"]
+    as_other = login(web, OTHER)
+    assert web.get("/api/personas").json() == []
+    assert web.patch("/api/personas/" + persona, json={"public": True}, headers=CSRF).status_code == 404
+    web.cookies.set("twin_session", as_owner)
+    result = web.patch("/api/personas/" + persona, json={"public": True}, headers=CSRF)
+    assert result.status_code == 200 and result.json()["public"] is True and result.json()["can_manage"] is True
+    assert web.get("/api/identity?persona=" + persona).json()["onboarding_pending"] is True
+    web.cookies.set("twin_session", as_other)
+    [listed] = web.get("/api/personas").json()
+    assert (listed["id"], listed["public"], listed["can_manage"]) == (persona, True, False)
+    headers = {**CSRF, "X-Twin-Persona": persona}
+    identity = web.get("/api/identity", headers=headers).json()
+    assert identity["visitor"] is True and "onboarding_pending" not in identity
+    assert web.get("/api/status", headers=headers).status_code == 200
+    conversation = web.post("/api/conversations", json={}, headers=headers)
+    assert conversation.status_code == 201, conversation.text
+    body = {"messages": [{"role": "user", "content": "问题"}], "conversation_id": conversation.json()["id"]}
+    response = web.post("/api/persona/chat/stream", json=body, headers=headers)
+    assert response.status_code == 200 and "event: final" in response.text
+    for method, path, payload in [
+        ("GET", "/api/persona/sources", None),
+        ("GET", "/api/persona/items", None),
+        ("GET", "/api/me/voice/reference", None),
+        ("PUT", "/api/identity", {"name": "偷改", "about": ""}),
+        ("POST", "/api/persona/notes", {"text": "不能写入他人的记忆"}),
+        ("POST", "/api/persona/chat", {"messages": [{"role": "user", "content": "问题"}]}),
+    ]:
+        denied = web.request(method, path, json=payload, headers=headers)
+        assert denied.status_code == 403, (path, denied.text)
+        assert denied.json() == {"detail": "这是别人的公开分身，只能聊天"}
+    assert web.delete("/api/personas/" + persona, headers=CSRF).status_code == 404
+    web.cookies.set("twin_session", as_owner)
+    assert web.get("/api/conversations?persona=" + persona).json() == []
+    assert web.patch("/api/personas/" + persona, json={"public": False}, headers=CSRF).json()["public"] is False
+    web.cookies.set("twin_session", as_other)
+    assert web.get("/api/personas").json() == []
+    assert web.get("/api/identity", headers=headers).status_code == 404

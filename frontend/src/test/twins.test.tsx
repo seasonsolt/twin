@@ -317,3 +317,39 @@ it('lets the owner reach all twins even when the selected twin needs onboarding'
     screen.queryByRole('heading', { name: '你是谁' }),
   ).not.toBeInTheDocument();
 });
+
+it('lets the owner publish a twin and lists other members’ public twins without management', async () => {
+  items[1] = { ...items[1], public: true, can_manage: false };
+  const original = fetcher.getMockImplementation() as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/api/personas/default' && init?.method === 'PATCH') {
+      items[0] = { ...items[0], ...JSON.parse(init.body as string) };
+      return json(items[0]);
+    }
+    return original(path, init);
+  });
+  mountTwins();
+  const mine = screen.getByLabelText('分身列表');
+  const shared = screen.getByLabelText('公开分身列表');
+  const friend = within(shared).getByRole('button', { name: '和朋友聊天' });
+  expect(friend.closest('article')?.querySelector('details')).toBeNull();
+  expect(within(friend).queryByText('公开')).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls
+        .filter(([path]) => path === '/api/persona/sources')
+        .map(([, init]) => new Headers(init.headers).get('X-Twin-Persona')),
+    ).toEqual(['default']),
+  );
+  const user = userEvent.setup();
+  await user.click(within(mine).getByLabelText('管理主人'));
+  await user.click(within(mine).getByRole('button', { name: '设为公开' }));
+  expect(await within(mine).findByText('公开')).toBeInTheDocument();
+  await user.click(within(mine).getByLabelText('管理主人'));
+  expect(
+    within(mine).getByRole('button', { name: '设为私有' }),
+  ).toBeInTheDocument();
+});

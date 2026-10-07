@@ -59,6 +59,7 @@ export function Chat() {
     state.items.find((item) => item.id === state.id),
   );
   const name = status?.target_name || persona?.name || '本人';
+  const canManage = persona?.can_manage ?? true;
   const [stale, setStale] = useState(false);
   const [stateError, setStateError] = useState('');
   const [capabilities, setCapabilities] = useState<Capabilities | null>(
@@ -301,7 +302,7 @@ export function Chat() {
         <div className="chat-scroll">
           <PersonaFade>
             <div className="chat-conversation flex flex-col justify-end space-y-4">
-              {stale && (
+              {stale && canManage && (
                 <p role="status" className="text-xs text-secondary">
                   新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
                   <a
@@ -338,9 +339,11 @@ export function Chat() {
                   <EmptyState
                     title={`和${name}聊聊`}
                     body={
-                      status?.counts.sources === 0
-                        ? '先添加一些关于你的记忆，再来聊聊。'
-                        : '在下面输入一句话开始，也可以先添加记忆。'
+                      !canManage
+                        ? '在下面输入一句话开始。'
+                        : status?.counts.sources === 0
+                          ? '先添加一些关于你的记忆，再来聊聊。'
+                          : '在下面输入一句话开始，也可以先添加记忆。'
                     }
                   >
                     <div
@@ -365,12 +368,14 @@ export function Chat() {
                         </button>
                       ))}
                     </div>
-                    <a
-                      className="inline-flex min-h-11 items-center text-accent underline"
-                      href="#/profile?section=memories"
-                    >
-                      添加记忆
-                    </a>
+                    {canManage && (
+                      <a
+                        className="inline-flex min-h-11 items-center text-accent underline"
+                        href="#/profile?section=memories"
+                      >
+                        添加记忆
+                      </a>
+                    )}
                   </EmptyState>
                 )}
                 <MessageList

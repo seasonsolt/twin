@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import secrets
 import shutil
 import threading
@@ -27,6 +28,30 @@ from .jobs import JobManager
 class NameBody(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     name: str = Field(min_length=1, max_length=20)
+
+
+class VisibilityBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    public: bool
+
+
+# Visitors of a public twin can only talk to it; its memories and settings stay with the owner.
+VISITOR_ROUTES = [
+    (method, re.compile(pattern))
+    for method, pattern in [
+        ("GET", r"/api/(status|identity|persona/state)"),
+        ("GET", r"/api/media/(capabilities|avatar\.vrm|avatar-image)"),
+        ("GET", r"/api/media/(audio|video|video/jobs)/[^/]+"),
+        ("POST", r"/api/media/(audio|video)"),
+        ("POST", r"/api/persona/chat/stream"),
+        ("GET|POST", r"/api/conversations"),
+        ("GET|PATCH|DELETE", r"/api/conversations/[^/]+"),
+    ]
+]
+
+
+def visitor_route(method: str, path: str) -> bool:
+    return any(method in methods.split("|") and pattern.fullmatch(path) for methods, pattern in VISITOR_ROUTES)
 
 
 class Personas:
@@ -78,7 +103,7 @@ class Personas:
                 self.apps[persona_id] = self.make_app(persona_id, settings)
             return self.apps[persona_id]
 
-    def view(self, entry: dict[str, Any]) -> dict[str, Any]:
+    def view(self, entry: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         persona_id = entry["id"]
         settings = self.settings_for(persona_id)
         name, _ = stored_identity(settings.db_path)
@@ -93,24 +118,37 @@ class Personas:
             else None,
             "sources": sources,
             "is_default": persona_id == self.data["default"],
+            "public": bool(entry.get("public")),
+            "can_manage": self.accessible(entry, identity),
         }
 
     def accessible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
         return bool(identity["admin"] or (entry.get("owner") and entry["owner"] == identity["email"]))
 
+    def visible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
+        return bool(entry.get("public")) or self.accessible(entry, identity)
+
     def check_owner(self, persona_id: str, identity: dict[str, Any]) -> None:
         if not any(p["id"] == persona_id and self.accessible(p, identity) for p in self.data["personas"]):
             raise HTTPException(404, "分身不存在")
+
+    def check_access(self, persona_id: str, identity: dict[str, Any], method: str, path: str) -> bool:
+        """Return whether the request comes from a visitor rather than someone who manages the twin."""
+        entry = next((p for p in self.data["personas"] if p["id"] == persona_id), None)
+        if entry is None or not self.visible(entry, identity):
+            raise HTTPException(404, "分身不存在")
+        if self.accessible(entry, identity):
+            return False
+        if not visitor_route(method, path):
+            raise HTTPException(403, "这是别人的公开分身，只能聊天")
+        return True
 
     def register(self, app: FastAPI) -> None:
         @app.get("/api/personas")
         def list_personas(request: Request) -> list[dict[str, Any]]:
             with self.lock:
-                return [
-                    self.view(entry)
-                    for entry in self.data["personas"]
-                    if self.accessible(entry, request.scope["twin_identity"])
-                ]
+                identity = request.scope["twin_identity"]
+                return [self.view(entry, identity) for entry in self.data["personas"] if self.visible(entry, identity)]
 
         @app.post("/api/personas", status_code=201)
         def create_persona(body: NameBody, request: Request) -> dict[str, Any]:
@@ -137,7 +175,17 @@ class Personas:
                 }
                 self.data["personas"].append(entry)
                 self.save()
-                return self.view(entry)
+                return self.view(entry, identity)
+
+        @app.patch("/api/personas/{persona_id}")
+        def set_visibility(persona_id: str, body: VisibilityBody, request: Request) -> dict[str, Any]:
+            with self.lock:
+                identity = request.scope["twin_identity"]
+                self.check_owner(persona_id, identity)
+                entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
+                entry["public"] = body.public
+                self.save()
+                return self.view(entry, identity)
 
         @app.delete("/api/personas/{persona_id}")
         def delete_persona(persona_id: str, request: Request) -> dict[str, bool]:
@@ -182,7 +230,9 @@ class PersonaMiddleware:
         management = path == "/api/personas" or path.startswith("/api/personas/")
         try:
             with self.registry.lock:
-                if persona_id is not None:
+                if persona_id is not None and not management:
+                    scope["twin_visitor"] = self.registry.check_access(persona_id, identity, str(scope["method"]), path)
+                elif persona_id is not None:
                     self.registry.check_owner(persona_id, identity)
                 if management:
                     context = None

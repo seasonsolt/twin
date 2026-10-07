@@ -17,6 +17,8 @@ export interface Persona {
   sources: number;
   created_at: string;
   is_default: boolean;
+  public?: boolean;
+  can_manage?: boolean;
   owner?: string | null;
 }
 let refreshVersion = 0;
@@ -102,3 +104,10 @@ export const usePersonas = create<{
       );
   },
 }));
+
+// Someone else's public twin can only be talked to.
+export const useCanManage = () =>
+  usePersonas(
+    (state) =>
+      state.items.find((item) => item.id === state.id)?.can_manage ?? true,
+  );

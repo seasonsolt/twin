@@ -79,6 +79,7 @@ class TTSSettings(BaseModel):
     api_key_env: str = "TWIN_TTS_KEY"
     voice: str = "default"
     voice_dir: Path | None = None
+    streaming: bool = True
     language: str = "zh"
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
@@ -489,6 +490,7 @@ def make_synthesizer(s: TTSSettings) -> SpeechSynthesizer:
         base_url=s.base_url,
         api_key_env=s.api_key_env,
         voice=voice,
+        streaming=s.streaming,
         timeout=s.timeout,
         max_retries=s.max_retries,
     )

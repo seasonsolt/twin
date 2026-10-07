@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import datetime as dt
 import re
 import secrets
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
@@ -27,6 +28,7 @@ from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
 from ..media.schema import AVATAR_PRESETS, AudioManifest, MediaScript, VoiceSpec
 from ..media.script import script_from_presentable, speech_script
+from ..media.stream import SAMPLE_RATE, frame, stream_audio
 from ..media.tts import (
     MediaError,
     MediaInputTooLong,
@@ -84,6 +86,12 @@ class MediaBody(BaseModel):
     kind: Literal["chat_reply"]
     answer: dict[str, Any]
     persona_name: str | None = None
+
+
+class StreamAudioBody(BaseModel):
+    answer: dict[str, Any]
+    persona_name: str | None = None
+    kind: Literal["chat_reply"] = "chat_reply"
 
 
 class AudioBody(MediaBody):
@@ -258,6 +266,32 @@ def register(
             ],
             "manifest": manifest.model_dump(mode="json"),
         }
+
+    @app.post("/api/media/audio/stream")
+    def audio_stream(body: StreamAudioBody) -> StreamingResponse:
+        script = speech_script(make_script(MediaBody(**body.model_dump())))
+
+        async def generate() -> AsyncIterator[bytes]:
+            # A fixed output rate lets the first frame pass through proxies before upstream synthesis starts.
+            yield frame(1, {"sample_rate": SAMPLE_RATE, "segments": len(script.segments)})
+            try:
+                synth = await asyncio.to_thread(speech)
+                chunks = stream_audio(script, synth, cache_dir)
+                try:
+                    async for chunk in chunks:
+                        yield chunk
+                finally:
+                    await chunks.aclose()
+            except MediaError as exc:
+                yield frame(4, {"detail": speech_error(exc)[1]})
+            except Exception:
+                yield frame(4, {"detail": "语音服务不可用，请检查语音配置"})
+
+        return StreamingResponse(
+            generate(),
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/media/audio/{name}")
     def audio_file(name: str) -> FileResponse:

@@ -3,11 +3,12 @@ import {
   usePersonaId,
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
-import { api, handleApiFailure } from '../../lib/api';
+import { api, ApiError, handleApiFailure } from '../../lib/api';
 import { personaUrl } from '../../lib/persona';
 import type { AudioPart } from '../avatar/types';
 import type { ChatReply } from './types';
 import { GaplessAudio } from './GaplessAudio';
+import { StreamingAudio, readAudioStream } from './StreamingAudio';
 
 const initial = {
   id: '',
@@ -26,6 +27,7 @@ const idle = {
     void _name;
   },
   stop() {},
+  unlock() {},
 };
 interface AudioReply {
   count: number;
@@ -64,6 +66,9 @@ export function useReplyAudio(active: boolean) {
     let position = 0;
     let waiting = false;
     let player: GaplessAudio | null = null;
+    let streaming: StreamingAudio | null = null;
+    let streamRequest: AbortController | null = null;
+    let streamId = '';
     let prefetch = () => {};
     const key = () => `${segment}:${position}`;
     const currentTime = () =>
@@ -88,6 +93,11 @@ export function useReplyAudio(active: boolean) {
       publish({ playing: false, loading: false });
     };
     const stop = () => {
+      streamRequest?.abort();
+      streamRequest = null;
+      streaming?.stop();
+      streaming = null;
+      streamId = '';
       pause();
       if (audio.hasAttribute('src')) {
         audio.removeAttribute('src');
@@ -217,7 +227,11 @@ export function useReplyAudio(active: boolean) {
     const onTime = () => {
       if (state.playing) publish({ progress: progress() });
     };
-    const toggle = async (id: string, answer: ChatReply, name: string) => {
+    const toggleSegmented = async (
+      id: string,
+      answer: ChatReply,
+      name: string,
+    ) => {
       if (answer.abstain || answer.mode === 'abstain') return;
       if (state.id === id && state.playing) return pause();
       if (state.id !== id) stop();
@@ -231,7 +245,10 @@ export function useReplyAudio(active: boolean) {
       const valid = () =>
         alive && !controller.signal.aborted && current === version;
       publish({ id, playing: true, errors: { ...state.errors, [id]: '' } });
-      if (!player && typeof AudioContext !== 'undefined') {
+      if (
+        !player &&
+        (typeof AudioContext !== 'undefined' || 'webkitAudioContext' in window)
+      ) {
         try {
           player = new GaplessAudio();
         } catch {
@@ -344,6 +361,113 @@ export function useReplyAudio(active: boolean) {
           fail(error instanceof Error ? error.message : '语音暂不可用，请重试');
       }
     };
+    const prepareContext = () => {
+      if (
+        !player &&
+        (typeof AudioContext !== 'undefined' || 'webkitAudioContext' in window)
+      ) {
+        try {
+          player = new GaplessAudio();
+        } catch {
+          return;
+        }
+      }
+    };
+    const unlock = () => {
+      prepareContext();
+      // Called synchronously from play/send gestures, before any network await (Safari).
+      if (player) void player.resume().catch(() => {});
+    };
+    const toggle = async (id: string, answer: ChatReply, name: string) => {
+      if (answer.abstain || answer.mode === 'abstain') return;
+      if (streaming && streamId === id) {
+        if (state.playing) {
+          void streaming.pause().catch(() => {});
+          publish({
+            playing: false,
+            loading: false,
+            speaking: false,
+            level: 0,
+            caption: '',
+          });
+        } else {
+          publish({ playing: true });
+          void streaming.resume().catch(() => fail());
+        }
+        return;
+      }
+      if (state.id === id && !streamId && (state.playing || reply.count > 0))
+        return toggleSegmented(id, answer, name);
+      stop();
+      prepareContext();
+      if (!player || typeof player.context.createBuffer !== 'function')
+        return toggleSegmented(id, answer, name);
+      unlock();
+      const controller = new AbortController();
+      streamRequest = controller;
+      streamId = id;
+      const valid = () =>
+        alive && !controller.signal.aborted && streamRequest === controller;
+      publish({
+        id,
+        playing: true,
+        loading: true,
+        errors: { ...state.errors, [id]: '' },
+      });
+      const current = new StreamingAudio(
+        player.context,
+        (patch) => {
+          if (valid()) publish(patch);
+        },
+        () => {
+          if (!valid()) return;
+          controller.abort();
+          streamRequest = null;
+          streaming = null;
+          streamId = '';
+          publish({
+            playing: false,
+            loading: false,
+            speaking: false,
+            level: 0,
+            caption: '',
+            progress: 1,
+          });
+        },
+      );
+      streaming = current;
+      try {
+        const response = await api<Response>('/api/media/audio/stream', {
+          method: 'POST',
+          responseType: 'stream',
+          json: { answer, persona_name: name },
+          signal: controller.signal,
+          headers: { 'X-Twin-Persona': persona },
+        });
+        if (!valid()) return;
+        await readAudioStream(response, current);
+      } catch (error) {
+        if (!valid()) return;
+        const receivedAudio = current.hasAudio;
+        const wasPlaying = state.playing;
+        const canFallback =
+          !(error instanceof ApiError) ||
+          error.status === 0 ||
+          error.status === 404 ||
+          error.status >= 500;
+        stop();
+        if (!receivedAudio && canFallback && wasPlaying)
+          await toggleSegmented(id, answer, name);
+        else if (wasPlaying)
+          publish({
+            errors: {
+              ...state.errors,
+              [id]:
+                error instanceof Error ? error.message : '语音暂不可用，请重试',
+            },
+          });
+      }
+    };
     audio.addEventListener('playing', onPlaying);
     audio.addEventListener('pause', quiet);
     audio.addEventListener('waiting', quiet);
@@ -353,6 +477,7 @@ export function useReplyAudio(active: boolean) {
     actions.current = {
       toggle: (id, answer, name) => void toggle(id, answer, name),
       stop,
+      unlock,
     };
     publish();
     window.addEventListener('twin-persona-switch', stop);
@@ -376,5 +501,6 @@ export function useReplyAudio(active: boolean) {
     toggle: (id: string, answer: ChatReply, name: string) =>
       actions.current.toggle(id, answer, name),
     stop: () => actions.current.stop(),
+    unlock: () => actions.current.unlock(),
   };
 }

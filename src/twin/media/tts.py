@@ -19,6 +19,7 @@ import math
 import threading
 import time
 import wave
+from collections.abc import AsyncGenerator
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
@@ -246,6 +247,7 @@ class CloudflareMeloTTS(_HTTPSpeech):
         *,
         voice: VoiceSpec | None = None,
         languages: list[str] | None = None,
+        async_client: httpx.AsyncClient | None = None,
         timeout: float = 60.0,
         max_retries: int = 2,
         client: httpx.Client | None = None,
@@ -261,6 +263,7 @@ class CloudflareMeloTTS(_HTTPSpeech):
             client=client,
         )
         self.name = "cloudflare:melotts"
+        self._async_client = async_client
         self.capabilities = SynthCapabilities(
             audio_formats=["mp3", "wav"],
             languages=languages or [self.voice.language],
@@ -279,6 +282,36 @@ class CloudflareMeloTTS(_HTTPSpeech):
     def synthesize(self, request: SpeechRequest) -> SpeechResult:
         _check_request(request, self.capabilities)
         response = self._post("/run/@cf/myshell-ai/melotts", {"prompt": request.text, "lang": request.voice.language})
+        return self._result(response)
+
+    async def synthesize_async(self, request: SpeechRequest) -> SpeechResult:
+        """Whole-audio fallback using cancellable I/O while keeping the synchronous B2 API."""
+        _check_request(request, self.capabilities)
+        client = self._async_client or httpx.AsyncClient()
+        try:
+            response = await client.post(
+                self._base_url + "/run/@cf/myshell-ai/melotts",
+                json={"prompt": request.text, "lang": request.voice.language},
+                headers={"Authorization": f"Bearer {self._key}"},
+                timeout=self._timeout,
+                follow_redirects=False,
+            )
+            if response.status_code == 408:
+                raise MediaTimeout("Speech service timed out")
+            if response.status_code == 429 or response.status_code >= 500:
+                raise MediaUnavailable("Speech service unavailable")
+            if response.status_code >= 300:
+                raise MediaRejected("Speech request rejected")
+            return self._result(response)
+        except httpx.TimeoutException:
+            raise MediaTimeout("Speech service timed out") from None
+        except (httpx.HTTPError, httpx.InvalidURL):
+            raise MediaUnavailable("Speech service transport failed") from None
+        finally:
+            if self._async_client is None:
+                await client.aclose()
+
+    def _result(self, response: httpx.Response) -> SpeechResult:
         extras: dict[str, str] = {}
         try:
             content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -317,6 +350,35 @@ class CloudflareMeloTTS(_HTTPSpeech):
         )
 
 
+def wav_pcm(audio: bytes) -> tuple[int, bytes]:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as parsed:
+            width, channels = parsed.getsampwidth(), parsed.getnchannels()
+            if width not in (1, 2, 3, 4) or not 1 <= channels <= 8 or parsed.getcomptype() != "NONE":
+                raise ValueError("Unsupported PCM")
+            rate = parsed.getframerate()
+            pcm = parsed.readframes(parsed.getnframes())
+            if rate <= 0 or not pcm or len(pcm) != parsed.getnframes() * width * channels:
+                raise ValueError("Invalid PCM")
+            if width == 2 and channels == 1:
+                return rate, pcm
+            samples = (
+                [(value - 128) * 256 for value in pcm]
+                if width == 1
+                else [
+                    int.from_bytes(pcm[offset : offset + width], "little", signed=True) >> (8 * (width - 2))
+                    for offset in range(0, len(pcm), width)
+                ]
+            )
+            mono = b"".join(
+                round(sum(samples[offset : offset + channels]) / channels).to_bytes(2, "little", signed=True)
+                for offset in range(0, len(samples), channels)
+            )
+            return rate, mono
+    except (wave.Error, EOFError, ValueError):
+        raise MediaUnavailable("Speech service returned invalid PCM WAV") from None
+
+
 class OpenAICompatSpeech(_HTTPSpeech):
     """Self-hosted OpenAI-compatible speech shim; no public endpoint is selected implicitly."""
 
@@ -326,6 +388,8 @@ class OpenAICompatSpeech(_HTTPSpeech):
         base_url: str,
         api_key_env: str = "TWIN_TTS_KEY",
         *,
+        streaming: bool = True,
+        async_client: httpx.AsyncClient | None = None,
         voice: VoiceSpec | None = None,
         timeout: float = 60.0,
         max_retries: int = 2,
@@ -340,6 +404,8 @@ class OpenAICompatSpeech(_HTTPSpeech):
             client=client,
         )
         self.model = model
+        self.streaming = streaming
+        self._async_client = async_client
         self.name = "openai_compat:speech"
         self._capabilities = SynthCapabilities(
             audio_formats=["wav", "mp3"], languages=[self.voice.language], max_chars=1000
@@ -371,6 +437,66 @@ class OpenAICompatSpeech(_HTTPSpeech):
     @property
     def identity(self) -> str:
         return self._identity("openai_compat", self.model)
+
+    async def stream_pcm(self, request: SpeechRequest) -> AsyncGenerator[tuple[int, bytes]]:
+        # Capabilities have been checked by the renderer before entering the async transport.
+        _check_request(request, self._capabilities)
+        client = self._async_client or httpx.AsyncClient()
+        payload = {"model": self.model, "input": request.text, "voice": request.voice.voice_id}
+        headers = {"Authorization": f"Bearer {self._key}"}
+        try:
+            if self.streaming:
+                async with client.stream(
+                    "POST",
+                    self._base_url + "/audio/speech/stream",
+                    json=payload,
+                    headers=headers,
+                    timeout=self._timeout,
+                    follow_redirects=False,
+                ) as response:
+                    if response.status_code not in (404, 405):
+                        if response.status_code != 200:
+                            raise MediaUnavailable("Speech streaming service unavailable")
+                        try:
+                            rate = int(response.headers.get("X-Sample-Rate", "0"))
+                            if (
+                                not 8000 <= rate <= 192000
+                                or response.headers.get("content-type", "").split(";")[0] != "audio/pcm"
+                            ):
+                                raise ValueError("Invalid PCM headers")
+                        except ValueError:
+                            raise MediaUnavailable("Speech service returned invalid PCM headers") from None
+                        pending = b""
+                        size = 0
+                        async for chunk in response.aiter_bytes():
+                            pending += chunk
+                            end = len(pending) // 2 * 2
+                            if end:
+                                size += end
+                                yield rate, pending[:end]
+                                pending = pending[end:]
+                        if pending or not size:
+                            raise MediaUnavailable("Speech service returned incomplete PCM")
+                        return
+            response = await client.post(
+                self._base_url + "/audio/speech",
+                json={**payload, "response_format": "wav"},
+                headers=headers,
+                timeout=self._timeout,
+                follow_redirects=False,
+            )
+            if response.status_code != 200:
+                raise MediaUnavailable("Speech service unavailable")
+            rate, pcm = wav_pcm(response.content)
+            for offset in range(0, len(pcm), 8192):
+                yield rate, pcm[offset : offset + 8192]
+        except httpx.TimeoutException:
+            raise MediaTimeout("Speech service timed out") from None
+        except (httpx.HTTPError, httpx.InvalidURL):
+            raise MediaUnavailable("Speech service transport failed") from None
+        finally:
+            if self._async_client is None:
+                await client.aclose()
 
     def synthesize(self, request: SpeechRequest) -> SpeechResult:
         _check_request(request, self.capabilities)

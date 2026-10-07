@@ -252,6 +252,8 @@ export function Chat() {
   const send = () => {
     if (chat.busy || chat.loading || chat.restoreFailed || !chat.draft.trim())
       return;
+    audio.stop();
+    audio.unlock();
     void refreshState();
     void chat.send();
   };

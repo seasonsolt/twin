@@ -1,6 +1,6 @@
 export class GaplessAudio {
-  private context = new AudioContext();
-  private analyser = this.context.createAnalyser();
+  readonly context: AudioContext;
+  private analyser: AnalyserNode;
   private samples = new Float32Array(512);
   private sources = new Map<
     string,
@@ -9,6 +9,13 @@ export class GaplessAudio {
   private end = 0;
 
   constructor() {
+    const Constructor =
+      globalThis.AudioContext ??
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Constructor) throw new Error('Web Audio 不可用');
+    this.context = new Constructor();
+    this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = this.samples.length;
     this.analyser.connect(this.context.destination);
   }

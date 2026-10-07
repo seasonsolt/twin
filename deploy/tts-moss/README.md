@@ -223,10 +223,13 @@ base_url = "http://127.0.0.1:8001/v1"
 api_key_env = "TWIN_TTS_KEY"
 voice = "Junhao" # 未设置本人声音时的回退
 voice_dir = "/path/to/twin-voices" # 与容器 /voices 相同的宿主机目录
+streaming = true # 默认；流端点不存在时自动回退整段 WAV
 language = "zh"
 timeout = 600
 max_retries = 0
 ```
+
+网页听优先请求 `POST /v1/audio/speech/stream`，JSON 为 model/input/voice；成功需 `audio/pcm`、`X-Sample-Rate` 与分块发送的单声道 PCM16LE。此端点由上游服务实现；404/405 或 `streaming = false` 使用原来的整段 WAV，仍通过同一个浏览器 PCM 流播放。其他语音 provider 总是使用整段解码回退。
 
 renderer 使用 WAV。通用 OpenAI 适配器也能请求 MP3，但**本镜像仅支持 WAV**，请求 MP3 返回 400。
 较长超时适合 CPU 合成；重试设为 0 防止超时请求在串行服务端重复堆积。

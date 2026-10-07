@@ -227,6 +227,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `PUT /api/me/voice` / `DELETE /api/me/voice` | multipart file（录音/视频 ≤95MB），CPU ffmpeg 处理并校验至少 5 秒；删除恢复默认；返回 profile |
 | `GET /api/me/voice/reference` | 本人处理后的单声道 24kHz PCM16 WAV，private/no-store；不存在中文 JSON 404 |
 | `POST /api/media/script`、`/export`、`/audio`、`/clip` | `{kind: "chat_reply", answer: ChatReply, persona_name?: str}`；audio 可追加 `segments?: int[]`（零基脚本段索引，省略为全部），返回 `segment_count` 与所选分片 URL/口型轨、完整 script 和所选分片 manifest；非法索引 400 |
+| `POST /api/media/audio/stream` | `{answer: ChatReply, persona_name?: str}`；同样的鉴权、X-Twin 与分身隔离；octet-stream 帧：1 字节类型 + 4 字节大端长度 + payload。类型 1 为 JSON 采样率/段数或段索引/纯文本字幕，2 为单声道 PCM16LE，3 为 JSON 总时长，4 为脱敏 JSON 错误；no-store、X-Accel-Buffering: no |
 | `GET /api/media/audio/{name}` | SHA-256 命名 WAV/MP3 分片，验证目录边界 |
 | `POST /api/media/video` | 与 clip 相同的请求体，返回 `{job_id}`；弃权回答 400，未配置 503 |
 | `GET /api/media/video/jobs/{job_id}` | 当前分身的视频任务状态（与其他任务共用按分身隔离的 JobManager）；done 结果 `{file, duration_s, warnings}`，重启清空 |
@@ -238,7 +239,11 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 `video.available=true` 时，`features/chat/useReplyVideos.ts` 自动为非弃权回复提交真人视频任务，每条回复只启动一次；页面同一时间只处理一个视频任务，后续回复排队（新回复优先），已有会话任务优先恢复轮询，避免堆积 GPU 工作。`ReplyVideo.tsx` 生成期间仅显示小字“真人版生成中…”，不显示按钮、卡片或进度条；每秒轮询专用任务接口。完成后显示标为“真人版”的 `<video controls playsInline preload="metadata">`，宽度 100%、最大 360px、圆角，poster 为肖像，原生播放/全屏控件及“保存”链接；visually hidden 完整回复文本作为描述。如果该回复的语音仍在播放（包括等下一段），延迟首次显示直到语音停止，不自动播放视频。成品与已提交任务 ID 按回复、肖像 sha 和声音 ID 缓存在本标签页 sessionStorage，返回聊天不重复提交；失败只显示“真人版生成失败 · 重试”。轮询连接失败保留任务 ID，重试恢复轮询而非重复生成；已确认失败或不存在的任务才重新提交。离页停止轮询，不取消已提交的远端任务；正在提交的请求保留以记录任务 ID。超阈值分段用小字提示回听出入，不展示识别文本。远端 JSON 契约和本地后处理见 [MEDIA.md](MEDIA.md#34-本人视频通道v2)。
 
-脚本与独立 HTML 导出不调用模型，音频与视频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含来源元数据和指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息。
+脚本与独立 HTML 导出不调用模型，音频与视频只调用配置合成器。导出自包含、无可执行脚本或外部资源，文本及 inert JSON 安全转义，含来源元数据和指纹；指纹不是签名。音频存于数据库目录的 media-cache，GET 为 `private, no-store`。语音不可用/拒绝/超时/过长为 503/502/504/413，不回显服务消息；已经开始的 PCM 流使用错误帧。
+
+听优先使用 fetch/ReadableStream + Web Audio，PCM 统一为 24 kHz，首段约 150 ms 缓冲后在同一时间线上连续排程；断粮冻结播放进度、显示等待，补足缓冲后继续。字幕按实际播放时间切换，舞台音量由输出 AnalyserNode 的 RMS 驱动。播放和发送按钮同步创建/恢复 AudioContext（含 Safari），暂停冻结音频时钟；停止、换回复/分身和离页取消 fetch 并清理音源。未收到音频时连接失败或流端点 404/5xx 自动退回旧的分段播放。完整成功流按文本、音色、模型和版本保存在当前分身的私有 media-cache，重放不重新合成。
+
+流响应在鉴权/安全/分身中间件中逐块透传，首个采样率帧在访问上游前发送。Cloudflare Tunnel 应直接转发此 HTTP 响应，不启用额外代理缓存/响应聚合；应用发送 no-store 与 X-Accel-Buffering: no。外部代理的缓冲设置仍需部署端验证。
 
 ## 安全与服务路由
 

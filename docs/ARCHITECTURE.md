@@ -28,7 +28,7 @@ twin 是个人工具，不添加免责声明。
 | L1 语料（4） | 各类来源转成统一的"表达"；原文与化名视图分开 | `persona.sources`、`persona.questionnaire` |
 | L2 认知（5） | 从表达中抽取带逐字证据的档案条目、细项完成度 | `persona.profile`、`persona.coverage` |
 | L3 运行时（6） | 检索档案与原话、作答、引用、置信度、弃权 | `persona.chat` |
-| L4 展示（7） | 把回答变成脚本、语音、形象与视频 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render`、`service` |
+| L4 展示（7） | 把回答变成脚本、语音、形象与视频 | `media.adapters`、`media.script`、`media.speech_text`、`media.lipsync`、`media.render`、`media.stream`、`service` |
 | L5 接入（9） | 命令行、网页、API/MCP | `cli`、`web.*`、`frontend/`（React）、`api`、`mcp_server` |
 | 横切：评测（8） | 执行框架、评委、统计、来源记录、回听评测 | `evals.harness`、`evals.provenance`、`evals.personal`、`media.check` |
 | 横切：治理 | 授权、隐私、数据出境 | 规则见第 4 节；只读身份契约、出境分类与预置音色已完成 |

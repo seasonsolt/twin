@@ -1,34 +1,18 @@
 # twin
 
-**A personal digital twin, grounded in a person's own material.**
+**通用的个人数字分身：从一个人自己的资料里长出来，像他一样回答、说话和出镜。**
 
 [![CI](https://github.com/seasonsolt/twin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/seasonsolt/twin/actions/workflows/ci.yml)
 
-English | [简体中文](#简体中文)
-
-> **Status: early.** Interfaces will still change.
-
-twin builds a persona from freely added memories — notes, chats, documents, optional questions and interviews — where every trait carries a verbatim, dated quote, and serves it as conversation and speech: **Identity → Memory upload → Service**. Answers cite their evidence or abstain. twin is a personal tool and does not add disclaimers. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Chinese).
-
-**Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, and rely on LoRA training that is slow to update. The author first tried to fix this inside Second Me: the fork [seasonsolt/Second-Me](https://github.com/seasonsolt/Second-Me) swapped every replaceable module for the best option as of Q3 2026 (Qwen3, MLX LoRA, retrieval-first memory, 8K context) and still fell short, because the gap is architectural. twin was therefore designed from scratch: it answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (original Second Me: 4.7% and 10%; upgraded fork: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 0.5B (original) or 1.7B (upgraded) model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
-
-**Memory architecture.** Two layers instead of a plain vector store: the person's own *expressions* (dated, with context, own words vs. narration), and *persona items* derived from them across 9 dimensions / 39 facets, each item carrying mechanically verified verbatim quotes, behaviour-vs-self-report evidence classes, occasion counts, explicit conflicts, and the person's own review (confirm / edit / reject, preserved across re-merges). Answers pick one of three modes — grounded, general, abstain — then pass citation validation, confidence caps and a quote guard. Updates are deterministic and incremental (content-hashed chunks, candidates and items; only changed facets re-merge), and any answer can be computed "as of" a past date. Agent-memory frameworks (mem0, Letta, Graphiti/Zep, MemOS, Cognee, MIRIX) remember facts *about* a user for a task; twin models *who the person is and how they speak*, and refuses when the material is silent. Digital-human projects (Duix-Avatar/HeyGem, LiveTalking, Fay) clone face and voice but have no identity-grade memory; twin pairs both.
-
-**Roadmap.** Round 1 (done) built the foundations — memory architecture (L0–L3), voice cloning with streaming speech, photo-driven talking-head video, and a stage-style digital-human UI (L4) — demonstrated through chat, which is itself the default plugin of the service layer (L5). Round 2 targets enterprise use: executive twins that take part in daily work through service plugins on the same answer contract — employee Q&A, decision pre-review, meetings, drafting chat/email replies for the executive's approval, and training — each with its own scenario eval before it is switched on.
-
----
-
-## 简体中文
-
-通用的个人分身：从一个人的资料里提炼出有来源依据的人格档案，再以对话、语音等方式提供服务。
+> **状态：早期。** 接口还会变化。
 
 ```
-Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服务
+你是谁  ──►  添加记忆  ──►  服务（聊天、语音、视频；之后是企业场景插件）
 ```
 
 - **有据可查。** 档案里每一条都带逐字核对过的原话和日期；回答引用不到依据时降低置信度或弃权，不硬编。
 - **随时添加记忆。** 写一段、上传文件或文件夹，自动整理；问卷可以不填。
-- **隐私优先。** 他人姓名在进入档案时统一化名；对他人的评价不进档案；本人资料默认不发往境外服务。
+- **隐私优先。** 他人姓名在进入档案时统一化名；对他人的评价不进档案；资料发往哪些服务由配置决定，界面如实显示。
 
 架构与规则见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

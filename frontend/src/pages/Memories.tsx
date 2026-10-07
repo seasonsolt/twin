@@ -36,7 +36,7 @@ import { usePersonas } from '../stores/personas';
 import { MediaClaim } from '../features/sources/MediaClaim';
 
 const accept =
-  '.txt,.md,.pdf,.docx,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus';
+  '.txt,.md,.pdf,.docx,.epub,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus';
 export interface Memory {
   source_id: string;
   title: string;
@@ -395,8 +395,9 @@ export function Memories({
         }}
       />
       <p className="text-xs text-tertiary">
-        TXT、Markdown、PDF、Word、HTML、CSV、JSON、SRT、VTT；每个文件最多 50
-        MB。音频、视频最多 4 GB，支持断点续传。刷新后重新选择同一文件即可继续。
+        TXT、Markdown、PDF、Word、EPUB、HTML、CSV、JSON、SRT、VTT；每个文件最多
+        50 MB。音频、视频最多 4
+        GB，支持断点续传。刷新后重新选择同一文件即可继续。
       </p>
     </div>
   );

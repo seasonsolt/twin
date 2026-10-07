@@ -166,7 +166,7 @@ twin persona build                                  # 抽取并合并人格档�
 twin persona coverage                               # 看了解到什么，还可以分享什么
 ```
 
-支持 TXT、Markdown、PDF（文字层）、Word（.docx）、HTML、CSV、JSON、SRT、VTT，自动识别文字编码（含 GBK）；每个文件最多 50 MB，扫描 PDF 暂不支持。日期默认取文件名，聊天缺失日期时取第一条日期，再回退到添加当天。需要强制类型时仍可用 `--kind`。
+支持 TXT、Markdown、PDF（文字层）、Word（.docx）、EPUB 电子书、HTML、CSV、JSON、SRT、VTT，自动识别文字编码（含 GBK）；每个文件最多 50 MB，扫描 PDF 暂不支持。日期默认取文件名，聊天缺失日期时取第一条日期，再回退到添加当天。需要强制类型时仍可用 `--kind`。
 
 网页 `#/memories`（导航“记忆”）可以写一段、上传多个文件或整个文件夹，也支持最多 4 GB 的录音、播客、手机视频和屏幕录制。音视频以 8 MiB 分片断点续传；上传时保持页面打开，刷新后重新选择同一文件可继续。原件保留，ffmpeg 提取音频后由 `[asr]` 转写，带时间戳的文字自动进入普通记忆整理。未配置识别也可上传，配置后重启服务，点“重新转写”。命令/HTTP 配置见 [docs/MEDIA.md](docs/MEDIA.md#音视频记忆)。添加、删除后自动处理，不必点构建；可以查看分身看到的文字、记住的条数和失败重试。CLI 导入或笔记保存后，可运行 `twin persona build`，也可启动网页让它自动处理。
 

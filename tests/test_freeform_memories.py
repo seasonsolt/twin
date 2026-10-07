@@ -4,6 +4,7 @@ import datetime as dt
 import io
 import re
 import threading
+import zipfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -375,3 +376,42 @@ def test_cli_note_and_auto_kind(tmp_path: Path) -> None:
     assert note.exit_code == 0 and "已添加 笔记" in note.output
     with PersonaStore(tmp_path / "persona.db") as store:
         assert len(store.list_sources()) == 2
+
+
+def epub(chapters: dict[str, str], spine: list[str]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as book:
+        book.writestr("mimetype", "application/epub+zip")
+        book.writestr(
+            "META-INF/container.xml",
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+            "</rootfiles></container>",
+        )
+        items = "".join(
+            f'<item id="{name}" href="Text/{name}.xhtml" media-type="application/xhtml+xml"/>' for name in chapters
+        )
+        refs = "".join(f'<itemref idref="{name}"/>' for name in spine)
+        book.writestr(
+            "OEBPS/content.opf",
+            f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>{items}'
+            '<item id="css" href="style.css" media-type="text/css"/></manifest>'
+            f'<spine>{refs}<itemref idref="css"/></spine></package>',
+        )
+        book.writestr("OEBPS/style.css", "p { color: red }")
+        for name, body in chapters.items():
+            book.writestr(
+                f"OEBPS/Text/{name}.xhtml", f"<html><head><style>p{{}}</style></head><body>{body}</body></html>"
+            )
+    return buffer.getvalue()
+
+
+def test_epub_text_follows_the_reading_order() -> None:
+    data = epub({"b": "<h1>第二章</h1><p>后来我搬到了海边。</p>", "a": "<p>我在山里长大。</p>"}, ["a", "b"])
+    text = extract_text("回忆录.EPUB", data)
+    assert text.index("我在山里长大") < text.index("第二章") < text.index("后来我搬到了海边")
+    assert "color" not in text and "p{}" not in text
+    with pytest.raises(ValueError, match="无法读取电子书"):
+        extract_text("bad.epub", b"broken")
+    with pytest.raises(ValueError, match="没有可提取的文字"):
+        extract_text("empty.epub", epub({"a": "<img src='x.png'/>"}, ["a"]))

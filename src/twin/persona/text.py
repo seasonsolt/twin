@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import io
+import posixpath
+import zipfile
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
 MAX_FILE_BYTES = 50 * 1024 * 1024
-SUPPORTED_SUFFIXES = frozenset({".pdf", ".docx", ".html", ".htm", ".txt", ".md", ".csv", ".json", ".srt", ".vtt"})
+SUPPORTED_SUFFIXES = frozenset(
+    {".pdf", ".docx", ".epub", ".html", ".htm", ".txt", ".md", ".csv", ".json", ".srt", ".vtt"}
+)
 
 
 class _HTMLText(HTMLParser):
@@ -31,6 +37,42 @@ class _HTMLText(HTMLParser):
     def handle_data(self, data: str) -> None:
         if not self.hidden:
             self.parts.append(data)
+
+
+def _html_text(markup: str) -> str:
+    parser = _HTMLText()
+    parser.feed(markup)
+    return "".join(parser.parts).strip()
+
+
+def _epub_text(data: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(data)) as book:
+        # A small archive can expand enormously; refuse books that would not fit the upload limit unpacked.
+        if sum(info.file_size for info in book.infolist()) > 4 * MAX_FILE_BYTES:
+            raise ValueError("电子书解压后太大")
+        container = ElementTree.fromstring(book.read("META-INF/container.xml"))
+        rootfile = next(e for e in container.iter() if e.tag.endswith("rootfile")).attrib["full-path"]
+        package = ElementTree.fromstring(book.read(rootfile))
+        base = posixpath.dirname(rootfile)
+        manifest = {
+            item.attrib["id"]: item.attrib
+            for item in package.iter()
+            if item.tag.endswith("}item") and "id" in item.attrib and "href" in item.attrib
+        }
+        chapters = []
+        for ref in package.iter():
+            if not ref.tag.endswith("}itemref") or ref.attrib.get("idref") not in manifest:
+                continue
+            item = manifest[ref.attrib["idref"]]
+            if "html" not in item.get("media-type", ""):
+                continue
+            path = posixpath.normpath(posixpath.join(base, unquote(item["href"].split("#", 1)[0])))
+            if PurePosixPath(path).is_absolute() or path.startswith(".."):
+                continue
+            chapter = _html_text(book.read(path).decode("utf-8", errors="replace"))
+            if chapter:
+                chapters.append(chapter)
+    return "\n\n".join(chapters)
 
 
 def extract_text(name: str, data: bytes) -> str:
@@ -60,6 +102,16 @@ def extract_text(name: str, data: bytes) -> str:
             ).strip()
         except Exception:
             raise ValueError("无法读取 Word，请检查文件是否损坏") from None
+    if suffix == ".epub":
+        try:
+            text = _epub_text(data)
+        except ValueError:
+            raise
+        except Exception:
+            raise ValueError("无法读取电子书，请检查文件是否损坏或加密") from None
+        if not text:
+            raise ValueError("这本电子书没有可提取的文字")
+        return text
     from charset_normalizer import from_bytes
 
     # Prefer the common Chinese export encodings; short GBK samples otherwise look like Korean/Japanese.
@@ -68,7 +120,5 @@ def extract_text(name: str, data: bytes) -> str:
         raise ValueError("无法识别文字编码")
     text = str(match).lstrip("\ufeff")
     if suffix in {".html", ".htm"}:
-        parser = _HTMLText()
-        parser.feed(text)
-        return "".join(parser.parts).strip()
+        return _html_text(text)
     return text

@@ -14,6 +14,8 @@ twin builds a persona from freely added memories — notes, chats, documents, op
 
 **Memory architecture.** Two layers instead of a plain vector store: the person's own *expressions* (dated, with context, own words vs. narration), and *persona items* derived from them across 9 dimensions / 39 facets, each item carrying mechanically verified verbatim quotes, behaviour-vs-self-report evidence classes, occasion counts, explicit conflicts, and the person's own review (confirm / edit / reject, preserved across re-merges). Answers pick one of three modes — grounded, general, abstain — then pass citation validation, confidence caps and a quote guard. Updates are deterministic and incremental (content-hashed chunks, candidates and items; only changed facets re-merge), and any answer can be computed "as of" a past date. Agent-memory frameworks (mem0, Letta, Graphiti/Zep, MemOS, Cognee, MIRIX) remember facts *about* a user for a task; twin models *who the person is and how they speak*, and refuses when the material is silent. Digital-human projects (Duix-Avatar/HeyGem, LiveTalking, Fay) clone face and voice but have no identity-grade memory; twin pairs both.
 
+**Roadmap.** Round 1 (done) built the foundations — memory architecture (L0–L3), voice cloning with streaming speech, photo-driven talking-head video, and a stage-style digital-human UI (L4) — demonstrated through chat, which is itself the default plugin of the service layer (L5). Round 2 targets enterprise use: executive twins that take part in daily work through service plugins on the same answer contract — employee Q&A, decision pre-review, meetings, drafting chat/email replies for the executive's approval, and training — each with its own scenario eval before it is switched on.
+
 ---
 
 ## 简体中文
@@ -159,6 +161,58 @@ twin 的记忆不是"把文本切块放进向量库"，而是两层：**本人�
 记忆更新一项是 twin 自己的评测框架在临时数据库副本上跑的：每步只导入或删除资料、增量构建，不重训；每步作答 3 次全对。只有 2 道题，样本很小。
 
 **还没有被评测证明的。** 成本与延迟、用同一个作答模型和 Second Me 对比。它们在路线图的第一步，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 技术路线
+
+twin 分两轮：第一轮建底座，把"像这个人"做到可评测；第二轮在底座上加服务／插件层，让高管的数字分身进入企业的日常工作。
+
+```
+                ┌──────────────────────── 服务 / 插件层（第二轮的重点）────────────────────────┐
+                │  聊天（默认插件，第一轮的演示形态）  │  会议  │  群聊与邮件  │  决策预审  │  员工问答  │ … │
+                └──────────────┬───────────────────────────────────────────────────────────────┘
+                               │ 统一契约：带引用、置信度、模式（有据/通用/弃权）的回答 + 呈现通道
+   L5 接入   网页、HTTP API、MCP、命令行；登录、多分身、权限
+   L4 展示   文字（流式、Markdown）· 语音（声音克隆、边生成边播放）· 视频（照片驱动的真人口播）· 舞台式数字人界面
+   L3 运行时 检索档案与原话 → 作答 → 引用核对、置信度封顶、引号守卫、弃权
+   L2 认知   原话 → 带逐字证据的档案条目（9 维 39 细项），增量合并，本人审阅
+   L1 语料   笔记、聊天、文档、录音/视频（转写、区分说话人、认出本人）→ 统一的"原话"
+   L0 基础   数据契约、存储（每个分身独立）、模型后端（大模型、向量、语音合成、语音识别、视频）
+   横切      评测（本人资料题库、评委团、置信区间）· 治理（化名、同意、出境如实显示、对话隔离）
+```
+
+### 第一轮：基础能力（已完成）
+
+| 能力 | 做到了什么 |
+| --- | --- |
+| 记忆架构 | 两层记忆（原话 + 带证据的档案），三种作答模式与机械检查，增量更新、按日期作答，见上文"记忆架构" |
+| 资料进入 | 文字、文件、文件夹、录音、视频（分块续传、转写、区分说话人、认出本人），自动整理 |
+| 声音 | 用本人录音克隆声音；GPU 上边生成边播放，约 0.3–0.5 秒开口；不可用时自动退回本机 |
+| 视频 | 一张照片 + 克隆声音生成真人口播视频；GPU 主机优先，不可用时退回本机 |
+| 数字人界面 | 舞台式聊天：人像居中常驻，点哪句就说哪句；多分身切换、档案页、对话记录 |
+| 文字速度 | 快速作答模型 + 流式输出，约 1 秒出第一个字 |
+| 评测 | 本人资料题库：事实、不编造、口吻、通用、记忆更新，换模型、改提示词都先过评测 |
+
+第一轮用**聊天**来演示这些能力。聊天本身就是服务层的一个插件，只是默认开启。
+
+### 第二轮：企业落地（规划中）
+
+目标：给高管做数字分身，参与企业的日常工作，把高管的判断、经验和表达方式复制出来、放大出去。每个场景都是服务层的一个插件，复用同一套记忆、作答契约和呈现通道：
+
+| 插件（候选） | 高管分身在其中做什么 | 依赖的底座能力 |
+| --- | --- | --- |
+| 聊天（已有，默认） | 回答关于本人观点、经验、做法的问题 | L3 作答、L4 文字/语音/视频 |
+| 员工问答 | 员工随时问"老板会怎么看这件事"，回答带出处，没有依据就说要问本人 | 有据作答、弃权、引用 |
+| 决策预审 | 对方案按高管一贯的决策方式先过一遍：会问什么问题、看重什么、可能的顾虑 | "怎么做决定""看重什么"维度 |
+| 会议 | 会前给出高管可能的关注点；会中听转写，在需要时用高管口吻发言或提问；会后整理高管视角的要点 | 语音识别、流式语音、数字人视频 |
+| 群聊与邮件 | 用高管的口吻起草回复，由本人确认后发出 | 口吻、"说话方式"维度 |
+| 培训与传承 | 把高管的方法论和案例讲给新人听，随时追问 | 档案、原话、视频 |
+
+服务／插件层要定下的契约（第二轮第一步）：
+
+- **输入**：插件把场景里的上下文（会议转写、消息、文档、问题）交给底座，指定分身、截止日期、可用的资料范围。
+- **输出**：沿用现有的回答契约（正文、引用、置信度、模式），插件决定怎么呈现：文字、语音、视频，或者先给本人确认的草稿。
+- **插件描述**：名称、触发方式（被问到、定时、事件）、接入渠道（网页、企业 IM、会议系统、邮件）、需要的权限、对外发出前是否必须经本人确认。
+- **评测**：每个插件带自己的场景题库，进入默认开启之前要在本人资料上过评测，和第一轮同一套框架。
 
 ## 安装
 

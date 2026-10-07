@@ -15,6 +15,7 @@ export function StageHeader({
   right,
   footer,
   children,
+  switchable = true,
   className,
   ...props
 }: Omit<HTMLMotionProps<'header'>, 'children'> & {
@@ -26,6 +27,7 @@ export function StageHeader({
   right?: ReactNode;
   footer?: ReactNode;
   children?: ReactNode;
+  switchable?: boolean;
 }) {
   const { id, items } = usePersonas();
   const current = items.find((item) => item.id === id);
@@ -96,7 +98,7 @@ export function StageHeader({
           />
         )}
         <h1 className="persona-name stage-name" aria-label={name}>
-          {brand || variant === 'future' ? (
+          {brand || variant === 'future' || !switchable ? (
             name
           ) : (
             <PersonaSwitcher

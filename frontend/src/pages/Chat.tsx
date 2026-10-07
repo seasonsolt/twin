@@ -12,6 +12,7 @@ import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { Button, EmptyState, Textarea } from '../components/ui';
 import { Citations } from '../features/chat/Citations';
+import { MessageText } from '../features/chat/MessageText';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
 import { videoUrl } from '../features/chat/useReplyVideos';
@@ -244,7 +245,7 @@ export function Chat() {
       />
       <div className="chat-thread">
         <div className="chat-scroll">
-          <div className="chat-conversation space-y-4">
+          <div className="chat-conversation flex flex-col justify-end space-y-4">
             {stale && (
               <p role="status" className="text-xs text-secondary">
                 新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
@@ -334,90 +335,83 @@ export function Chat() {
                         }
                       >
                         {abstain ? (
-                          <p className="whitespace-pre-wrap">{turn.content}</p>
+                          <MessageText text={turn.content} />
                         ) : (
                           <>
                             <div
-                              className={`min-w-0 break-words ${turn.role === 'twin' ? 'twin-bubble' : ''}`}
+                              className={`min-w-0 ${turn.role === 'twin' ? 'twin-bubble' : ''}`}
                               data-speaking={
                                 (audio.id === turn.id && audio.playing) ||
                                 (videoId === turn.id && videoPlaying)
                               }
                             >
-                              <p className="whitespace-pre-wrap">
-                                {turn.content}
-                              </p>
-                              {turn.reply && (
-                                <div className="mt-1">
-                                  <div
-                                    role="group"
-                                    aria-label="回复媒体"
-                                    className="flex min-w-0 justify-end"
-                                  >
-                                    <button
-                                      type="button"
-                                      className="reply-play min-h-11 min-w-11"
-                                      aria-label={
-                                        (audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id && videoPlaying)
-                                          ? '正在说这句，点击暂停'
-                                          : `让${name}说这句`
-                                      }
-                                      aria-busy={
-                                        audio.id === turn.id && audio.loading
-                                      }
-                                      data-speaking={
-                                        (audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id && videoPlaying)
-                                      }
-                                      data-generating={
-                                        video.videos[turn.id]?.status ===
-                                        'generating'
-                                      }
-                                      onClick={() => toggleReply(turn)}
-                                    >
-                                      <span
-                                        className="reply-play-visual"
-                                        aria-hidden
-                                      >
-                                        {(audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id &&
-                                          videoPlaying) ? (
-                                          <span className="speaking-bars">
-                                            <i />
-                                            <i />
-                                            <i />
-                                          </span>
-                                        ) : (
-                                          <Play size={16} />
-                                        )}
-                                      </span>
-                                    </button>
-                                  </div>
-                                  {audio.id === turn.id && (
-                                    <progress
-                                      aria-label="语音播放进度"
-                                      max={1}
-                                      value={audio.progress}
-                                      className="sr-only"
-                                    />
-                                  )}
-                                  {audio.errors[turn.id] && (
-                                    <p
-                                      role="alert"
-                                      className="text-xs text-danger"
-                                    >
-                                      {audio.errors[turn.id]}
-                                    </p>
-                                  )}
-                                </div>
-                              )}
+                              <MessageText text={turn.content} />
                             </div>
                             {turn.reply && (
-                              <Citations cited={turn.reply.cited} />
+                              <>
+                                <div
+                                  role="group"
+                                  aria-label="回复媒体"
+                                  className="reply-actions mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-2"
+                                >
+                                  <button
+                                    type="button"
+                                    className="reply-play min-h-11 min-w-11"
+                                    aria-label={
+                                      (audio.id === turn.id && audio.playing) ||
+                                      (videoId === turn.id && videoPlaying)
+                                        ? '正在说这句，点击暂停'
+                                        : `让${name}说这句`
+                                    }
+                                    aria-busy={
+                                      audio.id === turn.id && audio.loading
+                                    }
+                                    data-speaking={
+                                      (audio.id === turn.id && audio.playing) ||
+                                      (videoId === turn.id && videoPlaying)
+                                    }
+                                    data-generating={
+                                      video.videos[turn.id]?.status ===
+                                      'generating'
+                                    }
+                                    onClick={() => toggleReply(turn)}
+                                  >
+                                    <span
+                                      className="reply-play-visual"
+                                      aria-hidden
+                                    >
+                                      {(audio.id === turn.id &&
+                                        audio.playing) ||
+                                      (videoId === turn.id && videoPlaying) ? (
+                                        <span className="speaking-bars">
+                                          <i />
+                                          <i />
+                                          <i />
+                                        </span>
+                                      ) : (
+                                        <Play size={16} />
+                                      )}
+                                    </span>
+                                  </button>
+                                  <Citations cited={turn.reply.cited} />
+                                </div>
+                                {audio.id === turn.id && (
+                                  <progress
+                                    aria-label="语音播放进度"
+                                    max={1}
+                                    value={audio.progress}
+                                    className="sr-only"
+                                  />
+                                )}
+                                {audio.errors[turn.id] && (
+                                  <p
+                                    role="alert"
+                                    className="text-xs text-danger"
+                                  >
+                                    {audio.errors[turn.id]}
+                                  </p>
+                                )}
+                              </>
                             )}
                             {video.videos[turn.id]?.status === 'failed' && (
                               <p

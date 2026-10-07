@@ -8,7 +8,7 @@ import { ChatAvatar } from './ChatAvatar';
 import { ReplyVideo } from './ReplyVideo';
 import type { Turn } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
-import { useDesktop } from '../../lib/useMobile';
+import { useDesktop, useMobile } from '../../lib/useMobile';
 
 export function videoCaption(text: string, time: number, duration: number) {
   const sentences = text.match(/[^。！？!?\r\n]+[。！？!?]*|[^\r\n]+$/gu) ?? [
@@ -55,6 +55,7 @@ export function ChatStage({
 }) {
   const { reduced } = useMotionPreset();
   const desktop = useDesktop();
+  const mobile = useMobile();
   const [collapsed, setCollapsed] = useState(false);
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -141,11 +142,21 @@ export function ChatStage({
         data-desktop={desktop}
         data-reduced-motion={reduced}
         style={{ height: reduced ? targetHeight : height }}
-        left={<PersonaSwitcher stage />}
+        switchable={mobile}
+        left={mobile ? <PersonaSwitcher stage /> : undefined}
         right={
-          <button type="button" className="stage-new" onClick={onClear}>
-            新对话
-          </button>
+          !desktop && (
+            <button type="button" className="stage-new" onClick={onClear}>
+              新对话
+            </button>
+          )
+        }
+        footer={
+          desktop && (
+            <button type="button" className="stage-new" onClick={onClear}>
+              新对话
+            </button>
+          )
         }
         portrait={
           <motion.button
@@ -161,7 +172,7 @@ export function ChatStage({
                 ? '展开舞台'
                 : url && videoPlaying
                   ? '打开真人视频全屏'
-                  : url
+                  : url || !mobile
                     ? '播放或暂停当前句'
                     : `${name}的肖像，快速切换分身`
             }
@@ -174,7 +185,7 @@ export function ChatStage({
               if (url && videoPlaying) {
                 player.current?.pause();
                 setOpen(true);
-              } else if (url) onToggle();
+              } else if (url || !mobile) onToggle();
               else setSwitching(true);
             }}
           >
@@ -224,13 +235,15 @@ export function ChatStage({
           </p>
         }
       >
-        <PersonaSwitcher
-          open={switching}
-          onOpenChange={setSwitching}
-          returnFocus={circle}
-          className="sr-only"
-          label="舞台快速切换"
-        />
+        {mobile && (
+          <PersonaSwitcher
+            open={switching}
+            onOpenChange={setSwitching}
+            returnFocus={circle}
+            className="sr-only"
+            label="舞台快速切换"
+          />
+        )}
         {turn?.reply && url && (
           <ReplyVideo
             id={turn.id}

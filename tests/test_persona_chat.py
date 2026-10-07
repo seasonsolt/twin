@@ -132,6 +132,11 @@ def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Setti
     assert "mode 设为 general" in prompt and "citations 可以为空" in prompt
     assert "涉及本人但无资料支持的问题仍按规则 1 弃权" in prompt
     assert "承诺和评价具体他人仍按规则 3 弃权" in prompt
+    output_format = prompt.split("## 输出格式\n", 1)[1].split("## 核心画像", 1)[0]
+    assert "短回复保持一两句话" in output_format
+    assert "长回复拆成简短段落" in output_format
+    assert "每项单独一行的编号列表（1.、2.）" in output_format
+    assert "不要使用 HTML" in output_format
 
 
 @pytest.mark.parametrize("cited", [True, False])

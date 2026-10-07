@@ -237,11 +237,24 @@ it('caps the rail stack at six, offers all twins and creation, and shows the acc
     'href',
     '#/twins',
   );
-  expect(screen.getByText(account.email)).toBeVisible();
-  expect(screen.getByRole('button', { name: '退出登录' })).toBeVisible();
-  await userEvent
-    .setup()
-    .click(screen.getByRole('button', { name: '新建分身' }));
+  const aside = rail.closest('aside')!;
+  expect(aside).toHaveClass('bg-canvas', 'text-primary', 'border-r');
+  expect(aside).not.toHaveClass('bg-accent');
+  expect(within(aside).queryByText(account.email)).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  const accountButton = screen.getByRole('button', { name: '账户' });
+  await user.click(accountButton);
+  const popover = screen.getByRole('dialog', { name: '账户' });
+  expect(within(popover).getByText(account.email)).toBeVisible();
+  expect(
+    within(popover).getByRole('button', { name: '退出登录' }),
+  ).toBeVisible();
+  await user.keyboard('{Escape}');
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+  );
+  expect(accountButton).toHaveFocus();
+  await user.click(screen.getByRole('button', { name: '新建分身' }));
   expect(screen.getByRole('dialog', { name: '新建分身' })).toBeInTheDocument();
 });
 

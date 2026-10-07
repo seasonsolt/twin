@@ -213,7 +213,7 @@ it('routes no_persona to creation, then opens the app for the new twin', async (
     '我的分身',
   );
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
-  await screen.findByRole('button', { name: '切换分身' });
+  await screen.findByRole('button', { name: '切换到我的分身' });
   await waitFor(() => expect(usePersonas.getState().id).toBe(persona.id));
   expect(
     fetcher.mock.calls
@@ -222,11 +222,19 @@ it('routes no_persona to creation, then opens the app for the new twin', async (
   ).toBe(true);
 });
 
-it('shows the signed-in email in the rail and logs out', async () => {
+it('shows the full signed-in email in the account popover and logs out', async () => {
   loggedIn = true;
   const user = userEvent.setup();
   render(<App />);
-  await waitFor(() => expect(screen.getByText(member.email)).toBeVisible());
+  const account = await screen.findByRole('button', { name: '账户' });
+  expect(account).toHaveTextContent('M');
+  expect(account).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByText(member.email)).not.toBeInTheDocument();
+  await user.click(account);
+  expect(screen.getByRole('dialog', { name: '账户' })).toHaveClass(
+    'account-popover',
+  );
+  expect(screen.getByText(member.email)).toBeVisible();
   await user.click(screen.getByRole('button', { name: '退出登录' }));
   expect(
     await screen.findByRole('heading', { name: '用邮箱登录' }),

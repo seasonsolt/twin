@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import { BookUser, Folder, MessageCircle, Plus } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
-import { Button, Skeleton, Tooltip } from '../ui';
+import { Button, Dialog, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
@@ -36,7 +36,7 @@ function Navigation() {
             <NavLink
               key={route}
               to={`/${route}`}
-              className="rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-canvas aria-[current=page]:text-canvas"
+              className="rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary aria-[current=page]:text-canvas"
             >
               {({ isActive }) => (
                 <>
@@ -87,6 +87,8 @@ function BottomTabs() {
 function TwinRail() {
   const { id, items, refresh, switchTo } = usePersonas();
   const identity = useAuth((state) => state.identity);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountButton = useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -100,11 +102,11 @@ function TwinRail() {
     };
   }, [refresh]);
   return (
-    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col bg-accent px-2 py-4 text-canvas">
+    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col border-r border-border bg-canvas px-2 py-4 text-primary">
       <Link
         to="/twins"
         aria-label="我的分身"
-        className="persona-name mb-3 text-center text-2xl"
+        className="persona-name my-3 mb-6 text-center text-2xl"
       >
         twin
       </Link>
@@ -132,39 +134,58 @@ function TwinRail() {
       <NewTwin className="rail-new grid min-h-11 place-items-center rounded-full">
         <Plus size={22} aria-hidden />
       </NewTwin>
-      <div className="my-3 border-t border-canvas/40" />
+      <div className="my-3 border-t border-border" />
       <Navigation />
       {identity?.auth_enabled && (
         <div className="rail-account mt-auto pt-4 text-center text-xs">
-          <p className="truncate" title={identity.email ?? undefined}>
-            {identity.email}
-          </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="min-h-11 px-0 text-xs text-canvas"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              setError('');
-              void useAuth
-                .getState()
-                .logout()
-                .catch((failure: unknown) =>
-                  setError(
-                    failure instanceof Error ? failure.message : '退出失败',
-                  ),
-                )
-                .finally(() => setBusy(false));
+          <button
+            ref={accountButton}
+            type="button"
+            aria-label="账户"
+            aria-haspopup="dialog"
+            aria-expanded={accountOpen}
+            className="rail-account-button mx-auto grid size-11 place-items-center rounded-full bg-primary text-lg text-canvas"
+            onClick={() => setAccountOpen(!accountOpen)}
+          >
+            {Array.from(identity.email?.trim() || '?')[0].toUpperCase()}
+          </button>
+          <Dialog
+            open={accountOpen}
+            onOpenChange={setAccountOpen}
+            title="账户"
+            body={identity.email || ''}
+            popover
+            className="account-popover"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              accountButton.current?.focus();
             }}
           >
-            退出登录
-          </Button>
-          {error && (
-            <p role="alert" className="break-words">
-              {error}
-            </p>
-          )}
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError('');
+                void useAuth
+                  .getState()
+                  .logout()
+                  .catch((failure: unknown) =>
+                    setError(
+                      failure instanceof Error ? failure.message : '退出失败',
+                    ),
+                  )
+                  .finally(() => setBusy(false));
+              }}
+            >
+              退出登录
+            </Button>
+            {error && (
+              <p role="alert" className="break-words">
+                {error}
+              </p>
+            )}
+          </Dialog>
         </div>
       )}
     </aside>

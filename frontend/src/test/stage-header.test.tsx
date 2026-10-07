@@ -129,6 +129,14 @@ it.each([
 ] as const)(
   'shows the current name and round portrait on %s, with a working switcher',
   async (route, Page) => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 767px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
     const view = mount(<Page />, `/${route}`);
     const header = await screen.findByRole('banner', { name: '小林的舞台' });
     await waitFor(() => expect(header.querySelector('img')).not.toBeNull());
@@ -142,7 +150,9 @@ it.each([
         '[aria-hidden].stage-sun, [aria-hidden].stage-coral',
       ),
     ).toHaveLength(2);
-    fireEvent.click(within(header).getByRole('button', { name: '切换分身' }));
+    fireEvent.click(
+      within(header).getByRole('button', { name: '小林，快速切换分身' }),
+    );
     const sheet = await screen.findByRole('dialog', { name: '切换分身' });
     expect(within(sheet).getByText('小林').closest('button')).toHaveClass(
       'bg-primary',

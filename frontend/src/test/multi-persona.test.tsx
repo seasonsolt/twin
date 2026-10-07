@@ -235,8 +235,7 @@ it('creates, switches and opens onboarding even though the new identity already 
   window.location.hash = '#/chat';
   const user = userEvent.setup();
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: '切换分身' }));
-  await user.click(await screen.findByRole('link', { name: '新建分身' }));
+  await user.click(await screen.findByRole('button', { name: '新建分身' }));
   await user.type(
     await screen.findByRole('textbox', { name: '分身名字' }),
     '新的分身',

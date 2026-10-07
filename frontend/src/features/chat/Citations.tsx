@@ -30,12 +30,14 @@ export function Citations({ cited = [] }: { cited?: Citation[] }) {
       <Button
         variant="ghost"
         size="sm"
-        className="min-h-11 px-2"
+        className="citation-toggle min-h-11 px-1"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen(!open)}
       >
-        依据 {cited.length}
+        <span className="rounded-full border border-primary px-3 py-0.5 text-xs text-primary">
+          依据 {cited.length}
+        </span>
       </Button>
       <AnimatePresence initial={false}>
         {open && (

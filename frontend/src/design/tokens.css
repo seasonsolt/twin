@@ -263,6 +263,9 @@
   font-size: 40px;
 }
 .chat-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - var(--mobile-tabs-height) - 20px);
   min-width: 0;
   padding-bottom: calc(
     var(--composer-height, 76px) + 12px + var(--keyboard-inset, 0px)
@@ -270,19 +273,25 @@
 }
 .chat-thread,
 .chat-scroll {
-  display: contents;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
 }
 .about-grid {
   display: grid;
   gap: 16px;
 }
 .chat-conversation {
+  flex: 1;
+  width: 100%;
   padding: 20px 16px 0;
-  max-width: 800px;
+  max-width: 792px;
   margin: 0 auto;
 }
 .stage-space {
   position: relative;
+  flex-shrink: 0;
 }
 .stage-header {
   position: relative;
@@ -429,9 +438,16 @@
   color: var(--canvas);
   border-radius: 22px 22px 6px 22px;
 }
+.message-text {
+  font-size: 16px;
+  line-height: 1.75;
+  line-break: strict;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
 .twin-bubble {
   background: var(--surface);
-  padding: 14px 16px 4px;
+  padding: 14px 18px;
   border-radius: 6px 22px 22px 22px;
   box-shadow: 0 2px 0 var(--border);
 }
@@ -768,9 +784,11 @@
   background: var(--text-primary);
 }
 @media (hover: hover) and (pointer: fine) {
-  .rail-link:hover,
+  .rail-link:hover:not([aria-current='page']),
   .rail-all:hover,
-  .rail-new:hover,
+  .rail-new:hover {
+    background: var(--soft);
+  }
   .stage-new:hover,
   .stage-switch:hover {
     background: var(--accent-pressed);
@@ -843,10 +861,26 @@
     flex-shrink: 0;
   }
   .nav-rail :focus-visible {
-    outline-color: var(--canvas);
+    outline-color: var(--accent);
+  }
+  .account-popover {
+    top: auto;
+    left: 80px;
+    bottom: 16px;
+    width: min(320px, calc(100vw - 96px));
+    translate: none;
+    transform: none;
+    overflow-wrap: break-word;
+    text-align: left;
   }
   .persona-popover {
     translate: none;
+  }
+  .message-text {
+    font-size: 17px;
+  }
+  .chat-page {
+    min-height: 100dvh;
   }
   .app-main {
     padding-bottom: 0;
@@ -858,16 +892,14 @@
     left: var(--sidebar-width, 0px);
   }
   .chat-conversation {
-    max-width: 680px;
-    padding-inline: 24px;
-    box-sizing: content-box;
-    width: calc(100% - 48px);
+    max-width: 824px;
+    padding-inline: 32px;
   }
   .chat-composer {
-    padding-inline: 24px;
+    padding-inline: 32px;
   }
   .chat-composer .composer-field {
-    max-width: 680px;
+    max-width: 760px;
   }
   .memories-page,
   .about-page,
@@ -986,7 +1018,11 @@
     padding-top: 0;
   }
   .chat-stage .stage-actions {
-    inset: auto 32px 32px;
+    display: none;
+  }
+  .chat-stage .stage-footer {
+    margin-top: 24px;
+    text-align: center;
   }
   .chat-stage .stage-new,
   .chat-stage .stage-switch {
@@ -1019,8 +1055,8 @@
     scrollbar-gutter: stable;
   }
   .chat-conversation {
-    max-width: 760px;
-    width: calc(100% - 64px);
+    min-height: 100%;
+    max-width: 824px;
     padding: 32px 32px 24px;
     margin-inline: auto;
   }

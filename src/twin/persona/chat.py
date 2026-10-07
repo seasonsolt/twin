@@ -410,6 +410,10 @@ CHAT_SYSTEM = """\
 citations 可以为空，confidence 不超过 0.5。涉及本人但无资料支持的问题仍按规则 1 弃权，承诺和评价具体他人仍按规则 3 \
 弃权，mode 设为 abstain、abstain 为 true；有资料依据的本人回答 mode 设为 grounded、abstain 为 false。
 
+## 输出格式
+短回复保持一两句话；长回复拆成简短段落，段落之间换行，或使用每项单独一行的编号列表（1.、2.）。
+不要把长回答挤成一整段，不要使用 HTML。
+
 ## 核心画像（证据最多的条目）
 {core}
 

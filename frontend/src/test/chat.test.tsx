@@ -15,6 +15,7 @@ import { Chat } from '../pages/Chat';
 import { useStatus } from '../stores/status';
 import { CHAT_KEY } from '../features/chat/useConversation';
 import { Citations } from '../features/chat/Citations';
+import { MessageText } from '../features/chat/MessageText';
 import type { ChatReply } from '../features/chat/types';
 
 vi.mock('motion/react', async (original) => {
@@ -541,6 +542,97 @@ it('scrolls to the newest message on both send and receive', async () => {
   expect(scroll.mock.calls.length).toBeGreaterThan(sent);
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
+it('renders newline paragraphs and simple lists as escaped text', () => {
+  const view = render(
+    <MessageText
+      text={
+        '开头，标点正常。\r\n第二段。\n\n1. <img src=x onerror=alert(1)>\n2. &lt;script&gt;\n\n- <script>alert(1)</script>\n- 一个项目\n\n第一步：先听。\n第二步：再做。\n结尾。'
+      }
+    />,
+  );
+  expect(view.container.querySelectorAll('p')).toHaveLength(3);
+  expect(view.container.querySelectorAll('ol')).toHaveLength(2);
+  expect(view.container.querySelectorAll('ul')).toHaveLength(1);
+  expect(screen.getAllByRole('listitem')).toHaveLength(6);
+  expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
+  expect(screen.getByText('&lt;script&gt;')).toBeInTheDocument();
+  expect(view.container.querySelector('img, script')).toBeNull();
+  expect(view.container.querySelector('ol li')).toHaveAttribute('value', '1');
+  const rule = readFileSync('src/design/tokens.css', 'utf8').match(
+    /\.message-text\s*\{[^}]*\}/,
+  )![0];
+  const style = document.createElement('style');
+  style.textContent = rule;
+  document.head.append(style);
+  try {
+    const computed = getComputedStyle(view.container.firstElementChild!);
+    expect(computed.lineBreak).toBe('strict');
+    expect(computed.wordBreak).toBe('normal');
+    expect(computed.overflowWrap).toBe('break-word');
+    expect(computed.fontSize).toBe('16px');
+    expect(computed.lineHeight).toBe('1.75');
+  } finally {
+    style.remove();
+  }
+});
+
+it.each([true, false])(
+  'keeps reply actions outside the bubble on mobile: %s',
+  async (mobile) => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: mobile
+          ? query === '(max-width: 767px)'
+          : query === '(min-width: 1200px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    sessionStorage.setItem(
+      CHAT_KEY,
+      JSON.stringify([
+        {
+          id: 'structured',
+          role: 'twin',
+          content: '第一段。\n第二段。',
+          reply: {
+            ...reply,
+            abstain: false,
+            mode: 'grounded',
+            abstain_reason: '',
+          },
+          timestamp: '2025-01-01T12:00:00Z',
+        },
+      ]),
+    );
+    const view = mount();
+    const article = screen.getByRole('article', { name: '分身回复' });
+    const bubble = article.querySelector('.twin-bubble')!;
+    const row = screen.getByRole('group', { name: '回复媒体' });
+    const play = await screen.findByRole('button', { name: '让测试人说这句' });
+    const citations = screen.getByRole('button', { name: '依据 1' });
+    expect(bubble.querySelector('button')).toBeNull();
+    expect(row.parentElement).toBe(article);
+    expect(row).toContainElement(play);
+    expect(row).toContainElement(citations);
+    expect(row).toHaveClass('flex', 'justify-end', 'items-center');
+    expect(play).toHaveClass('min-h-11', 'min-w-11');
+    expect(citations.querySelector('span')).toHaveClass(
+      'border',
+      'rounded-full',
+    );
+    expect(bubble.querySelectorAll('p')).toHaveLength(2);
+    expect(view.container.querySelector('.chat-conversation')).toHaveClass(
+      'flex',
+      'flex-col',
+      'justify-end',
+    );
+    await userEvent.setup().click(citations);
+    expect(screen.getByRole('list', { name: '回答依据' })).toBeVisible();
+  },
+);
+
 it('citation disclosure expands and collapses using keyboard and shows both citation kinds', async () => {
   render(
     <Citations

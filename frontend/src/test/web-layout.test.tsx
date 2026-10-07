@@ -153,6 +153,51 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
   expect(desktopCss).toMatch(
     /\.chat-composer \.composer-field\s*\{\s*max-width: 760px/s,
   );
+  const stage = view.container.querySelector('.chat-stage')!;
+  expect(
+    within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
+  ).toBeNull();
+  expect(stage.querySelector('.stage-circle')).toHaveStyle({
+    width: '240px',
+    height: '240px',
+  });
+  expect(stage.querySelector('.stage-name button')).toBeNull();
+  expect(stage.querySelector('.stage-footer')).toContainElement(
+    screen.getByRole('button', { name: '新对话' }),
+  );
+  expect(css).toMatch(/\.chat-stage\s*\{[^}]*overflow: hidden/s);
+  expect(desktopCss).toMatch(/\.chat-stage\s*\{[^}]*justify-content: center/s);
+  expect(desktopCss).toMatch(
+    /\.chat-stage \.stage-footer\s*\{[^}]*margin-top: 24px/s,
+  );
+  expect(desktopCss).toMatch(
+    /\.chat-conversation\s*\{[^}]*min-height: 100%[^}]*max-width: 824px[^}]*padding: 32px 32px 24px/s,
+  );
+});
+
+it('keeps switching in the rail on tablet too', async () => {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+  const view = mount(<Chat />);
+  await waitFor(() =>
+    expect(view.container.querySelector('.chat-stage')).toHaveAttribute(
+      'data-desktop',
+      'false',
+    ),
+  );
+  const stage = view.container.querySelector('.chat-stage')!;
+  expect(
+    within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
+  ).toBeNull();
+  expect(
+    within(stage as HTMLElement).getByRole('button', { name: '新对话' }),
+  ).toBeVisible();
 });
 
 it('uses a desktop memory grid with the sticky add panel and focuses it from the header', async () => {

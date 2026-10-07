@@ -127,11 +127,12 @@ def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Setti
     prompt = pc.chat_system_prompt(settings.target_name, ctx)
     assert '引号（「」『』“”""）只能包住逐字出现在【说话样本】或【检索资料】中的文字' in prompt
     assert "强调、转述或术语不要加引号" in prompt and "绝不能把转述当作本人的原话" in prompt
-    assert "不涉及本人的观点、经历、工作或生活" in prompt
     assert "开头用一句简短的话说明这是通用知识、不是本人观点" in prompt
     assert "mode 设为 general" in prompt and "citations 可以为空" in prompt
-    assert "涉及本人但无资料支持的问题仍按规则 1 弃权" in prompt
-    assert "承诺和评价具体他人仍按规则 3 弃权" in prompt
+    assert "confidence 不超过 0.5" in prompt
+    assert "citations 填你用到的资料编号（方括号里的原样复制，如 pi_1a2b3c4d5e6f）" in prompt
+    assert '标了"本人已确认"的条目最可靠，优先依据它们' in prompt
+    assert "最多 2 个；寒暄等不涉及任何细项时为空列表" in prompt
     output_format = prompt.split("## 输出格式\n", 1)[1].split("## 核心画像", 1)[0]
     assert "少量使用 Markdown" in output_format
     assert "日常聊天保持自然的简短段落，最多加粗一两个关键词" in output_format
@@ -142,6 +143,41 @@ def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Setti
     assert "绝不使用 HTML" in output_format
     assert "<<<META>>>" in pc.STREAM_FORMAT
     assert "不要用 JSON 或代码块包裹整篇回复" in pc.STREAM_FORMAT
+
+
+def test_prompt_ordered_mode_checklist_and_style() -> None:
+    prompt = pc.chat_system_prompt("测试本人", pc.PersonaContext([], [], [], []))
+    checklist = prompt.split("## 写回复前，按顺序检查", 1)[1].split("## 整体 mode 与弃权", 1)[0]
+    personal, restricted, general = (checklist.index(f"{n}. ") for n in (1, 2, 3))
+    assert personal < restricted < general
+    assert "只在内部判断，不输出检查过程" in checklist
+    assert "只查【核心画像】和【检索资料】" in checklist[personal:restricted]
+    assert "不确定资料是否包含某个个人事实，就按没有覆盖处理" in checklist
+    assert "不能把个人问题改成通用回答来掩盖缺失" in checklist
+    assert "即使有相关资料，也只对这部分说明需要本人确认" in checklist[restricted:general]
+    assert "评价某个具体的他人" in checklist[restricted:general]
+    assert "其余能回答的部分继续回答" in checklist[restricted:general]
+    assert "通用知识、方法、一般话题的看法" in checklist[general:]
+    assert "充分帮助，给出判断、理由或可执行步骤" in checklist[general:]
+    assert "不能因档案没有相关内容就说得问本人" in checklist[general:]
+    assert "不编造个人事实、数字、人名、日期、事件或生活细节" in prompt
+    assert "不用常识补齐个人信息" in prompt
+    assert "模仿句子长短、用词、口头禅和直接程度，用第一人称" in prompt
+    assert "不要用助手腔（作为一个……、希望对你有帮助）" in prompt
+    assert "寒暄和简单问题一两句" in prompt
+    assert "把判断、理由和具体做法说完整" in prompt
+
+
+def test_prompt_substantive_answers_are_not_abstentions() -> None:
+    prompt = pc.chat_system_prompt("测试本人", pc.PersonaContext([], [], [], []))
+    modes = prompt.split("## 整体 mode 与弃权\n", 1)[1].split("## 规则", 1)[0]
+    assert "有资料依据的实质回答 mode 设为 grounded" in modes
+    assert "通用实质回答 mode 设为 general；两者 abstain 都为 false，abstain_reason 为空" in modes
+    assert "混合请求按实质回答部分选择 mode" in modes
+    assert "只有没有实质回答、只能说明无资料或需要本人确认时，mode 设为 abstain，abstain 为 true" in modes
+    assert "具体得我本人定或细节得由我本人来定，不算弃权" in modes
+    assert "mode 保持 grounded/general，abstain=false" in modes
+    assert "不要为了避免弃权而给个人问题编造答案" in modes
 
 
 @pytest.mark.parametrize("cited", [True, False])

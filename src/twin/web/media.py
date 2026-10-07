@@ -237,6 +237,8 @@ def register(
     @app.post("/api/media/audio")
     def audio(body: AudioBody) -> dict[str, Any]:
         script = speech_script(make_script(body))
+        if not script.segments:
+            raise HTTPException(400, "没有可播放的语音内容")
         if body.segments is not None and any(index >= len(script.segments) for index in body.segments):
             raise HTTPException(400, "语音分段索引超出范围")
         try:
@@ -270,6 +272,8 @@ def register(
     @app.post("/api/media/audio/stream")
     def audio_stream(body: StreamAudioBody) -> StreamingResponse:
         script = speech_script(make_script(MediaBody(**body.model_dump())))
+        if not script.segments:
+            raise HTTPException(400, "没有可播放的语音内容")
 
         async def generate() -> AsyncIterator[bytes]:
             # A fixed output rate lets the first frame pass through proxies before upstream synthesis starts.
@@ -339,8 +343,8 @@ def register(
     @app.post("/api/media/video")
     def submit_video(body: MediaBody) -> dict[str, str]:
         script = make_script(body)
-        if script.abstain:
-            raise HTTPException(400, "分身已弃权，不能生成讲述视频")
+        if not script.segments:
+            raise HTTPException(400, "没有可生成视频的内容")
         if not allow_video_fallback and not own_video_assets():
             raise HTTPException(503, "先在「关于你」上传形象和声音")
         if not video_available:

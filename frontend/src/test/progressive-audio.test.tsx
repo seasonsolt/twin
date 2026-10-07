@@ -372,10 +372,35 @@ it('waits only for the missing next segment and resumes immediately when it arri
 it.each([
   { ...answer, abstain: true },
   { ...answer, mode: 'abstain' as const },
-])('never requests speech for abstention', (reply) => {
-  const fetchMock = vi.fn();
+])('speaks abstention reply text', async (reply) => {
+  vi.stubGlobal('AudioContext', undefined);
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+  const fetchMock = vi.fn(async () =>
+    json({
+      segment_count: 1,
+      segments: [{ index: 0, url: '/first.wav', duration_s: 2, lipsync: null }],
+    }),
+  );
   vi.stubGlobal('fetch', fetchMock);
-  render(<Harness reply={reply} />);
+  const view = render(<Harness reply={reply} />);
   fireEvent.click(screen.getByText('播放'));
-  expect(fetchMock).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled(),
+  );
+  expect(view.container.querySelector('audio')).toHaveAttribute(
+    'src',
+    '/first.wav',
+  );
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/media/audio',
+    expect.objectContaining({
+      body: JSON.stringify({
+        kind: 'chat_reply',
+        answer: reply,
+        persona_name: '本人',
+        segments: [0],
+      }),
+    }),
+  );
 });

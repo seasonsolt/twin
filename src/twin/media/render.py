@@ -186,7 +186,7 @@ def render_audio(
     *,
     segments: list[int] | None = None,
 ) -> AudioRender:
-    """Speak notices and non-abstaining speech, cache requests, and label every exported file.
+    """Speak reply segments, cache requests, and label every exported file.
 
     Cache entries store only normalized contract fields (audio as base64 JSON); exports are
     separately labelled per source, so shared text cannot reuse another answer's fingerprint.
@@ -202,8 +202,6 @@ def render_audio(
     label = f"AI-generated; twin; source {script.source_fingerprint}"
     for segment in script.segments:
         if segments is not None and segment.index not in segments:
-            continue
-        if script.abstain and segment.kind != "notice":
             continue
         parts: list[AudioPart] = []
         for text, spoken in _speech_parts(segment.text, synthesizer.voice.language, synthesizer.capabilities):

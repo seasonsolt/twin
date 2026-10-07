@@ -163,14 +163,14 @@ def test_cache_hit_has_zero_calls_and_manifest_is_private(synth: Recorder, tmp_p
             assert file.stat().st_mode & 0o777 == 0o700
 
 
-def test_abstain_speaks_notices_only_even_with_stray_speech(synth: Recorder, tmp_path: Path) -> None:
+def test_abstain_speaks_all_segments(synth: Recorder, tmp_path: Path) -> None:
     script = make_script(abstain=True)
     script = script.model_copy(
-        update={"segments": [*script.segments, Segment(index=1, kind="speech", text="不可播放。")]}
+        update={"segments": [*script.segments, Segment(index=1, kind="speech", text="这句也可播放。")]}
     )
     result = render_audio(script, synth, tmp_path)
-    assert [segment.kind for segment in result.segments] == ["notice"]
-    assert [call.text for call in synth.calls] == ["资料不足，请向本人确认。"]
+    assert [segment.kind for segment in result.segments] == ["notice", "speech"]
+    assert [call.text for call in synth.calls] == ["资料不足，请向本人确认。", "这句也可播放。"]
 
 
 def test_split_order_and_sentence_comma_preference(synth: Recorder, tmp_path: Path) -> None:

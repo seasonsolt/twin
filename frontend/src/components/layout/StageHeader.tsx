@@ -66,8 +66,12 @@ export function StageHeader({
         className,
       )}
     >
-      <span aria-hidden className="stage-sun" />
-      <span aria-hidden className="stage-coral" />
+      {variant !== 'chat' && (
+        <>
+          <span aria-hidden className="stage-sun" />
+          <span aria-hidden className="stage-coral" />
+        </>
+      )}
       <div className="stage-actions">
         <div>
           {mobile && switchable && !brand && variant !== 'future' ? (
@@ -92,18 +96,28 @@ export function StageHeader({
         <div>{right}</div>
       </div>
       <div className="stage-person">
-        <PersonaFade>
-          {brand ? (
-            <div className="stage-brand-mark" aria-hidden>
-              <span />
-              <span />
+        <div className="stage-portrait-area">
+          {variant === 'chat' && (
+            <div aria-hidden className="stage-decorations">
+              <span aria-hidden className="stage-sun" />
+              <span aria-hidden className="stage-coral" />
             </div>
-          ) : portrait ? (
-            portrait
-          ) : (
-            <div className="stage-circle stage-portrait">{portraitContent}</div>
           )}
-        </PersonaFade>
+          <PersonaFade>
+            {brand ? (
+              <div className="stage-brand-mark" aria-hidden>
+                <span />
+                <span />
+              </div>
+            ) : portrait ? (
+              portrait
+            ) : (
+              <div className="stage-circle stage-portrait">
+                {portraitContent}
+              </div>
+            )}
+          </PersonaFade>
+        </div>
         <h1 className="persona-name stage-name" aria-label={name}>
           <PersonaFade>{name}</PersonaFade>
         </h1>

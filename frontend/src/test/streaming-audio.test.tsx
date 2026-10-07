@@ -264,82 +264,83 @@ const answer: ChatReply = {
   retrieved_ids: [],
   mode: 'grounded',
 };
-function Harness() {
+function Harness({ reply = answer }: { reply?: ChatReply }) {
   const audio = useReplyAudio(true);
   return (
     <>
       <audio ref={audio.audioRef} />
       <button onClick={() => audio.unlock()}>发送</button>
-      <button onClick={() => audio.toggle('one', answer, '本人')}>
-        播放一
-      </button>
-      <button onClick={() => audio.toggle('two', answer, '本人')}>
-        播放二
-      </button>
+      <button onClick={() => audio.toggle('one', reply, '本人')}>播放一</button>
+      <button onClick={() => audio.toggle('two', reply, '本人')}>播放二</button>
       <span data-testid="playing">{String(audio.playing)}</span>
       <span data-testid="loading">{String(audio.loading)}</span>
     </>
   );
 }
 
-it('unlocks on send before fetch, streams using X-Twin/persona, pauses/resumes, and aborts on reply/persona switch', async () => {
-  const tick = clock();
-  const contexts: Context[] = [];
-  vi.stubGlobal(
-    'AudioContext',
-    class extends Context {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-    },
-  );
-  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
-  let controller!: ReadableStreamDefaultController<Uint8Array>;
-  const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
-    void url;
-    void init;
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(value) {
-          controller = value;
-        },
-      }),
-      { headers: { 'Content-Type': 'application/octet-stream' } },
+it.each(['grounded', 'abstain'] as const)(
+  'unlocks, streams %s replies, pauses/resumes, and aborts on reply/persona switch',
+  async (mode) => {
+    const reply = { ...answer, mode, abstain: mode === 'abstain' };
+    const tick = clock();
+    const contexts: Context[] = [];
+    vi.stubGlobal(
+      'AudioContext',
+      class extends Context {
+        constructor() {
+          super();
+          contexts.push(this);
+        }
+      },
     );
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  render(<Harness />);
-  fireEvent.click(screen.getByText('发送'));
-  expect(contexts).toHaveLength(1);
-  expect(contexts[0].resume).toHaveBeenCalled();
-  expect(fetchMock).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByText('播放一'));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-  expect(fetchMock.mock.calls[0][0]).toBe('/api/media/audio/stream');
-  const init = fetchMock.mock.calls[0][1] as RequestInit;
-  expect(new Headers(init.headers).get('X-Twin')).toBe('1');
-  await act(async () => {
-    controller.enqueue(header());
-    controller.enqueue(caption(0, '内容'));
-    controller.enqueue(pcm(0.2));
-  });
-  contexts[0].currentTime = 0.05;
-  act(() => tick());
-  expect(screen.getByTestId('loading')).toHaveTextContent('false');
-  fireEvent.click(screen.getByText('播放一'));
-  expect(screen.getByTestId('playing')).toHaveTextContent('false');
-  fireEvent.click(screen.getByText('播放一'));
-  expect(screen.getByTestId('playing')).toHaveTextContent('true');
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByText('播放二'));
-  expect(init.signal?.aborted).toBe(true);
-  expect(contexts[0].sources[0].stop).toHaveBeenCalled();
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-  const second = fetchMock.mock.calls[1][1] as RequestInit;
-  act(() => window.dispatchEvent(new Event('twin-persona-switch')));
-  expect(second.signal?.aborted).toBe(true);
-});
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      void url;
+      void init;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(value) {
+            controller = value;
+          },
+        }),
+        { headers: { 'Content-Type': 'application/octet-stream' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Harness reply={reply} />);
+    fireEvent.click(screen.getByText('发送'));
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].resume).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('播放一'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/media/audio/stream');
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get('X-Twin')).toBe('1');
+    expect(JSON.parse(init.body as string).answer).toEqual(reply);
+    await act(async () => {
+      controller.enqueue(header());
+      controller.enqueue(caption(0, '内容'));
+      controller.enqueue(pcm(0.2));
+    });
+    contexts[0].currentTime = 0.05;
+    act(() => tick());
+    expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    fireEvent.click(screen.getByText('播放一'));
+    expect(screen.getByTestId('playing')).toHaveTextContent('false');
+    fireEvent.click(screen.getByText('播放一'));
+    expect(screen.getByTestId('playing')).toHaveTextContent('true');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('播放二'));
+    expect(init.signal?.aborted).toBe(true);
+    expect(contexts[0].sources[0].stop).toHaveBeenCalled();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const second = fetchMock.mock.calls[1][1] as RequestInit;
+    act(() => window.dispatchEvent(new Event('twin-persona-switch')));
+    expect(second.signal?.aborted).toBe(true);
+  },
+);
 
 it.each(['network', '404', '500', 'error-frame'])(
   'automatically falls back to segmented playback before audio on %s',

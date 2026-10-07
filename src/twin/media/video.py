@@ -121,9 +121,9 @@ class RemoteVideo:
         return remote
 
     def synthesize(self, script: MediaScript, out_path: Path) -> VideoResult:
-        if script.abstain:
-            raise MediaRejected("分身已弃权，不能生成讲述视频")
-        texts = [s.text for s in script.segments if s.kind == "speech"]
+        texts = [s.text for s in script.segments if s.kind == "speech" and s.text.strip()]
+        if not texts:
+            raise MediaRejected("没有可生成视频的内容")
         if sum(map(len, texts)) > 100_000:
             raise MediaInputTooLong("视频内容过长，请缩短回答")
         segments = [{"id": f"s{i:02d}", "text": text} for i, text in enumerate(texts, 1)]

@@ -230,8 +230,16 @@ it.each(['grounded', 'general', 'abstain'] as const)(
         {
           id: 'reply',
           role: 'twin',
-          content: answer.reply,
-          reply: { ...answer, mode, abstain: mode === 'abstain' },
+          content: '**先听听**大家的意见。',
+          reply: {
+            ...answer,
+            reply: '**先听听**大家的意见。',
+            mode,
+            abstain: mode === 'abstain',
+            cited: [
+              { id: 'p1', kind: 'item', text: '引用资料', facet: '价值观' },
+            ],
+          },
           timestamp: '2025-01-01T12:00:00Z',
         },
       ]),
@@ -245,34 +253,33 @@ it.each(['grounded', 'general', 'abstain'] as const)(
     );
     await screen.findAllByRole('img', { name: '本人的肖像' });
     const article = screen.getByRole('article', { name: '分身回复' });
-    if (mode === 'abstain') {
-      expect(article).toHaveClass('text-secondary');
-      expect(article.querySelector('img, time, button')).toBeNull();
-      expect(
-        screen.queryByRole('group', { name: '回复媒体' }),
-      ).not.toBeInTheDocument();
-      expect(count('/api/media/video')).toBe(0);
-    } else {
-      expect(article).toHaveClass('min-w-0');
-      expect(article.querySelector('img, video')).toBeNull();
-      expect(screen.getByRole('button', { name: '让本人说这句' })).toHaveClass(
-        'min-h-11',
-        'min-w-11',
-      );
-      expect(
-        screen.getByRole('button', { name: '让本人说这句' }),
-      ).not.toHaveTextContent('播放');
-      expect(
-        screen.queryByRole('button', { name: '生成视频' }),
-      ).not.toBeInTheDocument();
-      await waitFor(() => expect(count('/api/media/video')).toBe(1));
-      expect(
-        screen.getByRole('button', { name: '让本人说这句' }),
-      ).toHaveAttribute('data-generating', 'true');
-      expect(screen.getByRole('group', { name: '回复媒体' })).toHaveClass(
-        'min-w-0',
-      );
-    }
+    expect(article.querySelector('.twin-bubble')).not.toBeNull();
+    expect(within(article).getByText('先听听').tagName).toBe('STRONG');
+    expect(article).not.toHaveClass('text-secondary');
+    expect(
+      within(article).getByRole('button', { name: '依据 1' }),
+    ).toBeVisible();
+    expect(article).toHaveClass('min-w-0');
+    expect(article.querySelector('img, video')).toBeNull();
+    expect(screen.getByRole('button', { name: '让本人说这句' })).toHaveClass(
+      'min-h-11',
+      'min-w-11',
+    );
+    expect(
+      screen.getByRole('button', { name: '让本人说这句' }),
+    ).not.toHaveTextContent('播放');
+    expect(
+      screen.queryByRole('button', { name: '生成视频' }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(count('/api/media/video')).toBe(1));
+    expect(
+      screen.getByRole('button', { name: '让本人说这句' }),
+    ).toHaveAttribute('data-generating', 'true');
+    expect(screen.getByRole('group', { name: '回复媒体' })).toHaveClass(
+      'min-w-0',
+    );
+    fireEvent.click(screen.getByRole('button', { name: '让本人说这句' }));
+    await waitFor(() => expect(count('/api/media/audio')).toBeGreaterThan(0));
     expect(view.container.querySelectorAll('audio')).toHaveLength(1);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   },
@@ -728,6 +735,20 @@ function VideoHarness({
 function video() {
   return <VideoHarness />;
 }
+it.each([
+  { ...answer, abstain: true },
+  { ...answer, mode: 'abstain' as const },
+])('generates and opens fullscreen video for abstention', async (reply) => {
+  jobStatus = 'done';
+  render(<VideoHarness turns={[{ ...videoTurns[0], reply }]} />);
+  const play = await screen.findByRole('button', { name: '播放真人视频' });
+  expect(count('/api/media/video')).toBe(1);
+  fireEvent.click(play);
+  expect(screen.getByRole('dialog', { name: '真人版' })).toBeVisible();
+  expect(screen.getByLabelText('回复的真人视频')).toHaveAccessibleDescription(
+    reply.reply,
+  );
+});
 it('keys video session results by both portrait sha and owner voice ID', async () => {
   jobStatus = 'done';
   const view = render(
@@ -958,8 +979,11 @@ it('serializes background jobs and chooses the newest queued reply, skipping bot
     one,
     turn('two'),
     turn('three'),
-    { ...turn('abstain'), reply: { ...answer, abstain: true } },
-    { ...turn('mode-only'), reply: { ...answer, mode: 'abstain' as const } },
+    { ...turn('empty'), reply: { ...answer, reply: '   ' } },
+    {
+      ...turn('empty-abstain'),
+      reply: { ...answer, abstain: true, reply: '' },
+    },
   ];
   view.rerender(<VideoHarness turns={turns} />);
   await act(async () => {});

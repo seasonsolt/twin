@@ -139,8 +139,11 @@ def test_transport_errors_are_generic(dependencies: None, error: Exception, tmp_
     assert SECRET not in str(exc.value)
 
 
-def test_general_video_keeps_content(dependencies: None, tmp_path: Path) -> None:
-    general = script_from_presentable(presentable_from_payload("chat_reply", {**SOURCE, "mode": "general"}), "人")
+@pytest.mark.parametrize("mode", ["general", "abstain"])
+def test_video_keeps_content(dependencies: None, tmp_path: Path, mode: str) -> None:
+    general = script_from_presentable(
+        presentable_from_payload("chat_reply", {**SOURCE, "mode": mode, "abstain": mode == "abstain"}), "人"
+    )
     runner = FakeRunner(stdout="{}")
     with pytest.raises(MediaUnavailable, match="响应无效"):
         RemoteVideo(host="test-alias", command="configured-command", runner=runner).synthesize(
@@ -149,11 +152,12 @@ def test_general_video_keeps_content(dependencies: None, tmp_path: Path) -> None
     assert [s["text"] for s in runner.request["segments"]] == [SOURCE["reply"]]
 
 
-def test_abstention_never_calls_runner(tmp_path: Path) -> None:
+@pytest.mark.parametrize("abstain", [False, True])
+def test_empty_reply_never_calls_runner(tmp_path: Path, abstain: bool) -> None:
     runner = FakeRunner()
-    with pytest.raises(MediaRejected, match="弃权"):
+    with pytest.raises(MediaRejected, match="内容"):
         RemoteVideo(host="test-alias", command="configured-command", runner=runner).synthesize(
-            script().model_copy(update={"abstain": True}), tmp_path / "out.mp4"
+            script().model_copy(update={"abstain": abstain, "segments": []}), tmp_path / "out.mp4"
         )
     assert not runner.calls
 
@@ -366,12 +370,14 @@ def test_real_postprocess_metadata_and_contract(tmp_path: Path) -> None:
         assert min(image.getpixel((20, 20))) > 240
 
 
-def test_web_job_flow_streaming_and_abstention(tmp_path: Path) -> None:
+@pytest.mark.parametrize("abstain", [False, True])
+def test_web_job_flow_streaming_and_abstention(tmp_path: Path, abstain: bool) -> None:
     class Synth:
         name = "fake"
 
         def synthesize(self, script: MediaScript, out_path: Path) -> VideoResult:
-            assert not script.abstain
+            assert script.abstain == abstain
+            assert [s.text for s in script.segments] == [SOURCE["reply"]]
             out_path.write_bytes(b"fake labelled mp4")
             return VideoResult(output=out_path, duration_s=1.0, warnings=["s02: cer=0.1"])
 
@@ -379,8 +385,9 @@ def test_web_job_flow_streaming_and_abstention(tmp_path: Path) -> None:
     register(app, Settings(db_path=tmp_path / "twin.db"), video_factory=lambda: Synth())
     with TestClient(app) as client:
         assert client.get("/api/media/capabilities").json()["video"] == {"available": True}
-        assert client.post("/api/media/video", json={**BODY, "answer": {**SOURCE, "abstain": True}}).status_code == 400
-        response = client.post("/api/media/video", json=BODY)
+        empty = {**SOURCE, "reply": "  ", "abstain": abstain}
+        assert client.post("/api/media/video", json={**BODY, "answer": empty}).status_code == 400
+        response = client.post("/api/media/video", json={**BODY, "answer": {**SOURCE, "abstain": abstain}})
         assert response.status_code == 200
         job_id = response.json()["job_id"]
         for _ in range(100):

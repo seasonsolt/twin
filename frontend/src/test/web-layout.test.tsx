@@ -151,8 +151,14 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
   );
   expect(desktopCss).toMatch(/\.chat-scroll\s*\{[^}]*overflow-y: auto/s);
   expect(desktopCss).toMatch(/\.chat-composer\s*\{[^}]*position: static/s);
+  expect(desktopCss).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
+  expect(desktopCss).toContain('clamp(32px, calc((100% - 760px) / 2), 96px)');
+  expect(desktopCss).toContain('minmax(0, 760px) minmax(32px, 1fr)');
+  expect(
+    within(thread as HTMLElement).getByRole('form', { name: '消息输入' }),
+  ).toHaveClass('chat-column-grid');
   expect(desktopCss).toMatch(
-    /\.chat-composer \.composer-field\s*\{\s*max-width: 760px/s,
+    /\.chat-composer \.composer-field\s*\{\s*width: 100%/s,
   );
   const stage = view.container.querySelector('.chat-stage')!;
   expect(
@@ -183,7 +189,7 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
     /\.stage-space\s*\{[^}]*position: sticky[^}]*height: 100dvh/s,
   );
   expect(desktopCss).toMatch(
-    /\.chat-conversation\s*\{[^}]*min-height: 100%[^}]*max-width: 824px[^}]*padding: 32px 32px 24px/s,
+    /\.chat-conversation\s*\{[^}]*min-height: 100%[^}]*max-width: none[^}]*padding: 32px 0 24px/s,
   );
 });
 

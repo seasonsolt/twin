@@ -364,6 +364,34 @@
   padding-top: 50px;
   pointer-events: none;
 }
+.stage-portrait-area {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.chat-stage .stage-portrait-area > .persona-fade {
+  position: relative;
+  z-index: 1;
+}
+.stage-decorations {
+  position: absolute;
+  z-index: 0;
+  inset: 0 0 auto;
+  height: 196px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.chat-stage .stage-decorations .stage-sun {
+  left: calc(50% - 150px);
+  top: 24px;
+}
+.chat-stage .stage-decorations .stage-coral {
+  top: 100px;
+}
+.chat-stage[data-collapsed='true'] .stage-decorations {
+  display: none;
+}
 .stage-circle {
   position: relative;
   flex-shrink: 0;
@@ -1178,17 +1206,20 @@
   .chat-stage .stage-actions {
     display: none;
   }
-  .chat-stage .stage-sun {
-    width: 180px;
-    height: 180px;
-    top: 15%;
-    left: -70px;
+  .chat-stage .stage-decorations {
+    height: 210px;
   }
-  .chat-stage .stage-coral {
-    width: 140px;
-    height: 140px;
-    top: 65%;
-    right: -55px;
+  .chat-stage .stage-decorations .stage-sun {
+    width: 150px;
+    height: 150px;
+    top: 16px;
+    left: calc(50% - 180px);
+  }
+  .chat-stage .stage-decorations .stage-coral {
+    width: 100px;
+    height: 100px;
+    top: 80px;
+    right: -35px;
   }
   .chat-thread {
     display: flex;
@@ -1204,21 +1235,36 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
   }
+  .chat-column-grid {
+    display: grid;
+    grid-template-columns:
+      clamp(32px, calc((100% - 760px) / 2), 96px)
+      minmax(0, 760px) minmax(32px, 1fr);
+  }
+  .chat-column-grid > * {
+    grid-column: 2;
+    min-width: 0;
+  }
+  .chat-scroll > .chat-column-grid {
+    min-height: 100%;
+  }
   .chat-conversation {
     min-height: 100%;
-    max-width: 824px;
-    padding: 32px 32px 24px;
-    margin-inline: auto;
+    max-width: none;
+    padding: 32px 0 24px;
+    margin-inline: 0;
   }
   .chat-composer {
     position: static;
     flex-shrink: 0;
-    padding: 16px 32px 24px;
+    padding: 16px 0 24px;
     overflow-y: auto;
     scrollbar-gutter: stable;
   }
   .chat-composer .composer-field {
-    max-width: 760px;
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
   }
   .memories-page,
   .about-page,

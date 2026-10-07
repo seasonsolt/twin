@@ -132,7 +132,15 @@ it.each(['desktop', 'tablet', 'mobile'])(
         removeEventListener: vi.fn(),
       })),
     );
-    mount();
+    const view = mount();
+    expect(
+      view.container.querySelector(
+        '.chat-scroll > .chat-column-grid .chat-conversation',
+      ),
+    ).not.toBeNull();
+    expect(screen.getByRole('form', { name: '消息输入' })).toHaveClass(
+      'chat-column-grid',
+    );
     await send();
     const cid = localStorage.getItem(CURRENT_CHAT_KEY)!;
     fireEvent.click(screen.getByRole('button', { name: '新对话' }));
@@ -144,7 +152,15 @@ it.each(['desktop', 'tablet', 'mobile'])(
       viewport === 'desktop' ? 'stage-history' : 'history-sheet',
     );
     if (viewport === 'desktop') {
-      expect(panel.closest('.chat-stage')).not.toBeNull();
+      const stage = panel.closest('.chat-stage')!;
+      expect(stage).not.toBeNull();
+      expect(panel.closest('.stage-portrait-area')).toBeNull();
+      expect(panel.querySelector('.stage-sun, .stage-coral')).toBeNull();
+      expect(
+        stage.querySelectorAll(
+          '.stage-portrait-area > .stage-decorations > span',
+        ),
+      ).toHaveLength(2);
       expect(screen.queryByRole('button', { name: '对话记录' })).toBeNull();
       expect(screen.queryByRole('dialog')).toBeNull();
     } else {

@@ -8,7 +8,6 @@ from .speech_text import split_speech, strip_markdown
 _ENDINGS = frozenset("。！？!?….\r\n")
 _QUOTES = {"「": "」", "“": "”"}
 _CLOSING_QUOTES = frozenset("」”\"'")
-_DEFAULT_ABSTENTION = "资料不足以判断，请向本人确认。"
 
 
 def _terminal_period(text: str, index: int) -> bool:
@@ -44,17 +43,13 @@ def split_sentences(text: str) -> list[str]:
 
 def speech_script(script: MediaScript) -> MediaScript:
     """Rechunk only audio scripts; presentation and video keep their sentence layout."""
-    if script.abstain:
-        return script
     text = "\n".join(segment.text for segment in script.segments if segment.kind == "speech")
     return script.model_copy(
         update={"segments": [Segment(index=i, kind="speech", text=piece) for i, piece in enumerate(split_speech(text))]}
     )
 
 
-def _segments(text: str, abstain: bool, reason: str) -> list[Segment]:
-    if abstain:
-        return [Segment(index=0, kind="notice", text=strip_markdown(reason).strip() or _DEFAULT_ABSTENTION)]
+def _segments(text: str) -> list[Segment]:
     return [Segment(index=i, kind="speech", text=s) for i, s in enumerate(split_sentences(strip_markdown(text)))]
 
 
@@ -67,6 +62,6 @@ def script_from_presentable(p: PresentableAnswer, persona_name: str) -> MediaScr
         as_of=p.as_of,
         confidence=p.confidence,
         abstain=p.abstain,
-        segments=_segments(p.text, p.abstain, p.abstain_reason),
+        segments=_segments(p.text),
         citations=list(p.citations),
     )

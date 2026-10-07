@@ -39,7 +39,7 @@ export function ReplyVideo({
   portrait = portrait ? personaUrl(portrait) : undefined;
   const touch = useRef<{ x: number; y: number } | null>(null);
   const url = state?.status === 'done' ? videoUrl(state.result) : null;
-  if (answer.abstain || answer.mode === 'abstain') return null;
+  if (!answer.reply.trim()) return null;
   const ready = !!url;
   const setOpen = onOpenChange;
   return (

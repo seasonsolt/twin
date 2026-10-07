@@ -150,6 +150,20 @@ it.each([
         '[aria-hidden].stage-sun, [aria-hidden].stage-coral',
       ),
     ).toHaveLength(2);
+    if (route === 'chat') {
+      expect(
+        header.querySelectorAll(
+          '.stage-portrait-area > .stage-decorations > span',
+        ),
+      ).toHaveLength(2);
+      expect(
+        header.querySelector('.stage-actions .stage-decorations'),
+      ).toBeNull();
+      expect(header.querySelector('.stage-name .stage-decorations')).toBeNull();
+      expect(
+        header.querySelector('.stage-caption .stage-decorations'),
+      ).toBeNull();
+    }
     fireEvent.click(within(header).getByRole('button', { name: '切换分身' }));
     const sheet = await screen.findByRole('dialog', { name: '切换分身' });
     expect(within(sheet).getByText('小林').closest('button')).toHaveClass(

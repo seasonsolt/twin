@@ -92,7 +92,9 @@ def test_encoding_and_resampling_are_chunk_independent() -> None:
         assert len(actual) // 2 == (2000 * SAMPLE_RATE + rate - 1) // rate
 
 
-def test_stream_order_cache_replay_voice_and_model(tmp_path: Path) -> None:
+@pytest.mark.parametrize("abstain", [False, True])
+def test_stream_order_cache_replay_voice_and_model(tmp_path: Path, abstain: bool) -> None:
+    body = {**BODY, "answer": {**BODY["answer"], "abstain": abstain, "abstain_reason": "依据不足"}}
     calls: list[httpx.Request] = []
     bodies: list[PCMBody] = []
 
@@ -109,7 +111,7 @@ def test_stream_order_cache_replay_voice_and_model(tmp_path: Path) -> None:
             base_url="http://localhost",
         ) as client:
             before = len(calls)
-            response = client.post("/api/media/audio/stream", json=BODY, headers=HEADERS)
+            response = client.post("/api/media/audio/stream", json=body, headers=HEADERS)
             assert response.status_code == 200
             assert response.headers["content-type"] == "application/octet-stream"
             assert response.headers["cache-control"] == "no-store"
@@ -126,7 +128,7 @@ def test_stream_order_cache_replay_voice_and_model(tmp_path: Path) -> None:
             assert all(request.url.path == "/v1/audio/speech/stream" for request in calls)
             spoken = json.loads(calls[before].content)["input"]
             assert "**" not in spoken and "12" not in spoken
-            replay = client.post("/api/media/audio/stream", json=BODY, headers=HEADERS)
+            replay = client.post("/api/media/audio/stream", json=body, headers=HEADERS)
             assert replay.content == response.content
             assert len(calls) == before + 2
     assert all(body.closed for body in bodies)

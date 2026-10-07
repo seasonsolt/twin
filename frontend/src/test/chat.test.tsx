@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
@@ -251,9 +252,14 @@ it('streams progressively, hides thinking on the first delta, then replaces text
   });
   const abstention = screen.getByLabelText('分身回复');
   expect(abstention).toHaveTextContent(reply.reply);
-  expect(abstention.children).toHaveLength(1);
-  expect(abstention).toHaveClass('text-secondary');
-  expect(abstention.querySelector('time, button, img')).toBeNull();
+  expect(abstention.querySelector('.twin-bubble')).not.toBeNull();
+  expect(abstention).not.toHaveClass('text-secondary');
+  expect(
+    within(abstention).getByRole('button', { name: '让测试人说这句' }),
+  ).toBeVisible();
+  expect(
+    within(abstention).getByRole('button', { name: '依据 1' }),
+  ).toBeVisible();
   expect(
     screen.queryByText(/置信度|需要本人确认|通用回答/),
   ).not.toBeInTheDocument();
@@ -480,6 +486,25 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
   expect(css).toContain('font-size: 16px !important');
   expect(css).toContain('env(safe-area-inset-bottom');
   expect(css).toContain('-webkit-tap-highlight-color: transparent');
+});
+it('shares a bounded 760px desktop grid between conversation and composer', () => {
+  const view = mount();
+  expect(
+    view.container.querySelector(
+      '.chat-scroll > .chat-column-grid .chat-conversation',
+    ),
+  ).not.toBeNull();
+  expect(screen.getByRole('form', { name: '消息输入' })).toHaveClass(
+    'chat-column-grid',
+  );
+  const css = readFileSync('src/design/tokens.css', 'utf8');
+  expect(css).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
+  expect(css).toContain('clamp(32px, calc((100% - 760px) / 2), 96px)');
+  expect(css).toContain('minmax(0, 760px) minmax(32px, 1fr)');
+  expect(css).toMatch(/\.stage-decorations\s*\{[^}]*overflow: hidden;/);
+  expect(readFileSync('src/features/chat/history.css', 'utf8')).toMatch(
+    /\.stage-history\s*\{[^}]*background: var\(--accent\);/,
+  );
 });
 it('caps composer growth at five lines', () => {
   mount();

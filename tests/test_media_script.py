@@ -80,18 +80,20 @@ def test_chat_provenance(reply: ChatReply) -> None:
 
 
 @pytest.mark.parametrize("reason", ["  证据不足  ", "", "  \n "])
-def test_abstain_no_speech(reply: ChatReply, reason: str) -> None:
+def test_abstain_speaks_reply_not_reason(reply: ChatReply, reason: str) -> None:
     reply.abstain = True
     reply.abstain_reason = reason
     for p in [presentable_from_chat_reply(reply)]:
         script = script_from_presentable(p, "合成人物")
-        assert len(script.segments) == 1
-        assert all(s.kind == "notice" for s in script.segments)
-        assert script.segments[0].text == (reason.strip() or "资料不足以判断，请向本人确认。")
+        assert script.abstain
+        assert all(s.kind == "speech" for s in script.segments)
+        assert [s.text for s in script.segments] == split_sentences(reply.reply)
         assert script.citations
 
 
-def test_empty_speech_has_no_segments(reply: ChatReply) -> None:
+@pytest.mark.parametrize("abstain", [False, True])
+def test_empty_speech_has_no_segments(reply: ChatReply, abstain: bool) -> None:
+    reply.abstain = abstain
     reply.reply = "  "
     assert script_from_presentable(presentable_from_chat_reply(reply), "合成人物").segments == []
 
@@ -173,8 +175,9 @@ def test_audio_rechunking_does_not_change_video_or_presentation(reply: ChatReply
     assert [segment.index for segment in spoken.segments] == list(range(len(spoken.segments)))
     assert spoken.citations == original.citations
     assert spoken.source_fingerprint == original.source_fingerprint
-    notice = original.model_copy(update={"abstain": True})
-    assert speech_script(notice) is notice
+    abstention = original.model_copy(update={"abstain": True})
+    assert speech_script(abstention).abstain
+    assert speech_script(abstention).segments == spoken.segments
 
 
 def test_manifest_roundtrip() -> None:

@@ -85,8 +85,7 @@ export function Chat() {
       !active ||
       !capabilities?.available ||
       !turn?.reply ||
-      turn.reply.abstain ||
-      turn.reply.mode === 'abstain' ||
+      !turn.reply.reply.trim() ||
       autoSpoken.current === turn.id
     )
       return;
@@ -277,12 +276,7 @@ export function Chat() {
             currentTurn ??
               [...chat.turns]
                 .reverse()
-                .find(
-                  (turn) =>
-                    turn.reply &&
-                    !turn.reply.abstain &&
-                    turn.reply.mode !== 'abstain',
-                ),
+                .find((turn) => turn.reply?.reply.trim()),
             true,
           )
         }
@@ -302,252 +296,240 @@ export function Chat() {
       {!desktop && history}
       <div className="chat-thread">
         <div className="chat-scroll">
-          <PersonaFade>
-            <div className="chat-conversation flex flex-col justify-end space-y-4">
-              {stale && canManage && (
-                <p role="status" className="text-xs text-secondary">
-                  新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
-                  <a
-                    className="inline-flex min-h-11 items-center text-accent underline"
-                    href="#/profile?section=memories"
-                  >
-                    查看记忆
-                  </a>
-                </p>
-              )}
-              {stateError && (
-                <div role="alert" className="text-sm text-danger">
-                  无法检查档案状态：{stateError}{' '}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void refreshState()}
-                  >
-                    重新检查
-                  </Button>
-                </div>
-              )}
-              <div
-                aria-live="polite"
-                aria-relevant="additions text"
-                data-testid="chat-messages"
-              >
-                {chat.loading && (
-                  <p role="status" className="text-sm text-secondary">
-                    正在加载对话…
+          <div className="chat-column-grid">
+            <PersonaFade>
+              <div className="chat-conversation flex flex-col justify-end space-y-4">
+                {stale && canManage && (
+                  <p role="status" className="text-xs text-secondary">
+                    新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
+                    <a
+                      className="inline-flex min-h-11 items-center text-accent underline"
+                      href="#/profile?section=memories"
+                    >
+                      查看记忆
+                    </a>
                   </p>
                 )}
-                {!chat.turns.length && !chat.loading && (
-                  <EmptyState
-                    title={`和${name}聊聊`}
-                    body={
-                      !canManage
-                        ? '在下面输入一句话开始。'
-                        : status?.counts.sources === 0
-                          ? '先添加一些关于你的记忆，再来聊聊。'
-                          : '在下面输入一句话开始，也可以先添加记忆。'
-                    }
-                  >
-                    <div
-                      className="starter-chips flex flex-wrap justify-center gap-3"
-                      aria-label="聊天开场白"
+                {stateError && (
+                  <div role="alert" className="text-sm text-danger">
+                    无法检查档案状态：{stateError}{' '}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void refreshState()}
                     >
-                      {[
-                        '你最近在忙什么？',
-                        '你周末一般怎么过？',
-                        '遇到难事你会怎么做？',
-                      ].map((starter) => (
-                        <button
-                          key={starter}
-                          type="button"
-                          className="starter-chip min-h-11 rounded-full border border-primary px-4 text-primary"
-                          onClick={() => {
-                            chat.setDraft(starter);
-                            document.getElementById('chat-input')?.focus();
-                          }}
-                        >
-                          {starter}
-                        </button>
-                      ))}
-                    </div>
-                    {canManage && (
-                      <a
-                        className="inline-flex min-h-11 items-center text-accent underline"
-                        href="#/profile?section=memories"
-                      >
-                        添加记忆
-                      </a>
-                    )}
-                  </EmptyState>
-                )}
-                <MessageList
-                  label="对话记录"
-                  className="space-y-4"
-                  items={chat.turns.map((turn) => {
-                    const abstain =
-                      turn.role === 'twin' &&
-                      (turn.reply?.abstain || turn.reply?.mode === 'abstain');
-                    return {
-                      id: turn.id,
-                      text: turn.content,
-                      content: (
-                        <article
-                          aria-label={
-                            turn.role === 'user' ? '你说' : '分身回复'
-                          }
-                          className={
-                            turn.role === 'user'
-                              ? 'user-bubble ml-auto w-fit max-w-[85%] px-4 py-3'
-                              : abstain
-                                ? 'mr-auto text-sm text-secondary'
-                                : 'mr-auto w-fit max-w-[90%] min-w-0 text-primary'
-                          }
-                        >
-                          {abstain ? (
-                            <MessageText text={turn.content} />
-                          ) : (
-                            <>
-                              <div
-                                className={`min-w-0 ${turn.role === 'twin' ? 'twin-bubble' : ''}`}
-                                data-speaking={
-                                  (audio.id === turn.id && audio.playing) ||
-                                  (videoId === turn.id && videoPlaying)
-                                }
-                              >
-                                <MessageText
-                                  text={turn.content}
-                                  plain={turn.role === 'user'}
-                                  streaming={
-                                    turn.role === 'twin' &&
-                                    !turn.reply &&
-                                    chat.busy
-                                  }
-                                />
-                              </div>
-                              {turn.reply && (
-                                <>
-                                  <div
-                                    role="group"
-                                    aria-label="回复媒体"
-                                    className="reply-actions mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-2"
-                                  >
-                                    <button
-                                      type="button"
-                                      className="reply-play min-h-11 min-w-11"
-                                      aria-label={
-                                        (audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id && videoPlaying)
-                                          ? '正在说这句，点击暂停'
-                                          : `让${name}说这句`
-                                      }
-                                      aria-busy={
-                                        audio.id === turn.id && audio.loading
-                                      }
-                                      data-speaking={
-                                        (audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id && videoPlaying)
-                                      }
-                                      data-generating={
-                                        video.videos[turn.id]?.status ===
-                                        'generating'
-                                      }
-                                      onClick={() => toggleReply(turn)}
-                                    >
-                                      <span
-                                        className="reply-play-visual"
-                                        aria-hidden
-                                      >
-                                        {(audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id &&
-                                          videoPlaying) ? (
-                                          <span className="speaking-bars">
-                                            <i />
-                                            <i />
-                                            <i />
-                                          </span>
-                                        ) : (
-                                          <Play size={16} />
-                                        )}
-                                      </span>
-                                    </button>
-                                    <Citations cited={turn.reply.cited} />
-                                  </div>
-                                  {audio.id === turn.id && (
-                                    <progress
-                                      aria-label="语音播放进度"
-                                      max={1}
-                                      value={audio.progress}
-                                      className="sr-only"
-                                    />
-                                  )}
-                                  {audio.errors[turn.id] && (
-                                    <p
-                                      role="alert"
-                                      className="text-xs text-danger"
-                                    >
-                                      {audio.errors[turn.id]}
-                                    </p>
-                                  )}
-                                </>
-                              )}
-                              {video.videos[turn.id]?.status === 'failed' && (
-                                <p
-                                  role="alert"
-                                  className="text-xs text-secondary"
-                                >
-                                  真人版生成失败 ·{' '}
-                                  <button
-                                    type="button"
-                                    className="min-h-11 underline"
-                                    onClick={() => video.retry(turn.id)}
-                                  >
-                                    重试生成视频
-                                  </button>
-                                </p>
-                              )}
-                            </>
-                          )}
-                        </article>
-                      ),
-                    };
-                  })}
-                />
-                {chat.busy && !chat.newest && (
-                  <div className="py-3">
-                    <ThinkingLabel />
+                      重新检查
+                    </Button>
                   </div>
                 )}
-              </div>
-              {chat.error && (
                 <div
-                  role="alert"
-                  className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-danger"
+                  aria-live="polite"
+                  aria-relevant="additions text"
+                  data-testid="chat-messages"
                 >
-                  <p>分身没能回复：{chat.error}</p>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      void refreshState();
-                      chat.retry();
-                    }}
-                    disabled={chat.busy}
-                  >
-                    重试
-                  </Button>
+                  {chat.loading && (
+                    <p role="status" className="text-sm text-secondary">
+                      正在加载对话…
+                    </p>
+                  )}
+                  {!chat.turns.length && !chat.loading && (
+                    <EmptyState
+                      title={`和${name}聊聊`}
+                      body={
+                        !canManage
+                          ? '在下面输入一句话开始。'
+                          : status?.counts.sources === 0
+                            ? '先添加一些关于你的记忆，再来聊聊。'
+                            : '在下面输入一句话开始，也可以先添加记忆。'
+                      }
+                    >
+                      <div
+                        className="starter-chips flex flex-wrap justify-center gap-3"
+                        aria-label="聊天开场白"
+                      >
+                        {[
+                          '你最近在忙什么？',
+                          '你周末一般怎么过？',
+                          '遇到难事你会怎么做？',
+                        ].map((starter) => (
+                          <button
+                            key={starter}
+                            type="button"
+                            className="starter-chip min-h-11 rounded-full border border-primary px-4 text-primary"
+                            onClick={() => {
+                              chat.setDraft(starter);
+                              document.getElementById('chat-input')?.focus();
+                            }}
+                          >
+                            {starter}
+                          </button>
+                        ))}
+                      </div>
+                      {canManage && (
+                        <a
+                          className="inline-flex min-h-11 items-center text-accent underline"
+                          href="#/profile?section=memories"
+                        >
+                          添加记忆
+                        </a>
+                      )}
+                    </EmptyState>
+                  )}
+                  <MessageList
+                    label="对话记录"
+                    className="space-y-4"
+                    items={chat.turns.map((turn) => {
+                      return {
+                        id: turn.id,
+                        text: turn.content,
+                        content: (
+                          <article
+                            aria-label={
+                              turn.role === 'user' ? '你说' : '分身回复'
+                            }
+                            className={
+                              turn.role === 'user'
+                                ? 'user-bubble ml-auto w-fit max-w-[85%] px-4 py-3'
+                                : 'mr-auto w-fit max-w-[90%] min-w-0 text-primary'
+                            }
+                          >
+                            <div
+                              className={`min-w-0 ${turn.role === 'twin' ? 'twin-bubble' : ''}`}
+                              data-speaking={
+                                (audio.id === turn.id && audio.playing) ||
+                                (videoId === turn.id && videoPlaying)
+                              }
+                            >
+                              <MessageText
+                                text={turn.content}
+                                plain={turn.role === 'user'}
+                                streaming={
+                                  turn.role === 'twin' &&
+                                  !turn.reply &&
+                                  chat.busy
+                                }
+                              />
+                            </div>
+                            {turn.reply && (
+                              <>
+                                <div
+                                  role="group"
+                                  aria-label="回复媒体"
+                                  className="reply-actions mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-2"
+                                >
+                                  <button
+                                    type="button"
+                                    className="reply-play min-h-11 min-w-11"
+                                    aria-label={
+                                      (audio.id === turn.id && audio.playing) ||
+                                      (videoId === turn.id && videoPlaying)
+                                        ? '正在说这句，点击暂停'
+                                        : `让${name}说这句`
+                                    }
+                                    aria-busy={
+                                      audio.id === turn.id && audio.loading
+                                    }
+                                    data-speaking={
+                                      (audio.id === turn.id && audio.playing) ||
+                                      (videoId === turn.id && videoPlaying)
+                                    }
+                                    data-generating={
+                                      video.videos[turn.id]?.status ===
+                                      'generating'
+                                    }
+                                    onClick={() => toggleReply(turn)}
+                                  >
+                                    <span
+                                      className="reply-play-visual"
+                                      aria-hidden
+                                    >
+                                      {(audio.id === turn.id &&
+                                        audio.playing) ||
+                                      (videoId === turn.id && videoPlaying) ? (
+                                        <span className="speaking-bars">
+                                          <i />
+                                          <i />
+                                          <i />
+                                        </span>
+                                      ) : (
+                                        <Play size={16} />
+                                      )}
+                                    </span>
+                                  </button>
+                                  <Citations cited={turn.reply.cited} />
+                                </div>
+                                {audio.id === turn.id && (
+                                  <progress
+                                    aria-label="语音播放进度"
+                                    max={1}
+                                    value={audio.progress}
+                                    className="sr-only"
+                                  />
+                                )}
+                                {audio.errors[turn.id] && (
+                                  <p
+                                    role="alert"
+                                    className="text-xs text-danger"
+                                  >
+                                    {audio.errors[turn.id]}
+                                  </p>
+                                )}
+                              </>
+                            )}
+                            {video.videos[turn.id]?.status === 'failed' && (
+                              <p
+                                role="alert"
+                                className="text-xs text-secondary"
+                              >
+                                真人版生成失败 ·{' '}
+                                <button
+                                  type="button"
+                                  className="min-h-11 underline"
+                                  onClick={() => video.retry(turn.id)}
+                                >
+                                  重试生成视频
+                                </button>
+                              </p>
+                            )}
+                          </article>
+                        ),
+                      };
+                    })}
+                  />
+                  {chat.busy && !chat.newest && (
+                    <div className="py-3">
+                      <ThinkingLabel />
+                    </div>
+                  )}
                 </div>
-              )}
-              <div ref={end} />
-            </div>
-          </PersonaFade>
+                {chat.error && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-danger"
+                  >
+                    <p>分身没能回复：{chat.error}</p>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        void refreshState();
+                        chat.retry();
+                      }}
+                      disabled={chat.busy}
+                    >
+                      重试
+                    </Button>
+                  </div>
+                )}
+                <div ref={end} />
+              </div>
+            </PersonaFade>
+          </div>
         </div>
         <form
           ref={composer}
           aria-label="消息输入"
-          className="chat-composer fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl md:left-[var(--sidebar-width,0px)]"
+          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl md:left-[var(--sidebar-width,0px)]"
           onSubmit={(event) => {
             event.preventDefault();
             send();

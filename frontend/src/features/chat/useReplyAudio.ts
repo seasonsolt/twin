@@ -232,7 +232,7 @@ export function useReplyAudio(active: boolean) {
       answer: ChatReply,
       name: string,
     ) => {
-      if (answer.abstain || answer.mode === 'abstain') return;
+      if (!answer.reply.trim()) return;
       if (state.id === id && state.playing) return pause();
       if (state.id !== id) stop();
       reply = cache.current.get(id) ?? { count: 0, segments: new Map() };
@@ -379,7 +379,7 @@ export function useReplyAudio(active: boolean) {
       if (player) void player.resume().catch(() => {});
     };
     const toggle = async (id: string, answer: ChatReply, name: string) => {
-      if (answer.abstain || answer.mode === 'abstain') return;
+      if (!answer.reply.trim()) return;
       if (streaming && streamId === id) {
         if (state.playing) {
           void streaming.pause().catch(() => {});

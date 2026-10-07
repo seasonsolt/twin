@@ -120,8 +120,6 @@ async def stream_audio(script: MediaScript, synth: SpeechSynthesizer, cache_dir:
     assembled = bytearray()
     size = 0
     for segment in script.segments:
-        if script.abstain and segment.kind != "notice":
-            continue
         meta = frame(1, {"segment": segment.index, "caption": segment.text})
         assembled.extend(meta)
         yield meta

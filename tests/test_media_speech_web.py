@@ -110,10 +110,27 @@ def test_audio_urls_metadata_and_hardening(tmp_path: Path) -> None:
         repeated = client.post("/api/media/audio", json=BODY, headers=HEADERS).json()
         assert repeated["segments"] == result["segments"]
         abstention = {**SOURCE, "abstain": True, "abstain_reason": "依据不足"}
-        result = client.post("/api/media/audio", json={**BODY, "answer": abstention}, headers=HEADERS).json()
-        assert all(segment["kind"] == "notice" for segment in result["manifest"]["segments"])
+        response = client.post("/api/media/audio", json={**BODY, "answer": abstention}, headers=HEADERS)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["script"]["abstain"]
+        assert all(segment["kind"] == "speech" for segment in result["manifest"]["segments"])
+        assert "".join(s["text"] for s in result["script"]["segments"]) == SOURCE["reply"]
         for path in (tmp_path / "media-cache").rglob("*"):
             assert stat.S_IMODE(path.stat().st_mode) == (0o700 if path.is_dir() else 0o600)
+
+
+@pytest.mark.parametrize("endpoint", ["/api/media/audio", "/api/media/audio/stream"])
+@pytest.mark.parametrize("abstain", [False, True])
+def test_empty_reply_rejected(tmp_path: Path, endpoint: str, abstain: bool) -> None:
+    def factory() -> SilentSynthesizer:
+        pytest.fail("Empty replies must not start speech")
+
+    settings = Settings(db_path=tmp_path / "twin.db")
+    with TestClient(create_app(settings, synthesizer_factory=factory), base_url="http://localhost") as client:
+        answer = {**SOURCE, "reply": "  ", "abstain": abstain, "abstain_reason": "依据不足"}
+        response = client.post(endpoint, json={**BODY, "answer": answer}, headers=HEADERS)
+        assert response.status_code == 400
 
 
 def test_audio_selected_segments_reuse_full_render_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

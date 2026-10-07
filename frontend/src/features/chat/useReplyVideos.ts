@@ -228,11 +228,7 @@ export function useReplyVideos(
       update(next, nextName) {
         persona = nextName;
         pending = next.filter(
-          (turn) =>
-            turn.role === 'twin' &&
-            turn.reply &&
-            !turn.reply.abstain &&
-            turn.reply.mode !== 'abstain',
+          (turn) => turn.role === 'twin' && turn.reply?.reply.trim(),
         );
         for (const turn of pending) {
           if (!records.current.has(turn.id))

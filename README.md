@@ -12,6 +12,8 @@ twin builds a persona from freely added memories — notes, chats, documents, op
 
 **Why twin.** Open-source "clone a person" projects mostly invent answers when the material is silent, keep no verifiable evidence, and rely on LoRA training that is slow to update. The author first tried to fix this inside Second Me: the fork [seasonsolt/Second-Me](https://github.com/seasonsolt/Second-Me) swapped every replaceable module for the best option as of Q3 2026 (Qwen3, MLX LoRA, retrieval-first memory, 8K context) and still fell short, because the gap is architectural. twin was therefore designed from scratch: it answers only from cited, verbatim evidence, abstains otherwise, and updates by re-indexing instead of retraining. On the author's own 59-question set, scored with the same judge script that was used for Second Me, twin reaches 98.4% fact accuracy and never fabricated on unanswerable questions (original Second Me: 4.7% and 10%; upgraded fork: at best 78.1% and 70%). Caveat: twin answered with a frontier model while Second Me ran a local 0.5B (original) or 1.7B (upgraded) model, so part of the gap is the model, not the method. Details and limits are in the Chinese section below.
 
+**Memory architecture.** Two layers instead of a plain vector store: the person's own *expressions* (dated, with context, own words vs. narration), and *persona items* derived from them across 9 dimensions / 39 facets, each item carrying mechanically verified verbatim quotes, behaviour-vs-self-report evidence classes, occasion counts, explicit conflicts, and the person's own review (confirm / edit / reject, preserved across re-merges). Answers pick one of three modes — grounded, general, abstain — then pass citation validation, confidence caps and a quote guard. Updates are deterministic and incremental (content-hashed chunks, candidates and items; only changed facets re-merge), and any answer can be computed "as of" a past date. Agent-memory frameworks (mem0, Letta, Graphiti/Zep, MemOS, Cognee, MIRIX) remember facts *about* a user for a task; twin models *who the person is and how they speak*, and refuses when the material is silent. Digital-human projects (Duix-Avatar/HeyGem, LiveTalking, Fay) clone face and voice but have no identity-grade memory; twin pairs both.
+
 ---
 
 ## 简体中文
@@ -38,7 +40,8 @@ Identity 身份  ──►  Memory upload 记忆上传  ──►  Service 服�
 | [Second Me 升级版](https://github.com/seasonsolt/Second-Me)（作者的第一次尝试，已冻结） | 同一架构，可替换模块升级到 2026 年第三季度的最好选择：Qwen3-1.7B、Apple Silicon 上 MLX LoRA、检索式记忆（事实来自检索，LoRA 只学风格）、8192 token 上下文、按 embedding 模型选检索阈值 | 仍然没有原话证据和按日期作答，置信度靠模型自评；不编造率最高 80%；检索式记忆按设计增删改不用重训，但评测中删除 0/2 生效 |
 | [Distilly](https://github.com/titanwings/distilly)（MIT，原名同事.skill） | 通读材料，生成一份人格与工作技能档案（Agent Skill），作答时只靠这份档案 | 没有检索和证据；档案一次性生成，更新靠重写；资料里没有的话题会用本人口吻编出立场（早期合成数据测试中，陷阱题 83% 被编造） |
 | [WeClone](https://github.com/xming521/WeClone)（AGPL-3.0） | 用聊天记录微调 LoRA，复刻口吻 | 只学口吻，不管事实是否有据；需要训练，许可为 AGPL |
-| mem0、Letta、Graphiti 等记忆框架 | 通用的智能体记忆 | 不是分身：没有人格维度、口吻和弃权规则；部分组件对中文支持差（例如 mem0 的 BM25 与实体抽取写死英文模型） |
+| mem0、Letta、Graphiti / Zep、MemOS、Cognee、MIRIX 等记忆框架 | 给智能体用的通用记忆：抽取事实（mem0）、可自我编辑的记忆块（Letta）、带有效期的时序知识图谱（Graphiti）、可组合的记忆仓（MemOS）、知识图谱（Cognee）、按类型分的个人活动记忆（MIRIX） | 不是分身：记的是"关于用户的事实"，不是"这个人是谁、怎么想、怎么说"；没有人格维度、口吻模仿和弃权规则；榜单（LoCoMo、LongMemEval）测的是对话回忆准确率，不测像不像本人；部分组件对中文支持差（例如 mem0 的 BM25 与实体抽取写死英文模型） |
+| Duix-Avatar（HeyGem）、LiveTalking、Fay 等数字人 | 形象克隆、口型同步视频、声音克隆，部分带对话和知识库 | 只解决"长得像、声音像"，没有身份级的记忆：回答内容不出自本人资料，也没有证据和弃权 |
 
 ### 先试过升级 Second Me：为什么另起炉灶
 
@@ -61,6 +64,55 @@ twin 不是第一次尝试。作者先 fork 了 Second Me（[seasonsolt/Second-M
 | 更新要重新训练 | 不做 LoRA；新资料导入后增量抽取、重建索引即可生效。微调只能作为默认关闭的风格插件，在评测上显著胜出才允许打开 |
 | 没有可信评测 | 内置评测框架：题库与资料留在仓库外，评委团、重复作答、按来源分组的置信区间、每次运行的来源记录 |
 
+### 记忆架构
+
+twin 的记忆不是"把文本切块放进向量库"，而是两层：**本人说过的原话**，和从原话里提炼、每条都带证据的**人格档案**。
+
+```
+资料（笔记、聊天记录、文档、录音/视频转写、问卷、访谈）
+  │ 解析：只保留本人说的话；他人姓名化名；录音视频先区分说话人、认出哪位是本人
+  ▼
+原话 Expression ──── 每句带日期、渠道、上下文（被问的问题 / 前几条他人消息），标明是本人原话还是第三方转述
+  │ 抽取（按 6000 字分段，大模型）：每个候选结论必须附 1–3 段逐字核对通过的原话，核对不过就丢弃
+  ▼
+候选 Candidate ──── 归入 9 个维度、39 个细项（经历、价值观、怎么做决定、怎么思考、擅长什么、说话方式、和人相处、最近关注、生活喜好）
+  │ 合并（按细项，大模型）：同义合并；行为证据优先于自述；自述与行为矛盾时标出 conflict
+  ▼
+档案条目 PersonaItem ── 结论 + 适用场景 + 证据列表（原话、日期、来源、自述/行为）；按"不同来源 × 不同日期"计次
+  │ 本人可以确认、修改或否决每一条；审阅结果在之后的重新合并中保留
+  ▼
+索引 ──── 档案条目和原话各一个向量空间；换 embedding 模型时自动重建
+```
+
+**作答时**，每次组装同一套材料：与问题最相关的 12 条档案和 6 句原话；每个维度证据最多的 2 条作为"核心画像"（不管问什么都在）；最近 8 句本人的聊天原话作为"说话样本"；最近 8 轮对话。模型先判断问题属于哪一类：
+
+| 模式 | 什么时候 | 怎么回答 |
+| --- | --- | --- |
+| 有据（grounded） | 问的是本人的观点、经历、做法，资料里有 | 只依据档案和原话，用本人口吻，标出引用了哪些条目 |
+| 通用（general） | 与本人无关的知识或方法问题 | 照常帮忙，开头说明这不是本人的观点 |
+| 弃权（abstain） | 关于本人但资料里没有，或要替本人承诺、评价具体他人 | 用本人口吻说明这得问本人，不编 |
+
+回答之后还有三道机械检查，不依赖模型自觉：
+
+- **引用核对**：只保留真实出现在材料里的引用编号。
+- **置信度封顶**：通用回答 ≤ 0.5；没有引用或弃权 ≤ 0.3；只引用了未经本人确认的转述 ≤ 0.6。
+- **引号守卫**：回答里加了引号、却在材料里找不到逐字出处的"原话"，自动去掉引号，不把转述冒充成本人原话。
+
+**更新**是确定性的增量计算，不重训：分段、候选、条目的编号都由内容哈希得出，新增资料只抽取没见过的分段，只有候选集合变了的细项才重新合并，删除资料会让依赖它的条目随之更新或消失，并给出逐细项的增删改清单。每条证据都有日期，可以回答"截至某一天，他会怎么说"。
+
+**隐私**：每个分身一个独立的 SQLite 文件；对话按登录的人分开；他人姓名在进入大模型、向量和聊天之前统一化名；生活类细项需要本人同意才抽取；后台如实显示哪些服务会让数据离开本机。
+
+和"智能体记忆"框架的区别可以归结为下面几点：
+
+| | 智能体记忆（mem0、Letta、Graphiti、MemOS 等） | twin |
+| --- | --- | --- |
+| 记什么 | 关于用户和世界的事实，服务于完成任务 | 这个人是谁、怎么想、怎么做决定、怎么说话 |
+| 证据 | 部分有来源追溯（Graphiti） | 每条结论都带逐字核对过的本人原话和日期 |
+| 不知道时 | 没有专门的弃权机制 | 三种模式之一，资料没有就弃权 |
+| 口吻 | 人设只是一段提示词 | 说话样本 + 说话方式维度，评测里单独打分 |
+| 随时间变化 | Graphiti 用有效期表示事实变化 | 证据带日期，可以按任意一天作答 |
+| 形象和声音 | 不涉及 | 本人照片和声音克隆，回答可以被"说出来"、配真人视频 |
+
 ### 评测能体现什么
 
 **作者本人资料（59 题）。** 2026-10-05，同一套题库、同一个评分脚本和评委模型（Second Me 项目的 `judge.py`，`gpt-6.1-sol`）。twin 每题作答 3 次；表中 twin 取第 1 次回答，与 Second Me 每题一次的做法一致；升级版本一栏取它修复前后几次运行中的最好值或区间：
@@ -77,18 +129,20 @@ twin 不是第一次尝试。作者先 fork 了 Second Me（[seasonsolt/Second-M
 
 **换不同家族的评委复核。** 冻结 Second Me fork 时，用 `claude-sonnet-5-5`（与所有作答模型都不同家族）对同一份资料、57 道题（不含记忆更新）单次重评，方向一致：事实 twin 98.4% / 原始 6.2% / 升级 68.8%，不编造 100% / 10% / 80%，风格 3.9 / 1.0 / 1.9，通用 2.0 / 2.2 / 3.0。完整表格见 [seasonsolt/Second-Me](https://github.com/seasonsolt/Second-Me) 的 README。
 
-**当前版本（2026-10-06，twin 自己的评测框架）。** 作答用不开思考的快速模型（与当时线上部署一致；现在评测作答走 `[chat_llm]`，见 [docs/PERSONAL_EVAL.md](docs/PERSONAL_EVAL.md)），评委固定为 `gpt-6.1-sol`，每题作答 3 次，括号内为 95% 区间：
+**当前版本（twin 自己的评测框架）。** 同一份资料、同一套题，评委固定为 `gpt-6.1-sol`，每题作答 3 次，括号内为 95% 区间。作答模型由 `[chat_llm]` 决定（见 [docs/PERSONAL_EVAL.md](docs/PERSONAL_EVAL.md)）：
 
-| 类别 | twin |
-| --- | --- |
-| 事实准确率（32 题） | 97.4%（93.2%–100%） |
-| 资料里没有的问题不编造（10 题） | 100% |
-| 风格像本人（10 题，1–5） | 4.2（4.0–4.4） |
-| 通用问题质量（5 题，1–5） | 4.5（4.1–4.8） |
-| 记忆更新（2 题 × 增改删，6 分） | 6 |
-| 回答里加引号却在资料里找不到的"原话" | 0（运行时自动去掉了 26 处这样的引号） |
+| 类别 | `gpt-5.6-sol`，不开思考（2026-10-06） | `deepseek-flash`，不开思考（2026-10-07，现在线上） |
+| --- | --- | --- |
+| 事实准确率（32 题） | 97.4%（93.2%–100%） | 97.9%（94.7%–100%） |
+| 资料里没有的问题不编造（10 题） | 100% | 90%（70%–100%） |
+| 风格像本人（10 题，1–5） | 4.2（4.0–4.4） | 4.0（3.9–4.1） |
+| 通用问题质量（5 题，1–5） | 4.5（4.1–4.8） | 3.9（3.5–4.3） |
+| 记忆更新（2 题 × 增改删，6 分） | 6 | 5 |
+| 回答里加引号却在资料里找不到的"原话" | 0（运行时去掉 26 处） | 0（运行时去掉 31 处） |
 
-通用问题从 2.6 提高到 4.5：与本人无关的问题，分身先说明"这不是本人的观点"，再给出一般性的回答，并在界面、语音和视频里标为"通用回答"。引号一项靠的是运行时检查：引号里的文字如果不在分身看到的资料里逐字出现，就去掉引号、保留文字，不把转述当成本人原话。
+线上用 `deepseek-flash` 是为了速度：同样的提示词下，第一个字约 0.7 秒、整段约 2 秒，`gpt-5.6-sol` 分别约 3.7 秒和 5 秒。代价写在表里：事实持平，但通用问题偏保守（15 次里有 5 次本该帮忙却弃权），口吻和不编造略降。针对它的提示词调整正在评测，结果会更新到这里。
+
+通用问题的做法：与本人无关的问题，分身先说明"这不是本人的观点"，再给出一般性的回答。引号一项靠的是运行时检查：引号里的文字如果不在分身看到的资料里逐字出现，就去掉引号、保留文字，不把转述当成本人原话。
 
 读这组数字要注意：
 

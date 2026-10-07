@@ -9,7 +9,6 @@ import {
 import { useLocation } from 'react-router';
 import { ArrowUp, Play } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
-import { ReplyReveal } from '../components/effects/ReplyReveal';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { Button, EmptyState, Textarea } from '../components/ui';
 import { Citations } from '../features/chat/Citations';
@@ -48,6 +47,21 @@ export function Chat() {
     return () => window.removeEventListener('twin-assets-changed', changed);
   }, []);
   const audio = useReplyAudio(active);
+  const autoSpoken = useRef<string | null>(null);
+  useEffect(() => {
+    const turn = chat.turns.find((entry) => entry.id === chat.newest);
+    if (
+      !active ||
+      !capabilities?.available ||
+      !turn?.reply ||
+      turn.reply.abstain ||
+      turn.reply.mode === 'abstain' ||
+      autoSpoken.current === turn.id
+    )
+      return;
+    autoSpoken.current = turn.id;
+    audio.toggle(turn.id, turn.reply, name);
+  }, [active, capabilities, chat.turns, chat.newest, audio, name]);
   const [videoId, setVideoId] = useState('');
   const [videoPlaying, setVideoPlaying] = useState(false);
   const video = useReplyVideos(
@@ -154,7 +168,7 @@ export function Chat() {
   }, [active]);
   useEffect(() => {
     if (active) end.current?.scrollIntoView?.({ block: 'end' });
-  }, [active, chat.turns.length, chat.busy, composerHeight]);
+  }, [active, chat.turns, chat.busy, composerHeight]);
   const currentTurn = chat.turns.find(
     (turn) => turn.id === (videoId || audio.id),
   );
@@ -307,9 +321,7 @@ export function Chat() {
                     (turn.reply?.abstain || turn.reply?.mode === 'abstain');
                   return {
                     id: turn.id,
-                    text: abstain
-                      ? turn.reply?.abstain_reason || turn.content
-                      : turn.content,
+                    text: turn.content,
                     content: (
                       <article
                         aria-label={turn.role === 'user' ? '你说' : '分身回复'}
@@ -322,7 +334,7 @@ export function Chat() {
                         }
                       >
                         {abstain ? (
-                          <p>{turn.reply?.abstain_reason || turn.content}</p>
+                          <p className="whitespace-pre-wrap">{turn.content}</p>
                         ) : (
                           <>
                             <div
@@ -332,14 +344,9 @@ export function Chat() {
                                 (videoId === turn.id && videoPlaying)
                               }
                             >
-                              {turn.role === 'twin' &&
-                              turn.id === chat.newest ? (
-                                <ReplyReveal text={turn.content} />
-                              ) : (
-                                <p className="whitespace-pre-wrap">
-                                  {turn.content}
-                                </p>
-                              )}
+                              <p className="whitespace-pre-wrap">
+                                {turn.content}
+                              </p>
                               {turn.reply && (
                                 <div className="mt-1">
                                   <div
@@ -434,7 +441,7 @@ export function Chat() {
                   };
                 })}
               />
-              {chat.busy && (
+              {chat.busy && !chat.newest && (
                 <div className="py-3">
                   <ThinkingLabel />
                 </div>

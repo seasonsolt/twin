@@ -57,6 +57,7 @@ provider = "openai_compat"
 # model = "your-model"
 # base_url = "http://127.0.0.1:8000/v1"
 api_key_env = "TWIN_LLM_KEY"
+# hedge_after_s = 2.5 # 流式聊天首 token 超时后只追加一次竞速请求；0 禁用
 # reasoning_effort_extract = "low"  # 提取/合并的思考档位；不写则沿用 reasoning_effort，但 none 自动改为 low
 
 # 可选聊天专用模型：不配置时沿用 [llm]；提取、构建、问卷及默认评委仍使用 [llm]。
@@ -69,6 +70,7 @@ api_key_env = "TWIN_LLM_KEY"
 # api_key_env = "TWIN_LLM_KEY_DEEPSEEK"
 # json_mode = "json_object"
 # extra_body = { thinking = { type = "disabled" } }
+# hedge_after_s = 2.5 # 配置 [chat_llm] 时使用这里的值；流式请求不使用 JSON mode
 
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。

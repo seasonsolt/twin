@@ -129,7 +129,9 @@ class SecurityMiddleware:
                 response_headers = MutableHeaders(scope=message)
                 for name, value in _SECURITY_HEADERS.items():
                     response_headers.setdefault(name, value)
-                if is_api or int(message.get("status", 200)) >= 500:
+                if response_headers.get("content-type", "").startswith("text/event-stream"):
+                    response_headers["Cache-Control"] = "no-cache"
+                elif is_api or int(message.get("status", 200)) >= 500:
                     response_headers["Cache-Control"] = "no-store"
                 else:
                     # Revalidate the page and its assets on every load after an upgrade.

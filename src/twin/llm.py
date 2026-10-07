@@ -12,6 +12,7 @@ pydantic instance back. Backends:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -20,7 +21,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from typing import Any, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -296,6 +297,7 @@ class OpenAICompatLLM:
         max_retries: int = 2,
         reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None,
         extra_body: dict[str, Any] | None = None,
+        async_client: Any | None = None,
     ) -> None:
         import openai
 
@@ -316,6 +318,45 @@ class OpenAICompatLLM:
             max_retries=0,
         )
         self.base_url = str(getattr(self._client, "base_url", base_url or os.environ.get("OPENAI_BASE_URL", "")))
+        self._async_client = async_client
+        self._async_options: dict[str, Any] = {
+            "base_url": base_url,
+            "api_key": key_from_env(api_key_env) or "EMPTY",
+            "timeout": timeout,
+            "max_retries": 0,
+        }
+
+    async def stream(
+        self, *, system: str, user: str, effort: Effort = "medium", max_tokens: int | None = None
+    ) -> AsyncGenerator[str]:
+        import openai
+
+        if self._async_client is None:
+            self._async_client = openai.AsyncOpenAI(**self._async_options)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
+            "stream": True,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        if self.extra_body:
+            # Plain text even when this backend's structured calls use JSON mode.
+            kwargs["extra_body"] = {k: v for k, v in self.extra_body.items() if k != "response_format"}
+        if self.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        try:
+            stream = await self._async_client.chat.completions.create(**kwargs)
+            try:
+                async for chunk in stream:
+                    for choice in chunk.choices:
+                        if choice.finish_reason == "content_filter" or getattr(choice.delta, "refusal", None):
+                            raise LLMRefusal(f"{self.name} refused", category="content_filter")
+                        if text := choice.delta.content:
+                            yield text
+            finally:
+                await stream.close()
+        except openai.APIError as e:
+            raise LLMError(f"{self.name}: {type(e).__name__}: {e}") from e
 
     def _response_format(self, schema: type[BaseModel]) -> dict[str, Any] | None:
         if self.json_mode == "json_schema":
@@ -396,6 +437,65 @@ class OpenAICompatLLM:
                     {"role": "user", "content": f"上面的输出不符合 schema：{e}\n请只输出修正后的完整 JSON。"}
                 )
         raise LLMInvalidOutput(f"{self.name}: {last_error}")
+
+
+async def hedged_stream(factory: Callable[[], AsyncIterator[str]], hedge_after_s: float) -> AsyncGenerator[str]:
+    """Race only the first nonempty token; cancellation closes both the HTTP response and iterator."""
+    streams: list[AsyncIterator[str]] = []
+    tasks: list[asyncio.Task[str]] = []
+    arrivals: list[int] = []
+
+    async def first(stream: AsyncIterator[str], index: int) -> str:
+        async for text in stream:
+            if text:
+                arrivals.append(index)
+                return text
+        raise LLMInvalidOutput("empty streaming reply")
+
+    def start() -> None:
+        stream = factory()
+        streams.append(stream)
+        tasks.append(asyncio.create_task(first(stream, len(tasks))))
+
+    async def close(index: int) -> None:
+        tasks[index].cancel()
+        await asyncio.gather(tasks[index], return_exceptions=True)
+        closer = getattr(streams[index], "aclose", None)
+        if closer is not None:
+            await closer()
+
+    start()
+    try:
+        if hedge_after_s > 0:
+            done, _ = await asyncio.wait(tasks, timeout=hedge_after_s)
+            if not done:
+                start()
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            # Both tasks may finish before the waiter resumes; preserve actual token arrival order.
+            for index in [*arrivals, *(i for i in range(len(tasks)) if i not in arrivals)]:
+                task = tasks[index]
+                if task not in done:
+                    continue
+                try:
+                    text = task.result()
+                except Exception:
+                    if pending or any(t in done and t is not task and t.exception() is None for t in tasks):
+                        continue
+                    raise
+                winner = tasks.index(task)
+                for index in range(len(tasks)):
+                    if index != winner:
+                        await close(index)
+                yield text
+                async for text in streams[winner]:
+                    if text:
+                        yield text
+                return
+    finally:
+        for index in range(len(tasks)):
+            await close(index)
 
 
 class _TransientCLIError(LLMError):

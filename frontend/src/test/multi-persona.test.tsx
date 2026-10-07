@@ -114,7 +114,10 @@ beforeEach(() => {
         counts: { sources: persona.sources, items: 0 },
         egress: [],
       });
-    if (path === '/api/persona/chat') return json(reply);
+    if (path === '/api/persona/chat/stream')
+      return new Response(`event: final\ndata: ${JSON.stringify(reply)}\n\n`, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
     if (path.startsWith('/api/persona/questionnaire'))
       return json({
         questions: [],
@@ -282,11 +285,51 @@ it('restores and saves chat history independently for each persona', async () =>
   );
   expect(sessionStorage.getItem(CHAT_KEY)).not.toContain('新的问题');
   const request = fetcher.mock.calls.find(
-    ([path]) => path === '/api/persona/chat',
+    ([path]) => path === '/api/persona/chat/stream',
   )![1];
   expect(selected(request)).toBe(B);
   act(() => usePersonas.getState().switchTo('default'));
   expect(screen.getByText('主人的历史')).toBeVisible();
+});
+
+it('aborts an unfinished reply on persona switch and never saves its partial text', async () => {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let signal: AbortSignal | null | undefined;
+  const cancel = vi.fn();
+  const original = fetcher.getMockImplementation()! as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((path: string, init?: RequestInit) => {
+    if (path !== '/api/persona/chat/stream') return original(path, init);
+    signal = init?.signal;
+    return Promise.resolve(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(value) {
+            controller = value;
+          },
+          cancel,
+        }),
+      ),
+    );
+  });
+  render(<ChatContext />);
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: '发送' })),
+  );
+  await act(async () =>
+    controller.enqueue(
+      new TextEncoder().encode('event: delta\ndata: {"text":"主人回复中"}\n\n'),
+    ),
+  );
+  expect(screen.getByText(/主人回复中/)).toBeInTheDocument();
+  await act(async () => usePersonas.getState().switchTo(B));
+  expect(signal?.aborted).toBe(true);
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(screen.queryByText(/主人回复中/)).not.toBeInTheDocument();
+  expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
+  expect(sessionStorage.getItem(personaKey(CHAT_KEY, B))).toBeNull();
 });
 
 const videoTurns: Turn[] = [

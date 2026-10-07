@@ -160,11 +160,11 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 名字保存到 p_meta 的 identity:name，介绍保存到 identity:about；有效名字为用户保存值，否则为配置 target_name。用户保存的名字也参与说话人匹配，配置名字与别名仍有效。介绍设定或变化时，事务内替换标题为“自我介绍”的笔记，并触发自动处理；清空介绍删除旧笔记。单独改名字不重复添加笔记。
 
-聊天使用 MessageList、最新回复的 ReplyReveal、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时直接显示友好的弃权回复（200），不创建聊天任务；正常聊天任务每秒轮询，离页取消等待和请求，不取消服务端任务。
+聊天使用 MessageList、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。通过 fetch 读取 `POST /api/persona/chat/stream` 的 SSE，首个 delta 后隐藏思考指示，正文直接追加，不使用 ReplyReveal 的人工延迟；final 用引号校验后的正文替换并附加依据。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。离页、切换分身或新请求取消旧流。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时流直接返回友好的弃权回复，不初始化模型。旧聊天任务接口仍可用。
 
 每条分身回复（包括弃权）左侧由 `features/chat/ChatAvatar.tsx` 显示 36px 圆头像，优先级为 **肖像 > VRM 静态预览 > 姓名首字**；图片或模型失败继续回退，聊天绝不使用 2D 插画。非弃权回复下方只提供主按钮“播放”（播放中为“暂停”），触控区域至少 44×44px；general 回答同样支持，保留原回答全部正文，不追加提示。弃权不提供媒体操作，也不启动视频任务。
 
-`features/chat/useReplyAudio.ts` 管理全聊天唯一的语音播放状态。点击“播放”先 POST `/api/media/audio`，带 `segments: [0]`，首段返回并解码后立即播放；其余脚本段最多两个并行请求，提前下载、解码，严格按脚本段及段内分片顺序播放。`GaplessAudio.ts` 用 Web Audio 时间轴连续排程，就绪分片之间无额外停顿；不支持 Web Audio 时回退 `<audio>`。分片未就绪时等待，返回后立即继续；重复播放复用回复缓存、解码缓冲和服务端原有缓存键。ARIA 名称为“播放语音”/“暂停语音”。暂停保留分片与时间，开始另一条回复先停止前一条。回复下方细进度线按分片时长和播放时间累计（剩余时长未齐时估算）；当前头像复用 `features/avatar/SpeakingGlow.tsx` 的弹簧光环，强度取当前分片播放时间 × lipsync.fps 的 level，不伪造嘴部。暂停、等待或结束时光环淡出，减少动态效果时仅显示静态说话圆点。错误显示回复内的中文小字，可再次点击“播放”；离页、清空和卸载停止音频并释放请求与 rAF。聊天仅保留原生按钮键盘行为，不提供逐句导航、快捷键帮助或 HTML/2D 片段导出入口；相关后端接口保留供 API/CLI 使用。
+`features/chat/useReplyAudio.ts` 管理全聊天唯一的语音播放状态。新回复收到 final 后，非弃权且语音可用时立即启动朗读，在真人视频生成期间由肖像显示说话状态。自动朗读或点击“播放”先 POST `/api/media/audio`，带 `segments: [0]`，首段返回并解码后立即播放；其余脚本段最多两个并行请求，提前下载、解码，严格按脚本段及段内分片顺序播放。`GaplessAudio.ts` 用 Web Audio 时间轴连续排程，就绪分片之间无额外停顿；不支持 Web Audio 时回退 `<audio>`。分片未就绪时等待，返回后立即继续；重复播放复用回复缓存、解码缓冲和服务端原有缓存键。ARIA 名称为“播放语音”/“暂停语音”。暂停保留分片与时间，开始另一条回复先停止前一条。回复下方细进度线按分片时长和播放时间累计（剩余时长未齐时估算）；当前头像复用 `features/avatar/SpeakingGlow.tsx` 的弹簧光环，强度取当前分片播放时间 × lipsync.fps 的 level，不伪造嘴部。暂停、等待或结束时光环淡出，减少动态效果时仅显示静态说话圆点。错误显示回复内的中文小字，可再次点击“播放”；离页、清空和卸载停止音频并释放请求与 rAF。聊天仅保留原生按钮键盘行为，不提供逐句导航、快捷键帮助或 HTML/2D 片段导出入口；相关后端接口保留供 API/CLI 使用。
 
 可选 3D 预览由 `features/avatar/AvatarPreview.tsx` 统一选择并通过 React.lazy 加载 `Avatar3D.tsx`，props 为 `{url, mouth, speaking, onFallback}`。组件使用 GLTFLoader / VRMLoaderPlugin、头骨摄像机取景、令牌三点光、临界阻尼口型和头动、眨眼/lookAt 与模型 SpringBones；署名来自模型元数据。关于你页保持闭口，仍按 VRM > 肖像 > 2D 选择；画廊“形象对比”并排展示 2D/3D，共享演示口型轨和重播按钮。聊天的 VRM `still` 模式仅渲染一帧，不启动眨眼、头动或口型循环。离屏/隐藏停止 rAF，卸载销毁渲染器和模型资源；失败先回退配置肖像、再回退 2D，MP4 导出仍为 2D。CSP 的 img-src 允许 blob: 加载内嵌纹理，media-src 允许本地与 blob: 录音回放；配置与许可注意事项见 [MEDIA.md](MEDIA.md#浏览器-3d-形象v1)。
 
@@ -177,6 +177,12 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 可选的“回答几个问题”有 20 题、九个日常主题，全部可以跳过，所有已答内容都成为记忆。按 API section 分组，用 FlowStepper 导航到首个未答组；跳过清空答案，空答案不计已答。草稿 800ms 防抖、版本化串行 PUT；保存回答等待草稿成功，确认说明记忆导入与替换。离页完成待写草稿，小于 60KB 时尽力 keepalive，不另存个人答案。仅未保存且写入中的离开才警告。没有轮次切换或重测入口。
 
 关于你独立读取 identity 与 media capabilities；预览失败不影响名字编辑。小的“外部服务”区域读取 status.egress，仅列实际配置且外部的服务，用“大模型 / 向量 / 朗读 / 语音识别 / 视频生成 / 回答检查”和主机描述，不显示提供方 ID；不展示技术分类表。3D 署名仍来自模型元数据；形象闭口、减少动态效果不眨眼。
+
+## 流式聊天延迟检查
+
+`[chat_llm]`（未配置则 `[llm]`）的 `hedge_after_s` 默认 2.5 秒，0 禁用；首 token 未到时最多追加一个相同请求，先返回正文的胜出，另一个取消并关闭。OpenAI 兼容流式调用保留 extra_body，但不请求 JSON mode：正文之后是 `<<<META>>>` 独立行和元数据 JSON。无效元数据保留正文，返回无引用、零置信度的保守弃权；最终仍执行引用过滤、置信度上限、引号校验与原有聊天日志。核心画像不随检索问题改变，系统提示按同一分身的档案保持稳定。
+
+运行 `uv run python scripts/chat_latency.py http://127.0.0.1:8765 --persona default`，打印五个问题的 first delta 与 final 秒数。启用登录时通过 `TWIN_SESSION` 环境变量提供会话 cookie；`--questions` 可传入五个自定义问题。脚本会产生普通聊天日志，不会验证真实回答质量；模型和网络延迟仍取决于部署。
 
 ## API 与任务契约
 
@@ -207,6 +213,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `POST /api/persona/items/{id}/review` | confirmed/edited/rejected/unreviewed；edited 必须非空 |
 | `GET /api/persona/coverage?as_of=...` | 完成度、来源矩阵、等级标签、分类版本、建议 |
 | `POST /api/persona/chat` | messages（≤40 条、每条≤4000 字、最后非空 user）；有档案时 202 job_id，结果 ChatReply + cited；无档案时 200 直接返回友好弃权回复 |
+| `POST /api/persona/chat/stream` | 同样的请求与鉴权/分身隔离；200 text/event-stream，delta `{text}` → final `ChatReply + cited`，失败为 error `{detail}`；立即发送注释、等待期间每 10 秒心跳；no-cache、X-Accel-Buffering: no |
 | `GET /api/persona/questionnaire?round=initial` | 问题、答案、提交状态 |
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
 | `POST /api/persona/questionnaire/submit` | 导入全部回答并尝试构建；只支持 initial |

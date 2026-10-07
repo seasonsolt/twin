@@ -44,6 +44,7 @@ class LLMSettings(BaseModel):
     effort_twin: Effort = "high"
     max_tokens: int | None = Field(default=None, gt=0)
     timeout: float = Field(default=600.0, gt=0)
+    hedge_after_s: float = Field(default=2.5, ge=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
     extra_body: dict[str, JsonValue] = Field(default_factory=dict)
     egress: Literal["local", "external"] | None = None

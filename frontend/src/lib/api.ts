@@ -35,7 +35,7 @@ export function handleApiFailure(status: number, data: unknown) {
 export type ApiOptions = Omit<RequestInit, 'body'> & {
   json?: unknown;
   form?: FormData;
-  responseType?: 'json' | 'text';
+  responseType?: 'json' | 'text' | 'stream';
 };
 
 export async function api<T>(
@@ -73,6 +73,7 @@ export async function api<T>(
     if (error instanceof Error && error.name === 'AbortError') throw error;
     throw new ApiError(0, '无法连接本地服务，请检查服务是否启动');
   }
+  if (response.ok && responseType === 'stream') return response as T;
   const data: unknown =
     response.status === 204
       ? null

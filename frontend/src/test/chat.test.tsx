@@ -73,12 +73,26 @@ const json = (data: unknown, status = 200) =>
   });
 let fetchMock: ReturnType<typeof vi.fn>;
 let fail = false;
-let jobStatus = 'done';
+let streamController: ReadableStreamDefaultController<Uint8Array>;
+const encode = (event: string, data: unknown) =>
+  new TextEncoder().encode(
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+  );
+const streamReply = (answer: ChatReply) =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encode('delta', { text: answer.reply }));
+        controller.enqueue(encode('final', answer));
+        controller.close();
+      },
+    }),
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  );
 beforeEach(async () => {
   vi.mocked(useReducedMotion).mockReturnValue(true);
   sessionStorage.clear();
   fail = false;
-  jobStatus = 'done';
   fetchMock = vi.fn(async (url: string) => {
     if (url === '/api/status')
       return json({
@@ -92,17 +106,22 @@ beforeEach(async () => {
         backend: null,
         video: { available: true },
       });
-    if (url === '/api/persona/chat') {
+    if (url === '/api/persona/chat/stream') {
       if (fail) {
         fail = false;
         return json({ detail: '还没有人格档案，请先构建' }, 400);
       }
-      return json({ job_id: 'j/1' }, 202);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
     }
     if (url === '/api/media/video') return json({ job_id: 'v1' });
     if (url === '/api/media/video/jobs/v1') return json({ status: 'running' });
-    if (url === '/api/jobs/j%2F1')
-      return json({ status: jobStatus, result: reply });
     throw new Error(`Unexpected API: ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -139,9 +158,9 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
     url: string,
   ) => Promise<Response>;
   fetchMock.mockImplementation((url: string) =>
-    url === '/api/persona/chat'
+    url === '/api/persona/chat/stream'
       ? Promise.resolve(
-          json({
+          streamReply({
             ...reply,
             reply: '记忆还在处理中，等我记住后再聊吧。',
             abstain_reason: '记忆还在处理中，等我记住后再聊吧。',
@@ -180,12 +199,11 @@ it('fills and focuses the composer from each starter without sending', async () 
     expect(screen.getByRole('textbox', { name: '你说' })).toHaveFocus();
   }
   expect(
-    fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat'),
+    fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat/stream'),
   ).toBe(false);
 });
 
-it('sends, polls queued/running jobs, renders only the abstention reason and persists complete turns', async () => {
-  vi.useFakeTimers();
+it('streams progressively, hides thinking on the first delta, then replaces text and persists metadata', async () => {
   mount();
   await submit();
   expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
@@ -196,27 +214,33 @@ it('sends, polls queued/running jobs, renders only the abstention reason and per
   );
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   const init = fetchMock.mock.calls.find(
-    ([url]) => url === '/api/persona/chat',
+    ([url]) => url === '/api/persona/chat/stream',
   )![1] as RequestInit;
   expect(JSON.parse(init.body as string)).toEqual({
     messages: [{ role: 'user', content: '你怎么看？' }],
   });
   expect(new Headers(init.headers).get('X-Twin')).toBe('1');
-  jobStatus = 'running';
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
-  });
   expect(
     screen
       .getAllByRole('status')
       .some((node) => node.textContent?.includes('思考中…')),
   ).toBe(true);
-  jobStatus = 'done';
+  await act(async () =>
+    streamController.enqueue(encode('delta', { text: '先听' })),
+  );
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent('先听');
+  expect(screen.queryByText('思考中…')).not.toBeInTheDocument();
+  await act(async () =>
+    streamController.enqueue(encode('delta', { text: '大家' })),
+  );
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent('先听大家');
+  expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
+    streamController.enqueue(encode('final', reply));
+    streamController.close();
   });
   const abstention = screen.getByLabelText('分身回复');
-  expect(abstention).toHaveTextContent(/^证据不足$/);
+  expect(abstention).toHaveTextContent(reply.reply);
   expect(abstention.children).toHaveLength(1);
   expect(abstention).toHaveClass('text-secondary');
   expect(abstention.querySelector('time, button, img')).toBeNull();
@@ -234,6 +258,46 @@ it('sends, polls queued/running jobs, renders only the abstention reason and per
     ),
   ).toEqual(['user', 'twin']);
 });
+it('replaces draft text with guarded final text, attaches citations and starts voice only on final', async () => {
+  const original = fetchMock.getMockImplementation()! as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string, init: RequestInit) =>
+    url === '/api/media/audio'
+      ? new Promise<Response>(() => {})
+      : original(url, init),
+  );
+  mount();
+  await submit();
+  await act(async () =>
+    streamController.enqueue(encode('delta', { text: '不正确的初稿' })),
+  );
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent('不正确的初稿');
+  expect(fetchMock.mock.calls.some(([url]) => url === '/api/media/audio')).toBe(
+    false,
+  );
+  const final = {
+    ...reply,
+    reply: '修正后的回复',
+    abstain: false,
+    abstain_reason: '',
+    mode: 'grounded',
+  };
+  await act(async () => {
+    streamController.enqueue(encode('final', final));
+    streamController.close();
+  });
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent('修正后的回复');
+  expect(screen.queryByText('不正确的初稿')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '依据 1' })).toBeInTheDocument();
+  const saved = JSON.parse(sessionStorage.getItem(CHAT_KEY)!);
+  expect(saved.at(-1).reply).toEqual(final);
+  expect(
+    fetchMock.mock.calls.filter(([url]) => url === '/api/media/audio'),
+  ).toHaveLength(1);
+});
+
 it('renders general reply text without mode or confidence badges', async () => {
   sessionStorage.setItem(
     CHAT_KEY,
@@ -301,16 +365,15 @@ it('shows Chinese detail and retries without duplicating the failed user turn', 
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
   });
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
+    streamController.enqueue(encode('final', reply));
+    streamController.close();
   });
-  expect(screen.getByLabelText('分身回复')).toHaveTextContent(
-    reply.abstain_reason,
-  );
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent(reply.reply);
   expect(
     screen.getAllByLabelText('你说', { selector: 'article' }),
   ).toHaveLength(1);
   expect(
-    fetchMock.mock.calls.filter(([url]) => url === '/api/persona/chat'),
+    fetchMock.mock.calls.filter(([url]) => url === '/api/persona/chat/stream'),
   ).toHaveLength(2);
 });
 it('does not send on composition, keyCode 229, or Shift+Enter', async () => {
@@ -324,7 +387,7 @@ it('does not send on composition, keyCode 229, or Shift+Enter', async () => {
   fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
   fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
   expect(
-    fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat'),
+    fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat/stream'),
   ).toBe(false);
 });
 it('restores static history and clears immediately without confirmation', async () => {
@@ -350,52 +413,38 @@ it('restores static history and clears immediately without confirmation', async 
   );
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
 });
-it('stops polling on route change and aborts an in-flight poll on unmount', async () => {
-  vi.useFakeTimers();
-  jobStatus = 'running';
+it('aborts streaming on route change and unmount without polling', async () => {
   const rendered = mount();
   await submit();
-  await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: '切换路由' }));
-  });
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(5000);
-  });
+  const signal = fetchMock.mock.calls.find(
+    ([url]) => url === '/api/persona/chat/stream',
+  )![1].signal;
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: '切换路由' })),
+  );
+  expect(signal.aborted).toBe(true);
   expect(
     fetchMock.mock.calls.some(([url]) => url.startsWith('/api/jobs/')),
   ).toBe(false);
   rendered.unmount();
   const second = mount();
   await submit();
-  let signal: AbortSignal | undefined;
-  fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
-    if (url.startsWith('/api/jobs/')) {
-      signal = init.signal!;
-      return new Promise<Response>(() => {});
-    }
-    return json({ stale: false });
-  });
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
-  });
+  const secondSignal = fetchMock.mock.calls
+    .filter(([url]) => url === '/api/persona/chat/stream')
+    .at(-1)![1].signal;
   second.unmount();
-  expect(signal?.aborted).toBe(true);
+  expect(secondSignal.aborted).toBe(true);
 });
-it('renders job failure inline with retry', async () => {
-  vi.useFakeTimers();
-  fetchMock.mockImplementation(async (url: string) => {
-    if (url.startsWith('/api/jobs/'))
-      return json({ status: 'failed', error: '模型暂时不可用' });
-    return json(
-      url === '/api/persona/chat' ? { job_id: 'j/1' } : { stale: false },
-    );
-  });
+it('renders stream failure inline with retry', async () => {
   mount();
   await submit();
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
+    streamController.enqueue(encode('delta', { text: '部分回复' }));
+    streamController.enqueue(encode('error', { detail: '模型暂时不可用' }));
+    streamController.close();
   });
   expect(screen.getByRole('alert')).toHaveTextContent('模型暂时不可用');
+  expect(screen.queryByLabelText('分身回复')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '重试' })).toBeEnabled();
 });
 it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', () => {
@@ -485,7 +534,10 @@ it('scrolls to the newest message on both send and receive', async () => {
   await submit();
   expect(scroll.mock.calls.length).toBeGreaterThan(initial);
   const sent = scroll.mock.calls.length;
-  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  await act(async () => {
+    streamController.enqueue(encode('final', reply));
+    streamController.close();
+  });
   expect(scroll.mock.calls.length).toBeGreaterThan(sent);
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });

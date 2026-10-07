@@ -3,18 +3,20 @@ read its completeness and chat."""
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import email.parser
 import email.policy
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+import json
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -27,7 +29,7 @@ from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
 from ..persona.profile import build_profile, consented_facets, profile_stale, source_memories
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial
-from ..persona.schema import SOURCE_KIND_LABELS, ChatTurn, ReviewStatus, SourceKind, evidence_class
+from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from .backends import Backends
@@ -111,16 +113,33 @@ def run_chat(settings: Settings, llm: LLM, embedder: Embedder, messages: list[Ch
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
         reply = PersonaChat(store, llm, embedder, settings).reply(messages)
-        items = {i.item_id: i for i in store.list_items()}
-        cited: list[dict[str, Any]] = []
-        for ref in reply.citations:
-            if (item := items.get(ref)) is not None:
-                facet = FACET_BY_ID[item.facet_id].name
-                cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
-            elif (e := store.get_expression(ref)) is not None:
-                day = e.date.isoformat() if e.date else None
-                cited.append({"id": ref, "kind": "expression", "date": day, "channel": e.channel, "text": e.text})
+        return chat_payload(store, reply)
+
+
+def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
+    items = {i.item_id: i for i in store.list_items()}
+    cited: list[dict[str, Any]] = []
+    for ref in reply.citations:
+        if (item := items.get(ref)) is not None:
+            facet = FACET_BY_ID[item.facet_id].name
+            cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
+        elif (e := store.get_expression(ref)) is not None:
+            day = e.date.isoformat() if e.date else None
+            cited.append({"id": ref, "kind": "expression", "date": day, "channel": e.channel, "text": e.text})
     return {**reply.model_dump(mode="json"), "cited": cited}
+
+
+def validate_chat(body: ChatBody) -> list[ChatTurn]:
+    messages = body.messages
+    if messages[-1].role != "user" or not messages[-1].content.strip():
+        raise HTTPException(400, "最后一条消息必须是你说的话，且不能为空")
+    if any(len(m.content) > MAX_MESSAGE_CHARS for m in messages):
+        raise HTTPException(400, f"单条消息不能超过 {MAX_MESSAGE_CHARS} 字")
+    return messages
+
+
+def sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 
 def register(
@@ -371,11 +390,7 @@ def register(
 
     @app.post("/api/persona/chat", status_code=202)
     def start_chat(body: ChatBody) -> Any:
-        messages = body.messages
-        if messages[-1].role != "user" or not messages[-1].content.strip():
-            raise HTTPException(400, "最后一条消息必须是你说的话，且不能为空")
-        if any(len(m.content) > MAX_MESSAGE_CHARS for m in messages):
-            raise HTTPException(400, f"单条消息不能超过 {MAX_MESSAGE_CHARS} 字")
+        messages = validate_chat(body)
         with open_store() as store:
             if not store.list_items():
                 reply = no_profile_reply(store)
@@ -383,6 +398,54 @@ def register(
         llm, embedder = backends.chat_llm(), backends.embedder()
         job = jobs.submit("chat", "和分身聊天", lambda log: run_chat(settings, llm, embedder, messages, log))
         return {"job_id": job.job_id}
+
+    @app.post("/api/persona/chat/stream")
+    def stream_chat(body: ChatBody) -> StreamingResponse:
+        messages = validate_chat(body)
+
+        async def produce() -> AsyncGenerator[str]:
+            with open_store() as store:
+                if not store.list_items():
+                    reply = no_profile_reply(store)
+                    yield sse_event("delta", {"text": reply.reply})
+                    yield sse_event("final", chat_payload(store, reply))
+                    return
+                llm, embedder = await run_in_threadpool(lambda: (backends.chat_llm(), backends.embedder()))
+                chat = PersonaChat(store, llm, embedder, settings)
+                async with aclosing(chat.stream_reply(messages)) as replies:
+                    async for result in replies:
+                        if isinstance(result, str):
+                            yield sse_event("delta", {"text": result})
+                        else:
+                            yield sse_event("final", chat_payload(store, result))
+
+        async def events() -> AsyncGenerator[str]:
+            yield ": connected\n\n"
+            stream = produce()
+            pending: asyncio.Task[str] | None = None
+            try:
+                while True:
+                    pending = asyncio.create_task(anext(stream))
+                    while not (await asyncio.wait({pending}, timeout=10))[0]:
+                        yield ": heartbeat\n\n"
+                    try:
+                        yield pending.result()
+                    except StopAsyncIteration:
+                        break
+            except Exception:
+                # Backend errors can contain prompts, URLs or credentials; never reflect them to the browser.
+                yield sse_event("error", {"detail": "分身暂时无法回复，请重试"})
+            finally:
+                if pending is not None:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                await stream.aclose()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/persona/questionnaire")
     def get_questionnaire(round: Round = "initial") -> dict[str, Any]:

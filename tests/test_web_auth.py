@@ -217,6 +217,19 @@ def test_protected_routes_and_access_headers_do_not_authenticate(web: TestClient
     assert result.headers["cache-control"] == "no-store"
 
 
+def test_streaming_chat_requires_login_and_persona_ownership(web: TestClient) -> None:
+    body = {"messages": [{"role": "user", "content": "问题"}]}
+    result = web.post("/api/persona/chat/stream", json=body, headers=CSRF)
+    assert result.status_code == 401 and result.json()["code"] == "login_required"
+    login(web)
+    own = create(web)
+    response = web.post("/api/persona/chat/stream", json=body, headers={**CSRF, "X-Twin-Persona": own})
+    assert response.status_code == 200 and "event: final" in response.text
+    login(web, OTHER)
+    denied = web.post("/api/persona/chat/stream", json=body, headers={**CSRF, "X-Twin-Persona": own})
+    assert denied.status_code == 404 and denied.json() == {"detail": "分身不存在"}
+
+
 def test_logout_expiration_csrf_and_static(web: TestClient) -> None:
     assert web.get("/").status_code == 200
     assert web.get("/api/whoami").status_code == 401

@@ -9,16 +9,23 @@ its confidence capped.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
-from collections.abc import Sequence
+import json
+import math
+from collections.abc import AsyncGenerator, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import aclosing
+from contextvars import copy_context
 from dataclasses import dataclass, field
 
 import numpy as np
+from pydantic import ValidationError
 
 from ..config import Settings
 from ..embed import Embedder, embedder_fingerprint
-from ..llm import LLM
+from ..llm import LLM, hedged_stream
 from ..util import Progress
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
@@ -180,19 +187,21 @@ class PersonaChat:
         self.settings = settings
 
     def retrieve(self, query: str, as_of: dt.date | None = None) -> PersonaContext:
-        items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of)}
-        expressions = {
-            e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
-        }
-        q = self.embedder.embed([_clip(query, 2000)])[0]
+        # Start network embedding while assembling the persona's stable material.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            embedding = pool.submit(copy_context().run, self.embedder.embed, [_clip(query, 2000)])
+            items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of)}
+            expressions = {
+                e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
+            }
+            q = embedding.result()[0]
         ranked_items = _rank(self.store, ITEMS_NS, q, items, K_ITEMS)
         ranked_expr = _rank(self.store, EXPRESSIONS_NS, q, expressions, K_EXPRESSIONS)
-        taken = {i.item_id for i, _ in ranked_items}
         core: list[PersonaItem] = []
         for d in DIMENSIONS:
             own = [i for i in items.values() if FACET_BY_ID[i.facet_id].dimension_id == d.dimension_id]
             own.sort(key=lambda i: (-i.occasions(), i.item_id))
-            core.extend(i for i in own[:CORE_PER_DIMENSION] if i.item_id not in taken)
+            core.extend(own[:CORE_PER_DIMENSION])
         chats = {s.source_id for s in self.store.list_sources(SourceKind.CHAT)}
         said = [
             e
@@ -217,6 +226,60 @@ class PersonaChat:
             schema=ChatDraft,
             effort=self.settings.effective_chat_llm.effort_twin,
         )
+        return self._finalize(draft, ctx, messages, as_of, persist=persist)
+
+    async def stream_reply(
+        self, messages: Sequence[ChatTurn], as_of: dt.date | None = None, *, persist: bool = True
+    ) -> AsyncGenerator[str | ChatReply]:
+        if not messages or messages[-1].role != "user":
+            raise ValueError("the last message must be the user's")
+        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
+            reply = no_profile_reply(self.store, as_of)
+            yield reply.reply
+            yield reply
+            return
+        users = [m.content for m in messages if m.role == "user"]
+        retrieval = asyncio.create_task(asyncio.to_thread(self.retrieve, "\n".join(users[-2:]), as_of))
+        try:
+            ctx = await asyncio.shield(retrieval)
+        except asyncio.CancelledError:
+            # The SQLite store must outlive the retrieval worker, even after a client disconnects.
+            await retrieval
+            raise
+        system = chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx)
+        user = chat_user_message(messages, ctx)
+        effort = self.settings.effective_chat_llm.effort_twin
+        stream = getattr(self.llm, "stream", None)
+        if stream is None:
+            draft = await asyncio.to_thread(
+                self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort
+            )
+            yield draft.reply
+        else:
+            parser = ChatStreamParser()
+            async with aclosing(
+                hedged_stream(
+                    lambda: stream(system=system + STREAM_FORMAT, user=user, effort=effort),
+                    self.settings.effective_chat_llm.hedge_after_s,
+                )
+            ) as chunks:
+                async for chunk in chunks:
+                    if delta := parser.feed(chunk):
+                        yield delta
+            if delta := parser.finish():
+                yield delta
+            draft = parser.draft()
+        yield self._finalize(draft, ctx, messages, as_of, persist=persist)
+
+    def _finalize(
+        self,
+        draft: ChatDraft,
+        ctx: PersonaContext,
+        messages: Sequence[ChatTurn],
+        as_of: dt.date | None,
+        *,
+        persist: bool,
+    ) -> ChatReply:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
@@ -245,6 +308,84 @@ class PersonaChat:
 
 
 # ---------------------------------------------------------------- prompts and schemas
+
+STREAM_FORMAT = """
+
+## 输出格式
+先直接输出回复正文（不要 JSON、代码块或 reply 标签），然后换行输出一行且仅一行 <<<META>>>，
+随后输出一个紧凑 JSON 对象，字段为 citations、confidence、mode、abstain、abstain_reason、topic_facets。
+citations 和 topic_facets 是字符串数组，confidence 是 0 到 1 的数字，mode 是 grounded、general 或 abstain，
+abstain 是布尔值，abstain_reason 是弃权原因字符串（不弃权时为空）。
+所有字段遵守上述规则。JSON 不包含 reply，正文只输出一次，不要在正文中输出分隔符。
+"""
+
+
+class ChatStreamParser:
+    """Hold only a possible delimiter at a line start, never expose metadata as reply text."""
+
+    marker = "<<<META>>>"
+
+    def __init__(self) -> None:
+        self.pending = ""
+        self.text = ""
+        self.metadata = ""
+        self.in_metadata = False
+        self.line_start = True
+
+    def feed(self, chunk: str) -> str:
+        if self.in_metadata:
+            self.metadata += chunk
+            return ""
+        self.pending += chunk
+        output = ""
+        while self.pending:
+            if self.line_start:
+                line, separator, rest = self.pending.partition("\n")
+                if line.rstrip("\r") == self.marker:
+                    if not separator:
+                        break
+                    self.in_metadata = True
+                    self.metadata = rest
+                    self.pending = ""
+                    break
+                if not separator and (self.marker.startswith(line) or line == self.marker + "\r"):
+                    break
+            line, separator, rest = self.pending.partition("\n")
+            output += line + separator
+            self.pending = rest
+            self.line_start = bool(separator)
+        self.text += output
+        return output
+
+    def finish(self) -> str:
+        if self.line_start and self.pending.rstrip("\r") == self.marker:
+            self.in_metadata = True
+            self.pending = ""
+        output, self.pending = self.pending, ""
+        self.text += output
+        return output
+
+    def draft(self) -> ChatDraft:
+        try:
+            if not self.in_metadata:
+                raise ValueError("missing delimiter")
+            metadata = json.loads(self.metadata)
+            if not isinstance(metadata, dict):
+                raise ValueError("metadata must be an object")
+            data = ChatDraft.model_validate({**metadata, "reply": self.text.rstrip("\r\n")})
+            if not math.isfinite(data.confidence):
+                raise ValueError("confidence must be finite")
+        except (ValueError, ValidationError):
+            # No second generation: keep every streamed word, claim no grounding without validated metadata.
+            return ChatDraft(
+                reply=self.text,
+                citations=[],
+                confidence=0,
+                mode="abstain",
+                abstain=True,
+                abstain_reason="",
+            )
+        return data
 
 
 CHAT_SYSTEM = """\

@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
 import { api, handleApiFailure } from '../../lib/api';
-import { getPersonaId, personaUrl } from '../../lib/persona';
+import { personaUrl } from '../../lib/persona';
 import type { AudioPart } from '../avatar/types';
 import type { ChatReply } from './types';
 import { GaplessAudio } from './GaplessAudio';
@@ -30,7 +34,7 @@ interface AudioReply {
 }
 
 export function useReplyAudio(active: boolean) {
-  const persona = getPersonaId();
+  const persona = usePersonaId();
   const audioRef = useRef<HTMLAudioElement>(null);
   const actions = useRef(idle);
   const cache = useRef(new Map<string, AudioReply>());
@@ -48,6 +52,8 @@ export function useReplyAudio(active: boolean) {
   useEffect(() => {
     const audio = audioRef.current;
     if (!active || !audio) return;
+    cache.current.clear();
+    buffers.current.clear();
     let alive = true;
     let state = { ...initial };
     let request: AbortController | null = null;
@@ -246,6 +252,7 @@ export function useReplyAudio(active: boolean) {
                 segments: [index],
               },
               signal: controller.signal,
+              headers: { 'X-Twin-Persona': persona },
             });
         if (!valid()) return;
         if (!result.segments.length)
@@ -326,7 +333,9 @@ export function useReplyAudio(active: boolean) {
       stop,
     };
     publish();
+    window.addEventListener('twin-persona-switch', stop);
     return () => {
+      window.removeEventListener('twin-persona-switch', stop);
       alive = false;
       stop();
       if (player) void player.close().catch(() => {});

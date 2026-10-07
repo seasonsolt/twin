@@ -1,4 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
 import { api, ApiError } from '../../lib/api';
 import { personaKey, personaUrl } from '../../lib/persona';
 import type { Job } from '../jobs/useJob';
@@ -88,7 +92,8 @@ export function useReplyVideos(
   name: string,
   assets = '',
 ) {
-  assets = personaKey(assets);
+  const personaId = usePersonaId();
+  assets = personaKey(assets, personaId);
   const records = useMemo(() => ({ current: runningJobs(assets) }), [assets]);
   const [view, setView] = useState<Record<string, ReplyVideoState>>({});
   const actions = useRef({
@@ -137,6 +142,8 @@ export function useReplyVideos(
                   answer: turn!.reply,
                   persona_name: persona,
                 },
+                signal: controller.signal,
+                headers: { 'X-Twin-Persona': personaId },
               });
               submissions.set(key(id, assets), submission);
             }
@@ -152,7 +159,10 @@ export function useReplyVideos(
           try {
             const job = await api<Job<VideoResult>>(
               `/api/media/video/jobs/${encodeURIComponent(state.jobId!)}`,
-              { signal: pollController.signal },
+              {
+                signal: pollController.signal,
+                headers: { 'X-Twin-Persona': personaId },
+              },
             );
             if (!alive) return;
             if (version !== resumeVersion) continue;
@@ -251,7 +261,7 @@ export function useReplyVideos(
       document.removeEventListener('visibilitychange', visible);
       actions.current = { update() {}, retry() {} };
     };
-  }, [active, assets, records]);
+  }, [active, assets, records, personaId]);
   useEffect(() => {
     actions.current.update(turns, name);
   }, [active, turns, name, assets]);

@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
 import { api } from '../../lib/api';
-import { getPersonaId, personaKey } from '../../lib/persona';
+import { personaKey } from '../../lib/persona';
 import type { QuestionnaireData, Round, Submission } from './types';
 
 export const SAVE_DELAY_MS = 800;
@@ -20,7 +24,7 @@ interface DraftSession {
 }
 
 export function useQuestionnaire(round: Round, active = true) {
-  const persona = getPersonaId();
+  const persona = usePersonaId();
   const [data, setData] = useState<QuestionnaireData | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -42,7 +46,7 @@ export function useQuestionnaire(round: Round, active = true) {
       if (draft.revision === draft.savedRevision) return true;
       const revision = draft.revision;
       const snapshot = { ...draft.answers };
-      if (draft.alive) {
+      if (draft.alive && draft.persona === persona) {
         setSaveState('saving');
         setSaveError('');
       }
@@ -77,7 +81,7 @@ export function useQuestionnaire(round: Round, active = true) {
       draft.saving = undefined;
       return ok;
     },
-    [],
+    [persona],
   );
 
   useEffect(() => {

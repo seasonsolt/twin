@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
 import { api } from '../../lib/api';
 import { toast } from '../../components/ui';
 import { useStatus } from '../../stores/status';
 import type { Coverage, ProfileItem, ReviewStatus } from './types';
 
 export function useProfile(active: boolean) {
+  const personaId = usePersonaId();
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [items, setItems] = useState<ProfileItem[]>([]);
   const [coverageError, setCoverageError] = useState('');
@@ -24,6 +29,7 @@ export function useProfile(active: boolean) {
     try {
       const report = await api<Coverage>('/api/persona/coverage', {
         signal: request.signal,
+        headers: { 'X-Twin-Persona': personaId },
       });
       if (!request.signal.aborted && alive.current) {
         setCoverage(report);
@@ -35,7 +41,7 @@ export function useProfile(active: boolean) {
           failure instanceof Error ? failure.message : '建议加载失败',
         );
     }
-  }, []);
+  }, [personaId]);
   const latestCoverageRefresh = useRef(refreshCoverage);
   useEffect(() => {
     latestCoverageRefresh.current = refreshCoverage;
@@ -49,7 +55,7 @@ export function useProfile(active: boolean) {
     try {
       const rows = await api<ProfileItem[]>(
         '/api/persona/items?include_rejected=false',
-        { signal: request.signal },
+        { signal: request.signal, headers: { 'X-Twin-Persona': personaId } },
       );
       if (!request.signal.aborted && alive.current) {
         const merged = rows.map(
@@ -68,13 +74,14 @@ export function useProfile(active: boolean) {
     } finally {
       if (!request.signal.aborted && alive.current) setLoading(false);
     }
-  }, []);
+  }, [personaId]);
   const latestItemsRefresh = useRef(refreshItems);
   useEffect(() => {
     latestItemsRefresh.current = refreshItems;
   }, [refreshItems]);
   useEffect(() => {
     alive.current = active;
+    optimistic.current = new Map();
     const requests = mutations.current;
     return () => {
       alive.current = false;
@@ -82,7 +89,7 @@ export function useProfile(active: boolean) {
       itemsRequest.current?.abort();
       requests.forEach((request) => request.abort());
     };
-  }, [active]);
+  }, [active, personaId]);
   useEffect(() => {
     if (active) void refreshCoverage();
     return () => coverageRequest.current?.abort();
@@ -98,6 +105,7 @@ export function useProfile(active: boolean) {
   ) => {
     if (!alive.current || optimistic.current.has(item.item_id)) return false;
     const request = new AbortController();
+    const reviewed = optimistic.current;
     mutations.current.add(request);
     const extracted = item.extracted_statement || item.statement;
     const updated: ProfileItem = {
@@ -148,7 +156,7 @@ export function useProfile(active: boolean) {
       return false;
     } finally {
       mutations.current.delete(request);
-      optimistic.current.delete(item.item_id);
+      reviewed.delete(item.item_id);
       if (!request.signal.aborted && alive.current)
         setPending(new Set(optimistic.current.keys()));
     }

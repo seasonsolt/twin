@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
   act,
   cleanup,
@@ -25,6 +26,7 @@ import { useReplyAudio } from '../features/chat/useReplyAudio';
 import { useReplyVideos, videoUrl } from '../features/chat/useReplyVideos';
 import { useQuestionnaire } from '../features/questionnaire/useQuestionnaire';
 import { api } from '../lib/api';
+import { useIdentity } from '../features/identity/useIdentity';
 import { uploadMedia } from '../lib/mediaUpload';
 import {
   getPersonaId,
@@ -44,6 +46,7 @@ const selected = (init?: RequestInit) =>
 let items: Persona[];
 let fetcher: ReturnType<typeof vi.fn>;
 let conversations: ReturnType<typeof conversationServer>;
+const conversationMounted = vi.fn();
 const reply = {
   reply: '独立回复',
   citations: [],
@@ -55,6 +58,7 @@ const reply = {
 };
 
 beforeEach(() => {
+  conversationMounted.mockClear();
   sessionStorage.clear();
   localStorage.clear();
   setPersonaId('default');
@@ -77,6 +81,8 @@ beforeEach(() => {
       is_default: false,
     },
   ];
+  usePersonas.getState().reset();
+  setPersonaId('default');
   usePersonas.setState({ id: 'default', items: [] });
   useStatus.setState({ data: null, error: null });
   fetcher = vi.fn(async (path: string, init?: RequestInit) => {
@@ -148,8 +154,10 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  usePersonas.getState().reset();
   setPersonaId('default');
   usePersonas.setState({ id: 'default', items: [] });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 function switcher() {
@@ -260,6 +268,9 @@ it('creates, switches and opens onboarding even though the new identity already 
 });
 
 function Conversation() {
+  useEffect(() => {
+    conversationMounted();
+  }, []);
   const chat = useConversation(true);
   return (
     <>
@@ -269,8 +280,7 @@ function Conversation() {
   );
 }
 function ChatContext() {
-  const id = usePersonas((state) => state.id);
-  return <Conversation key={id} />;
+  return <Conversation />;
 }
 it('restores and saves chat history independently for each persona', async () => {
   const turn = { id: 'same', role: 'twin', timestamp: 'now' };
@@ -287,7 +297,7 @@ it('restores and saves chat history independently for each persona', async () =>
   await waitFor(() =>
     expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy(),
   );
-  act(() => usePersonas.getState().switchTo(B));
+  await act(async () => usePersonas.getState().switchTo(B));
   expect(screen.queryByText('主人的历史')).not.toBeInTheDocument();
   expect(screen.getByText('朋友的历史')).toBeVisible();
   await waitFor(() =>
@@ -312,8 +322,9 @@ it('restores and saves chat history independently for each persona', async () =>
     ([path]) => path === '/api/persona/chat/stream',
   )![1];
   expect(selected(request)).toBe(B);
-  act(() => usePersonas.getState().switchTo('default'));
+  await act(async () => usePersonas.getState().switchTo('default'));
   expect(await screen.findByText('主人的历史')).toBeVisible();
+  expect(conversationMounted).toHaveBeenCalledOnce();
 });
 
 it('aborts an unfinished reply on persona switch and never saves its partial text', async () => {
@@ -433,8 +444,7 @@ function Questions() {
   );
 }
 function QuestionContext() {
-  const id = usePersonas((state) => state.id);
-  return <Questions key={id} />;
+  return <Questions />;
 }
 function AudioReply() {
   const audio = useReplyAudio(true);
@@ -452,8 +462,7 @@ function AudioReply() {
   );
 }
 function AudioContextPage() {
-  const id = usePersonas((state) => state.id);
-  return <AudioReply key={id} />;
+  return <AudioReply />;
 }
 it('stops playback and does not reuse another persona audio cache on switching', async () => {
   vi.stubGlobal('AudioContext', undefined);
@@ -475,7 +484,7 @@ it('stops playback and does not reuse another persona audio cache on switching',
   await waitFor(() =>
     expect(previous).toHaveAttribute('src', `${url}?persona=default`),
   );
-  act(() => usePersonas.getState().switchTo(B));
+  await act(async () => usePersonas.getState().switchTo(B));
   expect(pause).toHaveBeenCalled();
   expect(previous).not.toHaveAttribute('src');
   expect(view.container.querySelector('audio')).not.toHaveAttribute('src');
@@ -486,9 +495,12 @@ it('stops playback and does not reuse another persona audio cache on switching',
       `${url}?persona=${B}`,
     ),
   );
-  expect(fetcher).toHaveBeenCalledTimes(2);
-  expect(selected(fetcher.mock.calls[0][1])).toBe('default');
-  expect(selected(fetcher.mock.calls[1][1])).toBe(B);
+  const audioRequests = fetcher.mock.calls.filter(
+    ([path]) => path === '/api/media/audio',
+  );
+  expect(audioRequests).toHaveLength(2);
+  expect(selected(audioRequests[0][1])).toBe('default');
+  expect(selected(audioRequests[1][1])).toBe(B);
 });
 
 it('does not let an older registry response undo a switch to a newly created persona', async () => {
@@ -503,18 +515,18 @@ it('does not let an older registry response undo a switch to a newly created per
   const created = { ...items[1], id: NEW, name: '新分身' };
   fetcher.mockResolvedValueOnce(json([...items, created]));
   await usePersonas.getState().refresh();
-  usePersonas.getState().switchTo(NEW);
+  await usePersonas.getState().switchTo(NEW);
   resolve(json(items));
   await stale;
   expect(usePersonas.getState().id).toBe(NEW);
   expect(usePersonas.getState().items).toContainEqual(created);
 });
 
-it('can switch when browser storage is unavailable', () => {
+it('can switch when browser storage is unavailable', async () => {
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
     throw new Error('disabled');
   });
-  expect(() => usePersonas.getState().switchTo(B)).not.toThrow();
+  await expect(usePersonas.getState().switchTo(B)).resolves.toBeUndefined();
   expect(getPersonaId()).toBe(B);
 });
 
@@ -522,7 +534,7 @@ it('keeps deferred questionnaire leave-page writes attributed to their original 
   render(<QuestionContext />);
   await screen.findByText('ready');
   fireEvent.click(screen.getByRole('button', { name: '写答案' }));
-  act(() => usePersonas.getState().switchTo(B));
+  await act(async () => usePersonas.getState().switchTo(B));
   await waitFor(() =>
     expect(fetcher.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(
       true,
@@ -541,4 +553,116 @@ it('keeps deferred questionnaire leave-page writes attributed to their original 
       )
       .some(([, init]) => selected(init) === B),
   ).toBe(true);
+});
+
+it('keeps the chat page and layout mounted through prefetch and its timeout, with immediate rail feedback', async () => {
+  window.location.hash = '#/chat';
+  const view = render(<App />);
+  const input = await screen.findByRole('textbox', { name: '你说' });
+  const main = view.container.querySelector('#main');
+  const friend = await screen.findByRole('button', { name: '切换到朋友' });
+  const original = fetcher.getMockImplementation()! as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/media/capabilities' && selected(init) === B)
+      return new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+    return original(path, init);
+  });
+  vi.useFakeTimers();
+  let switching!: Promise<void>;
+  act(() => {
+    switching = usePersonas.getState().switchTo(B);
+  });
+  expect(friend).toHaveAttribute('aria-pressed', 'true');
+  expect(getPersonaId()).toBe('default');
+  expect(screen.getByRole('textbox', { name: '你说' })).toBe(input);
+  expect(view.container.querySelector('.skeleton')).toBeNull();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(799);
+  });
+  expect(getPersonaId()).toBe('default');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+    await switching;
+  });
+  expect(getPersonaId()).toBe(B);
+  expect(view.container.querySelector('#main')).toBe(main);
+  expect(screen.getByRole('textbox', { name: '你说' })).toBe(input);
+  expect(input).toHaveAttribute('placeholder', '和朋友聊点什么…');
+  expect(view.container.querySelector('.skeleton')).toBeNull();
+  expect(screen.getByRole('img', { name: '朋友的头像' })).toBeInTheDocument();
+  await act(async () => {
+    finish(json({ available: false, video: { available: false } }));
+  });
+  await api('/api/persona/state');
+  expect(selected(fetcher.mock.calls.at(-1)![1])).toBe(B);
+});
+
+function IdentityView() {
+  const identity = useIdentity();
+  return <p>{identity.data?.name ?? 'loading identity'}</p>;
+}
+
+it('ignores an old identity response even when fetch delivers it after the commit', async () => {
+  const original = fetcher.getMockImplementation()! as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  let finish!: (response: Response) => void;
+  let oldSignal: AbortSignal | null | undefined;
+  fetcher.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/identity' && selected(init) === 'default') {
+      oldSignal = init?.signal;
+      return new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+    }
+    return original(path, init);
+  });
+  render(<IdentityView />);
+  await act(async () => usePersonas.getState().switchTo(B));
+  expect(await screen.findByText('朋友')).toBeVisible();
+  expect(oldSignal?.aborted).toBe(true);
+  await act(async () => {
+    finish(json({ name: '迟来的主人', aliases: [], egress: [] }));
+  });
+  expect(screen.getByText('朋友')).toBeVisible();
+  expect(screen.queryByText('迟来的主人')).not.toBeInTheDocument();
+});
+
+it('decodes the target portrait before committing and abandons a superseded switch', async () => {
+  let decoded!: () => void;
+  const decode = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        decoded = resolve;
+      }),
+  );
+  vi.stubGlobal(
+    'Image',
+    class {
+      src = '';
+      decode = decode;
+    },
+  );
+  usePersonas.setState({ items });
+  let switching!: Promise<void>;
+  act(() => {
+    switching = usePersonas.getState().switchTo(B);
+  });
+  await waitFor(() => expect(decode).toHaveBeenCalledOnce());
+  expect(getPersonaId()).toBe('default');
+  decoded();
+  await act(async () => switching);
+  expect(getPersonaId()).toBe(B);
+  const returning = usePersonas.getState().switchTo('default');
+  await usePersonas.getState().switchTo(B);
+  await returning;
+  expect(getPersonaId()).toBe(B);
+  expect(usePersonas.getState().pendingId).toBeNull();
 });

@@ -33,7 +33,6 @@ const Gallery = lazy(() =>
 );
 
 export function App() {
-  const personaId = usePersonas((state) => state.id);
   const personaCount = usePersonas((state) => state.items.length);
   return (
     <MotionConfig reducedMotion="user">
@@ -42,7 +41,7 @@ export function App() {
           <AuthGate>
             <HashRouter>
               <Suspense fallback={<Skeleton className="h-40" />}>
-                <Routes key={personaId}>
+                <Routes>
                   <Route element={<AppShell />}>
                     <Route
                       index

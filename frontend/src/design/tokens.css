@@ -333,6 +333,22 @@
 .stage-switch:hover {
   background: var(--accent-pressed);
 }
+.persona-fade {
+  display: grid;
+  min-width: 0;
+}
+.persona-fade-layer {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+.persona-fade-layer[aria-hidden='true'] {
+  pointer-events: none;
+}
+.account-popover {
+  max-width: var(--radix-popover-content-available-width);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
 .stage-person {
   position: relative;
   display: flex;
@@ -947,13 +963,9 @@
     outline-color: var(--accent);
   }
   .account-popover {
-    top: auto;
-    left: 80px;
-    bottom: 16px;
-    width: min(320px, calc(100vw - 96px));
-    translate: none;
-    transform: none;
-    overflow-wrap: break-word;
+    width: max-content;
+    max-width: var(--radix-popover-content-available-width);
+    overflow-wrap: anywhere;
     text-align: left;
   }
   .persona-popover {

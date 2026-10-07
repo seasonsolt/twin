@@ -11,6 +11,7 @@ import type { Turn } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
 import { useDesktop, useMobile } from '../../lib/useMobile';
 import { stripMarkdown } from './markdownText';
+import { usePersonaId } from '../../lib/usePersonaState';
 
 export function videoCaption(text: string, time: number, duration: number) {
   const sentences = text.match(/[^。！？!?\r\n]+[。！？!?]*|[^\r\n]+$/gu) ?? [
@@ -60,6 +61,7 @@ export function ChatStage({
   history?: ReactNode;
 }) {
   const { reduced } = useMotionPreset();
+  const personaId = usePersonaId();
   const desktop = useDesktop();
   const mobile = useMobile();
   const [collapsed, setCollapsed] = useState(false);
@@ -225,6 +227,7 @@ export function ChatStage({
             ) : (
               <ChatAvatar
                 name={name}
+                personaId={personaId}
                 capabilities={capabilities}
                 className="size-full"
                 level={level}

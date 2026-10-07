@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
 import Cropper, { type Area } from 'react-easy-crop';
 import 'react-easy-crop/react-easy-crop.css';
 import { Button } from '../../components/ui';
@@ -85,6 +89,7 @@ const passage =
   '今天的阳光很温暖，我想放慢脚步，看看身边的风景。无论生活怎样变化，我都会认真倾听，坦诚表达，把每一个平凡的日子过得有趣而充实。';
 
 export function SelfAssets({ active = true }: { active?: boolean }) {
+  const personaId = usePersonaId();
   const [profile, setProfile] = useState<Assets | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [error, setError] = useState('');
@@ -104,7 +109,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   const portraitInput = useRef<HTMLInputElement>(null);
   const voiceInput = useRef<HTMLInputElement>(null);
   const request = useRef<AbortController | null>(null);
-  const recorder = useRecorder(active);
+  const recorder = useRecorder(active, personaId);
   const photoUrl = useObjectUrl(photo);
   const recordingUrl = useObjectUrl(recorder.file);
   const recording =
@@ -115,6 +120,8 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   useEffect(() => {
     if (!active) return;
     setBusy(false);
+    retryWork.current = null;
+    request.current = null;
     const controller = new AbortController();
     void api<Assets>('/api/me/assets', { signal: controller.signal })
       .then((assets) => {
@@ -140,7 +147,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
       controller.abort();
       request.current?.abort();
     };
-  }, [active, attempt]);
+  }, [active, attempt, personaId]);
 
   useEffect(() => {
     if (!active) return;

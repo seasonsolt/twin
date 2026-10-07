@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
 import { api, ApiError } from '../../lib/api';
 import { personaKey } from '../../lib/persona';
 
@@ -91,7 +95,8 @@ export function useJob<Result>({
   active?: boolean;
   onDone?: (job: Job<Result>, context: { restored: boolean }) => void;
 }) {
-  storageKey = storageKey ? personaKey(storageKey) : undefined;
+  const personaId = usePersonaId();
+  storageKey = storageKey ? personaKey(storageKey, personaId) : undefined;
   const [job, setJob] = useState<Job<Result> | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -132,7 +137,10 @@ export function useJob<Result>({
         try {
           const next = await api<Job<Result>>(
             `/api/jobs/${encodeURIComponent(id)}`,
-            { signal: request.signal },
+            {
+              signal: request.signal,
+              headers: { 'X-Twin-Persona': personaId },
+            },
           );
           if (request.signal.aborted || !alive.current) return;
           failures = 0;
@@ -180,7 +188,7 @@ export function useJob<Result>({
       };
       void poll();
     },
-    [cancel, kind, storageKey],
+    [cancel, kind, storageKey, personaId],
   );
   useEffect(() => {
     alive.current = active;

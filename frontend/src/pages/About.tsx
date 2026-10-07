@@ -10,6 +10,7 @@ import { useProfile } from '../features/profile/useProfile';
 import { useStatus } from '../stores/status';
 import { StageHeader } from '../components/layout/StageHeader';
 import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
+import { usePersonaId } from '../lib/usePersonaState';
 
 export const topics: Record<string, string> = {
   D1: '经历与身份',
@@ -44,6 +45,7 @@ const backendNames: Record<string, string> = {
 };
 
 export function About() {
+  const personaId = usePersonaId();
   const active = useLocation().pathname === '/about';
   const identity = useIdentity(active);
   const profile = useProfile(active);
@@ -119,7 +121,7 @@ export function About() {
                 <div className="flex flex-wrap items-start gap-3 md:gap-6">
                   <div className="min-w-0 flex-1 md:min-w-64">
                     <IdentityForm
-                      key={`${identity.data.name}-${identity.data.about}`}
+                      key={`${personaId}-${identity.data.name}-${identity.data.about}`}
                       identity={identity.data}
                       onSaved={identity.reload}
                     />

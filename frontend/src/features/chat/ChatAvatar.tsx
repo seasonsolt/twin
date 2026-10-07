@@ -24,18 +24,20 @@ export function ChatAvatar({
   level = 0,
   speaking = false,
   className = 'size-9',
+  personaId,
 }: {
   name: string;
   capabilities: Capabilities | null;
   level?: number;
   speaking?: boolean;
   className?: string;
+  personaId?: string;
 }) {
   const portrait = capabilities?.avatar_image?.url
-    ? personaUrl(capabilities.avatar_image.url)
+    ? personaUrl(capabilities.avatar_image.url, personaId)
     : undefined;
   const model = capabilities?.avatar_model?.url
-    ? personaUrl(capabilities.avatar_model.url)
+    ? personaUrl(capabilities.avatar_model.url, personaId)
     : undefined;
   const [failedPortrait, setFailedPortrait] = useState<string>();
   const [failedModel, setFailedModel] = useState<string>();

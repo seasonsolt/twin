@@ -1,5 +1,9 @@
-import { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { useEffect } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
+import { loadEssential, peekEssential } from '../../lib/personaPrefetch';
 import type { Capabilities } from '../avatar/types';
 import type { Status } from '../../stores/status';
 
@@ -15,9 +19,17 @@ export interface IdentityData {
 }
 
 export function useIdentity(active = true) {
-  const [data, setData] = useState<IdentityData | null>(null);
-  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
-  const [loading, setLoading] = useState(true);
+  const personaId = usePersonaId();
+  const [data, setData] = useState<IdentityData | null>(
+    () => peekEssential<IdentityData>('/api/identity', personaId) ?? null,
+  );
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(
+    () =>
+      peekEssential<Capabilities>('/api/media/capabilities', personaId) ?? null,
+  );
+  const [loading, setLoading] = useState(
+    () => !peekEssential('/api/identity', personaId),
+  );
   const [error, setError] = useState('');
   const [avatarError, setAvatarError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -29,10 +41,14 @@ export function useIdentity(active = true) {
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
-    setLoading(true);
+    setLoading(!peekEssential('/api/identity', personaId));
     setError('');
     setAvatarError('');
-    void api<IdentityData>('/api/identity', { signal: controller.signal })
+    void loadEssential<IdentityData>(
+      '/api/identity',
+      personaId,
+      controller.signal,
+    )
       .then((loaded) => {
         if (!controller.signal.aborted) setData(loaded);
       })
@@ -43,9 +59,11 @@ export function useIdentity(active = true) {
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
-    void api<Capabilities>('/api/media/capabilities', {
-      signal: controller.signal,
-    })
+    void loadEssential<Capabilities>(
+      '/api/media/capabilities',
+      personaId,
+      controller.signal,
+    )
       .then((loaded) => {
         if (!controller.signal.aborted) setCapabilities(loaded);
       })
@@ -56,7 +74,7 @@ export function useIdentity(active = true) {
           );
       });
     return () => controller.abort();
-  }, [active, attempt]);
+  }, [active, attempt, personaId]);
   return {
     data,
     capabilities,

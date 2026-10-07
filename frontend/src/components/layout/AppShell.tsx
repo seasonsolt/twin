@@ -1,10 +1,19 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import {
+  lazy,
+  startTransition,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Link, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
+import * as Popover from '@radix-ui/react-popover';
+import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import { BookUser, Folder, MessageCircle, Plus } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
-import { Button, Dialog, Skeleton, Tooltip } from '../ui';
+import { Button, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
@@ -85,7 +94,7 @@ function BottomTabs() {
 }
 
 function TwinRail() {
-  const { id, items, refresh, switchTo } = usePersonas();
+  const { id, pendingId, items, refresh, switchTo } = usePersonas();
   const identity = useAuth((state) => state.identity);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountButton = useRef<HTMLButtonElement>(null);
@@ -117,7 +126,7 @@ function TwinRail() {
               type="button"
               className="rail-twin rounded-full"
               aria-label={`切换到${persona.name}`}
-              aria-pressed={id === persona.id}
+              aria-pressed={(pendingId ?? id) === persona.id}
               onClick={() => switchTo(persona.id)}
             >
               <PersonaPortrait persona={persona} />
@@ -138,54 +147,63 @@ function TwinRail() {
       <Navigation />
       {identity?.auth_enabled && (
         <div className="rail-account mt-auto pt-4 text-center text-xs">
-          <button
-            ref={accountButton}
-            type="button"
-            aria-label="账户"
-            aria-haspopup="dialog"
-            aria-expanded={accountOpen}
-            className="rail-account-button mx-auto grid size-11 place-items-center rounded-full bg-primary text-lg text-canvas"
-            onClick={() => setAccountOpen(!accountOpen)}
-          >
-            {Array.from(identity.email?.trim() || '?')[0].toUpperCase()}
-          </button>
-          <Dialog
-            open={accountOpen}
-            onOpenChange={setAccountOpen}
-            title="账户"
-            body={identity.email || ''}
-            popover
-            className="account-popover"
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              accountButton.current?.focus();
-            }}
-          >
-            <Button
-              variant="secondary"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                setError('');
-                void useAuth
-                  .getState()
-                  .logout()
-                  .catch((failure: unknown) =>
-                    setError(
-                      failure instanceof Error ? failure.message : '退出失败',
-                    ),
-                  )
-                  .finally(() => setBusy(false));
-              }}
-            >
-              退出登录
-            </Button>
-            {error && (
-              <p role="alert" className="break-words">
-                {error}
-              </p>
-            )}
-          </Dialog>
+          <Popover.Root open={accountOpen} onOpenChange={setAccountOpen}>
+            <Popover.Trigger asChild>
+              <button
+                ref={accountButton}
+                type="button"
+                aria-label="账户"
+                className="rail-account-button mx-auto grid size-11 place-items-center rounded-full bg-primary text-lg text-canvas"
+              >
+                {Array.from(identity.email?.trim() || '?')[0].toUpperCase()}
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                side="right"
+                align="end"
+                sideOffset={12}
+                avoidCollisions
+                collisionPadding={12}
+                aria-label="账户"
+                onCloseAutoFocus={(event) => {
+                  event.preventDefault();
+                  accountButton.current?.focus();
+                }}
+                className="account-popover z-50 rounded-xl border border-border bg-surface p-3 shadow-elevation-2"
+              >
+                <p className="mb-1 text-xs text-secondary">
+                  {identity.email || ''}
+                </p>
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setError('');
+                    void useAuth
+                      .getState()
+                      .logout()
+                      .catch((failure: unknown) =>
+                        setError(
+                          failure instanceof Error
+                            ? failure.message
+                            : '退出失败',
+                        ),
+                      )
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  退出登录
+                </Button>
+                {error && (
+                  <p role="alert" className="break-words">
+                    {error}
+                  </p>
+                )}
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         </div>
       )}
     </aside>
@@ -193,15 +211,18 @@ function TwinRail() {
 }
 
 export function AppShell() {
+  const personaId = usePersonaId();
   const mobile = useMobile();
   const { error } = useStatus();
   const location = useLocation();
   const outlet = useOutlet();
   const twinLevel = location.pathname === '/twins';
-  const [onboarding, setOnboarding] = useState<IdentityData | null>(null);
+  const [onboarding, setOnboarding] = usePersonaState<IdentityData | null>(
+    null,
+  );
   const [checked, setChecked] = useState(false);
-  const [noPersona, setNoPersona] = useState(false);
-  useEffect(startStatusPolling, []);
+  const [noPersona, setNoPersona] = usePersonaState(false);
+  useEffect(startStatusPolling, [personaId]);
   useEffect(() => {
     if (twinLevel) return;
     const controller = new AbortController();
@@ -217,7 +238,7 @@ export function AppShell() {
           (identity.onboarding_pending ||
             (identity.name_source === 'config' && status.counts.sources === 0))
         )
-          setOnboarding(identity);
+          startTransition(() => setOnboarding(identity));
       })
       .catch((failure: unknown) => {
         if (
@@ -236,7 +257,7 @@ export function AppShell() {
         if (!controller.signal.aborted) setChecked(true);
       });
     return () => controller.abort();
-  }, [twinLevel]);
+  }, [twinLevel, personaId, setOnboarding, setNoPersona]);
   if (noPersona && !twinLevel)
     return (
       <main className="entry-page min-h-dvh">

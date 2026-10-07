@@ -40,7 +40,7 @@ export function NewTwin({
       await usePersonas.getState().refresh();
       changeOpen(false);
       navigate('/chat');
-      usePersonas.getState().switchTo(created.id);
+      await usePersonas.getState().switchTo(created.id);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '创建失败，请重试');
     } finally {

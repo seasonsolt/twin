@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import { usePersonaState as useState } from '../../lib/usePersonaState';
 
-export function useRecorder(active = true) {
+export function useRecorder(active = true, personaId = '') {
   const [state, setState] = useState<
     'idle' | 'requesting' | 'recording' | 'review'
   >('idle');
@@ -23,7 +24,7 @@ export function useRecorder(active = true) {
       generation.current += 1;
       cleanup.current();
     };
-  }, [active]);
+  }, [active, personaId]);
 
   const start = async () => {
     if (!active || state === 'recording' || state === 'requesting') return;

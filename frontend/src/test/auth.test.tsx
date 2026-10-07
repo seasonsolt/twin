@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -235,6 +236,23 @@ it('shows the full signed-in email in the account popover and logs out', async (
     'account-popover',
   );
   expect(screen.getByText(member.email)).toBeVisible();
+  const menu = screen.getByRole('dialog', { name: '账户' });
+  expect(menu).toHaveAttribute('data-side', 'right');
+  expect(menu).toHaveAttribute('data-align', 'end');
+  expect(within(menu).queryByRole('button', { name: /关闭/ })).toBeNull();
+  expect(within(menu).getAllByRole('button')).toHaveLength(1);
+  await user.keyboard('{Escape}');
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: '账户' })).toBeNull(),
+  );
+  expect(account).toHaveFocus();
+  await user.click(account);
+  await user.click(screen.getByRole('heading', { name: persona.name }));
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: '账户' })).toBeNull(),
+  );
+  expect(account).toHaveFocus();
+  await user.click(account);
   await user.click(screen.getByRole('button', { name: '退出登录' }));
   expect(
     await screen.findByRole('heading', { name: '用邮箱登录' }),

@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../lib/usePersonaState';
 import { useLocation } from 'react-router';
 import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
 import { StageHeader } from '../components/layout/StageHeader';
@@ -14,6 +18,7 @@ import {
   Dialog,
   EmptyState,
   IconButton,
+  Skeleton,
   Tabs,
   Textarea,
   toast,
@@ -28,6 +33,7 @@ import {
 } from '../lib/mediaUpload';
 import { usePendingWork } from '../lib/pendingWork';
 import { useStatus } from '../stores/status';
+import { usePersonas } from '../stores/personas';
 import { MediaClaim } from '../features/sources/MediaClaim';
 
 const accept =
@@ -103,10 +109,12 @@ function MemoryWork({
 
 export function Memories({ embedded = false }: { embedded?: boolean }) {
   const active = useLocation().pathname === '/memories' || embedded;
+  const personaId = usePersonaId();
   const confirm = useConfirm();
   const mobile = useMobile();
   const [adding, setAdding] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -132,37 +140,48 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   const previewRequest = useRef<AbortController | null>(null);
   const mutation = useRef<AbortController | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const refresh = useCallback(async function reload() {
-    request.current?.abort();
-    if (timer.current) clearTimeout(timer.current);
-    const controller = new AbortController();
-    request.current = controller;
-    try {
-      const [rows, state] = await Promise.all([
-        api<Memory[]>('/api/persona/sources', { signal: controller.signal }),
-        api<Processing>('/api/persona/processing', {
-          signal: controller.signal,
-        }),
-      ]);
-      if (!alive.current || controller.signal.aborted) return;
-      setMemories(rows);
-      setProcessing(state);
-      setError('');
-      if (
-        state.state !== 'idle' ||
-        rows.some((row) => mediaPending(row) || memoryPending(row))
-      )
-        timer.current = setTimeout(() => void reload(), 2000);
-      else void useStatus.getState().refresh();
-    } catch (err) {
-      if (alive.current && !controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : '无法读取记忆');
-        timer.current = setTimeout(() => void reload(), 2000);
+  const refresh = useCallback(
+    async function reload() {
+      request.current?.abort();
+      if (timer.current) clearTimeout(timer.current);
+      const controller = new AbortController();
+      request.current = controller;
+      try {
+        const [rows, state] = await Promise.all([
+          api<Memory[]>('/api/persona/sources', {
+            signal: controller.signal,
+            headers: { 'X-Twin-Persona': personaId },
+          }),
+          api<Processing>('/api/persona/processing', {
+            headers: { 'X-Twin-Persona': personaId },
+            signal: controller.signal,
+          }),
+        ]);
+        if (!alive.current || controller.signal.aborted) return;
+        setMemories(rows);
+        setLoading(false);
+        setProcessing(state);
+        setError('');
+        if (
+          state.state !== 'idle' ||
+          rows.some((row) => mediaPending(row) || memoryPending(row))
+        )
+          timer.current = setTimeout(() => void reload(), 2000);
+        else void useStatus.getState().refresh();
+      } catch (err) {
+        if (alive.current && !controller.signal.aborted) {
+          setLoading(false);
+          setError(err instanceof Error ? err.message : '无法读取记忆');
+          timer.current = setTimeout(() => void reload(), 2000);
+        }
       }
-    }
-  }, []);
+    },
+    [personaId],
+  );
   useEffect(() => {
     alive.current = active;
+    failedFiles.current = [];
+    mutation.current = null;
     if (active) void refresh();
     return () => {
       alive.current = false;
@@ -171,7 +190,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       mutation.current?.abort();
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [active, refresh]);
+  }, [active, refresh, personaId]);
 
   const mutate = async (
     fn: (signal: AbortSignal) => Promise<unknown>,
@@ -186,15 +205,15 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
     setError('');
     try {
       await fn(controller.signal);
-      if (!alive.current) return;
+      if (!alive.current || controller.signal.aborted) return;
       if (added) toast('已添加，正在记住…', 'success');
       await refresh();
     } catch (err) {
-      if (alive.current)
+      if (alive.current && !controller.signal.aborted)
         setError(err instanceof Error ? err.message : '操作失败，请重试');
     } finally {
-      mutation.current = null;
-      if (alive.current) setBusy(false);
+      if (mutation.current === controller) mutation.current = null;
+      if (alive.current && !controller.signal.aborted) setBusy(false);
     }
   };
   const upload = (files: File[]) =>
@@ -441,7 +460,8 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
         confirmLabel: '确认删除',
         tone: 'danger',
       })) &&
-      alive.current
+      alive.current &&
+      personaId === usePersonas.getState().id
     )
       await mutate((signal) =>
         api(`/api/persona/sources/${encodeURIComponent(memory.source_id)}`, {
@@ -576,7 +596,8 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
             <h2 className="mb-2 text-md font-semibold md:mb-4 md:text-lg">
               已添加的记忆
             </h2>
-            {!memories.length && (
+            {loading && <Skeleton className="h-24" />}
+            {!loading && !memories.length && (
               <EmptyState
                 title="还没有记忆"
                 body={

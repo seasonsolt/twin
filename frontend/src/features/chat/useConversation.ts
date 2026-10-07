@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../../lib/usePersonaState';
+import { loadEssential, peekEssential } from '../../lib/personaPrefetch';
 import { api, ApiError } from '../../lib/api';
 import { getPersonaId, personaKey } from '../../lib/persona';
 import { readSSE } from '../../lib/sse';
@@ -85,12 +90,21 @@ const message = (error: unknown) =>
 export function useConversation(active: boolean) {
   const legacyKey = personaKey(CHAT_KEY);
   const currentKey = personaKey(CURRENT_CHAT_KEY);
-  const personaId = getPersonaId();
+  const personaId = usePersonaId();
   const headers = useCallback(
     () => ({ 'X-Twin-Persona': personaId }),
     [personaId],
   );
-  const [turns, setTurns] = useState(() => loadLegacy(legacyKey));
+  const savedPath = stored(currentKey);
+  const prefetched = savedPath
+    ? peekEssential<Conversation>(
+        `/api/conversations/${encodeURIComponent(savedPath)}`,
+        personaId,
+      )
+    : undefined;
+  const [turns, setTurns] = useState(
+    () => prefetched?.turns ?? loadLegacy(legacyKey),
+  );
   const [conversationId, setConversationId] = useState<string | null>(null);
   const id = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -149,11 +163,25 @@ export function useConversation(active: boolean) {
     if (!active) return;
     const controller = new AbortController();
     request.current = controller;
+    const stop = () => {
+      mounted.current = false;
+      controller.abort();
+      request.current?.abort();
+      historyRequest.current?.abort();
+    };
+    window.addEventListener('twin-persona-switch', stop);
     const legacy = loadLegacy(legacyKey);
     const saved = stored(currentKey);
     id.current = null;
     setConversationId(null);
-    setTurns(legacy);
+    const cached = saved
+      ? peekEssential<Conversation>(
+          `/api/conversations/${encodeURIComponent(saved)}`,
+          personaId,
+        )
+      : undefined;
+    setTurns(cached?.turns ?? legacy);
+    setDraft('');
     failed.current = null;
     setBusy(false);
     setError('');
@@ -161,7 +189,7 @@ export function useConversation(active: boolean) {
     setNewest(null);
     setHistory([]);
     if (saved || legacy.length) {
-      setLoading(true);
+      setLoading(!cached);
       void (async () => {
         try {
           const imported = legacy.length
@@ -170,12 +198,10 @@ export function useConversation(active: boolean) {
           if (controller.signal.aborted) return;
           const nextId = saved || imported;
           if (!nextId) return;
-          const conversation = await api<Conversation>(
+          const conversation = await loadEssential<Conversation>(
             `/api/conversations/${encodeURIComponent(nextId)}`,
-            {
-              headers: headers(),
-              signal: controller.signal,
-            },
+            personaId,
+            controller.signal,
           );
           if (!controller.signal.aborted) {
             selectId(conversation.id);
@@ -203,10 +229,8 @@ export function useConversation(active: boolean) {
       setLoading(false);
     }
     return () => {
-      mounted.current = false;
-      controller.abort();
-      request.current?.abort();
-      historyRequest.current?.abort();
+      window.removeEventListener('twin-persona-switch', stop);
+      stop();
     };
   }, [
     active,
@@ -216,11 +240,20 @@ export function useConversation(active: boolean) {
     selectId,
     restoreVersion,
     refreshHistory,
+    personaId,
   ]);
 
   const send = async (text = draft) => {
     text = text.trim();
-    if (!text || !mounted.current || busy || loading || restoreFailed) return;
+    if (
+      !text ||
+      !mounted.current ||
+      personaId !== getPersonaId() ||
+      busy ||
+      loading ||
+      restoreFailed
+    )
+      return;
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
@@ -355,7 +388,7 @@ export function useConversation(active: boolean) {
       json: { title },
       headers: headers(),
     });
-    if (mounted.current)
+    if (mounted.current && personaId === getPersonaId())
       setHistory((rows) =>
         rows.map((row) => (row.id === nextId ? { ...row, title } : row)),
       );
@@ -365,7 +398,7 @@ export function useConversation(active: boolean) {
       method: 'DELETE',
       headers: headers(),
     });
-    if (!mounted.current) return;
+    if (!mounted.current || personaId !== getPersonaId()) return;
     if (id.current === nextId) clear();
     void refreshHistory();
   };

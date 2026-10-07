@@ -46,6 +46,8 @@ export async function api<T>(
     throw new ApiError(0, '仅允许访问本地 API');
   }
   const { json, form, responseType = 'json', ...init } = options;
+  if (init.signal?.aborted)
+    throw new DOMException('Request aborted', 'AbortError');
   if (json !== undefined && form)
     throw new ApiError(0, '不能同时发送 JSON 和表单');
   const method = (init.method ?? 'GET').toUpperCase();

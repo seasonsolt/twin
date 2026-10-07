@@ -13,7 +13,8 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { Chat } from '../pages/Chat';
 import { useStatus } from '../stores/status';
-import { CHAT_KEY } from '../features/chat/useConversation';
+import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
+import { conversationServer } from './conversationServer';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import type { ChatReply } from '../features/chat/types';
@@ -73,6 +74,7 @@ const json = (data: unknown, status = 200) =>
     headers: { 'Content-Type': 'application/json' },
   });
 let fetchMock: ReturnType<typeof vi.fn>;
+let conversations: ReturnType<typeof conversationServer>;
 let fail = false;
 let streamController: ReadableStreamDefaultController<Uint8Array>;
 const encode = (event: string, data: unknown) =>
@@ -93,8 +95,12 @@ const streamReply = (answer: ChatReply) =>
 beforeEach(async () => {
   vi.mocked(useReducedMotion).mockReturnValue(true);
   sessionStorage.clear();
+  localStorage.clear();
+  conversations = conversationServer();
   fail = false;
-  fetchMock = vi.fn(async (url: string) => {
+  fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const history = conversations.respond(url, init);
+    if (history) return history;
     if (url === '/api/status')
       return json({
         target_name: '测试人',
@@ -157,8 +163,9 @@ async function submit() {
 it('links empty chat to memories and accepts a friendly no-profile reply without polling', async () => {
   const original = fetchMock.getMockImplementation()! as (
     url: string,
+    init?: RequestInit,
   ) => Promise<Response>;
-  fetchMock.mockImplementation((url: string) =>
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
     url === '/api/persona/chat/stream'
       ? Promise.resolve(
           streamReply({
@@ -169,7 +176,7 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
             cited: [],
           }),
         )
-      : original(url),
+      : original(url, init),
   );
   mount();
   expect(screen.getByRole('link', { name: '添加记忆' })).toHaveAttribute(
@@ -183,7 +190,8 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
   expect(
     fetchMock.mock.calls.some(([url]) => url.startsWith('/api/jobs/')),
   ).toBe(false);
-  expect(sessionStorage.getItem(CHAT_KEY)).toContain('记忆还在处理中');
+  expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
+  expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy();
 });
 
 it('fills and focuses the composer from each starter without sending', async () => {
@@ -218,6 +226,7 @@ it('streams progressively, hides thinking on the first delta, then replaces text
     ([url]) => url === '/api/persona/chat/stream',
   )![1] as RequestInit;
   expect(JSON.parse(init.body as string)).toEqual({
+    conversation_id: localStorage.getItem(CURRENT_CHAT_KEY),
     messages: [{ role: 'user', content: '你怎么看？' }],
   });
   expect(new Headers(init.headers).get('X-Twin')).toBe('1');
@@ -253,11 +262,10 @@ it('streams progressively, hides thinking on the first delta, then replaces text
   expect(
     screen.queryByRole('button', { name: /语音|视频/ }),
   ).not.toBeInTheDocument();
-  expect(
-    JSON.parse(sessionStorage.getItem(CHAT_KEY)!).map(
-      (turn: { role: string }) => turn.role,
-    ),
-  ).toEqual(['user', 'twin']);
+  expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
+  expect(conversations.rows.has(localStorage.getItem(CURRENT_CHAT_KEY)!)).toBe(
+    true,
+  );
 });
 it('replaces draft text with guarded final text, attaches citations and starts voice only on final', async () => {
   const original = fetchMock.getMockImplementation()! as (
@@ -292,8 +300,8 @@ it('replaces draft text with guarded final text, attaches citations and starts v
   expect(screen.getByLabelText('分身回复')).toHaveTextContent('修正后的回复');
   expect(screen.queryByText('不正确的初稿')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '依据 1' })).toBeInTheDocument();
-  const saved = JSON.parse(sessionStorage.getItem(CHAT_KEY)!);
-  expect(saved.at(-1).reply).toEqual(final);
+  expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
+  expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy();
   expect(
     fetchMock.mock.calls.filter(([url]) => url === '/api/media/audio'),
   ).toHaveLength(1);
@@ -542,22 +550,19 @@ it('scrolls to the newest message on both send and receive', async () => {
   expect(scroll.mock.calls.length).toBeGreaterThan(sent);
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
-it('renders newline paragraphs and simple lists as escaped text', () => {
+it('keeps user messages plain and applies strict CJK typography', () => {
   const view = render(
     <MessageText
+      plain
       text={
         '开头，标点正常。\r\n第二段。\n\n1. <img src=x onerror=alert(1)>\n2. &lt;script&gt;\n\n- <script>alert(1)</script>\n- 一个项目\n\n第一步：先听。\n第二步：再做。\n结尾。'
       }
     />,
   );
-  expect(view.container.querySelectorAll('p')).toHaveLength(3);
-  expect(view.container.querySelectorAll('ol')).toHaveLength(2);
-  expect(view.container.querySelectorAll('ul')).toHaveLength(1);
-  expect(screen.getAllByRole('listitem')).toHaveLength(6);
-  expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
-  expect(screen.getByText('&lt;script&gt;')).toBeInTheDocument();
-  expect(view.container.querySelector('img, script')).toBeNull();
-  expect(view.container.querySelector('ol li')).toHaveAttribute('value', '1');
+  expect(view.container.querySelector('p, ol, ul, img, script')).toBeNull();
+  expect(view.container.textContent).toContain('<img src=x onerror=alert(1)>');
+  expect(view.container.textContent).toContain('&lt;script&gt;');
+  expect(view.container.firstElementChild).toHaveClass('message-plain');
   const rule = readFileSync('src/design/tokens.css', 'utf8').match(
     /\.message-text\s*\{[^}]*\}/,
   )![0];
@@ -595,7 +600,7 @@ it.each([true, false])(
         {
           id: 'structured',
           role: 'twin',
-          content: '第一段。\n第二段。',
+          content: '第一段。\n\n第二段。',
           reply: {
             ...reply,
             abstain: false,

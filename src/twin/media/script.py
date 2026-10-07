@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .schema import MediaScript, PresentableAnswer, Segment
+from .speech_text import strip_markdown
 
 _ENDINGS = frozenset("。！？!?….\r\n")
 _QUOTES = {"「": "」", "“": "”"}
@@ -43,8 +44,8 @@ def split_sentences(text: str) -> list[str]:
 
 def _segments(text: str, abstain: bool, reason: str) -> list[Segment]:
     if abstain:
-        return [Segment(index=0, kind="notice", text=reason.strip() or _DEFAULT_ABSTENTION)]
-    return [Segment(index=i, kind="speech", text=s) for i, s in enumerate(split_sentences(text))]
+        return [Segment(index=0, kind="notice", text=strip_markdown(reason).strip() or _DEFAULT_ABSTENTION)]
+    return [Segment(index=i, kind="speech", text=s) for i, s in enumerate(split_sentences(strip_markdown(text)))]
 
 
 def script_from_presentable(p: PresentableAnswer, persona_name: str) -> MediaScript:

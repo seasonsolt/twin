@@ -20,7 +20,13 @@ import {
   useConfirm,
 } from '../components/ui';
 import { api } from '../lib/api';
-import { isMedia, uploadMedia, type UploadProgress } from '../lib/mediaUpload';
+import {
+  isMedia,
+  uploadMedia,
+  uploadForm,
+  type UploadProgress,
+} from '../lib/mediaUpload';
+import { usePendingWork } from '../lib/pendingWork';
 import { useStatus } from '../stores/status';
 import { MediaClaim } from '../features/sources/MediaClaim';
 
@@ -53,6 +59,48 @@ interface Processing {
   last_error?: string | null;
 }
 
+const mediaPending = (memory: Memory) =>
+  ['queued', 'extracting', 'transcribing'].includes(memory.status);
+const memoryPending = (memory: Memory) =>
+  memory.status === 'processing' ||
+  (memory.candidates_pending &&
+    !['failed', 'needs_asr', 'needs_speaker'].includes(memory.status));
+function MemoryWork({
+  memory,
+  visible,
+  busy,
+  onRetry,
+}: {
+  memory: Memory;
+  visible: boolean;
+  busy: boolean;
+  onRetry: () => void;
+}) {
+  const pending = mediaPending(memory);
+  const label =
+    memory.status === 'transcribing'
+      ? `正在转写 ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟…`
+      : memory.status === 'extracting'
+        ? '正在提取音频…'
+        : '等待转写…';
+  usePendingWork(pending, label, true);
+  if (visible && ['failed', 'needs_asr'].includes(memory.status))
+    return (
+      <p role="alert" className="text-sm text-danger">
+        {memory.title} ·{' '}
+        {memory.status === 'needs_asr' ? '需要配置语音识别' : '处理失败'}
+        <Button variant="ghost" disabled={busy} onClick={onRetry}>
+          重试
+        </Button>
+      </p>
+    );
+  return visible && pending ? (
+    <p role="status" aria-busy="true" className="text-sm text-secondary">
+      {memory.title} · {label}
+    </p>
+  ) : null;
+}
+
 export function Memories({ embedded = false }: { embedded?: boolean }) {
   const active = useLocation().pathname === '/memories' || embedded;
   const confirm = useConfirm();
@@ -62,10 +110,14 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState('正在保存记忆…');
   const [error, setError] = useState('');
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
     null,
   );
+  usePendingWork(busy, busyLabel);
+  const building = processing.state !== 'idle' || memories.some(memoryPending);
+  usePendingWork(building, '正在整理记忆…', true);
   const failedFiles = useRef<File[]>([]);
   const [skipped, setSkipped] = useState<{ file: string; reason: string }[]>(
     [],
@@ -98,11 +150,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       setError('');
       if (
         state.state !== 'idle' ||
-        rows.some(
-          (row) =>
-            ['queued', 'extracting', 'transcribing'].includes(row.status) ||
-            row.candidates_pending,
-        )
+        rows.some((row) => mediaPending(row) || memoryPending(row))
       )
         timer.current = setTimeout(() => void reload(), 2000);
       else void useStatus.getState().refresh();
@@ -128,11 +176,14 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
   const mutate = async (
     fn: (signal: AbortSignal) => Promise<unknown>,
     added = false,
+    label = '正在保存记忆…',
   ) => {
     if (mutation.current) return;
     const controller = new AbortController();
     mutation.current = controller;
     setBusy(true);
+    setBusyLabel(label);
+    setError('');
     try {
       await fn(controller.signal);
       if (!alive.current) return;
@@ -147,45 +198,74 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
     }
   };
   const upload = (files: File[]) =>
-    void mutate(async (signal) => {
-      if (!files.length) return;
-      failedFiles.current = files;
-      const documents: File[] = [];
-      const ignored: { file: string; reason: string }[] = [];
-      try {
-        for (const file of files) {
-          if (
-            (file.webkitRelativePath || file.name)
-              .split('/')
-              .some((part) => part.startsWith('.'))
-          ) {
-            ignored.push({ file: file.name, reason: '已跳过隐藏文件' });
-          } else if (isMedia(file)) {
-            await uploadMedia(file, signal, (value) => {
-              if (alive.current) setUploadProgress(value);
+    void mutate(
+      async (signal) => {
+        if (!files.length) return;
+        failedFiles.current = files;
+        const documents: File[] = [];
+        const ignored: { file: string; reason: string }[] = [];
+        try {
+          let completed = 0;
+          for (const file of files) {
+            setBusyLabel(`正在上传 ${completed + 1}/${files.length}…`);
+            if (
+              (file.webkitRelativePath || file.name)
+                .split('/')
+                .some((part) => part.startsWith('.'))
+            ) {
+              ignored.push({ file: file.name, reason: '已跳过隐藏文件' });
+              completed++;
+            } else if (isMedia(file)) {
+              await uploadMedia(file, signal, (value) => {
+                if (alive.current) setUploadProgress(value);
+              });
+              completed++;
+              await refresh();
+            } else documents.push(file);
+          }
+          if (documents.length) {
+            const form = new FormData();
+            documents.forEach((file) =>
+              form.append('files', file, file.webkitRelativePath || file.name),
+            );
+            const size = documents.reduce((sum, file) => sum + file.size, 0);
+            setBusyLabel(`正在上传 ${completed + 1}/${files.length}…`);
+            setUploadProgress({
+              name: documents.map((file) => file.name).join('、'),
+              offset: 0,
+              size,
+              paused: false,
             });
-            await refresh();
-          } else documents.push(file);
+            const result = await uploadForm<{
+              imported: Memory[];
+              skipped: { file: string; reason: string }[];
+            }>('/api/persona/import', form, signal, (percent) => {
+              if (!alive.current) return;
+              setUploadProgress({
+                name: documents.map((file) => file.name).join('、'),
+                offset: (size * percent) / 100,
+                size,
+                paused: false,
+              });
+              setBusyLabel(
+                percent === 100
+                  ? '正在处理文件…'
+                  : `正在上传 ${completed + Math.min(documents.length, Math.floor((documents.length * percent) / 100) + 1)}/${files.length}…`,
+              );
+            });
+            ignored.push(...result.skipped);
+            if (alive.current && result.imported.length)
+              toast('已添加，正在记住…', 'success');
+          }
+          failedFiles.current = [];
+          if (alive.current) setSkipped(ignored);
+        } finally {
+          if (alive.current) setUploadProgress(null);
         }
-        if (documents.length) {
-          const form = new FormData();
-          documents.forEach((file) =>
-            form.append('files', file, file.webkitRelativePath || file.name),
-          );
-          const result = await api<{
-            imported: Memory[];
-            skipped: { file: string; reason: string }[];
-          }>('/api/persona/import', { method: 'POST', form, signal });
-          ignored.push(...result.skipped);
-          if (alive.current && result.imported.length)
-            toast('已添加，正在记住…', 'success');
-        }
-        failedFiles.current = [];
-        if (alive.current) setSkipped(ignored);
-      } finally {
-        if (alive.current) setUploadProgress(null);
-      }
-    });
+      },
+      false,
+      `正在上传 1/${files.length}…`,
+    );
   const retry = () =>
     void mutate((signal) =>
       api('/api/persona/build', { method: 'POST', signal }),
@@ -211,11 +291,12 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
       <progress
         className="h-2 w-full"
         aria-label="上传进度"
-        max={uploadProgress.size}
+        max={uploadProgress.size || 1}
         value={uploadProgress.offset}
       />
       <p className="text-sm text-secondary">
-        上传中 {Math.floor((uploadProgress.offset / uploadProgress.size) * 100)}
+        上传中{' '}
+        {Math.floor((uploadProgress.offset / (uploadProgress.size || 1)) * 100)}
         % · {(uploadProgress.offset / 1024 ** 2).toFixed(1)} /{' '}
         {(uploadProgress.size / 1024 ** 2).toFixed(1)} MB
       </p>
@@ -258,7 +339,8 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
     3600;
   const fileInput = (folder: boolean) => (
     <div
-      className="space-y-3 rounded-lg border border-dashed border-border p-6"
+      aria-busy={busy}
+      className={`space-y-3 rounded-lg border border-dashed border-border p-6 ${busy ? 'opacity-60' : ''}`}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
@@ -298,7 +380,8 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
             label: '写一段',
             content: (
               <form
-                className="space-y-3"
+                aria-busy={busy}
+                className={`space-y-3 ${busy ? 'opacity-60' : ''}`}
                 onSubmit={(event) => {
                   event.preventDefault();
                   const saved = text;
@@ -329,7 +412,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                   loading={busy}
                   disabled={!text.trim()}
                 >
-                  保存
+                  {busy ? busyLabel : '保存'}
                 </Button>
               </form>
             ),
@@ -413,6 +496,20 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
               text={processing.state === 'queued' ? '等待记住…' : '正在记住…'}
             />
           )}
+          {embedded && building && processing.state === 'idle' && (
+            <p role="status">正在整理记忆…</p>
+          )}
+          {memories.map((memory) => (
+            <MemoryWork
+              key={memory.source_id}
+              memory={memory}
+              visible={embedded}
+              busy={busy}
+              onRetry={() =>
+                memory.media_sha ? retranscribe(memory) : retry()
+              }
+            />
+          ))}
           {processing.last_error && (
             <p className="text-sm text-danger">
               {processing.last_error}{' '}
@@ -451,6 +548,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
             ref={addPanel}
             className="memory-add-panel"
             aria-label="添加记忆"
+            aria-busy={busy}
           >
             <Card>{addContent}</Card>
           </section>
@@ -462,6 +560,7 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
             <Button
               size="sm"
               variant="ghost"
+              disabled={busy}
               onClick={() =>
                 failedFiles.current.length
                   ? upload(failedFiles.current)
@@ -495,7 +594,10 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
                   id: memory.source_id,
                   text: memory.title,
                   content: (
-                    <article className="memory-card flex items-start justify-between gap-2 rounded-xl bg-surface p-4 shadow-card">
+                    <article
+                      aria-busy={mediaPending(memory) || memoryPending(memory)}
+                      className={`memory-card flex items-start justify-between gap-2 rounded-xl bg-surface p-4 shadow-card ${mediaPending(memory) || memoryPending(memory) ? 'opacity-60' : ''}`}
+                    >
                       <div className="min-w-0 flex-1">
                         <h3 className="flex items-center gap-2 font-medium">
                           {memory.kind === 'video' && (
@@ -646,7 +748,9 @@ export function Memories({ embedded = false }: { embedded?: boolean }) {
             </IconButton>
             <Dialog
               open={adding && active}
-              onOpenChange={setAdding}
+              onOpenChange={(open) => {
+                if (!busy) setAdding(open);
+              }}
               title="添加记忆"
               body="写一段话，或上传文件、文件夹。"
               className="top-auto right-0 bottom-0 left-0 max-h-[85dvh] w-full translate-x-0 translate-y-0 rounded-b-none rounded-t-xl p-4 pb-[max(16px,env(safe-area-inset-bottom))]"

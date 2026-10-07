@@ -15,8 +15,8 @@ interface StepperProps extends HTMLAttributes<HTMLDivElement> {
   backButtonProps?: React.ButtonHTMLAttributes<HTMLButtonElement>;
   nextButtonProps?: React.ButtonHTMLAttributes<HTMLButtonElement>;
   backButtonText?: string;
-  nextButtonText?: string;
-  completeButtonText?: string;
+  nextButtonText?: ReactNode;
+  completeButtonText?: ReactNode;
   disableStepIndicators?: boolean;
   renderStepIndicator?: (props: {
     step: number;

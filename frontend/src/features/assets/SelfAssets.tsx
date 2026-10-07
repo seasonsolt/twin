@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import 'react-easy-crop/react-easy-crop.css';
 import { Button } from '../../components/ui';
-import { api, handleApiFailure } from '../../lib/api';
-import { getPersonaId, personaUrl } from '../../lib/persona';
+import { api } from '../../lib/api';
+import { personaUrl } from '../../lib/persona';
+import { uploadForm } from '../../lib/mediaUpload';
 import type { Capabilities } from '../avatar/types';
 import { useRecorder } from './useRecorder';
+import { usePendingWork } from '../../lib/pendingWork';
 
 export const ASSETS_CHANGED = 'twin-assets-changed';
 interface Profile {
@@ -23,68 +25,28 @@ export function uploadAsset(
   progress: (value: number) => void,
   signal: AbortSignal,
 ): Promise<Profile> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', path);
-    xhr.setRequestHeader('X-Twin', '1');
-    xhr.setRequestHeader('X-Twin-Persona', getPersonaId());
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable)
-        progress(Math.round((event.loaded / event.total) * 100));
-    };
-    const abort = () => xhr.abort();
-    const finish = () => signal.removeEventListener('abort', abort);
-    xhr.onload = () => {
-      finish();
-      let data: Profile & { detail?: string };
-      try {
-        data = JSON.parse(xhr.responseText);
-      } catch {
-        reject(new Error('上传失败，请重试'));
-        return;
-      }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else {
-        handleApiFailure(xhr.status, data);
-        reject(
-          new Error(
-            typeof data.detail === 'string' &&
-              /[\u3400-\u9fff]/u.test(data.detail)
-              ? data.detail
-              : '上传失败，请重试',
-          ),
-        );
-      }
-    };
-    xhr.onerror = () => {
-      finish();
-      reject(new Error('连接中断，请重新上传'));
-    };
-    xhr.onabort = () => {
-      finish();
-      reject(new DOMException('上传已取消', 'AbortError'));
-    };
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) {
-      finish();
-      reject(new DOMException('上传已取消', 'AbortError'));
-      return;
-    }
-    xhr.send(form);
-  });
+  return uploadForm<Profile>(path, form, signal, progress, 'PUT');
 }
 
 const SERVER_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-// iPhone photos are often HEIC: the browser can show them but the server can't
-// read them, so re-encode anything else as JPEG (crop fractions stay valid).
+const isHeic = (file: File) =>
+  /^image\/hei[cf](?:-sequence)?$/i.test(file.type) ||
+  /\.hei[cf]$/i.test(file.name);
+
+// Re-encode browser-readable formats as JPEG; undecodable HEIC goes to the server.
 export async function toUploadableImage(file: File): Promise<File> {
   if (SERVER_IMAGE_TYPES.has(file.type)) return file;
   const url = URL.createObjectURL(file);
   try {
     const image = new Image();
     image.src = url;
-    await image.decode();
+    try {
+      await image.decode();
+    } catch {
+      if (isHeic(file)) return file;
+      throw new Error('无法读取照片，请选择有效的图片');
+    }
     const scale = Math.min(
       1,
       4096 / Math.max(image.naturalWidth, image.naturalHeight),
@@ -92,9 +54,9 @@ export async function toUploadableImage(file: File): Promise<File> {
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(image.naturalWidth * scale);
     canvas.height = Math.round(image.naturalHeight * scale);
-    canvas
-      .getContext('2d')
-      ?.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('无法转换照片，请换一张 JPEG 或 PNG 照片');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, 'image/jpeg', 0.92),
     );
@@ -129,7 +91,12 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [size, setSize] = useState(0);
+  const [busyKind, setBusyKind] = useState<'portrait' | 'voice'>('portrait');
+  const [busyLabel, setBusyLabel] = useState('');
+  const retryWork = useRef<(() => void) | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
+  const [previewUnavailable, setPreviewUnavailable] = useState(false);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [area, setArea] = useState<Area | null>(null);
@@ -143,6 +110,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   const recording =
     recorder.state === 'recording' || recorder.state === 'requesting';
   const disabled = busy || recording || !profile;
+  usePendingWork(busy || recording, busy ? busyLabel : '正在录音…');
 
   useEffect(() => {
     if (!active) return;
@@ -177,7 +145,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   useEffect(() => {
     if (!active) return;
     const refresh = () => {
-      if (!busy) setAttempt((value) => value + 1);
+      if (!busy && !request.current) setAttempt((value) => value + 1);
     };
     window.addEventListener(ASSETS_CHANGED, refresh);
     return () => window.removeEventListener(ASSETS_CHANGED, refresh);
@@ -221,7 +189,17 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
     if (!signal.aborted)
       setSample(result.segments[0] ? personaUrl(result.segments[0].url) : null);
   };
-  const operation = async (work: (signal: AbortSignal) => Promise<void>) => {
+  const operation = async (
+    kind: 'portrait' | 'voice',
+    label: string,
+    work: (signal: AbortSignal) => Promise<void>,
+    bytes = 0,
+  ) => {
+    if (request.current && busy) return;
+    retryWork.current = () => void operation(kind, label, work, bytes);
+    setBusyKind(kind);
+    setBusyLabel(label);
+    setSize(bytes);
     const controller = new AbortController();
     request.current?.abort();
     request.current = controller;
@@ -233,52 +211,76 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
     } catch (failure) {
       if (!controller.signal.aborted)
         setError(
-          failure instanceof Error ? failure.message : '保存失败，请重试',
+          failure instanceof Error && /[\u3400-\u9fff]/u.test(failure.message)
+            ? failure.message
+            : '保存失败，请重试',
         );
     } finally {
+      if (request.current === controller) request.current = null;
       if (!controller.signal.aborted) setBusy(false);
     }
   };
   const save = (kind: 'portrait' | 'voice', file: File) => {
+    setBusyKind(kind);
     if (file.size > (kind === 'portrait' ? 15 * 1024 * 1024 : 95_000_000)) {
       setError(
         kind === 'portrait' ? '照片不能超过 15 MB' : '录音或视频不能超过 95 MB',
       );
       return;
     }
-    void operation(async (signal) => {
-      const form = new FormData();
-      form.append(
-        'file',
-        kind === 'portrait' ? await toUploadableImage(file) : file,
-      );
-      if (kind === 'portrait' && area) {
-        for (const [key, value] of Object.entries({
-          x: area.x,
-          y: area.y,
-          w: area.width,
-          h: area.height,
-        }))
-          form.append(key, String(value / 100));
-      }
-      const next = await uploadAsset(
-        `/api/me/${kind}`,
-        form,
-        setProgress,
-        signal,
-      );
-      const nextCaps = await changed(next, signal);
-      if (signal.aborted) return;
-      if (kind === 'portrait') setPhoto(null);
-      else {
-        recorder.reset();
-        setSample(null);
-        if (nextCaps?.available) await trial(signal);
-      }
-    });
+    const uploading = kind === 'portrait' ? '正在上传照片…' : '正在上传声音…';
+    const processing = kind === 'portrait' ? '正在处理照片…' : '正在处理声音…';
+    void operation(
+      kind,
+      uploading,
+      async (signal) => {
+        const form = new FormData();
+        const uploadable =
+          kind === 'portrait' && !previewUnavailable
+            ? await toUploadableImage(file)
+            : file;
+        const uncropped =
+          kind === 'portrait' && isHeic(file) && uploadable === file;
+        if (uncropped && !signal.aborted) setPreviewUnavailable(true);
+        if (signal.aborted) return;
+        setSize(uploadable.size);
+        form.append('file', uploadable);
+        if (kind === 'portrait' && area && !uncropped) {
+          for (const [key, value] of Object.entries({
+            x: area.x,
+            y: area.y,
+            w: area.width,
+            h: area.height,
+          }))
+            form.append(key, String(value / 100));
+        }
+        const next = await uploadAsset(
+          `/api/me/${kind}`,
+          form,
+          (value) => {
+            if (signal.aborted) return;
+            setProgress(value);
+            if (value === 100) setBusyLabel(processing);
+          },
+          signal,
+        );
+        if (signal.aborted) return;
+        setProgress(100);
+        setBusyLabel(processing);
+        const nextCaps = await changed(next, signal);
+        if (signal.aborted) return;
+        if (kind === 'portrait') setPhoto(null);
+        else {
+          recorder.reset();
+          setSample(null);
+          if (nextCaps?.available) await trial(signal);
+        }
+      },
+      file.size,
+    );
   };
   const reset = (kind: 'portrait' | 'voice') =>
-    void operation(async (signal) => {
+    void operation(kind, '正在恢复默认…', async (signal) => {
       const next = await api<Profile>(`/api/me/${kind}`, {
         method: 'DELETE',
         signal,
@@ -292,11 +294,35 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
       ? personaUrl(caps.avatar_image.url)
       : undefined;
 
+  const errorFeedback = error && (
+    <div role="alert" className="text-danger">
+      {error}
+      {profile && retryWork.current && (
+        <Button
+          variant="ghost"
+          disabled={disabled}
+          onClick={() => retryWork.current?.()}
+        >
+          重试
+        </Button>
+      )}
+      {!profile && (
+        <Button
+          variant="ghost"
+          onClick={() => setAttempt((value) => value + 1)}
+        >
+          重试加载
+        </Button>
+      )}
+    </div>
+  );
+
   return (
     <div className="self-assets space-y-5 [&_button]:min-h-11 [&_input]:text-base [&_label]:min-h-11">
       <section
         aria-label="形象"
-        className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
+        aria-busy={busy && busyKind === 'portrait'}
+        className={`space-y-3 rounded-xl bg-surface p-4 shadow-card ${busy && busyKind === 'portrait' ? 'opacity-60' : ''}`}
       >
         <h2 className="text-md font-semibold">形象</h2>
         <div className="flex items-center gap-3">
@@ -342,12 +368,15 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             const file = event.target.files?.[0];
             event.target.value = '';
             if (file) {
+              setBusyKind('portrait');
+              retryWork.current = null;
               if (file.size > 15 * 1024 * 1024) {
                 setError('照片不能超过 15 MB');
                 return;
               }
               setError('');
               setPhoto(file);
+              setPreviewUnavailable(false);
               setCrop({ x: 0, y: 0 });
               setZoom(1);
               setArea(null);
@@ -360,49 +389,65 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
         {photoUrl && (
           <div className="space-y-3">
             <div
-              className="relative h-80 overflow-hidden rounded-lg bg-black"
+              className={`relative h-80 overflow-hidden rounded-lg ${previewUnavailable ? 'flex items-center justify-center bg-background p-6 text-center text-secondary' : 'bg-black'}`}
               aria-label="裁剪照片"
             >
-              <Cropper
-                image={photoUrl}
-                crop={crop}
-                zoom={zoom}
-                aspect={3 / 4}
-                onCropChange={setCrop}
-                onZoomChange={setZoom}
-                onCropComplete={setArea}
-                mediaProps={{
-                  onError: () => {
-                    setPhoto(null);
-                    setError('无法打开照片，请选择 JPEG、PNG 或 WebP 图片');
-                  },
-                }}
-                disableAutomaticStylesInjection
-              />
+              {previewUnavailable ? (
+                <p>这个格式无法在浏览器里预览，会自动居中裁剪</p>
+              ) : (
+                <Cropper
+                  key={photoUrl}
+                  image={photoUrl}
+                  crop={crop}
+                  zoom={zoom}
+                  aspect={3 / 4}
+                  onCropChange={setCrop}
+                  onZoomChange={setZoom}
+                  onCropComplete={setArea}
+                  mediaProps={{
+                    onError: () => {
+                      setArea(null);
+                      if (photo && isHeic(photo)) {
+                        setPreviewUnavailable(true);
+                      } else {
+                        setPhoto(null);
+                        setError('无法读取照片，请选择有效的图片');
+                      }
+                    },
+                    onLoad: () => setPreviewUnavailable(false),
+                  }}
+                  disableAutomaticStylesInjection
+                />
+              )}
             </div>
-            <label className="flex items-center gap-3">
-              缩放
-              <input
-                aria-label="照片缩放"
-                type="range"
-                min={1}
-                max={3}
-                step={0.01}
-                value={zoom}
-                disabled={busy}
-                onChange={(event) => setZoom(Number(event.target.value))}
-                className="min-h-11 flex-1"
-              />
-            </label>
-            <p className="text-sm text-secondary">
-              拖动照片或双指缩放，让脸部留在框内。
-            </p>
+            {!previewUnavailable && (
+              <>
+                <label className="flex items-center gap-3">
+                  缩放
+                  <input
+                    aria-label="照片缩放"
+                    type="range"
+                    min={1}
+                    max={3}
+                    step={0.01}
+                    value={zoom}
+                    disabled={busy}
+                    onChange={(event) => setZoom(Number(event.target.value))}
+                    className="min-h-11 flex-1"
+                  />
+                </label>
+                <p className="text-sm text-secondary">
+                  拖动照片或双指缩放，让脸部留在框内。
+                </p>
+              </>
+            )}
             <div className="flex gap-2">
               <Button
-                disabled={disabled || !area}
+                disabled={disabled || (!area && !previewUnavailable)}
+                loading={busy && busyKind === 'portrait'}
                 onClick={() => photo && save('portrait', photo)}
               >
-                使用这张
+                {busy && busyKind === 'portrait' ? busyLabel : '使用这张'}
               </Button>
               <Button
                 variant="ghost"
@@ -414,10 +459,12 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             </div>
           </div>
         )}
+        {busyKind === 'portrait' && errorFeedback}
       </section>
       <section
         aria-label="声音"
-        className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
+        aria-busy={(busy && busyKind === 'voice') || recording}
+        className={`space-y-3 rounded-xl bg-surface p-4 shadow-card ${(busy && busyKind === 'voice') || recording ? 'opacity-60' : ''}`}
       >
         <h2 className="text-md font-semibold">声音</h2>
         <p>
@@ -446,6 +493,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
           <Button
             variant="secondary"
             disabled={disabled}
+            loading={busy && busyKind === 'voice'}
             onClick={() => voiceInput.current?.click()}
           >
             上传录音或视频
@@ -545,7 +593,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             <Button
               variant="secondary"
               disabled={disabled}
-              onClick={() => void operation(trial)}
+              onClick={() => void operation('voice', '正在处理声音…', trial)}
             >
               试听
             </Button>
@@ -559,30 +607,32 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             )}
           </div>
         )}
+        {busyKind === 'voice' && errorFeedback}
+        {recorder.error && (
+          <p role="alert" className="text-danger">
+            {recorder.error}
+          </p>
+        )}
       </section>
       {busy && (
         <div role="status">
-          <progress
-            aria-label="上传进度"
-            value={progress}
-            max={100}
-            className="w-full"
-          />
-          <p>{progress < 100 ? `上传中 ${progress}%` : '正在处理，请稍等…'}</p>
-        </div>
-      )}
-      {(error || recorder.error) && (
-        <p role="alert" className="text-danger">
-          {error || recorder.error}
-          {!profile && (
-            <Button
-              variant="ghost"
-              onClick={() => setAttempt((value) => value + 1)}
-            >
-              重试加载
-            </Button>
+          {size > 0 && (
+            <>
+              <progress
+                aria-label="上传进度"
+                value={progress}
+                max={100}
+                className="w-full"
+              />
+              <p>
+                上传中 {progress}% ·{' '}
+                {((size * progress) / 100 / 1024 ** 2).toFixed(1)} /{' '}
+                {(size / 1024 ** 2).toFixed(1)} MB
+              </p>
+            </>
           )}
-        </p>
+          <p>{busyLabel}</p>
+        </div>
       )}
     </div>
   );

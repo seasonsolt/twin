@@ -154,7 +154,7 @@ CASES = [
 def test_numeric_rules_and_idempotence(original: str, expected: str) -> None:
     assert speech_text(original, "zh") == expected
     assert speech_text(expected, "zh") == expected
-    assert SPEECH_TEXT_VERSION == 3
+    assert SPEECH_TEXT_VERSION == 4
 
 
 @pytest.mark.parametrize(("original", "expected"), CASES)
@@ -198,6 +198,38 @@ def test_acronyms_are_only_spelled_by_declared_capability(original: str, expecte
     assert speech_text(original, "zh", capabilities=capabilities) == expected
     assert speech_text(expected, "zh", capabilities=capabilities) == expected
     assert speech_text(original, "zh") == speech_text(original, "zh", capabilities=SynthCapabilities())
+
+
+@pytest.mark.parametrize(
+    ("original", "expected"),
+    [
+        ("**重点**和*建议*，用`命令`。", "重点和建议，用命令。"),
+        ("我__建议__先看_数据_。", "我建议先看数据。"),
+        ("#### 选项\n\n1. **先做**\n2. 再做\n   - 子项", "选项\n\n先做\n再做\n子项"),
+        ("| 方案 | 成本 |\n| --- | --- |\n| 甲 | 低 |", "方案，成本\n\n甲，低"),
+        ("前面。\n```python\nprint('不要读')\n\nprint('也不读')\n```\n后面。", "前面。\n（代码略）\n后面。"),
+        ("```\n```\n后面。", "（代码略）\n后面。"),
+        ("~~~sh\necho hidden", "（代码略）"),
+        ("- ```sh\n    echo hidden\n    ```\n- 再做", "（代码略）\n再做"),
+        ("`a | b`不是表格。", "a | b 不是表格。"),
+        ("| 项目 |\n| --- |\n| 甲 |", "项目\n\n甲"),
+        ("[来源](https://example.com/a_(b))", "来源"),
+        ("> **引用**\n\n[来源](https://example.com) ![图片](https://example.com/a.png)", "引用\n\n来源 图片"),
+        ("<script>不要说</script><img src=x onerror=bad>正常", "正常"),
+        ("**2个**，增长*3.5%*。", "两个，增长百分之三点五。"),
+    ],
+)
+def test_markdown_is_silent_and_preserves_raw_spans(original: str, expected: str) -> None:
+    spans = speech_text_spans(original, "zh")
+    assert "".join(source for source, _ in spans) == original
+    assert "".join(spoken for _, spoken in spans) == expected
+    assert speech_text(expected, "zh") == expected
+
+
+def test_markdown_is_stripped_for_non_chinese_speech() -> None:
+    assert speech_text("**Hello**\n\n- First\n- Second\n\n```sh\necho secret\n```", "en") == (
+        "Hello\n\nFirst\nSecond\n\n（代码略）"
+    )
 
 
 def test_original_non_number_characters_remain_in_order() -> None:

@@ -127,6 +127,10 @@ it.each([true, false])(
     await screen.findByRole('heading', { name: '添加记忆' });
     expect(await screen.findAllByText('等待记住…')).toHaveLength(1);
     expect(screen.getAllByRole('tab')).toHaveLength(3);
+    expect(
+      screen.getByRole('button', { name: '正在整理记忆…' }),
+    ).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '在后台继续处理' }));
     const memoryInput = screen.getByLabelText('要记住的文字');
     fireEvent.change(memoryInput, {
       target: { value: '今天去散步了' },
@@ -140,6 +144,9 @@ it.each([true, false])(
       expect(
         fetcher.mock.calls.some(([url]) => url === '/api/persona/notes'),
       ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '继续' })).toBeEnabled(),
     );
     fireEvent.click(screen.getByRole('button', { name: '继续' }));
     const start = await screen.findByRole('button', { name: '开始聊天' });

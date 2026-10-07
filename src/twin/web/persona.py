@@ -33,6 +33,7 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from .backends import Backends
+from .conversations import append_reply, append_user, owner
 from .jobs import JobManager, PersonaProcessing
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
@@ -61,6 +62,7 @@ class ReviewBody(BaseModel):
 
 class ChatBody(BaseModel):
     messages: list[ChatTurn] = Field(min_length=1, max_length=MAX_CHAT_TURNS)
+    conversation_id: str | None = Field(default=None, max_length=100)
 
 
 def _date(value: str | None, field: str) -> dt.date | None:
@@ -109,11 +111,19 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
     }
 
 
-def run_chat(settings: Settings, llm: LLM, embedder: Embedder, messages: list[ChatTurn], log: Log) -> dict[str, Any]:
+def run_chat(
+    settings: Settings,
+    llm: LLM,
+    embedder: Embedder,
+    messages: list[ChatTurn],
+    log: Log,
+    conversation_id: str | None = None,
+    email: str | None = None,
+) -> dict[str, Any]:
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
         reply = PersonaChat(store, llm, embedder, settings).reply(messages)
-        return chat_payload(store, reply)
+        return append_reply(store, conversation_id, email, chat_payload(store, reply))
 
 
 def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
@@ -190,8 +200,9 @@ def register(
             store.clear_source_errors()
         processing.queue()
 
-    from . import identity
+    from . import conversations, identity
 
+    conversations.register(app, settings)
     identity.register(app, settings, queue_build)
 
     from . import uploads
@@ -389,26 +400,39 @@ def register(
         return data
 
     @app.post("/api/persona/chat", status_code=202)
-    def start_chat(body: ChatBody) -> Any:
+    def start_chat(body: ChatBody, request: Request) -> Any:
         messages = validate_chat(body)
+        email = owner(request)
         with open_store() as store:
+            append_user(store, body.conversation_id, email, messages[-1].content)
             if not store.list_items():
                 reply = no_profile_reply(store)
-                return JSONResponse({**reply.model_dump(mode="json"), "cited": []}, status_code=200)
+                return JSONResponse(
+                    append_reply(store, body.conversation_id, email, chat_payload(store, reply)), status_code=200
+                )
         llm, embedder = backends.chat_llm(), backends.embedder()
-        job = jobs.submit("chat", "和分身聊天", lambda log: run_chat(settings, llm, embedder, messages, log))
+        job = jobs.submit(
+            "chat",
+            "和分身聊天",
+            lambda log: run_chat(settings, llm, embedder, messages, log, body.conversation_id, email),
+        )
         return {"job_id": job.job_id}
 
     @app.post("/api/persona/chat/stream")
-    def stream_chat(body: ChatBody) -> StreamingResponse:
+    def stream_chat(body: ChatBody, request: Request) -> StreamingResponse:
         messages = validate_chat(body)
+        email = owner(request)
+        with open_store() as store:
+            append_user(store, body.conversation_id, email, messages[-1].content)
 
         async def produce() -> AsyncGenerator[str]:
             with open_store() as store:
                 if not store.list_items():
                     reply = no_profile_reply(store)
                     yield sse_event("delta", {"text": reply.reply})
-                    yield sse_event("final", chat_payload(store, reply))
+                    yield sse_event(
+                        "final", append_reply(store, body.conversation_id, email, chat_payload(store, reply))
+                    )
                     return
                 llm, embedder = await run_in_threadpool(lambda: (backends.chat_llm(), backends.embedder()))
                 chat = PersonaChat(store, llm, embedder, settings)
@@ -417,7 +441,9 @@ def register(
                         if isinstance(result, str):
                             yield sse_event("delta", {"text": result})
                         else:
-                            yield sse_event("final", chat_payload(store, result))
+                            yield sse_event(
+                                "final", append_reply(store, body.conversation_id, email, chat_payload(store, result))
+                            )
 
         async def events() -> AsyncGenerator[str]:
             yield ": connected\n\n"

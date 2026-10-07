@@ -13,6 +13,7 @@ from typing import IO, Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
 from starlette.concurrency import run_in_threadpool
 
 from ..assets import AssetStore
@@ -20,18 +21,22 @@ from ..config import Settings
 from ..media.clip import ffmpeg_path
 from ..media.tts import MediaUnavailable
 
+register_heif_opener()
+
 PORTRAIT_LIMIT = 15 * 1024 * 1024
 VOICE_LIMIT = 95_000_000
 UPLOAD_PATHS = frozenset({"/api/me/portrait", "/api/me/voice"})
 VOICE_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".mp4", ".mov", ".caf"}
 
 
-async def read_upload(file: UploadFile, output: IO[bytes], limit: int) -> None:
+async def read_upload(
+    file: UploadFile, output: IO[bytes], limit: int, size_error: str = "文件太大，请选择较小的文件"
+) -> None:
     size = 0
     while chunk := await file.read(65536):
         size += len(chunk)
         if size > limit:
-            raise HTTPException(413, "文件太大，请选择较小的文件")
+            raise HTTPException(413, size_error)
         await run_in_threadpool(output.write, chunk)
     if not size:
         raise HTTPException(400, "文件为空或上传不完整，请重试")
@@ -41,8 +46,8 @@ async def read_upload(file: UploadFile, output: IO[bytes], limit: int) -> None:
 def portrait(path: Path, fields: dict[str, str]) -> bytes:
     try:
         with Image.open(path) as source:
-            if source.format not in {"JPEG", "PNG", "WEBP"}:
-                raise HTTPException(400, "请选择 JPEG、PNG 或 WebP 照片")
+            if source.format not in {"JPEG", "PNG", "WEBP", "HEIF"}:
+                raise HTTPException(400, "请选择 JPEG、PNG、WebP 或 HEIC/HEIF 照片")
             image = ImageOps.exif_transpose(source).convert("RGB")
         width, height = image.size
         if fields:
@@ -73,8 +78,8 @@ def portrait(path: Path, fields: dict[str, str]) -> bytes:
         output = io.BytesIO()
         clean.save(output, format="PNG")
         return output.getvalue()
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
-        raise HTTPException(400, "无法读取照片，请选择有效的 JPEG、PNG 或 WebP 图片") from None
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(400, "无法读取照片，请选择有效的 JPEG、PNG、WebP 或 HEIC/HEIF 图片") from None
 
 
 def voice(path: Path, directory: Path) -> tuple[bytes, float]:
@@ -156,7 +161,7 @@ def register(app: FastAPI, settings: Settings) -> None:
             raise HTTPException(400, "裁剪参数无效")
         store.prepare()
         with tempfile.NamedTemporaryFile(dir=store.directory, suffix=".upload") as upload:
-            await read_upload(file, upload.file, PORTRAIT_LIMIT)
+            await read_upload(file, upload.file, PORTRAIT_LIMIT, "照片不能超过 15 MB")
             content = await run_in_threadpool(portrait, Path(upload.name), fields)
             return await run_in_threadpool(store.save, "portrait", content)
 

@@ -24,6 +24,7 @@ import {
 import type { Turn } from '../features/chat/types';
 import { personaUrl } from '../lib/persona';
 import { CHAT_KEY } from '../features/chat/useConversation';
+import { conversationServer } from './conversationServer';
 import { useStatus } from '../stores/status';
 import type { Capabilities } from '../features/avatar/types';
 import type { ChatReply } from '../features/chat/types';
@@ -80,6 +81,7 @@ const json = (data: unknown, status = 200) =>
     headers: { 'Content-Type': 'application/json' },
   });
 let fetchMock: ReturnType<typeof vi.fn>;
+let conversations: ReturnType<typeof conversationServer>;
 let paused: boolean;
 let failPlay: boolean;
 let frames: Map<number, FrameRequestCallback>;
@@ -88,6 +90,8 @@ let audioFail: boolean;
 let submitFail: boolean;
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
+  conversations = conversationServer();
   preference.reduced = false;
   paused = true;
   failPlay = false;
@@ -127,6 +131,8 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   useStatus.setState({ data: null, error: null });
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const history = conversations.respond(url, init);
+    if (history) return history;
     if (url === '/api/persona/state') return json({ stale: false });
     if (url === '/api/media/capabilities') return json(caps);
     if (url === '/api/media/audio')
@@ -272,12 +278,14 @@ it.each(['grounded', 'general', 'abstain'] as const)(
   },
 );
 it('hides video without capability, but keeps the voice action', async () => {
-  fetchMock.mockImplementation(async (url: string) =>
-    json(
-      url === '/api/media/capabilities'
-        ? { ...caps, video: { available: false } }
-        : { stale: false },
-    ),
+  fetchMock.mockImplementation(
+    async (url: string, init?: RequestInit) =>
+      conversations.respond(url, init) ??
+      json(
+        url === '/api/media/capabilities'
+          ? { ...caps, video: { available: false } }
+          : { stale: false },
+      ),
   );
   sessionStorage.setItem(
     CHAT_KEY,

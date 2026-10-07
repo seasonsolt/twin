@@ -5,11 +5,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import date
+from difflib import SequenceMatcher
 from typing import Final
 
 from .schema import SynthCapabilities
 
-SPEECH_TEXT_VERSION: Final = 3
+SPEECH_TEXT_VERSION: Final = 4
 
 _DIGITS = "零一二三四五六七八九"
 _MEASURES = (
@@ -138,7 +139,7 @@ def _space_spans(spans: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return spaced
 
 
-def speech_text_spans(
+def _pronunciation_spans(
     text: str, language: str, *, capabilities: SynthCapabilities | None = None
 ) -> list[tuple[str, str]]:
     """Return ordered original/spoken spans, retaining provenance for audio splitting.
@@ -217,6 +218,84 @@ def speech_text_spans(
     return _space_spans(spans)
 
 
+def strip_markdown(text: str) -> str:
+    """Plain scripts only: formatting is silent, table cells are read in row order."""
+    text = re.sub(r"(?m)^ {0,3}(?:> ?)+", "", text)
+    text = re.sub(r"(?m)^[ \t]*(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?", "", text)
+    text = re.sub(
+        r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*(?=\n|\Z)[\s\S]*?"
+        r"(?:\n[ \t]*(?P=fence)[`~]*[ \t]*(?=\n|$)|\Z)",
+        "（代码略）",
+        text,
+    )
+    text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1\s*>", "", text)
+    text = re.sub(r"<!--[^>]*-->|</?[A-Za-z][^>]*>", "", text)
+    text = re.sub(r"!?\[([^\]\n]*)\]\((?:[^()\n]|\([^()\n]*\))*\)", r"\1", text)
+    text = re.sub(r"(?m)^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?$", r"\1", text)
+    text = re.sub(r"(?m)^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$", "", text)
+    lines = text.splitlines(keepends=True)
+    table_rows: set[int] = set()
+    separators: set[int] = set()
+    for index, line in enumerate(lines):
+        cells = line.strip().strip("|").split("|")
+        if index and "|" in line and all(re.fullmatch(r"\s*:?-{3,}:?\s*", cell) for cell in cells):
+            if "|" not in lines[index - 1]:
+                continue
+            separators.add(index)
+            table_rows.add(index - 1)
+            following = index + 1
+            while following < len(lines) and "|" in lines[following] and lines[following].strip():
+                table_rows.add(following)
+                following += 1
+    for index in table_rows | separators:
+        newline = "\n" if lines[index].endswith("\n") else ""
+        lines[index] = (
+            ""
+            if index in separators
+            else "，".join(cell.strip() for cell in re.split(r"(?<!\\)\|", lines[index].strip().strip("|")))
+        ) + newline
+    text = "".join(lines)
+    text = re.sub(r"(`+)([^`\n]+)\1", r"\2", text)
+    for marker in (r"\*\*", "__", r"\*", "_", "~~"):
+        text = re.sub(rf"(?<![A-Za-z0-9]){marker}(?=\S)(.+?)(?<=\S){marker}(?![A-Za-z0-9])", r"\1", text)
+        # CJK words may directly adjoin emphasis delimiters.
+        if marker in (r"\*\*", r"\*", "~~"):
+            text = re.sub(rf"{marker}(?=\S)(.+?)(?<=\S){marker}", r"\1", text)
+    return re.sub(r"\\([\\`*_{}\[\]()#+.!>|~-])", r"\1", text)
+
+
+def speech_text_spans(
+    text: str, language: str, *, capabilities: SynthCapabilities | None = None
+) -> list[tuple[str, str]]:
+    """Strip Markdown for every language, preserving raw source provenance in spoken spans."""
+    plain = strip_markdown(text)
+    spans = _pronunciation_spans(plain, language, capabilities=capabilities)
+    if plain == text:
+        return spans
+    if not plain:
+        return [(text, "")] if text else []
+    sources = [""] * len(plain)
+    pending = ""
+    for kind, start, end, left, right in SequenceMatcher(None, text, plain, autojunk=False).get_opcodes():
+        raw = pending + text[start:end]
+        pending = ""
+        if kind == "equal":
+            sources[left:right] = list(text[start:end])
+            sources[left] = raw[: len(raw) - (end - start)] + sources[left]
+        elif left < right:
+            sources[left] = raw
+        else:
+            pending = raw
+    sources[-1] += pending
+    result: list[tuple[str, str]] = []
+    offset = 0
+    for original, spoken in spans:
+        end = offset + len(original)
+        result.append(("".join(sources[offset:end]), spoken))
+        offset = end
+    return result
+
+
 def speech_text(text: str, language: str, *, capabilities: SynthCapabilities | None = None) -> str:
-    """Normalize numeric pronunciation and opt-in acronym spelling without changing content."""
+    """Strip Markdown, normalize numeric pronunciation and apply opt-in acronym spelling."""
     return "".join(spoken for _, spoken in speech_text_spans(text, language, capabilities=capabilities))

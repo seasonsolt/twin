@@ -15,7 +15,12 @@ import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 import { Twins } from '../pages/Twins';
 import { ConfirmProvider } from '../components/ui';
 import type { Turn } from '../features/chat/types';
-import { useConversation, CHAT_KEY } from '../features/chat/useConversation';
+import {
+  useConversation,
+  CHAT_KEY,
+  CURRENT_CHAT_KEY,
+} from '../features/chat/useConversation';
+import { conversationServer } from './conversationServer';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
 import { useReplyVideos, videoUrl } from '../features/chat/useReplyVideos';
 import { useQuestionnaire } from '../features/questionnaire/useQuestionnaire';
@@ -38,6 +43,7 @@ const selected = (init?: RequestInit) =>
   new Headers(init?.headers).get('X-Twin-Persona');
 let items: Persona[];
 let fetcher: ReturnType<typeof vi.fn>;
+let conversations: ReturnType<typeof conversationServer>;
 const reply = {
   reply: '独立回复',
   citations: [],
@@ -52,6 +58,7 @@ beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   setPersonaId('default');
+  conversations = conversationServer();
   items = [
     {
       id: 'default',
@@ -73,6 +80,8 @@ beforeEach(() => {
   usePersonas.setState({ id: 'default', items: [] });
   useStatus.setState({ data: null, error: null });
   fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    const history = conversations.respond(path, init);
+    if (history) return history;
     if (path === '/api/whoami')
       return json({ email: null, admin: true, auth_enabled: false });
     const persona =
@@ -114,10 +123,12 @@ beforeEach(() => {
         counts: { sources: persona.sources, items: 0 },
         egress: [],
       });
-    if (path === '/api/persona/chat/stream')
+    if (path === '/api/persona/chat/stream') {
+      conversations.append(init!, reply);
       return new Response(`event: final\ndata: ${JSON.stringify(reply)}\n\n`, {
         headers: { 'Content-Type': 'text/event-stream' },
       });
+    }
     if (path.startsWith('/api/persona/questionnaire'))
       return json({
         questions: [],
@@ -273,22 +284,36 @@ it('restores and saves chat history independently for each persona', async () =>
   );
   render(<ChatContext />);
   expect(screen.getByText('主人的历史')).toBeVisible();
+  await waitFor(() =>
+    expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy(),
+  );
   act(() => usePersonas.getState().switchTo(B));
   expect(screen.queryByText('主人的历史')).not.toBeInTheDocument();
   expect(screen.getByText('朋友的历史')).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: '发送' }));
   await waitFor(() =>
-    expect(sessionStorage.getItem(personaKey(CHAT_KEY, B))).toContain(
-      '新的问题',
-    ),
+    expect(localStorage.getItem(personaKey(CURRENT_CHAT_KEY, B))).toBeTruthy(),
   );
-  expect(sessionStorage.getItem(CHAT_KEY)).not.toContain('新的问题');
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  await waitFor(() => expect(screen.getByText(/新的问题/)).toBeVisible());
+  await waitFor(() =>
+    expect(
+      conversations.rows
+        .get(localStorage.getItem(personaKey(CURRENT_CHAT_KEY, B))!)!
+        .turns.at(-1)?.content,
+    ).toBe(reply.reply),
+  );
+  expect(sessionStorage.getItem(personaKey(CHAT_KEY, B))).toBeNull();
+  expect(
+    [...conversations.rows.values()]
+      .find((row) => row.persona === 'default')
+      ?.turns.some((turn) => turn.content === '新的问题'),
+  ).toBe(false);
   const request = fetcher.mock.calls.find(
     ([path]) => path === '/api/persona/chat/stream',
   )![1];
   expect(selected(request)).toBe(B);
   act(() => usePersonas.getState().switchTo('default'));
-  expect(screen.getByText('主人的历史')).toBeVisible();
+  expect(await screen.findByText('主人的历史')).toBeVisible();
 });
 
 it('aborts an unfinished reply on persona switch and never saves its partial text', async () => {

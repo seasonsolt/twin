@@ -3,6 +3,7 @@ import { Button, Field, Input, Textarea } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useStatus } from '../../stores/status';
 import type { IdentityData } from './useIdentity';
+import { usePendingWork } from '../../lib/pendingWork';
 
 export function IdentityForm({
   identity,
@@ -17,11 +18,14 @@ export function IdentityForm({
   const [about, setAbout] = useState(identity.about || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  usePendingWork(busy, '正在保存身份…');
   return (
     <form
-      className="space-y-3"
+      aria-busy={busy}
+      className={`space-y-3 ${busy ? 'opacity-60' : ''}`}
       onSubmit={(event) => {
         event.preventDefault();
+        if (busy) return;
         setBusy(true);
         setError('');
         void api<IdentityData>('/api/identity', {
@@ -76,8 +80,13 @@ export function IdentityForm({
           {error}
         </p>
       )}
-      <Button type="submit" loading={busy} disabled={!name.trim()}>
-        保存
+      <Button
+        type="submit"
+        loading={busy}
+        disabled={!name.trim()}
+        aria-disabled={busy || !name.trim()}
+      >
+        {busy ? '正在保存身份…' : error ? '重试保存' : '保存'}
       </Button>
     </form>
   );

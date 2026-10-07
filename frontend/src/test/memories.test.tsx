@@ -11,6 +11,13 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, toast } from '../components/ui';
 import { Memories, type Memory } from '../pages/Memories';
+import { api } from '../lib/api';
+
+vi.mock('../lib/mediaUpload', async (original) => ({
+  ...(await original<typeof import('../lib/mediaUpload')>()),
+  uploadForm: (path: string, form: FormData, signal: AbortSignal) =>
+    api(path, { method: 'POST', form, signal }),
+}));
 
 vi.mock('../components/ui', async (original) => ({
   ...(await original<typeof import('../components/ui')>()),

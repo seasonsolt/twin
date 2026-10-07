@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image, PngImagePlugin
+from pillow_heif import from_pillow
 
 from twin.assets import AssetStore
 from twin.config import AvatarSettings, Settings, TTSSettings, load_settings
@@ -111,6 +112,35 @@ def test_portrait_profile_crop_metadata_permissions_and_fallbacks(tmp_path: Path
         assert web.get("/api/media/capabilities").json()["avatar_image"] is None
 
 
+@pytest.mark.parametrize("extension", ["heic", "heif"])
+def test_heic_portrait_default_crop_and_metadata(tmp_path: Path, extension: str) -> None:
+    source = Image.new("RGB", (640, 640), "blue")
+    exif = source.getexif()
+    exif[315] = "private artist"
+    source.info["exif"] = exif.tobytes()
+    output = io.BytesIO()
+    from_pillow(source).save(output)
+    with client(tmp_path) as web:
+        response = web.put(
+            "/api/me/portrait",
+            files={"file": (f"self.{extension}", output.getvalue(), f"image/{extension}")},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        profile = response.json()
+        with Image.open(io.BytesIO(web.get("/api/media/avatar-image").content)) as saved:
+            assert saved.format == "PNG" and saved.mode == "RGB"
+            assert saved.size == (480, 640)
+            assert not saved.info and not saved.getexif()
+        invalid = web.put(
+            "/api/me/portrait", files={"file": (f"bad.{extension}", b"garbage", f"image/{extension}")}, headers=HEADERS
+        )
+        assert invalid.status_code == 400
+        assert "无法读取照片" in invalid.json()["detail"]
+        assert web.get("/api/me/assets").json()["portrait"] == profile["portrait"]
+        assert not list((tmp_path / "assets").glob("*.upload"))
+
+
 @pytest.mark.parametrize(
     "content,fields",
     [
@@ -165,7 +195,7 @@ def test_chunked_upload_size_limit_and_clean_temp(tmp_path: Path, monkeypatch: p
 
     response = asyncio.run(request())
     assert response.status_code == 413 and consumed == 100
-    assert response.json()["detail"] == "文件太大，请选择较小的文件"
+    assert response.json()["detail"] == "照片不能超过 15 MB"
     assert not list((tmp_path / "assets").glob("*.upload"))
     with client(tmp_path) as web:
         malformed = web.put(
@@ -207,7 +237,7 @@ def test_content_length_rejected_before_multipart_parsing(
 
     response = asyncio.run(request())
     assert response.status_code == 413
-    assert response.json()["detail"] == "文件太大，请选择较小的文件"
+    assert response.json()["detail"] == ("照片不能超过 15 MB" if path == "portrait" else "文件太大，请选择较小的文件")
     assert not consumed and not (tmp_path / "assets").exists()
     assert response.headers["x-content-type-options"] == "nosniff"
 

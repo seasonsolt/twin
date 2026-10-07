@@ -5,24 +5,30 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { SelfAssets } from '../features/assets/SelfAssets';
+import { SelfAssets, toUploadableImage } from '../features/assets/SelfAssets';
 import { useRecorder } from '../features/assets/useRecorder';
 
 vi.mock('react-easy-crop', () => ({
   default: ({
     aspect,
     onCropComplete,
+    mediaProps,
   }: {
     aspect: number;
     onCropComplete: (area: object) => void;
+    mediaProps: { onError: () => void; onLoad: () => void };
   }) => (
-    <button
-      onClick={() => onCropComplete({ x: 10, y: 20, width: 60, height: 80 })}
-    >
-      裁剪 {aspect}
-    </button>
+    <>
+      <img alt="待裁剪照片" {...mediaProps} />
+      <button
+        onClick={() => onCropComplete({ x: 10, y: 20, width: 60, height: 80 })}
+      >
+        裁剪 {aspect}
+      </button>
+    </>
   ),
 }));
 const empty = { portrait: null, voice: null, speech_clone: true, video: false };
@@ -101,6 +107,7 @@ class Recorder {
 }
 beforeEach(() => {
   assets = empty;
+  Xhr.last = undefined as unknown as Xhr;
   speech = false;
   tracks = [{ stop: vi.fn() }];
   gum = vi.fn().mockResolvedValue({ getTracks: () => tracks });
@@ -229,6 +236,174 @@ it('re-encodes an iPhone HEIC photo as JPEG before uploading', async () => {
   context.mockRestore();
   toBlob.mockRestore();
 });
+
+it.each([
+  ['IMG_0001.HEIC', ''],
+  ['self.heif', 'application/octet-stream'],
+  ['photo', 'image/heic'],
+  ['photo', 'image/heif'],
+])('uploads undecodable %s (%s) without crop fields', async (name, type) => {
+  const decode = vi.fn();
+  Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+    configurable: true,
+    value: decode,
+  });
+  try {
+    render(<SelfAssets />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('选择照片')).toBeEnabled(),
+    );
+    const file = new File(['heic'], name, { type });
+    fireEvent.change(screen.getByLabelText('选择照片'), {
+      target: { files: [file] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: '裁剪 0.75' }));
+    fireEvent.error(screen.getByRole('img', { name: '待裁剪照片' }));
+    expect(
+      screen.getByText('这个格式无法在浏览器里预览，会自动居中裁剪'),
+    ).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('照片缩放')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '使用这张' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '使用这张' }));
+    await waitFor(() => expect(Xhr.last?.path).toBe('/api/me/portrait'));
+    expect(Xhr.last.body?.get('file')).toBe(file);
+    expect(['x', 'y', 'w', 'h'].map((key) => Xhr.last.body?.has(key))).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(decode).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '换一张' })).toBeDisabled();
+    act(() =>
+      Xhr.last.upload.onprogress?.({
+        lengthComputable: true,
+        loaded: 100,
+        total: 100,
+      }),
+    );
+    expect(screen.getByRole('progressbar')).toHaveAttribute('value', '100');
+    expect(screen.getByRole('region', { name: '形象' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
+    act(() =>
+      Xhr.last.complete({
+        ...empty,
+        portrait: { sha: 'heic', file: 'heic.png' },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '换一张' })).toBeEnabled(),
+    );
+    await waitFor(() =>
+      expect(screen.queryByLabelText('裁剪照片')).not.toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText('选择照片'), {
+      target: { files: [new File(['jpg'], 'new.jpg', { type: 'image/jpeg' })] },
+    });
+    expect(await screen.findByLabelText('照片缩放')).toBeVisible();
+    expect(screen.getByRole('button', { name: '使用这张' })).toBeDisabled();
+  } finally {
+    delete (HTMLImageElement.prototype as { decode?: unknown }).decode;
+  }
+});
+
+it('handles HEIC decode rejection during conversion without crop fields', async () => {
+  Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+    configurable: true,
+    value: vi.fn().mockRejectedValue(new Error('decode failed')),
+  });
+  try {
+    render(<SelfAssets />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('选择照片')).toBeEnabled(),
+    );
+    const file = new File(['heic'], 'photo.heic', { type: 'image/heic' });
+    fireEvent.change(screen.getByLabelText('选择照片'), {
+      target: { files: [file] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: '裁剪 0.75' }));
+    fireEvent.click(screen.getByRole('button', { name: '使用这张' }));
+    await waitFor(() => expect(Xhr.last?.body?.get('file')).toBe(file));
+    expect(Xhr.last.body?.has('x')).toBe(false);
+    expect(
+      screen.getByText('这个格式无法在浏览器里预览，会自动居中裁剪'),
+    ).toBeVisible();
+    await expect(
+      toUploadableImage(new File(['bad'], 'photo.bmp')),
+    ).rejects.toThrow('无法读取照片');
+  } finally {
+    delete (HTMLImageElement.prototype as { decode?: unknown }).decode;
+  }
+});
+
+it('shows an unreadable JPEG error next to the photo controls', async () => {
+  render(<SelfAssets />);
+  await waitFor(() => expect(screen.getByLabelText('选择照片')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('选择照片'), {
+    target: { files: [new File(['bad'], 'bad.jpg', { type: 'image/jpeg' })] },
+  });
+  fireEvent.error(await screen.findByRole('img', { name: '待裁剪照片' }));
+  expect(
+    within(screen.getByRole('region', { name: '形象' })).getByRole('alert'),
+  ).toHaveTextContent('无法读取照片，请选择有效的图片');
+  expect(
+    screen.queryByRole('button', { name: '使用这张' }),
+  ).not.toBeInTheDocument();
+  expect(Xhr.last).toBeUndefined();
+});
+
+it('rejects photos over 15 MB next to the photo controls', async () => {
+  render(<SelfAssets />);
+  await waitFor(() => expect(screen.getByLabelText('选择照片')).toBeEnabled());
+  const file = new File(['large'], 'large.heic');
+  Object.defineProperty(file, 'size', { value: 15 * 1024 ** 2 + 1 });
+  fireEvent.change(screen.getByLabelText('选择照片'), {
+    target: { files: [file] },
+  });
+  expect(
+    within(screen.getByRole('region', { name: '形象' })).getByRole('alert'),
+  ).toHaveTextContent('照片不能超过 15 MB');
+  expect(Xhr.last).toBeUndefined();
+});
+
+it.each(['too small', 'unreadable', 'network'])(
+  'shows the %s upload reason beside the portrait and allows retry',
+  async (failure) => {
+    render(<SelfAssets />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('选择照片')).toBeEnabled(),
+    );
+    const file = new File(['heic'], 'photo.heic');
+    fireEvent.change(screen.getByLabelText('选择照片'), {
+      target: { files: [file] },
+    });
+    fireEvent.error(await screen.findByRole('img', { name: '待裁剪照片' }));
+    fireEvent.click(screen.getByRole('button', { name: '使用这张' }));
+    await waitFor(() => expect(Xhr.last?.path).toBe('/api/me/portrait'));
+    const reason =
+      failure === 'too small'
+        ? '照片裁剪后太小，短边至少需要 320 像素'
+        : failure === 'unreadable'
+          ? '无法读取照片，请选择有效的 HEIC/HEIF 图片'
+          : '连接中断，请重新上传';
+    act(() => {
+      if (failure === 'network') Xhr.last.onerror?.();
+      else Xhr.last.complete({ detail: reason }, 400);
+    });
+    expect(
+      await within(screen.getByRole('region', { name: '形象' })).findByRole(
+        'alert',
+      ),
+    ).toHaveTextContent(reason);
+    expect(screen.getByRole('button', { name: '使用这张' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(Xhr.last.body?.get('file')).toBe(file));
+    expect(Xhr.last.body?.has('x')).toBe(false);
+  },
+);
 
 it('uploads a video as voice, plays the processed reference and offers synthesis with the new voice', async () => {
   speech = true;

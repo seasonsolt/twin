@@ -150,7 +150,7 @@ class SecurityMiddleware:
             limit = assets.PORTRAIT_LIMIT if scope["path"] == "/api/me/portrait" else assets.VOICE_LIMIT
             declared = headers.get("content-length", "")
             if declared.isdigit() and int(declared) > limit + 16384:
-                detail = "文件太大，请选择较小的文件"
+                detail = "照片不能超过 15 MB" if scope["path"] == "/api/me/portrait" else "文件太大，请选择较小的文件"
                 await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send_hardened)
                 return
         media_chunk = scope["method"] == "PUT" and str(scope.get("path", "")).startswith("/api/uploads/")

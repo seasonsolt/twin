@@ -108,6 +108,24 @@ def test_general_content_is_shown_and_spoken_unchanged(reply: ChatReply, tmp_pat
     assert "".join(p.text for s in audio.segments for p in s.parts) == general.reply
 
 
+def test_markdown_script_strips_before_splitting_and_keeps_citations(reply: ChatReply) -> None:
+    reply.reply = (
+        "**先核对**。\n\n1. 再决定。\n\n```sh\necho secret.\n```\n\n| 方案 | 成本 |\n| --- | --- |\n| 甲 | 低 |"
+    )
+    presentable = presentable_from_chat_reply(reply)
+    script = script_from_presentable(presentable, "合成人物")
+    assert [segment.text for segment in script.segments] == [
+        "先核对。",
+        "再决定。",
+        "（代码略）",
+        "方案，成本",
+        "甲，低",
+    ]
+    assert script.citations == presentable.citations
+    assert script.source_fingerprint == fingerprint(reply.model_dump(mode="json"))
+    assert presentable.text == reply.reply
+
+
 def test_manifest_roundtrip() -> None:
     manifest = MediaManifest(source_fingerprint="abc", created_at=dt.datetime.now(dt.UTC))
     assert MediaManifest.model_validate_json(manifest.model_dump_json()) == manifest

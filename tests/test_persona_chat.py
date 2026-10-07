@@ -133,10 +133,15 @@ def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Setti
     assert "涉及本人但无资料支持的问题仍按规则 1 弃权" in prompt
     assert "承诺和评价具体他人仍按规则 3 弃权" in prompt
     output_format = prompt.split("## 输出格式\n", 1)[1].split("## 核心画像", 1)[0]
-    assert "短回复保持一两句话" in output_format
-    assert "长回复拆成简短段落" in output_format
-    assert "每项单独一行的编号列表（1.、2.）" in output_format
-    assert "不要使用 HTML" in output_format
+    assert "少量使用 Markdown" in output_format
+    assert "日常聊天保持自然的简短段落，最多加粗一两个关键词" in output_format
+    assert "步骤或选项用列表" in output_format
+    assert "只有真正的并列对比才用表格" in output_format
+    assert "代码块只用于代码或命令" in output_format
+    assert "标题不得高于四级（####），通常不用标题" in output_format
+    assert "绝不使用 HTML" in output_format
+    assert "<<<META>>>" in pc.STREAM_FORMAT
+    assert "不要用 JSON 或代码块包裹整篇回复" in pc.STREAM_FORMAT
 
 
 @pytest.mark.parametrize("cited", [True, False])

@@ -46,7 +46,7 @@ def test_only_adapters_import_runtime_types(path: Path) -> None:
 
 def test_script_imports_only_boundary_contract_and_util() -> None:
     targets = _imports((MEDIA_ROOT / "script.py").read_text(encoding="utf-8"), "twin.media")
-    assert targets <= {"__future__", "twin.media.schema", "twin.util"}, targets
+    assert targets <= {"__future__", "twin.media.schema", "twin.media.speech_text", "twin.util"}, targets
 
 
 def test_schema_imports_only_stdlib_pydantic_and_util() -> None:

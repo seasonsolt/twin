@@ -11,6 +11,61 @@ const extensions = new Set(
 export const isMedia = (file: File) =>
   extensions.has(file.name.split('.').at(-1)?.toLowerCase() ?? '');
 
+export function uploadForm<T>(
+  path: string,
+  form: FormData,
+  signal: AbortSignal,
+  progress: (percent: number) => void,
+  method = 'POST',
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, path);
+    xhr.setRequestHeader('X-Twin', '1');
+    xhr.setRequestHeader('X-Twin-Persona', getPersonaId());
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable)
+        progress(Math.round((event.loaded / event.total) * 100));
+    };
+    const abort = () => xhr.abort();
+    const finish = () => signal.removeEventListener('abort', abort);
+    xhr.onload = () => {
+      finish();
+      let data: T & { detail?: string };
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        reject(new Error('上传失败，请重试'));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else {
+        handleApiFailure(xhr.status, data);
+        reject(
+          new ApiError(
+            xhr.status,
+            typeof data?.detail === 'string' &&
+              /[\u3400-\u9fff]/u.test(data.detail)
+              ? data.detail
+              : '上传失败，请重试',
+          ),
+        );
+      }
+    };
+    xhr.onerror = () => {
+      finish();
+      reject(new Error('连接中断，请重新上传'));
+    };
+    xhr.onabort = () => {
+      finish();
+      reject(new DOMException('上传已取消', 'AbortError'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    xhr.send(form);
+  });
+}
+
 interface SavedUpload {
   id: string;
   name: string;

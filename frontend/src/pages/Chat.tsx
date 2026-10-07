@@ -7,7 +7,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { useLocation } from 'react-router';
-import { ArrowUp, Play } from 'lucide-react';
+import { ArrowUp, History, Play } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { Button, EmptyState, Textarea } from '../components/ui';
@@ -15,6 +15,7 @@ import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
+import { ConversationHistory } from '../features/chat/ConversationHistory';
 import { videoUrl } from '../features/chat/useReplyVideos';
 import type { Turn } from '../features/chat/types';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
@@ -28,6 +29,11 @@ export function Chat() {
   const { pathname } = useLocation();
   const active = pathname === '/chat';
   const chat = useConversation(active);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const openHistory = () => {
+    setHistoryOpen(true);
+    void chat.refreshHistory();
+  };
   const status = useStatus((state) => state.data);
   const persona = usePersonas((state) =>
     state.items.find((item) => item.id === state.id),
@@ -194,8 +200,14 @@ export function Chat() {
       audio.toggle(turn.id, turn.reply, name);
     }
   };
+  const stopPlayback = () => {
+    audio.stop();
+    setVideoId('');
+    setVideoPlaying(false);
+  };
   const send = () => {
-    if (chat.busy || !chat.draft.trim()) return;
+    if (chat.busy || chat.loading || chat.restoreFailed || !chat.draft.trim())
+      return;
     void refreshState();
     void chat.send();
   };
@@ -238,12 +250,22 @@ export function Chat() {
         }}
         onClear={() => {
           chat.clear();
-          audio.stop();
-          setVideoId('');
-          setVideoPlaying(false);
+          stopPlayback();
         }}
+        onHistory={openHistory}
+      />
+      <ConversationHistory
+        open={active && historyOpen}
+        onOpenChange={setHistoryOpen}
+        chat={chat}
+        onResume={stopPlayback}
       />
       <div className="chat-thread">
+        <header className="chat-history-header">
+          <button type="button" onClick={openHistory}>
+            <History size={18} aria-hidden /> 对话记录
+          </button>
+        </header>
         <div className="chat-scroll">
           <div className="chat-conversation flex flex-col justify-end space-y-4">
             {stale && (
@@ -274,7 +296,12 @@ export function Chat() {
               aria-relevant="additions text"
               data-testid="chat-messages"
             >
-              {!chat.turns.length && (
+              {chat.loading && (
+                <p role="status" className="text-sm text-secondary">
+                  正在加载对话…
+                </p>
+              )}
+              {!chat.turns.length && !chat.loading && (
                 <EmptyState
                   title={`和${name}聊聊`}
                   body={
@@ -345,7 +372,15 @@ export function Chat() {
                                 (videoId === turn.id && videoPlaying)
                               }
                             >
-                              <MessageText text={turn.content} />
+                              <MessageText
+                                text={turn.content}
+                                plain={turn.role === 'user'}
+                                streaming={
+                                  turn.role === 'twin' &&
+                                  !turn.reply &&
+                                  chat.busy
+                                }
+                              />
                             </div>
                             {turn.reply && (
                               <>
@@ -490,7 +525,9 @@ export function Chat() {
               aria-label="发送"
               className="send-button size-11 min-h-11 rounded-full p-0"
               loading={chat.busy}
-              disabled={!chat.draft.trim()}
+              disabled={
+                !chat.draft.trim() || chat.loading || chat.restoreFailed
+              }
             >
               {!chat.busy && <ArrowUp className="size-5" aria-hidden />}
             </Button>

@@ -1,4 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import { LoaderCircle } from 'lucide-react';
+import {
+  PendingStep,
+  PendingWorkProvider,
+  useFlowPending,
+} from '../../lib/pendingWork';
 import { useMotionPreset } from '../../design/motion';
 import Stepper from '../reactbits/Stepper';
 import { Button } from '../ui/controls';
@@ -9,17 +15,15 @@ export interface FlowStep {
   content: ReactNode;
 }
 
-export function FlowStepper({
-  steps,
-  onComplete,
-  completedText = '已完成',
-  finalActionText = '完成',
-  initialStep = 1,
-  completeOnLast = true,
-  maxStep = steps.length,
-  stageHeader,
-  footer,
-}: {
+export function FlowStepper(props: FlowStepperProps) {
+  return (
+    <PendingWorkProvider>
+      <FlowStepperBody {...props} />
+    </PendingWorkProvider>
+  );
+}
+
+interface FlowStepperProps {
   steps: FlowStep[];
   onComplete?: () => void;
   completedText?: string;
@@ -29,11 +33,39 @@ export function FlowStepper({
   maxStep?: number;
   stageHeader?: ReactNode;
   footer?: ReactNode;
-}) {
+}
+
+function FlowStepperBody({
+  steps,
+  onComplete,
+  completedText = '已完成',
+  finalActionText = '完成',
+  initialStep = 1,
+  completeOnLast = true,
+  maxStep = steps.length,
+  stageHeader,
+  footer,
+}: FlowStepperProps) {
   const { reduced } = useMotionPreset();
   const [current, setCurrent] = useState(initialStep);
   const [completed, setCompleted] = useState(false);
+  const pending = useFlowPending(steps[current - 1]?.id);
+  const descriptionId = useId();
+  const nextDisabled =
+    pending.locked ||
+    (current >= maxStep && current < steps.length) ||
+    (!completeOnLast && current === steps.length);
+  const busyLabel = (
+    <>
+      <LoaderCircle
+        aria-hidden
+        className="size-4 animate-spin motion-reduce:animate-none"
+      />
+      {pending.label}
+    </>
+  );
   const finish = () => {
+    if (pending.locked) return;
     setCompleted(true);
     onComplete?.();
   };
@@ -46,8 +78,14 @@ export function FlowStepper({
       type="button"
       aria-label={`第 ${step} 步：${steps[step - 1].title}`}
       aria-current={step === active ? 'step' : undefined}
-      disabled={step > maxStep}
-      onClick={() => select(step)}
+      disabled={step > maxStep || (pending.locked && step !== active)}
+      aria-disabled={step > maxStep || (pending.locked && step !== active)}
+      aria-describedby={
+        pending.locked && step !== active ? descriptionId : undefined
+      }
+      onClick={() => {
+        if (!pending.locked && step <= maxStep) select(step);
+      }}
       className={
         stageHeader
           ? 'stage-step size-11 shrink-0 rounded-full'
@@ -79,31 +117,38 @@ export function FlowStepper({
               ))}
             </div>
             <div className="effects-stepper-body min-h-24 p-5 sm:p-6">
-              {steps[current - 1].content}
+              <PendingStep step={steps[current - 1].id}>
+                {steps[current - 1].content}
+              </PendingStep>
             </div>
             <div className="flex justify-end gap-2 p-5 sm:p-6">
               {current > 1 && (
                 <Button
                   variant="secondary"
+                  disabled={pending.locked}
+                  aria-disabled={pending.locked}
+                  aria-describedby={pending.locked ? descriptionId : undefined}
                   onClick={() => setCurrent(current - 1)}
                 >
                   上一步
                 </Button>
               )}
               <Button
-                disabled={
-                  (current >= maxStep && current < steps.length) ||
-                  (!completeOnLast && current === steps.length)
-                }
+                disabled={nextDisabled}
+                loading={pending.locked}
+                aria-disabled={nextDisabled}
+                aria-describedby={pending.locked ? descriptionId : undefined}
                 onClick={() =>
                   current === steps.length ? finish() : setCurrent(current + 1)
                 }
               >
-                {current === steps.length
-                  ? completeOnLast
-                    ? finalActionText
-                    : '到最后了'
-                  : '继续'}
+                {pending.locked
+                  ? pending.label
+                  : current === steps.length
+                    ? completeOnLast
+                      ? finalActionText
+                      : '到最后了'
+                    : '继续'}
               </Button>
             </div>
           </div>
@@ -118,21 +163,31 @@ export function FlowStepper({
             contentClassName="!px-0"
             footerClassName="!px-5 !pb-5 sm:!px-6 sm:!pb-6"
             backButtonText="上一步"
-            nextButtonText="继续"
-            completeButtonText={completeOnLast ? finalActionText : '到最后了'}
+            nextButtonText={pending.locked ? busyLabel : '继续'}
+            completeButtonText={
+              pending.locked
+                ? busyLabel
+                : completeOnLast
+                  ? finalActionText
+                  : '到最后了'
+            }
             backButtonProps={{
               type: 'button',
+              disabled: pending.locked,
+              'aria-disabled': pending.locked,
+              'aria-describedby': pending.locked ? descriptionId : undefined,
               className:
                 'min-h-11 rounded-full border border-border px-3 py-2 text-secondary',
             }}
             nextButtonProps={
               {
                 type: 'button',
-                disabled:
-                  (current >= maxStep && current < steps.length) ||
-                  (!completeOnLast && current === steps.length),
+                disabled: nextDisabled,
+                'aria-disabled': nextDisabled,
+                'aria-busy': pending.locked,
+                'aria-describedby': pending.locked ? descriptionId : undefined,
                 className:
-                  'min-h-11 rounded-full bg-accent px-3 py-2 text-on-accent disabled:opacity-50',
+                  'inline-flex items-center gap-2 min-h-11 rounded-full bg-accent px-3 py-2 text-on-accent disabled:opacity-50',
               } as React.ButtonHTMLAttributes<HTMLButtonElement>
             }
             renderStepIndicator={({ step, currentStep, onStepClick }) =>
@@ -144,12 +199,26 @@ export function FlowStepper({
                 key={step.id}
                 className="effects-stepper-body min-h-24 p-5 sm:p-6"
               >
-                {step.content}
+                <PendingStep step={step.id}>{step.content}</PendingStep>
               </div>
             ))}
           </Stepper>
         )}
-        {footer}
+        {pending.locked && (
+          <p
+            id={descriptionId}
+            role="status"
+            className="px-5 text-sm text-secondary"
+          >
+            {pending.label} 请等待处理完成后再继续。
+          </p>
+        )}
+        {pending.backgroundJob && (
+          <Button variant="ghost" className="mx-5" onClick={pending.release}>
+            在后台继续处理
+          </Button>
+        )}
+        <PendingStep step={steps[current - 1].id}>{footer}</PendingStep>
       </div>
     </div>
   );

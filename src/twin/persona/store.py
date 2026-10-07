@@ -11,9 +11,11 @@ import re
 import shutil
 import sqlite3
 import threading
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -38,6 +40,13 @@ CREATE TABLE IF NOT EXISTS p_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS p_reviews (item_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS p_chat_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, abstain INTEGER NOT NULL, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY, owner TEXT, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS conversations_owner_updated ON conversations(owner, updated_at DESC);
+CREATE TABLE IF NOT EXISTS conversation_turns (
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, reply_json TEXT, created_at TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, seq));
 CREATE TABLE IF NOT EXISTS p_vectors (
     namespace TEXT NOT NULL, ref_id TEXT NOT NULL, text_sha TEXT NOT NULL, vec BLOB NOT NULL,
     PRIMARY KEY (namespace, ref_id));
@@ -57,6 +66,7 @@ class PersonaStore:
         if str(path) not in ("", ":memory:"):
             prepare_private_file(self.path)
         self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_SCHEMA)
         self._lock = threading.RLock()
@@ -393,6 +403,128 @@ class PersonaStore:
         if not rows:
             return [], np.zeros((0, 0), dtype=np.float32)
         return [r[0] for r in rows], np.stack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+
+    def create_conversation(
+        self, owner: str | None, turns: list[dict[str, Any]] | None = None, migration_id: str | None = None
+    ) -> str:
+        conversation_id = migration_id or str(uuid.uuid4())
+        now = dt.datetime.now(dt.UTC).isoformat()
+        with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)).fetchone():
+                self.get_conversation(conversation_id, owner)
+                return conversation_id
+            created_at = turns[0].get("timestamp", now) if turns else now
+            db.execute(
+                "INSERT INTO conversations VALUES (?, ?, ?, ?, ?)", (conversation_id, owner, "新对话", created_at, now)
+            )
+            for turn in turns or []:
+                self.append_conversation_turn(
+                    conversation_id, owner, turn["role"], turn["content"], turn.get("reply"), turn.get("timestamp")
+                )
+            if turns:
+                db.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                    (turns[-1].get("timestamp", now), conversation_id),
+                )
+        return conversation_id
+
+    def list_conversations(self, owner: str | None, offset: int = 0) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT c.id, c.title, c.updated_at, "
+                "(SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = c.id), "
+                "(SELECT content FROM conversation_turns WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1) "
+                "FROM conversations c WHERE owner IS ? ORDER BY updated_at DESC, id DESC LIMIT 50 OFFSET ?",
+                (owner, offset),
+            ).fetchall()
+        return [
+            {"id": r[0], "title": r[1], "updated_at": r[2], "turns": r[3], "preview": (r[4] or "")[:120]} for r in rows
+        ]
+
+    def get_conversation(self, conversation_id: str, owner: str | None) -> dict[str, Any]:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT title FROM conversations WHERE id = ? AND owner IS ?", (conversation_id, owner)
+            ).fetchone()
+            if row is None:
+                raise KeyError(conversation_id)
+            turns = self._db.execute(
+                "SELECT seq, role, content, reply_json, created_at FROM conversation_turns "
+                "WHERE conversation_id = ? ORDER BY seq",
+                (conversation_id,),
+            ).fetchall()
+        return {
+            "id": conversation_id,
+            "title": row[0],
+            "turns": [
+                {
+                    "id": f"{conversation_id}:{r[0]}",
+                    "role": r[1],
+                    "content": r[2],
+                    "timestamp": r[4],
+                    **({"reply": json.loads(r[3])} if r[3] else {}),
+                }
+                for r in turns
+            ],
+        }
+
+    def append_conversation_turn(
+        self,
+        conversation_id: str,
+        owner: str | None,
+        role: str,
+        content: str,
+        reply: dict[str, Any] | None = None,
+        timestamp: str | None = None,
+    ) -> None:
+        now = dt.datetime.now(dt.UTC).isoformat()
+        with self._tx() as db:
+            if not db.in_transaction:
+                db.execute("BEGIN IMMEDIATE")
+            if not db.execute(
+                "SELECT 1 FROM conversations WHERE id = ? AND owner IS ?", (conversation_id, owner)
+            ).fetchone():
+                raise KeyError(conversation_id)
+            seq = db.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversation_turns WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone()[0]
+            first_user = (
+                role == "user"
+                and not db.execute(
+                    "SELECT 1 FROM conversation_turns WHERE conversation_id = ? AND role = 'user'", (conversation_id,)
+                ).fetchone()
+            )
+            db.execute(
+                "INSERT INTO conversation_turns VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    conversation_id,
+                    seq,
+                    role,
+                    content,
+                    json.dumps(reply, ensure_ascii=False) if reply else None,
+                    timestamp or now,
+                ),
+            )
+            db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id))
+            if first_user:
+                db.execute("UPDATE conversations SET title = ? WHERE id = ?", (content.strip()[:24], conversation_id))
+
+    def rename_conversation(self, conversation_id: str, owner: str | None, title: str) -> bool:
+        with self._tx() as db:
+            return (
+                db.execute(
+                    "UPDATE conversations SET title = ? WHERE id = ? AND owner IS ?", (title, conversation_id, owner)
+                ).rowcount
+                > 0
+            )
+
+    def delete_conversation(self, conversation_id: str, owner: str | None) -> bool:
+        with self._tx() as db:
+            return (
+                db.execute("DELETE FROM conversations WHERE id = ? AND owner IS ?", (conversation_id, owner)).rowcount
+                > 0
+            )
 
     # ------------------------------------------------------------ chat log (what people ask, where the twin abstains)
 

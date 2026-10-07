@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useSpring } from 'motion/react';
+import { History } from 'lucide-react';
 import { PersonaSwitcher } from '../../components/layout/PersonaSwitcher';
 import { StageHeader } from '../../components/layout/StageHeader';
 import { useMotionPreset, springs } from '../../design/motion';
@@ -9,6 +10,7 @@ import { ReplyVideo } from './ReplyVideo';
 import type { Turn } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
 import { useDesktop, useMobile } from '../../lib/useMobile';
+import { stripMarkdown } from './markdownText';
 
 export function videoCaption(text: string, time: number, duration: number) {
   const sentences = text.match(/[^。！？!?\r\n]+[。！？!?]*|[^\r\n]+$/gu) ?? [
@@ -39,6 +41,7 @@ export function ChatStage({
   onVideoPlaying,
   onVideoError,
   onClear,
+  onHistory,
 }: {
   name: string;
   capabilities: Capabilities | null;
@@ -52,6 +55,7 @@ export function ChatStage({
   onVideoPlaying(playing: boolean): void;
   onVideoError(): void;
   onClear(): void;
+  onHistory?(): void;
 }) {
   const { reduced } = useMotionPreset();
   const desktop = useDesktop();
@@ -125,11 +129,17 @@ export function ChatStage({
     }
   }, [url, turn?.id, videoPlaying, open]);
   const small = collapsed && !desktop;
+  const videoText = url && videoPlaying ? (turn?.content ?? '') : '';
+  const plainReply = useMemo(() => stripMarkdown(videoText), [videoText]);
+  const plainVoiceCaption = useMemo(
+    () => stripMarkdown(voiceCaption),
+    [voiceCaption],
+  );
   const videoCaptionText =
     url && videoPlaying && turn
-      ? videoCaption(turn.content, time, videoState?.result?.duration_s ?? 0)
+      ? videoCaption(plainReply, time, videoState?.result?.duration_s ?? 0)
       : '';
-  const caption = videoCaptionText || voiceCaption;
+  const caption = videoCaptionText || plainVoiceCaption;
   return (
     <motion.div
       className="stage-space"
@@ -146,9 +156,21 @@ export function ChatStage({
         left={mobile ? <PersonaSwitcher stage /> : undefined}
         right={
           !desktop && (
-            <button type="button" className="stage-new" onClick={onClear}>
-              新对话
-            </button>
+            <div className="flex items-center gap-1">
+              {mobile && onHistory && (
+                <button
+                  type="button"
+                  className="stage-new"
+                  aria-label="对话记录"
+                  onClick={onHistory}
+                >
+                  <History size={20} aria-hidden />
+                </button>
+              )}
+              <button type="button" className="stage-new" onClick={onClear}>
+                新对话
+              </button>
+            </div>
           )
         }
         footer={

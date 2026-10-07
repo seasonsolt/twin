@@ -312,7 +312,7 @@ class PersonaChat:
 STREAM_FORMAT = """
 
 ## 输出格式
-先直接输出回复正文（不要 JSON、代码块或 reply 标签），然后换行输出一行且仅一行 <<<META>>>，
+先直接输出回复正文（不要用 JSON 或代码块包裹整篇回复，不要 reply 标签），然后换行输出一行且仅一行 <<<META>>>，
 随后输出一个紧凑 JSON 对象，字段为 citations、confidence、mode、abstain、abstain_reason、topic_facets。
 citations 和 topic_facets 是字符串数组，confidence 是 0 到 1 的数字，mode 是 grounded、general 或 abstain，
 abstain 是布尔值，abstain_reason 是弃权原因字符串（不弃权时为空）。
@@ -411,8 +411,9 @@ citations 可以为空，confidence 不超过 0.5。涉及本人但无资料支�
 弃权，mode 设为 abstain、abstain 为 true；有资料依据的本人回答 mode 设为 grounded、abstain 为 false。
 
 ## 输出格式
-短回复保持一两句话；长回复拆成简短段落，段落之间换行，或使用每项单独一行的编号列表（1.、2.）。
-不要把长回答挤成一整段，不要使用 HTML。
+少量使用 Markdown：日常聊天保持自然的简短段落，最多加粗一两个关键词；长回复分段，段落之间空一行。
+步骤或选项用列表，只有真正的并列对比才用表格，代码块只用于代码或命令。
+标题不得高于四级（####），通常不用标题；不要把长回答挤成一整段，绝不使用 HTML。
 
 ## 核心画像（证据最多的条目）
 {core}

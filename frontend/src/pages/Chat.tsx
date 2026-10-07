@@ -7,7 +7,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { useLocation } from 'react-router';
-import { ArrowUp, History, Play } from 'lucide-react';
+import { ArrowUp, Play } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { Button, EmptyState, Textarea } from '../components/ui';
@@ -24,13 +24,27 @@ import type { Capabilities } from '../features/avatar/types';
 import { api } from '../lib/api';
 import { useStatus } from '../stores/status';
 import { usePersonas } from '../stores/personas';
+import { useDesktop } from '../lib/useMobile';
 
 export function Chat() {
   const { pathname } = useLocation();
   const active = pathname === '/chat';
   const chat = useConversation(active);
+  const desktop = useDesktop();
   const [historyOpen, setHistoryOpen] = useState(false);
+  const { refreshHistory } = chat;
+  useEffect(() => {
+    if (active) void refreshHistory();
+  }, [active, refreshHistory]);
+  useEffect(() => {
+    if (desktop) setHistoryOpen(false);
+  }, [desktop]);
+  const historyTrigger = useRef<HTMLElement | null>(null);
   const openHistory = () => {
+    historyTrigger.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setHistoryOpen(true);
     void chat.refreshHistory();
   };
@@ -205,6 +219,22 @@ export function Chat() {
     setVideoId('');
     setVideoPlaying(false);
   };
+  const newConversation = () => {
+    chat.clear();
+    stopPlayback();
+  };
+  const history = (
+    <ConversationHistory
+      open={active && historyOpen}
+      onOpenChange={setHistoryOpen}
+      chat={chat}
+      onResume={stopPlayback}
+      onNew={newConversation}
+      name={name}
+      inline={desktop}
+      returnFocus={historyTrigger}
+    />
+  );
   const send = () => {
     if (chat.busy || chat.loading || chat.restoreFailed || !chat.draft.trim())
       return;
@@ -248,24 +278,12 @@ export function Chat() {
           if (currentTurn?.reply)
             audio.toggle(currentTurn.id, currentTurn.reply, name);
         }}
-        onClear={() => {
-          chat.clear();
-          stopPlayback();
-        }}
+        onClear={newConversation}
         onHistory={openHistory}
+        history={desktop ? history : undefined}
       />
-      <ConversationHistory
-        open={active && historyOpen}
-        onOpenChange={setHistoryOpen}
-        chat={chat}
-        onResume={stopPlayback}
-      />
+      {!desktop && history}
       <div className="chat-thread">
-        <header className="chat-history-header">
-          <button type="button" onClick={openHistory}>
-            <History size={18} aria-hidden /> 对话记录
-          </button>
-        </header>
         <div className="chat-scroll">
           <div className="chat-conversation flex flex-col justify-end space-y-4">
             {stale && (

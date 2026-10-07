@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { motion, useSpring } from 'motion/react';
 import { History } from 'lucide-react';
 import { PersonaSwitcher } from '../../components/layout/PersonaSwitcher';
@@ -42,6 +42,7 @@ export function ChatStage({
   onVideoError,
   onClear,
   onHistory,
+  history,
 }: {
   name: string;
   capabilities: Capabilities | null;
@@ -56,6 +57,7 @@ export function ChatStage({
   onVideoError(): void;
   onClear(): void;
   onHistory?(): void;
+  history?: ReactNode;
 }) {
   const { reduced } = useMotionPreset();
   const desktop = useDesktop();
@@ -77,9 +79,9 @@ export function ChatStage({
     setTime(0);
   }, [url, turn?.id]);
   const height = useSpring(desktop ? 470 : 360, springs.snappy);
-  const size = useSpring(desktop ? 240 : 196, springs.snappy);
+  const size = useSpring(desktop ? 210 : 196, springs.snappy);
   const targetHeight = desktop ? 470 : collapsed ? 96 : 360;
-  const targetSize = desktop ? 240 : collapsed ? 60 : 196;
+  const targetSize = desktop ? 210 : collapsed ? 60 : 196;
   useEffect(() => {
     if (reduced) {
       height.jump(targetHeight);
@@ -157,7 +159,7 @@ export function ChatStage({
         right={
           !desktop && (
             <div className="flex items-center gap-1">
-              {mobile && onHistory && (
+              {onHistory && (
                 <button
                   type="button"
                   className="stage-new"
@@ -171,13 +173,6 @@ export function ChatStage({
                 新对话
               </button>
             </div>
-          )
-        }
-        footer={
-          desktop && (
-            <button type="button" className="stage-new" onClick={onClear}>
-              新对话
-            </button>
           )
         }
         portrait={
@@ -257,6 +252,7 @@ export function ChatStage({
           </p>
         }
       >
+        {desktop && history}
         {mobile && (
           <PersonaSwitcher
             open={switching}

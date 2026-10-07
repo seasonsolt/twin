@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 const css = readFileSync('src/design/tokens.css', 'utf-8');
+const historyCss = readFileSync('src/features/chat/history.css', 'utf-8');
 
 function luminance(hex: string) {
   const rgb = hex
@@ -50,6 +51,18 @@ describe('WCAG AA tokens', () => {
     expect(
       contrast(themes[0].canvas, themes[0]['text-primary']),
     ).toBeGreaterThanOrEqual(4.5);
+  });
+  it('keeps history group labels readable on the accent and current items solid ground with ink', () => {
+    expect(historyCss).toMatch(
+      /\.stage-history \.history-group-label\s*\{[^}]*color: var\(--on-accent\)/s,
+    );
+    expect(
+      contrast(themes[0]['on-accent'], themes[0].accent),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(historyCss).toMatch(
+      /\.stage-history \.history-entry\[data-current='true'\]\s*\{[^}]*background: var\(--canvas\)[^}]*color: var\(--text-primary\)/s,
+    );
+    expect(historyCss).not.toContain('box-shadow: inset');
   });
   it('covers stage, yellow cards, status chips, outline inputs and video controls', () => {
     const theme = themes[0];

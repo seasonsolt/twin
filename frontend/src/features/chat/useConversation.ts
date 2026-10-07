@@ -180,6 +180,7 @@ export function useConversation(active: boolean) {
           if (!controller.signal.aborted) {
             selectId(conversation.id);
             setTurns(conversation.turns);
+            if (imported) void refreshHistory();
           }
         } catch (error) {
           if (!controller.signal.aborted) {
@@ -207,7 +208,15 @@ export function useConversation(active: boolean) {
       request.current?.abort();
       historyRequest.current?.abort();
     };
-  }, [active, legacyKey, currentKey, headers, selectId, restoreVersion]);
+  }, [
+    active,
+    legacyKey,
+    currentKey,
+    headers,
+    selectId,
+    restoreVersion,
+    refreshHistory,
+  ]);
 
   const send = async (text = draft) => {
     text = text.trim();

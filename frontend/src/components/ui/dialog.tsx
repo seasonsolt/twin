@@ -23,6 +23,7 @@ export function Dialog({
   onCloseAutoFocus,
   onOpenAutoFocus,
   onInteractOutside,
+  onEscapeKeyDown,
   className,
   exitTransition,
   popover = false,
@@ -31,11 +32,12 @@ export function Dialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  body: string;
+  body?: string;
   children?: ReactNode;
   onCloseAutoFocus?: (event: Event) => void;
   onOpenAutoFocus?: (event: Event) => void;
   onInteractOutside?: RadixDialog.DialogContentProps['onInteractOutside'];
+  onEscapeKeyDown?: RadixDialog.DialogContentProps['onEscapeKeyDown'];
   className?: string;
   exitTransition?: Transition;
   popover?: boolean;
@@ -67,6 +69,8 @@ export function Dialog({
               onCloseAutoFocus={onCloseAutoFocus}
               onOpenAutoFocus={onOpenAutoFocus}
               onInteractOutside={onInteractOutside}
+              onEscapeKeyDown={onEscapeKeyDown}
+              {...(!body ? { 'aria-describedby': undefined } : {})}
             >
               <motion.div
                 key="dialog"
@@ -94,9 +98,11 @@ export function Dialog({
                     </IconButton>
                   </RadixDialog.Close>
                 </div>
-                <RadixDialog.Description className="mb-5 text-secondary">
-                  {body}
-                </RadixDialog.Description>
+                {body && (
+                  <RadixDialog.Description className="mb-5 text-secondary">
+                    {body}
+                  </RadixDialog.Description>
+                )}
                 {children}
               </motion.div>
             </RadixDialog.Content>

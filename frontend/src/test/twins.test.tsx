@@ -108,7 +108,11 @@ beforeEach(() => {
         speech_clone: false,
         video: false,
       });
-    if (path.startsWith('/api/persona/items') || path === '/api/jobs')
+    if (
+      path.startsWith('/api/persona/items') ||
+      path.startsWith('/api/conversations?') ||
+      path === '/api/jobs'
+    )
       return json([]);
     if (path === '/api/persona/coverage')
       return json({ facets: [], suggestions: [], kind_labels: {} });

@@ -45,7 +45,8 @@ beforeEach(() => {
           JSON.stringify(
             path === '/api/personas'
               ? [persona]
-              : path === '/api/persona/sources'
+              : path === '/api/persona/sources' ||
+                  path.startsWith('/api/conversations?')
                 ? []
                 : path === '/api/status'
                   ? { target_name: '小林', counts: { sources: 1, items: 0 } }
@@ -158,17 +159,27 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
     within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
   ).toBeNull();
   expect(stage.querySelector('.stage-circle')).toHaveStyle({
-    width: '240px',
-    height: '240px',
+    width: '210px',
+    height: '210px',
   });
   expect(stage.querySelector('.stage-name button')).toBeNull();
-  expect(stage.querySelector('.stage-footer')).toContainElement(
+  expect(stage.querySelector('.stage-footer')).toBeNull();
+  expect(stage.querySelector('.stage-history')).toContainElement(
     screen.getByRole('button', { name: '新对话' }),
   );
+  expect(
+    within(stage as HTMLElement).getByRole('searchbox', { name: '搜索对话' }),
+  ).toBeVisible();
+  expect(
+    within(thread as HTMLElement).queryByRole('button', { name: '对话记录' }),
+  ).toBeNull();
+  expect(screen.queryByRole('dialog', { name: '对话记录' })).toBeNull();
   expect(css).toMatch(/\.chat-stage\s*\{[^}]*overflow: hidden/s);
-  expect(desktopCss).toMatch(/\.chat-stage\s*\{[^}]*justify-content: center/s);
   expect(desktopCss).toMatch(
-    /\.chat-stage \.stage-footer\s*\{[^}]*margin-top: 24px/s,
+    /\.chat-stage\s*\{[^}]*justify-content: flex-start/s,
+  );
+  expect(desktopCss).toMatch(
+    /\.stage-space\s*\{[^}]*position: sticky[^}]*height: 100dvh/s,
   );
   expect(desktopCss).toMatch(
     /\.chat-conversation\s*\{[^}]*min-height: 100%[^}]*max-width: 824px[^}]*padding: 32px 32px 24px/s,

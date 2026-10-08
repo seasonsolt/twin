@@ -1,0 +1,950 @@
+{
+ "version": "zh-v2",
+ "title": "了解你的 62 个问题",
+ "items": [
+  {
+   "id": "ipip_e1",
+   "domain": "personality",
+   "facet": null,
+   "question": "我在聚会上是活跃气氛的那个人。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "E",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_a1",
+   "domain": "personality",
+   "facet": null,
+   "question": "我能体谅别人的感受。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "A",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_c1",
+   "domain": "personality",
+   "facet": null,
+   "question": "该做的杂事，我会马上做完。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "C",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_n1",
+   "domain": "personality",
+   "facet": null,
+   "question": "我的情绪经常起伏。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "N",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_o1",
+   "domain": "personality",
+   "facet": null,
+   "question": "我的想象力很丰富。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "O",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_e2",
+   "domain": "personality",
+   "facet": null,
+   "question": "我话不多。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "E",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_a2",
+   "domain": "personality",
+   "facet": null,
+   "question": "别人的烦恼，我不太感兴趣。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "A",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_c2",
+   "domain": "personality",
+   "facet": null,
+   "question": "我常常忘记把东西放回原处。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "C",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_n2",
+   "domain": "personality",
+   "facet": null,
+   "question": "大多数时候我都很放松。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "N",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_o2",
+   "domain": "personality",
+   "facet": null,
+   "question": "我对抽象的概念不感兴趣。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "O",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_e3",
+   "domain": "personality",
+   "facet": null,
+   "question": "聚会上我会和很多不同的人聊天。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "E",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_a3",
+   "domain": "personality",
+   "facet": null,
+   "question": "我能感受到别人的情绪。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "A",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_c3",
+   "domain": "personality",
+   "facet": null,
+   "question": "我喜欢有条理。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "C",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_n3",
+   "domain": "personality",
+   "facet": null,
+   "question": "我很容易心烦。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "N",
+   "reverse": false,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_o3",
+   "domain": "personality",
+   "facet": null,
+   "question": "我很难理解抽象的概念。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "O",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_e4",
+   "domain": "personality",
+   "facet": null,
+   "question": "在人群里，我习惯待在不起眼的位置。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "E",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_a4",
+   "domain": "personality",
+   "facet": null,
+   "question": "说实话，我对别人不太感兴趣。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "A",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_c4",
+   "domain": "personality",
+   "facet": null,
+   "question": "我常把事情弄得一团糟。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "C",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_n4",
+   "domain": "personality",
+   "facet": null,
+   "question": "我很少感到情绪低落。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "N",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "ipip_o4",
+   "domain": "personality",
+   "facet": null,
+   "question": "我的想象力不太好。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "scale": "O",
+   "reverse": true,
+   "origin": "mini-ipip"
+  },
+  {
+   "id": "v1",
+   "domain": "values",
+   "facet": "2.1",
+   "question": "下面几样，你现阶段最看重哪一样？",
+   "options": [
+    "家人和亲密关系",
+    "事业或学业上的成就",
+    "自由，按自己的方式生活",
+    "内心安稳、身体健康",
+    "对别人或社会有用"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "v2",
+   "domain": "values",
+   "facet": "2.1",
+   "question": "如果只能选一种，你更愿意要哪种工作？",
+   "options": [
+    "收入高但很累",
+    "收入一般但轻松",
+    "收入一般但很有意思",
+    "收入不高但很稳定"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "v3",
+   "domain": "values",
+   "facet": "2.2",
+   "question": "为了把事情办成，偶尔说点无伤大雅的假话也可以。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "v4",
+   "domain": "values",
+   "facet": "2.3",
+   "question": "答应别人的事，哪怕后来很不方便，我也会做到。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "v5",
+   "domain": "values",
+   "facet": "2.4",
+   "question": "认识一个新的人，你一开始的态度通常是？",
+   "options": [
+    "先相信，出了问题再说",
+    "保持礼貌，观察一段时间再决定",
+    "先防着，等对方证明自己"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "v6",
+   "domain": "values",
+   "facet": "2.1",
+   "question": "比起被人喜欢，我更在乎把事情做对。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "d1",
+   "domain": "decision",
+   "facet": "3.1",
+   "question": "二选一：确定拿到 500 元；或者抛硬币，正面拿 1,200 元，反面什么都没有。你选？",
+   "options": [
+    "确定拿 500 元",
+    "抛硬币"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "d2",
+   "domain": "decision",
+   "facet": "3.2",
+   "question": "二选一：今天拿 1,000 元，或者三个月后拿 1,300 元。你选？",
+   "options": [
+    "今天拿 1,000 元",
+    "三个月后拿 1,300 元"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "d3",
+   "domain": "decision",
+   "facet": "3.3",
+   "question": "做重要决定时，你最依赖什么？",
+   "options": [
+    "数据和事实",
+    "自己的直觉",
+    "信任的人的意见",
+    "过去类似事情的经验"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "d4",
+   "domain": "decision",
+   "facet": "3.6",
+   "question": "买一件比较贵的东西（比如手机、家电），你一般怎么买？",
+   "options": [
+    "看中了很快就买",
+    "比较几款，几天内决定",
+    "反复研究很久才买",
+    "能不买就先不买"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "d5",
+   "domain": "decision",
+   "facet": "3.1",
+   "question": "有一个机会，成了收获很大，失败了损失也不小。我通常会去试试。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "d6",
+   "domain": "decision",
+   "facet": "3.4",
+   "question": "工作或学习中，质量和速度只能顾一头时，你通常？",
+   "options": [
+    "先求快，之后再改",
+    "宁可慢，也要做好",
+    "看对方要什么",
+    "尽量两头兼顾，自己多熬一点"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "t1",
+   "domain": "thinking",
+   "facet": "4.1",
+   "question": "遇到一个复杂的新问题，你第一步通常是？",
+   "options": [
+    "先动手试，边做边想",
+    "先把问题拆开、理清楚",
+    "先找有经验的人问",
+    "先查资料，看别人怎么做"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "t2",
+   "domain": "thinking",
+   "facet": "4.2",
+   "question": "别人告诉我一个结论，我习惯追问\"为什么\"和\"怎么知道的\"。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "t3",
+   "domain": "thinking",
+   "facet": "4.4",
+   "question": "没想清楚之前，我宁可先不行动。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "t4",
+   "domain": "thinking",
+   "facet": "4.3",
+   "question": "解释一件事给别人听时，你最常用？",
+   "options": [
+    "打比方",
+    "讲具体例子或故事",
+    "列要点、讲逻辑",
+    "画图或写下来"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "t5",
+   "domain": "thinking",
+   "facet": "4.4",
+   "question": "很多事情没有标准答案，我能接受这种不确定。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "t6",
+   "domain": "thinking",
+   "facet": "5.3",
+   "question": "被问到自己不懂的事，你通常会？",
+   "options": [
+    "直接说不懂",
+    "说说自己的猜测，并说明不确定",
+    "先查一下再回答",
+    "转给更懂的人"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "s1",
+   "domain": "social",
+   "facet": "7.4",
+   "question": "和朋友或同事意见不合时，你通常？",
+   "options": [
+    "当面说清楚",
+    "先放一放，找合适的时机再说",
+    "算了，不值得争",
+    "看事情大小决定"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "s2",
+   "domain": "social",
+   "facet": "7.2",
+   "question": "朋友向你倾诉烦恼时，你通常会？",
+   "options": [
+    "帮他分析，给建议",
+    "先听，安慰他",
+    "陪他做点别的，转移注意力",
+    "分享自己类似的经历"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "s5",
+   "domain": "social",
+   "facet": "7.3",
+   "question": "周末我更愿意和一群人热闹，而不是自己待着。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "s6",
+   "domain": "social",
+   "facet": "7.5",
+   "question": "压力很大的时候，你最可能？",
+   "options": [
+    "一个人闷着消化",
+    "找人聊聊",
+    "运动、出去走走",
+    "埋头把事情做完",
+    "吃点好的、睡一觉"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "s7",
+   "domain": "social",
+   "facet": "2.4",
+   "question": "关系不错的朋友找你借一笔不小的钱，你通常会？",
+   "options": [
+    "借，相信他会还",
+    "借一部分，量力而行",
+    "找个理由婉拒",
+    "看用途和关系再定"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "s8",
+   "domain": "social",
+   "facet": "7.3",
+   "question": "和别人一起做事时，你通常是哪种角色？",
+   "options": [
+    "拿主意、定方向",
+    "出点子、提想法",
+    "踏实把事做完",
+    "协调大家、照顾气氛"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "e1",
+   "domain": "expression",
+   "facet": "6.2",
+   "question": "说一件事时，你通常？",
+   "options": [
+    "先说结论，再讲原因",
+    "先讲来龙去脉，最后说结论",
+    "看对象决定"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "e2",
+   "domain": "expression",
+   "facet": "6.1",
+   "question": "我说话比较直，有时会让人觉得不够委婉。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "e3",
+   "domain": "expression",
+   "facet": "6.5",
+   "question": "和别人沟通，你更喜欢？",
+   "options": [
+    "打字",
+    "语音或打电话",
+    "当面说"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "e4",
+   "domain": "expression",
+   "facet": "6.3",
+   "question": "我聊天时常开玩笑、自嘲。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "e5",
+   "domain": "expression",
+   "facet": "6.4",
+   "question": "需要拒绝别人时，你通常？",
+   "options": [
+    "直接说不行，并说明原因",
+    "委婉地找个理由",
+    "先答应，再想办法",
+    "很难拒绝，多半还是帮了"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "e6",
+   "domain": "expression",
+   "facet": "6.2",
+   "question": "我回消息一般很简短。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "l1",
+   "domain": "life",
+   "facet": "9.2",
+   "question": "你通常几点睡？",
+   "options": [
+    "11 点以前",
+    "11 点到 12 点",
+    "12 点到 1 点",
+    "1 点以后",
+    "很不规律"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "l2",
+   "domain": "life",
+   "facet": "9.1",
+   "question": "有一整天空闲，你最可能怎么过？",
+   "options": [
+    "出门：运动、旅行、逛逛",
+    "在家：看书、追剧、打游戏",
+    "和家人朋友待在一起",
+    "学点新东西或做点副业",
+    "好好休息，什么都不做"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "l3",
+   "domain": "life",
+   "facet": "9.4",
+   "question": "你运动的频率大概是？",
+   "options": [
+    "几乎不运动",
+    "每月几次",
+    "每周一两次",
+    "每周三次以上"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "l4",
+   "domain": "life",
+   "facet": "9.5",
+   "question": "吃饭这件事，你更像哪种？",
+   "options": [
+    "填饱就行",
+    "喜欢找好吃的",
+    "自己做饭为主",
+    "在意健康，控制饮食"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "l5",
+   "domain": "life",
+   "facet": "9.5",
+   "question": "每月有一笔闲钱，你更可能怎么用？",
+   "options": [
+    "存起来",
+    "投资理财",
+    "花在体验上（旅行、吃喝、演出）",
+    "买东西",
+    "花在家人或别人身上"
+   ],
+   "ordinal": false,
+   "origin": "twin"
+  },
+  {
+   "id": "l6",
+   "domain": "life",
+   "facet": "9.2",
+   "question": "手机不在身边，我会觉得不踏实。",
+   "options": [
+    "完全不像我",
+    "不太像我",
+    "说不准",
+    "比较像我",
+    "非常像我"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "w1",
+   "domain": "views",
+   "facet": "3.5",
+   "question": "总体来说，AI 给普通人带来的好处会多于坏处。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "w2",
+   "domain": "views",
+   "facet": "3.5",
+   "question": "年轻人应该先去大城市闯一闯。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "w3",
+   "domain": "views",
+   "facet": "3.5",
+   "question": "孩子的成绩很重要，值得多花钱补课。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "w4",
+   "domain": "views",
+   "facet": "3.5",
+   "question": "钱是安全感最主要的来源。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "w5",
+   "domain": "views",
+   "facet": "3.5",
+   "question": "大多数人在大多数时候是可以信任的。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  },
+  {
+   "id": "w6",
+   "domain": "views",
+   "facet": "3.5",
+   "question": "努力比天赋和运气更能决定一个人能走多远。",
+   "options": [
+    "非常不同意",
+    "不太同意",
+    "中立",
+    "比较同意",
+    "非常同意"
+   ],
+   "ordinal": true,
+   "origin": "twin"
+  }
+ ]
+}

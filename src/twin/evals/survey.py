@@ -6,6 +6,10 @@ themself; twin accuracy divided by that consistency is the normalized accuracy. 
 twin may abstain (reported separately as coverage), and the person grades blind, choosing their own answer
 before the twin's is shown.
 
+Version 2 adds a scored personality scale (Mini-IPIP), a screen for survey items the person already answered
+in their memories (the paper's overlap filter), and baseline answerers built from less information (the paper's
+persona-paragraph baseline and a no-information prior), scored against the same graded key.
+
 Sheets hold the person's answers about themself: they are written owner-only and must stay out of memories,
 or later twins would be graded on material copied from the key.
 """
@@ -24,14 +28,22 @@ from typing import Any, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from ..llm import LLM
 from ..persona.chat import PersonaChat
+from ..persona.quotes import normalize_quote
 from ..persona.schema import ChatTurn
+from ..persona.store import PersonaStore
 from ..util import open_private, private_directory, run_parallel
 from .stats import _rng, bootstrap_grouped
 
 SHEET_VERSION: Literal[1] = 1
 LETTERS = "ABCDEFGH"
 BOOTSTRAP_ROUNDS = 2000
+DEFAULT_INSTRUMENT = "survey_zh_v2.json"
+TRAITS = {"E": "外向", "A": "宜人", "C": "尽责", "N": "情绪不稳", "O": "开放"}
+# Bigram overlap above which an item and an earlier question go to the overlap judge (or count alone without one).
+LEAK_CANDIDATE = 0.45
+LEAK_LEXICAL = 0.6
 
 _ASK = "请按你自己的真实情况，从上面选一个最接近的。第一行只写选项字母，比如「B」；第二行用一两句话说为什么。"
 _ABSTAIN_OK = "如果你的资料里看不出来，就直接说不知道，不要猜。"
@@ -50,6 +62,16 @@ class SurveyItem(_Model):
     options: list[str] = Field(min_length=2, max_length=len(LETTERS))
     # Ordered options (agreement or "like me" scales) also report how far off a miss is.
     ordinal: bool = False
+    # Personality items: the trait they score and whether agreeing lowers it.
+    scale: Literal["E", "A", "C", "N", "O"] | None = None
+    reverse: bool = False
+    origin: str = "twin"
+
+    @model_validator(mode="after")
+    def _scaled_items_are_ordinal(self) -> SurveyItem:
+        if self.scale is not None and not self.ordinal:
+            raise ValueError(f"题目 {self.id}：计分量表题必须是有序选项")
+        return self
 
 
 class Instrument(_Model):
@@ -85,6 +107,8 @@ class SheetItem(_Model):
     item: SurveyItem
     twin: TwinAnswer | None = None
     person: PersonGrade = Field(default_factory=PersonGrade)
+    # Why the item may already be answered in the person's memories; such items are left out of scores.
+    leak: str | None = None
 
     @model_validator(mode="after")
     def _in_range(self) -> SheetItem:
@@ -102,13 +126,15 @@ class Sheet(_Model):
     as_of: dt.date | None = None
     repeats: int = Field(default=0, ge=0)
     force_choice: bool = False
+    # "twin", or a baseline: "intro" (the person's self-description only) or "blank" (no information).
+    system: str = "twin"
     items: list[SheetItem]
 
 
 def load_instrument(path: Path | None = None) -> Instrument:
     try:
         if path is None:
-            raw = resources.files(__package__).joinpath("instruments/survey_zh_v1.json").read_bytes()
+            raw = resources.files(__package__).joinpath(f"instruments/{DEFAULT_INSTRUMENT}").read_bytes()
         else:
             raw = path.read_bytes()
         return Instrument.model_validate(json.loads(raw))
@@ -214,6 +240,136 @@ def ask_survey(
     )
 
 
+class _Same(_Model):
+    score: int = Field(ge=0, le=100)
+    same: bool
+
+
+def _bigrams(text: str) -> set[str]:
+    norm = normalize_quote(text)
+    return {norm[i : i + 2] for i in range(len(norm) - 1)} or {norm}
+
+
+def _dice(a: set[str], b: set[str]) -> float:
+    return 2 * len(a & b) / (len(a) + len(b)) if a and b else 0.0
+
+
+def screen_leakage(store: PersonaStore, instrument: Instrument, judge: LLM | None = None) -> dict[str, str]:
+    """Items the memories may already answer: an earlier question close to the item, or the item text itself.
+
+    Follows the paper's overlap filter: lexical candidates, then an LLM judge asked whether the two questions
+    ask the same thing. Without a judge, a high lexical overlap alone counts. Only questions the person was
+    asked (expression context) and the person's own words are compared; nothing is logged.
+    """
+    expressions = store.list_expressions(target_only=True)
+    asked = {e.context for e in expressions if e.context.strip()}
+    said = [normalize_quote(e.text) for e in expressions]
+    flagged: dict[str, str] = {}
+    for item in instrument.items:
+        question = normalize_quote(item.question)
+        if len(question) >= 6 and any(question in text for text in said):
+            flagged[item.id] = "题目原文出现在记忆里"
+            continue
+        grams = _bigrams(item.question)
+        scored = sorted(((_dice(grams, _bigrams(c)), c) for c in asked), reverse=True)[:3]
+        for overlap, context in scored:
+            if overlap < LEAK_CANDIDATE:
+                break
+            if judge is None:
+                if overlap >= LEAK_LEXICAL:
+                    flagged[item.id] = "和记忆里问过的问题几乎一样"
+                    break
+                continue
+            verdict = judge.structured(
+                system="你判断两个问题是不是在问同一件事。只输出 JSON。",
+                user=(
+                    f"问卷题：{item.question}\n之前问过的问题：{context}\n"
+                    '输出 {"score": 0-100 的相似程度, "same": 两题问的是不是同一件事}'
+                ),
+                schema=_Same,
+            )
+            if verdict.same:
+                flagged[item.id] = "和记忆里问过的问题是同一个问题"
+                break
+    return flagged
+
+
+class _Pick(_Model):
+    reasoning: str
+    choice: str
+
+
+_BASELINE_SYSTEM = (
+    "你在预测一个具体的人会怎样回答问卷。所有题目都是单选题，必须从选项里选一个。"
+    "先想清楚每个选项代表什么样的人，再推理这个人最可能选哪个，最后只给出选项字母。"
+)
+
+
+def ask_baseline(
+    llm: LLM,
+    instrument: Instrument,
+    *,
+    about: str | None,
+    max_workers: int = 1,
+    progress: Callable[[str], None] | None = None,
+) -> Sheet:
+    """Forced-choice predictions from the self-description alone (``about``), or from nothing (``about=None``)."""
+    if about is not None and not about.strip():
+        raise ValueError("没有自我介绍，无法运行 intro 基线；先在档案里填写介绍")
+    profile = f"这个人写的自我介绍：\n{about.strip()}" if about is not None else "关于这个人，你没有任何信息。"
+
+    def one(item: SurveyItem) -> tuple[int | None, str]:
+        options = "\n".join(f"{LETTERS[i]}. {text}" for i, text in enumerate(item.options))
+        pick = llm.structured(
+            system=_BASELINE_SYSTEM,
+            user=f"{profile}\n\n题目：{item.question}\n{options}\n\n"
+            '输出 JSON：{"reasoning": "简短推理", "choice": "一个选项字母"}',
+            schema=_Pick,
+        )
+        return parse_choice(pick.choice, len(item.options)), pick.reasoning
+
+    results = run_parallel(one, instrument.items, max_workers)
+    if any(isinstance(r, Exception) for r in results):
+        raise RuntimeError("基线作答失败（详情已隐藏）")
+    rows: list[SheetItem] = []
+    for item, result in zip(instrument.items, results, strict=True):
+        assert not isinstance(result, Exception)
+        choice, reasoning = result
+        rows.append(
+            SheetItem(
+                item=item,
+                twin=TwinAnswer(choice=choice, choices=[choice], modes=["baseline"], reply=reasoning, confidence=0),
+            )
+        )
+    if progress:
+        progress(f"基线已答 {len(rows)} 题")
+    return Sheet(
+        instrument=instrument.version,
+        created=dt.date.today(),
+        repeats=1,
+        force_choice=True,
+        system="intro" if about is not None else "blank",
+        items=rows,
+    )
+
+
+def apply_key(sheet: Sheet, key: Sheet) -> Sheet:
+    """Score another answerer against a graded sheet: copy the person's choices and the leakage flags."""
+    if key.instrument != sheet.instrument:
+        raise ValueError("答卷和标准答案不是同一版问卷")
+    graded = {row.item.id: row for row in key.items}
+    items = []
+    for row in sheet.items:
+        source = graded.get(row.item.id)
+        if source is None:
+            items.append(row)
+            continue
+        items.append(
+            row.model_copy(update={"person": source.person.model_copy(update={"rating": None}), "leak": source.leak})
+        )
+    return sheet.model_copy(update={"items": items})
+
+
 def blank_sheet(instrument: Instrument) -> Sheet:
     """A sheet without twin answers, for the person's retest round."""
     items = [SheetItem(item=item) for item in instrument.items]
@@ -298,22 +454,84 @@ def _retest(first: Sheet, second: Sheet, seed: str) -> dict[str, Any]:
     }
 
 
-def score_sheet(sheet: Sheet, retest: Sheet | None = None) -> dict[str, Any]:
+def _trait_scores(rows: Sequence[SheetItem], pick: Callable[[SheetItem], int | None]) -> dict[str, float | None]:
+    """Mean 1-5 keyed score per trait over the items answered; reverse-keyed items count 6 - x."""
+    values: dict[str, list[int]] = defaultdict(list)
+    for row in rows:
+        choice = pick(row)
+        if row.item.scale is not None and choice is not None:
+            value = choice + 1
+            values[row.item.scale].append(6 - value if row.item.reverse else value)
+    return {trait: (sum(values[trait]) / len(values[trait]) if values[trait] else None) for trait in TRAITS}
+
+
+def _pearson(first: dict[str, float | None], second: dict[str, float | None]) -> float | None:
+    pairs = [(first[t], second[t]) for t in TRAITS if first[t] is not None and second[t] is not None]
+    if len(pairs) < 3:
+        return None
+    x = np.array([a for a, _ in pairs], dtype=float)
+    y = np.array([b for _, b in pairs], dtype=float)
+    if x.std() == 0 or y.std() == 0:
+        return None
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def _mae(first: dict[str, float | None], second: dict[str, float | None]) -> float | None:
+    diffs = [abs(a - b) for t in TRAITS if (a := first[t]) is not None and (b := second[t]) is not None]
+    return sum(diffs) / len(diffs) if diffs else None
+
+
+def _personality(rows: Sequence[SheetItem], retest: Sheet | None) -> dict[str, Any] | None:
+    """Trait profile of the person and the twin; with a retest, the paper's normalized correlation."""
+    scaled = [r for r in rows if r.item.scale is not None]
+    if not scaled:
+        return None
+    person = _trait_scores(scaled, lambda r: r.person.choice)
+    twin = _trait_scores(scaled, lambda r: r.twin.choice if r.twin else None)
+    block: dict[str, Any] = {
+        "traits": {t: {"person": person[t], "twin": twin[t]} for t in TRAITS},
+        "mae": _mae(person, twin),
+        "r": _pearson(person, twin),
+        "retest_mae": None,
+        "retest_r": None,
+        "normalized_r": None,
+    }
+    if retest is not None:
+        later = _trait_scores([r for r in retest.items if r.item.scale is not None], lambda r: r.person.choice)
+        block["retest_mae"] = _mae(person, later)
+        block["retest_r"] = _pearson(person, later)
+        if block["r"] is not None and block["retest_r"]:
+            block["normalized_r"] = block["r"] / block["retest_r"]
+    return block
+
+
+def score_sheet(sheet: Sheet, retest: Sheet | None = None, *, include_leaked: bool = False) -> dict[str, Any]:
     if retest is not None and retest.instrument != sheet.instrument:
         raise ValueError("两份答卷不是同一版问卷")
+    leaked = {row.item.id for row in sheet.items if row.leak}
+    rows = sheet.items if include_leaked else [row for row in sheet.items if row.item.id not in leaked]
+    if retest is not None and not include_leaked:
+        retest = retest.model_copy(update={"items": [r for r in retest.items if r.item.id not in leaked]})
+    kept = sheet.model_copy(update={"items": rows})
     domains: dict[str, list[SheetItem]] = defaultdict(list)
-    for row in sheet.items:
+    for row in rows:
         domains[row.item.domain].append(row)
     return {
         "instrument": sheet.instrument,
+        "system": sheet.system,
         "repeats": sheet.repeats,
         "force_choice": sheet.force_choice,
         "as_of": sheet.as_of.isoformat() if sheet.as_of else None,
-        "overall": _block(sheet.items, "survey:overall"),
-        "domains": {name: _block(rows, f"survey:{name}") for name, rows in sorted(domains.items())},
-        "retest": _retest(sheet, retest, "survey:retest") if retest is not None else None,
+        "n_leaked": len(leaked),
+        "leaked_included": include_leaked,
+        "overall": _block(rows, "survey:overall"),
+        "domains": {name: _block(group, f"survey:{name}") for name, group in sorted(domains.items())},
+        "personality": _personality(rows, retest),
+        "retest": _retest(kept, retest, "survey:retest") if retest is not None else None,
     }
 
+
+SYSTEM_NAMES = {"twin": "分身", "intro": "只看自我介绍的基线", "blank": "没有任何信息的基线"}
 
 DOMAIN_NAMES = {
     "values": "看重什么",
@@ -341,11 +559,18 @@ def _interval(value: tuple[float, float] | None) -> str:
 
 def score_markdown(summary: dict[str, Any]) -> str:
     o = summary["overall"]
+    who = SYSTEM_NAMES.get(summary.get("system", "twin"), summary.get("system", "twin"))
+    leaked = summary.get("n_leaked", 0)
+    leak_note = ""
+    if leaked:
+        leak_note = f"另有 {leaked} 题可能已在记忆里答过，" + (
+            "已计入。" if summary.get("leaked_included") else "未计入。"
+        )
     lines = [
-        f"# 问卷评测（{summary['instrument']}）",
+        f"# 问卷评测（{summary['instrument']} · {who}）",
         "",
-        f"已阅 {o['n_graded']}/{o['n_items']} 题；分身作答 {o['n_answered']} 题，"
-        f"每题 {summary['repeats']} 次{'，要求必选' if summary['force_choice'] else '，允许不知道'}。",
+        f"已阅 {o['n_graded']}/{o['n_items']} 题；作答 {o['n_answered']} 题，"
+        f"每题 {summary['repeats']} 次{'，要求必选' if summary['force_choice'] else '，允许不知道'}。{leak_note}",
         "",
         "| 指标 | 数值 |",
         "| --- | --- |",
@@ -371,6 +596,22 @@ def score_markdown(summary: dict[str, Any]) -> str:
             f"| 你两次作答的一致率（天花板） | {_pct(retest['consistency'])} |",
             f"| 分身准确率（同一批题） | {_pct(retest['strict_accuracy'])} |",
             f"| 归一化准确率 | {_num(retest['normalized'])}{_interval(retest['normalized_ci95'])} |",
+        ]
+    personality = summary.get("personality")
+    if personality:
+        lines += ["", "## 性格（Mini-IPIP，1–5）", "", "| 特质 | 你 | 作答方 |", "| --- | --- | --- |"]
+        for trait, name in TRAITS.items():
+            pair = personality["traits"][trait]
+            lines.append(f"| {name} | {_num(pair['person'])} | {_num(pair['twin'])} |")
+        lines += [
+            "",
+            f"五个特质的平均偏差 {_num(personality['mae'])}，相关 {_num(personality['r'])}"
+            + (
+                f"；你两次的相关 {_num(personality['retest_r'])}，归一化相关 {_num(personality['normalized_r'])}。"
+                if personality["retest_r"] is not None
+                else "。"
+            ),
+            "只有五个点，相关系数只能看方向。",
         ]
     lines += ["", "## 分方面", "", "| 方面 | 已阅 | 准确率（弃权算错） | 作答率 | 随机猜 |"]
     lines.append("| --- | --- | --- | --- | --- |")

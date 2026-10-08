@@ -778,36 +778,64 @@ def survey_ask_command(
     repeats: Annotated[int, typer.Option("--repeats", min=1, help="每题作答次数，取多数")] = 3,
     as_of: Annotated[str | None, typer.Option("--as-of", help="让分身只用这一天以前的资料作答")] = None,
     force_choice: Annotated[bool, typer.Option("--force-choice", help="资料不够也必须选（和论文做法一致）")] = False,
+    baseline: Annotated[
+        str | None,
+        typer.Option("--baseline", help="换成基线作答：intro 只看自我介绍，blank 没有任何信息；不需要再阅卷"),
+    ] = None,
+    no_judge: Annotated[bool, typer.Option("--no-judge", help="防泄漏检查只看字面相似，不调用模型")] = False,
     instrument: InstrumentOption = None,
     allow_in_repo: AllowInRepo = False,
 ) -> None:
-    """让分身答问卷，写出待阅的答卷。"""
-    from .evals.survey import ask_survey, load_instrument, write_sheet
+    """让分身答问卷，写出待阅的答卷；先检查哪些题记忆里已经答过。"""
+    from .evals.survey import ask_baseline, ask_survey, load_instrument, screen_leakage, write_sheet
 
     with _errors():
         _survey_out(out, allow_in_repo)
         if out.exists():
             raise ValueError(f"{out} 已存在；换一个文件名，避免覆盖已阅的答卷")
+        if baseline not in {None, "intro", "blank"}:
+            raise typer.BadParameter("应为 intro 或 blank", param_hint="--baseline")
         survey = load_instrument(instrument)
         settings = _settings(ctx)
         with _persona_store(settings) as store:
-            if profile_stale(store):
-                _progress(STALE_PROFILE_NOTICE)
-            twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
-            try:
-                sheet = ask_survey(
-                    twin,
-                    survey,
-                    repeats=repeats,
-                    as_of=_optional_date(as_of, "--as-of"),
-                    force_choice=force_choice,
-                    max_workers=settings.max_workers,
-                    progress=_progress,
-                )
-            except RuntimeError as e:
-                raise _fail(str(e)) from None
+            if baseline is not None:
+                about = (store.get_meta("identity:about") or "") if baseline == "intro" else None
+                try:
+                    sheet = ask_baseline(
+                        _llm(settings, chat=True),
+                        survey,
+                        about=about,
+                        max_workers=settings.max_workers,
+                        progress=_progress,
+                    )
+                except RuntimeError as e:
+                    raise _fail(str(e)) from None
+            else:
+                if profile_stale(store):
+                    _progress(STALE_PROFILE_NOTICE)
+                flagged = screen_leakage(store, survey, None if no_judge else _llm(settings))
+                if flagged:
+                    _progress(f"有 {len(flagged)} 题可能已在记忆里答过，照常作答，但默认不计分。")
+                twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
+                try:
+                    sheet = ask_survey(
+                        twin,
+                        survey,
+                        repeats=repeats,
+                        as_of=_optional_date(as_of, "--as-of"),
+                        force_choice=force_choice,
+                        max_workers=settings.max_workers,
+                        progress=_progress,
+                    )
+                except RuntimeError as e:
+                    raise _fail(str(e)) from None
+                for row in sheet.items:
+                    row.leak = flagged.get(row.item.id)
         write_sheet(out, sheet)
-    _say(f"分身已答完 {len(sheet.items)} 题，答卷写入 {out}。下一步：twin survey grade {out}")
+    if baseline is not None:
+        _say(f"基线已答完，写入 {out}。用 twin survey score {out} --key <已阅的分身答卷> 计分。")
+    else:
+        _say(f"分身已答完 {len(sheet.items)} 题，答卷写入 {out}。下一步：twin survey grade {out}")
 
 
 @survey_app.command("grade")
@@ -839,13 +867,18 @@ def survey_self_command(
 def survey_score_command(
     sheet: Annotated[Path, typer.Argument(help="已阅的答卷")],
     retest: Annotated[Path | None, typer.Option("--retest", help="隔一段时间后你自己再答的答卷")] = None,
+    key: Annotated[Path | None, typer.Option("--key", help="给基线答卷计分时，用这份已阅的分身答卷做标准答案")] = None,
+    include_leaked: Annotated[bool, typer.Option("--include-leaked", help="把记忆里可能已答过的题也算进去")] = False,
     out: Annotated[Path | None, typer.Option("--out", help="把报告写入 Markdown 文件")] = None,
 ) -> None:
-    """统计准确率、作答率、各方面表现；给了 --retest 再算归一化准确率。不调用模型。"""
-    from .evals.survey import read_sheet, score_markdown, score_sheet
+    """统计准确率、作答率、各方面和性格；给了 --retest 再算归一化准确率。不调用模型。"""
+    from .evals.survey import apply_key, read_sheet, score_markdown, score_sheet
 
     with _errors():
-        summary = score_sheet(read_sheet(sheet), read_sheet(retest) if retest is not None else None)
+        scored = read_sheet(sheet)
+        if key is not None:
+            scored = apply_key(scored, read_sheet(key))
+        summary = score_sheet(scored, read_sheet(retest) if retest is not None else None, include_leaked=include_leaked)
         text = score_markdown(summary)
         if out is not None:
             _write(out, text)

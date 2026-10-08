@@ -111,6 +111,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 
 ### Chat answer modes (L3)
 
+- 聊天检索每次从隐私视图的 `item_text` / `expression_text` 构建 BM25（CJK 字符 bigram + ASCII 单词），与向量排名按 RRF(60) 融合；无向量时仍可按关键词召回，不改存储。
 - `ChatDraft.mode` / append-only `ChatReply.mode` are `Literal["grounded", "general", "abstain"]`,
   defaulting to `"grounded"`. Missing mode on legacy drafts/replies becomes `"abstain"` when `abstain=true`,
   otherwise `"grounded"`; missing `abstain` is derived as `mode == "abstain"`. Explicit inconsistencies are rejected.

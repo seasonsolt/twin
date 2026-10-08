@@ -40,6 +40,7 @@ LAYERS: dict[str, int] = {
     "identity": 1,
     "persona": 1,
     "persona.dimensions": 1,
+    "persona.lexical": 0,
     "persona.schema": 1,
     "persona.items": 1,
     "llm": 2,

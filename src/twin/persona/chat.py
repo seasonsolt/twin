@@ -14,7 +14,7 @@ import datetime as dt
 import hashlib
 import json
 import math
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from contextvars import copy_context
@@ -29,6 +29,7 @@ from ..llm import LLM, hedged_stream
 from ..util import Progress
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
+from .lexical import BM25
 from .quotes import remove_unverified_quotes
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
 from .sources import expression_view
@@ -150,15 +151,35 @@ def _visible_items(store: PersonaStore, settings: Settings, as_of: dt.date | Non
     ]
 
 
+def _rrf(*rankings: list[str]) -> list[tuple[str, float]]:
+    """Fuse complete rankings with RRF(60), breaking score ties by id."""
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, ref in enumerate(ranking, start=1):
+            scores[ref] = scores.get(ref, 0.0) + 1 / (60 + rank)
+    return sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
+
+
 def _rank[T](
-    store: PersonaStore, namespace: str, query: np.ndarray, candidates: dict[str, T], k: int
+    store: PersonaStore,
+    namespace: str,
+    query: str,
+    vector: np.ndarray,
+    candidates: dict[str, T],
+    text: Callable[[T], str],
+    k: int,
 ) -> list[tuple[T, float]]:
-    ids, matrix = store.get_vectors(namespace)
-    if not ids or not candidates:
+    if not candidates:
         return []
-    sims = matrix @ query
-    order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in candidates)
-    return [(candidates[ref], s) for s, ref in reversed(order[-k:])]
+    ids, matrix = store.get_vectors(namespace)
+    vector_order: list[str] = []
+    if ids:
+        sims = matrix @ vector
+        order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in candidates)
+        vector_order = [ref for _, ref in reversed(order)]
+    scores = BM25({ref: text(candidate) for ref, candidate in candidates.items()}).scores(query)
+    keyword_order = sorted(scores, key=lambda ref: (-scores[ref], ref))
+    return [(candidates[ref], score) for ref, score in _rrf(vector_order, keyword_order)[:k]]
 
 
 def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:
@@ -195,8 +216,8 @@ class PersonaChat:
                 e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
             }
             q = embedding.result()[0]
-        ranked_items = _rank(self.store, ITEMS_NS, q, items, K_ITEMS)
-        ranked_expr = _rank(self.store, EXPRESSIONS_NS, q, expressions, K_EXPRESSIONS)
+        ranked_items = _rank(self.store, ITEMS_NS, query, q, items, item_text, K_ITEMS)
+        ranked_expr = _rank(self.store, EXPRESSIONS_NS, query, q, expressions, expression_text, K_EXPRESSIONS)
         core: list[PersonaItem] = []
         for d in DIMENSIONS:
             own = [i for i in items.values() if FACET_BY_ID[i.facet_id].dimension_id == d.dimension_id]

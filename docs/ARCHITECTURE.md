@@ -30,7 +30,7 @@ flowchart TB
 
 | 层 | 代码层号（只用于 `tests/test_layers.py`） | 主要模块 |
 | --- | --- | --- |
-| L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` · `persona.schema/items/dimensions` `media.schema` · `llm` `embed` `config` `media.tts/asr` · `persona.store` |
+| L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` `persona.lexical` · `persona.schema/items/dimensions` `media.schema` · `llm` `embed` `config` `media.tts/asr` · `persona.store` |
 | L1 | 4 | `persona.sources` `persona.questionnaire` `persona.quotes` |
 | L2 | 5 | `persona.profile` `persona.coverage` |
 | L3 | 6 | `persona.chat` |
@@ -46,7 +46,7 @@ flowchart TB
   E -->|分段抽取（6000 字/段）<br/>每条附 1–3 段逐字核对的原话| C[候选 Candidate<br/>9 维度 · 39 细项]
   C -->|按细项合并<br/>行为证据优先 · 标出矛盾| I[档案条目 PersonaItem<br/>结论 · 适用场景 · 证据 · 计次]
   I -->|本人确认 / 修改 / 否决<br/>重新合并后保留| I
-  I --> V[(向量索引<br/>档案 · 原话)]
+  I --> V[(检索索引<br/>向量持久化 · BM25 按次构建<br/>档案 · 原话)]
   E --> V
 ```
 
@@ -64,7 +64,7 @@ sequenceDiagram
   participant M as 作答模型
   participant T as 语音服务（GPU）
   U->>W: 发问（SSE）
-  W->>R: 检索：12 条档案 + 6 句原话 + 核心画像 + 说话样本 + 最近 8 轮
+  W->>R: 混合检索（向量 + BM25，RRF 60）：12 条档案 + 6 句原话 + 核心画像 + 说话样本 + 最近 8 轮
   R->>M: 流式作答（先正文，后引用/置信度/模式）
   M-->>U: 正文逐字推送
   R->>R: 引用核对 · 置信度封顶 · 引号守卫

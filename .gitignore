@@ -19,3 +19,6 @@ eval-*/
 
 frontend/node_modules/
 *.vrm
+
+# Paper PDFs: third-party copyright, keep local only (see docs/paper/REFERENCES.md)
+docs/paper/refs/

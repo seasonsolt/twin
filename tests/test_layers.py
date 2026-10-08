@@ -56,6 +56,7 @@ LAYERS: dict[str, int] = {
     "persona.chat": 6,
     "evals.provenance": 8,
     "evals.personal": 8,
+    "evals.survey": 8,
     "service": 7,
     "api": 9,
     "mcp_server": 9,

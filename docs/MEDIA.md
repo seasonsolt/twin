@@ -52,7 +52,7 @@ stdout 最后一行：`{"ok": true, "candidates": [{"time": 2.5, "image": "<out_
 2. **可追溯。** 每个产出物都记录它来自哪一次回答（运行快照或回答指纹）、用了哪些引用，以及音色和形象配置。
 3. **人物无关、出境由配置决定。** `src/` 里不出现具体人物的专属内容；用本人资料评测和展示时，语音与识别只走本地或本人指定的服务，外部服务（如 Cloudflare）按配置使用，界面如实展示出境分类。
 
-聊天使用肖像、VRM 静态头像或姓名首字，真人视频直接内联于回复。2D 插画仅保留在关于你/画廊预览和 CLI/API 片段导出；本人视频通道通过下述通用远端任务接入。
+聊天使用肖像、VRM 静态头像或分身选中的插画预置，真人视频直接内联于回复。插画也用于档案、舞台、分身列表和无照片的图谱中心；CLI/API 片段导出继续消费对应五色 palette。本人视频通道通过下述通用远端任务接入。
 
 已确定（2026-10-04）：默认形象用风格化插画，不做写实；语音后端两种都接，Cloudflare `melotts` 用于合成数据和公开数据，本地自托管服务（MOSS-TTS-Nano 起步，可换 CosyVoice3）用于内网。
 
@@ -114,7 +114,7 @@ M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/R
 
 `SpeechResult` 只在展示层转换：`LipSyncTrack` v1 默认 `fps=25`，`levels` 每帧为 0–3（闭嘴到大开口），长度不超过 `fps × 600`，更长音频仅生成前 600 秒。`source` 为 timings / energy / pattern；时间戳对应各音频分片的朗读文本，词间闭嘴、词内按字符位置交替 2/3。WAV 能量支持 8/16-bit PCM 单/双声道，以每帧全部声道样本的 RMS、三帧移动平均、片内第 95 百分位为基准，按严格大于 10% / 35% / 70% 分成四档；纯静音全零，稀疏非静音导致基准为零时退回最大 RMS。MP3 或不支持/损坏的 WAV 使用明确合成的 pattern；未知时长默认 1 秒，不猜测音素。
 
-`AvatarSpec` v1 只有预置 ID、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 仅接受 default / ink / dawn。React 组件 `frontend/src/features/avatar/Avatar.tsx` 渲染内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
+`AvatarSpec` v1 只有预置 ID、五种十六进制平涂色、四种口型及 `stylized=True`，没有图片、路径或资源地址。`[avatar].preset` 默认 chestnut（栗），预置为 chestnut / wave（澜）/ bun（禾）/ stone（石）/ silver（岚）；旧 default / ink / dawn 均映射到 chestnut。每个分身可在元数据 `identity:avatar_preset` 保存选择；未选择时按分身 ID 的 SHA-256 确定预置，默认分身回退到配置。React 组件 `frontend/src/features/avatar/Avatar.tsx` 渲染内联 SVG，不获取形象资源，前端只消费形象与口型契约，不按语音后端选择动画。每个 `AudioPart.lipsync` 默认为 `None`，旧清单仍可读，HTTP 序列化为 null，形象保持静止。
 
 聊天用各分片的 `audio.currentTime` 读取 lipsync level，仅驱动小圆头像的柔和光环，不显示 2D 动画或伪造照片嘴部。关于你/画廊仍可预览 2D 形象，正常情况下每 3–6 秒眨眼，减少动态效果时不眨眼。弃权仅呈现回复，不生成讲述内容。
 
@@ -124,7 +124,7 @@ M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/R
 
 `GET /api/media/avatar-image` 同源返回配置照片及正确的 `image/png`、`image/jpeg` 或 `image/webp` 类型，`Cache-Control: no-cache`；未配置或文件已删除返回中文 JSON 404。能力接口追加 `avatar_image: {url: "/api/media/avatar-image"} | null`，包括语音不可用时，不暴露本地路径。
 
-聊天每条分身回复左侧为小圆头像，按 **肖像 > VRM 静态预览 > 姓名首字** 选择，图片/模型失败继续回退，绝不回退 2D。“关于你”仍按 **VRM > 肖像 > 2D 预置** 选择。照片 object-cover、偏向面部裁切，始终静止、不伪造嘴部；聊天朗读时柔和 accent 光环按当前口型轨 0–3 的强度变化并经弹簧平滑，暂停后淡出。减少动态效果时取消光环，仅显示静态“正在说话”圆点。肖像也作为聊天真人视频的 poster，不改变 CLI/API MP4 导出形象。
+聊天每条分身回复左侧为小圆头像，按 **肖像 > VRM 静态预览 > 分身的插画预置** 选择，图片/模型失败继续回退。“关于你”仍按 **VRM > 肖像 > 2D 预置** 选择。照片 object-cover、偏向面部裁切，始终静止、不伪造嘴部；聊天朗读时柔和 accent 光环按当前口型轨 0–3 的强度变化并经弹簧平滑，暂停后淡出。减少动态效果时取消光环，仅显示静态“正在说话”圆点。肖像也作为聊天真人视频的 poster，不改变 CLI/API MP4 导出形象。
 
 ### 浏览器 3D 形象（V1）
 
@@ -132,7 +132,7 @@ M1d follow-up：服务完整性守卫及实机阈值依据见 `deploy/tts-moss/R
 
 ```toml
 [avatar]
-preset = "default" # 保留 2D 回退与 MP4 导出
+preset = "chestnut" # 默认分身的 2D 回退与 MP4 导出
 vrm_path = "/path/to/stylized.vrm"
 ```
 
@@ -142,7 +142,7 @@ vrm_path = "/path/to/stylized.vrm"
 
 呼吸 0.4 Hz、胸部转角 ±.008 rad；头部微动俯仰 ±.018、偏航 ±.025 rad，以 10 s⁻¹ 临界阻尼平滑，说话额外 ±.025 rad 点头（角频率 3.4 s⁻¹）。眼睛通过 lookAt 注视摄像机，每 .7–2.2 秒小幅扫视（水平 ±.0175、垂直 ±.0125 倍模型高度）；眨眼间隔 2.5–6 秒、单次 .16 秒、15% 双眨眼。`vrm.update(delta)` 驱动模型自带 SpringBones 的头发/衣服物理。减少动态效果时停用呼吸、头动、扫视、点头和元音变化，口型限 0/1，眨眼降为 8–14 秒。画布离屏或文档隐藏时停止渲染，最高 60 fps；恢复时限制 delta ≤ .05 秒，卸载释放 GPU 资源。
 
-模型名/作者从 `vrm.meta` 读取并显示“模型：名称 · 作者”，兼容 VRM 0.x 的 title/author；许可链接只接受 HTTP(S)，不硬编码模型名称。聊天使用 `still` 模式，只渲染一帧、没有动画循环，署名保留于头像 title。无配置、WebGL 不可用、模型/3D 模块加载错误或上下文丢失时，关于你/画廊先回退配置肖像、再回退 2D，聊天则回退姓名首字。CSP **仅**在 `img-src 'self' data:` 增加 `blob:`，用于 glTF 内嵌纹理；GLTFLoader 显式使用 TextureLoader（HTML 图片），避免默认 ImageBitmapLoader 的 blob fetch 触及 connect-src。脚本/连接等策略不放宽；模型应自包含，不依赖外部纹理服务。
+模型名/作者从 `vrm.meta` 读取并显示“模型：名称 · 作者”，兼容 VRM 0.x 的 title/author；许可链接只接受 HTTP(S)，不硬编码模型名称。聊天使用 `still` 模式，只渲染一帧、没有动画循环，署名保留于头像 title。无配置、WebGL 不可用、模型/3D 模块加载错误或上下文丢失时，关于你/画廊先回退配置肖像、再回退 2D，聊天则回退分身选中的插画预置。CSP **仅**在 `img-src 'self' data:` 增加 `blob:`，用于 glTF 内嵌纹理；GLTFLoader 显式使用 TextureLoader（HTML 图片），避免默认 ImageBitmapLoader 的 blob fetch 触及 connect-src。脚本/连接等策略不放宽；模型应自包含，不依赖外部纹理服务。
 
 MP4 导出仍为 2D；浏览器端录制 3D 画布及音频是后续工作，本次不改变视频导出链路。
 

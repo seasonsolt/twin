@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from twin.config import Settings
 from twin.egress import egress_status
+from twin.media.schema import AVATAR_CHOICES
 from twin.web import create_app
 
 
@@ -32,7 +33,9 @@ def test_get_identity_shape_without_constructing_backends(tmp_path: Path) -> Non
             "about": "",
             "name_source": "config",
             "voice": "invented-preset",
-            "avatar": "ink",
+            "avatar": "chestnut",
+            "avatar_preset": "chestnut",
+            "avatar_presets": AVATAR_CHOICES,
             "egress": egress_status(settings, external_only=True),
         }
     assert not settings.db_path.exists()

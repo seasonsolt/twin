@@ -16,6 +16,7 @@ from twin.config import AvatarSettings, Settings
 from twin.identity import Identity
 from twin.media.render import render_audio
 from twin.media.schema import (
+    AVATAR_ALIASES,
     AVATAR_PRESETS,
     AudioManifest,
     AudioPart,
@@ -26,6 +27,7 @@ from twin.media.schema import (
     SpeechRequest,
     SpeechResult,
     WordTiming,
+    default_avatar,
 )
 from twin.media.tts import SilentSynthesizer
 from twin.web import create_app
@@ -68,7 +70,7 @@ def test_track_length_cap_frozen_and_roundtrip() -> None:
 
 
 def test_avatar_presets_fields() -> None:
-    assert set(AVATAR_PRESETS) == {"default", "ink", "dawn"}
+    assert set(AVATAR_PRESETS) == {"chestnut", "wave", "bun", "stone", "silver"}
     assert set(AvatarSpec.model_fields) == {
         "schema_version",
         "avatar_id",
@@ -110,7 +112,7 @@ def test_old_part_manifest_and_identity_load() -> None:
     assert manifest.segments[0].parts[0].lipsync is None
     identity = Identity.model_validate_json('{"name":"合成人物","aliases":[]}')
     assert identity.avatar is None
-    assert Identity(name="合成人物", aliases=[], avatar="ink").avatar == "ink"
+    assert Identity(name="合成人物", aliases=[], avatar="ink").avatar == "chestnut"
 
 
 @pytest.mark.parametrize(
@@ -122,7 +124,43 @@ def test_config_rejects_nonpreset(preset: str) -> None:
     message = str(error.value)
     assert all(name in message for name in AVATAR_PRESETS)
     assert "形象仅支持预置" in message
-    assert Settings().avatar.preset == "default"
+    assert Settings().avatar.preset == "chestnut"
+
+
+@pytest.mark.parametrize("legacy", AVATAR_ALIASES)
+def test_old_ids_map_to_chestnut_in_config_and_stored_contracts(legacy: str) -> None:
+    assert AvatarSettings(preset=legacy).preset == "chestnut"
+    assert Identity(name="测试", aliases=[], avatar=legacy).avatar == "chestnut"
+    assert (
+        AvatarSpec.model_validate({**AVATAR_PRESETS["chestnut"].model_dump(), "avatar_id": legacy}).avatar_id
+        == "chestnut"
+    )
+
+
+@pytest.mark.parametrize(
+    "persona_id,expected",
+    [
+        ("p-0000000000", "stone"),
+        ("p-1111111111", "wave"),
+        ("p-2222222222", "chestnut"),
+        ("p-3333333333", "bun"),
+        ("p-0000000007", "silver"),
+    ],
+)
+def test_persona_hash_has_stable_known_choices(persona_id: str, expected: str) -> None:
+    assert default_avatar(persona_id) == expected
+
+
+def test_default_persona_uses_configured_preset(tmp_path: Path) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db", avatar=AvatarSettings(preset="wave"))
+    with TestClient(create_app(settings), base_url="http://localhost") as client:
+        assert client.get("/api/identity").json()["avatar_preset"] == "wave"
+        assert client.get("/api/media/capabilities").json()["avatar"] == AVATAR_PRESETS["wave"].model_dump()
+        saved = client.put("/api/identity/avatar-preset", json={"preset": "bun"}, headers={"X-Twin": "1"})
+        assert saved.status_code == 200 and saved.json()["avatar"] == "bun"
+        assert settings.avatar.preset == "wave"
+    with TestClient(create_app(settings), base_url="http://localhost") as client:
+        assert client.get("/api/identity").json()["avatar_preset"] == "bun"
 
 
 class TimedSynthesizer(SilentSynthesizer):
@@ -175,8 +213,8 @@ def test_http_avatar_audio_and_identity(tmp_path: Path) -> None:
     with TestClient(create_app(settings, synthesizer_factory=SilentSynthesizer), base_url="http://localhost") as client:
         capabilities = client.get("/api/media/capabilities").json()
         assert capabilities["available"] is False
-        assert capabilities["avatar"] == AVATAR_PRESETS["dawn"].model_dump(mode="json")
-        assert client.get("/api/identity").json()["avatar"] == "dawn"
+        assert capabilities["avatar"] == AVATAR_PRESETS["chestnut"].model_dump(mode="json")
+        assert client.get("/api/identity").json()["avatar"] == "chestnut"
         response = client.post("/api/media/audio", json=body, headers={"X-Twin": "1"})
         assert response.status_code == 200
         result = response.json()
@@ -195,7 +233,7 @@ def test_avatar_remains_available_when_speech_fails(tmp_path: Path) -> None:
     ) as client:
         result = client.get("/api/media/capabilities").json()
         assert result["available"] is False
-        assert result["avatar"] == AVATAR_PRESETS["default"].model_dump(mode="json")
+        assert result["avatar"] == AVATAR_PRESETS["chestnut"].model_dump(mode="json")
 
 
 def test_identity_show_and_init_template(tmp_path: Path) -> None:
@@ -203,10 +241,11 @@ def test_identity_show_and_init_template(tmp_path: Path) -> None:
     config.write_text(f'db_path = "{tmp_path / "twin.db"}"\n[avatar]\npreset = "ink"\n', encoding="utf-8")
     result = CliRunner().invoke(app, ["--config", str(config), "identity", "show"])
     assert result.exit_code == 0, result.output
-    assert "形象：ink（风格化插画，不使用照片）" in result.output
+    assert "形象：chestnut（风格化插画，不使用照片）" in result.output
     example = (Path(__file__).resolve().parents[1] / "twin.toml.example").read_text(encoding="utf-8")
     for template in (CONFIG_TEMPLATE, example):
         assert (
             "# [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。\n"
-            '# preset = "default" # 可选 default、ink、dawn。' in template
+            '# preset = "chestnut" # 可选 chestnut（栗）、wave（澜）、bun（禾）、stone（石）、silver（岚）。'
+            in template
         )

@@ -1,23 +1,34 @@
-import { useEffect, useState } from 'react';
+import { createElement, useEffect, useState } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { PresetSvg } from '../../avatar/presets';
 
-export function usePortrait(url?: string) {
+export function illustratedPortrait(preset?: string | null) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(renderToStaticMarkup(createElement(PresetSvg, { preset })))}`;
+}
+
+export function usePortrait(url?: string, preset?: string | null) {
+  const fallback = illustratedPortrait(preset);
+  const source = url || fallback;
   const [loaded, setLoaded] = useState<{
     url: string;
     image: HTMLImageElement;
   } | null>(null);
   useEffect(() => {
-    if (!url) return;
     let alive = true;
     const image = new Image();
     image.onload = () => {
-      if (alive) setLoaded({ url, image });
+      if (alive) setLoaded({ url: source, image });
     };
-    image.src = url;
+    image.onerror = () => {
+      if (alive && image.src !== fallback) image.src = fallback;
+    };
+    image.src = source;
     return () => {
       alive = false;
+      image.onload = image.onerror = null;
     };
-  }, [url]);
-  return loaded && loaded.url === url ? loaded.image : null;
+  }, [source, fallback]);
+  return loaded && loaded.url === source ? loaded.image : null;
 }
 export function paintTwinPortrait(
   ctx: CanvasRenderingContext2D,

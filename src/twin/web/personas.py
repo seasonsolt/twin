@@ -20,7 +20,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..assets import AssetStore
 from ..config import Settings
-from ..persona.store import PersonaStore, stored_identity
+from ..media.schema import default_avatar
+from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..util import private_directory
 from .jobs import JobManager
 
@@ -112,7 +113,9 @@ class Personas:
                 "db_path": self.root / "personas" / persona_id / "twin.db",
                 "target_name": stored_identity(self.root / "personas" / persona_id / "twin.db")[0] or "本人",
                 "target_aliases": [],
-                "avatar": self.settings.avatar.model_copy(update={"image_path": None}),
+                "avatar": self.settings.avatar.model_copy(
+                    update={"image_path": None, "preset": default_avatar(persona_id)}
+                ),
                 "video": self.settings.video.model_copy(update={"require_assets": True}),
             }
         )
@@ -137,6 +140,7 @@ class Personas:
             "avatar_url": f"/api/media/avatar-image?persona={persona_id}"
             if portrait or settings.avatar.image_path
             else None,
+            "avatar_preset": stored_avatar(settings.db_path, settings.avatar.preset),
             "sources": sources,
             "is_default": persona_id == self.data["default"],
             "public": bool(entry.get("public")),

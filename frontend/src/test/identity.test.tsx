@@ -1,8 +1,16 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Profile } from '../pages/Profile';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, ToastViewport } from '../components/ui';
+import { AvatarPicker } from '../features/avatar/AvatarPicker';
+import { usePersonas } from '../stores/personas';
 import { useStatus, type Status } from '../stores/status';
 
 const identity = {
@@ -109,7 +117,7 @@ it('edits name/about in a dialog and saves with X-Twin, previews a closed-mouth 
   expect(screen.queryByText('预置音色')).toBeNull();
   expect(screen.getByText('朗读：speech.test')).toBeVisible();
   expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
-  const avatar = await screen.findByRole('img', { name: '风格化插画' });
+  const avatar = await screen.findByRole('img', { name: '插画形象：栗' });
   expect(avatar).toHaveAttribute('data-mouth-level', '0');
   fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByDisplayValue(identity.name);
@@ -140,6 +148,74 @@ it('edits name/about in a dialog and saves with X-Twin, previews a closed-mouth 
   });
   expect(new Headers(options.headers).get('X-Twin')).toBe('1');
 });
+it('saves a persona-scoped illustrated choice with loading feedback and updates the header immediately', async () => {
+  const original = fetcher.getMockImplementation()! as (
+    path: string,
+    options: RequestInit,
+  ) => Promise<Response>;
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation((path, options) =>
+    path === '/api/identity/avatar-preset'
+      ? new Promise<Response>((resolve) => {
+          finish = resolve;
+        })
+      : original(path, options),
+  );
+  setup();
+  render(<ToastViewport />);
+  await screen.findByRole('heading', { name: identity.name });
+  fireEvent.click(screen.getByRole('tab', { name: '形象和声音' }));
+  fireEvent.click(screen.getByRole('button', { name: '选择澜' }));
+  expect(screen.getByRole('button', { name: '选择澜' })).toBeDisabled();
+  expect(screen.getByText('保存中…')).toBeVisible();
+  const request = fetcher.mock.calls.find(
+    ([path]) => path === '/api/identity/avatar-preset',
+  )![1];
+  expect(request.method).toBe('PUT');
+  expect(JSON.parse(request.body as string)).toEqual({ preset: 'wave' });
+  expect(new Headers(request.headers).get('X-Twin-Persona')).toBe(
+    usePersonas.getState().id,
+  );
+  finish(json({ ...identity, avatar: 'wave', avatar_preset: 'wave' }));
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole('banner')).getByRole('img', {
+        name: '插画形象：澜',
+      }),
+    ).toBeVisible(),
+  );
+  expect(screen.getByRole('button', { name: '选择澜' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(screen.getByRole('button', { name: '选择澜' })).not.toBeDisabled();
+  expect(screen.getByRole('status')).toHaveTextContent('插画形象已保存');
+});
+
+it('keeps the photo fallback picker collapsed and leaves the choice unchanged on failure', async () => {
+  const save = vi.fn().mockRejectedValue(new Error('形象保存失败'));
+  const view = render(
+    <>
+      <AvatarPicker selected="stone" collapsed onSave={save} />
+      <ToastViewport />
+    </>,
+  );
+  const details = view.container.querySelector('details')!;
+  expect(details.open).toBe(false);
+  fireEvent.click(screen.getByText('没有照片时使用的插画形象'));
+  details.open = true;
+  fireEvent.click(screen.getByRole('button', { name: '选择岚' }));
+  await waitFor(() =>
+    expect(screen.getByRole('status')).toHaveTextContent('形象保存失败'),
+  );
+  expect(save).toHaveBeenCalledWith('silver');
+  expect(screen.getByRole('button', { name: '选择石' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(screen.getByRole('button', { name: '选择岚' })).not.toBeDisabled();
+});
+
 it('describes external services using plain names, never provider ids or local services', async () => {
   useStatus.setState({
     data: {
@@ -208,7 +284,13 @@ it('keeps identity editable when the preview fails and supports retry', async ()
   expect(await screen.findByRole('alert')).toHaveTextContent('预览暂不可用');
   failAvatar = false;
   fireEvent.click(screen.getByRole('button', { name: '重试预览' }));
-  expect(await screen.findByRole('img', { name: '风格化插画' })).toBeVisible();
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole('banner')).getByRole('img', {
+        name: '插画形象：栗',
+      }),
+    ).toBeVisible(),
+  );
   fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByDisplayValue(identity.name);
   await waitFor(() => expect(screen.getByLabelText('名字')).toBeVisible());

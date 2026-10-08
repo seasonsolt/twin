@@ -23,7 +23,7 @@ from ..channels.wecom import WeComHub
 from ..config import Settings
 from ..egress import egress_status
 from ..media.tts import SpeechSynthesizer
-from ..persona.store import PersonaStore, stored_identity
+from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from . import assets, media, persona
 from .auth import Auth, AuthMiddleware
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
@@ -376,6 +376,7 @@ def create_app(
             synthesizer_factory,
             jobs=scoped_jobs,
             name_factory=lambda: stored_identity(resolved.db_path)[0] or resolved.target_name,
+            avatar_factory=lambda: stored_avatar(resolved.db_path, resolved.avatar.preset),
         )
         return context
 

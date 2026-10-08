@@ -622,7 +622,7 @@ it('never animates glow with reduced motion, but keeps a static speaking cue', a
   expect(await screen.findByRole('status', { name: '正在说话' })).toBeVisible();
   expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
 });
-it('prefers portrait, then a VRM still, then an initial, never a cartoon', async () => {
+it('prefers portrait, then a VRM still, then the illustrated preset', async () => {
   const view = render(<ChatAvatar name="测试人" capabilities={caps} />);
   const image = screen.getByRole('img', { name: '测试人的肖像' });
   expect(
@@ -632,14 +632,13 @@ it('prefers portrait, then a VRM still, then an initial, never a cartoon', async
   const model = await screen.findByRole('button', { name: 'VRM 静态头像' });
   expect(model).toHaveAttribute('data-still', 'true');
   fireEvent.click(model);
-  expect(screen.getByRole('img', { name: '测试人的头像' })).toHaveTextContent(
-    '测',
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toHaveAttribute(
+    'viewBox',
+    '0 0 220 220',
   );
   view.rerender(<ChatAvatar name="张三" capabilities={null} />);
-  expect(screen.getByRole('img', { name: '张三的头像' })).toHaveTextContent(
-    '张',
-  );
-  expect(view.container.querySelector('svg')).toBeNull();
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toBeVisible();
+  expect(view.container.querySelector('.eyes')).not.toBeNull();
 });
 function ReplyVideo({
   id,

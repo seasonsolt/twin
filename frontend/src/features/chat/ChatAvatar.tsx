@@ -2,6 +2,8 @@ import { Component, lazy, Suspense, useState, type ReactNode } from 'react';
 import type { Capabilities } from '../avatar/types';
 import { personaUrl } from '../../lib/persona';
 import { SpeakingGlow } from '../avatar/SpeakingGlow';
+import { Avatar } from '../avatar/Avatar';
+import { usePersonas } from '../../stores/personas';
 
 const Avatar3D = lazy(() => import('../avatar/Avatar3D'));
 
@@ -35,6 +37,11 @@ export function ChatAvatar({
   className?: string;
   personaId?: string;
 }) {
+  const selectedPreset = usePersonas(
+    (state) =>
+      state.items.find((item) => item.id === (personaId ?? state.id))
+        ?.avatar_preset,
+  );
   const portrait = capabilities?.avatar_image?.url
     ? personaUrl(capabilities.avatar_image.url, personaId)
     : undefined;
@@ -44,13 +51,15 @@ export function ChatAvatar({
   const [failedPortrait, setFailedPortrait] = useState<string>();
   const [failedModel, setFailedModel] = useState<string>();
   const initial = (
-    <span
-      role="img"
-      aria-label={`${name}的头像`}
-      className="flex size-full items-center justify-center bg-accent/10 text-sm text-secondary"
-    >
-      {Array.from(name.trim())[0] || '本'}
-    </span>
+    <Avatar
+      spec={capabilities?.avatar}
+      preset={
+        capabilities?.avatar_preset ??
+        capabilities?.avatar?.avatar_id ??
+        selectedPreset
+      }
+      mouthLevel={level}
+    />
   );
   return (
     <div className={`relative shrink-0 ${className}`} aria-label="分身头像">

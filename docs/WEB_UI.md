@@ -134,6 +134,12 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 列表恢复时若所存 ID 已被删除或不可访问则选择首个可见分身；管理员优先 default。成员没有分身时打开新建流程。只有默认分身可回退到 `[avatar].image_path` 和视频驱动内置素材；
 其他分身需自己的肖像和声音才能生成真人视频，否则能力包含 `reason: "先在「关于你」上传形象和声音"`，语音使用 `[tts].voice`。
 
+## 插画形象与图谱
+
+档案「形象和声音」提供「选择插画形象」：栗、澜、禾、石、岚五个圆形缩略图，选中项以各自 accent 色描边；移动端单行横向滚动。照片或 3D 模型存在时折叠到「没有照片时使用的插画形象」。保存期间禁用选择，完成后 toast 提示并立即更新档案头部和分身列表。无照片的舞台、聊天、切换栏和分身卡片均显示该分身的预置。
+
+`features/profile/graph/fit.ts` 在布局停止、筛选或画布尺寸变化后拟合实际布局坐标；节点半径和固定像素标签一起计算边界，最大投影跨度约为画布较短边的 85%。2D 求缩放和平移，3D 按当前视角求透视相机距离与目标点，避免全局最长标签 padding 使图谱缩小。中心节点没有照片时将相同预置 SVG 栅格化到画布/CanvasTexture；图像失败保留首字回退。
+
 ## 音视频人物确认
 
 记忆页有 `needs_speaker` 来源时显示“有 N 段录音需要确认哪位是你”紧凑横幅，点开第一条；列表显示“待确认”芯片。媒体详情提供说话人行（编号、时长、轮换短片段试听、建议者“像你”、单选）和“都不是我（旁观资料）”。只有一人自动确认，多人高置信度自动识别显示“已自动识别，可修改”，其余来源在确认前不进入记忆构建。修改后自动重新整理，详情文字同步更新。
@@ -162,7 +168,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 聊天使用 MessageList、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。通过 fetch 读取 `POST /api/persona/chat/stream` 的 SSE，首个 delta 后隐藏思考指示，正文直接追加，不使用 ReplyReveal 的人工延迟；final 用引号校验后的正文替换并附加依据。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。离页、切换分身或新请求取消旧流。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时流直接返回友好的弃权回复，不初始化模型。旧聊天任务接口仍可用。
 
-每条分身回复（包括弃权）左侧由 `features/chat/ChatAvatar.tsx` 显示 36px 圆头像，优先级为 **肖像 > VRM 静态预览 > 姓名首字**；图片或模型失败继续回退，聊天绝不使用 2D 插画。非弃权回复下方只提供主按钮“播放”（播放中为“暂停”），触控区域至少 44×44px；general 回答同样支持，保留原回答全部正文，不追加提示。弃权不提供媒体操作，也不启动视频任务。
+每条分身回复（包括弃权）左侧由 `features/chat/ChatAvatar.tsx` 显示 36px 圆头像，优先级为 **肖像 > VRM 静态预览 > 分身选中的插画形象**；图片或模型失败继续回退。插画使用 220×220 正方形 SVG 的圆形裁剪，支持眨眼和 0–3 级口型。非弃权回复下方只提供主按钮“播放”（播放中为“暂停”），触控区域至少 44×44px；general 回答同样支持，保留原回答全部正文，不追加提示。弃权不提供媒体操作，也不启动视频任务。
 
 `features/chat/useReplyAudio.ts` 管理全聊天唯一的语音播放状态。新回复收到 final 后，非弃权且语音可用时立即启动朗读，在真人视频生成期间由肖像显示说话状态。自动朗读或点击“播放”先 POST `/api/media/audio`，带 `segments: [0]`，首段返回并解码后立即播放；其余脚本段最多两个并行请求，提前下载、解码，严格按脚本段及段内分片顺序播放。`GaplessAudio.ts` 用 Web Audio 时间轴连续排程，就绪分片之间无额外停顿；不支持 Web Audio 时回退 `<audio>`。分片未就绪时等待，返回后立即继续；重复播放复用回复缓存、解码缓冲和服务端原有缓存键。ARIA 名称为“播放语音”/“暂停语音”。暂停保留分片与时间，开始另一条回复先停止前一条。回复下方细进度线按分片时长和播放时间累计（剩余时长未齐时估算）；当前头像复用 `features/avatar/SpeakingGlow.tsx` 的弹簧光环，强度取当前分片播放时间 × lipsync.fps 的 level，不伪造嘴部。暂停、等待或结束时光环淡出，减少动态效果时仅显示静态说话圆点。错误显示回复内的中文小字，可再次点击“播放”；离页、清空和卸载停止音频并释放请求与 rAF。聊天仅保留原生按钮键盘行为，不提供逐句导航、快捷键帮助或 HTML/2D 片段导出入口；相关后端接口保留供 API/CLI 使用。
 
@@ -190,7 +196,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 | 方法/路径 | 契约 |
 | --- | --- |
-| `GET /api/personas` | `[{id,name,owner|null,avatar_url|null,sources,created_at,is_default}]`，管理员看全部，成员仅看自己的；owner 为 null 的旧分身归管理员 |
+| `GET /api/personas` | `[{id,name,owner|null,avatar_url|null,avatar_preset,sources,created_at,is_default}]`，管理员看全部，成员仅看自己的；owner 为 null 的旧分身归管理员 |
 | `POST /api/personas` | `{name}`，201 返回新分身，owner 为当前邮箱（auth 关闭则 null）；成员达到 max_personas_per_member 时 409“最多可以建 3 个分身”；私有目录及 identity，registry 仅增加拥有者邮箱 |
 | `DELETE /api/personas/{id}` | 删除该目录；默认分身 400，运行/排队任务或请求存在时 409 |
 | `POST /api/identity/onboarding-complete` | 完成当前分身的新建引导 |
@@ -217,9 +223,10 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `GET /api/persona/questionnaire?round=initial` | 问题、答案、提交状态 |
 | `PUT /api/persona/questionnaire/draft` | round、answers，保存草稿 |
 | `POST /api/persona/questionnaire/submit` | 导入全部回答并尝试构建；只支持 initial |
-| `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/egress；name 是有效名字；新建未完成引导时追加 onboarding_pending=true；无授权账本 |
+| `GET /api/identity` | name/aliases/about/name_source（config 或 user）/voice/avatar/avatar_preset/avatar_presets（id、name）/egress；name 是有效名字；新建未完成引导时追加 onboarding_pending=true；无授权账本 |
 | `PUT /api/identity` | X-Twin: 1；`{name, about}`；去除首尾空白后名字 1–20 字，介绍 ≤200 字；返回完整 identity；介绍变化会替换“自我介绍”笔记并自动处理 |
-| `GET /api/media/capabilities` | available/backend/languages/audio_formats/avatar、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null；avatar_image 为 `{url: "/api/media/avatar-image"}` 或 null（语音失败时仍返回） |
+| `PUT /api/identity/avatar-preset` | `{preset: id}`，仅分身管理者；保存 `identity:avatar_preset` 并返回身份；未知 ID 中文 400，访客 403 |
+| `GET /api/media/capabilities` | available/backend/languages/audio_formats/avatar/avatar_preset/avatar_presets、`video: {available: bool}`；avatar_model 为 `{format: "vrm", url: "/api/media/avatar.vrm"}` 或 null；avatar_image 为 `{url: "/api/media/avatar-image"}` 或 null（语音失败时仍返回） |
 | `GET /api/media/avatar.vrm` | 配置的本地 VRM 流，model/gltf-binary、no-cache；未配置中文 JSON 404 |
 | `GET /api/media/avatar-image` | 本人上传肖像优先，否则配置的本地肖像；上传版本能力 URL 含 ?v=sha；image/png、image/jpeg 或 image/webp、no-cache |
 | `GET /api/me/assets` | portrait/voice profile + speech_clone（voice_dir 已配置）、video 布尔能力 |

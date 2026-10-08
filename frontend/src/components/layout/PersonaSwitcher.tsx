@@ -13,6 +13,7 @@ import { personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
+import { PresetSvg } from '../../features/avatar/presets';
 
 export function PersonaPortrait({ persona }: { persona?: Persona }) {
   const [failed, setFailed] = useState<string>();
@@ -27,11 +28,8 @@ export function PersonaPortrait({ persona }: { persona?: Persona }) {
       className="persona-portrait size-12 shrink-0 rounded-full border-2 border-canvas object-cover"
     />
   ) : (
-    <span
-      className="persona-portrait persona-name grid size-12 shrink-0 place-items-center rounded-full bg-soft text-2xl text-primary"
-      aria-hidden
-    >
-      {Array.from(persona?.name || '本人')[0]}
+    <span className="persona-portrait block size-12 shrink-0 overflow-hidden rounded-full">
+      <PresetSvg preset={persona?.avatar_preset} />
     </span>
   );
 }

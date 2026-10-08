@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from ..embed import Matrix
+from ..media.schema import AVATAR_ALIASES, AVATAR_PRESETS
 from ..util import prepare_private_file
 from .items import PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
 from .schema import ChatReply, Expression, ParsedSource, ReviewStatus, Source, SourceKind
@@ -58,6 +59,15 @@ def stored_identity(path: Path) -> tuple[str | None, str]:
         return None, ""
     with PersonaStore(path) as store:
         return store.get_meta("identity:name") or None, store.get_meta("identity:about") or ""
+
+
+def stored_avatar(path: Path, configured: str = "chestnut") -> str:
+    value = None
+    if path.is_file():
+        with PersonaStore(path) as store:
+            value = store.get_meta("identity:avatar_preset")
+    selected = AVATAR_ALIASES.get(value or configured, value or configured)
+    return selected if selected in AVATAR_PRESETS else "chestnut"
 
 
 class PersonaStore:

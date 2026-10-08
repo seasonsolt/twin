@@ -407,6 +407,7 @@ def test_public_twin_can_be_talked_to_but_not_changed_by_other_members(web: Test
         ("GET", "/api/persona/items", None),
         ("GET", "/api/me/voice/reference", None),
         ("PUT", "/api/identity", {"name": "偷改", "about": ""}),
+        ("PUT", "/api/identity/avatar-preset", {"preset": "silver"}),
         ("POST", "/api/persona/notes", {"text": "不能写入他人的记忆"}),
         ("POST", "/api/persona/chat", {"messages": [{"role": "user", "content": "问题"}]}),
     ]:

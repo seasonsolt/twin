@@ -7,6 +7,7 @@ import { cn } from '../../lib/utils';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { useMobile } from '../../lib/useMobile';
 import { PersonaFade } from '../motion/PersonaFade';
+import { PresetSvg } from '../../features/avatar/presets';
 
 export function StageHeader({
   variant = 'compact',
@@ -47,7 +48,7 @@ export function StageHeader({
   const portraitContent =
     url && failed !== url ? (
       <img src={url} alt={`${name}的肖像`} onError={() => setFailed(url)} />
-    ) : (
+    ) : variant === 'future' ? (
       <span
         role="img"
         aria-label={`${name}的头像`}
@@ -55,6 +56,8 @@ export function StageHeader({
       >
         {Array.from(name.trim())[0] || '本'}
       </span>
+    ) : (
+      <PresetSvg preset={current?.avatar_preset} />
     );
   return (
     <motion.header

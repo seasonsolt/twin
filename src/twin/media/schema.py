@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 from pathlib import Path
 from typing import Annotated, Final, Literal
@@ -157,6 +158,11 @@ class AvatarSpec(BaseModel):
             return {key: val for key, val in value.items() if key != "label"}
         return value
 
+    @field_validator("avatar_id")
+    @classmethod
+    def canonical_id(cls, value: str) -> str:
+        return AVATAR_ALIASES.get(value, value)
+
     @field_validator("palette")
     @classmethod
     def flat_palette(cls, value: dict[str, str]) -> dict[str, str]:
@@ -167,38 +173,30 @@ class AvatarSpec(BaseModel):
         return value
 
 
+# Legacy palette IDs all use the approved chestnut illustration.
+AVATAR_ALIASES = dict.fromkeys(("default", "ink", "dawn"), "chestnut")
+AVATAR_NAMES = {"chestnut": "栗", "wave": "澜", "bun": "禾", "stone": "石", "silver": "岚"}
 AVATAR_PRESETS: dict[str, AvatarSpec] = {
-    "default": AvatarSpec(
-        avatar_id="default",
-        palette={
-            "skin": "#F4CFAC",
-            "hair": "#57477D",
-            "outfit": "#447B91",
-            "background": "#E8F1F3",
-            "accent": "#C55C7D",
-        },
-    ),
-    "ink": AvatarSpec(
-        avatar_id="ink",
-        palette={
-            "skin": "#DBDFE8",
-            "hair": "#34364F",
-            "outfit": "#676D91",
-            "background": "#F1F0F7",
-            "accent": "#925F9F",
-        },
-    ),
-    "dawn": AvatarSpec(
-        avatar_id="dawn",
-        palette={
-            "skin": "#FFE1AC",
-            "hair": "#AB5E71",
-            "outfit": "#CB8055",
-            "background": "#FFF3DE",
-            "accent": "#7069A6",
-        },
-    ),
+    preset: AvatarSpec(
+        avatar_id=preset,
+        palette=dict(zip(("skin", "hair", "outfit", "background", "accent"), colors, strict=True)),
+    )
+    for preset, colors in {
+        "chestnut": ("#F3C4A2", "#4A2E26", "#E2A33B", "#F6C9A8", "#C9862A"),
+        "wave": ("#F6C8A4", "#B8523A", "#2F8C83", "#FFD9C2", "#F2C14E"),
+        "bun": ("#EDB48C", "#2C2320", "#7C8A4A", "#F7DF8E", "#E46A4E"),
+        "stone": ("#D6976E", "#2A2522", "#3F5F86", "#BFD3B4", "#2E4A6C"),
+        "silver": ("#F5CDB2", "#E4E1E6", "#8E4F6E", "#EFB7B3", "#6E3A55"),
+    }.items()
 }
+
+
+AVATAR_CHOICES = [{"id": key, "name": name} for key, name in AVATAR_NAMES.items()]
+
+
+def default_avatar(persona_id: str) -> str:
+    index = int.from_bytes(hashlib.sha256(persona_id.encode()).digest()[:8], "big") % len(AVATAR_PRESETS)
+    return list(AVATAR_PRESETS)[index]
 
 
 class AudioPart(BaseModel):

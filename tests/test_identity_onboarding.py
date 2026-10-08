@@ -24,7 +24,7 @@ def test_legacy_labels_are_ignored(label: str) -> None:
     records = [
         (MediaManifest, {"source_fingerprint": "test", "created_at": "2025-01-01T00:00:00Z"}),
         (ServiceIdentity, {"name": "测试", "avatar": None, "voice": None}),
-        (AvatarSpec, AVATAR_PRESETS["default"].model_dump()),
+        (AvatarSpec, AVATAR_PRESETS["chestnut"].model_dump()),
         (
             MediaScript,
             {

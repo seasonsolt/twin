@@ -5,6 +5,7 @@ import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Graph3DBatch } from './Graph3DBatch';
 import type { MemoryLink, MemoryNode } from './buildMemoryGraph';
 import { configureRadialForces } from './layout';
+import { fit3D } from './fit';
 import { paintTwinPortrait, usePortrait } from './portrait';
 import {
   nodeAlpha,
@@ -127,6 +128,7 @@ export default function Graph3D(props: GraphViewProps) {
   const layout = useGraphLayout(props.graph, 3);
   const portrait = usePortrait(
     props.graph.nodes.find((node) => node.kind === 'twin')?.portrait,
+    props.graph.nodes.find((node) => node.kind === 'twin')?.avatarPreset,
   );
   const fg = useRef<ForceGraphMethods<MemoryNode, MemoryLink> | undefined>(
     undefined,
@@ -145,9 +147,9 @@ export default function Graph3D(props: GraphViewProps) {
   const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const batch = useRef<Graph3DBatch | null>(null);
   const generation = useRef({ value: 0 });
-  const latest = useRef({ props, portrait });
+  const latest = useRef({ props, portrait, layout });
   useEffect(() => {
-    latest.current = { props, portrait };
+    latest.current = { props, portrait, layout };
   });
   const interact = useCallback(() => {
     const controls = fg.current?.controls() as OrbitControls | undefined;
@@ -340,12 +342,18 @@ export default function Graph3D(props: GraphViewProps) {
     }
   }, [layout, props, portrait, styleObject]);
   const fit = useCallback(() => {
-    const state = latest.current.props;
-    fg.current?.zoomToFit(
-      500,
-      Math.min(state.width, state.height) * 0.1,
-      (node) => state.visible.has(node.id),
+    const graph = fg.current;
+    if (!graph) return;
+    const { props: state, layout: data } = latest.current;
+    const view = fit3D(
+      data.nodes.filter((node) => state.visible.has(node.id)),
+      graph.camera() as THREE.PerspectiveCamera,
+      state.width,
+      state.height,
+      state.labelled,
     );
+    if (view)
+      graph.cameraPosition(view.position, view.target, state.reduced ? 0 : 500);
   }, []);
   const visibleKey = [...props.visible].sort().join('\0');
   useEffect(() => {

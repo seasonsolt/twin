@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from twin.cli import app
 from twin.config import Settings, TTSSettings
-from twin.media.schema import AVATAR_PRESETS, SpeechRequest, SpeechResult
+from twin.media.schema import AVATAR_CHOICES, AVATAR_PRESETS, SpeechRequest, SpeechResult
 from twin.media.tts import (
     MediaError,
     MediaInputTooLong,
@@ -63,7 +63,9 @@ def test_capabilities_are_lazy_and_secret_free(tmp_path: Path) -> None:
         response = client.get("/api/media/capabilities")
         assert response.status_code == 200
         assert response.json() == {
-            "avatar": AVATAR_PRESETS["default"].model_dump(mode="json"),
+            "avatar": AVATAR_PRESETS["chestnut"].model_dump(mode="json"),
+            "avatar_preset": "chestnut",
+            "avatar_presets": AVATAR_CHOICES,
             "avatar_model": None,
             "avatar_image": None,
             "video": {"available": False},

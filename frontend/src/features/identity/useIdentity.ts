@@ -3,7 +3,14 @@ import {
   usePersonaId,
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
-import { loadEssential, peekEssential } from '../../lib/personaPrefetch';
+import {
+  clearPrefetch,
+  loadEssential,
+  peekEssential,
+} from '../../lib/personaPrefetch';
+import { api } from '../../lib/api';
+import { usePersonas } from '../../stores/personas';
+import { presetSpec } from '../avatar/presets';
 import type { Capabilities } from '../avatar/types';
 import type { Status } from '../../stores/status';
 
@@ -16,6 +23,8 @@ export interface IdentityData {
   aliases: string[];
   voice: string | null;
   avatar: string | null;
+  avatar_preset?: string;
+  avatar_presets?: { id: string; name: string }[];
   egress: Status['egress'];
 }
 
@@ -83,5 +92,34 @@ export function useIdentity(active = true) {
     error,
     avatarError,
     reload: () => setAttempt((value) => value + 1),
+    savePreset: async (preset: string) => {
+      const saved = await api<IdentityData>('/api/identity/avatar-preset', {
+        method: 'PUT',
+        headers: { 'X-Twin-Persona': personaId },
+        json: { preset },
+      });
+      clearPrefetch();
+      usePersonas.setState((state) => ({
+        items: state.items.map((item) =>
+          item.id === personaId
+            ? {
+                ...item,
+                avatar_preset: saved.avatar_preset ?? saved.avatar ?? preset,
+              }
+            : item,
+        ),
+      }));
+      if (usePersonas.getState().id !== personaId) return;
+      setData(saved);
+      setCapabilities((current) =>
+        current
+          ? {
+              ...current,
+              avatar: presetSpec(saved.avatar_preset ?? saved.avatar),
+              avatar_preset: saved.avatar_preset,
+            }
+          : current,
+      );
+    },
   };
 }

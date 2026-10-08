@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d';
 import type { MemoryLink, MemoryNode } from './buildMemoryGraph';
 import { ambientParticle, configureRadialForces } from './layout';
+import { fit2D } from './fit';
 import { paintTwinPortrait, usePortrait } from './portrait';
 import {
   linkHighlighted,
@@ -34,10 +35,11 @@ export default function Graph2D(props: GraphViewProps) {
   );
   const portrait = usePortrait(
     props.graph.nodes.find((node) => node.kind === 'twin')?.portrait,
+    props.graph.nodes.find((node) => node.kind === 'twin')?.avatarPreset,
   );
-  const latest = useRef(props);
+  const latest = useRef({ props, layout });
   useEffect(() => {
-    latest.current = props;
+    latest.current = { props, layout };
   });
   useEffect(() => {
     const graph = fg.current;
@@ -58,21 +60,17 @@ export default function Graph2D(props: GraphViewProps) {
     fg.current.d3ReheatSimulation();
   }, [layout]);
   const fit = useCallback(() => {
-    const state = latest.current;
-    const fontSize = state.width < 500 ? 14 : 15;
-    const labelPadding = Math.max(
-      0,
-      ...state.graph.nodes
-        .filter(
-          (node) => node.kind === 'dimension' && state.visible.has(node.id),
-        )
-        .map((node) => Math.min(node.label.length, 33) * fontSize * 0.85 + 10),
+    const { props: state, layout: data } = latest.current;
+    const view = fit2D(
+      data.nodes.filter((node) => state.visible.has(node.id)),
+      state.width,
+      state.height,
+      state.labelled,
     );
-    fg.current?.zoomToFit(
-      state.reduced ? 0 : 500,
-      Math.max(Math.min(state.width, state.height) * 0.1, labelPadding),
-      (node) => state.visible.has(node.id),
-    );
+    if (!view) return;
+    const duration = state.reduced ? 0 : 500;
+    fg.current?.centerAt(view.x, view.y, duration);
+    fg.current?.zoom(view.zoom, duration);
   }, []);
   const visibleKey = [...props.visible].sort().join('\0');
   useEffect(() => {

@@ -34,14 +34,14 @@ it('prefers a static portrait to the preset and falls back on image error', () =
   expect(image).toHaveClass('object-cover', 'object-[50%_30%]');
   expect(screen.queryByRole('note')).not.toBeInTheDocument();
   expect(
-    screen.queryByRole('img', { name: '风格化插画' }),
+    screen.queryByRole('img', { name: '插画形象：栗' }),
   ).not.toBeInTheDocument();
   fireEvent.error(image);
-  expect(screen.getByRole('img', { name: '风格化插画' })).toBeVisible();
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toBeVisible();
   view.rerender(
     <AvatarPreview capabilities={{ ...capabilities, avatar_image: null }} />,
   );
-  expect(screen.getByRole('img', { name: '风格化插画' })).toBeVisible();
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toBeVisible();
 });
 
 it('spring-smooths glow intensity from the lipsync level and fades it when not speaking', async () => {

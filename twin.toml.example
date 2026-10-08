@@ -63,7 +63,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # command 必须配置；host 省略或为空时本机执行并复制输出，否则使用 SSH/scp；出境声明与契约见 docs/MEDIA.md
 
 # [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
-# preset = "default" # 可选 default、ink、dawn。
+# preset = "chestnut" # 可选 chestnut（栗）、wave（澜）、bun（禾）、stone（石）、silver（岚）。
 # vrm_path = "/path/to/stylized.vrm" # 可选本地风格化 3D 模型，≤ 64 MB；不提交模型文件。
 # image_path = "/path/to/portrait.png" # 未上传本人肖像时的回退，PNG/JPEG/WebP ≤ 10 MB。
 

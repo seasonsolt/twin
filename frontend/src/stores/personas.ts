@@ -14,6 +14,7 @@ export interface Persona {
   id: string;
   name: string;
   avatar_url: string | null;
+  avatar_preset?: string;
   sources: number;
   created_at: string;
   is_default: boolean;

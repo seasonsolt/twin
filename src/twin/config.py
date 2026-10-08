@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 from .embed import Embedder, HashingEmbedder, OpenAICompatEmbedder, embedder_fingerprint
 from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, OpenAICompatLLM
 from .media.asr import CloudflareWhisper, OpenAICompatTranscription, SpeechRecognizer
-from .media.schema import AVATAR_PRESETS, VoiceSpec
+from .media.schema import AVATAR_ALIASES, AVATAR_PRESETS, VoiceSpec
 from .media.tts import CloudflareMeloTTS, OpenAICompatSpeech, SilentSynthesizer, SpeechSynthesizer
 from .usage import Price
 from .util import RenameError, fingerprint, key_from_env
@@ -123,7 +123,7 @@ class MediaSettings(BaseModel):
 
 
 class AvatarSettings(BaseModel):
-    preset: str = "default"
+    preset: str = "chestnut"
     vrm_path: str | None = None
     image_path: str | None = None
 
@@ -183,6 +183,7 @@ class AvatarSettings(BaseModel):
     @field_validator("preset")
     @classmethod
     def stylized_preset(cls, value: str) -> str:
+        value = AVATAR_ALIASES.get(value, value)
         if value not in AVATAR_PRESETS:
             raise ValueError(f"形象仅支持预置：{'、'.join(AVATAR_PRESETS)}")
         return value

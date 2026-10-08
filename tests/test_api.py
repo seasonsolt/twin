@@ -62,7 +62,7 @@ def test_health_auth_identity_and_answer(token: str, chat: PersonaChat) -> None:
             assert "私密问题" not in response.text and token not in response.text
         client.headers["Authorization"] = f"Bearer {token}"
         identity = client.get("/v1/identity")
-        assert identity.json() == {"name": "本人", "avatar": "default", "voice": "default"}
+        assert identity.json() == {"name": "本人", "avatar": "chestnut", "voice": "default"}
         response = client.post("/v1/ask", json={"question": "私密问题", "as_of": "2025-01-01"})
         assert response.status_code == 200
         assert response.json()["as_of"] == "2025-01-01"

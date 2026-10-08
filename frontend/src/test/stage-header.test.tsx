@@ -269,10 +269,11 @@ it('renders persona-free login and waitlist heroes even with a previous persona 
   );
 });
 
-it('falls back to a handwritten initial when the portrait fails', () => {
+it('falls back to the chosen illustration when the portrait fails', () => {
   mount(<StageHeader />, '/memories');
   fireEvent.error(screen.getByRole('img', { name: '小林的肖像' }));
-  expect(screen.getByRole('img', { name: '小林的头像' })).toHaveTextContent(
-    '小',
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toHaveAttribute(
+    'viewBox',
+    '0 0 220 220',
   );
 });

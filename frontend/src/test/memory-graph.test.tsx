@@ -14,6 +14,7 @@ import { Graph3DBatch } from '../features/profile/graph/Graph3DBatch';
 import Graph2D from '../features/profile/graph/Graph2D';
 import type { GraphViewProps } from '../features/profile/graph/rendering';
 import { paintTwinPortrait } from '../features/profile/graph/portrait';
+import { projectedBounds2D } from '../features/profile/graph/fit';
 import MemoryGraphPanel from '../features/profile/graph/MemoryGraphPanel';
 import {
   buildMemoryGraph,
@@ -31,6 +32,7 @@ const renderer = vi.hoisted(() => ({
   pause: vi.fn(),
   fly: vi.fn(),
   fit: vi.fn(),
+  zoom: vi.fn(),
 }));
 vi.mock('react-force-graph-2d', async () => {
   const { useImperativeHandle } = await import('react');
@@ -47,7 +49,7 @@ vi.mock('react-force-graph-2d', async () => {
         pauseAnimation: renderer.pause,
         resumeAnimation: vi.fn(),
         centerAt: renderer.fly,
-        zoom: vi.fn(),
+        zoom: renderer.zoom,
         zoomToFit: renderer.fit,
       }));
       return (
@@ -282,6 +284,7 @@ beforeEach(() => {
   renderer.pause.mockClear();
   renderer.fly.mockClear();
   renderer.fit.mockClear();
+  renderer.zoom.mockClear();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -551,26 +554,37 @@ it('fits visible nodes after settling and changing filters without replacing the
   await screen.findByRole('button', { name: '节点 喜欢徒步' });
   const layout = renderer.current!.graphData;
   act(() => renderer.current!.onEngineStop?.());
-  expect(renderer.fit).toHaveBeenCalledWith(
-    0,
-    expect.any(Number),
-    expect.any(Function),
+  expect(renderer.zoom).toHaveBeenCalledWith(expect.any(Number), 0);
+  const bounds = projectedBounds2D(
+    layout!.nodes,
+    renderer.zoom.mock.lastCall![0],
+    900,
   );
-  expect(renderer.fit.mock.lastCall![1]).toBeGreaterThan(50);
-  renderer.fit.mockClear();
+  expect(
+    Math.max(bounds.right - bounds.left, bounds.bottom - bounds.top),
+  ).toBeCloseTo(500 * 0.85, 1);
+  renderer.zoom.mockClear();
   await userEvent
     .setup()
     .click(screen.getByRole('button', { name: '经历与身份' }));
-  await waitFor(() => expect(renderer.fit).toHaveBeenCalled());
-  const predicate = renderer.fit.mock.lastCall![2] as (
+  await waitFor(() => expect(renderer.zoom).toHaveBeenCalled());
+  const visible = renderer.current!.nodeVisibility as (
     node: MemoryNode,
   ) => boolean;
-  expect(predicate(layout!.nodes.find((node) => node.id === 'item:a')!)).toBe(
+  expect(visible(layout!.nodes.find((node) => node.id === 'item:a')!)).toBe(
     false,
   );
-  expect(predicate(layout!.nodes.find((node) => node.id === 'item:b')!)).toBe(
+  expect(visible(layout!.nodes.find((node) => node.id === 'item:b')!)).toBe(
     true,
   );
+  const filtered = projectedBounds2D(
+    layout!.nodes.filter(visible),
+    renderer.zoom.mock.lastCall![0],
+    900,
+  );
+  expect(
+    Math.max(filtered.right - filtered.left, filtered.bottom - filtered.top),
+  ).toBeCloseTo(500 * 0.85, 1);
   expect(renderer.current!.graphData).toBe(layout);
 });
 
@@ -594,7 +608,14 @@ it('reserves screen space for dimension labels on a narrow 2D canvas', () => {
     />,
   );
   act(() => renderer.current!.onEngineStop?.());
-  expect(renderer.fit.mock.lastCall![1]).toBeGreaterThan(32);
+  const bounds = projectedBounds2D(
+    renderer.current!.graphData!.nodes,
+    renderer.zoom.mock.lastCall![0],
+    320,
+  );
+  expect(
+    Math.max(bounds.right - bounds.left, bounds.bottom - bounds.top),
+  ).toBeCloseTo(320 * 0.85, 1);
   const ctx = {
     save: vi.fn(),
     restore: vi.fn(),

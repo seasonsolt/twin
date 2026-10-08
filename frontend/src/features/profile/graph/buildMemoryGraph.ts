@@ -11,6 +11,7 @@ export interface GraphTwin {
   id: string;
   name: string;
   portrait?: string;
+  avatarPreset?: string | null;
 }
 export interface MemoryNode {
   id: string;
@@ -24,6 +25,7 @@ export interface MemoryNode {
   itemId?: string;
   sourceId?: string;
   portrait?: string;
+  avatarPreset?: string | null;
   date?: string | null;
   x?: number;
   y?: number;
@@ -62,6 +64,7 @@ export function buildMemoryGraph(
       kind: 'twin',
       label: twin.name,
       portrait: twin.portrait,
+      avatarPreset: twin.avatarPreset,
       colorToken: '--graph-center',
       size: 16,
     },

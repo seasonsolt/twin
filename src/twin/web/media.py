@@ -26,7 +26,7 @@ from ..config import Settings, make_synthesizer, make_video_synthesizer
 from ..media.adapters import presentable_from_payload
 from ..media.clip import render_clip
 from ..media.render import EXPORT_CSP, export_html, render_audio
-from ..media.schema import AVATAR_PRESETS, AudioManifest, MediaScript, VoiceSpec
+from ..media.schema import AVATAR_CHOICES, AVATAR_PRESETS, AudioManifest, MediaScript, VoiceSpec
 from ..media.script import script_from_presentable, speech_script
 from ..media.stream import SAMPLE_RATE, frame, stream_audio
 from ..media.tts import (
@@ -106,11 +106,13 @@ def register(
     *,
     jobs: JobManager | None = None,
     name_factory: Callable[[], str] | None = None,
+    avatar_factory: Callable[[], str] | None = None,
 ) -> None:
     """Register under the application's existing security middleware with lazy speech."""
     app.add_middleware(PrivateAudioMiddleware)
     cache_dir = settings.db_path.parent / "media-cache"
     assets = AssetStore(settings.db_path)
+    selected_avatar = avatar_factory or (lambda: settings.avatar.preset)
     synthesizer: SpeechSynthesizer | None = None
     selected_voice: str | None = None
     lock = threading.Lock()
@@ -173,7 +175,8 @@ def register(
 
     @app.get("/api/media/capabilities")
     def capabilities() -> dict[str, Any]:
-        avatar = AVATAR_PRESETS[settings.avatar.preset].model_dump(mode="json")
+        preset = selected_avatar()
+        avatar = AVATAR_PRESETS[preset].model_dump(mode="json")
         avatar_model = (
             {"format": "vrm", "url": "/api/media/avatar.vrm"} if settings.avatar.vrm_path is not None else None
         )
@@ -199,6 +202,8 @@ def register(
         except MediaError as exc:
             return {
                 "avatar": avatar,
+                "avatar_preset": preset,
+                "avatar_presets": AVATAR_CHOICES,
                 "avatar_model": avatar_model,
                 "avatar_image": avatar_image,
                 "video": video_capability,
@@ -210,6 +215,8 @@ def register(
             }
         return {
             "avatar": avatar,
+            "avatar_preset": preset,
+            "avatar_presets": AVATAR_CHOICES,
             "avatar_model": avatar_model,
             "avatar_image": avatar_image,
             "video": video_capability,
@@ -323,9 +330,7 @@ def register(
             private_directory(cache_dir)
             with tempfile.NamedTemporaryFile(dir=cache_dir.parent, suffix=".mp4", delete=False) as output:
                 path = Path(output.name)
-            render_clip(
-                script, speech(), AVATAR_PRESETS[settings.avatar.preset], path, font_path=settings.media.font_path
-            )
+            render_clip(script, speech(), AVATAR_PRESETS[selected_avatar()], path, font_path=settings.media.font_path)
             return FileResponse(
                 path,
                 media_type="video/mp4",

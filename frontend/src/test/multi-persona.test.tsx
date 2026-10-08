@@ -596,7 +596,9 @@ it('keeps the chat page and layout mounted through prefetch and its timeout, wit
   expect(screen.getByRole('textbox', { name: '你说' })).toBe(input);
   expect(input).toHaveAttribute('placeholder', '和朋友聊点什么…');
   expect(view.container.querySelector('.skeleton')).toBeNull();
-  expect(screen.getByRole('img', { name: '朋友的头像' })).toBeInTheDocument();
+  expect(
+    view.container.querySelector('.chat-stage svg[data-preset]'),
+  ).toBeInTheDocument();
   await act(async () => {
     finish(json({ available: false, video: { available: false } }));
   });

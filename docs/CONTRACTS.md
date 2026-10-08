@@ -15,7 +15,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 
 - `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、
   `about: str = ""`、`name_source: Literal["config", "user"] = "config"`、
-  `voice: str | None = None`、`avatar: str | None = None`。预置 ID 从配置填入，不构造媒体后端。
+  `voice: str | None = None`、`avatar: str | None = None`。形象预置 ID 优先来自分身元数据，否则使用该分身的确定性默认（默认分身使用配置）；不构造媒体后端。
 - p_meta 保存 `identity:name` / `identity:about`。Web、API/MCP 身份、聊天与网页生成提示使用保存名，
   缺省回退配置 target_name；说话人匹配增加保存名作为别名，不替换配置名字/别名。
   `PUT /api/identity` 要求 X-Twin: 1，输入 `{name, about}`，去除首尾空白后名字 1–20 字、介绍 ≤200 字。
@@ -27,7 +27,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   保留 `Source.declined_facets`；跨来源的拒绝优先于回答。问卷变化后重建档案并清理对应条目向量。
 - 音色校验仅是后端预置音色的格式与列表检查；2D 形象必须为预置，3D 形象由 `vrm_path` 指定。
 - `twin identity show` 显示名字、别名、预置音色、预置形象与出境表（类型、提供方、主机、本机/外部、声明/推断）。
-  `GET /api/identity` 返回 name/aliases/about/name_source/voice/avatar/egress，不再返回 consents 或 biometric；
+  `GET /api/identity` 返回 name/aliases/about/name_source/voice/avatar/avatar_preset/avatar_presets/egress，不再返回 consents 或 biometric；
   移除 CLI grant/revoke 和 `POST /api/identity/consent`。问卷授权规则不变，关于你页不展示技术覆盖指标。
 
 ## 出境分类（EgressInfo）
@@ -300,12 +300,17 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   `render_audio` attaches the track without reading backend extras. Track time is local to each file.
 - `AvatarSpec` v1 is frozen and forbids extras except ignored legacy labels: `avatar_id`, `palette` (exactly skin/hair/outfit/background/accent, six-digit hex),
   `mouth_states: Literal[4] = 4`, `stylized: Literal[True] = True`. No URL, path or image fields exist.
-  `AVATAR_PRESETS` contains three invented flat palettes: default, ink and dawn.
+  `AVATAR_PRESETS` contains five approved illustrations and their flat palettes: chestnut (栗), wave (澜), bun (禾), stone (石), silver (岚).
+  Legacy default/ink/dawn IDs alias to chestnut in configuration and persisted contracts.
 - `AudioPart.lipsync: LipSyncTrack | None = None` is append-only; old manifests load with null tracks
   and display an idle avatar. HTTP audio segments carry the same nullable track.
-- `Settings.avatar` defaults to `AvatarSettings(preset="default")`; unknown presets produce a Chinese
+- `Settings.avatar` defaults to `AvatarSettings(preset="chestnut")`; unknown presets produce a Chinese
   preset list. Capabilities always include the selected `AvatarSpec`,
-  even when speech is unavailable. `frontend/src/features/avatar/Avatar.tsx` renders inline SVG with no asset inputs.
+  even when speech is unavailable. Identity preserves its string `avatar`; identity and capabilities also expose
+  `avatar_preset` and `avatar_presets: [{id, name}]`. `identity:avatar_preset` metadata overrides the deterministic
+  SHA-256 persona-ID choice (the default persona uses configuration). Manager-only `PUT /api/identity/avatar-preset`
+  saves `{preset: id}` and returns updated identity; unknown IDs return Chinese HTTP 400 errors.
+  `frontend/src/features/avatar/Avatar.tsx` renders the selected inline SVG with group-based blinking and four mouth levels.
   Playback samples the current part by audio time; pause/stop/text-only closes the mouth, close releases
   rAF and blink timers. Reduced motion disables blinking and limits openness to 0/1.
 

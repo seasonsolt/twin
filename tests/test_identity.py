@@ -41,7 +41,7 @@ def test_identity_shape() -> None:
         "name": "测试",
         "aliases": ["别名"],
         "voice": "default",
-        "avatar": "ink",
+        "avatar": "chestnut",
         "about": "",
         "name_source": "config",
     }
@@ -151,7 +151,7 @@ def test_cli_show_is_read_only(settings: Settings, tmp_path: Path) -> None:
     result = runner.invoke(app, [*prefix, "show"])
     assert result.exit_code == 0, result.exception
     assert "名字：测试本人" in result.stdout and "别名：测试别名" in result.stdout
-    assert "音色：default" in result.stdout and "形象：default" in result.stdout
+    assert "音色：default" in result.stdout and "形象：chestnut" in result.stdout
     assert "声明/推断" in result.stdout and "最新决定" not in result.stdout
     assert not settings.db_path.exists()
     for command in ("grant", "revoke"):

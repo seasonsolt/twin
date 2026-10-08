@@ -74,11 +74,13 @@ class ServiceIdentity(BaseModel):
 
 
 def public_identity(settings: Settings) -> ServiceIdentity:
+    from .persona.store import stored_avatar
+
     identity = Identity(
         name=stored_identity(settings.db_path)[0] or settings.target_name,
         aliases=settings.target_aliases,
         voice=settings.tts.voice,
-        avatar=settings.avatar.preset,
+        avatar=stored_avatar(settings.db_path, settings.avatar.preset),
     )
     return ServiceIdentity(name=identity.name, avatar=identity.avatar, voice=identity.voice)
 

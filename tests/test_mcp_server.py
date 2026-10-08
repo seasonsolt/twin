@@ -52,7 +52,7 @@ def test_direct_tools_match_service_contract(chat: PersonaChat) -> None:
     identity = tools.twin_identity()
     assert identity.structuredContent == {
         "name": "张三",
-        "avatar": "default",
+        "avatar": "chestnut",
         "voice": "default",
     }
     assert chat.store.chat_demand() == {}

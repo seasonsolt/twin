@@ -380,7 +380,7 @@ const capabilities = {
 };
 it('renders 2D without loading three when the model is unset, and after a 3D failure', async () => {
   const view = renderView(<AvatarPreview capabilities={capabilities} />);
-  expect(screen.getByRole('img', { name: '风格化插画' })).toBeVisible();
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toBeVisible();
   expect(mocks.load).not.toHaveBeenCalled();
   mocks.unavailable = true;
   view.rerender(
@@ -392,7 +392,7 @@ it('renders 2D without loading three when the model is unset, and after a 3D fai
     />,
   );
   await load();
-  expect(screen.getByRole('img', { name: '风格化插画' })).toBeVisible();
+  expect(screen.getByRole('img', { name: '插画形象：栗' })).toBeVisible();
 });
 
 it('prefers VRM over a portrait and falls back to the portrait after context loss', async () => {
@@ -478,9 +478,7 @@ it.each([
 ] as const)(
   'shows VRM %s metadata in About and restores the fallback (portrait=%s)',
   async (metaVersion, portrait) => {
-    const fallbackName = portrait
-      ? '形象：肖像照片'
-      : '形象：default（风格化形象）';
+    const fallbackName = portrait ? '形象：肖像照片' : '形象：栗（插画形象）';
     if (metaVersion === '0') {
       Object.defineProperty(model, 'meta', {
         value: { metaVersion: '0', title: '配置模型', author: '配置作者' },

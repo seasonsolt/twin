@@ -14,6 +14,8 @@ const mock = vi.hoisted(() => ({
   nodes: null as THREE.Group | null,
   renderer: null as unknown as THREE.WebGLRenderer,
   fit: vi.fn(),
+  camera: null as THREE.PerspectiveCamera | null,
+  position: vi.fn(),
   pause: vi.fn(),
   dispose: vi.fn(),
   lost: vi.fn(),
@@ -58,7 +60,8 @@ vi.mock('react-force-graph-3d', async () => {
         d3ReheatSimulation: vi.fn(),
         resumeAnimation: vi.fn(),
         pauseAnimation: mock.pause,
-        cameraPosition: vi.fn(),
+        camera: () => mock.camera,
+        cameraPosition: mock.position,
         zoomToFit: mock.fit,
       }));
       return <div aria-label="模拟三维图" />;
@@ -166,6 +169,10 @@ beforeEach(() => {
     dispose: mock.dispose,
     forceContextLoss: mock.lost,
   } as unknown as THREE.WebGLRenderer;
+  mock.camera = new THREE.PerspectiveCamera(50, 900 / 500, 0.1, 10000);
+  mock.camera.position.set(0, 150, 600);
+  mock.camera.lookAt(0, 0, 0);
+  mock.position.mockClear();
   mock.fit.mockClear();
   mock.pause.mockClear();
   mock.dispose.mockClear();
@@ -212,7 +219,53 @@ it('includes batched source/item bounds in fitting but keeps screen-sized labels
   mock.scene!.updateMatrixWorld(true);
   expect(new THREE.Box3().setFromObject(mock.nodes!).equals(before)).toBe(true);
   act(() => mock.current!.onEngineStop?.());
-  expect(mock.fit).toHaveBeenCalledWith(500, 50, expect.any(Function));
+  expect(mock.position).toHaveBeenLastCalledWith(
+    expect.any(THREE.Vector3),
+    expect.any(THREE.Vector3),
+    500,
+  );
+});
+
+it('rasterises the chosen preset into the centre canvas texture when there is no photo', async () => {
+  const images: HTMLImageElement[] = [];
+  const NativeImage = Image;
+  vi.stubGlobal(
+    'Image',
+    class {
+      constructor() {
+        const image = new NativeImage();
+        images.push(image);
+        return image;
+      }
+    },
+  );
+  const state = props();
+  state.graph.nodes[0].avatarPreset = 'silver';
+  render(<Graph3D {...state} />);
+  const image = images[0];
+  expect(decodeURIComponent(image.src)).toContain('data-preset="silver"');
+  expect(decodeURIComponent(image.src)).toContain('class="mouth"');
+  Object.defineProperty(image, 'width', { value: 220 });
+  Object.defineProperty(image, 'height', { value: 220 });
+  act(() => image.onload?.(new Event('load')));
+  const center = mock.nodes!.children.find(
+    (node) => node.userData.node.kind === 'twin',
+  )!;
+  const body = center.getObjectByName('body') as THREE.Sprite;
+  const texture = body.material.map as THREE.CanvasTexture;
+  expect(texture.image).toBeInstanceOf(HTMLCanvasElement);
+  const ctx = (texture.image as HTMLCanvasElement).getContext('2d')!;
+  expect(ctx.drawImage).toHaveBeenCalledWith(
+    image,
+    0,
+    0,
+    220,
+    220,
+    14,
+    14,
+    100,
+    100,
+  );
 });
 
 it('does not dispose the WebGL renderer during StrictMode replay, but does dispose on real unmount', async () => {

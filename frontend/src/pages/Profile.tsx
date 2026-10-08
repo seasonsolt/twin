@@ -4,6 +4,8 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Button, Card, Dialog, Skeleton, useConfirm } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { AvatarPreview } from '../features/avatar/AvatarPreview';
+import { AvatarPicker } from '../features/avatar/AvatarPicker';
+import { presetId, presets } from '../features/avatar/presets';
 import { IdentityForm } from '../features/identity/IdentityForm';
 import { useIdentity } from '../features/identity/useIdentity';
 import { SelfAssets } from '../features/assets/SelfAssets';
@@ -215,6 +217,10 @@ export function Profile() {
                   twin={{
                     id: personaId,
                     name: identity.data?.name || current?.name || '分身',
+                    avatarPreset:
+                      identity.data?.avatar_preset ??
+                      identity.data?.avatar ??
+                      current?.avatar_preset,
                     portrait: identity.capabilities?.avatar_image
                       ? personaUrl(
                           identity.capabilities.avatar_image.url ||
@@ -254,7 +260,7 @@ export function Profile() {
                   ? `${modelName}（3D 模型）`
                   : identity.capabilities?.avatar_image
                     ? '肖像照片'
-                    : `${identity.data?.avatar || '未设置'}（风格化形象）`}
+                    : `${presets[presetId(identity.data?.avatar)].name}（插画形象）`}
               </p>
               {identity.avatarError && (
                 <p role="alert" className="text-danger">
@@ -268,6 +274,17 @@ export function Profile() {
                   </Button>
                 </p>
               )}
+              <AvatarPicker
+                key={`avatar-${personaId}`}
+                selected={identity.data?.avatar_preset ?? identity.data?.avatar}
+                collapsed={
+                  !!(
+                    identity.capabilities?.avatar_image ||
+                    identity.capabilities?.avatar_model
+                  )
+                }
+                onSave={identity.savePreset}
+              />
               <RecordingShortcut key={personaId} />
               <SelfAssets />
             </section>

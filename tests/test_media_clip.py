@@ -56,7 +56,7 @@ def font() -> Path:
 
 
 def test_frames_are_deterministic_and_have_no_badge(font: Path) -> None:
-    avatar = AVATAR_PRESETS["default"]
+    avatar = AVATAR_PRESETS["chestnut"]
     hashes = []
     for level in range(4):
         first = clip._draw_frame(avatar, "你好。", level, font, (1280, 720))
@@ -85,7 +85,7 @@ def test_wrap_measures_cjk_characters(font: Path) -> None:
 def test_missing_ffmpeg_is_chinese_and_does_not_synthesize(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(clip.shutil, "which", lambda _: None)
     with pytest.raises(MediaError, match=r"找不到 ffmpeg.*install"):
-        clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["default"], tmp_path / "clip.mp4")
+        clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["chestnut"], tmp_path / "clip.mp4")
     assert not (tmp_path / "media-cache").exists()
 
 
@@ -156,7 +156,7 @@ def test_missing_font_is_chinese(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setattr(clip.shutil, "which", lambda name: "/fake/ffmpeg" if name == "ffmpeg" else None)
     monkeypatch.setattr(clip, "FONT_PATHS", ())
     with pytest.raises(MediaError, match=r"找不到中文字体.*\[media\] font_path"):
-        clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["default"], tmp_path / "clip.mp4")
+        clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["chestnut"], tmp_path / "clip.mp4")
     with pytest.raises(MediaError, match="font_path"):
         clip._font_path(tmp_path / "absent.ttf")
 
@@ -171,14 +171,14 @@ def test_invalid_font_and_excessive_text_fail_before_synthesis(
     invalid.write_bytes(b"not a font")
     with pytest.raises(MediaError, match="无法读取中文字体"):
         clip.render_clip(
-            script(), SilentSynthesizer(), AVATAR_PRESETS["default"], tmp_path / "clip.mp4", font_path=invalid
+            script(), SilentSynthesizer(), AVATAR_PRESETS["chestnut"], tmp_path / "clip.mp4", font_path=invalid
         )
     overlong = script().model_copy(
         update={"segments": [script().segments[0].model_copy(update={"text": "字" * 100_001})]}
     )
     with pytest.raises(MediaInputTooLong, match="过长"):
         clip.render_clip(
-            overlong, SilentSynthesizer(), AVATAR_PRESETS["default"], tmp_path / "clip.mp4", font_path=font
+            overlong, SilentSynthesizer(), AVATAR_PRESETS["chestnut"], tmp_path / "clip.mp4", font_path=font
         )
 
 
@@ -199,7 +199,7 @@ def test_real_ffmpeg_clip(
         return draw(*args, **kwargs)
 
     monkeypatch.setattr(clip, "_draw_frame", capture)
-    result = clip.render_clip(source, SilentSynthesizer(), AVATAR_PRESETS["default"], out, font_path=font)
+    result = clip.render_clip(source, SilentSynthesizer(), AVATAR_PRESETS["chestnut"], out, font_path=font)
     assert frames[0] == (source.segments[0].text, False)
     assert frames[-1] == ("回答依据", True)
     assert result == out and out.stat().st_size > 0
@@ -261,7 +261,7 @@ def test_unknown_duration_and_lipsync(
 
     monkeypatch.setattr(clip, "_draw_frame", capture)
     clip.render_clip(
-        script(), UnknownDuration(), AVATAR_PRESETS["ink"], tmp_path / "small.mp4", font_path=font, size=(640, 360)
+        script(), UnknownDuration(), AVATAR_PRESETS["chestnut"], tmp_path / "small.mp4", font_path=font, size=(640, 360)
     )
     assert levels and set(levels) == ({0, 1, 2, 3} if has_lipsync else {0})
     assert levels[0] == levels[-1] == 0
@@ -276,7 +276,7 @@ def test_ffmpeg_failure_does_not_echo_stderr(font: Path, tmp_path: Path, monkeyp
     out = tmp_path / "clip.mp4"
     out.write_bytes(b"previous output")
     with pytest.raises(MediaError, match="视频合成失败") as error:
-        clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["default"], out, font_path=font)
+        clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["chestnut"], out, font_path=font)
     assert "PRIVATE" not in str(error.value)
     assert error.value.__suppress_context__
     assert out.read_bytes() == b"previous output"
@@ -285,7 +285,7 @@ def test_ffmpeg_failure_does_not_echo_stderr(font: Path, tmp_path: Path, monkeyp
 
 def fake_clip(source: MediaScript, synth: Any, avatar: AvatarSpec, out: Path, **kwargs: Any) -> Path:
     assert source.source_fingerprint == script().source_fingerprint
-    assert avatar == AVATAR_PRESETS["ink"]
+    assert avatar == AVATAR_PRESETS["chestnut"]
     assert kwargs["font_path"] == "/configured/font.ttc"
     out.write_bytes(b"fake mp4")
     return out

@@ -105,7 +105,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # command 必须配置；host 省略或为空时本机执行并复制输出，否则使用 SSH/scp；出境声明与契约见 docs/MEDIA.md
 
 # [avatar] # 2D 预置形象；或用 vrm_path 指定 3D 模型。
-# preset = "default" # 可选 default、ink、dawn。
+# preset = "chestnut" # 可选 chestnut（栗）、wave（澜）、bun（禾）、stone（石）、silver（岚）。
 
 # 可选 [tts] / [asr] 配置见 docs/MEDIA.md；下面为可取消注释的配置节。
 # [tts]
@@ -472,12 +472,14 @@ app.add_typer(identity_app, name="identity")
 @identity_app.command("show")
 def identity_show(ctx: typer.Context) -> None:
     """查看名字、别名、预置音色、预置形象与出境分类。"""
+    from .persona.store import stored_avatar
+
     settings = _settings(ctx)
     identity = Identity(
         name=settings.target_name,
         aliases=settings.target_aliases,
         voice=settings.tts.voice,
-        avatar=settings.avatar.preset,
+        avatar=stored_avatar(settings.db_path, settings.avatar.preset),
     )
     _say(f"名字：{identity.name}")
     _say(f"别名：{'、'.join(identity.aliases) or '—'}")
@@ -803,6 +805,7 @@ def media_clip_command(
     from .media.clip import render_clip
     from .media.schema import AVATAR_PRESETS
     from .media.tts import MediaError
+    from .persona.store import stored_avatar
 
     with _errors():
         try:
@@ -816,7 +819,11 @@ def media_clip_command(
             raise _fail("语音未配置或不可用，请检查 [tts] 配置和密钥环境变量") from None
         try:
             render_clip(
-                script, synthesizer, AVATAR_PRESETS[settings.avatar.preset], out, font_path=settings.media.font_path
+                script,
+                synthesizer,
+                AVATAR_PRESETS[stored_avatar(settings.db_path, settings.avatar.preset)],
+                out,
+                font_path=settings.media.font_path,
             )
         except MediaError as exc:
             raise _fail(str(exc)) from None

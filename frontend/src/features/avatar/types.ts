@@ -11,6 +11,8 @@ export interface Capabilities {
   video?: { available: boolean; asset_key?: string };
   backend: string | null;
   avatar?: AvatarSpec;
+  avatar_preset?: string;
+  avatar_presets?: { id: string; name: string }[];
   avatar_model?: { format: 'vrm'; url: string } | null;
   avatar_image?: { url: string } | null;
   error?: string;

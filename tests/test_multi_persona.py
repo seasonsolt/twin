@@ -23,7 +23,7 @@ from twin.config import AvatarSettings, Settings, TTSSettings, VideoSettings, ma
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import Segment
-from twin.media.schema import MediaScript, VideoResult, VoiceSpec
+from twin.media.schema import AVATAR_PRESETS, MediaScript, VideoResult, VoiceSpec, default_avatar
 from twin.media.tts import MediaUnavailable, SilentSynthesizer
 from twin.persona.items import PersonaItem
 from twin.persona.store import PersonaStore
@@ -78,6 +78,36 @@ def registry(web: TestClient) -> Personas:
     return web.app.state.personas  # type: ignore[union-attr,no-any-return]
 
 
+def test_persona_avatar_defaults_and_preset_update(web: TestClient) -> None:
+    a, b = create(web), create(web)
+    for persona in (a, b):
+        expected = default_avatar(persona)
+        assert expected in AVATAR_PRESETS
+        assert web.get("/api/identity", headers=headers(persona)).json()["avatar"] == expected
+        assert web.get("/api/media/capabilities", headers=headers(persona)).json()["avatar"]["avatar_id"] == expected
+        fresh = registry(web).settings_for(persona)
+        assert fresh.avatar.preset == expected
+    before = web.get("/api/identity", headers=headers(b)).json()["avatar"]
+    selected = web.put("/api/identity/avatar-preset", json={"preset": "silver"}, headers=headers(a))
+    assert selected.status_code == 200
+    assert selected.json()["avatar"] == selected.json()["avatar_preset"] == "silver"
+    assert len(selected.json()["avatar_presets"]) == 5
+    with PersonaStore(registry(web).settings_for(a).db_path) as store:
+        assert store.get_meta("identity:avatar_preset") == "silver"
+    assert (
+        web.get("/api/media/capabilities", headers=headers(a)).json()["avatar"] == AVATAR_PRESETS["silver"].model_dump()
+    )
+    assert web.get("/api/identity", headers=headers(b)).json()["avatar"] == before
+    assert web.get("/api/identity").json()["avatar"] == "chestnut"
+    invalid = web.put("/api/identity/avatar-preset", json={"preset": "absent"}, headers=headers(a))
+    assert invalid.status_code == 400 and "形象仅支持预置" in invalid.json()["detail"]
+    assert web.get("/api/identity", headers=headers(a)).json()["avatar"] == "silver"
+    with PersonaStore(registry(web).settings_for(a).db_path) as store:
+        store.set_meta("identity:avatar_preset", "ink")
+    assert web.get("/api/identity", headers=headers(a)).json()["avatar"] == "chestnut"
+    assert web.put("/api/identity/avatar-preset", json={"preset": "wave"}).status_code == 403
+
+
 def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: Path) -> None:
     resolved = registry(web).settings_for("default")
     assert resolved.db_path == tmp_path / "old-name.db"
@@ -90,6 +120,7 @@ def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: 
         "owner": None,
         "name": "原主人",
         "avatar_url": None,
+        "avatar_preset": "chestnut",
         "sources": 0,
         "created_at": entries[0]["created_at"],
         "is_default": True,

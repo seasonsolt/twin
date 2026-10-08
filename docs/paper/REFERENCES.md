@@ -11,7 +11,8 @@ so the repository keeps links and notes, not the files.
 | Paper | Notes |
 | --- | --- |
 | Park et al., *LLM Agents Grounded in Self-Reports Enable General-Purpose Simulation of Individuals*, arXiv:2411.10109 (v3) | [PARK_NOTES.md](PARK_NOTES.md) |
-| Wei et al., *AI-native Memory 2.0: Second Me*, arXiv:2503.08102 | Not yet read from the PDF; to be uploaded |
+| Wei et al., *AI-native Memory 2.0: Second Me*, arXiv:2503.08102 (v2) | [SECONDME_NOTES.md](SECONDME_NOTES.md) |
+| Shang et al., *AI-native Memory: A Pathway from LLMs Towards AGI*, arXiv:2406.18312 (LPM 1.0) | Cited by Second Me; not yet read |
 
 ## A. Simulating specific real people (closest to our claim)
 

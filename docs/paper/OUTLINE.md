@@ -2,8 +2,8 @@
 
 Working draft. Numbers marked **[have]** come from runs already documented in
 [COMPARISON.md](../COMPARISON.md); numbers marked **[todo]** need new runs before submission.
-The summary of Second Me (arXiv:2503.08102) below is from memory and must be checked
-against the paper before any sentence about it is written.
+Statements about Second Me (arXiv:2503.08102) and Park et al. (arXiv:2411.10109) are checked against the
+PDFs; see [SECONDME_NOTES.md](SECONDME_NOTES.md) and [PARK_NOTES.md](PARK_NOTES.md).
 
 ---
 
@@ -85,6 +85,11 @@ The upgrade ablation, already run on the author's own data **[have]**.
   from retrieval, LoRA for style only), 1024 → 8192 context, per-embedding-model retrieval
   thresholds.
 - Same 59-question set, same judge script (`judge.py`), judge `gpt-6.1-sol`.
+- **[todo]** Add the paper's own configuration, Qwen2.5-7B-Instruct with SFT + DPO; the 0.5B run is the
+  released default, not what arXiv:2503.08102 evaluated (see [SECONDME_NOTES.md](SECONDME_NOTES.md)).
+- Explain why Second Me's reported scores did not reveal these gaps: its correctness rubric only
+  penalizes conflict with records, it has no unanswerable questions, and its test set is synthesized by
+  the training pipeline.
 
 | Metric | Original (0.5B) | Upgraded (1.7B) |
 | --- | --- | --- |

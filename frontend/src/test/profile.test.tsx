@@ -48,7 +48,8 @@ beforeEach(() => {
   usePersonas.setState({ id: 'friend', items, pendingId: null });
   useAuth.setState({ identity: null });
   useStatus.setState({ data: null, error: null });
-  window.location.hash = '#/profile?section=memories';
+  window.location.hash = '#/profile';
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
   fetcher = vi.fn(async (path: string, init?: RequestInit) => {
     const id = new Headers(init?.headers).get('X-Twin-Persona');
     const persona = items.find((item) => item.id === id) ?? items[0];
@@ -74,6 +75,7 @@ beforeEach(() => {
         egress: [],
       });
     if (path === '/api/media/capabilities') return json({ available: false });
+    if (path === '/api/channels') return json({ wecom: null });
     if (path === '/api/me/assets')
       return json({
         portrait: null,
@@ -113,22 +115,36 @@ afterEach(() => {
   Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
 });
 
-it('renders overview, memories, assets, speaker confirmation, and identity editing in one profile', async () => {
-  render(<App />);
+it('renders only overview by default, keeps the header, and supports section links and identity editing', async () => {
+  const view = render(<App />);
   await screen.findByRole('heading', { name: '我了解到的他' });
-  expect(screen.getByRole('article')).toHaveTextContent('访谈录音');
-  expect(screen.getByRole('region', { name: '概览' })).toHaveTextContent(
-    '有 1 段录音需要确认哪位是你',
+  const panel = screen.getByRole('tabpanel', { name: '概览' });
+  expect(panel).toHaveTextContent('删除这个分身');
+  const nav = screen.getByRole('tablist', { name: '档案章节' });
+  expect(
+    within(nav)
+      .getAllByRole('tab')
+      .map((tab) => tab.textContent),
+  ).toEqual(['概览', '记忆', '形象和声音', '接入']);
+  expect(within(nav).getByRole('tab', { name: '概览' })).toHaveAttribute(
+    'aria-selected',
+    'true',
   );
-  expect(screen.getByRole('region', { name: '形象和声音' })).toHaveTextContent(
-    '预置音色',
+  expect(screen.queryByText('企业微信')).toBeNull();
+  expect(screen.queryByText('预置音色')).toBeNull();
+  expect(screen.queryByRole('article')).toBeNull();
+  const header = view.container.querySelector('.stage-header');
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole('link', { name: '有 1 段录音需要确认哪位是你' }),
   );
-  const nav = screen.getByRole('navigation', { name: '档案章节' });
-  expect(within(nav).getAllByRole('link')).toHaveLength(3);
-  expect(within(nav).getByRole('link', { name: '记忆' })).toHaveAttribute(
-    'aria-current',
-    'location',
+  await screen.findByRole('article');
+  expect(screen.getByRole('tabpanel', { name: '记忆' })).toHaveTextContent(
+    '访谈录音',
   );
+  expect(screen.queryByRole('heading', { name: '我了解到的他' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '删除这个分身' })).toBeNull();
+  expect(view.container.querySelector('.stage-header')).toBe(header);
   expect(screen.queryByRole('textbox', { name: '名字' })).toBeNull();
   await userEvent.setup().click(screen.getByRole('button', { name: '编辑' }));
   expect(
@@ -137,7 +153,7 @@ it('renders overview, memories, assets, speaker confirmation, and identity editi
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('朋友');
 });
 
-it.each(['overview', 'memories', 'assets'])(
+it.each(['overview', 'memories', 'assets', 'channels'])(
   'keeps the mobile profile and %s section mounted when switching twins',
   async (section) => {
     vi.stubGlobal(
@@ -156,7 +172,7 @@ it.each(['overview', 'memories', 'assets'])(
       view.container.querySelectorAll('button[aria-label="切换分身"]'),
     ).toHaveLength(1);
     const page = view.container.querySelector('.profile-page');
-    const memorySection = view.container.querySelector('#profile-memories');
+    const panel = view.container.querySelector(`#profile-${section}`);
     const user = userEvent.setup();
     await user.click(switcher);
     await user.click(
@@ -166,9 +182,8 @@ it.each(['overview', 'memories', 'assets'])(
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(window.location.hash).toBe(`#/profile?section=${section}`);
     expect(view.container.querySelector('.profile-page')).toBe(page);
-    expect(view.container.querySelector('#profile-memories')).toBe(
-      memorySection,
-    );
+    expect(view.container.querySelector(`#profile-${section}`)).toBe(panel);
+    expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
     expect(
       view.container.querySelectorAll('button[aria-label="切换分身"]'),
     ).toHaveLength(1);
@@ -180,46 +195,84 @@ it.each(['overview', 'memories', 'assets'])(
   },
 );
 
-it('updates the active anchor and deep link on scroll without remounting content', async () => {
+it('switches panels with pointer and arrow keys, resets scroll, and never scroll-spies', async () => {
   const view = render(<App />);
-  const nav = await screen.findByRole('navigation', { name: '档案章节' });
-  const bounds = (top: number) => ({
-    top,
-    bottom: top + 64,
-    left: 0,
-    right: 400,
-    width: 400,
-    height: 64,
-    x: 0,
-    y: top,
-    toJSON: () => ({}),
-  });
-  vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue(bounds(0));
-  vi.spyOn(
-    view.container.querySelector('#profile-overview')!,
-    'getBoundingClientRect',
-  ).mockReturnValue(bounds(-800));
-  vi.spyOn(
-    view.container.querySelector('#profile-memories')!,
-    'getBoundingClientRect',
-  ).mockReturnValue(bounds(-400));
-  vi.spyOn(
-    view.container.querySelector('#profile-assets')!,
-    'getBoundingClientRect',
-  ).mockReturnValue(bounds(70));
+  const nav = await screen.findByRole('tablist', { name: '档案章节' });
+  const user = userEvent.setup();
+  await user.click(within(nav).getByRole('tab', { name: '形象和声音' }));
+  expect(window.location.hash).toBe('#/profile?section=assets');
+  expect(
+    screen.getByRole('tabpanel', { name: '形象和声音' }),
+  ).toHaveTextContent('预置音色');
+  expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0 });
+  within(nav).getByRole('tab', { name: '形象和声音' }).focus();
+  await user.keyboard('{ArrowRight}');
+  expect(window.location.hash).toBe('#/profile?section=channels');
+  expect(
+    await screen.findByRole('tabpanel', { name: '接入' }),
+  ).toHaveTextContent('企业微信');
+  expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
   act(() => fireEvent.scroll(window));
+  expect(window.location.hash).toBe('#/profile?section=channels');
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['overview', '概览'],
+  ['memories', '记忆'],
+  ['assets', '形象和声音'],
+  ['channels', '接入'],
+  ['unknown', '概览'],
+])(
+  'opens only the selected panel from the %s deep link',
+  async (section, title) => {
+    window.location.hash = `#/profile?section=${section}`;
+    const view = render(<App />);
+    const panel = await screen.findByRole('tabpanel', { name: title });
+    const nav = screen.getByRole('tablist', { name: '档案章节' });
+    const tab = within(nav).getByRole('tab', { name: title });
+    expect(tab).toHaveAttribute('aria-selected', 'true');
+    expect(tab).toHaveAttribute('aria-controls', panel.id);
+    expect(panel).toHaveAttribute('aria-labelledby', tab.id);
+    expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
+    if (section === 'channels') {
+      expect(within(panel).getByRole('button', { name: '绑定' })).toBeVisible();
+      expect(
+        within(panel).getByRole('heading', { name: '接入', level: 2 }),
+      ).toBeVisible();
+    }
+  },
+);
+
+it('mounts polling components only in their selected panel and aborts them when leaving', async () => {
+  render(<App />);
+  await screen.findByRole('heading', { name: '我了解到的他' });
+  expect(
+    fetcher.mock.calls.some(
+      ([path]) =>
+        path === '/api/channels' || path === '/api/persona/processing',
+    ),
+  ).toBe(false);
+  const nav = screen.getByRole('tablist', { name: '档案章节' });
+  const user = userEvent.setup();
+  await user.click(within(nav).getByRole('tab', { name: '接入' }));
   await waitFor(() =>
-    expect(window.location.hash).toBe('#/profile?section=assets'),
+    expect(fetcher.mock.calls.some(([path]) => path === '/api/channels')).toBe(
+      true,
+    ),
   );
-  expect(within(nav).getByRole('link', { name: '形象和声音' })).toHaveAttribute(
-    'aria-current',
-    'location',
-  );
-  await userEvent
-    .setup()
-    .click(within(nav).getByRole('link', { name: '记忆' }));
-  expect(window.location.hash).toBe('#/profile?section=memories');
-  expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  const channelRequest = fetcher.mock.calls.find(
+    ([path]) => path === '/api/channels',
+  )![1]!;
+  await user.click(within(nav).getByRole('tab', { name: '记忆' }));
+  expect(channelRequest.signal?.aborted).toBe(true);
+  await screen.findByRole('article');
+  const memoryRequest = fetcher.mock.calls.find(
+    ([path]) => path === '/api/persona/processing',
+  )![1]!;
+  await user.click(within(nav).getByRole('tab', { name: '概览' }));
+  expect(memoryRequest.signal?.aborted).toBe(true);
+  expect(screen.queryByRole('article')).toBeNull();
 });
 
 it('protects the default twin and confirms deletion before clearing only the deleted twin and returning to all twins', async () => {
@@ -270,7 +323,7 @@ it('keeps the profile and reports a blocked deletion without clearing local data
   expect(await screen.findByRole('alert')).toHaveTextContent(
     '这个分身还有任务在运行',
   );
-  expect(window.location.hash).toBe('#/profile?section=memories');
+  expect(window.location.hash).toBe('#/profile');
   expect(sessionStorage.getItem(personaKey(CHAT_KEY, 'friend'))).toBe(
     'private',
   );

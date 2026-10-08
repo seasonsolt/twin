@@ -9,16 +9,22 @@ import { LayoutScope } from '../motion';
 export function Tabs({
   items,
   defaultValue,
+  scrollable = false,
 }: {
   items: {
     value: string;
-    label: string;
+    label: ReactNode;
     content: ReactNode;
     disabled?: boolean;
   }[];
   defaultValue?: string;
+  scrollable?: boolean;
 }) {
-  const [value, setValue] = useState(defaultValue ?? items[0]?.value);
+  const [selected, setValue] = useState(defaultValue ?? items[0]?.value);
+  const value = items.some((item) => item.value === selected)
+    ? selected
+    : (items.find((item) => item.value === defaultValue)?.value ??
+      items[0]?.value);
   const { reduced, transition } = useMotionPreset('layout');
   const id = useId();
   return (
@@ -26,14 +32,18 @@ export function Tabs({
       <TabsPrimitive.Root value={value} onValueChange={setValue}>
         <TabsPrimitive.List
           aria-label="内容分类"
-          className="mb-4 inline-flex gap-1 rounded-full border border-border bg-soft p-1"
+          className={`mb-4 gap-1 rounded-full border border-border bg-soft p-1 ${
+            scrollable ? 'flex w-full min-w-0 overflow-x-auto' : 'inline-flex'
+          }`}
         >
           {items.map((item) => (
             <TabsPrimitive.Trigger
               key={item.value}
               value={item.value}
               disabled={item.disabled}
-              className="relative min-h-11 rounded-full px-4 py-1.5 text-secondary data-[state=active]:text-canvas disabled:opacity-40"
+              className={`relative min-h-11 rounded-full px-4 py-1.5 text-secondary data-[state=active]:text-canvas disabled:opacity-40 ${
+                scrollable ? 'shrink-0 whitespace-nowrap' : ''
+              }`}
             >
               {value === item.value && (
                 <motion.span

@@ -44,7 +44,8 @@ it('always shows an unbound channel and follows the persona API helper', async (
   vi.stubGlobal('fetch', fetcher);
   renderChannels();
   await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
-  expect(screen.getByText('接入')).toBeVisible();
+  expect(screen.getByText('企业微信')).toBeVisible();
+  expect(screen.queryByRole('heading', { name: '接入' })).toBeNull();
   expect(screen.getByText('让同事在企业微信里单聊或 @ 这个分身')).toBeVisible();
   expect(screen.getByRole('button', { name: '绑定' })).toBeVisible();
   expect(fetcher.mock.calls[0][0]).toBe('/api/channels');
@@ -69,7 +70,10 @@ it.each([
     expect(screen.getByText('企业微信')).toBeVisible();
     expect(screen.getByText('aibTest')).toHaveClass('font-mono');
     expect(
-      screen.getByText('接入').parentElement?.querySelector('[aria-hidden]'),
+      screen
+        .getByText('企业微信')
+        .closest('section')
+        ?.querySelector('[aria-hidden]'),
     ).toHaveClass(tone);
   },
 );

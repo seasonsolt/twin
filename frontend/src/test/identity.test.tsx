@@ -106,7 +106,7 @@ const setup = () =>
 it('edits name/about in a dialog and saves with X-Twin, previews a closed-mouth avatar and names external services plainly', async () => {
   setup();
   await screen.findByRole('heading', { name: identity.name });
-  expect(screen.getByText('预置音色')).toBeVisible();
+  expect(screen.queryByText('预置音色')).toBeNull();
   expect(screen.getByText('朗读：speech.test')).toBeVisible();
   expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
   const avatar = await screen.findByRole('img', { name: '风格化插画' });
@@ -204,6 +204,7 @@ it('keeps identity editable when the preview fails and supports retry', async ()
   failAvatar = true;
   setup();
   await screen.findByRole('heading', { name: identity.name });
+  fireEvent.click(screen.getByRole('tab', { name: '形象和声音' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('预览暂不可用');
   failAvatar = false;
   fireEvent.click(screen.getByRole('button', { name: '重试预览' }));

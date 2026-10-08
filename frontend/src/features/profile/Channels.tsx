@@ -95,7 +95,6 @@ export function Channels() {
 
   return (
     <Card className="p-4 md:p-6">
-      <h3 className="mb-3 text-md font-semibold md:text-lg">接入</h3>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">企业微信</span>
         <div className="flex min-w-0 flex-1 basis-full items-center gap-2 sm:basis-auto">

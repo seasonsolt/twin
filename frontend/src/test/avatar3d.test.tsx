@@ -526,7 +526,7 @@ it.each([
     );
     renderView(
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/profile']}>
+        <MemoryRouter initialEntries={['/profile?section=assets']}>
           <Profile />
         </MemoryRouter>
       </ConfirmProvider>,

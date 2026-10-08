@@ -13,11 +13,11 @@ from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
@@ -58,6 +58,18 @@ class ReviewBody(BaseModel):
     status: ReviewStatus
     statement: str | None = Field(default=None, max_length=1000)
     note: str = Field(default="", max_length=1000)
+
+
+class BatchReviewBody(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=500)
+    status: Literal["confirmed"]
+
+    @field_validator("item_ids")
+    @classmethod
+    def unique_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("档案条目不能重复")
+        return value
 
 
 class ChatBody(BaseModel):
@@ -386,6 +398,20 @@ def register(
             item = store.get_item(item_id)
         assert item is not None
         return item_view(item)
+
+    @app.post("/api/persona/items/review-batch")
+    def review_batch(body: BatchReviewBody) -> dict[str, int]:
+        review = PReview(
+            status=ReviewStatus.CONFIRMED,
+            note="",
+            reviewed_at=dt.datetime.now().isoformat(timespec="seconds"),
+        )
+        with open_store() as store:
+            try:
+                store.set_reviews(body.item_ids, review)
+            except KeyError as e:
+                raise HTTPException(404, f"找不到档案条目 {e.args[0]}（可能已在重新构建时合并）") from e
+        return {"updated": len(body.item_ids)}
 
     @app.get("/api/persona/coverage")
     def get_coverage(as_of: str | None = None) -> dict[str, Any]:

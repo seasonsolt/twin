@@ -1,4 +1,14 @@
-import { Button, Card, EmptyState, Skeleton } from '../../components/ui';
+import { useState } from 'react';
+import {
+  Button,
+  Card,
+  EmptyState,
+  Skeleton,
+  Tabs,
+  useConfirm,
+} from '../../components/ui';
+import { usePersonaId } from '../../lib/usePersonaState';
+import type { ProfileItem } from './types';
 import { ItemCard } from './ItemCard';
 import { useProfile } from './useProfile';
 import { useStatus } from '../../stores/status';
@@ -35,8 +45,93 @@ const backendNames: Record<string, string> = {
   judge: '回答检查',
 };
 
+function DimensionItems({
+  items,
+  profile,
+}: {
+  items: ProfileItem[];
+  profile: ReturnType<typeof useProfile>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const confirm = useConfirm();
+  const unreviewed = items.filter((item) => item.review === 'unreviewed');
+  const confirmAll = async () => {
+    if (
+      await confirm({
+        title: `确认这 ${unreviewed.length} 条？`,
+        body: '确认后，分身回答时会优先依据它们。可以随时逐条撤销。',
+        confirmLabel: '全部确认',
+      })
+    )
+      await profile.confirmItems(unreviewed);
+  };
+  return (
+    <div className="space-y-2 md:space-y-3">
+      {unreviewed.length > 0 && (
+        <div className="flex justify-end">
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={profile.batchBusy}
+            disabled={
+              profile.pending.size > 0 ||
+              profile.loading ||
+              !!profile.itemsError
+            }
+            onClick={() => void confirmAll()}
+          >
+            全部确认（{unreviewed.length}）
+          </Button>
+        </div>
+      )}
+      {(expanded ? items : items.slice(0, 5)).map((item) => (
+        <ItemCard
+          key={item.item_id}
+          item={item}
+          pending={profile.pending.has(item.item_id)}
+          onReview={profile.review}
+          kindLabels={profile.coverage?.kind_labels ?? {}}
+        />
+      ))}
+      {items.length > 5 && (
+        <Button
+          variant="ghost"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? '收起' : `展开其余 ${items.length - 5} 条`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function Overview() {
+  const personaId = usePersonaId();
   const profile = useProfile(true);
+  const dimensions = Object.entries(topics)
+    .map(([id, title]) => {
+      const items = profile.items.filter(
+        (item) => item.dimension_id === id && item.review !== 'rejected',
+      );
+      return {
+        id,
+        title,
+        items,
+        unreviewed: items.filter((item) => item.review === 'unreviewed').length,
+      };
+    })
+    .filter((dimension) => dimension.items.length > 0);
+  const total = dimensions.reduce(
+    (sum, dimension) => sum + dimension.items.length,
+    0,
+  );
+  const unreviewed = dimensions.reduce(
+    (sum, dimension) => sum + dimension.unreviewed,
+    0,
+  );
+  const defaultDimension =
+    dimensions.find((dimension) => dimension.unreviewed > 0) ?? dimensions[0];
   const status = useStatus((state) => state.data);
   const wanted = [
     ...new Set(
@@ -79,33 +174,33 @@ export function Overview() {
             </a>
           </EmptyState>
         )}
-        {Object.entries(topics).map(([id, title]) => {
-          const items = profile.items.filter(
-            (item) => item.dimension_id === id && item.review !== 'rejected',
-          );
-          return (
-            items.length > 0 && (
-              <section
-                key={id}
-                className="mt-3 space-y-2 md:mt-5 md:space-y-3"
-                aria-label={title}
-              >
-                <h4 className="text-sm font-semibold text-secondary">
-                  {title}
-                </h4>
-                {items.map((item) => (
-                  <ItemCard
-                    key={item.item_id}
-                    item={item}
-                    pending={profile.pending.has(item.item_id)}
-                    onReview={profile.review}
-                    kindLabels={profile.coverage?.kind_labels ?? {}}
-                  />
-                ))}
-              </section>
-            )
-          );
-        })}
+        {dimensions.length > 0 && (
+          <div className="min-w-0">
+            <p className="mb-3 text-sm text-secondary">
+              共 {total} 条，其中 {unreviewed} 条待你确认
+            </p>
+            <Tabs
+              key={personaId}
+              scrollable
+              defaultValue={defaultDimension.id}
+              items={dimensions.map(({ id, title, items, unreviewed }) => ({
+                value: id,
+                label: (
+                  <>
+                    {title} {items.length}
+                    {unreviewed > 0 && (
+                      <span className="ml-1 text-xs opacity-70">
+                        {' · '}
+                        {unreviewed} 待确认
+                      </span>
+                    )}
+                  </>
+                ),
+                content: <DimensionItems items={items} profile={profile} />,
+              }))}
+            />
+          </div>
+        )}
       </Card>
       <Card className="p-4 md:p-6">
         <h3 className="mb-3 text-md font-semibold md:text-lg">还想多了解</h3>

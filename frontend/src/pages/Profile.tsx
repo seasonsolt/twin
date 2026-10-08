@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Button, Card, Dialog, Skeleton, useConfirm } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
@@ -19,6 +20,7 @@ const sections = [
   { id: 'overview', title: '概览' },
   { id: 'memories', title: '记忆' },
   { id: 'assets', title: '形象和声音' },
+  { id: 'channels', title: '接入' },
 ] as const;
 type Section = (typeof sections)[number]['id'];
 
@@ -34,14 +36,10 @@ export function Profile() {
   const requested = params.get('section');
   const section: Section =
     sections.find((item) => item.id === requested)?.id ?? 'overview';
-  const [active, setActive] = useState<Section>(section);
   const [editing, setEditing] = usePersonaState(false);
   const [speakerCount, setSpeakerCount] = usePersonaState(0);
   const [busy, setBusy] = usePersonaState(false);
   const [error, setError] = usePersonaState('');
-  const fromScroll = useRef(false);
-  const nav = useRef<HTMLElement>(null);
-  const content = useRef<HTMLDivElement>(null);
   const modelUrl = identity.capabilities?.avatar_model?.url;
   const [model, setModel] = useState<{ url?: string; name: string | null }>({
     name: null,
@@ -51,66 +49,25 @@ export function Profile() {
     [modelUrl],
   );
   const modelName = modelUrl && model.url === modelUrl ? model.name : null;
-  const jump = useCallback((id: Section) => {
-    content.current
-      ?.querySelector<HTMLElement>(`#profile-${id}`)
-      ?.scrollIntoView?.({ block: 'start', behavior: 'instant' });
-    setActive(id);
-  }, []);
   useEffect(() => {
-    if (fromScroll.current) {
-      fromScroll.current = false;
-      return;
-    }
-    if (!requested) {
-      setActive('overview');
-      return;
-    }
-    jump(section);
-    const observer = new ResizeObserver(() => jump(section));
-    if (content.current) observer.observe(content.current);
-    const unpin = () => observer.disconnect();
-    window.addEventListener('wheel', unpin, { passive: true });
-    window.addEventListener('pointerdown', unpin, { passive: true });
-    window.addEventListener('keydown', unpin);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('wheel', unpin);
-      window.removeEventListener('pointerdown', unpin);
-      window.removeEventListener('keydown', unpin);
-    };
-  }, [requested, section, jump]);
+    window.scrollTo({ top: 0 });
+  }, [section]);
   useEffect(() => {
-    const spy = () => {
-      const threshold =
-        (nav.current?.getBoundingClientRect().bottom ?? 64) + 16;
-      let next: Section = 'overview';
-      let nearest = -Infinity;
-      for (const item of sections) {
-        const top = content.current
-          ?.querySelector(`#profile-${item.id}`)
-          ?.getBoundingClientRect().top;
-        if (
-          top !== undefined &&
-          top <= threshold &&
-          (top > nearest || (top === nearest && item.id === requested))
-        ) {
-          next = item.id;
-          nearest = top;
-        }
-      }
-      setActive(next);
-      if (requested !== next) {
-        fromScroll.current = true;
-        setParams(
-          { section: next },
-          { replace: true, preventScrollReset: true },
-        );
-      }
-    };
-    window.addEventListener('scroll', spy, { passive: true });
-    return () => window.removeEventListener('scroll', spy);
-  }, [requested, setParams]);
+    if (section !== 'overview') return;
+    const controller = new AbortController();
+    void api<{ status: string }[]>('/api/persona/sources', {
+      signal: controller.signal,
+      headers: { 'X-Twin-Persona': personaId },
+    })
+      .then((rows) => {
+        if (!controller.signal.aborted)
+          setSpeakerCount(
+            rows.filter((row) => row.status === 'needs_speaker').length,
+          );
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [section, personaId, setSpeakerCount]);
   const remove = async () => {
     if (!current || current.is_default || busy) return;
     const deleting = current;
@@ -138,7 +95,13 @@ export function Profile() {
     }
   };
   return (
-    <div className="profile-page">
+    <TabsPrimitive.Root
+      className="profile-page"
+      value={section}
+      onValueChange={(value) =>
+        setParams({ section: value }, { replace: true })
+      }
+    >
       <StageHeader
         variant="expanded"
         name={identity.data?.name}
@@ -169,95 +132,128 @@ export function Profile() {
           </p>
         }
       />
-      <nav ref={nav} aria-label="档案章节" className="profile-section-nav">
-        {sections.map((item) => (
-          <a
-            key={item.id}
-            href={`#/profile?section=${item.id}`}
-            aria-current={active === item.id ? 'location' : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              fromScroll.current = false;
-              setParams({ section: item.id });
-              jump(item.id);
-            }}
-          >
-            {item.title}
-          </a>
-        ))}
-      </nav>
-      <div ref={content} className="profile-content page-content space-y-6">
-        <section
-          id="profile-overview"
-          className="profile-section space-y-4"
-          aria-label="概览"
-        >
-          <h2 className="text-xl font-semibold">概览</h2>
-          {speakerCount > 0 && (
-            <a
-              className="speaker-banner block rounded-xl bg-note p-4 text-primary"
-              href="#/profile?section=memories"
+      <TabsPrimitive.List asChild>
+        <nav aria-label="档案章节" className="profile-section-nav">
+          {sections.map((item) => (
+            <TabsPrimitive.Trigger
+              key={item.id}
+              value={item.id}
+              aria-controls={`profile-${item.id}`}
+              asChild
             >
-              有 {speakerCount} 段录音需要确认哪位是你
-            </a>
-          )}
-          <Overview />
-          <Channels />
-        </section>
-        <section
-          id="profile-memories"
-          className="profile-section space-y-4"
-          aria-label="记忆"
-        >
-          <h2 className="text-xl font-semibold">记忆</h2>
-          <Memories profile onSpeakerCount={setSpeakerCount} />
-        </section>
-        <section
-          id="profile-assets"
-          className="profile-section space-y-4"
-          aria-label="形象和声音"
-        >
-          <h2 className="text-xl font-semibold">形象和声音</h2>
-          <p className="text-sm text-secondary">
-            形象：
-            {modelName
-              ? `${modelName}（3D 模型）`
-              : identity.capabilities?.avatar_image
-                ? '肖像照片'
-                : `${identity.data?.avatar || '未设置'}（风格化形象）`}
-          </p>
-          {identity.avatarError && (
-            <p role="alert" className="text-danger">
-              形象预览：{identity.avatarError}{' '}
-              <Button variant="secondary" size="sm" onClick={identity.reload}>
-                重试预览
-              </Button>
-            </p>
-          )}
-          <RecordingShortcut key={personaId} />
-          <SelfAssets />
-        </section>
-        <Card className="border border-danger/20 p-4 md:p-6">
-          <h2 className="mb-3 text-lg font-semibold">删除这个分身</h2>
-          {current?.is_default ? (
-            <p className="text-secondary">默认分身不能删除</p>
-          ) : (
-            current && (
-              <Button
-                variant="danger"
-                loading={busy}
-                onClick={() => void remove()}
+              <a
+                href={`#/profile?section=${item.id}`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (section !== item.id)
+                    setParams({ section: item.id }, { replace: true });
+                }}
               >
-                删除这个分身
-              </Button>
-            )
-          )}
-          {error && (
-            <p role="alert" className="mt-3 text-danger">
-              {error}
-            </p>
-          )}
-        </Card>
+                {item.title}
+              </a>
+            </TabsPrimitive.Trigger>
+          ))}
+        </nav>
+      </TabsPrimitive.List>
+      <div className="page-content space-y-6">
+        {section === 'overview' && (
+          <TabsPrimitive.Content value="overview" asChild>
+            <section
+              id="profile-overview"
+              className="profile-section space-y-4"
+              aria-label="概览"
+            >
+              <h2 className="text-xl font-semibold">概览</h2>
+              {speakerCount > 0 && (
+                <a
+                  className="speaker-banner block rounded-xl bg-note p-4 text-primary"
+                  href="#/profile?section=memories"
+                >
+                  有 {speakerCount} 段录音需要确认哪位是你
+                </a>
+              )}
+              <Overview />
+              <Card className="border border-danger/20 p-4 md:p-6">
+                <h2 className="mb-3 text-lg font-semibold">删除这个分身</h2>
+                {current?.is_default ? (
+                  <p className="text-secondary">默认分身不能删除</p>
+                ) : (
+                  current && (
+                    <Button
+                      variant="danger"
+                      loading={busy}
+                      onClick={() => void remove()}
+                    >
+                      删除这个分身
+                    </Button>
+                  )
+                )}
+                {error && (
+                  <p role="alert" className="mt-3 text-danger">
+                    {error}
+                  </p>
+                )}
+              </Card>
+            </section>
+          </TabsPrimitive.Content>
+        )}
+        {section === 'memories' && (
+          <TabsPrimitive.Content value="memories" asChild>
+            <section
+              id="profile-memories"
+              className="profile-section space-y-4"
+              aria-label="记忆"
+            >
+              <h2 className="text-xl font-semibold">记忆</h2>
+              <Memories profile onSpeakerCount={setSpeakerCount} />
+            </section>
+          </TabsPrimitive.Content>
+        )}
+        {section === 'assets' && (
+          <TabsPrimitive.Content value="assets" asChild>
+            <section
+              id="profile-assets"
+              className="profile-section space-y-4"
+              aria-label="形象和声音"
+            >
+              <h2 className="text-xl font-semibold">形象和声音</h2>
+              <p className="text-sm text-secondary">
+                形象：
+                {modelName
+                  ? `${modelName}（3D 模型）`
+                  : identity.capabilities?.avatar_image
+                    ? '肖像照片'
+                    : `${identity.data?.avatar || '未设置'}（风格化形象）`}
+              </p>
+              {identity.avatarError && (
+                <p role="alert" className="text-danger">
+                  形象预览：{identity.avatarError}{' '}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={identity.reload}
+                  >
+                    重试预览
+                  </Button>
+                </p>
+              )}
+              <RecordingShortcut key={personaId} />
+              <SelfAssets />
+            </section>
+          </TabsPrimitive.Content>
+        )}
+        {section === 'channels' && (
+          <TabsPrimitive.Content value="channels" asChild>
+            <section
+              id="profile-channels"
+              className="profile-section space-y-4"
+              aria-label="接入"
+            >
+              <h2 className="text-xl font-semibold">接入</h2>
+              <Channels />
+            </section>
+          </TabsPrimitive.Content>
+        )}
       </div>
       <Dialog
         open={editing}
@@ -285,6 +281,6 @@ export function Profile() {
           />
         )}
       </Dialog>
-    </div>
+    </TabsPrimitive.Root>
   );
 }

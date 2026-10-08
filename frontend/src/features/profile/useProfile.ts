@@ -4,6 +4,7 @@ import {
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
 import { api } from '../../lib/api';
+import { getPersonaId } from '../../lib/persona';
 import { toast } from '../../components/ui';
 import { useStatus } from '../../stores/status';
 import type { Coverage, ProfileItem, ReviewStatus } from './types';
@@ -16,6 +17,8 @@ export function useProfile(active: boolean) {
   const [itemsError, setItemsError] = useState('');
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
   const coverageRequest = useRef<AbortController | null>(null);
   const itemsRequest = useRef<AbortController | null>(null);
@@ -103,7 +106,12 @@ export function useProfile(active: boolean) {
     status: ReviewStatus,
     statement?: string,
   ) => {
-    if (!alive.current || optimistic.current.has(item.item_id)) return false;
+    if (
+      !alive.current ||
+      optimistic.current.has(item.item_id) ||
+      (batchRequest.current && !batchRequest.current.signal.aborted)
+    )
+      return false;
     const request = new AbortController();
     const reviewed = optimistic.current;
     mutations.current.add(request);
@@ -161,6 +169,55 @@ export function useProfile(active: boolean) {
         setPending(new Set(optimistic.current.keys()));
     }
   };
+  const confirmItems = async (rows: ProfileItem[]) => {
+    if (
+      !alive.current ||
+      getPersonaId() !== personaId ||
+      optimistic.current.size > 0 ||
+      (batchRequest.current && !batchRequest.current.signal.aborted)
+    )
+      return false;
+    const ids = rows
+      .filter((item) => item.review === 'unreviewed')
+      .map((item) => item.item_id);
+    if (!ids.length) return false;
+    const request = new AbortController();
+    batchRequest.current = request;
+    mutations.current.add(request);
+    setBatchBusy(true);
+    setPending(new Set(ids));
+    try {
+      const saved = await api<{ updated: number }>(
+        '/api/persona/items/review-batch',
+        {
+          method: 'POST',
+          json: { item_ids: ids, status: 'confirmed' },
+          signal: request.signal,
+          headers: { 'X-Twin-Persona': personaId },
+        },
+      );
+      if (request.signal.aborted || !alive.current) return false;
+      void latestItemsRefresh.current();
+      void latestCoverageRefresh.current();
+      toast(`已确认 ${saved.updated} 条`, 'success');
+      await useStatus.getState().refresh(request.signal);
+      return !request.signal.aborted && alive.current;
+    } catch (failure) {
+      if (!request.signal.aborted && alive.current)
+        toast(
+          failure instanceof Error ? failure.message : '审核失败，请重试',
+          'danger',
+        );
+      return false;
+    } finally {
+      mutations.current.delete(request);
+      if (batchRequest.current === request) batchRequest.current = null;
+      if (!request.signal.aborted && alive.current) {
+        setBatchBusy(false);
+        setPending(new Set(optimistic.current.keys()));
+      }
+    }
+  };
   return {
     coverage,
     items,
@@ -168,6 +225,8 @@ export function useProfile(active: boolean) {
     itemsError,
     loading,
     pending,
+    batchBusy,
+    confirmItems,
     refreshCoverage,
     refreshItems,
     review,

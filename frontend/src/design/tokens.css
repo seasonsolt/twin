@@ -242,12 +242,9 @@
   padding: 0 16px;
   border-radius: 999px;
 }
-.profile-section-nav a[aria-current='location'] {
+.profile-section-nav a[aria-selected='true'] {
   background: var(--text-primary);
   color: var(--canvas);
-}
-.profile-section {
-  scroll-margin-top: 88px;
 }
 .profile-page {
   max-width: 1120px;
@@ -1306,28 +1303,6 @@
   }
   .profile-page .memory-add-panel {
     top: 88px;
-  }
-  .profile-content {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
-    align-items: start;
-    gap: 32px;
-  }
-  .profile-content > * {
-    margin: 0;
-    min-width: 0;
-    grid-column: 1 / -1;
-  }
-  #profile-overview {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  #profile-assets {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  #profile-memories {
-    grid-row: 2;
   }
   .about-grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

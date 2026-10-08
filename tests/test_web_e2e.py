@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import datetime as dt
 import re
 import time
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
+from twin.persona.items import PersonaItem, PReview
+from twin.persona.schema import ReviewStatus
+from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.app import MAX_JSON_BYTES
 
@@ -148,6 +153,96 @@ def test_persona_pages(tmp_path: Path) -> None:
 
     deleted = browser.client.delete(f"/api/persona/sources/{sources[1]['source_id']}", headers=headers)
     assert deleted.status_code == 200 and len(browser.get("/api/persona/sources")) == 1
+
+
+def batch_items(settings: Settings) -> list[str]:
+    ids = ["pi_batch_1", "pi_batch_2", "pi_batch_3"]
+    with PersonaStore(settings.db_path) as store:
+        store.replace_facet_items(
+            "2.1",
+            [PersonaItem(item_id=item_id, facet_id="2.1", statement=item_id, evidence=[]) for item_id in ids],
+        )
+    return ids
+
+
+def test_persona_batch_review(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    ids = batch_items(settings)
+    browser = make_browser(settings, persona_handler)
+    assert browser.post("/api/persona/items/review-batch", json={"item_ids": ids[:2], "status": "confirmed"}) == {
+        "updated": 2
+    }
+    with PersonaStore(settings.db_path) as store:
+        reviews = store.reviews()
+        assert set(reviews) == set(ids[:2])
+        assert all(review.status is ReviewStatus.CONFIRMED and review.note == "" for review in reviews.values())
+        assert len({review.reviewed_at for review in reviews.values()}) == 1
+        assert all(
+            dt.datetime.fromisoformat(review.reviewed_at).date() == dt.date.today() for review in reviews.values()
+        )
+        assert store.list_items()[-1].review is ReviewStatus.UNREVIEWED
+
+
+def test_persona_batch_review_missing_is_atomic_and_persona_scoped(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    ids = batch_items(settings)
+    with PersonaStore(settings.db_path) as store:
+        store.set_review(
+            ids[0], PReview(status=ReviewStatus.EDITED, statement="已修改", note="保留", reviewed_at="旧时间")
+        )
+        before = store.reviews()
+    browser = make_browser(settings, persona_handler)
+    result = browser.post(
+        "/api/persona/items/review-batch", 404, json={"item_ids": [*ids, "pi_missing"], "status": "confirmed"}
+    )
+    assert result == {"detail": "找不到档案条目 pi_missing（可能已在重新构建时合并）"}
+    with PersonaStore(settings.db_path) as store:
+        assert store.reviews() == before
+    other = browser.post("/api/personas", 201, json={"name": "另一个人"})["id"]
+    response = browser.client.post(
+        "/api/persona/items/review-batch",
+        headers={"X-Twin": "1", "X-Twin-Persona": other},
+        json={"item_ids": ids, "status": "confirmed"},
+    )
+    assert response.status_code == 404
+    with PersonaStore(settings.db_path) as store:
+        assert store.reviews() == before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"item_ids": [], "status": "confirmed"},
+        {"item_ids": ["pi_batch_1", "pi_batch_1"], "status": "confirmed"},
+        {"item_ids": [str(i) for i in range(501)], "status": "confirmed"},
+        {"item_ids": ["pi_batch_1"], "status": "rejected"},
+    ],
+)
+def test_persona_batch_review_validation(tmp_path: Path, body: dict[str, Any]) -> None:
+    settings = make_settings(tmp_path)
+    batch_items(settings)
+    browser = make_browser(settings, persona_handler)
+    browser.post("/api/persona/items/review-batch", 400, json=body)
+    with PersonaStore(settings.db_path) as store:
+        assert store.reviews() == {}
+
+
+def test_persona_batch_review_denies_visitors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    ids = batch_items(settings)
+    app = create_app(settings)
+    app.state.personas.data["personas"][0].update(owner="owner@xjjk.com", public=True)
+    monkeypatch.setattr(app.state.auth, "session", lambda _: {"email": "visitor@xjjk.com", "admin": False})
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        headers = {"X-Twin": "1", "X-Twin-Persona": "default"}
+        assert client.get("/api/identity", headers=headers).json()["visitor"] is True
+        response = client.post(
+            "/api/persona/items/review-batch", headers=headers, json={"item_ids": ids, "status": "confirmed"}
+        )
+        assert response.status_code == 403
+        assert response.json() == {"detail": "这是别人的公开分身，只能聊天"}
+    with PersonaStore(settings.db_path) as store:
+        assert store.reviews() == {}
 
 
 def test_questionnaire_page(tmp_path: Path) -> None:

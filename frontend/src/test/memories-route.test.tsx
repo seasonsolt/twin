@@ -52,7 +52,16 @@ it.each([
     ),
   );
   render(<App />);
-  await screen.findByRole('heading', { name: '他记得的事', level: 2 });
+  await screen.findByRole('heading', {
+    name: section === 'memories' ? '他记得的事' : '我了解到的他',
+  });
+  await waitFor(() =>
+    expect(
+      screen.getByRole('tabpanel', {
+        name: section === 'memories' ? '记忆' : '概览',
+      }),
+    ).toBeVisible(),
+  );
   await waitFor(() =>
     expect(window.location.hash).toBe(
       section ? `#/profile?section=${section}` : '#/profile',
@@ -68,7 +77,5 @@ it.each([
     ),
   ).toHaveLength(2);
   expect(screen.getAllByRole('button', { name: '切换分身' })).toHaveLength(1);
-  expect(
-    screen.getByRole('navigation', { name: '档案章节' }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole('tablist', { name: '档案章节' })).toBeInTheDocument();
 });

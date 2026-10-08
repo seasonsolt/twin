@@ -312,6 +312,17 @@ class PersonaStore:
             else:
                 db.execute("INSERT OR REPLACE INTO p_reviews VALUES (?, ?)", (item_id, review.model_dump_json()))
 
+    def set_reviews(self, item_ids: list[str], review: PReview) -> None:
+        with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for item_id in item_ids:
+                if db.execute("SELECT 1 FROM p_items WHERE item_id = ?", (item_id,)).fetchone() is None:
+                    raise KeyError(item_id)
+            db.executemany(
+                "INSERT OR REPLACE INTO p_reviews VALUES (?, ?)",
+                [(item_id, review.model_dump_json()) for item_id in item_ids],
+            )
+
     def get_meta(self, key: str) -> str | None:
         with self._lock:
             row = self._db.execute("SELECT value FROM p_meta WHERE key = ?", (key,)).fetchone()

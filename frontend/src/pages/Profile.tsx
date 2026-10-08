@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Button, Card, Dialog, Skeleton, useConfirm } from '../components/ui';
@@ -12,12 +12,17 @@ import { Overview } from '../features/profile/Overview';
 import { Channels } from '../features/profile/Channels';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
-import { forgetPersona } from '../lib/persona';
+import { forgetPersona, personaUrl } from '../lib/persona';
 import { usePersonas } from '../stores/personas';
 import { Memories } from './Memories';
 
+const MemoryGraphPanel = lazy(
+  () => import('../features/profile/graph/MemoryGraphPanel'),
+);
+
 const sections = [
   { id: 'overview', title: '概览' },
+  { id: 'graph', title: '图谱' },
   { id: 'memories', title: '记忆' },
   { id: 'assets', title: '形象和声音' },
   { id: 'channels', title: '接入' },
@@ -194,6 +199,32 @@ export function Profile() {
                   </p>
                 )}
               </Card>
+            </section>
+          </TabsPrimitive.Content>
+        )}
+        {section === 'graph' && (
+          <TabsPrimitive.Content value="graph" asChild>
+            <section
+              id="profile-graph"
+              className="profile-section min-w-0"
+              aria-label="图谱"
+            >
+              <Suspense fallback={<Skeleton className="h-[70vh]" />}>
+                <MemoryGraphPanel
+                  key={personaId}
+                  twin={{
+                    id: personaId,
+                    name: identity.data?.name || current?.name || '分身',
+                    portrait: identity.capabilities?.avatar_image
+                      ? personaUrl(
+                          identity.capabilities.avatar_image.url ||
+                            '/api/media/avatar-image',
+                          personaId,
+                        )
+                      : undefined,
+                  }}
+                />
+              </Suspense>
             </section>
           </TabsPrimitive.Content>
         )}

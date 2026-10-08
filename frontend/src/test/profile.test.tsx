@@ -125,7 +125,7 @@ it('renders only overview by default, keeps the header, and supports section lin
     within(nav)
       .getAllByRole('tab')
       .map((tab) => tab.textContent),
-  ).toEqual(['概览', '记忆', '形象和声音', '接入']);
+  ).toEqual(['概览', '图谱', '记忆', '形象和声音', '接入']);
   expect(within(nav).getByRole('tab', { name: '概览' })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -153,7 +153,7 @@ it('renders only overview by default, keeps the header, and supports section lin
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('朋友');
 });
 
-it.each(['overview', 'memories', 'assets', 'channels'])(
+it.each(['overview', 'graph', 'memories', 'assets', 'channels'])(
   'keeps the mobile profile and %s section mounted when switching twins',
   async (section) => {
     vi.stubGlobal(
@@ -219,6 +219,7 @@ it('switches panels with pointer and arrow keys, resets scroll, and never scroll
 
 it.each([
   ['overview', '概览'],
+  ['graph', '图谱'],
   ['memories', '记忆'],
   ['assets', '形象和声音'],
   ['channels', '接入'],
@@ -235,6 +236,12 @@ it.each([
     expect(tab).toHaveAttribute('aria-controls', panel.id);
     expect(panel).toHaveAttribute('aria-labelledby', tab.id);
     expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
+    if (section === 'graph') {
+      expect(
+        await within(panel).findByRole('textbox', { name: '搜索记忆和原话' }),
+      ).toBeVisible();
+      expect(await within(panel).findByText('还不够了解你')).toBeVisible();
+    }
     if (section === 'channels') {
       expect(within(panel).getByRole('button', { name: '绑定' })).toBeVisible();
       expect(

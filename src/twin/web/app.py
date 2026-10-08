@@ -9,10 +9,12 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -227,12 +229,21 @@ _VALIDATION_MESSAGES = {
     "bool_parsing": "应为 true 或 false",
     "bool_type": "应为 true 或 false",
     "string_type": "应为文本",
+    "string_too_short": "文本太短，不能为空",
+    "string_too_long": "文本太长",
+    "string_pattern_mismatch": "仅支持字母、数字、下划线和连字符",
     "enum": "取值无效",
     "model_attributes_type": "应为 JSON 对象",
     "dict_type": "应为 JSON 对象",
     "greater_than_equal": "数值太小",
     "less_than_equal": "数值太大",
 }
+
+
+class WeComBindingBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    bot_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    secret: str | None = Field(default=None, min_length=1, max_length=256, repr=False)
 
 
 def create_app(
@@ -255,7 +266,9 @@ def create_app(
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)
     registry = Personas(settings, jobs)
-    hub = WeComHub(settings, registry, backends) if settings.wecom.bots else None
+    hub = WeComHub(settings, registry, backends)
+    registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
+    registry.on_restored = lambda persona_id: anyio.from_thread.run(hub.persona_restored, persona_id)
     app.state.channels = hub
     app.state.personas = registry
     app.state.auth = auth
@@ -332,8 +345,17 @@ def create_app(
             }
 
         @context.get("/api/channels")
-        def get_channels() -> dict[str, list[dict[str, str]]]:
-            return {"wecom": hub.status_for(persona_id) if hub else []}
+        def get_channels() -> dict[str, Any]:
+            return {"wecom": hub.status_for(persona_id)}
+
+        @context.put("/api/channels/wecom")
+        async def bind_wecom(body: WeComBindingBody) -> dict[str, Any]:
+            return await hub.bind(persona_id, body.bot_id, body.secret)
+
+        @context.delete("/api/channels/wecom")
+        async def unbind_wecom() -> dict[str, bool]:
+            await hub.unbind(persona_id)
+            return {"deleted": True}
 
         @context.get("/api/jobs")
         def get_jobs() -> list[dict[str, Any]]:
@@ -370,13 +392,11 @@ def create_app(
                     continue
                 context = registry.application(entry["id"])
                 await stack.enter_async_context(context.router.lifespan_context(context))
-            if hub:
-                await hub.start()
+            await hub.start()
             try:
                 yield
             finally:
-                if hub:
-                    await hub.stop()
+                await hub.stop()
                 for context in list(registry.apps.values()):
                     context.state.processing.close()
 

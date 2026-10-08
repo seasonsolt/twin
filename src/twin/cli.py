@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import ipaddress
 import json
+import logging
 import os
 import socket
 import sqlite3
@@ -78,10 +79,7 @@ api_key_env = "TWIN_LLM_KEY"
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
-# [[wecom.bots]] # 企业微信智能机器人：API 模式 + 长连接，见 docs/GUIDE.md。
-# persona = "default"
-# bot_id = "aibXXXX"
-# secret_env = "TWIN_WECOM_SECRET" # 环境变量名，绝不填写 Secret 本身
+# 企业微信智能机器人在分身档案 → 接入 → 绑定，见 docs/GUIDE.md。
 
 # [api] # 对外服务：令牌值仅放环境变量，至少 32 个字符，见 docs/SERVICE.md。
 # token_env = "TWIN_API_TOKEN"
@@ -383,6 +381,15 @@ def ui(
     """
     settings = _settings(ctx)
     from .web import create_app
+
+    channels_logger = logging.getLogger("twin.channels")
+    if not channels_logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        channels_logger.addHandler(handler)
+    channels_logger.setLevel(logging.INFO)
+    channels_logger.propagate = False
 
     address = host.strip().strip("[]")
     extra_hosts: tuple[str, ...] = ()

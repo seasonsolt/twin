@@ -63,7 +63,10 @@ class Personas:
         self.lock = threading.RLock()
         self.apps: dict[str, FastAPI] = {}
         self.requests: dict[str, int] = {}
+        self.removing: set[str] = set()
         self.make_app: Callable[[str, Settings], FastAPI]
+        self.on_removed: Callable[[str], None] = lambda _: None
+        self.on_restored: Callable[[str], None] = lambda _: None
         with self.lock:
             if not self.path.exists():
                 self.data: dict[str, Any] = {
@@ -98,7 +101,9 @@ class Personas:
             self.save()
 
     def settings_for(self, persona_id: str) -> Settings:
-        if not any(p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]):
+        if persona_id in self.removing or not any(
+            p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]
+        ):
             raise HTTPException(404, "分身不存在")
         if persona_id == self.data["default"]:
             return self.settings.model_copy()
@@ -142,10 +147,14 @@ class Personas:
         return bool(identity["admin"] or (entry.get("owner") and entry["owner"] == identity["email"]))
 
     def visible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
-        return not entry.get("deleted_at") and (bool(entry.get("public")) or self.accessible(entry, identity))
+        return (
+            entry["id"] not in self.removing
+            and not entry.get("deleted_at")
+            and (bool(entry.get("public")) or self.accessible(entry, identity))
+        )
 
     def check_owner(self, persona_id: str, identity: dict[str, Any], *, deleted: bool = False) -> None:
-        if not any(
+        if persona_id in self.removing or not any(
             p["id"] == persona_id and bool(p.get("deleted_at")) == deleted and self.accessible(p, identity)
             for p in self.data["personas"]
         ):
@@ -205,7 +214,9 @@ class Personas:
                 for key in ("deleted_at", "trash_directory", "name"):
                     entry.pop(key)
                 self.save()
-                return self.view(entry, identity)
+                view = self.view(entry, identity)
+            self.on_restored(persona_id)
+            return view
 
         @app.post("/api/personas", status_code=201)
         def create_persona(body: NameBody, request: Request) -> dict[str, Any]:
@@ -265,12 +276,20 @@ class Personas:
                 name = stored_identity(settings.db_path)[0] or settings.target_name
                 deleted_at = self.clock()
                 trash_directory = f"{persona_id}-{deleted_at.strftime('%Y%m%dT%H%M%S%fZ')}"
-                private_directory(self.root / "trash")
-                settings.db_path.parent.rename(self.root / "trash" / trash_directory)
-                self.apps.pop(persona_id, None)
-                entry.update(name=name, deleted_at=deleted_at.isoformat(), trash_directory=trash_directory)
-                self.save()
+                self.removing.add(persona_id)
+            try:
+                # Never hold the registry's thread lock while waiting for the channel loop.
+                self.on_removed(persona_id)
+                with self.lock:
+                    private_directory(self.root / "trash")
+                    settings.db_path.parent.rename(self.root / "trash" / trash_directory)
+                    self.apps.pop(persona_id, None)
+                    entry.update(name=name, deleted_at=deleted_at.isoformat(), trash_directory=trash_directory)
+                    self.save()
                 return {"deleted": True}
+            finally:
+                with self.lock:
+                    self.removing.discard(persona_id)
 
 
 class PersonaMiddleware:

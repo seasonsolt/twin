@@ -12,18 +12,20 @@ from collections import OrderedDict, deque
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import HTTPException
 from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as websocket_connect
 
-from ..config import Settings, WeComBot
+from ..assets import AssetStore
+from ..config import Settings
 from ..persona.chat import HISTORY_TURNS, PersonaChat, no_profile_reply
 from ..persona.schema import ChatReply, ChatTurn
 from ..persona.store import PersonaStore, stored_identity
 from ..service import resolve_citations
-from ..util import key_from_env
+from ..util import private_directory
 
 if TYPE_CHECKING:
     from ..web.backends import Backends
@@ -37,10 +39,6 @@ SessionKey = tuple[str, str, str]
 
 
 class SubscribeFailed(Exception):
-    pass
-
-
-class MissingSecret(Exception):
     pass
 
 
@@ -88,10 +86,12 @@ def citation_footer(store: PersonaStore, settings: Settings, reply: ChatReply) -
 class WeComBotRunner:
     def __init__(
         self,
-        bot: WeComBot,
+        bot_id: str,
+        secret: str,
         settings: Settings,
         backends: Backends,
         *,
+        persona_id: str = "default",
         url: str = "wss://openws.work.weixin.qq.com",
         connect: Connect = websocket_connect,
         heartbeat_interval: float = 30,
@@ -103,7 +103,8 @@ class WeComBotRunner:
         rate_window: float = 60,
         sessions: dict[SessionKey, Session] | None = None,
     ) -> None:
-        self.bot, self.settings, self.backends = bot, settings, backends
+        self.bot_id, self.secret, self.persona_id = bot_id, secret, persona_id
+        self.settings, self.backends = settings, backends
         self.url, self.connect = url, connect
         self.heartbeat_interval = heartbeat_interval
         self.backoff_initial, self.backoff_max = backoff_initial, backoff_max
@@ -122,57 +123,59 @@ class WeComBotRunner:
                 self.status, self.detail = "connecting", "连接中…"
                 delay = backoff
                 try:
-                    secret = key_from_env(self.bot.secret_env)
-                    if not secret:
-                        raise MissingSecret
                     async with self.connect(self.url) as socket:
                         try:
                             # Both websocket layers otherwise log private frames at DEBUG level.
                             socket.debug = socket.protocol.debug = False
-                            await self._subscribe(socket, secret)
+                            await self._subscribe(socket)
                             backoff = self.backoff_initial
                             self.status, self.detail = "connected", "已连接"
-                            logger.info("wecom bot %s connected", self.bot.bot_id)
+                            logger.info("wecom bot %s connected", self.bot_id)
                             await self._connected(socket)
                         finally:
                             await socket.close()
-                except MissingSecret:
-                    self.status, self.detail = "error", f"没有读到环境变量 {self.bot.secret_env}"
-                    delay = self.subscribe_backoff
                 except SubscribeFailed:
-                    self.status, self.detail = "error", "凭证无效"
+                    self.status, self.detail = "error", "Bot ID 或 Secret 不对"
                     delay = self.subscribe_backoff
                 except Kicked:
                     self.status, self.detail = "error", "连接被替换，稍后重连"
+                    logger.info("wecom bot %s disconnected/kicked", self.bot_id)
                     delay = self.kicked_backoff
                 except Exception as exc:
                     self.status, self.detail = "error", "连接断开，正在重连"
-                    logger.warning("wecom bot %s connection error (%s)", self.bot.bot_id, type(exc).__name__)
+                    logger.info("wecom bot %s disconnected (%s)", self.bot_id, type(exc).__name__)
                     delay = backoff
                     backoff = min(backoff * 2, self.backoff_max)
                 await asyncio.sleep(delay)
         finally:
             self.status, self.detail = "error", "连接已停止"
+            logger.info("wecom bot %s disconnected", self.bot_id)
 
     async def _send(self, socket: ClientConnection, frame: dict[str, Any]) -> None:
         async with self._send_lock:
             await socket.send(json.dumps(frame, ensure_ascii=False))
 
-    async def _subscribe(self, socket: ClientConnection, secret: str) -> None:
+    async def _subscribe(self, socket: ClientConnection) -> None:
         req_id = uuid.uuid4().hex
         await self._send(
             socket,
             {
                 "cmd": "aibot_subscribe",
                 "headers": {"req_id": req_id},
-                "body": {"bot_id": self.bot.bot_id, "secret": secret},
+                "body": {"bot_id": self.bot_id, "secret": self.secret},
             },
         )
         async with asyncio.timeout(20):
             while True:
                 frame = json.loads(await socket.recv())
                 if frame.get("headers", {}).get("req_id") == req_id:
-                    if frame.get("errcode", 0) != 0:
+                    errcode = frame.get("errcode", 0)
+                    if errcode != 0:
+                        logger.warning(
+                            "wecom bot %s subscribe rejected (errcode=%s)",
+                            self.bot_id,
+                            errcode if isinstance(errcode, int) else -1,
+                        )
                         raise SubscribeFailed
                     return
 
@@ -242,7 +245,7 @@ class WeComBotRunner:
                     },
                 )
         except Exception as exc:
-            logger.warning("wecom bot %s welcome error (%s)", self.bot.bot_id, type(exc).__name__)
+            logger.warning("wecom bot %s welcome error (%s)", self.bot_id, type(exc).__name__)
 
     async def _stream(
         self,
@@ -278,7 +281,7 @@ class WeComBotRunner:
     async def _answer(self, socket: ClientConnection, req_id: str, body: dict[str, Any]) -> None:
         kind = body.get("chattype", "single")
         peer = body.get("chatid", "") if kind == "group" else body.get("from", {}).get("userid", "")
-        session = self.sessions.setdefault((self.bot.persona, kind, peer), Session())
+        session = self.sessions.setdefault((self.persona_id, kind, peer), Session())
         stream_id = uuid.uuid4().hex
         work = asyncio.create_task(self._produce(socket, session, req_id, stream_id, body))
         try:
@@ -288,12 +291,12 @@ class WeComBotRunner:
                 raise TimeoutError
             work.result()
         except Exception as exc:
-            logger.warning("wecom bot %s answer error (%s)", self.bot.bot_id, type(exc).__name__)
+            logger.warning("wecom bot %s answer error (%s)", self.bot_id, type(exc).__name__)
             try:
                 async with asyncio.timeout(65):
                     await self._stream(socket, session, req_id, stream_id, APOLOGY, finish=True)
             except Exception as send_exc:
-                logger.warning("wecom bot %s send error (%s)", self.bot.bot_id, type(send_exc).__name__)
+                logger.warning("wecom bot %s send error (%s)", self.bot_id, type(send_exc).__name__)
         finally:
             # Send the deadline's final before waiting for retrieval workers to release the store.
             if not work.done() and not work.cancelling():
@@ -343,39 +346,134 @@ class WeComBotRunner:
             session.history = [*messages, ChatTurn(role="twin", content=reply.reply)][-HISTORY_TURNS * 2 :]
 
 
+CONFLICT = "这个机器人已经绑定了另一个分身"
+
+
 class WeComHub:
     def __init__(self, settings: Settings, registry: Personas, backends: Backends) -> None:
-        self.runners: list[WeComBotRunner] = []
-        self._missing: list[WeComBot] = []
-        self._tasks: list[asyncio.Task[None]] = []
-        sessions: dict[SessionKey, Session] = {}
-        for bot in settings.wecom.bots:
+        self.settings, self.registry, self.backends = settings, registry, backends
+        self.runners: dict[str, WeComBotRunner] = {}
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._errors: dict[str, str] = {}
+        self._lock = asyncio.Lock()
+
+    def _path(self, persona_id: str) -> Path:
+        return self.registry.settings_for(persona_id).db_path.parent / "channels.json"
+
+    def _read(self, persona_id: str) -> dict[str, Any]:
+        path = self._path(persona_id)
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def _write(self, persona_id: str, data: dict[str, Any]) -> None:
+        path = self._path(persona_id)
+        if data:
+            private_directory(path.parent)
+            AssetStore.write(path, json.dumps(data, ensure_ascii=False).encode())
+        else:
+            path.unlink(missing_ok=True)
+
+    def _conflicts(self, persona_id: str, bot_id: str) -> bool:
+        return any(
+            self._read(entry["id"]).get("wecom", {}).get("bot_id") == bot_id
+            for entry in self.registry.data["personas"]
+            if entry["id"] != persona_id and entry["id"] not in self.registry.removing and not entry.get("deleted_at")
+        )
+
+    def _start(self, persona_id: str, binding: dict[str, str]) -> None:
+        self._errors.pop(persona_id, None)
+        runner = WeComBotRunner(
+            binding["bot_id"],
+            binding["secret"],
+            self.registry.settings_for(persona_id),
+            self.backends,
+            persona_id=persona_id,
+            url=self.settings.wecom.url,
+        )
+        self.runners[persona_id] = runner
+        self._tasks[persona_id] = asyncio.create_task(runner.run())
+
+    async def _stop(self, persona_id: str) -> None:
+        task = self._tasks.pop(persona_id, None)
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.runners.pop(persona_id, None)
+        self._errors.pop(persona_id, None)
+
+    async def start(self) -> None:
+        async with self._lock:
+            claimed = {runner.bot_id for runner in self.runners.values()}
+            for entry in self.registry.data["personas"]:
+                persona_id = entry["id"]
+                if entry.get("deleted_at") or persona_id in self.runners:
+                    continue
+                binding = self._read(persona_id).get("wecom")
+                if binding:
+                    if binding["bot_id"] in claimed:
+                        self._errors[persona_id] = CONFLICT
+                    else:
+                        self._start(persona_id, binding)
+                        claimed.add(binding["bot_id"])
+
+    async def stop(self) -> None:
+        async with self._lock:
+            for persona_id in list(self._tasks):
+                await self._stop(persona_id)
+
+    async def bind(self, persona_id: str, bot_id: str, secret: str | None) -> dict[str, Any]:
+        async with self._lock:
+            data = self._read(persona_id)
+            previous = data.get("wecom", {})
+            if secret is None:
+                if previous.get("bot_id") != bot_id or not previous.get("secret"):
+                    raise HTTPException(400, "请填写 Secret")
+                secret = previous["secret"]
+            if self._conflicts(persona_id, bot_id):
+                raise HTTPException(409, CONFLICT)
+            await self._stop(persona_id)
+            data["wecom"] = {"bot_id": bot_id, "secret": secret}
+            self._write(persona_id, data)
+            self._start(persona_id, data["wecom"])
+            status = self.status_for(persona_id)
+            assert status is not None
+            return status
+
+    async def unbind(self, persona_id: str) -> None:
+        async with self._lock:
+            data = self._read(persona_id)
+            if "wecom" not in data:
+                raise HTTPException(404, "还没有绑定企业微信")
+            await self._stop(persona_id)
+            del data["wecom"]
+            self._write(persona_id, data)
+
+    async def persona_removed(self, persona_id: str) -> None:
+        async with self._lock:
+            await self._stop(persona_id)
+
+    async def persona_restored(self, persona_id: str) -> None:
+        async with self._lock:
+            await self._stop(persona_id)
             try:
-                resolved = registry.settings_for(bot.persona)
+                binding = self._read(persona_id).get("wecom")
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
-                self._missing.append(bot)
-                continue
-            self.runners.append(WeComBotRunner(bot, resolved, backends, url=settings.wecom.url, sessions=sessions))
+                return
+            if binding:
+                if self._conflicts(persona_id, binding["bot_id"]):
+                    self._errors[persona_id] = CONFLICT
+                else:
+                    self._start(persona_id, binding)
 
-    async def start(self) -> None:
-        if not self._tasks:
-            self._tasks = [asyncio.create_task(runner.run()) for runner in self.runners]
-
-    async def stop(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-
-    def status_for(self, persona_id: str) -> list[dict[str, str]]:
-        return [
-            {"bot_id": runner.bot.bot_id, "status": runner.status, "detail": runner.detail}
-            for runner in self.runners
-            if runner.bot.persona == persona_id
-        ] + [
-            {"bot_id": bot.bot_id, "status": "error", "detail": "分身不存在"}
-            for bot in self._missing
-            if bot.persona == persona_id
-        ]
+    def status_for(self, persona_id: str) -> dict[str, Any] | None:
+        binding = self._read(persona_id).get("wecom")
+        if not binding:
+            return None
+        runner = self.runners.get(persona_id)
+        return {
+            "bot_id": binding["bot_id"],
+            "status": runner.status if runner else "error" if persona_id in self._errors else "connecting",
+            "detail": runner.detail if runner else self._errors.get(persona_id, "连接中…"),
+            "secret_set": bool(binding.get("secret")),
+        }

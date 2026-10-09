@@ -630,7 +630,13 @@ def persona_chat(
             except (LLMError, EmbedError) as e:
                 raise _fail(str(e)) from e
             history.append(ChatTurn(role="twin", content=answer.reply))
-            flag = f"（弃权：{answer.abstain_reason}）" if answer.abstain else ""
+            flag = (
+                f"（弃权：{answer.abstain_reason}）"
+                if answer.abstain
+                else "（推测，非本人表达）"
+                if answer.mode == "inferred"
+                else ""
+            )
             _say(f"{settings.target_name}的分身：{answer.reply}")
             _say(f"  置信度 {answer.confidence:.2f}{flag}  依据 {', '.join(answer.citations) or '无'}")
             if message is not None:

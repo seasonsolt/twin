@@ -41,7 +41,7 @@ class ServiceAnswer(BaseModel):
     as_of: dt.date | None
     persona_name: str
     generated_at: dt.datetime
-    mode: Literal["grounded", "general", "abstain"] = "grounded"
+    mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"
 
     @model_validator(mode="before")
     @classmethod

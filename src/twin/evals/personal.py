@@ -714,7 +714,7 @@ def _quotes_summary(predictions: Sequence[Prediction]) -> dict[str, Any] | None:
 
 
 def _mode_counts(predictions: Sequence[Prediction]) -> dict[str, int]:
-    counts = {"grounded": 0, "general": 0, "abstain": 0}
+    counts = {"grounded": 0, "general": 0, "inferred": 0, "abstain": 0}
     for prediction in predictions:
         mode = prediction.raw.get("mode", "abstain" if prediction.abstain else "grounded")
         if mode not in counts:

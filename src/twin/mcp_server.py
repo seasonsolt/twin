@@ -39,6 +39,8 @@ class TwinTools:
         text = answer.answer
         if answer.abstain:
             text += f"\n弃权：{answer.abstain_reason}"
+        elif answer.mode == "inferred":
+            text += "\n（推测，非本人表达）"
         return CallToolResult(
             content=[TextContent(type="text", text=text)], structuredContent=answer.model_dump(mode="json")
         )

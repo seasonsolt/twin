@@ -217,7 +217,7 @@ function tick() {
   });
 }
 
-it.each(['grounded', 'general', 'abstain'] as const)(
+it.each(['grounded', 'general', 'inferred', 'abstain'] as const)(
   'shows inline actions by %s mode and video availability at 375px',
   async (mode) => {
     Object.defineProperty(window, 'innerWidth', {

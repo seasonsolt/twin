@@ -143,22 +143,25 @@ def test_summary_mode_counts_and_legacy_records(tmp_path: Path) -> None:
         assert data[category]["modes"] == {
             "grounded": 0 if category == "general" else n,
             "general": n if category == "general" else 0,
+            "inferred": 0,
             "abstain": n,
         }
-    assert data["update"]["modes"] == {"grounded": 0, "general": 0, "abstain": 0}
-    assert data["overall"]["modes"] == {"grounded": 5, "general": 1, "abstain": 6}
+    assert data["update"]["modes"] == {"grounded": 0, "general": 0, "inferred": 0, "abstain": 0}
+    assert data["overall"]["modes"] == {"grounded": 5, "general": 1, "inferred": 0, "abstain": 6}
     legacy = report.model_copy(update={"predictions": tuple(p.model_copy(update={"raw": {}}) for p in predictions)})
-    assert summarize(legacy)["general"]["modes"] == {"grounded": 1, "general": 0, "abstain": 1}
+    assert summarize(legacy)["general"]["modes"] == {"grounded": 1, "general": 0, "inferred": 0, "abstain": 1}
     compared = compare_reports(legacy, report)
     assert compared["categories"]["general"]["modes"] == {
-        "A": {"grounded": 1, "general": 0, "abstain": 1},
-        "B": {"grounded": 0, "general": 1, "abstain": 1},
+        "A": {"grounded": 1, "general": 0, "inferred": 0, "abstain": 1},
+        "B": {"grounded": 0, "general": 1, "inferred": 0, "abstain": 1},
     }
     write_outputs(tmp_path, report, Settings(), allow_in_repo=True)
     assert (
         json.loads((tmp_path / "report.json").read_text())["categories"]["general"]["modes"] == data["general"]["modes"]
     )
-    assert '回答模式：{"grounded": 0, "general": 1, "abstain": 1}' in (tmp_path / "report.md").read_text()
+    assert (
+        '回答模式：{"grounded": 0, "general": 1, "inferred": 0, "abstain": 1}' in (tmp_path / "report.md").read_text()
+    )
 
 
 @pytest.mark.parametrize("mode", ["grounded", "general", "abstain"])

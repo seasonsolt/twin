@@ -127,7 +127,7 @@ class ChatDraft(BaseModel):
     topic_facets: list[str] = Field(
         default_factory=list, description=f"对方这句话涉及的细项编号，最多 {MAX_TOPIC_FACETS} 个，从【细项列表】里选"
     )
-    mode: Literal["grounded", "general", "abstain"] = "grounded"
+    mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"
     answered: bool = Field(
         default=True,
         description="reply 是否给出了 asked 所要的那一项；只讲了相关背景、近似信息，或在说明没有这条记录时为 false",
@@ -154,7 +154,7 @@ class ChatReply(BaseModel):
     topic_facets: list[str] = Field(default_factory=list)
     retrieved_ids: list[str]
     as_of: dt.date | None = None
-    mode: Literal["grounded", "general", "abstain"] = "grounded"
+    mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"
     quotes_removed: int = 0
 
     @model_validator(mode="before")
@@ -166,7 +166,7 @@ class ChatReply(BaseModel):
     def consistent_mode(self) -> ChatReply:
         if self.abstain != (self.mode == "abstain"):
             raise ValueError("abstain must match mode")
-        if self.mode == "general":
+        if self.mode in ("general", "inferred"):
             self.confidence = min(self.confidence, 0.5)
         return self
 

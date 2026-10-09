@@ -139,7 +139,7 @@ def test_transport_errors_are_generic(dependencies: None, error: Exception, tmp_
     assert SECRET not in str(exc.value)
 
 
-@pytest.mark.parametrize("mode", ["general", "abstain"])
+@pytest.mark.parametrize("mode", ["general", "inferred", "abstain"])
 def test_video_keeps_content(dependencies: None, tmp_path: Path, mode: str) -> None:
     general = script_from_presentable(
         presentable_from_payload("chat_reply", {**SOURCE, "mode": mode, "abstain": mode == "abstain"}), "人"

@@ -112,13 +112,22 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 ### Chat answer modes (L3)
 
 - 聊天检索每次从隐私视图的 `item_text` / `expression_text` 构建 BM25（CJK 字符 bigram + ASCII 单词），与向量排名按 RRF(60) 融合；无向量时仍可按关键词召回，不改存储。
-- `ChatDraft.mode` / append-only `ChatReply.mode` are `Literal["grounded", "general", "abstain"]`,
+- `ChatDraft.mode` / append-only `ChatReply.mode` are `Literal["grounded", "general", "inferred", "abstain"]`,
   defaulting to `"grounded"`. Missing mode on legacy drafts/replies becomes `"abstain"` when `abstain=true`,
   otherwise `"grounded"`; missing `abstain` is derived as `mode == "abstain"`. Explicit inconsistencies are rejected.
 - Owner-specific answers remain evidence-grounded; unsupported owner questions, commitments and judgements of
   specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, begin with a short
   general-knowledge/non-owner-view notice, may omit citations, and have confidence capped at 0.5.
   The frontend adds a neutral `通用回答 · 非本人观点` badge; `需要本人确认` is reserved for abstention.
+- `"inferred"` is the best inference for "what would they choose/do/prefer/think" questions the material does not
+  answer directly but has indirect evidence for (related past answers, stated values, traits, habits). The text states
+  it is an inference and never presents it as something the owner said or did; factual recall, commitments and
+  judgements of specific other people never use it. Finalization requires at least one valid citation (otherwise the
+  reply becomes `abstain` with confidence ≤ 0.3), caps confidence at `INFERRED_CONFIDENCE_CAP` (0.5, also enforced by
+  `ChatReply`), and treats `answered=false` like a grounded miss. When the question fixes the output format (e.g. only
+  an option label) the text may be just that; the inference status then lives in `mode`. The frontend shows a neutral
+  `推测 · 非本人表达` badge, MCP/CLI append `（推测，非本人表达）` and WeCom a footer line; consumers that need the
+  owner's own view must not treat `inferred` as `grounded`.
 - `ChatDraft.asked` names the item the question wants and `answered` (default `true`) says whether the text supplies it.
   A `grounded` draft with `answered=false` is finalized as `abstain` (confidence capped at 0.3, reason defaults to the
   asked item); `general` and `abstain` drafts are unaffected. Replies follow the language of the other party's latest
@@ -126,7 +135,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - Quotation marks may enclose only verbatim text from speaking samples or retrieved material, never emphasis,
   terms or paraphrases presented as the owner's words. The other grounding rules remain unchanged.
 - Chat log JSON appends `mode` without a SQLite migration. `chat_demand()` excludes general questions from both
-  asked and abstained facet counts; legacy logs without mode retain their previous demand behaviour.
+  asked and abstained facet counts and counts inferred answers as asked and as gaps (no direct evidence existed); legacy logs without mode retain their previous demand behaviour.
 
 ### Pre-release removals (P3)
 
@@ -217,7 +226,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   表达复用 `expression_view(target_only=True, until=as_of)`；条目取最后可见证据，表达取本人文本，
   沿用聊天的空白整理/截断。返回 ref_id/kind/quote/date/source_kind，不暴露来源路径或审核备注。
 - ServiceAnswer 包含 schema_version/answer/abstain/abstain_reason/confidence/citations/as_of/
-  persona_name/generated_at（UTC），追加 `mode: Literal["grounded", "general", "abstain"] = "grounded"`；
+  persona_name/generated_at（UTC），追加 `mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"`；
   文本、弃权、置信度和 mode 保持 L3 原值。
   `ServiceIdentity` 仅含 name/avatar/voice，不输出授权或备注。
 - `api` / `mcp_server`（代码层 9）共用懒 ServiceBackend，配置 LLM 与 embed 均
@@ -280,7 +289,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   Sentence boundaries are Chinese/ASCII terminal punctuation clusters or line breaks outside `「」` / `“”` quotes;
   ASCII periods end a sentence only before whitespace, a closing quote or end of text, never between two digits.
   Only segment-edge whitespace is trimmed. Unclosed quotes conservatively retain the remainder together.
-  `PresentableAnswer` appends `mode: Literal["grounded", "general", "abstain"] = "grounded"`, preserved by the
+  `PresentableAnswer` appends `mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"`, preserved by the
   ChatReply adapter. General replies preserve all model content, including the first sentence, without added notices.
   The video adapter sends only speech segments.
   Abstention produces only an abstention notice, never speech; an empty reason has a neutral default.

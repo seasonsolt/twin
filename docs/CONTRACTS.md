@@ -119,6 +119,10 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, begin with a short
   general-knowledge/non-owner-view notice, may omit citations, and have confidence capped at 0.5.
   The frontend adds a neutral `通用回答 · 非本人观点` badge; `需要本人确认` is reserved for abstention.
+- `ChatDraft.asked` names the item the question wants and `answered` (default `true`) says whether the text supplies it.
+  A `grounded` draft with `answered=false` is finalized as `abstain` (confidence capped at 0.3, reason defaults to the
+  asked item); `general` and `abstain` drafts are unaffected. Replies follow the language of the other party's latest
+  message; quoted original words stay verbatim and are verified as before.
 - Quotation marks may enclose only verbatim text from speaking samples or retrieved material, never emphasis,
   terms or paraphrases presented as the owner's words. The other grounding rules remain unchanged.
 - Chat log JSON appends `mode` without a SQLite migration. `chat_demand()` excludes general questions from both

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import re
@@ -209,6 +210,101 @@ def test_general_reply_confidence_and_demand(store: PersonaStore, settings: Sett
     assert store.chat_demand() == {"2.1": (1, 1)}
 
 
+def own_words_id(chat: pc.PersonaChat, question: str) -> str:
+    pc.index_persona(chat.store, chat.embedder, chat.settings)
+    return next(e.expression_id for e, _ in chat.retrieve(question).expressions if e.is_target)
+
+
+@pytest.mark.parametrize("answered", [True, False])
+def test_reply_that_misses_the_asked_item_is_finalized_as_abstain(
+    store: PersonaStore, settings: Settings, answered: bool
+) -> None:
+    question = "Which store did I redeem the coupon at?"
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings)
+    cited = own_words_id(chat, question)
+    draft = {
+        "asked": "the store where the coupon was redeemed",
+        "reply": "我是在邮箱里兑换的那张优惠券。",
+        "citations": [cited],
+        "confidence": 0.99,
+        "mode": "grounded",
+        "answered": answered,
+    }
+    chat.llm = FakeLLM(lambda *a: draft)
+    reply = chat.reply([ChatTurn(role="user", content=question)])
+    assert reply.reply == draft["reply"] and reply.citations == [cited]
+    if answered:
+        assert (reply.mode, reply.abstain, reply.confidence, reply.abstain_reason) == ("grounded", False, 0.99, "")
+    else:
+        assert (reply.mode, reply.abstain, reply.confidence) == ("abstain", True, pc.UNCITED_CONFIDENCE_CAP)
+        assert "the store where the coupon was redeemed" in reply.abstain_reason
+    entry = json.loads(store._db.execute("SELECT json FROM p_chat_log").fetchone()[0])
+    assert entry["abstain"] is not answered and entry["mode"] == reply.mode
+    assert ChatReply.model_validate_json(reply.model_dump_json()) == reply
+
+
+def test_missed_item_keeps_model_reason_and_leaves_other_modes_alone(store: PersonaStore, settings: Settings) -> None:
+    drafts = iter(
+        [
+            {
+                "reply": "没记这个。",
+                "citations": [],
+                "confidence": 0.9,
+                "answered": False,
+                "abstain_reason": "资料没有店名",
+            },
+            {"reply": "一般来说先列预算。", "citations": [], "mode": "general", "confidence": 0.9, "answered": False},
+        ]
+    )
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: next(drafts)), HashingEmbedder(), settings)
+    ask = [ChatTurn(role="user", content="哪家店？")]
+    missed, general = chat.reply(ask, persist=False), chat.reply(ask, persist=False)
+    assert missed.abstain and missed.mode == "abstain" and missed.abstain_reason == "资料没有店名"
+    assert general.mode == "general" and not general.abstain and general.confidence == 0.5
+
+
+def test_streamed_reply_that_misses_the_asked_item_is_abstained(store: PersonaStore, settings: Settings) -> None:
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings)
+    cited = own_words_id(chat, "哪家店？")
+    meta = {"asked": "店名", "answered": False, "citations": [cited], "confidence": 0.95, "mode": "grounded"}
+
+    class Streaming(FakeLLM):
+        async def stream(self, **kwargs: Any) -> Any:
+            assert "asked" in kwargs["system"] and "answered" in kwargs["system"]
+            yield "我是在邮箱里兑换的。\n<<<META>>>\n" + json.dumps(meta, ensure_ascii=False)
+
+    chat.llm = Streaming(lambda *a: {})
+
+    async def run() -> list[Any]:
+        return [x async for x in chat.stream_reply([ChatTurn(role="user", content="哪家店？")], persist=False)]
+
+    final = asyncio.run(run())[-1]
+    assert isinstance(final, ChatReply)
+    assert (final.mode, final.abstain, final.confidence) == ("abstain", True, pc.UNCITED_CONFIDENCE_CAP)
+
+
+def test_reply_language_follows_the_asker(store: PersonaStore, settings: Settings) -> None:
+    ctx = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings).retrieve("问题")
+    prompt = pc.chat_system_prompt(settings.target_name, ctx)
+    rules = prompt.split("## 规则\n", 1)[1].split("## 输出格式", 1)[0]
+    assert "7. 回复语言跟随对方最后一句话" in rules
+    assert "对方用英文，整段回复（包括说明是通用知识、没有记录或需要本人确认的句子）都用英文" in rules
+    assert "对方用中文就用中文" in rules and "引用的原话保持原文逐字，不翻译、不改写" in rules
+    for text in ("Which store did I redeem the coupon at?", "你怎么看签大单？"):
+        user = pc.chat_user_message([ChatTurn(role="user", content=text)], ctx)
+        assert user.endswith(f"对方：{text}\n\n请回复对方的最后一句话，语言与这句话一致。")
+
+
+def test_english_reply_keeps_verbatim_chinese_quotes(store: PersonaStore, settings: Settings) -> None:
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings)
+    cited = own_words_id(chat, "钱进了账户")
+    reply_text = "I put it as 「钱进了账户」, and I never said “revenue is whatever you invoice”."
+    chat.llm = FakeLLM(lambda *a: {"reply": reply_text, "citations": [cited], "confidence": 0.8})
+    reply = chat.reply([ChatTurn(role="user", content="How do you define income?")], persist=False)
+    assert reply.reply == "I put it as 「钱进了账户」, and I never said revenue is whatever you invoice."
+    assert reply.quotes_removed == 1 and not reply.abstain
+
+
 def test_index_is_incremental_and_follows_the_embedding_space(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     first = pc.index_persona(store, embedder, settings)
@@ -263,7 +359,7 @@ def test_reply_filters_citations_and_caps_confidence(store: PersonaStore, settin
     _, system, user = llm.calls[0]
     assert "张三的数字分身" in system and "说白了钱进了账户才叫收入" in system  # voice sample
     assert "2.1 核心价值排序；" in system and "；本人已确认" not in system
-    assert user.endswith("对方：你怎么看签大单？\n\n请回复对方的最后一句话。")
+    assert user.endswith("对方：你怎么看签大单？\n\n请回复对方的最后一句话，语言与这句话一致。")
     history += [ChatTurn(role="twin", content=first.reply), ChatTurn(role="user", content="你喜欢什么运动？")]
     second = chat.reply(history, as_of=D(2026, 9, 30))
     assert second.abstain and second.confidence == 0.3 and second.abstain_reason == "无依据"

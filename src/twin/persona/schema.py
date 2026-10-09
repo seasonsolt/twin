@@ -118,6 +118,7 @@ def _chat_mode_defaults(data: object) -> object:
 
 
 class ChatDraft(BaseModel):
+    asked: str = Field(default="", description="对方最后一句话要的那一项具体信息或结论，一句话，如“兑换优惠券的商店名”")
     reply: str = Field(description="以本人身份、第一人称、他平时的说话方式写的回复")
     citations: list[str] = Field(description="回复依据的资料编号，原样复制方括号里的编号；没有依据时为空列表")
     confidence: float = Field(description="0 到 1：你对“本人会这样回答”的把握")
@@ -127,6 +128,10 @@ class ChatDraft(BaseModel):
         default_factory=list, description=f"对方这句话涉及的细项编号，最多 {MAX_TOPIC_FACETS} 个，从【细项列表】里选"
     )
     mode: Literal["grounded", "general", "abstain"] = "grounded"
+    answered: bool = Field(
+        default=True,
+        description="reply 是否给出了 asked 所要的那一项；只讲了相关背景、近似信息，或在说明没有这条记录时为 false",
+    )
 
     @model_validator(mode="before")
     @classmethod

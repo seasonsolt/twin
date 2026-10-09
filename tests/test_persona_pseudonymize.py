@@ -372,6 +372,6 @@ def test_old_code_database_loads_and_keeps_profile_and_chat_output_unchanged(
         assert "不替本人答应事情或做承诺" in system
         assert (
             hashlib.sha256(user.encode()).hexdigest()
-            == "5d95a8fa94134a4da264fd4e58bd759f5a1fc45734c3f9e8ecdb6c1ac490048c"
+            == "68bf79f4a8d73d2b86fd2c914dd5a16cb92ee22d7d9172187df78c06774df7c8"
         )
         assert store.list_expressions(source.source_id) == raw

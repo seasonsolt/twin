@@ -20,6 +20,7 @@ from twin.evals import persona_runtime as pr
 from twin.evals import personamem as pm
 from twin.evals import twin2k500 as tw
 from twin.llm import FakeLLM
+from twin.persona.chat import EMPTY_REPLY
 from twin.persona.profile import BuildReport, consented_facets
 from twin.persona.schema import ChatDraft, EvidenceClass, SourceKind, evidence_class
 from twin.persona.sources import parse_chat
@@ -315,7 +316,9 @@ def test_twin_categorical_attempts_and_unscored_boundaries(
     expected = [1, 0, 0, 0, 0, None, None, None, None] if score else [None] * 9
     assert [r["scores"]["exact_match"] for r in rows] == expected
     assert all(r["scores"]["absolute_error"] is None for r in rows)
-    assert [r["model_response"] for r in rows[:8]] == [response for response, _ in replies]
+    # A blank reply is finalized into an honest abstention text instead of staying empty.
+    shown = [EMPTY_REPLY["en"] if not response.strip() else response for response, _ in replies]
+    assert [r["model_response"] for r in rows[:8]] == shown
     assert [r["format_failure"] for r in rows[:8]] == [False, False, True, True, False, False, True, False]
     assert [r["persona"]["abstain"] for r in rows[:8]] == [abstain for _, abstain in replies]
     hypotheses = [json.loads(line) for line in (out / "hypotheses.jsonl").read_text().splitlines()]

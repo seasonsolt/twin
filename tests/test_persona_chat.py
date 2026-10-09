@@ -293,15 +293,27 @@ def test_prompt_inference_branch_sits_in_the_personal_step_before_abstaining() -
     step = checklist[personal:restricted]
     infer, abstain = step.index("归为 inferred"), step.index("就用本人的口吻简短说明资料里没记这件事")
     assert infer < abstain
-    assert "不是发生过什么、在哪、何时、谁、多少这类事实回忆，也不是替本人承诺或评价具体他人" in step
+    assert "发生过什么、在哪、何时、谁，以及本人生活里的事实数字（几个孩子、收入、日期、实付价格）才是事实回忆" in step
+    assert "本人会给出的个人估计（认为多少比例的人支持、可能性有多大、会做几次" in step
+    assert step.index("个人估计") < infer
     assert "没有相关的间接依据，或问的是事实回忆" in step
     modes = prompt.split("## 整体 mode 与弃权\n", 1)[1].split("## 规则", 1)[0]
     assert "我没直接说过，但按我……，大概会……" in modes
     assert "不把推测说成我说过或做过的事，不编造经历" in modes
     assert "citations 至少填一条用到的间接资料，没有就改为 abstain" in modes
     assert "confidence 不超过 0.5" in modes
-    assert "对方限定了输出格式（如只回选项标签）时，正文可以只按该格式作答，推测的身份由 mode 标明" in modes
+    assert "对方限定了输出格式时，只按输出格式一节的规则给出该值，推测的身份由 mode 标明" in modes
     assert "inferred 或 abstain" in pc.STREAM_FORMAT
+
+
+def test_prompt_format_constraint_forbids_prefixed_commentary_in_every_substantive_mode() -> None:
+    prompt = pc.chat_system_prompt("测试本人", pc.PersonaContext([], [], [], []))
+    fmt = prompt.split("## 输出格式\n", 1)[1].split("少量使用 Markdown", 1)[0]
+    assert "只回选项标签、只回一个数字" in fmt
+    assert "无论 mode 是 grounded、general 还是 inferred" in fmt
+    assert "正文都恰好是该标签或数字，不加前缀、单位、解释，也不加说明通用知识或推测的句子" in fmt
+    assert "回答的身份由 mode 标明" in fmt
+    assert "对方限定了输出格式时除外，见输出格式" in prompt
 
 
 INFERENCE: dict[str, Any] = {
@@ -580,3 +592,77 @@ def test_rendered_and_quotable_expressions_follow_the_query() -> None:
     ctx = pc.PersonaContext([], [(e, 1.0)], [], [], query="优惠券在哪个超市兑换")
     assert "城东超市兑换了优惠券" in pc.chat_user_message([ChatTurn(role="user", content="?")], ctx)
     assert any("城东超市" in m for m in pc._quote_materials(ctx))
+
+
+def number_draft(**changes: Any) -> dict[str, Any]:
+    return {**INFERENCE, "asked": "认为多少百分比的人支持该政策", "reply": "55", "abstain_reason": "", **changes}
+
+
+def test_numeric_estimate_is_inferred_with_citation_and_keeps_the_bare_number(
+    store: PersonaStore, settings: Settings
+) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: number_draft(citations=[item_id])), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content='{"question": "What percentage support it?"}')], persist=False)
+    assert (reply.reply, reply.mode, reply.abstain, reply.citations) == ("55", "inferred", False, [item_id])
+    assert reply.confidence == pc.INFERRED_CONFIDENCE_CAP
+
+
+def test_numeric_fact_without_evidence_stays_abstained(store: PersonaStore, settings: Settings) -> None:
+    draft = number_draft(
+        asked="孩子的个数",
+        reply="资料里没有记这件事。",
+        mode="abstain",
+        confidence=0.1,
+        abstain_reason="无记录",
+        citations=[],
+    )
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: draft), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="你有几个孩子？")], persist=False)
+    assert (reply.mode, reply.abstain, reply.citations) == ("abstain", True, [])
+    assert reply.reply == "资料里没有记这件事。" and reply.confidence <= pc.UNCITED_CONFIDENCE_CAP
+    # A number claimed as inference without any retrieved basis is not allowed through either.
+    guess = number_draft(asked="孩子的个数", reply="2", citations=[])
+    chat.llm = FakeLLM(lambda *a: guess)
+    assert chat.reply([ChatTurn(role="user", content="你有几个孩子？")], persist=False).abstain
+
+
+@pytest.mark.parametrize(
+    ("question", "fallback"),
+    [("你有几个孩子？", pc.EMPTY_REPLY["zh"]), ("How many children do you have?", pc.EMPTY_REPLY["en"])],
+)
+@pytest.mark.parametrize("blank", ["", "  \n\t"])
+@pytest.mark.parametrize("mode", ["grounded", "general", "inferred", "abstain"])
+def test_finalized_reply_is_never_empty(
+    store: PersonaStore, settings: Settings, question: str, fallback: str, blank: str, mode: str
+) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    draft = number_draft(reply=blank, citations=[item_id], mode=mode, abstain_reason="")
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: draft), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content=question)], persist=False)
+    assert (reply.reply, reply.mode, reply.abstain) == (fallback, "abstain", True)
+    assert reply.abstain_reason and reply.confidence <= pc.UNCITED_CONFIDENCE_CAP
+
+
+async def collect(chat: pc.PersonaChat, question: list[ChatTurn]) -> list[Any]:
+    return [x async for x in chat.stream_reply(question, persist=False)]
+
+
+def test_streamed_empty_body_is_replaced_in_the_final_reply(store: PersonaStore, settings: Settings) -> None:
+    cited = store.list_items("2.1")[0].item_id
+    meta = {k: v for k, v in number_draft(citations=[cited]).items() if k not in ("reply", "abstain_reason")}
+    question = [ChatTurn(role="user", content="How many children do you have?")]
+
+    class OnlyMetadata(FakeLLM):
+        async def stream(self, **kwargs: Any) -> Any:
+            yield "<<<META>>>\n" + json.dumps(meta, ensure_ascii=False)
+
+    class NoDelimiter(FakeLLM):
+        async def stream(self, **kwargs: Any) -> Any:
+            yield "\n"
+
+    for llm in (OnlyMetadata(lambda *a: {}), NoDelimiter(lambda *a: {})):
+        chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
+        final = asyncio.run(collect(chat, question))[-1]
+        assert isinstance(final, ChatReply)
+        assert (final.reply, final.mode, final.abstain) == (pc.EMPTY_REPLY["en"], "abstain", True)

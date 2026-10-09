@@ -14,6 +14,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 from collections.abc import AsyncGenerator, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
@@ -29,7 +30,7 @@ from ..llm import LLM, hedged_stream
 from ..util import Progress
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
-from .lexical import BM25
+from .lexical import BM25, tokenize
 from .quotes import remove_unverified_quotes
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
 from .sources import expression_view
@@ -54,6 +55,34 @@ UNVERIFIED_CONFIDENCE_CAP = 0.6
 def _clip(text: str, limit: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+_SENTENCE_END = re.compile(r"[。！？!?；;.\n]\s*")
+
+
+def _excerpt(text: str, query: str, limit: int) -> str:
+    """Clip a long text to the passage sharing the most query terms, starting at a sentence, so a conclusion
+    late in a long message is not cut off; without overlap this is a plain head clip."""
+    text = " ".join(text.split())
+    terms = set(tokenize(query))
+    if len(text) <= limit or not terms:
+        return _clip(text, limit)
+    width = limit - 2
+    starts = [0, *(m.end() for m in _SENTENCE_END.finditer(text) if m.end() < len(text))]
+
+    def covered(start: int) -> int:
+        # Count only whole sentences, so a passage cut off at the window's end does not win.
+        window = text[start : start + width]
+        if start + width < len(text):
+            ends = [m.end() for m in _SENTENCE_END.finditer(window)]
+            window = window[: ends[-1]] if ends else window
+        return len(terms.intersection(tokenize(window)))
+
+    best = max(starts, key=lambda s: (covered(s), -s))
+    if best == 0:
+        return _clip(text, limit)
+    body = text[min(best, len(text) - (limit - 1)) :]
+    return "…" + body if len(body) <= limit - 1 else "…" + body[:width] + "…"
 
 
 def item_text(item: PersonaItem) -> str:
@@ -111,6 +140,8 @@ class PersonaContext:
     # The person's own words to imitate: short chat messages first, then quotes of them found in biographies.
     voice: list[str]
     as_of: dt.date | None = None
+    # The retrieval query; long expressions are shown around the passage it matches.
+    query: str = ""
     ids: set[str] = field(default_factory=set)
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
@@ -231,7 +262,7 @@ class PersonaChat:
         ]
         said.sort(key=lambda e: (e.date or dt.date.min, e.expression_id), reverse=True)
         voice = [e.text for e in said[:VOICE_SAMPLES]]
-        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of)
+        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of, query)
 
     def reply(self, messages: Sequence[ChatTurn], as_of: dt.date | None = None, *, persist: bool = True) -> ChatReply:
         if not messages or messages[-1].role != "user":
@@ -470,7 +501,7 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
         if item.evidence
     ]
     for expression, _ in ctx.expressions:
-        materials.append(_clip(expression.text, TEXT_CHARS))
+        materials.append(_excerpt(expression.text, ctx.query, TEXT_CHARS))
         if expression.context:
             materials.append(_clip(expression.context, 160))
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
@@ -494,10 +525,10 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     return CHAT_SYSTEM.format(name=name, scope=scope, core=core, voice=voice, facets=facets)
 
 
-def _render_expression(e: Expression) -> str:
+def _render_expression(e: Expression, query: str) -> str:
     head = " · ".join(x for x in (e.date.isoformat() if e.date else "", e.channel) if x)
     context = f"（语境：{_clip(e.context, 160)}）" if e.context else ""
-    return f"- [{e.expression_id}] {head}{context}「{_clip(e.text, TEXT_CHARS)}」"
+    return f"- [{e.expression_id}] {head}{context}「{_excerpt(e.text, query, TEXT_CHARS)}」"
 
 
 def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
@@ -508,12 +539,12 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     own = [e for e, _ in ctx.expressions if not e.narrated]
     narrated = [e for e, _ in ctx.expressions if e.narrated]
     lines.append("本人原话：")
-    lines.extend(_render_expression(e) for e in own)
+    lines.extend(_render_expression(e, ctx.query) for e in own)
     if not own:
         lines.append("（无相关原话）")
     if narrated:
         lines.append("资料记述（不是本人原话）：")
-        lines.extend(_render_expression(e) for e in narrated)
+        lines.extend(_render_expression(e, ctx.query) for e in narrated)
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:
         who = "对方" if m.role == "user" else "你"

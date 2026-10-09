@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, suppress
@@ -127,6 +128,59 @@ def _answer(q: dict[str, Any], kind: str, index: int, choices: tuple[str, ...]) 
         v = a.get("Values", [])[index] if q["QuestionType"] == "Slider" else a.get("Text")
         return None if v in (None, "") else _number(v)
     return None
+
+
+def _label(value: Any, options: Any) -> str:
+    """A selected choice as its text, falling back to the 1-based position within the options."""
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, (int, float, str)) and not isinstance(value, bool) and isinstance(options, list):
+        try:
+            position = _number(value)
+        except ValueError:
+            return ""
+        if position.is_integer() and 1 <= position <= len(options):
+            return str(options[int(position) - 1])
+    return ""
+
+
+def _past_entries(q: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """One readable (question, answer) entry per past matrix row or slider statement, so each statement stays
+    next to its own answer instead of in parallel arrays a clipped context separates."""
+    question, answers = q["QuestionText"], q["Answers"]
+    rows, statements, values = q.get("Rows"), q.get("Statements"), answers.get("Values")
+    selected = answers.get("SelectedText") or answers.get("SelectedByPosition")
+    entries: list[tuple[str, str]] = []
+    if rows and isinstance(selected, list) and len(selected) == len(rows):
+        texts = answers.get("SelectedText") or [None] * len(rows)
+        positions = answers.get("SelectedByPosition") or [None] * len(rows)
+        for row, text, position in zip(rows, texts, positions, strict=True):
+            label = _label(text, q.get("Columns")) or _label(position, q.get("Columns"))
+            if label:
+                entries.append((question, f"{row}: {label}" if row.strip() else label))
+    elif statements and isinstance(values, list) and len(values) == len(statements):
+        bounds = q.get("Range") or {}
+        scale = f" ({bounds['Min']:g}–{bounds['Max']:g})" if "Min" in bounds and "Max" in bounds else ""
+        for statement, value in zip(statements, values, strict=True):
+            if value not in (None, ""):
+                entries.append((question, f"{statement}: {value}{scale}" if statement.strip() else f"{value}{scale}"))
+    elif selected is not None:
+        texts, positions = answers.get("SelectedText"), answers.get("SelectedByPosition")
+        if isinstance(selected, list):
+            labels = [_label(t, None) for t in texts] if isinstance(texts, list) else []
+            labels = labels or [_label(p, q.get("Options")) for p in positions or []]
+        else:
+            labels = [_label(texts, None) or _label(positions, q.get("Options"))]
+        if any(labels):
+            entries.append((question, "; ".join(label for label in labels if label)))
+    elif isinstance(answers.get("Text"), (str, list)):
+        text = answers["Text"]
+        joined = "; ".join(str(t) for t in text if str(t).strip()) if isinstance(text, list) else text
+        if joined.strip():
+            entries.append((question, joined))
+    else:
+        entries.append((question, json.dumps(answers, ensure_ascii=False)))
+    return [(context, text, "") for context, text in entries]
 
 
 def _expand(pid: str, persona: str, blocks: list[dict[str, Any]]) -> list[Case]:
@@ -263,15 +317,7 @@ def load_dataset(path: Path) -> tuple[Case, ...]:
                             evidence.append(clean)
                     persona = json.dumps(evidence, ensure_ascii=False)
                 past_questionnaire = (
-                    tuple(
-                        (
-                            json.dumps({k: v for k, v in q.items() if k != "Answers"}, ensure_ascii=False),
-                            json.dumps(q["Answers"], ensure_ascii=False),
-                            "",
-                        )
-                        for q in evidence
-                        if q["Answers"]
-                    )
+                    tuple(entry for q in evidence if q["Answers"] for entry in _past_entries(q))
                     if row.get("wave1_3_persona_json")
                     else None
                 )
@@ -296,21 +342,33 @@ def load_dataset(path: Path) -> tuple[Case, ...]:
         raise ValueError("Invalid Twin-2K-500 wave_split data; check schema, IDs and response domains") from None
 
 
+SAMPLE_SEED = "twin2k500-v1"
+
+
+def sample_participants(cases: Sequence[Case], count: int, seed: str = SAMPLE_SEED) -> list[str]:
+    """Draw participants uniformly without replacement, reproducibly for the same data and seed."""
+    ids = list(dict.fromkeys(c.input.participant_id for c in cases))
+    if not 1 <= count <= len(ids):
+        raise ValueError("participant sample size must be between 1 and the number of participants")
+    return random.Random(seed).sample(ids, count)
+
+
 def select_cases(
     cases: Sequence[Case],
     *,
-    limit: int = 3,
+    limit: int | None = 3,
     offset: int = 0,
     participant_ids: Sequence[str] | None = None,
 ) -> tuple[Case, ...]:
-    if limit < 1 or offset < 0:
+    """Filter to the named participants, then slice response items in source order; ``limit=None`` keeps all."""
+    if (limit is not None and limit < 1) or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
     if participant_ids is not None:
         wanted = set(participant_ids)
         if not wanted or wanted - {c.input.participant_id for c in cases}:
             raise ValueError("Unknown or empty participant selection")
         cases = [c for c in cases if c.input.participant_id in wanted]
-    selected = tuple(cases[offset : offset + limit])
+    selected = tuple(cases[offset:] if limit is None else cases[offset : offset + limit])
     if not selected:
         raise ValueError("No question items selected")
     return selected

@@ -119,6 +119,23 @@ uv run twin eval-twin2k500 --dataset /private/tmp/twin-export/wave_split.jsonl \
   --out /private/tmp/twin-runs/fresh-jsonl-run --limit 3 --dry-run
 ```
 
+### Formal test set
+
+The formal Twin-2K-500 test set is 10 participants drawn uniformly without replacement
+from the pinned first chunk (294 participants) with seed `twin2k500-v1`, keeping every
+wave 4 response item of each sampled participant:
+
+```sh
+uv run twin eval-twin2k500 --dataset /private/tmp/twin-export/wave_split.jsonl \
+  --out /private/tmp/twin-runs/formal-10 --participants 10 --dry-run
+```
+
+Sampling people rather than items keeps each profile build serving all of that person's
+items. `sample_participants` uses `random.Random(seed).sample` over participant IDs in
+source order, so the same data and seed always select the same people; the sampled IDs
+and seed enter the configuration fingerprint. With `--participants`, `--limit` defaults
+to all items of the sample. Report categorical and numeric items separately.
+
 All three benchmark CLI commands (LongMemEval, PersonaMem, Twin-2K-500) use
 `_benchmark_settings` to copy Settings, set `chat_llm=settings.llm`, and clear
 `judges`. Thus the configured `[llm]` xjjk `gpt-5.6-sol` is used instead of the
@@ -144,7 +161,7 @@ other items using gpt-6-luna. Results remain separate by model; see
 These nonrandom samples do not establish full benchmark accuracy; actual costs remain unknown.
 
 `select_cases(cases, *, limit=3, offset=0, participant_ids=None)` filters explicit
-participant IDs first, then slices response items in source order. IDs are strings
+participant IDs first, then slices response items in source order; `limit=None` keeps all. IDs are strings
 in the API. Unknown IDs fail. Without a participant filter, selection starts with
 the first source participant; the default limit is three response items, not three
 people. Matrix rows and Slider statements each count toward the limit.

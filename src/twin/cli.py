@@ -762,7 +762,13 @@ def _benchmark_settings(ctx: typer.Context) -> Settings:
     return settings.model_copy(update={"chat_llm": settings.llm, "judges": []})
 
 
-def _benchmark_fingerprints(settings: Settings, paths: dict[str, Path], limit: int, offset: int) -> dict[str, str]:
+def _benchmark_fingerprints(
+    settings: Settings,
+    paths: dict[str, Path],
+    limit: int | None,
+    offset: int,
+    selection: dict[str, Any] | None = None,
+) -> dict[str, str]:
     from .util import fingerprint
 
     result = {}
@@ -775,6 +781,7 @@ def _benchmark_fingerprints(settings: Settings, paths: dict[str, Path], limit: i
             "embed": settings.embed.model_dump(exclude={"base_url", "api_key_env"}),
             "limit": limit,
             "offset": offset,
+            **(selection or {}),
         }
     )
     return result
@@ -827,20 +834,34 @@ def twin2k500_command(
     ctx: typer.Context,
     dataset: Annotated[Path, typer.Option("--dataset", help="Official wave_split exported JSON/JSONL")],
     out: Annotated[Path, typer.Option("--out", help="Fresh private output directory outside git repositories")],
-    limit: Annotated[int, typer.Option("--limit", min=1)] = 3,
+    limit: Annotated[
+        int | None, typer.Option("--limit", min=1, help="Response items; default 3, or all with --participants")
+    ] = None,
     offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    participants: Annotated[
+        int | None, typer.Option("--participants", min=1, help="Seeded random sample of participants")
+    ] = None,
+    seed: Annotated[str, typer.Option("--seed", help="Participant sampling seed")] = "twin2k500-v1",
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """Twin-2K-500 production Twin built from waves 1–3, evaluated on wave 4."""
     from .evals.longmemeval import validate_output
-    from .evals.twin2k500 import load_dataset, run_evaluation, select_cases
+    from .evals.twin2k500 import load_dataset, run_evaluation, sample_participants, select_cases
 
     try:
         out = validate_output(out)
-        cases = select_cases(load_dataset(dataset), limit=limit, offset=offset)
+        loaded = load_dataset(dataset)
+        if participants is None:
+            limit = 3 if limit is None else limit
+            cases = select_cases(loaded, limit=limit, offset=offset)
+            selection = None
+        else:
+            sampled = sample_participants(loaded, participants, seed)
+            cases = select_cases(loaded, limit=limit, offset=offset, participant_ids=sampled)
+            selection = {"participants": sorted(sampled), "seed": seed}
         settings = _benchmark_settings(ctx)
-        identities = _benchmark_fingerprints(settings, {"dataset_sha256": dataset}, limit, offset)
+        identities = _benchmark_fingerprints(settings, {"dataset_sha256": dataset}, limit, offset, selection)
         report = run_evaluation(
             cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities
         )

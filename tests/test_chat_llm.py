@@ -168,3 +168,21 @@ def test_web_and_service_chat_select_and_cache_model(
     assert backend.ask("问题", None).answer == expected.model
     assert calls == [(expected, "chat_llm" if configured else "llm")] * 2
     assert answers == [expected.model] * 3
+
+
+def test_failure_summary_names_fields_and_stop_reason_without_content() -> None:
+    from twin.llm import LLMInvalidOutput, failure_summary
+
+    class Shape(BaseModel):
+        count: int
+        names: list[str]
+
+    try:
+        Shape.model_validate_json('{"count": "SECRET"}')
+    except ValidationError as cause:
+        error = LLMInvalidOutput(f"model: {cause}", stop_reason="end_turn")
+        error.__cause__ = cause
+    summary = failure_summary(error)
+    assert summary == "LLMInvalidOutput [stop=end_turn; int_parsing@count, missing@names]"
+    assert "SECRET" not in summary
+    assert failure_summary(ValueError("SECRET")) == "ValueError"

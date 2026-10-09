@@ -473,3 +473,29 @@ def test_runtime_fingerprint_tracks_actual_settings_with_fixed_caller_digest(
     settings = Settings()
     fallback = bench.run_evaluation(cases, tmp_path / "fallback", settings, dry_run=True, system="retrieval")
     assert fallback["fingerprints"]["configuration"] == fingerprint(settings.model_dump(mode="json"))
+
+
+def test_past_matrix_rows_and_slider_statements_become_separate_answers() -> None:
+    by_id = {q["QuestionID"]: q for q in questions()}
+    assert bench._past_entries(by_id["matrix"]) == [
+        ("Rate these fictional objects.", "Cobalt: Low", ""),
+        ("Rate these fictional objects.", "Silver: High", ""),
+    ]
+    assert bench._past_entries(by_id["choice"]) == [("Choose a fictional telescope.", "Boreal", "")]
+    assert bench._past_entries(by_id["slider"]) == [("Give a probability.", "87 (0–100)", "")]
+    positional = {**by_id["matrix"], "Answers": {"SelectedByPosition": [2, 1]}}
+    assert [text for _, text, _ in bench._past_entries(positional)] == ["Cobalt: High", "Silver: Low"]
+    odd = {"QuestionText": "Odd", "Answers": {"Other": 1}}
+    assert bench._past_entries(odd) == [("Odd", '{"Other": 1}', "")]
+
+
+def test_participant_sample_is_seeded_and_keeps_all_their_items(tmp_path: Path) -> None:
+    cases = bench.load_dataset(dataset(tmp_path, [row(pid) for pid in range(1, 7)]))
+    first = bench.sample_participants(cases, 3)
+    assert first == bench.sample_participants(cases, 3) and len(set(first)) == 3
+    selected = bench.select_cases(cases, limit=None, participant_ids=first)
+    assert {c.input.participant_id for c in selected} == set(first)
+    assert len(selected) == len([c for c in cases if c.input.participant_id in first])
+    for count in (0, 7):
+        with pytest.raises(ValueError):
+            bench.sample_participants(cases, count)

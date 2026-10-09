@@ -178,6 +178,8 @@ class PersonaRuntime:
                         report = build_profile(store, self.llm, settings)
                         recorder = active_recorder()
                         if report.failures or (recorder is not None and recorder.stop is not None):
+                            # Content-free: stage, chunk or facet id, error type, stop reason and field paths.
+                            self.metadata["preparation_failures"] = report.failures
                             raise PreparationError("Profile preparation failed")
                     with self._stage("index"):
                         index_persona(store, self.embedder, settings)

@@ -364,3 +364,26 @@ def test_quote_guard_rejects_unseen_material(
     monkeypatch.setattr(chat, "retrieve", lambda *a: ctx)
     reply = chat.reply([ChatTurn(role="user", content="问题以前的话"), ChatTurn(role="user", content="最后的问题")])
     assert reply.reply == draft.replace("「", "").replace("」", "") and reply.quotes_removed == 5
+
+
+def test_long_expression_is_shown_around_the_passage_the_query_matches() -> None:
+    text = "我平时喜欢听歌。" * 90 + "最有满足感的是写下自己的音乐历程并现场演出。"
+    excerpt = pc._excerpt(text, "怎样表达音乐最有满足感", pc.TEXT_CHARS)
+    assert len(excerpt) == pc.TEXT_CHARS and excerpt.startswith("…")
+    assert excerpt.endswith("最有满足感的是写下自己的音乐历程并现场演出。")
+    assert pc._excerpt(text, "毫不相关", pc.TEXT_CHARS) == pc._clip(text, pc.TEXT_CHARS)
+    assert pc._excerpt("短句。", "音乐", pc.TEXT_CHARS) == "短句。"
+
+
+def test_rendered_and_quotable_expressions_follow_the_query() -> None:
+    e = Expression(
+        expression_id="e1",
+        source_id="s",
+        idx=0,
+        speaker="me",
+        is_target=True,
+        text="闲聊。" * 300 + "我在城东超市兑换了优惠券。",
+    )
+    ctx = pc.PersonaContext([], [(e, 1.0)], [], [], query="优惠券在哪个超市兑换")
+    assert "城东超市兑换了优惠券" in pc.chat_user_message([ChatTurn(role="user", content="?")], ctx)
+    assert any("城东超市" in m for m in pc._quote_materials(ctx))

@@ -274,7 +274,9 @@ def _with_identity_alias(settings: Settings) -> Settings:
     return settings.model_copy(update={"target_aliases": [*settings.target_aliases, name]}) if name else settings
 
 
-def parse_chat(path_name: str, raw: str, settings: Settings, channel: str = "") -> ParsedSource:
+def parse_chat(
+    path_name: str, raw: str, settings: Settings, channel: str = "", *, allow_no_target: bool = False
+) -> ParsedSource:
     settings = _with_identity_alias(settings)
     suffix = Path(path_name).suffix.lower()
     if suffix == ".csv":
@@ -287,7 +289,7 @@ def parse_chat(path_name: str, raw: str, settings: Settings, channel: str = "") 
         messages, skipped = _rows_to_messages([r for r in rows if isinstance(r, dict)])
     else:
         messages, skipped = _text_to_messages(raw, date_from_name(Path(path_name).stem))
-    if not any(settings.is_target(m.speaker) for m in messages):
+    if not allow_no_target and not any(settings.is_target(m.speaker) for m in messages):
         raise ValueError(
             f"{path_name}: no message from {settings.target_name}; check target_name / target_aliases "
             f"(speakers seen: {', '.join(sorted({m.speaker for m in messages})[:8]) or 'none'})"

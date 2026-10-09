@@ -56,12 +56,74 @@ def test_init_uses_config_option_as_target(tmp_path: Path) -> None:
 def test_remaining_commands() -> None:
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0
-    for name in ("init", "ui", "persona", "media", "eval", "eval-compare"):
+    for name in (
+        "init",
+        "ui",
+        "persona",
+        "media",
+        "eval",
+        "eval-compare",
+        "eval-longmemeval",
+        "eval-personamem",
+        "eval-twin2k500",
+    ):
         assert name in result.output
     assert set(
         cli.app.registered_commands[i].name or cli.app.registered_commands[i].callback.__name__
         for i in range(len(cli.app.registered_commands))
-    ) == {"init", "ui", "api", "mcp", "eval", "eval-compare"}
+    ) == {"init", "ui", "api", "mcp", "eval", "eval-compare", "eval-longmemeval", "eval-personamem", "eval-twin2k500"}
+
+
+@pytest.mark.parametrize("benchmark", ["longmemeval", "personamem", "twin2k500"])
+def test_benchmarks_use_main_llm_without_production_chat(
+    benchmark: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib
+
+    from twin.config import LLMSettings
+
+    module = importlib.import_module(f"twin.evals.{benchmark}")
+    settings = Settings(
+        llm=LLMSettings(model="gpt-5.6-sol", base_url="https://xjjk.example/v1", api_key_env="TWIN_LLM_KEY"),
+        chat_llm=LLMSettings(model="deepseek-flash", api_key_env="TWIN_LLM_KEY_DEEPSEEK"),
+        judges=[LLMSettings(model="production-judge")],
+    )
+    monkeypatch.setattr(cli, "load_settings", lambda _: settings)
+    monkeypatch.setattr(module, "load_dataset", lambda *args: (object(),))
+    monkeypatch.setattr(module, "select_cases", lambda cases, **kwargs: cases)
+    observed = []
+
+    def run(cases, out, evaluation_settings, **kwargs):  # type: ignore[no-untyped-def]
+        observed.append(evaluation_settings)
+        assert kwargs["system"] == "twin"
+        assert kwargs["score"] is True
+        return {
+            "system": "twin",
+            "selected": 1,
+            "completed": 1,
+            "prediction_failures": 0,
+            "judge_failures": 0,
+            "missing": 0,
+        }
+
+    monkeypatch.setattr(module, "run_evaluation", run)
+    source = tmp_path / "source.json"
+    source.write_text("[]", encoding="utf-8")
+    inputs = (
+        ["--questions", str(source), "--contexts", str(source)]
+        if benchmark == "personamem"
+        else ["--dataset", str(source)]
+    )
+    args = [f"eval-{benchmark}", *inputs, "--out", str(tmp_path / "output")]
+    if benchmark == "longmemeval":
+        args.append("--score")
+    result = invoke(None, *args)
+    assert result.exit_code == 0, result.output
+    assert len(observed) == 1
+    assert observed[0].effective_chat_llm == settings.llm
+    assert observed[0].judges == []
+    assert settings.chat_llm is not None and settings.chat_llm.model == "deepseek-flash"
+    assert settings.judges[0].model == "production-judge"
 
 
 @pytest.fixture(autouse=True)

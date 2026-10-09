@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import ipaddress
 import json
 import logging
@@ -689,6 +690,165 @@ def personal_eval_command(
         # Neither SDK errors nor runtime validation errors may echo personal prompts or answers.
         raise _fail("本人资料评测失败；请检查配置、参考文本和输出权限（详情已隐藏）") from None
     _say("评测报告已写入；update 已在临时副本上运行。" if "update" not in report.skipped else "评测报告已写入。")
+
+
+@app.command("eval-longmemeval")
+def longmemeval_command(
+    ctx: typer.Context,
+    dataset: Annotated[Path, typer.Option("--dataset", help="LongMemEval S cleaned JSON")],
+    out: Annotated[Path, typer.Option("--out", help="Fresh private directory outside git repositories")],
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 3,
+    offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    score: Annotated[bool, typer.Option("--score/--no-score", help="Optional custom configured-judge scoring")] = False,
+) -> None:
+    """LongMemEval through production Twin, with an optional retrieval baseline."""
+    from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
+    from .util import fingerprint
+
+    try:
+        out = validate_output(out)
+        with dataset.open("rb") as stream:
+            dataset_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        cases = select_cases(load_dataset(dataset), limit=limit, offset=offset)
+        settings = _benchmark_settings(ctx)
+        configured_identity = fingerprint(
+            {
+                "reader": settings.effective_chat_llm.model_dump(exclude={"base_url", "api_key_env"}),
+                "embed": settings.embed.model_dump(exclude={"base_url", "api_key_env"}),
+                "judges": [
+                    judge.model_dump(exclude={"base_url", "api_key_env"}) for judge in settings.judges or [settings.llm]
+                ]
+                if score
+                else [],
+                "limit": limit,
+                "offset": offset,
+                "score": score,
+            }
+        )
+        report = run_evaluation(
+            cases,
+            out,
+            settings,
+            system=system,
+            dry_run=dry_run,
+            score=score,
+            fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
+        )
+    except Exception:
+        raise _fail(
+            "LongMemEval failed; check dataset, configuration and fresh private output directory (details hidden)"
+        ) from None
+    _say(
+        f"LongMemEval: selected={report['selected']}, completed={report['completed']}, "
+        f"preparation_failures={report.get('preparation_failures', 0)}, "
+        f"prediction_failures={report['prediction_failures']}, judge_failures={report['judge_failures']}, "
+        f"missing={report['missing']}; system={report['system']}."
+    )
+    if not dry_run and any(
+        report.get(key, 0) for key in ("preparation_failures", "prediction_failures", "judge_failures", "missing")
+    ):
+        raise typer.Exit(code=1)
+
+
+def _benchmark_settings(ctx: typer.Context) -> Settings:
+    config = _config_path(ctx)
+    if config is None and os.environ.get("TWIN_CONFIG"):
+        config = Path(os.environ["TWIN_CONFIG"])
+    if config is not None and not config.is_file():
+        raise ValueError("Missing configuration")
+    settings = load_settings(config)
+    return settings.model_copy(update={"chat_llm": settings.llm, "judges": []})
+
+
+def _benchmark_fingerprints(settings: Settings, paths: dict[str, Path], limit: int, offset: int) -> dict[str, str]:
+    from .util import fingerprint
+
+    result = {}
+    for name, path in paths.items():
+        with path.open("rb") as stream:
+            result[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    result["configuration"] = fingerprint(
+        {
+            "reader": settings.effective_chat_llm.model_dump(exclude={"base_url", "api_key_env"}),
+            "embed": settings.embed.model_dump(exclude={"base_url", "api_key_env"}),
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    return result
+
+
+def _benchmark_status(name: str, report: dict[str, Any], *, dry_run: bool) -> None:
+    _say(
+        f"{name}: selected={report['selected']}, completed={report['completed']}, "
+        f"preparation_failures={report.get('preparation_failures', 0)}, "
+        f"prediction_failures={report['prediction_failures']}, missing={report['missing']}."
+    )
+    if not dry_run and any(report.get(key, 0) for key in ("preparation_failures", "prediction_failures", "missing")):
+        raise typer.Exit(code=1)
+
+
+@app.command("eval-personamem")
+def personamem_command(
+    ctx: typer.Context,
+    questions: Annotated[Path, typer.Option("--questions", help="Official PersonaMem questions CSV")],
+    contexts: Annotated[Path, typer.Option("--contexts", help="Official shared contexts JSONL")],
+    out: Annotated[Path, typer.Option("--out", help="Fresh private output directory outside git repositories")],
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 3,
+    offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """PersonaMem through production Twin with official multiple-choice scoring."""
+    from .evals.longmemeval import validate_output
+    from .evals.personamem import load_dataset, run_evaluation, select_cases
+
+    try:
+        out = validate_output(out)
+        cases = select_cases(load_dataset(questions, contexts), limit=limit, offset=offset)
+        settings = _benchmark_settings(ctx)
+        identities = _benchmark_fingerprints(
+            settings, {"questions_sha256": questions, "contexts_sha256": contexts}, limit, offset
+        )
+        report = run_evaluation(
+            cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities
+        )
+    except Exception:
+        raise _fail(
+            "PersonaMem failed; check input, configuration and fresh output directory (details hidden)"
+        ) from None
+    _benchmark_status("PersonaMem", report, dry_run=dry_run)
+
+
+@app.command("eval-twin2k500")
+def twin2k500_command(
+    ctx: typer.Context,
+    dataset: Annotated[Path, typer.Option("--dataset", help="Official wave_split exported JSON/JSONL")],
+    out: Annotated[Path, typer.Option("--out", help="Fresh private output directory outside git repositories")],
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 3,
+    offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Twin-2K-500 production Twin built from waves 1–3, evaluated on wave 4."""
+    from .evals.longmemeval import validate_output
+    from .evals.twin2k500 import load_dataset, run_evaluation, select_cases
+
+    try:
+        out = validate_output(out)
+        cases = select_cases(load_dataset(dataset), limit=limit, offset=offset)
+        settings = _benchmark_settings(ctx)
+        identities = _benchmark_fingerprints(settings, {"dataset_sha256": dataset}, limit, offset)
+        report = run_evaluation(
+            cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities
+        )
+    except Exception:
+        raise _fail(
+            "Twin-2K-500 failed; check input, configuration and fresh output directory (details hidden)"
+        ) from None
+    _benchmark_status("Twin-2K-500", report, dry_run=dry_run)
 
 
 @app.command("eval-compare")

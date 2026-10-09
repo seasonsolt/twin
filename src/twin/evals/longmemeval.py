@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import math
 import os
+import random
 import re
 from collections.abc import Sequence
 from contextlib import ExitStack, suppress
@@ -157,9 +158,24 @@ def load_dataset(path: Path) -> tuple[Case, ...]:
         ) from None
 
 
-def select_cases(cases: Sequence[Case], *, limit: int = 3, offset: int = 0) -> tuple[Case, ...]:
+SAMPLE_SEED = "longmemeval-v1"
+
+
+def select_cases(
+    cases: Sequence[Case], *, limit: int = 3, offset: int = 0, per_type: int | None = None, seed: str = SAMPLE_SEED
+) -> tuple[Case, ...]:
+    """Slice questions in source order, or with ``per_type`` draw that many of every question type, reproducibly
+    for the same data and seed, and keep them in source order."""
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
+    if per_type is not None:
+        chosen: set[str] = set()
+        for question_type in QUESTION_TYPES:
+            ids = [c.input.question_id for c in cases if c.question_type == question_type]
+            if not 1 <= per_type <= len(ids):
+                raise ValueError("per-type sample size must be between 1 and each type's question count")
+            chosen.update(random.Random(f"{seed}:{question_type}").sample(ids, per_type))
+        return tuple(c for c in cases if c.input.question_id in chosen)
     selected = tuple(cases[offset : offset + limit])
     if not selected:
         raise ValueError("No questions selected")

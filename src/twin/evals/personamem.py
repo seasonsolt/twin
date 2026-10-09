@@ -6,6 +6,7 @@ import ast
 import csv
 import json
 import os
+import random
 import re
 from collections.abc import Sequence
 from contextlib import ExitStack, suppress
@@ -173,9 +174,21 @@ def load_dataset(questions_path: Path, contexts_path: Path) -> tuple[Case, ...]:
         raise ValueError("Invalid PersonaMem dataset: check CSV choices, IDs, categories and context cutoffs") from None
 
 
-def select_cases(cases: Sequence[Case], *, limit: int = 3, offset: int = 0) -> tuple[Case, ...]:
+SAMPLE_SEED = "personamem-v1"
+
+
+def select_cases(
+    cases: Sequence[Case], *, limit: int = 3, offset: int = 0, sample: int | None = None, seed: str = SAMPLE_SEED
+) -> tuple[Case, ...]:
+    """Slice questions in source order, or draw ``sample`` questions uniformly, reproducibly for the same data and
+    seed, and keep them in source order."""
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
+    if sample is not None:
+        if not 1 <= sample <= len(cases):
+            raise ValueError("sample size must be between 1 and the number of questions")
+        chosen = set(random.Random(seed).sample(range(len(cases)), sample))
+        return tuple(c for i, c in enumerate(cases) if i in chosen)
     selected = tuple(cases[offset : offset + limit])
     if not selected:
         raise ValueError("No questions selected")

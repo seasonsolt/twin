@@ -384,3 +384,13 @@ def test_usage_hashes_custom_backend_identity(tmp_path: Path, monkeypatch: pytes
     assert all("SECRET_CUSTOM" not in (out / name).read_text() for name in pm.ARTIFACTS)
     stages = json.loads((out / "usage.json").read_text())["stages"]
     assert {row["stage"] for row in stages} == {"personamem.retrieval", "personamem.prediction"}
+
+
+def test_random_sample_is_seeded_and_in_source_order(tmp_path: Path) -> None:
+    cases = pm.load_dataset(*dataset(tmp_path, [item(str(i)) for i in range(8)]))
+    selected = [c.input.question_id for c in pm.select_cases(cases, sample=4)]
+    assert selected == [c.input.question_id for c in pm.select_cases(cases, sample=4)]
+    assert len(selected) == 4 and selected == sorted(selected, key=int)
+    for sample in (0, 9):
+        with pytest.raises(ValueError):
+            pm.select_cases(cases, sample=sample)

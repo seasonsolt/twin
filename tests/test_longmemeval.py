@@ -530,3 +530,17 @@ def test_report_and_usage_do_not_serialize_custom_backend_names(
     for name in lm.ARTIFACTS:
         assert "SECRET_ID" not in (out / name).read_text()
         assert "PRIVATE_JUDGE_ID" not in (out / name).read_text()
+
+
+def test_per_type_sample_is_seeded_balanced_and_in_source_order(tmp_path: Path) -> None:
+    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(4)]
+    cases = lm.load_dataset(dataset(tmp_path, items))
+    selected = lm.select_cases(cases, per_type=2)
+    assert selected == lm.select_cases(cases, per_type=2)
+    assert all(sum(c.question_type == t for c in selected) == 2 for t in lm.QUESTION_TYPES)
+    order = [c.input.question_id for c in cases]
+    assert [order.index(c.input.question_id) for c in selected] == sorted(
+        order.index(c.input.question_id) for c in selected
+    )
+    with pytest.raises(ValueError):
+        lm.select_cases(cases, per_type=5)

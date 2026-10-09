@@ -90,7 +90,7 @@ report = run_evaluation(cases, out, Settings(), dry_run=True, score=True)
 ```
 
 `load_dataset(questions_path: Path, contexts_path: Path) -> tuple[Case, ...]`;
-`select_cases(cases, *, limit=3, offset=0) -> tuple[Case, ...]`;
+`select_cases(cases, *, limit=3, offset=0, sample=None, seed="personamem-v1") -> tuple[Case, ...]`;
 `validate_output(out: Path) -> Path`;
 `run_evaluation` accepts the selected cases, output path and Settings, with
 `dry_run`, `score`, `fingerprints`, and `system` keyword options. The default system
@@ -102,6 +102,11 @@ The CLI runs exact choice scoring automatically:
 ```bash
 uv run twin --config /path/twin.toml eval-personamem --questions /path/questions_32k.csv --contexts /path/shared_contexts_32k.jsonl --out /tmp/personamem-run-01 --limit 3
 ```
+
+The formal test set is 30 questions drawn uniformly without replacement from the
+32k questions CSV with seed `personamem-v1` (`--sample 30`), run in source order. The
+sample size and seed enter the configuration fingerprint. Report the official score,
+strict format compliance and per-type results separately.
 
 Add `--dry-run` to validate inputs and plan subjects without constructing a backend
 or making build, embedding, answer, or judge calls. Add `--system retrieval` to run

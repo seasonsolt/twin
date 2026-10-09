@@ -699,6 +699,10 @@ def longmemeval_command(
     out: Annotated[Path, typer.Option("--out", help="Fresh private directory outside git repositories")],
     limit: Annotated[int, typer.Option("--limit", min=1)] = 3,
     offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    per_type: Annotated[
+        int | None, typer.Option("--per-type", min=1, help="Seeded random sample of this many per question type")
+    ] = None,
+    seed: Annotated[str, typer.Option("--seed", help="Question sampling seed")] = "longmemeval-v1",
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     score: Annotated[bool, typer.Option("--score/--no-score", help="Optional custom configured-judge scoring")] = False,
@@ -711,7 +715,7 @@ def longmemeval_command(
         out = validate_output(out)
         with dataset.open("rb") as stream:
             dataset_sha = hashlib.file_digest(stream, "sha256").hexdigest()
-        cases = select_cases(load_dataset(dataset), limit=limit, offset=offset)
+        cases = select_cases(load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed)
         settings = _benchmark_settings(ctx)
         configured_identity = fingerprint(
             {
@@ -724,6 +728,7 @@ def longmemeval_command(
                 else [],
                 "limit": limit,
                 "offset": offset,
+                **({"per_type": per_type, "seed": seed} if per_type is not None else {}),
                 "score": score,
             }
         )
@@ -805,6 +810,8 @@ def personamem_command(
     out: Annotated[Path, typer.Option("--out", help="Fresh private output directory outside git repositories")],
     limit: Annotated[int, typer.Option("--limit", min=1)] = 3,
     offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+    sample: Annotated[int | None, typer.Option("--sample", min=1, help="Seeded random sample of questions")] = None,
+    seed: Annotated[str, typer.Option("--seed", help="Question sampling seed")] = "personamem-v1",
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
@@ -814,10 +821,14 @@ def personamem_command(
 
     try:
         out = validate_output(out)
-        cases = select_cases(load_dataset(questions, contexts), limit=limit, offset=offset)
+        cases = select_cases(load_dataset(questions, contexts), limit=limit, offset=offset, sample=sample, seed=seed)
         settings = _benchmark_settings(ctx)
         identities = _benchmark_fingerprints(
-            settings, {"questions_sha256": questions, "contexts_sha256": contexts}, limit, offset
+            settings,
+            {"questions_sha256": questions, "contexts_sha256": contexts},
+            limit,
+            offset,
+            {"sample": sample, "seed": seed} if sample is not None else None,
         )
         report = run_evaluation(
             cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities

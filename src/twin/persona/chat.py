@@ -58,6 +58,7 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+CJK = re.compile(r"[一-鿿]")
 _SENTENCE_END = re.compile(r"[。！？!?；;.\n]\s*")
 
 
@@ -334,21 +335,29 @@ class PersonaChat:
         persist: bool,
     ) -> ChatReply:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
+        # Nothing to show is a missed answer, never a blank bubble: say so honestly in the asker's language.
+        empty = not text.strip()
+        if empty:
+            text = EMPTY_REPLY["zh" if CJK.search(messages[-1].content) else "en"]
         citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
         # A grounded or inferred text that did not supply the asked item is a missed answer, whatever the flags.
         missed = draft.mode in ("grounded", "inferred") and not draft.answered
         # An inference must rest on at least one retrieved item; without one it is a guess, so it abstains.
         unsupported = draft.mode == "inferred" and not citations
-        abstain = draft.abstain or missed or unsupported
+        abstain = draft.abstain or missed or unsupported or empty
         reason = draft.abstain_reason.strip()
-        if not reason and missed:
+        if not reason and empty:
+            reason = "回复没有给出任何内容"
+        elif not reason and missed:
             reason = f"回复没有给出所问内容：{draft.asked.strip()}"
         elif not reason and unsupported:
             reason = "没有相关的间接依据，不做推测"
-        if draft.mode == "general":
+        if abstain:
+            confidence = min(confidence, UNCITED_CONFIDENCE_CAP)
+        elif draft.mode == "general":
             confidence = min(confidence, 0.5)
-        elif abstain or not citations:
+        elif not citations:
             confidence = min(confidence, UNCITED_CONFIDENCE_CAP)
         elif draft.mode == "inferred":
             confidence = min(confidence, INFERRED_CONFIDENCE_CAP)
@@ -373,6 +382,8 @@ class PersonaChat:
 
 
 # ---------------------------------------------------------------- prompts and schemas
+
+EMPTY_REPLY = {"zh": "这一项我没法确定，先不答。", "en": "I can't say for certain, so I won't answer this one."}
 
 STREAM_FORMAT = """
 
@@ -460,9 +471,11 @@ CHAT_SYSTEM = """\
 
 ## 写回复前，按顺序检查（只在内部判断，不输出检查过程）
 1. 是在问本人的观点、经历、做法或个人事实吗？只查【核心画像】和【检索资料】：有明确依据才回答，归为 grounded；\
-没有直接依据时，先看对方问的是不是“遇到某个情境会选什么、怎么做、偏好什么、怎么看”这类本人没直接说过的倾向\
-（不是发生过什么、在哪、何时、谁、多少这类事实回忆，也不是替本人承诺或评价具体他人）：如果资料里有相关的间接依据\
-（相关的过往回答、明确的价值观、特质或习惯），可以给出最佳推测，归为 inferred，规则见下；\
+没有直接依据时，先看对方问的是不是“遇到某个情境会选什么、怎么做、偏好什么、怎么看”这类本人没直接说过的倾向，\
+或本人会给出的个人估计（认为多少比例的人支持、可能性有多大、会做几次、假设情境里的数量或金额、量表上的值）\
+——这些都是倾向，不是事实；发生过什么、在哪、何时、谁，以及本人生活里的事实数字（几个孩子、收入、日期、\
+实付价格）才是事实回忆，也不是替本人承诺或评价具体他人：如果资料里有相关的间接依据\
+（相关的过往回答、明确的价值观、特质或习惯），可以给出最佳推测（估计就给出一个具体的数），归为 inferred，规则见下；\
 没有相关的间接依据，或问的是事实回忆，就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，该部分弃权。不确定资料是否包含某个个人事实，\
 就按没有覆盖处理。不能把个人问题改成通用回答来掩盖缺失。先想清对方要的具体是哪一项（asked，如商店名、日期、\
 人名、数字），再核对引用的资料是否直接给出了这一项；只有相关背景、同类信息或事件的其他侧面，不算给出，\
@@ -471,7 +484,7 @@ CHAT_SYSTEM = """\
 也只对这部分说明需要本人确认，不代答。其余能回答的部分继续回答，不要因一个承诺请求就拒绝整题。
 3. 其余不需要本人资料的问题，包括通用知识、方法、一般话题的看法，归为 general：充分帮助，给出判断、理由或可执行\
 步骤，不能因档案没有相关内容就说得问本人。开头用一句简短的话说明这是通用知识、不是本人观点，例如：\
-这不是我本人的经验，我先说通用做法。日常寒暄自然回应，不必硬套知识说明。
+这不是我本人的经验，我先说通用做法（对方限定了输出格式时除外，见输出格式）。日常寒暄自然回应，不必硬套知识说明。
 
 ## 整体 mode 与弃权
 - 看正文是否实质回答了问题，而不是看有没有本人确认之类的措辞。有资料依据的实质回答 mode 设为 grounded，\
@@ -486,7 +499,7 @@ answered 为 false、mode 设为 abstain，正文直接说明这一项我不知�
 可以顺带提已知的相关背景，但要标明它不是所问的答案。
 - inferred 是对没直接说过的倾向的推测：正文必须明说这是推测，例如“我没直接说过，但按我……，大概会……”，点明依据的是\
 哪类间接资料，不把推测说成我说过或做过的事，不编造经历；citations 至少填一条用到的间接资料，没有就改为 abstain；\
-confidence 不超过 0.5。对方限定了输出格式（如只回选项标签）时，正文可以只按该格式作答，推测的身份由 mode 标明。
+confidence 不超过 0.5。对方限定了输出格式时，只按输出格式一节的规则给出该值，推测的身份由 mode 标明。
 - general 的 citations 可以为空，confidence 不超过 0.5；abstain 的 confidence 不超过 0.3。
 
 ## 规则
@@ -505,6 +518,9 @@ confidence 不超过 0.5。对方限定了输出格式（如只回选项标签�
 对方用中文就用中文；混用时取主要语言。引用的原话保持原文逐字，不翻译、不改写。
 
 ## 输出格式
+对方限定了输出格式（如只回选项标签、只回一个数字）时，只要给出实质回答，无论 mode 是 grounded、general 还是 inferred，\
+正文都恰好是该标签或数字，不加前缀、单位、解释，也不加说明通用知识或推测的句子；回答的身份由 mode 标明。\
+不给实质回答（abstain）时仍用一句话说明。
 少量使用 Markdown：日常聊天保持自然的简短段落，最多加粗一两个关键词；长回复分段，段落之间空一行。
 步骤或选项用列表，只有真正的并列对比才用表格，代码块只用于代码或命令。
 标题不得高于四级（####），通常不用标题；不要把长回答挤成一整段，绝不使用 HTML。

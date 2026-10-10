@@ -24,7 +24,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..llm import LLM, retry_truncated
+from ..llm import LLM, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import PersonaCandidate, PersonaItem, PEvidence
@@ -441,7 +441,7 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
 
     def persist(chunk: Chunk, outcome: list[PersonaCandidate] | Exception) -> None:
         if isinstance(outcome, Exception):
-            report.failures.append(f"extract {chunk.chunk_id}: {type(outcome).__name__}")
+            report.failures.append(f"extract {chunk.chunk_id}: {failure_summary(outcome)}")
         else:
             store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome)
             report.chunks_extracted += 1
@@ -472,7 +472,7 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
     def save(job: tuple[str, list[PersonaCandidate]], outcome: list[PersonaItem] | Exception) -> None:
         facet_id, members = job
         if isinstance(outcome, Exception):
-            report.failures.append(f"merge {facet_id}: {type(outcome).__name__}")
+            report.failures.append(f"merge {facet_id}: {failure_summary(outcome)}")
             return
         before = {i.item_id: i.statement for i in store.list_items(facet_id, raw=True)}
         store.replace_facet_items(facet_id, outcome)

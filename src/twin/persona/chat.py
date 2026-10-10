@@ -14,6 +14,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 from collections.abc import AsyncGenerator, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
@@ -29,7 +30,7 @@ from ..llm import LLM, hedged_stream
 from ..util import Progress
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
-from .lexical import BM25
+from .lexical import BM25, tokenize
 from .quotes import remove_unverified_quotes
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
 from .sources import expression_view
@@ -54,6 +55,34 @@ UNVERIFIED_CONFIDENCE_CAP = 0.6
 def _clip(text: str, limit: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+_SENTENCE_END = re.compile(r"[。！？!?；;.\n]\s*")
+
+
+def _excerpt(text: str, query: str, limit: int) -> str:
+    """Clip a long text to the passage sharing the most query terms, starting at a sentence, so a conclusion
+    late in a long message is not cut off; without overlap this is a plain head clip."""
+    text = " ".join(text.split())
+    terms = set(tokenize(query))
+    if len(text) <= limit or not terms:
+        return _clip(text, limit)
+    width = limit - 2
+    starts = [0, *(m.end() for m in _SENTENCE_END.finditer(text) if m.end() < len(text))]
+
+    def covered(start: int) -> int:
+        # Count only whole sentences, so a passage cut off at the window's end does not win.
+        window = text[start : start + width]
+        if start + width < len(text):
+            ends = [m.end() for m in _SENTENCE_END.finditer(window)]
+            window = window[: ends[-1]] if ends else window
+        return len(terms.intersection(tokenize(window)))
+
+    best = max(starts, key=lambda s: (covered(s), -s))
+    if best == 0:
+        return _clip(text, limit)
+    body = text[min(best, len(text) - (limit - 1)) :]
+    return "…" + body if len(body) <= limit - 1 else "…" + body[:width] + "…"
 
 
 def item_text(item: PersonaItem) -> str:
@@ -111,6 +140,8 @@ class PersonaContext:
     # The person's own words to imitate: short chat messages first, then quotes of them found in biographies.
     voice: list[str]
     as_of: dt.date | None = None
+    # The retrieval query; long expressions are shown around the passage it matches.
+    query: str = ""
     ids: set[str] = field(default_factory=set)
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
@@ -231,7 +262,7 @@ class PersonaChat:
         ]
         said.sort(key=lambda e: (e.date or dt.date.min, e.expression_id), reverse=True)
         voice = [e.text for e in said[:VOICE_SAMPLES]]
-        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of)
+        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of, query)
 
     def reply(self, messages: Sequence[ChatTurn], as_of: dt.date | None = None, *, persist: bool = True) -> ChatReply:
         if not messages or messages[-1].role != "user":
@@ -304,9 +335,13 @@ class PersonaChat:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
+        # A grounded text that did not supply the asked item is a missed answer, whatever flags the model set.
+        missed = draft.mode == "grounded" and not draft.answered
+        abstain = draft.abstain or missed
+        reason = draft.abstain_reason.strip() or (f"回复没有给出所问内容：{draft.asked.strip()}" if missed else "")
         if draft.mode == "general":
             confidence = min(confidence, 0.5)
-        elif draft.abstain or not citations:
+        elif abstain or not citations:
             confidence = min(confidence, UNCITED_CONFIDENCE_CAP)
         elif not any(c in ctx.trusted for c in citations):
             confidence = min(confidence, UNVERIFIED_CONFIDENCE_CAP)
@@ -315,12 +350,12 @@ class PersonaChat:
             reply=text,
             citations=citations,
             confidence=round(confidence, 3),
-            abstain=draft.abstain,
-            abstain_reason=draft.abstain_reason.strip() if draft.abstain else "",
+            abstain=abstain,
+            abstain_reason=reason if abstain else "",
             topic_facets=topics[:MAX_TOPIC_FACETS],
             retrieved_ids=sorted(ctx.ids),
             as_of=as_of,
-            mode=draft.mode,
+            mode="abstain" if abstain else draft.mode,
             quotes_removed=quotes_removed,
         )
         if persist:
@@ -334,7 +369,8 @@ STREAM_FORMAT = """
 
 ## 输出格式
 先直接输出回复正文（不要用 JSON 或代码块包裹整篇回复，不要 reply 标签），然后换行输出一行且仅一行 <<<META>>>，
-随后输出一个紧凑 JSON 对象，字段为 citations、confidence、mode、abstain、abstain_reason、topic_facets。
+随后输出一个紧凑 JSON 对象，字段为 asked、answered、citations、confidence、mode、abstain、abstain_reason、\
+topic_facets。asked 是对方要的那一项具体内容（字符串），answered 是正文是否给出了它（布尔值）。
 citations 和 topic_facets 是字符串数组，confidence 是 0 到 1 的数字，mode 是 grounded、general 或 abstain，
 abstain 是布尔值，abstain_reason 是弃权原因字符串（不弃权时为空）。
 所有字段遵守上述规则。JSON 不包含 reply，正文只输出一次，不要在正文中输出分隔符。
@@ -416,7 +452,9 @@ CHAT_SYSTEM = """\
 ## 写回复前，按顺序检查（只在内部判断，不输出检查过程）
 1. 是在问本人的观点、经历、做法或个人事实吗？只查【核心画像】和【检索资料】：有明确依据才回答，归为 grounded；\
 没有覆盖就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，该部分弃权。不确定资料是否包含某个个人事实，\
-就按没有覆盖处理。不能把个人问题改成通用回答来掩盖缺失。
+就按没有覆盖处理。不能把个人问题改成通用回答来掩盖缺失。先想清对方要的具体是哪一项（asked，如商店名、日期、\
+人名、数字），再核对引用的资料是否直接给出了这一项；只有相关背景、同类信息或事件的其他侧面，不算给出，\
+不要把背景说成所问事项的答案。
 2. 是要替本人答应、承诺、做决定，或评价某个具体的他人吗？不替本人答应事情或做承诺。即使有相关资料，\
 也只对这部分说明需要本人确认，不代答。其余能回答的部分继续回答，不要因一个承诺请求就拒绝整题。
 3. 其余不需要本人资料的问题，包括通用知识、方法、一般话题的看法，归为 general：充分帮助，给出判断、理由或可执行\
@@ -430,6 +468,9 @@ CHAT_SYSTEM = """\
 - 只有没有实质回答、只能说明无资料或需要本人确认时，mode 设为 abstain，abstain 为 true，abstain_reason 简述原因。
 - 实质回答末尾补充具体得我本人定或细节得由我本人来定，不算弃权：mode 保持 grounded/general，abstain=false。\
 不要为了避免弃权而给个人问题编造答案，或用无关的通用建议冒充实质回答。
+- answered 记录正文是否给出了 asked 那一项。正文没有给出（只讲相关背景或近似信息，或在说明没有这条记录）时，\
+answered 为 false、mode 设为 abstain，正文直接说明这一项我不知道或没记；\
+可以顺带提已知的相关背景，但要标明它不是所问的答案。
 - general 的 citations 可以为空，confidence 不超过 0.5；abstain 的 confidence 不超过 0.3。
 
 ## 规则
@@ -444,6 +485,8 @@ CHAT_SYSTEM = """\
 5. topic_facets 填对方这句话涉及的细项编号（见【细项列表】），最多 2 个；寒暄等不涉及任何细项时为空列表。
 6. 引号（「」『』“”\"\"）只能包住逐字出现在【说话样本】或【检索资料】中的文字；强调、转述或术语不要加引号；\
 绝不能把转述当作本人的原话。
+7. 回复语言跟随对方最后一句话：对方用英文，整段回复（包括说明是通用知识、没有记录或需要本人确认的句子）都用英文；\
+对方用中文就用中文；混用时取主要语言。引用的原话保持原文逐字，不翻译、不改写。
 
 ## 输出格式
 少量使用 Markdown：日常聊天保持自然的简短段落，最多加粗一两个关键词；长回复分段，段落之间空一行。
@@ -470,7 +513,7 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
         if item.evidence
     ]
     for expression, _ in ctx.expressions:
-        materials.append(_clip(expression.text, TEXT_CHARS))
+        materials.append(_excerpt(expression.text, ctx.query, TEXT_CHARS))
         if expression.context:
             materials.append(_clip(expression.context, 160))
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
@@ -494,10 +537,10 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     return CHAT_SYSTEM.format(name=name, scope=scope, core=core, voice=voice, facets=facets)
 
 
-def _render_expression(e: Expression) -> str:
+def _render_expression(e: Expression, query: str) -> str:
     head = " · ".join(x for x in (e.date.isoformat() if e.date else "", e.channel) if x)
     context = f"（语境：{_clip(e.context, 160)}）" if e.context else ""
-    return f"- [{e.expression_id}] {head}{context}「{_clip(e.text, TEXT_CHARS)}」"
+    return f"- [{e.expression_id}] {head}{context}「{_excerpt(e.text, query, TEXT_CHARS)}」"
 
 
 def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
@@ -508,15 +551,15 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     own = [e for e, _ in ctx.expressions if not e.narrated]
     narrated = [e for e, _ in ctx.expressions if e.narrated]
     lines.append("本人原话：")
-    lines.extend(_render_expression(e) for e in own)
+    lines.extend(_render_expression(e, ctx.query) for e in own)
     if not own:
         lines.append("（无相关原话）")
     if narrated:
         lines.append("资料记述（不是本人原话）：")
-        lines.extend(_render_expression(e) for e in narrated)
+        lines.extend(_render_expression(e, ctx.query) for e in narrated)
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:
         who = "对方" if m.role == "user" else "你"
         lines.append(f"{who}：{m.content.strip()}")
-    lines.append("\n请回复对方的最后一句话。")
+    lines.append("\n请回复对方的最后一句话，语言与这句话一致。")
     return "\n".join(lines)

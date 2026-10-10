@@ -48,7 +48,22 @@ class LLMTruncated(LLMError):
 
 
 class LLMInvalidOutput(LLMError):
-    pass
+    def __init__(self, message: str, stop_reason: str | None = None) -> None:
+        super().__init__(message)
+        self.stop_reason = stop_reason
+
+
+def failure_summary(error: BaseException) -> str:
+    """Name a failure by its type, stop reason and invalid field paths, never by its message, so records that must
+    not hold input or output text can still say why a structured call failed."""
+    parts = [f"stop={stop}"] if (stop := getattr(error, "stop_reason", None)) else []
+    cause: BaseException | None = error
+    while cause is not None and not isinstance(cause, ValidationError):
+        cause = cause.__cause__
+    if isinstance(cause, ValidationError):
+        fields = sorted({f"{e['type']}@{'.'.join(map(str, e['loc'])) or '<root>'}" for e in cause.errors()})
+        parts.append(", ".join(fields[:5]) + (f" (+{len(fields) - 5})" if len(fields) > 5 else ""))
+    return type(error).__name__ + (f" [{'; '.join(parts)}]" if parts else "")
 
 
 def retry_truncated[R](call: Callable[[], R]) -> R:
@@ -279,7 +294,7 @@ class AnthropicLLM:
         try:
             return schema.model_validate_json(_extract_json(_answer_text(message.content)))
         except ValidationError as e:
-            raise LLMInvalidOutput(f"{self.name}: {e}") from e
+            raise LLMInvalidOutput(f"{self.name}: {e}", stop_reason=message.stop_reason) from e
 
 
 class OpenAICompatLLM:
@@ -417,6 +432,7 @@ class OpenAICompatLLM:
             kwargs["response_format"] = response_format
 
         last_error: Exception | None = None
+        finish_reason: str | None = None
         for _ in range(2):
             choice = self._complete(messages, kwargs)
             if choice.finish_reason == "length":
@@ -428,6 +444,7 @@ class OpenAICompatLLM:
                     category="content_filter" if choice.finish_reason == "content_filter" else "refusal",
                 )
             content = choice.message.content or ""
+            finish_reason = choice.finish_reason
             try:
                 return schema.model_validate_json(_extract_json(content))
             except ValidationError as e:
@@ -436,7 +453,7 @@ class OpenAICompatLLM:
                 messages.append(
                     {"role": "user", "content": f"上面的输出不符合 schema：{e}\n请只输出修正后的完整 JSON。"}
                 )
-        raise LLMInvalidOutput(f"{self.name}: {last_error}")
+        raise LLMInvalidOutput(f"{self.name}: {last_error}", stop_reason=finish_reason) from last_error
 
 
 async def hedged_stream(factory: Callable[[], AsyncIterator[str]], hedge_after_s: float) -> AsyncGenerator[str]:
@@ -593,7 +610,7 @@ class ClaudeCLILLM:
                 return schema.model_validate(data)
             return schema.model_validate_json(_extract_json(str(payload.get("result", ""))))
         except ValidationError as e:
-            raise LLMInvalidOutput(f"{self.name}: {e}") from e
+            raise LLMInvalidOutput(f"{self.name}: {e}", stop_reason=payload.get("stop_reason")) from e
 
     def _invoke(self, cmd: list[str], user: str) -> tuple[Any, subprocess.CompletedProcess[str]]:
         proc = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=self.timeout, cwd=self._workdir)

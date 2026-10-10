@@ -499,3 +499,14 @@ def test_participant_sample_is_seeded_and_keeps_all_their_items(tmp_path: Path) 
     for count in (0, 7):
         with pytest.raises(ValueError):
             bench.sample_participants(cases, count)
+
+
+def test_dev_split_never_draws_formal_participants(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bench, "FORMAL_PARTICIPANTS", 2)
+    cases = bench.load_dataset(dataset(tmp_path, [row(pid) for pid in range(1, 7)]))
+    formal = set(bench.sample_participants(cases, 2))
+    dev = bench.sample_participants(cases, 4, split="dev")
+    assert dev == bench.sample_participants(cases, 4, split="dev") and not formal & set(dev)
+    for count, split in ((5, "dev"), (1, "holdout")):
+        with pytest.raises(ValueError):
+            bench.sample_participants(cases, count, split=split)

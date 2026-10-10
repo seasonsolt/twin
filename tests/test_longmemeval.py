@@ -544,3 +544,17 @@ def test_per_type_sample_is_seeded_balanced_and_in_source_order(tmp_path: Path) 
     )
     with pytest.raises(ValueError):
         lm.select_cases(cases, per_type=5)
+
+
+def test_dev_split_never_draws_formal_questions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lm, "FORMAL_PER_TYPE", 2)
+    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(5)]
+    cases = lm.load_dataset(dataset(tmp_path, items))
+    formal = {c.input.question_id for c in lm.select_cases(cases, per_type=2)}
+    dev = lm.select_cases(cases, per_type=3, split="dev")
+    assert dev == lm.select_cases(cases, per_type=3, split="dev")
+    assert not formal & {c.input.question_id for c in dev}
+    assert all(sum(c.question_type == t for c in dev) == 3 for t in lm.QUESTION_TYPES)
+    for options in ({"per_type": 4, "split": "dev"}, {"split": "dev"}, {"per_type": 1, "split": "holdout"}):
+        with pytest.raises(ValueError):
+            lm.select_cases(cases, **options)  # type: ignore[arg-type]

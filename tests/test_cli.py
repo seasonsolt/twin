@@ -66,12 +66,26 @@ def test_remaining_commands() -> None:
         "eval-longmemeval",
         "eval-personamem",
         "eval-twin2k500",
+        "eval-suite",
+        "eval-scorecard",
     ):
         assert name in result.output
     assert set(
         cli.app.registered_commands[i].name or cli.app.registered_commands[i].callback.__name__
         for i in range(len(cli.app.registered_commands))
-    ) == {"init", "ui", "api", "mcp", "eval", "eval-compare", "eval-longmemeval", "eval-personamem", "eval-twin2k500"}
+    ) == {
+        "init",
+        "ui",
+        "api",
+        "mcp",
+        "eval",
+        "eval-compare",
+        "eval-longmemeval",
+        "eval-personamem",
+        "eval-twin2k500",
+        "eval-suite",
+        "eval-scorecard",
+    }
 
 
 @pytest.mark.parametrize("benchmark", ["longmemeval", "personamem", "twin2k500"])

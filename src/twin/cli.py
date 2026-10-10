@@ -699,6 +699,7 @@ def personal_eval_command(
 
 
 SPLIT_HELP = "formal (documented sample) or dev (disjoint sample for day-to-day iteration)"
+JUDGES_HELP = "Judge with the config's [[judges]] tables instead of the main llm (opt-in: they may be paid endpoints)"
 
 
 @app.command("eval-longmemeval")
@@ -716,12 +717,12 @@ def longmemeval_command(
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     score: Annotated[bool, typer.Option("--score/--no-score", help="Optional custom configured-judge scoring")] = False,
+    configured_judges: Annotated[bool, typer.Option("--configured-judges", help=JUDGES_HELP)] = False,
 ) -> None:
-    """LongMemEval through production Twin, with an optional retrieval baseline. ``[[judges]]`` tables, when
-    configured, judge instead of the main ``llm``."""
+    """LongMemEval through production Twin, with an optional retrieval baseline."""
     try:
         report = _run_longmemeval(
-            _benchmark_settings(ctx, keep_judges=True),
+            _benchmark_settings(ctx, keep_judges=configured_judges),
             dataset,
             out,
             limit=limit,
@@ -999,6 +1000,7 @@ def eval_suite_command(
     pm_sample: Annotated[int | None, typer.Option("--pm-sample", min=1)] = None,
     t2k_participants: Annotated[int | None, typer.Option("--t2k-participants", min=1)] = None,
     baseline: Annotated[Path | None, typer.Option("--baseline", help="Earlier scorecard.json to compare with")] = None,
+    configured_judges: Annotated[bool, typer.Option("--configured-judges", help=JUDGES_HELP)] = False,
 ) -> None:
     """Run the three public benchmarks ``--repeats`` times through production Twin and write a scorecard.
 
@@ -1047,7 +1049,7 @@ def eval_suite_command(
             raise ValueError
         private_directory(out)
         out.chmod(0o700)
-        judged = _benchmark_settings(ctx, keep_judges=True)
+        judged = _benchmark_settings(ctx, keep_judges=configured_judges)
         plain = _benchmark_settings(ctx)
     except Exception:
         raise _fail("Suite setup failed; check configuration, baseline and a fresh empty output directory") from None
@@ -1073,7 +1075,9 @@ def eval_suite_command(
                 failed.append(name)
                 _progress(f"{name} stopped early (details hidden)")
     try:
-        card = build_scorecard(out, _suite_metadata(split, repeats, sizes))
+        metadata = _suite_metadata(split, repeats, sizes)
+        metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
+        card = build_scorecard(out, metadata)
         write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:
         raise _fail("Scorecard failed; every repeat of a benchmark must finish (details hidden)") from None

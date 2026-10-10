@@ -394,3 +394,20 @@ def test_random_sample_is_seeded_and_in_source_order(tmp_path: Path) -> None:
     for sample in (0, 9):
         with pytest.raises(ValueError):
             pm.select_cases(cases, sample=sample)
+
+
+def test_dev_split_never_shares_a_context_with_the_formal_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pm, "FORMAL_SAMPLE", 2)
+    sids = [f"shared-{i}" for i in range(6)]
+    rows = [item(f"{s}-{q}", sid=s) for s in sids for q in range(2)]
+    cases = pm.load_dataset(*dataset(tmp_path, rows, {s: history() for s in sids}))
+    formal = {c.input.subject_id for c in pm.select_cases(cases, sample=2)}
+    dev = pm.select_cases(cases, sample=4, split="dev")
+    assert dev == pm.select_cases(cases, sample=4, split="dev") and len(dev) == 4
+    assert not formal & {c.input.subject_id for c in dev}
+    rest = sum(c.input.subject_id not in formal for c in cases)
+    for options in ({"sample": rest + 1, "split": "dev"}, {"split": "dev"}, {"sample": 1, "split": "holdout"}):
+        with pytest.raises(ValueError):
+            pm.select_cases(cases, **options)  # type: ignore[arg-type]

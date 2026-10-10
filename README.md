@@ -116,15 +116,15 @@ flowchart LR
 
 <sub>twin 用前沿大模型作答，Second Me 用本地小模型，差距有一部分来自模型。评委、题量与当前线上模型的结果见 [对比与评测](docs/COMPARISON.md)。</sub>
 
-在三个公开基准上：
+在三个公开基准上（越高越好）：
 
-| 基准 | 测什么 | **twin** | 竞品 |
-| :-- | :-- | :-: | :-- |
-| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) S | 长期对话记忆问答 | 33%（10/30） | EmergenceMem 86% · Zep 71.2% · Second Me 升级版 0/6 |
-| [PersonaMem](https://github.com/bowen-upenn/PersonaMem) v1 32k | 记住并运用用户的人格与偏好 | **63%**（19/30） | GPT-4.5、Gemini-2.0 等前沿模型读全文约 50% · Second Me 升级版 3/6 |
-| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 预测本人会怎么回答问卷 | 43.8%（真人重测 72.6%） | GPT-4.1-mini 数字孪生 71.7%（真人重测 81.7%）· Second Me 升级版 3.0% |
+| 基准 | **twin** | 公开最好成绩 | Second Me 升级版 |
+| :-- | :-: | :-: | :-: |
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval)：长期对话记忆 | 33% | **86%**<br/><sub>EmergenceMem</sub> | 0% |
+| [PersonaMem](https://github.com/bowen-upenn/PersonaMem)：记住用户的人格与偏好 | **63%** | 约 50%<br/><sub>GPT-4.5 读全文</sub> | 50% |
+| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500)：像本人一样答问卷，达到真人重测的比例 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
 
-<sub>twin 为 2026-10-10 当前代码、`gpt-6-luna` 作答的固定种子抽样，不是全量成绩；LongMemEval 由同一模型评分，评分不稳定。竞品数字取自各自论文或博客：LongMemEval 为全量 500 题、GPT-4o 评委；Twin-2K-500 论文对数值题按偏差给部分分，题目也不同，twin 只计分类题精确匹配，两者不能直接比，看与真人重测的差距更合适。Second Me 为同题小样本对照。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md) 和 [对比与评测](docs/COMPARISON.md)。</sub>
+<sub>twin 为 2026-10-10 代码、`gpt-6-luna` 作答的抽样成绩（每项 30 题或 10 人），LongMemEval 由同一模型评分。公开成绩取自各自论文或博客，题量、评委和打分细则与 twin 不同，只能看量级。Second Me 为同题小样本（6 题或 2 人）。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md) 和 [对比与评测](docs/COMPARISON.md)。</sub>
 
 ## 技术路线
 

@@ -6,6 +6,27 @@
 
 基准的数据版本、合法输入边界和评分规则分别见 [LongMemEval](LONGMEMEVAL.md)、[PersonaMem](PERSONAMEM.md)、[Twin-2K-500](TWIN2K500.md)。旧 `--system retrieval` 的结果不混入生产链路成绩。
 
+## 评测循环
+
+改进记忆、检索、人格与回答规则时，用 `twin eval-suite` 衡量每次改动，不要直接对着正式样本调：
+
+- **开发集与正式集分开。** `--split dev`（默认）只从正式样本以外抽题：LongMemEval 排除正式 30 题，PersonaMem 排除正式样本用到的全部共享上下文（同一个人的资料不进开发集），Twin-2K-500 排除正式 10 人。日常迭代只看开发集；阶段结束才用 `--split formal` 跑一次正式集记录里程碑。三个基准的单项命令也接受 `--split`。
+- **固定评委。** 加 `--configured-judges` 后 LongMemEval 由配置里的 `[[judges]]` 评分，多位评委取平均，不再由作答模型自评。建议选与作答模型不同家族的两位评委，并在整个迭代过程中保持不变。默认关闭，因为生产配置里的评委可能是付费接口。
+- **重复运行。** `--repeats`（默认 2）把每个基准完整跑几遍，成绩单给出范围。只有两次成绩的范围不重叠时才标为"超出波动"；单次运行不判断。
+- **成绩单。** 套件目录里每次运行写到 `<基准>/r<n>/`，汇总写成 `scorecard.json` 和 `scorecard.md`：总分（失败与弃权都计为错误）、按题型的分数、按结果分类的题数、与 `--baseline` 指定的上一份成绩单逐题对比（由错变对、由对变错）。成绩单只含题目 ID、题型、分数和结果分类，不含回复与资料。`twin eval-scorecard <目录> --baseline <上一份 scorecard.json>` 不调用模型，只根据已有运行重算。
+
+结果分类对应要查的层：`preparation` 建档失败；`format` 没给出合法选项或数值（回答规则）；`abstained` 弃权（记忆或检索没找到，或回答规则过于保守）；`wrong_grounded` 依据资料却答错（记忆或检索取错）；`wrong_inferred` 推测答错（人格建模）；`wrong_general` 按常识作答且答错。
+
+开发集默认规模为 LongMemEval 每种题型 3 题、PersonaMem 24 题、Twin-2K-500 4 人，可用 `--lme-per-type`、`--pm-sample`、`--t2k-participants` 调整；比较两份成绩单时规模和划分必须相同。
+
+```bash
+uv run twin --config twin.toml eval-suite --out /private/tmp/twin-suite/<日期>-<改动> \
+  --longmemeval longmemeval_s_cleaned.json \
+  --personamem-questions questions_32k.csv --personamem-contexts shared_contexts_32k.jsonl \
+  --twin2k500 wave_persona_chunk_001.jsonl \
+  --configured-judges --baseline /private/tmp/twin-suite/<上一轮>/scorecard.json
+```
+
 ## 正式样本成绩（修复后）
 
 正式样本在提交 `7aaa9d4` 上运行，测试集定义见各基准文档：LongMemEval S 每种题型抽 5 题（种子 `longmemeval-v1`），PersonaMem 32k 抽 30 题（种子 `personamem-v1`），Twin-2K-500 首分片抽 10 人并跑其全部 wave 4 题项（种子 `twin2k500-v1`）。模型为 magpie 本地代理的 OpenAI 兼容接口 `codex/gpt-6-luna`，运行前探测返回身份为 `gpt-6-luna`；逐次调用只记录配置指纹，没有逐条记录返回模型名。建档、回答和 LongMemEval 评委都使用该模型，embedding 为 Cloudflare `@cf/baai/bge-m3`。三个基准并行，各自 `max_workers=4`，约 84 分钟完成。

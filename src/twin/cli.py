@@ -906,6 +906,185 @@ def personal_eval_compare_command(
     _say("配对比较报告已写入（B - A）。")
 
 
+survey_app = typer.Typer(
+    help="问卷评测：分身答卷，本人不看答案先作答再阅卷；隔两周本人再答一次，得到归一化准确率。", no_args_is_help=True
+)
+app.add_typer(survey_app, name="survey")
+InstrumentOption = Annotated[Path | None, typer.Option("--instrument", help="自定义问卷 JSON（默认内置 48 题）")]
+AllowInRepo = Annotated[bool, typer.Option("--allow-in-repo")]
+
+
+def _survey_out(path: Path, allow_in_repo: bool) -> None:
+    from .evals.personal import ensure_output_directory
+
+    ensure_output_directory(path.parent, allow_in_repo=allow_in_repo)
+    if path.is_symlink():
+        raise ValueError("答卷文件不能是符号链接")
+
+
+def _survey_grade(path: Path) -> None:
+    """Blind grading: the person picks their own answer before the twin's is shown; saved after every item."""
+    from .evals.survey import LETTERS, read_sheet, write_sheet
+
+    sheet = read_sheet(path)
+    todo = [row for row in sheet.items if row.person.choice is None and not row.person.skipped]
+    total = len(sheet.items)
+    if not todo:
+        _say("这份答卷已经阅完。")
+        return
+    _say("先选你自己的答案，再看分身选了什么。字母作答，s 跳过这题，q 保存并退出。")
+    for row in todo:
+        item = row.item
+        letters = LETTERS[: len(item.options)]
+        _say("")
+        _say(f"第 {sheet.items.index(row) + 1}/{total} 题")
+        _say(item.question)
+        for letter, option in zip(letters, item.options, strict=True):
+            _say(f"  {letter}. {option}")
+        while True:
+            answer = typer.prompt("你会选", default="", show_default=False).strip().upper()
+            if answer in {"Q", "S"} or (len(answer) == 1 and answer in letters):
+                break
+            _say(f"请输入 {letters[0]}–{letters[-1]}，或 s / q。")
+        if answer == "Q":
+            break
+        if answer == "S":
+            row.person.skipped = True
+        else:
+            row.person.choice = letters.index(answer)
+            twin = row.twin
+            if twin is not None:
+                if twin.choice is None:
+                    _say("分身选了：没有选（说不知道）")
+                else:
+                    verdict = "✓ 一样" if twin.choice == row.person.choice else "✗ 不一样"
+                    _say(f"分身选了：{LETTERS[twin.choice]}. {item.options[twin.choice]}  {verdict}")
+                _say(f"分身的话：{twin.reply.strip()}")
+                rating = typer.prompt("分身说的理由像你吗？1–5，回车跳过", default="", show_default=False).strip()
+                if rating in {"1", "2", "3", "4", "5"}:
+                    row.person.rating = int(rating)
+        write_sheet(path, sheet)
+    left = sum(1 for row in sheet.items if row.person.choice is None and not row.person.skipped)
+    _say(f"已保存。还剩 {left} 题。" if left else "全部阅完。用 twin survey score 看结果。")
+
+
+@survey_app.command("ask")
+@_command_usage("chat")
+def survey_ask_command(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="答卷 JSON（仓库外，仅本人可读写）")],
+    repeats: Annotated[int, typer.Option("--repeats", min=1, help="每题作答次数，取多数")] = 3,
+    as_of: Annotated[str | None, typer.Option("--as-of", help="让分身只用这一天以前的资料作答")] = None,
+    force_choice: Annotated[bool, typer.Option("--force-choice", help="资料不够也必须选（和论文做法一致）")] = False,
+    baseline: Annotated[
+        str | None,
+        typer.Option("--baseline", help="换成基线作答：intro 只看自我介绍，blank 没有任何信息；不需要再阅卷"),
+    ] = None,
+    no_judge: Annotated[bool, typer.Option("--no-judge", help="防泄漏检查只看字面相似，不调用模型")] = False,
+    instrument: InstrumentOption = None,
+    allow_in_repo: AllowInRepo = False,
+) -> None:
+    """让分身答问卷，写出待阅的答卷；先检查哪些题记忆里已经答过。"""
+    from .evals.survey import ask_baseline, ask_survey, load_instrument, screen_leakage, write_sheet
+
+    with _errors():
+        _survey_out(out, allow_in_repo)
+        if out.exists():
+            raise ValueError(f"{out} 已存在；换一个文件名，避免覆盖已阅的答卷")
+        if baseline not in {None, "intro", "blank"}:
+            raise typer.BadParameter("应为 intro 或 blank", param_hint="--baseline")
+        survey = load_instrument(instrument)
+        settings = _settings(ctx)
+        with _persona_store(settings) as store:
+            if baseline is not None:
+                about = (store.get_meta("identity:about") or "") if baseline == "intro" else None
+                try:
+                    sheet = ask_baseline(
+                        _llm(settings, chat=True),
+                        survey,
+                        about=about,
+                        max_workers=settings.max_workers,
+                        progress=_progress,
+                    )
+                except RuntimeError as e:
+                    raise _fail(str(e)) from None
+            else:
+                if profile_stale(store):
+                    _progress(STALE_PROFILE_NOTICE)
+                flagged = screen_leakage(store, survey, None if no_judge else _llm(settings))
+                if flagged:
+                    _progress(f"有 {len(flagged)} 题可能已在记忆里答过，照常作答，但默认不计分。")
+                twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
+                try:
+                    sheet = ask_survey(
+                        twin,
+                        survey,
+                        repeats=repeats,
+                        as_of=_optional_date(as_of, "--as-of"),
+                        force_choice=force_choice,
+                        max_workers=settings.max_workers,
+                        progress=_progress,
+                    )
+                except RuntimeError as e:
+                    raise _fail(str(e)) from None
+                for row in sheet.items:
+                    row.leak = flagged.get(row.item.id)
+        write_sheet(out, sheet)
+    if baseline is not None:
+        _say(f"基线已答完，写入 {out}。用 twin survey score {out} --key <已阅的分身答卷> 计分。")
+    else:
+        _say(f"分身已答完 {len(sheet.items)} 题，答卷写入 {out}。下一步：twin survey grade {out}")
+
+
+@survey_app.command("grade")
+def survey_grade_command(
+    sheet: Annotated[Path, typer.Argument(help="twin survey ask 写出的答卷")],
+) -> None:
+    """阅卷：先选你自己的答案，再看分身的答案并给理由打分；随时可以退出，下次接着阅。"""
+    with _errors():
+        _survey_grade(sheet)
+
+
+@survey_app.command("self")
+def survey_self_command(
+    out: Annotated[Path, typer.Option("--out", help="你自己的答卷（仓库外）")],
+    instrument: InstrumentOption = None,
+    allow_in_repo: AllowInRepo = False,
+) -> None:
+    """只有你自己作答，不调用分身；隔两周左右再答一次，用来测你自己的一致性。"""
+    from .evals.survey import blank_sheet, load_instrument, write_sheet
+
+    with _errors():
+        _survey_out(out, allow_in_repo)
+        if not out.exists():
+            write_sheet(out, blank_sheet(load_instrument(instrument)))
+        _survey_grade(out)
+
+
+@survey_app.command("score")
+def survey_score_command(
+    sheet: Annotated[Path, typer.Argument(help="已阅的答卷")],
+    retest: Annotated[Path | None, typer.Option("--retest", help="隔一段时间后你自己再答的答卷")] = None,
+    key: Annotated[Path | None, typer.Option("--key", help="给基线答卷计分时，用这份已阅的分身答卷做标准答案")] = None,
+    include_leaked: Annotated[bool, typer.Option("--include-leaked", help="把记忆里可能已答过的题也算进去")] = False,
+    out: Annotated[Path | None, typer.Option("--out", help="把报告写入 Markdown 文件")] = None,
+) -> None:
+    """统计准确率、作答率、各方面和性格；给了 --retest 再算归一化准确率。不调用模型。"""
+    from .evals.survey import apply_key, read_sheet, score_markdown, score_sheet
+
+    with _errors():
+        scored = read_sheet(sheet)
+        if key is not None:
+            scored = apply_key(scored, read_sheet(key))
+        summary = score_sheet(scored, read_sheet(retest) if retest is not None else None, include_leaked=include_leaked)
+        text = score_markdown(summary)
+        if out is not None:
+            _write(out, text)
+            _say(f"已写入 {out}")
+        else:
+            _say(text)
+
+
 media_app = typer.Typer(help="已保存回答的展示、语音合成与合成句集回听评测。")
 app.add_typer(media_app, name="media")
 

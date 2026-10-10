@@ -159,22 +159,48 @@ def load_dataset(path: Path) -> tuple[Case, ...]:
 
 
 SAMPLE_SEED = "longmemeval-v1"
+FORMAL_PER_TYPE = 5
+SPLITS = ("formal", "dev")
+
+
+def _per_type_sample(cases: Sequence[Case], per_type: int, seed: str, excluded: set[str]) -> set[str]:
+    chosen: set[str] = set()
+    for question_type in QUESTION_TYPES:
+        ids = [
+            c.input.question_id
+            for c in cases
+            if c.question_type == question_type and c.input.question_id not in excluded
+        ]
+        if not 1 <= per_type <= len(ids):
+            raise ValueError("per-type sample size must be between 1 and each type's question count")
+        chosen.update(random.Random(f"{seed}:{question_type}").sample(ids, per_type))
+    return chosen
 
 
 def select_cases(
-    cases: Sequence[Case], *, limit: int = 3, offset: int = 0, per_type: int | None = None, seed: str = SAMPLE_SEED
+    cases: Sequence[Case],
+    *,
+    limit: int = 3,
+    offset: int = 0,
+    per_type: int | None = None,
+    seed: str = SAMPLE_SEED,
+    split: str = "formal",
 ) -> tuple[Case, ...]:
     """Slice questions in source order, or with ``per_type`` draw that many of every question type, reproducibly
-    for the same data and seed, and keep them in source order."""
+    for the same data and seed, and keep them in source order. The ``dev`` split draws only from questions outside
+    the documented formal sample, so iterating on it cannot tune the twin to the formal questions."""
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
+    if split not in SPLITS:
+        raise ValueError("split must be formal or dev")
+    if split == "dev":
+        if per_type is None:
+            raise ValueError("the dev split is a seeded sample; pass per_type")
+        formal = _per_type_sample(cases, FORMAL_PER_TYPE, SAMPLE_SEED, set())
+        chosen = _per_type_sample(cases, per_type, f"{seed}:dev", formal)
+        return tuple(c for c in cases if c.input.question_id in chosen)
     if per_type is not None:
-        chosen: set[str] = set()
-        for question_type in QUESTION_TYPES:
-            ids = [c.input.question_id for c in cases if c.question_type == question_type]
-            if not 1 <= per_type <= len(ids):
-                raise ValueError("per-type sample size must be between 1 and each type's question count")
-            chosen.update(random.Random(f"{seed}:{question_type}").sample(ids, per_type))
+        chosen = _per_type_sample(cases, per_type, seed, set())
         return tuple(c for c in cases if c.input.question_id in chosen)
     selected = tuple(cases[offset : offset + limit])
     if not selected:

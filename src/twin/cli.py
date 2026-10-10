@@ -698,6 +698,9 @@ def personal_eval_command(
     _say("评测报告已写入；update 已在临时副本上运行。" if "update" not in report.skipped else "评测报告已写入。")
 
 
+SPLIT_HELP = "formal (documented sample) or dev (disjoint sample for day-to-day iteration)"
+
+
 @app.command("eval-longmemeval")
 def longmemeval_command(
     ctx: typer.Context,
@@ -709,43 +712,26 @@ def longmemeval_command(
         int | None, typer.Option("--per-type", min=1, help="Seeded random sample of this many per question type")
     ] = None,
     seed: Annotated[str, typer.Option("--seed", help="Question sampling seed")] = "longmemeval-v1",
+    split: Annotated[str, typer.Option("--split", help=SPLIT_HELP)] = "formal",
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     score: Annotated[bool, typer.Option("--score/--no-score", help="Optional custom configured-judge scoring")] = False,
 ) -> None:
-    """LongMemEval through production Twin, with an optional retrieval baseline."""
-    from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
-    from .util import fingerprint
-
+    """LongMemEval through production Twin, with an optional retrieval baseline. ``[[judges]]`` tables, when
+    configured, judge instead of the main ``llm``."""
     try:
-        out = validate_output(out)
-        with dataset.open("rb") as stream:
-            dataset_sha = hashlib.file_digest(stream, "sha256").hexdigest()
-        cases = select_cases(load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed)
-        settings = _benchmark_settings(ctx)
-        configured_identity = fingerprint(
-            {
-                "reader": settings.effective_chat_llm.model_dump(exclude={"base_url", "api_key_env"}),
-                "embed": settings.embed.model_dump(exclude={"base_url", "api_key_env"}),
-                "judges": [
-                    judge.model_dump(exclude={"base_url", "api_key_env"}) for judge in settings.judges or [settings.llm]
-                ]
-                if score
-                else [],
-                "limit": limit,
-                "offset": offset,
-                **({"per_type": per_type, "seed": seed} if per_type is not None else {}),
-                "score": score,
-            }
-        )
-        report = run_evaluation(
-            cases,
+        report = _run_longmemeval(
+            _benchmark_settings(ctx, keep_judges=True),
+            dataset,
             out,
-            settings,
+            limit=limit,
+            offset=offset,
+            per_type=per_type,
+            seed=seed,
+            split=split,
             system=system,
             dry_run=dry_run,
             score=score,
-            fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
         )
     except Exception:
         raise _fail(
@@ -757,20 +743,72 @@ def longmemeval_command(
         f"prediction_failures={report['prediction_failures']}, judge_failures={report['judge_failures']}, "
         f"missing={report['missing']}; system={report['system']}."
     )
-    if not dry_run and any(
-        report.get(key, 0) for key in ("preparation_failures", "prediction_failures", "judge_failures", "missing")
-    ):
+    if not dry_run and _benchmark_failed(report):
         raise typer.Exit(code=1)
 
 
-def _benchmark_settings(ctx: typer.Context) -> Settings:
+def _run_longmemeval(
+    settings: Settings,
+    dataset: Path,
+    out: Path,
+    *,
+    limit: int,
+    offset: int,
+    per_type: int | None,
+    seed: str,
+    split: str,
+    system: str,
+    dry_run: bool,
+    score: bool,
+) -> dict[str, Any]:
+    from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
+    from .util import fingerprint
+
+    out = validate_output(out)
+    with dataset.open("rb") as stream:
+        dataset_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+    cases = select_cases(load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed, split=split)
+    configured_identity = fingerprint(
+        {
+            "reader": settings.effective_chat_llm.model_dump(exclude={"base_url", "api_key_env"}),
+            "embed": settings.embed.model_dump(exclude={"base_url", "api_key_env"}),
+            "judges": [
+                judge.model_dump(exclude={"base_url", "api_key_env"}) for judge in settings.judges or [settings.llm]
+            ]
+            if score
+            else [],
+            "limit": limit,
+            "offset": offset,
+            **({"per_type": per_type, "seed": seed} if per_type is not None else {}),
+            **({"split": split} if split != "formal" else {}),
+            "score": score,
+        }
+    )
+    return run_evaluation(
+        cases,
+        out,
+        settings,
+        system=system,
+        dry_run=dry_run,
+        score=score,
+        fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
+    )
+
+
+def _benchmark_failed(report: dict[str, Any]) -> bool:
+    return any(
+        report.get(key, 0) for key in ("preparation_failures", "prediction_failures", "judge_failures", "missing")
+    )
+
+
+def _benchmark_settings(ctx: typer.Context, *, keep_judges: bool = False) -> Settings:
     config = _config_path(ctx)
     if config is None and os.environ.get("TWIN_CONFIG"):
         config = Path(os.environ["TWIN_CONFIG"])
     if config is not None and not config.is_file():
         raise ValueError("Missing configuration")
     settings = load_settings(config)
-    return settings.model_copy(update={"chat_llm": settings.llm, "judges": []})
+    return settings.model_copy(update={"chat_llm": settings.llm, **({} if keep_judges else {"judges": []})})
 
 
 def _benchmark_fingerprints(
@@ -804,7 +842,7 @@ def _benchmark_status(name: str, report: dict[str, Any], *, dry_run: bool) -> No
         f"preparation_failures={report.get('preparation_failures', 0)}, "
         f"prediction_failures={report['prediction_failures']}, missing={report['missing']}."
     )
-    if not dry_run and any(report.get(key, 0) for key in ("preparation_failures", "prediction_failures", "missing")):
+    if not dry_run and _benchmark_failed(report):
         raise typer.Exit(code=1)
 
 
@@ -818,32 +856,60 @@ def personamem_command(
     offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
     sample: Annotated[int | None, typer.Option("--sample", min=1, help="Seeded random sample of questions")] = None,
     seed: Annotated[str, typer.Option("--seed", help="Question sampling seed")] = "personamem-v1",
+    split: Annotated[str, typer.Option("--split", help=SPLIT_HELP)] = "formal",
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """PersonaMem through production Twin with official multiple-choice scoring."""
-    from .evals.longmemeval import validate_output
-    from .evals.personamem import load_dataset, run_evaluation, select_cases
-
     try:
-        out = validate_output(out)
-        cases = select_cases(load_dataset(questions, contexts), limit=limit, offset=offset, sample=sample, seed=seed)
-        settings = _benchmark_settings(ctx)
-        identities = _benchmark_fingerprints(
-            settings,
-            {"questions_sha256": questions, "contexts_sha256": contexts},
-            limit,
-            offset,
-            {"sample": sample, "seed": seed} if sample is not None else None,
-        )
-        report = run_evaluation(
-            cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities
+        report = _run_personamem(
+            _benchmark_settings(ctx),
+            questions,
+            contexts,
+            out,
+            limit=limit,
+            offset=offset,
+            sample=sample,
+            seed=seed,
+            split=split,
+            system=system,
+            dry_run=dry_run,
         )
     except Exception:
         raise _fail(
             "PersonaMem failed; check input, configuration and fresh output directory (details hidden)"
         ) from None
     _benchmark_status("PersonaMem", report, dry_run=dry_run)
+
+
+def _run_personamem(
+    settings: Settings,
+    questions: Path,
+    contexts: Path,
+    out: Path,
+    *,
+    limit: int,
+    offset: int,
+    sample: int | None,
+    seed: str,
+    split: str,
+    system: str,
+    dry_run: bool,
+) -> dict[str, Any]:
+    from .evals.longmemeval import validate_output
+    from .evals.personamem import load_dataset, run_evaluation, select_cases
+
+    out = validate_output(out)
+    cases = select_cases(
+        load_dataset(questions, contexts), limit=limit, offset=offset, sample=sample, seed=seed, split=split
+    )
+    selection = {"sample": sample, "seed": seed} if sample is not None else None
+    if selection is not None and split != "formal":
+        selection["split"] = split
+    identities = _benchmark_fingerprints(
+        settings, {"questions_sha256": questions, "contexts_sha256": contexts}, limit, offset, selection
+    )
+    return run_evaluation(cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities)
 
 
 @app.command("eval-twin2k500")
@@ -859,34 +925,211 @@ def twin2k500_command(
         int | None, typer.Option("--participants", min=1, help="Seeded random sample of participants")
     ] = None,
     seed: Annotated[str, typer.Option("--seed", help="Participant sampling seed")] = "twin2k500-v1",
+    split: Annotated[str, typer.Option("--split", help=SPLIT_HELP)] = "formal",
     system: Annotated[str, typer.Option("--system", help="twin (default) or retrieval baseline")] = "twin",
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """Twin-2K-500 production Twin built from waves 1–3, evaluated on wave 4."""
-    from .evals.longmemeval import validate_output
-    from .evals.twin2k500 import load_dataset, run_evaluation, sample_participants, select_cases
-
     try:
-        out = validate_output(out)
-        loaded = load_dataset(dataset)
-        if participants is None:
-            limit = 3 if limit is None else limit
-            cases = select_cases(loaded, limit=limit, offset=offset)
-            selection = None
-        else:
-            sampled = sample_participants(loaded, participants, seed)
-            cases = select_cases(loaded, limit=limit, offset=offset, participant_ids=sampled)
-            selection = {"participants": sorted(sampled), "seed": seed}
-        settings = _benchmark_settings(ctx)
-        identities = _benchmark_fingerprints(settings, {"dataset_sha256": dataset}, limit, offset, selection)
-        report = run_evaluation(
-            cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities
+        report = _run_twin2k500(
+            _benchmark_settings(ctx),
+            dataset,
+            out,
+            limit=limit,
+            offset=offset,
+            participants=participants,
+            seed=seed,
+            split=split,
+            system=system,
+            dry_run=dry_run,
         )
     except Exception:
         raise _fail(
             "Twin-2K-500 failed; check input, configuration and fresh output directory (details hidden)"
         ) from None
     _benchmark_status("Twin-2K-500", report, dry_run=dry_run)
+
+
+def _run_twin2k500(
+    settings: Settings,
+    dataset: Path,
+    out: Path,
+    *,
+    limit: int | None,
+    offset: int,
+    participants: int | None,
+    seed: str,
+    split: str,
+    system: str,
+    dry_run: bool,
+) -> dict[str, Any]:
+    from .evals.longmemeval import validate_output
+    from .evals.twin2k500 import load_dataset, run_evaluation, sample_participants, select_cases
+
+    out = validate_output(out)
+    loaded = load_dataset(dataset)
+    if participants is None:
+        if split != "formal":
+            raise ValueError("the dev split is a seeded sample; pass participants")
+        limit = 3 if limit is None else limit
+        cases = select_cases(loaded, limit=limit, offset=offset)
+        selection = None
+    else:
+        sampled = sample_participants(loaded, participants, seed, split)
+        cases = select_cases(loaded, limit=limit, offset=offset, participant_ids=sampled)
+        selection = {"participants": sorted(sampled), "seed": seed}
+    identities = _benchmark_fingerprints(settings, {"dataset_sha256": dataset}, limit, offset, selection)
+    return run_evaluation(cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities)
+
+
+SUITE_SIZES = {"dev": {"lme": 3, "pm": 24, "t2k": 4}, "formal": {"lme": 5, "pm": 30, "t2k": 10}}
+
+
+@app.command("eval-suite")
+def eval_suite_command(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="Fresh private suite directory outside git repositories")],
+    split: Annotated[str, typer.Option("--split", help=SPLIT_HELP)] = "dev",
+    repeats: Annotated[int, typer.Option("--repeats", min=1, help="Full runs per benchmark, to measure noise")] = 2,
+    longmemeval: Annotated[Path | None, typer.Option("--longmemeval", help="LongMemEval S cleaned JSON")] = None,
+    personamem_questions: Annotated[Path | None, typer.Option("--personamem-questions")] = None,
+    personamem_contexts: Annotated[Path | None, typer.Option("--personamem-contexts")] = None,
+    twin2k500: Annotated[Path | None, typer.Option("--twin2k500", help="Twin-2K-500 wave_split JSON/JSONL")] = None,
+    lme_per_type: Annotated[int | None, typer.Option("--lme-per-type", min=1)] = None,
+    pm_sample: Annotated[int | None, typer.Option("--pm-sample", min=1)] = None,
+    t2k_participants: Annotated[int | None, typer.Option("--t2k-participants", min=1)] = None,
+    baseline: Annotated[Path | None, typer.Option("--baseline", help="Earlier scorecard.json to compare with")] = None,
+) -> None:
+    """Run the three public benchmarks ``--repeats`` times through production Twin and write a scorecard.
+
+    Iterate on the ``dev`` split; run ``formal`` only to record a milestone. Benchmarks run concurrently, repeats of
+    one benchmark run in sequence, and each run lands in ``<out>/<benchmark>/r<n>/``.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .evals.longmemeval import validate_output
+    from .evals.scorecard import build_scorecard, compare, write_scorecard
+
+    if split not in SUITE_SIZES:
+        raise _fail("--split must be formal or dev")
+    if (personamem_questions is None) != (personamem_contexts is None):
+        raise _fail("PersonaMem needs both --personamem-questions and --personamem-contexts")
+    sizes = {
+        "lme": lme_per_type or SUITE_SIZES[split]["lme"],
+        "pm": pm_sample or SUITE_SIZES[split]["pm"],
+        "t2k": t2k_participants or SUITE_SIZES[split]["t2k"],
+    }
+    jobs: dict[str, Callable[[Settings, Path], dict[str, Any]]] = {}
+    if longmemeval is not None:
+        lme_dataset = longmemeval
+        jobs["longmemeval"] = lambda settings, run: _run_longmemeval(
+            settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
+            split=split, system="twin", dry_run=False, score=True,
+        )  # fmt: skip
+    if personamem_questions is not None and personamem_contexts is not None:
+        pm_questions, pm_contexts = personamem_questions, personamem_contexts
+        jobs["personamem"] = lambda settings, run: _run_personamem(
+            settings, pm_questions, pm_contexts, run, limit=3, offset=0, sample=sizes["pm"], seed="personamem-v1",
+            split=split, system="twin", dry_run=False,
+        )  # fmt: skip
+    if twin2k500 is not None:
+        t2k_dataset = twin2k500
+        jobs["twin2k500"] = lambda settings, run: _run_twin2k500(
+            settings, t2k_dataset, run, limit=None, offset=0, participants=sizes["t2k"], seed="twin2k500-v1",
+            split=split, system="twin", dry_run=False,
+        )  # fmt: skip
+    if not jobs:
+        raise _fail("Name at least one benchmark dataset")
+    try:
+        previous = json.loads(baseline.read_text(encoding="utf-8")) if baseline is not None else None
+        out = validate_output(out)
+        if out.exists() and any(out.iterdir()):
+            raise ValueError
+        private_directory(out)
+        out.chmod(0o700)
+        judged = _benchmark_settings(ctx, keep_judges=True)
+        plain = _benchmark_settings(ctx)
+    except Exception:
+        raise _fail("Suite setup failed; check configuration, baseline and a fresh empty output directory") from None
+
+    def run_benchmark(name: str) -> list[dict[str, Any]]:
+        settings = judged if name == "longmemeval" else plain
+        reports = []
+        for index in range(1, repeats + 1):
+            run = out / name / f"r{index}"
+            private_directory(run)
+            reports.append(jobs[name](settings, run))
+            _progress(f"{name} r{index}/{repeats} done")
+        return reports
+
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {name: pool.submit(run_benchmark, name) for name in jobs}
+        for name, future in futures.items():
+            try:
+                if any(_benchmark_failed(report) for report in future.result()):
+                    failed.append(name)
+            except Exception:
+                failed.append(name)
+                _progress(f"{name} stopped early (details hidden)")
+    try:
+        card = build_scorecard(out, _suite_metadata(split, repeats, sizes))
+        write_scorecard(out, card, compare(card, previous) if previous is not None else None)
+    except Exception:
+        raise _fail("Scorecard failed; every repeat of a benchmark must finish (details hidden)") from None
+    _say(f"Scorecard written to {out / 'scorecard.md'}.")
+    if failed:
+        _say("Runs with failures (counted as wrong in the scorecard): " + ", ".join(failed))
+        raise typer.Exit(code=1)
+
+
+def _suite_metadata(split: str, repeats: int, sizes: dict[str, int]) -> dict[str, Any]:
+    repo = Path(__file__).resolve().parents[2]
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        commit += "-dirty" if dirty else ""
+    except (OSError, subprocess.CalledProcessError):
+        commit = "unknown"
+    return {
+        "split": split,
+        "repeats": repeats,
+        "sizes": sizes,
+        "commit": commit,
+        "date": dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
+@app.command("eval-scorecard")
+def eval_scorecard_command(
+    suite: Annotated[Path, typer.Argument(help="Suite directory with <benchmark>/r<n>/ runs")],
+    baseline: Annotated[Path | None, typer.Option("--baseline", help="Earlier scorecard.json to compare with")] = None,
+) -> None:
+    """Rebuild a suite's scorecard from its runs, optionally against a baseline, without calling a model."""
+    from .evals.scorecard import build_scorecard, compare, write_scorecard
+
+    with _errors():
+        existing = suite / "scorecard.json"
+        metadata = (
+            {
+                k: v
+                for k, v in json.loads(existing.read_text(encoding="utf-8")).items()
+                if k not in ("benchmarks", "comparison", "version")
+            }
+            if existing.is_file()
+            else {"split": "unknown"}
+        )
+        card = build_scorecard(suite, metadata)
+        previous = json.loads(baseline.read_text(encoding="utf-8")) if baseline is not None else None
+        write_scorecard(suite, card, compare(card, previous) if previous is not None else None)
+    _say(f"Scorecard written to {suite / 'scorecard.md'}.")
 
 
 @app.command("eval-compare")

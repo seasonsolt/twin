@@ -175,15 +175,35 @@ def load_dataset(questions_path: Path, contexts_path: Path) -> tuple[Case, ...]:
 
 
 SAMPLE_SEED = "personamem-v1"
+FORMAL_SAMPLE = 30
+SPLITS = ("formal", "dev")
 
 
 def select_cases(
-    cases: Sequence[Case], *, limit: int = 3, offset: int = 0, sample: int | None = None, seed: str = SAMPLE_SEED
+    cases: Sequence[Case],
+    *,
+    limit: int = 3,
+    offset: int = 0,
+    sample: int | None = None,
+    seed: str = SAMPLE_SEED,
+    split: str = "formal",
 ) -> tuple[Case, ...]:
     """Slice questions in source order, or draw ``sample`` questions uniformly, reproducibly for the same data and
-    seed, and keep them in source order."""
+    seed, and keep them in source order. The ``dev`` split draws only from shared contexts that no formal-sample
+    question uses, so iterating on it cannot tune the twin to the formal personas."""
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
+    if split not in SPLITS:
+        raise ValueError("split must be formal or dev")
+    if split == "dev":
+        if sample is None:
+            raise ValueError("the dev split is a seeded sample; pass sample")
+        formal = {c.input.subject_id for c in select_cases(cases, sample=FORMAL_SAMPLE)}
+        rest = [c for c in cases if c.input.subject_id not in formal]
+        if not 1 <= sample <= len(rest):
+            raise ValueError("sample size must be between 1 and the number of dev questions")
+        picked = {c.input.question_id for c in random.Random(f"{seed}:dev").sample(rest, sample)}
+        return tuple(c for c in cases if c.input.question_id in picked)
     if sample is not None:
         if not 1 <= sample <= len(cases):
             raise ValueError("sample size must be between 1 and the number of questions")

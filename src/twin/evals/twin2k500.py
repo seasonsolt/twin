@@ -343,11 +343,19 @@ def load_dataset(path: Path) -> tuple[Case, ...]:
 
 
 SAMPLE_SEED = "twin2k500-v1"
+FORMAL_PARTICIPANTS = 10
+SPLITS = ("formal", "dev")
 
 
-def sample_participants(cases: Sequence[Case], count: int, seed: str = SAMPLE_SEED) -> list[str]:
-    """Draw participants uniformly without replacement, reproducibly for the same data and seed."""
+def sample_participants(cases: Sequence[Case], count: int, seed: str = SAMPLE_SEED, split: str = "formal") -> list[str]:
+    """Draw participants uniformly without replacement, reproducibly for the same data and seed. The ``dev`` split
+    draws only from participants outside the documented formal sample."""
+    if split not in SPLITS:
+        raise ValueError("split must be formal or dev")
     ids = list(dict.fromkeys(c.input.participant_id for c in cases))
+    if split == "dev":
+        formal = set(sample_participants(cases, FORMAL_PARTICIPANTS))
+        ids, seed = [i for i in ids if i not in formal], f"{seed}:dev"
     if not 1 <= count <= len(ids):
         raise ValueError("participant sample size must be between 1 and the number of participants")
     return random.Random(seed).sample(ids, count)

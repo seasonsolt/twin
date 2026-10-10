@@ -60,6 +60,7 @@ LAYERS: dict[str, int] = {
     "evals.longmemeval": 8,
     "evals.personamem": 8,
     "evals.twin2k500": 8,
+    "evals.survey": 8,
     "service": 7,
     "api": 9,
     "mcp_server": 9,

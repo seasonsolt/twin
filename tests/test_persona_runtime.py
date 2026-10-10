@@ -19,7 +19,7 @@ from twin.evals import longmemeval as lm
 from twin.evals import persona_runtime as pr
 from twin.evals import personamem as pm
 from twin.evals import twin2k500 as tw
-from twin.llm import FakeLLM
+from twin.llm import FakeLLM, LLMError
 from twin.persona.chat import EMPTY_REPLY
 from twin.persona.profile import BuildReport, consented_facets
 from twin.persona.schema import ChatDraft, EvidenceClass, SourceKind, evidence_class
@@ -489,3 +489,27 @@ def test_runtime_fingerprint_preserves_scoring_protocol(
         assert (
             changed["fingerprints"]["runtime_configuration"] != changed_again["fingerprints"]["runtime_configuration"]
         )
+
+
+def test_a_timed_out_merge_still_answers_from_unmerged_candidates() -> None:
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema.__name__ == "ExtractDraft":
+            return {
+                "items": [
+                    {"facet_id": "2.1", "statement": "Prefers Atlas", "quotes": [{"n": 1, "quote": "I prefer Atlas"}]},
+                    {"facet_id": "2.1", "statement": "Chooses Atlas", "quotes": [{"n": 1, "quote": "Atlas"}]},
+                ]
+            }
+        if schema.__name__ == "MergeDraft":
+            raise LLMError("timed out")
+        assert schema is ChatDraft and "Prefers Atlas" in user and "Chooses Atlas" in user
+        return {"reply": "Atlas", "citations": [], "confidence": 0.5}
+
+    runtime = pr.PersonaRuntime(Settings(), FakeLLM(answer), HashingEmbedder())
+    try:
+        reply = runtime.predict("a", (pr.SourceInput("h", "chat", (("user", "I prefer Atlas", ""),)),), "project?")
+        assert reply.reply == "Atlas"
+        assert runtime.metadata["preparation_degraded"] == ["merge 2.1: LLMError"]
+        assert "preparation_failure" not in runtime.metadata
+    finally:
+        runtime.close()

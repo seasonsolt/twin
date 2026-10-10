@@ -103,6 +103,8 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         report = build_profile(store, llm, settings, log)
         for failure in report.failures:
             log(f"FAILED {failure}")
+        for degraded in report.degraded:
+            log(f"未完全合并，下次构建会重试：{degraded}")
         log("[2/2] 更新检索向量")
         index_persona(store, embedder, settings, log)
     if report.failures and report.chunks_extracted == 0 and report.facets_merged == 0:

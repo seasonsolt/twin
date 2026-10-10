@@ -24,7 +24,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..llm import LLM, failure_summary, retry_truncated
+from ..llm import LLM, LLMError, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import PersonaCandidate, PersonaItem, PEvidence
@@ -332,20 +332,31 @@ def _item_from(
     )
 
 
+class MergeDegraded(Exception):
+    """A facet merged only in part: ``items`` keep every candidate, some left unmerged after a model failure.
+    Saving them keeps the profile usable; the facet is merged again on the next build."""
+
+    def __init__(self, items: list[PersonaItem], cause: LLMError) -> None:
+        super().__init__(failure_summary(cause))
+        self.items = items
+        self.cause = cause
+
+
 def merge_facet(
     llm: LLM, facet_id: str, candidates: Sequence[PersonaCandidate], settings: Settings
 ) -> list[PersonaItem]:
+    """Merge a facet's candidates in batches. A batch whose call fails (usually a timeout on a long reply) is
+    merged again as two halves; a half that still fails keeps its candidates as separate items, and the facet
+    raises ``MergeDegraded`` carrying every item instead of losing them all."""
     if len(candidates) == 1:
         c = candidates[0]
         return [_item_from(facet_id, c.statement, c.applies_when, [c], "")]
-    items: list[PersonaItem] = []
-    ordered = sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
-    for start in range(0, len(ordered), MAX_MERGE_CANDIDATES):
-        batch = ordered[start : start + MAX_MERGE_CANDIDATES]
-        facet = FACET_BY_ID[facet_id]
-        system = MERGE_SYSTEM.format(
-            name=settings.target_name, facet_id=facet_id, facet_name=facet.name, facet_desc=facet.description
-        )
+    facet = FACET_BY_ID[facet_id]
+    system = MERGE_SYSTEM.format(
+        name=settings.target_name, facet_id=facet_id, facet_name=facet.name, facet_desc=facet.description
+    )
+
+    def merge_batch(batch: Sequence[PersonaCandidate]) -> list[PersonaItem]:
         call = partial(
             llm.structured,
             system=system,
@@ -357,17 +368,41 @@ def merge_facet(
         draft = retry_truncated(call)
         by_id = {c.candidate_id: c for c in batch}
         used: set[str] = set()
+        merged: list[PersonaItem] = []
         for group in draft.items:
             members = [by_id[i] for i in dict.fromkeys(group.candidate_ids) if i in by_id and i not in used]
             if not members or not group.statement.strip():
                 continue
             used.update(c.candidate_id for c in members)
-            items.append(
+            merged.append(
                 _item_from(facet_id, group.statement.strip(), group.applies_when.strip(), members, group.conflict)
             )
-        items.extend(
+        merged.extend(
             _item_from(facet_id, c.statement, c.applies_when, [c], "") for c in batch if c.candidate_id not in used
         )
+        return merged
+
+    items: list[PersonaItem] = []
+    failure: LLMError | None = None
+    ordered = sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
+    for start in range(0, len(ordered), MAX_MERGE_CANDIDATES):
+        batch = ordered[start : start + MAX_MERGE_CANDIDATES]
+        try:
+            items.extend(merge_batch(batch))
+            continue
+        except LLMError as error:
+            failure = error
+        middle = len(batch) // 2
+        for half in (batch[:middle], batch[middle:]):
+            if len(half) < 2:
+                items.extend(_item_from(facet_id, c.statement, c.applies_when, [c], "") for c in half)
+                continue
+            try:
+                items.extend(merge_batch(half))
+            except LLMError:
+                items.extend(_item_from(facet_id, c.statement, c.applies_when, [c], "") for c in half)
+    if failure is not None:
+        raise MergeDegraded(items, failure)
     return items
 
 
@@ -391,6 +426,8 @@ class BuildReport:
     facets_merged: int = 0
     items: int = 0
     failures: list[str] = field(default_factory=list)
+    # Facets saved after a partial merge (see ``MergeDegraded``); they are merged again on the next build.
+    degraded: list[str] = field(default_factory=list)
     facet_diffs: dict[str, FacetItemDiff] = field(default_factory=dict)
 
     @property
@@ -471,17 +508,24 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
 
     def save(job: tuple[str, list[PersonaCandidate]], outcome: list[PersonaItem] | Exception) -> None:
         facet_id, members = job
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, MergeDegraded):
+            report.degraded.append(f"merge {facet_id}: {failure_summary(outcome.cause)}")
+            items = outcome.items
+        elif isinstance(outcome, Exception):
             report.failures.append(f"merge {facet_id}: {failure_summary(outcome)}")
             return
+        else:
+            items = outcome
         before = {i.item_id: i.statement for i in store.list_items(facet_id, raw=True)}
-        store.replace_facet_items(facet_id, outcome)
+        store.replace_facet_items(facet_id, items)
         after = {i.item_id: i.statement for i in store.list_items(facet_id, raw=True)}
         report.facet_diffs[facet_id] = FacetItemDiff(
             added=len(after.keys() - before.keys()),
             changed=sum(before[i] != after[i] for i in before.keys() & after.keys()),
             removed=len(before.keys() - after.keys()),
         )
+        if isinstance(outcome, MergeDegraded):
+            return
         store.set_meta(f"merge:{facet_id}", _merge_key(members))
         report.facets_merged += 1
 

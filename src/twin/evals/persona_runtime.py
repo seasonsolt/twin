@@ -176,6 +176,8 @@ class PersonaRuntime:
                             if parsed is not None:
                                 store.put_source(parsed)
                         report = build_profile(store, self.llm, settings)
+                        if report.degraded:
+                            self.metadata["preparation_degraded"] = report.degraded
                         recorder = active_recorder()
                         if report.failures or (recorder is not None and recorder.stop is not None):
                             # Content-free: stage, chunk or facet id, error type, stop reason and field paths.

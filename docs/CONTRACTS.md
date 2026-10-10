@@ -183,6 +183,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - `BuildReport` 保留原字段并追加 `facet_diffs: dict[str, FacetItemDiff]`；`FacetItemDiff` 含 `added/changed/removed`。比较 replace_facet_items 前后的原始 item_id 与 statement，不受人工审核替换表述影响；相同 ID 仅 statement 改变算 changed，ID 改变算 removed + added，证据/情境改变不算 statement diff。包含成功合并但零变化的细项，不包含失败或跳过的细项。
 - BuildReport 提供派生总计 `items_added/items_changed/items_removed/facets_changed` 和 `change_summary()`。facets_changed 只计算有非零 diff 的细项；无变化增量构建总计为零。构建日志仅使用编号、计数及错误类型，不记录条目文本、来源标题或异常正文。
 - 只有无失败且输入版本仍未变的构建，才由 `mark_profile_built` 同事务更新 built_at 并清除 pending 标记；built_at 记录本次构建开始时间。部分失败或构建期间来源改变仍保持 stale，已完成结果保留供重试。CLI build/chat 在 stale 时向 stderr 提示，chat 仍运行。
+- 细项合并调用失败（多为长输出超时）时，`merge_facet` 把这批候选分成两半各合并一次，仍失败的一半保留为未合并的单条条目，并抛出携带全部条目的 `MergeDegraded`。构建照常保存这些条目，记入 `BuildReport.degraded`（不进 `failures`，不阻止 `mark_profile_built`），但不写该细项的合并键，下次构建会重新合并。预算停止等非模型错误不降级。
 
 ## Generic evaluation schema (code layer 1)
 

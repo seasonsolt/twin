@@ -569,6 +569,8 @@ def persona_build(ctx: typer.Context) -> None:
         report = build_profile(store, llm, settings, _progress)
         for failure in report.failures:
             _progress(f"FAILED {failure}")
+        for degraded in report.degraded:
+            _progress(f"未完全合并，下次构建会重试：{degraded}")
         if llm.failed and not llm.succeeded:
             raise _fail(f"人格档案阶段的 {llm.failed} 次模型调用全部失败：{type(llm.last_error).__name__}")
         try:

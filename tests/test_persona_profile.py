@@ -8,12 +8,13 @@ import pytest
 from pydantic import BaseModel
 
 from twin.config import Settings
-from twin.llm import FakeLLM, LLMTruncated
+from twin.llm import FakeLLM, LLMError, LLMTruncated
 from twin.persona import profile as pf
 from twin.persona.items import item_as_of
 from twin.persona.schema import EvidenceClass
 from twin.persona.sources import parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
+from twin.usage import BudgetExceeded
 
 D = dt.date
 
@@ -234,3 +235,48 @@ def test_statement_prompts_omit_pronoun_subjects() -> None:
     assert "在成都做产品经理" in pf.EXTRACT_SYSTEM
     assert "做决定前喜欢先睡一觉" in pf.EXTRACT_SYSTEM
     assert not any(word in pf.EXTRACT_SYSTEM for word in ("回款", "首付", "公曰", "奏称", "升迁"))
+
+
+def test_a_failed_merge_keeps_candidates_and_is_merged_next_build(store: PersonaStore, settings: Settings) -> None:
+    def merge_times_out(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is pf.MergeDraft:
+            raise LLMError("timed out")
+        return handler(system, user, schema)
+
+    first = pf.build_profile(store, FakeLLM(merge_times_out), settings)
+    assert first.failures == [] and first.degraded == ["merge 2.1: LLMError"]
+    assert store.get_meta("built_at") is not None and store.get_meta("merge:2.1") is None
+    assert sorted(i.statement for i in store.list_items("2.1")) == ["他把回款放在第一位"] * 2
+    llm = FakeLLM(handler)
+    second = pf.build_profile(store, llm, settings)
+    assert second.degraded == [] and second.facets_merged == 1
+    assert [name for name, _, _ in llm.calls] == ["MergeDraft"]
+    assert [i.statement for i in store.list_items("2.1")] == ["他认为钱进了账户才算收入"]
+
+
+def test_a_failed_merge_batch_is_merged_again_in_halves(store: PersonaStore, settings: Settings) -> None:
+    pf.build_profile(store, FakeLLM(handler), settings)
+    base = [c for c in store.list_candidates() if c.facet_id == "2.1"]
+    candidates = [c.model_copy(update={"candidate_id": f"pc_{n:016x}"}) for n in range(4) for c in base[:1]]
+    sizes: list[int] = []
+
+    def long_batches_time_out(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        ids = re.findall(r"\[(pc_[0-9a-f]+)\]", user)
+        sizes.append(len(ids))
+        if len(ids) > 2:
+            raise LLMError("timed out")
+        return {"items": [{"statement": "合并", "candidate_ids": ids}]}
+
+    with pytest.raises(pf.MergeDegraded) as degraded:
+        pf.merge_facet(FakeLLM(long_batches_time_out), "2.1", candidates, settings)
+    assert sizes == [4, 2, 2]
+    assert [i.member_candidate_ids for i in degraded.value.items] == [
+        [c.candidate_id for c in candidates[:2]],
+        [c.candidate_id for c in candidates[2:]],
+    ]
+
+    def budget_stop(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise BudgetExceeded("budget")
+
+    with pytest.raises(BudgetExceeded):
+        pf.merge_facet(FakeLLM(budget_stop), "2.1", candidates, settings)

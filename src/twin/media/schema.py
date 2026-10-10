@@ -40,7 +40,7 @@ class PresentableAnswer(BaseModel):
     confidence: float
     as_of: dt.date | None
     citations: list[MediaCitation]
-    mode: Literal["grounded", "general", "abstain"] = "grounded"
+    mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"
 
 
 class MediaScript(BaseModel):

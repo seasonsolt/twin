@@ -57,8 +57,8 @@ style 的两个指标各有独立评委调用，保留各自失败行。不合�
 
 ## 回答模式计数
 
-分身适配器在 `Prediction.raw["mode"]` 保存回答模式 grounded / general / abstain；这与题目的评测
-`Prediction.mode` 不同。评分规则不变。每分类及 overall 的摘要 `modes` 分别计数三种模式，直接
+分身适配器在 `Prediction.raw["mode"]` 保存回答模式 grounded / general / inferred / abstain；这与题目的评测
+`Prediction.mode` 不同。评分规则不变。每分类及 overall 的摘要 `modes` 分别计数四种模式，直接
 汇总全部重复，不平均、不依赖评委成功与否；未运行分类计数为零。比较摘要提供 A / B 各自计数，
 JSON 和 Markdown 均展示。旧 records 没有 raw mode 时，按 abstain=true 计为 abstain，否则 grounded。
 

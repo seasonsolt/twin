@@ -313,6 +313,35 @@ it('replaces draft text with guarded final text, attaches citations and starts v
   ).toHaveLength(1);
 });
 
+it('marks an inferred reply with a neutral badge and no confidence', async () => {
+  sessionStorage.setItem(
+    CHAT_KEY,
+    JSON.stringify([
+      {
+        id: 'inferred',
+        role: 'twin',
+        content: '我没直接说过，但按我的习惯，大概会选 B。',
+        reply: {
+          ...reply,
+          mode: 'inferred',
+          abstain: false,
+          abstain_reason: '',
+          confidence: 0.5,
+        },
+        timestamp: '2025-01-01T12:00:00Z',
+      },
+    ]),
+  );
+  mount();
+  expect(screen.getByLabelText('分身回复')).toHaveTextContent(
+    '我没直接说过，但按我的习惯，大概会选 B。',
+  );
+  expect(screen.getByText('推测 · 非本人表达')).toBeVisible();
+  expect(
+    screen.queryByText(/通用回答|置信度|需要本人确认/),
+  ).not.toBeInTheDocument();
+});
+
 it('renders general reply text without mode or confidence badges', async () => {
   sessionStorage.setItem(
     CHAT_KEY,

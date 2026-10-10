@@ -137,6 +137,22 @@ def test_general_mode_passthrough(grounded_chat: tuple[PersonaChat, list[str]]) 
     assert chat.store.chat_demand() == {}
 
 
+def test_inferred_mode_passthrough(grounded_chat: tuple[PersonaChat, list[str]]) -> None:
+    chat, ids = grounded_chat
+    chat.llm = FakeLLM(
+        lambda *args: {
+            "reply": "我没直接说过，但按我的习惯，大概会先问清楚。",
+            "mode": "inferred",
+            "confidence": 0.9,
+            "citations": ids[:1],
+        }
+    )
+    answer = answer_question(chat, "如果被临时拉进会议你会怎么做？", None)
+    assert answer.mode == "inferred" and not answer.abstain and not answer.abstain_reason
+    assert answer.confidence == 0.5 and len(answer.citations) == 1
+    assert ServiceAnswer.model_validate_json(answer.model_dump_json()) == answer
+
+
 def test_question_limit_before_model_call(grounded_chat: tuple[PersonaChat, list[str]]) -> None:
     chat, _ = grounded_chat
     assert isinstance(chat.llm, FakeLLM)

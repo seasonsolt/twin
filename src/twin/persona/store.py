@@ -569,7 +569,7 @@ class PersonaStore:
             )
 
     def chat_demand(self) -> dict[str, tuple[int, int]]:
-        """Per facet: how many logged questions touched it and how many of those the twin abstained on."""
+        """Per facet: how many logged questions touched it and how many of those it abstained on or could only infer."""
         with self._lock:
             rows = self._db.execute("SELECT abstain, json FROM p_chat_log").fetchall()
         demand: dict[str, list[int]] = {}
@@ -580,5 +580,5 @@ class PersonaStore:
             for facet in entry.get("topic_facets", []):
                 counts = demand.setdefault(facet, [0, 0])
                 counts[0] += 1
-                counts[1] += int(abstain)
+                counts[1] += int(abstain or entry.get("mode") == "inferred")
         return {f: (asked, abstained) for f, (asked, abstained) in demand.items()}

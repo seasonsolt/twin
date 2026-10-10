@@ -9,7 +9,7 @@ import { useLocation } from 'react-router';
 import { ArrowUp, Play } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
-import { Button, EmptyState, Textarea } from '../components/ui';
+import { Badge, Button, EmptyState, Textarea } from '../components/ui';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import { useConversation } from '../features/chat/useConversation';
@@ -456,6 +456,9 @@ export function Chat() {
                                       )}
                                     </span>
                                   </button>
+                                  {turn.reply.mode === 'inferred' && (
+                                    <Badge>推测 · 非本人表达</Badge>
+                                  )}
                                   <Citations cited={turn.reply.cited} />
                                 </div>
                                 {audio.id === turn.id && (

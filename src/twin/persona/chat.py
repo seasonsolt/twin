@@ -50,6 +50,7 @@ TEXT_CHARS = 600
 UNCITED_CONFIDENCE_CAP = 0.3
 # An answer resting only on items the person has not reviewed yet (no confirmed item, no verbatim words).
 UNVERIFIED_CONFIDENCE_CAP = 0.6
+INFERRED_CONFIDENCE_CAP = 0.5
 
 
 def _clip(text: str, limit: int) -> str:
@@ -335,14 +336,22 @@ class PersonaChat:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
-        # A grounded text that did not supply the asked item is a missed answer, whatever flags the model set.
-        missed = draft.mode == "grounded" and not draft.answered
-        abstain = draft.abstain or missed
-        reason = draft.abstain_reason.strip() or (f"回复没有给出所问内容：{draft.asked.strip()}" if missed else "")
+        # A grounded or inferred text that did not supply the asked item is a missed answer, whatever the flags.
+        missed = draft.mode in ("grounded", "inferred") and not draft.answered
+        # An inference must rest on at least one retrieved item; without one it is a guess, so it abstains.
+        unsupported = draft.mode == "inferred" and not citations
+        abstain = draft.abstain or missed or unsupported
+        reason = draft.abstain_reason.strip()
+        if not reason and missed:
+            reason = f"回复没有给出所问内容：{draft.asked.strip()}"
+        elif not reason and unsupported:
+            reason = "没有相关的间接依据，不做推测"
         if draft.mode == "general":
             confidence = min(confidence, 0.5)
         elif abstain or not citations:
             confidence = min(confidence, UNCITED_CONFIDENCE_CAP)
+        elif draft.mode == "inferred":
+            confidence = min(confidence, INFERRED_CONFIDENCE_CAP)
         elif not any(c in ctx.trusted for c in citations):
             confidence = min(confidence, UNVERIFIED_CONFIDENCE_CAP)
         topics = [f for f in dict.fromkeys(f.strip() for f in draft.topic_facets) if f in FACET_BY_ID]
@@ -371,7 +380,7 @@ STREAM_FORMAT = """
 先直接输出回复正文（不要用 JSON 或代码块包裹整篇回复，不要 reply 标签），然后换行输出一行且仅一行 <<<META>>>，
 随后输出一个紧凑 JSON 对象，字段为 asked、answered、citations、confidence、mode、abstain、abstain_reason、\
 topic_facets。asked 是对方要的那一项具体内容（字符串），answered 是正文是否给出了它（布尔值）。
-citations 和 topic_facets 是字符串数组，confidence 是 0 到 1 的数字，mode 是 grounded、general 或 abstain，
+citations 和 topic_facets 是字符串数组，confidence 是 0 到 1 的数字，mode 是 grounded、general、inferred 或 abstain，
 abstain 是布尔值，abstain_reason 是弃权原因字符串（不弃权时为空）。
 所有字段遵守上述规则。JSON 不包含 reply，正文只输出一次，不要在正文中输出分隔符。
 """
@@ -451,7 +460,10 @@ CHAT_SYSTEM = """\
 
 ## 写回复前，按顺序检查（只在内部判断，不输出检查过程）
 1. 是在问本人的观点、经历、做法或个人事实吗？只查【核心画像】和【检索资料】：有明确依据才回答，归为 grounded；\
-没有覆盖就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，该部分弃权。不确定资料是否包含某个个人事实，\
+没有直接依据时，先看对方问的是不是“遇到某个情境会选什么、怎么做、偏好什么、怎么看”这类本人没直接说过的倾向\
+（不是发生过什么、在哪、何时、谁、多少这类事实回忆，也不是替本人承诺或评价具体他人）：如果资料里有相关的间接依据\
+（相关的过往回答、明确的价值观、特质或习惯），可以给出最佳推测，归为 inferred，规则见下；\
+没有相关的间接依据，或问的是事实回忆，就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，该部分弃权。不确定资料是否包含某个个人事实，\
 就按没有覆盖处理。不能把个人问题改成通用回答来掩盖缺失。先想清对方要的具体是哪一项（asked，如商店名、日期、\
 人名、数字），再核对引用的资料是否直接给出了这一项；只有相关背景、同类信息或事件的其他侧面，不算给出，\
 不要把背景说成所问事项的答案。
@@ -463,7 +475,8 @@ CHAT_SYSTEM = """\
 
 ## 整体 mode 与弃权
 - 看正文是否实质回答了问题，而不是看有没有本人确认之类的措辞。有资料依据的实质回答 mode 设为 grounded，\
-通用实质回答 mode 设为 general；两者 abstain 都为 false，abstain_reason 为空。混合请求按实质回答部分选择 mode，\
+通用实质回答 mode 设为 general，按间接依据的推测设为 inferred；三者 abstain 都为 false，\
+abstain_reason 为空。混合请求按实质回答部分选择 mode，\
 仅对不能代答的部分简短说明边界。
 - 只有没有实质回答、只能说明无资料或需要本人确认时，mode 设为 abstain，abstain 为 true，abstain_reason 简述原因。
 - 实质回答末尾补充具体得我本人定或细节得由我本人来定，不算弃权：mode 保持 grounded/general，abstain=false。\
@@ -471,6 +484,9 @@ CHAT_SYSTEM = """\
 - answered 记录正文是否给出了 asked 那一项。正文没有给出（只讲相关背景或近似信息，或在说明没有这条记录）时，\
 answered 为 false、mode 设为 abstain，正文直接说明这一项我不知道或没记；\
 可以顺带提已知的相关背景，但要标明它不是所问的答案。
+- inferred 是对没直接说过的倾向的推测：正文必须明说这是推测，例如“我没直接说过，但按我……，大概会……”，点明依据的是\
+哪类间接资料，不把推测说成我说过或做过的事，不编造经历；citations 至少填一条用到的间接资料，没有就改为 abstain；\
+confidence 不超过 0.5。对方限定了输出格式（如只回选项标签）时，正文可以只按该格式作答，推测的身份由 mode 标明。
 - general 的 citations 可以为空，confidence 不超过 0.5；abstain 的 confidence 不超过 0.3。
 
 ## 规则

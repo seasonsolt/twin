@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import secrets
 from collections.abc import Iterator
 from pathlib import Path
@@ -105,6 +106,26 @@ def test_memory_session_round_trip(chat: PersonaChat, capsys: pytest.CaptureFixt
     asyncio.run(run())
     assert "私密问题" not in capsys.readouterr().err
     assert chat.store.chat_demand() == {}
+
+
+def test_inferred_answer_is_marked_in_the_text_result(chat: PersonaChat, monkeypatch: pytest.MonkeyPatch) -> None:
+    tools = TwinTools(chat.settings, lambda: chat)
+    inferred = ServiceAnswer(
+        answer="我没直接说过，但大概会先问清楚。",
+        abstain=False,
+        abstain_reason="",
+        confidence=0.5,
+        citations=[],
+        as_of=None,
+        persona_name="张三",
+        generated_at=dt.datetime.now(dt.UTC),
+        mode="inferred",
+    )
+    monkeypatch.setattr(tools.backend, "ask", lambda *_: inferred)
+    result = tools.ask_twin("如果被临时拉进会议你会怎么做？")
+    assert isinstance(result.content[0], TextContent)
+    assert result.content[0].text == f"{inferred.answer}\n（推测，非本人表达）"
+    assert result.structuredContent is not None and result.structuredContent["mode"] == "inferred"
 
 
 def test_external_backends_construct_without_grant(

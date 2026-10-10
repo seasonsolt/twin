@@ -71,6 +71,8 @@ def question_text(body: dict[str, Any]) -> str:
 
 
 def citation_footer(store: PersonaStore, settings: Settings, reply: ChatReply) -> str:
+    if reply.mode == "inferred":
+        return "\n\n> 以上是按资料推测，不是本人说过的话"
     if reply.mode != "grounded" or not reply.citations:
         return ""
     citations = resolve_citations(store, settings, reply.citations, reply.as_of)

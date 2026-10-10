@@ -298,7 +298,7 @@ def seed_citations(settings: Settings) -> list[str]:
     return ["pi_test", expression.expression_id]
 
 
-@pytest.mark.parametrize("mode", ["grounded", "general", "abstain"])
+@pytest.mark.parametrize("mode", ["grounded", "general", "inferred", "abstain"])
 def test_citation_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
     refs: list[str] = []
 
@@ -318,6 +318,8 @@ def test_citation_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: 
             assert content == (
                 "最终回答\n\n> 依据：2025-03-02 · 「先核实证据」\n> 依据：2025-03-02 · 「先核实证据」"
                 if mode == "grounded"
+                else "最终回答\n\n> 以上是按资料推测，不是本人说过的话"
+                if mode == "inferred"
                 else "最终回答"
             )
 

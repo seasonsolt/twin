@@ -71,7 +71,7 @@ def store(settings: Settings) -> PersonaStore:
 
 
 @pytest.mark.parametrize("contract", [ChatDraft, ChatReply])
-@pytest.mark.parametrize("mode", ["grounded", "general", "abstain"])
+@pytest.mark.parametrize("mode", ["grounded", "general", "inferred", "abstain"])
 def test_chat_modes_and_legacy_compatibility(contract: type[ChatDraft] | type[ChatReply], mode: str) -> None:
     data = {"reply": "测试回答", "citations": [], "confidence": 0.9, "abstain_reason": "", "retrieved_ids": []}
     answer = contract.model_validate({**data, "mode": mode})
@@ -80,7 +80,7 @@ def test_chat_modes_and_legacy_compatibility(contract: type[ChatDraft] | type[Ch
     if isinstance(answer, ChatReply):
         assert answer.quotes_removed == 0
         assert contract.model_validate({**data, "mode": mode, "quotes_removed": 2}).quotes_removed == 2
-        if mode == "general":
+        if mode in ("general", "inferred"):
             assert answer.confidence == 0.5
     for abstain in (True, False):
         legacy = contract.model_validate({**data, "abstain": abstain})
@@ -173,7 +173,10 @@ def test_prompt_substantive_answers_are_not_abstentions() -> None:
     prompt = pc.chat_system_prompt("测试本人", pc.PersonaContext([], [], [], []))
     modes = prompt.split("## 整体 mode 与弃权\n", 1)[1].split("## 规则", 1)[0]
     assert "有资料依据的实质回答 mode 设为 grounded" in modes
-    assert "通用实质回答 mode 设为 general；两者 abstain 都为 false，abstain_reason 为空" in modes
+    assert (
+        "通用实质回答 mode 设为 general，按间接依据的推测设为 inferred；三者 abstain 都为 false，abstain_reason 为空"
+        in modes
+    )
     assert "混合请求按实质回答部分选择 mode" in modes
     assert "只有没有实质回答、只能说明无资料或需要本人确认时，mode 设为 abstain，abstain 为 true" in modes
     assert "具体得我本人定或细节得由我本人来定，不算弃权" in modes
@@ -281,6 +284,100 @@ def test_streamed_reply_that_misses_the_asked_item_is_abstained(store: PersonaSt
     final = asyncio.run(run())[-1]
     assert isinstance(final, ChatReply)
     assert (final.mode, final.abstain, final.confidence) == ("abstain", True, pc.UNCITED_CONFIDENCE_CAP)
+
+
+def test_prompt_inference_branch_sits_in_the_personal_step_before_abstaining() -> None:
+    prompt = pc.chat_system_prompt("测试本人", pc.PersonaContext([], [], [], []))
+    checklist = prompt.split("## 写回复前，按顺序检查", 1)[1].split("## 整体 mode 与弃权", 1)[0]
+    personal, restricted = checklist.index("1. "), checklist.index("2. ")
+    step = checklist[personal:restricted]
+    infer, abstain = step.index("归为 inferred"), step.index("就用本人的口吻简短说明资料里没记这件事")
+    assert infer < abstain
+    assert "不是发生过什么、在哪、何时、谁、多少这类事实回忆，也不是替本人承诺或评价具体他人" in step
+    assert "没有相关的间接依据，或问的是事实回忆" in step
+    modes = prompt.split("## 整体 mode 与弃权\n", 1)[1].split("## 规则", 1)[0]
+    assert "我没直接说过，但按我……，大概会……" in modes
+    assert "不把推测说成我说过或做过的事，不编造经历" in modes
+    assert "citations 至少填一条用到的间接资料，没有就改为 abstain" in modes
+    assert "confidence 不超过 0.5" in modes
+    assert "对方限定了输出格式（如只回选项标签）时，正文可以只按该格式作答，推测的身份由 mode 标明" in modes
+    assert "inferred 或 abstain" in pc.STREAM_FORMAT
+
+
+INFERENCE: dict[str, Any] = {
+    "asked": "遇到延期项目会选哪个选项",
+    "reply": "我没直接说过，但按我一贯不开工的原则，大概会选 B。",
+    "confidence": 0.95,
+    "mode": "inferred",
+    "topic_facets": ["2.1"],
+    "abstain_reason": "不应保留",
+}
+
+
+def test_inferred_reply_with_citation_is_capped_and_logged(store: PersonaStore, settings: Settings) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {**INFERENCE, "citations": [item_id]}), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="如果项目延期你会选哪个？")])
+    assert (reply.mode, reply.abstain, reply.abstain_reason) == ("inferred", False, "")
+    assert reply.confidence == pc.INFERRED_CONFIDENCE_CAP == 0.5 and reply.citations == [item_id]
+    assert reply.reply == INFERENCE["reply"]
+    entry = json.loads(store._db.execute("SELECT json FROM p_chat_log").fetchone()[0])
+    assert entry["mode"] == "inferred" and entry["abstain"] is False
+    assert ChatReply.model_validate_json(reply.model_dump_json()) == reply
+    # No direct evidence existed, so the question counts as asked and as a gap.
+    assert store.chat_demand() == {"2.1": (1, 1)}
+
+
+@pytest.mark.parametrize("citations", [[], ["pi_unknown"]])
+def test_inferred_reply_without_a_valid_citation_abstains(
+    store: PersonaStore, settings: Settings, citations: list[str]
+) -> None:
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {**INFERENCE, "citations": citations}), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="如果项目延期你会选哪个？")], persist=False)
+    assert (reply.mode, reply.abstain, reply.citations) == ("abstain", True, [])
+    assert reply.confidence == pc.UNCITED_CONFIDENCE_CAP and reply.abstain_reason == "不应保留"
+    bare = {k: v for k, v in INFERENCE.items() if k != "abstain_reason"}
+    chat.llm = FakeLLM(lambda *a: {**bare, "citations": citations})
+    reply = chat.reply([ChatTurn(role="user", content="如果项目延期你会选哪个？")], persist=False)
+    assert reply.abstain and "不做推测" in reply.abstain_reason
+
+
+def test_inferred_reply_that_misses_the_asked_item_abstains(store: PersonaStore, settings: Settings) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    draft = {**INFERENCE, "citations": [item_id], "answered": False}
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {**draft, "abstain_reason": ""}), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="如果项目延期你会选哪个？")], persist=False)
+    assert (reply.mode, reply.abstain, reply.confidence) == ("abstain", True, pc.UNCITED_CONFIDENCE_CAP)
+    assert INFERENCE["asked"] in reply.abstain_reason
+
+
+def test_streamed_inferred_reply_matches_the_blocking_path(store: PersonaStore, settings: Settings) -> None:
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), settings)
+    cited = own_words_id(chat, "如果项目延期你会选哪个？")
+    meta = {k: v for k, v in INFERENCE.items() if k not in ("reply", "abstain_reason")} | {"citations": [cited]}
+
+    class Streaming(FakeLLM):
+        async def stream(self, **kwargs: Any) -> Any:
+            assert "inferred" in kwargs["system"]
+            yield INFERENCE["reply"] + "\n<<<META>>>\n" + json.dumps(meta, ensure_ascii=False)
+
+    question = [ChatTurn(role="user", content="如果项目延期你会选哪个？")]
+    draft = {**INFERENCE, "citations": [cited], "abstain_reason": ""}
+    blocking = pc.PersonaChat(store, FakeLLM(lambda *a: draft), HashingEmbedder(), settings).reply(
+        question, persist=False
+    )
+    chat.llm = Streaming(lambda *a: {})
+
+    async def run(citations: list[str]) -> ChatReply:
+        meta["citations"] = citations
+        final = [x async for x in chat.stream_reply(question, persist=False)][-1]
+        assert isinstance(final, ChatReply)
+        return final
+
+    streamed = asyncio.run(run([cited]))
+    assert streamed == blocking and streamed.mode == "inferred" and streamed.confidence == 0.5
+    uncited = asyncio.run(run([]))
+    assert (uncited.mode, uncited.abstain, uncited.confidence) == ("abstain", True, pc.UNCITED_CONFIDENCE_CAP)
 
 
 def test_reply_language_follows_the_asker(store: PersonaStore, settings: Settings) -> None:

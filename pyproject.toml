@@ -56,3 +56,4 @@ mypy_path = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["rewrite: run the real retrieval rewrite call instead of the test-wide stub"]

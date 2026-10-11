@@ -135,6 +135,10 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - The system prompt names today's date: `PersonaChat.reply(today=…)`, else `as_of`, else the local date. `today`
   changes only the date the reply counts from, never which evidence is visible. Retrieved quotes and expressions are
   labelled with the date they were said (`原话（YYYY-MM-DD 说）`, `YYYY-MM-DD 说 · channel`).
+- Each reply first makes one structured call (`persona.rewrite.rewrite`) naming up to five aspects of the person's
+  material the latest user turns rest on, in Chinese with English keywords (for a specific policy, the political
+  stance and related values). Retrieval ranks items and expressions for the turns and for those aspects, fusing the
+  vector and keyword rankings of both with equal weight. An `LLMError` drops the aspects; budget stops propagate.
 - Questions about spans, recency, order or totals (`persona.derive.needs_derivation`) get one extra structured call
   that lists the dated events and quantities the retrieved material states, each tied to a record id. Code drops facts
   citing unknown ids or dated after today, then computes days since today, gaps between consecutive events, totals and

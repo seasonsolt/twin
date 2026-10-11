@@ -109,8 +109,14 @@ def test_keyword_ranking_includes_candidates_without_vectors_and_excludes_stale_
             "test",
             [("stale", "sha", np.array([1.0, 0.0])), ("b", "sha", np.array([0.0, 1.0]))],
         )
-        ranked = pc._rank(store, pc.ITEMS_NS, "rare", np.array([1.0, 0.0]), {"a": "rare", "b": "other"}, str, 12)
+        candidates = {"a": "rare", "b": "other"}
+        ranked = pc._rank(store, pc.ITEMS_NS, [("rare", np.array([1.0, 0.0]))], candidates, str, 12)
         assert ranked == [("rare", 1 / 61), ("other", 1 / 61)]
+        # A rewrite hint is one more pair of rankings fused with equal weight.
+        hinted = pc._rank(
+            store, pc.ITEMS_NS, [("rare", np.array([1.0, 0.0])), ("other", np.array([0.0, 1.0]))], candidates, str, 12
+        )
+        assert hinted == [("other", 3 / 61), ("rare", 1 / 61)]
 
 
 def test_expression_keywords_use_privacy_view_and_context_without_vectors() -> None:

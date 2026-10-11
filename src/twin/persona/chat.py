@@ -33,6 +33,7 @@ from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .lexical import BM25, tokenize
 from .quotes import remove_unverified_quotes
+from .rewrite import rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
 from .sources import expression_view
 from .store import PersonaStore
@@ -201,23 +202,25 @@ def _rrf(*rankings: list[str]) -> list[tuple[str, float]]:
 def _rank[T](
     store: PersonaStore,
     namespace: str,
-    query: str,
-    vector: np.ndarray,
+    queries: Sequence[tuple[str, np.ndarray]],
     candidates: dict[str, T],
     text: Callable[[T], str],
     k: int,
 ) -> list[tuple[T, float]]:
+    """RRF over a vector and a keyword ranking for each query."""
     if not candidates:
         return []
     ids, matrix = store.get_vectors(namespace)
-    vector_order: list[str] = []
-    if ids:
-        sims = matrix @ vector
-        order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in candidates)
-        vector_order = [ref for _, ref in reversed(order)]
-    scores = BM25({ref: text(candidate) for ref, candidate in candidates.items()}).scores(query)
-    keyword_order = sorted(scores, key=lambda ref: (-scores[ref], ref))
-    return [(candidates[ref], score) for ref, score in _rrf(vector_order, keyword_order)[:k]]
+    bm25 = BM25({ref: text(candidate) for ref, candidate in candidates.items()})
+    rankings: list[list[str]] = []
+    for query, vector in queries:
+        if ids:
+            sims = matrix @ vector
+            order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in candidates)
+            rankings.append([ref for _, ref in reversed(order)])
+        scores = bm25.scores(query)
+        rankings.append(sorted(scores, key=lambda ref: (-scores[ref], ref)))
+    return [(candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
 
 
 def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:
@@ -245,17 +248,19 @@ class PersonaChat:
         self.embedder = embedder
         self.settings = settings
 
-    def retrieve(self, query: str, as_of: dt.date | None = None) -> PersonaContext:
+    def retrieve(self, query: str, as_of: dt.date | None = None, hints: str = "") -> PersonaContext:
+        """``hints`` (from ``rewrite``) are ranked for alongside the query, with equal weight."""
+        texts = [_clip(query, 2000), *([_clip(hints, 2000)] if hints else [])]
         # Start network embedding while assembling the persona's stable material.
         with ThreadPoolExecutor(max_workers=1) as pool:
-            embedding = pool.submit(copy_context().run, self.embedder.embed, [_clip(query, 2000)])
+            embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
             items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of)}
             expressions = {
                 e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
             }
-            q = embedding.result()[0]
-        ranked_items = _rank(self.store, ITEMS_NS, query, q, items, item_text, K_ITEMS)
-        ranked_expr = _rank(self.store, EXPRESSIONS_NS, query, q, expressions, expression_text, K_EXPRESSIONS)
+            queries = list(zip([query, hints], embedding.result(), strict=False))
+        ranked_items = _rank(self.store, ITEMS_NS, queries, items, item_text, K_ITEMS)
+        ranked_expr = _rank(self.store, EXPRESSIONS_NS, queries, expressions, expression_text, K_EXPRESSIONS)
         core: list[PersonaItem] = []
         for d in DIMENSIONS:
             own = [i for i in items.values() if FACET_BY_ID[i.facet_id].dimension_id == d.dimension_id]
@@ -283,9 +288,7 @@ class PersonaChat:
             raise ValueError("the last message must be the user's")
         if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
             return no_profile_reply(self.store, as_of)
-        users = [m.content for m in messages if m.role == "user"]
-        query = "\n".join(users[-2:])
-        ctx = self.retrieve(query, as_of)
+        ctx = self._search(messages, as_of)
         ctx.today = today
         self._derive(messages, ctx)
         draft = self.llm.structured(
@@ -306,8 +309,7 @@ class PersonaChat:
             yield reply.reply
             yield reply
             return
-        users = [m.content for m in messages if m.role == "user"]
-        retrieval = asyncio.create_task(asyncio.to_thread(self.retrieve, "\n".join(users[-2:]), as_of))
+        retrieval = asyncio.create_task(asyncio.to_thread(self._search, messages, as_of))
         try:
             ctx = await asyncio.shield(retrieval)
         except asyncio.CancelledError:
@@ -339,6 +341,15 @@ class PersonaChat:
                 yield delta
             draft = parser.draft()
         yield self._finalize(draft, ctx, messages, as_of, persist=persist)
+
+    def _search(self, messages: Sequence[ChatTurn], as_of: dt.date | None) -> PersonaContext:
+        """Retrieve for the latest user turns, plus the aspects ``rewrite`` names; a failed rewrite only drops them."""
+        query = "\n".join([m.content for m in messages if m.role == "user"][-2:])
+        try:
+            hints = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
+        except LLMError:
+            hints = ""
+        return self.retrieve(query, as_of, hints)
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
         """Fill ``ctx.derived`` for span, order and total questions; a failed call only leaves it empty."""

@@ -8,7 +8,7 @@ import importlib
 import json
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from functools import cache
@@ -25,8 +25,8 @@ from ..persona.profile import build_profile
 from ..persona.schema import ChatReply, ChatTurn, Expression, ParsedSource, Source, SourceKind
 from ..persona.sources import parse_chat, source_id_for
 from ..persona.store import PersonaStore
-from ..usage import active_recorder, call_stage
-from ..util import fingerprint, private_directory
+from ..usage import active_recorder, call_stage, collect_calls
+from ..util import fingerprint, private_directory, run_parallel
 
 PROTOCOL_VERSION = "production-persona-v1"
 IDENTITY_VERSION = "benchmark-user-v1"
@@ -187,6 +187,8 @@ class PersonaRuntime:
         )
         self.llm, self.embedder, self.cache = llm, embedder, cache
         self._states: dict[str, bool] = {}
+        # Built by ``prepare``, waiting for the subject's first question.
+        self._prepared: dict[str, dict[str, Any]] = {}
         self.metadata: dict[str, Any] = {}
 
     def close(self) -> None:
@@ -199,24 +201,27 @@ class PersonaRuntime:
         )
 
     @contextmanager
-    def _stage(self, name: str) -> Iterator[None]:
+    def _stage(self, metadata: dict[str, Any], name: str) -> Iterator[None]:
         start = perf_counter()
-        recorder = active_recorder()
-        first = len(recorder.rows) if recorder else 0
-        try:
-            with call_stage("persona." + name):
-                yield
-        finally:
-            rows = recorder.rows[first:] if recorder else []
-            self.metadata["stages"][name] = {
-                "seconds": perf_counter() - start,
-                "calls": len(rows),
-                "failed_calls": sum(not row.success for row in rows),
-                "known_cost_usd": sum(row.known_cost_usd for row in rows),
-                "unknown_cost_calls": sum(row.estimated_cost_usd is None for row in rows),
-            }
+        with collect_calls() as rows:
+            try:
+                with call_stage("persona." + name):
+                    yield
+            finally:
+                metadata["stages"][name] = {
+                    "seconds": perf_counter() - start,
+                    "calls": len(rows),
+                    "failed_calls": sum(not row.success for row in rows),
+                    "known_cost_usd": sum(row.known_cost_usd for row in rows),
+                    "unknown_cost_calls": sum(row.estimated_cost_usd is None for row in rows),
+                }
 
-    def _prepare(self, store: PersonaStore, sources: tuple[SourceInput, ...], settings: Settings) -> None:
+    def _db_settings(self, key: str) -> Settings:
+        return self.settings.model_copy(update={"db_path": self.root / (key + ".db")})
+
+    def _prepare(
+        self, store: PersonaStore, sources: tuple[SourceInput, ...], settings: Settings, metadata: dict[str, Any]
+    ) -> None:
         store.set_identity(TARGET, "", None)
         for source in sources:
             parsed = parse_source(source, settings)
@@ -224,53 +229,81 @@ class PersonaRuntime:
                 store.put_source(parsed)
         report = build_profile(store, self.llm, settings)
         if report.degraded:
-            self.metadata["preparation_degraded"] = report.degraded
+            metadata["preparation_degraded"] = report.degraded
         recorder = active_recorder()
         if report.failures or (recorder is not None and recorder.stop is not None):
             # Content-free: stage, chunk or facet id, error type, stop reason and field paths.
-            self.metadata["preparation_failures"] = report.failures
+            metadata["preparation_failures"] = report.failures
             raise PreparationError("Profile preparation failed")
+
+    def _build(self, key: str, sources: tuple[SourceInput, ...], metadata: dict[str, Any]) -> None:
+        """Build or restore one profile and index it; a failure is sticky for the key."""
+        settings = self._db_settings(key)
+        # Save failure first, so parser, constructor and partial-build failures are sticky.
+        self._states[key] = False
+        try:
+            restored = False
+            if self.cache is not None:
+                restored = self.cache.restore(key, settings.db_path)
+                metadata["profile_cache"] = "hit" if restored else "miss"
+            with PersonaStore(settings.db_path) as store:
+                with self._stage(metadata, "preparation"):
+                    if not restored:
+                        self._prepare(store, sources, settings, metadata)
+                with self._stage(metadata, "index"):
+                    index_persona(store, self.embedder, settings)
+            # A degraded build retries its merges next time, so it is not frozen into the cache.
+            if self.cache is not None and not restored and "preparation_degraded" not in metadata:
+                self.cache.save(settings.db_path, key)
+        except Exception as error:
+            metadata["preparation_failure"] = True
+            raise PreparationError("Persona preparation failed (details hidden)") from error
+        self._states[key] = True
+
+    def prepare(self, subjects: Iterable[tuple[str, tuple[SourceInput, ...]]], workers: int) -> None:
+        """Build the distinct subjects' profiles ``workers`` at a time ahead of ``predict``, which then reports each
+        build on the subject's first question as if it had built it there. With one worker ``predict`` builds."""
+        if workers < 2:
+            return
+        pending: dict[str, tuple[SourceInput, ...]] = {}
+        for subject, sources in subjects:
+            key = preparation_key(subject, sources, self.settings)
+            if key not in self._states:
+                pending.setdefault(key, sources)
+
+        def build(item: tuple[str, tuple[SourceInput, ...]]) -> None:
+            key, sources = item
+            self._prepared[key] = metadata = {"preparation_key": key, "cache_hit": False, "stages": {}}
+            self._build(key, sources, metadata)
+
+        # Failures stay in each subject's metadata and state; predict raises them on that subject's questions.
+        run_parallel(build, list(pending.items()), workers)
 
     def predict(
         self, subject: str, sources: tuple[SourceInput, ...], prompt: str, today: dt.date | None = None
     ) -> ChatReply:
         key = preparation_key(subject, sources, self.settings)
-        cached = key in self._states
-        self.metadata = {"preparation_key": key, "cache_hit": cached, "stages": {}}
-        if cached and not self._states[key]:
-            self.metadata["preparation_failure"] = True
-            raise PreparationError("Previously failed preparation")
-        settings = self.settings.model_copy(update={"db_path": self.root / (key + ".db")})
-        try:
-            restored = False
-            if not cached and self.cache is not None:
-                restored = self.cache.restore(key, settings.db_path)
-                self.metadata["profile_cache"] = "hit" if restored else "miss"
-            with PersonaStore(settings.db_path) as store:
-                if not cached:
-                    # Save failure first, so parser, constructor and partial-build failures are sticky.
-                    self._states[key] = False
-                    with self._stage("preparation"):
-                        if not restored:
-                            self._prepare(store, sources, settings)
-                    with self._stage("index"):
-                        index_persona(store, self.embedder, settings)
-                    # A degraded build retries its merges next time, so it is not frozen into the cache.
-                    if self.cache is not None and not restored and "preparation_degraded" not in self.metadata:
-                        self.cache.save(settings.db_path, key)
-                    self._states[key] = True
-                with self._stage("answer"):
-                    reply = PersonaChat(store, self.llm, self.embedder, settings).reply(
-                        [ChatTurn(role="user", content=prompt)], persist=False, today=today
-                    )
-                self.metadata.update(reply.model_dump(mode="json"))
-                return reply
-        except Exception as error:
-            if not self._states.get(key, False):
-                self._states[key] = False
+        prepared = self._prepared.pop(key, None)
+        if prepared is not None:
+            self.metadata = prepared
+            if prepared.get("preparation_failure"):
+                raise PreparationError("Persona preparation failed (details hidden)")
+        else:
+            cached = key in self._states
+            self.metadata = {"preparation_key": key, "cache_hit": cached, "stages": {}}
+            if cached and not self._states[key]:
                 self.metadata["preparation_failure"] = True
-                raise PreparationError("Persona preparation failed (details hidden)") from error
-            raise
+                raise PreparationError("Previously failed preparation")
+            if not cached:
+                self._build(key, sources, self.metadata)
+        settings = self._db_settings(key)
+        with PersonaStore(settings.db_path) as store:
+            with self._stage(self.metadata, "answer"):
+                reply = PersonaChat(store, self.llm, self.embedder, settings).reply(
+                    [ChatTurn(role="user", content=prompt)], persist=False, today=today
+                )
+            self.metadata.update(reply.model_dump(mode="json"))
+            return reply
 
 
 def report_system(system: str, retrieval_label: str) -> dict[str, Any]:

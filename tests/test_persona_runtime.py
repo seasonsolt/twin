@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import threading
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -516,9 +518,11 @@ def test_a_timed_out_merge_still_answers_from_unmerged_candidates() -> None:
         runtime.close()
 
 
-def atlas_build(*, merge_fails: bool = False) -> FakeLLM:
+def atlas_build(*, merge_fails: bool = False, wait: Callable[[], object] | None = None) -> FakeLLM:
     def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
         if schema.__name__ == "ExtractDraft":
+            if wait is not None:
+                wait()
             return {
                 "items": [
                     {"facet_id": "2.1", "statement": "Prefers Atlas", "quotes": [{"n": 1, "quote": "I prefer Atlas"}]},
@@ -580,3 +584,89 @@ def test_profile_cache_skips_degraded_and_failed_builds(tmp_path: Path) -> None:
     finally:
         runtime.close()
     assert not list(root.glob("*.db"))
+
+
+def atlas_sources(subject: str, text: str = "I prefer Atlas") -> tuple[pr.SourceInput, ...]:
+    return (pr.SourceInput("h", "chat", (("user", f"{text} ({subject})", ""),)),)
+
+
+def test_parallel_preparation_reports_each_subject_as_if_built_on_its_first_question(tmp_path: Path) -> None:
+    # Both builds wait for each other inside extraction, so their calls interleave in one recorder.
+    llm = atlas_build(wait=threading.Barrier(2, timeout=10).wait)
+    runtime = pr.PersonaRuntime(Settings(), llm, HashingEmbedder(), pr.ProfileCache(tmp_path, "r1"))
+    try:
+        with record_usage(UsageRecorder()):
+            runtime.prepare([(s, atlas_sources(s)) for s in "aba"], workers=2)
+            assert sorted(call[0] for call in llm.calls) == ["ExtractDraft"] * 2 + ["MergeDraft"] * 2
+            for subject in "ab":
+                assert runtime.predict(subject, atlas_sources(subject), "project?").reply == "Atlas"
+                metadata = runtime.metadata
+                assert not metadata["cache_hit"] and metadata["profile_cache"] == "miss"
+                assert metadata["stages"]["preparation"]["calls"] == 2
+            runtime.predict("a", atlas_sources("a"), "project again?")
+            assert runtime.metadata["cache_hit"] and set(runtime.metadata["stages"]) == {"answer"}
+        assert sum(call[0] == "ExtractDraft" for call in llm.calls) == 2 and len(list(tmp_path.glob("*.db"))) == 2
+    finally:
+        runtime.close()
+
+
+def test_a_failed_parallel_preparation_fails_only_its_subject(monkeypatch: pytest.MonkeyPatch) -> None:
+    build = pr.build_profile
+
+    def flaky(store: PersonaStore, llm: Any, settings: Settings) -> BuildReport:
+        if any("BROKEN" in e.text for e in store.list_expressions()):
+            return BuildReport(failures=["extract: LLMError"])
+        return build(store, llm, settings)
+
+    monkeypatch.setattr(pr, "build_profile", flaky)
+    llm = atlas_build()
+    runtime = pr.PersonaRuntime(Settings(), llm, HashingEmbedder())
+    broken = atlas_sources("b", "BROKEN")
+    try:
+        with record_usage(UsageRecorder()):
+            runtime.prepare([("a", atlas_sources("a")), ("b", broken)], workers=2)
+            assert runtime.predict("a", atlas_sources("a"), "project?").reply == "Atlas"
+            with pytest.raises(pr.PreparationError):
+                runtime.predict("b", broken, "project?")
+            assert runtime.metadata["preparation_failure"] and not runtime.metadata["cache_hit"]
+            assert runtime.metadata["preparation_failures"] == ["extract: LLMError"]
+            with pytest.raises(pr.PreparationError):
+                runtime.predict("b", broken, "project again?")
+            assert runtime.metadata["cache_hit"] and runtime.metadata["preparation_failure"]
+        assert sum(call[0] == "ChatDraft" for call in llm.calls) == 1
+    finally:
+        runtime.close()
+
+
+def test_one_preparation_worker_leaves_building_to_predict() -> None:
+    llm = atlas_build()
+    runtime = pr.PersonaRuntime(Settings(), llm, HashingEmbedder())
+    try:
+        runtime.prepare([("a", atlas_sources("a"))], workers=1)
+        assert not llm.calls and not list(runtime.root.glob("*.db"))
+    finally:
+        runtime.close()
+
+
+def test_benchmark_prepares_subjects_in_parallel_before_answering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm = fake_persona("(b)")
+    monkeypatch.setattr(pm, "make_llm", lambda _: llm)
+    monkeypatch.setattr(pm, "make_embedder", lambda _: HashingEmbedder())
+    cases = [
+        pm.Case(
+            pm.QuestionInput(
+                f"q{i}", "project?", ("A", "B", "C", "D"), (pm.Turn("user", f"I prefer Atlas {s}"),), subject_id=s
+            ),
+            pm.QUESTION_TYPES[0],
+            pm.Gold("b", "b"),
+        )
+        for i, s in enumerate("aab")
+    ]
+    pm.run_evaluation(cases, tmp_path / "out", Settings(), prepare_workers=2)
+    names = [call[0] for call in llm.calls]
+    assert names.index("ChatDraft") > max(i for i, name in enumerate(names) if name == "ExtractDraft")
+    rows = records(tmp_path / "out")
+    assert [r["persona"]["cache_hit"] for r in rows] == [False, True, False]
+    assert all("preparation" in r["persona"]["stages"] for r in (rows[0], rows[2]))

@@ -136,6 +136,8 @@ class UsageRecorder:
         with self._lock:
             row.estimated_cost_usd = self.cost(row, zero=zero)
             self.rows.append(row)
+            for rows in _collectors.get():
+                rows.append(row)
 
     def summary(self) -> dict[str, Any]:
         with self._lock:
@@ -199,6 +201,7 @@ class UsageRecorder:
 _stage: ContextVar[str] = ContextVar("call_stage", default="other")
 _recorder: ContextVar[UsageRecorder | None] = ContextVar("usage_recorder", default=None)
 _active: ContextVar[CallRow | None] = ContextVar("usage_call", default=None)
+_collectors: ContextVar[tuple[list[CallRow], ...]] = ContextVar("usage_collectors", default=())
 _default = UsageRecorder()
 
 
@@ -225,6 +228,18 @@ def call_stage(label: str) -> Iterator[None]:
         yield
     finally:
         _stage.reset(token)
+
+
+@contextmanager
+def collect_calls() -> Iterator[list[CallRow]]:
+    """Rows recorded in this context and in threads it starts with ``copy_context``, exact even while other
+    threads record into the same recorder."""
+    rows: list[CallRow] = []
+    token = _collectors.set((*_collectors.get(), rows))
+    try:
+        yield rows
+    finally:
+        _collectors.reset(token)
 
 
 @contextmanager

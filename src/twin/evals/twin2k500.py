@@ -8,7 +8,7 @@ import math
 import os
 import random
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -442,6 +442,11 @@ class TwinSystem:
             entries = (("Past-wave questionnaire material (unstructured self-report)", question.persona, ""),)
         return (SourceInput("wave1-3", "questionnaire", entries, narrated=question.past_questionnaire is None),)
 
+    def prepare(self, questions: Iterable[QuestionInput], workers: int) -> None:
+        self.runtime.prepare(
+            (("twin2k500:" + question.participant_id, self.sources(question)) for question in questions), workers
+        )
+
     def predict(self, question: QuestionInput) -> str:
         self.retrieval_manifest = []
         reply = self.runtime.predict(
@@ -551,6 +556,7 @@ def run_evaluation(
     score: bool = True,
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
+    prepare_workers: int = 1,
 ) -> dict[str, Any]:
     system_info = report_system(system, SYSTEM_LABEL)
     if not cases:
@@ -600,6 +606,8 @@ def run_evaluation(
                     )
             except Exception:
                 pass
+        if isinstance(baseline, TwinSystem) and recorder.stop is None:
+            baseline.prepare((c.input for c in cases if c.kind != "unsupported"), prepare_workers)
         with open_private(out / "records.jsonl") as records, open_private(out / "hypotheses.jsonl") as hypotheses:
             for c in cases:
                 row: dict[str, Any] = {

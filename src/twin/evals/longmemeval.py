@@ -8,7 +8,7 @@ import math
 import os
 import random
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -315,6 +315,9 @@ class TwinSystem:
         )
         return sources
 
+    def prepare(self, questions: Iterable[QuestionInput], workers: int) -> None:
+        self.runtime.prepare((("longmemeval", self.sources(question)) for question in questions), workers)
+
     def predict(self, question: QuestionInput) -> str:
         self.retrieval_manifest = []
         reply = self.runtime.predict(
@@ -419,6 +422,7 @@ def run_evaluation(
     score: bool = False,
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
+    prepare_workers: int = 1,
 ) -> dict[str, Any]:
     system_info = report_system(system, SYSTEM_LABEL)
     if not cases:
@@ -482,6 +486,8 @@ def run_evaluation(
                     )
             except Exception:
                 setup_failed = True
+        if isinstance(baseline, TwinSystem) and not setup_failed and recorder.stop is None:
+            baseline.prepare((case.input for case in cases), prepare_workers)
         panel_failed = False
         for case in cases:
             row: dict[str, Any] = {

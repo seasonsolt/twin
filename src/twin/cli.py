@@ -766,6 +766,7 @@ def _run_longmemeval(
     system: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    prepare_workers: int = 1,
     score: bool,
 ) -> dict[str, Any]:
     from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
@@ -800,6 +801,7 @@ def _run_longmemeval(
         score=score,
         fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
         profile_cache=profile_cache,
+        prepare_workers=prepare_workers,
     )
 
 
@@ -904,6 +906,7 @@ def _run_personamem(
     system: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    prepare_workers: int = 1,
 ) -> dict[str, Any]:
     from .evals.longmemeval import validate_output
     from .evals.personamem import load_dataset, run_evaluation, select_cases
@@ -927,6 +930,7 @@ def _run_personamem(
         score=True,
         fingerprints=identities,
         profile_cache=profile_cache,
+        prepare_workers=prepare_workers,
     )
 
 
@@ -981,6 +985,7 @@ def _run_twin2k500(
     system: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    prepare_workers: int = 1,
 ) -> dict[str, Any]:
     from .evals.longmemeval import validate_output
     from .evals.twin2k500 import load_dataset, run_evaluation, sample_participants, select_cases
@@ -1007,6 +1012,7 @@ def _run_twin2k500(
         score=True,
         fingerprints=identities,
         profile_cache=profile_cache,
+        prepare_workers=prepare_workers,
     )
 
 
@@ -1036,6 +1042,15 @@ def eval_suite_command(
             "until the profile-building code changes",
         ),
     ] = None,
+    prepare_workers: Annotated[
+        int,
+        typer.Option(
+            "--prepare-workers",
+            min=1,
+            help="Subjects whose profiles each benchmark builds at once, before answering; each build already "
+            "makes several model calls at a time",
+        ),
+    ] = 2,
 ) -> None:
     """Run the three public benchmarks ``--repeats`` times through production Twin and write a scorecard.
 
@@ -1063,18 +1078,21 @@ def eval_suite_command(
         jobs["longmemeval"] = lambda settings, run, cache: _run_longmemeval(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
             split=split, system="twin", dry_run=False, score=True, profile_cache=cache,
+            prepare_workers=prepare_workers,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
         jobs["personamem"] = lambda settings, run, cache: _run_personamem(
             settings, pm_questions, pm_contexts, run, limit=3, offset=0, sample=sizes["pm"], seed="personamem-v1",
             split=split, system="twin", dry_run=False, profile_cache=cache,
+            prepare_workers=prepare_workers,
         )  # fmt: skip
     if twin2k500 is not None:
         t2k_dataset = twin2k500
         jobs["twin2k500"] = lambda settings, run, cache: _run_twin2k500(
             settings, t2k_dataset, run, limit=None, offset=0, participants=sizes["t2k"], seed="twin2k500-v1",
             split=split, system="twin", dry_run=False, profile_cache=cache,
+            prepare_workers=prepare_workers,
         )  # fmt: skip
     if not jobs:
         raise _fail("Name at least one benchmark dataset")
@@ -1119,6 +1137,7 @@ def eval_suite_command(
         metadata = _suite_metadata(split, repeats, sizes)
         metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
         metadata["profile_cache"] = profile_cache is not None
+        metadata["prepare_workers"] = prepare_workers
         card = build_scorecard(out, metadata)
         write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:

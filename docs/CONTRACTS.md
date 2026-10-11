@@ -132,6 +132,8 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   A `grounded` draft with `answered=false` is finalized as `abstain` (confidence capped at 0.3, reason defaults to the
   asked item); `general` and `abstain` drafts are unaffected. Replies follow the language of the other party's latest
   message; quoted original words stay verbatim and are verified as before.
+- The system prompt names today's date: `PersonaChat.reply(today=…)`, else `as_of`, else the local date. `today`
+  changes only the date the reply counts from, never which evidence is visible.
 - Quotation marks may enclose only verbatim text from speaking samples or retrieved material, never emphasis,
   terms or paraphrases presented as the owner's words. The other grounding rules remain unchanged.
 - Chat log JSON appends `mode` without a SQLite migration. `chat_demand()` excludes general questions from both

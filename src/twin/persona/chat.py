@@ -145,6 +145,8 @@ class PersonaContext:
     # The retrieval query; long expressions are shown around the passage it matches.
     query: str = ""
     ids: set[str] = field(default_factory=set)
+    # The date the reply counts from ("how many days ago"); defaults to ``as_of``, then to the local date.
+    today: dt.date | None = None
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
     trusted: set[str] = field(default_factory=set)
@@ -266,7 +268,14 @@ class PersonaChat:
         voice = [e.text for e in said[:VOICE_SAMPLES]]
         return PersonaContext(ranked_items, ranked_expr, core, voice, as_of, query)
 
-    def reply(self, messages: Sequence[ChatTurn], as_of: dt.date | None = None, *, persist: bool = True) -> ChatReply:
+    def reply(
+        self,
+        messages: Sequence[ChatTurn],
+        as_of: dt.date | None = None,
+        *,
+        persist: bool = True,
+        today: dt.date | None = None,
+    ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
         if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
@@ -274,6 +283,7 @@ class PersonaChat:
         users = [m.content for m in messages if m.role == "user"]
         query = "\n".join(users[-2:])
         ctx = self.retrieve(query, as_of)
+        ctx.today = today
         draft = self.llm.structured(
             system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
             user=chat_user_message(messages, ctx),
@@ -467,7 +477,7 @@ class ChatStreamParser:
 
 CHAT_SYSTEM = """\
 你是{name}的数字分身，用{name}的身份、第一人称、他平时的说话方式和人聊天。你掌握的只有下面的人格档案和\
-用户消息里的【检索资料】；信息范围：{scope}。
+用户消息里的【检索资料】；信息范围：{scope}。今天是 {today}。
 
 ## 写回复前，按顺序检查（只在内部判断，不输出检查过程）
 1. 是在问本人的观点、经历、做法或个人事实吗？只查【核心画像】和【检索资料】：有明确依据才回答，归为 grounded；\
@@ -563,10 +573,11 @@ def _render_item(item: PersonaItem) -> str:
 
 def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     scope = f"{ctx.as_of.isoformat()}（含）以前的资料" if ctx.as_of else "档案里收录的全部资料"
+    today = (ctx.today or ctx.as_of or dt.date.today()).isoformat()
     core = "\n".join(_render_item(i) for i in ctx.core) or "（档案还是空的）"
     voice = "\n".join(f"- 「{_clip(t, VOICE_MAX_CHARS)}」" for t in ctx.voice) or "（暂无本人原话，用简洁的口语）"
     facets = " ".join(f"{f.facet_id} {f.name}；" for f in FACETS)
-    return CHAT_SYSTEM.format(name=name, scope=scope, core=core, voice=voice, facets=facets)
+    return CHAT_SYSTEM.format(name=name, scope=scope, today=today, core=core, voice=voice, facets=facets)
 
 
 def _render_expression(e: Expression, query: str) -> str:

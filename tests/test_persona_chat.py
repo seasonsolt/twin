@@ -666,3 +666,12 @@ def test_streamed_empty_body_is_replaced_in_the_final_reply(store: PersonaStore,
         final = asyncio.run(collect(chat, question))[-1]
         assert isinstance(final, ChatReply)
         assert (final.reply, final.mode, final.abstain) == (pc.EMPTY_REPLY["en"], "abstain", True)
+
+
+def test_prompt_names_today_from_today_then_as_of_then_local_date() -> None:
+    plain = pc.chat_system_prompt("测试本人", pc.PersonaContext([], [], [], []))
+    assert f"今天是 {dt.date.today().isoformat()}。" in plain
+    dated = pc.PersonaContext([], [], [], [], as_of=dt.date(2024, 3, 1))
+    assert "今天是 2024-03-01。" in pc.chat_system_prompt("测试本人", dated)
+    dated.today = dt.date(2024, 3, 5)
+    assert "今天是 2024-03-05。" in pc.chat_system_prompt("测试本人", dated)

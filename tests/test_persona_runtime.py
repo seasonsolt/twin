@@ -202,6 +202,7 @@ def test_lme_retains_future_and_assistant_only_sessions(tmp_path: Path, monkeypa
     assert source_rows[1].expressions[0].date == dt.date(2025, 1, 2)
     assert "Atlas" in llm.calls[-1][2] and "GOLD_SECRET" not in repr(llm.calls)
     assert records(tmp_path / "out")[0]["persona"]["as_of"] is None
+    assert "今天是 2024-01-01。" in llm.calls[-1][1]
 
 
 def test_personamem_raw_response_official_score_and_prefix_cache(

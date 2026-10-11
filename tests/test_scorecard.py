@@ -25,14 +25,16 @@ def lme_row(qid: str, qtype: str, score: float | None, mode: str = "grounded", s
     }
 
 
-def pm_row(qid: str, correct: bool, *, format_failure: bool = False, status: str = "ok") -> dict[str, Any]:
+def pm_row(
+    qid: str, correct: bool, *, format_failure: bool = False, status: str = "ok", mode: str = "inferred"
+) -> dict[str, Any]:
     return {
         "question_id": qid,
         "question_type": "recall_user_shared_facts",
         "status": status,
         "score": correct,
         "format_failure": format_failure,
-        "persona": {"mode": "inferred"},
+        "persona": {"mode": mode},
     }
 
 
@@ -70,6 +72,7 @@ def test_scorecard_aggregates_repeats_and_counts_failures_as_wrong(tmp_path: Pat
             pm_row("p1", True),
             pm_row("p2", False, format_failure=True),
             pm_row("p3", False, status="preparation_failed"),
+            pm_row("p4", False, format_failure=True, mode="abstain"),
         ],
     )
     write_run(
@@ -85,8 +88,9 @@ def test_scorecard_aggregates_repeats_and_counts_failures_as_wrong(tmp_path: Pat
     assert lme["headline"]["min"] == pytest.approx(0.375) and lme["headline"]["max"] == pytest.approx(0.5)
     assert lme["types"] == {"multi-session": pytest.approx(0.625), "temporal-reasoning": pytest.approx(0.25)}
     assert lme["judges"]["mean"] == 2
-    assert pm["headline"]["mean"] == pytest.approx(1 / 3)
+    assert pm["headline"]["mean"] == pytest.approx(1 / 4)
     assert pm["outcomes"]["correct"] == 1 and pm["outcomes"]["format"] == 1 and pm["outcomes"]["preparation"] == 1
+    assert pm["outcomes"]["abstained"] == 1
     assert t2k["items"] == 2 and t2k["headline"]["mean"] == 0.5 and t2k["human_test_retest"]["mean"] == 0.75
     assert t2k["outcomes"]["wrong_inferred"] == 1
     sc.write_scorecard(tmp_path, card, None)

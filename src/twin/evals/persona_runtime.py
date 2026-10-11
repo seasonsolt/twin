@@ -156,7 +156,9 @@ class PersonaRuntime:
                 "unknown_cost_calls": sum(row.estimated_cost_usd is None for row in rows),
             }
 
-    def predict(self, subject: str, sources: tuple[SourceInput, ...], prompt: str) -> ChatReply:
+    def predict(
+        self, subject: str, sources: tuple[SourceInput, ...], prompt: str, today: dt.date | None = None
+    ) -> ChatReply:
         key = preparation_key(subject, sources, self.settings)
         cached = key in self._states
         self.metadata = {"preparation_key": key, "cache_hit": cached, "stages": {}}
@@ -188,7 +190,7 @@ class PersonaRuntime:
                     self._states[key] = True
                 with self._stage("answer"):
                     reply = PersonaChat(store, self.llm, self.embedder, settings).reply(
-                        [ChatTurn(role="user", content=prompt)], persist=False
+                        [ChatTurn(role="user", content=prompt)], persist=False, today=today
                     )
                 self.metadata.update(reply.model_dump(mode="json"))
                 return reply

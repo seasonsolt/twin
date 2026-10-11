@@ -22,6 +22,7 @@ from ..embed import Embedder
 from ..llm import LLM
 from ..persona.chat import _rrf
 from ..persona.lexical import BM25
+from ..persona.sources import parse_date
 from ..usage import BudgetExceeded, UsageRecorder, call_stage, record_usage
 from ..util import fingerprint, open_private, private_directory
 from .harness import Judge
@@ -327,6 +328,8 @@ class TwinSystem:
                 },
                 ensure_ascii=False,
             ),
+            # Count "how many days ago" from the question date; every session stays visible, as upstream.
+            today=parse_date(question.question_date),
         )
         self.retrieval_manifest = [{"ref": ref} for ref in reply.retrieved_ids]
         return reply.reply

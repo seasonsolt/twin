@@ -59,14 +59,15 @@ def _outcome(row: dict[str, Any], score: float) -> str:
         return "preparation"
     if status != "ok":
         return "failed"
-    if row.get("format_failure"):
-        return "format"
     if score >= 0.5:
         return "correct"
     persona = row.get("persona") or {}
     mode = persona.get("mode")
+    # An abstention also lacks a valid label, so it is checked before format failures.
     if persona.get("abstain") or mode == "abstain":
         return "abstained"
+    if row.get("format_failure"):
+        return "format"
     return f"wrong_{mode}" if mode in ("grounded", "inferred", "general") else "failed"
 
 

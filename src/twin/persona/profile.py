@@ -32,7 +32,7 @@ from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
 from .store import PersonaStore
 
-PROMPT_VERSION = "persona-v3"
+PROMPT_VERSION = "persona-v4"
 CHUNK_CHARS = 6000
 ENTRY_CHARS = 1500
 CONTEXT_CHARS = 300
@@ -201,7 +201,14 @@ EXTRACT_SYSTEM = """\
 4. 不写对任何具体他人的评价，不记录别人的隐私；涉及他人时只记录{name}自己的做法和观点。
 5. 寒暄、事务性的只言片语（"好的""收到"）不提炼。表达风格类细项（6.x）可以根据他的用词、句式、语气提炼，\
 引用最能体现这种风格的原话。
-6. 没有值得提炼的内容时，返回空列表。"""
+6. 没有值得提炼的内容时，返回空列表。{coverage}"""
+
+# Questionnaire answers are each a deliberate statement, and most are never retrieved verbatim later, so a stance
+# left out of every conclusion is effectively lost to the twin.
+QUESTIONNAIRE_COVERAGE = """
+7. 这是问卷资料：凡是表明身份、立场、价值观、偏好、习惯或行为倾向的回答，都要被至少一条结论引用，\
+不要只挑几条代表；只有空白、纯事务性或不涉及本人的回答可以不覆盖。同一主题的几个回答合成一条结论，\
+引用最能代表的原话。"""
 
 _EVIDENCE_NOTES = {
     "self_report": "本人自述：这是他对自己的描述，结论照实记录他怎么说",
@@ -221,6 +228,7 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
         evidence_note=_EVIDENCE_NOTES[klass.value],
         facets=facet_guide(allowed),
         max_quotes=MAX_QUOTES,
+        coverage=QUESTIONNAIRE_COVERAGE if chunk.source.kind == SourceKind.QUESTIONNAIRE else "",
     )
     draft = retry_truncated(
         lambda: llm.structured(

@@ -198,6 +198,21 @@ def test_chunks_split_at_the_size_limit(
     assert chunks[0].text.startswith("[1] 2026-09-01 · 群_2026-09\n语境：李四：这单签了，首付 10%\n本人：")
 
 
+def test_only_questionnaire_extraction_asks_to_cover_every_stated_answer(
+    store: PersonaStore, settings: Settings
+) -> None:
+    systems: dict[str, str] = {}
+
+    def record(system: str, user: str, schema: type[BaseModel]) -> BaseModel | dict[str, Any]:
+        if schema is pf.ExtractDraft:
+            systems["questionnaire" if "questionnaire" in system else "chat"] = system
+        return handler(system, user, schema)
+
+    pf.build_profile(store, FakeLLM(record), settings)
+    assert pf.QUESTIONNAIRE_COVERAGE.strip() in systems["questionnaire"]
+    assert "都要被至少一条结论引用" not in systems["chat"]
+
+
 def test_item_as_of_trims_later_and_undated_evidence(store: PersonaStore, settings: Settings) -> None:
     pf.build_profile(store, FakeLLM(handler), settings)
     money = store.list_items("2.1")[0]

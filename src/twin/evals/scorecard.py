@@ -8,6 +8,7 @@ compared across code changes without re-reading private run artifacts.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from pathlib import Path
 from typing import Any
@@ -163,11 +164,21 @@ def build_scorecard(suite: Path, metadata: dict[str, Any]) -> dict[str, Any]:
     return {"version": 1, **metadata, "benchmarks": benchmarks}
 
 
+def sign_test(better: int, worse: int) -> float:
+    """Two-sided exact sign test: how likely a split at least this uneven is when each moved item is a coin flip."""
+    n = better + worse
+    if n == 0:
+        return 1.0
+    tail: float = sum(math.comb(n, k) for k in range(min(better, worse) + 1)) / 2**n
+    return min(1.0, 2 * tail)
+
+
 def compare(candidate: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
     """Headline and per-type deltas plus items that moved, on the benchmarks and items both scorecards share.
 
-    A delta is ``beyond_noise`` only when the candidate's repeat range and the baseline's do not overlap and both
-    have at least two repeats; otherwise run-to-run variation cannot be told apart from the change.
+    A delta is ``beyond_noise`` when a two-sided exact sign test over the items whose mean score moved gives
+    p < 0.05. Pairing by item keeps one or two items flipping back and forth, which a small set makes worth several
+    points, from reading as a change.
     """
     if candidate.get("split") != baseline.get("split"):
         raise ValueError("Scorecards use different splits")
@@ -179,20 +190,25 @@ def compare(candidate: dict[str, Any], baseline: dict[str, Any]) -> dict[str, An
         shared = cand["per_item"].keys() & base["per_item"].keys()
         if shared != cand["per_item"].keys() or shared != base["per_item"].keys():
             raise ValueError(f"{name}: scorecards cover different items")
-        repeated = cand["repeats"] > 1 and base["repeats"] > 1
         ch, bh = cand["headline"], base["headline"]
         fixed, broken = [], []
+        better = worse = 0
         for key in sorted(shared):
             before = statistics.fmean(base["per_item"][key]["scores"])
             after = statistics.fmean(cand["per_item"][key]["scores"])
+            better += after > before
+            worse += after < before
             if before < 0.5 <= after:
                 fixed.append(key)
             elif after < 0.5 <= before:
                 broken.append(key)
+        p_value = sign_test(better, worse)
         result[name] = {
             "delta": ch["mean"] - bh["mean"],
-            "beyond_noise": repeated and (ch["min"] > bh["max"] or ch["max"] < bh["min"]),
-            "repeated": repeated,
+            "better": better,
+            "worse": worse,
+            "p_value": p_value,
+            "beyond_noise": p_value < 0.05,
             "types": {t: cand["types"][t] - base["types"].get(t, 0.0) for t in cand["types"] if t in base["types"]},
             "outcomes": {
                 o: cand["outcomes"][o] / cand["repeats"] - base["outcomes"][o] / base["repeats"] for o in OUTCOMES
@@ -223,8 +239,11 @@ def render_markdown(card: dict[str, Any], comparison: dict[str, Any] | None = No
         delta = ""
         if comparison and name in comparison:
             c = comparison[name]
-            note = "超出波动" if c["beyond_noise"] else ("在波动内" if c["repeated"] else "单次运行，无法判断波动")
-            delta = f"{c['delta'] * 100:+.1f} 个百分点（{note}）"
+            note = "超出波动" if c["beyond_noise"] else "在波动内"
+            delta = (
+                f"{c['delta'] * 100:+.1f} 个百分点（{note}：{c['better']} 题变好、{c['worse']} 题变差，"
+                f"符号检验 p={c['p_value']:.2f}）"
+            )
         lines.append(
             f"| {name} | {bench['metric']} | {bench['items']} | {_pct(h['mean'])} | "
             f"{_pct(h['min'])}–{_pct(h['max'])} | {delta} |"

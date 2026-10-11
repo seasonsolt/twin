@@ -105,15 +105,25 @@ def test_comparison_reports_moved_items_and_noise(tmp_path: Path) -> None:
     cand = sc.build_scorecard(lme_suite(tmp_path / "b", [[1.0, 0.0, 1.0, 1.0], [1.0, 0.0, 1.0, 0.0]]), {"split": "dev"})
     result = sc.compare(cand, base)["longmemeval"]
     assert result["fixed"] == ["q0", "q2", "q3"] and result["broken"] == ["q1"]
-    assert result["beyond_noise"] and result["delta"] == pytest.approx(0.375)
-    single = sc.build_scorecard(lme_suite(tmp_path / "c", [[1.0, 1.0, 1.0, 1.0]]), {"split": "dev"})
-    assert not sc.compare(single, base)["longmemeval"]["beyond_noise"]
-    assert "单次运行" in sc.render_markdown(single, sc.compare(single, base))
+    assert result["delta"] == pytest.approx(0.375) and (result["better"], result["worse"]) == (3, 1)
+    assert result["p_value"] == pytest.approx(0.625) and not result["beyond_noise"]
+    assert "3 题变好、1 题变差，符号检验 p=0.62" in sc.render_markdown(cand, sc.compare(cand, base))
+    low = sc.build_scorecard(lme_suite(tmp_path / "c", [[0.0] * 8]), {"split": "dev"})
+    high = sc.build_scorecard(lme_suite(tmp_path / "d", [[1.0] * 7 + [0.5]]), {"split": "dev"})
+    assert sc.compare(high, low)["longmemeval"]["beyond_noise"]
+    assert sc.compare(low, low)["longmemeval"]["p_value"] == 1.0
     with pytest.raises(ValueError):
         sc.compare(cand, {**base, "split": "formal"})
-    other = sc.build_scorecard(lme_suite(tmp_path / "d", [[1.0, 1.0, 1.0]]), {"split": "dev"})
+    other = sc.build_scorecard(lme_suite(tmp_path / "e", [[1.0, 1.0, 1.0]]), {"split": "dev"})
     with pytest.raises(ValueError):
         sc.compare(other, base)
+
+
+def test_sign_test_matches_the_binomial_tail() -> None:
+    assert sc.sign_test(0, 0) == 1.0
+    assert sc.sign_test(6, 0) == pytest.approx(2 / 64)
+    assert sc.sign_test(5, 1) == pytest.approx(2 * 7 / 64)
+    assert sc.sign_test(3, 3) == 1.0
 
 
 def test_scorecard_rejects_incomplete_or_mismatched_runs(tmp_path: Path) -> None:
@@ -177,7 +187,7 @@ def test_suite_runs_every_repeat_and_writes_a_comparable_scorecard(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert calls == [("lme", 3, "dev", False)] * 2
+    assert calls == [("lme", 3, "dev", False)] * 3
     assert json.loads((second / "scorecard.json").read_text())["comparison"]["longmemeval"]["delta"] == 0
     assert "与基线相比" in (second / "scorecard.md").read_text()
 

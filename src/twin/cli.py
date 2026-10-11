@@ -993,7 +993,7 @@ def eval_suite_command(
     ctx: typer.Context,
     out: Annotated[Path, typer.Option("--out", help="Fresh private suite directory outside git repositories")],
     split: Annotated[str, typer.Option("--split", help=SPLIT_HELP)] = "dev",
-    repeats: Annotated[int, typer.Option("--repeats", min=1, help="Full runs per benchmark, to measure noise")] = 2,
+    repeats: Annotated[int, typer.Option("--repeats", min=1, help="Full runs per benchmark, to measure noise")] = 3,
     longmemeval: Annotated[Path | None, typer.Option("--longmemeval", help="LongMemEval S cleaned JSON")] = None,
     personamem_questions: Annotated[Path | None, typer.Option("--personamem-questions")] = None,
     personamem_contexts: Annotated[Path | None, typer.Option("--personamem-contexts")] = None,

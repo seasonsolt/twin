@@ -120,7 +120,9 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   general-knowledge/non-owner-view notice, may omit citations, and have confidence capped at 0.5.
   The frontend adds a neutral `通用回答 · 非本人观点` badge; `需要本人确认` is reserved for abstention.
 - `"inferred"` is the best inference for "what would they choose/do/prefer/think" questions the material does not
-  answer directly but has indirect evidence for (related past answers, stated values, traits, habits). The text states
+  answer directly but has indirect evidence for (related past answers, stated values or positions, traits, habits).
+  With such evidence the reply infers rather than abstains, and matches the direction and strength the evidence shows
+  instead of drifting to a middle option; uncertainty is carried by `mode` and confidence. The text states
   it is an inference and never presents it as something the owner said or did; factual recall, commitments and
   judgements of specific other people never use it. Finalization requires at least one valid citation (otherwise the
   reply becomes `abstain` with confidence ≤ 0.3), caps confidence at `INFERRED_CONFIDENCE_CAP` (0.5, also enforced by

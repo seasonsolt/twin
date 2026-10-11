@@ -514,3 +514,69 @@ def test_a_timed_out_merge_still_answers_from_unmerged_candidates() -> None:
         assert "preparation_failure" not in runtime.metadata
     finally:
         runtime.close()
+
+
+def atlas_build(*, merge_fails: bool = False) -> FakeLLM:
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema.__name__ == "ExtractDraft":
+            return {
+                "items": [
+                    {"facet_id": "2.1", "statement": "Prefers Atlas", "quotes": [{"n": 1, "quote": "I prefer Atlas"}]},
+                    {"facet_id": "2.1", "statement": "Chooses Atlas", "quotes": [{"n": 1, "quote": "Atlas"}]},
+                ]
+            }
+        if schema.__name__ == "MergeDraft":
+            if merge_fails:
+                raise LLMError("timed out")
+            return {"items": [{"statement": "Prefers Atlas", "candidate_ids": re.findall(r"\[(pc_[0-9a-f]+)\]", user)}]}
+        assert schema is ChatDraft and "Prefers Atlas" in user
+        return {"reply": "Atlas", "citations": [], "confidence": 0.5}
+
+    return FakeLLM(answer)
+
+
+def cached_predict(cache: pr.ProfileCache, llm: FakeLLM) -> dict[str, Any]:
+    runtime = pr.PersonaRuntime(Settings(), llm, HashingEmbedder(), cache)
+    try:
+        source = (pr.SourceInput("h", "chat", (("user", "I prefer Atlas", ""),)),)
+        assert runtime.predict("a", source, "project?").reply == "Atlas"
+        return runtime.metadata
+    finally:
+        runtime.close()
+
+
+def test_profile_cache_reuses_each_repeats_own_build_until_build_code_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "profiles"
+    first = atlas_build()
+    assert cached_predict(pr.ProfileCache(root, "r1"), first)["profile_cache"] == "miss"
+    assert [call[0] for call in first.calls] == ["ExtractDraft", "MergeDraft", "ChatDraft"]
+    (cached,) = root.glob("*-r1.db")
+    assert cached.stat().st_mode & 0o777 == 0o600 and root.stat().st_mode & 0o777 == 0o700
+
+    again = atlas_build()
+    metadata = cached_predict(pr.ProfileCache(root, "r1"), again)
+    assert metadata["profile_cache"] == "hit" and metadata["stages"]["preparation"]["calls"] == 0
+    assert [call[0] for call in again.calls] == ["ChatDraft"]
+
+    assert cached_predict(pr.ProfileCache(root, "r2"), atlas_build())["profile_cache"] == "miss"
+    monkeypatch.setattr(pr, "build_code_fingerprint", lambda: "changed")
+    assert cached_predict(pr.ProfileCache(root, "r1"), atlas_build())["profile_cache"] == "miss"
+
+
+def test_profile_cache_skips_degraded_and_failed_builds(tmp_path: Path) -> None:
+    root = tmp_path / "profiles"
+    assert cached_predict(pr.ProfileCache(root, "r1"), atlas_build(merge_fails=True))["profile_cache"] == "miss"
+    assert not list(root.glob("*.db"))
+
+    def broken(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise LLMError("down")
+
+    runtime = pr.PersonaRuntime(Settings(), FakeLLM(broken), HashingEmbedder(), pr.ProfileCache(root, "r1"))
+    try:
+        with pytest.raises(pr.PreparationError):
+            runtime.predict("a", (pr.SourceInput("h", "chat", (("user", "I prefer Atlas", ""),)),), "project?")
+    finally:
+        runtime.close()
+    assert not list(root.glob("*.db"))

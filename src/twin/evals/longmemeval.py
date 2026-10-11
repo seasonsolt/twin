@@ -26,7 +26,7 @@ from ..persona.sources import parse_date
 from ..usage import BudgetExceeded, UsageRecorder, call_stage, record_usage
 from ..util import fingerprint, open_private, private_directory
 from .harness import Judge
-from .persona_runtime import PersonaRuntime, SourceInput, preparation_key, report_system
+from .persona_runtime import PersonaRuntime, ProfileCache, SourceInput, preparation_key, report_system
 from .personal import ensure_output_directory, make_panel
 
 QUESTION_TYPES = (
@@ -418,6 +418,7 @@ def run_evaluation(
     dry_run: bool = False,
     score: bool = False,
     fingerprints: dict[str, str] | None = None,
+    profile_cache: ProfileCache | None = None,
 ) -> dict[str, Any]:
     system_info = report_system(system, SYSTEM_LABEL)
     if not cases:
@@ -450,7 +451,7 @@ def run_evaluation(
                 llm = make_llm(settings.llm if system == "twin" else settings.effective_chat_llm)
                 embedder = make_embedder(settings.embed)
                 if system == "twin":
-                    runtime = PersonaRuntime(settings, llm, embedder)
+                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache)
                     cleanup.callback(runtime.close)
                     baseline = TwinSystem(runtime)
                 else:

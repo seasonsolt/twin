@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -40,6 +40,9 @@ from .persona.store import PersonaStore
 from .persona.text import SUPPORTED_SUFFIXES
 from .usage import BudgetExceeded, UsageRecorder, active_recorder, call_stage, failure_directory, record_usage
 from .util import RenameError, open_private, private_directory
+
+if TYPE_CHECKING:
+    from .evals.persona_runtime import ProfileCache
 
 DEFAULT_CONFIG = Path("twin.toml")
 CONFIG_TEMPLATE = """# 通用个人分身：身份 → 记忆资料 → 服务。密钥仅从环境变量读取。
@@ -762,6 +765,7 @@ def _run_longmemeval(
     split: str,
     system: str,
     dry_run: bool,
+    profile_cache: ProfileCache | None = None,
     score: bool,
 ) -> dict[str, Any]:
     from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
@@ -795,6 +799,7 @@ def _run_longmemeval(
         dry_run=dry_run,
         score=score,
         fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
+        profile_cache=profile_cache,
     )
 
 
@@ -898,6 +903,7 @@ def _run_personamem(
     split: str,
     system: str,
     dry_run: bool,
+    profile_cache: ProfileCache | None = None,
 ) -> dict[str, Any]:
     from .evals.longmemeval import validate_output
     from .evals.personamem import load_dataset, run_evaluation, select_cases
@@ -912,7 +918,16 @@ def _run_personamem(
     identities = _benchmark_fingerprints(
         settings, {"questions_sha256": questions, "contexts_sha256": contexts}, limit, offset, selection
     )
-    return run_evaluation(cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities)
+    return run_evaluation(
+        cases,
+        out,
+        settings,
+        system=system,
+        dry_run=dry_run,
+        score=True,
+        fingerprints=identities,
+        profile_cache=profile_cache,
+    )
 
 
 @app.command("eval-twin2k500")
@@ -965,6 +980,7 @@ def _run_twin2k500(
     split: str,
     system: str,
     dry_run: bool,
+    profile_cache: ProfileCache | None = None,
 ) -> dict[str, Any]:
     from .evals.longmemeval import validate_output
     from .evals.twin2k500 import load_dataset, run_evaluation, sample_participants, select_cases
@@ -982,7 +998,16 @@ def _run_twin2k500(
         cases = select_cases(loaded, limit=limit, offset=offset, participant_ids=sampled)
         selection = {"participants": sorted(sampled), "seed": seed}
     identities = _benchmark_fingerprints(settings, {"dataset_sha256": dataset}, limit, offset, selection)
-    return run_evaluation(cases, out, settings, system=system, dry_run=dry_run, score=True, fingerprints=identities)
+    return run_evaluation(
+        cases,
+        out,
+        settings,
+        system=system,
+        dry_run=dry_run,
+        score=True,
+        fingerprints=identities,
+        profile_cache=profile_cache,
+    )
 
 
 SUITE_SIZES = {"dev": {"lme": 3, "pm": 24, "t2k": 4}, "formal": {"lme": 5, "pm": 30, "t2k": 10}}
@@ -1003,6 +1028,14 @@ def eval_suite_command(
     t2k_participants: Annotated[int | None, typer.Option("--t2k-participants", min=1)] = None,
     baseline: Annotated[Path | None, typer.Option("--baseline", help="Earlier scorecard.json to compare with")] = None,
     configured_judges: Annotated[bool, typer.Option("--configured-judges", help=JUDGES_HELP)] = False,
+    profile_cache: Annotated[
+        Path | None,
+        typer.Option(
+            "--profile-cache",
+            help="Private directory outside git that keeps built profiles across suites; repeat n reuses build n "
+            "until the profile-building code changes",
+        ),
+    ] = None,
 ) -> None:
     """Run the three public benchmarks ``--repeats`` times through production Twin and write a scorecard.
 
@@ -1012,6 +1045,7 @@ def eval_suite_command(
     from concurrent.futures import ThreadPoolExecutor
 
     from .evals.longmemeval import validate_output
+    from .evals.persona_runtime import ProfileCache
     from .evals.scorecard import build_scorecard, compare, write_scorecard
 
     if split not in SUITE_SIZES:
@@ -1023,24 +1057,24 @@ def eval_suite_command(
         "pm": pm_sample or SUITE_SIZES[split]["pm"],
         "t2k": t2k_participants or SUITE_SIZES[split]["t2k"],
     }
-    jobs: dict[str, Callable[[Settings, Path], dict[str, Any]]] = {}
+    jobs: dict[str, Callable[[Settings, Path, ProfileCache | None], dict[str, Any]]] = {}
     if longmemeval is not None:
         lme_dataset = longmemeval
-        jobs["longmemeval"] = lambda settings, run: _run_longmemeval(
+        jobs["longmemeval"] = lambda settings, run, cache: _run_longmemeval(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
-            split=split, system="twin", dry_run=False, score=True,
+            split=split, system="twin", dry_run=False, score=True, profile_cache=cache,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
-        jobs["personamem"] = lambda settings, run: _run_personamem(
+        jobs["personamem"] = lambda settings, run, cache: _run_personamem(
             settings, pm_questions, pm_contexts, run, limit=3, offset=0, sample=sizes["pm"], seed="personamem-v1",
-            split=split, system="twin", dry_run=False,
+            split=split, system="twin", dry_run=False, profile_cache=cache,
         )  # fmt: skip
     if twin2k500 is not None:
         t2k_dataset = twin2k500
-        jobs["twin2k500"] = lambda settings, run: _run_twin2k500(
+        jobs["twin2k500"] = lambda settings, run, cache: _run_twin2k500(
             settings, t2k_dataset, run, limit=None, offset=0, participants=sizes["t2k"], seed="twin2k500-v1",
-            split=split, system="twin", dry_run=False,
+            split=split, system="twin", dry_run=False, profile_cache=cache,
         )  # fmt: skip
     if not jobs:
         raise _fail("Name at least one benchmark dataset")
@@ -1051,6 +1085,10 @@ def eval_suite_command(
             raise ValueError
         private_directory(out)
         out.chmod(0o700)
+        if profile_cache is not None:
+            profile_cache = validate_output(profile_cache)
+            private_directory(profile_cache)
+            profile_cache.chmod(0o700)
         judged = _benchmark_settings(ctx, keep_judges=configured_judges)
         plain = _benchmark_settings(ctx)
     except Exception:
@@ -1062,7 +1100,8 @@ def eval_suite_command(
         for index in range(1, repeats + 1):
             run = out / name / f"r{index}"
             private_directory(run)
-            reports.append(jobs[name](settings, run))
+            cache = ProfileCache(profile_cache, f"r{index}") if profile_cache is not None else None
+            reports.append(jobs[name](settings, run, cache))
             _progress(f"{name} r{index}/{repeats} done")
         return reports
 
@@ -1079,6 +1118,7 @@ def eval_suite_command(
     try:
         metadata = _suite_metadata(split, repeats, sizes)
         metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
+        metadata["profile_cache"] = profile_cache is not None
         card = build_scorecard(out, metadata)
         write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:

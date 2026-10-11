@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import importlib
 import json
+import os
+import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
+from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
@@ -21,7 +26,7 @@ from ..persona.schema import ChatReply, ChatTurn, Expression, ParsedSource, Sour
 from ..persona.sources import parse_chat, source_id_for
 from ..persona.store import PersonaStore
 from ..usage import active_recorder, call_stage
-from ..util import fingerprint
+from ..util import fingerprint, private_directory
 
 PROTOCOL_VERSION = "production-persona-v1"
 IDENTITY_VERSION = "benchmark-user-v1"
@@ -39,6 +44,61 @@ class SourceInput:
     # Chat: (role, text, date). Questionnaire: (question/context, answer, date).
     entries: tuple[tuple[str, str, str], ...]
     narrated: bool = False
+
+
+# Profile building reads these modules; editing any of them invalidates every cached profile, so a cache never
+# stands in for a build the current code would do differently. Chat and retrieval code are deliberately absent.
+_BUILD_MODULES = (
+    "twin.config",
+    "twin.llm",
+    "twin.util",
+    "twin.persona.dimensions",
+    "twin.persona.items",
+    "twin.persona.profile",
+    "twin.persona.questionnaire",
+    "twin.persona.schema",
+    "twin.persona.sources",
+    "twin.persona.store",
+    "twin.persona.text",
+)
+
+
+@cache
+def build_code_fingerprint() -> str:
+    digest = hashlib.sha256()
+    for name in _BUILD_MODULES:
+        digest.update(Path(importlib.import_module(name).__file__ or "").read_bytes())
+    return digest.hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class ProfileCache:
+    """Built profiles kept across runs. ``slot`` (one per repeat) keeps build-to-build variance in the measurement:
+    repeat n of every run reuses build n, never one shared build."""
+
+    root: Path
+    slot: str
+
+    def path(self, key: str) -> Path:
+        return self.root / f"{key}-{build_code_fingerprint()}-{self.slot}.db"
+
+    def save(self, built: Path, key: str) -> None:
+        private_directory(self.root)
+        target = self.path(key)
+        partial = target.with_suffix(".partial")
+        with closing(sqlite3.connect(built)) as source, closing(sqlite3.connect(partial)) as copy:
+            source.backup(copy)
+        partial.chmod(0o600)
+        os.replace(partial, target)
+
+    def restore(self, key: str, into: Path) -> bool:
+        cached = self.path(key)
+        if not cached.exists():
+            return False
+        with closing(sqlite3.connect(cached)) as source, closing(sqlite3.connect(into)) as copy:
+            source.backup(copy)
+        into.chmod(0o600)
+        return True
 
 
 class PreparationError(RuntimeError):
@@ -112,7 +172,7 @@ def parse_source(source: SourceInput, settings: Settings) -> ParsedSource | None
 class PersonaRuntime:
     """One run's disk cache; stores are closed between questions, including failed builds."""
 
-    def __init__(self, settings: Settings, llm: LLM, embedder: Embedder) -> None:
+    def __init__(self, settings: Settings, llm: LLM, embedder: Embedder, cache: ProfileCache | None = None) -> None:
         self._temporary = TemporaryDirectory(prefix="twin-public-eval-")
         self.root = Path(self._temporary.name)
         self.root.chmod(0o700)
@@ -125,7 +185,7 @@ class PersonaRuntime:
                 "chat_llm": None,
             },
         )
-        self.llm, self.embedder = llm, embedder
+        self.llm, self.embedder, self.cache = llm, embedder, cache
         self._states: dict[str, bool] = {}
         self.metadata: dict[str, Any] = {}
 
@@ -156,6 +216,21 @@ class PersonaRuntime:
                 "unknown_cost_calls": sum(row.estimated_cost_usd is None for row in rows),
             }
 
+    def _prepare(self, store: PersonaStore, sources: tuple[SourceInput, ...], settings: Settings) -> None:
+        store.set_identity(TARGET, "", None)
+        for source in sources:
+            parsed = parse_source(source, settings)
+            if parsed is not None:
+                store.put_source(parsed)
+        report = build_profile(store, self.llm, settings)
+        if report.degraded:
+            self.metadata["preparation_degraded"] = report.degraded
+        recorder = active_recorder()
+        if report.failures or (recorder is not None and recorder.stop is not None):
+            # Content-free: stage, chunk or facet id, error type, stop reason and field paths.
+            self.metadata["preparation_failures"] = report.failures
+            raise PreparationError("Profile preparation failed")
+
     def predict(
         self, subject: str, sources: tuple[SourceInput, ...], prompt: str, today: dt.date | None = None
     ) -> ChatReply:
@@ -167,26 +242,22 @@ class PersonaRuntime:
             raise PreparationError("Previously failed preparation")
         settings = self.settings.model_copy(update={"db_path": self.root / (key + ".db")})
         try:
+            restored = False
+            if not cached and self.cache is not None:
+                restored = self.cache.restore(key, settings.db_path)
+                self.metadata["profile_cache"] = "hit" if restored else "miss"
             with PersonaStore(settings.db_path) as store:
                 if not cached:
                     # Save failure first, so parser, constructor and partial-build failures are sticky.
                     self._states[key] = False
                     with self._stage("preparation"):
-                        store.set_identity(TARGET, "", None)
-                        for source in sources:
-                            parsed = parse_source(source, settings)
-                            if parsed is not None:
-                                store.put_source(parsed)
-                        report = build_profile(store, self.llm, settings)
-                        if report.degraded:
-                            self.metadata["preparation_degraded"] = report.degraded
-                        recorder = active_recorder()
-                        if report.failures or (recorder is not None and recorder.stop is not None):
-                            # Content-free: stage, chunk or facet id, error type, stop reason and field paths.
-                            self.metadata["preparation_failures"] = report.failures
-                            raise PreparationError("Profile preparation failed")
+                        if not restored:
+                            self._prepare(store, sources, settings)
                     with self._stage("index"):
                         index_persona(store, self.embedder, settings)
+                    # A degraded build retries its merges next time, so it is not frozen into the cache.
+                    if self.cache is not None and not restored and "preparation_degraded" not in self.metadata:
+                        self.cache.save(settings.db_path, key)
                     self._states[key] = True
                 with self._stage("answer"):
                     reply = PersonaChat(store, self.llm, self.embedder, settings).reply(

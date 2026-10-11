@@ -195,3 +195,23 @@ def test_suite_runs_every_repeat_and_writes_a_comparable_scorecard(
     assert rebuilt.exit_code == 0 and json.loads((out / "scorecard.json").read_text())["split"] == "dev"
     assert CliRunner().invoke(app, ["--config", str(config), "eval-suite", "--out", str(out)]).exit_code == 1
     assert CliRunner().invoke(app, [*args, "--split", "holdout"]).exit_code == 1
+
+
+def test_suite_profile_cache_gives_each_repeat_its_own_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    slots: list[Any] = []
+
+    def fake_lme(settings: Any, dataset: Path, run: Path, **options: Any) -> dict[str, Any]:
+        slots.append(options["profile_cache"])
+        write_run(run, [lme_row("q0", "multi-session", 1.0)], judges=["j0"])
+        return {"preparation_failures": 0, "prediction_failures": 0, "judge_failures": 0, "missing": 0}
+
+    monkeypatch.setattr(cli, "_run_longmemeval", fake_lme)
+    data = tmp_path / "data.json"
+    data.write_text("{}")
+    cache = tmp_path / "profiles"
+    args = ["eval-suite", "--out", str(tmp_path / "suite"), "--longmemeval", str(data), "--repeats", "2"]
+    result = CliRunner().invoke(app, [*args, "--profile-cache", str(cache)])
+    assert result.exit_code == 0, result.output
+    assert [(s.root, s.slot) for s in slots] == [(cache.resolve(), "r1"), (cache.resolve(), "r2")]
+    assert cache.stat().st_mode & 0o777 == 0o700
+    assert json.loads((tmp_path / "suite" / "scorecard.json").read_text())["profile_cache"] is True

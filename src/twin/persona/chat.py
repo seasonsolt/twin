@@ -37,6 +37,7 @@ from .rewrite import rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
 from .sources import expression_view
 from .store import PersonaStore
+from .style import extreme_rate
 
 ITEMS_NS = "items"
 EXPRESSIONS_NS = "expressions"
@@ -151,6 +152,8 @@ class PersonaContext:
     today: dt.date | None = None
     # Spans, order and totals computed from checked records for questions that need them (see ``derive``).
     derived: list[str] = field(default_factory=list)
+    # Share of the person's graded questionnaire answers at the strongest end (see ``style``); None when too few.
+    extreme_rate: float | None = None
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
     trusted: set[str] = field(default_factory=set)
@@ -274,7 +277,9 @@ class PersonaChat:
         ]
         said.sort(key=lambda e: (e.date or dt.date.min, e.expression_id), reverse=True)
         voice = [e.text for e in said[:VOICE_SAMPLES]]
-        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of, query)
+        surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
+        style = extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated)
+        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of, query, extreme_rate=style)
 
     def reply(
         self,
@@ -568,7 +573,7 @@ confidence 不超过 0.5。对方限定了输出格式时，只按输出格式�
 标题不得高于四级（####），通常不用标题；不要把长回答挤成一整段，绝不使用 HTML。
 
 ## 核心画像（证据最多的条目）
-{core}
+{core}{style}
 
 ## 说话样本（他本人的原话，最近的在前）
 {voice}
@@ -605,13 +610,22 @@ def _render_item(item: PersonaItem) -> str:
     return f"- [{item.item_id}] {item_text(item)}（{meta}{verified}{conflict}）{label}：「{_clip(quote, QUOTE_CHARS)}」"
 
 
+STYLE_SECTION = """
+
+## 答题风格
+本人过去回答带程度的选项时（同意程度、频率、支持程度等），约 {rate:.0%} 选了最强烈的一端（如“非常”“总是”\
+“strongly”），其余选了温和或中间的选项。推测本人在带程度的选项上会怎么选时，强度要符合这个习惯：方向明确时，\
+按这个比例倾向最强烈的一端，不要因为是推测就默认选温和的选项。"""
+
+
 def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     scope = f"{ctx.as_of.isoformat()}（含）以前的资料" if ctx.as_of else "档案里收录的全部资料"
     today = (ctx.today or ctx.as_of or dt.date.today()).isoformat()
     core = "\n".join(_render_item(i) for i in ctx.core) or "（档案还是空的）"
     voice = "\n".join(f"- 「{_clip(t, VOICE_MAX_CHARS)}」" for t in ctx.voice) or "（暂无本人原话，用简洁的口语）"
     facets = " ".join(f"{f.facet_id} {f.name}；" for f in FACETS)
-    return CHAT_SYSTEM.format(name=name, scope=scope, today=today, core=core, voice=voice, facets=facets)
+    style = "" if ctx.extreme_rate is None else STYLE_SECTION.format(rate=ctx.extreme_rate)
+    return CHAT_SYSTEM.format(name=name, scope=scope, today=today, core=core, style=style, voice=voice, facets=facets)
 
 
 def _render_expression(e: Expression, query: str) -> str:

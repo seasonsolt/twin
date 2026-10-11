@@ -139,6 +139,10 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   material the latest user turns rest on, in Chinese with English keywords (for a specific policy, the political
   stance and related values). Retrieval ranks items and expressions for the turns and for those aspects, fusing the
   vector and keyword rankings of both with equal weight. An `LLMError` drops the aspects; budget stops propagate.
+- With at least `persona.style.MIN_GRADED` graded questionnaire answers visible at `as_of`, the system prompt gains an
+  答题风格 section giving the share answered at the strongest end (Chinese and English intensity words, each part of a
+  matrix answer counted once) and asks inferred graded answers to follow that habit rather than default to the
+  moderate option. Chat-only profiles get no such section.
 - Questions about spans, recency, order or totals (`persona.derive.needs_derivation`) get one extra structured call
   that lists the dated events and quantities the retrieved material states, each tied to a record id. Code drops facts
   citing unknown ids or dated after today, then computes days since today, gaps between consecutive events, totals and

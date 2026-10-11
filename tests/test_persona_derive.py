@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+from typing import Any
+
+import pytest
+from pydantic import BaseModel
+
+from twin.config import Settings
+from twin.embed import HashingEmbedder
+from twin.llm import FakeLLM, LLMError
+from twin.persona import chat as pc
+from twin.persona import derive as dv
+from twin.persona.schema import ChatDraft, ChatTurn
+from twin.persona.sources import parse_chat
+from twin.persona.store import PersonaStore
+from twin.usage import BudgetExceeded
+
+TODAY = dt.date(2024, 3, 25)
+
+
+def fact(ref: str, date: str = "", quantity: float | None = None, unit: str = "", event: str = "事") -> dv.DatedFact:
+    return dv.DatedFact(ref=ref, event=event, date=date, quantity=quantity, unit=unit)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "How many days ago did I buy a smoker?",
+        "How long have I been birdwatching?",
+        "What is the order of the three trips I took?",
+        "Which event did I attend first, the gala or the fair?",
+        "How much have I made from selling eggs this month?",
+        "我上次体检是多久以前？",
+        "这两次搬家相隔几个月？",
+        "我一共去过几次日本？",
+    ],
+)
+def test_span_order_and_total_questions_trigger_derivation(question: str) -> None:
+    assert dv.needs_derivation(question)
+
+
+@pytest.mark.parametrize(
+    "question", ["How many children do you have?", "What do you think about remote work?", "你最喜欢哪本书？", "你好"]
+)
+def test_ordinary_questions_skip_derivation(question: str) -> None:
+    assert not dv.needs_derivation(question)
+
+
+def test_compute_checks_refs_and_dates_then_spans_order_and_totals() -> None:
+    lines = dv.compute(
+        [
+            fact("b", "2024-03-17", 350, "粉丝", "收到球拍"),
+            fact("a", "2024-03-10", 250, "粉丝", "买了球拍"),
+            fact("ghost", "2024-03-01", event="没有这条资料"),
+            fact("a", "2024-04-01", event="晚于今天"),
+            fact("c", "not a date", 5, "粉丝", "日期不明"),
+            fact("c", event=" "),
+        ],
+        TODAY,
+        {"a", "b", "c"},
+    )
+    assert lines == [
+        "已核对的事件（按日期先后）：",
+        "- 2024-03-10 买了球拍，数量 250粉丝 [a]，距今天 15 天，约 2.1 周",
+        "- 2024-03-17 收到球拍，数量 350粉丝 [b]，距今天 8 天，约 1.1 周",
+        "- 日期不详：日期不明，数量 5粉丝 [c]",
+        "- 从 [a] 到 [b]：相隔 7 天，约 1 周",
+        "- 数量合计（粉丝，3 条）：605",
+    ]
+
+
+def test_compute_reports_change_and_long_spans_when_every_quantity_is_dated() -> None:
+    lines = dv.compute(
+        [fact("a", "2024-01-01", 40, "打"), fact("b", "2024-02-15", 10, "打"), fact("c", "2023-12-01")],
+        TODAY,
+        {"a", "b", "c"},
+    )
+    assert "- 2023-12-01 事 [c]，距今天 115 天，约 16.4 周，约 3.8 个月" in lines
+    assert "- 最早到最晚：相隔 76 天，约 10.9 周，约 2.5 个月" in lines
+    assert lines[-2:] == ["- 数量合计（打，2 条）：50", "- 从最早一条到最晚一条的变化（打）：-30"]
+    assert dv.compute([fact("ghost", "2024-01-01")], TODAY, {"a"}) == []
+    assert dv.compute([fact("a")], TODAY, {"a"}) == []
+
+
+def test_derive_only_calls_the_model_for_questions_that_need_it() -> None:
+    def sheet(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        assert schema is dv.FactSheet and "【今天】2024-03-25" in user and "[a] 2024-03-15 说" in user
+        return {"facts": [{"ref": "a", "event": "买了烟熏炉", "date": "2024-03-15"}]}
+
+    llm = FakeLLM(sheet)
+    assert dv.derive(llm, "你好", "- [a] 2024-03-15 说「I just got a smoker today」", TODAY, {"a"}, "low") == []
+    assert llm.calls == []
+    lines = dv.derive(llm, "How many days ago did I buy a smoker?", "- [a] 2024-03-15 说「…」", TODAY, {"a"}, "low")
+    assert lines[1] == "- 2024-03-15 买了烟熏炉 [a]，距今天 10 天，约 1.4 周"
+
+
+@pytest.fixture
+def chat() -> pc.PersonaChat:
+    settings = Settings(target_name="张三", pseudonymize_others=False)
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2024-03.txt", "2024-03-15 10:00 张三：今天刚买了烟熏炉\n", settings))
+    embedder = HashingEmbedder()
+    pc.index_persona(store, embedder, settings)
+    return pc.PersonaChat(store, FakeLLM(lambda *_: {}), embedder, settings)
+
+
+def test_reply_shows_computed_lines_and_survives_a_failed_derivation(chat: pc.PersonaChat) -> None:
+    expression = chat.store.list_expressions()[0].expression_id
+    failing = {"on": False}
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is dv.FactSheet:
+            if failing["on"]:
+                raise LLMError("timed out")
+            return {"facts": [{"ref": expression, "event": "买了烟熏炉", "date": "2024-03-15"}]}
+        assert schema is ChatDraft
+        return {"reply": "十天前", "citations": [expression], "confidence": 0.8, "mode": "grounded"}
+
+    chat.llm = FakeLLM(answer)
+    question = [ChatTurn(role="user", content="烟熏炉是多久以前买的？")]
+    assert chat.reply(question, persist=False, today=TODAY).reply == "十天前"
+    _, system, user = chat.llm.calls[-1]
+    assert "今天是 2024-03-25" in system and "【推算】" in user
+    assert f"- 2024-03-15 买了烟熏炉 [{expression}]，距今天 10 天，约 1.4 周" in user
+    assert "所问的一项在【推算】里有就算资料给出了" in system
+
+    failing["on"] = True
+    chat.llm = FakeLLM(answer)
+    assert chat.reply(question, persist=False, today=TODAY).reply == "十天前"
+    assert "【推算】" not in chat.llm.calls[-1][2]
+
+    def over_budget(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise BudgetExceeded("budget")
+
+    chat.llm = FakeLLM(over_budget)
+    with pytest.raises(BudgetExceeded):
+        chat.reply(question, persist=False, today=TODAY)
+
+
+def test_streamed_reply_derives_too(chat: pc.PersonaChat) -> None:
+    expression = chat.store.list_expressions()[0].expression_id
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is dv.FactSheet:
+            return {"facts": [{"ref": expression, "event": "买了烟熏炉", "date": "2024-03-15"}]}
+        return {"reply": "十天前", "citations": [expression], "confidence": 0.8, "mode": "grounded"}
+
+    chat.llm = FakeLLM(answer)
+
+    async def run() -> list[Any]:
+        return [
+            part
+            async for part in chat.stream_reply(
+                [ChatTurn(role="user", content="烟熏炉是多久以前买的？")], persist=False
+            )
+        ]
+
+    assert asyncio.run(run())[-1].reply == "十天前"
+    assert "【推算】" in chat.llm.calls[-1][2]

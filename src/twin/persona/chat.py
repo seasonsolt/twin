@@ -26,8 +26,9 @@ from pydantic import ValidationError
 
 from ..config import Settings
 from ..embed import Embedder, embedder_fingerprint
-from ..llm import LLM, hedged_stream
+from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
+from .derive import derive
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .lexical import BM25, tokenize
@@ -147,6 +148,8 @@ class PersonaContext:
     ids: set[str] = field(default_factory=set)
     # The date the reply counts from ("how many days ago"); defaults to ``as_of``, then to the local date.
     today: dt.date | None = None
+    # Spans, order and totals computed from checked records for questions that need them (see ``derive``).
+    derived: list[str] = field(default_factory=list)
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
     trusted: set[str] = field(default_factory=set)
@@ -284,6 +287,7 @@ class PersonaChat:
         query = "\n".join(users[-2:])
         ctx = self.retrieve(query, as_of)
         ctx.today = today
+        self._derive(messages, ctx)
         draft = self.llm.structured(
             system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
             user=chat_user_message(messages, ctx),
@@ -310,6 +314,7 @@ class PersonaChat:
             # The SQLite store must outlive the retrieval worker, even after a client disconnects.
             await retrieval
             raise
+        await asyncio.to_thread(self._derive, messages, ctx)
         system = chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx)
         user = chat_user_message(messages, ctx)
         effort = self.settings.effective_chat_llm.effort_twin
@@ -334,6 +339,20 @@ class PersonaChat:
                 yield delta
             draft = parser.draft()
         yield self._finalize(draft, ctx, messages, as_of, persist=persist)
+
+    def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
+        """Fill ``ctx.derived`` for span, order and total questions; a failed call only leaves it empty."""
+        try:
+            ctx.derived = derive(
+                self.llm,
+                messages[-1].content,
+                "\n".join(_material_lines(ctx)),
+                ctx.today or ctx.as_of or dt.date.today(),
+                ctx.ids,
+                self.settings.effective_chat_llm.effort_extract,
+            )
+        except LLMError:
+            ctx.derived = []
 
     def _finalize(
         self,
@@ -489,7 +508,9 @@ CHAT_SYSTEM = """\
 没有相关的间接依据，或问的是事实回忆，就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，该部分弃权。不确定资料是否包含某个个人事实，\
 就按没有覆盖处理。不能把个人问题改成通用回答来掩盖缺失。先想清对方要的具体是哪一项（asked，如商店名、日期、\
 人名、数字），再核对引用的资料是否直接给出了这一项；只有相关背景、同类信息或事件的其他侧面，不算给出，\
-不要把背景说成所问事项的答案。
+不要把背景说成所问事项的答案。资料标的“某日 说”是那句话说出的日期。用户消息里有【推算】时，其中的日期、间隔、\
+先后和合计是程序按核对过的资料算出的，所问的一项在【推算】里有就算资料给出了，直接用它回答并引用对应的资料编号，\
+归为 grounded。
 2. 是要替本人答应、承诺、做决定，或评价某个具体的他人吗？不替本人答应事情或做承诺。即使有相关资料，\
 也只对这部分说明需要本人确认，不代答。其余能回答的部分继续回答，不要因一个承诺请求就拒绝整题。
 3. 其余不需要本人资料的问题，包括通用知识、方法、一般话题的看法，归为 general：充分帮助，给出判断、理由或可执行\
@@ -568,7 +589,9 @@ def _render_item(item: PersonaItem) -> str:
     meta = f"{item.occasions()} 处证据" + (f"，最近 {last.isoformat()}" if last else "")
     conflict = f"；注意矛盾：{item.conflict}" if item.conflict else ""
     verified = "；本人已确认" if item.verified else ""
-    return f"- [{item.item_id}] {item_text(item)}（{meta}{verified}{conflict}）原话：「{_clip(quote, QUOTE_CHARS)}」"
+    said = item.evidence[-1].date if item.evidence else None
+    label = f"原话（{said.isoformat()} 说）" if said else "原话"
+    return f"- [{item.item_id}] {item_text(item)}（{meta}{verified}{conflict}）{label}：「{_clip(quote, QUOTE_CHARS)}」"
 
 
 def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
@@ -581,13 +604,13 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
 
 
 def _render_expression(e: Expression, query: str) -> str:
-    head = " · ".join(x for x in (e.date.isoformat() if e.date else "", e.channel) if x)
+    head = " · ".join(x for x in (f"{e.date.isoformat()} 说" if e.date else "", e.channel) if x)
     context = f"（语境：{_clip(e.context, 160)}）" if e.context else ""
     return f"- [{e.expression_id}] {head}{context}「{_excerpt(e.text, query, TEXT_CHARS)}」"
 
 
-def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
-    lines = ["【检索资料】", "档案条目："]
+def _material_lines(ctx: PersonaContext) -> list[str]:
+    lines = ["档案条目："]
     lines.extend(_render_item(i) for i, _ in ctx.items)
     if not ctx.items:
         lines.append("（无相关条目）")
@@ -600,6 +623,13 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     if narrated:
         lines.append("资料记述（不是本人原话）：")
         lines.extend(_render_expression(e, ctx.query) for e in narrated)
+    return lines
+
+
+def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
+    lines = ["【检索资料】", *_material_lines(ctx)]
+    if ctx.derived:
+        lines += ["", "【推算】（程序按上面资料里核对过的日期和数量算出）", *ctx.derived]
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:
         who = "对方" if m.role == "user" else "你"

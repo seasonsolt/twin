@@ -133,7 +133,13 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   asked item); `general` and `abstain` drafts are unaffected. Replies follow the language of the other party's latest
   message; quoted original words stay verbatim and are verified as before.
 - The system prompt names today's date: `PersonaChat.reply(today=…)`, else `as_of`, else the local date. `today`
-  changes only the date the reply counts from, never which evidence is visible.
+  changes only the date the reply counts from, never which evidence is visible. Retrieved quotes and expressions are
+  labelled with the date they were said (`原话（YYYY-MM-DD 说）`, `YYYY-MM-DD 说 · channel`).
+- Questions about spans, recency, order or totals (`persona.derive.needs_derivation`) get one extra structured call
+  that lists the dated events and quantities the retrieved material states, each tied to a record id. Code drops facts
+  citing unknown ids or dated after today, then computes days since today, gaps between consecutive events, totals and
+  change per unit into a `【推算】` section of the user message; the reply may treat those values as given by the
+  material. The call is skipped for other questions; an `LLMError` leaves the section out, budget stops propagate.
 - Quotation marks may enclose only verbatim text from speaking samples or retrieved material, never emphasis,
   terms or paraphrases presented as the owner's words. The other grounding rules remain unchanged.
 - Chat log JSON appends `mode` without a SQLite migration. `chat_demand()` excludes general questions from both

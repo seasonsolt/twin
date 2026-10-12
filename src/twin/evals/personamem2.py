@@ -302,6 +302,7 @@ def run_evaluation(
     dry_run: bool = False,
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -337,7 +338,7 @@ def run_evaluation(
             try:
                 runtime = PersonaRuntime(
                     settings, limit_calls(make_llm(settings.llm), call_slots), make_embedder(settings.embed),
-                    profile_cache,
+                    profile_cache, grant_gated,
                 )  # fmt: skip
                 cleanup.callback(runtime.close)
                 system = TwinSystem(runtime)

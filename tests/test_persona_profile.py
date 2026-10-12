@@ -93,6 +93,20 @@ def test_consent_gated_facets_need_an_answered_questionnaire_question(store: Per
     assert not any(f.startswith("9.") for f in pf.consented_facets(empty))
 
 
+def test_an_evaluation_can_build_gated_facets_as_if_consented(settings: Settings) -> None:
+    chats = PersonaStore(":memory:")
+    chats.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    pf.build_profile(chats, FakeLLM(handler), settings)
+    assert not any(c.facet_id.startswith("9.") for c in chats.list_candidates())
+
+    granted = PersonaStore(":memory:")
+    granted.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    llm = FakeLLM(handler)
+    pf.build_profile(granted, llm, settings, grant_gated=True)
+    assert "9.3" in {c.facet_id for c in granted.list_candidates()}
+    assert all("9.4" in system for name, system, _ in llm.calls if name == "ExtractDraft")
+
+
 def test_build_extracts_verified_candidates_merges_per_facet_and_is_incremental(
     store: PersonaStore, settings: Settings
 ) -> None:

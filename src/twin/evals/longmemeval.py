@@ -433,9 +433,11 @@ def run_evaluation(
     score: bool = False,
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
+    judge_slots: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
     system_info = report_system(system, SYSTEM_LABEL)
     if not cases:
@@ -470,7 +472,7 @@ def run_evaluation(
                 )
                 embedder = make_embedder(settings.embed)
                 if system == "twin":
-                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache)
+                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache, grant_gated)
                     cleanup.callback(runtime.close)
                     baseline = TwinSystem(runtime)
                 else:
@@ -512,7 +514,11 @@ def run_evaluation(
             with panel_lock:
                 if not panel and not panel_failed:
                     try:
-                        panel = tuple(Judge(limit_calls(j.llm, call_slots), j.effort) for j in make_panel(settings))
+                        # A judge waits for its own slot before a shared one, so waiting never holds a shared slot.
+                        panel = tuple(
+                            Judge(limit_calls(limit_calls(j.llm, call_slots), judge_slots), j.effort)
+                            for j in make_panel(settings)
+                        )
                     except Exception:
                         panel_failed = True
                 return None if panel_failed else panel

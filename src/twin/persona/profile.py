@@ -487,11 +487,20 @@ def _merge_key(candidates: Sequence[PersonaCandidate]) -> str:
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
-def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: Progress | None = None) -> BuildReport:
+def build_profile(
+    store: PersonaStore,
+    llm: LLM,
+    settings: Settings,
+    progress: Progress | None = None,
+    *,
+    grant_gated: bool = False,
+) -> BuildReport:
+    """``grant_gated`` treats every consent-gated facet as allowed; only evaluations use it, to measure what the
+    profile could hold with the person's consent. Production builds derive consent from questionnaires."""
     report = BuildReport()
     sources_changed_at = store.get_meta("sources_changed_at")
     built_at = dt.datetime.now(dt.UTC).isoformat()
-    allowed = consented_facets(store)
+    allowed = frozenset(f.facet_id for f in FACETS) if grant_gated else consented_facets(store)
 
     def safe_progress(message: str) -> None:
         if progress:

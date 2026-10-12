@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import re
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
@@ -21,6 +22,7 @@ from twin.evals import longmemeval as lm
 from twin.evals import persona_runtime as pr
 from twin.evals import personamem as pm
 from twin.evals import twin2k500 as tw
+from twin.evals.harness import Judge
 from twin.llm import FakeLLM, LLMError
 from twin.persona.chat import EMPTY_REPLY
 from twin.persona.profile import BuildReport, consented_facets
@@ -467,8 +469,6 @@ def test_runtime_fingerprint_preserves_scoring_protocol(
     monkeypatch.setattr(module, "make_llm", lambda _: fake_persona())
     monkeypatch.setattr(module, "make_embedder", lambda _: HashingEmbedder())
     if benchmark == "longmemeval":
-        from twin.evals.harness import Judge
-
         monkeypatch.setattr(lm, "make_panel", lambda _: (Judge(FakeLLM(lambda *_: {"correct": True}), "low"),))
         case: Any = lm.Case(lm.QuestionInput("q", "?", "", ()), "single-session-user", lm.Gold("Atlas", ()))
     elif benchmark == "personamem":
@@ -613,10 +613,10 @@ def test_parallel_preparation_reports_each_subject_as_if_built_on_its_first_ques
 def test_a_failed_parallel_preparation_fails_only_its_subject(monkeypatch: pytest.MonkeyPatch) -> None:
     build = pr.build_profile
 
-    def flaky(store: PersonaStore, llm: Any, settings: Settings) -> BuildReport:
+    def flaky(store: PersonaStore, llm: Any, settings: Settings, **options: Any) -> BuildReport:
         if any("BROKEN" in e.text for e in store.list_expressions()):
             return BuildReport(failures=["extract: LLMError"])
-        return build(store, llm, settings)
+        return build(store, llm, settings, **options)
 
     monkeypatch.setattr(pr, "build_profile", flaky)
     llm = atlas_build()
@@ -782,3 +782,34 @@ def test_benchmark_prepares_subjects_in_parallel_before_answering(
     rows = records(tmp_path / "out")
     assert [r["persona"]["cache_hit"] for r in rows] == [False, True, False]
     assert all("preparation" in r["persona"]["stages"] for r in (rows[0], rows[2]))
+
+
+def test_judges_stay_within_their_own_cap_while_answers_run_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = threading.Lock()
+    running = peak = 0
+
+    def judge(*_: Any) -> dict[str, Any]:
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.05)
+        with lock:
+            running -= 1
+        return {"correct": True}
+
+    monkeypatch.setattr(lm, "make_llm", lambda _: fake_persona())
+    monkeypatch.setattr(lm, "make_embedder", lambda _: HashingEmbedder())
+    monkeypatch.setattr(lm, "make_panel", lambda _: (Judge(FakeLLM(judge), "low"), Judge(FakeLLM(judge), "low")))
+    session = lm.Session(0, "s", "2024/01/01 (Mon) 10:00", (lm.Turn("user", "I prefer Atlas"),))
+    cases = [
+        lm.Case(lm.QuestionInput(f"q{i}", "project?", "2024/01/02 (Tue) 10:00", (session,)), "multi-session",
+                lm.Gold("Atlas", ("s",)))
+        for i in range(6)
+    ]  # fmt: skip
+    report = lm.run_evaluation(
+        cases, tmp_path / "out", Settings(), score=True, answer_workers=6, judge_slots=threading.Semaphore(1)
+    )
+    assert report["completed"] == 6 and peak == 1

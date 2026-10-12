@@ -567,6 +567,7 @@ def run_evaluation(
     score: bool = True,
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -597,7 +598,7 @@ def run_evaluation(
                     make_llm(settings.llm if system == "twin" else settings.effective_chat_llm), call_slots
                 )
                 if system == "twin":
-                    runtime = PersonaRuntime(settings, llm, make_embedder(settings.embed), profile_cache)
+                    runtime = PersonaRuntime(settings, llm, make_embedder(settings.embed), profile_cache, grant_gated)
                     cleanup.callback(runtime.close)
                     baseline = TwinSystem(runtime)
                 else:

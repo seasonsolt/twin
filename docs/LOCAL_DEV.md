@@ -57,7 +57,7 @@
 
 `./scripts/local-up.sh` 首次运行时自动完成下面的安装（缺 ffmpeg 时用 Homebrew 安装）；本机已有模型直接复用，安装失败只提示、不阻塞文字聊天，下次运行会再试。只想要文字聊天时加 `--no-asr`。
 
-Apple Silicon Mac 使用 `asr-funasr`：SenseVoice 转写、FSMN 检测语音、CAM++ 区分说话人并与本人参考声音匹配，视频音轨也走此流程。每次调用启动进程，无常驻服务；默认 CPU，冷启动约 17 秒，首次依赖导入可能更久。
+Apple Silicon Mac 使用 `asr-funasr`：SenseVoice 转写、FSMN 检测语音、CAM++ 区分说话人并与本人参考声音匹配，视频音轨也走此流程。每次调用启动进程，无常驻服务；默认使用 Apple 芯片 GPU（MPS），49 分钟录音约 1–2 分钟转完，冷启动约 17 秒；转写时页面显示进度。
 
 也可以在仓库根目录手动安装或检查：
 

@@ -72,7 +72,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.0.0", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.1.0", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 3 and pack.model_bytes > 900_000_000
     assert all(len(f["sha256"]) == 64 for m in pack.models for f in m["files"])
@@ -104,7 +104,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.0.0" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.1.0" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -116,13 +116,13 @@ def test_install_failure_preserves_previous(environment, step):
     pack, config, _ = environment
     old = compute.install(pack, config, runner=FakeRunner())
     old_config = config.read_bytes()
-    new = replace(pack, version="1.1.0")
+    new = replace(pack, version="9.9.9")
     with pytest.raises(ValueError, match="已保留旧安装"):
         compute.install(new, config, runner=FakeRunner(fail=lambda args: step in args))
     assert (old.parent / "current").resolve() == old
     assert config.read_bytes() == old_config
-    assert not (old.parent / "1.1.0").exists()
-    assert not list(old.parent.glob(".1.1.0-*"))
+    assert not (old.parent / "9.9.9").exists()
+    assert not list(old.parent.glob(".9.9.9-*"))
 
 
 def test_missing_requires_opt_in_and_downloads_once(environment):

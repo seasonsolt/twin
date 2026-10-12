@@ -369,12 +369,17 @@ def remove(pack: Pack, config: Path) -> str:
     return f"已移除 {pack.name}；模型缓存保留：{cache}（约 {total / 1024**3:.2f} GiB），由你决定是否清理。请重启网页。"
 
 
+def installed_version(pack: Pack) -> str | None:
+    manifest = TwinPaths.from_env().compute / pack.name / "current" / "pack.toml"
+    if not manifest.is_file():
+        return None
+    return str(tomllib.loads(manifest.read_text()).get("version")) or None
+
+
 def status(pack: Pack, config: Path) -> str:
     current = TwinPaths.from_env().compute / pack.name / "current"
     installed = (current / "venv/bin/python").is_file() and (current / pack.entry).is_file()
-    version = "未知"
-    if (current / "pack.toml").is_file():
-        version = str(tomllib.loads((current / "pack.toml").read_text()).get("version", "未知"))
+    version = installed_version(pack) or "未知"
     text = config.read_text() if config.is_file() else ""
     settings = load_settings(config)
     configured = "asr" in tomllib.loads(text)

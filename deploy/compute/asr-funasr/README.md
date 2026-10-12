@@ -2,7 +2,7 @@
 
 这是音视频记忆的**输入能力**：FSMN VAD 找到语音片段，CAM++ 声纹聚类区分说话人并与本人参考声音比较，SenseVoiceSmall 转写文字。视频提取后的音轨走同一条流程。S1 是说话时间最长的人，不代表本人；请在网页核对、认领本人片段。
 
-每次转写启动一个 Python 进程，完成后退出，无常驻 worker、无服务端口。默认 CPU；如需尝试 MPS，可在配置中的命令末尾手动追加 `--device mps`。一次进程冷启动约 17 秒，首次导入可能更慢，适合后台整理会议录音。
+每次转写启动一个 Python 进程，完成后退出，无常驻 worker、无服务端口。默认自动使用 Apple 芯片 GPU（MPS），不可用时回退 CPU；可在配置中的命令末尾追加 `--device cpu` 强制使用 CPU。本机实测识别实时率 MPS 约 0.013、CPU 约 0.12（49 分钟录音在 MPS 上约 1 分钟）。转写过程向 stderr 输出 `@@twin-progress <0–1>` 行，twin 据此显示进度。一次进程冷启动约 17 秒，首次导入可能更慢，适合后台整理会议录音。
 
 ## 安装与移除
 
@@ -18,7 +18,7 @@ uv run twin --config ./twin.toml compute remove asr-funasr
 
 已有模型可去掉 `--download-models`，校验通过直接复用，不重复下载。缺失或摘要不符且没有该参数时，安装报错退出。`--force` 重建当前版本环境，仍不会覆盖手写 `[asr]`。依赖与模型首次准备通常需要数分钟到十几分钟，取决于网络与缓存；建议预留至少 5 GiB 磁盘空间（依赖、模型和下载缓存），重建时还需容纳旧环境。
 
-安装位置优先使用 `TWIN_COMPUTE_HOME`，否则为 `TwinPaths.compute`（macOS 默认 `~/Library/Application Support/twin/compute`，可由 `TWIN_HOME` 间接改变）。这是机器共享目录，多个 clone 共用 `asr-funasr/1.0.0` 与 `current` 链接，但各自配置要分别启用。需要完全留在仓库内时，安装和启动网页都设置同一个绝对路径：
+安装位置优先使用 `TWIN_COMPUTE_HOME`，否则为 `TwinPaths.compute`（macOS 默认 `~/Library/Application Support/twin/compute`，可由 `TWIN_HOME` 间接改变）。这是机器共享目录，多个 clone 共用 `asr-funasr/<版本>` 与 `current` 链接，但各自配置要分别启用。需要完全留在仓库内时，安装和启动网页都设置同一个绝对路径：
 
 ```bash
 export TWIN_COMPUTE_HOME="$PWD/.pi-runs/compute-home"

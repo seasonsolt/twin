@@ -356,14 +356,18 @@ def test_shell_variables_before_cjk_are_braced() -> None:
     assert offenders == []
 
 
-@pytest.mark.parametrize("state", ["configured", "missing", "fails"])
+@pytest.mark.parametrize("state", ["handwritten", "managed-current", "managed-old", "missing", "fails"])
 def test_ensure_asr(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], state: str) -> None:
     from twin.ops import compute
 
     config = '[llm]\nmodel = "m"\n'
-    if state == "configured":
+    if state == "handwritten":
         config += '[asr]\nprovider = "command"\ncommand = "transcribe"\n'
+    if state.startswith("managed"):
+        config += f'{compute.BEGIN}\n[asr]\nprovider = "command"\ncommand = "transcribe"\n{compute.END}\n'
     Path("twin.toml").write_text(config)
+    pack = compute.get_pack("asr-funasr")
+    monkeypatch.setattr(compute, "installed_version", lambda _: "1.0.0" if state == "managed-old" else pack.version)
     calls = []
 
     def install(pack, path, *, download_models, progress):  # type: ignore[no-untyped-def]
@@ -373,9 +377,11 @@ def test_ensure_asr(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixtu
 
     monkeypatch.setattr(compute, "install", install)
     assert ensure_asr() == 0
-    assert calls == ([] if state == "configured" else [("asr-funasr", Path("twin.toml"), True)])
+    expected = state in {"managed-old", "missing", "fails"}
+    assert calls == ([("asr-funasr", Path("twin.toml"), True)] if expected else [])
     output = capsys.readouterr().out
     assert ("文字聊天不受影响" in output) == (state == "fails")
+    assert ("升级录音转写包 1.0.0" in output) == (state == "managed-old")
 
 
 def test_local_up_dry_run_asr_opt_out(tmp_path: Path) -> None:

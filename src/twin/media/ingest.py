@@ -7,6 +7,8 @@ import math
 import re
 import subprocess
 import tempfile
+import threading
+import time
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -51,6 +53,9 @@ class Transcriber(Protocol):
     def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]: ...
 
 
+PROGRESS_LINE = re.compile(r"@@twin-progress ([0-9.]+)\s*$")
+
+
 class CommandTranscriber:
     diarizes = True
 
@@ -69,15 +74,8 @@ class CommandTranscriber:
             request["reference"] = str(self.reference.resolve())
         self.speakers = []
         try:
-            result = subprocess.run(
-                ["bash", "-lc", self.command],
-                input=json.dumps(request),
-                text=True,
-                capture_output=True,
-                check=True,
-                timeout=1800 + duration,
-            )
-            payload = json.loads(result.stdout.strip().splitlines()[-1])
+            stdout = self._run(json.dumps(request), duration, progress)
+            payload = json.loads(stdout.strip().splitlines()[-1])
             if payload.get("ok") is not True or not isinstance(payload.get("segments"), list):
                 raise ValueError()
             segments = [Segment.model_validate(s) for s in payload["segments"]]
@@ -88,6 +86,55 @@ class CommandTranscriber:
             raise RuntimeError("语音识别失败，请检查语音识别配置后重试") from None
         progress(duration, duration)
         return segments
+
+    def _run(self, request: str, duration: float, progress: Progress) -> str:
+        """Run the command; `@@twin-progress <0..1>` lines on stderr become progress in this (the job's) thread."""
+        process = subprocess.Popen(
+            ["bash", "-lc", self.command],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert process.stdin and process.stdout and process.stderr
+        output: list[str] = []
+        latest = [0.0]
+
+        def read_progress() -> None:
+            assert process.stderr
+            for line in process.stderr:
+                match = PROGRESS_LINE.search(line)
+                if match:
+                    latest[0] = float(match.group(1))
+
+        stdout = process.stdout
+        readers = [
+            threading.Thread(target=lambda: output.append(stdout.read()), daemon=True),
+            threading.Thread(target=read_progress, daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            process.stdin.write(request)
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+        deadline = time.monotonic() + 1800 + duration
+        reported = 0.0
+        while process.poll() is None:
+            if time.monotonic() > deadline:
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(self.command, 1800 + duration)
+            if latest[0] > reported:
+                reported = min(1.0, latest[0])
+                progress(reported * duration, duration)
+            time.sleep(0.5)
+        for reader in readers:
+            reader.join()
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, self.command)
+        return "".join(output)
 
 
 def silence_chunks(audio: Path, duration: float) -> list[tuple[float, float]]:

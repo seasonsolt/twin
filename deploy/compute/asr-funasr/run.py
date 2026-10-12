@@ -106,26 +106,74 @@ def emit(payload):
     print(json.dumps(payload, ensure_ascii=False, allow_nan=False), flush=True)
 
 
-def run(request=None, *, device="cpu", check=False):
+def report(fraction):
+    """Progress for twin on stderr: one `@@twin-progress <0..1>` line per step."""
+    os.write(2, f"\n@@twin-progress {min(1.0, max(0.0, fraction)):.4f}\n".encode())
+
+
+def run(request=None, *, device="auto", check=False):
     paths = model_paths()
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     import librosa
     import numpy as np
     import torch
     from funasr import AutoModel
 
     torch.set_num_threads(8)
+    if device == "auto":
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-    def load(path, **kwargs):
-        return AutoModel(model=path, device=device, disable_update=True, disable_pbar=True, **kwargs)
+    def load(path, on=None, **kwargs):
+        return AutoModel(model=path, device=on or device, disable_update=True, disable_pbar=True, **kwargs)
 
-    vad = load(paths[1], max_end_silence_time=500, max_single_segment_time=30000)
-    spk = load(paths[2])
-    asr = load(paths[0])
+    # Measured on Apple silicon (49 min meeting): FSMN VAD takes 8 s on CPU but 93 s on MPS; SenseVoice and
+    # same-length CAM++ batches are several times faster on MPS; padded CPU batches are ~3x slower than single clips.
+    vad = load(paths[1], "cpu", max_end_silence_time=500, max_single_segment_time=30000)
+    spk = load(paths[2], "cpu")
+    try:
+        asr = load(paths[0])
+        spk_batch = load(paths[2]) if device == "mps" else None
+    except Exception:
+        if device == "cpu":
+            raise
+        device = "cpu"
+        asr = load(paths[0])
+        spk_batch = None
+    batch = 16 if device == "mps" else 1
 
     def embed(clip):
         value = spk.generate(input=clip, disable_pbar=True)[0]["spk_embedding"]
         value = np.asarray(value.detach().cpu() if hasattr(value, "detach") else value, dtype=np.float32).reshape(-1)
         return value / (np.linalg.norm(value) + 1e-9)
+
+    def embed_all(clips, done):
+        # Equal-length groups avoid zero padding, so batched embeddings match single-clip ones. Small groups stay
+        # on CPU: every new clip length costs MPS a fresh graph, which outweighs the batch for a handful of clips.
+        result = [None] * len(clips)
+        groups = {}
+        for k, clip in enumerate(clips):
+            groups.setdefault(len(clip), []).append(k)
+        finished = 0
+        with torch.no_grad():
+            for members in groups.values():
+                if spk_batch is None or len(members) < 8:
+                    for k in members:
+                        result[k] = embed(clips[k])
+                        finished += 1
+                        if finished % 50 == 0:
+                            done(finished / len(clips))
+                    continue
+                for i in range(0, len(members), 64):
+                    part = members[i : i + 64]
+                    found, _ = spk_batch.model.inference(
+                        data_in=[torch.from_numpy(clips[k]) for k in part], device=device
+                    )
+                    rows = found[0]["spk_embedding"].detach().cpu().numpy().astype(np.float32)
+                    for k, row in zip(part, rows, strict=True):
+                        result[k] = row / (np.linalg.norm(row) + 1e-9)
+                    finished += len(part)
+                    done(finished / len(clips))
+        return np.stack(result)
 
     if check:
         wav = (0.01 * np.sin(2 * np.pi * 440 * np.arange(16000) / 16000)).astype(np.float32)
@@ -134,16 +182,21 @@ def run(request=None, *, device="cpu", check=False):
         asr.generate(input=[wav], cache={}, language="zh", use_itn=True, batch_size=1, disable_pbar=True)
         if not np.isfinite(embedding).all() or embedding.size != 192:
             raise ValueError("声纹健康检查失败")
+        if spk_batch is not None:
+            batched = embed_all([wav] * 8, lambda _: None)
+            if not np.allclose(batched[0], embedding, atol=1e-3):
+                raise ValueError("声纹批量健康检查失败")
         return {"ok": True, "device": device, "models": 3, "sample_seconds": 1, "embedding_dimensions": 192}
 
     audio, language, diarize, reference = request
     wav, _ = librosa.load(str(audio), sr=16000, mono=True)
     spans = [list(s) for s in vad.generate(input=wav, cache={}, disable_pbar=True)[0]["value"]]
+    report(0.05)
     labels = [0] * len(spans)
     centroids = {}
     if diarize and spans:
         windows, hop, total = make_windows(spans)
-        emb = np.stack([embed(wav[int(b * 16) : int(e * 16)]) for _, b, e in windows])
+        emb = embed_all([wav[int(b * 16) : int(e * 16)] for _, b, e in windows], lambda f: report(0.05 + 0.15 * f))
         if len(windows) >= 2:
             from sklearn.cluster import AgglomerativeClustering
 
@@ -167,13 +220,15 @@ def run(request=None, *, device="cpu", check=False):
 
     totals, order, names, chunks = organize(spans, labels)
     segments = []
-    for i in range(0, len(chunks), 16):
-        batch = chunks[i : i + 16]
-        clips = [wav[int(b * 16) : int(e * 16)] for b, e, _ in batch]
+    report(0.2)
+    for i in range(0, len(chunks), batch):
+        part = chunks[i : i + batch]
+        clips = [wav[int(b * 16) : int(e * 16)] for b, e, _ in part]
         results = asr.generate(
             input=clips, cache={}, language=language, use_itn=True, batch_size=len(clips), disable_pbar=True
         )
-        for (beg, end, label), result in zip(batch, results, strict=True):
+        report(0.2 + 0.8 * (i + len(part)) / len(chunks))
+        for (beg, end, label), result in zip(part, results, strict=True):
             text = re.sub(r"<\|[^|]*\|>", "", str(result.get("text", ""))).strip()
             if text:
                 segments.append(
@@ -195,7 +250,7 @@ def run(request=None, *, device="cpu", check=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", choices=("cpu", "mps"), default="cpu")
+    parser.add_argument("--device", choices=("auto", "cpu", "mps"), default="auto")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     for key in ("HF_HUB_OFFLINE", "MODELSCOPE_OFFLINE", "TRANSFORMERS_OFFLINE"):

@@ -182,6 +182,25 @@ def test_command_contract_and_sanitized_failure(tmp_path: Path) -> None:
         assert "secret-token" not in str(error.value)
 
 
+def test_command_progress_from_stderr(tmp_path: Path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(wav_bytes())
+    script = tmp_path / "slow.py"
+    script.write_text(
+        "import json, sys, time\n"
+        "json.load(sys.stdin)\n"
+        "for value in (0.25, 0.5):\n"
+        "    print('noise', file=sys.stderr)\n"
+        "    print(f'@@twin-progress {value}', file=sys.stderr, flush=True)\n"
+        "    time.sleep(0.8)\n"
+        "print(json.dumps({'ok': True, 'segments': [{'start': 0, 'end': 1, 'text': 'x'}]}))\n"
+    )
+    progress: list[float] = []
+    CommandTranscriber(f"python3 {script}").transcribe(audio, 100, lambda done, _: progress.append(done))
+    assert progress[0] == 0 and progress[-1] == 100
+    assert 25 in progress and 50 in progress and progress == sorted(progress)
+
+
 def test_http_silence_chunks_and_offsets(tmp_path: Path) -> None:
     audio = tmp_path / "tone.wav"
     with wave.open(str(audio), "wb") as wav:

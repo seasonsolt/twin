@@ -28,7 +28,7 @@ from ..llm import LLM, LLMError, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import PersonaCandidate, PersonaItem, PEvidence
-from .kernel import KERNEL, rebuild_scope
+from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
@@ -237,6 +237,21 @@ _EVIDENCE_NOTES = {
 
 def _candidate_id(chunk_id: str, i: int) -> str:
     return "pc_" + hashlib.sha256(f"{chunk_id}\x1f{i}".encode()).hexdigest()[:16]
+
+
+def prompt_fingerprint() -> str:
+    """Everything that shapes extraction and merge output apart from the taxonomy; pinned per PROMPT_VERSION."""
+    return content_digest(
+        {
+            "extract": EXTRACT_SYSTEM,
+            "merge": MERGE_SYSTEM,
+            "evidence": _EVIDENCE_NOTES,
+            "questionnaire": QUESTIONNAIRE_COVERAGE,
+            "max_quotes": MAX_QUOTES,
+            "extract_schema": ExtractDraft.model_json_schema(),
+            "merge_schema": MergeDraft.model_json_schema(),
+        }
+    )
 
 
 def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> list[PersonaCandidate]:
@@ -498,6 +513,16 @@ def build_profile(
     """``grant_gated`` treats every consent-gated facet as allowed; only evaluations use it, to measure what the
     profile could hold with the person's consent. Production builds derive consent from questionnaires."""
     report = BuildReport()
+    built = store.kernel_built()
+    # Snapshot once per kernel change, before stale extractions are dropped, so a bad kernel can be rolled back.
+    if (
+        rebuild_scope(built, KERNEL) != "none"
+        and store.get_meta("kernel:snapshot") != kernel_json(KERNEL)
+        and store.has_extractions()
+    ):
+        old = built or LEGACY_KERNEL
+        store.snapshot(f"{old.prompt}-{old.taxonomy}")
+        store.set_meta("kernel:snapshot", kernel_json(KERNEL))
     sources_changed_at = store.get_meta("sources_changed_at")
     built_at = dt.datetime.now(dt.UTC).isoformat()
     allowed = frozenset(f.facet_id for f in FACETS) if grant_gated else consented_facets(store)

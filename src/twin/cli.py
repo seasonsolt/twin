@@ -787,6 +787,42 @@ def kernel_status(ctx: typer.Context) -> None:
                 _say(f"schema：{store.schema_version()}  范围：{scope}  待重抽分段：{count}")
 
 
+@kernel_app.command("snapshots")
+def kernel_snapshots(ctx: typer.Context) -> None:
+    """列出内核升级前自动保存的快照（每个分身保留最近 3 份）。"""
+    from .persona.store import list_snapshots
+
+    with _errors():
+        for persona_id, settings in _kernel_personas(_settings(ctx)):
+            found = list_snapshots(settings.db_path)
+            _say(f"分身 {persona_id}：{'无快照' if not found else ''}")
+            for path in reversed(found):
+                _say(f"  {path}（{path.stat().st_size / 1024**2:.1f} MiB）")
+
+
+@kernel_app.command("restore")
+def kernel_restore(
+    ctx: typer.Context,
+    snapshot: Annotated[Path, typer.Argument(help="twin kernel snapshots 列出的快照文件")],
+    persona: Annotated[str, typer.Option("--persona")] = "default",
+    yes: Annotated[bool, typer.Option("--yes", help="确认已停止网页并覆盖当前数据")] = False,
+) -> None:
+    """用快照覆盖分身数据；覆盖前自动再快照一次当前数据。"""
+    from .persona.store import restore_snapshot
+
+    selected = [resolved for pid, resolved in _kernel_personas(_settings(ctx)) if pid == persona]
+    if not selected:
+        raise _fail("分身不存在")
+    if not yes:
+        raise _fail("恢复会覆盖该分身的当前数据：先停止网页（Ctrl-C 或 twin ops stop），再加 --yes")
+    with _errors():
+        before = restore_snapshot(snapshot, selected[0].db_path)
+    _say(f"已恢复分身 {persona}" + (f"；恢复前的数据另存为 {before}" if before else ""))
+    _say(
+        "用当前代码启动会再次按新内核整理；要继续用旧内核，先切回旧版本代码（如 git switch --detach <旧版本>）再启动。"
+    )
+
+
 @kernel_app.command("rebuild")
 @_command_usage("build")
 def kernel_rebuild(

@@ -1,0 +1,51 @@
+# cnb CI: the same checks as .github/workflows/ci.yml, on pushes to main and on PRs into main.
+# Script arrays are joined with &&, so any failing command fails the stage.
+main:
+  push: &checks
+    - name: backend
+      docker:
+        image: python:3.12-bookworm
+        volumes:
+          - /root/.cache/uv:copy-on-write
+      stages:
+        - name: tools
+          script:
+            - apt-get update
+            - apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
+            - pip install --no-cache-dir uv==0.13.0
+        - name: sync
+          script: uv sync --frozen --python 3.12
+        - name: ruff
+          script:
+            - uv run ruff check src tests deploy
+            - uv run ruff format --check src tests deploy
+        - name: mypy
+          script: uv run mypy
+        - name: pytest
+          script: uv run pytest -q
+
+    - name: frontend
+      docker:
+        image: node:22-bookworm
+        volumes:
+          - /root/.local/share/pnpm/store:copy-on-write
+      stages:
+        - name: install
+          script:
+            # The pnpm version pinned in frontend/package.json; corepack would pick its own from the repo root.
+            - npm install -g "$(node -p "require('./frontend/package.json').packageManager")"
+            - pnpm -C frontend install --frozen-lockfile
+        - name: typecheck
+          script: pnpm -C frontend typecheck
+        - name: lint
+          script: pnpm -C frontend lint
+        - name: test
+          script: pnpm -C frontend test
+        - name: build
+          script: pnpm -C frontend build
+        - name: static matches build
+          script:
+            - git diff --exit-code src/twin/web/static
+            - test -z "$(git status --porcelain src/twin/web/static)"
+
+  pull_request: *checks

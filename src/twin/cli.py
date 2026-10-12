@@ -770,6 +770,7 @@ def _run_longmemeval(
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
+    judge_slots: threading.Semaphore | None = None,
     score: bool,
 ) -> dict[str, Any]:
     from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
@@ -808,6 +809,7 @@ def _run_longmemeval(
         prepare_workers=prepare_workers,
         answer_workers=answer_workers,
         call_slots=call_slots,
+        judge_slots=judge_slots,
     )
 
 
@@ -1153,6 +1155,15 @@ def eval_suite_command(
             "the endpoint rate-limits or times out",
         ),
     ] = 32,
+    max_judge_calls: Annotated[
+        int,
+        typer.Option(
+            "--max-judge-calls",
+            min=1,
+            help="Judge calls in flight across the whole suite, within --max-calls; judge endpoints often allow "
+            "fewer concurrent requests than the answer model",
+        ),
+    ] = 4,
     grant_gated_facets: Annotated[
         bool,
         typer.Option(
@@ -1184,6 +1195,7 @@ def eval_suite_command(
         "t2k": t2k_participants or SUITE_SIZES[split]["t2k"],
     }
     slots = threading.Semaphore(max_calls)
+    judge_slots = threading.Semaphore(max_judge_calls)
     jobs: dict[str, Callable[[Settings, Path, ProfileCache | None], dict[str, Any]]] = {}
     if longmemeval is not None:
         lme_dataset = longmemeval
@@ -1191,6 +1203,7 @@ def eval_suite_command(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
             split=split, system="twin", dry_run=False, score=True, profile_cache=cache, grant_gated=grant_gated_facets,
             prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
+            judge_slots=judge_slots,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
@@ -1263,6 +1276,7 @@ def eval_suite_command(
         metadata["prepare_workers"] = prepare_workers
         metadata["answer_workers"] = answer_workers
         metadata["max_calls"] = max_calls
+        metadata["max_judge_calls"] = max_judge_calls
         card = build_scorecard(out, metadata)
         write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:

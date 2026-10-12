@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, toast } from '../components/ui';
 import { Memories, type Memory } from '../pages/Memories';
 import { api } from '../lib/api';
+import { useAuth } from '../stores/auth';
 
 vi.mock('../lib/mediaUpload', async (original) => ({
   ...(await original<typeof import('../lib/mediaUpload')>()),
@@ -38,7 +39,13 @@ const memory: Memory = {
   remembered: 3,
 };
 let rows: Memory[];
-let state: { state: 'idle' | 'queued' | 'running'; last_error?: string };
+let state: {
+  state: 'idle' | 'queued' | 'running';
+  last_error?: string;
+  notice?: string;
+  kernel_rebuild?: string;
+  kernel_pending?: number;
+};
 let fetcher: ReturnType<typeof vi.fn>;
 let importError: boolean;
 beforeEach(() => {
@@ -71,6 +78,10 @@ beforeEach(() => {
       rows = [];
       state = { state: 'queued' };
       return json({ deleted: true });
+    }
+    if (url === '/api/kernel/rebuild') {
+      state = { state: 'queued' };
+      return json({ job_id: 'k1' }, 202);
     }
     if (url === '/api/persona/build') {
       state = { state: 'queued' };
@@ -354,3 +365,35 @@ it('keeps Chinese upload errors and aborts uploads on unmount', async () => {
   page.unmount();
   expect(init.signal.aborted).toBe(true);
 });
+
+it.each([true, false])(
+  'asks to confirm a kernel rebuild over the cost gate (admin %s)',
+  async (admin) => {
+    useAuth.setState({
+      identity: { email: null, admin, auth_enabled: false },
+    });
+    state = {
+      state: 'idle',
+      notice: '记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案',
+      kernel_rebuild: 'awaiting_confirmation',
+      kernel_pending: 512,
+    };
+    mount();
+    expect(
+      await screen.findByText(/需重新整理 512 段，会调用模型/),
+    ).toBeInTheDocument();
+    const button = screen.queryByRole('button', { name: '开始重新整理' });
+    if (!admin) {
+      expect(button).toBeNull();
+      return;
+    }
+    await userEvent.click(button!);
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        '/api/kernel/rebuild',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    useAuth.setState({ identity: null });
+  },
+);

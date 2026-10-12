@@ -14,17 +14,35 @@ done
 voices=()
 while IFS= read -r voice; do
     voices+=("$voice")
-done < <(say -v '?' | awk '/zh_(CN|TW)/ {
+done < <(say -v '?' | awk '/zh_(CN|TW|HK)/ {
     sub(/[[:space:]]+zh_.*/, "")
     voice = $0
     sub(/[[:space:]]*\(.*/, "", voice)
     if (!seen[voice]++) print
 }')
-if [[ ${#voices[@]} -lt 2 ]]; then
-    echo '需要两个不同的中文音色。请在系统设置 → 辅助功能 → 朗读内容中自行添加，再重试。' >&2
-    echo "用 say -v '?' 查看音色；本脚本不会下载音色或模型。" >&2
+pick() {
+    local want voice
+    for want in "$@"; do
+        for voice in "${voices[@]}"; do
+            if [[ "$voice" == "$want"* ]]; then
+                printf '%s' "$voice"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+# Eddy/Flo/Reed/Rocko/Grandpa share one synthesis engine and sit at the CAM++ merge threshold
+# (window cosine ≈ 0.45), so the second voice must come from another engine to be told apart.
+lin_voice="$(pick Eddy Reed Rocko Grandpa || true)"
+lan_voice="$(pick Tingting Meijia Sinji || true)"
+if [[ -z "$lin_voice" || -z "$lan_voice" ]]; then
+    echo '需要两个声纹差异足够大的中文音色：Eddy（或 Reed/Rocko）以及 Tingting（或 Meijia/Sinji）。' >&2
+    echo '请在系统设置 → 辅助功能 → 朗读内容 → 系统声音中添加“婷婷（Tingting）”，再重试。' >&2
+    echo "用 say -v '?' 查看已安装音色；本脚本不会下载音色或模型。" >&2
     exit 1
 fi
+voices=("$lin_voice" "$lan_voice")
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 umask 077

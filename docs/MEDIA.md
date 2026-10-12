@@ -20,14 +20,13 @@ twin 是个人工具，不添加免责声明。
 
 未配置 `[asr]` 时也保存原件，显示“需要配置语音识别”；配置并重启后点“重新转写”。HTTP 的 `provider = "openai_compat"`（还需 model、base_url）或 `"cloudflare"`（base_url、api_key_env）复用现有识别器，先通过 ffmpeg silencedetect 选停顿，将 WAV 切成不超过 25 秒的识别请求，无停顿则硬切；每段保留全局时间偏移。
 
-也可配置本机命令（仅用于记忆转写，合成语音评测仍用 HTTP）：
+Apple Silicon Mac 可安装本机会议转写命令包（仅用于记忆转写，合成语音评测仍用 HTTP）：
 
-```toml
-[asr]
-provider = "command"
-command = "python /path/to/transcribe.py"
-language = "zh"
+```bash
+uv run twin --config ./twin.toml compute install asr-funasr --download-models
 ```
+
+已有模型时去掉 `--download-models`，不会下载模型。安装会向当前配置写入 `[asr] provider = "command"`、本机命令路径、`language = "zh"`、`egress = "local"`，不覆盖已有手写节。重启网页后生效；详见 [开启会议录音转写](LOCAL_DEV.md#开启会议录音转写)。也可手动配置遵守以下契约的其他命令。
 
 命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
 

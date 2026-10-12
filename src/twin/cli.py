@@ -369,12 +369,63 @@ def init(
             )
             template += (
                 "\n# 默认只有文字聊天；语音、转写、认人、真人视频可按需开启。\n"
-                "# P4 将提供 twin compute install，也可手写配置，详见 docs/MEDIA.md。\n"
+                "# 转写可运行 twin compute install asr-funasr，也可手写配置，详见 docs/MEDIA.md。\n"
             )
             private_directory(paths.data)
         private_directory(target.parent)
         _write(target, template)
     _say(f"已生成配置文件 {target}。请先修改 target_name 和 [llm] 部分，密钥通过环境变量提供。")
+
+
+compute_app = typer.Typer(help="安装与管理本机转写算力包。", no_args_is_help=True)
+app.add_typer(compute_app, name="compute")
+
+
+def _compute_config(ctx: typer.Context) -> Path:
+    return _config_path(ctx) or Path(os.environ.get("TWIN_CONFIG", str(DEFAULT_CONFIG)))
+
+
+@compute_app.command("list")
+def compute_list() -> None:
+    """列出仓库提供的算力包。"""
+    from .ops.compute import discover
+
+    with _errors():
+        for pack in discover():
+            _say(f"{pack.name} {pack.version}（{pack.kind}；{', '.join(pack.platforms)}）")
+
+
+@compute_app.command("status")
+def compute_status(ctx: typer.Context) -> None:
+    """查看安装、配置与模型校验状态。"""
+    from .ops.compute import discover, status
+
+    with _errors():
+        for pack in discover():
+            _say(status(pack, _compute_config(ctx)))
+
+
+@compute_app.command("install")
+def compute_install(
+    ctx: typer.Context,
+    pack: Annotated[str, typer.Argument(help="算力包名称")],
+    download_models: Annotated[bool, typer.Option("--download-models", help="允许下载缺失的模型")] = False,
+    force: Annotated[bool, typer.Option("--force", help="重建当前版本环境；不覆盖手写配置")] = False,
+) -> None:
+    """校验、安装转写包并启用当前配置。"""
+    from .ops.compute import get_pack, install
+
+    with _errors():
+        install(get_pack(pack), _compute_config(ctx), download_models=download_models, force=force, progress=_say)
+
+
+@compute_app.command("remove")
+def compute_remove(ctx: typer.Context, pack: Annotated[str, typer.Argument()]) -> None:
+    """移除算力包及工具写入的配置，保留模型缓存。"""
+    from .ops.compute import get_pack, remove
+
+    with _errors():
+        _say(remove(get_pack(pack), _compute_config(ctx)))
 
 
 ops_app = typer.Typer(help="装机、服务托管与备份恢复。", no_args_is_help=True)

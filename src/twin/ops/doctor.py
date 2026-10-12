@@ -214,7 +214,7 @@ def inspect_installation(
             except Exception:
                 checks.append(Check(f"{name}探针", False, "模型调用失败，请检查后端配置与凭据（详情已隐藏）"))
     for name, command in [
-        ("转写", settings.asr.command if settings.asr.provider == "command" else None),
+        ("识别", settings.asr.command if settings.asr.provider == "command" else None),
         ("认人", settings.vision.command),
         ("视频", settings.video.command if settings.video.provider != "none" else None),
     ]:
@@ -226,14 +226,18 @@ def inspect_installation(
             try:
                 arguments = shlex.split(command)
                 exists = bool(arguments) and shutil.which(arguments[0]) is not None
+                if name == "识别":
+                    exists = exists and all(Path(arg).is_file() for arg in arguments[1:] if arg.endswith(".py"))
             except ValueError:
                 exists = False
             checks.append(
                 Check(
-                    f"{name}命令",
+                    name if name == "识别" else f"{name}命令",
                     exists,
-                    "已找到" if exists else "未找到",
-                    "算力包需先 twin compute install（P4 提供）；自定义命令请检查路径",
+                    "已找到" if exists else "未找到命令或脚本",
+                    "算力包需先 twin compute install asr-funasr；自定义命令请检查路径"
+                    if name == "识别"
+                    else "自定义命令请检查路径",
                 )
             )
     web_loaded = False

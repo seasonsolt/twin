@@ -44,7 +44,7 @@ class TwinPaths:
             Path(os.environ.get("TWIN_ENV_FILE", config_dir / "env")).expanduser().resolve(),
             home / "releases",
             home / "current",
-            home / "compute",
+            Path(os.environ.get("TWIN_COMPUTE_HOME", home / "compute")).expanduser().resolve(),
             home / "models",
             home / "data",
             home / "backups",

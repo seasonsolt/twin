@@ -57,14 +57,36 @@ chmod 600 .env
 默认不启用 `[tts]`、`[asr]`、`[vision]` 或 `[video]`。网页不显示未开启的听/视频入口，doctor 将这些能力标为“未开启（可选）”。
 
 - 想听回复：按 [媒体配置](MEDIA.md) 配置 `[tts]`，接入已有语音服务。
-- 想导入会议录音：安装 ffmpeg，按 [音视频记忆](MEDIA.md#音视频记忆) 配置 `[asr]`，接入已有转写服务或本机命令。它是输入能力，可单独开启，无需同时开启语音或视频输出。
+- 想导入会议录音：按下节安装本机转写包。它是输入能力，可单独开启，无需同时开启语音或视频输出。
 - 想从视频挑选照片或生成真人视频：分别按需配置 `[vision]` / `[video]`，见同一媒体文档。
 
-将启用后端的密钥放在 `.env` 对应变量里，保存后停止并重新运行脚本。本流程不会安装算力包或下载模型；计划中的 `twin compute install` 属于后续 P4，不是当前前置步骤。
+将启用后端的密钥放在 `.env` 对应变量里，保存后停止并重新运行脚本。`local-up.sh` 不自动安装算力包或下载模型。
+
+## 开启会议录音转写
+
+Apple Silicon Mac 可安装 `asr-funasr`：SenseVoice 转写、FSMN 检测语音、CAM++ 区分说话人并与本人参考声音匹配，视频音轨也走此流程。每次调用启动进程，无常驻服务；默认 CPU，冷启动约 17 秒，首次依赖导入可能更久。
+
+在仓库根目录运行：
+
+```bash
+brew install ffmpeg
+uv run twin --config ./twin.toml compute install asr-funasr --download-models
+uv run twin --config ./twin.toml compute status
+```
+
+首次安装通常数分钟到十几分钟，取决于网络和缓存；三个模型约 0.90 GiB，连同 Python 依赖、下载缓存建议预留至少 5 GiB。已有 `~/.cache/modelscope` 模型会校验后复用，不重复下载；只使用现有缓存时去掉 `--download-models`，缺模型会报错退出。
+
+包默认安装到机器共享的 `~/Library/Application Support/twin/compute`，多个仓库 clone 共用。希望连算力环境也留在仓库内时，先执行 `export TWIN_COMPUTE_HOME="$PWD/.pi-runs/compute-home"`；自定义模型缓存使用 `MODELSCOPE_CACHE`，网页启动时也需保留该变量。配置目标是 `--config`、`TWIN_CONFIG` 或默认 `./twin.toml`；已有手写 `[asr]` 不覆盖，按提示手动处理。安装不会开启朗读、形象候选或口型视频。
+
+安装完成后 **Ctrl-C 停止网页，再运行 `./scripts/local-up.sh`**。在“记忆”页上传录音；已上传但未转写的文件点“重新转写”。转写在本机离线运行，随后整理使用你配置的模型服务。
+
+运行 `./scripts/demo-meeting.sh` 合成双人会议，按下一节上传参考声音和录音。在说话人卡片试听并核对 S1/S2（S1 说话最多），可勾选多个属于本人的说话人后确认；未认领者以其他人处理。自动声纹建议也要核对。
+
+移除：`uv run twin --config ./twin.toml compute remove asr-funasr`，然后重启网页。只删除包与本工具在当前配置写入的 `[asr]`，模型缓存保留并提示大小；其他 clone 若还使用此共享包也会受影响。更多路径、版本与隐私说明见 [算力包 README](../deploy/compute/asr-funasr/README.md)。
 
 ## 会议录音演示
 
-仅 macOS：确保 `say -v '?'` 能列出至少两个不同的中文音色，以及已安装 ffmpeg（包含 ffprobe）。缺少中文音色时到系统设置 → 辅助功能 → 朗读内容自行添加，脚本不下载音色。
+仅 macOS：需要已安装 ffmpeg（包含 ffprobe），以及两个声纹差异足够大的中文音色：林舟用 Eddy（或 Reed/Rocko），岚禾用 Tingting（婷婷，或 Meijia/Sinji）。Eddy、Flo 等同一系列音色在声纹模型里几乎分不开，会被并成一个说话人，所以脚本不会用两个同系列音色。缺少婷婷时到系统设置 → 辅助功能 → 朗读内容 → 系统声音中添加，脚本不下载音色。
 
 ```bash
 ./scripts/demo-meeting.sh
@@ -118,4 +140,4 @@ git pull && ./scripts/local-up.sh
 
 只清理示例可在网页“管理分身”里删除“示例·林舟”（7 天回收站规则沿用现有功能）。要完全清空本次本地验证，先停止服务，确认当前在这个仓库且默认数据路径未改变，再删除整个 `./data/`；这会清除本仓库所有分身、上传、聊天和合成会议，保留 `twin.toml` 与 `.env`。下次 `./scripts/local-up.sh --demo` 会重新建立数据。需要保留旧验证结果时，停止服务后先把整个 `data/` 移到自己的备份位置。
 
-这里不写入 `~/Library` 或 `~/.config`，不注册常驻服务，也不操作官方演示环境。需要可选常驻部署时再看 [Mac 部署说明](../deploy/mac/README.md)。
+基础文字启动流程不写入 `~/Library` 或 `~/.config`，不注册常驻服务，也不操作官方演示环境；可选转写包默认使用上述机器共享目录，可用 `TWIN_COMPUTE_HOME` 改到仓库内。需要可选常驻部署时再看 [Mac 部署说明](../deploy/mac/README.md)。

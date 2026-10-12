@@ -411,7 +411,7 @@ def test_init_profiles(profile: str) -> None:
     path = TwinPaths.from_env().config if profile == "mac-unified" else Path("twin.toml")
     settings = load_settings(path)
     if profile == "mac-unified":
-        assert "P4 将提供 twin compute install" in path.read_text()
+        assert "twin compute install asr-funasr" in path.read_text()
         assert "docs/MEDIA.md" in path.read_text()
         active = {line.strip() for line in path.read_text().splitlines()}
         assert all(f"[{section}]" not in active for section in ("tts", "asr", "vision", "video"))

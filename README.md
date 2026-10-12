@@ -178,7 +178,7 @@ flowchart TB
 
 更新代码：停止服务后运行 `git pull && ./scripts/local-up.sh`；数据库迁移和内核增量重建由应用自动完成。本地数据默认只在本机仓库 `data/`，与官方演示环境互不影响。
 
-参数、自检、示例提问和会议录音演示见 [协作者本地验证](docs/LOCAL_DEV.md)。命令行、API、MCP、公网部署和邮箱登录见 [使用指南](docs/GUIDE.md)。
+参数、自检、示例提问和会议录音演示见 [协作者本地验证](docs/LOCAL_DEV.md)。多人录音或视频音轨可单独[开启会议录音转写](docs/LOCAL_DEV.md#开启会议录音转写)，运行 `uv run twin compute install asr-funasr --download-models` 安装本机转写包。命令行、API、MCP、公网部署和邮箱登录见 [使用指南](docs/GUIDE.md)。
 
 ## 文档
 

@@ -18,6 +18,7 @@ import webbrowser
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -30,7 +31,7 @@ from .embed import Embedder, EmbedError
 from .identity import Identity
 from .llm import CallTally, LLMError
 from .media.schema import MediaScript
-from .ops.envfile import load_env_file
+from .ops.envfile import load_env_file, selected_env_file
 from .ops.paths import TwinPaths
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
@@ -329,7 +330,7 @@ def main(
     with _errors():
         if home is not None:
             os.environ["TWIN_HOME"] = str(home)
-        env = Path(os.environ.get("TWIN_ENV_FILE", TwinPaths.from_env().env))
+        env = selected_env_file()
         try:
             load_env_file(env)
         except (ValueError, OSError) as error:
@@ -491,7 +492,7 @@ def doctor_command(
     from .ops.service import manager
 
     with _errors():
-        paths = TwinPaths.from_env()
+        paths = replace(TwinPaths.from_env(), env=selected_env_file())
         try:
             settings = load_settings(_ops_config(ctx))
         except (ValueError, OSError):
@@ -638,6 +639,25 @@ def mcp_command(ctx: typer.Context) -> None:
         create_mcp_server(settings).run(transport="stdio")
     except Exception:
         raise _fail("MCP 服务暂时不可用，请检查配置后重试") from None
+
+
+demo_app = typer.Typer(help="导入完全虚构的示例分身。", no_args_is_help=True)
+app.add_typer(demo_app, name="demo")
+
+
+@demo_app.command("seed")
+def demo_seed(
+    ctx: typer.Context,
+    force: Annotated[bool, typer.Option("--force", help="重新导入示例来源，保留自行添加的资料")] = False,
+) -> None:
+    """创建或复用“示例·林舟”；只导入资料，不调用模型。请先停止网页服务。"""
+    from .ops.demo import seed_demo
+
+    with _errors():
+        persona_id, count = seed_demo(_settings(ctx), force=force)
+    _say(f"示例·林舟（{persona_id}）：本次导入 {count} 份虚构示例资料。")
+    _say("启动网页后切换到“示例·林舟”，等待自动整理完成再提问（整理会调用配置的模型）。")
+    _say(f"也可运行 twin kernel rebuild --persona {persona_id} 手动整理此分身。")
 
 
 persona_app = typer.Typer(

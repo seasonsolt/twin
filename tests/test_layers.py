@@ -73,6 +73,8 @@ LAYERS: dict[str, int] = {
     "ops": 9,
     "ops.paths": 9,
     "ops.envfile": 9,
+    "ops.demo": 9,
+    "ops.local": 9,
     "ops.service": 9,
     "ops.doctor": 9,
     "ops.backup": 9,

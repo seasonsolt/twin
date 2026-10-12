@@ -1,5 +1,7 @@
 # 使用指南
 
+协作者从仓库在自己的 Mac 上验证，先看 [本地快速开始](LOCAL_DEV.md)：填写仓库 `twin.toml` / `.env` 后运行 `./scripts/local-up.sh --demo`。默认只有文字聊天，数据在本机 `data/`，与官方演示环境互不影响。
+
 ```bash
 twin init                     # 生成带中文注释的 twin.toml，按注释填写模型和向量服务
 ```
@@ -8,7 +10,7 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 可选的 `[chat_llm]` 让聊天（网页、CLI、API/MCP 与评测作答）用更快的模型，档案抽取和构建仍用 `[llm]`；未配置时聊天也用 `[llm]`，示例见 `twin.toml.example`。
 外部后端按配置使用，界面如实展示出境分类；用 `twin identity show` 查看，本机转发代理需声明 `egress = "external"`。
 
-## 在 Mac 上部署
+## 在 Mac 上常驻部署（可选）
 
 Apple Silicon、macOS 14+ 可在仓库运行 `./deploy/mac/install.sh --dry-run` 预览，再运行安装脚本。
 配置后用 `twin doctor` 自检，`twin ops` 管理常驻服务和备份；默认不调用模型，只有 `twin doctor --probe` 才实际探测模型。

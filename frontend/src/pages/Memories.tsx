@@ -33,6 +33,7 @@ import {
 import { usePendingWork } from '../lib/pendingWork';
 import { useStatus } from '../stores/status';
 import { usePersonas } from '../stores/personas';
+import { useAuth } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
 
 const accept =
@@ -63,6 +64,8 @@ interface Processing {
   state: 'idle' | 'queued' | 'running';
   notice?: string | null;
   last_error?: string | null;
+  kernel_rebuild?: string | null;
+  kernel_pending?: number;
 }
 
 const mediaPending = (memory: Memory) =>
@@ -124,6 +127,11 @@ export function Memories({
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
+  const admin = useAuth((state) => state.identity?.admin ?? false);
+  const awaitingKernel =
+    processing.kernel_rebuild === 'awaiting_confirmation' &&
+    processing.state === 'idle' &&
+    (processing.kernel_pending ?? 0) > 0;
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('正在保存记忆…');
@@ -299,6 +307,10 @@ export function Memories({
   const retry = () =>
     void mutate((signal) =>
       api('/api/persona/build', { method: 'POST', signal }),
+    );
+  const rebuildKernel = () =>
+    void mutate((signal) =>
+      api('/api/kernel/rebuild', { method: 'POST', signal }),
     );
   const retranscribe = (memory: Memory) =>
     void mutate((signal) =>
@@ -530,6 +542,23 @@ export function Memories({
           {processing.notice && (
             <p role="status" className="text-sm text-secondary">
               {processing.notice}
+              {awaitingKernel && (
+                <>
+                  {' '}
+                  需重新整理 {processing.kernel_pending} 段，会调用模型。
+                  {admin && (
+                    <Button
+                      className="min-h-11"
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={rebuildKernel}
+                    >
+                      开始重新整理
+                    </Button>
+                  )}
+                </>
+              )}
             </p>
           )}
           {processing.state !== 'idle' && (

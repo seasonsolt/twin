@@ -1,0 +1,20 @@
+[Unit]
+Description=twin web (served at https://daw.xjjk.com/twin/ through nginx)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/data/twin
+# Secrets live in /data/twin/.env (0600, owned by ubuntu); twin.toml names only the variables.
+Environment=TWIN_HOME=/data/twin/home
+Environment=TWIN_ENV_FILE=/data/twin/.env
+ExecStart=/data/twin/current/.venv/bin/twin --config /data/twin/twin.toml ui --host 127.0.0.1 --port 8770 --allow-host daw.xjjk.com
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

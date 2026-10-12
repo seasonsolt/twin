@@ -49,3 +49,42 @@ main:
             - test -z "$(git status --porcelain src/twin/web/static)"
 
   pull_request: *checks
+
+# Releasing (scripts/release-stable.sh fast-forwards stable) deploys to daw, served at https://daw.xjjk.com/twin/.
+# Same route as the audiostudio project on the same machine: Tencent Cloud TAT runs deploy/daw/deploy.sh as root.
+stable:
+  push:
+    - name: deploy-daw
+      docker:
+        image: python:3.12-bookworm
+        volumes:
+          - /root/.cache/uv:copy-on-write
+      imports:
+        - https://cnb.cool/xjjk/config/-/blob/main/env.dev.yml
+      env:
+        TWIN_TAT_REGION: ap-nanjing
+        TWIN_TAT_INSTANCE_ID: ins-mgz1lxik
+      stages:
+        - name: tools
+          script:
+            - apt-get update
+            - apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
+            - pip install --no-cache-dir uv==0.13.0
+        - name: verify
+          script:
+            - uv sync --frozen --python 3.12
+            - uv run ruff check src tests deploy
+            - uv run mypy
+            - uv run pytest -q
+        - name: package
+          # Only what runs on daw; the committed frontend build is under src/twin/web/static.
+          script: >-
+            git archive --format=tar.gz --output=/tmp/twin-release.tar.gz HEAD --
+            src pyproject.toml uv.lock README.md twin.toml.example deploy/daw deploy/compute
+        - name: deploy
+          lock:
+            key: twin-daw-production
+            expires: 1800
+            wait: true
+            timeout: 600
+          script: uv run --no-project --with tencentcloud-sdk-python-common python deploy/daw/deploy_via_tat.py /tmp/twin-release.tar.gz

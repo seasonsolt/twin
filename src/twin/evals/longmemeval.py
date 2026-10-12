@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import threading
 from collections.abc import Iterable, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass
@@ -26,7 +27,15 @@ from ..persona.sources import parse_date
 from ..usage import BudgetExceeded, UsageRecorder, call_stage, record_usage
 from ..util import fingerprint, open_private, private_directory
 from .harness import Judge
-from .persona_runtime import PersonaRuntime, ProfileCache, SourceInput, preparation_key, report_system
+from .persona_runtime import (
+    PersonaRuntime,
+    ProfileCache,
+    SourceInput,
+    in_order,
+    limit_calls,
+    preparation_key,
+    report_system,
+)
 from .personal import ensure_output_directory, make_panel
 
 QUESTION_TYPES = (
@@ -303,7 +312,11 @@ class TwinSystem:
     def __init__(self, runtime: PersonaRuntime) -> None:
         self.runtime = runtime
         self.llm, self.embedder = runtime.llm, runtime.embedder
-        self.retrieval_manifest: list[dict[str, Any]] = []
+
+    @property
+    def retrieval_manifest(self) -> list[dict[str, Any]]:
+        """What this thread's last answer retrieved; empty when it failed before answering."""
+        return [{"ref": ref} for ref in self.runtime.metadata.get("retrieved_ids", [])]
 
     @staticmethod
     def sources(question: QuestionInput) -> tuple[SourceInput, ...]:
@@ -319,7 +332,6 @@ class TwinSystem:
         self.runtime.prepare((("longmemeval", self.sources(question)) for question in questions), workers)
 
     def predict(self, question: QuestionInput) -> str:
-        self.retrieval_manifest = []
         reply = self.runtime.predict(
             "longmemeval",
             self.sources(question),
@@ -334,7 +346,6 @@ class TwinSystem:
             # Count "how many days ago" from the question date; every session stays visible, as upstream.
             today=parse_date(question.question_date),
         )
-        self.retrieval_manifest = [{"ref": ref} for ref in reply.retrieved_ids]
         return reply.reply
 
 
@@ -423,6 +434,8 @@ def run_evaluation(
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
     prepare_workers: int = 1,
+    answer_workers: int = 1,
+    call_slots: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
     system_info = report_system(system, SYSTEM_LABEL)
     if not cases:
@@ -452,7 +465,9 @@ def run_evaluation(
     ):
         if not dry_run:
             try:
-                llm = make_llm(settings.llm if system == "twin" else settings.effective_chat_llm)
+                llm = limit_calls(
+                    make_llm(settings.llm if system == "twin" else settings.effective_chat_llm), call_slots
+                )
                 embedder = make_embedder(settings.embed)
                 if system == "twin":
                     runtime = PersonaRuntime(settings, llm, embedder, profile_cache)
@@ -489,7 +504,20 @@ def run_evaluation(
         if isinstance(baseline, TwinSystem) and not setup_failed and recorder.stop is None:
             baseline.prepare((case.input for case in cases), prepare_workers)
         panel_failed = False
-        for case in cases:
+        panel_lock = threading.Lock()
+
+        def judges() -> tuple[Judge, ...] | None:
+            """The panel, built on the first answer that needs judging; ``None`` once building it failed."""
+            nonlocal panel, panel_failed
+            with panel_lock:
+                if not panel and not panel_failed:
+                    try:
+                        panel = tuple(Judge(limit_calls(j.llm, call_slots), j.effort) for j in make_panel(settings))
+                    except Exception:
+                        panel_failed = True
+                return None if panel_failed else panel
+
+        def evaluate(case: Case) -> dict[str, Any]:
             row: dict[str, Any] = {
                 "question_id": case.input.question_id,
                 "question_type": case.question_type,
@@ -510,10 +538,6 @@ def run_evaluation(
                     try:
                         assert baseline is not None
                         hypothesis = baseline.predict(case.input)
-                        hypotheses.write(
-                            json.dumps({"question_id": case.input.question_id, "hypothesis": hypothesis}) + "\n"
-                        )
-                        hypotheses.flush()
                         row.update(status="ok", hypothesis=hypothesis, retrieval=baseline.retrieval_manifest)
                     except Exception:
                         row["error"] = "Prediction failed (details hidden)"
@@ -522,15 +546,11 @@ def run_evaluation(
                     else:
                         if score:
                             scoring_start = perf_counter()
-                            if not panel and not panel_failed:
-                                try:
-                                    panel = make_panel(settings)
-                                except Exception:
-                                    panel_failed = True
-                            if panel_failed:
+                            current = judges()
+                            if current is None:
                                 row["judgements"] = [None] * len(settings.judges or [settings.llm])
                             else:
-                                for judge in panel:
+                                for judge in current:
                                     if recorder.stop is not None:
                                         row["judgements"].append(None)
                                         continue
@@ -545,6 +565,16 @@ def run_evaluation(
                 row["persona"] = baseline.runtime.metadata
                 if baseline.runtime.metadata.get("preparation_failure"):
                     row["status"] = "preparation_failed"
+            return row
+
+        # Retrieval baselines keep per-instance state, so only Twin answers several questions at a time.
+        workers = answer_workers if isinstance(baseline, TwinSystem) else 1
+        for case, row in in_order(evaluate, cases, workers):
+            if row["status"] == "ok":
+                hypotheses.write(
+                    json.dumps({"question_id": case.input.question_id, "hypothesis": row["hypothesis"]}) + "\n"
+                )
+                hypotheses.flush()
             rows.append(row)
             records.write(json.dumps(row, ensure_ascii=False) + "\n")
             records.flush()

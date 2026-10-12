@@ -767,6 +767,8 @@ def _run_longmemeval(
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
     prepare_workers: int = 1,
+    answer_workers: int = 1,
+    call_slots: threading.Semaphore | None = None,
     score: bool,
 ) -> dict[str, Any]:
     from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
@@ -802,6 +804,8 @@ def _run_longmemeval(
         fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
         profile_cache=profile_cache,
         prepare_workers=prepare_workers,
+        answer_workers=answer_workers,
+        call_slots=call_slots,
     )
 
 
@@ -892,6 +896,69 @@ def personamem_command(
     _benchmark_status("PersonaMem", report, dry_run=dry_run)
 
 
+@app.command("eval-personamem2")
+def personamem2_command(
+    ctx: typer.Context,
+    benchmark: Annotated[
+        Path, typer.Option("--benchmark", help="PersonaMem-v2 benchmark/text/benchmark.csv; histories beside it")
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Fresh private output directory outside git repositories")],
+    personas: Annotated[
+        int | None, typer.Option("--personas", min=1, help="Personas to draw; all their questions")
+    ] = None,
+    seed: Annotated[str, typer.Option("--seed", help="Persona sampling seed")] = "personamem-v2",
+    split: Annotated[str, typer.Option("--split", help=SPLIT_HELP)] = "formal",
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """PersonaMem-v2 (text, 32k) through production Twin with upstream multiple-choice scoring."""
+    try:
+        report = _run_personamem2(
+            _benchmark_settings(ctx), benchmark, out, personas=personas, seed=seed, split=split, dry_run=dry_run
+        )
+    except Exception:
+        raise _fail(
+            "PersonaMem-v2 failed; check input, downloaded histories, configuration and fresh output directory "
+            "(details hidden)"
+        ) from None
+    _benchmark_status("PersonaMem-v2", report, dry_run=dry_run)
+
+
+def _run_personamem2(
+    settings: Settings,
+    benchmark: Path,
+    out: Path,
+    *,
+    personas: int | None,
+    seed: str,
+    split: str,
+    dry_run: bool,
+    profile_cache: ProfileCache | None = None,
+    prepare_workers: int = 1,
+    answer_workers: int = 1,
+    call_slots: threading.Semaphore | None = None,
+) -> dict[str, Any]:
+    from .evals.personamem2 import load_benchmark, load_cases, run_evaluation, split_personas, validate_output
+
+    out = validate_output(out)
+    rows = load_benchmark(benchmark)
+    chosen = split_personas(rows, split, personas, seed)
+    cases = load_cases(rows, chosen, benchmark.resolve().parent)
+    identities = _benchmark_fingerprints(
+        settings, {"dataset_sha256": benchmark}, None, 0, {"personas": chosen, "seed": seed, "split": split}
+    )
+    return run_evaluation(
+        cases,
+        out,
+        settings,
+        dry_run=dry_run,
+        fingerprints=identities,
+        profile_cache=profile_cache,
+        prepare_workers=prepare_workers,
+        answer_workers=answer_workers,
+        call_slots=call_slots,
+    )
+
+
 def _run_personamem(
     settings: Settings,
     questions: Path,
@@ -907,6 +974,8 @@ def _run_personamem(
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
     prepare_workers: int = 1,
+    answer_workers: int = 1,
+    call_slots: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
     from .evals.longmemeval import validate_output
     from .evals.personamem import load_dataset, run_evaluation, select_cases
@@ -931,6 +1000,8 @@ def _run_personamem(
         fingerprints=identities,
         profile_cache=profile_cache,
         prepare_workers=prepare_workers,
+        answer_workers=answer_workers,
+        call_slots=call_slots,
     )
 
 
@@ -986,6 +1057,8 @@ def _run_twin2k500(
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
     prepare_workers: int = 1,
+    answer_workers: int = 1,
+    call_slots: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
     from .evals.longmemeval import validate_output
     from .evals.twin2k500 import load_dataset, run_evaluation, sample_participants, select_cases
@@ -1013,10 +1086,15 @@ def _run_twin2k500(
         fingerprints=identities,
         profile_cache=profile_cache,
         prepare_workers=prepare_workers,
+        answer_workers=answer_workers,
+        call_slots=call_slots,
     )
 
 
-SUITE_SIZES = {"dev": {"lme": 3, "pm": 24, "t2k": 4}, "formal": {"lme": 5, "pm": 30, "t2k": 10}}
+SUITE_SIZES = {
+    "dev": {"lme": 3, "pm": 24, "pm2": 4, "t2k": 4},
+    "formal": {"lme": 5, "pm": 30, "pm2": 8, "t2k": 10},
+}
 
 
 @app.command("eval-suite")
@@ -1028,9 +1106,13 @@ def eval_suite_command(
     longmemeval: Annotated[Path | None, typer.Option("--longmemeval", help="LongMemEval S cleaned JSON")] = None,
     personamem_questions: Annotated[Path | None, typer.Option("--personamem-questions")] = None,
     personamem_contexts: Annotated[Path | None, typer.Option("--personamem-contexts")] = None,
+    personamem2: Annotated[
+        Path | None, typer.Option("--personamem2", help="PersonaMem-v2 benchmark/text/benchmark.csv")
+    ] = None,
     twin2k500: Annotated[Path | None, typer.Option("--twin2k500", help="Twin-2K-500 wave_split JSON/JSONL")] = None,
     lme_per_type: Annotated[int | None, typer.Option("--lme-per-type", min=1)] = None,
     pm_sample: Annotated[int | None, typer.Option("--pm-sample", min=1)] = None,
+    pm2_personas: Annotated[int | None, typer.Option("--pm2-personas", min=1)] = None,
     t2k_participants: Annotated[int | None, typer.Option("--t2k-participants", min=1)] = None,
     baseline: Annotated[Path | None, typer.Option("--baseline", help="Earlier scorecard.json to compare with")] = None,
     configured_judges: Annotated[bool, typer.Option("--configured-judges", help=JUDGES_HELP)] = False,
@@ -1047,15 +1129,27 @@ def eval_suite_command(
         typer.Option(
             "--prepare-workers",
             min=1,
-            help="Subjects whose profiles each benchmark builds at once, before answering; each build already "
+            help="Subjects whose profiles each run builds at once, before answering; each build already "
             "makes several model calls at a time",
         ),
-    ] = 2,
+    ] = 4,
+    answer_workers: Annotated[
+        int, typer.Option("--answer-workers", min=1, help="Questions each run answers at once")
+    ] = 4,
+    max_calls: Annotated[
+        int,
+        typer.Option(
+            "--max-calls",
+            min=1,
+            help="Model calls in flight across the whole suite, shared by every benchmark and repeat; lower it if "
+            "the endpoint rate-limits or times out",
+        ),
+    ] = 32,
 ) -> None:
     """Run the three public benchmarks ``--repeats`` times through production Twin and write a scorecard.
 
-    Iterate on the ``dev`` split; run ``formal`` only to record a milestone. Benchmarks run concurrently, repeats of
-    one benchmark run in sequence, and each run lands in ``<out>/<benchmark>/r<n>/``.
+    Iterate on the ``dev`` split; run ``formal`` only to record a milestone. Every benchmark and repeat runs at the
+    same time under one ``--max-calls`` cap, and each run lands in ``<out>/<benchmark>/r<n>/``.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1070,29 +1164,37 @@ def eval_suite_command(
     sizes = {
         "lme": lme_per_type or SUITE_SIZES[split]["lme"],
         "pm": pm_sample or SUITE_SIZES[split]["pm"],
+        "pm2": pm2_personas or SUITE_SIZES[split]["pm2"],
         "t2k": t2k_participants or SUITE_SIZES[split]["t2k"],
     }
+    slots = threading.Semaphore(max_calls)
     jobs: dict[str, Callable[[Settings, Path, ProfileCache | None], dict[str, Any]]] = {}
     if longmemeval is not None:
         lme_dataset = longmemeval
         jobs["longmemeval"] = lambda settings, run, cache: _run_longmemeval(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
             split=split, system="twin", dry_run=False, score=True, profile_cache=cache,
-            prepare_workers=prepare_workers,
+            prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
         jobs["personamem"] = lambda settings, run, cache: _run_personamem(
             settings, pm_questions, pm_contexts, run, limit=3, offset=0, sample=sizes["pm"], seed="personamem-v1",
             split=split, system="twin", dry_run=False, profile_cache=cache,
-            prepare_workers=prepare_workers,
+            prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
+        )  # fmt: skip
+    if personamem2 is not None:
+        pm2_benchmark = personamem2
+        jobs["personamem2"] = lambda settings, run, cache: _run_personamem2(
+            settings, pm2_benchmark, run, personas=sizes["pm2"], seed="personamem-v2", split=split, dry_run=False,
+            profile_cache=cache, prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if twin2k500 is not None:
         t2k_dataset = twin2k500
         jobs["twin2k500"] = lambda settings, run, cache: _run_twin2k500(
             settings, t2k_dataset, run, limit=None, offset=0, participants=sizes["t2k"], seed="twin2k500-v1",
             split=split, system="twin", dry_run=False, profile_cache=cache,
-            prepare_workers=prepare_workers,
+            prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if not jobs:
         raise _fail("Name at least one benchmark dataset")
@@ -1112,32 +1214,35 @@ def eval_suite_command(
     except Exception:
         raise _fail("Suite setup failed; check configuration, baseline and a fresh empty output directory") from None
 
-    def run_benchmark(name: str) -> list[dict[str, Any]]:
+    def run_repeat(name: str, index: int) -> dict[str, Any]:
         settings = judged if name == "longmemeval" else plain
-        reports = []
-        for index in range(1, repeats + 1):
-            run = out / name / f"r{index}"
-            private_directory(run)
-            cache = ProfileCache(profile_cache, f"r{index}") if profile_cache is not None else None
-            reports.append(jobs[name](settings, run, cache))
-            _progress(f"{name} r{index}/{repeats} done")
-        return reports
+        run = out / name / f"r{index}"
+        private_directory(run)
+        # Each repeat has its own cache slot, so repeats never share or race for a build.
+        cache = ProfileCache(profile_cache, f"r{index}") if profile_cache is not None else None
+        report = jobs[name](settings, run, cache)
+        _progress(f"{name} r{index}/{repeats} done")
+        return report
 
     failed: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        futures = {name: pool.submit(run_benchmark, name) for name in jobs}
-        for name, future in futures.items():
+    runs = [(name, index) for index in range(1, repeats + 1) for name in jobs]
+    with ThreadPoolExecutor(max_workers=len(runs)) as pool:
+        futures = {run: pool.submit(run_repeat, *run) for run in runs}
+        for (name, index), future in futures.items():
             try:
-                if any(_benchmark_failed(report) for report in future.result()):
+                if _benchmark_failed(future.result()) and name not in failed:
                     failed.append(name)
             except Exception:
-                failed.append(name)
-                _progress(f"{name} stopped early (details hidden)")
+                if name not in failed:
+                    failed.append(name)
+                _progress(f"{name} r{index} stopped early (details hidden)")
     try:
         metadata = _suite_metadata(split, repeats, sizes)
         metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
         metadata["profile_cache"] = profile_cache is not None
         metadata["prepare_workers"] = prepare_workers
+        metadata["answer_workers"] = answer_workers
+        metadata["max_calls"] = max_calls
         card = build_scorecard(out, metadata)
         write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:

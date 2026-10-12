@@ -120,11 +120,11 @@ flowchart LR
 
 | 基准 | **twin** | 公开最好成绩 | Second Me 升级版 |
 | :-- | :-: | :-: | :-: |
-| [LongMemEval](https://github.com/xiaowu0162/LongMemEval)：长期对话记忆 | 33% | **86%**<br/><sub>EmergenceMem</sub> | 0% |
-| [PersonaMem](https://github.com/bowen-upenn/PersonaMem)：记住用户的人格与偏好 | **63%** | 约 50%<br/><sub>GPT-4.5 读全文</sub> | 50% |
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval)：长期对话记忆 | 33% | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
+| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2)：从对话里推断没明说的偏好 | 待测 | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
 | [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500)：像本人一样答问卷，达到真人重测的比例 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
 
-<sub>twin 为 2026-10-10 代码、`gpt-6-luna` 作答的抽样成绩（每项 30 题或 10 人），LongMemEval 由同一模型评分。公开成绩取自各自论文或博客，题量、评委和打分细则与 twin 不同，只能看量级。Second Me 为同题小样本（6 题或 2 人）。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md) 和 [对比与评测](docs/COMPARISON.md)。</sub>
+<sub>twin 为 2026-10-10 代码、`gpt-6-luna` 作答的抽样成绩（每项 30 题或 10 人），LongMemEval 由同一模型评分。公开成绩截至 2026-10，取自各自论文或博客，题量、作答模型、评委和打分细则与 twin 不同，只能看量级。LongMemEval 的高分都是厂商自报，尚无独立复现，且分数随作答模型变化很大。PersonaMem 已从 v1 换到更难的 v2：twin 在 v1 上为 63%，当时公开成绩约 50%；v2 上前沿大模型直接读全文约 37%–48%（论文）。Twin-2K-500 暂停迭代。Second Me 为同题小样本（6 题或 2 人）。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md) 和 [对比与评测](docs/COMPARISON.md)。</sub>
 
 ## 技术路线
 

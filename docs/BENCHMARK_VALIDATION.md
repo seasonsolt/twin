@@ -15,17 +15,16 @@
 - **重复运行与波动判断。** `--repeats`（默认 3）把每个基准完整跑几遍，成绩单给出范围，逐题分数取各次平均。与基线比较时逐题配对：数出平均分变好和变差的题数，做双侧精确符号检验，p < 0.05 才标为"超出波动"。开发集题量小，一两题来回翻转就值好几个百分点，只看总分范围会误判。
 - **成绩单。** 套件目录里每次运行写到 `<基准>/r<n>/`，汇总写成 `scorecard.json` 和 `scorecard.md`：总分（失败与弃权都计为错误）、按题型的分数、按结果分类的题数、与 `--baseline` 指定的上一份成绩单逐题对比（由错变对、由对变错）。成绩单只含题目 ID、题型、分数和结果分类，不含回复与资料。`twin eval-scorecard <目录> --baseline <上一份 scorecard.json>` 不调用模型，只根据已有运行重算。
 - **建档缓存。** 每轮约 95% 的时间花在建档上，作答只占很少。加 `--profile-cache <目录>` 后，建好的档案按题目对象和重复序号保存：第 n 次重复复用第 n 份档案，各次重复仍是不同的建档，建档波动照样计入。缓存键还包含建档相关源码（配置、模型调用、档案抽取与合并、来源解析、存储等模块）的指纹，这些代码一改就全部重建；检索和回答代码不在指纹内，只改它们的轮次不再重建。建档降级或失败的档案不缓存。缓存目录存有基准资料，须放在 git 仓库外，权限 0700。
-- **并行建档。** 每个基准先把不同题目对象的档案同时建好再依次作答，同时建几个由 `--prepare-workers`（默认 2）决定；每份建档内部本来就并发调用模型，所以总并发约是它乘以 `max_workers`。各对象的建档调用分别计数，记录里仍记在该对象第一道题上，和逐个建档时一样；某个对象建档失败只影响它自己的题。这个数不进缓存键，改它不会让缓存失效。
+- **并行运行。** 三个基准的每次重复同时开跑，互不等待；每次重复各用自己的缓存槽位，不会争用同一份档案。每次运行先把不同题目对象的档案同时建好，同时建几个由 `--prepare-workers`（默认 4）决定，每份建档内部本来就并发调用模型；建好后同时答 `--answer-workers`（默认 4）道题，记录仍按题目顺序写出。各对象的建档调用记在该对象第一道题上，和逐个建档时一样；某个对象建档失败只影响它自己的题。整个套件同时在途的模型调用（建档、作答、评委）共用一个上限 `--max-calls`（默认 32），排队等待的时间不计入调用耗时。代理限流或超时时调低它，不必改其他并发参数。这几个数都不进缓存键，改它们不会让缓存失效。
 
 结果分类对应要查的层：`preparation` 建档失败；`format` 没给出合法选项或数值（回答规则）；`abstained` 弃权（记忆或检索没找到，或回答规则过于保守）；`wrong_grounded` 依据资料却答错（记忆或检索取错）；`wrong_inferred` 推测答错（人格建模）；`wrong_general` 按常识作答且答错。
 
-开发集默认规模为 LongMemEval 每种题型 3 题、PersonaMem 24 题、Twin-2K-500 4 人，可用 `--lme-per-type`、`--pm-sample`、`--t2k-participants` 调整；比较两份成绩单时规模和划分必须相同。
+开发集默认规模为 LongMemEval 每种题型 3 题、PersonaMem-v2 4 人（约 100 题）、PersonaMem v1 24 题、Twin-2K-500 4 人，可用 `--lme-per-type`、`--pm2-personas`、`--pm-sample`、`--t2k-participants` 调整；比较两份成绩单时规模和划分必须相同。自 2026-10-12 起，人格与偏好改用 [PersonaMem-v2](PERSONAMEM2.md)，v1 只保留历史对照；Twin-2K-500 暂停迭代，套件命令不带 `--twin2k500`。
 
 ```bash
 uv run twin --config twin.toml eval-suite --out /private/tmp/twin-suite/<日期>-<改动> \
   --longmemeval longmemeval_s_cleaned.json \
-  --personamem-questions questions_32k.csv --personamem-contexts shared_contexts_32k.jsonl \
-  --twin2k500 wave_persona_chunk_001.jsonl \
+  --personamem2 personamem-v2/benchmark.csv \
   --configured-judges --baseline /private/tmp/twin-suite/<上一轮>/scorecard.json
 ```
 

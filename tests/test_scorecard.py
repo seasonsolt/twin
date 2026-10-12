@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,7 @@ def test_scorecard_aggregates_repeats_and_counts_failures_as_wrong(tmp_path: Pat
         mean_normalized_absolute_error=0.2,
     )
     card = sc.build_scorecard(tmp_path, {"split": "dev"})
-    lme, pm, t2k = (card["benchmarks"][name] for name in sc.BENCHMARKS)
+    lme, pm, t2k = (card["benchmarks"][name] for name in ("longmemeval", "personamem", "twin2k500"))
     assert lme["repeats"] == 2 and lme["items"] == 4
     assert lme["headline"]["min"] == pytest.approx(0.375) and lme["headline"]["max"] == pytest.approx(0.5)
     assert lme["types"] == {"multi-session": pytest.approx(0.625), "temporal-reasoning": pytest.approx(0.25)}
@@ -166,7 +167,7 @@ def test_suite_runs_every_repeat_and_writes_a_comparable_scorecard(
     assert result.exit_code == 1 and "personamem" in result.output
     assert sorted(calls) == [("lme", 3, "dev", True)] * 2 + [("pm", 24, "dev", False)] * 2
     card = json.loads((out / "scorecard.json").read_text())
-    assert card["split"] == "dev" and card["repeats"] == 2 and card["sizes"] == {"lme": 3, "pm": 24, "t2k": 4}
+    assert card["split"] == "dev" and card["repeats"] == 2 and card["sizes"] == {"lme": 3, "pm": 24, "pm2": 4, "t2k": 4}
     assert card["judges"] == ["judge"]
     assert card["benchmarks"]["personamem"]["outcomes"]["preparation"] == 2
 
@@ -212,6 +213,56 @@ def test_suite_profile_cache_gives_each_repeat_its_own_slot(tmp_path: Path, monk
     args = ["eval-suite", "--out", str(tmp_path / "suite"), "--longmemeval", str(data), "--repeats", "2"]
     result = CliRunner().invoke(app, [*args, "--profile-cache", str(cache)])
     assert result.exit_code == 0, result.output
-    assert [(s.root, s.slot) for s in slots] == [(cache.resolve(), "r1"), (cache.resolve(), "r2")]
+    assert sorted((s.root, s.slot) for s in slots) == [(cache.resolve(), "r1"), (cache.resolve(), "r2")]
     assert cache.stat().st_mode & 0o777 == 0o700
     assert json.loads((tmp_path / "suite" / "scorecard.json").read_text())["profile_cache"] is True
+
+
+def test_suite_runs_every_benchmark_and_repeat_at_once_under_one_call_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two benchmarks × two repeats only finish if all four runs are in flight together.
+    together = threading.Barrier(4, timeout=10)
+    seen: list[dict[str, Any]] = []
+
+    def run(run: Path, options: dict[str, Any], row: dict[str, Any], judges: list[str] | None = None) -> dict[str, Any]:
+        seen.append(options)
+        together.wait()
+        write_run(run, [row], judges=judges)
+        return {"preparation_failures": 0, "prediction_failures": 0, "judge_failures": 0, "missing": 0}
+
+    monkeypatch.setattr(
+        cli, "_run_longmemeval", lambda s, d, r, **o: run(r, o, lme_row("q0", "multi-session", 1.0), ["j0"])
+    )
+    monkeypatch.setattr(cli, "_run_personamem", lambda s, q, c, r, **o: run(r, o, pm_row("p1", True)))
+    data = tmp_path / "data.json"
+    data.write_text("{}")
+    args = ["eval-suite", "--out", str(tmp_path / "suite"), "--longmemeval", str(data), "--repeats", "2"]
+    args += ["--personamem-questions", str(data), "--personamem-contexts", str(data), "--max-calls", "5"]
+    result = CliRunner().invoke(app, [*args, "--answer-workers", "3"])
+    assert result.exit_code == 0, result.output
+    assert len(seen) == 4 and len({id(o["call_slots"]) for o in seen}) == 1
+    assert {o["answer_workers"] for o in seen} == {3} and {o["prepare_workers"] for o in seen} == {4}
+    slots = seen[0]["call_slots"]
+    assert all(slots.acquire(blocking=False) for _ in range(5)) and not slots.acquire(blocking=False)
+    card = json.loads((tmp_path / "suite" / "scorecard.json").read_text())
+    assert (card["answer_workers"], card["max_calls"], card["prepare_workers"]) == (3, 5, 4)
+
+
+def test_suite_runs_personamem2_by_persona_on_the_dev_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def fake(settings: Any, benchmark: Path, run: Path, **options: Any) -> dict[str, Any]:
+        seen.append(options)
+        write_run(run, [pm_row("p1", True)])
+        return {"preparation_failures": 0, "prediction_failures": 0, "missing": 0}
+
+    monkeypatch.setattr(cli, "_run_personamem2", fake)
+    data = tmp_path / "benchmark.csv"
+    data.write_text("")
+    args = ["eval-suite", "--out", str(tmp_path / "suite"), "--personamem2", str(data), "--repeats", "1"]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert [(o["personas"], o["split"], o["seed"]) for o in seen] == [(4, "dev", "personamem-v2")]
+    card = json.loads((tmp_path / "suite" / "scorecard.json").read_text())
+    assert card["benchmarks"]["personamem2"]["metric"] == "选择题准确率"

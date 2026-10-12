@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import threading
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass, replace
@@ -23,7 +24,15 @@ from ..persona.lexical import BM25
 from ..usage import BudgetExceeded, UsageRecorder, call_stage, record_usage
 from ..util import fingerprint, open_private, private_directory
 from .longmemeval import _write_usage
-from .persona_runtime import PersonaRuntime, ProfileCache, SourceInput, preparation_key, report_system
+from .persona_runtime import (
+    PersonaRuntime,
+    ProfileCache,
+    SourceInput,
+    in_order,
+    limit_calls,
+    preparation_key,
+    report_system,
+)
 from .personal import ensure_output_directory
 
 SYSTEM_LABEL = "wave1-3 persona BM25 retrieval baseline"
@@ -433,7 +442,11 @@ class TwinSystem:
     def __init__(self, runtime: PersonaRuntime) -> None:
         self.runtime = runtime
         self.llm = runtime.llm
-        self.retrieval_manifest: list[dict[str, Any]] = []
+
+    @property
+    def retrieval_manifest(self) -> list[dict[str, Any]]:
+        """What this thread's last answer retrieved; empty when it failed before answering."""
+        return [{"ref": ref} for ref in self.runtime.metadata.get("retrieved_ids", [])]
 
     @staticmethod
     def sources(question: QuestionInput) -> tuple[SourceInput, ...]:
@@ -448,7 +461,6 @@ class TwinSystem:
         )
 
     def predict(self, question: QuestionInput) -> str:
-        self.retrieval_manifest = []
         reply = self.runtime.predict(
             "twin2k500:" + question.participant_id,
             self.sources(question),
@@ -463,7 +475,6 @@ class TwinSystem:
                 ensure_ascii=False,
             ),
         )
-        self.retrieval_manifest = [{"ref": ref} for ref in reply.retrieved_ids]
         return reply.reply
 
 
@@ -557,6 +568,8 @@ def run_evaluation(
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
     prepare_workers: int = 1,
+    answer_workers: int = 1,
+    call_slots: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
     system_info = report_system(system, SYSTEM_LABEL)
     if not cases:
@@ -580,7 +593,9 @@ def run_evaluation(
     with ExitStack() as cleanup, suppress(BudgetExceeded), record_usage(recorder):
         if not dry_run:
             try:
-                llm = make_llm(settings.llm if system == "twin" else settings.effective_chat_llm)
+                llm = limit_calls(
+                    make_llm(settings.llm if system == "twin" else settings.effective_chat_llm), call_slots
+                )
                 if system == "twin":
                     runtime = PersonaRuntime(settings, llm, make_embedder(settings.embed), profile_cache)
                     cleanup.callback(runtime.close)
@@ -608,64 +623,73 @@ def run_evaluation(
                 pass
         if isinstance(baseline, TwinSystem) and recorder.stop is None:
             baseline.prepare((c.input for c in cases if c.kind != "unsupported"), prepare_workers)
+
+        def evaluate(c: Case) -> dict[str, Any]:
+            row: dict[str, Any] = {
+                "participant": hashlib.sha256(c.input.participant_id.encode()).hexdigest(),
+                "question_id": c.input.question_id,
+                "item_id": c.input.item_id,
+                "kind": c.kind,
+                "gold_missing": c.gold.answer is None,
+                "status": "dry_run",
+                "retrieval": [],
+                "scores": _unscored(),
+                "human_scores": grade_answer(c, c.gold.human_answer)
+                if score and c.gold.human_answer is not None
+                else _unscored(),
+            }
+            if system == "twin":
+                row["preparation_key"] = preparation_key(
+                    "twin2k500:" + c.input.participant_id, TwinSystem.sources(c.input), settings
+                )
+            if not dry_run:
+                row["status"] = "prediction_failed"
+                if c.kind == "unsupported":
+                    row["status"] = "unsupported"
+                elif recorder.stop is not None:
+                    row["status"] = "budget_skipped"
+                elif baseline is None:
+                    row["error"] = "Backend construction failed (details hidden)"
+                else:
+                    try:
+                        response = baseline.predict(c.input)
+                        answer = parse_prediction(c.input, response) if system == "twin" else response
+                        row.update(model_response=response, format_failure=answer is None)
+                        row.update(status="ok", retrieval=baseline.retrieval_manifest)
+                        if score:
+                            scoring_start = perf_counter()
+                            abstain = isinstance(baseline, TwinSystem) and baseline.runtime.metadata.get(
+                                "abstain", False
+                            )
+                            row["scores"] = grade_answer(c, None if abstain else answer)
+                            row["scoring_seconds"] = perf_counter() - scoring_start
+                        prediction = {
+                            "participant": row["participant"],
+                            "question_id": c.input.question_id,
+                            "item_id": c.input.item_id,
+                            "answer": answer,
+                        }
+                        row["_prediction"] = prediction
+                    except Exception:
+                        row["error"] = "Prediction failed (details hidden)"
+            if isinstance(baseline, TwinSystem) and row["status"] not in (
+                "dry_run",
+                "budget_skipped",
+                "unsupported",
+            ):
+                row["persona"] = baseline.runtime.metadata
+                if baseline.runtime.metadata.get("preparation_failure"):
+                    row["status"] = "preparation_failed"
+            return row
+
+        # Retrieval baselines keep per-instance state, so only Twin answers several questions at a time.
+        workers = answer_workers if isinstance(baseline, TwinSystem) else 1
         with open_private(out / "records.jsonl") as records, open_private(out / "hypotheses.jsonl") as hypotheses:
-            for c in cases:
-                row: dict[str, Any] = {
-                    "participant": hashlib.sha256(c.input.participant_id.encode()).hexdigest(),
-                    "question_id": c.input.question_id,
-                    "item_id": c.input.item_id,
-                    "kind": c.kind,
-                    "gold_missing": c.gold.answer is None,
-                    "status": "dry_run",
-                    "retrieval": [],
-                    "scores": _unscored(),
-                    "human_scores": grade_answer(c, c.gold.human_answer)
-                    if score and c.gold.human_answer is not None
-                    else _unscored(),
-                }
-                if system == "twin":
-                    row["preparation_key"] = preparation_key(
-                        "twin2k500:" + c.input.participant_id, TwinSystem.sources(c.input), settings
-                    )
-                if not dry_run:
-                    row["status"] = "prediction_failed"
-                    if c.kind == "unsupported":
-                        row["status"] = "unsupported"
-                    elif recorder.stop is not None:
-                        row["status"] = "budget_skipped"
-                    elif baseline is None:
-                        row["error"] = "Backend construction failed (details hidden)"
-                    else:
-                        try:
-                            response = baseline.predict(c.input)
-                            answer = parse_prediction(c.input, response) if system == "twin" else response
-                            row.update(model_response=response, format_failure=answer is None)
-                            row.update(status="ok", retrieval=baseline.retrieval_manifest)
-                            if score:
-                                scoring_start = perf_counter()
-                                abstain = isinstance(baseline, TwinSystem) and baseline.runtime.metadata.get(
-                                    "abstain", False
-                                )
-                                row["scores"] = grade_answer(c, None if abstain else answer)
-                                row["scoring_seconds"] = perf_counter() - scoring_start
-                            prediction = {
-                                "participant": row["participant"],
-                                "question_id": c.input.question_id,
-                                "item_id": c.input.item_id,
-                                "answer": answer,
-                            }
-                            hypotheses.write(json.dumps(prediction) + "\n")
-                            hypotheses.flush()
-                        except Exception:
-                            row["error"] = "Prediction failed (details hidden)"
-                if isinstance(baseline, TwinSystem) and row["status"] not in (
-                    "dry_run",
-                    "budget_skipped",
-                    "unsupported",
-                ):
-                    row["persona"] = baseline.runtime.metadata
-                    if baseline.runtime.metadata.get("preparation_failure"):
-                        row["status"] = "preparation_failed"
+            for _c, row in in_order(evaluate, cases, workers):
+                prediction = row.pop("_prediction", None)
+                if prediction is not None:
+                    hypotheses.write(json.dumps(prediction) + "\n")
+                    hypotheses.flush()
                 rows.append(row)
                 records.write(json.dumps(row) + "\n")
                 records.flush()

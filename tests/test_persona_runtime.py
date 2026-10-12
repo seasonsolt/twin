@@ -638,14 +638,126 @@ def test_a_failed_parallel_preparation_fails_only_its_subject(monkeypatch: pytes
         runtime.close()
 
 
-def test_one_preparation_worker_leaves_building_to_predict() -> None:
+def test_one_preparation_worker_still_builds_before_answering() -> None:
     llm = atlas_build()
     runtime = pr.PersonaRuntime(Settings(), llm, HashingEmbedder())
     try:
-        runtime.prepare([("a", atlas_sources("a"))], workers=1)
-        assert not llm.calls and not list(runtime.root.glob("*.db"))
+        with record_usage(UsageRecorder()):
+            runtime.prepare([("a", atlas_sources("a")), ("b", atlas_sources("b"))], workers=1)
+            assert [call[0] for call in llm.calls] == ["ExtractDraft", "MergeDraft"] * 2
+            runtime.predict("a", atlas_sources("a"), "project?")
+            assert not runtime.metadata["cache_hit"] and "preparation" in runtime.metadata["stages"]
     finally:
         runtime.close()
+
+
+def echo_persona(parties: int) -> FakeLLM:
+    """Answers with the question's own marker, and only once ``parties`` answers are in flight together."""
+    barrier = threading.Barrier(parties, timeout=10)
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is ChatDraft:
+            barrier.wait()
+            marker = re.findall(r"marker-\w+", user)[-1]
+            return {"reply": marker, "citations": [], "confidence": 0.5, "mode": "general"}
+        return {"items": []}
+
+    return FakeLLM(answer)
+
+
+def test_benchmark_answers_concurrently_and_records_in_question_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm = echo_persona(3)
+    monkeypatch.setattr(pm, "make_llm", lambda _: llm)
+    monkeypatch.setattr(pm, "make_embedder", lambda _: HashingEmbedder())
+    cases = [
+        pm.Case(
+            pm.QuestionInput(
+                f"q{i}", f"marker-q{i}?", ("A", "B", "C", "D"), (pm.Turn("user", f"I prefer Atlas {s}"),), subject_id=s
+            ),
+            pm.QUESTION_TYPES[0],
+            pm.Gold("b", "b"),
+        )
+        for i, s in enumerate("aab")
+    ]
+    report = pm.run_evaluation(cases, tmp_path / "out", Settings(), answer_workers=3)
+    rows = records(tmp_path / "out")
+    assert report["completed"] == 3 and [r["question_id"] for r in rows] == ["q0", "q1", "q2"]
+    # Each row keeps its own thread's answer and the build lands on each subject's first question.
+    assert [r["model_response"] for r in rows] == [f"marker-q{i}" for i in range(3)]
+    assert [r["persona"]["reply"] for r in rows] == [f"marker-q{i}" for i in range(3)]
+    assert [r["persona"]["cache_hit"] for r in rows] == [False, True, False]
+    hypotheses = [json.loads(line) for line in (tmp_path / "out" / "hypotheses.jsonl").read_text().splitlines()]
+    assert [h["question_id"] for h in hypotheses] == ["q0", "q1", "q2"]
+
+
+def test_twin2k500_and_longmemeval_answer_concurrently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    llm = echo_persona(2)
+    for module in (tw, lm):
+        monkeypatch.setattr(module, "make_llm", lambda _: llm)
+        monkeypatch.setattr(module, "make_embedder", lambda _: HashingEmbedder())
+    item = tw.QuestionInput(
+        "participant", "q", "q", "TE", "marker-x?", (), (), None, "legacy", (("Past question?", "Past answer", ""),)
+    )
+    items = [
+        tw.Case(replace(item, question_id=str(i), question=f"marker-t{i}?"), "numeric", tw.Gold(None, None))
+        for i in range(2)
+    ]
+    tw.run_evaluation(items, tmp_path / "t2k", Settings(), answer_workers=2)
+    assert [r["model_response"] for r in records(tmp_path / "t2k")] == ["marker-t0", "marker-t1"]
+    session = lm.Session(0, "s", "2025/01/02 (Thu) 10:00", (lm.Turn("user", "Atlas"),))
+    questions = [
+        lm.Case(lm.QuestionInput(f"q{i}", f"marker-l{i}?", "2025/01/03 (Fri) 10:00", (session,)), "single-session-user",
+                lm.Gold("Atlas", ("s",)))
+        for i in range(2)
+    ]  # fmt: skip
+    lm.run_evaluation(questions, tmp_path / "lme", Settings(), answer_workers=2)
+    assert [r["hypothesis"] for r in records(tmp_path / "lme")] == ["marker-l0", "marker-l1"]
+
+
+def test_limited_llm_caps_calls_in_flight_across_wrappers() -> None:
+    lock, active, peak = threading.Lock(), [0], [0]
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        threading.Event().wait(0.02)
+        with lock:
+            active[0] -= 1
+        return {"items": []}
+
+    class Empty(BaseModel):
+        items: list[str] = []
+
+    slots = threading.Semaphore(2)
+    wrapped = [pr.limit_calls(FakeLLM(answer), slots) for _ in range(2)]
+    assert pr.limit_calls(wrapped[0], None) is wrapped[0] and wrapped[0].name == FakeLLM(answer).name
+    threads = [
+        threading.Thread(target=lambda llm=llm: llm.structured(system="s", user="u", schema=Empty))
+        for llm in wrapped * 4
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert peak[0] == 2
+
+
+def test_in_order_yields_in_input_order_and_raises_at_the_failing_item() -> None:
+    def slow_first(n: int) -> int:
+        if n == 0:
+            threading.Event().wait(0.05)
+        if n == 3:
+            raise ValueError("boom")
+        return n * 10
+
+    seen = []
+    with pytest.raises(ValueError, match="boom"):
+        for item, result in pr.in_order(slow_first, [0, 1, 2, 3, 4], 3):
+            seen.append((item, result))
+    assert seen == [(0, 0), (1, 10), (2, 20)]
 
 
 def test_benchmark_prepares_subjects_in_parallel_before_answering(

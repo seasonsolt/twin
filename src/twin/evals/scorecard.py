@@ -15,10 +15,11 @@ from typing import Any
 
 from ..util import open_private
 
-BENCHMARKS = ("longmemeval", "personamem", "twin2k500")
+BENCHMARKS = ("longmemeval", "personamem", "personamem2", "twin2k500")
 HEADLINES = {
     "longmemeval": "评委判定准确率",
     "personamem": "选择题准确率",
+    "personamem2": "选择题准确率",
     "twin2k500": "分类题精确匹配",
 }
 # Outcome labels point at the layer to inspect: preparation (profile build), answer rules (format), memory and
@@ -46,7 +47,7 @@ def _item(benchmark: str, row: dict[str, Any]) -> tuple[str, str, float] | None:
     if benchmark == "longmemeval":
         score = row.get("score")
         return row["question_id"], row["question_type"], float(score) if ok and score is not None else 0.0
-    if benchmark == "personamem":
+    if benchmark in ("personamem", "personamem2"):
         return row["question_id"], row["question_type"], 1.0 if ok and row.get("score") is True else 0.0
     if row.get("kind") != "categorical" or row.get("gold_missing"):
         return None

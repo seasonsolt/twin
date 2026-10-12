@@ -8,8 +8,11 @@ import importlib
 import json
 import os
 import sqlite3
-from collections.abc import Iterable, Iterator
+import threading
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
+from contextvars import copy_context
 from dataclasses import asdict, dataclass
 from functools import cache
 from pathlib import Path
@@ -19,7 +22,7 @@ from typing import Any, Literal
 
 from ..config import Settings, configuration_fingerprint
 from ..embed import Embedder
-from ..llm import LLM
+from ..llm import LLM, T
 from ..persona.chat import PersonaChat, index_persona
 from ..persona.profile import build_profile
 from ..persona.schema import ChatReply, ChatTurn, Expression, ParsedSource, Source, SourceKind
@@ -101,6 +104,36 @@ class ProfileCache:
         return True
 
 
+class LimitedLLM:
+    """Shares one cap on in-flight model calls among every run of a process, so running benchmarks and repeats at
+    the same time cannot overload the model endpoint. Time spent waiting for a slot is not part of call latency."""
+
+    def __init__(self, llm: LLM, slots: threading.Semaphore) -> None:
+        self.llm, self.slots, self.name = llm, slots, llm.name
+
+    def structured(self, *, system: str, user: str, schema: type[T], **options: Any) -> T:
+        with self.slots:
+            return self.llm.structured(system=system, user=user, schema=schema, **options)
+
+
+def limit_calls(llm: LLM, slots: threading.Semaphore | None) -> LLM:
+    return llm if slots is None else LimitedLLM(llm, slots)
+
+
+def in_order[A, R](fn: Callable[[A], R], items: Sequence[A], workers: int) -> Iterator[tuple[A, R]]:
+    """Run ``fn`` over items ``workers`` at a time and yield each result in input order as soon as it and every
+    earlier one are done, so callers persist rows in a stable order while later items are still running. An
+    exception from ``fn`` propagates at its item; items not yet started are cancelled and running ones finish."""
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [pool.submit(copy_context().run, fn, item) for item in items]
+        try:
+            for item, future in zip(items, futures, strict=True):
+                yield item, future.result()
+        finally:
+            for future in futures:
+                future.cancel()
+
+
 class PreparationError(RuntimeError):
     """A cached preparation failure; never answer using a partially built profile."""
 
@@ -170,7 +203,10 @@ def parse_source(source: SourceInput, settings: Settings) -> ParsedSource | None
 
 
 class PersonaRuntime:
-    """One run's disk cache; stores are closed between questions, including failed builds."""
+    """One run's disk cache; stores are closed between questions, including failed builds.
+
+    ``predict`` may run in several threads once ``prepare`` has built the subjects; ``metadata`` is the calling
+    thread's last answer."""
 
     def __init__(self, settings: Settings, llm: LLM, embedder: Embedder, cache: ProfileCache | None = None) -> None:
         self._temporary = TemporaryDirectory(prefix="twin-public-eval-")
@@ -189,7 +225,17 @@ class PersonaRuntime:
         self._states: dict[str, bool] = {}
         # Built by ``prepare``, waiting for the subject's first question.
         self._prepared: dict[str, dict[str, Any]] = {}
-        self.metadata: dict[str, Any] = {}
+        self._lock = threading.Lock()
+        self._local = threading.local()
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = getattr(self._local, "metadata", {})
+        return metadata
+
+    @metadata.setter
+    def metadata(self, value: dict[str, Any]) -> None:
+        self._local.metadata = value
 
     def close(self) -> None:
         self._temporary.cleanup()
@@ -262,9 +308,7 @@ class PersonaRuntime:
 
     def prepare(self, subjects: Iterable[tuple[str, tuple[SourceInput, ...]]], workers: int) -> None:
         """Build the distinct subjects' profiles ``workers`` at a time ahead of ``predict``, which then reports each
-        build on the subject's first question as if it had built it there. With one worker ``predict`` builds."""
-        if workers < 2:
-            return
+        build on the subject's first question as if it had built it there."""
         pending: dict[str, tuple[SourceInput, ...]] = {}
         for subject, sources in subjects:
             key = preparation_key(subject, sources, self.settings)
@@ -283,19 +327,22 @@ class PersonaRuntime:
         self, subject: str, sources: tuple[SourceInput, ...], prompt: str, today: dt.date | None = None
     ) -> ChatReply:
         key = preparation_key(subject, sources, self.settings)
-        prepared = self._prepared.pop(key, None)
+        # Concurrent answers start in submission order, so the build lands on the subject's earliest question.
+        # Building here is the unprepared path; the lock keeps two threads from building one subject twice.
+        with self._lock:
+            prepared = self._prepared.pop(key, None)
+            if prepared is None:
+                cached = key in self._states
+                self.metadata = {"preparation_key": key, "cache_hit": cached, "stages": {}}
+                if not cached:
+                    self._build(key, sources, self.metadata)
         if prepared is not None:
             self.metadata = prepared
             if prepared.get("preparation_failure"):
                 raise PreparationError("Persona preparation failed (details hidden)")
-        else:
-            cached = key in self._states
-            self.metadata = {"preparation_key": key, "cache_hit": cached, "stages": {}}
-            if cached and not self._states[key]:
-                self.metadata["preparation_failure"] = True
-                raise PreparationError("Previously failed preparation")
-            if not cached:
-                self._build(key, sources, self.metadata)
+        elif cached and not self._states[key]:
+            self.metadata["preparation_failure"] = True
+            raise PreparationError("Previously failed preparation")
         settings = self._db_settings(key)
         with PersonaStore(settings.db_path) as store:
             with self._stage(self.metadata, "answer"):

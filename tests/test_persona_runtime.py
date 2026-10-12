@@ -569,6 +569,37 @@ def test_profile_cache_reuses_each_repeats_own_build_until_build_code_changes(
     assert cached_predict(pr.ProfileCache(root, "r1"), atlas_build())["profile_cache"] == "miss"
 
 
+def test_repeats_sharing_a_slot_build_once_and_the_others_restore(tmp_path: Path) -> None:
+    root = tmp_path / "profiles"
+    started = threading.Event()
+    release = threading.Event()
+
+    def held() -> None:
+        started.set()
+        assert release.wait(10)
+
+    # The first build holds extraction open until the others are queued on the same slot.
+    builder, waiters = atlas_build(wait=held), [atlas_build(), atlas_build()]
+    results: list[dict[str, Any]] = []
+
+    def run(llm: FakeLLM) -> None:
+        results.append(cached_predict(pr.ProfileCache(root, "r1"), llm))
+
+    threads = [threading.Thread(target=run, args=(llm,)) for llm in [builder, *waiters]]
+    threads[0].start()
+    assert started.wait(10)
+    for thread in threads[1:]:
+        thread.start()
+    time.sleep(0.2)
+    release.set()
+    for thread in threads:
+        thread.join(10)
+    assert sorted(r["profile_cache"] for r in results) == ["hit", "hit", "miss"]
+    assert [call[0] for call in builder.calls] == ["ExtractDraft", "MergeDraft", "ChatDraft"]
+    assert all([call[0] for call in llm.calls] == ["ChatDraft"] for llm in waiters)
+    assert len(list(root.glob("*-r1.db"))) == 1
+
+
 def test_profile_cache_skips_degraded_and_failed_builds(tmp_path: Path) -> None:
     root = tmp_path / "profiles"
     assert cached_predict(pr.ProfileCache(root, "r1"), atlas_build(merge_fails=True))["profile_cache"] == "miss"

@@ -218,6 +218,31 @@ def test_suite_profile_cache_gives_each_repeat_its_own_slot(tmp_path: Path, monk
     assert json.loads((tmp_path / "suite" / "scorecard.json").read_text())["profile_cache"] is True
 
 
+def test_suite_repeats_can_share_fewer_builds_and_the_scorecard_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slots: list[str] = []
+
+    def fake_lme(settings: Any, dataset: Path, run: Path, **options: Any) -> dict[str, Any]:
+        slots.append(options["profile_cache"].slot)
+        write_run(run, [lme_row("q0", "multi-session", 1.0)], judges=["j0"])
+        return {"preparation_failures": 0, "prediction_failures": 0, "judge_failures": 0, "missing": 0}
+
+    monkeypatch.setattr(cli, "_run_longmemeval", fake_lme)
+    data = tmp_path / "data.json"
+    data.write_text("{}")
+    out = tmp_path / "suite"
+    args = ["eval-suite", "--out", str(out), "--longmemeval", str(data), "--repeats", "3"]
+    args += ["--profile-cache", str(tmp_path / "profiles")]
+    result = CliRunner().invoke(app, [*args, "--builds", "1"])
+    assert result.exit_code == 0, result.output
+    assert slots == ["r1", "r1", "r1"]
+    assert json.loads((out / "scorecard.json").read_text())["builds"] == 1
+    assert "共用 1 份建档结果" in (out / "scorecard.md").read_text()
+    too_many = ["eval-suite", "--out", str(tmp_path / "other"), "--longmemeval", str(data), "--repeats", "2"]
+    assert CliRunner().invoke(app, [*too_many, "--builds", "3"]).exit_code == 1
+
+
 def test_suite_runs_every_benchmark_and_repeat_at_once_under_one_call_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

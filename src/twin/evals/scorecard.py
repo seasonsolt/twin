@@ -239,6 +239,15 @@ def render_markdown(card: dict[str, Any], comparison: dict[str, Any] | None = No
             if card.get("grant_gated_facets")
             else []
         ),
+        *(
+            [
+                "",
+                f"各次运行共用 {card['builds']} 份建档结果，范围只反映作答的波动，不含建档的波动；"
+                "确认改动有效要按每次运行各建一份重跑。",
+            ]
+            if card.get("builds") and card.get("repeats") and card["builds"] < card["repeats"]
+            else []
+        ),
         "",
         "| 基准 | 指标 | 题数 | 平均 | 范围 | 与基线相比 |",
         "| :-- | :-- | --: | --: | :-: | :-- |",

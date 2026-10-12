@@ -31,7 +31,11 @@ import {
   type UploadProgress,
 } from '../lib/mediaUpload';
 import { usePendingWork } from '../lib/pendingWork';
-import { useStatus } from '../stores/status';
+import {
+  useStatus,
+  type KernelStatus,
+  type KernelVersion,
+} from '../stores/status';
 import { usePersonas } from '../stores/personas';
 import { useAuth } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
@@ -64,8 +68,6 @@ interface Processing {
   state: 'idle' | 'queued' | 'running';
   notice?: string | null;
   last_error?: string | null;
-  kernel_rebuild?: string | null;
-  kernel_pending?: number;
 }
 
 const mediaPending = (memory: Memory) =>
@@ -110,6 +112,71 @@ function MemoryWork({
   ) : null;
 }
 
+const kernelLabel = (version: KernelVersion) =>
+  `${version.prompt} · 分类 ${version.taxonomy}`;
+
+function KernelLine({
+  kernel,
+  processing,
+  admin,
+  busy,
+  onUpgrade,
+}: {
+  kernel: KernelStatus;
+  processing: Processing;
+  admin: boolean;
+  busy: boolean;
+  onUpgrade: () => void;
+}) {
+  const current = (
+    <span className="font-medium">记忆内核 {kernelLabel(kernel.version)}</span>
+  );
+  if (kernel.scope === 'none')
+    return (
+      <p className="text-sm text-secondary">
+        {current}
+        {' · 已是最新'}
+      </p>
+    );
+  const from = kernel.built ? kernelLabel(kernel.built) : '旧版';
+  if (processing.state !== 'idle')
+    return (
+      <p role="status" className="text-sm text-secondary">
+        {current}
+        {` · 正在从 ${from} 升级，整理完成前沿用旧档案`}
+      </p>
+    );
+  return (
+    <div
+      role="status"
+      className="space-y-1 rounded-lg border border-border p-3 text-sm"
+    >
+      <p>
+        {current}
+        {' · 可以升级'}
+      </p>
+      <p className="text-secondary">
+        现有记忆按 {from} 整理，升级后按新版本重新整理
+        {kernel.pending_chunks > 0 &&
+          `，需重新整理 ${kernel.pending_chunks} 段，会调用模型`}
+        。升级完成前沿用旧档案。
+      </p>
+      {admin ? (
+        <Button
+          className="min-h-11"
+          size="sm"
+          disabled={busy}
+          onClick={onUpgrade}
+        >
+          升级记忆内核
+        </Button>
+      ) : (
+        <p className="text-secondary">请管理员升级。</p>
+      )}
+    </div>
+  );
+}
+
 export function Memories({
   embedded = false,
   profile = false,
@@ -128,10 +195,7 @@ export function Memories({
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
   const admin = useAuth((state) => state.identity?.admin ?? false);
-  const awaitingKernel =
-    processing.kernel_rebuild === 'awaiting_confirmation' &&
-    processing.state === 'idle' &&
-    (processing.kernel_pending ?? 0) > 0;
+  const kernel = useStatus((state) => state.data?.kernel);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('正在保存记忆…');
@@ -309,9 +373,10 @@ export function Memories({
       api('/api/persona/build', { method: 'POST', signal }),
     );
   const rebuildKernel = () =>
-    void mutate((signal) =>
-      api('/api/kernel/rebuild', { method: 'POST', signal }),
-    );
+    void mutate(async (signal) => {
+      await api('/api/kernel/rebuild', { method: 'POST', signal });
+      void useStatus.getState().refresh();
+    });
   const retranscribe = (memory: Memory) =>
     void mutate((signal) =>
       api(
@@ -539,27 +604,20 @@ export function Memories({
               添加记忆
             </Button>
           )}
-          {processing.notice && (
-            <p role="status" className="text-sm text-secondary">
-              {processing.notice}
-              {awaitingKernel && (
-                <>
-                  {' '}
-                  需重新整理 {processing.kernel_pending} 段，会调用模型。
-                  {admin && (
-                    <Button
-                      className="min-h-11"
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={rebuildKernel}
-                    >
-                      开始重新整理
-                    </Button>
-                  )}
-                </>
-              )}
-            </p>
+          {kernel && (!embedded || kernel.scope !== 'none') ? (
+            <KernelLine
+              kernel={kernel}
+              processing={processing}
+              admin={admin}
+              busy={busy}
+              onUpgrade={rebuildKernel}
+            />
+          ) : (
+            processing.notice && (
+              <p role="status" className="text-sm text-secondary">
+                {processing.notice}
+              </p>
+            )
           )}
           {processing.state !== 'idle' && (
             <ThinkingLabel

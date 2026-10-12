@@ -13,6 +13,7 @@ import { ConfirmProvider, toast } from '../components/ui';
 import { Memories, type Memory } from '../pages/Memories';
 import { api } from '../lib/api';
 import { useAuth } from '../stores/auth';
+import { useStatus } from '../stores/status';
 
 vi.mock('../lib/mediaUpload', async (original) => ({
   ...(await original<typeof import('../lib/mediaUpload')>()),
@@ -46,11 +47,22 @@ let state: {
   kernel_rebuild?: string;
   kernel_pending?: number;
 };
+const v4 = { schema: 1, prompt: 'persona-v4', taxonomy: 'v1' };
+const v5 = { schema: 1, prompt: 'persona-v5', taxonomy: 'v1' };
+let kernel: Record<string, unknown>;
 let fetcher: ReturnType<typeof vi.fn>;
 let importError: boolean;
 beforeEach(() => {
   rows = [memory];
   state = { state: 'idle' };
+  kernel = {
+    version: v4,
+    built: v4,
+    scope: 'none',
+    pending_chunks: 0,
+    state: 'ready',
+  };
+  useStatus.setState({ data: null, error: null });
   importError = false;
   vi.mocked(toast).mockClear();
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
@@ -60,6 +72,7 @@ beforeEach(() => {
       return json({
         counts: { sources: rows.length, items: 3 },
         egress: [],
+        kernel,
       });
     if (url === '/api/persona/notes') {
       state = { state: 'queued' };
@@ -366,25 +379,37 @@ it('keeps Chinese upload errors and aborts uploads on unmount', async () => {
   expect(init.signal.aborted).toBe(true);
 });
 
+it('shows the kernel version when memories are on the current kernel', async () => {
+  mount();
+  expect(
+    await screen.findByText('记忆内核 persona-v4 · 分类 v1'),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/已是最新/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '升级记忆内核' })).toBeNull();
+});
+
 it.each([true, false])(
-  'asks to confirm a kernel rebuild over the cost gate (admin %s)',
+  'offers a kernel upgrade when memories were built on an older kernel (admin %s)',
   async (admin) => {
     useAuth.setState({
       identity: { email: null, admin, auth_enabled: false },
     });
-    state = {
-      state: 'idle',
-      notice: '记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案',
-      kernel_rebuild: 'awaiting_confirmation',
-      kernel_pending: 512,
+    kernel = {
+      version: v5,
+      built: v4,
+      scope: 'full',
+      pending_chunks: 512,
+      state: 'awaiting_confirmation',
     };
     mount();
+    expect(await screen.findByText(/可以升级/)).toBeInTheDocument();
     expect(
-      await screen.findByText(/需重新整理 512 段，会调用模型/),
-    ).toBeInTheDocument();
-    const button = screen.queryByRole('button', { name: '开始重新整理' });
+      screen.getByText(/现有记忆按 persona-v4 · 分类 v1 整理/),
+    ).toHaveTextContent('需重新整理 512 段，会调用模型');
+    const button = screen.queryByRole('button', { name: '升级记忆内核' });
     if (!admin) {
       expect(button).toBeNull();
+      expect(screen.getByText('请管理员升级。')).toBeInTheDocument();
       return;
     }
     await userEvent.click(button!);
@@ -394,6 +419,9 @@ it.each([true, false])(
         expect.objectContaining({ method: 'POST' }),
       ),
     );
+    expect(
+      await screen.findByText(/正在从 persona-v4 · 分类 v1 升级/),
+    ).toBeInTheDocument();
     useAuth.setState({ identity: null });
   },
 );

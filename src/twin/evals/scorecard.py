@@ -231,6 +231,14 @@ def render_markdown(card: dict[str, Any], comparison: dict[str, Any] | None = No
         f"代码 `{card.get('commit', '?')}` · {card.get('date', '?')} · 每个基准运行 {card.get('repeats', '?')} 次",
         "",
         "失败与弃权都计为错误。",
+        *(
+            [
+                "",
+                "建档时视为本人已授权全部需授权的细项（生活与喜好、健康、家庭）；产品默认只在本人通过问卷授权后建这些细项。",
+            ]
+            if card.get("grant_gated_facets")
+            else []
+        ),
         "",
         "| 基准 | 指标 | 题数 | 平均 | 范围 | 与基线相比 |",
         "| :-- | :-- | --: | --: | :-: | :-- |",

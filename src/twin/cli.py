@@ -766,6 +766,7 @@ def _run_longmemeval(
     system: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -803,6 +804,7 @@ def _run_longmemeval(
         score=score,
         fingerprints={"dataset_sha256": dataset_sha, "configuration": configured_identity},
         profile_cache=profile_cache,
+        grant_gated=grant_gated,
         prepare_workers=prepare_workers,
         answer_workers=answer_workers,
         call_slots=call_slots,
@@ -933,6 +935,7 @@ def _run_personamem2(
     split: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -953,6 +956,7 @@ def _run_personamem2(
         dry_run=dry_run,
         fingerprints=identities,
         profile_cache=profile_cache,
+        grant_gated=grant_gated,
         prepare_workers=prepare_workers,
         answer_workers=answer_workers,
         call_slots=call_slots,
@@ -973,6 +977,7 @@ def _run_personamem(
     system: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -999,6 +1004,7 @@ def _run_personamem(
         score=True,
         fingerprints=identities,
         profile_cache=profile_cache,
+        grant_gated=grant_gated,
         prepare_workers=prepare_workers,
         answer_workers=answer_workers,
         call_slots=call_slots,
@@ -1056,6 +1062,7 @@ def _run_twin2k500(
     system: str,
     dry_run: bool,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -1085,6 +1092,7 @@ def _run_twin2k500(
         score=True,
         fingerprints=identities,
         profile_cache=profile_cache,
+        grant_gated=grant_gated,
         prepare_workers=prepare_workers,
         answer_workers=answer_workers,
         call_slots=call_slots,
@@ -1145,6 +1153,14 @@ def eval_suite_command(
             "the endpoint rate-limits or times out",
         ),
     ] = 32,
+    grant_gated_facets: Annotated[
+        bool,
+        typer.Option(
+            "--grant-gated-facets",
+            help="Build profiles as if the person consented to every consent-gated facet (life and preferences, "
+            "health, family); the scorecard says so. Production derives consent from questionnaires",
+        ),
+    ] = False,
 ) -> None:
     """Run the three public benchmarks ``--repeats`` times through production Twin and write a scorecard.
 
@@ -1173,27 +1189,28 @@ def eval_suite_command(
         lme_dataset = longmemeval
         jobs["longmemeval"] = lambda settings, run, cache: _run_longmemeval(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
-            split=split, system="twin", dry_run=False, score=True, profile_cache=cache,
+            split=split, system="twin", dry_run=False, score=True, profile_cache=cache, grant_gated=grant_gated_facets,
             prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
         jobs["personamem"] = lambda settings, run, cache: _run_personamem(
             settings, pm_questions, pm_contexts, run, limit=3, offset=0, sample=sizes["pm"], seed="personamem-v1",
-            split=split, system="twin", dry_run=False, profile_cache=cache,
+            split=split, system="twin", dry_run=False, profile_cache=cache, grant_gated=grant_gated_facets,
             prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if personamem2 is not None:
         pm2_benchmark = personamem2
         jobs["personamem2"] = lambda settings, run, cache: _run_personamem2(
             settings, pm2_benchmark, run, personas=sizes["pm2"], seed="personamem-v2", split=split, dry_run=False,
-            profile_cache=cache, prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
+            profile_cache=cache, grant_gated=grant_gated_facets, prepare_workers=prepare_workers,
+            answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if twin2k500 is not None:
         t2k_dataset = twin2k500
         jobs["twin2k500"] = lambda settings, run, cache: _run_twin2k500(
             settings, t2k_dataset, run, limit=None, offset=0, participants=sizes["t2k"], seed="twin2k500-v1",
-            split=split, system="twin", dry_run=False, profile_cache=cache,
+            split=split, system="twin", dry_run=False, profile_cache=cache, grant_gated=grant_gated_facets,
             prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
         )  # fmt: skip
     if not jobs:
@@ -1218,8 +1235,10 @@ def eval_suite_command(
         settings = judged if name == "longmemeval" else plain
         run = out / name / f"r{index}"
         private_directory(run)
-        # Each repeat has its own cache slot, so repeats never share or race for a build.
-        cache = ProfileCache(profile_cache, f"r{index}") if profile_cache is not None else None
+        # Each repeat has its own cache slot, so repeats never share or race for a build; granted builds hold
+        # facets default builds never extract, so they keep slots of their own.
+        slot = f"r{index}" + ("-granted" if grant_gated_facets else "")
+        cache = ProfileCache(profile_cache, slot) if profile_cache is not None else None
         report = jobs[name](settings, run, cache)
         _progress(f"{name} r{index}/{repeats} done")
         return report
@@ -1240,6 +1259,7 @@ def eval_suite_command(
         metadata = _suite_metadata(split, repeats, sizes)
         metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
         metadata["profile_cache"] = profile_cache is not None
+        metadata["grant_gated_facets"] = grant_gated_facets
         metadata["prepare_workers"] = prepare_workers
         metadata["answer_workers"] = answer_workers
         metadata["max_calls"] = max_calls

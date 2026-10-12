@@ -266,3 +266,23 @@ def test_suite_runs_personamem2_by_persona_on_the_dev_split(tmp_path: Path, monk
     assert [(o["personas"], o["split"], o["seed"]) for o in seen] == [(4, "dev", "personamem-v2")]
     card = json.loads((tmp_path / "suite" / "scorecard.json").read_text())
     assert card["benchmarks"]["personamem2"]["metric"] == "选择题准确率"
+
+
+def test_a_granted_suite_builds_into_its_own_slots_and_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[Any] = []
+
+    def fake_lme(settings: Any, dataset: Path, run: Path, **options: Any) -> dict[str, Any]:
+        calls.append(options)
+        write_run(run, [lme_row("q0", "multi-session", 1.0)], judges=["j0"])
+        return {"preparation_failures": 0, "prediction_failures": 0, "judge_failures": 0, "missing": 0}
+
+    monkeypatch.setattr(cli, "_run_longmemeval", fake_lme)
+    data = tmp_path / "data.json"
+    data.write_text("{}")
+    out = tmp_path / "suite"
+    args = ["eval-suite", "--out", str(out), "--longmemeval", str(data), "--repeats", "1"]
+    result = CliRunner().invoke(app, [*args, "--profile-cache", str(tmp_path / "profiles"), "--grant-gated-facets"])
+    assert result.exit_code == 0, result.output
+    assert calls[0]["grant_gated"] is True and calls[0]["profile_cache"].slot == "r1-granted"
+    assert json.loads((out / "scorecard.json").read_text())["grant_gated_facets"] is True
+    assert "视为本人已授权" in (out / "scorecard.md").read_text()

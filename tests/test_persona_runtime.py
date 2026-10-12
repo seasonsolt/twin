@@ -613,10 +613,10 @@ def test_parallel_preparation_reports_each_subject_as_if_built_on_its_first_ques
 def test_a_failed_parallel_preparation_fails_only_its_subject(monkeypatch: pytest.MonkeyPatch) -> None:
     build = pr.build_profile
 
-    def flaky(store: PersonaStore, llm: Any, settings: Settings) -> BuildReport:
+    def flaky(store: PersonaStore, llm: Any, settings: Settings, **options: Any) -> BuildReport:
         if any("BROKEN" in e.text for e in store.list_expressions()):
             return BuildReport(failures=["extract: LLMError"])
-        return build(store, llm, settings)
+        return build(store, llm, settings, **options)
 
     monkeypatch.setattr(pr, "build_profile", flaky)
     llm = atlas_build()

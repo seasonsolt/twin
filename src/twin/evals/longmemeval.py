@@ -433,6 +433,7 @@ def run_evaluation(
     score: bool = False,
     fingerprints: dict[str, str] | None = None,
     profile_cache: ProfileCache | None = None,
+    grant_gated: bool = False,
     prepare_workers: int = 1,
     answer_workers: int = 1,
     call_slots: threading.Semaphore | None = None,
@@ -470,7 +471,7 @@ def run_evaluation(
                 )
                 embedder = make_embedder(settings.embed)
                 if system == "twin":
-                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache)
+                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache, grant_gated)
                     cleanup.callback(runtime.close)
                     baseline = TwinSystem(runtime)
                 else:

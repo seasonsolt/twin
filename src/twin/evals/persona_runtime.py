@@ -208,7 +208,14 @@ class PersonaRuntime:
     ``predict`` may run in several threads once ``prepare`` has built the subjects; ``metadata`` is the calling
     thread's last answer."""
 
-    def __init__(self, settings: Settings, llm: LLM, embedder: Embedder, cache: ProfileCache | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        llm: LLM,
+        embedder: Embedder,
+        cache: ProfileCache | None = None,
+        grant_gated: bool = False,
+    ) -> None:
         self._temporary = TemporaryDirectory(prefix="twin-public-eval-")
         self.root = Path(self._temporary.name)
         self.root.chmod(0o700)
@@ -221,7 +228,7 @@ class PersonaRuntime:
                 "chat_llm": None,
             },
         )
-        self.llm, self.embedder, self.cache = llm, embedder, cache
+        self.llm, self.embedder, self.cache, self.grant_gated = llm, embedder, cache, grant_gated
         self._states: dict[str, bool] = {}
         # Built by ``prepare``, waiting for the subject's first question.
         self._prepared: dict[str, dict[str, Any]] = {}
@@ -243,7 +250,12 @@ class PersonaRuntime:
     @property
     def configuration(self) -> str:
         return configuration_fingerprint(
-            self.settings, self.llm, self.embedder, [], experiment={"protocol": PROTOCOL_VERSION}
+            self.settings,
+            self.llm,
+            self.embedder,
+            [],
+            # Only a granted run adds the field, so default runs keep their earlier fingerprint.
+            experiment={"protocol": PROTOCOL_VERSION} | ({"grant_gated": True} if self.grant_gated else {}),
         )
 
     @contextmanager
@@ -273,7 +285,7 @@ class PersonaRuntime:
             parsed = parse_source(source, settings)
             if parsed is not None:
                 store.put_source(parsed)
-        report = build_profile(store, self.llm, settings)
+        report = build_profile(store, self.llm, settings, grant_gated=self.grant_gated)
         if report.degraded:
             metadata["preparation_degraded"] = report.degraded
         recorder = active_recorder()

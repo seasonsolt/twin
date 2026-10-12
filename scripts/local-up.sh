@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 demo=false
+asr=true
 open_browser=true
 dry_run=false
 port=8765
@@ -10,6 +11,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --demo) demo=true; shift ;;
         --no-open) open_browser=false; shift ;;
+        --no-asr) asr=false; shift ;;
         --dry-run) dry_run=true; shift ;;
         --port)
             if [[ $# -lt 2 || ! "$2" =~ ^[0-9]{1,5}$ ]]; then
@@ -23,23 +25,24 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2 ;;
         --help|-h)
-            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--port N] [--dry-run]'
+            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--port N] [--dry-run]'
             exit 0 ;;
         *) echo "错误：未知参数 $1" >&2; exit 2 ;;
     esac
 done
 cd "$repo_root"
 repo_root="$PWD"
-echo '本地验证：默认只有文字聊天，数据默认保存在本仓库 data/。'
+echo '本地验证：默认开启文字聊天和录音转写，数据默认保存在本仓库 data/。'
 echo '更新代码：停止服务后运行 git pull && ./scripts/local-up.sh'
 echo '数据库迁移和记忆内核增量重建由应用自动完成（保留费用闸）。'
 if "$dry_run"; then
-    echo '预览：检查 uv；缺少 ffmpeg 只提示（文字聊天不需要）。'
+    echo '预览：检查 uv；缺少 ffmpeg 时用 Homebrew 安装（录音转写需要）。'
     echo 'uv sync --frozen'
     echo '若缺少 twin.toml：twin --config ./twin.toml init ./twin.toml（默认模板，db_path = data/twin.db）'
     echo '若缺少 .env：从 .env.example 复制；chmod 600 .env'
     echo '缺少 [llm] model/base_url 或密钥时在终端逐项询问并保存（密钥写入 .env，不回显）；非终端则提示后退出。'
     echo '创建数据目录 data/（权限 700）'
+    if "$asr"; then echo '未配置 [asr] 时：twin compute install asr-funasr --download-models（已有模型直接复用；失败不阻塞启动）'; fi
     echo 'twin --config ./twin.toml doctor --local（只展示，不阻塞；不检查常驻服务）'
     echo "端口 $port 被占用时自动改用后续空闲端口"
     if "$demo"; then echo 'twin --config ./twin.toml demo seed'; fi
@@ -50,8 +53,13 @@ if ! command -v uv >/dev/null 2>&1; then
     echo '缺少 uv。请先安装：brew install uv，然后重新运行本脚本。' >&2
     exit 1
 fi
-if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo '提示：未找到 ffmpeg；文字聊天不需要，导入录音时再运行 brew install ffmpeg。'
+if "$asr" && ! command -v ffmpeg >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        echo '安装 ffmpeg（录音转写需要）…'
+        brew install ffmpeg || echo '提示：ffmpeg 安装失败，录音转写暂不可用；文字聊天不受影响。'
+    else
+        echo '提示：未找到 ffmpeg 和 Homebrew，录音转写暂不可用；安装 Homebrew 后重新运行本脚本。'
+    fi
 fi
 uv sync --frozen
 export PATH="$repo_root/.venv/bin:$PATH"
@@ -64,6 +72,7 @@ if [[ ! -e twin.toml ]]; then
     echo '已生成 ./twin.toml（默认文字聊天，数据在 data/）。'
 fi
 python -c 'from twin.ops.local import check_local_config; raise SystemExit(check_local_config())'
+if "$asr"; then python -c 'from twin.ops.local import ensure_asr; raise SystemExit(ensure_asr())'; fi
 echo '环境自检：'
 twin --config ./twin.toml doctor --local || echo '以上 ✗ 项不阻塞本地启动，可稍后处理。'
 if "$demo"; then twin --config ./twin.toml demo seed; fi

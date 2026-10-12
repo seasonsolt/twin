@@ -131,9 +131,11 @@ def test_doctor_optional_media_and_success_advice(monkeypatch: pytest.MonkeyPatc
     checks = inspect_installation(
         paths, settings, paths.config, LaunchdManager(paths, fake_runner), connect=lambda *_: True
     )
-    for name in ("语音", "识别", "认人", "视频"):
+    for name in ("语音", "认人", "视频"):
         check = next(item for item in checks if item.name == name)
         assert check.ok is None and check.detail == "未开启（可选）"
+    asr = next(item for item in checks if item.name == "识别")
+    assert asr.ok is False and "twin compute install asr-funasr" in asr.advice
     assert not any("TWIN_TTS_KEY" in item.name or "TWIN_ASR_KEY" in item.name for item in checks)
     assert Check("测试", True, "通过", "修复").text() == "✓ 测试：通过"
     assert Check("测试", None, "跳过", "修复").text() == "– 测试：跳过"
@@ -526,5 +528,5 @@ def test_installer_dry_run_writes_nothing() -> None:
     result = subprocess.run(
         ["bash", str(root / "deploy/mac/install.sh"), "--dry-run"], capture_output=True, text=True, check=True
     )
-    assert "预演" in result.stdout and "P4" in result.stdout
+    assert "预演" in result.stdout and "asr-funasr" in result.stdout
     assert not TwinPaths.from_env().home.exists()

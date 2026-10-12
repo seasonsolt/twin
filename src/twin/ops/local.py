@@ -123,3 +123,20 @@ def check_local_config(
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     data.chmod(0o700)
     return 0
+
+
+def ensure_asr() -> int:
+    """Turn on meeting transcription (a core feature) unless [asr] is already configured; never blocks chat."""
+    from .compute import get_pack, install
+
+    asr = load_settings(CONFIG).asr
+    if asr.base_url or (asr.provider == "command" and asr.command):
+        return 0
+    pack = get_pack("asr-funasr")
+    print(f"开启录音转写：本机已有模型直接复用，否则下载约 {pack.model_bytes / 1024**3:.1f} GiB（只需一次）。")
+    try:
+        install(pack, CONFIG, download_models=True, progress=lambda text: print(f"  {text}"))
+    except (ValueError, OSError) as error:
+        print(f"  录音转写暂未开启：{error}")
+        print("  文字聊天不受影响；处理后重新运行 ./scripts/local-up.sh 会再次尝试。")
+    return 0

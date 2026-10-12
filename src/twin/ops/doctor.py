@@ -113,8 +113,8 @@ def inspect_installation(
         ),
         Check(
             "ffmpeg",
-            shutil.which("ffmpeg") is not None or (None if local else False),
-            "已安装" if shutil.which("ffmpeg") else "未找到（文字聊天不需要）" if local else "未找到",
+            shutil.which("ffmpeg") is not None,
+            "已安装" if shutil.which("ffmpeg") else "未找到",
             "运行 brew install ffmpeg",
         ),
         Check("配置校验", config.is_file(), "配置已解析" if config.is_file() else "请先运行 twin init"),
@@ -183,6 +183,9 @@ def inspect_installation(
         enabled = section.provider not in {"hashing", "silent"} and (
             not isinstance(section, ASRSettings) or bool(section.base_url or section.command)
         )
+        if not enabled and name == "识别":
+            checks.append(Check(name, False, "未开启，无法转写录音", "运行 twin compute install asr-funasr"))
+            continue
         if not enabled:
             checks.append(Check(name, None, "本机轻量后端" if section.provider == "hashing" else "未开启（可选）"))
             continue

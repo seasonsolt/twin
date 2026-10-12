@@ -2,7 +2,7 @@
 
 > 常驻部署（可选）；本地验证请看 [docs/LOCAL_DEV.md](../../docs/LOCAL_DEV.md)。
 
-需要 Apple Silicon、macOS 14+ 和已安装的 Homebrew。P2 从当前仓库构建 wheel；发布下载/升级在 P3，算力包安装在 P4。默认只有文字聊天，可托管网页和备份；语音、转写、认人和真人视频按需开启，不会自动安装。资料以会议录音为主时，需要单独开启转写（P4 的 `asr-funasr` 包），与语音和视频输出无关。
+需要 Apple Silicon、macOS 14+ 和已安装的 Homebrew。P2 从当前仓库构建 wheel；发布下载/升级在 P3，算力包安装在 P4。默认开启文字聊天和会议录音转写（安装脚本运行 `twin compute install asr-funasr`，已有模型直接复用，失败不阻塞安装），可托管网页和备份；朗读真人音色、认人和口型视频默认关闭，按需开启，不会自动安装。
 
 ```bash
 # 在仓库中先查看将执行的步骤，不安装软件、不写文件、不注册服务
@@ -37,7 +37,7 @@ twin init --profile split        # 保留现有模板与远端配置方式
 twin init --profile minimal      # 只生成 LLM/embed 基础配置
 ```
 
-`mac-unified` 只生成文字聊天所需的 `[llm]`、`[embed]` 和数据路径，不写入媒体配置节。未开启的能力在 doctor 中显示“未开启（可选）”，不会算作失败；网页隐藏对应播放、试听和真人视频入口。P4 将提供 `twin compute install`，当前也可按 [媒体配置说明](../../docs/MEDIA.md) 手写配置，接入已有服务。会议录音需要开启转写，P4 对应 `asr-funasr` 包。
+`mac-unified` 生成文字聊天所需的 `[llm]`、`[embed]` 和数据路径；安装脚本随后运行 `twin compute install asr-funasr` 写入 `[asr]`。转写未开启时 doctor 显示 ✗；朗读、认人和视频未开启时显示“未开启（可选）”，不算失败，网页隐藏对应播放、试听和真人视频入口，可按 [媒体配置说明](../../docs/MEDIA.md) 开启。
 
 ## 托管服务与自检
 

@@ -11,7 +11,8 @@ if [[ "${1:-}" == "--dry-run" && $# == 1 ]]; then
         '从 twin.ops.paths 解析目录；建立 releases/<version>/venv' \
         'uv pip install --require-hashes -r requirements.lock；安装本仓库 wheel' \
         '原子切换 current；不存在配置时 twin init --profile mac-unified；创建 0600 env' \
-        '默认只有文字聊天；媒体能力按需开启，P4 将提供 twin compute install；本次不下载模型' \
+        '开启录音转写：twin compute install asr-funasr --download-models（已有模型直接复用；失败不阻塞安装）' \
+        '朗读真人音色、认人和口型视频默认关闭，按需开启（docs/MEDIA.md）' \
         'twin ops install-services；twin ops start；twin doctor' \
         "TWIN_HOME=${TWIN_HOME:-默认系统目录}"
     exit 0
@@ -103,7 +104,13 @@ if [[ ! -f "$config_path" ]]; then
     "${twin[@]}" init --profile mac-unified
 fi
 printf '%s\n' "请编辑 ${config_path}，填写模型与端点；在 $env_path 中填写 TWIN_LLM_KEY（及启用后端所需变量）。" \
-    '默认只有文字聊天；媒体能力可手写配置（docs/MEDIA.md），P4 将提供 twin compute install。会议录音需开启转写（asr-funasr）。'
+    '朗读真人音色、认人和口型视频默认关闭，按需开启（docs/MEDIA.md）。'
+# Transcription is a core feature; the pack definitions live in this checkout, so run its sources with the release venv.
+if ! PYTHONPATH="$repo/src" "$install_home/current/venv/bin/python" -c 'from twin.cli import app; app()' \
+    --config "$config_path" compute install asr-funasr --download-models; then
+    printf '%s\n' '录音转写暂未开启；处理提示的问题后在仓库运行：' \
+        "uv run twin --config '${config_path}' compute install asr-funasr --download-models"
+fi
 "${twin[@]}" ops install-services
 "${twin[@]}" ops start
 if ! "${twin[@]}" doctor; then

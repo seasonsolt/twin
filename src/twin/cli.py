@@ -368,8 +368,8 @@ def init(
                 'db_path = "data/twin.db"', "db_path = " + json.dumps(str(paths.data / "twin.db"))
             )
             template += (
-                "\n# 默认只有文字聊天；语音、转写、认人、真人视频可按需开启。\n"
-                "# 转写可运行 twin compute install asr-funasr，也可手写配置，详见 docs/MEDIA.md。\n"
+                "\n# 默认开启文字聊天与录音转写（安装脚本运行 twin compute install asr-funasr 写入 [asr]）；\n"
+                "# 朗读真人音色、认人和口型视频默认关闭，按需开启，详见 docs/MEDIA.md。\n"
             )
             private_directory(paths.data)
         private_directory(target.parent)
@@ -417,6 +417,10 @@ def compute_install(
 
     with _errors():
         install(get_pack(pack), _compute_config(ctx), download_models=download_models, force=force, progress=_say)
+        _say(
+            "重启网页后生效（本地：Ctrl-C 后重新 ./scripts/local-up.sh；常驻：twin ops restart）；"
+            "已上传但未转写的录音点“重新转写”或“重试”。"
+        )
 
 
 @compute_app.command("remove")

@@ -347,7 +347,6 @@ def _install(
     if backup.exists():
         shutil.rmtree(backup)
     progress(f"已安装 {pack.name} {pack.version}，配置：{config}")
-    progress("请重启网页（Ctrl-C 后重新 ./scripts/local-up.sh），在“记忆”页上传录音；已上传但未转写的点“重新转写”。")
     return target
 
 

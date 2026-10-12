@@ -15,7 +15,7 @@ from twin import cli
 from twin.config import Settings, load_settings
 from twin.ops import demo
 from twin.ops.envfile import load_env_file, selected_env_file
-from twin.ops.local import check_local_config, set_llm_value
+from twin.ops.local import check_local_config, ensure_asr, set_llm_value
 from twin.ops.paths import TwinPaths
 from twin.persona.schema import SourceKind
 from twin.persona.sources import expression_view, parse_note, parse_source
@@ -353,3 +353,39 @@ def test_shell_variables_before_cjk_are_braced() -> None:
         if pattern.search(line)
     ]
     assert offenders == []
+
+
+@pytest.mark.parametrize("state", ["configured", "missing", "fails"])
+def test_ensure_asr(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], state: str) -> None:
+    from twin.ops import compute
+
+    config = '[llm]\nmodel = "m"\n'
+    if state == "configured":
+        config += '[asr]\nprovider = "command"\ncommand = "transcribe"\n'
+    Path("twin.toml").write_text(config)
+    calls = []
+
+    def install(pack, path, *, download_models, progress):  # type: ignore[no-untyped-def]
+        calls.append((pack.name, path, download_models))
+        if state == "fails":
+            raise ValueError("未找到 ffmpeg，请运行 brew install ffmpeg")
+
+    monkeypatch.setattr(compute, "install", install)
+    assert ensure_asr() == 0
+    assert calls == ([] if state == "configured" else [("asr-funasr", Path("twin.toml"), True)])
+    output = capsys.readouterr().out
+    assert ("文字聊天不受影响" in output) == (state == "fails")
+
+
+def test_local_up_dry_run_asr_opt_out(tmp_path: Path) -> None:
+    def run(*options: str) -> str:
+        return subprocess.run(
+            ["/bin/bash", str(ROOT / "scripts/local-up.sh"), "--dry-run", *options],
+            env={**os.environ, "REPO_ROOT": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    assert "asr-funasr" in run()
+    assert "asr-funasr" not in run("--no-asr")

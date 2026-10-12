@@ -1,8 +1,8 @@
 # asr-funasr 会议录音转写包
 
-这是音视频记忆的**输入能力**：FSMN VAD 找到语音片段，CAM++ 声纹聚类区分说话人并与本人参考声音比较，SenseVoiceSmall 转写文字。视频提取后的音轨走同一条流程。S1 是说话时间最长的人，不代表本人；请在网页核对、认领本人片段。
+这是音视频记忆的**输入能力**：FSMN VAD 找到语音片段，CAM++ 声纹聚类区分说话人并与本人参考声音比较，SeACo-Paraformer-large 转写文字，CT-Transformer 补标点。Paraformer 只识别中文（夹杂的英文术语也能出），中文会议上的术语和人名明显好于 SenseVoice，并支持热词。视频提取后的音轨走同一条流程。S1 是说话时间最长的人，不代表本人；请在网页核对、认领本人片段。
 
-每次转写启动一个 Python 进程，完成后退出，无常驻 worker、无服务端口。默认自动使用 Apple 芯片 GPU（MPS），不可用时回退 CPU；可在配置中的命令末尾追加 `--device cpu` 强制使用 CPU。本机实测识别实时率 MPS 约 0.013、CPU 约 0.12（49 分钟录音在 MPS 上约 1 分钟）。转写过程向 stderr 输出 `@@twin-progress <0–1>` 行，twin 据此显示进度。一次进程冷启动约 17 秒，首次导入可能更慢，适合后台整理会议录音。
+Mac 上每次转写启动一个 Python 进程，完成后退出，无常驻 worker、无服务端口。设备按 CUDA、MPS、CPU 的顺序自动选择；可在配置中的命令末尾追加 `--device cpu` 强制使用 CPU。实测 49 分钟会议：M 系列 Mac（MPS）约 67 秒，RTX 4090（常驻服务，见下文）约 16 秒。转写过程向 stderr 输出 `@@twin-progress <0–1>` 行，twin 据此显示进度。一次进程冷启动约 30 秒、峰值内存约 5 GB，首次导入可能更慢，适合后台整理会议录音。
 
 ## 安装与移除
 
@@ -33,16 +33,40 @@ uv run twin --config ./twin.toml compute install asr-funasr
 
 | ModelScope ID | 用途 | 权重大小 |
 | --- | --- | --- |
-| [iic/SenseVoiceSmall](https://modelscope.cn/models/iic/SenseVoiceSmall) | 语音文字识别 | 约 893 MiB |
+| [iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch](https://modelscope.cn/models/iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch) | 中文语音识别，支持热词 | 约 952 MiB |
+| [iic/punc_ct-transformer_cn-en-common-vocab471067-large](https://modelscope.cn/models/iic/punc_ct-transformer_cn-en-common-vocab471067-large) | 中英文标点恢复 | 约 1092 MiB |
 | [iic/speech_fsmn_vad_zh-cn-16k-common-pytorch](https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch) | 语音活动检测 | 约 1.6 MiB |
 | [iic/speech_campplus_sv_zh-cn_16k-common](https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common) | 192 维声纹、聚类与参考声音比较 | 约 26.7 MiB |
 
-模型与必要配置合计约 0.90 GiB。`pack.toml` 固定已验证的 `master` 快照文件 SHA-256；上游 master 若变化，不会静默接纳新权重，需要维护者更新包清单和版本。摘要主要来自 P0 清单，另外补齐实际运行必需的 CMVN 和 SentencePiece 文件。依赖按 P0 的完整版本快照锁定，含 scikit-learn。
+模型与必要配置合计约 2.0 GiB；`pack.toml` 用 `role`（asr / vad / punc / speaker）标明每个模型的用途。`pack.toml` 固定已验证的 `master` 快照文件 SHA-256；上游 master 若变化，不会静默接纳新权重，需要维护者更新包清单和版本。摘要与 ModelScope 官方仓库一致，并补齐实际运行必需的 CMVN、`seg_dict` 等文件。依赖按 P0 的完整版本快照锁定，含 scikit-learn。
 
 缓存根为 `MODELSCOPE_CACHE`（默认 `~/.cache/modelscope`）；优先查找 `models/<组织>--<模型>/snapshots/<revision>`，兼容历史 `hub/<组织>/<模型>` 和 `<组织>/<模型>` 布局。仅在显式允许下载时调用 ModelScope SDK。安装流式校验摘要，版本目录的 `verified.json` 缓存文件大小、mtime 和期望摘要；未变的文件可免于重复读取。
 
 ## 命令契约与隐私
 
-完整契约见 [docs/MEDIA.md](../../../docs/MEDIA.md#音视频记忆)。stdin 接收 JSON 请求，stdout 最后一行输出 JSON 结果；依赖日志转到 stderr。`run.py --check` 加载三个模型，用内置 1 秒正弦波逐一推理并检查声纹维度；不需要任何用户录音。
+完整契约见 [docs/MEDIA.md](../../../docs/MEDIA.md#音视频记忆)。stdin 接收 JSON 请求，stdout 最后一行输出 JSON 结果；依赖日志转到 stderr。`run.py --check` 加载四个模型，用内置 1 秒正弦波逐一推理并检查声纹维度；不需要任何用户录音。
 
 转写、声纹提取和匹配全程本机离线；运行强制设置 `HF_HUB_OFFLINE`、`MODELSCOPE_OFFLINE`、`TRANSFORMERS_OFFLINE`，模型加载禁用更新。缺模型只报错，不触发下载。安装 Python 依赖需要网络或已有包缓存；模型下载需要显式 `--download-models`。后续记忆整理/聊天仍使用 twin 配置的大模型，其出境范围由该配置决定。
+
+## 热词
+
+请求 JSON 可带 `"hotwords": ["邓郁松", "魔搭"]`：去掉空白项和含空格的词，去重，最多 200 个。热词只提高这些词被识别出来的概率，不会强行替换文字。热词的来源（例如从记忆里的人名、项目名自动整理）以后再定，目前默认不传。
+
+## 常驻服务与远程转写
+
+没有 Apple 芯片、或想用独立 GPU 机器时，可以在 GPU 机器上常驻一份模型，twin 所在机器用只依赖标准库的 `remote.py` 转发请求，契约与 `run.py` 完全相同：
+
+```bash
+# GPU 机器：Python 环境需含 pack 依赖与 CUDA 版 torch；模型缓存同上
+python run.py --serve --port 18790          # 只监听 127.0.0.1；启动时先跑一次 --check
+curl -s http://127.0.0.1:18790/health       # {"ok": true, "version": ..., "device": "cuda", "busy": false}
+```
+
+```toml
+# twin 机器的 twin.toml（手写 [asr]，local-up 不会覆盖）
+[asr]
+provider = "command"
+command = "python3 /path/to/twin/deploy/compute/asr-funasr/remote.py --url http://127.0.0.1:18790"
+```
+
+服务一次只跑一个任务，其余请求排队；响应是逐行 JSON（进度，最后是结果），`remote.py` 把进度转成 `@@twin-progress` 行。上传的录音和参考声音写进临时目录，处理完立即删除。服务没有认证，只应监听本机，再经 SSH 隧道转发到 twin 所在机器，不要直接暴露到网络。`remote.py` 上传前会用 ffmpeg 把 wav 无损压成 FLAC（体积约为原来的 40%，识别结果不变；压缩失败就原样上传，`--no-flac` 关闭），带宽窄时上传时间能省一半以上。`remote.py --hotwords <文件>` 可指定热词文件（每行一个，`#` 开头为注释），请求自带热词时以请求为准。

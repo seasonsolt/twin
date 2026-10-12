@@ -316,7 +316,7 @@ def _install(
             execute([str(work / "venv/bin/python"), "-c", script, model["id"], model["revision"], str(cache)])
         if missing and verify_models(pack, cache, work / "verified.json"):
             raise ValueError("下载后模型 sha256 校验失败，保留旧安装；请检查模型版本和缓存")
-        progress("运行离线健康检查（加载三个模型）…")
+        progress("运行离线健康检查（加载全部模型）…")
         result = execute([str(work / "venv/bin/python"), str(work / pack.entry), "--check"])
         try:
             healthy = json.loads(result.stdout.strip().splitlines()[-1]).get("ok") is True

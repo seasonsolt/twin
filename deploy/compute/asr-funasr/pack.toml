@@ -1,47 +1,49 @@
 name = "asr-funasr"
-version = "1.1.0"
+version = "1.2.0"
 kind = "command"
 platforms = ["darwin-arm64"]
 python = "3.12"
 entry = "run.py"
 
 [[models]]
-id = "iic/SenseVoiceSmall"
+id = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 revision = "master"
+role = "asr"
 
 [[models.files]]
 path = "config.yaml"
-size = 1855
-sha256 = "f71e239ba36705564b5bf2d2ffd07eece07b8e3f2bbf6d2c99d8df856339ac19"
+size = 3477
+sha256 = "6602efa95e4c7248e1d1030f7ff454a3c9af0f57c335ed87f35260cd7faec35d"
 
 [[models.files]]
 path = "configuration.json"
-size = 396
-sha256 = "02810a7f8e9e8aee10370a265f7e799728ce25b4c00cdbf4602b303ee395a38e"
+size = 478
+sha256 = "1acac324430b5a4680ef5ee2947575443ab2039a92c8a0551665f6bc9a606b41"
 
 [[models.files]]
 path = "model.pt"
-size = 936291369
-sha256 = "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea"
+size = 989763045
+sha256 = "3d491689244ec5dfbf9170ef3827c358aa10f1f20e42a7c59e15e688647946d1"
 
 [[models.files]]
 path = "tokens.json"
-size = 352064
-sha256 = "a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97"
+size = 93676
+sha256 = "2b20c2b12572d682afff84ce1c8d560f67b8b32a4c1f21567411d141ed352127"
+
+[[models.files]]
+path = "seg_dict"
+size = 8287834
+sha256 = "59a2ef803a3f1648ad03a2e1480db1c1ee0c0d7dc4ef4dbd16cea33944329022"
 
 [[models.files]]
 path = "am.mvn"
 size = 11203
 sha256 = "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5"
 
-[[models.files]]
-path = "chn_jpn_yue_eng_ko_spectok.bpe.model"
-size = 377341
-sha256 = "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8"
-
 [[models]]
 id = "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
 revision = "master"
+role = "vad"
 
 [[models.files]]
 path = "config.yaml"
@@ -64,8 +66,39 @@ size = 8040
 sha256 = "6820fef9687708c4fc3fab2530179c8fcea6262daa25514380056cd8f6eb1754"
 
 [[models]]
+id = "iic/punc_ct-transformer_cn-en-common-vocab471067-large"
+revision = "master"
+role = "punc"
+
+[[models.files]]
+path = "config.yaml"
+size = 812
+sha256 = "c5ffb25cd063ed366cb26283908dca05a08ecfef8e90bef1d498ef9ffacd7552"
+
+[[models.files]]
+path = "configuration.json"
+size = 450
+sha256 = "7043245e6264cea789404e498a6f55a330a18585a4690d35dfe71741e6982237"
+
+[[models.files]]
+path = "model.pt"
+size = 1125507622
+sha256 = "7176cae922a872e130e6b88aef9a1153581711baf79c9124c7c95be383cd6f81"
+
+[[models.files]]
+path = "tokens.json"
+size = 8280697
+sha256 = "89951fe0669380ed33298ee048c4a2b0ebcaaf6ee8f332d85c281c41d0f38392"
+
+[[models.files]]
+path = "jieba_usr_dict"
+size = 11280857
+sha256 = "059aa2af152734d5fd011a4d69cbab171f62347074db0db5157c17b5649010f5"
+
+[[models]]
 id = "iic/speech_campplus_sv_zh-cn_16k-common"
 revision = "master"
+role = "speaker"
 
 [[models.files]]
 path = "campplus_cn_common.bin"

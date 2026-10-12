@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import tomllib
+import urllib.error
+import urllib.request
+import wave
 from dataclasses import replace
 from pathlib import Path
 
@@ -72,9 +78,10 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.1.0", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.2.0", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
-    assert len(pack.models) == 3 and pack.model_bytes > 900_000_000
+    assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
+    assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
     assert all(len(f["sha256"]) == 64 for m in pack.models for f in m["files"])
     assert "scikit-learn==" in (pack.source / "requirements-darwin-arm64.lock").read_text()
     assert "am.mvn" in {f["path"] for m in pack.models for f in m["files"]}
@@ -104,7 +111,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.1.0" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.2.0" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -311,7 +318,7 @@ def script():
 def test_script_pure_functions(script, tmp_path, capsys):
     audio = tmp_path / "audio.wav"
     audio.touch()
-    assert script.parse_request({"audio": str(audio), "language": "invalid"}) == (audio, "auto", False, None)
+    assert script.parse_request({"audio": str(audio), "language": "invalid"}) == (audio, "auto", False, None, [])
     for request in ([], {}, {"audio": "relative.wav"}, {"audio": str(audio), "diarize": "yes"}):
         with pytest.raises(ValueError):
             script.parse_request(request)
@@ -346,4 +353,137 @@ def test_script_missing_models_is_json_without_dependencies(tmp_path):
 def test_manifest_has_no_personal_paths():
     text = (compute.PACK_ROOT / "asr-funasr/pack.toml").read_text()
     assert "/Users/" not in text
-    assert len(tomllib.loads(text)["models"]) == 3
+    assert len(tomllib.loads(text)["models"]) == 4
+
+
+def test_script_hotwords_and_upload(script, tmp_path):
+    assert script.parse_hotwords(None) == []
+    assert script.parse_hotwords([" 魔搭 ", "", "两 个", "魔搭", "twin"]) == ["魔搭", "twin"]
+    assert len(script.parse_hotwords([f"词{i}" for i in range(500)])) == script.MAX_HOTWORDS
+    for bad in ("魔搭", [1], {"a": 1}):
+        with pytest.raises(ValueError, match="hotwords"):
+            script.parse_hotwords(bad)
+    header = json.dumps({"diarize": True, "hotwords": ["魔搭"], "audio_bytes": 3, "audio_suffix": ".WAV"}).encode()
+    body = header + b"\nabc"
+    audio, language, diarize, reference, hotwords = script.read_upload(io.BytesIO(body), len(body), tmp_path)
+    assert (audio.name, audio.read_bytes(), language, diarize, reference, hotwords) == (
+        "audio.wav",
+        b"abc",
+        "auto",
+        True,
+        None,
+        ["魔搭"],
+    )
+    for meta, data, length in (
+        ({"audio_bytes": 3}, b"abc", 99),
+        ({"audio_bytes": 0}, b"", None),
+        ({"audio_bytes": True}, b"a", None),
+        ({"audio_bytes": 3, "audio_suffix": "/../x"}, b"abc", None),
+        ({"audio_bytes": 3, "reference_bytes": 2}, b"abc", None),
+    ):
+        raw = json.dumps(meta).encode() + b"\n" + data
+        with pytest.raises(ValueError):
+            script.read_upload(io.BytesIO(raw), length or len(raw) + (2 if "reference_bytes" in meta else 0), tmp_path)
+
+
+@pytest.fixture
+def remote():
+    path = compute.PACK_ROOT / "asr-funasr/remote.py"
+    spec = importlib.util.spec_from_file_location("asr_remote", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_remote_client_round_trip(script, remote, tmp_path, capfd):
+    class FakeEngine:
+        device = "cuda"
+
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, audio, diarize, reference, hotwords, progress):
+            self.calls.append(
+                (audio.read_bytes(), audio.suffix, diarize, reference and reference.read_bytes(), hotwords)
+            )
+            progress(0.5)
+            if audio.read_bytes() == b"boom":
+                raise RuntimeError("显存不足")
+            return {"ok": True, "segments": [{"start": 0.0, "end": 1.0, "text": "你好", "speaker": "S1"}]}
+
+    engine = FakeEngine()
+    server = script.make_server(engine, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        audio, reference, words = tmp_path / "audio.wav", tmp_path / "voice.wav", tmp_path / "hotwords.txt"
+        audio.write_bytes(b"RIFF-audio")
+        reference.write_bytes(b"ref")
+        words.write_text("# 人名\n邓郁松\n\n魔搭\n", encoding="utf-8")
+        request = {"audio": str(audio), "language": "zh", "diarize": True, "reference": str(reference)}
+        result = remote.transcribe(url, request, hotwords=remote.read_hotwords(words))
+        assert result["ok"] is True and result["segments"][0]["text"] == "你好"
+        assert engine.calls[-1] == (b"RIFF-audio", ".wav", True, b"ref", ["邓郁松", "魔搭"])
+        assert "@@twin-progress 0.5000" in capfd.readouterr().err
+        audio.write_bytes(b"boom")
+        assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
+        with urllib.request.urlopen(url + "/health") as response:
+            assert json.loads(response.read()) == {"ok": True, "version": "1.2.0", "device": "cuda", "busy": False}
+        bad = b'{"audio_bytes": 1, "hotwords": "x"}\nA'
+        with pytest.raises(urllib.error.HTTPError) as rejected:
+            urllib.request.urlopen(urllib.request.Request(url + "/transcribe", data=bad, method="POST"))
+        assert rejected.value.code == 400 and "hotwords" in json.loads(rejected.value.read())["error"]
+        with pytest.raises(ValueError, match="音频文件不存在"):
+            remote.transcribe(url, {"audio": str(tmp_path / "missing.wav")})
+    finally:
+        server.shutdown()
+        server.server_close()
+    with pytest.raises(ValueError, match="连不上转写服务"):
+        remote.transcribe(url, {"audio": str(audio)}, timeout=2)
+    with pytest.raises(ValueError, match="地址无效"):
+        remote.transcribe("https://example.com", {"audio": str(audio)})
+
+
+def test_remote_command_contract(tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"x")
+    result = subprocess.run(
+        [sys.executable, str(compute.PACK_ROOT / "asr-funasr/remote.py"), "--url", "http://127.0.0.1:9"],
+        input=json.dumps({"audio": str(audio)}),
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout.splitlines()[-1])
+    assert result.returncode == 1 and payload == {"ok": False, "error": "连不上转写服务，请检查 GPU 机器上的服务和隧道"}
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_remote_uploads_wav_as_lossless_flac(script, remote, tmp_path):
+    audio = tmp_path / "audio.wav"
+    with wave.open(str(audio), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(16000)
+        out.writeframes(b"\x00\x00" * 16000)
+    seen = []
+
+    class FakeEngine:
+        device = "cpu"
+
+        def transcribe(self, audio, diarize, reference, hotwords, progress):
+            seen.append((audio.suffix, audio.stat().st_size))
+            return {"ok": True, "segments": []}
+
+    server = script.make_server(FakeEngine(), "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": True, "segments": []}
+        assert remote.transcribe(url, {"audio": str(audio)}, flac=False) == {"ok": True, "segments": []}
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen[0][0] == ".flac" and seen[0][1] < audio.stat().st_size
+    assert seen[1] == (".wav", audio.stat().st_size)
+    assert remote.compress(tmp_path / "voice.m4a", tmp_path) == tmp_path / "voice.m4a"

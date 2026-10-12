@@ -63,7 +63,7 @@
 
 `./scripts/local-up.sh` 首次运行时自动完成下面的安装（缺 ffmpeg 时用 Homebrew 安装）；本机已有模型直接复用，安装失败只提示、不阻塞文字聊天，下次运行会再试。只想要文字聊天时加 `--no-asr`。
 
-Apple Silicon Mac 使用 `asr-funasr`：SenseVoice 转写、FSMN 检测语音、CAM++ 区分说话人并与本人参考声音匹配，视频音轨也走此流程。每次调用启动进程，无常驻服务；默认使用 Apple 芯片 GPU（MPS），49 分钟录音约 1–2 分钟转完，冷启动约 17 秒；转写时页面显示进度。
+Apple Silicon Mac 使用 `asr-funasr`：SeACo-Paraformer 转写中文（支持热词）、CT-Transformer 补标点、FSMN 检测语音、CAM++ 区分说话人并与本人参考声音匹配，视频音轨也走此流程。每次调用启动进程，无常驻服务；默认使用 Apple 芯片 GPU（MPS），49 分钟录音约 1 分钟多转完，冷启动约 30 秒；转写时页面显示进度。转写包升级（例如 1.1.0 → 1.2.0 从 SenseVoice 换成 Paraformer）由 `local-up.sh` 自动完成，只需补下载新增的模型；已转写的录音不会自动重转。有独立 GPU 机器时也可以在那里常驻转写服务，见[算力包 README](../deploy/compute/asr-funasr/README.md#常驻服务与远程转写)。
 
 也可以在仓库根目录手动安装或检查：
 
@@ -73,7 +73,7 @@ uv run twin --config ./twin.toml compute install asr-funasr --download-models
 uv run twin --config ./twin.toml compute status
 ```
 
-首次安装通常数分钟到十几分钟，取决于网络和缓存；三个模型约 0.90 GiB，连同 Python 依赖、下载缓存建议预留至少 5 GiB。已有 `~/.cache/modelscope` 模型会校验后复用，不重复下载；只使用现有缓存时去掉 `--download-models`，缺模型会报错退出。
+首次安装通常数分钟到十几分钟，取决于网络和缓存；四个模型约 2.0 GiB，连同 Python 依赖、下载缓存建议预留至少 5 GiB。已有 `~/.cache/modelscope` 模型会校验后复用，不重复下载；只使用现有缓存时去掉 `--download-models`，缺模型会报错退出。
 
 包默认安装到机器共享的 `~/Library/Application Support/twin/compute`，多个仓库 clone 共用。希望连算力环境也留在仓库内时，先执行 `export TWIN_COMPUTE_HOME="$PWD/.pi-runs/compute-home"`；自定义模型缓存使用 `MODELSCOPE_CACHE`，网页启动时也需保留该变量。配置目标是 `--config`、`TWIN_CONFIG` 或默认 `./twin.toml`；已有手写 `[asr]` 不覆盖，按提示手动处理。安装不会开启朗读、形象候选或口型视频。
 

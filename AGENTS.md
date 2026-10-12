@@ -13,7 +13,7 @@
    ./scripts/local-up.sh --no-open --base-url <URL> --model <NAME>
    ```
 
-   不要加 `--demo`，除非用户明确想先看虚构示例。首次运行会同步依赖，用 Homebrew 安装 ffmpeg，并安装录音转写包 `asr-funasr`（模型约 0.9 GiB，本机已有则复用），可能需要几分钟。Claude Code 桌面版也可以用 `.claude/launch.json` 里的 `twin-local` 启动预览。
+   不要加 `--demo`，除非用户明确想先看虚构示例。首次运行会同步依赖，用 Homebrew 安装 ffmpeg，并安装录音转写包 `asr-funasr`（模型约 2.0 GiB，本机已有则复用），可能需要几分钟。Claude Code 桌面版也可以用 `.claude/launch.json` 里的 `twin-local` 启动预览。
 5. **判断结果**：
    - 输出出现 `网页界面：http://127.0.0.1:<端口>` 后，访问该地址返回 200 即成功。把地址告诉用户，并说明下一步：在网页里按引导填写名字和介绍，添加会议录音或其他资料，转写后勾选属于自己的说话人，然后就可以聊天。端口被占用时会自动顺延。
    - 输出“尚未配置文字聊天模型”：按提示补齐后重新运行。

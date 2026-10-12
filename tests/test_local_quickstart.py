@@ -409,3 +409,48 @@ def test_local_setup_from_flags(monkeypatch: pytest.MonkeyPatch, capsys: pytest.
     assert (settings.llm.model, settings.llm.base_url) == ("m", "http://127.0.0.1:8000/v1")
     monkeypatch.setenv("LOCAL_TEST_KEY", "none")
     assert check_local_config(interactive=False) == 0
+
+
+def _git(cwd: Path, *args: str) -> str:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com"}
+    env |= {"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+    return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
+
+
+@pytest.mark.parametrize("case", ["behind", "dirty", "other-branch", "no-update"])
+def test_local_up_updates_stable_and_restarts(tmp_path: Path, case: str) -> None:
+    origin, work = tmp_path / "origin.git", tmp_path / "work"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    seed = tmp_path / "seed"
+    (seed / "scripts").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts/local-up.sh", seed / "scripts/local-up.sh")
+    (seed / "README").write_text("v1\n")
+    _git(seed, "init", "-q", "-b", "stable")
+    _git(seed, "add", ".")
+    _git(seed, "commit", "-qm", "v1")
+    _git(seed, "push", "-q", str(origin), "stable")
+    _git(tmp_path, "clone", "-q", "-b", "stable", str(origin), str(work))
+    # The release replaces the script with a stub, so a restart is visible in the output.
+    (seed / "scripts/local-up.sh").write_text('#!/usr/bin/env bash\necho "NEW SCRIPT $TWIN_LOCAL_UP_UPDATED $*"\n')
+    _git(seed, "commit", "-qam", "v2")
+    _git(seed, "push", "-q", str(origin), "stable")
+    if case == "dirty":
+        (work / "README").write_text("local edit\n")
+    if case == "other-branch":
+        _git(work, "switch", "-qc", "dev")
+    options = ["--no-update"] if case == "no-update" else []
+    env = {k: v for k, v in os.environ.items() if k not in {"TWIN_LOCAL_UP_UPDATED", "REPO_ROOT"}}
+    env["PATH"] = "/usr/bin:/bin"  # git but no uv: a script that is not replaced stops at the uv check
+    result = subprocess.run(
+        ["/bin/bash", str(work / "scripts/local-up.sh"), "--no-open", *options],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if case == "behind":
+        assert "稳定版：已更新 1 个提交" in result.stdout
+        assert "NEW SCRIPT 1 --no-open" in result.stdout
+    else:
+        assert "NEW SCRIPT" not in result.stdout
+        assert "缺少 uv" in result.stderr
+        assert ("跳过自动更新" in result.stdout) == (case == "dirty")

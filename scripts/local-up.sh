@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+original_args=("$@")
+update=true
 demo=false
 asr=true
 open_browser=true
@@ -14,6 +16,7 @@ while [[ $# -gt 0 ]]; do
         --demo) demo=true; shift ;;
         --no-open) open_browser=false; shift ;;
         --no-asr) asr=false; shift ;;
+        --no-update) update=false; shift ;;
         --dry-run) dry_run=true; shift ;;
         --model|--base-url)
             if [[ $# -lt 2 || -z "$2" ]]; then
@@ -34,17 +37,49 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2 ;;
         --help|-h)
-            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--port N] [--base-url URL --model NAME] [--dry-run]'
+            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--no-update] [--port N] [--base-url URL --model NAME] [--dry-run]'
             exit 0 ;;
         *) echo "错误：未知参数 $1" >&2; exit 2 ;;
     esac
 done
 cd "$repo_root"
 repo_root="$PWD"
+
+# Colleagues run the stable branch: fast-forward it before anything else, then restart with the updated script.
+# The whole update lives in one function so bash has parsed it before git rewrites this file.
+update_stable() {
+    if [[ "${TWIN_LOCAL_UP_UPDATED:-}" == 1 ]] || ! command -v git >/dev/null 2>&1; then return 0; fi
+    if [[ "$(git -C "$repo_root" symbolic-ref --quiet --short HEAD 2>/dev/null)" != stable ]]; then return 0; fi
+    if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=no)" ]]; then
+        echo '稳定版：本地有未提交的改动，跳过自动更新。'
+        return 0
+    fi
+    if ! GIT_TERMINAL_PROMPT=0 git -C "$repo_root" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
+        fetch --quiet origin stable 2>/dev/null; then
+        echo '稳定版：暂时连不上仓库，使用本地版本继续。'
+        return 0
+    fi
+    local behind
+    behind=$(git -C "$repo_root" rev-list --count HEAD..FETCH_HEAD)
+    if [[ "$behind" == 0 ]]; then
+        echo "稳定版：已是最新（$(git -C "$repo_root" log -1 --format='%h %s')）。"
+        return 0
+    fi
+    if ! git -C "$repo_root" merge --ff-only --quiet FETCH_HEAD; then
+        echo '稳定版：本地分支与仓库分叉，无法自动更新，使用本地版本继续。'
+        return 0
+    fi
+    echo "稳定版：已更新 ${behind} 个提交，现在是 $(git -C "$repo_root" log -1 --format='%h %s')。"
+    export TWIN_LOCAL_UP_UPDATED=1
+    exec "$repo_root/scripts/local-up.sh" ${original_args[@]+"${original_args[@]}"}
+}
+if "$update" && ! "$dry_run"; then update_stable; fi
+
 echo '本地验证：默认开启文字聊天和录音转写，数据默认保存在本仓库 data/。'
-echo '更新代码：停止服务后运行 git pull && ./scripts/local-up.sh'
+echo '更新代码：stable 分支每次启动自动更新；其他分支停止服务后运行 git pull && ./scripts/local-up.sh'
 echo '数据库迁移和记忆内核增量重建由应用自动完成（保留费用闸）。'
 if "$dry_run"; then
+    if "$update"; then echo '在 stable 分支且无本地改动时：git fetch origin stable 并快进更新，然后重新启动脚本（--no-update 跳过）'; fi
     echo '预览：检查 uv；缺少 ffmpeg 时用 Homebrew 安装（录音转写需要）。'
     echo 'uv sync --frozen'
     echo '若缺少 twin.toml：twin --config ./twin.toml init ./twin.toml（默认模板，db_path = data/twin.db）'

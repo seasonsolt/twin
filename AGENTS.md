@@ -18,7 +18,7 @@
    - 输出出现 `网页界面：http://127.0.0.1:<端口>` 后，访问该地址返回 200 即成功。把地址告诉用户，并说明下一步：在网页里按引导填写名字和介绍，添加会议录音或其他资料，转写后勾选属于自己的说话人，然后就可以聊天。端口被占用时会自动顺延。
    - 输出“尚未配置文字聊天模型”：按提示补齐后重新运行。
    - “环境自检”里的 ✗ 不会阻止启动；转写安装失败只影响录音转写，文字聊天照常可用。
-6. **停止与更新**：停止时结束后台进程。更新时先停止，再运行 `git pull && ./scripts/local-up.sh`，数据库迁移和记忆内核重建会自动完成。
+6. **停止与更新**：停止时结束后台进程。更新时先停止再运行 `./scripts/local-up.sh`：`stable` 分支会自动更新到最新稳定版，数据库迁移和记忆内核重新整理自动完成。
 
 完整说明见 `docs/LOCAL_DEV.md`。
 
@@ -26,8 +26,14 @@
 
 文字聊天和会议录音转写默认开启；朗读真人音色和口型视频默认关闭，开启方法见 `docs/MEDIA.md`。
 
+## 打磨记忆内核与发布
+
+- 同事运行 `stable` 分支；内核在 `main` 上迭代，确认后运行 `./scripts/release-stable.sh` 发布（检查通过后只快进 `stable`）。
+- 修改抽取/合并提示词、输出结构（`persona/profile.py`）或维度分类（`persona/dimensions.py`）时，必须同时提升 `persona/kernel.py` 的 `PROMPT_VERSION` / `TAXONOMY_VERSION` 并记录新指纹，否则 `tests/test_kernel.py` 失败；不提升版本，同事已有的记忆不会按新内核重新整理。
+- 数据库结构变化只能在 `persona/store.py` 的 `_MIGRATIONS` 末尾追加；迁移和新内核整理前会自动快照，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
+
 ## 开发约定
 
 - 检查：`uv run ruff check src tests deploy && uv run mypy && uv run pytest -q`。改了前端时运行 `pnpm -C frontend build`，并一起提交 `src/twin/web/static`。
 - 密钥只放在环境变量或 `.env` 里，配置文件只写变量名。`twin.toml`、`.env`、`data/` 不入 git。
-- 仓库是公开的：不要提交内部主机名、域名、本机路径或任何个人资料。
+- 不要提交密钥、本机路径、个人资料或会议内容。

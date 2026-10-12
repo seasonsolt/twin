@@ -8,8 +8,6 @@
 
 从一个人自己的资料里长出来：每句话有出处，不知道就说不知道。
 
-[![CI](https://github.com/seasonsolt/twin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/seasonsolt/twin/actions/workflows/ci.yml)
-
 [架构](docs/ARCHITECTURE.md) · [使用指南](docs/GUIDE.md) · [对比与评测](docs/COMPARISON.md) · [LongMemEval](docs/LONGMEMEVAL.md) · [PersonaMem-v2](docs/PERSONAMEM2.md) · [Twin-2K-500](docs/TWIN2K500.md) · [验证与失误分析](docs/BENCHMARK_VALIDATION.md) · [服务接口](docs/SERVICE.md) · [语音与视频](docs/MEDIA.md)
 
 </div>
@@ -164,10 +162,10 @@ flowchart TB
 
 ## 快速开始
 
-1. 克隆仓库并进入目录（Mac 需先有 Git 和 uv；缺少 uv 时运行 `brew install uv`）：
+1. 克隆稳定版并进入目录（Mac 需先有 Git 和 uv；缺少 uv 时运行 `brew install uv`）：
 
    ```bash
-   git clone https://github.com/seasonsolt/twin.git
+   git clone -b stable https://cnb.cool/xjjk/opscenter/aihub/twin.git
    cd twin
    ```
 
@@ -185,7 +183,7 @@ flowchart TB
 
 **默认开启文字聊天和会议录音转写**：首次运行自动安装 ffmpeg 与本机转写包（约 0.9 GiB 模型，已有则复用；`--no-asr` 跳过）。朗读真人音色和口型视频默认关闭，需要时再配置 `[tts]` / `[video]`，见 [媒体配置](docs/MEDIA.md)。
 
-更新代码：停止服务后运行 `git pull && ./scripts/local-up.sh`；数据库迁移和内核增量重建由应用自动完成。本地数据默认只在本机仓库 `data/`，与官方演示环境互不影响。
+更新：`stable` 分支每次运行 `./scripts/local-up.sh` 都会自动更新到最新稳定版；数据库迁移和记忆内核重新整理由应用自动完成，整理前自动快照，可以回退。本地数据默认只在本机仓库 `data/`，与官方演示环境互不影响。
 
 在 Claude Code、Codex 等 AI 助手里打开仓库，说“部署它”即可，助手按 [AGENTS.md](AGENTS.md) 执行；密钥请自己填写在 `.env`，不要发到对话里。
 
@@ -212,4 +210,4 @@ pnpm -C frontend typecheck && pnpm -C frontend lint && pnpm -C frontend test
 uv run ruff check src tests deploy && uv run mypy && uv run pytest -q
 ```
 
-开发时 `uv run twin ui` 起后端，`pnpm -C frontend dev` 起前端（`/api` 代理到后端）。细节见 [网页界面](docs/WEB_UI.md)。
+内核在 `main` 上迭代，确认后运行 `./scripts/release-stable.sh` 发布给同事（只快进 `stable`）。开发时 `uv run twin ui` 起后端，`pnpm -C frontend dev` 起前端（`/api` 代理到后端）。细节见 [网页界面](docs/WEB_UI.md)。

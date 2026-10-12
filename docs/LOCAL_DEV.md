@@ -107,19 +107,28 @@ uv run twin --config ./twin.toml compute status
 | TOML 或 env 格式错误 | 检查引号与节名；env 每行只写 `KEY=VALUE`，不加 `export` |
 | 端口被占用 | 脚本自动改用后续空闲端口；也可加 `--port 9001` |
 | doctor 提示服务未加载 | 那是常驻部署的检查；本地脚本用 `doctor --local`，不检查常驻服务 |
-| 缺少 ffmpeg 或可选媒体未开启 | 文字聊天可以继续；需要导入录音时再安装并配置转写 |
+| 录音转写未开启 | `local-up.sh` 会自动安装 ffmpeg 与转写包；失败时按提示处理后重新运行，文字聊天不受影响 |
 | 整理失败或聊天无法调用模型 | 检查模型名、端点、密钥和服务可达性；配置检查通过只代表字段齐全，不保证模型在线 |
-| 内核等待确认 | P1 费用闸保留；先用 `uv run twin kernel status` 看分身状态，确认用量后按提示重建 |
+| 内核等待确认 | 重新整理的分段超过费用闸；管理员在“记忆”页点“开始重新整理”，或 `uv run twin kernel status` 查看后 `uv run twin kernel rebuild --yes` |
 
 ## 更新代码
 
-先按 Ctrl-C 停止当前服务，再在仓库根目录执行：
+按 Ctrl-C 停止服务后重新运行 `./scripts/local-up.sh` 即可：在 `stable` 分支且没有本地改动时，脚本先从仓库快进到最新稳定版，再用新版本启动；`--no-update` 跳过。其他分支请自己 `git pull`。
+
+依赖按锁文件同步，转写包有新版本时自动升级。数据库迁移和记忆内核增量重新整理自动完成，无需删库；需要重新整理的分段超过费用闸（默认 400）时，管理员在“记忆”页点“开始重新整理”，或运行 `uv run twin kernel rebuild --yes`。已有配置、密钥与资料保留。
+
+## 回退记忆内核
+
+数据库迁移前、以及每次按新内核重新整理前，都会把该分身的数据库快照到同目录的 `kernel-snapshots/`（0600，每个分身保留最近 3 份）。新内核效果不理想时：
 
 ```bash
-git pull && ./scripts/local-up.sh
+uv run twin kernel snapshots                                   # 列出快照
+git switch --detach <上一个稳定版提交>                          # 先回到旧代码，否则启动后会再次升级
+uv run twin kernel restore <快照文件> --persona default --yes   # 停止网页后执行；覆盖前会再快照一次当前数据
+./scripts/local-up.sh --no-update
 ```
 
-依赖按锁文件同步。数据库迁移和内核增量重建由 P1 自动完成，无需手动删库重建；超过费用闸或关闭自动重建时按提示确认。已有配置、密钥与资料保留。示例资料内容变化时可先运行 `uv run twin demo seed --force` 再启动。
+确认新稳定版修好后，`git switch stable` 再运行 `./scripts/local-up.sh` 回到自动更新。
 
 ## 数据在哪里、怎么清空
 

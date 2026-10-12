@@ -12,7 +12,8 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 
 Apple Silicon、macOS 14+ 可在仓库运行 `./deploy/mac/install.sh --dry-run` 预览，再运行安装脚本。
 配置后用 `twin doctor` 自检，`twin ops` 管理常驻服务和备份；默认不调用模型，只有 `twin doctor --probe` 才实际探测模型。
-当前阶段从本仓库构建 wheel，算力包需等待 P4；安装步骤、目录、密钥和恢复说明见 [Mac 部署说明](../deploy/mac/README.md)。
+默认只有文字聊天；语音、转写、认人和真人视频按需开启。资料是会议录音时，需要单独开启转写（P4 的 `asr-funasr` 包），无需同时开启语音或视频输出。当前可按 [媒体配置说明](MEDIA.md) 手写配置接入已有服务。
+当前阶段从本仓库构建 wheel，P4 将提供 `twin compute install`；安装步骤、目录、密钥和恢复说明见 [Mac 部署说明](../deploy/mac/README.md)。
 
 ## 网页快速开始
 

@@ -89,7 +89,9 @@ export function ChatStage({
     playbackError.current = onVideoError;
   }, [onVideoError]);
   const url =
-    videoState?.status === 'done' ? videoUrl(videoState.result) : null;
+    capabilities?.video?.available && videoState?.status === 'done'
+      ? videoUrl(videoState.result)
+      : null;
   useEffect(() => {
     setOpen(false);
     setTime(0);
@@ -234,48 +236,78 @@ export function ChatStage({
                     className="stage-speaking-ring"
                   />
                 ))}
-              <motion.button
-                ref={circle}
-                type="button"
-                className="stage-circle size-full"
-                style={{ scale: reduced ? 1 : breathing }}
-                aria-label={
-                  small
-                    ? '展开舞台'
-                    : url && videoPlaying
-                      ? '打开真人视频全屏'
-                      : '播放或暂停当前句'
-                }
-                aria-expanded={!small}
-                onClick={() => {
-                  if (small) {
-                    setCollapsed(false);
-                    if (url && !videoPlaying) onToggle();
-                    return;
+              {capabilities?.available || capabilities?.video?.available ? (
+                <motion.button
+                  ref={circle}
+                  type="button"
+                  className="stage-circle size-full"
+                  style={{ scale: reduced ? 1 : breathing }}
+                  aria-label={
+                    small
+                      ? '展开舞台'
+                      : url && videoPlaying
+                        ? '打开真人视频全屏'
+                        : '播放或暂停当前句'
                   }
-                  if (url && videoPlaying) {
-                    player.current?.pause();
-                    setOpen(true);
-                  } else onToggle();
-                }}
-              >
-                {url && (videoPlaying || videoShown) ? (
-                  <video
-                    key={`${turn?.id}:${url}`}
-                    ref={player}
-                    src={url}
-                    playsInline
-                    preload="metadata"
-                    aria-label="舞台真人视频"
-                    onLoadedMetadata={() => setTime(0)}
-                    onTimeUpdate={(event) =>
-                      setTime(event.currentTarget.currentTime)
+                  aria-expanded={!small}
+                  onClick={() => {
+                    if (small) {
+                      setCollapsed(false);
+                      if (url && !videoPlaying) onToggle();
+                      return;
                     }
-                    onEnded={() => onVideoPlaying(false)}
-                    onError={onVideoError}
-                    className="size-full rounded-full object-cover"
-                  />
-                ) : (
+                    if (url && videoPlaying) {
+                      player.current?.pause();
+                      setOpen(true);
+                    } else onToggle();
+                  }}
+                >
+                  {url && (videoPlaying || videoShown) ? (
+                    <video
+                      key={`${turn?.id}:${url}`}
+                      ref={player}
+                      src={url}
+                      playsInline
+                      preload="metadata"
+                      aria-label="舞台真人视频"
+                      onLoadedMetadata={() => setTime(0)}
+                      onTimeUpdate={(event) =>
+                        setTime(event.currentTarget.currentTime)
+                      }
+                      onEnded={() => onVideoPlaying(false)}
+                      onError={onVideoError}
+                      className="size-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <ChatAvatar
+                      name={name}
+                      personaId={personaId}
+                      capabilities={capabilities}
+                      className="size-full"
+                      glow={false}
+                    />
+                  )}
+                  {url && videoPlaying && (
+                    <span className="stage-video-chip">
+                      真人 ·{' '}
+                      {Math.floor((videoState?.result?.duration_s ?? 0) / 60)}:
+                      {String(
+                        Math.round(videoState?.result?.duration_s ?? 0) % 60,
+                      ).padStart(2, '0')}
+                    </span>
+                  )}
+                  {reduced && speaking && (
+                    <span
+                      role="status"
+                      aria-label="正在说话"
+                      className="stage-speaking-chip"
+                    >
+                      正在说
+                    </span>
+                  )}
+                </motion.button>
+              ) : (
+                <div className="stage-circle size-full">
                   <ChatAvatar
                     name={name}
                     personaId={personaId}
@@ -283,26 +315,8 @@ export function ChatStage({
                     className="size-full"
                     glow={false}
                   />
-                )}
-                {url && videoPlaying && (
-                  <span className="stage-video-chip">
-                    真人 ·{' '}
-                    {Math.floor((videoState?.result?.duration_s ?? 0) / 60)}:
-                    {String(
-                      Math.round(videoState?.result?.duration_s ?? 0) % 60,
-                    ).padStart(2, '0')}
-                  </span>
-                )}
-                {reduced && speaking && (
-                  <span
-                    role="status"
-                    aria-label="正在说话"
-                    className="stage-speaking-chip"
-                  >
-                    正在说
-                  </span>
-                )}
-              </motion.button>
+                </div>
+              )}
             </motion.div>
             {videoStatus && (
               <span role="status" className="stage-video-status">

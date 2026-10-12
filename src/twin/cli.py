@@ -31,7 +31,7 @@ from .identity import Identity
 from .llm import CallTally, LLMError
 from .media.schema import MediaScript
 from .ops.envfile import load_env_file
-from .ops.paths import TwinPaths, compute_defaults
+from .ops.paths import TwinPaths
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
@@ -363,22 +363,13 @@ def init(
             )
         if profile == "mac-unified":
             paths = TwinPaths.from_env()
-            defaults = compute_defaults()
             template = template.replace(
                 'db_path = "data/twin.db"', "db_path = " + json.dumps(str(paths.data / "twin.db"))
             )
-            template += "\n# 以下为 P4 算力包约定，需先 twin compute install；当前阶段尚未提供安装命令。\n"
             template += (
-                '\n[tts]\nprovider = "openai_compat"\n'
-                f'base_url = "http://127.0.0.1:{defaults["tts_port"]}/v1"\n'
-                'model = "moss-tts"\negress = "local"\n'
+                "\n# 默认只有文字聊天；语音、转写、认人、真人视频可按需开启。\n"
+                "# P4 将提供 twin compute install，也可手写配置，详见 docs/MEDIA.md。\n"
             )
-            for section in ("asr", "vision", "video"):
-                provider = "remote" if section == "video" else "command"
-                template += (
-                    f'\n[{section}]\nprovider = "{provider}"\n'
-                    f'command = {json.dumps(defaults[section + "_command"])}\negress = "local"\n'
-                )
             private_directory(paths.data)
         private_directory(target.parent)
         _write(target, template)

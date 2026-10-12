@@ -35,6 +35,8 @@ class TwinPaths:
         else:
             home = Path.home() / ".local" / "share" / "twin"
         config_dir = home / "config" if override else Path.home() / ".config" / "twin"
+        service_dir = os.environ.get("TWIN_SERVICE_DIR")
+        services = Path(service_dir).expanduser().resolve() if service_dir else None
         return cls(
             home,
             config_dir,
@@ -47,8 +49,8 @@ class TwinPaths:
             home / "data",
             home / "backups",
             home / "logs" if override or platform.system() != "Darwin" else Path.home() / "Library" / "Logs" / "twin",
-            home / "LaunchAgents" if override else Path.home() / "Library" / "LaunchAgents",
-            home / "systemd" if override else Path.home() / ".config" / "systemd" / "user",
+            services if services is not None else Path.home() / "Library" / "LaunchAgents",
+            services if services is not None else Path.home() / ".config" / "systemd" / "user",
         )
 
     def service_log(self, name: str) -> Path:

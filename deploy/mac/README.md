@@ -1,6 +1,6 @@
 # 在 Mac 上部署 twin
 
-需要 Apple Silicon、macOS 14+ 和已安装的 Homebrew。P2 从当前仓库构建 wheel；发布下载/升级在 P3，算力包安装在 P4。因此此阶段可以安装应用、托管网页和备份，但不会自动获得本机语音、转写、认人或真人视频。
+需要 Apple Silicon、macOS 14+ 和已安装的 Homebrew。P2 从当前仓库构建 wheel；发布下载/升级在 P3，算力包安装在 P4。默认只有文字聊天，可托管网页和备份；语音、转写、认人和真人视频按需开启，不会自动安装。资料以会议录音为主时，需要单独开启转写（P4 的 `asr-funasr` 包），与语音和视频输出无关。
 
 ```bash
 # 在仓库中先查看将执行的步骤，不安装软件、不写文件、不注册服务
@@ -23,7 +23,7 @@
 | 服务 | `~/Library/LaunchAgents/ai.twin.*.plist` |
 | 日志 | `~/Library/Logs/twin/*.log` |
 
-Linux 使用 `~/.local/share/twin/` 和 `~/.config/systemd/user/twin-*.service`/`.timer`。`TWIN_HOME` 会把配置、日志、服务文件和数据目录全部收进指定根目录，便于隔离测试；真实服务控制仍需显式执行 `twin ops start` 等命令。`TWIN_ENV_FILE` 可单独指定环境文件。
+Linux 使用 `~/.local/share/twin/` 和 `~/.config/systemd/user/twin-*.service`/`.timer`。`TWIN_HOME` 覆盖应用、配置、日志和数据目录，服务文件仍默认写入 `~/Library/LaunchAgents` 或 `~/.config/systemd/user`，以便系统自动加载。测试须另设 `TWIN_SERVICE_DIR` 到临时目录来隔离服务文件；真实服务控制仍需显式执行 `twin ops start` 等命令。`TWIN_ENV_FILE` 可单独指定环境文件。
 
 命令行入口先加载 env，再读取配置；不会覆盖进程已有环境变量。只支持 `KEY=VALUE`、注释及单/双引号，不支持 `export`、变量替换或命令执行。错误只显示行号和变量名，不显示值。可用编辑器填写 `TWIN_LLM_KEY`，以及实际启用后端需要的 `TWIN_EMBED_KEY`、`TWIN_TTS_KEY`、`TWIN_ASR_KEY`、`TWIN_SMTP_PASSWORD`。
 
@@ -35,7 +35,7 @@ twin init --profile split        # 保留现有模板与远端配置方式
 twin init --profile minimal      # 只生成 LLM/embed 基础配置
 ```
 
-`mac-unified` 预留 TTS router `127.0.0.1:8004/v1`，ASR、vision、video 命令约定为 `compute/<pack>/current/venv/bin/python .../run.py`（包分别为 `asr-funasr`、`vision-mediapipe`、`video-ditto`）。生成文件明确注明“需先 twin compute install”；**P2 尚无此命令**，doctor 会如实报告缺失。P4 前可自行配置已有服务，或使用 `minimal` 档位。
+`mac-unified` 只生成文字聊天所需的 `[llm]`、`[embed]` 和数据路径，不写入媒体配置节。未开启的能力在 doctor 中显示“未开启（可选）”，不会算作失败；网页隐藏对应播放、试听和真人视频入口。P4 将提供 `twin compute install`，当前也可按 [媒体配置说明](../../docs/MEDIA.md) 手写配置，接入已有服务。会议录音需要开启转写，P4 对应 `asr-funasr` 包。
 
 ## 托管服务与自检
 

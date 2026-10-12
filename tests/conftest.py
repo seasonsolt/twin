@@ -8,6 +8,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolated_ops_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TWIN_HOME", str(tmp_path / "twin-home"))
+    monkeypatch.setenv("TWIN_SERVICE_DIR", str(tmp_path / "services"))
     monkeypatch.delenv("TWIN_ENV_FILE", raising=False)
 
 

@@ -34,6 +34,9 @@ from twin.util import open_private, private_directory
 @pytest.fixture(autouse=True)
 def offline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr("twin.ops.doctor.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("twin.ops.doctor.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     monkeypatch.delenv("TWIN_CONFIG", raising=False)
     original = subprocess.run
 
@@ -61,7 +64,12 @@ def configured() -> tuple[TwinPaths, Settings]:
 
 def test_paths_override_contains_all_writes() -> None:
     paths = TwinPaths.from_env()
-    assert all(value.is_relative_to(paths.home) for value in vars(paths).values())
+    assert all(
+        value.is_relative_to(paths.home)
+        for name, value in vars(paths).items()
+        if name not in {"launch_agents", "systemd_user"}
+    )
+    assert paths.launch_agents == paths.systemd_user == Path(os.environ["TWIN_SERVICE_DIR"])
     assert compute_defaults()["tts_port"] == 8004
     assert str(paths.compute) in str(compute_defaults()["asr_command"])
 
@@ -69,12 +77,86 @@ def test_paths_override_contains_all_writes() -> None:
 @pytest.mark.parametrize("system", ["Darwin", "Linux"])
 def test_platform_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, system: str) -> None:
     monkeypatch.delenv("TWIN_HOME")
+    monkeypatch.delenv("TWIN_SERVICE_DIR")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr("twin.ops.paths.platform.system", lambda: system)
     paths = TwinPaths.from_env()
     assert paths.config == tmp_path / ".config/twin/twin.toml"
     assert paths.home == tmp_path / ("Library/Application Support/twin" if system == "Darwin" else ".local/share/twin")
     assert paths.launch_agents == tmp_path / "Library/LaunchAgents"
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Linux"])
+def test_home_override_keeps_system_service_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, system: str
+) -> None:
+    monkeypatch.delenv("TWIN_SERVICE_DIR")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr("twin.ops.paths.platform.system", lambda: system)
+    paths = TwinPaths.from_env()
+    assert paths.home == Path(os.environ["TWIN_HOME"])
+    assert paths.launch_agents == tmp_path / "Library/LaunchAgents"
+    assert paths.systemd_user == tmp_path / ".config/systemd/user"
+
+
+@pytest.mark.parametrize(
+    "ready_after,loaded,expected,elapsed",
+    [(1, True, True, 0), (4, True, True, 3), (99, True, False, 10), (99, False, None, 0)],
+)
+def test_doctor_port_startup_grace(ready_after: int, loaded: bool, expected: bool | None, elapsed: int) -> None:
+    from twin.ops import doctor
+
+    paths, settings = configured()
+    calls = 0
+
+    def connect(host: str, port: int) -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= ready_after
+
+    backend = LaunchdManager(paths, lambda cmd: subprocess.CompletedProcess(cmd, 0 if loaded else 113, "sleep 0", ""))
+    checks = doctor.inspect_installation(paths, settings, paths.config, backend, connect=connect)
+    check = next(item for item in checks if item.name == "网页端口")
+    assert check.ok is expected
+    assert doctor.time.monotonic() == elapsed
+    assert calls == (10 if elapsed == 10 else elapsed + 1)
+
+
+def test_doctor_optional_media_and_success_advice(monkeypatch: pytest.MonkeyPatch) -> None:
+    from twin.ops.doctor import Check
+
+    paths, settings = configured()
+    for key in ("TWIN_TTS_KEY", "TWIN_ASR_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    checks = inspect_installation(
+        paths, settings, paths.config, LaunchdManager(paths, fake_runner), connect=lambda *_: True
+    )
+    for name in ("语音", "识别", "认人", "视频"):
+        check = next(item for item in checks if item.name == name)
+        assert check.ok is None and check.detail == "未开启（可选）"
+    assert not any("TWIN_TTS_KEY" in item.name or "TWIN_ASR_KEY" in item.name for item in checks)
+    assert Check("测试", True, "通过", "修复").text() == "✓ 测试：通过"
+    assert Check("测试", None, "跳过", "修复").text() == "– 测试：跳过"
+    assert Check("测试", False, "失败", "修复").text() == "✗ 测试：失败；修复"
+    assert all(
+        not any(word in item.text() for word in ("请", "建议", "运行 ", "chmod", "必须")) for item in checks if item.ok
+    )
+
+
+@pytest.mark.parametrize("provider,required", [("silent", False), ("openai_compat", False), ("cloudflare", True)])
+def test_doctor_tts_credentials_follow_provider(monkeypatch: pytest.MonkeyPatch, provider: str, required: bool) -> None:
+    paths, settings = configured()
+    settings.tts = TTSSettings.model_validate(
+        {"provider": provider, "base_url": "http://127.0.0.1:8004/v1", "model": "test"}
+    )
+    monkeypatch.delenv("TWIN_TTS_KEY", raising=False)
+    checks = inspect_installation(
+        paths, settings, paths.config, LaunchdManager(paths, fake_runner), connect=lambda *_: True
+    )
+    keys = [item for item in checks if item.name == "环境变量 TWIN_TTS_KEY"]
+    assert bool(keys) is required
+    if required:
+        assert keys[0].ok is False
 
 
 def test_env_loading_atomic_and_no_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,10 +411,14 @@ def test_init_profiles(profile: str) -> None:
     path = TwinPaths.from_env().config if profile == "mac-unified" else Path("twin.toml")
     settings = load_settings(path)
     if profile == "mac-unified":
-        assert "需先 twin compute install" in path.read_text()
+        assert "P4 将提供 twin compute install" in path.read_text()
+        assert "docs/MEDIA.md" in path.read_text()
+        active = {line.strip() for line in path.read_text().splitlines()}
+        assert all(f"[{section}]" not in active for section in ("tts", "asr", "vision", "video"))
         assert settings.db_path == TwinPaths.from_env().data / "twin.db"
-        assert settings.tts.base_url == "http://127.0.0.1:8004/v1"
-        assert settings.video.host is None and settings.video.command
+        assert settings.tts.provider == "silent"
+        assert settings.video.provider == "none"
+        assert settings.asr.command is None and settings.vision.command is None
     if profile == "minimal":
         assert "[tts]" not in path.read_text()
     if profile == "split":

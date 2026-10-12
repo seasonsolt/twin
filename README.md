@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/seasonsolt/twin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/seasonsolt/twin/actions/workflows/ci.yml)
 
-[架构](docs/ARCHITECTURE.md) · [使用指南](docs/GUIDE.md) · [对比与评测](docs/COMPARISON.md) · [LongMemEval](docs/LONGMEMEVAL.md) · [PersonaMem](docs/PERSONAMEM.md) · [Twin-2K-500](docs/TWIN2K500.md) · [验证与失误分析](docs/BENCHMARK_VALIDATION.md) · [服务接口](docs/SERVICE.md) · [语音与视频](docs/MEDIA.md)
+[架构](docs/ARCHITECTURE.md) · [使用指南](docs/GUIDE.md) · [对比与评测](docs/COMPARISON.md) · [LongMemEval](docs/LONGMEMEVAL.md) · [PersonaMem-v2](docs/PERSONAMEM2.md) · [Twin-2K-500](docs/TWIN2K500.md) · [验证与失误分析](docs/BENCHMARK_VALIDATION.md) · [服务接口](docs/SERVICE.md) · [语音与视频](docs/MEDIA.md)
 
 </div>
 
@@ -106,7 +106,13 @@ flowchart LR
 | 增删资料不用重训 | ✓ | — | — | **✓** |
 | 克隆声音 + 真人视频 | — | ✓ | — | **✓** |
 
-在作者本人资料的同一套题上：
+## 评测
+
+两类评测：作者本人资料上的自建题，看分身像不像这个人；三个公开基准，看记忆和推断偏好的能力，能和别的系统比。
+
+### 本人资料
+
+同一套题（[本人资料评测](docs/PERSONAL_EVAL.md)）：
 
 | | 事实准确率 | 资料没有时不编造 | 像本人（1–5） |
 | :-- | :-: | :-: | :-: |
@@ -116,15 +122,24 @@ flowchart LR
 
 <sub>twin 用前沿大模型作答，Second Me 用本地小模型，差距有一部分来自模型。评委、题量与当前线上模型的结果见 [对比与评测](docs/COMPARISON.md)。</sub>
 
-在三个公开基准上（越高越好）：
+### 公开基准
 
-| 基准 | **twin** | 公开最好成绩 | Second Me 升级版 |
-| :-- | :-: | :-: | :-: |
-| [LongMemEval](https://github.com/xiaowu0162/LongMemEval)：长期对话记忆 | 33% | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
-| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2)：从对话里推断没明说的偏好 | 待测 | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
-| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500)：像本人一样答问卷，达到真人重测的比例 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
+越高越好：
 
-<sub>twin 为 2026-10-10 代码、`gpt-6-luna` 作答的抽样成绩（每项 30 题或 10 人），LongMemEval 由同一模型评分。公开成绩截至 2026-10，取自各自论文或博客，题量、作答模型、评委和打分细则与 twin 不同，只能看量级。LongMemEval 的高分都是厂商自报，尚无独立复现，且分数随作答模型变化很大。PersonaMem 已从 v1 换到更难的 v2：twin 在 v1 上为 63%，当时公开成绩约 50%；v2 上前沿大模型直接读全文约 37%–48%（论文）。Twin-2K-500 暂停迭代。Second Me 为同题小样本（6 题或 2 人）。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md) 和 [对比与评测](docs/COMPARISON.md)。</sub>
+| 基准 | 测什么 | **twin** | 公开最好成绩 | Second Me 升级版 |
+| :-- | :-- | :-: | :-: | :-: |
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 33% | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
+| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 50%<br/><sub>开发集，正式集待测</sub> | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
+| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 像本人一样答问卷，按达到真人重测的比例计 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
+
+- **twin 成绩**：都由 `gpt-6-luna` 作答。
+  - LongMemEval 和 Twin-2K-500 是 2026-10-10 代码的正式抽样，每项 30 题或 10 人；LongMemEval 由同一模型评分。
+  - PersonaMem-v2 是 2026-10-12 代码在开发集上的成绩：4 人 108 题，跑 3 次取平均。
+- **公开成绩**：截至 2026-10，取自各自的论文或博客。题量、作答模型、评委和打分细则都和 twin 不同，只能看量级。LongMemEval 的高分都是厂商自报，还没有独立复现，而且分数随作答模型变化很大。
+- **PersonaMem 版本**：已从 v1 换到更难的 v2。twin 在 v1 上是 63%，当时公开成绩约 50%。v2 上前沿大模型直接读全文约 37%–48%（论文）。
+- **Twin-2K-500**：暂停迭代。
+- **Second Me**：同题小样本，6 题或 2 人。
+- **怎么迭代**：每次改动在开发集上跑 3 次，用配对符号检验判断变化是否超出波动。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md)。
 
 ## 技术路线
 
@@ -165,7 +180,8 @@ twin ui          # 打开打印的地址：你是谁 → 形象和声音 → 添
 | 部署、导入资料、开启登录 | [使用指南](docs/GUIDE.md) |
 | 接入语音、视频、数字人 | [语音与视频](docs/MEDIA.md) |
 | 从其他应用调用分身 | [服务接口](docs/SERVICE.md) |
-| 看评测数据和同类对比 | [对比与评测](docs/COMPARISON.md) · [本人资料评测](docs/PERSONAL_EVAL.md) |
+| 看评测数据和同类对比 | [对比与评测](docs/COMPARISON.md) · [本人资料评测](docs/PERSONAL_EVAL.md) · [验证与失误分析](docs/BENCHMARK_VALIDATION.md) |
+| 跑公开基准 | [LongMemEval](docs/LONGMEMEVAL.md) · [PersonaMem-v2](docs/PERSONAMEM2.md) · [Twin-2K-500](docs/TWIN2K500.md) |
 | 改代码 | [契约](docs/CONTRACTS.md) · [网页界面](docs/WEB_UI.md) |
 
 ## 开发

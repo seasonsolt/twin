@@ -2,9 +2,30 @@ import { create } from 'zustand';
 import { api } from '../lib/api';
 import { getPersonaId } from '../lib/persona';
 
+export interface KernelVersion {
+  schema: number;
+  prompt: string;
+  taxonomy: string;
+}
+
+export interface KernelStatus {
+  version: KernelVersion;
+  built: KernelVersion | null;
+  scope: 'none' | 'merge' | 'full';
+  pending_chunks: number;
+  state:
+    | 'ready'
+    | 'pending'
+    | 'awaiting_confirmation'
+    | 'error'
+    | 'queued'
+    | 'running';
+}
+
 export interface Status {
   target_name: string;
   counts: { sources: number; items: number };
+  kernel?: KernelStatus;
   llm: { provider: string; model: string };
   embed: { provider: string };
   egress: {

@@ -536,7 +536,9 @@ def ops_restore(ctx: typer.Context, directory: Annotated[Path, typer.Argument()]
 
 @app.command("doctor")
 def doctor_command(
-    ctx: typer.Context, probe: Annotated[bool, typer.Option("--probe", help="实际调用模型，可能产生费用")] = False
+    ctx: typer.Context,
+    probe: Annotated[bool, typer.Option("--probe", help="实际调用模型，可能产生费用")] = False,
+    local: Annotated[bool, typer.Option("--local", help="仓库本地验证：不检查常驻服务和防睡眠")] = False,
 ) -> None:
     """检查部署；默认不调用模型。"""
     from .ops.doctor import inspect_installation
@@ -549,7 +551,7 @@ def doctor_command(
         except (ValueError, OSError):
             _say("✗ 配置校验：无法解析配置，请检查 twin.toml（详情已隐藏）")
             raise typer.Exit(1) from None
-        checks = inspect_installation(paths, settings, _ops_config(ctx), manager(paths), probe=probe)
+        checks = inspect_installation(paths, settings, _ops_config(ctx), manager(paths), probe=probe, local=local)
         if ctx.meta.get("env_error"):
             _say(f"✗ 环境文件：{ctx.meta['env_error']}")
         for check in checks:

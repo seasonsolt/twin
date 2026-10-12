@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -10,10 +11,10 @@ import pytest
 from typer.testing import CliRunner
 
 from twin import cli
-from twin.config import Settings
+from twin.config import Settings, load_settings
 from twin.ops import demo
 from twin.ops.envfile import load_env_file, selected_env_file
-from twin.ops.local import check_local_config
+from twin.ops.local import check_local_config, set_llm_value
 from twin.ops.paths import TwinPaths
 from twin.persona.schema import SourceKind
 from twin.persona.sources import expression_view, parse_note, parse_source
@@ -260,7 +261,7 @@ def test_local_configuration_gate(
     if not (model and url and key):
         assert "model" in output and "base_url" in output and "LOCAL_TEST_KEY" in output
     assert "test-only-sentinel" not in output
-    assert not Path("data").exists()
+    assert Path("data").exists() == (model and url and key)
     monkeypatch.delenv("LOCAL_TEST_KEY", raising=False)
 
 
@@ -272,3 +273,69 @@ def test_local_configuration_gate_reads_selected_env(monkeypatch: pytest.MonkeyP
     assert selected_env_file() == Path(".env")
     assert check_local_config() == 0
     monkeypatch.delenv("LOCAL_TEST_KEY")
+
+
+def test_local_setup_prompts_and_saves(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    Path("twin.toml").write_text(cli.CONFIG_TEMPLATE.replace("TWIN_LLM_KEY", "LOCAL_TEST_KEY"))
+    shutil.copy(ROOT / ".env.example", ".env")
+    Path(".env").chmod(0o600)
+    Path(".env").write_text(Path(".env").read_text().replace("TWIN_LLM_KEY", "LOCAL_TEST_KEY"))
+    answers = iter(["not a url", "http://127.0.0.1:8000/v1", "", "test-model"])
+    status = check_local_config(
+        interactive=True, read=lambda _: next(answers), read_secret=lambda _: "test-only-sentinel"
+    )
+    assert status == 0
+    output = capsys.readouterr().out
+    assert "test-only-sentinel" not in output
+    settings = load_settings(Path("twin.toml"))
+    assert (settings.llm.model, settings.llm.base_url) == ("test-model", "http://127.0.0.1:8000/v1")
+    assert 'LOCAL_TEST_KEY="test-only-sentinel"' in Path(".env").read_text().splitlines()
+    assert stat.S_IMODE(Path(".env").stat().st_mode) == 0o600
+    assert stat.S_IMODE(Path("data").stat().st_mode) == 0o700
+    monkeypatch.delenv("LOCAL_TEST_KEY")
+    assert check_local_config(interactive=False) == 0
+
+
+def test_local_setup_cancel_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    Path("twin.toml").write_text('[llm]\napi_key_env = "LOCAL_TEST_KEY"\n')
+
+    def cancel(_: str) -> str:
+        raise EOFError
+
+    assert check_local_config(interactive=True, read=cancel, read_secret=cancel) == 1
+    assert Path("twin.toml").read_text() == '[llm]\napi_key_env = "LOCAL_TEST_KEY"\n'
+    assert not Path("data").exists()
+
+
+def test_set_llm_value_only_touches_llm_section() -> None:
+    text = (
+        '[chat_llm]\nmodel = "chat"\n\n[llm]\nprovider = "openai_compat"\n# model = "x"\n\n'
+        '[embed]\nprovider = "hashing"\n'
+    )
+    updated = set_llm_value(set_llm_value(text, "model", "m"), "base_url", "http://h/v1")
+    assert updated.count('model = "chat"') == 1
+    assert '[llm]\nbase_url = "http://h/v1"\nprovider = "openai_compat"\nmodel = "m"\n' in updated
+
+
+def test_doctor_local_skips_services(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from twin.ops.doctor import inspect_installation
+
+    class Backend:
+        def execute(self, *args):  # type: ignore[no-untyped-def]
+            pytest.fail("local doctor must not query the service manager")
+
+        def runner(self, *args):  # type: ignore[no-untyped-def]
+            pytest.fail("local doctor must not read power settings")
+
+    settings = Settings(db_path=tmp_path / "data/twin.db")
+    checks = inspect_installation(
+        TwinPaths.from_env(),
+        settings,
+        Path("twin.toml"),
+        Backend(),  # type: ignore[arg-type]
+        local=True,
+        connect=lambda *_: False,
+    )
+    names = {check.name for check in checks}
+    assert not any(name.startswith("服务") for name in names)
+    assert {"网页端口", "防睡眠"}.isdisjoint(names)

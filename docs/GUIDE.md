@@ -1,6 +1,6 @@
 # 使用指南
 
-协作者从仓库在自己的 Mac 上验证，先看 [本地快速开始](LOCAL_DEV.md)：填写仓库 `twin.toml` / `.env` 后运行 `./scripts/local-up.sh --demo`。默认只有文字聊天，数据在本机 `data/`，与官方演示环境互不影响。
+协作者从仓库在自己的 Mac 上验证，先看 [本地快速开始](LOCAL_DEV.md)：运行 `./scripts/local-up.sh --demo`，首次按提示填写模型地址、模型名和密钥。默认只有文字聊天，数据在本机 `data/`，与官方演示环境互不影响。
 
 ```bash
 twin init                     # 生成带中文注释的 twin.toml，按注释填写模型和向量服务

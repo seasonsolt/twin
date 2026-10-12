@@ -171,21 +171,13 @@ flowchart TB
    cd twin
    ```
 
-2. 复制并填写本机配置：
-
-   ```bash
-   cp twin.toml.example twin.toml
-   cp .env.example .env
-   chmod 600 .env
-   ```
-
-   在 `twin.toml` 的 `[llm]` 中取消 `model`、`base_url` 两行的注释，填写模型名与服务地址；保留 `api_key_env = "TWIN_LLM_KEY"` 和相对路径 `db_path = "data/twin.db"`。在 `.env` 的 `TWIN_LLM_KEY=` 后填写密钥。
-
-3. 一条命令启动并导入虚构示例：
+2. 一条命令启动并导入虚构示例：
 
    ```bash
    ./scripts/local-up.sh --demo
    ```
+
+   首次运行会在终端询问模型服务地址、模型名和密钥（密钥输入不显示），分别保存到仓库的 `twin.toml` 和 `.env`（0600，均不入 git），以后不再询问。
 
    浏览器自动打开，切换到“示例·林舟”，等待资料自动整理后提问；按 Ctrl-C 停止。已有自己的资料时可不加 `--demo`。
 

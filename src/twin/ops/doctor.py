@@ -99,6 +99,7 @@ def inspect_installation(
     backend: ServiceManager,
     *,
     probe: bool = False,
+    local: bool = False,
     connect: Callable[[str, int], bool] = tcp,
     invoke_model: Callable[[str, Settings], None] = model_probe,
 ) -> list[Check]:
@@ -112,8 +113,8 @@ def inspect_installation(
         ),
         Check(
             "ffmpeg",
-            shutil.which("ffmpeg") is not None,
-            "已安装" if shutil.which("ffmpeg") else "未找到",
+            shutil.which("ffmpeg") is not None or (None if local else False),
+            "已安装" if shutil.which("ffmpeg") else "未找到（文字聊天不需要）" if local else "未找到",
             "运行 brew install ffmpeg",
         ),
         Check("配置校验", config.is_file(), "配置已解析" if config.is_file() else "请先运行 twin init"),
@@ -241,7 +242,7 @@ def inspect_installation(
                 )
             )
     web_loaded = False
-    for service in services(paths, config, settings):
+    for service in [] if local else services(paths, config, settings):
         try:
             result = backend.execute("status", service)
             if service.name == "web":
@@ -271,26 +272,27 @@ def inspect_installation(
             if connect is tcp
             else connect("127.0.0.1", settings.ops.web_port)
         )
-    checks.append(
-        Check(
-            "网页端口",
-            listening if web_loaded else None,
-            "已监听"
-            if web_loaded and listening
-            else "服务已加载，但端口未监听（已等待最多 10 秒）"
-            if web_loaded
-            else "已占用，web 服务未加载"
-            if listening
-            else "空闲，web 服务未加载",
-            "运行 twin ops logs web 检查启动错误",
+    if not local:
+        checks.append(
+            Check(
+                "网页端口",
+                listening if web_loaded else None,
+                "已监听"
+                if web_loaded and listening
+                else "服务已加载，但端口未监听（已等待最多 10 秒）"
+                if web_loaded
+                else "已占用，web 服务未加载"
+                if listening
+                else "空闲，web 服务未加载",
+                "运行 twin ops logs web 检查启动错误",
+            )
         )
-    )
     root = settings.db_path.parent
     while not root.exists():
         root = root.parent
     free = shutil.disk_usage(root).free
     checks.append(Check("磁盘余量", free >= 2 * 1024**3, f"剩余 {free / 1024**3:.1f} GiB", "至少保留 2 GiB，模型另计"))
-    if platform.system() == "Darwin":
+    if platform.system() == "Darwin" and not local:
         try:
             result = backend.runner(["pmset", "-g"])
             awake = result.returncode == 0 and re.search(r"(?m)^\s*sleep\s+0(?:\s|$)", result.stdout) is not None

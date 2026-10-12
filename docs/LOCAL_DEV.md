@@ -16,20 +16,12 @@
 在仓库根目录：
 
 ```bash
-cp twin.toml.example twin.toml
-cp .env.example .env
-chmod 600 .env
-```
-
-编辑 `twin.toml`：在 `[llm]` 中取消 `model`、`base_url` 两行的注释，填写你的模型名与完整 API 基础地址（OpenAI 兼容服务通常以 `/v1` 结尾），保留 `api_key_env = "TWIN_LLM_KEY"`。`target_name` 可填写你自己的名字；示例分身有独立身份，不受它影响。保留 `db_path = "data/twin.db"`，使数据留在仓库内。
-
-编辑 `.env`：在 `TWIN_LLM_KEY=` 后填入你的密钥。这个文件只支持 `KEY=VALUE`、注释及单/双引号，不支持 `export`、变量替换或命令执行。不要在 TOML、源码或聊天记录里保存密钥。
-
-```bash
 ./scripts/local-up.sh --demo
 ```
 
-脚本会同步锁定依赖，补齐缺失的配置和 `.env`（不覆盖已有内容），将 `.env` 权限收紧为 0600，展示 `twin doctor`，检查模型配置，导入示例，再前台启动网页。默认打开浏览器，地址为 `http://127.0.0.1:8765`，按 Ctrl-C 停止。若首次未复制配置也可直接运行脚本：它生成默认模板，然后提示填写并退出，不启动未配置的服务。
+首次运行时脚本在终端逐项询问缺少的设置：OpenAI 兼容服务地址（通常以 `/v1` 结尾）、模型名和密钥（输入不显示；本地服务无需密钥可填 `none`）。地址和模型写入 `./twin.toml` 的 `[llm]`，密钥写入 `./.env` 中 `api_key_env` 指定的变量（默认 `TWIN_LLM_KEY`，权限 0600）；两个文件都不入 git，以后运行不再询问。也可以事先从 `twin.toml.example`、`.env.example` 复制后手动填写。`.env` 只支持 `KEY=VALUE`、注释及单/双引号，不支持 `export`、变量替换或命令执行；不要在 TOML、源码或聊天记录里保存密钥。
+
+脚本会同步锁定依赖，补齐缺失的配置和 `.env`（不覆盖已有内容），创建数据目录 `data/`（0700），展示 `twin doctor --local`（不检查常驻服务，✗ 项不阻塞启动），导入示例，再前台启动网页。默认打开浏览器，地址为 `http://127.0.0.1:8765`，端口被占用时自动改用后续空闲端口；按 Ctrl-C 停止。在非终端环境（如 CI）运行时不询问，提示缺少的设置后退出。
 
 以后日常只需 `./scripts/local-up.sh`。可选参数可组合：
 
@@ -98,16 +90,16 @@ uv run twin --config ./twin.toml compute status
 
 ## 常见报错与 doctor
 
-运行 `uv run twin --config ./twin.toml doctor` 查看诊断。默认不调用模型，但会做连通性检查和常驻服务状态查询；`--probe` 才实际调用启用的模型服务，可能产生费用。快速开始中 doctor 返回非零也会继续到独立的模型配置检查。
+运行 `uv run twin --config ./twin.toml doctor` 查看诊断。默认不调用模型，但会做连通性检查和常驻服务状态查询；`--probe` 才实际调用启用的模型服务，可能产生费用。`--local` 跳过常驻服务、网页端口和防睡眠检查；快速开始中 doctor 返回非零也继续启动。
 
 | 现象 | 处理 |
 | --- | --- |
 | 找不到 uv | 自行运行 `brew install uv` 后重试 |
-| 提示模型尚未配置 | 检查 `[llm] model/base_url/api_key_env`；去掉 model/base_url 行首的 `#`，在 `.env` 填入对应密钥 |
+| 提示模型尚未配置 | 在终端运行脚本按提示填写；或检查 `[llm] model/base_url/api_key_env` 并在 `.env` 填入对应密钥 |
 | env 权限错误 | 执行报错中的 `chmod 600 ...`；直接运行 CLI 也只接受精确的 0600 |
 | TOML 或 env 格式错误 | 检查引号与节名；env 每行只写 `KEY=VALUE`，不加 `export` |
-| 端口被占用 | 停止已有实例，或加 `--port 9001` |
-| doctor 提示服务未加载、数据目录不存在 | 本地前台验证无需安装常驻服务；首次打开数据库会创建数据目录 |
+| 端口被占用 | 脚本自动改用后续空闲端口；也可加 `--port 9001` |
+| doctor 提示服务未加载 | 那是常驻部署的检查；本地脚本用 `doctor --local`，不检查常驻服务 |
 | 缺少 ffmpeg 或可选媒体未开启 | 文字聊天可以继续；需要导入录音时再安装并配置转写 |
 | 整理失败或聊天无法调用模型 | 检查模型名、端点、密钥和服务可达性；配置检查通过只代表字段齐全，不保证模型在线 |
 | 内核等待确认 | P1 费用闸保留；先用 `uv run twin kernel status` 看分身状态，确认用量后按提示重建 |

@@ -7,12 +7,21 @@ asr=true
 open_browser=true
 dry_run=false
 port=8765
+model=''
+base_url=''
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --demo) demo=true; shift ;;
         --no-open) open_browser=false; shift ;;
         --no-asr) asr=false; shift ;;
         --dry-run) dry_run=true; shift ;;
+        --model|--base-url)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                echo "错误：$1 需要一个值。" >&2
+                exit 2
+            fi
+            if [[ "$1" == --model ]]; then model=$2; else base_url=$2; fi
+            shift 2 ;;
         --port)
             if [[ $# -lt 2 || ! "$2" =~ ^[0-9]{1,5}$ ]]; then
                 echo '错误：--port 需要 1–65535 的整数。' >&2
@@ -25,7 +34,7 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2 ;;
         --help|-h)
-            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--port N] [--dry-run]'
+            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--port N] [--base-url URL --model NAME] [--dry-run]'
             exit 0 ;;
         *) echo "错误：未知参数 $1" >&2; exit 2 ;;
     esac
@@ -69,9 +78,11 @@ fi
 chmod 600 .env
 if [[ ! -e twin.toml ]]; then
     twin --config ./twin.toml init ./twin.toml >/dev/null
-    echo '已生成 ./twin.toml（默认文字聊天，数据在 data/）。'
+    echo '已生成 ./twin.toml（数据在 data/）。'
 fi
-python -c 'from twin.ops.local import check_local_config; raise SystemExit(check_local_config())'
+# Pass code with -c so stdin stays the terminal and the setup prompts work.
+python -c 'import sys; from twin.ops.local import check_local_config
+raise SystemExit(check_local_config(set_model=sys.argv[1], set_base_url=sys.argv[2]))' "$model" "$base_url"
 if "$asr"; then python -c 'from twin.ops.local import ensure_asr; raise SystemExit(ensure_asr())'; fi
 echo '环境自检：'
 twin --config ./twin.toml doctor --local || echo '以上 ✗ 项不阻塞本地启动，可稍后处理。'

@@ -260,7 +260,8 @@ def test_local_configuration_gate(
     assert check_local_config() == (0 if model and url and key else 1)
     output = capsys.readouterr().out
     if not (model and url and key):
-        assert "model" in output and "base_url" in output and "LOCAL_TEST_KEY" in output
+        assert ("--base-url URL --model NAME" in output) == (not (model and url))
+        assert ("LOCAL_TEST_KEY=" in output) == (not key)
     assert "test-only-sentinel" not in output
     assert Path("data").exists() == (model and url and key)
     monkeypatch.delenv("LOCAL_TEST_KEY", raising=False)
@@ -389,3 +390,16 @@ def test_local_up_dry_run_asr_opt_out(tmp_path: Path) -> None:
 
     assert "asr-funasr" in run()
     assert "asr-funasr" not in run("--no-asr")
+
+
+def test_local_setup_from_flags(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    Path("twin.toml").write_text(cli.CONFIG_TEMPLATE.replace("TWIN_LLM_KEY", "LOCAL_TEST_KEY"))
+    assert check_local_config(interactive=False, set_base_url="not-a-url", set_model="m") == 1
+    assert not load_settings(Path("twin.toml")).llm.model
+    assert check_local_config(interactive=False, set_base_url="http://127.0.0.1:8000/v1", set_model="m") == 1
+    output = capsys.readouterr().out
+    assert "--base-url URL" not in output and "LOCAL_TEST_KEY=" in output
+    settings = load_settings(Path("twin.toml"))
+    assert (settings.llm.model, settings.llm.base_url) == ("m", "http://127.0.0.1:8000/v1")
+    monkeypatch.setenv("LOCAL_TEST_KEY", "none")
+    assert check_local_config(interactive=False) == 0

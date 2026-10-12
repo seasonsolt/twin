@@ -2,6 +2,14 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "twin-local",
+      "runtimeExecutable": "./scripts/local-up.sh",
+      "runtimeArgs": [
+        "--no-open"
+      ],
+      "port": 8765
+    },
+    {
       "name": "twin-ui-demo",
       "runtimeExecutable": ".venv/bin/twin",
       "runtimeArgs": [

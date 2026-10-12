@@ -68,8 +68,13 @@ def check_local_config(
     interactive: bool | None = None,
     read: Callable[[str], str] = input,
     read_secret: Callable[[str], str] = getpass.getpass,
+    set_model: str = "",
+    set_base_url: str = "",
 ) -> int:
-    """Return 0 when text chat is configured; on a terminal, ask for missing values and save them first."""
+    """Return 0 when text chat is configured; on a terminal, ask for missing values and save them first.
+
+    `set_model` / `set_base_url` write non-secret settings without prompting, so agents can configure the repo.
+    """
     if interactive is None:
         interactive = sys.stdin.isatty()
     env = selected_env_file()
@@ -79,6 +84,16 @@ def check_local_config(
     except (ValueError, OSError):
         print("配置读取失败：请检查 twin.toml 的 TOML 格式及 .env 格式/权限；运行 twin doctor 查看详情。")
         return 1
+    if set_base_url and not _is_url(set_base_url):
+        print("--base-url 需要 http(s):// 开头的完整地址。")
+        return 1
+    if set_model or set_base_url:
+        text = CONFIG.read_text(encoding="utf-8")
+        for name, value in (("model", set_model.strip()), ("base_url", set_base_url.strip())):
+            if value:
+                text = set_llm_value(text, name, value)
+        CONFIG.write_text(text, encoding="utf-8")
+        settings = load_settings(CONFIG)
     llm = settings.llm
     model = (llm.model or "").strip()
     base_url = (llm.base_url or "").strip()
@@ -86,8 +101,12 @@ def check_local_config(
     key_missing = not os.environ.get(key_name, "").strip()
     if not (model and base_url) or key_missing:
         if not interactive:
-            print("尚未配置文字聊天模型，服务未启动。在终端里重新运行 ./scripts/local-up.sh 会逐项询问；或手动设置：")
-            print(f"  ./twin.toml 的 [llm] 填写 model 和 base_url；./.env 填写 {key_name}=你的密钥（chmod 600 .env）。")
+            missing = [name for name, value in (("model", model), ("base_url", base_url)) if not value]
+            print("尚未配置文字聊天模型，服务未启动。在终端里运行 ./scripts/local-up.sh 会逐项询问；或者：")
+            if missing:
+                print(f"  补齐 {'、'.join(missing)}：./scripts/local-up.sh --base-url URL --model NAME")
+            if key_missing:
+                print(f"  在 {env} 填写 {key_name}=密钥（本地服务无需密钥可填 none；chmod 600）。")
             return 1
         print("配置文字聊天模型（OpenAI 兼容接口），只需填写一次：")
         try:

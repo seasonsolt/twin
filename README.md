@@ -164,18 +164,42 @@ flowchart TB
 
 ## 快速开始
 
-```bash
-uv sync && source .venv/bin/activate
-twin init        # 生成带中文注释的 twin.toml，填模型和向量服务（密钥只放环境变量）
-twin ui          # 打开打印的地址：你是谁 → 形象和声音 → 添加记忆 → 聊天
-```
+1. 克隆仓库并进入目录（Mac 需先有 Git 和 uv；缺少 uv 时运行 `brew install uv`）：
 
-命令行、API、MCP、公网部署和邮箱登录见 [使用指南](docs/GUIDE.md)。
+   ```bash
+   git clone https://github.com/seasonsolt/twin.git
+   cd twin
+   ```
+
+2. 复制并填写本机配置：
+
+   ```bash
+   cp twin.toml.example twin.toml
+   cp .env.example .env
+   chmod 600 .env
+   ```
+
+   在 `twin.toml` 的 `[llm]` 中取消 `model`、`base_url` 两行的注释，填写模型名与服务地址；保留 `api_key_env = "TWIN_LLM_KEY"` 和相对路径 `db_path = "data/twin.db"`。在 `.env` 的 `TWIN_LLM_KEY=` 后填写密钥。
+
+3. 一条命令启动并导入虚构示例：
+
+   ```bash
+   ./scripts/local-up.sh --demo
+   ```
+
+   浏览器自动打开，切换到“示例·林舟”，等待资料自动整理后提问；按 Ctrl-C 停止。已有自己的资料时可不加 `--demo`。
+
+**默认只有文字聊天**，不需要 ffmpeg 或本地大模型。录音转写是独立的可选输入能力：需要时安装 ffmpeg 并配置 `[asr]`；想听回复或生成视频时再配置 `[tts]` / `[video]`，见 [媒体配置](docs/MEDIA.md)。
+
+更新代码：停止服务后运行 `git pull && ./scripts/local-up.sh`；数据库迁移和内核增量重建由应用自动完成。本地数据默认只在本机仓库 `data/`，与官方演示环境互不影响。
+
+参数、自检、示例提问和会议录音演示见 [协作者本地验证](docs/LOCAL_DEV.md)。多人录音或视频音轨可单独[开启会议录音转写](docs/LOCAL_DEV.md#开启会议录音转写)，运行 `uv run twin compute install asr-funasr --download-models` 安装本机转写包。命令行、API、MCP、公网部署和邮箱登录见 [使用指南](docs/GUIDE.md)。
 
 ## 文档
 
 | 我想… | 看这里 |
 | :-- | :-- |
+| 在自己的 Mac 上运行验证 | [协作者本地验证](docs/LOCAL_DEV.md) |
 | 了解整体怎么搭起来的 | [架构](docs/ARCHITECTURE.md) · [人格维度](docs/PERSONA_DIMENSIONS.md) |
 | 部署、导入资料、开启登录 | [使用指南](docs/GUIDE.md) |
 | 接入语音、视频、数字人 | [语音与视频](docs/MEDIA.md) |

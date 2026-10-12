@@ -1,0 +1,143 @@
+# 协作者在 Mac 上本地验证
+
+从 git 仓库目录运行 twin，默认只有文字聊天。无需注册常驻服务、部署隧道或安装本地大模型。官方演示环境独立部署，与这里的启动、数据和验证互不影响；默认本地数据只在这台 Mac 的仓库 `data/` 中，不会从演示环境同步，也不会写回演示环境。配置外部模型后，整理和聊天会把相关资料发送到你指定的模型服务。
+
+## 前置条件
+
+- macOS、Git、uv。没有 uv 时先自行运行 `brew install uv`；脚本只提示，不自动安装 Homebrew 或执行下载脚本。
+- Python 3.12 或更高版本；`uv sync --frozen` 按仓库锁文件创建 `.venv/` 并安装依赖，必要时由 uv 准备 Python。
+- 可用的模型名、OpenAI 兼容服务地址和密钥。默认 `hashing` 向量后端无需下载模型。
+- 文字聊天不需要 ffmpeg。需要导入录音或合成演示会议时再运行 `brew install ffmpeg`。
+
+前端构建产物已随仓库提供，普通验证不需要 Node、pnpm 或重建前端。
+
+## 首次配置与一条命令启动
+
+在仓库根目录：
+
+```bash
+cp twin.toml.example twin.toml
+cp .env.example .env
+chmod 600 .env
+```
+
+编辑 `twin.toml`：在 `[llm]` 中取消 `model`、`base_url` 两行的注释，填写你的模型名与完整 API 基础地址（OpenAI 兼容服务通常以 `/v1` 结尾），保留 `api_key_env = "TWIN_LLM_KEY"`。`target_name` 可填写你自己的名字；示例分身有独立身份，不受它影响。保留 `db_path = "data/twin.db"`，使数据留在仓库内。
+
+编辑 `.env`：在 `TWIN_LLM_KEY=` 后填入你的密钥。这个文件只支持 `KEY=VALUE`、注释及单/双引号，不支持 `export`、变量替换或命令执行。不要在 TOML、源码或聊天记录里保存密钥。
+
+```bash
+./scripts/local-up.sh --demo
+```
+
+脚本会同步锁定依赖，补齐缺失的配置和 `.env`（不覆盖已有内容），将 `.env` 权限收紧为 0600，展示 `twin doctor`，检查模型配置，导入示例，再前台启动网页。默认打开浏览器，地址为 `http://127.0.0.1:8765`，按 Ctrl-C 停止。若首次未复制配置也可直接运行脚本：它生成默认模板，然后提示填写并退出，不启动未配置的服务。
+
+以后日常只需 `./scripts/local-up.sh`。可选参数可组合：
+
+| 参数 | 用途 |
+| --- | --- |
+| `--demo` | 创建或复用“示例·林舟”，导入虚构资料 |
+| `--no-open` | 启动后不自动打开浏览器 |
+| `--port 9001` | 换一个本机端口（1–65535） |
+| `--dry-run` | 只打印步骤；不安装、不创建文件、不读密钥、不启动 |
+
+脚本固定使用仓库的 `./twin.toml`，即使进程设置了 `TWIN_CONFIG`。CLI 环境文件选择顺序是 **显式 `TWIN_ENV_FILE` → 当前目录 `./.env`（与 `./twin.toml` 同时存在时）→ 部署目录 env**（通常为 `~/.config/twin/env`）。只选择其中一个文件，不逐层合并；不会覆盖进程已有环境变量，所有被加载的 env 必须为 0600。若之前在终端导出了同名密钥，更改 `.env` 不会覆盖它；可在当前终端 `unset TWIN_LLM_KEY` 后重启。若显式指定了 `TWIN_ENV_FILE`，应修改那个文件，或 `unset TWIN_ENV_FILE` 使用仓库 `.env`。
+
+## 示例分身与提问
+
+网页顶栏切换到“示例·林舟”，等待自动整理结束再聊天。`demo seed` 本身只导入，不调用模型；网页自动整理会调用配置的模型，产生对应服务的用量。default 仍保留给你自己的验证。
+
+五份虚构资料覆盖工作安排、协作、决策、表达、学习、兴趣和隐私边界。可先问“第一轮为什么只做三张卡片？”并核对依据，再问“你的准确出生日期？”观察是否弃权。完整八个建议问题（含两个应当弃权的问题）及他人化名的观察方法见 [示例 README](../examples/demo/README.md)。
+
+重复 `uv run twin demo seed` 不重复导入，也不重新触发整理。示例文件更新后，停止服务，再运行 `uv run twin demo seed --force` 刷新示例来源；手动添加的其他资料与简介保留。若删掉整个示例分身，再次 seed 会新建独立示例，不自动恢复回收站里的旧分身。
+
+导入后也可以用命令输出的 `uv run twin kernel rebuild --persona <示例ID>` 手动整理该分身。`uv run twin persona build` 处理的是配置所指数据库（默认 default），不会自动选中网页当前分身。
+
+## 按需开启语音、转写和视频
+
+默认不启用 `[tts]`、`[asr]`、`[vision]` 或 `[video]`。网页不显示未开启的听/视频入口，doctor 将这些能力标为“未开启（可选）”。
+
+- 想听回复：按 [媒体配置](MEDIA.md) 配置 `[tts]`，接入已有语音服务。
+- 想导入会议录音：按下节安装本机转写包。它是输入能力，可单独开启，无需同时开启语音或视频输出。
+- 想从视频挑选照片或生成真人视频：分别按需配置 `[vision]` / `[video]`，见同一媒体文档。
+
+将启用后端的密钥放在 `.env` 对应变量里，保存后停止并重新运行脚本。`local-up.sh` 不自动安装算力包或下载模型。
+
+## 开启会议录音转写
+
+Apple Silicon Mac 可安装 `asr-funasr`：SenseVoice 转写、FSMN 检测语音、CAM++ 区分说话人并与本人参考声音匹配，视频音轨也走此流程。每次调用启动进程，无常驻服务；默认 CPU，冷启动约 17 秒，首次依赖导入可能更久。
+
+在仓库根目录运行：
+
+```bash
+brew install ffmpeg
+uv run twin --config ./twin.toml compute install asr-funasr --download-models
+uv run twin --config ./twin.toml compute status
+```
+
+首次安装通常数分钟到十几分钟，取决于网络和缓存；三个模型约 0.90 GiB，连同 Python 依赖、下载缓存建议预留至少 5 GiB。已有 `~/.cache/modelscope` 模型会校验后复用，不重复下载；只使用现有缓存时去掉 `--download-models`，缺模型会报错退出。
+
+包默认安装到机器共享的 `~/Library/Application Support/twin/compute`，多个仓库 clone 共用。希望连算力环境也留在仓库内时，先执行 `export TWIN_COMPUTE_HOME="$PWD/.pi-runs/compute-home"`；自定义模型缓存使用 `MODELSCOPE_CACHE`，网页启动时也需保留该变量。配置目标是 `--config`、`TWIN_CONFIG` 或默认 `./twin.toml`；已有手写 `[asr]` 不覆盖，按提示手动处理。安装不会开启朗读、形象候选或口型视频。
+
+安装完成后 **Ctrl-C 停止网页，再运行 `./scripts/local-up.sh`**。在“记忆”页上传录音；已上传但未转写的文件点“重新转写”。转写在本机离线运行，随后整理使用你配置的模型服务。
+
+运行 `./scripts/demo-meeting.sh` 合成双人会议，按下一节上传参考声音和录音。在说话人卡片试听并核对 S1/S2（S1 说话最多），可勾选多个属于本人的说话人后确认；未认领者以其他人处理。自动声纹建议也要核对。
+
+移除：`uv run twin --config ./twin.toml compute remove asr-funasr`，然后重启网页。只删除包与本工具在当前配置写入的 `[asr]`，模型缓存保留并提示大小；其他 clone 若还使用此共享包也会受影响。更多路径、版本与隐私说明见 [算力包 README](../deploy/compute/asr-funasr/README.md)。
+
+## 会议录音演示
+
+仅 macOS：需要已安装 ffmpeg（包含 ffprobe），以及两个声纹差异足够大的中文音色：林舟用 Eddy（或 Reed/Rocko），岚禾用 Tingting（婷婷，或 Meijia/Sinji）。Eddy、Flo 等同一系列音色在声纹模型里几乎分不开，会被并成一个说话人，所以脚本不会用两个同系列音色。缺少婷婷时到系统设置 → 辅助功能 → 朗读内容 → 系统声音中添加，脚本不下载音色。
+
+```bash
+./scripts/demo-meeting.sh
+```
+
+脚本交替使用两个中文音色合成林舟与岚禾的虚构会议，通过保留音高的调速合成为约 75 秒的 `data/demo/meeting.m4a`，并生成林舟的 `data/demo/linzhou-reference.m4a` 参考声音。重跑会覆盖这两个演示文件；它们不入 git，也不自动入库。
+
+先开启转写，启动网页并切换到“示例·林舟”。如需验证参考声音匹配，在分身声音设置里上传 `linzhou-reference.m4a`；然后到“记忆”页上传 `meeting.m4a`，核对说话人区分与“认出本人”。这是一段系统合成声音，不是真人录音；说话人区分和参考声音匹配取决于转写后端是否支持对应能力，普通仅返回文字的 ASR 无法完成该验证。不要把台词里说“我是林舟”当作声音匹配成功的证明；无法认出时按界面认领本人并复核转写。
+
+## 常见报错与 doctor
+
+运行 `uv run twin --config ./twin.toml doctor` 查看诊断。默认不调用模型，但会做连通性检查和常驻服务状态查询；`--probe` 才实际调用启用的模型服务，可能产生费用。快速开始中 doctor 返回非零也会继续到独立的模型配置检查。
+
+| 现象 | 处理 |
+| --- | --- |
+| 找不到 uv | 自行运行 `brew install uv` 后重试 |
+| 提示模型尚未配置 | 检查 `[llm] model/base_url/api_key_env`；去掉 model/base_url 行首的 `#`，在 `.env` 填入对应密钥 |
+| env 权限错误 | 执行报错中的 `chmod 600 ...`；直接运行 CLI 也只接受精确的 0600 |
+| TOML 或 env 格式错误 | 检查引号与节名；env 每行只写 `KEY=VALUE`，不加 `export` |
+| 端口被占用 | 停止已有实例，或加 `--port 9001` |
+| doctor 提示服务未加载、数据目录不存在 | 本地前台验证无需安装常驻服务；首次打开数据库会创建数据目录 |
+| 缺少 ffmpeg 或可选媒体未开启 | 文字聊天可以继续；需要导入录音时再安装并配置转写 |
+| 整理失败或聊天无法调用模型 | 检查模型名、端点、密钥和服务可达性；配置检查通过只代表字段齐全，不保证模型在线 |
+| 内核等待确认 | P1 费用闸保留；先用 `uv run twin kernel status` 看分身状态，确认用量后按提示重建 |
+
+## 更新代码
+
+先按 Ctrl-C 停止当前服务，再在仓库根目录执行：
+
+```bash
+git pull && ./scripts/local-up.sh
+```
+
+依赖按锁文件同步。数据库迁移和内核增量重建由 P1 自动完成，无需手动删库重建；超过费用闸或关闭自动重建时按提示确认。已有配置、密钥与资料保留。示例资料内容变化时可先运行 `uv run twin demo seed --force` 再启动。
+
+## 数据在哪里、怎么清空
+
+默认布局：
+
+| 内容 | 仓库内路径 |
+| --- | --- |
+| 配置与密钥（均不入 git） | `twin.toml`、`.env` |
+| 默认分身数据库 | `data/twin.db` |
+| 分身注册表 | `data/personas.json` |
+| 示例及其他独立分身 | `data/personas/p-<ID>/twin.db` 及同级素材目录 |
+| 合成会议 | `data/demo/` |
+| 上传、素材、缓存、回收站 | `data/` 下相应目录 |
+| Python 环境 | `.venv/` |
+
+若自行修改 `db_path`，数据根会跟随它的父目录；要保持本地验证隔离，请保留默认相对路径，不指向已有部署数据。
+
+只清理示例可在网页“管理分身”里删除“示例·林舟”（7 天回收站规则沿用现有功能）。要完全清空本次本地验证，先停止服务，确认当前在这个仓库且默认数据路径未改变，再删除整个 `./data/`；这会清除本仓库所有分身、上传、聊天和合成会议，保留 `twin.toml` 与 `.env`。下次 `./scripts/local-up.sh --demo` 会重新建立数据。需要保留旧验证结果时，停止服务后先把整个 `data/` 移到自己的备份位置。
+
+基础文字启动流程不写入 `~/Library` 或 `~/.config`，不注册常驻服务，也不操作官方演示环境；可选转写包默认使用上述机器共享目录，可用 `TWIN_COMPUTE_HOME` 改到仓库内。需要可选常驻部署时再看 [Mac 部署说明](../deploy/mac/README.md)。

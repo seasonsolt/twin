@@ -79,6 +79,7 @@ def test_remaining_commands() -> None:
         "ui",
         "api",
         "mcp",
+        "doctor",
         "eval",
         "eval-compare",
         "eval-longmemeval",

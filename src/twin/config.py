@@ -332,6 +332,22 @@ class WeComSettings(BaseModel):
     url: str = "wss://openws.work.weixin.qq.com"
 
 
+class KernelSettings(BaseModel):
+    auto_rebuild: bool = True
+    max_auto_rebuild_chunks: int = Field(default=400, ge=0)
+
+
+class OpsSettings(BaseModel):
+    web_port: int = Field(default=8765, ge=1, le=65535)
+    allow_hosts: list[str] = Field(default_factory=list)
+    compute_services: dict[str, list[str]] = Field(default_factory=dict)
+    tunnel_command: list[str] = Field(default_factory=list)
+
+
+class UpgradeSettings(BaseModel):
+    channel: Literal["off", "stable", "canary"] = "off"
+
+
 class Settings(BaseModel):
     db_path: Path = Path("data/twin.db")
     target_name: str = "本人"
@@ -347,6 +363,9 @@ class Settings(BaseModel):
     embed: EmbedSettings = Field(default_factory=EmbedSettings)
     pricing: dict[str, Price] = Field(default_factory=dict)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    ops: OpsSettings = Field(default_factory=OpsSettings)
+    upgrade: UpgradeSettings = Field(default_factory=UpgradeSettings)
+    kernel: KernelSettings = Field(default_factory=KernelSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)

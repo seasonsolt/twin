@@ -9,6 +9,7 @@ interface Speaker {
   seconds: number;
   similarity: number | null;
   suggested: boolean;
+  also_suggested: boolean;
   samples: string[];
 }
 interface Candidate {
@@ -16,7 +17,8 @@ interface Candidate {
   url: string;
 }
 interface Claim {
-  speaker: string | null;
+  claimed: string[];
+  diarized: boolean;
   confirmed: boolean;
   automatic: boolean;
   pending: boolean;
@@ -74,6 +76,8 @@ export function MediaClaim({
   onChanged?: () => void;
 }) {
   const [claim, setClaim] = useState<Claim | null>(null);
+  const [selection, setSelection] = useState<string[] | null>(null);
+  const dirty = useRef(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
@@ -92,6 +96,8 @@ export function MediaClaim({
         });
         if (controller.signal.aborted) return;
         setClaim(value);
+        if (!dirty.current)
+          setSelection(value.confirmed ? value.claimed : null);
         setError('');
         if (value.pending)
           timer.current = setTimeout(() => void reload(), 2000);
@@ -133,6 +139,7 @@ export function MediaClaim({
       toast(message, 'success');
       if (path.startsWith('adopt-'))
         window.dispatchEvent(new Event(ASSETS_CHANGED));
+      if (path === 'speaker') dirty.current = false;
       await refresh();
       onChanged?.();
     } catch (failure) {
@@ -165,56 +172,89 @@ export function MediaClaim({
             {claim.automatic && claim.speakers.length > 1 && (
               <p className="text-sm text-secondary">已自动识别，可修改</p>
             )}
-            {claim.speakers.map((speaker) => (
-              <div
-                key={speaker.id}
-                className="rounded-lg border border-border p-3"
-              >
-                <label className="flex min-h-11 items-center gap-3 text-base">
-                  <input
-                    type="radio"
-                    name={`speaker-${sourceId}`}
-                    value={speaker.id}
-                    checked={claim.confirmed && claim.speaker === speaker.id}
-                    className="size-5"
-                    onChange={() =>
-                      void mutate(
-                        'speaker',
-                        { speaker: speaker.id },
-                        '已确认，正在重新整理记忆',
-                        'PUT',
-                      )
-                    }
-                  />
-                  <span>
-                    {speaker.id} ·{' '}
-                    {speaker.seconds < 60
-                      ? `${speaker.seconds.toFixed(0)} 秒`
-                      : `${(speaker.seconds / 60).toFixed(1)} 分钟`}
-                  </span>
-                  {speaker.suggested && <Badge tone="success">像你</Badge>}
-                </label>
-                <SpeakerSample speaker={speaker} />
-              </div>
-            ))}
+            {!claim.diarized && (
+              <p className="text-sm text-secondary">当前转写服务不区分说话人</p>
+            )}
+            {!claim.diarized ? (
+              <label className="flex min-h-11 items-center gap-3 text-base">
+                <input
+                  type="radio"
+                  name={`speaker-${sourceId}`}
+                  className="size-5"
+                  checked={selection !== null && selection.length > 0}
+                  onChange={() => {
+                    dirty.current = true;
+                    setSelection(claim.speakers.map((speaker) => speaker.id));
+                  }}
+                />
+                整段都是我
+              </label>
+            ) : (
+              claim.speakers.map((speaker) => (
+                <div
+                  key={speaker.id}
+                  className="rounded-lg border border-border p-3"
+                >
+                  <label className="flex min-h-11 items-center gap-3 text-base">
+                    <input
+                      type="checkbox"
+                      value={speaker.id}
+                      checked={selection?.includes(speaker.id) ?? false}
+                      className="size-5"
+                      onChange={(event) => {
+                        dirty.current = true;
+                        setSelection(
+                          event.target.checked
+                            ? [...(selection ?? []), speaker.id]
+                            : (selection ?? []).filter(
+                                (id) => id !== speaker.id,
+                              ),
+                        );
+                      }}
+                    />
+                    <span>
+                      {speaker.id} ·{' '}
+                      {speaker.seconds < 60
+                        ? `${speaker.seconds.toFixed(0)} 秒`
+                        : `${(speaker.seconds / 60).toFixed(1)} 分钟`}
+                    </span>
+                    {speaker.suggested && <Badge tone="success">像你</Badge>}
+                    {speaker.also_suggested && <Badge>可能也是你</Badge>}
+                  </label>
+                  <SpeakerSample speaker={speaker} />
+                </div>
+              ))
+            )}
             <label className="flex min-h-11 items-center gap-3 text-base">
               <input
                 type="radio"
                 name={`speaker-${sourceId}`}
                 value="none"
                 className="size-5"
-                checked={claim.confirmed && claim.speaker === null}
-                onChange={() =>
-                  void mutate(
-                    'speaker',
-                    { speaker: null },
-                    '已保存为旁观资料',
-                    'PUT',
-                  )
-                }
+                checked={selection !== null && selection.length === 0}
+                onChange={() => {
+                  dirty.current = true;
+                  setSelection([]);
+                }}
               />
               都不是我（旁观资料）
             </label>
+            <Button
+              className="min-h-11"
+              disabled={selection === null}
+              onClick={() =>
+                void mutate(
+                  'speaker',
+                  { speakers: selection },
+                  selection?.length
+                    ? '已确认，正在重新整理记忆'
+                    : '已保存为旁观资料',
+                  'PUT',
+                )
+              }
+            >
+              确认选择
+            </Button>
           </fieldset>
           {claim.confirmed && (
             <>
@@ -297,7 +337,7 @@ export function MediaClaim({
                 onClick={() =>
                   void mutate(
                     'speaker',
-                    { speaker: claim.speaker },
+                    { speakers: claim.claimed },
                     '正在重新提取候选',
                     'PUT',
                   )

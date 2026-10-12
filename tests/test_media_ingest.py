@@ -137,6 +137,8 @@ def test_dedupe_retry_transcript_and_delete(
     assert len(client.get("/api/persona/sources").json()) == 1
 
     class FakeTranscriber:
+        diarizes = True
+
         def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
             assert audio.is_absolute() and duration == 1
             progress(0.5, duration)
@@ -208,6 +210,30 @@ def test_http_silence_chunks_and_offsets(tmp_path: Path) -> None:
     assert silence_chunks(audio, 60)[-1][1] == 60  # hard cut when no later silence
 
 
+def test_http_ingestion_requires_confirmation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Recognizer:
+        name, identity, capabilities = "fake", "fake", ASRCapabilities()
+
+        def transcribe(self, request: TranscriptionRequest) -> Transcription:
+            return Transcription(text="会议里不同人的话")
+
+    transcriber = HTTPTranscriber(Recognizer())
+    assert not transcriber.diarizes
+    monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: transcriber)
+    result = finish(client, wav_bytes())
+    assert wait_job(client, result["job_id"])["status"] == "done"
+    row = client.get("/api/persona/sources").json()[0]
+    assert row["status"] == "needs_speaker" and row["n_target"] == 0
+    base = f"/api/persona/sources/{result['source_id']}"
+    claim = client.get(base + "/speakers").json()
+    assert not claim["diarized"] and not claim["confirmed"] and claim["claimed"] == []
+    assert claim["speakers"][0]["id"] == "S1" and not claim["speakers"][0]["suggested"]
+    assert client.get(base + "/text").text == ""
+    chosen = client.put(base + "/speaker", json={"speakers": ["S1"]}, headers=HEADERS).json()
+    assert wait_job(client, chosen["job_id"])["status"] == "done"
+    assert "本人：[00:00] 会议里不同人的话" in client.get(base + "/text").text
+
+
 def test_transcript_paragraphs_and_timestamps() -> None:
     text = transcript_text(
         "电影.mov",
@@ -238,6 +264,8 @@ def test_single_media_worker_and_job_failure(tmp_path: Path, monkeypatch: pytest
     concurrent: list[int] = []
 
     class Fake:
+        diarizes = True
+
         def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
             concurrent.append(1)
             assert len(concurrent) == 1
@@ -277,6 +305,8 @@ def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monk
     calls = 0
 
     class Fake:
+        diarizes = True
+
         def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
             nonlocal calls
             calls += 1

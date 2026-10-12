@@ -18,9 +18,10 @@ import webbrowser
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import typer
 
@@ -30,13 +31,25 @@ from .embed import Embedder, EmbedError
 from .identity import Identity
 from .llm import CallTally, LLMError
 from .media.schema import MediaScript
+from .ops.envfile import load_env_file, selected_env_file
+from .ops.paths import TwinPaths
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
-from .persona.profile import STALE_PROFILE_NOTICE, build_profile, consented_facets, profile_stale, source_memories
+from .persona.kernel import KERNEL, rebuild_scope
+from .persona.profile import (
+    KERNEL_STALE_NOTICE,
+    STALE_PROFILE_NOTICE,
+    build_profile,
+    consented_facets,
+    pending_chunks,
+    profile_stale,
+    source_memories,
+    stale_reason,
+)
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import MEMORY_KIND_LABELS, parse_note, parse_source
-from .persona.store import PersonaStore
+from .persona.store import NewerStoreError, PersonaStore
 from .persona.text import SUPPORTED_SUFFIXES
 from .usage import BudgetExceeded, UsageRecorder, active_recorder, call_stage, failure_directory, record_usage
 from .util import RenameError, open_private, private_directory
@@ -50,6 +63,10 @@ target_name = "本人"
 target_aliases = []
 db_path = "data/twin.db"
 max_workers = 4
+
+# [kernel]
+# auto_rebuild = true
+# max_auto_rebuild_chunks = 400
 
 [media]
 # font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体
@@ -188,7 +205,7 @@ def _backend_errors() -> tuple[type[Exception], ...]:
 def _errors() -> Iterator[None]:
     try:
         yield
-    except (ValueError, OSError, sqlite3.Error, LLMError, EmbedError, BudgetExceeded) as e:
+    except (ValueError, OSError, sqlite3.Error, NewerStoreError, LLMError, EmbedError, BudgetExceeded) as e:
         raise _fail(str(e)) from e
     except Exception as e:
         if not isinstance(e, _backend_errors()):
@@ -207,7 +224,7 @@ def _settings(ctx: typer.Context) -> Settings:
     if path is not None and not path.is_file():
         raise _fail(f"找不到配置文件 {path}（来自{source}；可以先运行 `twin init {path}` 生成）")
     if path is None:
-        path = DEFAULT_CONFIG
+        path = DEFAULT_CONFIG if DEFAULT_CONFIG.is_file() else TwinPaths.from_env().config
         if not path.is_file():
             _progress(f"提示：没有找到配置文件 {path}，使用默认配置（可运行 `twin init` 生成）")
     with _errors():
@@ -305,8 +322,21 @@ def _command_usage[**P, R](stage: str) -> Callable[[Callable[P, R]], Callable[P,
 
 
 @app.callback()
-def main(ctx: typer.Context, config: ConfigOption = None) -> None:
+def main(
+    ctx: typer.Context,
+    config: ConfigOption = None,
+    home: Annotated[Path | None, typer.Option("--home", help="部署根目录（同 TWIN_HOME）")] = None,
+) -> None:
     with _errors():
+        if home is not None:
+            os.environ["TWIN_HOME"] = str(home)
+        env = selected_env_file()
+        try:
+            load_env_file(env)
+        except (ValueError, OSError) as error:
+            if ctx.invoked_subcommand != "doctor":
+                raise
+            ctx.meta["env_error"] = str(error)
         check_config_rename()
     ctx.obj = config
 
@@ -316,14 +346,216 @@ def init(
     ctx: typer.Context,
     path: Annotated[Path | None, typer.Argument(help="要生成的配置文件路径（默认 --config 或 ./twin.toml）")] = None,
     force: Annotated[bool, typer.Option("--force", help="覆盖已存在的文件")] = False,
+    profile: Annotated[
+        Literal["mac-unified", "split", "minimal"] | None, typer.Option("--profile", help="部署档位")
+    ] = None,
 ) -> None:
     """生成带中文注释的 twin.toml 配置模板。"""
-    target = path or _config_path(ctx) or DEFAULT_CONFIG
+    target = path or _config_path(ctx) or (TwinPaths.from_env().config if profile == "mac-unified" else DEFAULT_CONFIG)
     if target.exists() and not force:
         raise _fail(f"{target} 已存在；如需覆盖请加 --force")
     with _errors():
-        _write(target, CONFIG_TEMPLATE)
+        template = CONFIG_TEMPLATE
+        if profile == "minimal":
+            template = (
+                'target_name = "本人"\ndb_path = "data/twin.db"\n\n[llm]\nprovider = "openai_compat"\n'
+                'api_key_env = "TWIN_LLM_KEY"\n# model = "your-model"\n'
+                '# base_url = "http://127.0.0.1:8000/v1"\n\n[embed]\nprovider = "hashing"\n'
+            )
+        if profile == "mac-unified":
+            paths = TwinPaths.from_env()
+            template = template.replace(
+                'db_path = "data/twin.db"', "db_path = " + json.dumps(str(paths.data / "twin.db"))
+            )
+            template += (
+                "\n# 默认只有文字聊天；语音、转写、认人、真人视频可按需开启。\n"
+                "# 转写可运行 twin compute install asr-funasr，也可手写配置，详见 docs/MEDIA.md。\n"
+            )
+            private_directory(paths.data)
+        private_directory(target.parent)
+        _write(target, template)
     _say(f"已生成配置文件 {target}。请先修改 target_name 和 [llm] 部分，密钥通过环境变量提供。")
+
+
+compute_app = typer.Typer(help="安装与管理本机转写算力包。", no_args_is_help=True)
+app.add_typer(compute_app, name="compute")
+
+
+def _compute_config(ctx: typer.Context) -> Path:
+    return _config_path(ctx) or Path(os.environ.get("TWIN_CONFIG", str(DEFAULT_CONFIG)))
+
+
+@compute_app.command("list")
+def compute_list() -> None:
+    """列出仓库提供的算力包。"""
+    from .ops.compute import discover
+
+    with _errors():
+        for pack in discover():
+            _say(f"{pack.name} {pack.version}（{pack.kind}；{', '.join(pack.platforms)}）")
+
+
+@compute_app.command("status")
+def compute_status(ctx: typer.Context) -> None:
+    """查看安装、配置与模型校验状态。"""
+    from .ops.compute import discover, status
+
+    with _errors():
+        for pack in discover():
+            _say(status(pack, _compute_config(ctx)))
+
+
+@compute_app.command("install")
+def compute_install(
+    ctx: typer.Context,
+    pack: Annotated[str, typer.Argument(help="算力包名称")],
+    download_models: Annotated[bool, typer.Option("--download-models", help="允许下载缺失的模型")] = False,
+    force: Annotated[bool, typer.Option("--force", help="重建当前版本环境；不覆盖手写配置")] = False,
+) -> None:
+    """校验、安装转写包并启用当前配置。"""
+    from .ops.compute import get_pack, install
+
+    with _errors():
+        install(get_pack(pack), _compute_config(ctx), download_models=download_models, force=force, progress=_say)
+
+
+@compute_app.command("remove")
+def compute_remove(ctx: typer.Context, pack: Annotated[str, typer.Argument()]) -> None:
+    """移除算力包及工具写入的配置，保留模型缓存。"""
+    from .ops.compute import get_pack, remove
+
+    with _errors():
+        _say(remove(get_pack(pack), _compute_config(ctx)))
+
+
+ops_app = typer.Typer(help="装机、服务托管与备份恢复。", no_args_is_help=True)
+app.add_typer(ops_app, name="ops")
+
+
+def _ops_config(ctx: typer.Context) -> Path:
+    return _config_path(ctx) or Path(
+        os.environ.get("TWIN_CONFIG", DEFAULT_CONFIG if DEFAULT_CONFIG.is_file() else TwinPaths.from_env().config)
+    )
+
+
+def _ops_action(ctx: typer.Context, action: str, name: str | None) -> None:
+    from .ops.service import manager, services
+
+    with _errors():
+        paths = TwinPaths.from_env()
+        settings = _settings(ctx)
+        backend = manager(paths)
+        items = services(paths, _ops_config(ctx), settings)
+        if name:
+            items = [item for item in items if item.name == name]
+            if not items:
+                raise ValueError("服务名称不存在")
+        if action == "install-services":
+            backend.install(items)
+            _say("已写入用户服务配置")
+            return
+        for item in items:
+            if action == "logs":
+                path = paths.service_log(item.name)
+                _say(f"{item.name}：{path}")
+                if path.is_file():
+                    with path.open("rb") as stream:
+                        stream.seek(max(0, path.stat().st_size - 16384))
+                        _say(stream.read().decode("utf-8", errors="replace"))
+                else:
+                    _say("暂无日志")
+            else:
+                result = backend.execute(action, item)
+                _say(
+                    f"{item.name}：{'已加载' if result.returncode == 0 else '未加载或不可用'}"
+                    if action == "status"
+                    else f"{item.name}：操作完成"
+                )
+
+
+@ops_app.command("install-services")
+def ops_install(ctx: typer.Context) -> None:
+    """写入服务文件并重新加载用户配置。"""
+    _ops_action(ctx, "install-services", None)
+
+
+@ops_app.command("start")
+def ops_start(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """启动服务。"""
+    _ops_action(ctx, "start", name)
+
+
+@ops_app.command("stop")
+def ops_stop(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """停止服务。"""
+    _ops_action(ctx, "stop", name)
+
+
+@ops_app.command("restart")
+def ops_restart(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """重新启动服务。"""
+    _ops_action(ctx, "restart", name)
+
+
+@ops_app.command("status")
+def ops_status(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """查看服务状态。"""
+    _ops_action(ctx, "status", name)
+
+
+@ops_app.command("logs")
+def ops_logs(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """查看最近的服务日志。"""
+    _ops_action(ctx, "logs", name)
+
+
+@ops_app.command("backup")
+def ops_backup(ctx: typer.Context, reason: Annotated[str, typer.Option("--reason")] = "daily") -> None:
+    """创建私有数据快照。"""
+    from .ops.backup import backup
+
+    with _errors():
+        settings = _settings(ctx)
+        _say(f"备份完成：{backup(TwinPaths.from_env(), settings.db_path.parent, _ops_config(ctx), reason)}")
+
+
+@ops_app.command("restore")
+def ops_restore(ctx: typer.Context, directory: Annotated[Path, typer.Argument()]) -> None:
+    """确认服务停止后恢复快照。"""
+    from .ops.backup import restore
+    from .ops.service import manager, services
+
+    with _errors():
+        paths = TwinPaths.from_env()
+        settings = _settings(ctx)
+        backend = manager(paths)
+        stopped = all(backend.stopped(item) for item in services(paths, _ops_config(ctx), settings))
+        restore(directory, settings.db_path.parent, _ops_config(ctx), services_stopped=stopped)
+        _say("恢复完成；请检查配置中的绝对路径，再运行 twin ops start")
+
+
+@app.command("doctor")
+def doctor_command(
+    ctx: typer.Context, probe: Annotated[bool, typer.Option("--probe", help="实际调用模型，可能产生费用")] = False
+) -> None:
+    """检查部署；默认不调用模型。"""
+    from .ops.doctor import inspect_installation
+    from .ops.service import manager
+
+    with _errors():
+        paths = replace(TwinPaths.from_env(), env=selected_env_file())
+        try:
+            settings = load_settings(_ops_config(ctx))
+        except (ValueError, OSError):
+            _say("✗ 配置校验：无法解析配置，请检查 twin.toml（详情已隐藏）")
+            raise typer.Exit(1) from None
+        checks = inspect_installation(paths, settings, _ops_config(ctx), manager(paths), probe=probe)
+        if ctx.meta.get("env_error"):
+            _say(f"✗ 环境文件：{ctx.meta['env_error']}")
+        for check in checks:
+            _say(check.text())
+        if ctx.meta.get("env_error") or any(check.ok is False for check in checks):
+            raise typer.Exit(1)
 
 
 def _is_loopback(host: str) -> bool:
@@ -419,7 +651,8 @@ def ui(
             )
         )
     url_host = "127.0.0.1" if address in _WILDCARD_HOSTS else (f"[{address}]" if ":" in address else address)
-    application = create_app(settings, allowed_hosts=(*extra_hosts, *(allow_host or ())))
+    with _errors():
+        application = create_app(settings, allowed_hosts=(*extra_hosts, *(allow_host or ())))
     _serve(application, host, port, f"http://{url_host}:{port}", open_browser)
 
 
@@ -459,6 +692,25 @@ def mcp_command(ctx: typer.Context) -> None:
         raise _fail("MCP 服务暂时不可用，请检查配置后重试") from None
 
 
+demo_app = typer.Typer(help="导入完全虚构的示例分身。", no_args_is_help=True)
+app.add_typer(demo_app, name="demo")
+
+
+@demo_app.command("seed")
+def demo_seed(
+    ctx: typer.Context,
+    force: Annotated[bool, typer.Option("--force", help="重新导入示例来源，保留自行添加的资料")] = False,
+) -> None:
+    """创建或复用“示例·林舟”；只导入资料，不调用模型。请先停止网页服务。"""
+    from .ops.demo import seed_demo
+
+    with _errors():
+        persona_id, count = seed_demo(_settings(ctx), force=force)
+    _say(f"示例·林舟（{persona_id}）：本次导入 {count} 份虚构示例资料。")
+    _say("启动网页后切换到“示例·林舟”，等待自动整理完成再提问（整理会调用配置的模型）。")
+    _say(f"也可运行 twin kernel rebuild --persona {persona_id} 手动整理此分身。")
+
+
 persona_app = typer.Typer(
     help="通用数字分身：导入问卷、聊天记录、访谈、文档 → 人格档案 → 完成度 → 聊天。", no_args_is_help=True
 )
@@ -466,7 +718,8 @@ app.add_typer(persona_app, name="persona")
 
 
 def _persona_store(settings: Settings) -> PersonaStore:
-    return PersonaStore(settings.db_path)
+    with _errors():
+        return PersonaStore(settings.db_path)
 
 
 identity_app = typer.Typer(help="查看配置的只读身份与出境状态。", no_args_is_help=True)
@@ -496,6 +749,70 @@ def identity_show(ctx: typer.Context) -> None:
             f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
             f"{'外部' if row['external'] else '本机'} | {'声明' if row['declared'] else '推断'}"
         )
+
+
+kernel_app = typer.Typer(help="查看和重建记忆内核。", no_args_is_help=True)
+app.add_typer(kernel_app, name="kernel")
+
+
+def _kernel_personas(settings: Settings) -> list[tuple[str, Settings]]:
+    from .web.jobs import JobManager, describe_error
+    from .web.personas import Personas
+
+    registry = Personas(settings, JobManager(settings.max_workers, describe_error))
+    return [
+        (entry["id"], registry.settings_for(entry["id"]))
+        for entry in registry.data["personas"]
+        if not entry.get("deleted_at")
+    ]
+
+
+@kernel_app.command("status")
+def kernel_status(ctx: typer.Context) -> None:
+    with _errors():
+        for persona_id, settings in _kernel_personas(_settings(ctx)):
+            with _persona_store(settings) as store:
+                built = store.kernel_built()
+                scope = rebuild_scope(built, KERNEL)
+                _say(f"分身：{persona_id}")
+                _say(f"当前内核：{KERNEL.schema}/{KERNEL.prompt}/{KERNEL.taxonomy}")
+                _say(f"库内内核：{built.schema}/{built.prompt}/{built.taxonomy}" if built else "库内内核：未记录")
+                count = pending_chunks(store, settings) if scope != "none" else 0
+                _say(f"schema：{store.schema_version()}  范围：{scope}  待重抽分段：{count}")
+
+
+@kernel_app.command("rebuild")
+@_command_usage("build")
+def kernel_rebuild(
+    ctx: typer.Context,
+    persona: Annotated[str | None, typer.Option("--persona")] = None,
+    all_personas: Annotated[bool, typer.Option("--all")] = False,
+    yes: Annotated[bool, typer.Option("--yes")] = False,
+) -> None:
+    if all_personas and persona:
+        raise _fail("--persona 和 --all 不能同时使用")
+    settings = _settings(ctx)
+    selected = [
+        (pid, resolved) for pid, resolved in _kernel_personas(settings) if all_personas or pid == (persona or "default")
+    ]
+    if not selected:
+        raise _fail("分身不存在")
+    for pid, resolved in selected:
+        with _persona_store(resolved) as store:
+            count = pending_chunks(store, resolved)
+
+            if count > settings.kernel.max_auto_rebuild_chunks and not yes:
+                raise _fail(f"分身 {pid} 待重抽 {count} 个分段，超过费用闸；请确认后加 --yes")
+    for pid, resolved in selected:
+        with _persona_store(resolved) as store:
+            resolved = resolved.model_copy(
+                update={"target_name": store.get_meta("identity:name") or resolved.target_name}
+            )
+            report = build_profile(store, _llm(resolved), resolved, _progress)
+            index_persona(store, _embedder(resolved), resolved, _progress)
+            _say(f"分身 {pid}：{report.change_summary()}")
+            if report.failures:
+                raise _fail("部分记忆处理失败，请重试")
 
 
 @persona_app.command("import")
@@ -566,7 +883,7 @@ def persona_build(ctx: typer.Context) -> None:
     settings = _settings(ctx)
     with _persona_store(settings) as store:
         if profile_stale(store):
-            _progress(STALE_PROFILE_NOTICE)
+            _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
         llm = _llm(settings)
         embedder = _embedder(settings)
         report = build_profile(store, llm, settings, _progress)
@@ -622,7 +939,7 @@ def persona_chat(
     settings = _settings(ctx)
     with _persona_store(settings) as store:
         if profile_stale(store):
-            _progress(STALE_PROFILE_NOTICE)
+            _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
         twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
         history: list[ChatTurn] = []
         while True:

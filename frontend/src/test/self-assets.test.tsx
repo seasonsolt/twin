@@ -136,6 +136,22 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetcher);
 });
 
+it('hides synthesized voice trials when speech is disabled even with a saved voice', async () => {
+  assets = {
+    ...empty,
+    voice: { id: 'self-0123456789abcdef', file: 'voice.wav', duration_s: 12 },
+  };
+  render(<SelfAssets />);
+  await screen.findByText('我的声音（12.0 秒）');
+  expect(
+    screen.queryByRole('button', { name: '试听' }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('试听我的声音')).not.toBeInTheDocument();
+  expect(fetcher.mock.calls.some(([url]) => url === '/api/media/audio')).toBe(
+    false,
+  );
+});
+
 it('keeps photo and voice setup usable while speech capabilities are still loading', async () => {
   fetcher.mockImplementation((path: string) =>
     path === '/api/me/assets'

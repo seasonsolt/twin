@@ -18,10 +18,12 @@ vi.mock('motion/react', async (original) => ({
 }));
 const json = (value: unknown) => new Response(JSON.stringify(value));
 const base = '/api/persona/sources/recording';
-let chosen: string | null | undefined;
+let chosen: string[] | undefined;
+let diarized: boolean;
 let fetcher: ReturnType<typeof vi.fn>;
 const claim = () => ({
-  speaker: chosen ?? null,
+  claimed: chosen ?? [],
+  diarized,
   confirmed: chosen !== undefined,
   automatic: false,
   pending: false,
@@ -42,17 +44,21 @@ const claim = () => ({
       seconds: 12,
       similarity: 0.6,
       suggested: false,
+      also_suggested: true,
       samples: [base + '/samples/S2/0'],
     },
   ],
-  voices: chosen ? [{ id: 'v1', url: base + '/candidates/voice/v1' }] : [],
-  portraits: chosen
+  voices: chosen?.length
+    ? [{ id: 'v1', url: base + '/candidates/voice/v1' }]
+    : [],
+  portraits: chosen?.length
     ? [{ id: 'p1', url: base + '/candidates/portrait/p1' }]
     : [],
   candidate_error: null,
 });
 beforeEach(() => {
   chosen = undefined;
+  diarized = true;
   setPersonaId('p-test');
   vi.mocked(toast).mockClear();
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
@@ -67,8 +73,8 @@ beforeEach(() => {
           status: chosen === undefined ? 'needs_speaker' : 'remembered',
           remembered: 1,
           media_sha: 'sha',
-          voice_candidates: chosen ? 1 : 0,
-          portrait_candidates: chosen ? 1 : 0,
+          voice_candidates: chosen?.length ? 1 : 0,
+          portrait_candidates: chosen?.length ? 1 : 0,
         },
       ]);
     if (url === '/api/persona/processing') return json({ state: 'idle' });
@@ -77,7 +83,7 @@ beforeEach(() => {
     if (url === base + '/text') return new Response('本人：[00:00] 你好');
     if (url === base + '/speakers') return json(claim());
     if (url === base + '/speaker') {
-      chosen = JSON.parse(init.body as string).speaker;
+      chosen = JSON.parse(init.body as string).speakers;
       return json(claim());
     }
     if (url.startsWith(base + '/adopt-'))
@@ -106,9 +112,10 @@ it('opens the first pending recording from the banner, confirms a speaker, and a
   expect(screen.getByText('待确认')).toBeVisible();
   expect(await within(detail).findByText('请确认哪位是你')).toBeVisible();
   expect(within(detail).getByText('像你')).toBeVisible();
-  await user.click(within(detail).getByRole('radio', { name: /S1/ }));
+  await user.click(within(detail).getByRole('checkbox', { name: /S1/ }));
+  await user.click(within(detail).getByRole('button', { name: '确认选择' }));
   await within(detail).findByRole('button', { name: '用这段做声音' });
-  expect(within(detail).getByRole('radio', { name: /S1/ })).toBeChecked();
+  expect(within(detail).getByRole('checkbox', { name: /S1/ })).toBeChecked();
   expect(
     screen.queryByRole('button', { name: '有 1 段录音需要确认哪位是你' }),
   ).not.toBeInTheDocument();
@@ -169,7 +176,8 @@ it('cycles short samples only on play clicks and can save observer material', as
   }
   expect(play).toHaveBeenCalledTimes(3);
   await user.click(screen.getByRole('radio', { name: '都不是我（旁观资料）' }));
-  await waitFor(() => expect(chosen).toBeNull());
+  await user.click(screen.getByRole('button', { name: '确认选择' }));
+  await waitFor(() => expect(chosen).toEqual([]));
   await waitFor(() =>
     expect(
       screen.getByRole('radio', { name: '都不是我（旁观资料）' }),
@@ -181,8 +189,46 @@ it('cycles short samples only on play clicks and can save observer material', as
   play.mockRestore();
 });
 
+it('confirms multiple speakers together and leaves additional suggestions unchecked', async () => {
+  chosen = ['S1'];
+  render(<MediaClaim sourceId="recording" />);
+  const user = userEvent.setup();
+  const second = await screen.findByRole('checkbox', { name: /S2/ });
+  expect(screen.getByText('可能也是你')).toBeVisible();
+  expect(second).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /S1/ })).toBeChecked();
+  await user.click(second);
+  expect(
+    fetcher.mock.calls.filter(([, init]) => init.method === 'PUT'),
+  ).toHaveLength(0);
+  await user.click(screen.getByRole('button', { name: '确认选择' }));
+  await waitFor(() => expect(chosen).toEqual(['S1', 'S2']));
+  await waitFor(() => expect(second).not.toBeDisabled());
+  await user.click(screen.getByRole('checkbox', { name: /S1/ }));
+  await user.click(screen.getByRole('button', { name: '确认选择' }));
+  await waitFor(() => expect(chosen).toEqual(['S2']));
+});
+
+it('offers only whole-recording or observer choices without diarization', async () => {
+  diarized = false;
+  render(<MediaClaim sourceId="recording" />);
+  const user = userEvent.setup();
+  expect(await screen.findByText('当前转写服务不区分说话人')).toBeVisible();
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  expect(screen.getAllByRole('radio')).toHaveLength(2);
+  expect(screen.getByRole('button', { name: '确认选择' })).toBeDisabled();
+  await user.click(screen.getByRole('radio', { name: '整段都是我' }));
+  await user.click(screen.getByRole('button', { name: '确认选择' }));
+  await waitFor(() => expect(chosen).toEqual(['S1', 'S2']));
+  const observer = screen.getByRole('radio', { name: '都不是我（旁观资料）' });
+  await waitFor(() => expect(observer).not.toBeDisabled());
+  await user.click(observer);
+  await user.click(screen.getByRole('button', { name: '确认选择' }));
+  await waitFor(() => expect(chosen).toEqual([]));
+});
+
 it('shows the onboarding recording shortcut only when candidates exist', async () => {
-  chosen = 'S1';
+  chosen = ['S1'];
   render(<RecordingShortcut />);
   await screen.findByText('从你的视频里挑一个');
   await userEvent

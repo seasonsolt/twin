@@ -107,7 +107,9 @@ it('creates on first send, sends the id, starts fresh without deleting, and reop
   view.unmount();
   const reloaded = mount();
   await waitFor(() => expect(screen.getByText(reply.reply)).toBeVisible());
-  expect(screen.getByRole('button', { name: '让本人说这句' })).toBeEnabled();
+  expect(
+    screen.queryByRole('button', { name: '让本人说这句' }),
+  ).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '依据 1' }));
   expect(await screen.findByText('保存的依据')).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: '新对话' }));

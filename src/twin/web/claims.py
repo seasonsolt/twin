@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..assets import AssetStore
 from ..config import Settings
@@ -23,7 +23,16 @@ if TYPE_CHECKING:
 
 
 class SpeakerBody(BaseModel):
-    speaker: str | None = Field(max_length=80)
+    speaker: str | None = Field(default=None, max_length=80)
+    speakers: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = None
+
+    @model_validator(mode="after")
+    def selection(self) -> SpeakerBody:
+        if self.model_fields_set not in ({"speaker"}, {"speakers"}) or (
+            "speakers" in self.model_fields_set and self.speakers is None
+        ):
+            raise ValueError("请提供 speaker 或 speakers")
+        return self
 
 
 class AdoptBody(BaseModel):
@@ -62,12 +71,16 @@ def register(app: FastAPI, settings: Settings, ingestion: MediaIngestion) -> Non
         return {
             "pending": source.candidates_pending if source else False,
             "speaker": analysis.speaker,
+            "claimed": analysis.claimed,
+            "diarized": analysis.diarized,
+            "also_suggested": analysis.also_suggested,
             "confirmed": analysis.confirmed,
             "automatic": analysis.automatic,
             "speakers": [
                 {
                     **s.model_dump(),
                     "suggested": s.id == analysis.suggested,
+                    "also_suggested": s.id in analysis.also_suggested,
                     "samples": [
                         f"{base}/samples/{position}/{i}?revision={analysis.revision}"
                         for i, _ in enumerate(sample_windows(analysis, s.id))
@@ -92,9 +105,14 @@ def register(app: FastAPI, settings: Settings, ingestion: MediaIngestion) -> Non
             folder, analysis = load(source_id)
             source = store.get_source(source_id)
             assert source is not None
-            if body.speaker is not None and body.speaker not in {s.id for s in analysis.speakers}:
+            claimed = list(
+                dict.fromkeys(
+                    body.speakers if body.speakers is not None else ([body.speaker] if body.speaker is not None else [])
+                )
+            )
+            if not set(claimed).issubset(s.id for s in analysis.speakers):
                 raise HTTPException(400, "请选择录音中的说话人")
-            analysis.speaker, analysis.confirmed, analysis.automatic = body.speaker, True, False
+            analysis.claimed, analysis.confirmed, analysis.automatic = claimed, True, False
             analysis.revision = uuid.uuid4().hex
             analysis.voices, analysis.portraits, analysis.candidate_error = [], [], None
 

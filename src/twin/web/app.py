@@ -23,6 +23,8 @@ from ..channels.wecom import WeComHub
 from ..config import Settings
 from ..egress import egress_status
 from ..media.tts import SpeechSynthesizer
+from ..persona.kernel import KERNEL, rebuild_scope
+from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from . import assets, media, persona
 from .auth import Auth, AuthMiddleware
@@ -266,6 +268,12 @@ def create_app(
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)
     registry = Personas(settings, jobs)
+    for entry in registry.data["personas"]:
+        if not entry.get("deleted_at"):
+            path = registry.settings_for(entry["id"]).db_path
+            if path.is_file():
+                with PersonaStore(path):
+                    pass
     hub = WeComHub(settings, registry, backends)
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
     registry.on_restored = lambda persona_id: anyio.from_thread.run(hub.persona_restored, persona_id)
@@ -334,11 +342,36 @@ def create_app(
             with PersonaStore(resolved.db_path) as store:
                 counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
                 egress = egress_status(resolved, external_only=True)
+                built = store.kernel_built()
+                scope = rebuild_scope(built, KERNEL)
+                kernel_pending = pending_chunks(store, resolved) if scope != "none" else 0
+                state = context.state.processing.view()
+                blocked = scope != "none" and (
+                    not resolved.kernel.auto_rebuild or kernel_pending > resolved.kernel.max_auto_rebuild_chunks
+                )
+                kernel_state = (
+                    state["state"]
+                    if state["state"] != "idle"
+                    else "error"
+                    if store.get_meta("processing_last_error")
+                    else "awaiting_confirmation"
+                    if blocked
+                    else "ready"
+                    if scope == "none"
+                    else "pending"
+                )
             description = backends.describe()
             name = stored_identity(resolved.db_path)[0] or resolved.target_name
             return {
                 "target_name": name,
                 "counts": counts,
+                "kernel": {
+                    "version": KERNEL.__dict__,
+                    "built": built.__dict__ if built else None,
+                    "scope": scope,
+                    "pending_chunks": kernel_pending,
+                    "state": kernel_state,
+                },
                 "llm": {"provider": resolved.llm.provider, "model": resolved.llm.model, **description["llm"]},
                 "embed": {"provider": resolved.embed.provider, **description["embed"]},
                 "egress": egress,

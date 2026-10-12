@@ -23,6 +23,7 @@ from ..embed import Matrix
 from ..media.schema import AVATAR_ALIASES, AVATAR_PRESETS
 from ..util import prepare_private_file
 from .items import PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
+from .kernel import KERNEL, KernelVersion, kernel_json
 from .schema import ChatReply, Expression, ParsedSource, ReviewStatus, Source, SourceKind
 
 _SCHEMA = """
@@ -52,6 +53,11 @@ CREATE TABLE IF NOT EXISTS p_vectors (
     namespace TEXT NOT NULL, ref_id TEXT NOT NULL, text_sha TEXT NOT NULL, vec BLOB NOT NULL,
     PRIMARY KEY (namespace, ref_id));
 """
+_MIGRATIONS: tuple[str, ...] = (_SCHEMA,)
+
+
+class NewerStoreError(RuntimeError):
+    pass
 
 
 def stored_identity(path: Path) -> tuple[str | None, str]:
@@ -75,11 +81,46 @@ class PersonaStore:
         self.path = Path(path)
         if str(path) not in ("", ":memory:"):
             prepare_private_file(self.path)
-        self._db = sqlite3.connect(str(path), check_same_thread=False)
-        self._db.execute("PRAGMA foreign_keys=ON")
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.executescript(_SCHEMA)
         self._lock = threading.RLock()
+        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        try:
+            self._db.execute("PRAGMA foreign_keys=ON")
+            version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+            if version > len(_MIGRATIONS):
+                raise NewerStoreError(
+                    f"数据库由更新版本的 twin 写入（schema {version}），"
+                    f"当前版本只支持到 {len(_MIGRATIONS)}，请升级或从备份恢复"
+                )
+            if version == len(_MIGRATIONS):
+                self._db.execute("PRAGMA journal_mode=WAL")
+                return
+            self._db.execute("BEGIN IMMEDIATE")
+            version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+            if version > len(_MIGRATIONS):
+                raise NewerStoreError(
+                    f"数据库由更新版本的 twin 写入（schema {version}），"
+                    f"当前版本只支持到 {len(_MIGRATIONS)}，请升级或从备份恢复"
+                )
+            for number, migration in enumerate(_MIGRATIONS[version:], version + 1):
+                statement = ""
+                for char in migration:
+                    statement += char
+                    if char == ";" and sqlite3.complete_statement(statement):
+                        self._db.execute(statement)
+                        statement = ""
+                if statement.strip():
+                    self._db.execute(statement)
+                self._db.execute(f"PRAGMA user_version = {number}")
+            self._db.commit()
+            self._db.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            self._db.rollback()
+            self._db.close()
+            raise
+
+    def schema_version(self) -> int:
+        with self._lock:
+            return int(self._db.execute("PRAGMA user_version").fetchone()[0])
 
     def close(self) -> None:
         self._db.close()
@@ -342,7 +383,17 @@ class PersonaStore:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (key, value))
 
-    def mark_profile_built(self, built_at: str, sources_changed_at: str | None) -> None:
+    def kernel_built(self) -> KernelVersion | None:
+        value = self.get_meta("kernel:built")
+        if value is None:
+            return None
+        data = json.loads(value)
+        return KernelVersion(schema=int(data["schema"]), prompt=str(data["prompt"]), taxonomy=str(data["taxonomy"]))
+
+    def mark_kernel_built(self, kernel: KernelVersion) -> None:
+        self.set_meta("kernel:built", kernel_json(kernel))
+
+    def mark_profile_built(self, built_at: str, sources_changed_at: str | None, kernel: KernelVersion = KERNEL) -> None:
         """Acknowledge a successful build only if its input version is still current."""
         with self._tx() as db:
             saved = db.execute(
@@ -352,6 +403,8 @@ class PersonaStore:
             )
             if saved.rowcount:
                 db.execute("DELETE FROM p_meta WHERE key LIKE 'source_pending:%'")
+                db.execute("INSERT OR REPLACE INTO p_meta VALUES ('kernel:built', ?)", (kernel_json(kernel),))
+                db.execute("DELETE FROM p_meta WHERE key = 'kernel_rebuild'")
 
     def source_status(self, source_id: str, remembered: int) -> str:
         source = self.get_source(source_id)

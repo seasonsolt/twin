@@ -335,6 +335,8 @@ def test_uploads_and_ingestion_jobs_keep_their_persona(web: TestClient, monkeypa
     a, b = create(web, "甲"), create(web, "乙")
 
     class Transcriber:
+        diarizes = True
+
         def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
             started.set()
             assert release.wait(5)

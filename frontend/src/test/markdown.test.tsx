@@ -191,6 +191,11 @@ describe('chat Markdown', () => {
     view.rerender(
       <ChatStage
         {...props}
+        capabilities={{
+          available: true,
+          backend: 'test',
+          video: { available: true },
+        }}
         videoPlaying
         turn={{
           id: 'video',

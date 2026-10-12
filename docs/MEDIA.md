@@ -12,20 +12,21 @@ twin 是个人工具，不添加免责声明。
 
 `media_ingest` 复用 JobManager，每次只处理一个音视频，后台线程运行提取、识别、区分说话人和候选提取；列表显示转写进度、待确认、整理中、已加入或失败。转写是一条 audio/video 来源，标题为原文件名去后缀，保存时长与可获得的 creation_time。`analysis.json`（0600）保留每段 start/end/text/speaker、说话人时长/相似度、确认结果和候选。
 
-只有一位说话人时自动认领；多位且有当前分身的参考声音时，最高相似度至少 0.6、所有说话人均有相似度且领先第二位至少 0.1，则自动认领并显示“已自动识别，可修改”。否则来源进入 `needs_speaker`，不参与记忆抽取/检索，其他来源正常处理。确认后每段显示 `本人姓名：[mm:ss] 原话` 或 `其他人1/2…：[mm:ss] 原话`，沿用聊天来源的本人/他人标记与他人语境机制。选“都不是我（旁观资料）”时所有表达均为他人。之后修改选择会替换表达、使旧候选失效并排队重建。
+转写器显式声明 `diarizes` 能力：命令转写器为 true，HTTP 分段转写器为 false，并保存到 `analysis.json` 的 `diarized`。不区分说话人时永不自动认领、`suggested=null`，来源进入 `needs_speaker`；界面说明“当前转写服务不区分说话人”，仅提供“整段都是我”与“都不是我（旁观资料）”。区分说话人且只有一位时，无参考声音保持自动认领；有参考声音则相似度必须至少 0.6，低于阈值或 null 均待确认。多位且有当前分身的参考声音时，最高相似度至少 0.6、所有说话人均有相似度且领先第二位至少 0.1，则只自动认领最高者并显示“已自动识别，可修改”。其他相似度至少 0.6 的说话人记录为 `also_suggested`，显示“可能也是你”，默认不勾选。否则来源进入 `needs_speaker`，不参与记忆抽取/检索，其他来源正常处理。
 
-声音候选由 twin 从本人的片段中生成：合并间隔小于 0.6 秒的连续发言，剔除他人重叠片段，优先较长、响度高且稳定的窗口，最多 3 段、每段 8–20 秒。从提取的 16 kHz WAV 切出 24 kHz 单声道 WAV；采纳时再走手动上传的高通/响度/去静音归一化。试听为约 5 秒的最多 3 个片段，按需切出并缓存。候选提取失败不阻塞记忆构建。所有资料、参考声音和候选都只属于当前分身。
+认领保存在 `claimed: list[str]`，可勾选多位并点“确认选择”，每位仍可独立试听。确认后全部已认领说话人的片段显示 `本人姓名：[mm:ss] 原话`，仅未认领者编号为 `其他人1/2…`，沿用聊天来源的本人/他人标记与他人语境机制。选“都不是我（旁观资料）”时 `claimed=[]`，所有表达均为他人。之后修改选择会替换表达、使旧候选失效并排队重建。旧 `analysis.json` 缺少 `diarized` 时按 true 读取；缺少 `claimed` 时从旧 `speaker` 迁移（非 null → `[speaker]`，null → `[]`）。`speaker` 保留为只读兼容字段，始终为 `claimed[0]` 或 null；新旧字段同时存在时以 `claimed` 为准。读取不主动重写旧文件。
+
+声音候选由 twin 从全部已认领说话人的片段中生成：合并间隔小于 0.6 秒的连续发言，剔除未认领者的重叠片段，优先较长、响度高且稳定的窗口，最多 3 段、每段 8–20 秒。从提取的 16 kHz WAV 切出 24 kHz 单声道 WAV；采纳时再走手动上传的高通/响度/去静音归一化。试听为约 5 秒的最多 3 个片段，按需切出并缓存。候选提取失败不阻塞记忆构建。所有资料、参考声音和候选都只属于当前分身。
 
 未配置 `[asr]` 时也保存原件，显示“需要配置语音识别”；配置并重启后点“重新转写”。HTTP 的 `provider = "openai_compat"`（还需 model、base_url）或 `"cloudflare"`（base_url、api_key_env）复用现有识别器，先通过 ffmpeg silencedetect 选停顿，将 WAV 切成不超过 25 秒的识别请求，无停顿则硬切；每段保留全局时间偏移。
 
-也可配置本机命令（仅用于记忆转写，合成语音评测仍用 HTTP）：
+Apple Silicon Mac 可安装本机会议转写命令包（仅用于记忆转写，合成语音评测仍用 HTTP）：
 
-```toml
-[asr]
-provider = "command"
-command = "python /path/to/transcribe.py"
-language = "zh"
+```bash
+uv run twin --config ./twin.toml compute install asr-funasr --download-models
 ```
+
+已有模型时去掉 `--download-models`，不会下载模型。安装会向当前配置写入 `[asr] provider = "command"`、本机命令路径、`language = "zh"`、`egress = "local"`，不覆盖已有手写节。重启网页后生效；详见 [开启会议录音转写](LOCAL_DEV.md#开启会议录音转写)。也可手动配置遵守以下契约的其他命令。
 
 命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
 
@@ -41,8 +42,8 @@ stdout 最后一行：`{"ok": true, "candidates": [{"time": 2.5, "image": "<out_
 
 ### 说话人与候选 API
 
-- `GET /api/persona/sources/{id}/speakers`：speaker、confirmed、automatic、pending、speakers（id/seconds/similarity/suggested/samples）、voices/portraits（id/url 等）、candidate_error。
-- `PUT /api/persona/sources/{id}/speaker {"speaker": "S1"}`，或 null 表示旁观资料；返回新确认结果与候选处理 job_id，自动排队重建。
+- `GET /api/persona/sources/{id}/speakers`：claimed、兼容 speaker、diarized、also_suggested（其他可能本人 ID 列表）、confirmed、automatic、pending、speakers（id/seconds/similarity/suggested/also_suggested/samples，其中两种 suggested 为布尔值）、voices/portraits（id/url 等）、candidate_error。
+- `PUT /api/persona/sources/{id}/speaker {"speakers": ["S1", "S3"]}`，空列表表示旁观资料；继续接受旧 `{"speaker": "S1"}` / `{"speaker": null}`。两种字段只能提供一种，speakers 不接受 null；校验所有 ID 属于本条录音，按请求顺序去重。返回新确认结果与候选处理 job_id，自动排队重建。
 - `POST .../adopt-voice {"candidate": "<id>"}` / `POST .../adopt-portrait {"candidate": "<id>"}`：复用本人的 AssetStore 与手动处理，返回更新后的资产 profile。
 - 试听与候选 URL 为同源 GET，支持 `?persona=<id>`，与其他媒体 GET 使用相同的分身路由；候选 ID 随每次确认更换，旧 URL 返回 404。前端每个 audio/img URL 都显式携带 persona。
 

@@ -195,6 +195,58 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
   expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy();
 });
 
+it.each([false, true])(
+  'hides video entries with video disabled and speech=%s',
+  async (speech) => {
+    const original = fetchMock.getMockImplementation()! as (
+      url: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url === '/api/media/capabilities'
+        ? Promise.resolve(
+            json({
+              available: speech,
+              backend: speech ? 'openai_compat' : 'silent',
+              video: { available: false },
+            }),
+          )
+        : url === '/api/persona/chat/stream'
+          ? Promise.resolve(streamReply(reply))
+          : original(url, init),
+    );
+    mount();
+    await submit();
+    await screen.findByRole('article', { name: '分身回复' });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '发送' })).toHaveAttribute(
+        'aria-busy',
+        'false',
+      ),
+    );
+    expect(
+      screen.queryByRole('button', { name: '让测试人说这句' }) !== null,
+    ).toBe(speech);
+    expect(
+      screen.queryByRole('button', { name: '播放或暂停当前句' }) !== null,
+    ).toBe(speech);
+    expect(screen.queryByText(/真人版生成失败/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '重试生成视频' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('舞台真人视频')).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url.startsWith('/api/media/video')),
+    ).toBe(false);
+    if (!speech)
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          url.startsWith('/api/media/audio'),
+        ),
+      ).toBe(false);
+  },
+);
+
 it('fills and focuses the composer from each starter without sending', async () => {
   mount();
   expect(screen.getByRole('heading', { name: '和测试人聊聊' })).toBeVisible();

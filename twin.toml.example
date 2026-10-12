@@ -4,6 +4,10 @@ target_aliases = []
 db_path = "data/twin.db"
 max_workers = 4
 
+# [kernel]
+# auto_rebuild = true
+# max_auto_rebuild_chunks = 400
+
 [media]
 # font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体
 

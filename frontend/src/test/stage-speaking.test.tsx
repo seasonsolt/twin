@@ -235,6 +235,40 @@ it.each([
   },
 );
 
+it.each(['done', 'failed', 'generating'] as const)(
+  'hides stale video state %s when video is disabled',
+  (status) => {
+    render(
+      <MemoryRouter>
+        <ChatStage
+          {...props}
+          capabilities={{
+            ...caps,
+            available: false,
+            video: { available: false },
+          }}
+          videoPlaying
+          videoState={{
+            status,
+            result: {
+              file: `${'a'.repeat(64)}.mp4`,
+              duration_s: 1,
+              warnings: [],
+            },
+          }}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByLabelText('舞台真人视频')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /播放|真人视频/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/真人视频已就绪|真人视频生成中|真人版生成失败/),
+    ).not.toBeInTheDocument();
+  },
+);
+
 it('keeps the accent glow for non-stage avatars on light backgrounds', () => {
   const view = render(
     <ChatAvatar name="本人" capabilities={caps} speaking level={3} />,

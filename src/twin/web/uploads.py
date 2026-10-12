@@ -177,7 +177,9 @@ class MediaIngestion:
                 transcriber.diarize, transcriber.reference = True, reference
             segments = transcriber.transcribe(audio, duration, progress)
             log("[3/6] 区分说话人")
-            analysis = analyse(segments, getattr(transcriber, "speakers", []), reference is not None)
+            analysis = analyse(
+                segments, getattr(transcriber, "speakers", []), reference is not None, diarized=transcriber.diarizes
+            )
             with self.lock, PersonaStore(self.settings.db_path) as store:
                 current = store.get_source(source_id)
                 if current is None or current.media_job_id != job_id:
@@ -202,7 +204,7 @@ class MediaIngestion:
                 "transcribed_s": source.duration_s or 0,
                 "voice_candidates": len(analysis.voices),
                 "portrait_candidates": len(analysis.portraits),
-                "candidates_pending": analysis.confirmed and analysis.speaker is not None,
+                "candidates_pending": analysis.confirmed and bool(analysis.claimed),
             }
         )
         name = stored_identity(self.settings.db_path)[0] or self.settings.target_name
@@ -219,13 +221,13 @@ class MediaIngestion:
             analysis = Analysis.load(folder)
             if analysis.revision != revision:
                 return {"superseded": True}
-        if analysis.speaker is not None:
+        if analysis.claimed:
             log("[5/6] 提取声音候选")
         try:
             analysis.voices = voice_candidates(analysis, folder)
         except Exception:
             analysis.candidate_error = "声音候选提取失败，可重新确认说话人后重试"
-        if source.kind == SourceKind.VIDEO and analysis.speaker and self.settings.vision.command:
+        if source.kind == SourceKind.VIDEO and analysis.claimed and self.settings.vision.command:
             log("[6/6] 提取形象候选")
             try:
                 analysis.portraits = vision_candidates(

@@ -68,6 +68,63 @@ def test_auto_pick(scores: list[float | None], reference: bool, chosen: str | No
     assert single.confirmed and single.speaker == "S1"
 
 
+def test_single_speaker_reference_and_capability() -> None:
+    for reference in (False, True):
+        for score in (None, 0.59, 0.6, 0.9):
+            speakers = [Speaker(id="S1", seconds=12, similarity=score)]
+            analysis = analyse(segments()[:1], speakers, reference)
+            expected = not reference or (score is not None and score >= 0.6)
+            assert analysis.confirmed == expected
+            assert analysis.claimed == (["S1"] if expected else [])
+            undiarized = analyse(segments()[:1], speakers, reference, diarized=False)
+            assert not undiarized.confirmed and not undiarized.automatic
+            assert undiarized.claimed == [] and undiarized.suggested is None
+            assert undiarized.also_suggested == [] and not undiarized.diarized
+
+
+def test_also_suggested_does_not_auto_claim_multiple() -> None:
+    analysis = analyse(
+        segments(), [Speaker(id="S1", seconds=12, similarity=0.8), Speaker(id="S2", seconds=12, similarity=0.6)], True
+    )
+    assert analysis.claimed == ["S1"] and analysis.also_suggested == ["S2"]
+
+
+@pytest.mark.parametrize("speaker", ["S1", None])
+def test_legacy_analysis_migration(tmp_path: Path, speaker: str | None) -> None:
+    payload = {"segments": [s.model_dump() for s in segments()], "speakers": [], "speaker": speaker}
+    (tmp_path / "analysis.json").write_text(json.dumps(payload))
+    analysis = Analysis.load(tmp_path)
+    assert analysis.diarized and analysis.claimed == ([speaker] if speaker else [])
+    analysis.claimed = ["S2", "S1"]
+    analysis.save(tmp_path)
+    loaded = Analysis.load(tmp_path)
+    assert loaded.claimed == ["S2", "S1"] and loaded.speaker == "S2"
+    assert json.loads((tmp_path / "analysis.json").read_text())["speaker"] == "S2"
+
+
+def test_multiple_claims_lines_intervals_and_voice_windows() -> None:
+    analysis = analyse(
+        [
+            Segment(start=0, end=12, speaker="S1", text="a"),
+            Segment(start=10, end=14, speaker="S2", text="other"),
+            Segment(start=11, end=26, speaker="S3", text="b"),
+            Segment(start=30, end=32, speaker="S4", text="other2"),
+        ],
+        [],
+        False,
+    )
+    analysis.claimed = ["S1", "S3"]
+    assert [(name, own) for name, _, own in analysis.lines("本人")] == [
+        ("本人", True),
+        ("其他人1", False),
+        ("本人", True),
+        ("其他人2", False),
+    ]
+    assert intervals(analysis) == [(0, 10), (14, 26)]
+    assert voice_windows(analysis) == [(14.2, 25.8), (0.2, 9.8)]
+    assert all(end <= 10 for _, end in sample_windows(analysis, "S1"))
+
+
 def test_command_diarization_contract(tmp_path: Path) -> None:
     audio = tmp_path / "audio.wav"
     audio.write_bytes(tone(1))
@@ -91,6 +148,7 @@ def test_command_diarization_contract(tmp_path: Path) -> None:
         + "))\n"
     )
     transcriber = CommandTranscriber(f"python3 {shlex.quote(str(script))}")
+    assert transcriber.diarizes
     transcriber.diarize, transcriber.reference = True, reference
     assert transcriber.transcribe(audio, 24, lambda *_: None) == segments()
     assert transcriber.speakers[0].similarity == 0.73
@@ -125,7 +183,7 @@ def source() -> Source:
 def test_attribution_and_build_gate(tmp_path: Path) -> None:
     settings = Settings(db_path=tmp_path / "twin.db", pseudonymize_others=False)
     analysis = analyse(segments(), [], False)
-    analysis.speaker, analysis.confirmed = "S2", True
+    analysis.claimed, analysis.confirmed = ["S2"], True
     parsed = parse_media(source(), analysis.lines("本人"))
     assert parsed.source.n_target == 1 and parsed.source.n_expressions == 2
     assert parsed.expressions[0].speaker == "其他人1" and not parsed.expressions[0].is_target
@@ -136,7 +194,7 @@ def test_attribution_and_build_gate(tmp_path: Path) -> None:
         store.put_source(parsed)
         report = build_profile(store, FakeLLM(lambda *_: pytest.fail("unconfirmed source sent to model")), settings)
         assert report.sources == 0 and report.chunks_total == 0
-        analysis.speaker = None
+        analysis.claimed = []
         observers = parse_media(source().model_copy(update={"media_status": "ready"}), analysis.lines("本人"))
         store.put_source(observers)
         assert observers.source.n_target == 0
@@ -155,7 +213,7 @@ def test_voice_window_merging_overlap_length_and_samples(tmp_path: Path) -> None
         [],
         False,
     )
-    analysis.speaker = "S1"
+    analysis.claimed = ["S1"]
     assert intervals(analysis, "S1") == [(0, 10), (12, 15), (20, 50), (60, 68)]
     windows = voice_windows(analysis)
     assert len(windows) == 3 and windows[0][1] - windows[0][0] == pytest.approx(20)
@@ -166,7 +224,7 @@ def test_voice_window_merging_overlap_length_and_samples(tmp_path: Path) -> None
     audio = tmp_path / "short.wav"
     audio.write_bytes(tone(4))
     assert voice_windows(analysis, audio) == []
-    analysis.speaker = None
+    analysis.claimed = []
     assert voice_windows(analysis) == []
 
 
@@ -312,6 +370,8 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
     monkeypatch.setattr("twin.web.persona.run_persona_build", build)
 
     class Transcriber:
+        diarizes = True
+
         def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
             return segments()
 
@@ -336,6 +396,7 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         wait_job(client, chosen["job_id"])
         wait_processing(client)
         claim = client.get(base + "/speakers").json()
+        assert claim["claimed"] == ["S1"] and claim["diarized"]
         assert claim["confirmed"] and claim["speaker"] == "S1" and not claim["automatic"]
         assert len(claim["voices"]) == len(claim["portraits"]) == 1 and not claim["pending"]
         text = client.get(base + "/text").text
@@ -381,6 +442,18 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
             assert "我喜欢读书" in expressions[1].context
         assert client.get(candidate["url"]).status_code == 404
         assert client.get(sample).status_code == 404
+        for body in [{"speakers": ["missing"]}, {}, {"speakers": None}, {"speakers": [], "speaker": "S1"}]:
+            assert client.put(base + "/speaker", json=body, headers={"X-Twin": "1"}).status_code == 400
+        multiple = client.put(base + "/speaker", json={"speakers": ["S1", "S2", "S1"]}, headers={"X-Twin": "1"}).json()
+        assert multiple["claimed"] == ["S1", "S2"] and multiple["speaker"] == "S1"
+        wait_job(client, multiple["job_id"])
+        wait_processing(client)
+        with PersonaStore(settings.db_path) as store:
+            assert all(e.is_target for e in store.list_expressions(source_id=sid))
+        assert client.get(base + "/speakers").json()["voices"]
+        empty = client.put(base + "/speaker", json={"speakers": []}, headers={"X-Twin": "1"}).json()
+        wait_job(client, empty["job_id"])
+        assert empty["claimed"] == [] and empty["speaker"] is None
         observer = client.put(base + "/speaker", json={"speaker": None}, headers={"X-Twin": "1"}).json()
         wait_job(client, observer["job_id"])
         assert client.get(base + "/speakers").json()["voices"] == []

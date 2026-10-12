@@ -46,10 +46,14 @@ class Speaker(BaseModel):
 
 
 class Transcriber(Protocol):
+    diarizes: bool
+
     def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]: ...
 
 
 class CommandTranscriber:
+    diarizes = True
+
     def __init__(self, command: str, language: str = "zh") -> None:
         self.command, self.language = command, language
         self.diarize = False
@@ -118,6 +122,8 @@ def silence_chunks(audio: Path, duration: float) -> list[tuple[float, float]]:
 
 
 class HTTPTranscriber:
+    diarizes = False
+
     def __init__(self, recognizer: SpeechRecognizer, language: str = "zh") -> None:
         self.recognizer, self.language = recognizer, language
 

@@ -202,6 +202,14 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - Web chat without items returns 200 `ChatReply + cited`, friendly Chinese abstention explaining processing/no memories, before constructing backends. Persisting PersonaChat with no built profile also abstains without model calls. Non-persisting service/eval retrieval remains unchanged, including expression-only corpora.
 - CLI: `twin persona import 文件…` auto-detects and prints the kind per file; `--kind` remains an explicit override. `twin persona note "文字"` saves a note. CLI build is unchanged; UI resumes pending CLI memory on startup.
 
+## 会议录音认领（P2.2）
+
+- `media.ingest.Transcriber.diarizes: bool` 显式声明说话人区分能力，CommandTranscriber=true、HTTPTranscriber=false；上传流程传给 `analyse`，保存为 `Analysis.diarized`。HTTP 的整段 S1 永不自动认领，suggested=null，进入 needs_speaker。
+- 区分说话人时，单人无参考声音自动认领；有参考声音必须 similarity ≥ 0.6（null 不认领）。多人沿用全部有分数、最高 ≥ 0.6 且领先 ≥ 0.1 的规则，只认领一位。其他 ≥ 0.6 者列入 also_suggested，前端显示“可能也是你”，默认不勾选。
+- `Analysis.claimed: list[str]` 是唯一认领状态；旧文件缺少 claimed 时由 speaker 迁移（null → []），diarized 缺省 true。speaker 为只读派生兼容字段，等于 claimed[0] 或 null。所有已认领者的表达均标为本人，仅未认领者编号“其他人N”；声音和形象候选使用全部已认领片段并剔除未认领者的重叠发言。
+- `PUT /api/persona/sources/{id}/speaker` 接受 `{speakers: ["S1", "S3"]}`（[] 为旁观资料），继续接受 `{speaker: "S1"}` / `{speaker: null}`。两种字段只能提供一种，speakers 不接受 null；所有 ID 必须存在，按顺序去重。修改后替换表达、轮换 revision 使旧候选失效、排队重建。
+- `GET .../speakers` 追加 claimed、diarized、also_suggested ID 列表，以及各 speakers 条目的 also_suggested 布尔值。前端多选后统一确认，保留独立试听；diarized=false 时说明“当前转写服务不区分说话人”，只给“整段都是我”/“都不是我（旁观资料）”。详见 [MEDIA.md](MEDIA.md)。
+
 ## Memory upload queries and builds (code layers 3/5)
 
 - `PersonaStore` 的 `p_meta.sources_changed_at` 为带 UTC 时区的 ISO 时间（微秒精度），仅在新增/替换来源、实际删除来源时，与对应写入同事务更新。`source_pending:<source_id>` 是来源等待构建的内部标记，成功构建后清除。

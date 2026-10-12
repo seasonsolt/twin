@@ -11,9 +11,10 @@ import tempfile
 import uuid
 import wave
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageOps
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from ..assets import AssetStore
 from ..config import VisionSettings
@@ -32,7 +33,9 @@ class Candidate(BaseModel):
 class Analysis(BaseModel):
     segments: list[Segment]
     speakers: list[Speaker]
-    speaker: str | None = None
+    claimed: list[str] = Field(default_factory=list)
+    diarized: bool = True
+    also_suggested: list[str] = Field(default_factory=list)
     confirmed: bool = False
     suggested: str | None = None
     automatic: bool = False
@@ -40,6 +43,18 @@ class Analysis(BaseModel):
     voices: list[Candidate] = Field(default_factory=list)
     portraits: list[Candidate] = Field(default_factory=list)
     candidate_error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_speaker(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "claimed" not in data:
+            data = {**data, "claimed": [data["speaker"]] if data.get("speaker") is not None else []}
+        return data
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def speaker(self) -> str | None:
+        return self.claimed[0] if self.claimed else None
 
     def save(self, folder: Path) -> None:
         AssetStore.write(folder / "analysis.json", self.model_dump_json().encode())
@@ -49,19 +64,19 @@ class Analysis(BaseModel):
         return cls.model_validate_json((folder / "analysis.json").read_bytes())
 
     def lines(self, name: str) -> list[tuple[str, str, bool]]:
-        others = {s.id: f"其他人{i + 1}" for i, s in enumerate(s for s in self.speakers if s.id != self.speaker)}
+        others = {s.id: f"其他人{i + 1}" for i, s in enumerate(s for s in self.speakers if s.id not in self.claimed)}
         return [
             (
-                name if s.speaker == self.speaker else others[s.speaker],
+                name if s.speaker in self.claimed else others[s.speaker],
                 f"[{timestamp(s.start)}] {' '.join(s.text.split())}",
-                s.speaker == self.speaker,
+                s.speaker in self.claimed,
             )
             for s in self.segments
             if s.text.strip()
         ]
 
 
-def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: bool) -> Analysis:
+def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: bool, diarized: bool = True) -> Analysis:
     if not any(s.text.strip() for s in segments):
         raise ValueError("没有识别到文字")
     metadata = {s.id: s for s in speakers}
@@ -77,9 +92,15 @@ def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: boo
         for sid in ids
     ]
     ranked = sorted((s for s in speakers if s.similarity is not None), key=lambda s: s.similarity or 0, reverse=True)
-    suggested = ranked[0].id if has_reference and ranked else None
-    chosen = speakers[0].id if len(speakers) == 1 else None
-    if chosen is None and suggested:
+    suggested = ranked[0].id if diarized and has_reference and ranked else None
+    chosen = None
+    if (
+        diarized
+        and len(speakers) == 1
+        and (not has_reference or (speakers[0].similarity is not None and speakers[0].similarity >= 0.6))
+    ):
+        chosen = speakers[0].id
+    if len(speakers) > 1 and suggested:
         best = ranked[0].similarity or 0
         runner = (ranked[1].similarity or 0) if len(ranked) > 1 else 0
         if len(ranked) == len(speakers) and best >= 0.6 and best - runner >= 0.1 - 1e-9:
@@ -87,18 +108,21 @@ def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: boo
     return Analysis(
         segments=segments,
         speakers=speakers,
-        speaker=chosen,
+        claimed=[chosen] if chosen else [],
+        diarized=diarized,
+        also_suggested=[s.id for s in ranked if s.id != suggested and (s.similarity or 0) >= 0.6] if suggested else [],
         confirmed=chosen is not None,
         suggested=suggested,
         automatic=chosen is not None,
     )
 
 
-def intervals(analysis: Analysis, speaker: str) -> list[tuple[float, float]]:
-    # Never include overlap with another speaker, even inside a merged run.
-    others = [(s.start, s.end) for s in analysis.segments if s.speaker != speaker]
+def intervals(analysis: Analysis, speaker: str | None = None) -> list[tuple[float, float]]:
+    claimed = {speaker} if speaker is not None else set(analysis.claimed)
+    # Never include overlap with an unclaimed speaker, even inside a merged run.
+    others = [(s.start, s.end) for s in analysis.segments if s.speaker not in claimed]
     runs: list[tuple[float, float]] = []
-    for s in sorted((s for s in analysis.segments if s.speaker == speaker), key=lambda s: s.start):
+    for s in sorted((s for s in analysis.segments if s.speaker in claimed), key=lambda s: s.start):
         if runs and s.start - runs[-1][1] < 0.6 and not any(a < s.start and b > runs[-1][1] for a, b in others):
             runs[-1] = runs[-1][0], max(runs[-1][1], s.end)
         else:
@@ -113,9 +137,9 @@ def intervals(analysis: Analysis, speaker: str) -> list[tuple[float, float]]:
 
 
 def voice_windows(analysis: Analysis, audio: Path | None = None) -> list[tuple[float, float]]:
-    if analysis.speaker is None:
+    if not analysis.claimed:
         return []
-    runs = intervals(analysis, analysis.speaker)
+    runs = intervals(analysis)
     duration = math.inf
     if audio:
         with wave.open(str(audio)) as wav:
@@ -208,7 +232,7 @@ def sample_windows(analysis: Analysis, speaker: str) -> list[tuple[float, float]
 
 
 def vision_candidates(analysis: Analysis, video: Path, folder: Path, settings: VisionSettings) -> list[Candidate]:
-    if not settings.command or analysis.speaker is None:
+    if not settings.command or not analysis.claimed:
         return []
     with tempfile.TemporaryDirectory(dir=folder, prefix=".vision-") as temporary:
         out = Path(temporary).resolve()
@@ -217,7 +241,7 @@ def vision_candidates(analysis: Analysis, video: Path, folder: Path, settings: V
             input=json.dumps(
                 {
                     "video": str(video.resolve()),
-                    "intervals": intervals(analysis, analysis.speaker),
+                    "intervals": intervals(analysis),
                     "out_dir": str(out),
                     "max_candidates": 6,
                 }

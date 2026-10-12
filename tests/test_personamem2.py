@@ -89,6 +89,15 @@ def test_splits_are_seeded_and_dev_never_uses_formal_personas(tmp_path: Path) ->
         pm2.split_personas(rows, "dev", 13)
 
 
+def test_a_formal_count_stays_within_the_formal_personas(tmp_path: Path) -> None:
+    rows = pm2.load_benchmark(write_dataset(tmp_path, range(20), histories=False))
+    formal = pm2.split_personas(rows, "formal")
+    assert pm2.split_personas(rows, "formal", 8) == formal
+    assert set(pm2.split_personas(rows, "formal", 3)) <= set(formal)
+    with pytest.raises(ValueError):
+        pm2.split_personas(rows, "formal", 9)
+
+
 def test_options_shuffle_reproducibly_and_gold_follows_the_correct_answer(tmp_path: Path) -> None:
     rows = pm2.load_benchmark(write_dataset(tmp_path, range(12), histories=False))
     golds = set()

@@ -1,3 +1,4 @@
+import { withBase } from './base';
 let current = 'default';
 try {
   current = localStorage.getItem('twin:persona') || 'default';
@@ -38,5 +39,5 @@ export function personaUrl(path: string, id = current) {
   if (!path.startsWith('/api/')) return path;
   const url = new URL(path, window.location.origin);
   url.searchParams.set('persona', id);
-  return url.pathname + url.search;
+  return withBase(url.pathname + url.search);
 }

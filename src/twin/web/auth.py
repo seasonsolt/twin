@@ -218,7 +218,7 @@ class Auth:
                 httponly=True,
                 secure=secure_cookie(request),
                 samesite="lax",
-                path="/",
+                path=forwarded_prefix(request) + "/",
             )
             return {"email": email, "admin": email in self.settings.admin_emails}
 
@@ -227,7 +227,13 @@ class Auth:
             if self.settings.enabled:
                 with self.database() as db:
                     db.execute("DELETE FROM sessions WHERE hash = ?", (digest(request.cookies.get(COOKIE, "")),))
-            response.delete_cookie(COOKIE, path="/", httponly=True, secure=secure_cookie(request), samesite="lax")
+            response.delete_cookie(
+                COOKIE,
+                path=forwarded_prefix(request) + "/",
+                httponly=True,
+                secure=secure_cookie(request),
+                samesite="lax",
+            )
             return {"logged_out": True}
 
         @app.get("/api/whoami")
@@ -243,6 +249,18 @@ class Auth:
                 return []
             with self.database() as db:
                 return [dict(row) for row in db.execute("SELECT * FROM waitlist ORDER BY created_at")]
+
+
+PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)+")
+
+
+def forwarded_prefix(request: Request) -> str:
+    """The path a reverse proxy mounts the app under (X-Forwarded-Prefix, e.g. /twin), or "" at the root.
+
+    Only plain path segments are accepted, so the header can scope cookies and redirects but never leave the site.
+    """
+    value = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+    return value if PREFIX.fullmatch(value) and "/." not in value else ""
 
 
 def secure_cookie(request: Request) -> bool:

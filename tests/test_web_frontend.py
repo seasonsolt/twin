@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urljoin
 
 import pytest
 from fastapi.testclient import TestClient
@@ -75,8 +76,11 @@ def test_assets_and_csp_safe_build(client: TestClient) -> None:
         "/icons/favicon-32.png": "image/png",
         "/icons/apple-touch-icon.png": "image/png",
     }
-    assert set(icons) <= set(parser.references)
-    for reference in parser.references:
+    # Relative to the page, so the same build also serves under a reverse-proxy prefix such as /twin/.
+    assert all(reference.startswith("./") for reference in parser.references)
+    references = [urljoin("/", reference) for reference in parser.references]
+    assert set(icons) <= set(references)
+    for reference in references:
         bundled = re.fullmatch(r"/assets/[\w-]+-[\w-]+\.(js|css)", reference)
         assert bundled or reference == "/fonts/ma-shan-zheng/font.css" or reference in icons
         response = client.get(reference)
@@ -107,8 +111,8 @@ def test_assets_and_csp_safe_build(client: TestClient) -> None:
     urls = re.findall(r"url\(([^)]+)\)", font_css.text)
     assert len(urls) == 92
     for url in urls:
-        assert re.fullmatch(r"/fonts/ma-shan-zheng/slice-\d{3}\.woff2", url)
-        response = client.get(url)
+        assert re.fullmatch(r"slice-\d{3}\.woff2", url)
+        response = client.get(urljoin("/fonts/ma-shan-zheng/font.css", url))
         assert response.status_code == 200 and response.content.startswith(b"wOF2")
         assert response.headers["content-type"].startswith("font/woff2")
         assert_security(response)
@@ -121,6 +125,12 @@ def test_bookmarks_redirect_to_root(client: TestClient, path: str, method: str) 
     assert response.status_code == 308 and response.headers["location"] == "/"
     assert_security(response)
     assert client.get(path).text == client.get("/").text
+
+
+@pytest.mark.parametrize(("prefix", "location"), [("/twin", "/twin/"), ("https://evil.example", "/"), ("//evil", "/")])
+def test_bookmarks_redirect_within_the_proxy_prefix(client: TestClient, prefix: str, location: str) -> None:
+    response = client.get("/next", headers={"X-Forwarded-Prefix": prefix}, follow_redirects=False)
+    assert response.status_code == 308 and response.headers["location"] == location
 
 
 @pytest.mark.parametrize("directory_exists", [False, True])

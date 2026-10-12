@@ -193,6 +193,27 @@ def test_session_cookie_flags(web: TestClient, base: str, secure: bool) -> None:
 
 
 @pytest.mark.parametrize(
+    "prefix,path",
+    [
+        ("/twin", "/twin/"),
+        ("/twin/", "/twin/"),
+        ("/a/b-c", "/a/b-c/"),
+        ("", "/"),
+        ("//evil", "/"),
+        ("/..", "/"),
+        ("/a b", "/"),
+    ],
+)
+def test_session_cookie_is_scoped_to_the_proxy_prefix(web: TestClient, prefix: str, path: str) -> None:
+    code = request(web)
+    headers = {**CSRF, "X-Forwarded-Prefix": prefix}
+    result = web.post("/api/auth/verify", json={"email": MEMBER, "code": code}, headers=headers)
+    assert f"Path={path};" in result.headers["set-cookie"] + ";"
+    logout = web.post("/api/auth/logout", headers=headers)
+    assert "Max-Age=0" in logout.headers["set-cookie"] and f"Path={path};" in logout.headers["set-cookie"] + ";"
+
+
+@pytest.mark.parametrize(
     "path",
     [
         "/api/status",

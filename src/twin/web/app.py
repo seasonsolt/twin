@@ -27,7 +27,7 @@ from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from . import assets, media, persona
-from .auth import Auth, AuthMiddleware
+from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
@@ -440,8 +440,8 @@ def create_app(
 
     @app.api_route("/next", methods=["GET", "HEAD"])
     @app.api_route("/next/", methods=["GET", "HEAD"])
-    def next_redirect() -> RedirectResponse:
-        return RedirectResponse("/", status_code=308)
+    def next_redirect(request: Request) -> RedirectResponse:
+        return RedirectResponse(forwarded_prefix(request) + "/", status_code=308)
 
     @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     def frontend_page() -> Response:

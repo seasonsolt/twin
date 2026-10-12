@@ -1,0 +1,37 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api } from '../lib/api';
+import { basePath, withBase } from '../lib/base';
+import { personaUrl } from '../lib/persona';
+
+describe('serving under a path prefix', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it('derives the prefix from the page directory', () => {
+    expect(basePath('https://daw.example.com/')).toBe('');
+    expect(basePath('https://daw.example.com/twin/')).toBe('/twin');
+    expect(basePath('https://daw.example.com/twin/#/chat')).toBe('/twin');
+    expect(basePath('https://daw.example.com/a/b/index.html')).toBe('/a/b');
+  });
+
+  it('prefixes only same-origin absolute paths', () => {
+    expect(withBase('/api/status', '/twin')).toBe('/twin/api/status');
+    expect(withBase('/api/status', '')).toBe('/api/status');
+    expect(withBase('//evil.example/api', '/twin')).toBe('//evil.example/api');
+    expect(withBase('blob:abc', '/twin')).toBe('blob:abc');
+  });
+
+  it('sends requests and media URLs through the prefix', async () => {
+    window.history.replaceState(null, '', '/twin/#/chat');
+    const fetcher = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', fetcher);
+    await api('/api/status');
+    expect(fetcher.mock.calls[0][0]).toBe('/twin/api/status');
+    expect(personaUrl('/api/media/avatar-image?v=1', 'p1')).toBe(
+      '/twin/api/media/avatar-image?v=1&persona=p1',
+    );
+    window.history.replaceState(null, '', '/');
+    expect(personaUrl('/api/media/avatar-image', 'p1')).toBe(
+      '/api/media/avatar-image?persona=p1',
+    );
+  });
+});

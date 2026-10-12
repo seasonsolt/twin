@@ -1,3 +1,4 @@
+import { withBase } from './base';
 import { ApiError, handleApiFailure } from './api';
 import { getPersonaId, personaKey } from './persona';
 
@@ -149,7 +150,7 @@ async function request(
     onPause(false);
     abort(signal);
     try {
-      const response = await fetch(path, {
+      const response = await fetch(withBase(path), {
         ...options,
         signal,
         credentials: 'same-origin',

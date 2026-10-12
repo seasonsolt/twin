@@ -4,6 +4,7 @@ import {
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
 import { api, ApiError, handleApiFailure } from '../../lib/api';
+import { basePath } from '../../lib/base';
 import { personaUrl } from '../../lib/persona';
 import type { AudioPart } from '../avatar/types';
 import type { ChatReply } from './types';
@@ -301,7 +302,9 @@ export function useReplyAudio(active: boolean) {
             if (!buffers.current.has(item.url)) {
               if (
                 !/^\/api\/media\/audio\/[0-9a-f]{64}\.(wav|mp3)(\?persona=[a-z0-9-]+)?$/.test(
-                  item.url,
+                  item.url.startsWith(`${basePath()}/`)
+                    ? item.url.slice(basePath().length)
+                    : '',
                 )
               )
                 throw new Error('语音文件不可用，请重试');

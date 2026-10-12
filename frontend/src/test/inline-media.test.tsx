@@ -462,8 +462,9 @@ it('ships only self-hosted unicode-range font slices, with swap and no body webf
     file.endsWith('.woff2'),
   );
   expect(files).toHaveLength(92);
-  for (const file of files)
-    expect(css).toContain(`/fonts/ma-shan-zheng/${file}`);
+  // Relative to font.css, so the page also works under a path prefix.
+  expect(css).not.toMatch(/url\(\//);
+  for (const file of files) expect(css).toContain(`url(${file})`);
   const tokens = readFileSync('src/design/tokens.css', 'utf8');
   expect(tokens).toContain(
     "'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', serif",

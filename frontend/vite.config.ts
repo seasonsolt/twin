@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  base: '/',
+  base: './',
   plugins: [tailwindcss()],
   build: {
     outDir: '../src/twin/web/static',

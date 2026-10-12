@@ -1,3 +1,4 @@
+import { withBase } from './base';
 import { getPersonaId } from './persona';
 
 export class ApiError extends Error {
@@ -63,7 +64,7 @@ export async function api<T>(
   if (json !== undefined) headers.set('Content-Type', 'application/json');
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(withBase(path), {
       ...init,
       method,
       headers,

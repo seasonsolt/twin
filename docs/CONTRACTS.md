@@ -11,6 +11,16 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `config.Settings`: target name/aliases, privacy, database, concurrency, LLM, embedding, optional judges/pricing/budget, TTS and synthetic-speech ASR. OpenAI-compatible LLM endpoints require explicit model/base URL and never silently target a public default.
 - Tests are offline with `FakeLLM`, `HashingEmbedder`, fake HTTP transports and temporary databases. Python 3.12, strict mypy and ruff are required.
 
+## 记忆内核版本
+
+- `persona.kernel` 是代码层 1 的无 I/O 契约；冻结的 `KernelVersion(schema, prompt, taxonomy)`、`KERNEL` 与稳定排序的 `kernel_json` 描述当前内核。版本常量由这里提供给 profile/dimensions。
+- `rebuild_scope` 只在 prompt 改变时返回 `full`，taxonomy 改变时返回 `merge`，仅 schema 改变返回 `none`。无记录按 schema 1 / persona-v4 / v1 比较；现存无 `kernel:built` 的生产库因此视为已使用当前内核，不重抽、不提示。
+- `PersonaStore` 先读 `PRAGMA user_version`，最新库设置 WAL 后直接返回，不获取写事务；旧库才在 `BEGIN IMMEDIATE` 内复读版本、按顺序执行 `_MIGRATIONS` 并更新版本。旧无版本库保留数据，失败回滚全部迁移并关闭连接；超前 schema 抛出中文 `NewerStoreError`，拒绝打开。只读 `schema_version()` 返回数据库实际版本。
+- `p_meta['kernel:built']` 存稳定 JSON；只有成功且来源版本未变的构建才与 `built_at`、pending 标记在同一事务更新。失败不会宣告内核构建成功。
+- `stale_reason` 返回 `sources` / `kernel` / null，首次有来源或来源时间变化优先；空白库不标过期。`pending_chunks` 复用分段和内容键，只计未抽取且资料已就绪的分段，不调用模型。prompt 进入分段键；taxonomy 为 v1 时合并键保持原公式，其他值才额外进入合并键。启动恢复、Web 状态及 CLI status 仅在内核范围不为 none 时估算待重抽分段，否则为 0。
+- `[kernel] auto_rebuild=true`、`max_auto_rebuild_chunks=400`；启动时有内核差异且禁用自动重建或待重抽数量超过阈值时等待确认。`GET /api/status` 返回 `kernel: {version, built, scope, pending_chunks, state}`，state 为 ready/pending/queued/running/error/awaiting_confirmation；version/built 为版本对象，未记录 built 为 null。`processing.notice` 在等待确认时为“记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案”。
+- `POST /api/kernel/rebuild` 使用当前分身，要求管理员及 `X-Twin: 1`，返回 202 `{job_id}`；复用原有互斥构建任务。`twin kernel status` 逐分身显示版本、数据库实际 schema、范围和分段数；`twin kernel rebuild [--persona ID|--all] [--yes]` 默认配置分身，超过阈值必须显式 `--yes`。
+
 ## Identity 与用户建档
 
 - `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、
@@ -169,7 +179,8 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - Questionnaire version is `q-v1`: 20 optional everyday questions covering nine topics. Old `q-v0` answers are
   not displayed under new questions; previously imported sources remain and are replaced on next submission.
   Facet IDs stay stable; names use general-life wording (`taxonomy v1`). Extraction/merge statements omit pronoun
-  subjects, and `persona-v3` causes re-extraction on the next explicit build. Existing profiles can still be read.
+  subjects, and existing profiles remain readable across the current kernel baseline.
+
 - Removed CLI chat `--as-of` and Web `ChatBody.as_of`; Web chat always uses current material. Eval and service
   HTTP/MCP retain optional advanced `as_of`. Coverage date filtering is unchanged.
 - Removed archived biography eval payloads and their `decision/stance/voice/trap` type discriminator.
@@ -195,7 +206,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 
 - `PersonaStore` 的 `p_meta.sources_changed_at` 为带 UTC 时区的 ISO 时间（微秒精度），仅在新增/替换来源、实际删除来源时，与对应写入同事务更新。`source_pending:<source_id>` 是来源等待构建的内部标记，成功构建后清除。
 - `profile.source_memories(store) -> dict[str, SourceMemory]` 是纯查询：每个来源返回 `expressions_total/target/others`、`items_supported`、`facets`（facet_id/name）、`contributes_nothing`、`build_status`（not_built/remembered/no_items）。按证据 expression_id 查询实际来源，重复引用和跨来源条目对每个来源只计一次；未拒绝条目口径与完成度一致。仍存于上次档案的条目也计入支撑，过期状态独立展示。
-- `profile.profile_stale(store) -> bool`：sources_changed_at 晚于 built_at，或来源非空而 built_at 缺失；旧无 sources_changed_at 的库兼容，旧 built_at 无时区时按本机时间解析。这个状态只覆盖来源变化，不追踪配置变化。
+- `profile.profile_stale(store) -> bool`：sources_changed_at 晚于 built_at，或来源非空而 built_at 缺失；旧无 sources_changed_at 的库兼容，旧 built_at 无时区时按本机时间解析。这个状态覆盖来源与内核版本变化，不追踪其他配置变化。
 - `BuildReport` 保留原字段并追加 `facet_diffs: dict[str, FacetItemDiff]`；`FacetItemDiff` 含 `added/changed/removed`。比较 replace_facet_items 前后的原始 item_id 与 statement，不受人工审核替换表述影响；相同 ID 仅 statement 改变算 changed，ID 改变算 removed + added，证据/情境改变不算 statement diff。包含成功合并但零变化的细项，不包含失败或跳过的细项。
 - BuildReport 提供派生总计 `items_added/items_changed/items_removed/facets_changed` 和 `change_summary()`。facets_changed 只计算有非零 diff 的细项；无变化增量构建总计为零。构建日志仅使用编号、计数及错误类型，不记录条目文本、来源标题或异常正文。
 - 只有无失败且输入版本仍未变的构建，才由 `mark_profile_built` 同事务更新 built_at 并清除 pending 标记；built_at 记录本次构建开始时间。部分失败或构建期间来源改变仍保持 stale，已完成结果保留供重试。CLI build/chat 在 stale 时向 stderr 提示，chat 仍运行。

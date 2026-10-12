@@ -61,6 +61,7 @@ export interface Memory {
 }
 interface Processing {
   state: 'idle' | 'queued' | 'running';
+  notice?: string | null;
   last_error?: string | null;
 }
 
@@ -525,6 +526,11 @@ export function Memories({
             <Button onClick={openAdd} className="min-h-11">
               添加记忆
             </Button>
+          )}
+          {processing.notice && (
+            <p role="status" className="text-sm text-secondary">
+              {processing.notice}
+            </p>
           )}
           {processing.state !== 'idle' && (
             <ThinkingLabel

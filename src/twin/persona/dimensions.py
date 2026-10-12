@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-TAXONOMY_VERSION = "v1"
+from .kernel import TAXONOMY_VERSION as TAXONOMY_VERSION
 
 Speed = Literal["slow", "medium", "fast"]
 

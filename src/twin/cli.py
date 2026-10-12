@@ -33,10 +33,20 @@ from .media.schema import MediaScript
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
-from .persona.profile import STALE_PROFILE_NOTICE, build_profile, consented_facets, profile_stale, source_memories
+from .persona.kernel import KERNEL, rebuild_scope
+from .persona.profile import (
+    KERNEL_STALE_NOTICE,
+    STALE_PROFILE_NOTICE,
+    build_profile,
+    consented_facets,
+    pending_chunks,
+    profile_stale,
+    source_memories,
+    stale_reason,
+)
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import MEMORY_KIND_LABELS, parse_note, parse_source
-from .persona.store import PersonaStore
+from .persona.store import NewerStoreError, PersonaStore
 from .persona.text import SUPPORTED_SUFFIXES
 from .usage import BudgetExceeded, UsageRecorder, active_recorder, call_stage, failure_directory, record_usage
 from .util import RenameError, open_private, private_directory
@@ -50,6 +60,10 @@ target_name = "本人"
 target_aliases = []
 db_path = "data/twin.db"
 max_workers = 4
+
+# [kernel]
+# auto_rebuild = true
+# max_auto_rebuild_chunks = 400
 
 [media]
 # font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体
@@ -188,7 +202,7 @@ def _backend_errors() -> tuple[type[Exception], ...]:
 def _errors() -> Iterator[None]:
     try:
         yield
-    except (ValueError, OSError, sqlite3.Error, LLMError, EmbedError, BudgetExceeded) as e:
+    except (ValueError, OSError, sqlite3.Error, NewerStoreError, LLMError, EmbedError, BudgetExceeded) as e:
         raise _fail(str(e)) from e
     except Exception as e:
         if not isinstance(e, _backend_errors()):
@@ -419,7 +433,8 @@ def ui(
             )
         )
     url_host = "127.0.0.1" if address in _WILDCARD_HOSTS else (f"[{address}]" if ":" in address else address)
-    application = create_app(settings, allowed_hosts=(*extra_hosts, *(allow_host or ())))
+    with _errors():
+        application = create_app(settings, allowed_hosts=(*extra_hosts, *(allow_host or ())))
     _serve(application, host, port, f"http://{url_host}:{port}", open_browser)
 
 
@@ -466,7 +481,8 @@ app.add_typer(persona_app, name="persona")
 
 
 def _persona_store(settings: Settings) -> PersonaStore:
-    return PersonaStore(settings.db_path)
+    with _errors():
+        return PersonaStore(settings.db_path)
 
 
 identity_app = typer.Typer(help="查看配置的只读身份与出境状态。", no_args_is_help=True)
@@ -496,6 +512,70 @@ def identity_show(ctx: typer.Context) -> None:
             f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
             f"{'外部' if row['external'] else '本机'} | {'声明' if row['declared'] else '推断'}"
         )
+
+
+kernel_app = typer.Typer(help="查看和重建记忆内核。", no_args_is_help=True)
+app.add_typer(kernel_app, name="kernel")
+
+
+def _kernel_personas(settings: Settings) -> list[tuple[str, Settings]]:
+    from .web.jobs import JobManager, describe_error
+    from .web.personas import Personas
+
+    registry = Personas(settings, JobManager(settings.max_workers, describe_error))
+    return [
+        (entry["id"], registry.settings_for(entry["id"]))
+        for entry in registry.data["personas"]
+        if not entry.get("deleted_at")
+    ]
+
+
+@kernel_app.command("status")
+def kernel_status(ctx: typer.Context) -> None:
+    with _errors():
+        for persona_id, settings in _kernel_personas(_settings(ctx)):
+            with _persona_store(settings) as store:
+                built = store.kernel_built()
+                scope = rebuild_scope(built, KERNEL)
+                _say(f"分身：{persona_id}")
+                _say(f"当前内核：{KERNEL.schema}/{KERNEL.prompt}/{KERNEL.taxonomy}")
+                _say(f"库内内核：{built.schema}/{built.prompt}/{built.taxonomy}" if built else "库内内核：未记录")
+                count = pending_chunks(store, settings) if scope != "none" else 0
+                _say(f"schema：{store.schema_version()}  范围：{scope}  待重抽分段：{count}")
+
+
+@kernel_app.command("rebuild")
+@_command_usage("build")
+def kernel_rebuild(
+    ctx: typer.Context,
+    persona: Annotated[str | None, typer.Option("--persona")] = None,
+    all_personas: Annotated[bool, typer.Option("--all")] = False,
+    yes: Annotated[bool, typer.Option("--yes")] = False,
+) -> None:
+    if all_personas and persona:
+        raise _fail("--persona 和 --all 不能同时使用")
+    settings = _settings(ctx)
+    selected = [
+        (pid, resolved) for pid, resolved in _kernel_personas(settings) if all_personas or pid == (persona or "default")
+    ]
+    if not selected:
+        raise _fail("分身不存在")
+    for pid, resolved in selected:
+        with _persona_store(resolved) as store:
+            count = pending_chunks(store, resolved)
+
+            if count > settings.kernel.max_auto_rebuild_chunks and not yes:
+                raise _fail(f"分身 {pid} 待重抽 {count} 个分段，超过费用闸；请确认后加 --yes")
+    for pid, resolved in selected:
+        with _persona_store(resolved) as store:
+            resolved = resolved.model_copy(
+                update={"target_name": store.get_meta("identity:name") or resolved.target_name}
+            )
+            report = build_profile(store, _llm(resolved), resolved, _progress)
+            index_persona(store, _embedder(resolved), resolved, _progress)
+            _say(f"分身 {pid}：{report.change_summary()}")
+            if report.failures:
+                raise _fail("部分记忆处理失败，请重试")
 
 
 @persona_app.command("import")
@@ -566,7 +646,7 @@ def persona_build(ctx: typer.Context) -> None:
     settings = _settings(ctx)
     with _persona_store(settings) as store:
         if profile_stale(store):
-            _progress(STALE_PROFILE_NOTICE)
+            _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
         llm = _llm(settings)
         embedder = _embedder(settings)
         report = build_profile(store, llm, settings, _progress)
@@ -622,7 +702,7 @@ def persona_chat(
     settings = _settings(ctx)
     with _persona_store(settings) as store:
         if profile_stale(store):
-            _progress(STALE_PROFILE_NOTICE)
+            _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
         twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
         history: list[ChatTurn] = []
         while True:

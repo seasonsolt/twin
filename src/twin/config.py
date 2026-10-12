@@ -332,6 +332,11 @@ class WeComSettings(BaseModel):
     url: str = "wss://openws.work.weixin.qq.com"
 
 
+class KernelSettings(BaseModel):
+    auto_rebuild: bool = True
+    max_auto_rebuild_chunks: int = Field(default=400, ge=0)
+
+
 class Settings(BaseModel):
     db_path: Path = Path("data/twin.db")
     target_name: str = "本人"
@@ -347,6 +352,7 @@ class Settings(BaseModel):
     embed: EmbedSettings = Field(default_factory=EmbedSettings)
     pricing: dict[str, Price] = Field(default_factory=dict)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    kernel: KernelSettings = Field(default_factory=KernelSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)

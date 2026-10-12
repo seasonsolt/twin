@@ -28,11 +28,12 @@ from ..llm import LLM, LLMError, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import PersonaCandidate, PersonaItem, PEvidence
+from .kernel import KERNEL, rebuild_scope
+from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
 from .store import PersonaStore
 
-PROMPT_VERSION = "persona-v4"
 CHUNK_CHARS = 6000
 ENTRY_CHARS = 1500
 CONTEXT_CHARS = 300
@@ -42,18 +43,36 @@ STYLE_DIMENSION = "D6"
 
 
 STALE_PROFILE_NOTICE = "资料有变化，尚未重新构建；档案和聊天仍基于上次构建"
+KERNEL_STALE_NOTICE = "记忆内核已升级，正在按新版本重新整理；整理完成前沿用旧档案"
+KERNEL_AWAITING_NOTICE = "记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案"
+
+
+def stale_reason(store: PersonaStore) -> Literal["sources", "kernel", None]:
+    built_at = store.get_meta("built_at")
+    if built_at is None:
+        return "sources" if store.list_sources() else None
+    changed_at = store.get_meta("sources_changed_at")
+    if (
+        changed_at
+        and built_at
+        and dt.datetime.fromisoformat(changed_at).astimezone(dt.UTC)
+        > dt.datetime.fromisoformat(built_at).astimezone(dt.UTC)
+    ):
+        return "sources"
+    return "kernel" if rebuild_scope(store.kernel_built(), KERNEL) != "none" else None
 
 
 def profile_stale(store: PersonaStore) -> bool:
-    built_at = store.get_meta("built_at")
-    if built_at is None:
-        return bool(store.list_sources())
-    changed_at = store.get_meta("sources_changed_at")
-    if changed_at is None:
-        return False
-    # Legacy built_at values are local naive timestamps; new timestamps carry UTC offsets.
-    return dt.datetime.fromisoformat(changed_at).astimezone(dt.UTC) > dt.datetime.fromisoformat(built_at).astimezone(
-        dt.UTC
+    return stale_reason(store) is not None
+
+
+def pending_chunks(store: PersonaStore, settings: Settings) -> int:
+    allowed = consented_facets(store)
+    return sum(
+        not store.has_chunk(chunk.chunk_id)
+        for source in store.list_sources()
+        if source.media_status in (None, "ready")
+        for chunk in chunks_for(store, source, allowed, settings)
     )
 
 
@@ -149,7 +168,7 @@ def chunks_for(store: PersonaStore, source: Source, allowed: frozenset[str], set
         if not current:
             return
         text = "\n\n".join(render_entry(n, e) for n, e in enumerate(current, 1))
-        key = "\x1f".join([PROMPT_VERSION, source.source_id, ",".join(sorted(allowed)), text])
+        key = "\x1f".join([KERNEL.prompt, source.source_id, ",".join(sorted(allowed)), text])
         chunk_id = "ch_" + hashlib.sha256(key.encode()).hexdigest()[:16]
         chunks.append(Chunk(chunk_id, source, tuple(current), text))
 
@@ -462,9 +481,10 @@ class BuildReport:
 
 
 def _merge_key(candidates: Sequence[PersonaCandidate]) -> str:
-    return hashlib.sha256(
-        "\x1f".join([PROMPT_VERSION, *sorted(c.candidate_id for c in candidates)]).encode()
-    ).hexdigest()
+    parts = [KERNEL.prompt, *sorted(c.candidate_id for c in candidates)]
+    if KERNEL.taxonomy != "v1":
+        parts.insert(1, KERNEL.taxonomy)
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
 def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: Progress | None = None) -> BuildReport:
@@ -542,5 +562,5 @@ def build_profile(store: PersonaStore, llm: LLM, settings: Settings, progress: P
     )
     report.items = len(store.list_items())
     if not report.failures:
-        store.mark_profile_built(built_at, sources_changed_at)
+        store.mark_profile_built(built_at, sources_changed_at, KERNEL)
     return report

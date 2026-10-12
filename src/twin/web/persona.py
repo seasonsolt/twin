@@ -27,7 +27,17 @@ from ..persona.chat import PersonaChat, index_persona, no_profile_reply
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
-from ..persona.profile import build_profile, consented_facets, profile_stale, source_memories
+from ..persona.kernel import KERNEL, rebuild_scope
+from ..persona.profile import (
+    KERNEL_AWAITING_NOTICE,
+    KERNEL_STALE_NOTICE,
+    build_profile,
+    consented_facets,
+    pending_chunks,
+    profile_stale,
+    source_memories,
+    stale_reason,
+)
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial
 from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
@@ -235,6 +245,11 @@ def register(
                 s.source_id for s in store.list_sources() if s.media_status in {"queued", "extracting", "transcribing"}
             ]
             pending_candidates = [s for s in store.list_sources() if s.candidates_pending and s.media_status == "ready"]
+            kernel_scope = rebuild_scope(store.kernel_built(), KERNEL)
+            kernel_pending = pending_chunks(store, settings) if kernel_scope != "none" else 0
+            kernel_blocked = kernel_scope != "none" and (
+                not settings.kernel.auto_rebuild or kernel_pending > settings.kernel.max_auto_rebuild_chunks
+            )
         for source_id in interrupted:
             ingestion.queue(source_id)
         from ..media.claim import Analysis
@@ -248,7 +263,11 @@ def register(
                 partial(ingestion.candidates, source.source_id, revision),
             )
         if stale:
-            processing.queue()
+            if kernel_blocked:
+                with open_store() as store:
+                    store.set_meta("kernel_rebuild", "awaiting_confirmation")
+            else:
+                processing.queue()
 
     previous_lifespan = app.router.lifespan_context
 
@@ -267,6 +286,12 @@ def register(
     def get_processing() -> dict[str, Any]:
         view = processing.view()
         with open_store() as store:
+            view["kernel_rebuild"] = store.get_meta("kernel_rebuild")
+            view["notice"] = (
+                (KERNEL_AWAITING_NOTICE if view["kernel_rebuild"] == "awaiting_confirmation" else KERNEL_STALE_NOTICE)
+                if stale_reason(store) == "kernel"
+                else None
+            )
             view["last_finished_at"] = store.get_meta("processing_last_finished_at") or view["last_finished_at"]
             view["last_error"] = store.get_meta("processing_last_error") or view["last_error"]
         return view
@@ -360,6 +385,13 @@ def register(
         with open_store() as store:
             if not store.list_sources() and not profile_stale(store):
                 raise HTTPException(400, "还没有导入资料，请先添加记忆")
+        job = processing.start()
+        return {"job_id": job.job_id}
+
+    @app.post("/api/kernel/rebuild", status_code=202)
+    def rebuild_kernel(request: Request) -> dict[str, str]:
+        if not request.scope["twin_identity"]["admin"]:
+            raise HTTPException(403, "仅管理员可以重建记忆内核")
         job = processing.start()
         return {"job_id": job.job_id}
 

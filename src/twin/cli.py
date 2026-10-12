@@ -1523,6 +1523,16 @@ def eval_suite_command(
             "fewer concurrent requests than the answer model",
         ),
     ] = 4,
+    builds: Annotated[
+        int | None,
+        typer.Option(
+            "--builds",
+            min=1,
+            help="Profile builds the repeats share, at most --repeats (the default, one build per repeat). "
+            "Fewer builds make a round that changes profile building much faster, but the spread between repeats "
+            "then leaves out build-to-build variance; confirm a promising change with one build per repeat",
+        ),
+    ] = None,
     grant_gated_facets: Annotated[
         bool,
         typer.Option(
@@ -1545,6 +1555,9 @@ def eval_suite_command(
 
     if split not in SUITE_SIZES:
         raise _fail("--split must be formal or dev")
+    builds = builds or repeats
+    if builds > repeats:
+        raise _fail("--builds cannot exceed --repeats")
     if (personamem_questions is None) != (personamem_contexts is None):
         raise _fail("PersonaMem needs both --personamem-questions and --personamem-contexts")
     sizes = {
@@ -1607,9 +1620,10 @@ def eval_suite_command(
         settings = judged if name == "longmemeval" else plain
         run = out / name / f"r{index}"
         private_directory(run)
-        # Each repeat has its own cache slot, so repeats never share or race for a build; granted builds hold
-        # facets default builds never extract, so they keep slots of their own.
-        slot = f"r{index}" + ("-granted" if grant_gated_facets else "")
+        # Repeat n uses build slot n, cycling when the repeats share fewer builds; repeats on one slot build it once
+        # (see ``ProfileCache.building``). Granted builds hold facets default builds never extract, so they keep
+        # slots of their own.
+        slot = f"r{(index - 1) % builds + 1}" + ("-granted" if grant_gated_facets else "")
         cache = ProfileCache(profile_cache, slot) if profile_cache is not None else None
         report = jobs[name](settings, run, cache)
         _progress(f"{name} r{index}/{repeats} done")
@@ -1632,6 +1646,7 @@ def eval_suite_command(
         metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
         metadata["profile_cache"] = profile_cache is not None
         metadata["grant_gated_facets"] = grant_gated_facets
+        metadata["builds"] = builds
         metadata["prepare_workers"] = prepare_workers
         metadata["answer_workers"] = answer_workers
         metadata["max_calls"] = max_calls

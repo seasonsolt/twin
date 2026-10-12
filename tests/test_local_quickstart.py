@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -339,3 +340,16 @@ def test_doctor_local_skips_services(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     names = {check.name for check in checks}
     assert not any(name.startswith("服务") for name in names)
     assert {"网页端口", "防睡眠"}.isdisjoint(names)
+
+
+def test_shell_variables_before_cjk_are_braced() -> None:
+    """Some locales read the bytes of `$port，` as part of the name, which `set -u` turns into a crash."""
+    scripts = subprocess.run(["git", "ls-files", "*.sh"], cwd=ROOT, capture_output=True, text=True, check=True)
+    pattern = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]")
+    offenders = [
+        f"{name}:{number}"
+        for name in scripts.stdout.split()
+        for number, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert offenders == []

@@ -102,7 +102,7 @@ twin=("$install_home/current/venv/bin/twin" --config "$config_path")
 if [[ ! -f "$config_path" ]]; then
     "${twin[@]}" init --profile mac-unified
 fi
-printf '%s\n' "请编辑 $config_path，填写模型与端点；在 $env_path 中填写 TWIN_LLM_KEY（及启用后端所需变量）。" \
+printf '%s\n' "请编辑 ${config_path}，填写模型与端点；在 $env_path 中填写 TWIN_LLM_KEY（及启用后端所需变量）。" \
     '默认只有文字聊天；媒体能力可手写配置（docs/MEDIA.md），P4 将提供 twin compute install。会议录音需开启转写（asr-funasr）。'
 "${twin[@]}" ops install-services
 "${twin[@]}" ops start

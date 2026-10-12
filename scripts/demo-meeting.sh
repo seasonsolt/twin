@@ -7,7 +7,7 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 for tool in say ffmpeg ffprobe; do
     if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "缺少 $tool：say 由 macOS 提供；ffmpeg/ffprobe 请运行 brew install ffmpeg。" >&2
+        echo "缺少 ${tool}：say 由 macOS 提供；ffmpeg/ffprobe 请运行 brew install ffmpeg。" >&2
         exit 1
     fi
 done

@@ -85,7 +85,7 @@ if [[ -z "$free_port" ]]; then
     exit 1
 fi
 if [[ "$free_port" != "$port" ]]; then
-    echo "端口 $port 已被占用，改用 $free_port。"
+    echo "端口 $port 已被占用，改用 ${free_port}。"
     port=$free_port
 fi
 args=(--config ./twin.toml ui --port "$port")

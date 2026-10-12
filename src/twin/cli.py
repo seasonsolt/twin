@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import typer
 
@@ -30,6 +30,8 @@ from .embed import Embedder, EmbedError
 from .identity import Identity
 from .llm import CallTally, LLMError
 from .media.schema import MediaScript
+from .ops.envfile import load_env_file
+from .ops.paths import TwinPaths, compute_defaults
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
@@ -221,7 +223,7 @@ def _settings(ctx: typer.Context) -> Settings:
     if path is not None and not path.is_file():
         raise _fail(f"找不到配置文件 {path}（来自{source}；可以先运行 `twin init {path}` 生成）")
     if path is None:
-        path = DEFAULT_CONFIG
+        path = DEFAULT_CONFIG if DEFAULT_CONFIG.is_file() else TwinPaths.from_env().config
         if not path.is_file():
             _progress(f"提示：没有找到配置文件 {path}，使用默认配置（可运行 `twin init` 生成）")
     with _errors():
@@ -319,8 +321,21 @@ def _command_usage[**P, R](stage: str) -> Callable[[Callable[P, R]], Callable[P,
 
 
 @app.callback()
-def main(ctx: typer.Context, config: ConfigOption = None) -> None:
+def main(
+    ctx: typer.Context,
+    config: ConfigOption = None,
+    home: Annotated[Path | None, typer.Option("--home", help="部署根目录（同 TWIN_HOME）")] = None,
+) -> None:
     with _errors():
+        if home is not None:
+            os.environ["TWIN_HOME"] = str(home)
+        env = Path(os.environ.get("TWIN_ENV_FILE", TwinPaths.from_env().env))
+        try:
+            load_env_file(env)
+        except (ValueError, OSError) as error:
+            if ctx.invoked_subcommand != "doctor":
+                raise
+            ctx.meta["env_error"] = str(error)
         check_config_rename()
     ctx.obj = config
 
@@ -330,14 +345,174 @@ def init(
     ctx: typer.Context,
     path: Annotated[Path | None, typer.Argument(help="要生成的配置文件路径（默认 --config 或 ./twin.toml）")] = None,
     force: Annotated[bool, typer.Option("--force", help="覆盖已存在的文件")] = False,
+    profile: Annotated[
+        Literal["mac-unified", "split", "minimal"] | None, typer.Option("--profile", help="部署档位")
+    ] = None,
 ) -> None:
     """生成带中文注释的 twin.toml 配置模板。"""
-    target = path or _config_path(ctx) or DEFAULT_CONFIG
+    target = path or _config_path(ctx) or (TwinPaths.from_env().config if profile == "mac-unified" else DEFAULT_CONFIG)
     if target.exists() and not force:
         raise _fail(f"{target} 已存在；如需覆盖请加 --force")
     with _errors():
-        _write(target, CONFIG_TEMPLATE)
+        template = CONFIG_TEMPLATE
+        if profile == "minimal":
+            template = (
+                'target_name = "本人"\ndb_path = "data/twin.db"\n\n[llm]\nprovider = "openai_compat"\n'
+                'api_key_env = "TWIN_LLM_KEY"\n# model = "your-model"\n'
+                '# base_url = "http://127.0.0.1:8000/v1"\n\n[embed]\nprovider = "hashing"\n'
+            )
+        if profile == "mac-unified":
+            paths = TwinPaths.from_env()
+            defaults = compute_defaults()
+            template = template.replace(
+                'db_path = "data/twin.db"', "db_path = " + json.dumps(str(paths.data / "twin.db"))
+            )
+            template += "\n# 以下为 P4 算力包约定，需先 twin compute install；当前阶段尚未提供安装命令。\n"
+            template += (
+                '\n[tts]\nprovider = "openai_compat"\n'
+                f'base_url = "http://127.0.0.1:{defaults["tts_port"]}/v1"\n'
+                'model = "moss-tts"\negress = "local"\n'
+            )
+            for section in ("asr", "vision", "video"):
+                provider = "remote" if section == "video" else "command"
+                template += (
+                    f'\n[{section}]\nprovider = "{provider}"\n'
+                    f'command = {json.dumps(defaults[section + "_command"])}\negress = "local"\n'
+                )
+            private_directory(paths.data)
+        private_directory(target.parent)
+        _write(target, template)
     _say(f"已生成配置文件 {target}。请先修改 target_name 和 [llm] 部分，密钥通过环境变量提供。")
+
+
+ops_app = typer.Typer(help="装机、服务托管与备份恢复。", no_args_is_help=True)
+app.add_typer(ops_app, name="ops")
+
+
+def _ops_config(ctx: typer.Context) -> Path:
+    return _config_path(ctx) or Path(
+        os.environ.get("TWIN_CONFIG", DEFAULT_CONFIG if DEFAULT_CONFIG.is_file() else TwinPaths.from_env().config)
+    )
+
+
+def _ops_action(ctx: typer.Context, action: str, name: str | None) -> None:
+    from .ops.service import manager, services
+
+    with _errors():
+        paths = TwinPaths.from_env()
+        settings = _settings(ctx)
+        backend = manager(paths)
+        items = services(paths, _ops_config(ctx), settings)
+        if name:
+            items = [item for item in items if item.name == name]
+            if not items:
+                raise ValueError("服务名称不存在")
+        if action == "install-services":
+            backend.install(items)
+            _say("已写入用户服务配置")
+            return
+        for item in items:
+            if action == "logs":
+                path = paths.service_log(item.name)
+                _say(f"{item.name}：{path}")
+                if path.is_file():
+                    with path.open("rb") as stream:
+                        stream.seek(max(0, path.stat().st_size - 16384))
+                        _say(stream.read().decode("utf-8", errors="replace"))
+                else:
+                    _say("暂无日志")
+            else:
+                result = backend.execute(action, item)
+                _say(
+                    f"{item.name}：{'已加载' if result.returncode == 0 else '未加载或不可用'}"
+                    if action == "status"
+                    else f"{item.name}：操作完成"
+                )
+
+
+@ops_app.command("install-services")
+def ops_install(ctx: typer.Context) -> None:
+    """写入服务文件并重新加载用户配置。"""
+    _ops_action(ctx, "install-services", None)
+
+
+@ops_app.command("start")
+def ops_start(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """启动服务。"""
+    _ops_action(ctx, "start", name)
+
+
+@ops_app.command("stop")
+def ops_stop(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """停止服务。"""
+    _ops_action(ctx, "stop", name)
+
+
+@ops_app.command("restart")
+def ops_restart(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """重新启动服务。"""
+    _ops_action(ctx, "restart", name)
+
+
+@ops_app.command("status")
+def ops_status(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """查看服务状态。"""
+    _ops_action(ctx, "status", name)
+
+
+@ops_app.command("logs")
+def ops_logs(ctx: typer.Context, name: Annotated[str | None, typer.Argument()] = None) -> None:
+    """查看最近的服务日志。"""
+    _ops_action(ctx, "logs", name)
+
+
+@ops_app.command("backup")
+def ops_backup(ctx: typer.Context, reason: Annotated[str, typer.Option("--reason")] = "daily") -> None:
+    """创建私有数据快照。"""
+    from .ops.backup import backup
+
+    with _errors():
+        settings = _settings(ctx)
+        _say(f"备份完成：{backup(TwinPaths.from_env(), settings.db_path.parent, _ops_config(ctx), reason)}")
+
+
+@ops_app.command("restore")
+def ops_restore(ctx: typer.Context, directory: Annotated[Path, typer.Argument()]) -> None:
+    """确认服务停止后恢复快照。"""
+    from .ops.backup import restore
+    from .ops.service import manager, services
+
+    with _errors():
+        paths = TwinPaths.from_env()
+        settings = _settings(ctx)
+        backend = manager(paths)
+        stopped = all(backend.stopped(item) for item in services(paths, _ops_config(ctx), settings))
+        restore(directory, settings.db_path.parent, _ops_config(ctx), services_stopped=stopped)
+        _say("恢复完成；请检查配置中的绝对路径，再运行 twin ops start")
+
+
+@app.command("doctor")
+def doctor_command(
+    ctx: typer.Context, probe: Annotated[bool, typer.Option("--probe", help="实际调用模型，可能产生费用")] = False
+) -> None:
+    """检查部署；默认不调用模型。"""
+    from .ops.doctor import inspect_installation
+    from .ops.service import manager
+
+    with _errors():
+        paths = TwinPaths.from_env()
+        try:
+            settings = load_settings(_ops_config(ctx))
+        except (ValueError, OSError):
+            _say("✗ 配置校验：无法解析配置，请检查 twin.toml（详情已隐藏）")
+            raise typer.Exit(1) from None
+        checks = inspect_installation(paths, settings, _ops_config(ctx), manager(paths), probe=probe)
+        if ctx.meta.get("env_error"):
+            _say(f"✗ 环境文件：{ctx.meta['env_error']}")
+        for check in checks:
+            _say(check.text())
+        if ctx.meta.get("env_error") or any(check.ok is False for check in checks):
+            raise typer.Exit(1)
 
 
 def _is_loopback(host: str) -> bool:

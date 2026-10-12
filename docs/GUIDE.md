@@ -8,6 +8,12 @@ twin init                     # 生成带中文注释的 twin.toml，按注释�
 可选的 `[chat_llm]` 让聊天（网页、CLI、API/MCP 与评测作答）用更快的模型，档案抽取和构建仍用 `[llm]`；未配置时聊天也用 `[llm]`，示例见 `twin.toml.example`。
 外部后端按配置使用，界面如实展示出境分类；用 `twin identity show` 查看，本机转发代理需声明 `egress = "external"`。
 
+## 在 Mac 上部署
+
+Apple Silicon、macOS 14+ 可在仓库运行 `./deploy/mac/install.sh --dry-run` 预览，再运行安装脚本。
+配置后用 `twin doctor` 自检，`twin ops` 管理常驻服务和备份；默认不调用模型，只有 `twin doctor --probe` 才实际探测模型。
+当前阶段从本仓库构建 wheel，算力包需等待 P4；安装步骤、目录、密钥和恢复说明见 [Mac 部署说明](../deploy/mac/README.md)。
+
 ## 网页快速开始
 
 运行 `twin ui`，按打印的本机地址**打开页面 → 你是谁 → 形象和声音 → 添加记忆 → 聊天**。

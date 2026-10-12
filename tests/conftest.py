@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ops_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TWIN_HOME", str(tmp_path / "twin-home"))
+    monkeypatch.delenv("TWIN_ENV_FILE", raising=False)
 
 
 @pytest.fixture(autouse=True)

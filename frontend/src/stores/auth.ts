@@ -4,9 +4,16 @@ import { usePersonas } from './personas';
 
 export interface Identity {
   email: string | null;
+  /** Display name from single sign-on; email login has none. */
+  name?: string | null;
   admin: boolean;
   auth_enabled: boolean;
+  /** 'sso' means signing in and out belongs to another app on this site. */
+  provider?: 'email' | 'sso' | null;
 }
+
+export const accountLabel = (identity: Identity) =>
+  identity.name || identity.email || '';
 let version = 0;
 export const useAuth = create<{
   identity: Identity | null;

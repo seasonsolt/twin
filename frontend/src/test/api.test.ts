@@ -71,3 +71,36 @@ describe('local API client', () => {
     );
   });
 });
+
+describe('login handoff', () => {
+  it.each(['//evil.example/login', 'https://evil.example/', 'login'])(
+    'never leaves the site for %s',
+    async (login_url) => {
+      const assign = vi.fn();
+      vi.spyOn(window, 'location', 'get').mockReturnValue({
+        ...window.location,
+        assign,
+      } as Location);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                detail: '请先登录',
+                code: 'login_required',
+                login_url,
+              }),
+              { status: 401 },
+            ),
+        ),
+      );
+      await expect(api('/api/status')).rejects.toMatchObject({
+        code: 'login_required',
+      });
+      expect(assign).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    },
+  );
+});

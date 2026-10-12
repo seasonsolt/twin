@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import logging
 import os
 import re
 import secrets
@@ -12,8 +14,10 @@ import sqlite3
 import ssl
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -29,6 +33,7 @@ from ..config import AuthSettings, SMTPSettings
 from ..util import private_directory
 
 COOKIE = "twin_session"
+logger = logging.getLogger("twin.auth")
 
 
 def normalize_email(value: str) -> str:
@@ -92,7 +97,11 @@ class Auth:
         self.lock = threading.RLock()
         self.email_rates: dict[str, deque[float]] = {}
         self.ip_rates: dict[str, deque[float]] = {}
-        if settings.enabled:
+        self.sso = settings.enabled and settings.provider == "sso"
+        self.email = settings.enabled and not self.sso
+        self.sso_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+        self.sso_seen: set[str] = set()
+        if self.email:
             if not os.environ.get(settings.smtp.password_env):
                 raise ValueError(f"[auth.smtp] 缺少密码环境变量 {settings.smtp.password_env}")
             private_directory(root)
@@ -122,12 +131,58 @@ class Auth:
         email = email.strip().lower()
         return email in self.settings.allowed_emails or email.rsplit("@", 1)[-1] in self.settings.allowed_domains
 
-    def identity(self, email: str | None) -> dict[str, Any]:
+    def identity(self, email: str | None, name: str | None = None) -> dict[str, Any]:
         return {
             "email": email,
+            "name": name,
             "admin": not self.settings.enabled or email in self.settings.admin_emails,
             "auth_enabled": self.settings.enabled,
+            "provider": self.settings.provider if self.settings.enabled else None,
         }
+
+    def resolve(self, cookies: Mapping[str, str]) -> dict[str, Any] | None:
+        if self.sso:
+            return self.sso_session(cookies.get(self.settings.sso.cookie))
+        return self.session(cookies.get(COOKIE))
+
+    def sso_session(self, token: str | None) -> dict[str, Any] | None:
+        """Ask the app that owns the login who this cookie belongs to; remember the answer briefly."""
+        if not token or len(token) > 4096:
+            return None
+        key, now = digest(token), time.monotonic()
+        with self.lock:
+            cached = self.sso_cache.get(key)
+            if cached and cached[0] > now:
+                return cached[1]
+        sso = self.settings.sso
+        request = urllib.request.Request(
+            sso.me_url, headers={"Cookie": f"{sso.cookie}={token}", "Accept": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read(65536))
+        except urllib.error.HTTPError as error:
+            if error.code not in (401, 403):
+                logger.warning("SSO 身份查询失败：HTTP %s", error.code)
+                return None
+            payload = {}
+        except (OSError, ValueError) as error:
+            logger.warning("SSO 身份查询失败：%s", type(error).__name__)
+            return None
+        subject = str(payload.get("subject") or "").strip() if isinstance(payload, dict) else ""
+        identity = None
+        if subject and payload.get("authenticated") is not False:
+            name = str(payload.get("display_name") or payload.get("account") or "").strip() or None
+            identity = self.identity(f"sso:{subject}", name)
+            if subject not in self.sso_seen:
+                self.sso_seen.add(subject)
+                logger.info("SSO 登录：%s（账号 %s，twin 标识 sso:%s）", name, payload.get("account"), subject)
+        with self.lock:
+            if len(self.sso_cache) > 2000:
+                self.sso_cache = {k: v for k, v in self.sso_cache.items() if v[0] > now}
+            ttl = self.settings.sso.cache_seconds if identity else min(5, self.settings.sso.cache_seconds)
+            self.sso_cache[key] = (now + ttl, identity)
+        return identity
 
     def session(self, token: str | None) -> dict[str, Any] | None:
         if not self.settings.enabled:
@@ -157,9 +212,12 @@ class Auth:
                 emails.append(now)
             ips.append(now)
 
+    def login_url(self) -> str | None:
+        return self.settings.sso.login_url if self.sso else None
+
     def register(self, app: FastAPI) -> None:
         def enabled() -> None:
-            if not self.settings.enabled:
+            if not self.email:
                 raise HTTPException(404, "未启用邮箱登录")
 
         @app.post("/api/auth/request")
@@ -224,7 +282,7 @@ class Auth:
 
         @app.post("/api/auth/logout")
         def logout(request: Request, response: Response) -> dict[str, bool]:
-            if self.settings.enabled:
+            if self.email:
                 with self.database() as db:
                     db.execute("DELETE FROM sessions WHERE hash = ?", (digest(request.cookies.get(COOKIE, "")),))
             response.delete_cookie(
@@ -239,13 +297,13 @@ class Auth:
         @app.get("/api/whoami")
         def whoami(request: Request) -> Response:
             identity = request.scope.get("twin_identity")
-            return JSONResponse(identity) if identity else login_required()
+            return JSONResponse(identity) if identity else login_required(self.login_url())
 
         @app.get("/api/admin/waitlist")
         def waitlist(request: Request) -> list[dict[str, Any]]:
             if not request.scope["twin_identity"]["admin"]:
                 raise HTTPException(403, "仅管理员可查看等候名单")
-            if not self.settings.enabled:
+            if not self.email:
                 return []
             with self.database() as db:
                 return [dict(row) for row in db.execute("SELECT * FROM waitlist ORDER BY created_at")]
@@ -272,8 +330,11 @@ def secure_cookie(request: Request) -> bool:
     )
 
 
-def login_required() -> JSONResponse:
-    return JSONResponse({"detail": "请先登录", "code": "login_required"}, status_code=401)
+def login_required(login_url: str | None = None) -> JSONResponse:
+    body: dict[str, str] = {"detail": "请先登录", "code": "login_required"}
+    if login_url:
+        body["login_url"] = login_url
+    return JSONResponse(body, status_code=401)
 
 
 class AuthMiddleware:
@@ -288,9 +349,9 @@ class AuthMiddleware:
         # SQLite is small; use a worker so concurrent requests don't block the event loop.
         from starlette.concurrency import run_in_threadpool
 
-        identity = await run_in_threadpool(self.auth.session, request.cookies.get(COOKIE))
+        identity = await run_in_threadpool(self.auth.resolve, request.cookies)
         scope["twin_identity"] = identity
         if not identity and not request.url.path.startswith("/api/auth/") and request.url.path != "/api/whoami":
-            await login_required()(scope, receive, send)
+            await login_required(self.auth.login_url())(scope, receive, send)
             return
         await self.app(scope, receive, send)

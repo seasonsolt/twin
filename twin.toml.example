@@ -61,6 +61,13 @@ api_key_env = "TWIN_EMBED_KEY"
 # from_address = "twin@example.com"
 # from_name = "twin"
 # password_env = "TWIN_SMTP_PASSWORD" # 密码只在环境变量，绝不写入文件
+# 或借用同站另一个应用的登录（单点登录，不发邮件、不用 [auth.smtp]），见 deploy/daw/README.md：
+# provider = "sso"  # 写在 [auth] 里；能登录那个应用的人都能进入，管理员写 admin_emails = ["sso:<subject>"]
+# [auth.sso]
+# me_url = "http://127.0.0.1:8765/api/auth/me"  # 带着对方的会话 cookie 询问身份：200 已登录，401 未登录
+# cookie = "audio_studio_session"
+# login_url = "/login?next=/twin/"  # 未登录时浏览器跳往的本站路径
+# cache_seconds = 60
 
 # [video] # 可选真人视频通道，默认关闭
 # provider = "remote" # 执行配置的 SSH 或本机任务

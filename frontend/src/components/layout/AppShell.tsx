@@ -20,7 +20,7 @@ import { api, ApiError } from '../../lib/api';
 import { useCanManage, usePersonas } from '../../stores/personas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
-import { useAuth } from '../../stores/auth';
+import { accountLabel, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Onboarding = lazy(() =>
@@ -175,7 +175,9 @@ function TwinRail() {
                 aria-label="账户"
                 className="rail-account-button mx-auto grid size-11 place-items-center rounded-full bg-primary text-lg text-canvas"
               >
-                {Array.from(identity.email?.trim() || '?')[0].toUpperCase()}
+                {Array.from(
+                  accountLabel(identity).trim() || '?',
+                )[0].toUpperCase()}
               </button>
             </Popover.Trigger>
             <Popover.Portal>
@@ -193,29 +195,31 @@ function TwinRail() {
                 className="account-popover z-50 rounded-xl border border-border bg-surface p-3 shadow-elevation-2"
               >
                 <p className="mb-1 text-xs text-secondary">
-                  {identity.email || ''}
+                  {accountLabel(identity)}
                 </p>
-                <Button
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    setBusy(true);
-                    setError('');
-                    void useAuth
-                      .getState()
-                      .logout()
-                      .catch((failure: unknown) =>
-                        setError(
-                          failure instanceof Error
-                            ? failure.message
-                            : '退出失败',
-                        ),
-                      )
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  退出登录
-                </Button>
+                {identity.provider !== 'sso' && (
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true);
+                      setError('');
+                      void useAuth
+                        .getState()
+                        .logout()
+                        .catch((failure: unknown) =>
+                          setError(
+                            failure instanceof Error
+                              ? failure.message
+                              : '退出失败',
+                          ),
+                        )
+                        .finally(() => setBusy(false));
+                    }}
+                  >
+                    退出登录
+                  </Button>
+                )}
                 {error && (
                   <p role="alert" className="break-words">
                     {error}

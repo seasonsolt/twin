@@ -9,7 +9,7 @@ import { CHAT_KEY } from '../features/chat/useConversation';
 import { api } from '../lib/api';
 import { forgetPersona, personaKey } from '../lib/persona';
 import { useMobile } from '../lib/useMobile';
-import { useAuth } from '../stores/auth';
+import { accountLabel, useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 
@@ -281,17 +281,19 @@ export function Twins() {
             <div className="min-w-0 text-sm">
               <p
                 className="max-w-64 truncate text-secondary"
-                title={identity.email ?? undefined}
+                title={accountLabel(identity) || undefined}
               >
-                {identity.email}
+                {accountLabel(identity)}
               </p>
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void work(() => useAuth.getState().logout())}
-              >
-                退出登录
-              </Button>
+              {identity.provider !== 'sso' && (
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => void work(() => useAuth.getState().logout())}
+                >
+                  退出登录
+                </Button>
+              )}
             </div>
           )}
         </header>

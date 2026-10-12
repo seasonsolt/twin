@@ -304,14 +304,29 @@ class SMTPSettings(BaseModel):
     password_env: str = "TWIN_SMTP_PASSWORD"
 
 
+class SSOSettings(BaseModel):
+    """Single sign-on borrowed from another app on the same host (e.g. audio-studio's 认证中心 login).
+
+    twin forwards that app's session cookie, server to server, to `me_url` and trusts the account it reports;
+    the browser never hands twin an identity. `login_url` is where a signed-out visitor is sent.
+    """
+
+    me_url: str = ""
+    login_url: str = ""
+    cookie: str = ""
+    cache_seconds: int = Field(default=60, ge=0, le=3600)
+
+
 class AuthSettings(BaseModel):
     enabled: bool = False
+    provider: Literal["email", "sso"] = "email"
     allowed_domains: list[str] = Field(default_factory=lambda: ["xjjk.com"])
     allowed_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
     admin_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
     session_days: int = Field(default=30, gt=0)
     max_personas_per_member: int = Field(default=3, gt=0)
     smtp: SMTPSettings = Field(default_factory=SMTPSettings)
+    sso: SSOSettings = Field(default_factory=SSOSettings)
 
     @field_validator("allowed_domains", "allowed_emails", "admin_emails")
     @classmethod
@@ -320,6 +335,15 @@ class AuthSettings(BaseModel):
 
     @model_validator(mode="after")
     def smtp_required(self) -> AuthSettings:
+        if self.enabled and self.provider == "sso":
+            sso = self.sso
+            if not re.fullmatch(r"https?://[^/\s]+/\S*", sso.me_url):
+                raise ValueError("[auth.sso] me_url 必须是 http(s) 地址，例如 http://127.0.0.1:8765/api/auth/me")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", sso.cookie):
+                raise ValueError("[auth.sso] cookie 必须是另一个应用的会话 cookie 名")
+            if not sso.login_url.startswith("/") or sso.login_url.startswith("//"):
+                raise ValueError("[auth.sso] login_url 必须是本站路径，例如 /login?next=/twin/")
+            return self
         if self.enabled and not all(
             value.strip()
             for value in (self.smtp.host, self.smtp.username, self.smtp.from_address, self.smtp.password_env)

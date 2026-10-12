@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -14,7 +18,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from twin.assets import AssetStore
-from twin.config import AuthSettings, Settings, SMTPSettings
+from twin.config import AuthSettings, Settings, SMTPSettings, SSOSettings
 from twin.web import create_app
 from twin.web.auth import Auth, digest, normalize_email, send_code
 from twin.web.jobs import PersonaProcessing
@@ -256,7 +260,13 @@ def test_logout_expiration_csrf_and_static(web: TestClient) -> None:
     assert web.get("/api/whoami").status_code == 401
     assert web.post("/api/auth/request", json={"email": MEMBER}).status_code == 403
     token = login(web)
-    assert web.get("/api/whoami").json() == {"email": MEMBER, "admin": False, "auth_enabled": True}
+    assert web.get("/api/whoami").json() == {
+        "email": MEMBER,
+        "name": None,
+        "admin": False,
+        "auth_enabled": True,
+        "provider": "email",
+    }
     assert web.post("/api/auth/logout").status_code == 403
     result = web.post("/api/auth/logout", headers=CSRF)
     assert result.status_code == 200 and "Max-Age=0" in result.headers["set-cookie"]
@@ -327,7 +337,13 @@ def test_ownership_no_persona_limit_and_admin(web: TestClient) -> None:
 
 def test_auth_disabled_and_config_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(create_app(Settings(db_path=tmp_path / "twin.db")), base_url="http://localhost") as web:
-        assert web.get("/api/whoami").json() == {"email": None, "admin": True, "auth_enabled": False}
+        assert web.get("/api/whoami").json() == {
+            "email": None,
+            "name": None,
+            "admin": True,
+            "auth_enabled": False,
+            "provider": None,
+        }
         assert web.get("/api/status").status_code == 200
         assert not (tmp_path / "auth.db").exists()
     with pytest.raises(ValidationError, match=r"auth\.smtp"):
@@ -466,3 +482,111 @@ def test_trash_and_restore_are_owner_scoped_even_for_public_twins(web: TestClien
     web.cookies.set("twin_session", other_token)
     assert web.get("/api/personas").json()[0]["can_manage"] is False
     assert web.get("/api/personas/trash").json() == []
+
+
+class FakeLogin:
+    """Stands in for the app that owns single sign-on (audio-studio's GET /api/auth/me)."""
+
+    def __init__(self) -> None:
+        self.sessions = {
+            "cookie-a": {"authenticated": True, "subject": "1001", "display_name": "张三", "account": "zhangsan"},
+            "cookie-b": {"authenticated": True, "subject": "1002", "display_name": "李四", "account": "lisi"},
+        }
+        self.calls = 0
+        login = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_: Any) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                login.calls += 1
+                cookies = SimpleCookie(self.headers.get("Cookie", ""))
+                session = login.sessions.get(cookies["sso"].value) if "sso" in cookies else None
+                body = json.dumps(session or {"detail": "请先登录"}).encode()
+                self.send_response(200 if session else 401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/auth/me"
+
+
+@pytest.fixture
+def sso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, FakeLogin]]:
+    monkeypatch.delenv("TWIN_SMTP_PASSWORD", raising=False)  # SSO needs no mail account
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    login = FakeLogin()
+    settings = Settings(
+        db_path=tmp_path / "twin.db",
+        auth=AuthSettings(
+            enabled=True,
+            provider="sso",
+            admin_emails=["sso:1002"],
+            sso=SSOSettings(me_url=login.url, cookie="sso", login_url="/login?next=/twin/"),
+        ),
+    )
+    with TestClient(create_app(settings, allowed_hosts=["twin.example.com"]), base_url="http://localhost") as client:
+        yield client, login
+    login.server.shutdown()
+    login.server.server_close()
+
+
+def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    signed_out = web.get("/api/whoami")
+    assert signed_out.status_code == 401
+    assert signed_out.json() == {"detail": "请先登录", "code": "login_required", "login_url": "/login?next=/twin/"}
+    assert web.get("/api/personas").json()["login_url"] == "/login?next=/twin/"
+    web.cookies.set("sso", "forged")
+    assert web.get("/api/whoami").status_code == 401
+    web.cookies.set("sso", "cookie-a")
+    assert web.get("/api/whoami").json() == {
+        "email": "sso:1001",
+        "name": "张三",
+        "admin": False,
+        "auth_enabled": True,
+        "provider": "sso",
+    }
+    own = create(web)
+    calls = login.calls
+    for _ in range(3):
+        assert web.get("/api/personas").status_code == 200
+    assert login.calls == calls  # cached for cache_seconds
+    assert web.post("/api/auth/request", json={"email": MEMBER}, headers=CSRF).status_code == 404
+    assert web.post("/api/auth/verify", json={"email": MEMBER, "code": "1"}, headers=CSRF).status_code == 404
+    web.cookies.set("sso", "cookie-b")
+    assert web.get("/api/whoami").json()["admin"] is True
+    web.cookies.set("sso", "cookie-c")
+    login.sessions["cookie-c"] = {"authenticated": True, "subject": "1003", "display_name": "王五"}
+    denied = web.get("/api/persona/state", headers={"X-Twin-Persona": own})
+    assert denied.status_code == 404 and denied.json() == {"detail": "分身不存在"}
+
+
+def test_sso_login_service_down_means_signed_out(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    login.server.shutdown()
+    login.server.server_close()
+    web.cookies.set("sso", "cookie-a")
+    response = web.get("/api/whoami")
+    assert response.status_code == 401 and response.json()["login_url"] == "/login?next=/twin/"
+
+
+@pytest.mark.parametrize(
+    "sso_settings,message",
+    [
+        ({"me_url": "file:///etc/passwd", "cookie": "s", "login_url": "/login"}, "me_url"),
+        ({"me_url": "http://127.0.0.1:8765/api/auth/me", "cookie": "a b", "login_url": "/login"}, "cookie"),
+        ({"me_url": "http://127.0.0.1:8765/api/auth/me", "cookie": "s", "login_url": "//evil.example"}, "login_url"),
+        (
+            {"me_url": "http://127.0.0.1:8765/api/auth/me", "cookie": "s", "login_url": "https://evil.example"},
+            "login_url",
+        ),
+    ],
+)
+def test_sso_settings_are_validated(sso_settings: dict[str, str], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        AuthSettings(enabled=True, provider="sso", sso=SSOSettings(**sso_settings))

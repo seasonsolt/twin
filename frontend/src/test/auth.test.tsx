@@ -33,10 +33,12 @@ const persona: Persona = {
   is_default: false,
 };
 let loggedIn: boolean;
+let whoami: Record<string, unknown>;
 let items: Persona[];
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   loggedIn = false;
+  whoami = member;
   items = [persona];
   localStorage.clear();
   sessionStorage.clear();
@@ -54,7 +56,7 @@ beforeEach(() => {
     }
     if (!loggedIn)
       return json({ detail: '请先登录', code: 'login_required' }, 401);
-    if (path === '/api/whoami') return json(member);
+    if (path === '/api/whoami') return json(whoami);
     if (path === '/api/personas') {
       if (init.method === 'POST') {
         items = [persona];
@@ -257,6 +259,25 @@ it('shows the full signed-in email in the account popover and logs out', async (
     await screen.findByRole('heading', { name: '用邮箱登录' }),
   ).toBeVisible();
   expect(loggedIn).toBe(false);
+});
+
+it('shows the single sign-on name and leaves signing out to that site', async () => {
+  loggedIn = true;
+  whoami = {
+    ...member,
+    email: 'sso:u-1',
+    name: '张三',
+    provider: 'sso',
+  };
+  const user = userEvent.setup();
+  render(<App />);
+  const account = await screen.findByRole('button', { name: '账户' });
+  expect(account).toHaveTextContent('张');
+  await user.click(account);
+  const menu = screen.getByRole('dialog', { name: '账户' });
+  expect(within(menu).getByText('张三')).toBeVisible();
+  expect(within(menu).queryByText('sso:u-1')).toBeNull();
+  expect(within(menu).queryByRole('button', { name: '退出登录' })).toBeNull();
 });
 
 it.each([0, 1, 2])(

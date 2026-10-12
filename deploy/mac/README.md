@@ -1,5 +1,7 @@
 # 在 Mac 上部署 twin
 
+> 常驻部署（可选）；本地验证请看 [docs/LOCAL_DEV.md](../../docs/LOCAL_DEV.md)。
+
 需要 Apple Silicon、macOS 14+ 和已安装的 Homebrew。P2 从当前仓库构建 wheel；发布下载/升级在 P3，算力包安装在 P4。默认只有文字聊天，可托管网页和备份；语音、转写、认人和真人视频按需开启，不会自动安装。资料以会议录音为主时，需要单独开启转写（P4 的 `asr-funasr` 包），与语音和视频输出无关。
 
 ```bash
@@ -25,7 +27,7 @@
 
 Linux 使用 `~/.local/share/twin/` 和 `~/.config/systemd/user/twin-*.service`/`.timer`。`TWIN_HOME` 覆盖应用、配置、日志和数据目录，服务文件仍默认写入 `~/Library/LaunchAgents` 或 `~/.config/systemd/user`，以便系统自动加载。测试须另设 `TWIN_SERVICE_DIR` 到临时目录来隔离服务文件；真实服务控制仍需显式执行 `twin ops start` 等命令。`TWIN_ENV_FILE` 可单独指定环境文件。
 
-命令行入口先加载 env，再读取配置；不会覆盖进程已有环境变量。只支持 `KEY=VALUE`、注释及单/双引号，不支持 `export`、变量替换或命令执行。错误只显示行号和变量名，不显示值。可用编辑器填写 `TWIN_LLM_KEY`，以及实际启用后端需要的 `TWIN_EMBED_KEY`、`TWIN_TTS_KEY`、`TWIN_ASR_KEY`、`TWIN_SMTP_PASSWORD`。
+命令行入口先加载 env，再读取配置；选择顺序为显式 `TWIN_ENV_FILE` → 当前目录 `./.env`（与 `./twin.toml` 同时存在时）→ 部署目录 env，只选一个文件，不合并，也不会覆盖进程已有环境变量。文件权限必须为 0600。只支持 `KEY=VALUE`、注释及单/双引号，不支持 `export`、变量替换或命令执行。错误只显示行号和变量名，不显示值。可用编辑器填写 `TWIN_LLM_KEY`，以及实际启用后端需要的 `TWIN_EMBED_KEY`、`TWIN_TTS_KEY`、`TWIN_ASR_KEY`、`TWIN_SMTP_PASSWORD`。
 
 CLI 配置优先级：`--config` → `TWIN_CONFIG` → 当前目录 `twin.toml` → 部署目录的配置。安装后的可执行文件是 `~/Library/Application Support/twin/current/venv/bin/twin`，可将该 `bin` 目录加入自己的 PATH。
 

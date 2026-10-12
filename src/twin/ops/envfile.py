@@ -4,8 +4,22 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import stat
 from pathlib import Path
+
+from .paths import TwinPaths
+
+
+def selected_env_file() -> Path:
+    """Select one env file; a higher-priority file never merges with a fallback.
+
+    ./.env counts only beside ./twin.toml, so another project's .env is never read.
+    """
+    if "TWIN_ENV_FILE" in os.environ:
+        return Path(os.environ["TWIN_ENV_FILE"]).expanduser()
+    local = Path(".env")
+    return local if local.exists() and Path("twin.toml").exists() else TwinPaths.from_env().env
 
 
 def load_env_file(path: Path) -> list[str]:
@@ -13,7 +27,7 @@ def load_env_file(path: Path) -> list[str]:
         return []
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode != 0o600:
-        raise PermissionError(f"环境文件 {path} 权限为 {mode:04o}，请执行 chmod 600 {path}")
+        raise PermissionError(f"环境文件 {path} 权限为 {mode:04o}，请执行 chmod 600 {shlex.quote(str(path))}")
     values: dict[str, str] = {}
     for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()

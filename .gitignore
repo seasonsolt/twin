@@ -16,6 +16,7 @@ eval-*/
 
 # Local secrets (API keys); never commit
 .env
+/twin.toml
 
 frontend/node_modules/
 *.vrm

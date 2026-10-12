@@ -120,8 +120,10 @@ def test_resume_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: b
         if not queued:
             assert kernel["state"] == "awaiting_confirmation"
             assert processing["notice"] == profile.KERNEL_AWAITING_NOTICE
+            assert processing["kernel_pending"] == 1
         else:
             assert processing["notice"] == profile.KERNEL_STALE_NOTICE
+            assert processing["kernel_pending"] == 0
         assert client.post("/api/kernel/rebuild").status_code == 403
         assert client.post("/api/kernel/rebuild", headers={"X-Twin": "1"}).status_code == 202
 
@@ -257,3 +259,96 @@ def test_failed_build_keeps_kernel(tmp_path: Path) -> None:
 
         assert profile.build_profile(store, FakeLLM(fail), settings).failures
         assert store.kernel_built() == previous
+
+
+def test_kernel_content_changes_bump_versions() -> None:
+    """Colleagues' stores only re-extract when the version moves, so content changes must bump it."""
+    from twin.persona.dimensions import taxonomy_fingerprint
+    from twin.persona.kernel import PROMPT_FINGERPRINTS, PROMPT_VERSION, TAXONOMY_FINGERPRINTS, TAXONOMY_VERSION
+    from twin.persona.profile import prompt_fingerprint
+
+    assert PROMPT_FINGERPRINTS.get(PROMPT_VERSION) == prompt_fingerprint(), (
+        "抽取/合并提示词或输出结构变了：请提升 kernel.PROMPT_VERSION，"
+        f'并在 PROMPT_FINGERPRINTS 记录 "{prompt_fingerprint()}"'
+    )
+    assert TAXONOMY_FINGERPRINTS.get(TAXONOMY_VERSION) == taxonomy_fingerprint(), (
+        f'人格维度分类变了：请提升 kernel.TAXONOMY_VERSION，并在 TAXONOMY_FINGERPRINTS 记录 "{taxonomy_fingerprint()}"'
+    )
+    assert len(set(PROMPT_FINGERPRINTS.values())) == len(PROMPT_FINGERPRINTS)
+    assert len(set(TAXONOMY_FINGERPRINTS.values())) == len(TAXONOMY_FINGERPRINTS)
+
+
+def test_fingerprint_detects_prompt_edit(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from twin.persona import profile
+
+    before = profile.prompt_fingerprint()
+    monkeypatch.setattr(profile, "EXTRACT_SYSTEM", profile.EXTRACT_SYSTEM + "\n多一句要求。")
+    assert profile.prompt_fingerprint() != before
+
+
+def test_kernel_change_snapshots_once_and_restores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db")
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_note("我喜欢写程序", settings))
+        profile.build_profile(store, FakeLLM(lambda *_: {"items": []}), settings)
+        assert not storage.list_snapshots(settings.db_path)
+        monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, prompt="next"))
+
+        def fail(*args: object) -> dict[str, object]:
+            raise RuntimeError("failed")
+
+        assert profile.build_profile(store, FakeLLM(fail), settings).failures
+        profile.build_profile(store, FakeLLM(lambda *_: {"items": []}), settings)
+        assert store.kernel_built() == replace(KERNEL, prompt="next")
+    snapshots = storage.list_snapshots(settings.db_path)
+    assert len(snapshots) == 1 and snapshots[0].name.endswith(f"-{KERNEL.prompt}-{KERNEL.taxonomy}.db")
+    assert snapshots[0].stat().st_mode & 0o777 == 0o600 and snapshots[0].parent.stat().st_mode & 0o777 == 0o700
+    storage.restore_snapshot(snapshots[0], settings.db_path)
+    with PersonaStore(settings.db_path) as store:
+        assert store.kernel_built() == KERNEL and store.has_extractions()
+    with pytest.raises(ValueError):
+        storage.restore_snapshot(settings.db_path, settings.db_path)
+
+
+def test_migration_snapshots_existing_data_only(tmp_path: Path) -> None:
+    path = tmp_path / "twin.db"
+    with sqlite3.connect(path) as db:
+        db.executescript(storage._SCHEMA)
+        db.execute("INSERT INTO p_meta VALUES ('identity:name', '本人')")
+    PersonaStore(path).close()
+    PersonaStore(path).close()
+    PersonaStore(tmp_path / "fresh.db").close()
+    assert [p.name.endswith("-schema0.db") for p in storage.list_snapshots(path)] == [True]
+    assert not storage.list_snapshots(tmp_path / "fresh.db")
+    with sqlite3.connect(storage.list_snapshots(path)[0]) as db:
+        assert db.execute("SELECT value FROM p_meta WHERE key = 'identity:name'").fetchone() == ("本人",)
+
+
+def test_snapshots_keep_newest(tmp_path: Path) -> None:
+    with PersonaStore(tmp_path / "twin.db") as store:
+        made = [store.snapshot(f"step{i}") for i in range(storage.SNAPSHOT_KEEP + 2)]
+    assert storage.list_snapshots(tmp_path / "twin.db") == sorted(made[-storage.SNAPSHOT_KEEP :])  # type: ignore[type-var]
+
+
+def test_cli_snapshots_and_restore(tmp_path: Path) -> None:
+    config = tmp_path / "twin.toml"
+    config.write_text('db_path = "twin.db"\n')
+    db = tmp_path / "twin.db"
+    with PersonaStore(db) as store:
+        store.set_meta("identity:name", "旧")
+        saved = store.snapshot("persona-v4-v1")
+        store.set_meta("identity:name", "新")
+    runner = CliRunner()
+    listed = runner.invoke(app, ["--config", str(config), "kernel", "snapshots"])
+    assert listed.exit_code == 0 and str(saved) in listed.output
+    refused = runner.invoke(app, ["--config", str(config), "kernel", "restore", str(saved)])
+    assert refused.exit_code == 1 and "--yes" in refused.output
+    stranger = tmp_path / "other.db"
+    stranger.write_bytes(b"")
+    wrong = runner.invoke(app, ["--config", str(config), "kernel", "restore", str(stranger), "--yes"])
+    assert wrong.exit_code == 1
+    restored = runner.invoke(app, ["--config", str(config), "kernel", "restore", str(saved), "--yes"])
+    assert restored.exit_code == 0, restored.output
+    with PersonaStore(db) as store:
+        assert store.get_meta("identity:name") == "旧"
+    assert any(p.name.endswith("before-restore.db") for p in storage.list_snapshots(db))

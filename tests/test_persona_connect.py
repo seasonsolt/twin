@@ -18,6 +18,9 @@ from twin.persona import connect as cn
         "When did I move?",
         "我的猫是从哪来的？",
         "我姐姐多大？",
+        "How many years older is my brother than me?",
+        "How many years will I be when I retire?",
+        "How much did I save on the lamp?",
     ],
 )
 def test_questions_about_the_person_connect(question: str) -> None:
@@ -25,7 +28,18 @@ def test_questions_about_the_person_connect(question: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "question", ["What is the capital of France?", "Should I take the job?", "我选择什么？", "如何理解这句话？", "你好"]
+    "question",
+    [
+        "What is the capital of France?",
+        "Should I take the job?",
+        "我选择什么？",
+        "如何理解这句话？",
+        "你好",
+        "How many plants did I buy last month?",
+        "How many years in total did I spend at school?",
+        "What is the total amount I spent on shoes?",
+        "我一共去过几次北京？",
+    ],
 )
 def test_other_questions_skip_the_call(question: str) -> None:
     llm = FakeLLM(lambda *a: pytest.fail("no call expected"))

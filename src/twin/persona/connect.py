@@ -16,12 +16,19 @@ from ..llm import LLM, Effort
 MAX_LINKS = 3
 MAX_REFS = 4
 
-# Factual questions (which, when, where, who, how many ...) about the person themself; opinions and advice skip the
+# Factual questions (which, when, where, who, how old ...) about the person themself; opinions and advice skip the
 # step, and a miss only skips it.
 PERSONAL = re.compile(r"\b(?:I|my|me|mine|I'm|I've|I'd|I'll)\b|我", re.IGNORECASE)
 FACTUAL = re.compile(
     r"\b(?:what|which|where|when|who|whom|whose|how (?:many|much|old|long|far))\b|"
     r"哪|几|多少|什么时候|多大|多久|多远|是谁",
+    re.IGNORECASE,
+)
+# Counts and totals over many records are left to ``derive``: a few joined records draw the reply to count only
+# those. Differences in age or time ("how many years older") still connect.
+COUNTING = re.compile(
+    r"\bhow many\b(?!\s+(?:years?|months?|weeks?|days?)\s+(?:old|older|younger|will|before|after|ago|apart|between))|"
+    r"\b(?:in total|total|combined|altogether)\b|一共|总共|合计|几个|几次|多少个|多少次",
     re.IGNORECASE,
 )
 
@@ -51,7 +58,7 @@ CONNECT_SYSTEM = """\
 
 
 def needs_connecting(question: str) -> bool:
-    return bool(PERSONAL.search(question) and FACTUAL.search(question))
+    return bool(PERSONAL.search(question) and FACTUAL.search(question)) and not COUNTING.search(question)
 
 
 def connect(llm: LLM, question: str, material: str, refs: Collection[str], effort: Effort) -> list[str]:

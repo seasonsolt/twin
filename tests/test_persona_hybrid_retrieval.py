@@ -6,6 +6,7 @@ from time import perf_counter
 
 import numpy as np
 import pytest
+from coverage import Coverage
 
 from twin.config import Settings
 from twin.embed import Matrix
@@ -151,4 +152,6 @@ def test_bm25_5000_docs_under_one_second(record_property: Callable[[str, object]
     elapsed = perf_counter() - start
     record_property("bm25_seconds", elapsed)
     assert len(scores) == 5000
-    assert elapsed < 1.0
+    # Coverage tracing (pytest-testmon recording the code each test runs) slows it severalfold; time it untraced.
+    if Coverage.current() is None:
+        assert elapsed < 1.0

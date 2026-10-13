@@ -34,6 +34,6 @@
 
 ## 开发约定
 
-- 检查：`uv run ruff check src tests deploy && uv run mypy && uv run pytest -q`。改了前端时运行 `pnpm -C frontend build`，并一起提交 `src/twin/web/static`。
+- 检查：改动过程中运行 `uv run python scripts/check.py`，只跑受影响的测试（pytest-testmon 按代码改动挑选；改了前端时才跑前端检查和构建）。提交前运行一次 `uv run python scripts/check.py --full`，与 CI 一致。改了前端时一起提交 `src/twin/web/static`。
 - 密钥只放在环境变量或 `.env` 里，配置文件只写变量名。`twin.toml`、`.env`、`data/` 不入 git。
 - 不要提交密钥、本机路径、个人资料或会议内容。

@@ -44,7 +44,7 @@ pnpm -C frontend build
 uv run ruff check src tests deploy
 uv run ruff format --check src tests deploy
 uv run mypy
-uv run pytest -q
+uv run pytest -q -n auto
 ```
 
 Vite dev server 将 `/api` 代理到 `http://127.0.0.1:8765`，改写 Host 为目标主机，保持同源客户端请求与 `X-Twin: 1`，无需放宽后端 CSP 或开启 CORS。必须先启动 `twin ui`；若更改后端端口，同时调整 `frontend/vite.config.ts` 的 proxy target。开发服务器用于热更新，正式服务使用构建产物。

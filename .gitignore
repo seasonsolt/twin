@@ -2,6 +2,7 @@
 __pycache__/
 .mypy_cache/
 .pytest_cache/
+.testmondata*
 .ruff_cache/
 
 # 会议原文与认知模型（敏感数据）、评测输出

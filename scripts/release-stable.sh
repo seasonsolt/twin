@@ -34,7 +34,7 @@ fi
 echo '发布前检查：ruff、mypy、pytest…'
 uv run ruff check src tests deploy
 uv run mypy
-uv run pytest -q
+uv run pytest -q -n auto
 
 versions() { git show "$1:src/twin/persona/kernel.py" | grep -E '^(PROMPT|TAXONOMY)_VERSION = ' | tr '\n' ' '; }
 echo

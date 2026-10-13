@@ -229,6 +229,6 @@ The project checks are:
 uv run ruff check src tests deploy
 uv run ruff format --check src tests deploy
 uv run mypy
-uv run pytest -q
+uv run pytest -q -n auto
 git diff --check
 ```

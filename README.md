@@ -211,7 +211,8 @@ flowchart TB
 ```bash
 pnpm -C frontend install && pnpm -C frontend build   # 前端产物随 Python 包分发
 pnpm -C frontend typecheck && pnpm -C frontend lint && pnpm -C frontend test
-uv run ruff check src tests deploy && uv run mypy && uv run pytest -q
+uv run python scripts/check.py          # 改动中：只跑受影响的测试
+uv run python scripts/check.py --full   # 提交前：全部检查，与 CI 一致
 ```
 
 内核在 `main` 上迭代，确认后运行 `./scripts/release-stable.sh` 发布给同事（只快进 `stable`）。开发时 `uv run twin ui` 起后端，`pnpm -C frontend dev` 起前端（`/api` 代理到后端）。细节见 [网页界面](docs/WEB_UI.md)。

@@ -69,6 +69,7 @@ def test_remaining_commands() -> None:
         "eval-twin2k500",
         "eval-suite",
         "eval-scorecard",
+        "eval-asr",
     ):
         assert name in result.output
     assert set(
@@ -88,6 +89,7 @@ def test_remaining_commands() -> None:
         "eval-twin2k500",
         "eval-suite",
         "eval-scorecard",
+        "eval-asr",
     }
 
 

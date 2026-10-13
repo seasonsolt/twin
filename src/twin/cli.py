@@ -1749,6 +1749,50 @@ def eval_scorecard_command(
     _say(f"Scorecard written to {suite / 'scorecard.md'}.")
 
 
+@app.command("eval-asr")
+def eval_asr_command(
+    manifest: Annotated[Path, typer.Option("--manifest", help="评测清单 JSONL：id/audio/text/duration/group")],
+    engines: Annotated[Path, typer.Option("--engines", help="引擎 TOML；第一个 [[engine]] 是基线")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的输出目录")],
+    split: Annotated[str, typer.Option("--split", help="dev（默认）、formal 或 full")] = "dev",
+    size: Annotated[int, typer.Option("--size", help="dev/formal 各抽多少条")] = 1000,
+    seed: Annotated[str, typer.Option("--seed")] = "asr-v1",
+    cache: Annotated[Path | None, typer.Option("--cache", help="转写缓存目录，默认清单旁的 asr-cache/")] = None,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """本机语音识别评测：各引擎转写同一批片段，算字错率并与第一个引擎逐条配对比较；已缓存的转写不重跑。"""
+    from .evals.asr import load_engines, run_benchmark
+    from .evals.personal import ensure_output_directory
+    from .ops.paths import TwinPaths
+
+    last: dict[str, int] = {}
+
+    def progress(name: str, done: int, total: int) -> None:
+        step = max(1, total // 10)
+        if done == total or done // step != last.get(name, -1) // step:
+            _say(f"{name}: {done}/{total}")
+        last[name] = done
+
+    with _errors():
+        cache_dir = cache if cache is not None else manifest.parent / "asr-cache"
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        ensure_output_directory(cache_dir, allow_in_repo=allow_in_repo)
+        card = run_benchmark(
+            manifest,
+            load_engines(engines, TwinPaths.from_env().compute / "asr-funasr" / "current"),
+            out,
+            split=split,
+            size=size,
+            seed=seed,
+            cache_dir=cache_dir,
+            progress=progress,
+        )
+    for engine in card["engines"]:
+        strict = engine["metrics"]["strict"]
+        _say(f"{engine['engine']}: CER {100 * strict['cer']:.2f}%  RTF {engine['rtf']:.4f}")
+    _say(f"成绩单已写入 {out / 'scorecard.md'}。")
+
+
 @app.command("eval-compare")
 def personal_eval_compare_command(
     ctx: typer.Context,

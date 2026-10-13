@@ -318,13 +318,25 @@ def script():
 def test_script_pure_functions(script, tmp_path, capsys):
     audio = tmp_path / "audio.wav"
     audio.touch()
-    assert script.parse_request({"audio": str(audio), "language": "invalid"}) == (audio, "auto", False, None, [], {})
+    assert script.parse_request({"audio": str(audio), "language": "invalid"}) == (
+        audio,
+        "auto",
+        False,
+        None,
+        [],
+        {},
+        script.CLUSTER_THRESHOLD,
+    )
+    assert script.parse_request({"audio": str(audio), "cluster_threshold": 0.7})[-1] == 0.7
+    for bad in (True, "0.7", 0.05, 1.0):
+        with pytest.raises(ValueError, match="cluster_threshold"):
+            script.parse_request({"audio": str(audio), "cluster_threshold": bad})
     for request in ([], {}, {"audio": "relative.wav"}, {"audio": str(audio), "diarize": "yes"}):
         with pytest.raises(ValueError):
             script.parse_request(request)
     # Several voices in one run; a missing voice is skipped like a missing `reference`.
     request = {"audio": str(audio), "references": {"A": str(audio), "B": str(tmp_path / "missing.wav")}}
-    assert script.parse_request(request)[-1] == {"A": audio}
+    assert script.parse_request(request)[-2] == {"A": audio}
     for references in (
         ["x"],
         {"A": 1},
@@ -376,9 +388,10 @@ def test_script_hotwords_and_upload(script, tmp_path):
             script.parse_hotwords(bad)
     header = json.dumps({"diarize": True, "hotwords": ["魔搭"], "audio_bytes": 3, "audio_suffix": ".WAV"}).encode()
     body = header + b"\nabc"
-    audio, language, diarize, reference, hotwords, references = script.read_upload(
+    audio, language, diarize, reference, hotwords, references, threshold = script.read_upload(
         io.BytesIO(body), len(body), tmp_path
     )
+    assert threshold == script.CLUSTER_THRESHOLD
     assert (audio.name, audio.read_bytes(), language, diarize, reference, hotwords, references) == (
         "audio.wav",
         b"abc",
@@ -389,10 +402,11 @@ def test_script_hotwords_and_upload(script, tmp_path):
         {},
     )
     voices = [{"name": "A", "bytes": 2, "suffix": ".wav"}, {"name": "B", "bytes": 1}]
-    header = json.dumps({"audio_bytes": 3, "reference_bytes": 1, "references": voices}).encode()
-    body = header + b"\nabcRAAB"
+    header = json.dumps({"audio_bytes": 3, "reference_bytes": 1, "references": voices, "cluster_threshold": 0.65})
+    body = header.encode() + b"\nabcRAAB"
     (tmp_path / "multi").mkdir()
-    *_, reference, _, references = script.read_upload(io.BytesIO(body), len(body), tmp_path / "multi")
+    *_, reference, _, references, threshold = script.read_upload(io.BytesIO(body), len(body), tmp_path / "multi")
+    assert threshold == 0.65
     assert reference.read_bytes() == b"R"
     assert {name: path.read_bytes() for name, path in references.items()} == {"A": b"AA", "B": b"B"}
     for meta, data, length in (
@@ -426,7 +440,8 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         def __init__(self):
             self.calls = []
 
-        def transcribe(self, audio, diarize, reference, hotwords, progress, references):
+        def transcribe(self, audio, diarize, reference, hotwords, progress, references, cluster_threshold):
+            self.threshold = cluster_threshold
             self.calls.append(
                 (audio.read_bytes(), audio.suffix, diarize, reference and reference.read_bytes(), hotwords)
             )
@@ -456,6 +471,8 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         many = {**request, "references": {"A": str(reference), "B": str(other), "C": str(tmp_path / "gone.wav")}}
         assert remote.transcribe(url, many)["ok"] is True
         assert engine.voices == {"A": b"ref", "B": b"other"}
+        assert remote.transcribe(url, {**request, "cluster_threshold": 0.7})["ok"] is True
+        assert engine.threshold == 0.7
         assert "@@twin-progress 0.5000" in capfd.readouterr().err
         audio.write_bytes(b"boom")
         assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
@@ -502,7 +519,7 @@ def test_remote_uploads_wav_as_lossless_flac(script, remote, tmp_path):
     class FakeEngine:
         device = "cpu"
 
-        def transcribe(self, audio, diarize, reference, hotwords, progress, references):
+        def transcribe(self, audio, diarize, reference, hotwords, progress, references, cluster_threshold):
             seen.append((audio.suffix, audio.stat().st_size))
             return {"ok": True, "segments": []}
 

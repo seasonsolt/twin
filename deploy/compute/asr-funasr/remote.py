@@ -62,6 +62,8 @@ def build_request(payload, hotwords):
         ]
         meta["references"] = [{"name": n, "bytes": path.stat().st_size, "suffix": path.suffix} for n, path in voices]
         files += [path for _, path in voices]
+    if "cluster_threshold" in payload:
+        meta["cluster_threshold"] = payload["cluster_threshold"]
     if isinstance(payload.get("hotwords"), list):
         meta["hotwords"] = payload["hotwords"]
     elif hotwords:
@@ -139,11 +141,15 @@ def main():
     parser.add_argument("--hotwords", help="热词文件，每行一个词；# 开头为注释")
     parser.add_argument("--timeout", type=float, default=3600.0, help="单次读写超时（秒）")
     parser.add_argument("--no-flac", action="store_true", help="wav 不先压成 FLAC，原样上传")
+    parser.add_argument("--cluster-threshold", type=float, help="评测用：声纹聚类距离阈值，请求未指定时使用")
     args = parser.parse_args()
     try:
+        request = json.loads(sys.stdin.read())
+        if isinstance(request, dict) and args.cluster_threshold is not None:
+            request.setdefault("cluster_threshold", args.cluster_threshold)
         payload = transcribe(
             args.url,
-            json.loads(sys.stdin.read()),
+            request,
             hotwords=read_hotwords(args.hotwords),
             timeout=args.timeout,
             flac=not args.no_flac,

@@ -18,6 +18,8 @@ from pathlib import Path
 MANIFEST = Path(__file__).with_name("pack.toml")
 MAX_HOTWORDS = 200
 MAX_REFERENCES = 32
+# Cosine distance at which agglomerative clustering stops merging speaker windows; a larger value merges more.
+CLUSTER_THRESHOLD = 0.55
 
 
 def parse_request(payload):
@@ -36,7 +38,16 @@ def parse_request(payload):
     reference = Path(reference) if isinstance(reference, str) else None
     if reference is not None and (not reference.is_absolute() or not reference.is_file()):
         reference = None
-    return audio, language, diarize, reference, parse_hotwords(payload.get("hotwords")), parse_references(payload)
+    hotwords, references = parse_hotwords(payload.get("hotwords")), parse_references(payload)
+    return audio, language, diarize, reference, hotwords, references, parse_cluster_threshold(payload)
+
+
+def parse_cluster_threshold(payload):
+    """Optional clustering distance for benchmarks; twin itself never sends it."""
+    value = payload.get("cluster_threshold", CLUSTER_THRESHOLD)
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0.1 <= value <= 0.95:
+        raise ValueError("cluster_threshold 必须是 0.1–0.95 之间的数")
+    return float(value)
 
 
 def parse_references(payload):
@@ -243,7 +254,9 @@ class Engine:
                 raise ValueError("声纹批量健康检查失败")
         return {"ok": True, "device": self.device, "models": 4, "sample_seconds": 1, "embedding_dimensions": 192}
 
-    def transcribe(self, audio, diarize, reference, hotwords, progress, references=None):
+    def transcribe(
+        self, audio, diarize, reference, hotwords, progress, references=None, cluster_threshold=CLUSTER_THRESHOLD
+    ):
         import librosa
 
         np = self.np
@@ -260,7 +273,7 @@ class Engine:
                 from sklearn.cluster import AgglomerativeClustering
 
                 found = AgglomerativeClustering(
-                    n_clusters=None, metric="cosine", linkage="average", distance_threshold=0.55
+                    n_clusters=None, metric="cosine", linkage="average", distance_threshold=cluster_threshold
                 ).fit_predict(emb)
             else:
                 found = np.zeros(len(windows), dtype=int)
@@ -319,8 +332,8 @@ def run(request=None, *, device="auto", check=False):
     engine = Engine(device)
     if check:
         return engine.check()
-    audio, _language, diarize, reference, hotwords, references = request
-    return engine.transcribe(audio, diarize, reference, hotwords, report, references)
+    audio, _language, diarize, reference, hotwords, references, cluster_threshold = request
+    return engine.transcribe(audio, diarize, reference, hotwords, report, references, cluster_threshold)
 
 
 def read_upload(stream, length, directory):
@@ -372,6 +385,8 @@ def read_upload(stream, length, directory):
             raise ValueError("references 名称重复")
     if "hotwords" in meta:
         request["hotwords"] = meta["hotwords"]
+    if "cluster_threshold" in meta:
+        request["cluster_threshold"] = meta["cluster_threshold"]
     return parse_request(request)
 
 
@@ -409,7 +424,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
             directory = tempfile.mkdtemp(prefix="twin-asr-")
             try:
                 try:
-                    audio, _language, diarize, reference, hotwords, references = read_upload(
+                    audio, _language, diarize, reference, hotwords, references, threshold = read_upload(
                         self.rfile, length, directory
                     )
                 except (ValueError, UnicodeDecodeError) as error:
@@ -426,7 +441,13 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                 with busy:
                     try:
                         result = engine.transcribe(
-                            audio, diarize, reference, hotwords, lambda f: line({"progress": round(f, 4)}), references
+                            audio,
+                            diarize,
+                            reference,
+                            hotwords,
+                            lambda f: line({"progress": round(f, 4)}),
+                            references,
+                            threshold,
                         )
                     except (BrokenPipeError, ConnectionResetError):
                         raise
@@ -450,6 +471,9 @@ def main():
     parser.add_argument("--serve", action="store_true", help="常驻服务：加载一次模型，经 HTTP 处理请求")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18790)
+    parser.add_argument(
+        "--cluster-threshold", type=float, help=f"评测用：声纹聚类距离阈值（默认 {CLUSTER_THRESHOLD}），请求可覆盖"
+    )
     args = parser.parse_args()
     for key in ("HF_HUB_OFFLINE", "MODELSCOPE_OFFLINE", "TRANSFORMERS_OFFLINE"):
         os.environ[key] = "1"
@@ -463,7 +487,10 @@ def main():
         server.serve_forever()
         return 0
     try:
-        request = None if args.check else parse_request(json.loads(sys.stdin.read()))
+        payload = None if args.check else json.loads(sys.stdin.read())
+        if isinstance(payload, dict) and args.cluster_threshold is not None:
+            payload.setdefault("cluster_threshold", args.cluster_threshold)
+        request = None if payload is None else parse_request(payload)
         # Redirect native library writes as well as Python prints throughout imports/inference.
         sys.stdout.flush()
         saved = os.dup(1)

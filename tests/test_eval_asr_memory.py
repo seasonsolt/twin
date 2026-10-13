@@ -76,6 +76,27 @@ def test_end_to_end_isolated_fake_run_and_resume(tmp_path):
     assert run_memory_benchmark(**kwargs, limit=1)["cost"]["audio_hours"] == pytest.approx(1 / 3600)
 
 
+def test_one_target_selection_uses_only_fixed_hash_and_is_order_independent():
+    import hashlib
+
+    from twin.evals.asr_memory import select_cases
+
+    def session(sid, targets):
+        return Session(sid, Path("unused"), 1, [], {t: Path("voice") for t in targets})
+
+    sessions = [session("s2", ["B", "A", "C"]), session("s1", ["E", "D"])]
+    expected = [
+        (s.id, min(s.voices, key=lambda t: hashlib.sha256(f"l6-test-v1:{s.id}:{t}".encode()).hexdigest()))
+        for s in sorted(sessions, key=lambda s: s.id)
+    ]
+    assert [(s.id, t) for s, t in select_cases(sessions, one_per_session=True)] == expected
+    reordered = [session(s.id, reversed(list(s.voices))) for s in reversed(sessions)]
+    assert [(s.id, t) for s, t in select_cases(reordered, one_per_session=True)] == expected
+    assert len(select_cases(sessions)) == 5
+    with pytest.raises(ValueError):
+        select_cases([session("empty", [])], one_per_session=True)
+
+
 def test_cli_exposes_public_eval_command():
     from typer.testing import CliRunner
 
@@ -84,6 +105,28 @@ def test_cli_exposes_public_eval_command():
     result = CliRunner().invoke(app, ["eval-asr-memory", "--help"])
     assert result.exit_code == 0
     assert "public-alimeeting" in result.stdout
+    result = CliRunner().invoke(
+        app,
+        [
+            "eval-asr-memory",
+            "--sessions",
+            "unused",
+            "--base-cache",
+            "unused",
+            "--clean-cache",
+            "unused",
+            "--llm-config",
+            "unused",
+            "--out",
+            "unused",
+            "--cache",
+            "unused",
+            "--workers",
+            "6",
+            "--one-target-per-session",
+        ],
+    )
+    assert "必须确认" in result.output
 
 
 def test_speech_matches_l5_fallback_and_keeps_other_context():
@@ -151,7 +194,7 @@ def test_cache_replicates_are_independent_but_reruns_free(tmp_path):
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in tmp_path.glob("*.json"))
 
 
-def test_transient_retry_does_not_cache_or_log_error_messages(tmp_path, monkeypatch):
+def test_transient_retry_does_not_cache_or_log_error_messages(tmp_path, monkeypatch, capsys):
     from twin.evals import asr_memory
     from twin.llm import LLMError
 
@@ -175,6 +218,9 @@ def test_transient_retry_does_not_cache_or_log_error_messages(tmp_path, monkeypa
     assert wrapper.structured(system="s", user="u", schema=Reply).value == 1
     assert delays == [30]
     assert "sensitive-error-marker" not in next(tmp_path.glob("*.json")).read_text()
+    output = capsys.readouterr().out
+    assert "HTTP 429" in output
+    assert "sensitive-error-marker" not in output
 
 
 def test_compact_judge_expands_without_changing_decisions():

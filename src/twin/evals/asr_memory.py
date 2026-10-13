@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import time
@@ -120,6 +121,7 @@ class CachedLLM:
                     header = response.headers.get("Retry-After", "") if response is not None else ""
                     if header.isdigit():
                         delay = max(delay, int(header))
+                    print(f"L6 retry {self.replica}: HTTP {status}; attempt {retry + 1}/4 after {delay}s", flush=True)
                     time.sleep(delay)
         cost = {"seconds": time.monotonic() - began, "usage": [asdict(row) for row in usage]}
         save_json(path, {"response": result.model_dump(mode="json"), "cost": cost})
@@ -331,6 +333,23 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return card
 
 
+def select_cases(sessions: list[Session], *, one_per_session: bool = False) -> list[tuple[Session, str]]:
+    if not one_per_session:
+        return [(session, target) for session in sessions for target in sorted(session.voices)]
+    if any(not session.voices for session in sessions):
+        raise ValueError("One-target selection requires at least one target in every session")
+    return [
+        (
+            session,
+            min(
+                session.voices,
+                key=lambda target: (hashlib.sha256(f"l6-test-v1:{session.id}:{target}".encode()).hexdigest(), target),
+            ),
+        )
+        for session in sorted(sessions, key=lambda session: session.id)
+    ]
+
+
 def run_memory_benchmark(
     *,
     manifest: Path,
@@ -342,17 +361,31 @@ def run_memory_benchmark(
     llm: LLM,
     workers: int = 2,
     limit: int | None = None,
+    one_per_session: bool = False,
 ) -> dict[str, Any]:
     sessions = load_sessions(manifest)
     base, _ = _read_runs(base_cache)
     clean, _ = _read_runs(clean_cache)
-    cases = [(session, target) for session in sessions for target in sorted(session.voices)]
+    cases = select_cases(sessions, one_per_session=one_per_session)
     if limit is not None:
         cases = cases[:limit]
     # Only a digest is stored; credentials are environment-variable names, never environment values.
     identity = fingerprint(settings.llm.model_dump(mode="json"))
     began = time.monotonic()
     private_directory(out)
+    selection = {
+        "rule": "minimum sha256('l6-test-v1:' + session + ':' + target)" if one_per_session else "all L5 targets",
+        "limit": limit,
+        "cases": [
+            {
+                "session": session.id,
+                "target": target,
+                "sha256": hashlib.sha256(f"l6-test-v1:{session.id}:{target}".encode()).hexdigest(),
+            }
+            for session, target in cases
+        ],
+    }
+    save_json(out / "selection.json", selection)
 
     def run(case: tuple[Session, str]) -> dict[str, Any]:
         session, target = case
@@ -400,10 +433,12 @@ def run_memory_benchmark(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         rows = list(pool.map(run, cases))
     card = summarize(rows)
+    card["selection"] = selection
     calls = [call for row in rows for call in row["calls"]]
     usage = [u for c in calls for u in c["usage"]]
     card["cost"] = {
         "calls": len(calls),
+        "workers": workers,
         "cache_hits": sum(c["cached"] for c in calls),
         "input_tokens": sum(u["input_tokens"] or 0 for u in usage),
         "output_tokens": sum(u["output_tokens"] or 0 for u in usage),

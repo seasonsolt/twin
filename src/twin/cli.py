@@ -1802,7 +1802,10 @@ def eval_asr_memory_command(
     out: Annotated[Path, typer.Option("--out", help="仓库外输出目录")],
     cache: Annotated[Path, typer.Option("--cache", help="仓库外模型响应缓存")],
     public_alimeeting: Annotated[bool, typer.Option("--public-alimeeting", help="确认仅使用公开 AliMeeting")] = False,
-    workers: Annotated[int, typer.Option("--workers", min=1, max=2)] = 2,
+    workers: Annotated[int, typer.Option("--workers", min=1, max=6)] = 2,
+    one_target_per_session: Annotated[
+        bool, typer.Option("--one-target-per-session", help="按 l6-test-v1 SHA256 每场选一人，不读取评分")
+    ] = False,
     limit: Annotated[int | None, typer.Option("--limit", min=1, help="仅用于 Eval 冒烟检查的人次数")] = None,
 ) -> None:
     """L6：用原生产抽取和合并比较 gold / ASR / 清洗记忆，并测量重复抽取及裁判噪声。"""
@@ -1830,6 +1833,7 @@ def eval_asr_memory_command(
             llm=llm,
             workers=workers,
             limit=limit,
+            one_per_session=one_target_per_session,
         )
     _say(f"L6 已评分 {card['people']} 人次；成绩单：{out / 'scorecard.md'}")
 

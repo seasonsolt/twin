@@ -32,7 +32,7 @@ from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .lexical import BM25, tokenize
-from .locate import locate
+from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
 from .rewrite import Rewrite, rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
@@ -452,9 +452,9 @@ class PersonaChat:
         material = "\n".join(_material_lines(ctx))
         effort = self.settings.effective_chat_llm.effort_extract
         try:
-            ctx.derived = derive(
-                self.llm, messages[-1].content, material, ctx.today or ctx.as_of or dt.date.today(), ctx.ids, effort
-            )
+            question = messages[-1].content
+            today = ctx.today or ctx.as_of or dt.date.today()
+            ctx.derived = derive(self.llm, question, material, today, ctx.ids, effort, present=needs_locating(question))
         except LLMError:
             ctx.derived = []
         try:

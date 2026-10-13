@@ -157,12 +157,15 @@ def compute(
     *,
     count: bool = False,
     month: tuple[dt.date, dt.date] | None = None,
+    present: bool = True,
 ) -> list[str]:
     """Lines of checked facts and the spans, order and totals they imply. Facts citing an unknown record, or dated
     after ``today``, are dropped; an unparseable date is treated as missing. A date counted back from the day the
     words were said ("three months ago", "for three months") is computed here and marked as such. Undated facts
     without a quantity are kept, and the number of things found stated, only for a ``count`` question; when it names
-    a ``month``, the dated things inside it are counted and the undated ones left for the reply to place."""
+    a ``month``, the dated things inside it are counted and the undated ones left for the reply to place. The present
+    amount from the latest running total is worked out only for a ``present`` question (how many there are now): for
+    others, such as how much a price went up, two stated amounts are not a total and its later changes."""
     dated: list[tuple[DatedFact, dt.date]] = []
     undated: list[DatedFact] = []
     how: dict[int, str] = {}
@@ -212,7 +215,7 @@ def compute(
             by_unit.setdefault(fact.unit.strip(), []).append((fact, date))
     for unit, group in by_unit.items():
         name = unit or "无单位"
-        totals = [(fact, date) for fact, date in group if fact.kind == "累计" and date is not None]
+        totals = [(fact, date) for fact, date in group if present and fact.kind == "累计" and date is not None]
         if totals:
             lines.append(_current(name, totals[-1], [(f, d) for f, d in group if f.kind == "增减"]))
             if len(totals) > 1:
@@ -228,8 +231,11 @@ def compute(
         lines.append(f"- 数量合计（{name}，{len(group)} 条）：{_number(sum(f.quantity or 0 for f, _ in group))}")
         if all(date is not None for _, date in group):
             # ``dated`` is already in date order, so the group is too.
-            start, end = group[0][0].quantity or 0, group[-1][0].quantity or 0
-            lines.append(f"- 从最早一条到最晚一条的变化（{name}）：{end - start:+g}")
+            (first, _), (last, _) = group[0], group[-1]
+            lines.append(
+                f"- 从最早一条 [{first.ref}] 到最晚一条 [{last.ref}] 的变化（{name}）："
+                f"{(last.quantity or 0) - (first.quantity or 0):+g}；先后按的是资料的日期，后提到的不一定是后发生的"
+            )
     return lines
 
 
@@ -246,8 +252,18 @@ def _current(name: str, total: tuple[DatedFact, dt.date], changes: list[tuple[Da
     )
 
 
-def derive(llm: LLM, question: str, material: str, today: dt.date, refs: Collection[str], effort: Effort) -> list[str]:
-    """Computed lines for the reply prompt, or an empty list when the question needs none or nothing checks out."""
+def derive(
+    llm: LLM,
+    question: str,
+    material: str,
+    today: dt.date,
+    refs: Collection[str],
+    effort: Effort,
+    *,
+    present: bool = False,
+) -> list[str]:
+    """Computed lines for the reply prompt, or an empty list when the question needs none or nothing checks out.
+    ``present`` marks a question about how things stand now; a count question is treated as one too."""
     if not needs_derivation(question):
         return []
     sheet = llm.structured(
@@ -258,4 +274,11 @@ def derive(llm: LLM, question: str, material: str, today: dt.date, refs: Collect
     )
     facts = FactSheet.model_validate(sheet.model_dump()).facts
     count = bool(COUNT.search(question))
-    return compute(facts, today, refs, count=count, month=named_month(question, today) if count else None)
+    return compute(
+        facts,
+        today,
+        refs,
+        count=count,
+        month=named_month(question, today) if count else None,
+        present=present or count,
+    )

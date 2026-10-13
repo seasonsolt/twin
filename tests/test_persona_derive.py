@@ -82,7 +82,10 @@ def test_compute_reports_change_and_long_spans_when_every_quantity_is_dated() ->
     )
     assert "- 2023-12-01 事 [c]，距今天 115 天，约 16.4 周，约 3.8 个月" in lines
     assert "- 最早到最晚：相隔 76 天，约 10.9 周，约 2.5 个月" in lines
-    assert lines[-2:] == ["- 数量合计（打，2 条）：50", "- 从最早一条到最晚一条的变化（打）：-30"]
+    assert lines[-2:] == [
+        "- 数量合计（打，2 条）：50",
+        ("- 从最早一条 [a] 到最晚一条 [b] 的变化（打）：-30；先后按的是资料的日期，后提到的不一定是后发生的"),
+    ]
     assert dv.compute([fact("ghost", "2024-01-01")], TODAY, {"a"}) == []
     assert not any(line.startswith("- 以上共") for line in lines)
     assert dv.compute([fact("a")], TODAY, {"a"}) == []
@@ -268,3 +271,12 @@ def test_a_count_question_with_a_running_total_answers_from_the_total_not_the_nu
     assert lines[-1].startswith(
         "- 现在的数量（枚）：按最新的累计数 37（2024-03-01 [a]），加上 2024-03-03 的 +1 [b]，得 38"
     )
+
+
+def test_amounts_marked_as_running_totals_are_plain_amounts_outside_a_present_question() -> None:
+    facts = [
+        dv.DatedFact(ref="a", event="改过的报价 2800", date="2024-03-01", quantity=2800, unit="元", kind="累计"),
+        dv.DatedFact(ref="b", event="最初的报价 2500", date="2024-03-05", quantity=2500, unit="元", kind="累计"),
+    ]
+    lines = dv.compute(facts, TODAY, {"a", "b"}, present=False)
+    assert not any(line.startswith(("- 现在的数量", "- 累计数的变化")) for line in lines)

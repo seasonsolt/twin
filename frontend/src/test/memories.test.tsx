@@ -12,6 +12,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, toast } from '../components/ui';
 import { Memories, type Memory } from '../pages/Memories';
 import { api } from '../lib/api';
+import { useAuth } from '../stores/auth';
+import { useStatus } from '../stores/status';
 
 vi.mock('../lib/mediaUpload', async (original) => ({
   ...(await original<typeof import('../lib/mediaUpload')>()),
@@ -38,12 +40,29 @@ const memory: Memory = {
   remembered: 3,
 };
 let rows: Memory[];
-let state: { state: 'idle' | 'queued' | 'running'; last_error?: string };
+let state: {
+  state: 'idle' | 'queued' | 'running';
+  last_error?: string;
+  notice?: string;
+  kernel_rebuild?: string;
+  kernel_pending?: number;
+};
+const v4 = { schema: 1, prompt: 'persona-v4', taxonomy: 'v1' };
+const v5 = { schema: 1, prompt: 'persona-v5', taxonomy: 'v1' };
+let kernel: Record<string, unknown>;
 let fetcher: ReturnType<typeof vi.fn>;
 let importError: boolean;
 beforeEach(() => {
   rows = [memory];
   state = { state: 'idle' };
+  kernel = {
+    version: v4,
+    built: v4,
+    scope: 'none',
+    pending_chunks: 0,
+    state: 'ready',
+  };
+  useStatus.setState({ data: null, error: null });
   importError = false;
   vi.mocked(toast).mockClear();
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
@@ -53,6 +72,7 @@ beforeEach(() => {
       return json({
         counts: { sources: rows.length, items: 3 },
         egress: [],
+        kernel,
       });
     if (url === '/api/persona/notes') {
       state = { state: 'queued' };
@@ -71,6 +91,10 @@ beforeEach(() => {
       rows = [];
       state = { state: 'queued' };
       return json({ deleted: true });
+    }
+    if (url === '/api/kernel/rebuild') {
+      state = { state: 'queued' };
+      return json({ job_id: 'k1' }, 202);
     }
     if (url === '/api/persona/build') {
       state = { state: 'queued' };
@@ -354,3 +378,50 @@ it('keeps Chinese upload errors and aborts uploads on unmount', async () => {
   page.unmount();
   expect(init.signal.aborted).toBe(true);
 });
+
+it('shows the kernel version when memories are on the current kernel', async () => {
+  mount();
+  expect(
+    await screen.findByText('记忆内核 persona-v4 · 分类 v1'),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/已是最新/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '升级记忆内核' })).toBeNull();
+});
+
+it.each([true, false])(
+  'offers a kernel upgrade when memories were built on an older kernel (admin %s)',
+  async (admin) => {
+    useAuth.setState({
+      identity: { email: null, admin, auth_enabled: false },
+    });
+    kernel = {
+      version: v5,
+      built: v4,
+      scope: 'full',
+      pending_chunks: 512,
+      state: 'awaiting_confirmation',
+    };
+    mount();
+    expect(await screen.findByText(/可以升级/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/现有记忆按 persona-v4 · 分类 v1 整理/),
+    ).toHaveTextContent('需重新整理 512 段，会调用模型');
+    const button = screen.queryByRole('button', { name: '升级记忆内核' });
+    if (!admin) {
+      expect(button).toBeNull();
+      expect(screen.getByText('请管理员升级。')).toBeInTheDocument();
+      return;
+    }
+    await userEvent.click(button!);
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        '/api/kernel/rebuild',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    expect(
+      await screen.findByText(/正在从 persona-v4 · 分类 v1 升级/),
+    ).toBeInTheDocument();
+    useAuth.setState({ identity: null });
+  },
+);

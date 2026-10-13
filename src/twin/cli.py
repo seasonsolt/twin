@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -36,6 +36,7 @@ from .ops.paths import TwinPaths
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
+from .persona.dimensions import requires_consent
 from .persona.kernel import KERNEL, rebuild_scope
 from .persona.profile import (
     KERNEL_STALE_NOTICE,
@@ -787,6 +788,42 @@ def kernel_status(ctx: typer.Context) -> None:
                 _say(f"schema：{store.schema_version()}  范围：{scope}  待重抽分段：{count}")
 
 
+@kernel_app.command("snapshots")
+def kernel_snapshots(ctx: typer.Context) -> None:
+    """列出内核升级前自动保存的快照（每个分身保留最近 3 份）。"""
+    from .persona.store import list_snapshots
+
+    with _errors():
+        for persona_id, settings in _kernel_personas(_settings(ctx)):
+            found = list_snapshots(settings.db_path)
+            _say(f"分身 {persona_id}：{'无快照' if not found else ''}")
+            for path in reversed(found):
+                _say(f"  {path}（{path.stat().st_size / 1024**2:.1f} MiB）")
+
+
+@kernel_app.command("restore")
+def kernel_restore(
+    ctx: typer.Context,
+    snapshot: Annotated[Path, typer.Argument(help="twin kernel snapshots 列出的快照文件")],
+    persona: Annotated[str, typer.Option("--persona")] = "default",
+    yes: Annotated[bool, typer.Option("--yes", help="确认已停止网页并覆盖当前数据")] = False,
+) -> None:
+    """用快照覆盖分身数据；覆盖前自动再快照一次当前数据。"""
+    from .persona.store import restore_snapshot
+
+    selected = [resolved for pid, resolved in _kernel_personas(_settings(ctx)) if pid == persona]
+    if not selected:
+        raise _fail("分身不存在")
+    if not yes:
+        raise _fail("恢复会覆盖该分身的当前数据：先停止网页（Ctrl-C 或 twin ops stop），再加 --yes")
+    with _errors():
+        before = restore_snapshot(snapshot, selected[0].db_path)
+    _say(f"已恢复分身 {persona}" + (f"；恢复前的数据另存为 {before}" if before else ""))
+    _say(
+        "用当前代码启动会再次按新内核整理；要继续用旧内核，先切回旧版本代码（如 git switch --detach <旧版本>）再启动。"
+    )
+
+
 @kernel_app.command("rebuild")
 @_command_usage("build")
 def kernel_rebuild(
@@ -845,10 +882,12 @@ def persona_import(
             new = store.put_source(parsed)
             s = parsed.source
             span = f"{s.first_date or '—'} 至 {s.last_date or '—'}"
+            # Only a gated facet left blank keeps the twin from learning it; others are just unanswered.
+            withheld = [f for f in s.declined_facets if requires_consent(f)]
             _say(
                 f"{'导入' if new else '已更新'} {path.name}（{MEMORY_KIND_LABELS[s.kind]}）：{s.n_expressions} 条，"
                 f"本人 {s.n_target} 条，{span}"
-                + (f"；未授权细项 {'、'.join(s.declined_facets)}" if s.declined_facets else "")
+                + (f"；未授权细项 {'、'.join(withheld)}" if withheld else "")
                 + (f"；无法识别的行 {len(parsed.skipped_lines)} 行" if parsed.skipped_lines else "")
             )
 
@@ -1095,6 +1134,7 @@ def _run_longmemeval(
     call_slots: threading.Semaphore | None = None,
     judge_slots: threading.Semaphore | None = None,
     score: bool,
+    types: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
     from .util import fingerprint
@@ -1102,7 +1142,9 @@ def _run_longmemeval(
     out = validate_output(out)
     with dataset.open("rb") as stream:
         dataset_sha = hashlib.file_digest(stream, "sha256").hexdigest()
-    cases = select_cases(load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed, split=split)
+    cases = select_cases(
+        load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed, split=split, types=types
+    )
     configured_identity = fingerprint(
         {
             "reader": settings.effective_chat_llm.model_dump(exclude={"base_url", "api_key_env"}),
@@ -1116,6 +1158,7 @@ def _run_longmemeval(
             "offset": offset,
             **({"per_type": per_type, "seed": seed} if per_type is not None else {}),
             **({"split": split} if split != "formal" else {}),
+            **({"types": list(types)} if types is not None else {}),
             "score": score,
         }
     )
@@ -1444,6 +1487,14 @@ def eval_suite_command(
     ] = None,
     twin2k500: Annotated[Path | None, typer.Option("--twin2k500", help="Twin-2K-500 wave_split JSON/JSONL")] = None,
     lme_per_type: Annotated[int | None, typer.Option("--lme-per-type", min=1)] = None,
+    lme_types: Annotated[
+        str | None,
+        typer.Option(
+            "--lme-types",
+            help="Comma-separated LongMemEval question types to draw (default all), e.g. temporal-reasoning to "
+            "focus a round on one weak type with a larger --lme-per-type",
+        ),
+    ] = None,
     pm_sample: Annotated[int | None, typer.Option("--pm-sample", min=1)] = None,
     pm2_personas: Annotated[int | None, typer.Option("--pm2-personas", min=1)] = None,
     t2k_participants: Annotated[int | None, typer.Option("--t2k-participants", min=1)] = None,
@@ -1487,6 +1538,16 @@ def eval_suite_command(
             "fewer concurrent requests than the answer model",
         ),
     ] = 4,
+    builds: Annotated[
+        int | None,
+        typer.Option(
+            "--builds",
+            min=1,
+            help="Profile builds the repeats share, at most --repeats (the default, one build per repeat). "
+            "Fewer builds make a round that changes profile building much faster, but the spread between repeats "
+            "then leaves out build-to-build variance; confirm a promising change with one build per repeat",
+        ),
+    ] = None,
     grant_gated_facets: Annotated[
         bool,
         typer.Option(
@@ -1509,6 +1570,9 @@ def eval_suite_command(
 
     if split not in SUITE_SIZES:
         raise _fail("--split must be formal or dev")
+    builds = builds or repeats
+    if builds > repeats:
+        raise _fail("--builds cannot exceed --repeats")
     if (personamem_questions is None) != (personamem_contexts is None):
         raise _fail("PersonaMem needs both --personamem-questions and --personamem-contexts")
     sizes = {
@@ -1517,6 +1581,12 @@ def eval_suite_command(
         "pm2": pm2_personas or SUITE_SIZES[split]["pm2"],
         "t2k": t2k_participants or SUITE_SIZES[split]["t2k"],
     }
+    question_types = [t.strip() for t in lme_types.split(",") if t.strip()] if lme_types is not None else None
+    if question_types is not None:
+        from .evals.longmemeval import QUESTION_TYPES
+
+        if not question_types or set(question_types) - set(QUESTION_TYPES):
+            raise _fail("--lme-types takes question types among: " + ", ".join(QUESTION_TYPES))
     slots = threading.Semaphore(max_calls)
     judge_slots = threading.Semaphore(max_judge_calls)
     jobs: dict[str, Callable[[Settings, Path, ProfileCache | None], dict[str, Any]]] = {}
@@ -1526,7 +1596,7 @@ def eval_suite_command(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
             split=split, system="twin", dry_run=False, score=True, profile_cache=cache, grant_gated=grant_gated_facets,
             prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
-            judge_slots=judge_slots,
+            judge_slots=judge_slots, types=question_types,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
@@ -1571,9 +1641,10 @@ def eval_suite_command(
         settings = judged if name == "longmemeval" else plain
         run = out / name / f"r{index}"
         private_directory(run)
-        # Each repeat has its own cache slot, so repeats never share or race for a build; granted builds hold
-        # facets default builds never extract, so they keep slots of their own.
-        slot = f"r{index}" + ("-granted" if grant_gated_facets else "")
+        # Repeat n uses build slot n, cycling when the repeats share fewer builds; repeats on one slot build it once
+        # (see ``ProfileCache.building``). Granted builds hold facets default builds never extract, so they keep
+        # slots of their own.
+        slot = f"r{(index - 1) % builds + 1}" + ("-granted" if grant_gated_facets else "")
         cache = ProfileCache(profile_cache, slot) if profile_cache is not None else None
         report = jobs[name](settings, run, cache)
         _progress(f"{name} r{index}/{repeats} done")
@@ -1596,14 +1667,24 @@ def eval_suite_command(
         metadata["judges"] = [judge.model for judge in judged.judges] or [judged.llm.model]
         metadata["profile_cache"] = profile_cache is not None
         metadata["grant_gated_facets"] = grant_gated_facets
+        metadata["builds"] = builds
+        if question_types is not None:
+            metadata["lme_types"] = question_types
         metadata["prepare_workers"] = prepare_workers
         metadata["answer_workers"] = answer_workers
         metadata["max_calls"] = max_calls
         metadata["max_judge_calls"] = max_judge_calls
         card = build_scorecard(out, metadata)
-        write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:
         raise _fail("Scorecard failed; every repeat of a benchmark must finish (details hidden)") from None
+    comparison = None
+    if previous is not None:
+        try:
+            comparison = compare(card, previous)
+        except ValueError as e:
+            # Still write the scorecard: losing a finished suite to a mismatched baseline costs hours.
+            _say(f"Baseline not compared: {e}.")
+    write_scorecard(out, card, comparison)
     _say(f"Scorecard written to {out / 'scorecard.md'}.")
     if failed:
         _say("Runs with failures (counted as wrong in the scorecard): " + ", ".join(failed))

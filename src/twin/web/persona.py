@@ -287,6 +287,8 @@ def register(
         view = processing.view()
         with open_store() as store:
             view["kernel_rebuild"] = store.get_meta("kernel_rebuild")
+            awaiting = view["kernel_rebuild"] == "awaiting_confirmation" and stale_reason(store) == "kernel"
+            view["kernel_pending"] = pending_chunks(store, settings) if awaiting else 0
             view["notice"] = (
                 (KERNEL_AWAITING_NOTICE if view["kernel_rebuild"] == "awaiting_confirmation" else KERNEL_STALE_NOTICE)
                 if stale_reason(store) == "kernel"

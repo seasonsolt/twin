@@ -6,10 +6,11 @@ versioned: a change bumps ``TAXONOMY_VERSION`` so earlier completeness reports s
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from .kernel import TAXONOMY_VERSION as TAXONOMY_VERSION
+from .kernel import content_digest
 
 Speed = Literal["slow", "medium", "fast"]
 
@@ -40,7 +41,7 @@ DIMENSIONS: tuple[Dimension, ...] = (
     Dimension("D6", "说话方式", "slow"),
     Dimension("D7", "和人相处", "medium"),
     Dimension("D8", "最近在关注", "fast"),
-    Dimension("D9", "生活与喜好", "slow", consent_required=True),
+    Dimension("D9", "生活与喜好", "slow"),
 )
 
 FACETS: tuple[Facet, ...] = (
@@ -108,3 +109,8 @@ def facet_guide(allowed: frozenset[str] | None = None) -> str:
         lines.append(f"{d.dimension_id} {d.name}")
         lines.extend(f"  {f.facet_id} {f.name}：{f.description}" for f in facets)
     return "\n".join(lines)
+
+
+def taxonomy_fingerprint() -> str:
+    """Pinned per TAXONOMY_VERSION."""
+    return content_digest({"dimensions": [asdict(d) for d in DIMENSIONS], "facets": [asdict(f) for f in FACETS]})

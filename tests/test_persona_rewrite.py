@@ -21,11 +21,18 @@ pytestmark = pytest.mark.rewrite
 def test_rewrite_joins_at_most_five_named_aspects() -> None:
     names = [" 政治立场（political views） ", "", *(f"方面{i}" for i in range(6))]
     llm = FakeLLM(lambda system, user, schema: {"aspects": names})
-    assert (
-        rw.rewrite(llm, "Would you support a carbon tax?", "low") == "政治立场（political views）；方面0；方面1；方面2"
+    assert rw.rewrite(llm, "Would you support a carbon tax?", "low") == rw.Rewrite(
+        "政治立场（political views）；方面0；方面1；方面2"
     )
     assert llm.calls[0][0] == "Aspects" and llm.calls[0][2] == "Would you support a carbon tax?"
-    assert rw.rewrite(FakeLLM(lambda *_: {}), "你好", "low") == ""
+    assert rw.rewrite(FakeLLM(lambda *_: {}), "你好", "low") == rw.Rewrite()
+
+
+def test_rewrite_keeps_at_most_six_offered_alternatives_in_order() -> None:
+    offered = [" 川菜（Sichuan） ", "", *(f"备选{i}" for i in range(7))]
+    llm = FakeLLM(lambda system, user, schema: {"aspects": [], "alternatives": offered})
+    drafted = rw.rewrite(llm, "Sichuan or one of these?", "low")
+    assert drafted == rw.Rewrite("", ("川菜（Sichuan）", "备选0", "备选1", "备选2", "备选3", "备选4"))
 
 
 @pytest.fixture

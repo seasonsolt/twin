@@ -132,13 +132,16 @@ def test_index_embeds_the_privacy_view_for_every_source_kind(kind: SourceKind, e
         parsed = source_for(kind, settings)
         store.put_source(parsed)
         embedder = RecordingEmbedder()
-        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 1}
+        others = pc.others_view(store, settings)
+        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 1, "others": len(others)}
         viewed = expression_view(store, settings, target_only=True)
-        assert embedder.calls == [[pc.expression_text(viewed[0])]]
+        assert embedder.calls[0] == [pc.expression_text(viewed[0])]
+        assert embedder.calls[1:] == ([[e.text for e in others.values()]] if others else [])
         text = embedder.calls[0][0]
         assert "张三" in text and "老张" in text
         if enabled:
             assert "李四" not in text and pseudonym("李四") in text
+            assert all("李四" not in t for batch in embedder.calls for t in batch)
         else:
             assert "李四" in text
         assert store.list_expressions(parsed.source.source_id) == parsed.expressions
@@ -156,25 +159,26 @@ def test_index_privacy_change_reembeds_only_affected_raw_rows_and_cleans_context
         parsed = parse_text(SourceKind.CHAT, "context.txt", raw, settings)
         store.put_source(parsed)
         embedder = RecordingEmbedder()
-        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 2}
+        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 2, "others": 2}
         before = store.vector_shas(pc.EXPRESSIONS_NS)
         assert "李四" in embedder.calls[0][0] and "王五" in embedder.calls[0][0]
         embedder.calls.clear()
         settings.pseudonymize_others = True
-        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 1}
+        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 1, "others": 2}
         # Neither target message mentions others: the private data here is exclusively in Expression.context.
         assert embedder.calls == [
             [
                 f"{pseudonym('李四')}：{pseudonym('王五')}，先看数据 "
                 f"{pseudonym('王五')}：{pseudonym('李四')}，好的 我是张三，先看数据"
-            ]
+            ],
+            [f"{pseudonym('王五')}，先看数据", f"{pseudonym('李四')}，好的"],
         ]
         assert all("李四" not in text and "王五" not in text for batch in embedder.calls for text in batch)
         after = store.vector_shas(pc.EXPRESSIONS_NS)
         assert before[parsed.expressions[2].expression_id] != after[parsed.expressions[2].expression_id]
         assert before[parsed.expressions[3].expression_id] == after[parsed.expressions[3].expression_id]
         embedder.calls.clear()
-        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0}
+        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0, "others": 0}
         assert embedder.calls == [] and store.list_expressions() == parsed.expressions
 
 
@@ -323,8 +327,10 @@ def test_legacy_index_keeps_existing_vector_shas_without_reembedding(legacy_data
         vectors = {namespace: store.get_vectors(namespace)[1].tobytes() for namespace in old_docs}
         source = store.get_source("src_039ddb0db28e")
         assert source is not None and source.text_state == "pseudonymized"
-        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0}
-        assert embedder.calls == []
+        # The others namespace is new to a legacy database, so only it is embedded: the legacy message to the
+        # person and the known speaker's.
+        assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0, "others": 2}
+        assert sorted(embedder.calls[0]) == ["张三，先看数据", "收到"] and len(embedder.calls) == 1
         for namespace, (ref, sha, _) in old_docs.items():
             assert store.vector_shas(namespace) == shas[namespace] == {ref: sha}
             assert store.get_vectors(namespace)[1].tobytes() == vectors[namespace]
@@ -370,8 +376,11 @@ def test_old_code_database_loads_and_keeps_profile_and_chat_output_unchanged(
         assert chat.reply(HISTORY).reply == "先看数据再决定"
         _, system, user = llm.calls[-1]
         assert "不替本人答应事情或做承诺" in system
-        assert (
-            hashlib.sha256(user.encode()).hexdigest()
-            == "59a765251040be3c5a86fb3c91d9c403d5242c8df59fde98b651ed28a08b8fbe"
+        # Others' words are shown too, the raw speaker of the new source under a pseudonym when privacy is on.
+        assert ("他人8A25 说「收到」" in user) is enabled
+        assert hashlib.sha256(user.encode()).hexdigest() == (
+            "be22b05a7ef99102b1c34b6b8a83d9ee5aceabbf618a2e84aee7ff820ce01bd0"
+            if enabled
+            else "aafe140e27ffd379fc478a1dfd52d0b8b1fae355050256045b3dd72d720629a3"
         )
         assert store.list_expressions(source.source_id) == raw

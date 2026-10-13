@@ -33,7 +33,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - **预发布 breaking change（I4）**：此前声明契约只增不删；本次按用户明确决定移除授权账本。
   删除 `ConsentEvent`、`Decision`、`Scope`、`Origin`、生物特征 scopes，以及 `Identity.consents`、
   `granted`、`from_parts` 和 `PersonaStore` 的授权读写方法。不再创建 `p_consent`；已有表不读取、不删除。
-- `consented_facets` 仅由问卷推导：非 gated facet 始终允许；gated facet 必须回答且未拒绝。`build_profile(grant_gated=True)` 跳过这条规则，只供评测测量授权后的效果（`eval-suite --grant-gated-facets`），产品代码不传。
+- `consented_facets` 仅由问卷推导：非 gated facet 始终允许；gated facet 必须回答且未拒绝。分类 v2 起没有 gated 维度（D9 生活与喜好也直接从资料建档），机制保留给以后的隐私版本。`build_profile(grant_gated=True)` 跳过这条规则，只供评测测量授权后的效果（`eval-suite --grant-gated-facets`），产品代码不传。
   保留 `Source.declined_facets`；跨来源的拒绝优先于回答。问卷变化后重建档案并清理对应条目向量。
 - 音色校验仅是后端预置音色的格式与列表检查；2D 形象必须为预置，3D 形象由 `vrm_path` 指定。
 - `twin identity show` 显示名字、别名、预置音色、预置形象与出境表（类型、提供方、主机、本机/外部、声明/推断）。
@@ -113,7 +113,9 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `expression_text` of the view, never raw expressions. This includes other speakers' messages in `context`, even
   when the target text itself contains no other names. Vector SHA keys use the final viewed text, so privacy or
   catalog changes re-embed only affected raw rows; unchanged legacy rows retain their SHA keys/vectors and cause
-  no embedding call. CLI and web builds pass their active settings.
+  no embedding call. CLI and web builds pass their active settings. A third namespace, `others`, embeds what other
+  speakers said to the person (`others_view`: their messages in the same view, from ready sources) so the twin can
+  recall what it was told; chat shows these as others' words and never as the person's own.
 - Profile chunks contain the view both as rendered prompt text and as verification entries: evidence quotes are
   verified against exactly the view sent to the extractor, not against raw L1. Chunk hashes remain content-based;
   a changed privacy setting or known-name catalog invalidates affected chunks on the next build without changing

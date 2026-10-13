@@ -153,7 +153,9 @@ def test_prompt_ordered_mode_checklist_and_style() -> None:
     assert personal < restricted < general
     assert "只在内部判断，不输出检查过程" in checklist
     assert "只查【核心画像】和【检索资料】" in checklist[personal:restricted]
-    assert "不确定资料是否包含某个个人事实，就按没有覆盖处理" in checklist
+    assert "很可能就是所问的那件事或那个东西" in checklist and "不要因此弃权" in checklist
+    assert "关键前提和记录不是一回事" in checklist and "就自己算出结果并列出" in checklist
+    assert "以日期最晚的为准" in checklist
     assert "不能把个人问题改成通用回答来掩盖缺失" in checklist
     assert "即使有相关资料，也只对这部分说明需要本人确认" in checklist[restricted:general]
     assert "评价某个具体的他人" in checklist[restricted:general]
@@ -399,9 +401,17 @@ def test_reply_language_follows_the_asker(store: PersonaStore, settings: Setting
     assert "7. 回复语言跟随对方最后一句话" in rules
     assert "对方用英文，整段回复（包括说明是通用知识、没有记录或需要本人确认的句子）都用英文" in rules
     assert "对方用中文就用中文" in rules and "引用的原话保持原文逐字，不翻译、不改写" in rules
-    for text in ("Which store did I redeem the coupon at?", "你怎么看签大单？"):
+    for text, instruction in (
+        ("Which store did I redeem the coupon at?", "整段回复用英文。"),
+        ("你怎么看签大单？", "整段回复用中文。"),
+        ("Do you use the Shopify app?", "整段回复用英文。"),
+        ("このプランはどう思う？", "整段回复用日文。"),
+        ("이 계획 어때?", "整段回复用韩文。"),
+        ("¿Dónde compraste el café?", "语言与这句话一致。"),
+        ("Что ты думаешь?", "语言与这句话一致。"),
+    ):
         user = pc.chat_user_message([ChatTurn(role="user", content=text)], ctx)
-        assert user.endswith(f"对方：{text}\n\n请回复对方的最后一句话，语言与这句话一致。")
+        assert user.endswith(f"对方：{text}\n\n请回复对方的最后一句话，{instruction}")
 
 
 def test_english_reply_keeps_verbatim_chinese_quotes(store: PersonaStore, settings: Settings) -> None:
@@ -417,13 +427,11 @@ def test_english_reply_keeps_verbatim_chinese_quotes(store: PersonaStore, settin
 def test_index_is_incremental_and_follows_the_embedding_space(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     first = pc.index_persona(store, embedder, settings)
-    assert first == {
-        "items": 2,
-        "expressions": 4,
-    }  # two questionnaire answers and two chat messages
-    assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0}
+    # two questionnaire answers and two chat messages of the person's, two messages from others
+    assert first == {"items": 2, "expressions": 4, "others": 2}
+    assert pc.index_persona(store, embedder, settings) == {"items": 0, "expressions": 0, "others": 0}
     other = HashingEmbedder(dim=256)
-    assert pc.index_persona(store, other, settings) == {"items": 2, "expressions": 4}
+    assert pc.index_persona(store, other, settings) == {"items": 2, "expressions": 4, "others": 2}
     assert store.get_vectors("items")[1].shape == (2, 256)
 
 
@@ -468,7 +476,7 @@ def test_reply_filters_citations_and_caps_confidence(store: PersonaStore, settin
     _, system, user = llm.calls[0]
     assert "张三的数字分身" in system and "说白了钱进了账户才叫收入" in system  # voice sample
     assert "2.1 核心价值排序；" in system and "；本人已确认" not in system
-    assert user.endswith("对方：你怎么看签大单？\n\n请回复对方的最后一句话，语言与这句话一致。")
+    assert user.endswith("对方：你怎么看签大单？\n\n请回复对方的最后一句话，整段回复用中文。")
     history += [ChatTurn(role="twin", content=first.reply), ChatTurn(role="user", content="你喜欢什么运动？")]
     second = chat.reply(history, as_of=D(2026, 9, 30))
     assert second.abstain and second.confidence == 0.3 and second.abstain_reason == "无依据"

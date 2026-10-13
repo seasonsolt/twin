@@ -143,14 +143,17 @@ def load_benchmark(path: Path) -> tuple[Row, ...]:
 
 
 def split_personas(rows: Sequence[Row], split: str, count: int | None = None, seed: str = SAMPLE_SEED) -> list[str]:
-    """Seeded persona draw: ``formal`` from every persona, ``dev`` only from personas the formal draw left out."""
+    """Seeded persona draw: ``formal`` from every persona, ``dev`` only from personas the formal draw left out.
+
+    A ``formal`` count draws within the documented formal personas, so naming the default size still gets them.
+    """
     if split not in SPLITS:
         raise ValueError("split must be formal or dev")
     personas = sorted({row.persona_id for row in rows}, key=int)
     formal = sorted(random.Random(seed).sample(personas, SPLIT_PERSONAS["formal"]), key=int)
-    if split == "formal" and count is None:
+    if split == "formal" and count in (None, len(formal)):
         return formal
-    pool = personas if split == "formal" else [p for p in personas if p not in formal]
+    pool = formal if split == "formal" else [p for p in personas if p not in formal]
     count = count or SPLIT_PERSONAS[split]
     if not 1 <= count <= len(pool):
         raise ValueError("persona count out of range")

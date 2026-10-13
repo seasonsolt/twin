@@ -28,7 +28,7 @@ from ..llm import LLM, LLMError, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import PersonaCandidate, PersonaItem, PEvidence
-from .kernel import KERNEL, rebuild_scope
+from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
@@ -220,12 +220,17 @@ EXTRACT_SYSTEM = """\
 4. 不写对任何具体他人的评价，不记录别人的隐私；涉及他人时只记录{name}自己的做法和观点。
 5. 寒暄、事务性的只言片语（"好的""收到"）不提炼。表达风格类细项（6.x）可以根据他的用词、句式、语气提炼，\
 引用最能体现这种风格的原话。
-6. 没有值得提炼的内容时，返回空列表。{coverage}"""
+6. 他常请别人帮忙（润色邮件、改文案、问问题）：草稿和问题里顺带透露的个人情况，如住在哪、做什么、身体状况、\
+作息、喜好、去过的地方、正在做的事，同样要提炼，按事实记录。每个不同的具体情况单独一条，不要只挑几条代表。
+7. 他反复问起或主动关心某个话题，说明他关注它，可以记一条“关注……”（如“关注地中海饮食为什么流行”）；\
+措辞要写明是关注或好奇，不要写成喜欢或擅长。提问里透露的他自己的情况（如问“我母亲那边有糖尿病，我该怎么吃”\
+透露了母系有糖尿病家族史），按规则 6 另记一条事实，不要只记成关注。健康状况、病史、治疗经历也照实记录。
+8. 没有值得提炼的内容时，返回空列表。{coverage}"""
 
 # Questionnaire answers are each a deliberate statement, and most are never retrieved verbatim later, so a stance
 # left out of every conclusion is effectively lost to the twin.
 QUESTIONNAIRE_COVERAGE = """
-7. 这是问卷资料：凡是表明身份、立场、价值观、偏好、习惯或行为倾向的回答，都要被至少一条结论引用，\
+9. 这是问卷资料：凡是表明身份、立场、价值观、偏好、习惯或行为倾向的回答，都要被至少一条结论引用，\
 不要只挑几条代表；只有空白、纯事务性或不涉及本人的回答可以不覆盖。同一主题的几个回答合成一条结论，\
 引用最能代表的原话。"""
 
@@ -237,6 +242,21 @@ _EVIDENCE_NOTES = {
 
 def _candidate_id(chunk_id: str, i: int) -> str:
     return "pc_" + hashlib.sha256(f"{chunk_id}\x1f{i}".encode()).hexdigest()[:16]
+
+
+def prompt_fingerprint() -> str:
+    """Everything that shapes extraction and merge output apart from the taxonomy; pinned per PROMPT_VERSION."""
+    return content_digest(
+        {
+            "extract": EXTRACT_SYSTEM,
+            "merge": MERGE_SYSTEM,
+            "evidence": _EVIDENCE_NOTES,
+            "questionnaire": QUESTIONNAIRE_COVERAGE,
+            "max_quotes": MAX_QUOTES,
+            "extract_schema": ExtractDraft.model_json_schema(),
+            "merge_schema": MergeDraft.model_json_schema(),
+        }
+    )
 
 
 def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> list[PersonaCandidate]:
@@ -498,6 +518,16 @@ def build_profile(
     """``grant_gated`` treats every consent-gated facet as allowed; only evaluations use it, to measure what the
     profile could hold with the person's consent. Production builds derive consent from questionnaires."""
     report = BuildReport()
+    built = store.kernel_built()
+    # Snapshot once per kernel change, before stale extractions are dropped, so a bad kernel can be rolled back.
+    if (
+        rebuild_scope(built, KERNEL) != "none"
+        and store.get_meta("kernel:snapshot") != kernel_json(KERNEL)
+        and store.has_extractions()
+    ):
+        old = built or LEGACY_KERNEL
+        store.snapshot(f"{old.prompt}-{old.taxonomy}")
+        store.set_meta("kernel:snapshot", kernel_json(KERNEL))
     sources_changed_at = store.get_meta("sources_changed_at")
     built_at = dt.datetime.now(dt.UTC).isoformat()
     allowed = frozenset(f.facet_id for f in FACETS) if grant_gated else consented_facets(store)

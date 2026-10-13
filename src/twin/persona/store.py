@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,33 @@ CREATE TABLE IF NOT EXISTS p_vectors (
 _MIGRATIONS: tuple[str, ...] = (_SCHEMA,)
 
 
+SNAPSHOT_DIR = "kernel-snapshots"
+SNAPSHOT_KEEP = 3
+
+
+def list_snapshots(db_path: Path) -> list[Path]:
+    """Snapshots of one store, oldest first."""
+    return sorted((db_path.parent / SNAPSHOT_DIR).glob(f"{db_path.stem}-*.db"))
+
+
+def restore_snapshot(snapshot: Path, db_path: Path) -> Path | None:
+    """Copy a snapshot of this store back over it through SQLite, so WAL side files stay consistent; the current
+    state is snapshotted first and its path returned. Stop the web first."""
+    if snapshot.resolve() not in [p.resolve() for p in list_snapshots(db_path)]:
+        raise ValueError(f"请指定 {db_path.parent / SNAPSHOT_DIR} 中属于该分身的快照文件")
+    with closing(sqlite3.connect(":memory:")) as copy:
+        with closing(sqlite3.connect(f"{snapshot.resolve().as_uri()}?mode=ro", uri=True)) as source:
+            source.backup(copy)
+        before = None
+        if db_path.is_file():
+            with PersonaStore(db_path) as current:
+                before = current.snapshot("before-restore")
+        prepare_private_file(db_path)
+        with closing(sqlite3.connect(db_path)) as target:
+            copy.backup(target)
+    return before
+
+
 class NewerStoreError(RuntimeError):
     pass
 
@@ -94,6 +121,8 @@ class PersonaStore:
             if version == len(_MIGRATIONS):
                 self._db.execute("PRAGMA journal_mode=WAL")
                 return
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone():
+                self.snapshot(f"schema{version}")
             self._db.execute("BEGIN IMMEDIATE")
             version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
             if version > len(_MIGRATIONS):
@@ -117,6 +146,31 @@ class PersonaStore:
             self._db.rollback()
             self._db.close()
             raise
+
+    def snapshot(self, label: str) -> Path | None:
+        """Copy the store into `kernel-snapshots/` (0600) before a migration or kernel rebuild; keep the newest few."""
+        if str(self.path) in ("", ":memory:"):
+            return None
+        directory = self.path.parent / SNAPSHOT_DIR
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", label)
+        target = directory / f"{self.path.stem}-{stamp}-{safe}.db"
+        number = 1
+        while target.exists():
+            number += 1
+            target = directory / f"{self.path.stem}-{stamp}-{safe}-{number}.db"
+        prepare_private_file(target)
+        with self._lock, closing(sqlite3.connect(target)) as out:
+            self._db.backup(out)
+        for old in list_snapshots(self.path)[:-SNAPSHOT_KEEP]:
+            old.unlink(missing_ok=True)
+        return target
+
+    def has_extractions(self) -> bool:
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM p_chunks LIMIT 1").fetchone() is not None
 
     def schema_version(self) -> int:
         with self._lock:

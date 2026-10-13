@@ -11,7 +11,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from contextvars import copy_context
 from dataclasses import asdict, dataclass
 from functools import cache
@@ -74,16 +74,26 @@ def build_code_fingerprint() -> str:
     return digest.hexdigest()[:16]
 
 
+# One lock per cached profile across every run of a process: repeats sharing a slot build each profile once.
+_BUILD_LOCKS: dict[Path, threading.Lock] = {}
+_BUILD_LOCKS_GUARD = threading.Lock()
+
+
 @dataclass(frozen=True)
 class ProfileCache:
-    """Built profiles kept across runs. ``slot`` (one per repeat) keeps build-to-build variance in the measurement:
-    repeat n of every run reuses build n, never one shared build."""
+    """Built profiles kept across runs. ``slot`` (one per build) keeps build-to-build variance in the measurement:
+    repeat n of every run reuses build n. Repeats given the same slot share one build; ``building`` makes the first
+    of them build it and the others wait and restore it."""
 
     root: Path
     slot: str
 
     def path(self, key: str) -> Path:
         return self.root / f"{key}-{build_code_fingerprint()}-{self.slot}.db"
+
+    def building(self, key: str) -> threading.Lock:
+        with _BUILD_LOCKS_GUARD:
+            return _BUILD_LOCKS.setdefault(self.path(key), threading.Lock())
 
     def save(self, built: Path, key: str) -> None:
         private_directory(self.root)
@@ -300,19 +310,21 @@ class PersonaRuntime:
         # Save failure first, so parser, constructor and partial-build failures are sticky.
         self._states[key] = False
         try:
-            restored = False
-            if self.cache is not None:
-                restored = self.cache.restore(key, settings.db_path)
-                metadata["profile_cache"] = "hit" if restored else "miss"
-            with PersonaStore(settings.db_path) as store:
-                with self._stage(metadata, "preparation"):
-                    if not restored:
-                        self._prepare(store, sources, settings, metadata)
-                with self._stage(metadata, "index"):
-                    index_persona(store, self.embedder, settings)
-            # A degraded build retries its merges next time, so it is not frozen into the cache.
-            if self.cache is not None and not restored and "preparation_degraded" not in metadata:
-                self.cache.save(settings.db_path, key)
+            # Held through the build and save, so a repeat sharing this slot restores the build instead of redoing it.
+            with self.cache.building(key) if self.cache is not None else nullcontext():
+                restored = False
+                if self.cache is not None:
+                    restored = self.cache.restore(key, settings.db_path)
+                    metadata["profile_cache"] = "hit" if restored else "miss"
+                with PersonaStore(settings.db_path) as store:
+                    with self._stage(metadata, "preparation"):
+                        if not restored:
+                            self._prepare(store, sources, settings, metadata)
+                    with self._stage(metadata, "index"):
+                        index_persona(store, self.embedder, settings)
+                # A degraded build retries its merges next time, so it is not frozen into the cache.
+                if self.cache is not None and not restored and "preparation_degraded" not in metadata:
+                    self.cache.save(settings.db_path, key)
         except Exception as error:
             metadata["preparation_failure"] = True
             raise PreparationError("Persona preparation failed (details hidden)") from error

@@ -558,3 +558,22 @@ def test_dev_split_never_draws_formal_questions(tmp_path: Path, monkeypatch: pyt
     for options in ({"per_type": 4, "split": "dev"}, {"split": "dev"}, {"per_type": 1, "split": "holdout"}):
         with pytest.raises(ValueError):
             lm.select_cases(cases, **options)  # type: ignore[arg-type]
+
+
+def test_types_focus_the_draw_on_some_question_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lm, "FORMAL_PER_TYPE", 2)
+    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(6)]
+    cases = lm.load_dataset(dataset(tmp_path, items))
+    for split in ("formal", "dev"):
+        everything = lm.select_cases(cases, per_type=3, split=split)
+        focused = lm.select_cases(cases, per_type=3, split=split, types=["temporal-reasoning"])
+        assert focused == tuple(c for c in everything if c.question_type == "temporal-reasoning")
+    formal = {c.input.question_id for c in lm.select_cases(cases, per_type=2)}
+    larger = lm.select_cases(cases, per_type=4, split="dev", types=["temporal-reasoning", "multi-session"])
+    assert {c.question_type for c in larger} == {"temporal-reasoning", "multi-session"} and len(larger) == 8
+    assert not formal & {c.input.question_id for c in larger}
+    for types in ([], ["no-such-type"]):
+        with pytest.raises(ValueError):
+            lm.select_cases(cases, per_type=1, types=types)
+    with pytest.raises(ValueError):
+        lm.select_cases(cases, types=["temporal-reasoning"])

@@ -1,10 +1,10 @@
 """Chat with the general digital twin: the person's profile and words, answering in their place.
 
-Each turn retrieves the profile items and the person's own expressions most related to the conversation, adds an
-always-on core (the best-supported items per dimension) and recent voice samples, and asks the model to answer in
-the first person, from that material only. Everything is restricted to what was known on ``as_of`` when one is
-given. Answers cite the ids they rest on; an answer without a valid citation, or one the model abstains on, gets
-its confidence capped.
+Each turn retrieves the profile items and the person's own expressions most related to the conversation, plus
+what other people said to the person (labelled as theirs, never the person's view), adds an always-on core (the
+best-supported items per dimension) and recent voice samples, and asks the model to answer in the first person,
+from that material only. Everything is restricted to what was known on ``as_of`` when one is given. Answers cite
+the ids they rest on; an answer without a valid citation, or one the model abstains on, gets its confidence capped.
 """
 
 from __future__ import annotations
@@ -28,21 +28,31 @@ from ..config import Settings
 from ..embed import Embedder, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
-from .derive import derive
+from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .lexical import BM25, tokenize
 from .quotes import remove_unverified_quotes
-from .rewrite import rewrite
+from .rewrite import Rewrite, rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
 from .sources import expression_view
 from .store import PersonaStore
 from .style import extreme_rate
+from .when import time_window
 
 ITEMS_NS = "items"
 EXPRESSIONS_NS = "expressions"
+OTHERS_NS = "others"
 K_ITEMS = 12
-K_EXPRESSIONS = 6
+K_EXPRESSIONS = 12
+# Order, span and total questions gather events scattered over many conversations.
+K_EXPRESSIONS_SPAN = 24
+# The person's messages from the window a question points at ("last Saturday"), ranked within that window.
+K_WINDOW = 16
+K_OTHERS = 6
+# Per offered alternative, added on top of the shared ranking so one alternative's evidence is never crowded out.
+K_ALTERNATIVE_ITEMS = 1
+K_ALTERNATIVE_EXPRESSIONS = 2
 CORE_PER_DIMENSION = 2
 VOICE_SAMPLES = 8
 VOICE_MIN_CHARS = 6
@@ -50,6 +60,9 @@ VOICE_MAX_CHARS = 160
 HISTORY_TURNS = 8
 QUOTE_CHARS = 120
 TEXT_CHARS = 600
+# The best-matching things others said are shown at length: "the 7th item of the list you gave me" needs the list.
+OTHERS_FULL = 3
+OTHERS_FULL_CHARS = 2000
 UNCITED_CONFIDENCE_CAP = 0.3
 # An answer resting only on items the person has not reviewed yet (no confirmed item, no verbatim words).
 UNVERIFIED_CONFIDENCE_CAP = 0.6
@@ -99,6 +112,16 @@ def expression_text(e: Expression) -> str:
     return _clip(f"{e.context}\n{e.text}" if e.context else e.text, 1000)
 
 
+def others_view(store: PersonaStore, settings: Settings, until: dt.date | None = None) -> dict[str, Expression]:
+    """What other people said to the person, in the same privacy view as the person's own words."""
+    sources = {s.source_id: s for s in store.list_sources()}
+    return {
+        e.expression_id: e
+        for e in expression_view(store, settings, until=until)
+        if not e.is_target and sources[e.source_id].media_status in (None, "ready")
+    }
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -106,7 +129,7 @@ def _sha(text: str) -> str:
 def index_persona(
     store: PersonaStore, embedder: Embedder, settings: Settings, progress: Progress | None = None
 ) -> dict[str, int]:
-    """Bring both vector namespaces in line with the profile and the privacy view of expressions: embed what is
+    """Bring the vector namespaces in line with the profile and the privacy view of expressions: embed what is
     new or changed, drop what is gone; a different embedding model rebuilds a namespace. Returns texts embedded
     per namespace. Raw corpus text must not be sent to an external embedding service when privacy is enabled."""
     fingerprint = embedder_fingerprint(embedder)
@@ -115,6 +138,7 @@ def index_persona(
         EXPRESSIONS_NS: {
             e.expression_id: expression_text(e) for e in expression_view(store, settings, target_only=True)
         },
+        OTHERS_NS: {ref: _clip(e.text, 1000) for ref, e in others_view(store, settings).items()},
     }
     embedded: dict[str, int] = {}
     for namespace, docs in wanted.items():
@@ -154,13 +178,21 @@ class PersonaContext:
     derived: list[str] = field(default_factory=list)
     # Share of the person's graded questionnaire answers at the strongest end (see ``style``); None when too few.
     extreme_rate: float | None = None
+    # What other people said to the person; citable, but never the person's own view, so never trusted.
+    others: list[tuple[Expression, float]] = field(default_factory=list)
+    # The dates a relative time in the question ("last Saturday") can mean (see ``time_window``).
+    window: tuple[dt.date, dt.date] | None = None
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
     trusted: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         items = [i for i, _ in self.items] + self.core
-        self.ids = {i.item_id for i in items} | {e.expression_id for e, _ in self.expressions}
+        self.ids = (
+            {i.item_id for i in items}
+            | {e.expression_id for e, _ in self.expressions}
+            | {e.expression_id for e, _ in self.others}
+        )
         self.trusted = {i.item_id for i in items if i.verified} | {
             e.expression_id for e, _ in self.expressions if not e.narrated
         }
@@ -226,6 +258,11 @@ def _rank[T](
     return [(candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
 
 
+def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref: Callable[[T], str]) -> None:
+    seen = {ref(x) for x, _ in ranked}
+    ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
+
+
 def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:
     text = (
         "记忆还在处理中，等我记住后再聊吧。你也可以继续添加记忆。"
@@ -251,9 +288,19 @@ class PersonaChat:
         self.embedder = embedder
         self.settings = settings
 
-    def retrieve(self, query: str, as_of: dt.date | None = None, hints: str = "") -> PersonaContext:
-        """``hints`` (from ``rewrite``) are ranked for alongside the query, with equal weight."""
-        texts = [_clip(query, 2000), *([_clip(hints, 2000)] if hints else [])]
+    def retrieve(
+        self,
+        query: str,
+        as_of: dt.date | None = None,
+        hints: str = "",
+        alternatives: Sequence[str] = (),
+        today: dt.date | None = None,
+    ) -> PersonaContext:
+        """``hints`` (from ``rewrite``) are ranked for alongside the query, with equal weight; each of
+        ``alternatives`` adds its own best matches on top. When the query points at a relative time ("last
+        Saturday"), the best matches among what the person said in that window are added too."""
+        main = [query, *([hints] if hints else [])]
+        texts = [_clip(text, 2000) for text in [*main, *alternatives]]
         # Start network embedding while assembling the persona's stable material.
         with ThreadPoolExecutor(max_workers=1) as pool:
             embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
@@ -261,9 +308,35 @@ class PersonaChat:
             expressions = {
                 e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
             }
-            queries = list(zip([query, hints], embedding.result(), strict=False))
+            others = others_view(self.store, self.settings, until=as_of)
+            vectors = embedding.result()
+        queries = list(zip(main, vectors[: len(main)], strict=True))
         ranked_items = _rank(self.store, ITEMS_NS, queries, items, item_text, K_ITEMS)
-        ranked_expr = _rank(self.store, EXPRESSIONS_NS, queries, expressions, expression_text, K_EXPRESSIONS)
+        k_expressions = K_EXPRESSIONS_SPAN if needs_derivation(query) else K_EXPRESSIONS
+        ranked_expr = _rank(self.store, EXPRESSIONS_NS, queries, expressions, expression_text, k_expressions)
+        window = time_window(query, today or as_of or dt.date.today())
+        if window is not None:
+            within = {ref: e for ref, e in expressions.items() if e.date and window[0] <= e.date <= window[1]}
+            _add_new(
+                ranked_expr,
+                _rank(self.store, EXPRESSIONS_NS, queries, within, expression_text, K_WINDOW),
+                lambda e: e.expression_id,
+            )
+        for alternative in zip(alternatives, vectors[len(main) :], strict=True):
+            _add_new(
+                ranked_items,
+                _rank(self.store, ITEMS_NS, [alternative], items, item_text, K_ALTERNATIVE_ITEMS),
+                lambda i: i.item_id,
+            )
+            _add_new(
+                ranked_expr,
+                _rank(
+                    self.store, EXPRESSIONS_NS, [alternative], expressions, expression_text, K_ALTERNATIVE_EXPRESSIONS
+                ),
+                lambda e: e.expression_id,
+            )
+        # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
+        ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS)
         core: list[PersonaItem] = []
         for d in DIMENSIONS:
             own = [i for i in items.values() if FACET_BY_ID[i.facet_id].dimension_id == d.dimension_id]
@@ -279,7 +352,17 @@ class PersonaChat:
         voice = [e.text for e in said[:VOICE_SAMPLES]]
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
         style = extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated)
-        return PersonaContext(ranked_items, ranked_expr, core, voice, as_of, query, extreme_rate=style)
+        return PersonaContext(
+            ranked_items,
+            ranked_expr,
+            core,
+            voice,
+            as_of,
+            query,
+            extreme_rate=style,
+            others=ranked_others,
+            window=window,
+        )
 
     def reply(
         self,
@@ -293,7 +376,7 @@ class PersonaChat:
             raise ValueError("the last message must be the user's")
         if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
             return no_profile_reply(self.store, as_of)
-        ctx = self._search(messages, as_of)
+        ctx = self._search(messages, as_of, today)
         ctx.today = today
         self._derive(messages, ctx)
         draft = self.llm.structured(
@@ -347,14 +430,16 @@ class PersonaChat:
             draft = parser.draft()
         yield self._finalize(draft, ctx, messages, as_of, persist=persist)
 
-    def _search(self, messages: Sequence[ChatTurn], as_of: dt.date | None) -> PersonaContext:
+    def _search(
+        self, messages: Sequence[ChatTurn], as_of: dt.date | None, today: dt.date | None = None
+    ) -> PersonaContext:
         """Retrieve for the latest user turns, plus the aspects ``rewrite`` names; a failed rewrite only drops them."""
         query = "\n".join([m.content for m in messages if m.role == "user"][-2:])
         try:
-            hints = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
+            found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
         except LLMError:
-            hints = ""
-        return self.retrieve(query, as_of, hints)
+            found = Rewrite()
+        return self.retrieve(query, as_of, found.hints, found.alternatives, today)
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
         """Fill ``ctx.derived`` for span, order and total questions; a failed call only leaves it empty."""
@@ -521,16 +606,28 @@ CHAT_SYSTEM = """\
 ——这些都是倾向，不是事实；发生过什么、在哪、何时、谁，以及本人生活里的事实数字（几个孩子、收入、日期、\
 实付价格）才是事实回忆，也不是替本人承诺或评价具体他人：如果资料里有相关的间接依据\
 （相关的过往回答、明确的价值观、特质或习惯），可以给出最佳推测（估计就给出一个具体的数），归为 inferred，规则见下；\
-没有相关的间接依据，或问的是事实回忆，就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，该部分弃权。不确定资料是否包含某个个人事实，\
-就按没有覆盖处理。不能把个人问题改成通用回答来掩盖缺失。先想清对方要的具体是哪一项（asked，如商店名、日期、\
-人名、数字），再核对引用的资料是否直接给出了这一项；只有相关背景、同类信息或事件的其他侧面，不算给出，\
-不要把背景说成所问事项的答案。资料标的“某日 说”是那句话说出的日期。用户消息里有【推算】时，其中的日期、间隔、\
+没有相关的间接依据，或问的是事实回忆而资料里找不到，就用本人的口吻简短说明资料里没记这件事，不猜本人想法或经历，\
+该部分弃权。不能把个人问题改成通用回答来掩盖缺失。先想清对方要的具体是哪一项（asked，如商店名、日期、\
+人名、数字），再在资料里找给出这一项的记录：\
+（1）记录说的很可能就是所问的那件事或那个东西，只是措辞不同或个别细节没写明（例如问“5 天那趟哥斯达黎加\
+旅行带了几件衬衫”，资料说“去哥斯达黎加带了 7 件衬衫”），就用它回答，归为 grounded，顺带一句说明哪个细节\
+资料没写明，不要因此弃权；问题用的是概括的类别（电器、首饰、活动、亲戚的大事），记录说的是属于这一类的\
+具体东西或事（如问“买的电子产品”，记录说“买了降噪耳机”），也算对得上；但问题里的关键前提和记录不是一回事（不同的职位、物品、地点或事件，如问“当软件工程\
+经理时”，资料是“当高级软件工程师时”），就指出这个不一致、说明资料里没有所问的情况，按没给出处理，不要套用；（2）所问是几条记录的合计、个数、先后或间隔，而各条都在资料里，就自己算出结果并列出\
+用到的各条，归为 grounded；某个数要从资料推出（如“卖了 40 打”和“每打 3 美元”），按最合理的理解算出结果并写明\
+是怎么算的，不要因为一处没写明就不给结果；事情发生的日期没另写时，按那句话说出的日期算；（3）同一件事前后有不同说法时，以日期\
+最晚的为准，问“之前”的就用较早的；（4）只有相关背景、同类信息或事件的其他侧面，而没有所问的这一项时，才算\
+没给出，不要把背景说成所问事项的答案。资料标的“某日 说”是那句话说出的日期。\
+“别人对我说过的话”可以用来回答别人告诉过我、推荐过、提到过什么，按事实回忆归为 grounded 并引用它；\
+但它不是我的观点、偏好或经历，不能拿来当作我说过或做过的事。用户消息里有【推算】时，其中的日期、间隔、\
 先后和合计是程序按核对过的资料算出的，所问的一项在【推算】里有就算资料给出了，直接用它回答并引用对应的资料编号，\
 归为 grounded。
 2. 是要替本人答应、承诺、做决定，或评价某个具体的他人吗？不替本人答应事情或做承诺。即使有相关资料，\
 也只对这部分说明需要本人确认，不代答。其余能回答的部分继续回答，不要因一个承诺请求就拒绝整题。
 3. 其余不需要本人资料的问题，包括通用知识、方法、一般话题的看法，归为 general：充分帮助，给出判断、理由或可执行\
-步骤，不能因档案没有相关内容就说得问本人。开头用一句简短的话说明这是通用知识、不是本人观点，例如：\
+步骤，不能因档案没有相关内容就说得问本人。对方要的是建议或推荐（怎么解决、去哪、做什么、买什么）时，先看资料里\
+有没有和这件事相关的本人情况（用过或买过的东西、去过的地方、喜好、正在做的事），有就围绕它们给建议并引用，\
+归为 grounded，不要只给一套谁都适用的通用做法。开头用一句简短的话说明这是通用知识、不是本人观点，例如：\
 这不是我本人的经验，我先说通用做法（对方限定了输出格式时除外，见输出格式）。日常寒暄自然回应，不必硬套知识说明。
 
 ## 整体 mode 与弃权
@@ -568,6 +665,10 @@ confidence 不超过 0.5。对方限定了输出格式时，只按输出格式�
 对方限定了输出格式（如只回选项标签、只回一个数字）时，只要给出实质回答，无论 mode 是 grounded、general 还是 inferred，\
 正文都恰好是该标签或数字，不加前缀、单位、解释，也不加说明通用知识或推测的句子；回答的身份由 mode 标明。\
 不给实质回答（abstain）时仍用一句话说明。
+对方给出几个备选回复或方案，问哪个最适合我时，逐个对照【核心画像】和【检索资料】里我的情况：准确用上我的具体\
+情况（喜好、习惯、身体状况、病史、治疗经历、经历、所在地）的选项，优于对谁都适用的通用选项；健康和病史这类\
+情况资料里有，就照它选，不要因为敏感而回避提到它的选项；和我的情况矛盾的选项排除；我说过\
+不想再被提起或要求忘掉的事，用了它的选项也排除。几个选项都不矛盾时，选最贴合我的那个，不要因为稳妥就选通用的。
 少量使用 Markdown：日常聊天保持自然的简短段落，最多加粗一两个关键词；长回复分段，段落之间空一行。
 步骤或选项用列表，只有真正的并列对比才用表格，代码块只用于代码或命令。
 标题不得高于四级（####），通常不用标题；不要把长回答挤成一整段，绝不使用 HTML。
@@ -595,6 +696,7 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
         materials.append(_excerpt(expression.text, ctx.query, TEXT_CHARS))
         if expression.context:
             materials.append(_clip(expression.context, 160))
+    materials.extend(_excerpt(e.text, ctx.query, _other_chars(n)) for n, (e, _) in enumerate(ctx.others))
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
     return materials
 
@@ -634,6 +736,15 @@ def _render_expression(e: Expression, query: str) -> str:
     return f"- [{e.expression_id}] {head}{context}「{_excerpt(e.text, query, TEXT_CHARS)}」"
 
 
+def _other_chars(rank: int) -> int:
+    return OTHERS_FULL_CHARS if rank < OTHERS_FULL else TEXT_CHARS
+
+
+def _render_other(e: Expression, query: str, rank: int) -> str:
+    head = " · ".join(x for x in (f"{e.date.isoformat()}" if e.date else "", e.channel) if x)
+    return f"- [{e.expression_id}] {head} {e.speaker} 说「{_excerpt(e.text, query, _other_chars(rank))}」"
+
+
 def _material_lines(ctx: PersonaContext) -> list[str]:
     lines = ["档案条目："]
     lines.extend(_render_item(i) for i, _ in ctx.items)
@@ -648,16 +759,43 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     if narrated:
         lines.append("资料记述（不是本人原话）：")
         lines.extend(_render_expression(e, ctx.query) for e in narrated)
+    if ctx.others:
+        lines.append("别人对我说过的话（是别人说的，不是我的观点或经历）：")
+        lines.extend(_render_other(e, ctx.query, n) for n, (e, _) in enumerate(ctx.others))
     return lines
+
+
+def reply_language(text: str) -> str | None:
+    """The asker's language when it is plainly Chinese, English, Japanese or Korean, decided here: material in
+    another language otherwise pulls the reply into it. None when it is something else."""
+    if re.search(r"[\u3040-\u30ff]", text):
+        return "日文"
+    if re.search(r"[\uac00-\ud7af]", text):
+        return "韩文"
+    cjk = len(CJK.findall(text))
+    latin = len(re.findall(r"[A-Za-z]", text))
+    if latin > 2 * cjk:
+        # Accented or other-script letters mean a language other than English (Spanish, French, Russian...).
+        return None if re.search(r"[^\W\d_A-Za-z\u4e00-\u9fff]", text) else "英文"
+    return "中文" if cjk else None
 
 
 def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     lines = ["【检索资料】", *_material_lines(ctx)]
     if ctx.derived:
         lines += ["", "【推算】（程序按上面资料里核对过的日期和数量算出）", *ctx.derived]
+    if ctx.window is not None:
+        lo, hi = ctx.window
+        lines += [
+            "",
+            f"【时间】对方话里的相对时间（如“上周六”“四周前”）大约指 {lo.isoformat()} 至 {hi.isoformat()}；"
+            "资料里这几天说过的、和所问的事对得上的那件事，就是对方在问的，不要因为说法不同或日期没写成相对时间就"
+            "说没有记录。",
+        ]
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:
         who = "对方" if m.role == "user" else "你"
         lines.append(f"{who}：{m.content.strip()}")
-    lines.append("\n请回复对方的最后一句话，语言与这句话一致。")
+    language = reply_language(messages[-1].content)
+    lines.append(f"\n请回复对方的最后一句话，{f'整段回复用{language}' if language else '语言与这句话一致'}。")
     return "\n".join(lines)

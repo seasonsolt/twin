@@ -192,6 +192,14 @@ def test_suite_runs_every_repeat_and_writes_a_comparable_scorecard(
     assert json.loads((second / "scorecard.json").read_text())["comparison"]["longmemeval"]["delta"] == 0
     assert "与基线相比" in (second / "scorecard.md").read_text()
 
+    # A baseline from another split is not compared, but the finished suite still gets its scorecard.
+    third = tmp_path / "suite3"
+    common = ["--config", str(config), "eval-suite", "--longmemeval", str(data)]
+    common += ["--baseline", str(out / "scorecard.json")]
+    result = CliRunner().invoke(app, [*common, "--out", str(third), "--split", "formal"])
+    assert result.exit_code == 0 and "Baseline not compared" in result.output
+    assert "comparison" not in json.loads((third / "scorecard.json").read_text())
+
     rebuilt = CliRunner().invoke(app, ["eval-scorecard", str(out)])
     assert rebuilt.exit_code == 0 and json.loads((out / "scorecard.json").read_text())["split"] == "dev"
     assert CliRunner().invoke(app, ["--config", str(config), "eval-suite", "--out", str(out)]).exit_code == 1
@@ -216,6 +224,31 @@ def test_suite_profile_cache_gives_each_repeat_its_own_slot(tmp_path: Path, monk
     assert sorted((s.root, s.slot) for s in slots) == [(cache.resolve(), "r1"), (cache.resolve(), "r2")]
     assert cache.stat().st_mode & 0o777 == 0o700
     assert json.loads((tmp_path / "suite" / "scorecard.json").read_text())["profile_cache"] is True
+
+
+def test_suite_repeats_can_share_fewer_builds_and_the_scorecard_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slots: list[str] = []
+
+    def fake_lme(settings: Any, dataset: Path, run: Path, **options: Any) -> dict[str, Any]:
+        slots.append(options["profile_cache"].slot)
+        write_run(run, [lme_row("q0", "multi-session", 1.0)], judges=["j0"])
+        return {"preparation_failures": 0, "prediction_failures": 0, "judge_failures": 0, "missing": 0}
+
+    monkeypatch.setattr(cli, "_run_longmemeval", fake_lme)
+    data = tmp_path / "data.json"
+    data.write_text("{}")
+    out = tmp_path / "suite"
+    args = ["eval-suite", "--out", str(out), "--longmemeval", str(data), "--repeats", "3"]
+    args += ["--profile-cache", str(tmp_path / "profiles")]
+    result = CliRunner().invoke(app, [*args, "--builds", "1"])
+    assert result.exit_code == 0, result.output
+    assert slots == ["r1", "r1", "r1"]
+    assert json.loads((out / "scorecard.json").read_text())["builds"] == 1
+    assert "共用 1 份建档结果" in (out / "scorecard.md").read_text()
+    too_many = ["eval-suite", "--out", str(tmp_path / "other"), "--longmemeval", str(data), "--repeats", "2"]
+    assert CliRunner().invoke(app, [*too_many, "--builds", "3"]).exit_code == 1
 
 
 def test_suite_runs_every_benchmark_and_repeat_at_once_under_one_call_cap(

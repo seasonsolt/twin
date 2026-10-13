@@ -40,10 +40,11 @@ def settings() -> Settings:
 
 
 def test_taxonomy_has_nine_dimensions_and_39_unique_facets() -> None:
-    assert TAXONOMY_VERSION == "v1" and len(DIMENSIONS) == 9 and len(FACETS) == 39
+    assert TAXONOMY_VERSION == "v2" and len(DIMENSIONS) == 9 and len(FACETS) == 39
     assert len(FACET_BY_ID) == 39
     assert all(facets_of(d.dimension_id) for d in DIMENSIONS)
-    assert requires_consent("9.3") and not requires_consent("3.1")
+    # v2: life and preferences (D9) no longer wait for questionnaire consent.
+    assert not any(requires_consent(f.facet_id) for f in FACETS)
     guide = facet_guide(frozenset({"3.1", "6.1"}))
     assert guide.splitlines() == [
         "D3 怎么做决定",

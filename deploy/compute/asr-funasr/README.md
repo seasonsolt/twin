@@ -44,7 +44,7 @@ uv run twin --config ./twin.toml compute install asr-funasr
 
 ## 命令契约与隐私
 
-完整契约见 [docs/MEDIA.md](../../../docs/MEDIA.md#音视频记忆)。stdin 接收 JSON 请求，stdout 最后一行输出 JSON 结果；依赖日志转到 stderr。1.2.1 起请求可带 `"references": {"<名称>": "<绝对路径>"}`（最多 32 份），每个说话人另返回 `similarities`，与每份声音逐一比较；转写和切分不变，`twin eval-asr-session` 用它把每场会议只跑一次。缺失的声音文件跳过，与 `reference` 相同；常驻服务和 `remote.py` 同样支持。评测还可在请求里带 `"cluster_threshold"`（声纹聚类的余弦距离阈值，默认 0.55，越大合并越多），或在 `run.py` / `remote.py` 命令末尾加 `--cluster-threshold 0.65`；twin 自己从不传，线上行为不变。`run.py --check` 加载四个模型，用内置 1 秒正弦波逐一推理并检查声纹维度；不需要任何用户录音。
+完整契约见 [docs/MEDIA.md](../../../docs/MEDIA.md#音视频记忆)。stdin 接收 JSON 请求，stdout 最后一行输出 JSON 结果；依赖日志转到 stderr。1.2.1 起请求可带 `"references": {"<名称>": "<绝对路径>"}`（最多 32 份），每个说话人另返回 `similarities`，与每份声音逐一比较；转写和切分不变，`twin eval-asr-session` 用它把每场会议只跑一次。缺失的声音文件跳过，与 `reference` 相同；常驻服务和 `remote.py` 同样支持。1.2.1 起声纹聚类的余弦距离阈值默认 0.65（原为 0.55，越大合并越多）：AliMeeting 上场均多出的说话人从 3.9 / 3.6 个降到 1.4 / 0.5 个（Eval / Test），本人话语 CER 降 8.6 / 8.5 个点，他人误归属从 1.8% / 2.5% 升到 3.1% / 3.6%，详见 [docs/ASR_EVAL.md](../../../docs/ASR_EVAL.md)。评测可在请求里带 `"cluster_threshold"` 覆盖，或在 `run.py` / `remote.py` 命令末尾加 `--cluster-threshold 0.7`；twin 自己从不传。`run.py --check` 加载四个模型，用内置 1 秒正弦波逐一推理并检查声纹维度；不需要任何用户录音。
 
 转写、声纹提取和匹配全程本机离线；运行强制设置 `HF_HUB_OFFLINE`、`MODELSCOPE_OFFLINE`、`TRANSFORMERS_OFFLINE`，模型加载禁用更新。缺模型只报错，不触发下载。安装 Python 依赖需要网络或已有包缓存；模型下载需要显式 `--download-models`。后续记忆整理/聊天仍使用 twin 配置的大模型，其出境范围由该配置决定。
 

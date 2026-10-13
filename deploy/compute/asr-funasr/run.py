@@ -19,7 +19,8 @@ MANIFEST = Path(__file__).with_name("pack.toml")
 MAX_HOTWORDS = 200
 MAX_REFERENCES = 32
 # Cosine distance at which agglomerative clustering stops merging speaker windows; a larger value merges more.
-CLUSTER_THRESHOLD = 0.55
+# 0.65 from the AliMeeting sweep in docs/ASR_EVAL.md: 0.55 split each person into several speakers, 0.75 merged people.
+CLUSTER_THRESHOLD = 0.65
 
 
 def parse_request(payload):

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.evals import personamem2 as pm2
+from twin.evals.personamem import Turn
 from twin.evals.scorecard import benchmark_scorecard
 from twin.llm import FakeLLM
 from twin.persona.schema import ChatDraft
@@ -166,3 +167,22 @@ def test_run_scores_with_upstream_extraction_and_feeds_the_scorecard(
     assert [row["persona"]["cache_hit"] for row in first] == [False, True, False, True]
     card = benchmark_scorecard("personamem2", tmp_path / "suite" / "personamem2")
     assert card["outcomes"]["correct"] == 4 and card["outcomes"]["format"] == 4
+
+
+def test_the_persona_system_prompt_becomes_a_self_introduction_one_field_per_paragraph() -> None:
+    persona = {
+        "name": "Ana",
+        "race_ethnicity": "X",
+        "languages": ["English", "Spanish"],
+        "personality": {"core_traits": ["warm"]},
+    }
+    prompt = "You are an AI assistant helping a user with the following persona:\n\n" + json.dumps(persona)
+    assert pm2.persona_intro(prompt) == (
+        "name: Ana\n\nrace ethnicity: X\n\nlanguages: English; Spanish\n\npersonality: core traits: warm"
+    )
+    assert pm2.persona_intro("Plain description, no JSON.") == "Plain description, no JSON."
+    history = (Turn("system", prompt), Turn("user", "hi"), Turn("assistant", "hello"))
+    question = pm2.QuestionInput("q", "Q?", ("a", "b", "c", "d"), history, "p")
+    intro, chat = pm2.TwinSystem.sources(question)
+    assert intro.kind == "intro" and intro.entries == (("", pm2.persona_intro(prompt), ""),)
+    assert chat.kind == "chat" and [role for role, _, _ in chat.entries] == ["user", "assistant"]

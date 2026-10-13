@@ -845,3 +845,21 @@ def test_judges_stay_within_their_own_cap_while_answers_run_at_once(
         cases, tmp_path / "out", Settings(), score=True, answer_workers=6, judge_slots=threading.Semaphore(1)
     )
     assert report["completed"] == 6 and peak == 1
+
+
+def test_an_intro_source_becomes_the_persons_self_introduction(tmp_path: Path) -> None:
+    runtime = pr.PersonaRuntime(Settings(db_path=tmp_path / "x.db"), fake_persona(), HashingEmbedder())
+    sources = (
+        pr.SourceInput("persona", "intro", (("", "location: Lives by the harbor", ""),)),
+        pr.SourceInput("history", "chat", (("user", "I prefer Atlas", "2025-01-02"),)),
+    )
+    try:
+        runtime.predict("person", sources, "Where do I live?")
+        with PersonaStore(next(runtime.root.glob("*.db"))) as store:
+            assert store.get_meta("identity:about") == "location: Lives by the harbor"
+            intro = [s for s in store.list_sources() if s.title == "自我介绍"]
+            assert len(intro) == 1 and intro[0].origin.startswith("note:")
+            mine = [e for e in store.list_expressions() if e.source_id == intro[0].source_id]
+            assert [e.text for e in mine] == ["location: Lives by the harbor"] and mine[0].is_target
+    finally:
+        runtime.close()

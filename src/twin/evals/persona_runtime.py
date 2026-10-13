@@ -26,7 +26,7 @@ from ..llm import LLM, T
 from ..persona.chat import PersonaChat, index_persona
 from ..persona.profile import build_profile
 from ..persona.schema import ChatReply, ChatTurn, Expression, ParsedSource, Source, SourceKind
-from ..persona.sources import parse_chat, source_id_for
+from ..persona.sources import parse_chat, parse_note, source_id_for
 from ..persona.store import PersonaStore
 from ..usage import active_recorder, call_stage, collect_calls
 from ..util import fingerprint, private_directory, run_parallel
@@ -43,8 +43,8 @@ LIMITATIONS = [
 @dataclass(frozen=True)
 class SourceInput:
     name: str
-    kind: Literal["chat", "questionnaire"]
-    # Chat: (role, text, date). Questionnaire: (question/context, answer, date).
+    kind: Literal["chat", "questionnaire", "intro"]
+    # Chat: (role, text, date). Questionnaire: (question/context, answer, date). Intro: ("", self-introduction, "").
     entries: tuple[tuple[str, str, str], ...]
     narrated: bool = False
 
@@ -165,7 +165,7 @@ def preparation_key(subject: str, sources: tuple[SourceInput, ...], settings: Se
 
 def parse_source(source: SourceInput, settings: Settings) -> ParsedSource | None:
     entries = [entry for entry in source.entries if entry[1].strip()]
-    if not entries:
+    if not entries or source.kind == "intro":
         return None
     if source.kind == "chat":
         return parse_chat(
@@ -290,7 +290,10 @@ class PersonaRuntime:
     def _prepare(
         self, store: PersonaStore, sources: tuple[SourceInput, ...], settings: Settings, metadata: dict[str, Any]
     ) -> None:
-        store.set_identity(TARGET, "", None)
+        # A benchmark's description of the user enters as the person's self-introduction, as one written in the app
+        # would: a note of their own, kept as the identity's "about".
+        about = "\n\n".join(text for s in sources if s.kind == "intro" for _, text, _ in s.entries if text.strip())
+        store.set_identity(TARGET, about, parse_note(about, settings, "自我介绍") if about else None)
         for source in sources:
             parsed = parse_source(source, settings)
             if parsed is not None:

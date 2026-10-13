@@ -1793,6 +1793,42 @@ def eval_asr_command(
     _say(f"成绩单已写入 {out / 'scorecard.md'}。")
 
 
+@app.command("eval-asr-session")
+def eval_asr_session_command(
+    sessions: Annotated[
+        Path, typer.Option("--sessions", help="整场清单 JSONL：id/audio/duration/reference/references")
+    ],
+    engines: Annotated[Path, typer.Option("--engines", help="引擎 TOML：name/command；第一个 [[engine]] 是基线")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的输出目录")],
+    cache: Annotated[Path | None, typer.Option("--cache", help="转写缓存目录，默认清单旁的 asr-cache/")] = None,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """整场语音识别评测：按 twin [asr] command 转写整场会议，给出切分、说话人和本人话语三层成绩；已缓存的不重跑。"""
+    from .evals.asr_session import load_session_engines, run_session_benchmark
+    from .evals.personal import ensure_output_directory
+
+    last: dict[str, int] = {}
+
+    def progress(name: str, done: int, total: int) -> None:
+        if done != last.get(name):
+            _say(f"{name}: {done}/{total}")
+        last[name] = done
+
+    with _errors():
+        cache_dir = cache if cache is not None else sessions.parent / "asr-cache"
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        ensure_output_directory(cache_dir, allow_in_repo=allow_in_repo)
+        card = run_session_benchmark(
+            sessions, load_session_engines(engines), out, cache_dir=cache_dir, progress=progress
+        )
+    for engine in card["engines"]:
+        cer = engine["segmentation"]["strict"]["cer"]["rate"]
+        der = engine["speakers"]["der_0.25"]["rate"]
+        cpcer = engine["speakers"]["strict"]["cpcer"]["rate"]
+        _say(f"{engine['engine']}: 整场 CER {100 * cer:.2f}%  DER {100 * der:.2f}%  cpCER {100 * cpcer:.2f}%")
+    _say(f"成绩单已写入 {out / 'scorecard.md'}。")
+
+
 @app.command("eval-compare")
 def personal_eval_compare_command(
     ctx: typer.Context,

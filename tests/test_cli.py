@@ -70,6 +70,7 @@ def test_remaining_commands() -> None:
         "eval-suite",
         "eval-scorecard",
         "eval-asr",
+        "eval-asr-session",
     ):
         assert name in result.output
     assert set(
@@ -90,6 +91,7 @@ def test_remaining_commands() -> None:
         "eval-suite",
         "eval-scorecard",
         "eval-asr",
+        "eval-asr-session",
     }
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -134,7 +135,7 @@ def _by_speaker(utterances: Sequence[Utterance], mode: str) -> dict[str, list[st
     return {s: _joined([u for u in utterances if u.speaker == s], mode) for s in speakers}
 
 
-def cp_counts(reference: Sequence[Utterance], hypothesis: Sequence[Utterance], mode: str) -> dict[str, object]:
+def cp_counts(reference: Sequence[Utterance], hypothesis: Sequence[Utterance], mode: str) -> dict[str, Any]:
     """Concatenated minimum-permutation CER: each speaker's tokens joined in time order, hypothesis speakers matched
     one-to-one to reference speakers; an unmatched reference speaker is all deletions, an unmatched hypothesis
     speaker all insertions."""
@@ -179,7 +180,7 @@ def _frame_count(reference: Sequence[Utterance], hypothesis: Sequence[Utterance]
 
 def diarization_error(
     reference: Sequence[Utterance], hypothesis: Sequence[Utterance], collar: float = 0.25
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """NIST-style DER with overlap: per frame, missed = max(|R| - |H|, 0), false alarm = max(|H| - |R|, 0),
     confusion = min(|R|, |H|) - matched, where matched counts hypothesis speakers mapped to an active reference
     speaker under the one-to-one mapping with the most shared time. Seconds are reported alongside the rate."""

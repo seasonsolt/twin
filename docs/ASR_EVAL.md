@@ -2,6 +2,21 @@
 
 `twin eval-asr` 在本机用同一批带人工标注的片段比较多个识别引擎，给出字错率（CER）、速度和逐条配对比较，用来判断换模型、改参数能不能让会议转写更准。第一个引擎是基线。asr-funasr 1.2.0 起线上识别改用 SeACo-Paraformer 加标点模型，评测还没有对应的引擎；目前的基线是 1.1.0 包里的 SenseVoiceSmall，下文数字都以它为准。
 
+## 分层
+
+转写链路分层评测，每层只换一个变量，相邻两层同一批音频上的指标差就是这一层造成的损失，用来判断该先优化哪一层。
+
+| 层 | 测什么 | 命令 | 主指标 |
+| --- | --- | --- | --- |
+| L1 模型层 | 识别模型本身，输入人工切好的单人片段 | `twin eval-asr` | CER（strict / nofill） |
+| L2 切分层 | VAD 与声纹窗口切分，输入整场录音 | `twin eval-asr-session` | 不分说话人的整场 CER、漏检/误检语音 |
+| L3 说话人层 | 声纹聚类与本人认领 | `twin eval-asr-session` | DER（collar 0.25 秒）、cpCER、自动认领正确/认错/未认领 |
+| L4 后处理层 | 热词、LLM 清洗 | 待实现 | CER 差、专名召回、语气词保留 |
+| L5 流程层 | twin 记到本人名下的文字 | `twin eval-asr-session` | 本人话语 CER、他人误归属 |
+| L6 下游层 | 转写误差对记忆的影响 | 待实现 | persona eval 分数差 |
+
+L4–L6 需要人工逐字校对的本人会议录音，尚未建立。
+
 ## 数据
 
 清单是 JSON Lines，每行 `{"id", "audio", "text", "duration", "group"?}`：`audio` 相对清单所在目录，`text` 是人工参考文本，`duration` 为秒，`group` 是可选的录音编号。同一录音的片段错误相关，有 `group` 时置信区间按整段录音重抽，抽样也让同一录音整体落在同一边；没有时每条自成一组。
@@ -84,6 +99,51 @@ uv run twin eval-asr --manifest ~/asr-eval/wenet-meeting/manifest.jsonl \
 | 引擎常驻一个进程 | 模型只加载一次（SenseVoice 冷启动约 17 秒） |
 
 批大小再加到 32 以上收益递减：同批每段仍逐段编码音频，编码约占批量解码时间的三分之一。
+
+## 整场评测
+
+`twin eval-asr-session` 用 twin 上传录音时同一套 `CommandTranscriber` 与 `analyse()` 跑整场会议，被测的就是线上运行的程序。
+
+**数据。** [AliMeeting](https://www.openslr.org/119/)（OpenSLR SLR119，CC BY-SA 4.0）：中文真实会议，每场 2–4 人、15–30 分钟，句级说话人与时间标注（TextGrid）。Eval 8 场 4 小时（3.42 GB）日常迭代，Test 20 场 10 小时（8.90 GB）阶段结束时跑一次；训练集用不到。解压后转换（仓库外目录）：
+
+```bash
+uv run deploy/asr-eval/prepare_alimeeting.py <解压目录>/Eval_Ali --out ~/asr-eval/alimeeting/eval
+```
+
+远场取 8 通道阵列的第 0 通道，最接近手机或笔记本单个麦克风；去掉 `(SIL)`、`<sil>` 等标注记号。输出：
+
+- `sessions.jsonl`：每场 `{id, audio, duration, reference, references}`，`reference` 指向 `{"segments": [{start, end, speaker, text}]}`，`references` 为 `{说话人: 参考声音}`。
+- `manifest-far.jsonl` / `manifest-near.jsonl`：不与他人重叠的单句，`group` 为场次，直接交给 `twin eval-asr` 得到同一批音频的 L1。近场是干净音频的对照。
+- `voices/<说话人>.wav`：取自该说话人最后一场会议的近场录音、约 10 秒，模拟本人参考声音；那一场不再把他当「本人」评测，只参加一场的人不评测本人。
+
+**引擎。** TOML 的每个 `[[engine]]` 写 `name`、`command`（twin `[asr] command` 的写法），可选 `language`（默认 `zh`）和 `files`（计入引擎身份的文件，如算力包的 `pack.toml`）。线上引擎的 `command` 照抄 `twin.toml` 里 `twin compute install asr-funasr` 写入的那一行；算力包目录随系统而定（macOS 默认 `~/Library/Application Support/twin/compute`，可用 `TWIN_COMPUTE_HOME` 改）：
+
+```toml
+[[engine]]
+name = "funasr-1.2.0"
+command = "'<算力包目录>/asr-funasr/current/venv/bin/python' '<算力包目录>/asr-funasr/current/run.py'"
+files = ["<算力包目录>/asr-funasr/current/pack.toml"]
+```
+
+**运行。**
+
+```bash
+uv run twin eval-asr-session --sessions ~/asr-eval/alimeeting/eval/sessions.jsonl \
+  --engines ~/asr-eval/session-engines.toml --out ~/asr-eval/runs/<日期>-<改动>
+```
+
+每场按带 `diarize` 的请求转写；有参考声音的说话人各跑一次（参考声音只影响相似度，不影响识别和聚类，但包不输出质心，只能重跑），没有时跑一次。L2 用同一次带 diarize 的输出、忽略说话人：线上开启 diarize 时 `run.py` 按声纹窗口重新切分，与不开启时不同。结果按引擎身份（命令、language、`files` 的摘要）缓存在清单旁的 `asr-cache/`，中断后只补缺的场次。
+
+**评分。** 文字归一化与片段评测相同。
+
+- 整场 CER：参考和输出各按开始时间拼接后对齐（M2MeT 的先入先出口径）。
+- DER：逐帧（10 毫秒）漏检 + 误检 + 说话人混淆，除以参考说话人总时长；说话人按共同时长最大的一对一匹配；参考边界两侧各 0.25 秒不计分，另报 collar 0。重叠语音按每帧说话人数计。
+- cpCER：每个说话人的话按时间拼接，取总错字最少的说话人对应；没对上的参考说话人全算删除，多出的输出说话人全算插入。
+- 自动认领：按线上规则（相似度至少 0.6、领先第二名至少 0.1）认领后，看被认领说话人的时间里谁说得最多：是本人为正确，否则为认错。
+- 本人话语 CER：参考里本人的话对比 twin 记到本人名下的文字；没有自动认领时按用户手动选对说话人计算。他人误归属：本人名下的字里，落在只有别人说话时段的比例。
+- 区间按场次 bootstrap；与基线逐场配对，符号检验按场次。Eval 只有 8 场，区间很宽，结论以 Test 为准。
+
+`scorecard.md` 按层分节，末尾给出层间损失（说话人损失 = cpCER − 整场 CER，流程损失 = 本人话语 CER − cpCER）；`items.jsonl` 含每场参考与输出，权限 0600。
 
 ## 已有结论
 

@@ -70,7 +70,7 @@ def test_compute_checks_refs_and_dates_then_spans_order_and_totals() -> None:
         "- 2024-03-17 收到球拍，数量 350粉丝 [b]，距今天 8 天，约 1.1 周",
         "- 日期不详：日期不明，数量 5粉丝 [c]",
         "- 从 [a] 到 [b]：相隔 7 天，约 1 周",
-        f"- 数量合计（粉丝，3 条）：605；{dv.SUM_CAVEAT}",
+        "- 数量合计（粉丝，3 条）：605",
     ]
 
 
@@ -83,7 +83,7 @@ def test_compute_reports_change_and_long_spans_when_every_quantity_is_dated() ->
     assert "- 2023-12-01 事 [c]，距今天 115 天，约 16.4 周，约 3.8 个月" in lines
     assert "- 最早到最晚：相隔 76 天，约 10.9 周，约 2.5 个月" in lines
     assert lines[-2:] == [
-        f"- 数量合计（打，2 条）：50；{dv.SUM_CAVEAT}",
+        "- 数量合计（打，2 条）：50",
         ("- 从最早一条 [a] 到最晚一条 [b] 的变化（打）：-30；先后按的是资料的日期，后提到的不一定是后发生的"),
     ]
     assert dv.compute([fact("ghost", "2024-01-01")], TODAY, {"a"}) == []
@@ -280,3 +280,8 @@ def test_amounts_marked_as_running_totals_are_plain_amounts_outside_a_present_qu
     ]
     lines = dv.compute(facts, TODAY, {"a", "b"}, present=False)
     assert not any(line.startswith(("- 现在的数量", "- 累计数的变化")) for line in lines)
+
+
+def test_a_sum_of_amounts_that_grow_by_date_says_they_may_be_one_running_total() -> None:
+    lines = dv.compute([fact("a", "2024-01-01", 3, "次"), fact("b", "2024-02-15", 5, "次")], TODAY, {"a", "b"})
+    assert f"- 数量合计（次，2 条）：8；{dv.SUM_CAVEAT}" in lines

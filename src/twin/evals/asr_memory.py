@@ -176,7 +176,13 @@ def memory_items(lines: list[tuple[str, str, bool]], llm: LLM, settings: Setting
         groups[candidate.facet_id].append(candidate)
     items = [item for facet in sorted(groups) for item in merge_facet(llm, facet, groups[facet], settings)]
     return [
-        {"facet_id": item.facet_id, "statement": item.statement, "applies_when": item.applies_when} for item in items
+        {
+            "facet_id": item.facet_id,
+            "statement": item.statement,
+            "applies_when": item.applies_when,
+            **({"conflict": item.conflict} if item.conflict else {}),
+        }
+        for item in items
     ]
 
 

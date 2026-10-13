@@ -113,6 +113,31 @@ def test_real_extraction_and_merge_use_fictional_media_only():
     assert len(llm.calls) == 1
 
 
+def test_production_merge_conflict_is_kept_for_judging():
+    import re
+
+    def handler(system, user, schema):
+        if schema.__name__ == "ExtractDraft":
+            return {
+                "items": [
+                    {"facet_id": "1.1", "statement": color, "quotes": [{"n": 1, "quote": color}]}
+                    for color in ("喜欢蓝色", "喜欢红色")
+                ]
+            }
+        return {
+            "items": [
+                {
+                    "statement": "颜色偏好不一致",
+                    "conflict": "两种偏好缺少情境区分",
+                    "candidate_ids": sorted(set(re.findall(r"pc_[0-9a-f]+", user))),
+                }
+            ]
+        }
+
+    items = memory_items([("本人", "喜欢蓝色，喜欢红色", True)], FakeLLM(handler), Settings())
+    assert items[0]["conflict"] == "两种偏好缺少情境区分"
+
+
 def test_cache_replicates_are_independent_but_reruns_free(tmp_path):
     class Reply(BaseModel):
         value: int

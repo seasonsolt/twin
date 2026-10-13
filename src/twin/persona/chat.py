@@ -32,6 +32,7 @@ from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .lexical import BM25, tokenize
+from .locate import locate
 from .quotes import remove_unverified_quotes
 from .rewrite import Rewrite, rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
@@ -176,6 +177,8 @@ class PersonaContext:
     today: dt.date | None = None
     # Spans, order and totals computed from checked records for questions that need them (see ``derive``).
     derived: list[str] = field(default_factory=list)
+    # Records stating the asked item, in the order they were said, for questions about the present or latest state.
+    located: list[str] = field(default_factory=list)
     # Share of the person's graded questionnaire answers at the strongest end (see ``style``); None when too few.
     extreme_rate: float | None = None
     # What other people said to the person; citable, but never the person's own view, so never trusted.
@@ -442,18 +445,20 @@ class PersonaChat:
         return self.retrieve(query, as_of, found.hints, found.alternatives, today)
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
-        """Fill ``ctx.derived`` for span, order and total questions; a failed call only leaves it empty."""
+        """Fill ``ctx.derived`` for span, order and total questions and ``ctx.located`` for questions about the
+        present or latest state; a failed call only leaves its part empty."""
+        material = "\n".join(_material_lines(ctx))
+        effort = self.settings.effective_chat_llm.effort_extract
         try:
             ctx.derived = derive(
-                self.llm,
-                messages[-1].content,
-                "\n".join(_material_lines(ctx)),
-                ctx.today or ctx.as_of or dt.date.today(),
-                ctx.ids,
-                self.settings.effective_chat_llm.effort_extract,
+                self.llm, messages[-1].content, material, ctx.today or ctx.as_of or dt.date.today(), ctx.ids, effort
             )
         except LLMError:
             ctx.derived = []
+        try:
+            ctx.located = locate(self.llm, messages[-1].content, material, _said_dates(ctx), effort)
+        except LLMError:
+            ctx.located = []
 
     def _finalize(
         self,
@@ -745,6 +750,13 @@ def _render_other(e: Expression, query: str, rank: int) -> str:
     return f"- [{e.expression_id}] {head} {e.speaker} 说「{_excerpt(e.text, query, _other_chars(rank))}」"
 
 
+def _said_dates(ctx: PersonaContext) -> dict[str, dt.date | None]:
+    """The day each retrieved record was said: an item by its latest evidence, an expression by its own date."""
+    dates: dict[str, dt.date | None] = {i.item_id: i.last_seen() for i, _ in ctx.items}
+    dates.update((e.expression_id, e.date) for e, _ in [*ctx.expressions, *ctx.others])
+    return dates
+
+
 def _material_lines(ctx: PersonaContext) -> list[str]:
     lines = ["档案条目："]
     lines.extend(_render_item(i) for i, _ in ctx.items)
@@ -784,6 +796,8 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     lines = ["【检索资料】", *_material_lines(ctx)]
     if ctx.derived:
         lines += ["", "【推算】（程序按上面资料里核对过的日期和数量算出）", *ctx.derived]
+    if ctx.located:
+        lines += ["", "【对上号】（资料里直接说到所问这一项的，按说出的日期先后排列）", *ctx.located]
     if ctx.window is not None:
         lo, hi = ctx.window
         lines += [

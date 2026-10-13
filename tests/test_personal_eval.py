@@ -48,6 +48,7 @@ from twin.evals.schema import (
 from twin.evals.stats import bootstrap_grouped
 from twin.llm import FakeLLM
 from twin.persona.chat import PersonaChat, index_persona
+from twin.persona.locate import Mentions
 from twin.persona.profile import BuildReport, ExtractDraft, build_profile
 from twin.persona.schema import ChatDraft, SourceKind
 from twin.persona.sources import parse_text
@@ -502,6 +503,8 @@ def test_cli_fake_llm_outputs_and_captured_logs(
     build_calls: list[type[BaseModel]] = []
 
     def chat_grade(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is Mentions:  # "现在喜欢什么茶" asks how things stand now, so the reply first locates mentions
+            return {"mentions": []}
         assert schema is ChatDraft
         chat_calls.append(schema)
         return grade(system, user, schema)

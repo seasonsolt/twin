@@ -28,10 +28,12 @@ from ..config import Settings
 from ..embed import Embedder, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
+from .connect import connect
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .lexical import BM25, tokenize
+from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
 from .rewrite import Rewrite, rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
@@ -41,6 +43,8 @@ from .style import extreme_rate
 from .when import time_window
 
 ITEMS_NS = "items"
+# A bracketed record id written into the reply text, with the space before it.
+INLINE_ID = re.compile(r"[ \t]*\[([A-Za-z]+_[0-9a-f]+(?:#\d+)?)\]")
 EXPRESSIONS_NS = "expressions"
 OTHERS_NS = "others"
 K_ITEMS = 12
@@ -176,6 +180,10 @@ class PersonaContext:
     today: dt.date | None = None
     # Spans, order and totals computed from checked records for questions that need them (see ``derive``).
     derived: list[str] = field(default_factory=list)
+    # Records stating the asked item, in the order they were said, for questions about the present or latest state.
+    located: list[str] = field(default_factory=list)
+    # Records joined through a shared name, time, place or person to give the asked item (see ``connect``).
+    connected: list[str] = field(default_factory=list)
     # Share of the person's graded questionnaire answers at the strongest end (see ``style``); None when too few.
     extreme_rate: float | None = None
     # What other people said to the person; citable, but never the person's own view, so never trusted.
@@ -442,18 +450,27 @@ class PersonaChat:
         return self.retrieve(query, as_of, found.hints, found.alternatives, today)
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
-        """Fill ``ctx.derived`` for span, order and total questions; a failed call only leaves it empty."""
-        try:
-            ctx.derived = derive(
-                self.llm,
-                messages[-1].content,
-                "\n".join(_material_lines(ctx)),
-                ctx.today or ctx.as_of or dt.date.today(),
-                ctx.ids,
-                self.settings.effective_chat_llm.effort_extract,
-            )
-        except LLMError:
-            ctx.derived = []
+        """Fill ``ctx.derived`` for span, order and total questions, ``ctx.located`` for questions about the
+        present or latest state and ``ctx.connected`` for questions about the person, all at once; a failed call
+        only leaves its part empty."""
+        material = "\n".join(_material_lines(ctx))
+        effort = self.settings.effective_chat_llm.effort_extract
+        question = messages[-1].content
+        today = ctx.today or ctx.as_of or dt.date.today()
+        steps: dict[str, Callable[[], list[str]]] = {
+            "derived": lambda: derive(
+                self.llm, question, material, today, ctx.ids, effort, present=needs_locating(question)
+            ),
+            "located": lambda: locate(self.llm, question, material, _said_dates(ctx), effort),
+            "connected": lambda: connect(self.llm, question, material, ctx.ids, effort),
+        }
+        with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+            futures = {name: pool.submit(copy_context().run, step) for name, step in steps.items()}
+        for name, future in futures.items():
+            try:
+                setattr(ctx, name, future.result())
+            except LLMError:
+                setattr(ctx, name, [])
 
     def _finalize(
         self,
@@ -465,11 +482,16 @@ class PersonaChat:
         persist: bool,
     ) -> ChatReply:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
+        # Record ids belong in citations, not in the text the person reads; move any the reply wrote inline.
+        inline = [m.group(1) for m in INLINE_ID.finditer(text) if m.group(1) in ctx.ids]
+        if inline:
+            text = INLINE_ID.sub(lambda m: "" if m.group(1) in ctx.ids else m.group(0), text).strip()
         # Nothing to show is a missed answer, never a blank bubble: say so honestly in the asker's language.
         empty = not text.strip()
         if empty:
             text = EMPTY_REPLY["zh" if CJK.search(messages[-1].content) else "en"]
-        citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
+        cited = [*(c.strip().strip("[]") for c in draft.citations), *inline]
+        citations = [c for c in dict.fromkeys(cited) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
         # A grounded or inferred text that did not supply the asked item is a missed answer, whatever the flags.
         missed = draft.mode in ("grounded", "inferred") and not draft.answered
@@ -745,6 +767,13 @@ def _render_other(e: Expression, query: str, rank: int) -> str:
     return f"- [{e.expression_id}] {head} {e.speaker} 说「{_excerpt(e.text, query, _other_chars(rank))}」"
 
 
+def _said_dates(ctx: PersonaContext) -> dict[str, dt.date | None]:
+    """The day each retrieved record was said: an item by its latest evidence, an expression by its own date."""
+    dates: dict[str, dt.date | None] = {i.item_id: i.last_seen() for i, _ in ctx.items}
+    dates.update((e.expression_id, e.date) for e, _ in [*ctx.expressions, *ctx.others])
+    return dates
+
+
 def _material_lines(ctx: PersonaContext) -> list[str]:
     lines = ["档案条目："]
     lines.extend(_render_item(i) for i, _ in ctx.items)
@@ -784,6 +813,15 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
     lines = ["【检索资料】", *_material_lines(ctx)]
     if ctx.derived:
         lines += ["", "【推算】（程序按上面资料里核对过的日期和数量算出）", *ctx.derived]
+    if ctx.located:
+        lines += ["", "【对上号】（资料里直接说到所问这一项的，按说出的日期先后排列）", *ctx.located]
+    if ctx.connected:
+        lines += [
+            "",
+            "【连起来】（把几条记录按共同的名字、事物、时间、地点或人连起来得出的；连接合理时据此回答，"
+            "在正文里点明依据的记录）",
+            *ctx.connected,
+        ]
     if ctx.window is not None:
         lo, hi = ctx.window
         lines += [

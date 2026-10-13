@@ -30,14 +30,14 @@ from .stats import mcnemar_exact_p
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3] / "deploy" / "asr-eval"
 KINDS = {
+    "asr-funasr": "asr_funasr.py",
     "sensevoice": "sensevoice.py",
-    "paraformer": "paraformer.py",
     "qwen3-mlx": "qwen3_mlx.py",
     "fireredasr2-aed": "fireredasr2_aed.py",
     "fun-asr-nano": "fun_asr_nano.py",
 }
-# Engines that load an installed asr-funasr pack's models with the pack's own venv.
-PACK_KINDS = ("sensevoice", "paraformer")
+# Engines that run an asr-funasr pack: its venv by default, its models, identified by its pack.toml.
+PACK_KINDS = frozenset({"asr-funasr", "sensevoice"})
 # Small files that describe a model directory; weights are covered by the directory path (a hub snapshot commit).
 _MODEL_FILES = ("config.json", "model.safetensors.index.json", "cmvn.ark", "dict.txt", "train_bpe1000.model")
 SPLITS = ("dev", "formal", "full")
@@ -70,7 +70,7 @@ class Engine:
     python: Path
     model: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
-    pack: Path | None = None  # installed asr-funasr pack whose models the pack engines load
+    pack: Path | None = None  # asr-funasr pack directory that pack-driven engines run
 
     @property
     def script(self) -> Path:
@@ -128,9 +128,9 @@ def select_items(items: Sequence[Item], split: str, size: int = DEFAULT_SIZE, se
 def load_engines(path: Path, funasr_pack: Path) -> list[Engine]:
     """TOML [[engine]] tables: name, kind, python, model, options, pack. The first engine is the baseline.
 
-    `funasr_pack` is the installed asr-funasr version directory; sensevoice and paraformer engines use its venv and
-    models unless `pack` names another version directory (packs up to 1.1.0 recognize with SenseVoice, from 1.2.0
-    with Paraformer).
+    `funasr_pack` is the installed asr-funasr version directory. Pack-driven engines use its venv and models unless
+    `pack` names another pack directory: `asr-funasr` runs the pack's own recognizer (1.2.0 on, Paraformer), and
+    `sensevoice` loads SenseVoiceSmall from a 1.1.0 or earlier pack.
     """
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     rows = data.get("engine")
@@ -145,7 +145,7 @@ def load_engines(path: Path, funasr_pack: Path) -> list[Engine]:
             raise ValueError(f"未知引擎类型 {kind!r}；可选 {'/'.join(KINDS)}")
         pack_row = row.get("pack")
         if pack_row is not None and (kind not in PACK_KINDS or not isinstance(pack_row, str)):
-            raise ValueError(f"引擎 {name} 的 pack 只用于 {'/'.join(PACK_KINDS)}，且必须是路径字符串")
+            raise ValueError(f"引擎 {name} 的 pack 只用于 asr-funasr/sensevoice，且必须是路径字符串")
         pack = (Path(pack_row).expanduser() if pack_row else funasr_pack) if kind in PACK_KINDS else None
         python = row.get("python")
         if python is None and pack is not None:
@@ -181,6 +181,8 @@ def engine_identity(engine: Engine) -> dict[str, Any]:
     if engine.kind in PACK_KINDS:
         pack = engine.pack or Path()
         model = {"pack": _sha256(pack / "pack.toml") if (pack / "pack.toml").is_file() else None}
+        if engine.kind == "asr-funasr":  # recognizes with the pack's own code, so that code is part of the engine
+            model["run"] = _sha256(pack / "run.py") if (pack / "run.py").is_file() else None
     else:
         root = Path(engine.model or "")
         model = {

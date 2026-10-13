@@ -82,7 +82,10 @@ def test_compute_reports_change_and_long_spans_when_every_quantity_is_dated() ->
     )
     assert "- 2023-12-01 事 [c]，距今天 115 天，约 16.4 周，约 3.8 个月" in lines
     assert "- 最早到最晚：相隔 76 天，约 10.9 周，约 2.5 个月" in lines
-    assert lines[-2:] == ["- 数量合计（打，2 条）：50", "- 从最早一条到最晚一条的变化（打）：-30"]
+    assert lines[-2:] == [
+        "- 数量合计（打，2 条）：50",
+        ("- 从最早一条 [a] 到最晚一条 [b] 的变化（打）：-30；先后按的是资料的日期，后提到的不一定是后发生的"),
+    ]
     assert dv.compute([fact("ghost", "2024-01-01")], TODAY, {"a"}) == []
     assert not any(line.startswith("- 以上共") for line in lines)
     assert dv.compute([fact("a")], TODAY, {"a"}) == []
@@ -231,7 +234,54 @@ def test_count_for_a_named_month_leaves_out_other_months_and_undated_things() ->
         month=(dt.date(2024, 3, 1), dt.date(2024, 3, 31)),
     )
     assert lines[-3:] == [
-        "- 2024-03 这个月内共 1 件（问个数时，这就是所问月份里找到的件数）",
-        "- 另有 1 件日期不详，不能确认在这个月，没有计入",
+        "- 2024-03 这个月内有日期的共 1 件",
+        "- 另有 1 件日期不详，没有计入；资料的说法表明它也在这个月（如说的是“这个月”）就加上，否则不加",
         "- 从 [b] 到 [a]：相隔 12 天，约 1.7 周",
     ]
+
+
+def test_running_totals_are_not_summed_and_later_changes_are_added_to_the_latest() -> None:
+    def amount(ref: str, date: str, quantity: float, kind: str) -> dv.DatedFact:
+        return dv.DatedFact(ref=ref, event="事", date=date, quantity=quantity, unit="枚", kind=kind)  # type: ignore[arg-type]
+
+    lines = dv.compute(
+        [
+            amount("a", "2024-03-01", 3, "累计"),
+            amount("b", "2024-03-10", 5, "累计"),
+            amount("c", "2024-03-05", 4, "增减"),  # before the latest total, so already in it
+            amount("d", "2024-03-20", 1, "增减"),
+        ],
+        TODAY,
+        {"a", "b", "c", "d"},
+    )
+    assert lines[-2:] == [
+        "- 现在的数量（枚）：按最新的累计数 5（2024-03-10 [b]），加上 2024-03-20 的 +1 [d]，得 6；累计数之间不要相加",
+        "- 累计数的变化（枚）：从 2024-03-01 的 3 [a] 到 2024-03-10 的 5 [b]，+2",
+    ]
+    assert not any(line.startswith("- 数量合计") for line in lines)
+
+
+def test_a_count_question_with_a_running_total_answers_from_the_total_not_the_number_of_facts() -> None:
+    facts = [
+        dv.DatedFact(ref="a", event="一共有 37 枚", date="2024-03-01", quantity=37, unit="枚", kind="累计"),
+        dv.DatedFact(ref="b", event="又添了一枚", date="2024-03-03", quantity=1, unit="枚", kind="增减"),
+    ]
+    lines = dv.compute(facts, TODAY, {"a", "b"}, count=True)
+    assert not any(line.startswith("- 以上共") for line in lines)
+    assert lines[-1].startswith(
+        "- 现在的数量（枚）：按最新的累计数 37（2024-03-01 [a]），加上 2024-03-03 的 +1 [b]，得 38"
+    )
+
+
+def test_amounts_marked_as_running_totals_are_plain_amounts_outside_a_present_question() -> None:
+    facts = [
+        dv.DatedFact(ref="a", event="改过的报价 2800", date="2024-03-01", quantity=2800, unit="元", kind="累计"),
+        dv.DatedFact(ref="b", event="最初的报价 2500", date="2024-03-05", quantity=2500, unit="元", kind="累计"),
+    ]
+    lines = dv.compute(facts, TODAY, {"a", "b"}, present=False)
+    assert not any(line.startswith(("- 现在的数量", "- 累计数的变化")) for line in lines)
+
+
+def test_a_sum_of_amounts_that_grow_by_date_says_they_may_be_one_running_total() -> None:
+    lines = dv.compute([fact("a", "2024-01-01", 3, "次"), fact("b", "2024-02-15", 5, "次")], TODAY, {"a", "b"})
+    assert f"- 数量合计（次，2 条）：8；{dv.SUM_CAVEAT}" in lines

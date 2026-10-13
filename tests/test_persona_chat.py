@@ -683,3 +683,13 @@ def test_prompt_names_today_from_today_then_as_of_then_local_date() -> None:
     assert "今天是 2024-03-01。" in pc.chat_system_prompt("测试本人", dated)
     dated.today = dt.date(2024, 3, 5)
     assert "今天是 2024-03-05。" in pc.chat_system_prompt("测试本人", dated)
+
+
+def test_record_ids_written_into_the_reply_move_to_citations(store: PersonaStore, settings: Settings) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    draft = number_draft(reply=f"三个孩子。[{item_id}] [pi_000000000000] 见 [链接]", citations=[], mode="grounded")
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: draft), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="你有几个孩子？")], persist=False)
+    # Only ids of retrieved records are taken out; anything else in brackets is left as written.
+    assert reply.reply == "三个孩子。 [pi_000000000000] 见 [链接]"
+    assert reply.citations == [item_id]

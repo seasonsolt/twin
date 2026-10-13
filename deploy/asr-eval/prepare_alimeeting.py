@@ -14,8 +14,12 @@
   `{说话人: 参考声音路径}`；供 `twin eval-asr-session`（L2/L3/L5）使用。
 - `clips/far/*.wav` + `manifest-far.jsonl`、`clips/near/*.wav` + `manifest-near.jsonl`：不与他人重叠的单句，
   `group` 为场次，格式与 eval-asr 清单相同（L1）。
-- `voices/<说话人>.wav`：取自该说话人另一场会议的近场录音、约 10 秒不与他人重叠的语音，模拟用户在 twin 里
-  录的本人参考声音；只参加一场的说话人没有参考声音，也不作为「本人」评测。
+- `voices/<说话人>.wav`：约 10 秒不与他人重叠的近场（头戴麦）语音，模拟用户在 twin 里录的本人参考声音。优先取
+  该说话人另一场会议，那一场不再把他作为「本人」评测；只参加一场的说话人（Eval 集全部如此）退而取同一场的近场
+  录音：麦克风不同，但内容与被评的远场重叠，认领结果偏乐观。`sessions.jsonl` 的 `voice_from` 记录每份参考声音
+  取自哪一场。
+
+TextGrid 层名形如 `N_SPK8013`，去掉 `N_` 前缀作为说话人，近场录音为 `<场次>_N_<说话人>.wav`。
 """
 
 from __future__ import annotations
@@ -66,7 +70,8 @@ def read_textgrid(path: Path) -> list[Turn]:
         for m in _LONG.finditer(content, offset, end):
             text = clean_text(m.group(3).replace('""', '"'))
             if text:
-                turns.append(Turn(round(float(m.group(1)), 3), round(float(m.group(2)), 3), speaker.strip(), text))
+                start, stop = round(float(m.group(1)), 3), round(float(m.group(2)), 3)
+                turns.append(Turn(start, stop, speaker.strip().removeprefix("N_"), text))
     return sorted(turns, key=lambda t: (t.start, t.end, t.speaker))
 
 
@@ -154,10 +159,9 @@ def prepare(root: Path, out: Path) -> dict[str, int]:
     for session, turns in sessions.items():
         for speaker in sorted({t.speaker for t in turns}):
             attended.setdefault(speaker, []).append(session)
-    # Reference voice: the last session (sorted) the speaker attends; that session is not scored for them.
+    # Reference voice: the last session (sorted) the speaker attends, which is then not scored for them; a speaker
+    # with a single session gets one from that session's near-field recording instead.
     for speaker, places in sorted(attended.items()):
-        if len(places) < 2:
-            continue
         source = places[-1]
         audio = near_audio(near, source, speaker)
         if audio is None:
@@ -175,7 +179,7 @@ def prepare(root: Path, out: Path) -> dict[str, int]:
         references = {
             speaker: f"voices/{speaker}.wav"
             for speaker in sorted({t.speaker for t in turns})
-            if speaker in voices and voice_source[speaker] != session
+            if speaker in voices and (voice_source[speaker] != session or len(attended[speaker]) == 1)
         }
         row = {
             "id": session,
@@ -183,6 +187,7 @@ def prepare(root: Path, out: Path) -> dict[str, int]:
             "duration": round(len(samples) / RATE, 3),
             "reference": f"sessions/{session}.json",
             "references": references,
+            "voice_from": {speaker: voice_source[speaker] for speaker in references},
         }
         lines["sessions"].append(json.dumps(row, ensure_ascii=False))
         near_cache: dict[str, np.ndarray | None] = {}

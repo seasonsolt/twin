@@ -1,4 +1,4 @@
-"""AliMeeting conversion: TextGrid parsing, mark removal, far channel 0, isolated clips and cross-session voices."""
+"""AliMeeting conversion: TextGrid parsing, mark removal, far channel 0, isolated clips and reference voices."""
 
 import importlib.util
 import json
@@ -68,11 +68,13 @@ def corpus(tmp_path: Path) -> Path:
             "SPK1": [(0.0, 6.0, "今天(SIL)我们开会"), (8.0, 14.0, "<sil>预算的事")],
             "SPK2": [(5.0, 7.0, "好的(/OVERLAP)"), (15.0, 16.0, "")],
         },
-        "R2_M2": {"SPK1": [(0.0, 12.0, "第二场我先讲")], "SPK3": [(12.5, 14.0, "嗯(~)对")]},
+        "R2_M2": {"SPK1": [(0.0, 9.0, "第二场我先讲")], "SPK3": [(9.5, 16.0, "嗯(~)对")]},
     }
     for session, tiers in sessions.items():
         (far / "textgrid_dir").mkdir(parents=True, exist_ok=True)
-        (far / "textgrid_dir" / f"{session}.TextGrid").write_text(_textgrid(tiers, 16.0), encoding="utf-8")
+        # Real tiers are named after the near-field file: N_SPK8013 for R8001_M8004_N_SPK8013.wav.
+        named = {f"N_{speaker}": intervals for speaker, intervals in tiers.items()}
+        (far / "textgrid_dir" / f"{session}.TextGrid").write_text(_textgrid(named, 16.0), encoding="utf-8")
         # Channel 0 carries 100, channel 1 carries 200: only channel 0 must reach the outputs.
         _wav(far / "audio_dir" / f"{session}_MS1.wav", [_tone(16, 100), _tone(16, 200)])
         for speaker in tiers:
@@ -118,13 +120,16 @@ def test_isolated_drops_overlapping_turns() -> None:
 def test_prepare_writes_sessions_clips_and_voices(corpus: Path, tmp_path: Path) -> None:
     out = tmp_path / "out"
     counts = prep.prepare(corpus, out)
-    assert counts == {"sessions": 2, "far_clips": 3, "near_clips": 3, "voices": 1}
+    assert counts == {"sessions": 2, "far_clips": 3, "near_clips": 3, "voices": 2}
 
     sessions = {row["id"]: row for row in _rows(out / "sessions.jsonl")}
     assert sessions["R1_M1"]["duration"] == 16.0
-    # SPK1's voice comes from R2_M2 (the last session they attend), so only R1_M1 tests SPK1 as the person.
+    # SPK1's voice comes from R2_M2 (the last session they attend), so only R1_M1 tests SPK1 as the person. SPK2 has
+    # too little isolated speech for a voice; SPK3 attends only R2_M2, so their voice falls back to that session.
     assert sessions["R1_M1"]["references"] == {"SPK1": "voices/SPK1.wav"}
-    assert sessions["R2_M2"]["references"] == {}
+    assert sessions["R1_M1"]["voice_from"] == {"SPK1": "R2_M2"}
+    assert sessions["R2_M2"]["references"] == {"SPK3": "voices/SPK3.wav"}
+    assert sessions["R2_M2"]["voice_from"] == {"SPK3": "R2_M2"}
     reference = json.loads((out / "sessions" / "R1_M1.json").read_text(encoding="utf-8"))
     assert [s["speaker"] for s in reference["segments"]] == ["SPK1", "SPK2", "SPK1"]
     assert set(_samples(out / "sessions" / "R1_M1.wav").tolist()) == {100}
@@ -142,7 +147,7 @@ def test_prepare_writes_sessions_clips_and_voices(corpus: Path, tmp_path: Path) 
     assert set(_samples(out / near[0]["audio"]).tolist()) == {300}
 
     voice = _samples(out / "voices" / "SPK1.wav")
-    assert len(voice) == 12 * 16000  # one 12 s turn already covers the 10 s target
+    assert len(voice) == 9 * 16000  # the one isolated 9 s turn: short of 10 s, but above the 5 s floor
     assert not (out / "voices" / "SPK2.wav").exists()
 
 

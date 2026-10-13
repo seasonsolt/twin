@@ -23,6 +23,9 @@ DATES: dict[str, dt.date | None] = {"a": dt.date(2024, 3, 1), "b": dt.date(2024,
         "How often do I go swimming?",
         "Where am I planning to stay on the trip?",
         "What is my sister's job?",
+        "What was my office address?",
+        "Which was the car I used for commuting?",
+        "Where were my keys?",
         "我现在住在哪？",
         "我之前的车是什么牌子？",
         "我平时几点睡？",
@@ -53,10 +56,23 @@ def test_order_checks_refs_and_puts_the_latest_last() -> None:
         "- 2024-03-20 [b] 车现在停在车库",
         "- 日期不详 [c] 提到过那辆车",
         "- 日期最晚的那条是最新的说法；它和档案条目或更早的话不一致时，以它为准；"
-        "较晚的话说的是新增或减少（“又添了一个”）时，要在之前说的数上加减",
+        "较晚的话说的是新增或减少（‘又添了一个’）时，要在之前说的数上加减。"
+        "这是资料范围内的最新已知状态，回答时保留原话中的约数和限定；记录距提问有时间间隔本身不表示没有答案",
     ]
     assert lc.order([lc.Mention(ref="c", says="提到过那辆车")], DATES) == ["- 日期不详 [c] 提到过那辆车"]
     assert lc.order([lc.Mention(ref="ghost", says="x")], DATES) == []
+
+
+@pytest.mark.parametrize("question", ["Where did I live before I moved here?", "我之前的住址是什么？"])
+def test_previous_state_keeps_the_change_as_its_reference_point(question: str) -> None:
+    lines = lc.order(
+        [lc.Mention(ref="b", says="现在住在城南"), lc.Mention(ref="a", says="现在住在城北")],
+        DATES,
+        question=question,
+    )
+    assert "[a]" in lines[0] and "[b]" in lines[1]
+    assert "变更之前的状态" in lines[-1]
+    assert "最新已知状态" not in lines[-1]
 
 
 def test_locate_only_calls_the_model_for_questions_that_need_it() -> None:

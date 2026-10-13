@@ -535,5 +535,5 @@ def parse_note(text: str, settings: Settings, title: str | None = None) -> Parse
 
 def parse_source(kind: SourceKind | None, path: Path, settings: Settings, date: dt.date | None = None) -> ParsedSource:
     if path.stat().st_size > MAX_FILE_BYTES:
-        raise ValueError("每个文件最多 50 MB")
+        raise ValueError("每个文件最多 1 GB")
     return parse_upload(path.name, path.read_bytes(), settings, kind, date)

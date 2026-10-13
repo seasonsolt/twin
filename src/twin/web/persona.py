@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import email.parser
-import email.policy
 import json
+import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import asdict
@@ -19,6 +18,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 
 from ..config import Settings
 from ..embed import Embedder
@@ -46,7 +47,7 @@ from .backends import Backends
 from .conversations import append_reply, append_user, owner
 from .jobs import JobManager, PersonaProcessing
 
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
 MAX_CHAT_TURNS = 40
 MAX_MESSAGE_CHARS = 4000
@@ -569,50 +570,41 @@ def register(
         return {"round": "initial", "job_id": job.job_id, "notice": f"{notice}，正在构建人格档案"}
 
 
-def parse_multipart(content_type: str, body: bytes) -> list[tuple[str, bytes]]:
-    """``(file name as sent, content)`` of every file part named ``files`` of a multipart/form-data body. Raises
-    ``ValueError`` when the body is not multipart."""
-    head = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("latin-1", "replace")
-    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(head + body)
-    if not message.is_multipart():
-        raise ValueError("请求体不是 multipart/form-data")
-    files: list[tuple[str, bytes]] = []
-    for part in message.iter_parts():
-        filename = part.get_filename()
-        if part.get_param("name", header="content-disposition") != "files" or filename is None:
-            continue
-        payload = part.get_payload(decode=True)
-        files.append((str(filename), payload if isinstance(payload, bytes) else b""))
-    return files
-
-
 async def read_uploads(request: Request) -> list[tuple[str, bytes]]:
-    """The ``files`` parts of a multipart/form-data request, within the size and count limits."""
+    """``(file name as sent, content)`` of every file part named ``files`` of a multipart/form-data request, within
+    the size and count limits. File parts are spooled to temporary files while the body streams in, so only the
+    contents returned are held in memory."""
     content_type = request.headers.get("content-type", "")
     if not content_type.lower().startswith("multipart/form-data"):
         raise HTTPException(400, "请用 multipart/form-data 上传文件，字段名为 files")
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
         raise _too_large()
-    chunks: list[bytes] = []
-    size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > MAX_UPLOAD_BYTES:
-            raise _too_large()
-        chunks.append(chunk)
+
+    async def limited() -> AsyncGenerator[bytes, None]:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise _too_large()
+            yield chunk
+
+    # File and field counts are checked below with a Chinese message; the byte limit already bounds both.
+    parser = MultiPartParser(request.headers, limited(), max_files=math.inf, max_fields=math.inf)
     try:
-        received = await run_in_threadpool(parse_multipart, content_type, b"".join(chunks))
-    except ValueError as e:
-        raise HTTPException(400, f"无法解析上传内容：{e}") from e
-    if not received:
-        raise HTTPException(400, "没有收到文件：请用字段名 files 上传一个或多个文件")
-    if len(received) > MAX_UPLOAD_FILES:
-        raise HTTPException(400, f"一次最多上传 {MAX_UPLOAD_FILES} 个文件")
-    return received
+        form = await parser.parse()
+    except MultiPartException as e:
+        raise HTTPException(400, f"无法解析上传内容：{e.message}") from e
+    try:
+        parts = [part for key, part in form.multi_items() if key == "files" and isinstance(part, UploadFile)]
+        if not parts:
+            raise HTTPException(400, "没有收到文件：请用字段名 files 上传一个或多个文件")
+        if len(parts) > MAX_UPLOAD_FILES:
+            raise HTTPException(400, f"一次最多上传 {MAX_UPLOAD_FILES} 个文件")
+        return [(part.filename or "", await part.read()) for part in parts]
+    finally:
+        await form.close()
 
 
 def _too_large() -> HTTPException:
-    return HTTPException(
-        status_code=413, detail=f"上传内容太大（上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB），请分批上传"
-    )
+    return HTTPException(status_code=413, detail=f"上传内容太大（上限 {MAX_UPLOAD_BYTES // 1024**3} GB），请分批上传")

@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
-MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_FILE_BYTES = 1024**3
 SUPPORTED_SUFFIXES = frozenset(
     {".pdf", ".docx", ".epub", ".html", ".htm", ".txt", ".md", ".csv", ".json", ".srt", ".vtt"}
 )
@@ -77,7 +77,7 @@ def _epub_text(data: bytes) -> str:
 
 def extract_text(name: str, data: bytes) -> str:
     if len(data) > MAX_FILE_BYTES:
-        raise ValueError("每个文件最多 50 MB")
+        raise ValueError("每个文件最多 1 GB")
     suffix = Path(name).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise ValueError("不支持的文件类型")

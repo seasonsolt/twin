@@ -474,7 +474,7 @@ export function Memories({
       />
       <p className="text-xs text-tertiary">
         TXT、Markdown、PDF、Word、EPUB、HTML、CSV、JSON、SRT、VTT；每个文件最多
-        50 MB。音频、视频最多 4
+        1 GB。音频、视频最多 4
         GB，支持断点续传。刷新后重新选择同一文件即可继续。
       </p>
     </div>

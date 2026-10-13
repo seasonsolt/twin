@@ -21,11 +21,11 @@ from twin.cli import app as cli
 from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
+from twin.persona import text as text_module
 from twin.persona.chat import PersonaChat
 from twin.persona.schema import ChatTurn, SourceKind
 from twin.persona.sources import detect_kind, extract_text, parse_upload, pseudonym
 from twin.persona.store import PersonaStore
-from twin.persona.text import MAX_FILE_BYTES
 from twin.web import create_app
 from twin.web.jobs import JobManager, PersonaProcessing
 
@@ -79,7 +79,7 @@ def pdf(text: bool) -> bytes:
     return buffer.getvalue()
 
 
-def test_file_text_formats() -> None:
+def test_file_text_formats(monkeypatch: pytest.MonkeyPatch) -> None:
     assert extract_text("tiny.PDF", pdf(True)) == "Hello memory"
     document = Document()
     document.add_paragraph("我喜欢读书。")
@@ -99,8 +99,10 @@ def test_file_text_formats() -> None:
         extract_text("scan.pdf", pdf(False))
     with pytest.raises(ValueError, match="不支持"):
         extract_text("a.exe", b"hello")
-    with pytest.raises(ValueError, match="50 MB"):
-        extract_text("big.txt", b"x" * (MAX_FILE_BYTES + 1))
+    monkeypatch.setattr(text_module, "MAX_FILE_BYTES", 8)
+    with pytest.raises(ValueError, match="1 GB"):
+        extract_text("big.txt", b"x" * 9)
+    monkeypatch.undo()
     with pytest.raises(ValueError, match="无法读取"):
         extract_text("bad.docx", b"broken")
 
@@ -290,6 +292,30 @@ def test_notes_import_status_privacy_delete_and_chat(web: tuple[TestClient, Cloc
     assert title["title"] == "我的想法"
     assert len(client.get(f"/api/persona/sources/{title['source_id']}/text").text) == 20000
     finish_build(client)
+
+
+def test_import_limits(web: tuple[TestClient, Clock, Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    from twin.web import persona
+
+    client, _clock, _settings = web
+    assert "1 GB" in persona._too_large().detail
+    monkeypatch.setattr(persona, "MAX_UPLOAD_BYTES", 1000)
+    monkeypatch.setattr(persona, "MAX_UPLOAD_FILES", 2)
+    big = client.post("/api/persona/import", files={"files": ("a.txt", b"x" * 2000)})
+    assert big.status_code == 413
+    body = b'--b\r\nContent-Disposition: form-data; name="files"; filename="a.txt"\r\n\r\n' + b"x" * 2000
+    chunked = client.post(
+        "/api/persona/import",
+        content=iter([body[:500], body[500:]]),
+        headers={"content-type": "multipart/form-data; boundary=b"},
+    )
+    assert chunked.status_code == 413 and "content-length" not in chunked.request.headers
+    many = client.post("/api/persona/import", files=[("files", (f"{i}.txt", b"hi")) for i in range(3)])
+    assert many.status_code == 400 and "一次最多上传 2 个文件" in many.json()["detail"]
+    none = client.post("/api/persona/import", data={"other": "x"}, files={"note": ("a.txt", b"hi")})
+    assert none.status_code == 400 and "没有收到文件" in none.json()["detail"]
+    broken = client.post("/api/persona/import", content=b"x", headers={"content-type": "multipart/form-data"})
+    assert broken.status_code == 400 and "无法解析上传内容" in broken.json()["detail"]
 
 
 def test_processing_endpoint_running_follow_up_and_startup_resume(

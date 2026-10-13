@@ -7,14 +7,20 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-PROMPT_VERSION = "persona-v4"
-TAXONOMY_VERSION = "v1"
+PROMPT_VERSION = "persona-v5"
+TAXONOMY_VERSION = "v2"
 
 # Content fingerprints of each released version. Changing the extraction prompts or the taxonomy without bumping
 # the version would leave every existing store on stale extractions with no rebuild, so tests pin these: a change
 # must bump PROMPT_VERSION / TAXONOMY_VERSION and add the new fingerprint below.
-PROMPT_FINGERPRINTS = {"persona-v4": "a04b10cde3156c9131d60d3faf62113dc9120dc620f6647d5874265e85424953"}
-TAXONOMY_FINGERPRINTS = {"v1": "709b4a45adf588753f44a56e67780c93d76cb5f41f48caf89e991c20c77c5624"}
+PROMPT_FINGERPRINTS = {
+    "persona-v4": "a04b10cde3156c9131d60d3faf62113dc9120dc620f6647d5874265e85424953",
+    "persona-v5": "cf0cdafbd3252d51755f38c7afbbf50c45d8ebb81b3e77cd5646b4f24b70f9c4",
+}
+TAXONOMY_FINGERPRINTS = {
+    "v1": "709b4a45adf588753f44a56e67780c93d76cb5f41f48caf89e991c20c77c5624",
+    "v2": "953fbda71005252b1746adb953d5693bf9480a38d383f4ee7e40373a3f48563f",
+}
 
 
 @dataclass(frozen=True)

@@ -36,6 +36,7 @@ from .ops.paths import TwinPaths
 from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
+from .persona.dimensions import requires_consent
 from .persona.kernel import KERNEL, rebuild_scope
 from .persona.profile import (
     KERNEL_STALE_NOTICE,
@@ -888,10 +889,12 @@ def persona_import(
             new = store.put_source(parsed)
             s = parsed.source
             span = f"{s.first_date or '—'} 至 {s.last_date or '—'}"
+            # Only a gated facet left blank keeps the twin from learning it; others are just unanswered.
+            withheld = [f for f in s.declined_facets if requires_consent(f)]
             _say(
                 f"{'导入' if new else '已更新'} {path.name}（{MEMORY_KIND_LABELS[s.kind]}）：{s.n_expressions} 条，"
                 f"本人 {s.n_target} 条，{span}"
-                + (f"；未授权细项 {'、'.join(s.declined_facets)}" if s.declined_facets else "")
+                + (f"；未授权细项 {'、'.join(withheld)}" if withheld else "")
                 + (f"；无法识别的行 {len(parsed.skipped_lines)} 行" if parsed.skipped_lines else "")
             )
 

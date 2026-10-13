@@ -61,7 +61,8 @@ def run(config: Path, *args: str, code: int = 0) -> Result:
 
 def test_import_build_coverage_and_chat_end_to_end(config: Path, tmp_path: Path) -> None:
     out = run(config, "import", "问卷_2026-08-30.md", "--kind", "questionnaire").stdout
-    assert "导入 问卷_2026-08-30.md（问卷）：1 条，本人 1 条" in out and "未授权细项 9.1" in out
+    # The blank optional 9.1 question no longer withholds anything: life facets need no consent.
+    assert "导入 问卷_2026-08-30.md（问卷）：1 条，本人 1 条" in out and "未授权" not in out
     assert "导入 群聊.txt（聊天记录）：2 条，本人 1 条" in run(config, "import", "群聊.txt", "--kind", "chat").stdout
     assert "已更新 群聊.txt" in run(config, "import", "群聊.txt", "--kind", "chat").stdout
     assert len(run(config, "sources").stdout.splitlines()) == 2
@@ -71,7 +72,7 @@ def test_import_build_coverage_and_chat_end_to_end(config: Path, tmp_path: Path)
     assert "已写入 cov.md" in cov
     md = (tmp_path / "cov.md").read_text(encoding="utf-8")
     assert "| 2.1 核心价值排序 | 了解较多 | 0.83 |  |  | 1 |  | 1 |  |" in md  # questionnaire + chat, two occasions
-    assert "| 9.1 兴趣爱好 | 未授权 |" in md
+    assert "| 9.1 兴趣爱好 | 还不了解 |" in md and "未授权" not in md
     reply = run(config, "chat", "你看重什么？").stdout
     assert (
         "张明的分身：钱到账才算。" in reply and "置信度 0.60" in reply and "依据 pi_" in reply

@@ -42,6 +42,8 @@ from .style import extreme_rate
 from .when import time_window
 
 ITEMS_NS = "items"
+# A bracketed record id written into the reply text, with the space before it.
+INLINE_ID = re.compile(r"[ \t]*\[([A-Za-z]+_[0-9a-f]+(?:#\d+)?)\]")
 EXPRESSIONS_NS = "expressions"
 OTHERS_NS = "others"
 K_ITEMS = 12
@@ -470,11 +472,16 @@ class PersonaChat:
         persist: bool,
     ) -> ChatReply:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
+        # Record ids belong in citations, not in the text the person reads; move any the reply wrote inline.
+        inline = [m.group(1) for m in INLINE_ID.finditer(text) if m.group(1) in ctx.ids]
+        if inline:
+            text = INLINE_ID.sub(lambda m: "" if m.group(1) in ctx.ids else m.group(0), text).strip()
         # Nothing to show is a missed answer, never a blank bubble: say so honestly in the asker's language.
         empty = not text.strip()
         if empty:
             text = EMPTY_REPLY["zh" if CJK.search(messages[-1].content) else "en"]
-        citations = [c for c in dict.fromkeys(c.strip().strip("[]") for c in draft.citations) if c in ctx.ids]
+        cited = [*(c.strip().strip("[]") for c in draft.citations), *inline]
+        citations = [c for c in dict.fromkeys(cited) if c in ctx.ids]
         confidence = min(max(draft.confidence, 0.0), 1.0)
         # A grounded or inferred text that did not supply the asked item is a missed answer, whatever the flags.
         missed = draft.mode in ("grounded", "inferred") and not draft.answered

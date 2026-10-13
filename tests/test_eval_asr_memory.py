@@ -48,10 +48,7 @@ def test_end_to_end_isolated_fake_run_and_resume(tmp_path):
     def handler(system, user, schema):
         if schema.__name__ == "ExtractDraft":
             return {"items": [{"facet_id": "1.1", "statement": "喜欢蓝色", "quotes": [{"n": 1, "quote": "喜欢蓝色"}]}]}
-        return {
-            "gold": [{"id": 0, "matches": [0], "entity": False, "number": False}],
-            "candidate": [{"id": 0, "matches": [0], "status": "supported", "entity": False, "number": False}],
-        }
+        return {"gold": [[0, [0], False, False]], "candidate": [[0, [0], "supported", False, False]]}
 
     llm = FakeLLM(handler)
     kwargs = dict(
@@ -74,6 +71,9 @@ def test_end_to_end_isolated_fake_run_and_resume(tmp_path):
     assert run_memory_benchmark(**kwargs)["cost"]["cache_hits"] == calls
     assert len(llm.calls) == calls
     assert (tmp_path / "out/items.jsonl").stat().st_mode & 0o777 == 0o600
+    second = {**json.loads(manifest.read_text()), "id": "unselected", "duration": 999}
+    manifest.write_text(manifest.read_text() + "\n" + json.dumps(second))
+    assert run_memory_benchmark(**kwargs, limit=1)["cost"]["audio_hours"] == pytest.approx(1 / 3600)
 
 
 def test_cli_exposes_public_eval_command():
@@ -126,6 +126,47 @@ def test_cache_replicates_are_independent_but_reruns_free(tmp_path):
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in tmp_path.glob("*.json"))
 
 
+def test_transient_retry_does_not_cache_or_log_error_messages(tmp_path, monkeypatch):
+    from twin.evals import asr_memory
+    from twin.llm import LLMError
+
+    class Reply(BaseModel):
+        value: int
+
+    class RateLimit(Exception):
+        status_code = 429
+
+    attempts = []
+    delays = []
+
+    def handler(*_):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise LLMError("sensitive-error-marker") from RateLimit()
+        return {"value": 1}
+
+    monkeypatch.setattr(asr_memory.time, "sleep", delays.append)
+    wrapper = CachedLLM(FakeLLM(handler), tmp_path, "replica", "identity")
+    assert wrapper.structured(system="s", user="u", schema=Reply).value == 1
+    assert delays == [30]
+    assert "sensitive-error-marker" not in next(tmp_path.glob("*.json")).read_text()
+
+
+def test_compact_judge_expands_without_changing_decisions():
+    from twin.evals.asr_memory import CompactJudge
+
+    wire = CompactJudge.model_validate(
+        {
+            "gold": [[0, [1], True, False]],
+            "candidate": [[0, [], "garbled", False, False], [1, [0], "supported", True, False]],
+        }
+    )
+    draft = wire.expand()
+    assert draft.gold[0].matches == [1]
+    assert draft.candidate[0].status == "garbled"
+    assert judge_counts(draft, 1, 2)["precision"] == 0.5
+
+
 def test_judge_requires_complete_valid_ids_and_separates_unsupported():
     d = JudgeDraft.model_validate(
         {
@@ -145,6 +186,20 @@ def test_judge_requires_complete_valid_ids_and_separates_unsupported():
     with pytest.raises(ValueError):
         judge_counts(d, 2, 2)
     assert judge_counts(JudgeDraft(gold=[], candidate=[]), 0, 0)["f1"] is None
+
+
+def test_judge_repairs_incomplete_coverage_once():
+    from twin.evals.asr_memory import judge
+
+    def handler(system, user, schema):
+        if "校验失败" not in user:
+            return {"gold": [], "candidate": []}
+        return {"gold": [[0, [0], False, False]], "candidate": [[0, [0], "supported", False, False]]}
+
+    llm = FakeLLM(handler)
+    counts, _ = judge(llm, [{"statement": "喜欢蓝色"}], [{"statement": "喜欢蓝色"}])
+    assert counts["f1"] == 1
+    assert len(llm.calls) == 2
 
 
 def test_pairing_uses_people_and_session_cluster_ci():

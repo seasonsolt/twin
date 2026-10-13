@@ -71,6 +71,7 @@ LAYERS: dict[str, int] = {
     "evals.asr": 8,
     "evals.diarization": 8,
     "evals.asr_session": 8,
+    "evals.asr_memory": 8,
     "service": 7,
     "api": 9,
     "mcp_server": 9,

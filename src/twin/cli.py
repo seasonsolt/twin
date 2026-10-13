@@ -1793,6 +1793,47 @@ def eval_asr_command(
     _say(f"成绩单已写入 {out / 'scorecard.md'}。")
 
 
+@app.command("eval-asr-memory")
+def eval_asr_memory_command(
+    sessions: Annotated[Path, typer.Option("--sessions", help="AliMeeting 场次清单")],
+    base_cache: Annotated[Path, typer.Option("--base-cache", help="原 ASR 缓存 JSONL")],
+    clean_cache: Annotated[Path, typer.Option("--clean-cache", help="固定 L4 方案的清洗 JSONL")],
+    llm_config: Annotated[Path, typer.Option("--llm-config", help="仅读取 TOML 的 [llm]，不访问用户数据")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外输出目录")],
+    cache: Annotated[Path, typer.Option("--cache", help="仓库外模型响应缓存")],
+    public_alimeeting: Annotated[bool, typer.Option("--public-alimeeting", help="确认仅使用公开 AliMeeting")] = False,
+    workers: Annotated[int, typer.Option("--workers", min=1, max=2)] = 2,
+    limit: Annotated[int | None, typer.Option("--limit", min=1, help="仅用于 Eval 冒烟检查的人次数")] = None,
+) -> None:
+    """L6：用原生产抽取和合并比较 gold / ASR / 清洗记忆，并测量重复抽取及裁判噪声。"""
+    import tomllib
+
+    from .config import LLMSettings, Settings, make_llm
+    from .evals.asr_memory import run_memory_benchmark
+    from .evals.personal import ensure_output_directory
+
+    if not public_alimeeting:
+        raise typer.BadParameter("必须确认 --public-alimeeting；禁止发送私人录音或资料")
+    with _errors():
+        ensure_output_directory(out, allow_in_repo=False)
+        ensure_output_directory(cache, allow_in_repo=False)
+        config = LLMSettings.model_validate(tomllib.loads(llm_config.read_text())["llm"])
+        settings = Settings(target_name="本人", llm=config)
+        llm = make_llm(config.model_copy(update={"max_retries": 0}))
+        card = run_memory_benchmark(
+            manifest=sessions,
+            base_cache=base_cache,
+            clean_cache=clean_cache,
+            out=out,
+            cache=cache,
+            settings=settings,
+            llm=llm,
+            workers=workers,
+            limit=limit,
+        )
+    _say(f"L6 已评分 {card['people']} 人次；成绩单：{out / 'scorecard.md'}")
+
+
 @app.command("eval-asr-session")
 def eval_asr_session_command(
     sessions: Annotated[

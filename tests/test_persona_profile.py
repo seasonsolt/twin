@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from twin.config import Settings
 from twin.llm import FakeLLM, LLMError, LLMTruncated
 from twin.persona import profile as pf
+from twin.persona.dimensions import FACETS
 from twin.persona.items import item_as_of
 from twin.persona.schema import EvidenceClass
 from twin.persona.sources import parse_chat, parse_questionnaire
@@ -86,6 +87,7 @@ def handler(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
     raise AssertionError(schema)
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_consent_gated_facets_need_an_answered_questionnaire_question(store: PersonaStore) -> None:
     allowed = pf.consented_facets(store)
     assert "9.1" in allowed and "9.3" not in allowed and "3.1" in allowed
@@ -93,6 +95,17 @@ def test_consent_gated_facets_need_an_answered_questionnaire_question(store: Per
     assert not any(f.startswith("9.") for f in pf.consented_facets(empty))
 
 
+def test_life_facets_are_built_from_any_source_without_a_questionnaire(settings: Settings) -> None:
+    chats = PersonaStore(":memory:")
+    chats.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    assert pf.consented_facets(chats) == frozenset(f.facet_id for f in FACETS)
+    llm = FakeLLM(handler)
+    pf.build_profile(chats, llm, settings)
+    assert "9.3" in {c.facet_id for c in chats.list_candidates()}
+    assert all("9.4" in system for name, system, _ in llm.calls if name == "ExtractDraft")
+
+
+@pytest.mark.usefixtures("gated_life_facets")
 def test_an_evaluation_can_build_gated_facets_as_if_consented(settings: Settings) -> None:
     chats = PersonaStore(":memory:")
     chats.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
@@ -107,6 +120,7 @@ def test_an_evaluation_can_build_gated_facets_as_if_consented(settings: Settings
     assert all("9.4" in system for name, system, _ in llm.calls if name == "ExtractDraft")
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_build_extracts_verified_candidates_merges_per_facet_and_is_incremental(
     store: PersonaStore, settings: Settings
 ) -> None:
@@ -266,6 +280,7 @@ def test_statement_prompts_omit_pronoun_subjects() -> None:
     assert not any(word in pf.EXTRACT_SYSTEM for word in ("回款", "首付", "公曰", "奏称", "升迁"))
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_a_failed_merge_keeps_candidates_and_is_merged_next_build(store: PersonaStore, settings: Settings) -> None:
     def merge_times_out(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
         if schema is pf.MergeDraft:

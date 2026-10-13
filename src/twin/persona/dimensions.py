@@ -41,7 +41,7 @@ DIMENSIONS: tuple[Dimension, ...] = (
     Dimension("D6", "说话方式", "slow"),
     Dimension("D7", "和人相处", "medium"),
     Dimension("D8", "最近在关注", "fast"),
-    Dimension("D9", "生活与喜好", "slow", consent_required=True),
+    Dimension("D9", "生活与喜好", "slow"),
 )
 
 FACETS: tuple[Facet, ...] = (

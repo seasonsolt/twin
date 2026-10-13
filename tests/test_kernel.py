@@ -58,14 +58,15 @@ def test_newer_and_failed_migration(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 @pytest.mark.parametrize(
     "old,new,expected",
     [
+        # A database without a recorded kernel was built by the legacy one.
         (None, LEGACY_KERNEL, "none"),
-        (None, KERNEL, "none"),
-        (None, replace(KERNEL, prompt="next"), "full"),
+        (None, KERNEL, "full"),
+        (None, replace(LEGACY_KERNEL, taxonomy="next"), "merge"),
         (KERNEL, KERNEL, "none"),
         (KERNEL, replace(KERNEL, schema=2), "none"),
-        (KERNEL, replace(KERNEL, taxonomy="v2"), "merge"),
+        (KERNEL, replace(KERNEL, taxonomy="next"), "merge"),
         (KERNEL, replace(KERNEL, prompt="next"), "full"),
-        (KERNEL, replace(KERNEL, prompt="next", taxonomy="v2"), "full"),
+        (KERNEL, replace(KERNEL, prompt="next", taxonomy="next"), "full"),
     ],
 )
 def test_scopes(old: KernelVersion | None, new: KernelVersion, expected: str) -> None:
@@ -137,7 +138,8 @@ def test_cli_status_and_gate(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["--config", str(config), "kernel", "status"])
     assert result.exit_code == 0, result.output
-    assert "default" in result.output and "待重抽分段：0" in result.output
+    # Nothing recorded means the legacy kernel, so the note waits to be extracted again; above the gate of 0.
+    assert "default" in result.output and "范围：full  待重抽分段：1" in result.output
 
     result = runner.invoke(app, ["--config", str(config), "kernel", "rebuild"])
     assert result.exit_code == 1 and "--yes" in result.output
@@ -190,10 +192,14 @@ def test_merge_key_v1_keeps_legacy_formula(monkeypatch: pytest.MonkeyPatch) -> N
         profile.PersonaCandidate.model_construct(candidate_id="a"),
     ]
     ids = [c.candidate_id for c in candidates]
+    monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, taxonomy="v1"))
     expected = hashlib.sha256("\x1f".join([PROMPT_VERSION, *sorted(ids)]).encode()).hexdigest()
     assert profile._merge_key(candidates) == expected
     monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, taxonomy="v2"))
-    assert profile._merge_key(candidates) != expected
+    assert (
+        profile._merge_key(candidates)
+        == hashlib.sha256("\x1f".join([PROMPT_VERSION, "v2", *sorted(ids)]).encode()).hexdigest()
+    )
 
 
 def test_latest_store_opens_while_other_connection_writes(tmp_path: Path) -> None:
@@ -206,16 +212,14 @@ def test_latest_store_opens_while_other_connection_writes(tmp_path: Path) -> Non
             assert store.schema_version() == len(storage._MIGRATIONS)
 
 
-@pytest.mark.parametrize("recorded", [False, True])
-def test_current_kernel_skips_rebuild_and_chunk_scan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: bool
-) -> None:
+def test_current_kernel_skips_rebuild_and_chunk_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(db_path=tmp_path / "twin.db")
     with PersonaStore(settings.db_path) as store:
         store.put_source(parse_note("我喜欢写程序", settings))
         store.set_meta("built_at", dt.datetime.now(dt.UTC).isoformat())
-        if recorded:
-            store.mark_kernel_built(KERNEL)
+        # Built without a recorded kernel means built by the legacy one, which the current kernel replaces.
+        assert profile.profile_stale(store)
+        store.mark_kernel_built(KERNEL)
         assert not profile.profile_stale(store)
 
     def unexpected(*args: object) -> None:

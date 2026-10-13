@@ -51,6 +51,7 @@ def test_identity_shape() -> None:
         identity.name = "change"
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_questionnaire_derivation_answered_declined_and_not_answered(settings: Settings) -> None:
     answered = parse_questionnaire("q.md", QUESTIONNAIRE, settings)
     declined = parse_questionnaire("declined.md", QUESTIONNAIRE.replace("周末做模型。", ""), settings)
@@ -71,6 +72,7 @@ def test_questionnaire_derivation_answered_declined_and_not_answered(settings: S
         assert "9.1" not in consented_facets(store)
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_existing_consent_table_is_untouched_and_never_read(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -104,6 +106,7 @@ def test_new_store_does_not_create_consent_table(settings: Settings) -> None:
         assert db.execute("SELECT name FROM sqlite_master WHERE name = 'p_consent'").fetchall() == []
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_questionnaire_submission_replaces_derivation(settings: Settings) -> None:
     with PersonaStore(":memory:") as store:
         first = submit_initial(store, settings, {"q19": "周末做模型。"})
@@ -120,6 +123,7 @@ def extract_model(system: str, user: str, schema: type[BaseModel]) -> dict[str, 
     return {"items": [{"facet_id": "9.1", "statement": "他喜欢做模型", "quotes": [{"n": 1, "quote": "周末做模型"}]}]}
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_declining_questionnaire_next_build_removes_items_and_vectors(settings: Settings) -> None:
     with PersonaStore(":memory:") as store:
         parsed = parse_questionnaire("q.md", QUESTIONNAIRE, settings)

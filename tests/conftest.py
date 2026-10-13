@@ -18,3 +18,13 @@ def _no_retrieval_rewrite(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
     see no rewrite; tests marked ``rewrite`` exercise the real one."""
     if request.node.get_closest_marker("rewrite") is None:
         monkeypatch.setattr("twin.persona.chat.rewrite", lambda *args, **kwargs: "")
+
+
+@pytest.fixture
+def gated_life_facets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No dimension needs questionnaire consent by default; gate D9 again so the consent mechanism stays tested."""
+    from dataclasses import replace
+
+    from twin.persona.dimensions import DIMENSION_BY_ID
+
+    monkeypatch.setitem(DIMENSION_BY_ID, "D9", replace(DIMENSION_BY_ID["D9"], consent_required=True))

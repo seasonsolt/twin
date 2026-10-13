@@ -239,6 +239,7 @@ def test_personamem_raw_response_official_score_and_prefix_cache(
     assert sum(c[0] == "ExtractDraft" for c in llm.calls) == 1
 
 
+@pytest.mark.usefixtures("gated_life_facets")
 def test_twin_questionnaire_reuse_and_no_consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     llm = fake_persona("B")
     monkeypatch.setattr(tw, "make_llm", lambda _: llm)

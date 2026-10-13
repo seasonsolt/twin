@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..llm import LLM, Effort
+from .when import named_month
 
 MAX_FACTS = 8
 
@@ -137,11 +138,19 @@ def _date_of(fact: DatedFact) -> tuple[dt.date | None, str]:
     return _iso(fact.date) or (said if fact.before is None else None), ""
 
 
-def compute(facts: list[DatedFact], today: dt.date, refs: Collection[str], *, count: bool = False) -> list[str]:
+def compute(
+    facts: list[DatedFact],
+    today: dt.date,
+    refs: Collection[str],
+    *,
+    count: bool = False,
+    month: tuple[dt.date, dt.date] | None = None,
+) -> list[str]:
     """Lines of checked facts and the spans, order and totals they imply. Facts citing an unknown record, or dated
     after ``today``, are dropped; an unparseable date is treated as missing. A date counted back from the day the
     words were said ("three months ago", "for three months") is computed here and marked as such. Undated facts
-    without a quantity are kept, and the number of things found stated, only for a ``count`` question."""
+    without a quantity are kept, and the number of things found stated, only for a ``count`` question; when it names
+    a ``month``, only the dated things inside that month are counted."""
     dated: list[tuple[DatedFact, dt.date]] = []
     undated: list[DatedFact] = []
     how: dict[int, str] = {}
@@ -170,7 +179,12 @@ def compute(facts: list[DatedFact], today: dt.date, refs: Collection[str], *, co
         for fact in undated
         for amount in [f"，数量 {_number(fact.quantity)}{fact.unit}" if fact.quantity is not None else ""]
     )
-    if count:
+    if count and month is not None:
+        inside = [fact for fact, date in dated if month[0] <= date <= month[1]]
+        lines.append(f"- {month[0]:%Y-%m} 这个月内共 {len(inside)} 件（问个数时，这就是所问月份里找到的件数）")
+        if undated:
+            lines.append(f"- 另有 {len(undated)} 件日期不详，不能确认在这个月，没有计入")
+    elif count:
         lines.append(f"- 以上共 {len(dated) + len(undated)} 件（问个数时，这就是资料里找到的符合条件的件数）")
     for (first, a), (second, b) in pairwise(dated):
         lines.append(f"- 从 [{first.ref}] 到 [{second.ref}]：相隔 {_span((b - a).days)}")
@@ -202,4 +216,5 @@ def derive(llm: LLM, question: str, material: str, today: dt.date, refs: Collect
         effort=effort,
     )
     facts = FactSheet.model_validate(sheet.model_dump()).facts
-    return compute(facts, today, refs, count=bool(COUNT.search(question)))
+    count = bool(COUNT.search(question))
+    return compute(facts, today, refs, count=count, month=named_month(question, today) if count else None)

@@ -5,7 +5,7 @@ import datetime as dt
 import pytest
 
 from twin.llm import FakeLLM
-from twin.persona.when import time_window
+from twin.persona.when import named_month, time_window
 
 TODAY = dt.date(2023, 4, 22)  # a Saturday
 
@@ -90,3 +90,23 @@ def test_the_reply_prompt_names_the_window() -> None:
     assert user.index("【时间】") < user.index("【对话】")
     plain = pc.chat_user_message([ChatTurn(role="user", content="你好")], pc.PersonaContext([], [], [], []))
     assert "【时间】" not in plain
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("How many doctor's appointments did I go to in March?", (dt.date(2024, 3, 1), dt.date(2024, 3, 31))),
+        ("What did I buy during June?", (dt.date(2023, 6, 1), dt.date(2023, 6, 30))),
+        ("How many trips in December 2022?", (dt.date(2022, 12, 1), dt.date(2022, 12, 31))),
+        ("我3月份去了几次健身房？", (dt.date(2024, 3, 1), dt.date(2024, 3, 31))),
+        ("十二月买了几本书？", (dt.date(2023, 12, 1), dt.date(2023, 12, 31))),
+        ("2023年2月去了几次", (dt.date(2023, 2, 1), dt.date(2023, 2, 28))),
+        ("三个月前买的", None),
+        ("5月前交稿了吗", None),
+        ("How many books did I read?", None),
+    ],
+)
+def test_named_month_is_the_latest_such_month_unless_a_year_is_given(
+    text: str, expected: tuple[dt.date, dt.date] | None
+) -> None:
+    assert named_month(text, dt.date(2024, 3, 25)) == expected

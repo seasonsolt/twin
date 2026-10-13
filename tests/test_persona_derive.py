@@ -220,3 +220,18 @@ def test_streamed_reply_derives_too(chat: pc.PersonaChat) -> None:
 
     assert asyncio.run(run())[-1].reply == "十天前"
     assert "【推算】" in chat.llm.calls[-1][2]
+
+
+def test_count_for_a_named_month_leaves_out_other_months_and_undated_things() -> None:
+    lines = dv.compute(
+        [fact("a", "2024-03-03", event="看医生"), fact("b", "2024-02-20", event="看牙"), fact("c", event="复诊")],
+        TODAY,
+        {"a", "b", "c"},
+        count=True,
+        month=(dt.date(2024, 3, 1), dt.date(2024, 3, 31)),
+    )
+    assert lines[-3:] == [
+        "- 2024-03 这个月内共 1 件（问个数时，这就是所问月份里找到的件数）",
+        "- 另有 1 件日期不详，不能确认在这个月，没有计入",
+        "- 从 [b] 到 [a]：相隔 12 天，约 1.7 周",
+    ]

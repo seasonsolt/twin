@@ -34,6 +34,10 @@ _YESTERDAY = re.compile(r"\byesterday\b|昨天")
 _DAY_BEFORE = re.compile(r"\bday before yesterday\b|前天")
 _LAST_WEEK = re.compile(r"\blast week\b|上(?:个)?(?:周|星期|礼拜)(?![一二三四五六日天])", re.IGNORECASE)
 _LAST_MONTH = re.compile(r"\blast month\b|上个月", re.IGNORECASE)
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+           "november", "december")  # fmt: skip
+_IN_MONTH = re.compile(rf"\b(?:in|during)\s+({'|'.join(_MONTHS)})(?:\s+(\d{{4}}))?\b", re.IGNORECASE)
+_IN_MONTH_ZH = re.compile(r"(?:(\d{4})年)?(1[0-2]|[1-9]|十[一二]?|[一二三四五六七八九])月份?(?!前|以前|之前)")
 
 
 def time_window(text: str, today: dt.date) -> tuple[dt.date, dt.date] | None:
@@ -57,3 +61,20 @@ def time_window(text: str, today: dt.date) -> tuple[dt.date, dt.date] | None:
     _, centre, slack = min(found, key=lambda f: f[0])
     # The person may mention an event a few days after it happened, so the window reaches a little further forward.
     return centre - dt.timedelta(days=slack), min(today, centre + dt.timedelta(days=slack + 2))
+
+
+def named_month(text: str, today: dt.date) -> tuple[dt.date, dt.date] | None:
+    """The calendar month a question names ("in March", "3月份"), as an inclusive date range; without a year it is
+    the latest such month not after ``today``. None when no month is named."""
+    if (english := _IN_MONTH.search(text)) is not None:
+        month, year = _MONTHS.index(english.group(1).lower()) + 1, english.group(2)
+    elif (chinese := _IN_MONTH_ZH.search(text)) is not None:
+        number = chinese.group(2)
+        tens = number[0] == "十"
+        month = int(number) if number.isdigit() else int(10 * tens + _NUMBERS.get(number[tens:], 0))
+        year = chinese.group(1)
+    else:
+        return None
+    start = dt.date(int(year) if year else today.year - (month > today.month), month, 1)
+    following = dt.date(start.year + start.month // 12, start.month % 12 + 1, 1)
+    return start, following - dt.timedelta(days=1)

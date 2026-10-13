@@ -358,8 +358,10 @@ def test_no_profile_avoids_backends(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_subscribe_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     async def check() -> None:
         async with running(tmp_path, monkeypatch, ack={"errcode": 400, "errmsg": "sensitive"}) as (runner, _):
-            await asyncio.sleep(0.03)
-            assert runner.status == "error" and runner.detail == "Bot ID 或 Secret 不对"
+            async with asyncio.timeout(3):
+                while runner.status != "error":
+                    await asyncio.sleep(0.005)
+            assert runner.detail == "Bot ID 或 Secret 不对"
 
     asyncio.run(check())
     assert "wecom bot aibTest subscribe rejected (errcode=400)" in caplog.text
@@ -382,8 +384,9 @@ def test_reconnect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kicked: bool
                 while peer.subscribe["headers"]["req_id"] == first:
                     await asyncio.sleep(0.005)
             assert time.monotonic() - stamp >= (0.06 if kicked else 0.03)
-            await asyncio.sleep(0.01)
-            assert runner.status == "connected"
+            async with asyncio.timeout(3):
+                while runner.status != "connected":
+                    await asyncio.sleep(0.005)
 
     asyncio.run(check())
 
@@ -705,8 +708,9 @@ def test_subscribe_retry_uses_bound_secret(tmp_path: Path, monkeypatch: pytest.M
         async with running(tmp_path, monkeypatch, ack={"errcode": 1}, subscribe_backoff=0.08) as (runner, peer):
             first = peer.subscribe["headers"]["req_id"]
             stamp = time.monotonic()
-            await asyncio.sleep(0.01)
-            assert runner.status == "error"
+            async with asyncio.timeout(2):
+                while runner.status != "error":
+                    await asyncio.sleep(0.005)
             async with asyncio.timeout(2):
                 while peer.subscribe["headers"]["req_id"] == first:
                     await asyncio.sleep(0.005)

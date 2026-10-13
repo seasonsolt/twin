@@ -256,3 +256,15 @@ def test_running_totals_are_not_summed_and_later_changes_are_added_to_the_latest
         "- 累计数的变化（枚）：从 2024-03-01 的 3 [a] 到 2024-03-10 的 5 [b]，+2",
     ]
     assert not any(line.startswith("- 数量合计") for line in lines)
+
+
+def test_a_count_question_with_a_running_total_answers_from_the_total_not_the_number_of_facts() -> None:
+    facts = [
+        dv.DatedFact(ref="a", event="一共有 37 枚", date="2024-03-01", quantity=37, unit="枚", kind="累计"),
+        dv.DatedFact(ref="b", event="又添了一枚", date="2024-03-03", quantity=1, unit="枚", kind="增减"),
+    ]
+    lines = dv.compute(facts, TODAY, {"a", "b"}, count=True)
+    assert not any(line.startswith("- 以上共") for line in lines)
+    assert lines[-1].startswith(
+        "- 现在的数量（枚）：按最新的累计数 37（2024-03-01 [a]），加上 2024-03-03 的 +1 [b]，得 38"
+    )

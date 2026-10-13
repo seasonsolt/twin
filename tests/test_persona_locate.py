@@ -52,7 +52,8 @@ def test_order_checks_refs_and_puts_the_latest_last() -> None:
         "- 2024-03-01 [a] 车停在楼下",
         "- 2024-03-20 [b] 车现在停在车库",
         "- 日期不详 [c] 提到过那辆车",
-        "- 日期最晚的那条是最新的说法；它和档案条目或更早的话不一致时，以它为准",
+        "- 日期最晚的那条是最新的说法；它和档案条目或更早的话不一致时，以它为准；"
+        "较晚的话说的是新增或减少（“又添了一个”）时，要在之前说的数上加减",
     ]
     assert lc.order([lc.Mention(ref="c", says="提到过那辆车")], DATES) == ["- 日期不详 [c] 提到过那辆车"]
     assert lc.order([lc.Mention(ref="ghost", says="x")], DATES) == []

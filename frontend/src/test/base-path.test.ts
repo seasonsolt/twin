@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
 import { basePath, withBase } from '../lib/base';
+import { uploadForm } from '../lib/mediaUpload';
 import { personaUrl } from '../lib/persona';
 
 describe('serving under a path prefix', () => {
@@ -33,5 +34,33 @@ describe('serving under a path prefix', () => {
     expect(personaUrl('/api/media/avatar-image', 'p1')).toBe(
       '/api/media/avatar-image?persona=p1',
     );
+  });
+
+  it('sends progress uploads through the prefix', async () => {
+    window.history.replaceState(null, '', '/twin/#/memories');
+    const opened: string[] = [];
+    class FakeXHR {
+      upload = {};
+      status = 200;
+      responseText = '{"ok":true}';
+      onload: (() => void) | null = null;
+      open(_method: string, url: string) {
+        opened.push(url);
+      }
+      setRequestHeader() {}
+      send() {
+        this.onload?.();
+      }
+      abort() {}
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
+    await uploadForm(
+      '/api/persona/import',
+      new FormData(),
+      new AbortController().signal,
+      () => {},
+    );
+    expect(opened).toEqual(['/twin/api/persona/import']);
+    vi.unstubAllGlobals();
   });
 });

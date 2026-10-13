@@ -22,7 +22,7 @@ export function uploadForm<T>(
   return new Promise((resolve, reject) => {
     signal.throwIfAborted();
     const xhr = new XMLHttpRequest();
-    xhr.open(method, path);
+    xhr.open(method, withBase(path));
     xhr.setRequestHeader('X-Twin', '1');
     xhr.setRequestHeader('X-Twin-Persona', getPersonaId());
     xhr.upload.onprogress = (event) => {

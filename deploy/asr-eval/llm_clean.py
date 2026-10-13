@@ -91,23 +91,36 @@ def complete(*, config: dict[str, Any], prompt: str, user: str, effort: str, cac
         return {**json.loads(path.read_text()), "cached": True}
     began = time.monotonic()
     # No response bodies or exception messages in errors: upstream diagnostics can contain credentials.
-    try:
-        response = httpx.post(
-            config["base_url"].rstrip("/") + "/chat/completions",
-            headers={"Authorization": "Bearer " + os.environ[config.get("api_key_env", "TWIN_LLM_KEY")]},
-            json={
-                "model": config["model"],
-                "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": user}],
-                "reasoning_effort": effort,
-                "max_tokens": 8192,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=600,
-        )
-    except httpx.HTTPError as error:
-        raise RuntimeError(f"LLM transport failed: {type(error).__name__}") from None
-    if not response.is_success:
-        raise RuntimeError(f"LLM HTTP {response.status_code}")
+    for attempt in range(5):
+        delay = 30 * 2**attempt
+        try:
+            response = httpx.post(
+                config["base_url"].rstrip("/") + "/chat/completions",
+                headers={"Authorization": "Bearer " + os.environ[config.get("api_key_env", "TWIN_LLM_KEY")]},
+                json={
+                    "model": config["model"],
+                    "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": user}],
+                    "reasoning_effort": effort,
+                    "max_tokens": 8192,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=600,
+            )
+        except httpx.HTTPError as error:
+            failure = f"LLM transport failed: {type(error).__name__}"
+        else:
+            if response.is_success:
+                break
+            failure = f"LLM HTTP {response.status_code}"
+            if response.status_code not in (408, 429) and response.status_code < 500:
+                raise RuntimeError(failure)
+            retry_after = response.headers.get("Retry-After", "")
+            if retry_after.isdigit():
+                delay = max(delay, int(retry_after))
+        if attempt == 4:
+            raise RuntimeError(failure)
+        print(f"{failure}; retry {attempt + 1}/4 after {delay}s", file=sys.stderr, flush=True)
+        time.sleep(delay)
     body = response.json()
     choice = body["choices"][0]
     if choice["finish_reason"] != "stop":
@@ -116,6 +129,7 @@ def complete(*, config: dict[str, Any], prompt: str, user: str, effort: str, cac
         "payload": json.loads(choice["message"]["content"]),
         "usage": body.get("usage", {}),
         "seconds": time.monotonic() - began,
+        "attempts": attempt + 1,
         "key": key,
     }
     private_write(path, json.dumps(result, ensure_ascii=False))

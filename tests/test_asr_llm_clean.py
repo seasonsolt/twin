@@ -1,5 +1,6 @@
 """The L4 experiment must not change attribution or silently accept malformed edits."""
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -90,3 +91,125 @@ def test_cache_key_includes_prompt_input_model_and_options():
     key = module.cache_key(**kwargs)
     for field in kwargs:
         assert module.cache_key(**{**kwargs, field: "changed"}) != key
+
+
+def test_prepare_preserves_every_voice_view_without_reading_references(tmp_path, monkeypatch):
+    module = load()
+    manifest = tmp_path / "sessions.jsonl"
+    manifest.write_text(json.dumps({"id": "meeting", "duration": 3, "reference": "must-not-read.json"}))
+    rows = [
+        {
+            "session": "meeting",
+            "target": target,
+            "segments": segments(),
+            "speakers": [{"id": "S1", "similarity": similarity}],
+            "seconds": 42,
+            "absent": ["visitor"],
+        }
+        for target, similarity in [("person", 0.7), ("~visitor", 0.1)]
+    ]
+    base = tmp_path / "base.jsonl"
+    base.write_text("\n".join(json.dumps(row) for row in rows))
+    config = tmp_path / "config.toml"
+    config.write_text('[llm]\nmodel="fake"\n')
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("faithful")
+    calls = []
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        return {
+            "payload": {"edits": [{"id": 0, "text": "我们讨论语音识别。"}]},
+            "cached": False,
+            "usage": {},
+            "seconds": 1,
+        }
+
+    monkeypatch.setattr(module, "complete", complete)
+    out = tmp_path / "clean.jsonl"
+    args = argparse.Namespace(
+        public_alimeeting=True,
+        sessions=manifest,
+        base_cache=base,
+        config=config,
+        prompt=prompt,
+        out=out,
+        cache=tmp_path / "cache",
+        batch=80,
+        workers=1,
+        effort="low",
+        guard=0.25,
+    )
+    module.prepare(args)
+    assert len(calls) == 1
+    assert "reference" not in calls[0]["user"]
+    for before, after in zip(rows, module.read_rows(out), strict=True):
+        assert {k: v for k, v in before.items() if k != "segments"} == {
+            k: v for k, v in after.items() if k != "segments"
+        }
+        assert after["segments"][0] == {**before["segments"][0], "text": "我们讨论语音识别。"}
+        assert after["segments"][1] == before["segments"][1]
+    assert out.stat().st_mode & 0o777 == 0o600
+    args.public_alimeeting = False
+    with pytest.raises(ValueError):
+        module.prepare(args)
+
+
+def test_completion_cache_avoids_network_on_rerun(tmp_path, monkeypatch):
+    module = load()
+    import httpx
+
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"edits":[]}'}}],
+                "usage": {"total_tokens": 10},
+            },
+        )
+
+    monkeypatch.setattr(module.httpx, "post", post)
+    monkeypatch.setenv("TEST_CLEAN_KEY", "test-only")
+    kwargs = dict(
+        config={"model": "fake", "base_url": "http://local.invalid/v1", "api_key_env": "TEST_CLEAN_KEY"},
+        prompt="faithful",
+        user="public fixture",
+        effort="low",
+        cache=tmp_path,
+    )
+    first = module.complete(**kwargs)
+    second = module.complete(**kwargs)
+    assert not first["cached"] and second["cached"]
+    assert first["payload"] == second["payload"] == {"edits": []}
+    assert len(calls) == 1
+    assert "test-only" not in next(tmp_path.glob("*.json")).read_text()
+
+
+def test_transient_failures_retry_with_backoff(tmp_path, monkeypatch):
+    module = load()
+    import httpx
+
+    replies = iter(
+        [
+            httpx.Response(429, headers={"Retry-After": "45"}),
+            httpx.Response(503),
+            httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": '{"edits":[]}'}}]}),
+        ]
+    )
+    delays = []
+    monkeypatch.setattr(module.httpx, "post", lambda *a, **k: next(replies))
+    monkeypatch.setattr(module.time, "sleep", delays.append)
+    monkeypatch.setenv("TEST_CLEAN_KEY", "test-only")
+    result = module.complete(
+        config={"model": "fake", "base_url": "http://local.invalid/v1", "api_key_env": "TEST_CLEAN_KEY"},
+        prompt="faithful",
+        user="public fixture",
+        effort="low",
+        cache=tmp_path,
+    )
+    assert result["payload"] == {"edits": []}
+    assert delays == [45, 60]
+    assert result["attempts"] == 3

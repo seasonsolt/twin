@@ -173,9 +173,11 @@ FORMAL_PER_TYPE = 5
 SPLITS = ("formal", "dev")
 
 
-def _per_type_sample(cases: Sequence[Case], per_type: int, seed: str, excluded: set[str]) -> set[str]:
+def _per_type_sample(
+    cases: Sequence[Case], per_type: int, seed: str, excluded: set[str], types: Sequence[str] = QUESTION_TYPES
+) -> set[str]:
     chosen: set[str] = set()
-    for question_type in QUESTION_TYPES:
+    for question_type in types:
         ids = [
             c.input.question_id
             for c in cases
@@ -195,22 +197,27 @@ def select_cases(
     per_type: int | None = None,
     seed: str = SAMPLE_SEED,
     split: str = "formal",
+    types: Sequence[str] | None = None,
 ) -> tuple[Case, ...]:
     """Slice questions in source order, or with ``per_type`` draw that many of every question type, reproducibly
     for the same data and seed, and keep them in source order. The ``dev`` split draws only from questions outside
-    the documented formal sample, so iterating on it cannot tune the twin to the formal questions."""
+    the documented formal sample, so iterating on it cannot tune the twin to the formal questions. ``types`` keeps
+    the per-type draw to those question types (each type's draw is the same as without it), to focus on a weak one."""
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
+    if types is not None and (not types or set(types) - set(QUESTION_TYPES) or per_type is None):
+        raise ValueError(f"types needs per_type and names among: {', '.join(QUESTION_TYPES)}")
+    drawn = tuple(t for t in QUESTION_TYPES if types is None or t in types)
     if split not in SPLITS:
         raise ValueError("split must be formal or dev")
     if split == "dev":
         if per_type is None:
             raise ValueError("the dev split is a seeded sample; pass per_type")
         formal = _per_type_sample(cases, FORMAL_PER_TYPE, SAMPLE_SEED, set())
-        chosen = _per_type_sample(cases, per_type, f"{seed}:dev", formal)
+        chosen = _per_type_sample(cases, per_type, f"{seed}:dev", formal, drawn)
         return tuple(c for c in cases if c.input.question_id in chosen)
     if per_type is not None:
-        chosen = _per_type_sample(cases, per_type, seed, set())
+        chosen = _per_type_sample(cases, per_type, seed, set(), drawn)
         return tuple(c for c in cases if c.input.question_id in chosen)
     selected = tuple(cases[offset : offset + limit])
     if not selected:

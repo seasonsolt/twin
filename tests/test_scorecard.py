@@ -192,6 +192,14 @@ def test_suite_runs_every_repeat_and_writes_a_comparable_scorecard(
     assert json.loads((second / "scorecard.json").read_text())["comparison"]["longmemeval"]["delta"] == 0
     assert "与基线相比" in (second / "scorecard.md").read_text()
 
+    # A baseline from another split is not compared, but the finished suite still gets its scorecard.
+    third = tmp_path / "suite3"
+    common = ["--config", str(config), "eval-suite", "--longmemeval", str(data)]
+    common += ["--baseline", str(out / "scorecard.json")]
+    result = CliRunner().invoke(app, [*common, "--out", str(third), "--split", "formal"])
+    assert result.exit_code == 0 and "Baseline not compared" in result.output
+    assert "comparison" not in json.loads((third / "scorecard.json").read_text())
+
     rebuilt = CliRunner().invoke(app, ["eval-scorecard", str(out)])
     assert rebuilt.exit_code == 0 and json.loads((out / "scorecard.json").read_text())["split"] == "dev"
     assert CliRunner().invoke(app, ["--config", str(config), "eval-suite", "--out", str(out)]).exit_code == 1

@@ -1804,7 +1804,7 @@ def eval_asr_memory_command(
     public_alimeeting: Annotated[bool, typer.Option("--public-alimeeting", help="确认仅使用公开 AliMeeting")] = False,
     workers: Annotated[int, typer.Option("--workers", min=1, max=6)] = 2,
     one_target_per_session: Annotated[
-        bool, typer.Option("--one-target-per-session", help="按 l6-test-v1 SHA256 每场选一人，不读取评分")
+        bool, typer.Option("--one-target-per-session", help="按 l6-test-v1 SHA256 每个有 L5 目标的场次选一人")
     ] = False,
     limit: Annotated[int | None, typer.Option("--limit", min=1, help="仅用于 Eval 冒烟检查的人次数")] = None,
 ) -> None:

@@ -93,8 +93,8 @@ def test_one_target_selection_uses_only_fixed_hash_and_is_order_independent():
     reordered = [session(s.id, reversed(list(s.voices))) for s in reversed(sessions)]
     assert [(s.id, t) for s, t in select_cases(reordered, one_per_session=True)] == expected
     assert len(select_cases(sessions)) == 5
-    with pytest.raises(ValueError):
-        select_cases([session("empty", [])], one_per_session=True)
+    assert select_cases([session("empty", [])], one_per_session=True) == []
+    assert [(s.id, t) for s, t in select_cases([session("empty", []), *sessions], one_per_session=True)] == expected
 
 
 def test_cli_exposes_public_eval_command():

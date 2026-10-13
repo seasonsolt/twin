@@ -336,8 +336,6 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def select_cases(sessions: list[Session], *, one_per_session: bool = False) -> list[tuple[Session, str]]:
     if not one_per_session:
         return [(session, target) for session in sessions for target in sorted(session.voices)]
-    if any(not session.voices for session in sessions):
-        raise ValueError("One-target selection requires at least one target in every session")
     return [
         (
             session,
@@ -347,6 +345,7 @@ def select_cases(sessions: list[Session], *, one_per_session: bool = False) -> l
             ),
         )
         for session in sorted(sessions, key=lambda session: session.id)
+        if session.voices
     ]
 
 
@@ -376,6 +375,11 @@ def run_memory_benchmark(
     selection = {
         "rule": "minimum sha256('l6-test-v1:' + session + ':' + target)" if one_per_session else "all L5 targets",
         "limit": limit,
+        "excluded": [
+            {"session": session.id, "reason": "no reference voices; no L5/L6 targets"}
+            for session in sessions
+            if not session.voices
+        ],
         "cases": [
             {
                 "session": session.id,

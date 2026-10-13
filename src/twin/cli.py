@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -1141,6 +1141,7 @@ def _run_longmemeval(
     call_slots: threading.Semaphore | None = None,
     judge_slots: threading.Semaphore | None = None,
     score: bool,
+    types: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     from .evals.longmemeval import load_dataset, run_evaluation, select_cases, validate_output
     from .util import fingerprint
@@ -1148,7 +1149,9 @@ def _run_longmemeval(
     out = validate_output(out)
     with dataset.open("rb") as stream:
         dataset_sha = hashlib.file_digest(stream, "sha256").hexdigest()
-    cases = select_cases(load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed, split=split)
+    cases = select_cases(
+        load_dataset(dataset), limit=limit, offset=offset, per_type=per_type, seed=seed, split=split, types=types
+    )
     configured_identity = fingerprint(
         {
             "reader": settings.effective_chat_llm.model_dump(exclude={"base_url", "api_key_env"}),
@@ -1162,6 +1165,7 @@ def _run_longmemeval(
             "offset": offset,
             **({"per_type": per_type, "seed": seed} if per_type is not None else {}),
             **({"split": split} if split != "formal" else {}),
+            **({"types": list(types)} if types is not None else {}),
             "score": score,
         }
     )
@@ -1490,6 +1494,14 @@ def eval_suite_command(
     ] = None,
     twin2k500: Annotated[Path | None, typer.Option("--twin2k500", help="Twin-2K-500 wave_split JSON/JSONL")] = None,
     lme_per_type: Annotated[int | None, typer.Option("--lme-per-type", min=1)] = None,
+    lme_types: Annotated[
+        str | None,
+        typer.Option(
+            "--lme-types",
+            help="Comma-separated LongMemEval question types to draw (default all), e.g. temporal-reasoning to "
+            "focus a round on one weak type with a larger --lme-per-type",
+        ),
+    ] = None,
     pm_sample: Annotated[int | None, typer.Option("--pm-sample", min=1)] = None,
     pm2_personas: Annotated[int | None, typer.Option("--pm2-personas", min=1)] = None,
     t2k_participants: Annotated[int | None, typer.Option("--t2k-participants", min=1)] = None,
@@ -1576,6 +1588,12 @@ def eval_suite_command(
         "pm2": pm2_personas or SUITE_SIZES[split]["pm2"],
         "t2k": t2k_participants or SUITE_SIZES[split]["t2k"],
     }
+    question_types = [t.strip() for t in lme_types.split(",") if t.strip()] if lme_types is not None else None
+    if question_types is not None:
+        from .evals.longmemeval import QUESTION_TYPES
+
+        if not question_types or set(question_types) - set(QUESTION_TYPES):
+            raise _fail("--lme-types takes question types among: " + ", ".join(QUESTION_TYPES))
     slots = threading.Semaphore(max_calls)
     judge_slots = threading.Semaphore(max_judge_calls)
     jobs: dict[str, Callable[[Settings, Path, ProfileCache | None], dict[str, Any]]] = {}
@@ -1585,7 +1603,7 @@ def eval_suite_command(
             settings, lme_dataset, run, limit=3, offset=0, per_type=sizes["lme"], seed="longmemeval-v1",
             split=split, system="twin", dry_run=False, score=True, profile_cache=cache, grant_gated=grant_gated_facets,
             prepare_workers=prepare_workers, answer_workers=answer_workers, call_slots=slots,
-            judge_slots=judge_slots,
+            judge_slots=judge_slots, types=question_types,
         )  # fmt: skip
     if personamem_questions is not None and personamem_contexts is not None:
         pm_questions, pm_contexts = personamem_questions, personamem_contexts
@@ -1657,14 +1675,23 @@ def eval_suite_command(
         metadata["profile_cache"] = profile_cache is not None
         metadata["grant_gated_facets"] = grant_gated_facets
         metadata["builds"] = builds
+        if question_types is not None:
+            metadata["lme_types"] = question_types
         metadata["prepare_workers"] = prepare_workers
         metadata["answer_workers"] = answer_workers
         metadata["max_calls"] = max_calls
         metadata["max_judge_calls"] = max_judge_calls
         card = build_scorecard(out, metadata)
-        write_scorecard(out, card, compare(card, previous) if previous is not None else None)
     except Exception:
         raise _fail("Scorecard failed; every repeat of a benchmark must finish (details hidden)") from None
+    comparison = None
+    if previous is not None:
+        try:
+            comparison = compare(card, previous)
+        except ValueError as e:
+            # Still write the scorecard: losing a finished suite to a mismatched baseline costs hours.
+            _say(f"Baseline not compared: {e}.")
+    write_scorecard(out, card, comparison)
     _say(f"Scorecard written to {out / 'scorecard.md'}.")
     if failed:
         _say("Runs with failures (counted as wrong in the scorecard): " + ", ".join(failed))

@@ -1,6 +1,6 @@
 # 语音识别评测
 
-`twin eval-asr` 在本机用同一批带人工标注的片段比较多个识别引擎，给出字错率（CER）、速度和逐条配对比较，用来判断换模型、改参数能不能让会议转写更准。第一个引擎是基线。asr-funasr 1.2.0 起线上识别改用 SeACo-Paraformer 加标点模型，评测还没有对应的引擎；目前的基线是 1.1.0 包里的 SenseVoiceSmall，下文数字都以它为准。
+`twin eval-asr` 在本机用同一批带人工标注的片段比较多个识别引擎，给出字错率（CER）、速度和逐条配对比较，用来判断换模型、改参数能不能让会议转写更准。第一个引擎是基线，通常是线上的 asr-funasr 包：1.2.0 起识别用 SeACo-Paraformer 加标点模型，1.1.0 及以前用 SenseVoiceSmall。
 
 ## 数据
 
@@ -20,7 +20,13 @@ uv run deploy/asr-eval/prepare_wenetspeech.py test_meeting-00000-of-00001.parque
 
 ```toml
 [[engine]]
-name = "sensevoice"          # 基线；python 默认为该 asr-funasr 包的 venv，模型用包内同一份权重
+name = "paraformer"          # 基线：线上识别路径；pack 默认为已安装的 current，python 默认为包的 venv
+kind = "asr-funasr"
+pack = "deploy/compute/asr-funasr"   # 也可指向仓库里的包源码（相对运行目录），评测还没安装的改动
+python = "~/Library/Application Support/twin/compute/asr-funasr/1.2.0/venv/bin/python"
+
+[[engine]]
+name = "sensevoice"          # 模型用包内同一份权重
 kind = "sensevoice"
 pack = "~/Library/Application Support/twin/compute/asr-funasr/1.1.0"   # 默认为已安装的 current；1.2.0 起不含 SenseVoice
 
@@ -32,6 +38,7 @@ model = "~/.cache/huggingface/hub/models--mlx-community--Qwen3-ASR-1.7B-8bit/sna
 options = { batch_size = 32 }
 ```
 
+- `asr-funasr`：加载包目录里的 `run.py`，构造它的 `Engine` 并调用 `Engine.recognize()`，识别、热词与标点都与线上相同，每批段数取包的设置（MPS 16）。片段已切好，不跑 VAD 和声纹。引擎身份含包的 `pack.toml` 与 `run.py`，改了识别代码就会重新转写。options 可设 `device` 与 `hotwords`（字符串列表）。需要 1.2.0 及以后的包。
 - `sensevoice`：参数对齐 `deploy/compute/asr-funasr/run.py` 转写 VAD 片段的方式：MPS、每批 16 段、`language=zh`、`use_itn=True`。片段已切好，不跑 VAD 和声纹。options 可设 `device`、`batch_size`、`language`。包里没有 SenseVoiceSmall（1.2.0 及以后）时引擎直接报错，用 `pack` 指向旧版本目录。
 - `qwen3-mlx`：Qwen3-ASR 经 mlx-audio，贪心解码，`language` 默认 `Chinese`、`max_tokens` 默认 512、`batch_size` 默认 32。
 - `fun-asr-nano`：Fun-ASR-Nano-2512 经 Transformers 原生实现（`transformers>=5.17`，不加载远程代码），model 为 `FunAudioLLM/Fun-ASR-Nano-2512-hf` 的本机目录。MPS、float32、贪心解码；options 可设 `device`、`dtype`、`batch_size`（默认 16）、`language`（默认 `zh`）、`max_new_tokens`（默认 256）。
@@ -103,14 +110,18 @@ uv run twin eval-asr --manifest ~/asr-eval/wenet-meeting/manifest.jsonl \
 
 全量逐条结果：Qwen3-ASR 的 CER 低 1.78 点（95% 区间 1.69–1.91），相对少错约 23%；逐条看 2860 条更好、1000 条更差。替换和删除都下降，删除从 2.57% 降到 2.01%。官方报告的 bf16 版本在同一测试集为 5.88%，与本机 8bit 一致。Qwen-Audio-3.1 系列只有阿里云 API，没有开放权重，录音须上传，不符合本机离线转写的约定，没有纳入。
 
-2026-10-13 在 dev 划分加入 Fun-ASR-Nano 与 FireRedASR2-AED（引擎各自默认参数，Qwen3-ASR 32 条一批）：
+2026-10-13，以线上 asr-funasr 1.2.0（SeACo-Paraformer + 标点）为基线，六个引擎各用默认参数（Qwen3-ASR 32 条一批），dev 与 formal 结论一致：
 
-| 引擎 | 严格 CER | 去口头语 CER | 比基线（95% 区间） | 变好 / 变差 | RTF |
+| 引擎 | dev CER | formal CER | formal 比基线（95% 区间） | formal 变好 / 变差 | RTF（dev） |
 | --- | --- | --- | --- | --- | --- |
-| SenseVoiceSmall（1.1.0 包） | 7.38% | 6.76% | — | — | 0.004 |
-| FireRedASR2-AED，beam 3 | **4.58%** | **3.90%** | −2.80（−3.16 至 −2.47） | 436 / 104 | 0.212 |
-| FireRedASR2-AED，beam 1 | 4.68% | 3.98% | −2.70（−3.07 至 −2.36） | 429 / 105 | 0.094 |
-| Qwen3-ASR-1.7B 8bit | 5.84% | 5.21% | −1.54（−1.85 至 −1.23） | 315 / 118 | 0.036 |
-| Fun-ASR-Nano-2512 | 6.44% | 5.73% | −0.94（−1.24 至 −0.64） | 271 / 157 | 0.059 |
+| Paraformer（1.2.0 线上） | 6.81% | 7.00% | — | — | 0.014 |
+| SenseVoiceSmall（1.1.0） | 7.38% | 8.03% | +1.03（+0.75 至 +1.30） | 139 / 270 | 0.006 |
+| FireRedASR2-AED，beam 3 | **4.58%** | **4.62%** | −2.38（−2.72 至 −2.05） | 383 / 89 | 0.137 |
+| FireRedASR2-AED，beam 1 | 4.68% | 4.73% | −2.27（−2.60 至 −1.95） | 384 / 94 | 0.064 |
+| Qwen3-ASR-1.7B 8bit | 5.84% | 5.95% | −1.05（−1.35 至 −0.77） | 263 / 139 | 0.036 |
+| Fun-ASR-Nano-2512 | 6.44% | 6.44% | −0.56（−0.88 至 −0.26） | 233 / 173 | 0.065 |
 
-FireRedASR2-AED 与官方报告的 WenetSpeech 会议集 4.53% 一致，是本机最准的开源模型，但在 MPS 上最慢：约九成时间在自回归解码，官方解码器每步都重算整段音频的交叉注意力投影，还有多次 GPU 同步。beam 1 快约 2.2 倍，CER 只升 0.1 点；要再快需要给解码器加交叉注意力缓存。批再加大反而变慢（80 条实测 beam 3：每批 16 条 RTF 0.26，32 条 0.31）。Fun-ASR-Nano 用的是 Transformers 原生实现，不是官方 FunASR 推理路径。
+- 1.2.0 换成 Paraformer 是实在的改进：比 SenseVoice 少错约 13%（formal 1.03 点）。
+- FireRedASR2-AED 是本机最准的开源模型，与官方报告的 WenetSpeech 会议集 4.53% 一致，比 Paraformer 少错约三分之一。它也最慢：时间几乎都在自回归解码，官方解码器每一步都把整段编码重新投影成交叉注意力的键和值。引擎脚本把这一投影每批只算一次（编码在解码中不变，同一条的各束共用），2000 条转写逐字不变，RTF 从 0.212 降到 0.137（beam 1：0.094 → 0.064）。beam 1 再快一倍，CER 只升约 0.1 点。批加大反而变慢（每批 32 条比 16 条慢约 17%）。
+- Fun-ASR-Nano 用的是 Transformers 原生实现，不是官方 FunASR 推理路径。
+- 这些模型的训练数据可能含 WenetSpeech 训练集，换到自己的会议录音上差距可能不同，选型前要用本人会议清单复核。

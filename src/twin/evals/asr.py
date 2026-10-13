@@ -29,11 +29,14 @@ from .stats import mcnemar_exact_p
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3] / "deploy" / "asr-eval"
 KINDS = {
+    "asr-funasr": "asr_funasr.py",
     "sensevoice": "sensevoice.py",
     "qwen3-mlx": "qwen3_mlx.py",
     "fireredasr2-aed": "fireredasr2_aed.py",
     "fun-asr-nano": "fun_asr_nano.py",
 }
+# Engines that run an asr-funasr pack: its venv by default, its models, identified by its pack.toml.
+PACK_KINDS = frozenset({"asr-funasr", "sensevoice"})
 # Small files that describe a model directory; weights are covered by the directory path (a hub snapshot commit).
 _MODEL_FILES = ("config.json", "model.safetensors.index.json", "cmvn.ark", "dict.txt", "train_bpe1000.model")
 SPLITS = ("dev", "formal", "full")
@@ -66,7 +69,7 @@ class Engine:
     python: Path
     model: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
-    pack: Path | None = None  # installed asr-funasr pack whose models the sensevoice engine loads
+    pack: Path | None = None  # asr-funasr pack directory that pack-driven engines run
 
     @property
     def script(self) -> Path:
@@ -124,8 +127,9 @@ def select_items(items: Sequence[Item], split: str, size: int = DEFAULT_SIZE, se
 def load_engines(path: Path, funasr_pack: Path) -> list[Engine]:
     """TOML [[engine]] tables: name, kind, python, model, options, pack. The first engine is the baseline.
 
-    `funasr_pack` is the installed asr-funasr version directory; sensevoice engines use its venv and models unless
-    `pack` names another version directory (packs from 1.2.0 on recognize with Paraformer, not SenseVoice).
+    `funasr_pack` is the installed asr-funasr version directory. Pack-driven engines use its venv and models unless
+    `pack` names another pack directory: `asr-funasr` runs the pack's own recognizer (1.2.0 on, Paraformer), and
+    `sensevoice` loads SenseVoiceSmall from a 1.1.0 or earlier pack.
     """
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     rows = data.get("engine")
@@ -139,16 +143,16 @@ def load_engines(path: Path, funasr_pack: Path) -> list[Engine]:
         if kind not in KINDS:
             raise ValueError(f"未知引擎类型 {kind!r}；可选 {'/'.join(KINDS)}")
         pack_row = row.get("pack")
-        if pack_row is not None and (kind != "sensevoice" or not isinstance(pack_row, str)):
-            raise ValueError(f"引擎 {name} 的 pack 只用于 sensevoice，且必须是路径字符串")
-        pack = (Path(pack_row).expanduser() if pack_row else funasr_pack) if kind == "sensevoice" else None
+        if pack_row is not None and (kind not in PACK_KINDS or not isinstance(pack_row, str)):
+            raise ValueError(f"引擎 {name} 的 pack 只用于 asr-funasr/sensevoice，且必须是路径字符串")
+        pack = (Path(pack_row).expanduser() if pack_row else funasr_pack) if kind in PACK_KINDS else None
         python = row.get("python")
         if python is None and pack is not None:
             python = str(pack / "venv" / "bin" / "python")
         model = row.get("model")
         if not isinstance(python, str) or (model is not None and not isinstance(model, str)):
             raise ValueError(f"引擎 {name} 的 python/model 必须是路径字符串")
-        if kind != "sensevoice" and model is None:
+        if kind not in PACK_KINDS and model is None:
             raise ValueError(f"引擎 {name} 需要 model（本机模型目录）")
         options = row.get("options", {})
         if not isinstance(options, dict):
@@ -173,9 +177,11 @@ def engine_identity(engine: Engine) -> dict[str, Any]:
     if probe.returncode != 0:
         raise RuntimeError(f"引擎 {engine.name} 自检失败：{probe.stderr.strip()[-500:]}")
     versions = json.loads(probe.stdout.strip().splitlines()[-1])["versions"]
-    if engine.kind == "sensevoice":
+    if engine.kind in PACK_KINDS:
         pack = engine.pack or Path()
         model = {"pack": _sha256(pack / "pack.toml") if (pack / "pack.toml").is_file() else None}
+        if engine.kind == "asr-funasr":  # recognizes with the pack's own code, so that code is part of the engine
+            model["run"] = _sha256(pack / "run.py") if (pack / "run.py").is_file() else None
     else:
         root = Path(engine.model or "")
         model = {
@@ -240,7 +246,7 @@ def transcribe(
             "options": engine.options,
             "items": [{"id": i.id, "audio": str(i.audio), "duration": i.duration} for i in todo],
         }
-        if engine.kind == "sensevoice":
+        if engine.kind in PACK_KINDS:
             request["pack"] = str(engine.pack)
         private_directory(log_dir)
         wanted = {item.id for item in todo}

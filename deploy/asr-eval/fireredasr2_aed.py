@@ -3,6 +3,7 @@
 
 用装有 fireredasr2s 的 Python 运行，model 为模型目录（含 model.pth.tar、cmvn.ark、dict.txt、train_bpe1000.model）。
 官方 FireRedAsr2.transcribe() 只认 CUDA，所以这里用它的特征提取、模型和分词器，自己把张量放到 MPS 上，
+并给解码器加交叉注意力缓存（结果逐字不变，M1 Max 上快 2～2.5 倍）；
 解码参数取官方 README 的默认值：beam_size=3、softmax_smoothing=1.25、aed_length_penalty=0.6、eos_penalty=1.0。
 按时长排序后每批 batch_size 条（默认 16）；同批特征补零到等长，由编码器掩码屏蔽。
 """
@@ -26,6 +27,31 @@ def emit(row):
     print(json.dumps(row, ensure_ascii=False), file=RESULTS, flush=True)
 
 
+def cache_cross_attention(decoder):
+    """Project the encoder output to cross-attention keys and values once per batch instead of at every step.
+
+    batch_beam_search passes the same encoder tensor to every layer at every step, and beam reordering never changes
+    it (each utterance's beams share one encoder output), so the cached projections give identical results.
+    """
+    for layer in decoder.layer_stack:
+        attention = layer.cross_attn
+        projected = {}
+
+        def forward(q, k, v, mask=None, attention=attention, projected=projected):
+            if projected.get("source") is not k:
+                bs = k.size(0)
+                projected["source"] = k
+                projected["k"] = attention.w_ks(k).view(bs, -1, attention.n_head, attention.d_k).transpose(1, 2)
+                projected["v"] = attention.w_vs(v).view(bs, -1, attention.n_head, attention.d_k).transpose(1, 2)
+            bs = q.size(0)
+            q = attention.w_qs(q).view(bs, -1, attention.n_head, attention.d_k).transpose(1, 2)
+            mask = mask.unsqueeze(1) if mask is not None else None
+            output = attention.attention(q, projected["k"], projected["v"], mask=mask)
+            return attention.fc(output.transpose(1, 2).contiguous().view(bs, -1, attention.d_model))
+
+        attention.forward = forward
+
+
 def main():
     if sys.argv[1:] == ["--identify"]:
         emit({"versions": {name: metadata.version(name) for name in PACKAGES}})
@@ -44,6 +70,7 @@ def main():
     features = ASRFeatExtractor(str(root / "cmvn.ark"))
     tokenizer = ChineseCharEnglishSpmTokenizer(str(root / "dict.txt"), str(root / "train_bpe1000.model"))
     model = load_fireredasr_aed_model(str(root / "model.pth.tar")).eval().to(device)
+    cache_cross_attention(model.decoder)
     items = sorted(request["items"], key=lambda item: item["duration"])
     for start in range(0, len(items), batch):
         part = items[start : start + batch]

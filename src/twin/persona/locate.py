@@ -17,10 +17,13 @@ from ..llm import LLM, Effort
 
 MAX_MENTIONS = 6
 
-# Questions about the present, the latest, an earlier or a habitual state. A miss only skips the step.
+# Questions about the present, the latest, an earlier or a habitual state, including ones asked in the plain present
+# tense ("What time do I get up?", "How often do I swim?"), which a later remark may have changed. A miss only skips
+# the step.
 TRIGGER = re.compile(
     r"\b(?:current(?:ly)?|now|most recent(?:ly)?|latest|recent(?:ly)?|previous(?:ly)?|used to|usually|"
-    r"normally|typically|still|anymore|these days|so far)\b|现在|目前|如今|最近|之前的|以前的|原来的|通常|平时|还在",
+    r"normally|typically|still|anymore|these days|so far|how often|(?:do|does|am|is|are) (?:I|my))\b|"
+    r"现在|目前|如今|最近|之前的|以前的|原来的|通常|平时|还在",
     re.IGNORECASE,
 )
 

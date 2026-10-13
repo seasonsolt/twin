@@ -36,6 +36,9 @@ class ConstantEmbedder:
         ("𠀀𠀁 café Straße тест123", ["𠀀𠀁", "café", "strasse", "тест123"]),
         ("", []),
         ("，。！？ -- \t", []),
+        # Regular English plurals fold onto the singular; short words and -ss/-us/-is endings stay.
+        ("Trips stories boxes classes this bus is gas", ["trip", "story", "box", "class", "this", "bus", "is", "gas"]),
+        ("dishes matches cafés", ["dish", "match", "cafés"]),
     ],
 )
 def test_tokenize(text: str, expected: list[str]) -> None:

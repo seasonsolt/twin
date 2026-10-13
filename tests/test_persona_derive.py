@@ -84,6 +84,35 @@ def test_compute_reports_change_and_long_spans_when_every_quantity_is_dated() ->
     assert dv.compute([fact("a")], TODAY, {"a"}) == []
 
 
+def test_compute_counts_dates_back_from_the_day_the_words_were_said() -> None:
+    def back(ref: str, said: str, before: float | None, unit: str, event: str, date: str = "") -> dv.DatedFact:
+        return dv.DatedFact(ref=ref, event=event, date=date, said=said, before=before, before_unit=unit)  # type: ignore[arg-type]
+
+    lines = dv.compute(
+        [
+            back("f", "2024-03-24", None, "", "参加文化节"),  # happened the day it was said
+            back("s", "2024-03-24", 3, "月", "开始上西班牙语课"),
+            back("m", "2024-03-31", 1, "月", "月末那天说的上个月"),
+            back("w", "2024-03-20", 1.5, "周", "一周半前"),
+            back("y", "2024-03-20", 1, "年", "一年前"),
+            back("x", "2024-03-20", 2, "", "没有单位就不推算"),
+            back("z", "", 2, "天", "没有说出日期就不推算", "2024-03-01"),
+        ],
+        TODAY,
+        {"f", "s", "m", "w", "y", "x", "z"},
+    )
+    assert lines[:7] == [
+        "已核对的事件（按日期先后）：",
+        "- 2023-03-20（由 2024-03-20 说的话往前推 1 年） 一年前 [y]，距今天 371 天，约 53 周，约 12.2 个月",
+        "- 2023-12-24（由 2024-03-24 说的话往前推 3 月） 开始上西班牙语课 [s]，距今天 92 天，约 13.1 周，约 3 个月",
+        "- 2024-02-29（由 2024-03-31 说的话往前推 1 月） 月末那天说的上个月 [m]，距今天 25 天，约 3.6 周",
+        "- 2024-03-01 没有说出日期就不推算 [z]，距今天 24 天，约 3.4 周",
+        "- 2024-03-10（由 2024-03-20 说的话往前推 1.5 周） 一周半前 [w]，距今天 15 天，约 2.1 周",
+        "- 2024-03-24 参加文化节 [f]，距今天 1 天",
+    ]
+    assert not any("没有单位" in line for line in lines)
+
+
 def test_derive_only_calls_the_model_for_questions_that_need_it() -> None:
     def sheet(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
         assert schema is dv.FactSheet and "【今天】2024-03-25" in user and "[a] 2024-03-15 说" in user

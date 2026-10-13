@@ -15,6 +15,17 @@ _CJK = (
 _RUNS = re.compile(f"([{_CJK}]+)|([^\\W_{_CJK}]+)")
 
 
+def _singular(word: str) -> str:
+    """Fold a regular English plural onto its singular ("trips" finds "trip"); short and -ss/-us/-is words stay."""
+    if len(word) <= 3 or not word.isascii() or not word.endswith("s") or word.endswith(("ss", "us", "is")):
+        return word
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith(("ches", "shes", "xes", "sses")):
+        return word[:-2]
+    return word[:-1]
+
+
 def tokenize(text: str) -> list[str]:
     """Normalize words and split CJK runs into bigrams, keeping isolated characters."""
     tokens: list[str] = []
@@ -23,7 +34,7 @@ def tokenize(text: str) -> list[str]:
         if cjk and len(cjk) > 1:
             tokens.extend(cjk[i : i + 2] for i in range(len(cjk) - 1))
         else:
-            tokens.append(cjk or word)
+            tokens.append(cjk or _singular(word))
     return tokens
 
 

@@ -45,35 +45,40 @@ def segments() -> list[Segment]:
 
 
 @pytest.mark.parametrize(
-    ("scores", "reference", "chosen"),
+    ("scores", "reference", "claimed", "also"),
     [
-        ([0.73, 0.5], True, "S1"),
-        ([0.6, 0.5], True, "S1"),
-        ([0.59, 0.2], True, None),
-        ([0.7, 0.61], True, None),
-        ([0.7, 0.7], True, None),
-        ([0.9, 0.1], False, None),
-        ([None, None], True, None),
-        ([0.8, None], True, None),
-        ([0.2, 0.8], True, "S2"),
+        ([0.73, 0.3], True, ["S1"], []),
+        ([0.5, 0.3], True, ["S1"], []),
+        ([0.49, 0.2], True, [], []),
+        ([0.47, 0.46], True, [], ["S2"]),  # the best is suggested; the other near miss is flagged too
+        # Diarization split the person: further clusters are claimed too, best first, from a higher bar.
+        ([0.6, 0.7], True, ["S2", "S1"], []),
+        ([0.55, 0.5], True, ["S1"], ["S2"]),  # 0.5 starts a claim but is too low to join one
+        ([0.5, 0.55], True, ["S2"], ["S1"]),
+        ([0.7, 0.47], True, ["S1"], ["S2"]),
+        ([0.9, 0.1], False, [], []),
+        ([None, None], True, [], []),
+        ([0.8, None], True, [], []),
+        ([0.2, 0.8], True, ["S2"], []),
     ],
 )
-def test_auto_pick(scores: list[float | None], reference: bool, chosen: str | None) -> None:
+def test_auto_pick(scores: list[float | None], reference: bool, claimed: list[str], also: list[str]) -> None:
     analysis = analyse(
         segments(), [Speaker(id=f"S{i + 1}", seconds=12, similarity=score) for i, score in enumerate(scores)], reference
     )
-    assert analysis.speaker == chosen
-    assert analysis.confirmed == (chosen is not None)
+    assert analysis.claimed == claimed
+    assert analysis.also_suggested == also
+    assert analysis.confirmed == analysis.automatic == bool(claimed)
     single = analyse(segments()[:1], [], False)
     assert single.confirmed and single.speaker == "S1"
 
 
 def test_single_speaker_reference_and_capability() -> None:
     for reference in (False, True):
-        for score in (None, 0.59, 0.6, 0.9):
+        for score in (None, 0.49, 0.5, 0.9):
             speakers = [Speaker(id="S1", seconds=12, similarity=score)]
             analysis = analyse(segments()[:1], speakers, reference)
-            expected = not reference or (score is not None and score >= 0.6)
+            expected = not reference or (score is not None and score >= 0.5)
             assert analysis.confirmed == expected
             assert analysis.claimed == (["S1"] if expected else [])
             undiarized = analyse(segments()[:1], speakers, reference, diarized=False)
@@ -82,9 +87,9 @@ def test_single_speaker_reference_and_capability() -> None:
             assert undiarized.also_suggested == [] and not undiarized.diarized
 
 
-def test_also_suggested_does_not_auto_claim_multiple() -> None:
+def test_near_misses_are_suggested_not_claimed() -> None:
     analysis = analyse(
-        segments(), [Speaker(id="S1", seconds=12, similarity=0.8), Speaker(id="S2", seconds=12, similarity=0.6)], True
+        segments(), [Speaker(id="S1", seconds=12, similarity=0.8), Speaker(id="S2", seconds=12, similarity=0.45)], True
     )
     assert analysis.claimed == ["S1"] and analysis.also_suggested == ["S2"]
 
@@ -285,7 +290,7 @@ def test_ingestion_sends_diarization_and_persona_reference(tmp_path: Path, with_
     payload = {
         "ok": True,
         "segments": [s.model_dump() for s in segments()],
-        "speakers": [{"id": "S1", "seconds": 12, "similarity": 0.73}, {"id": "S2", "seconds": 12, "similarity": 0.5}],
+        "speakers": [{"id": "S1", "seconds": 12, "similarity": 0.73}, {"id": "S2", "seconds": 12, "similarity": 0.3}],
     }
     reference = None
     if with_reference:

@@ -28,6 +28,7 @@ from ..config import Settings
 from ..embed import Embedder, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
+from .connect import connect
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
@@ -181,6 +182,8 @@ class PersonaContext:
     derived: list[str] = field(default_factory=list)
     # Records stating the asked item, in the order they were said, for questions about the present or latest state.
     located: list[str] = field(default_factory=list)
+    # Records joined through a shared name, time, place or person to give the asked item (see ``connect``).
+    connected: list[str] = field(default_factory=list)
     # Share of the person's graded questionnaire answers at the strongest end (see ``style``); None when too few.
     extreme_rate: float | None = None
     # What other people said to the person; citable, but never the person's own view, so never trusted.
@@ -447,20 +450,27 @@ class PersonaChat:
         return self.retrieve(query, as_of, found.hints, found.alternatives, today)
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
-        """Fill ``ctx.derived`` for span, order and total questions and ``ctx.located`` for questions about the
-        present or latest state; a failed call only leaves its part empty."""
+        """Fill ``ctx.derived`` for span, order and total questions, ``ctx.located`` for questions about the
+        present or latest state and ``ctx.connected`` for questions about the person, all at once; a failed call
+        only leaves its part empty."""
         material = "\n".join(_material_lines(ctx))
         effort = self.settings.effective_chat_llm.effort_extract
-        try:
-            question = messages[-1].content
-            today = ctx.today or ctx.as_of or dt.date.today()
-            ctx.derived = derive(self.llm, question, material, today, ctx.ids, effort, present=needs_locating(question))
-        except LLMError:
-            ctx.derived = []
-        try:
-            ctx.located = locate(self.llm, messages[-1].content, material, _said_dates(ctx), effort)
-        except LLMError:
-            ctx.located = []
+        question = messages[-1].content
+        today = ctx.today or ctx.as_of or dt.date.today()
+        steps: dict[str, Callable[[], list[str]]] = {
+            "derived": lambda: derive(
+                self.llm, question, material, today, ctx.ids, effort, present=needs_locating(question)
+            ),
+            "located": lambda: locate(self.llm, question, material, _said_dates(ctx), effort),
+            "connected": lambda: connect(self.llm, question, material, ctx.ids, effort),
+        }
+        with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+            futures = {name: pool.submit(copy_context().run, step) for name, step in steps.items()}
+        for name, future in futures.items():
+            try:
+                setattr(ctx, name, future.result())
+            except LLMError:
+                setattr(ctx, name, [])
 
     def _finalize(
         self,
@@ -805,6 +815,13 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
         lines += ["", "【推算】（程序按上面资料里核对过的日期和数量算出）", *ctx.derived]
     if ctx.located:
         lines += ["", "【对上号】（资料里直接说到所问这一项的，按说出的日期先后排列）", *ctx.located]
+    if ctx.connected:
+        lines += [
+            "",
+            "【连起来】（把几条记录按共同的名字、事物、时间、地点或人连起来得出的；连接合理时据此回答，"
+            "在正文里点明依据的记录）",
+            *ctx.connected,
+        ]
     if ctx.window is not None:
         lo, hi = ctx.window
         lines += [

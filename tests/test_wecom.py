@@ -838,6 +838,10 @@ def test_ui_channel_logging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(channels_logger, "handlers", [])
     monkeypatch.setattr(channels_logger, "level", logging.NOTSET)
     monkeypatch.setattr(channels_logger, "propagate", True)
+    auth_logger = logging.getLogger("twin.auth")
+    monkeypatch.setattr(auth_logger, "handlers", [])
+    monkeypatch.setattr(auth_logger, "level", logging.NOTSET)
+    monkeypatch.setattr(auth_logger, "propagate", True)
     monkeypatch.setattr(cli, "_settings", lambda _: Settings(db_path=tmp_path / "twin.db"))
 
     def serve(*args: Any, **kwargs: Any) -> None:
@@ -846,12 +850,15 @@ def test_ui_channel_logging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         assert handler.level == logging.INFO
         assert channels_logger.level == logging.INFO and not channels_logger.propagate
         logging.getLogger("twin.channels.wecom").info("wecom bot aibTest connected")
+        assert auth_logger.level == logging.INFO and not auth_logger.propagate
+        auth_logger.info("SSO 登录：张三")
         assert logging.getLogger().handlers == root_handlers
 
     monkeypatch.setattr(cli, "_serve", serve)
     result = CliRunner().invoke(cli.app, ["ui"])
     assert result.exit_code == 0, result.exception
     assert result.stderr.count("INFO twin.channels.wecom: wecom bot aibTest connected") == 1
+    assert result.stderr.count("INFO twin.auth: SSO 登录：张三") == 1
 
 
 def test_legacy_config_ignored(tmp_path: Path) -> None:

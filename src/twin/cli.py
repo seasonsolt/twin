@@ -621,7 +621,7 @@ def ui(
         typer.Option(
             "--allow-host",
             help="额外接受的主机名（可重复），用于反向代理或隧道后面的公网域名；只放行主机名，不改变监听地址。"
-            "公网访问前必须配置 [auth] enabled = true 及 SMTP 邮箱验证码登录",
+            "公网访问前必须配置 [auth] enabled = true，并配置 SMTP 邮箱验证码登录或同站单点登录",
         ),
     ] = None,
 ) -> None:
@@ -632,14 +632,16 @@ def ui(
     settings = _settings(ctx)
     from .web import create_app
 
-    channels_logger = logging.getLogger("twin.channels")
-    if not channels_logger.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setLevel(logging.INFO)
-        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-        channels_logger.addHandler(handler)
-    channels_logger.setLevel(logging.INFO)
-    channels_logger.propagate = False
+    # Bot connections and first single sign-on logins are worth keeping in the service log; the rest stays quiet.
+    for name in ("twin.channels", "twin.auth"):
+        service_logger = logging.getLogger(name)
+        if not service_logger.handlers:
+            handler = logging.StreamHandler(sys.stderr)
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+            service_logger.addHandler(handler)
+        service_logger.setLevel(logging.INFO)
+        service_logger.propagate = False
 
     address = host.strip().strip("[]")
     extra_hosts: tuple[str, ...] = ()

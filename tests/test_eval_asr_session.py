@@ -205,3 +205,13 @@ def test_one_run_per_session_when_the_command_compares_every_voice(tmp_path: Pat
     assert multi["speakers"]["claims"] == old["speakers"]["claims"]
     assert multi["speakers"]["claims"]["correct"] == 2  # A claims S1, B claims S2
     assert multi["person"] == old["person"]
+    # B never attends s2, yet the fake scores B's voice close to s2's S2 (C): one absent person claimed. Only the
+    # engine that compares every voice can tell.
+    assert multi["speakers"]["absent"] == {"claimed": 1, "trials": 1, "highest_similarity": 0.8}
+    assert old["speakers"]["absent"] == {"claimed": 0, "trials": 0, "highest_similarity": None}
+    assert "1 / 1（0.800）" in (tmp_path / "out" / "scorecard.md").read_text(encoding="utf-8")
+
+    # Absent people are asked about once; a rerun only rescores.
+    before = len(_calls(calls))
+    run_session_benchmark(manifest, load_session_engines(engines), tmp_path / "again", cache_dir=tmp_path / "c")
+    assert len(_calls(calls)) == before

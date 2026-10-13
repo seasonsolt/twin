@@ -5,13 +5,15 @@ An engine is a twin `[asr] command` and is driven by the same `CommandTranscribe
 uses, so the program under test is the one that runs in production. A reference voice changes only the
 similarities, so each session is transcribed once with every evaluated person's voice (asr-funasr 1.2.1+ compares
 them all in one run); a command that ignores the extra voices is run again per person. The first person's run serves
-L2/L3. Results are cached per engine identity like eval-asr, so an interrupted run resumes and an unchanged engine
-only rescores.
+L2/L3. The same run also carries voices of people from other sessions, absent from this one, to count how often the
+person would be claimed in a meeting they never attended. Results are cached per engine identity like eval-asr, so an
+interrupted run resumes and an unchanged engine only rescores.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import platform
 import time
@@ -40,6 +42,8 @@ from .diarization import (
 from .stats import mcnemar_exact_p
 
 COLLARS = (0.25, 0.0)
+MAX_VOICES = 32  # asr-funasr's `references` limit
+ABSENT = "~"  # target prefix for a person absent from the session
 Progress = Callable[[str, int, int], None]
 
 
@@ -141,10 +145,12 @@ def _key(session: str, target: str) -> str:
     return f"{session}\x1f{target}"
 
 
-def _read_runs(path: Path) -> dict[str, Run]:
+def _read_runs(path: Path) -> tuple[dict[str, Run], set[str]]:
+    """Cached runs by key, and the sessions whose run already asked about absent people."""
     runs: dict[str, Run] = {}
+    checked: set[str] = set()
     if not path.is_file():
-        return runs
+        return runs, checked
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             row = json.loads(line)
@@ -156,12 +162,22 @@ def _read_runs(path: Path) -> dict[str, Run]:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue  # a run killed mid-write leaves at most one partial last line
         runs[_key(row["session"], row["target"])] = run
-    return runs
+        if "absent" in row:
+            checked.add(row["session"])
+    return runs, checked
 
 
 def _plan(session: Session) -> list[str]:
     """Targets to run: each evaluated person, or one run without a reference voice when there is none."""
     return sorted(session.voices) or [""]
+
+
+def _absent(session: Session, sessions: Sequence[Session]) -> dict[str, Path]:
+    """Voices of people who are not in this session, in a fixed pseudo-random order, as many as fit one request."""
+    present = {u.speaker for u in session.reference}
+    voices = {spk: path for other in sessions for spk, path in other.voices.items() if spk not in present}
+    order = sorted(voices, key=lambda spk: hashlib.sha256(f"absent-v1:{session.id}:{spk}".encode()).hexdigest())
+    return {spk: voices[spk] for spk in order[: max(0, MAX_VOICES - len(session.voices))]}
 
 
 def transcribe_sessions(
@@ -171,13 +187,15 @@ def transcribe_sessions(
     progress: Progress | None = None,
     transcriber: CommandTranscriber | None = None,
 ) -> tuple[dict[str, Run], dict[str, Any]]:
-    """Return {key(session, target): Run}, running the command only for pairs missing from the engine's cache."""
+    """Return {key(session, target): Run}, running the command only for pairs missing from the engine's cache.
+    Absent people's views (target ABSENT + name) are included when the command compared their voices."""
     identity = engine_identity(engine)
     private_directory(cache_dir)
     cache = cache_dir / f"session-{engine.name}-{fingerprint(identity)[:12]}.jsonl"
-    done = _read_runs(cache)
+    done, checked = _read_runs(cache)
     wanted = [(s, t) for s in sessions for t in _plan(s)]
-    todo = [(s, t) for s, t in wanted if _key(s.id, t) not in done]
+    # A session cached before absent people were asked about is run again whole.
+    todo = [(s, t) for s, t in wanted if _key(s.id, t) not in done or s.id not in checked]
     finished = len(wanted) - len(todo)
     if progress is not None:
         progress(engine.name, finished, len(wanted))
@@ -185,29 +203,35 @@ def transcribe_sessions(
         runner = transcriber or CommandTranscriber(engine.command, engine.language)
         with _open_append(cache) as sink:
 
-            def keep(session: Session, target: str, run: Run) -> None:
+            def keep(session: Session, target: str, run: Run, absent: list[str] | None = None) -> None:
                 nonlocal finished
-                row = {
+                row: dict[str, Any] = {
                     "session": session.id,
                     "target": target,
                     "segments": [u.__dict__ for u in run.segments],
                     "speakers": [s.model_dump() for s in run.speakers],
                     "seconds": run.seconds,
                 }
+                if absent is not None:
+                    row["absent"] = absent
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")
                 sink.flush()
                 done[_key(session.id, target)] = run
-                finished += 1
-                if progress is not None:
-                    progress(engine.name, finished, len(wanted))
+                if not target.startswith(ABSENT):
+                    finished += 1
+                    if progress is not None:
+                        progress(engine.name, finished, len(wanted))
 
             for session in sessions:
                 pending = [t for s, t in todo if s is session]
+                absent = None if session.id in checked else _absent(session, sessions)
                 while pending:
                     target, others = pending[0], pending[1:]
                     runner.diarize = True
                     runner.reference = session.voices.get(target) if target else None
                     runner.references = {t: session.voices[t] for t in others}
+                    asked = {ABSENT + name: path for name, path in (absent or {}).items()}
+                    runner.references.update(asked)
                     began = time.monotonic()
                     try:
                         segments = runner.transcribe(session.audio, session.duration, lambda _done, _total: None)
@@ -215,9 +239,11 @@ def transcribe_sessions(
                         raise RuntimeError(f"引擎 {engine.name} 转写 {session.id} 失败：{error}") from None
                     utterances = [Utterance(s.start, s.end, s.speaker, s.text) for s in segments]
                     seconds = time.monotonic() - began
-                    keep(session, target, Run(utterances, list(runner.speakers), seconds))
+                    marker = sorted(absent) if absent is not None else None
+                    keep(session, target, Run(utterances, list(runner.speakers), seconds), marker)
+                    absent = None
                     pending = others
-                    for other in others:
+                    for other in [*others, *asked]:
                         # The same run seen from another person's voice; only the similarities differ.
                         values = [runner.similarities.get(s.id, {}) for s in runner.speakers]
                         if runner.speakers and all(other in v for v in values):
@@ -227,7 +253,9 @@ def transcribe_sessions(
                             ]
                             keep(session, other, Run(utterances, speakers, seconds))
                             pending = [t for t in pending if t != other]
-    return {_key(s.id, t): done[_key(s.id, t)] for s, t in wanted}, identity
+    result = {_key(s.id, t): done[_key(s.id, t)] for s, t in wanted}
+    result.update({k: v for k, v in done.items() if k.partition("\x1f")[2].startswith(ABSENT)})
+    return result, identity
 
 
 def _ratio(numerator: Sequence[float], denominator: Sequence[float], seed: str) -> dict[str, Any]:
@@ -311,6 +339,23 @@ def _person_rows(sessions: Sequence[Session], runs: dict[str, Run]) -> tuple[_Ro
     return rows, outcomes
 
 
+def _absent_claims(sessions: Sequence[Session], runs: dict[str, Run]) -> dict[str, Any]:
+    """How often a person absent from the meeting would be claimed, and their highest similarity to any speaker."""
+    claimed = trials = 0
+    highest: float | None = None
+    for session in sessions:
+        for name in _absent(session, sessions):
+            run = runs.get(_key(session.id, ABSENT + name))
+            if run is None:
+                continue
+            segments = [Segment(start=u.start, end=u.end, text=u.text, speaker=u.speaker) for u in run.segments]
+            trials += 1
+            claimed += bool(analyse(segments, run.speakers, has_reference=True).claimed)
+            best = max((sp.similarity or 0.0 for sp in run.speakers), default=0.0)
+            highest = best if highest is None else max(highest, best)
+    return {"claimed": claimed, "trials": trials, "highest_similarity": highest}
+
+
 def score_engine(name: str, sessions: Sequence[Session], runs: dict[str, Run], seed: str) -> dict[str, Any]:
     s = _session_rows(sessions, runs)
     p, outcomes = _person_rows(sessions, runs)
@@ -351,6 +396,7 @@ def score_engine(name: str, sessions: Sequence[Session], runs: dict[str, Run], s
         }
     result["speakers"]["speaker_count_error"] = sum(s.get("speaker_count_error")) / len(sessions)
     result["speakers"]["claims"] = outcomes
+    result["speakers"]["absent"] = _absent_claims(sessions, runs)
     result["person"]["auto_claimed"] = sum(p.get("auto")) / len(p.get("auto")) if p.get("auto") else None
     result["rtf"] = sum(s.get("seconds")) / sum(s.get("audio"))
     result["_rows"] = {"session": s.values, "person": p.values}
@@ -465,6 +511,12 @@ def _ci(entry: dict[str, Any]) -> str:
     return f"{_pct(entry['rate'])}（{_pct(low)}–{_pct(high)}）"
 
 
+def _absent_cell(absent: dict[str, Any]) -> str:
+    if not absent["trials"]:
+        return "—"
+    return f"{absent['claimed']} / {absent['trials']}（{absent['highest_similarity']:.3f}）"
+
+
 def render_markdown(card: dict[str, Any]) -> str:
     engines = card["engines"]
     lines = [
@@ -493,8 +545,8 @@ def render_markdown(card: dict[str, Any]) -> str:
         "## L3 说话人层",
         "",
         "| 引擎 | DER collar 0.25（95% 区间） | 漏检 / 误检 / 混淆 | DER collar 0 | cpCER（95% 区间） | 去口头语 cpCER "
-        "| 说话人数误差（场均） | 自动认领 正确 / 认错 / 未认领 | 首选正确 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 说话人数误差（场均） | 自动认领 正确 / 认错 / 未认领 | 首选正确 | 不在场误认（最高相似度） |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for e in engines:
         spk, der = e["speakers"], e["speakers"]["der_0.25"]
@@ -504,7 +556,7 @@ def render_markdown(card: dict[str, Any]) -> str:
             f"{_pct(der['confusion'])} | {_pct(spk['der_0']['rate'])} | {_ci(spk['strict']['cpcer'])} | "
             f"{_pct(spk['nofill']['cpcer']['rate'])} | {spk['speaker_count_error']:.2f} | "
             f"{claims['correct']} / {claims['wrong']} / {claims['none']}（共 {claims['people']}） | "
-            f"{claims['suggested_correct']} |"
+            f"{claims['suggested_correct']} | {_absent_cell(spk['absent'])} |"
         )
     if card["people"]:
         lines += [

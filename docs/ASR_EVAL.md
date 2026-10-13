@@ -133,7 +133,7 @@ uv run twin eval-asr-session --sessions ~/asr-eval/alimeeting/eval/sessions.json
   --engines ~/asr-eval/session-engines.toml --out ~/asr-eval/runs/<日期>-<改动>
 ```
 
-每场按带 `diarize` 的请求转写，一次带上这场所有被评测本人的参考声音（`reference` 加 `references`）。参考声音只影响相似度，不影响识别和聚类；asr-funasr 1.2.1 起一次返回每个说话人对每份声音的相似度，每场只跑一次；更早的包忽略 `references`，评测自动退回每人各跑一次。没有参考声音的场次跑一次。L2 用同一次带 diarize 的输出、忽略说话人：线上开启 diarize 时 `run.py` 按声纹窗口重新切分，与不开启时不同。结果按引擎身份（命令、language、`files` 的摘要）缓存在清单旁的 `asr-cache/`，中断后只补缺的场次。
+每场按带 `diarize` 的请求转写，一次带上这场所有被评测本人的参考声音（`reference` 加 `references`）。参考声音只影响相似度，不影响识别和聚类；asr-funasr 1.2.1 起一次返回每个说话人对每份声音的相似度，每场只跑一次；更早的包忽略 `references`，评测自动退回每人各跑一次。没有参考声音的场次跑一次。同一次请求还带上其他场次的人（不在这场会议里）的声音，凑满 32 份，看 twin 会不会把不在场的人认领成本人：L3 的「不在场误认」列给出次数和他们与任一说话人的最高相似度，调认领门槛时它必须保持为 0；更早的包不比较多份声音，这一列为「—」。L2 用同一次带 diarize 的输出、忽略说话人：线上开启 diarize 时 `run.py` 按声纹窗口重新切分，与不开启时不同。结果按引擎身份（命令、language、`files` 的摘要）缓存在清单旁的 `asr-cache/`，中断后只补缺的场次。
 
 **评分。** 文字归一化与片段评测相同。
 

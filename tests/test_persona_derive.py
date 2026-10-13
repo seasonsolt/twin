@@ -231,7 +231,28 @@ def test_count_for_a_named_month_leaves_out_other_months_and_undated_things() ->
         month=(dt.date(2024, 3, 1), dt.date(2024, 3, 31)),
     )
     assert lines[-3:] == [
-        "- 2024-03 这个月内共 1 件（问个数时，这就是所问月份里找到的件数）",
-        "- 另有 1 件日期不详，不能确认在这个月，没有计入",
+        "- 2024-03 这个月内有日期的共 1 件",
+        "- 另有 1 件日期不详，没有计入；资料的说法表明它也在这个月（如说的是“这个月”）就加上，否则不加",
         "- 从 [b] 到 [a]：相隔 12 天，约 1.7 周",
     ]
+
+
+def test_running_totals_are_not_summed_and_later_changes_are_added_to_the_latest() -> None:
+    def amount(ref: str, date: str, quantity: float, kind: str) -> dv.DatedFact:
+        return dv.DatedFact(ref=ref, event="事", date=date, quantity=quantity, unit="枚", kind=kind)  # type: ignore[arg-type]
+
+    lines = dv.compute(
+        [
+            amount("a", "2024-03-01", 3, "累计"),
+            amount("b", "2024-03-10", 5, "累计"),
+            amount("c", "2024-03-05", 4, "增减"),  # before the latest total, so already in it
+            amount("d", "2024-03-20", 1, "增减"),
+        ],
+        TODAY,
+        {"a", "b", "c", "d"},
+    )
+    assert lines[-2:] == [
+        "- 现在的数量（枚）：按最新的累计数 5（2024-03-10 [b]），加上 2024-03-20 的 +1 [d]，得 6；累计数之间不要相加",
+        "- 累计数的变化（枚）：从 2024-03-01 的 3 [a] 到 2024-03-10 的 5 [b]，+2",
+    ]
+    assert not any(line.startswith("- 数量合计") for line in lines)

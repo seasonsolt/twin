@@ -3,6 +3,10 @@ updates an earlier one only in passing ("I've moved the bike to the garage now")
 the earlier state, so the reply tends to answer from the item or to say nothing is recorded. The model lists every
 record that states the asked item; code checks the ids and orders them by the day they were said, so the reply sees
 the latest statement as the latest.
+
+The model's listing varies from call to call, and a record it skips once (often the later one, when an earlier one
+calls itself "the most recent") is usually listed on another try, so the step asks twice at once and keeps every
+record either answer names.
 """
 
 from __future__ import annotations
@@ -10,12 +14,17 @@ from __future__ import annotations
 import datetime as dt
 import re
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 from pydantic import BaseModel, Field
 
-from ..llm import LLM, Effort
+from ..llm import LLM, Effort, LLMError
 
 MAX_MENTIONS = 6
+# Independent listings merged per question; a failed one only leaves the others.
+SAMPLES = 2
+MAX_LISTED = MAX_MENTIONS * SAMPLES
 
 # Questions about the present, the latest, an earlier or a habitual state, including ones asked in the plain present
 # tense ("What time do I get up?", "How often do I swim?"), which a later remark may have changed. A miss only skips
@@ -64,20 +73,36 @@ def locate(llm: LLM, question: str, material: str, dates: Mapping[str, dt.date |
     said, or None when undated."""
     if not needs_locating(question):
         return []
-    found = llm.structured(
-        system=LOCATE_SYSTEM,
-        user=f"【问题】\n{question}\n\n【资料】\n{material}",
-        schema=Mentions,
-        effort=effort,
-    )
-    return order(Mentions.model_validate(found.model_dump()).mentions, dates, question=question)
+
+    def listing() -> list[Mention]:
+        found = llm.structured(
+            system=LOCATE_SYSTEM,
+            user=f"【问题】\n{question}\n\n【资料】\n{material}",
+            schema=Mentions,
+            effort=effort,
+        )
+        return Mentions.model_validate(found.model_dump()).mentions[:MAX_MENTIONS]
+
+    with ThreadPoolExecutor(max_workers=SAMPLES) as pool:
+        pending = [pool.submit(copy_context().run, listing) for _ in range(SAMPLES)]
+    listings: list[list[Mention]] = []
+    failure: LLMError | None = None
+    for future in pending:
+        try:
+            listings.append(future.result())
+        except LLMError as exc:
+            failure = exc
+    if not listings and failure is not None:
+        raise failure
+    return order([mention for listed in listings for mention in listed], dates, question=question)
 
 
 def order(mentions: list[Mention], dates: Mapping[str, dt.date | None], *, question: str = "") -> list[str]:
-    """Checked mentions, one per record, dated ones in the order they were said and undated ones after them."""
+    """Checked mentions, one per record (the first wording kept), dated ones in the order they were said and undated
+    ones after them."""
     seen: dict[str, Mention] = {}
-    for mention in mentions[:MAX_MENTIONS]:
-        if mention.ref in dates and mention.says.strip() and mention.ref not in seen:
+    for mention in mentions:
+        if mention.ref in dates and mention.says.strip() and mention.ref not in seen and len(seen) < MAX_LISTED:
             seen[mention.ref] = mention
     if not seen:
         return []

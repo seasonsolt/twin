@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from twin.llm import FakeLLM
+from twin.llm import FakeLLM, LLMError
 from twin.persona import locate as lc
 
 DATES: dict[str, dt.date | None] = {"a": dt.date(2024, 3, 1), "b": dt.date(2024, 3, 20), "c": None}
@@ -86,3 +87,45 @@ def test_locate_only_calls_the_model_for_questions_that_need_it() -> None:
     assert lc.locate(llm, "Where do I keep my bike now?", "- [b] …", DATES, "low")[0] == (
         "- 2024-03-20 [b] bike is in the garage now"
     )
+
+
+def test_locate_keeps_every_record_either_listing_names() -> None:
+    answers = iter(
+        [
+            {"mentions": [{"ref": "a", "says": "车停在楼下"}]},
+            {"mentions": [{"ref": "b", "says": "车现在停在车库"}, {"ref": "a", "says": "另一种说法"}]},
+        ]
+    )
+    lock = threading.Lock()
+
+    def found(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        with lock:
+            return next(answers)
+
+    llm = FakeLLM(found)
+    lines = lc.locate(llm, "Where do I keep my bike now?", "- [a] …\n- [b] …", DATES, "low")
+    assert len(llm.calls) == lc.SAMPLES
+    assert [line.split("]")[0] for line in lines[:2]] == ["- 2024-03-01 [a", "- 2024-03-20 [b"]
+    assert len(lines) == 3
+
+
+def test_locate_uses_the_listing_that_succeeds_and_fails_only_when_all_do() -> None:
+    calls = iter([True, False])
+    lock = threading.Lock()
+
+    def flaky(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        with lock:
+            ok = next(calls)
+        if not ok:
+            raise LLMError("down")
+        return {"mentions": [{"ref": "b", "says": "车现在停在车库"}]}
+
+    assert lc.locate(FakeLLM(flaky), "Where do I keep my bike now?", "- [b] …", DATES, "low")[0].startswith(
+        "- 2024-03-20 [b]"
+    )
+
+    def down(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise LLMError("down")
+
+    with pytest.raises(LLMError):
+        lc.locate(FakeLLM(down), "Where do I keep my bike now?", "- [b] …", DATES, "low")

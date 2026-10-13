@@ -1,6 +1,6 @@
 # 语音识别评测
 
-`twin eval-asr` 在本机用同一批带人工标注的片段比较多个识别引擎，给出字错率（CER）、速度和逐条配对比较，用来判断换模型、改参数能不能让会议转写更准。第一个引擎是基线。asr-funasr 1.2.0 起线上识别改用 SeACo-Paraformer 加标点模型，评测还没有对应的引擎；目前的基线是 1.1.0 包里的 SenseVoiceSmall，下文数字都以它为准。
+`twin eval-asr` 在本机用同一批带人工标注的片段比较多个识别引擎，给出字错率（CER）、速度和逐条配对比较，用来判断换模型、改参数能不能让会议转写更准。第一个引擎是基线。asr-funasr 1.2.0 起线上识别改用 SeACo-Paraformer 加标点模型，对应引擎 `paraformer`；下文已有结论的基线是 1.1.0 包里的 SenseVoiceSmall。
 
 ## 分层
 
@@ -47,6 +47,7 @@ model = "~/.cache/huggingface/hub/models--mlx-community--Qwen3-ASR-1.7B-8bit/sna
 options = { batch_size = 32 }
 ```
 
+- `paraformer`：SeACo-Paraformer 加标点，直接调用包内 `run.py` 的 `Engine.recognize()`，模型、设备选择和标点与线上同一份代码；需要 1.2.0 及以后的包。options 可设 `device`、`batch_size`（默认取包的设置）、`hotwords`（字符串列表）。
 - `sensevoice`：参数对齐 `deploy/compute/asr-funasr/run.py` 转写 VAD 片段的方式：MPS、每批 16 段、`language=zh`、`use_itn=True`。片段已切好，不跑 VAD 和声纹。options 可设 `device`、`batch_size`、`language`。包里没有 SenseVoiceSmall（1.2.0 及以后）时引擎直接报错，用 `pack` 指向旧版本目录。
 - `qwen3-mlx`：Qwen3-ASR 经 mlx-audio，贪心解码，`language` 默认 `Chinese`、`max_tokens` 默认 512、`batch_size` 默认 32。
 - `fun-asr-nano`：Fun-ASR-Nano-2512 经 Transformers 原生实现（`transformers>=5.17`，不加载远程代码），model 为 `FunAudioLLM/Fun-ASR-Nano-2512-hf` 的本机目录。MPS、float32、贪心解码；options 可设 `device`、`dtype`、`batch_size`（默认 16）、`language`（默认 `zh`）、`max_new_tokens`（默认 256）。
@@ -114,7 +115,7 @@ uv run deploy/asr-eval/prepare_alimeeting.py <解压目录>/Eval_Ali --out ~/asr
 
 - `sessions.jsonl`：每场 `{id, audio, duration, reference, references}`，`reference` 指向 `{"segments": [{start, end, speaker, text}]}`，`references` 为 `{说话人: 参考声音}`。
 - `manifest-far.jsonl` / `manifest-near.jsonl`：不与他人重叠的单句，`group` 为场次，直接交给 `twin eval-asr` 得到同一批音频的 L1。近场是干净音频的对照。
-- `voices/<说话人>.wav`：取自该说话人最后一场会议的近场录音、约 10 秒，模拟本人参考声音；那一场不再把他当「本人」评测，只参加一场的人不评测本人。
+- `voices/<说话人>.wav`：约 10 秒不与他人重叠的近场录音，模拟本人参考声音。优先取该说话人最后一场会议，那一场不再把他当「本人」评测；只参加一场的人取同一场的近场录音。AliMeeting Eval/Test 里每人只参加一场，所以全部是同场取样：麦克风不同，但内容与被评的远场重叠，自动认领结果偏乐观，与线上「另录一段本人声音」相比是上限。`sessions.jsonl` 的 `voice_from` 记录取自哪一场；孤立语音不足 5 秒的人没有参考声音。
 
 **引擎。** TOML 的每个 `[[engine]]` 写 `name`、`command`（twin `[asr] command` 的写法），可选 `language`（默认 `zh`）和 `files`（计入引擎身份的文件，如算力包的 `pack.toml`）。线上引擎的 `command` 照抄 `twin.toml` 里 `twin compute install asr-funasr` 写入的那一行；算力包目录随系统而定（macOS 默认 `~/Library/Application Support/twin/compute`，可用 `TWIN_COMPUTE_HOME` 改）：
 
@@ -132,7 +133,7 @@ uv run twin eval-asr-session --sessions ~/asr-eval/alimeeting/eval/sessions.json
   --engines ~/asr-eval/session-engines.toml --out ~/asr-eval/runs/<日期>-<改动>
 ```
 
-每场按带 `diarize` 的请求转写；有参考声音的说话人各跑一次（参考声音只影响相似度，不影响识别和聚类，但包不输出质心，只能重跑），没有时跑一次。L2 用同一次带 diarize 的输出、忽略说话人：线上开启 diarize 时 `run.py` 按声纹窗口重新切分，与不开启时不同。结果按引擎身份（命令、language、`files` 的摘要）缓存在清单旁的 `asr-cache/`，中断后只补缺的场次。
+每场按带 `diarize` 的请求转写，一次带上这场所有被评测本人的参考声音（`reference` 加 `references`）。参考声音只影响相似度，不影响识别和聚类；asr-funasr 1.2.1 起一次返回每个说话人对每份声音的相似度，每场只跑一次；更早的包忽略 `references`，评测自动退回每人各跑一次。没有参考声音的场次跑一次。L2 用同一次带 diarize 的输出、忽略说话人：线上开启 diarize 时 `run.py` 按声纹窗口重新切分，与不开启时不同。结果按引擎身份（命令、language、`files` 的摘要）缓存在清单旁的 `asr-cache/`，中断后只补缺的场次。
 
 **评分。** 文字归一化与片段评测相同。
 

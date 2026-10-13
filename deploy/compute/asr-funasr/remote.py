@@ -53,6 +53,15 @@ def build_request(payload, hotwords):
     }
     if len(files) == 2:
         meta["reference_suffix"] = files[1].suffix
+    references = payload.get("references")
+    if isinstance(references, dict):
+        voices = [
+            (name, Path(path))
+            for name, path in references.items()
+            if isinstance(path, str) and Path(path).is_absolute() and Path(path).is_file() and Path(path).stat().st_size
+        ]
+        meta["references"] = [{"name": n, "bytes": path.stat().st_size, "suffix": path.suffix} for n, path in voices]
+        files += [path for _, path in voices]
     if isinstance(payload.get("hotwords"), list):
         meta["hotwords"] = payload["hotwords"]
     elif hotwords:

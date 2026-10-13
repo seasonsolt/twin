@@ -8,21 +8,29 @@ import pytest
 
 from twin.evals.asr_session import load_session_engines, load_sessions, run_session_benchmark
 
-# A stand-in for a twin [asr] command: replies with canned segments per audio file, gives S1 a high similarity
-# whenever a reference voice is sent, and logs every request so tests can count runs.
+# A stand-in for a twin [asr] command: replies with canned segments per audio file, scores A's voice close to S1 and
+# any other voice close to S2, and logs every request so tests can count runs. With a third argument "multi" it also
+# answers `references` like asr-funasr 1.2.1; without it, it ignores them like older packs.
 FAKE_COMMAND = """
 import json, sys
 from pathlib import Path
 plan = json.loads(Path(sys.argv[1]).read_text())
+multi = sys.argv[3:] == ["multi"]
 request = json.load(sys.stdin)
 with open(sys.argv[2], "a") as log:
     log.write(json.dumps({"audio": Path(request["audio"]).stem, "reference": bool(request.get("reference"))}) + "\\n")
 segments = plan[Path(request["audio"]).stem]
 ids = sorted({s["speaker"] for s in segments})
-speakers = [
-    {"id": i, "seconds": 1.0, "similarity": (0.8 if i == "S1" else 0.3) if request.get("reference") else None}
-    for i in ids
-]
+
+def score(voice, speaker):
+    return 0.8 if speaker == ("S1" if Path(voice).stem == "A" else "S2") else 0.3
+
+speakers = []
+for i in ids:
+    row = {"id": i, "seconds": 1.0, "similarity": score(request["reference"], i) if request.get("reference") else None}
+    if multi and request.get("references"):
+        row["similarities"] = {name: score(voice, i) for name, voice in request["references"].items()}
+    speakers.append(row)
 print(json.dumps({"ok": True, "segments": segments, "speakers": speakers}))
 """
 
@@ -172,3 +180,28 @@ def test_engine_identity_changes_with_hashed_files(tmp_path: Path) -> None:
     plan.write_text(plan.read_text() + " ", encoding="utf-8")
     run_session_benchmark(manifest, load_session_engines(engines)[:1], tmp_path / "o2", cache_dir=cache)
     assert len(_calls(calls)) == before + 2
+
+
+def test_one_run_per_session_when_the_command_compares_every_voice(tmp_path: Path) -> None:
+    manifest, _, calls = _setup(tmp_path)
+    # Evaluate both A and B in s1 (B's voice is a stand-in file; only its name matters to the fake).
+    (manifest.parent / "voices" / "B.wav").write_bytes(b"RIFF")
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    rows[0]["references"] = {"A": "voices/A.wav", "B": "voices/B.wav"}
+    manifest.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    script, plan = tmp_path / "fake.py", tmp_path / "good.json"
+    blocks = [
+        f'[[engine]]\nname = "{name}"\ncommand = "{sys.executable} {script} {plan} {calls}{suffix}"\n'
+        for name, suffix in (("multi", " multi"), ("old", ""))
+    ]
+    engines = tmp_path / "pair.toml"
+    engines.write_text("\n".join(blocks), encoding="utf-8")
+
+    card = run_session_benchmark(manifest, load_session_engines(engines), tmp_path / "out", cache_dir=tmp_path / "c")
+
+    s1 = [c for c in _calls(calls) if c["audio"] == "s1"]
+    assert len(s1) == 3  # the multi engine once, the old engine once per person
+    multi, old = card["engines"]
+    assert multi["speakers"]["claims"] == old["speakers"]["claims"]
+    assert multi["speakers"]["claims"]["correct"] == 2  # A claims S1, B claims S2
+    assert multi["person"] == old["person"]

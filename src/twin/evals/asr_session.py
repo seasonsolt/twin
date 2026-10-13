@@ -2,9 +2,11 @@
 labelled sessions, then score segmentation, speakers and what the twin keeps as the person's words.
 
 An engine is a twin `[asr] command` and is driven by the same `CommandTranscriber` and `analyse()` the upload path
-uses, so the program under test is the one that runs in production. Each session is transcribed once per person
-evaluated in it (the reference voice changes only the similarities; the first run serves L2/L3). Results are cached
-per engine identity like eval-asr, so an interrupted run resumes and an unchanged engine only rescores.
+uses, so the program under test is the one that runs in production. A reference voice changes only the
+similarities, so each session is transcribed once with every evaluated person's voice (asr-funasr 1.2.1+ compares
+them all in one run); a command that ignores the extra voices is run again per person. The first person's run serves
+L2/L3. Results are cached per engine identity like eval-asr, so an interrupted run resumes and an unchanged engine
+only rescores.
 """
 
 from __future__ import annotations
@@ -182,30 +184,49 @@ def transcribe_sessions(
     if todo:
         runner = transcriber or CommandTranscriber(engine.command, engine.language)
         with _open_append(cache) as sink:
-            for session, target in todo:
-                runner.diarize = True
-                runner.reference = session.voices.get(target) if target else None
-                began = time.monotonic()
-                try:
-                    segments = runner.transcribe(session.audio, session.duration, lambda _done, _total: None)
-                except RuntimeError as error:
-                    raise RuntimeError(f"引擎 {engine.name} 转写 {session.id} 失败：{error}") from None
-                seconds = time.monotonic() - began
+
+            def keep(session: Session, target: str, run: Run) -> None:
+                nonlocal finished
                 row = {
                     "session": session.id,
                     "target": target,
-                    "segments": [s.model_dump() for s in segments],
-                    "speakers": [s.model_dump() for s in runner.speakers],
-                    "seconds": seconds,
+                    "segments": [u.__dict__ for u in run.segments],
+                    "speakers": [s.model_dump() for s in run.speakers],
+                    "seconds": run.seconds,
                 }
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")
                 sink.flush()
-                done[_key(session.id, target)] = Run(
-                    [Utterance(s.start, s.end, s.speaker, s.text) for s in segments], list(runner.speakers), seconds
-                )
+                done[_key(session.id, target)] = run
                 finished += 1
                 if progress is not None:
                     progress(engine.name, finished, len(wanted))
+
+            for session in sessions:
+                pending = [t for s, t in todo if s is session]
+                while pending:
+                    target, others = pending[0], pending[1:]
+                    runner.diarize = True
+                    runner.reference = session.voices.get(target) if target else None
+                    runner.references = {t: session.voices[t] for t in others}
+                    began = time.monotonic()
+                    try:
+                        segments = runner.transcribe(session.audio, session.duration, lambda _done, _total: None)
+                    except RuntimeError as error:
+                        raise RuntimeError(f"引擎 {engine.name} 转写 {session.id} 失败：{error}") from None
+                    utterances = [Utterance(s.start, s.end, s.speaker, s.text) for s in segments]
+                    seconds = time.monotonic() - began
+                    keep(session, target, Run(utterances, list(runner.speakers), seconds))
+                    pending = others
+                    for other in others:
+                        # The same run seen from another person's voice; only the similarities differ.
+                        values = [runner.similarities.get(s.id, {}) for s in runner.speakers]
+                        if runner.speakers and all(other in v for v in values):
+                            speakers = [
+                                s.model_copy(update={"similarity": v[other]})
+                                for s, v in zip(runner.speakers, values, strict=True)
+                            ]
+                            keep(session, other, Run(utterances, speakers, seconds))
+                            pending = [t for t in pending if t != other]
     return {_key(s.id, t): done[_key(s.id, t)] for s, t in wanted}, identity
 
 

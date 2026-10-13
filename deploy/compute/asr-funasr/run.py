@@ -17,6 +17,7 @@ from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("pack.toml")
 MAX_HOTWORDS = 200
+MAX_REFERENCES = 32
 
 
 def parse_request(payload):
@@ -35,7 +36,24 @@ def parse_request(payload):
     reference = Path(reference) if isinstance(reference, str) else None
     if reference is not None and (not reference.is_absolute() or not reference.is_file()):
         reference = None
-    return audio, language, diarize, reference, parse_hotwords(payload.get("hotwords"))
+    return audio, language, diarize, reference, parse_hotwords(payload.get("hotwords")), parse_references(payload)
+
+
+def parse_references(payload):
+    """Optional {name: absolute voice path}: every speaker is compared with each voice in one run. Like `reference`,
+    a voice that is missing is skipped rather than failing the job."""
+    value = payload.get("references")
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_REFERENCES:
+        raise ValueError(f"references 必须是最多 {MAX_REFERENCES} 项的 {{名称: 路径}}")
+    result = {}
+    for name, path in value.items():
+        if not isinstance(name, str) or not 0 < len(name) <= 80 or not isinstance(path, str):
+            raise ValueError("references 的名称和路径必须是字符串")
+        if Path(path).is_absolute() and Path(path).is_file():
+            result[name] = Path(path)
+    return result
 
 
 def parse_hotwords(value):
@@ -225,7 +243,7 @@ class Engine:
                 raise ValueError("声纹批量健康检查失败")
         return {"ok": True, "device": self.device, "models": 4, "sample_seconds": 1, "embedding_dimensions": 192}
 
-    def transcribe(self, audio, diarize, reference, hotwords, progress):
+    def transcribe(self, audio, diarize, reference, hotwords, progress, references=None):
         import librosa
 
         np = self.np
@@ -279,12 +297,21 @@ class Engine:
                     )
         speakers = []
         if diarize:
-            ref = self.embed(librosa.load(str(reference), sr=16000, mono=True)[0]) if reference and centroids else None
+
+            def voice(path):
+                return self.embed(librosa.load(str(path), sr=16000, mono=True)[0])
+
+            ref = voice(reference) if reference and centroids else None
+            voices = {name: voice(path) for name, path in (references or {}).items()} if centroids else {}
             for label in order:
                 value = float(np.dot(ref, centroids[label])) if ref is not None and label in centroids else None
-                speakers.append(
-                    {"id": names[label], "seconds": round(totals[label], 2), "similarity": similarity(value)}
-                )
+                speaker = {"id": names[label], "seconds": round(totals[label], 2), "similarity": similarity(value)}
+                if references:
+                    speaker["similarities"] = {
+                        name: similarity(float(np.dot(vec, centroids[label])) if label in centroids else None)
+                        for name, vec in voices.items()
+                    }
+                speakers.append(speaker)
         return {"ok": True, "segments": segments, **({"speakers": speakers} if diarize else {})}
 
 
@@ -292,29 +319,38 @@ def run(request=None, *, device="auto", check=False):
     engine = Engine(device)
     if check:
         return engine.check()
-    audio, _language, diarize, reference, hotwords = request
-    return engine.transcribe(audio, diarize, reference, hotwords, report)
+    audio, _language, diarize, reference, hotwords, references = request
+    return engine.transcribe(audio, diarize, reference, hotwords, report, references)
 
 
 def read_upload(stream, length, directory):
-    """Body: one JSON line {language, diarize, hotwords, audio_bytes/suffix, reference_bytes/suffix}, then the files."""
+    """Body: one JSON line {language, diarize, hotwords, audio_bytes/suffix, reference_bytes/suffix,
+    references: [{name, bytes, suffix}]}, then the files in that order."""
     header = stream.readline(65536)
     if not header.endswith(b"\n"):
         raise ValueError("请求无效")
     meta = json.loads(header)
     if not isinstance(meta, dict):
         raise ValueError("请求无效")
-    sizes = [meta.get("audio_bytes"), meta.get("reference_bytes", 0)]
+    extra = meta.get("references", [])
+    if not isinstance(extra, list) or len(extra) > MAX_REFERENCES or not all(isinstance(r, dict) for r in extra):
+        raise ValueError("请求无效")
+    files = [("audio", meta.get("audio_bytes"), meta.get("audio_suffix"))]
+    files.append(("reference", meta.get("reference_bytes", 0), meta.get("reference_suffix")))
+    files += [(f"voice-{k}", r.get("bytes"), r.get("suffix")) for k, r in enumerate(extra)]
+    sizes = [size for _, size, _ in files]
     if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in sizes) or not sizes[0]:
+        raise ValueError("请求无效")
+    if not all(sizes[2:]):
         raise ValueError("请求无效")
     if len(header) + sum(sizes) != length:
         raise ValueError("请求长度不符")
-    paths = []
-    for name, size in zip(("audio", "reference"), sizes, strict=True):
+    paths = {}
+    for name, size, suffix in files:
         if not size:
             continue
         # Keep the extension: decoders pick the container format from it.
-        suffix = meta.get(f"{name}_suffix") or ""
+        suffix = suffix or ""
         if not isinstance(suffix, str) or not re.fullmatch(r"(\.[A-Za-z0-9]{1,8})?", suffix):
             raise ValueError("请求无效")
         path = Path(directory) / (name + suffix.lower())
@@ -326,10 +362,14 @@ def read_upload(stream, length, directory):
                     raise ValueError("请求不完整")
                 out.write(block)
                 remaining -= len(block)
-        paths.append(path)
-    request = {"audio": str(paths[0]), "language": meta.get("language"), "diarize": meta.get("diarize", False)}
-    if len(paths) == 2:
-        request["reference"] = str(paths[1])
+        paths[name] = path
+    request = {"audio": str(paths["audio"]), "language": meta.get("language"), "diarize": meta.get("diarize", False)}
+    if "reference" in paths:
+        request["reference"] = str(paths["reference"])
+    if extra:
+        request["references"] = {r.get("name"): str(paths[f"voice-{k}"]) for k, r in enumerate(extra)}
+        if len(request["references"]) != len(extra):
+            raise ValueError("references 名称重复")
     if "hotwords" in meta:
         request["hotwords"] = meta["hotwords"]
     return parse_request(request)
@@ -369,7 +409,9 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
             directory = tempfile.mkdtemp(prefix="twin-asr-")
             try:
                 try:
-                    audio, _language, diarize, reference, hotwords = read_upload(self.rfile, length, directory)
+                    audio, _language, diarize, reference, hotwords, references = read_upload(
+                        self.rfile, length, directory
+                    )
                 except (ValueError, UnicodeDecodeError) as error:
                     return self.reply(400, {"ok": False, "error": str(error)})
                 self.send_response(200)
@@ -384,7 +426,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                 with busy:
                     try:
                         result = engine.transcribe(
-                            audio, diarize, reference, hotwords, lambda f: line({"progress": round(f, 4)})
+                            audio, diarize, reference, hotwords, lambda f: line({"progress": round(f, 4)}), references
                         )
                     except (BrokenPipeError, ConnectionResetError):
                         raise

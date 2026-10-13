@@ -16,6 +16,17 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
+// Node 25+ has its own localStorage/sessionStorage globals (undefined without --localstorage-file), and Vitest only
+// copies jsdom's window keys that Node lacks, so point both back at jsdom's storage.
+const { window: dom } = (globalThis as unknown as { jsdom: { window: Window } })
+  .jsdom;
+for (const key of ['localStorage', 'sessionStorage'] as const) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    value: dom[key],
+  });
+}
+
 class ResizeObserverMock {
   observe() {}
   unobserve() {}

@@ -102,7 +102,7 @@ def test_splits_are_disjoint_deterministic_and_keep_groups_whole() -> None:
 
 def test_engine_config_validation(tmp_path: Path) -> None:
     path = tmp_path / "engines.toml"
-    for kind in sorted(set(asr.KINDS) - {"sensevoice"}):
+    for kind in sorted(set(asr.KINDS) - set(asr.PACK_KINDS)):
         assert (asr.ENGINE_ROOT / asr.KINDS[kind]).is_file()
         path.write_text(f'[[engine]]\nname = "q"\nkind = "{kind}"\npython = "/bin/python"\n')
         with pytest.raises(ValueError, match="model"):
@@ -118,11 +118,13 @@ def test_engine_config_validation(tmp_path: Path) -> None:
         load_engines(path, tmp_path / "pack")
 
 
-def test_sensevoice_engine_defaults_to_installed_pack_and_accepts_another(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["sensevoice", "paraformer"])
+def test_pack_engine_defaults_to_installed_pack_and_accepts_another(kind: str, tmp_path: Path) -> None:
+    assert (asr.ENGINE_ROOT / asr.KINDS[kind]).is_file()
     path = tmp_path / "engines.toml"
     path.write_text(
-        '[[engine]]\nname = "a"\nkind = "sensevoice"\n'
-        f'[[engine]]\nname = "b"\nkind = "sensevoice"\npack = "{tmp_path / "1.1.0"}"\n'
+        f'[[engine]]\nname = "a"\nkind = "{kind}"\n'
+        f'[[engine]]\nname = "b"\nkind = "{kind}"\npack = "{tmp_path / "1.1.0"}"\n'
     )
     current, older = load_engines(path, tmp_path / "current")
     assert (current.pack, current.python) == (tmp_path / "current", tmp_path / "current" / "venv" / "bin" / "python")

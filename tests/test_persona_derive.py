@@ -35,6 +35,9 @@ def fact(ref: str, date: str = "", quantity: float | None = None, unit: str = ""
         "我上次体检是多久以前？",
         "这两次搬家相隔几个月？",
         "我一共去过几次日本？",
+        "How many plants do I keep on the balcony?",
+        "What is the total I paid for the two concert tickets?",
+        "我买过几部相机？",
     ],
 )
 def test_span_order_and_total_questions_trigger_derivation(question: str) -> None:
@@ -42,7 +45,7 @@ def test_span_order_and_total_questions_trigger_derivation(question: str) -> Non
 
 
 @pytest.mark.parametrize(
-    "question", ["How many children do you have?", "What do you think about remote work?", "你最喜欢哪本书？", "你好"]
+    "question", ["What is your favourite film?", "What do you think about remote work?", "你最喜欢哪本书？", "你好"]
 )
 def test_ordinary_questions_skip_derivation(question: str) -> None:
     assert not dv.needs_derivation(question)
@@ -81,7 +84,36 @@ def test_compute_reports_change_and_long_spans_when_every_quantity_is_dated() ->
     assert "- 最早到最晚：相隔 76 天，约 10.9 周，约 2.5 个月" in lines
     assert lines[-2:] == ["- 数量合计（打，2 条）：50", "- 从最早一条到最晚一条的变化（打）：-30"]
     assert dv.compute([fact("ghost", "2024-01-01")], TODAY, {"a"}) == []
+    assert not any(line.startswith("- 以上共") for line in lines)
     assert dv.compute([fact("a")], TODAY, {"a"}) == []
+
+
+def test_compute_lists_every_thing_found_for_a_count_question() -> None:
+    lines = dv.compute(
+        [fact("a", event="戴着手环"), fact("b", "2024-03-01", event="买了血压计"), fact("ghost", event="没有这条")],
+        TODAY,
+        {"a", "b"},
+        count=True,
+    )
+    assert lines == [
+        "已核对的事件（按日期先后）：",
+        "- 2024-03-01 买了血压计 [b]，距今天 24 天，约 3.4 周",
+        "- 日期不详：戴着手环 [a]",
+        "- 以上共 2 件（问个数时，这就是资料里找到的符合条件的件数）",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("question", "count"),
+    [
+        ("How many plants do I keep on the balcony?", True),
+        ("我一共去过几次日本？", True),
+        ("How many weeks passed between the two trips?", False),
+        ("What is the total I paid for the two concert tickets?", False),
+    ],
+)
+def test_only_questions_about_how_many_things_count_them(question: str, count: bool) -> None:
+    assert bool(dv.COUNT.search(question)) is count
 
 
 def test_compute_counts_dates_back_from_the_day_the_words_were_said() -> None:

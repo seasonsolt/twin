@@ -113,7 +113,9 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `expression_text` of the view, never raw expressions. This includes other speakers' messages in `context`, even
   when the target text itself contains no other names. Vector SHA keys use the final viewed text, so privacy or
   catalog changes re-embed only affected raw rows; unchanged legacy rows retain their SHA keys/vectors and cause
-  no embedding call. CLI and web builds pass their active settings.
+  no embedding call. CLI and web builds pass their active settings. A third namespace, `others`, embeds what other
+  speakers said to the person (`others_view`: their messages in the same view, from ready sources) so the twin can
+  recall what it was told; chat shows these as others' words and never as the person's own.
 - Profile chunks contain the view both as rendered prompt text and as verification entries: evidence quotes are
   verified against exactly the view sent to the extractor, not against raw L1. Chunk hashes remain content-based;
   a changed privacy setting or known-name catalog invalidates affected chunks on the next build without changing

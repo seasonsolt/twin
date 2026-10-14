@@ -24,7 +24,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..llm import LLM, LLMError, failure_summary, retry_truncated
+from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence
@@ -199,6 +199,10 @@ def corpus_chunks(
     return [c for s in sources for c in _chunk(s, by_source.get(s.source_id, []), allowed)]
 
 
+def _render(entries: Sequence[Expression]) -> str:
+    return "\n\n".join(render_entry(n, e) for n, e in enumerate(entries, 1))
+
+
 def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str]) -> list[Chunk]:
     chunks: list[Chunk] = []
     current: list[Expression] = []
@@ -207,7 +211,7 @@ def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str
     def close() -> None:
         if not current:
             return
-        text = "\n\n".join(render_entry(n, e) for n, e in enumerate(current, 1))
+        text = _render(current)
         key = "\x1f".join([KERNEL.prompt, source.source_id, ",".join(sorted(allowed)), text])
         chunk_id = "ch_" + hashlib.sha256(key.encode()).hexdigest()[:16]
         chunks.append(Chunk(chunk_id, source, tuple(current), text))
@@ -306,6 +310,25 @@ class Extraction:
 
 
 def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> Extraction:
+    """Extract a chunk; one whose reply is cut off twice is extracted again as two halves, down to single entries,
+    and a single entry that is still cut off fails the chunk. The halves' candidates keep the chunk's id, so the
+    chunk is stored, and retried after a failure, as one."""
+    try:
+        return _extract(llm, chunk, allowed, settings)
+    except LLMTruncated:
+        if len(chunk.entries) < 2:
+            raise
+    middle = len(chunk.entries) // 2
+    parts = [
+        extract_chunk(llm, Chunk(f"{chunk.chunk_id}/{n}", chunk.source, entries, _render(entries)), allowed, settings)
+        for n, entries in ((1, chunk.entries[:middle]), (2, chunk.entries[middle:]))
+    ]
+    stats = parts[0].stats + parts[1].stats
+    stats.splits += 1
+    return Extraction([c.model_copy(update={"chunk_id": chunk.chunk_id}) for p in parts for c in p.candidates], stats)
+
+
+def _extract(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> Extraction:
     klass = evidence_class(chunk.source.kind)
     system = EXTRACT_SYSTEM.format(
         name=settings.target_name,

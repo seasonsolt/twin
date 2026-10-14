@@ -995,6 +995,7 @@ def persona_build(ctx: typer.Context) -> None:
                 f"本次模型提炼 {x.returned} 条结论，保留 {x.kept} 条；丢弃：细项不可用 {x.off_facet} 条，"
                 f"没有可核对的引文 {x.unsupported} 条（引文对不上 {x.quotes_unmatched} 处、"
                 f"编号不存在 {x.quotes_misnumbered} 处、风格引用他人记述 {x.quotes_narrated_style} 处）"
+                + (f"；回复被截断后拆分重抽 {x.splits} 次" if x.splits else "")
             )
         _say(report.change_summary())
         for facet_id, diff in sorted(report.facet_diffs.items()):

@@ -43,6 +43,7 @@ class ExtractStats(BaseModel):
     quotes_unmatched: int = 0  # quotes not found in the entry they name
     quotes_misnumbered: int = 0  # quotes naming an entry the chunk does not have
     quotes_narrated_style: int = 0  # style quotes taken from someone else's narration
+    splits: int = 0  # times a chunk was halved because its reply was cut off twice
 
     def __add__(self, other: ExtractStats) -> ExtractStats:
         return ExtractStats(**{name: getattr(self, name) + getattr(other, name) for name in ExtractStats.model_fields})

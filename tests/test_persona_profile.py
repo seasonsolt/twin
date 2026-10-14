@@ -216,6 +216,36 @@ def test_a_truncated_call_is_made_once_more(store: PersonaStore, settings: Setti
     assert report.failures == [] and report.chunks_extracted == 2 and report.items > 0
 
 
+@pytest.mark.usefixtures("gated_life_facets")
+def test_a_chunk_cut_off_twice_is_extracted_in_halves(settings: Settings) -> None:
+    plain = PersonaStore(":memory:")
+    plain.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    seen: list[int] = []
+
+    def long_replies(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is pf.ExtractDraft:
+            seen.append(len(entries(user)))
+            if len(entries(user)) > 1:
+                raise LLMTruncated("hit max_tokens")
+        return handler(system, user, schema)
+
+    report = pf.build_profile(plain, FakeLLM(long_replies), settings)
+    assert report.failures == [] and report.chunks_extracted == 1
+    assert seen == [2, 2, 1, 1]  # the whole chunk twice, then each half
+    assert report.extraction.splits == 1 and report.extraction.kept == 2
+    [chunk] = pf.chunks_for(plain, plain.list_sources()[0], pf.consented_facets(plain), settings)
+    candidates = plain.list_candidates()
+    assert {c.chunk_id for c in candidates} == {chunk.chunk_id}
+    assert len({c.candidate_id for c in candidates}) == len(candidates) == 2
+    assert sorted(c.statement for c in candidates) == ["他把回款放在第一位", "他追问对照组"]
+
+    def always_cut_off(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise LLMTruncated("hit max_tokens")
+
+    with pytest.raises(LLMTruncated):  # a single entry cannot be split further
+        pf.extract_chunk(FakeLLM(always_cut_off), chunk, pf.consented_facets(plain), settings)
+
+
 def test_chunks_split_at_the_size_limit(
     store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:

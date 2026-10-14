@@ -10,8 +10,9 @@ import time
 import uuid
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager, aclosing
+from contextlib import AbstractAsyncContextManager, aclosing, nullcontext
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -21,19 +22,23 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from ..assets import AssetStore
 from ..config import Settings
-from ..persona.chat import HISTORY_TURNS, PersonaChat, no_profile_reply
+from ..persona.chat import HISTORY_TURNS, PersonaChat, no_profile_reply, off_loop
 from ..persona.schema import ChatReply, ChatTurn
 from ..persona.store import PersonaStore, stored_identity
 from ..service import resolve_citations
 from ..util import private_directory
 
 if TYPE_CHECKING:
+    from ..embed import Embedder
+    from ..llm import LLM
     from ..web.backends import Backends
+    from ..web.jobs import JobManager
     from ..web.personas import Personas
 
 logger = logging.getLogger(__name__)
 FALLBACK = "我现在只看得懂文字和语音，换成文字问我吧。"
 APOLOGY = "我这边出了点问题，稍后再问我一次。"
+BUSY = "现在找我的人有点多，稍后再问我一次。"
 Connect = Callable[[str], AbstractAsyncContextManager[ClientConnection]]
 SessionKey = tuple[str, str, str]
 
@@ -104,9 +109,12 @@ class WeComBotRunner:
         answer_timeout: float = 530,
         rate_window: float = 60,
         sessions: dict[SessionKey, Session] | None = None,
+        jobs: JobManager | None = None,
     ) -> None:
         self.bot_id, self.secret, self.persona_id = bot_id, secret, persona_id
         self.settings, self.backends = settings, backends
+        # Answers share the chat limits of the web UI; without ``jobs`` (tests) they are not limited.
+        self.jobs = jobs
         self.url, self.connect = url, connect
         self.heartbeat_interval = heartbeat_interval
         self.backoff_initial, self.backoff_max = backoff_initial, backoff_max
@@ -319,48 +327,82 @@ class WeComBotRunner:
                 await self._stream(socket, session, req_id, stream_id, FALLBACK, finish=True)
                 return
             messages = [*session.history, ChatTurn(role="user", content=question)]
-            with PersonaStore(self.settings.db_path) as store:
-                if not store.list_items():
-                    reply = no_profile_reply(store)
+            # The store is opened, read and written off the event loop, which every bot and the web UI share.
+            with await off_loop(partial(PersonaStore, self.settings.db_path)) as store:
+                reply: ChatReply | None
+                if not await off_loop(store.list_items):
+                    reply = await off_loop(partial(no_profile_reply, store))
                 else:
                     llm, embedder = await asyncio.to_thread(
                         lambda: (self.backends.chat_llm(), self.backends.embedder())
                     )
-                    chat = PersonaChat(store, llm, embedder, self.settings)
-                    draft, sent, refreshed = "", "", float("-inf")
-                    reply = None
-                    async with aclosing(chat.stream_reply(messages)) as replies:
-                        async for result in replies:
-                            if isinstance(result, str):
-                                draft += result
-                                if (
-                                    draft != sent
-                                    and time.monotonic() - refreshed >= 1.0
-                                    and await self._stream(socket, session, req_id, stream_id, draft, finish=False)
-                                ):
-                                    sent, refreshed = draft, time.monotonic()
-                            else:
-                                reply = result
+                    reply = await self._generate(socket, session, req_id, stream_id, store, llm, embedder, messages)
                 if reply is None:
-                    raise RuntimeError
-                final = reply.reply + citation_footer(store, self.settings, reply)
+                    return
+                final = reply.reply + await off_loop(partial(citation_footer, store, self.settings, reply))
                 await self._stream(socket, session, req_id, stream_id, final, finish=True)
             session.history = [*messages, ChatTurn(role="twin", content=reply.reply)][-HISTORY_TURNS * 2 :]
+
+    async def _generate(
+        self,
+        socket: ClientConnection,
+        session: Session,
+        req_id: str,
+        stream_id: str,
+        store: PersonaStore,
+        llm: LLM,
+        embedder: Embedder,
+        messages: list[ChatTurn],
+    ) -> ChatReply | None:
+        """The reply, its draft streamed as it grows, admitted to the chat limits the web UI uses (one of its
+        worker slots while generating); None after answering that it is busy instead."""
+        from ..web.jobs import TooManyJobs
+
+        try:
+            ticket = self.jobs.admit_stream() if self.jobs is not None else None
+        except TooManyJobs:
+            await self._stream(socket, session, req_id, stream_id, BUSY, finish=True)
+            return None
+        try:
+            async with ticket.running() if ticket is not None else nullcontext():
+                chat = PersonaChat(store, llm, embedder, self.settings)
+                draft, sent, refreshed = "", "", float("-inf")
+                reply = None
+                async with aclosing(chat.stream_reply(messages)) as replies:
+                    async for result in replies:
+                        if isinstance(result, str):
+                            draft += result
+                            if (
+                                draft != sent
+                                and time.monotonic() - refreshed >= 1.0
+                                and await self._stream(socket, session, req_id, stream_id, draft, finish=False)
+                            ):
+                                sent, refreshed = draft, time.monotonic()
+                        else:
+                            reply = result
+        finally:
+            if ticket is not None:
+                ticket.close()
+        if reply is None:
+            raise RuntimeError
+        return reply
 
 
 CONFLICT = "这个机器人已经绑定了另一个分身"
 
 
 class WeComHub:
-    def __init__(self, settings: Settings, registry: Personas, backends: Backends) -> None:
-        self.settings, self.registry, self.backends = settings, registry, backends
+    def __init__(
+        self, settings: Settings, registry: Personas, backends: Backends, jobs: JobManager | None = None
+    ) -> None:
+        self.settings, self.registry, self.backends, self.jobs = settings, registry, backends, jobs
         self.runners: dict[str, WeComBotRunner] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._errors: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     def _path(self, persona_id: str) -> Path:
-        return self.registry.settings_for(persona_id).db_path.parent / "channels.json"
+        return self.registry.directory(persona_id) / "channels.json"
 
     def _read(self, persona_id: str) -> dict[str, Any]:
         path = self._path(persona_id)
@@ -390,6 +432,7 @@ class WeComHub:
             self.backends,
             persona_id=persona_id,
             url=self.settings.wecom.url,
+            jobs=self.jobs,
         )
         self.runners[persona_id] = runner
         self._tasks[persona_id] = asyncio.create_task(runner.run())

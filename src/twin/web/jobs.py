@@ -4,7 +4,8 @@ Each job runs in its own daemon thread, so stopping the server never waits for a
 Profile builds are exclusive (a second submission raises ``JobConflict``).
 Chats run side by side, at most ``answer_workers`` at once, the rest stay queued, and at most
 ``MAX_PENDING_ANSWERS`` of them may be unfinished (one more raises ``TooManyJobs``); streamed chats are admitted
-with ``admit_stream`` and share both limits with chat jobs. Jobs live only in memory.
+with ``admit_stream`` and share both limits with chat jobs. Speech is synthesized ``SPEECH_WORKERS`` at a time with
+at most ``MAX_PENDING_SPEECH`` requests waiting or running (``admit_speech``). Jobs live only in memory.
 
 Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (from the ``[n/N]`` lines), a tally of the
 ``ok`` / ``FAILED`` lines of the current stage and, separately, its milestones (stage markers and Chinese summaries).
@@ -23,11 +24,14 @@ import subprocess
 import sys
 import threading
 from collections import deque
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+from starlette.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from ..embed import EmbedError
 from ..llm import LLMError
@@ -47,6 +51,8 @@ EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
 MAX_PROGRESS_LINES = 500
 MAX_MILESTONES = 2000
 MAX_PENDING_ANSWERS = 20
+SPEECH_WORKERS = 2
+MAX_PENDING_SPEECH = 8
 LISTED_JOBS = 50
 KEPT_JOBS = 200
 
@@ -167,18 +173,34 @@ class Slots:
             self._free += 1
 
 
-class StreamTicket:
-    """A streamed chat counted as pending from ``JobManager.admit_stream`` until ``close``; inside ``running`` it
-    also holds one of the chat worker slots. ``close`` is idempotent and frees the slot too, so a stream that ends
-    without unwinding still gives both back."""
+class Ticket:
+    """A request counted as pending from ``JobManager.admit_stream`` / ``admit_speech`` until ``close`` (or the end
+    of a ``with`` block); inside ``running`` (coroutines) or ``holding`` (threads) it also holds one of the worker
+    slots. ``close`` is idempotent and frees the slot too, so a request that ends without unwinding still gives both
+    back."""
 
     def __init__(self, slots: Slots, done: Callable[[], None]) -> None:
         self._slots, self._done = slots, done
         self._holding = self._closed = False
 
+    def __enter__(self) -> Ticket:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
         await self._slots.acquire_async()
+        self._holding = True
+        try:
+            yield
+        finally:
+            self._release_slot()
+
+    @contextmanager
+    def holding(self) -> Iterator[None]:
+        self._slots.acquire()
         self._holding = True
         try:
             yield
@@ -231,6 +253,8 @@ class JobManager:
         self._exclusive_slot: list[Job | None] = [None]
         self._answer_slots = Slots(max(1, answer_workers))
         self._streams = [0]
+        self._speech_slots = Slots(SPEECH_WORKERS)
+        self._speech = [0]
         self._media_slot = threading.BoundedSemaphore(1)
         self._video_slot = threading.BoundedSemaphore(1)
         self._describe_error = describe_error
@@ -282,7 +306,7 @@ class JobManager:
             raise
         return job
 
-    def admit_stream(self) -> StreamTicket:
+    def admit_stream(self) -> Ticket:
         """Count one streamed chat against the pending limit (``TooManyJobs`` when full); the caller must ``close``
         the ticket once the stream ends."""
         with self._lock:
@@ -293,7 +317,21 @@ class JobManager:
             with self._lock:
                 self._streams[0] -= 1
 
-        return StreamTicket(self._answer_slots, done)
+        return Ticket(self._answer_slots, done)
+
+    def admit_speech(self) -> Ticket:
+        """Count one speech synthesis against ``MAX_PENDING_SPEECH`` (``TooManyJobs`` when full); the caller must
+        ``close`` the ticket once it is done."""
+        with self._lock:
+            if self._speech[0] >= MAX_PENDING_SPEECH:
+                raise TooManyJobs(f"正在合成的语音太多（上限 {MAX_PENDING_SPEECH} 段），请稍后再试")
+            self._speech[0] += 1
+
+        def done() -> None:
+            with self._lock:
+                self._speech[0] -= 1
+
+        return Ticket(self._speech_slots, done)
 
     def _check_pending(self) -> None:
         pending = self._streams[0] + sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
@@ -415,6 +453,22 @@ class JobManager:
             if slot is not None:
                 slot.release()
             job.done.set()
+
+
+class AdmittedStream(StreamingResponse):
+    """A streamed response that gives its ``ticket`` back once the response ends, even when the client left before
+    the stream started."""
+
+    def __init__(self, content: AsyncIterator[Any], ticket: Ticket | None, **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self.ticket = ticket
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if self.ticket is not None:
+                self.ticket.close()
 
 
 class PersonaProcessing:

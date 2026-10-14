@@ -20,12 +20,11 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
-from starlette.types import Receive, Scope, Send
 
 from ..config import Settings
 from ..embed import Embedder
 from ..llm import LLM
-from ..persona.chat import PersonaChat, index_persona, no_profile_reply
+from ..persona.chat import PersonaChat, index_persona, no_profile_reply, off_loop
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
@@ -46,7 +45,7 @@ from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, p
 from ..persona.store import PersonaStore, stored_identity
 from .backends import Backends
 from .conversations import append_reply, append_user, owner
-from .jobs import Job, JobManager, PersonaProcessing, StreamTicket
+from .jobs import AdmittedStream, Job, JobManager, PersonaProcessing, Ticket
 
 MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
@@ -87,22 +86,6 @@ class BatchReviewBody(BaseModel):
 class ChatBody(BaseModel):
     messages: list[ChatTurn] = Field(min_length=1, max_length=MAX_CHAT_TURNS)
     conversation_id: str | None = Field(default=None, max_length=100)
-
-
-class AdmittedStream(StreamingResponse):
-    """A streamed chat that gives its ``ticket`` back once the response ends, even when the client left before the
-    stream started."""
-
-    def __init__(self, content: AsyncIterator[str], ticket: StreamTicket | None, **kwargs: Any) -> None:
-        super().__init__(content, **kwargs)
-        self.ticket = ticket
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        try:
-            await super().__call__(scope, receive, send)
-        finally:
-            if self.ticket is not None:
-                self.ticket.close()
 
 
 def _date(value: str | None, field: str) -> dt.date | None:
@@ -539,7 +522,7 @@ def register(
         email = owner(request)
         with open_store() as store:
             profiled = bool(store.list_items())
-        ticket: StreamTicket | None = None
+        ticket: Ticket | None = None
         if profiled:
             llm, embedder = backends.chat_llm(), backends.embedder()
             ticket = jobs.admit_stream()
@@ -551,28 +534,31 @@ def register(
                 ticket.close()
             raise
 
+        def save(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
+            return append_reply(store, body.conversation_id, email, chat_payload(store, reply))
+
+        def unbuilt() -> tuple[str, dict[str, Any]]:
+            with open_store() as store:
+                reply = no_profile_reply(store)
+                return reply.reply, save(store, reply)
+
+        # The store is opened, read and written off the event loop, which other requests share.
         async def produce() -> AsyncGenerator[str]:
             if ticket is None:
-                with open_store() as store:
-                    reply = no_profile_reply(store)
-                    yield sse_event("delta", {"text": reply.reply})
-                    yield sse_event(
-                        "final", append_reply(store, body.conversation_id, email, chat_payload(store, reply))
-                    )
+                text, final = await off_loop(unbuilt)
+                yield sse_event("delta", {"text": text})
+                yield sse_event("final", final)
                 return
             # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
             async with ticket.running():
-                with open_store() as store:
+                with await off_loop(partial(PersonaStore, settings.db_path)) as store:
                     chat = PersonaChat(store, llm, embedder, settings)
                     async with aclosing(chat.stream_reply(messages)) as replies:
                         async for result in replies:
                             if isinstance(result, str):
                                 yield sse_event("delta", {"text": result})
                             else:
-                                yield sse_event(
-                                    "final",
-                                    append_reply(store, body.conversation_id, email, chat_payload(store, result)),
-                                )
+                                yield sse_event("final", await off_loop(partial(save, store, result)))
 
         async def events() -> AsyncGenerator[str]:
             yield ": connected\n\n"

@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from contextvars import copy_context
 from dataclasses import dataclass, field
+from functools import partial
 
 import numpy as np
 from pydantic import ValidationError
@@ -37,7 +38,7 @@ from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
 from .rewrite import Rewrite, rewrite
 from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
-from .sources import expression_view
+from .sources import ExpressionView
 from .store import PersonaStore
 from .style import extreme_rate
 from .when import time_window
@@ -116,13 +117,16 @@ def expression_text(e: Expression) -> str:
     return _clip(f"{e.context}\n{e.text}" if e.context else e.text, 1000)
 
 
-def others_view(store: PersonaStore, settings: Settings, until: dt.date | None = None) -> dict[str, Expression]:
-    """What other people said to the person, in the same privacy view as the person's own words."""
-    sources = {s.source_id: s for s in store.list_sources()}
+def others_view(
+    store: PersonaStore, settings: Settings, until: dt.date | None = None, view: ExpressionView | None = None
+) -> dict[str, Expression]:
+    """What other people said to the person, in the same privacy view as the person's own words; ``view``, when
+    given, is that view already read from ``store``."""
+    view = view or ExpressionView(store, settings)
     return {
         e.expression_id: e
-        for e in expression_view(store, settings, until=until)
-        if not e.is_target and sources[e.source_id].media_status in (None, "ready")
+        for e in view.select(until=until)
+        if not e.is_target and view.sources[e.source_id].media_status in (None, "ready")
     }
 
 
@@ -137,12 +141,11 @@ def index_persona(
     new or changed, drop what is gone; a different embedding model rebuilds a namespace. Returns texts embedded
     per namespace. Raw corpus text must not be sent to an external embedding service when privacy is enabled."""
     fingerprint = embedder_fingerprint(embedder)
+    view = ExpressionView(store, settings)
     wanted = {
         ITEMS_NS: {i.item_id: item_text(i) for i in store.list_items()},
-        EXPRESSIONS_NS: {
-            e.expression_id: expression_text(e) for e in expression_view(store, settings, target_only=True)
-        },
-        OTHERS_NS: {ref: _clip(e.text, 1000) for ref, e in others_view(store, settings).items()},
+        EXPRESSIONS_NS: {e.expression_id: expression_text(e) for e in view.select(target_only=True)},
+        OTHERS_NS: {ref: _clip(e.text, 1000) for ref, e in others_view(store, settings, view=view).items()},
     }
     embedded: dict[str, int] = {}
     for namespace, docs in wanted.items():
@@ -206,19 +209,24 @@ class PersonaContext:
         }
 
 
-def _visible_items(store: PersonaStore, settings: Settings, as_of: dt.date | None) -> list[PersonaItem]:
+def _visible_items(
+    store: PersonaStore, settings: Settings, as_of: dt.date | None, view: ExpressionView | None = None
+) -> list[PersonaItem]:
+    """``view``, when given, is the privacy view already read from ``store``."""
     items = store.list_items()
     if as_of is not None:
         items = [t for i in items if (t := item_as_of(i, as_of)) is not None]
+    view = view or ExpressionView(store, settings)
+    stored = {e.expression_id: e for e in view.corpus}
     # Evidence quotes are expression text too. A profile built with privacy disabled may
     # contain raw quotes; use the same boundary view, which also protects quotes already containing codes.
     quotes: list[Expression] = []
     for item in items:
         for ev in item.evidence:
-            entry = store.get_expression(ev.expression_id)
+            entry = stored.get(ev.expression_id)
             if entry is not None:
                 quotes.append(entry.model_copy(update={"text": ev.quote}))
-    viewed = expression_view(store, settings, expressions=quotes)
+    viewed = view.select(expressions=quotes)
     by_quote = {(raw.expression_id, raw.text): view.text for raw, view in zip(quotes, viewed, strict=True)}
     return [
         item.model_copy(
@@ -291,6 +299,17 @@ def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref
     ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
 
 
+async def off_loop[T](fn: Callable[[], T]) -> T:
+    """``fn()`` in a worker thread. A caller cancelled meanwhile still waits for it: ``fn`` may be using a SQLite
+    store that the caller closes as soon as it unwinds."""
+    work = asyncio.ensure_future(asyncio.to_thread(fn))
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        await asyncio.gather(work, return_exceptions=True)
+        raise
+
+
 def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:
     text = (
         "记忆还在处理中，等我记住后再聊吧。你也可以继续添加记忆。"
@@ -332,11 +351,11 @@ class PersonaChat:
         # Start network embedding while assembling the persona's stable material.
         with ThreadPoolExecutor(max_workers=1) as pool:
             embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
-            items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of)}
-            expressions = {
-                e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
-            }
-            others = others_view(self.store, self.settings, until=as_of)
+            # One read of the corpus serves the evidence quotes, the person's own words and other people's.
+            view = ExpressionView(self.store, self.settings)
+            items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of, view)}
+            expressions = {e.expression_id: e for e in view.select(target_only=True, until=as_of)}
+            others = others_view(self.store, self.settings, until=as_of, view=view)
             vectors = embedding.result()
         queries = list(zip(main, vectors[: len(main)], strict=True))
         # Each namespace's vectors and keyword index are loaded once and shared by every ranking below.
@@ -391,8 +410,8 @@ class PersonaChat:
     ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
-            return no_profile_reply(self.store, as_of)
+        if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
+            return unbuilt
         ctx = self._search(messages, as_of, today)
         ctx.today = today
         self._derive(messages, ctx)
@@ -409,21 +428,19 @@ class PersonaChat:
     ) -> AsyncGenerator[str | ChatReply]:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
-            reply = no_profile_reply(self.store, as_of)
-            yield reply.reply
-            yield reply
+        # Every store read and write runs off the event loop, which other requests share.
+        if persist and (unbuilt := await off_loop(partial(self._unbuilt_reply, as_of))) is not None:
+            yield unbuilt.reply
+            yield unbuilt
             return
-        retrieval = asyncio.create_task(asyncio.to_thread(self._search, messages, as_of))
-        try:
-            ctx = await asyncio.shield(retrieval)
-        except asyncio.CancelledError:
-            # The SQLite store must outlive the retrieval worker, even after a client disconnects.
-            await retrieval
-            raise
+        ctx = await off_loop(partial(self._search, messages, as_of))
         await asyncio.to_thread(self._derive, messages, ctx)
-        system = chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx)
-        user = chat_user_message(messages, ctx)
+        system, user = await off_loop(
+            lambda: (
+                chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
+                chat_user_message(messages, ctx),
+            )
+        )
         effort = self.settings.effective_chat_llm.effort_twin
         stream = getattr(self.llm, "stream", None)
         if stream is None:
@@ -445,7 +462,13 @@ class PersonaChat:
             if delta := parser.finish():
                 yield delta
             draft = parser.draft()
-        yield self._finalize(draft, ctx, messages, as_of, persist=persist)
+        yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist))
+
+    def _unbuilt_reply(self, as_of: dt.date | None) -> ChatReply | None:
+        """The reply while nothing has been built yet; None once there is a profile to answer from."""
+        if not self.store.list_items() and self.store.get_meta("built_at") is None:
+            return no_profile_reply(self.store, as_of)
+        return None
 
     def _search(
         self, messages: Sequence[ChatTurn], as_of: dt.date | None, today: dt.date | None = None

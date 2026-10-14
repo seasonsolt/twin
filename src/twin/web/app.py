@@ -272,7 +272,7 @@ def create_app(
             if path.is_file():
                 with PersonaStore(path):
                     pass
-    hub = WeComHub(settings, registry, backends)
+    hub = WeComHub(settings, registry, backends, jobs)
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
     registry.on_restored = lambda persona_id: anyio.from_thread.run(hub.persona_restored, persona_id)
     app.state.channels = hub

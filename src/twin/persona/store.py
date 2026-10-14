@@ -387,8 +387,8 @@ class PersonaStore:
     # ------------------------------------------------------------ profile
 
     def replace_facet_items(self, facet_id: str, items: list[PersonaItem]) -> None:
-        """Replace a facet's items, carrying the person's reviews over to the items that still contain the reviewed
-        ones' candidates; reviews of items that disappear are dropped."""
+        """Replace a facet's items, carrying the person's reviews over to the items that continue the reviewed ones
+        (see ``carry_reviews``); reviews of items that disappear are dropped."""
         old = self.list_items(facet_id, raw=True)
         carried = carry_reviews(old, items, self.reviews())
         with self._tx() as db:

@@ -124,11 +124,11 @@ flowchart LR
 
 越高越好：
 
-| 基准 | 测什么 | **twin** | 公开最好成绩 | Second Me 升级版 |
-| :-- | :-- | :-: | :-: | :-: |
-| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 75%<br/><sub>gpt-6-luna 作答</sub><br/>94%<br/><sub>Sonnet 5.5 作答</sub> | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
-| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 55%<br/><sub>gpt-6-luna 作答</sub><br/>66%<br/><sub>Sonnet 5.5 作答</sub> | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
-| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 像本人一样答问卷，按达到真人重测的比例计 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
+| 基准 | 测什么 | **twin**<br/><sub>gpt-6-luna 作答</sub> | **twin**<br/><sub>Sonnet 5.5 作答</sub> | 公开最好成绩 | Second Me 升级版 |
+| :-- | :-- | :-: | :-: | :-: | :-: |
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 75% | 94% | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
+| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 55% | 66% | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
+| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 像本人一样答问卷，按达到真人重测的比例计 | 60% | — | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
 
 - **twin 成绩**：LongMemEval 和 PersonaMem-v2 是记忆内核 persona-v5（2026-10-14，第 40 轮）在正式集上的成绩，跑 3 次取平均，评委为 `gpt-6.1-sol`。
   - **两种作答模型**：画像都由 `gpt-6-luna` 构建，两种作答用的是同一套画像，只换掉回答问题的模型。部署时可以用 `[chat_llm]` 单独给回答配一个更强的模型，画像仍用 `[llm]` 构建。Anthropic 不向总部在中国大陆或大陆控股的公司提供服务，能否用 Sonnet 作答取决于部署方。

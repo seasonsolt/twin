@@ -32,7 +32,7 @@ flowchart TB
 | --- | --- | --- |
 | L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` `persona.lexical` · `persona.schema/items/dimensions` `media.schema` · `llm` `embed` `config` `media.tts/asr` · `persona.store` |
 | L1 | 4 | `persona.sources` `persona.questionnaire` `persona.quotes` |
-| L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） |
+| L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） |
 | L3 | 6 | `persona.chat` |
 | L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` |
 | 评测 | 8 | `evals.*` `media.check` |

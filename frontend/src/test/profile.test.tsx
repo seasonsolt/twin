@@ -97,6 +97,8 @@ beforeEach(() => {
       ]);
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     if (path.startsWith('/api/persona/items')) return json([]);
+    if (path === '/api/persona/followups')
+      return json({ items: [], pending: 0 });
     if (path === '/api/persona/coverage')
       return json({ facets: [], suggestions: [], kind_labels: {} });
     return json({});
@@ -125,7 +127,7 @@ it('renders only overview by default, keeps the header, and supports section lin
     within(nav)
       .getAllByRole('tab')
       .map((tab) => tab.textContent),
-  ).toEqual(['概览', '图谱', '记忆', '形象和声音', '接入']);
+  ).toEqual(['概览', '图谱', '记忆', '待回答', '形象和声音', '接入']);
   expect(within(nav).getByRole('tab', { name: '概览' })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -221,6 +223,7 @@ it.each([
   ['overview', '概览'],
   ['graph', '图谱'],
   ['memories', '记忆'],
+  ['questions', '待回答'],
   ['assets', '形象和声音'],
   ['channels', '接入'],
   ['unknown', '概览'],

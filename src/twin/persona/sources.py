@@ -533,6 +533,38 @@ def parse_note(text: str, settings: Settings, title: str | None = None) -> Parse
     return parsed
 
 
+ANSWER_CHANNEL = "回答分身答不上的问题"
+
+
+def parse_answer(
+    question: str, answer: str, name: str, origin: str, *, previous: str = "", date: dt.date | None = None
+) -> ParsedSource:
+    """The person's own answer to a question the twin could not answer: one expression in their words, the question
+    (after ``previous``, the asker's turn before it, when there was one) as its context. ``origin`` names the question
+    it answers."""
+    answer = answer.strip()
+    if not 1 <= len(answer) <= 20000:
+        raise ValueError("回答需要 1–20000 个字")
+    date = date or dt.date.today()
+    asked = " ".join(question.split())
+    source_id = source_id_for(SourceKind.INTERVIEW, origin, answer)
+    expression = Expression(
+        expression_id=f"{source_id}#00000",
+        source_id=source_id,
+        idx=0,
+        date=date,
+        speaker=name,
+        is_target=True,
+        text=answer,
+        context=f"有人先问：{' '.join(previous.split())[:300]}；接着问：{asked[:500]}"
+        if previous.strip()
+        else f"有人问：{asked[:500]}",
+        channel=ANSWER_CHANNEL,
+    )
+    title = f"回答：{asked if len(asked) <= 40 else asked[:39] + '…'}"
+    return ParsedSource(_source(SourceKind.INTERVIEW, title, origin, source_id, [expression]), [expression])
+
+
 def parse_source(kind: SourceKind | None, path: Path, settings: Settings, date: dt.date | None = None) -> ParsedSource:
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ValueError("每个文件最多 1 GB")

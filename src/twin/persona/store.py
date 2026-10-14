@@ -510,6 +510,14 @@ class PersonaStore:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (key, value))
 
+    def meta_with_prefix(self, prefix: str) -> dict[str, str]:
+        """Every meta value whose key starts with ``prefix``, by the rest of the key."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key, value FROM p_meta WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+            ).fetchall()
+        return {key[len(prefix) :]: value for key, value in rows}
+
     def kernel_built(self) -> KernelVersion | None:
         value = self.get_meta("kernel:built")
         if value is None:
@@ -729,9 +737,12 @@ class PersonaStore:
 
     # ------------------------------------------------------------ chat log (what people ask, where the twin abstains)
 
-    def log_chat(self, question: str, reply: ChatReply) -> None:
+    def log_chat(self, question: str, reply: ChatReply, previous: str = "") -> None:
+        """Log one answered question; ``previous`` is the asker's turn before it, for a follow-up like 「那他呢？」."""
         entry = {
             "question": question[:2000],
+            "previous": previous[:500],
+            "reason": reply.abstain_reason[:500],
             "abstain": reply.abstain,
             "mode": reply.mode,
             "confidence": reply.confidence,
@@ -747,6 +758,12 @@ class PersonaStore:
                     json.dumps(entry, ensure_ascii=False),
                 ),
             )
+
+    def chat_abstentions(self) -> list[tuple[str, dict[str, Any]]]:
+        """``(asked at, logged entry)`` of every question the twin abstained on, oldest first."""
+        with self._lock:
+            rows = self._db.execute("SELECT at, json FROM p_chat_log WHERE abstain = 1 ORDER BY id").fetchall()
+        return [(at, json.loads(raw)) for at, raw in rows]
 
     def chat_demand(self) -> dict[str, tuple[int, int]]:
         """Per facet: how many logged questions touched it and how many of those it abstained on or could only infer."""

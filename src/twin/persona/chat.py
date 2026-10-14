@@ -519,7 +519,8 @@ class PersonaChat:
             quotes_removed=quotes_removed,
         )
         if persist:
-            self.store.log_chat(messages[-1].content, reply)
+            asked = [m.content for m in messages if m.role == "user"]
+            self.store.log_chat(asked[-1], reply, asked[-2] if len(asked) > 1 else "")
         return reply
 
 

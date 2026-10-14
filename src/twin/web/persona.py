@@ -239,6 +239,9 @@ def register(
     from . import ledger
 
     ledger.register(app, settings, backends, jobs)
+    from . import followups
+
+    followups.register(app, settings, queue_build)
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():

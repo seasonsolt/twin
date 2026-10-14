@@ -12,6 +12,7 @@ import { SelfAssets } from '../features/assets/SelfAssets';
 import { RecordingShortcut } from '../features/sources/MediaClaim';
 import { Overview } from '../features/profile/Overview';
 import { Channels } from '../features/profile/Channels';
+import { Followups } from '../features/followups/Followups';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
 import { forgetPersona, personaUrl } from '../lib/persona';
@@ -26,6 +27,7 @@ const sections = [
   { id: 'overview', title: '概览' },
   { id: 'graph', title: '图谱' },
   { id: 'memories', title: '记忆' },
+  { id: 'questions', title: '待回答' },
   { id: 'assets', title: '形象和声音' },
   { id: 'channels', title: '接入' },
 ] as const;
@@ -243,6 +245,18 @@ export function Profile() {
             >
               <h2 className="text-xl font-semibold">记忆</h2>
               <Memories profile onSpeakerCount={setSpeakerCount} />
+            </section>
+          </TabsPrimitive.Content>
+        )}
+        {section === 'questions' && (
+          <TabsPrimitive.Content value="questions" asChild>
+            <section
+              id="profile-questions"
+              className="profile-section space-y-4"
+              aria-label="待回答"
+            >
+              <h2 className="text-xl font-semibold">待回答</h2>
+              <Followups />
             </section>
           </TabsPrimitive.Content>
         )}

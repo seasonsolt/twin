@@ -245,6 +245,8 @@ def test_sse_headers_quote_guard_persistence_and_persona(tmp_path: Path) -> None
             assert len(entries) == 1
             assert json.loads(entries[0][0]) == {
                 "question": "怎么看？",
+                "previous": "",
+                "reason": "",
                 "mode": "grounded",
                 "abstain": False,
                 "confidence": 0.6,
@@ -289,6 +291,10 @@ def test_sse_invalid_metadata_keeps_text_and_logs_once(tmp_path: Path, body: str
         assert final["confidence"] == 0 and final["mode"] == "abstain" and final["abstain"]
         with PersonaStore(settings.db_path) as store:
             assert store._db.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 1
+        # The abstained question waits for the person to answer it.
+        queue = web.get("/api/persona/followups", headers={"X-Twin": "1"}).json()
+        assert queue["pending"] == 1 and queue["items"][0]["question"] == "问题"
+        assert queue["items"][0]["reason"] == final["abstain_reason"]
 
 
 def test_sse_error_is_sanitized(tmp_path: Path) -> None:

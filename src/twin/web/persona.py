@@ -14,9 +14,10 @@ from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
@@ -26,7 +27,7 @@ from ..embed import Embedder
 from ..llm import LLM
 from ..persona.chat import PersonaChat, index_persona, no_profile_reply, off_loop
 from ..persona.coverage import LEVEL_LABELS, coverage_report
-from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
+from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
 from ..persona.items import PReview
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import (
@@ -40,7 +41,7 @@ from ..persona.profile import (
     stale_reason,
 )
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial
-from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, SourceKind, evidence_class
+from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, Source, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from .backends import Backends
@@ -51,6 +52,12 @@ MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
 MAX_CHAT_TURNS = 40
 MAX_MESSAGE_CHARS = 4000
+PAGE_SIZE = 50
+MAX_PAGE_SIZE = 500
+MEDIA_PENDING = frozenset({"queued", "extracting", "transcribing"})
+# Sources the memory page lists apart from the paged list: work in progress and work waiting for the person.
+NEEDS_ATTENTION = MEDIA_PENDING | {"failed", "needs_asr", "needs_speaker"}
+MAX_ATTENTION = 50
 
 Log = Callable[[str], None]
 
@@ -72,15 +79,24 @@ class ReviewBody(BaseModel):
 
 
 class BatchReviewBody(BaseModel):
-    item_ids: list[str] = Field(min_length=1, max_length=500)
+    """Confirm the listed items, or with ``dimension_id`` every unreviewed item of that dimension."""
+
+    item_ids: list[str] | None = Field(default=None, min_length=1, max_length=500)
+    dimension_id: str | None = None
     status: Literal["confirmed"]
 
     @field_validator("item_ids")
     @classmethod
-    def unique_ids(cls, value: list[str]) -> list[str]:
-        if len(set(value)) != len(value):
+    def unique_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(set(value)) != len(value):
             raise ValueError("档案条目不能重复")
         return value
+
+    @model_validator(mode="after")
+    def one_target(self) -> BatchReviewBody:
+        if (self.item_ids is None) == (self.dimension_id is None):
+            raise ValueError("请给出 item_ids 或 dimension_id 中的一项")
+        return self
 
 
 class ChatBody(BaseModel):
@@ -154,10 +170,10 @@ def run_chat(
 
 
 def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
-    items = {i.item_id: i for i in store.list_items()}
+    items = store.get_items(list(reply.citations))
     cited: list[dict[str, Any]] = []
     for ref in reply.citations:
-        if (item := items.get(ref)) is not None:
+        if (item := items.get(ref)) is not None and item.review is not ReviewStatus.REJECTED:
             facet = FACET_BY_ID[item.facet_id].name
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
         elif (e := store.get_expression(ref)) is not None:
@@ -337,25 +353,61 @@ def register(
             )[:20000]
 
     @app.get("/api/persona/sources")
-    def list_sources() -> list[dict[str, Any]]:
+    def list_sources(
+        limit: Annotated[int, Query(ge=0, le=MAX_PAGE_SIZE)] = PAGE_SIZE,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        status: Annotated[list[str] | None, Query()] = None,
+        candidates: bool = False,
+        attention: bool = False,
+    ) -> dict[str, Any]:
+        """One page of memories (oldest first) and how many match: only those with a ``status`` (repeatable) or,
+        with ``candidates``, with voice or portrait candidates. ``summary`` counts every memory; ``attention`` adds
+        up to 50 memories being transcribed or waiting for the person, wherever they are in the list."""
         running = processing.view()["state"] == "running"
         with open_store() as store:
-            memories = source_memories(store)
+            sources = store.list_sources()
+            memories = source_memories(store, sources)
+            statuses = store.source_statuses(sources, {sid: m.items_supported for sid, m in memories.items()})
             progress = store.build_progress() if running else None
-            chunks = progress[1] if progress else {}
-            rows = []
-            for s in store.list_sources():
-                status = store.source_status(s.source_id, memories[s.source_id].items_supported)
-                row = {
-                    **source_view(s),
-                    **asdict(memories[s.source_id]),
-                    "status": status,
-                    "remembered": memories[s.source_id].items_supported,
-                }
-                if status == "processing" and s.source_id in chunks:
-                    row["chunks_done"], row["chunks_total"] = chunks[s.source_id]
-                rows.append(row)
-            return rows
+        chunks = progress[1] if progress else {}
+
+        def busy(source: Source) -> bool:
+            state = statuses[source.source_id]
+            return (
+                state in MEDIA_PENDING
+                or state == "processing"
+                or (source.candidates_pending and state not in {"failed", "needs_asr", "needs_speaker"})
+            )
+
+        def row(source: Source) -> dict[str, Any]:
+            memory = memories[source.source_id]
+            state = statuses[source.source_id]
+            view = {**source_view(source), **asdict(memory), "status": state, "remembered": memory.items_supported}
+            if state == "processing" and source.source_id in chunks:
+                view["chunks_done"], view["chunks_total"] = chunks[source.source_id]
+            return view
+
+        wanted = set(status or ())
+        matching = [
+            s
+            for s in sources
+            if (not wanted or statuses[s.source_id] in wanted)
+            and (not candidates or s.voice_candidates or s.portrait_candidates)
+        ]
+        result: dict[str, Any] = {
+            "items": [row(s) for s in matching[offset : offset + limit]],
+            "total": len(matching),
+            "summary": {
+                "total": len(sources),
+                "duration_s": sum(s.duration_s or 0 for s in sources),
+                "needs_speaker": sum(statuses[s.source_id] == "needs_speaker" for s in sources),
+                "busy": sum(busy(s) for s in sources),
+            },
+        }
+        if attention:
+            waiting = [s for s in sources if statuses[s.source_id] in NEEDS_ATTENTION]
+            result["attention"] = [row(s) for s in waiting[:MAX_ATTENTION]]
+        return result
 
     @app.get("/api/persona/state")
     def get_state() -> dict[str, Any]:
@@ -412,7 +464,7 @@ def register(
     @app.post("/api/persona/build", status_code=202)
     def start_build() -> dict[str, str]:
         with open_store() as store:
-            if not store.list_sources() and not profile_stale(store):
+            if not store.count_sources() and not profile_stale(store):
                 raise HTTPException(400, "还没有导入资料，请先添加记忆")
         job = processing.start()
         return {"job_id": job.job_id}
@@ -435,9 +487,71 @@ def register(
         }
 
     @app.get("/api/persona/items")
-    def list_items(include_rejected: bool = False) -> list[dict[str, Any]]:
+    def list_items(
+        include_rejected: bool = False,
+        dimension: Annotated[list[str] | None, Query()] = None,
+        review: ReviewStatus | None = None,
+        q: Annotated[str, Query(max_length=200)] = "",
+        source_id: str | None = None,
+        sort: Literal["facet", "evidence"] = "facet",
+        limit: Annotated[int, Query(ge=0, le=MAX_PAGE_SIZE)] = PAGE_SIZE,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        with_sources: bool = False,
+    ) -> dict[str, Any]:
+        """One page of profile items and how many match. Filters: ``dimension`` (repeatable), ``review``, ``q``
+        (statement or quote), ``source_id`` (evidence from that source). ``sort=evidence`` lists the best-supported
+        items first; ``with_sources`` adds the title and date of every source the page cites."""
+        if unknown := [d for d in dimension or () if d not in DIMENSION_BY_ID]:
+            raise HTTPException(400, f"未知的维度 {unknown[0]}")
+        facet_ids = [f.facet_id for f in FACETS if f.dimension_id in set(dimension)] if dimension else None
         with open_store() as store:
-            return [item_view(i) for i in store.list_items(include_rejected=include_rejected)]
+            items, total = store.query_items(
+                facet_ids=facet_ids,
+                review=review,
+                text=q,
+                source_id=source_id,
+                by_evidence=sort == "evidence",
+                include_rejected=include_rejected,
+                limit=limit,
+                offset=offset,
+            )
+            result: dict[str, Any] = {"items": [item_view(i) for i in items], "total": total}
+            if with_sources:
+                cited = sorted({e.source_id for i in items for e in i.evidence if e.source_id})
+                result["sources"] = {
+                    sid: {"title": source.title, "first_date": source.first_date, "kind": source.kind.value}
+                    for sid in cited
+                    if (source := store.get_source(sid)) is not None
+                }
+        return result
+
+    @app.get("/api/persona/items/summary")
+    def items_summary() -> dict[str, Any]:
+        """Item counts per dimension in taxonomy order, rejected items left out."""
+        with open_store() as store:
+            counts = store.item_counts()
+        totals: dict[str, list[int]] = {}
+        for (facet_id, status), n in counts.items():
+            if status is ReviewStatus.REJECTED or facet_id not in FACET_BY_ID:
+                continue
+            row = totals.setdefault(FACET_BY_ID[facet_id].dimension_id, [0, 0])
+            row[0] += n
+            row[1] += n if status is ReviewStatus.UNREVIEWED else 0
+        dimensions = [
+            {
+                "dimension_id": d.dimension_id,
+                "name": d.name,
+                "total": totals[d.dimension_id][0],
+                "unreviewed": totals[d.dimension_id][1],
+            }
+            for d in DIMENSIONS
+            if d.dimension_id in totals
+        ]
+        return {
+            "total": sum(d["total"] for d in dimensions),
+            "unreviewed": sum(d["unreviewed"] for d in dimensions),
+            "dimensions": dimensions,
+        }
 
     @app.post("/api/persona/items/{item_id}/review")
     def review_item(item_id: str, body: ReviewBody) -> dict[str, Any]:
@@ -469,12 +583,17 @@ def register(
             note="",
             reviewed_at=dt.datetime.now().isoformat(timespec="seconds"),
         )
+        if body.dimension_id is not None and body.dimension_id not in DIMENSION_BY_ID:
+            raise HTTPException(400, f"未知的维度 {body.dimension_id}")
         with open_store() as store:
+            ids = body.item_ids or store.unreviewed_item_ids(
+                [f.facet_id for f in FACETS if f.dimension_id == body.dimension_id]
+            )
             try:
-                store.set_reviews(body.item_ids, review)
+                store.set_reviews(ids, review)
             except KeyError as e:
                 raise HTTPException(404, f"找不到档案条目 {e.args[0]}（可能已在重新构建时合并）") from e
-        return {"updated": len(body.item_ids)}
+        return {"updated": len(ids)}
 
     @app.get("/api/persona/coverage")
     def get_coverage(as_of: str | None = None) -> dict[str, Any]:
@@ -496,7 +615,7 @@ def register(
         messages = validate_chat(body)
         email = owner(request)
         with open_store() as store:
-            if not store.list_items():
+            if not store.has_items():
                 append_user(store, body.conversation_id, email, messages[-1].content)
                 reply = no_profile_reply(store)
                 return JSONResponse(
@@ -521,7 +640,7 @@ def register(
         messages = validate_chat(body)
         email = owner(request)
         with open_store() as store:
-            profiled = bool(store.list_items())
+            profiled = store.has_items()
         ticket: Ticket | None = None
         if profiled:
             llm, embedder = backends.chat_llm(), backends.embedder()
@@ -577,10 +696,13 @@ def register(
                 # Backend errors can contain prompts, URLs or credentials; never reflect them to the browser.
                 yield sse_event("error", {"detail": "分身暂时无法回复，请重试"})
             finally:
-                if pending is not None:
-                    pending.cancel()
-                    await asyncio.gather(pending, return_exceptions=True)
-                await stream.aclose()
+                # Cancel the pending operation once, then let its worker finish before closing the store and
+                # releasing the ticket. Starlette's cancelled scope would otherwise cancel this gather again.
+                with anyio.CancelScope(shield=True):
+                    if pending is not None:
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+                    await stream.aclose()
 
         return AdmittedStream(
             events(),

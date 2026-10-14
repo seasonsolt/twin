@@ -434,7 +434,7 @@ class PersonaChat:
             yield unbuilt
             return
         ctx = await off_loop(partial(self._search, messages, as_of))
-        await asyncio.to_thread(self._derive, messages, ctx)
+        await off_loop(partial(self._derive, messages, ctx))
         system, user = await off_loop(
             lambda: (
                 chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
@@ -444,8 +444,8 @@ class PersonaChat:
         effort = self.settings.effective_chat_llm.effort_twin
         stream = getattr(self.llm, "stream", None)
         if stream is None:
-            draft = await asyncio.to_thread(
-                self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort
+            draft = await off_loop(
+                partial(self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort)
             )
             yield draft.reply
         else:
@@ -466,7 +466,7 @@ class PersonaChat:
 
     def _unbuilt_reply(self, as_of: dt.date | None) -> ChatReply | None:
         """The reply while nothing has been built yet; None once there is a profile to answer from."""
-        if not self.store.list_items() and self.store.get_meta("built_at") is None:
+        if not self.store.has_items() and self.store.get_meta("built_at") is None:
             return no_profile_reply(self.store, as_of)
         return None
 

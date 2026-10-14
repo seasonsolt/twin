@@ -14,6 +14,7 @@ import { personaKey, setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -83,20 +84,25 @@ beforeEach(() => {
         speech_clone: false,
         video: false,
       });
-    if (path === '/api/persona/sources')
-      return json([
-        {
-          source_id: 'audio',
-          title: '访谈录音',
-          status: 'needs_speaker',
-          kind: 'audio',
-          remembered: 0,
-          detected_kind_label: '录音',
-          first_date: null,
-        },
-      ]);
+    if (isSourcesUrl(path))
+      return json(
+        sourcesPage(path, [
+          {
+            source_id: 'audio',
+            title: '访谈录音',
+            status: 'needs_speaker',
+            kind: 'audio',
+            remembered: 0,
+            detected_kind_label: '录音',
+            first_date: null,
+          },
+        ]),
+      );
     if (path === '/api/persona/processing') return json({ state: 'idle' });
-    if (path.startsWith('/api/persona/items')) return json([]);
+    if (path === '/api/persona/items/summary')
+      return json({ total: 0, unreviewed: 0, dimensions: [] });
+    if (path.startsWith('/api/persona/items'))
+      return json({ items: [], total: 0 });
     if (path === '/api/persona/coverage')
       return json({ facets: [], suggestions: [], kind_labels: {} });
     return json({});

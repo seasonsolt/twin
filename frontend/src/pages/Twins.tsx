@@ -72,18 +72,14 @@ export function Twins() {
         .filter((persona) => persona.can_manage !== false)
         .map(async (persona) => {
           try {
-            const sources = await api<{ status: string }[]>(
-              '/api/persona/sources',
+            const page = await api<{ summary: { needs_speaker: number } }>(
+              '/api/persona/sources?limit=0',
               {
                 headers: { 'X-Twin-Persona': persona.id },
                 signal: controller.signal,
               },
             );
-            return [
-              persona.id,
-              sources.filter((source) => source.status === 'needs_speaker')
-                .length,
-            ] as const;
+            return [persona.id, page.summary.needs_speaker] as const;
           } catch {
             return [persona.id, 0] as const;
           }

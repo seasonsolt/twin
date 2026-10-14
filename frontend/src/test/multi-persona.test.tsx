@@ -36,6 +36,7 @@ import {
 } from '../lib/persona';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 const B = 'p-bbbbbbbbbb';
 const NEW = 'p-cccccccccc';
@@ -146,7 +147,7 @@ beforeEach(() => {
     if (path === '/api/media/capabilities')
       return json({ available: false, video: { available: false } });
     if (path === '/api/jobs') return json([]);
-    if (path === '/api/persona/sources') return json([]);
+    if (isSourcesUrl(path)) return json(sourcesPage(path, []));
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     return json({});
   });

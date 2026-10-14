@@ -271,6 +271,51 @@ def test_reviews_follow_items_through_a_re_merge(store: PersonaStore, settings: 
     assert store.reviews() == {"pi_grown": review}  # the old item's review moved, nothing left dangling
 
 
+def test_reviews_follow_re_extracted_items_by_evidence_and_wording() -> None:
+    from twin.persona.items import PersonaItem, PEvidence, PReview, carry_reviews
+    from twin.persona.schema import ReviewStatus, SourceKind
+
+    def item(item_id: str, statement: str, expressions: list[str], members: list[str]) -> PersonaItem:
+        evidence = [
+            PEvidence(
+                expression_id=e,
+                source_id="s1",
+                source_kind=SourceKind.DOCUMENT,
+                evidence_class=EvidenceClass.BEHAVIOR,
+                quote="原话",
+            )
+            for e in expressions
+        ]
+        return PersonaItem(
+            item_id=item_id, facet_id="2.1", statement=statement, evidence=evidence, member_candidate_ids=members
+        )
+
+    at = "2026-10-14T10:00:00"
+    confirmed = PReview(status=ReviewStatus.CONFIRMED, reviewed_at=at)
+    rejected = PReview(status=ReviewStatus.REJECTED, reviewed_at=at)
+    money = item("pi_money", "做事先看回款", ["e1"], ["pc_a"])
+    # Two traits drawn from the same expression: the wording decides which one continues the reviewed item.
+    paid = item("pi_paid", "做事优先看回款", ["e1"], ["pc_x"])
+    risk = item("pi_risk", "签约前先问风险", ["e1"], ["pc_y"])
+    assert carry_reviews([money], [risk, paid], {"pi_money": confirmed}) == {"pi_paid": confirmed}
+    # A similar wording quoting nothing the old item quoted is a different occasion, not a re-extraction.
+    elsewhere = item("pi_elsewhere", "做事先看回款", ["e9"], ["pc_z"])
+    assert carry_reviews([money], [elsewhere], {"pi_money": confirmed}) == {}
+    # An edit is matched by the person's wording as well as the extracted one.
+    edited = PReview(status=ReviewStatus.EDITED, statement="签约前先问风险", reviewed_at=at)
+    vague = item("pi_vague", "看重安全", ["e1"], ["pc_b"])
+    assert carry_reviews([vague], [paid, risk], {"pi_vague": edited}) == {"pi_risk": edited}
+    # Old items merged into one new item: the rejection wins, as with surviving candidates.
+    twin = item("pi_twin", "做事先看回款", ["e1"], ["pc_c"])
+    assert carry_reviews([money, twin], [paid], {"pi_money": confirmed, "pi_twin": rejected}) == {"pi_paid": rejected}
+    # A survivor keeps its review by candidates; nothing moves by wording while any candidate survives (a split).
+    grown = item("pi_grown", "做事先看回款", ["e1"], ["pc_a", "pc_new"])
+    assert carry_reviews([money], [grown, paid], {"pi_money": confirmed}) == {"pi_grown": confirmed}
+    both = item("pi_both", "做事先看回款", ["e1"], ["pc_a", "pc_d"])
+    half = item("pi_half", "做事先看回款", ["e1"], ["pc_a"])
+    assert carry_reviews([both], [half, paid], {"pi_both": confirmed}) == {}
+
+
 def test_statement_prompts_omit_pronoun_subjects() -> None:
     assert "不加人称代词主语" in pf.EXTRACT_SYSTEM and "不加人称代词主语" in pf.MERGE_SYSTEM
     assert "不加人称代词主语" in pf.CandidateDraft.model_fields["statement"].description

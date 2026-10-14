@@ -253,11 +253,11 @@ def test_notes_import_status_privacy_delete_and_chat(web: tuple[TestClient, Cloc
     assert client.post("/api/persona/notes", json={"text": " "}).status_code == 400
     assert client.post("/api/persona/notes", json={"text": "x" * 20001}).status_code == 400
     assert client.get("/api/persona/processing").json()["state"] == "queued"
-    assert client.get("/api/persona/sources").json()[0]["status"] == "processing"
+    assert client.get("/api/persona/sources").json()["items"][0]["status"] == "processing"
     reply = client.post("/api/persona/chat", json={"messages": [{"role": "user", "content": "你好"}]})
     assert reply.status_code == 200 and "处理中" in reply.json()["reply"]
     finish_build(client)
-    rows = client.get("/api/persona/sources").json()
+    rows = client.get("/api/persona/sources").json()["items"]
     assert rows[0]["status"] == "nothing_found" and rows[0]["remembered"] == 0 and "preview" not in rows[0]
     uploads = [
         (
@@ -280,14 +280,16 @@ def test_notes_import_status_privacy_delete_and_chat(web: tuple[TestClient, Cloc
     assert "王五" not in preview.text and pseudonym("王五") in preview.text
     assert client.get("/api/persona/sources/missing/text").status_code == 404
     finish_build(client)
-    remembered = next(s for s in client.get("/api/persona/sources").json() if s["source_id"] == source["source_id"])
+    remembered = next(
+        s for s in client.get("/api/persona/sources").json()["items"] if s["source_id"] == source["source_id"]
+    )
     assert remembered["status"] == "remembered" and remembered["remembered"] == 1
     assert client.get("/api/persona/processing").json()["last_finished_at"]
     assert client.delete(f"/api/persona/sources/{source['source_id']}").status_code == 200
     assert client.get("/api/persona/processing").json()["state"] == "queued"
     assert client.delete("/api/persona/sources/missing").status_code == 404
     finish_build(client)
-    assert client.get("/api/persona/items").json() == []
+    assert client.get("/api/persona/items").json()["items"] == []
     title = client.post("/api/persona/notes", json={"text": "x" * 20000, "title": "我的想法"}).json()
     assert title["title"] == "我的想法"
     assert len(client.get(f"/api/persona/sources/{title['source_id']}/text").text) == 20000
@@ -353,7 +355,7 @@ def test_processing_endpoint_running_follow_up_and_startup_resume(
         assert monotonic() < deadline
         sleep(0.001)
     assert len(calls) == 2
-    assert all(s["status"] == "nothing_found" for s in client.get("/api/persona/sources").json())
+    assert all(s["status"] == "nothing_found" for s in client.get("/api/persona/sources").json()["items"])
     client.post("/api/persona/notes", json={"text": "saved before shutdown"})
     second_app = create_app(settings, llm_factory=lambda: FakeLLM(handler), embedder_factory=HashingEmbedder)
     with TestClient(second_app, base_url="http://127.0.0.1") as restarted:
@@ -372,7 +374,7 @@ def test_failed_build_status_and_private_error(
     monkeypatch.setattr("twin.web.persona.run_persona_build", fail)
     source = client.post("/api/persona/notes", json={"text": secret}).json()
     finish_build(client)
-    assert client.get("/api/persona/sources").json()[0]["status"] == "failed"
+    assert client.get("/api/persona/sources").json()["items"][0]["status"] == "failed"
     assert client.get("/api/persona/processing").json()["last_error"]
     assert secret not in caplog.text
     with PersonaStore(settings.db_path) as store:

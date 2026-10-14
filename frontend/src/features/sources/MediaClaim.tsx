@@ -353,6 +353,9 @@ export function MediaClaim({
   );
 }
 
+// Enough recordings to pick a voice or portrait from; the memory page lists every one.
+const SHORTCUT_LIMIT = 20;
+
 export function RecordingShortcut() {
   const [sources, setSources] = useState<
     {
@@ -370,22 +373,15 @@ export function RecordingShortcut() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const reload = async () => {
       try {
-        const rows = await api<typeof sources>('/api/persona/sources', {
+        const page = await api<{
+          items: typeof sources;
+          summary: { busy: number };
+        }>(`/api/persona/sources?candidates=true&limit=${SHORTCUT_LIMIT}`, {
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
-        setSources(
-          rows.filter((row) => row.voice_candidates || row.portrait_candidates),
-        );
-        if (
-          rows.some(
-            (row) =>
-              row.candidates_pending ||
-              ['queued', 'extracting', 'transcribing'].includes(
-                row.status ?? '',
-              ),
-          )
-        )
+        setSources(page.items);
+        if (page.summary.busy > 0)
           timer = setTimeout(() => void reload(), 2000);
       } catch {
         // The optional shortcut must not block manual asset setup.

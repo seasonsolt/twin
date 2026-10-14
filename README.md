@@ -124,20 +124,24 @@ flowchart LR
 
 越高越好：
 
-| 基准 | 测什么 | **twin** | 公开最好成绩 | Second Me 升级版 |
-| :-- | :-- | :-: | :-: | :-: |
-| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 82%<br/><sub>正式集</sub> | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
-| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 55%<br/><sub>正式集</sub> | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
-| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 像本人一样答问卷，按达到真人重测的比例计 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
+| 基准 | 测什么 | **twin**<br/><sub>gpt-6-luna 作答</sub> | **twin**<br/><sub>Sonnet 5.5 作答</sub> | 公开最好成绩 | Second Me 升级版 |
+| :-- | :-- | :-: | :-: | :-: | :-: |
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 75% | 94% | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
+| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 55% | 66% | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
+| [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 像本人一样答问卷，按达到真人重测的比例计 | 60% | — | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
 
-- **twin 成绩**：都由 `gpt-6-luna` 作答。
-  - LongMemEval 和 PersonaMem-v2 是记忆内核 persona-v5（2026-10-14，第 40 轮）在正式集上的成绩，跑 3 次取平均。
-    - LongMemEval：30 题，每种题型 5 题。3 次在 77%–90% 之间，评委为 `gpt-6.1-sol`。
-    - PersonaMem-v2：8 人 201 题。3 次在 54%–57% 之间。
-    - 同一内核在开发集上为 LongMemEval 82%（36 题）、PersonaMem-v2 54%（4 人 108 题）。开发集用于日常迭代，题目与正式集不重叠。
-    - 2026-10-10 旧代码在 LongMemEval 正式集上为 33%，由作答模型自己评分。
-  - Twin-2K-500 是 2026-10-10 代码的正式抽样，10 人。
-- **公开成绩**：截至 2026-10，取自各自的论文或博客。题量、作答模型、评委和打分细则都和 twin 不同，只能看量级。LongMemEval 的高分都是厂商自报，还没有独立复现，而且分数随作答模型变化很大。
+- **twin 成绩**：LongMemEval 和 PersonaMem-v2 是记忆内核 persona-v5（2026-10-14，第 40 轮）在正式集上的成绩，跑 3 次取平均，评委为 `gpt-6.1-sol`。
+  - **两种作答模型**：画像都由 `gpt-6-luna` 构建，两种作答用的是同一套画像，只换掉回答问题的模型。部署时可以用 `[chat_llm]` 单独给回答配一个更强的模型，画像仍用 `[llm]` 构建。Anthropic 不向总部在中国大陆或大陆控股的公司提供服务，能否用 Sonnet 作答取决于部署方。
+  - **LongMemEval**：60 题，每种题型 10 题。
+    - `gpt-6-luna` 作答 75%，3 次在 72%–80% 之间。
+    - Sonnet 5.5 作答 94%，3 次在 92%–97% 之间。多会话从 43% 提到 83%，时间推理从 63% 提到 93%。
+    - 其中 8 题在扩到 60 题之前被开发集抽到过；去掉这 8 题后两者分别是 74% 和 95%。此后开发集不再抽到正式题。
+    - 此前的正式集是每种题型 5 题共 30 题，第 40 轮用 `gpt-6-luna` 作答为 82%；题量翻倍后降到 75%，30 题的成绩偏乐观。
+    - 2026-10-10 旧代码在 30 题正式集上为 33%，由作答模型自己评分。
+  - **PersonaMem-v2**：8 人 201 题。`gpt-6-luna` 作答 55%，3 次在 54%–57% 之间；Sonnet 5.5 作答 66%，3 次在 65%–68% 之间。
+  - **开发集**用于日常迭代，题目与正式集不重叠。第 40 轮在开发集上为 LongMemEval 83%（36 题，3 次在 81%–86% 之间）、PersonaMem-v2 54%（4 人 108 题，3 次在 53%–57% 之间），都由 `gpt-6-luna` 作答。开发集 2026-10-14 起换成不含任何正式题的新抽样，和此前的开发集数字不能直接比。
+  - **Twin-2K-500** 是 2026-10-10 代码的正式抽样，10 人，`gpt-6-luna` 作答。
+- **公开成绩**：截至 2026-10，取自各自的论文或博客。题量、作答模型、评委和打分细则都和 twin 不同，只能看量级，不能直接比高低。LongMemEval 的高分都是厂商自报，还没有独立复现，而且分数随作答模型变化很大。
 - **PersonaMem 版本**：已从 v1 换到更难的 v2。twin 在 v1 上是 63%，当时公开成绩约 50%。v2 上前沿大模型直接读全文约 37%–48%（论文）。
 - **Twin-2K-500**：暂停迭代。
 - **Second Me**：同题小样本，6 题或 2 人。
@@ -145,13 +149,13 @@ flowchart LR
 
 ### 迭代走势
 
-蓝线是开发集，橙点是正式集，竖线是同一代码跑 3 次的范围，空心点是没有合并的实验。
+蓝线是开发集，橙色圆点是正式集（每种题型 5 题的 30 题版），竖线是同一代码跑 3 次的范围，空心点是没有合并的实验，都由 `gpt-6-luna` 作答。最右边虚线后的“10-14”是新口径：开发集换成不含任何正式题的新抽样，橙色方块是扩大后的正式集（LongMemEval 60 题），绿色菱形是同一套画像改由 Sonnet 5.5 作答。新口径和左边的折线不能直接比。
 
 ![LongMemEval 各轮走势](docs/assets/trend-longmemeval.webp)
 
 ![PersonaMem-v2 各轮走势](docs/assets/trend-personamem2.webp)
 
-薄弱题型单独加题复测：多会话、知识更新、时间推理各 48–73 题，每题跑 2 次。题量扩大处折线断开。
+薄弱题型单独加题复测：多会话、知识更新、时间推理各 48–73 题，每题跑 2 次，`gpt-6-luna` 作答。题量扩大处折线断开；“10-14”是新开发集上各 48 题的基线。
 
 ![LongMemEval 薄弱题型走势](docs/assets/trend-weak-types.webp)
 

@@ -12,6 +12,12 @@ import { ConfirmProvider, ToastViewport } from '../components/ui';
 import { AvatarPicker } from '../features/avatar/AvatarPicker';
 import { usePersonas } from '../stores/personas';
 import { useStatus, type Status } from '../stores/status';
+import {
+  isItemSummaryUrl,
+  isSourcesUrl,
+  itemSummary,
+  sourcesPage,
+} from './personaApi';
 
 const identity = {
   name: '配置姓名',
@@ -78,8 +84,8 @@ beforeEach(() => {
                   }
                 : identity,
             )
-        : path === '/api/persona/sources'
-          ? json([])
+        : isSourcesUrl(path)
+          ? json(sourcesPage(path, []))
           : path === '/api/persona/processing'
             ? json({ state: 'idle' })
             : path === '/api/me/assets'
@@ -93,8 +99,8 @@ beforeEach(() => {
                 ? failAvatar
                   ? json({ detail: '预览暂不可用' }, 503)
                   : json({ available: false, avatar: spec })
-                : path === '/api/persona/items?include_rejected=false'
-                  ? json([])
+                : isItemSummaryUrl(path)
+                  ? json(itemSummary([]))
                   : path === '/api/persona/coverage'
                     ? json({ facets: [], suggestions: [], kind_labels: {} })
                     : json(useStatus.getState().data ?? status),

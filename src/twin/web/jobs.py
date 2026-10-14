@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import anyio
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
@@ -289,13 +290,23 @@ class JobManager:
             job = Job(
                 job_id=self._new_id(), kind=kind, title=title, created=_now(), persona_id=self.persona_id or "default"
             )
-            # Capture input and persist acceptance before a worker can run, under the same admission lock as builds.
-            if prepare is not None:
-                prepare(job)
+            # Reserve admission before preparing input. Preparation can write to SQLite, so it must run without
+            # this lock; the queued record still counts against limits and prevents deletion or a second build.
             self._jobs[job.job_id] = job
             if exclusive:
                 self._exclusive_slot[0] = job
             self._evict()
+        try:
+            if prepare is not None:
+                prepare(job)
+        except BaseException:
+            with self._lock:
+                self._jobs.pop(job.job_id)
+                if self._exclusive_slot[0] is job:
+                    self._exclusive_slot[0] = None
+                job.status, job.finished = "failed", _now()
+            job.done.set()
+            raise
         try:
             threading.Thread(target=self._run, args=(job, fn), name=f"twin-{job.job_id}", daemon=True).start()
         except BaseException:
@@ -467,8 +478,16 @@ class AdmittedStream(StreamingResponse):
         try:
             await super().__call__(scope, receive, send)
         finally:
-            if self.ticket is not None:
-                self.ticket.close()
+            # A disconnect cancels Starlette's task group. Cleanup must finish despite that cancellation, and a
+            # failed send can leave the iterator suspended at a yield rather than closing it automatically.
+            with anyio.CancelScope(shield=True):
+                try:
+                    close = getattr(self.body_iterator, "aclose", None)
+                    if close is not None:
+                        await close()
+                finally:
+                    if self.ticket is not None:
+                        self.ticket.close()
 
 
 class PersonaProcessing:

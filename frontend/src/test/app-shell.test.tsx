@@ -5,6 +5,13 @@ import { AppShell } from '../components/layout/AppShell';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { Profile } from '../pages/Profile';
 import { useStatus, type Status } from '../stores/status';
+import {
+  isItemSummaryUrl,
+  isSourcesUrl,
+  itemSummary,
+  itemsPage,
+  sourcesPage,
+} from './personaApi';
 
 it('keeps only name/AI label in the header and describes external hosts only on About', async () => {
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
@@ -38,23 +45,27 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       Promise.resolve(
         new Response(
           JSON.stringify(
-            path === '/api/persona/sources' ||
-              path === '/api/personas' ||
-              path.startsWith('/api/persona/items')
-              ? []
-              : path.startsWith('/api/persona/coverage')
-                ? { facets: [], suggestions: [], kind_labels: {} }
-                : path === '/api/status'
-                  ? status
-                  : path === '/api/identity'
-                    ? {
-                        name: '身份测试人',
-                        aliases: [],
-                        voice: null,
-                        avatar: null,
-                        egress: [],
-                      }
-                    : { available: false, backend: null },
+            isSourcesUrl(path)
+              ? sourcesPage(path, [])
+              : isItemSummaryUrl(path)
+                ? itemSummary([])
+                : path.startsWith('/api/persona/items')
+                  ? itemsPage(path, [])
+                  : path === '/api/personas'
+                    ? []
+                    : path.startsWith('/api/persona/coverage')
+                      ? { facets: [], suggestions: [], kind_labels: {} }
+                      : path === '/api/status'
+                        ? status
+                        : path === '/api/identity'
+                          ? {
+                              name: '身份测试人',
+                              aliases: [],
+                              voice: null,
+                              avatar: null,
+                              egress: [],
+                            }
+                          : { available: false, backend: null },
           ),
         ),
       ),

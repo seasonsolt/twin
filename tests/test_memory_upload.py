@@ -270,7 +270,7 @@ def test_a_failed_source_does_not_hold_back_the_others(settings: Settings) -> No
 def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> None:
     app = create_app(settings, llm_factory=lambda: FakeLLM(handler), embedder_factory=HashingEmbedder)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        assert client.get("/api/persona/sources").json() == []
+        assert client.get("/api/persona/sources").json()["items"] == []
         assert client.get("/api/persona/state").json() == {"stale": False, "built_at": None, "sources_changed_at": None}
         response = client.post(
             "/api/persona/import?kind=document",
@@ -279,7 +279,7 @@ def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> 
         )
         assert response.status_code == 200
         original = response.json()["imported"][0]
-        [source] = client.get("/api/persona/sources").json()
+        [source] = client.get("/api/persona/sources").json()["items"]
         assert all(source[key] == value for key, value in original.items() if key not in ("new", "skipped_lines"))
         assert source["build_status"] == "not_built" and source["expressions_target"] == 1
         assert client.get("/api/persona/state").json()["stale"]
@@ -289,7 +289,7 @@ def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> 
         assert result["items_added"] == 1 and result["facets_changed"] == 1
         assert "items" in result and "failures" in result
         assert not any("他核对测试数据" in line for line in logs)
-        [source] = client.get("/api/persona/sources").json()
+        [source] = client.get("/api/persona/sources").json()["items"]
         assert source["items_supported"] == 1 and source["facets"][0]["facet_id"] == "2.1"
         assert source["build_status"] == "remembered"
         assert not client.get("/api/persona/state").json()["stale"]
@@ -308,7 +308,7 @@ def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> 
         assert job["status"] == "done" and job["result"]["items_removed"] == 1
         assert job["result"]["facet_diffs"]["2.1"] == {"added": 0, "changed": 0, "removed": 1}
         assert not client.get("/api/persona/state").json()["stale"]
-        assert client.get("/api/persona/items").json() == []
+        assert client.get("/api/persona/items").json()["items"] == []
         assert pf.STALE_PROFILE_NOTICE == "资料有变化，尚未重新构建；档案和聊天仍基于上次构建"
 
 
@@ -357,7 +357,7 @@ def test_web_shows_chunk_progress_while_a_build_runs(settings: Settings) -> None
         job = client.post("/api/persona/build", headers=HEADERS).json()["job_id"]
         assert started.wait(5)
         assert client.get("/api/persona/processing").json()["progress"] == {"phase": "extract", "done": 0, "total": 1}
-        [source] = client.get("/api/persona/sources").json()
+        [source] = client.get("/api/persona/sources").json()["items"]
         assert (source["status"], source["chunks_done"], source["chunks_total"]) == ("processing", 0, 1)
         release.set()
         for _ in range(200):
@@ -365,5 +365,5 @@ def test_web_shows_chunk_progress_while_a_build_runs(settings: Settings) -> None
                 break
             time.sleep(0.02)
         assert "progress" not in client.get("/api/persona/processing").json()
-        [source] = client.get("/api/persona/sources").json()
+        [source] = client.get("/api/persona/sources").json()["items"]
         assert source["status"] == "remembered" and "chunks_total" not in source

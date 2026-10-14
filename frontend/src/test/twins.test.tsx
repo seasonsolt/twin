@@ -10,6 +10,7 @@ import { personaKey, setPersonaId } from '../lib/persona';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 import { useAuth } from '../stores/auth';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -87,16 +88,19 @@ beforeEach(() => {
         counts: { sources: persona.sources, items: 0 },
         egress: [],
       });
-    if (path === '/api/persona/sources')
+    if (isSourcesUrl(path))
       return json(
-        Array.from({ length: selected === B ? 1 : 2 }, (_, index) => ({
-          source_id: `s-${index}`,
-          title: `录音 ${index}`,
-          status: 'needs_speaker',
-          detected_kind_label: '录音',
-          remembered: 0,
-          first_date: null,
-        })),
+        sourcesPage(
+          path,
+          Array.from({ length: selected === B ? 1 : 2 }, (_, index) => ({
+            source_id: `s-${index}`,
+            title: `录音 ${index}`,
+            status: 'needs_speaker',
+            detected_kind_label: '录音',
+            remembered: 0,
+            first_date: null,
+          })),
+        ),
       );
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     if (path === '/api/media/capabilities')
@@ -108,11 +112,11 @@ beforeEach(() => {
         speech_clone: false,
         video: false,
       });
-    if (
-      path.startsWith('/api/persona/items') ||
-      path.startsWith('/api/conversations?') ||
-      path === '/api/jobs'
-    )
+    if (path === '/api/persona/items/summary')
+      return json({ total: 0, unreviewed: 0, dimensions: [] });
+    if (path.startsWith('/api/persona/items'))
+      return json({ items: [], total: 0 });
+    if (path.startsWith('/api/conversations?') || path === '/api/jobs')
       return json([]);
     if (path === '/api/persona/coverage')
       return json({ facets: [], suggestions: [], kind_labels: {} });
@@ -171,7 +175,7 @@ it('lists twins with portraits, isolated last messages, confirmation counts, cur
   expect(await within(friend).findByText('有 1 段待确认')).toBeInTheDocument();
   expect(
     fetcher.mock.calls
-      .filter(([path]) => path === '/api/persona/sources')
+      .filter(([path]) => isSourcesUrl(path))
       .every(([, init]) => new Headers(init.headers).has('X-Twin-Persona')),
   ).toBe(true);
 });
@@ -367,7 +371,7 @@ it('lets the owner publish a twin and lists other members’ public twins withou
   await waitFor(() =>
     expect(
       fetcher.mock.calls
-        .filter(([path]) => path === '/api/persona/sources')
+        .filter(([path]) => isSourcesUrl(path))
         .map(([, init]) => new Headers(init.headers).get('X-Twin-Persona')),
     ).toEqual(['default']),
   );

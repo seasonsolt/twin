@@ -22,6 +22,13 @@ import {
   mouthWeight,
 } from '../features/avatar/motion';
 import { visibleRenderLoop } from '../features/avatar/renderLoop';
+import {
+  isItemSummaryUrl,
+  isSourcesUrl,
+  itemSummary,
+  itemsPage,
+  sourcesPage,
+} from './personaApi';
 
 const mocks = vi.hoisted(() => ({
   render: vi.fn(),
@@ -490,26 +497,29 @@ it.each([
         Promise.resolve(
           new Response(
             JSON.stringify(
-              path === '/api/persona/sources' ||
-                path.startsWith('/api/persona/items')
-                ? []
-                : path.startsWith('/api/persona/coverage')
-                  ? { facets: [], suggestions: [], kind_labels: {} }
-                  : path === '/api/identity'
-                    ? {
-                        name: '配置身份',
-                        aliases: [],
-                        avatar: 'default',
-                        voice: null,
-                        egress: [],
-                      }
-                    : {
-                        ...capabilities,
-                        avatar_image: portrait
-                          ? { url: '/api/media/avatar-image' }
-                          : null,
-                        avatar_model: { format: 'vrm', url: props.url },
-                      },
+              isSourcesUrl(path)
+                ? sourcesPage(path, [])
+                : isItemSummaryUrl(path)
+                  ? itemSummary([])
+                  : path.startsWith('/api/persona/items')
+                    ? itemsPage(path, [])
+                    : path.startsWith('/api/persona/coverage')
+                      ? { facets: [], suggestions: [], kind_labels: {} }
+                      : path === '/api/identity'
+                        ? {
+                            name: '配置身份',
+                            aliases: [],
+                            avatar: 'default',
+                            voice: null,
+                            egress: [],
+                          }
+                        : {
+                            ...capabilities,
+                            avatar_image: portrait
+                              ? { url: '/api/media/avatar-image' }
+                              : null,
+                            avatar_model: { format: 'vrm', url: props.url },
+                          },
             ),
             { headers: { 'Content-Type': 'application/json' } },
           ),

@@ -330,7 +330,7 @@ class WeComBotRunner:
             # The store is opened, read and written off the event loop, which every bot and the web UI share.
             with await off_loop(partial(PersonaStore, self.settings.db_path)) as store:
                 reply: ChatReply | None
-                if not await off_loop(store.list_items):
+                if not await off_loop(store.has_items):
                     reply = await off_loop(partial(no_profile_reply, store))
                 else:
                     llm, embedder = await asyncio.to_thread(

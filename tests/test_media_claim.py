@@ -388,7 +388,7 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         sid = result["source_id"]
         base = f"/api/persona/sources/{sid}"
         assert not builds
-        row = client.get("/api/persona/sources").json()[0]
+        row = client.get("/api/persona/sources").json()["items"][0]
         assert row["status"] == "needs_speaker" and row["n_target"] == 0
         initial = client.get(base + "/speakers").json()
         assert not initial["confirmed"] and len(initial["speakers"]) == 2
@@ -406,7 +406,7 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert len(claim["voices"]) == len(claim["portraits"]) == 1 and not claim["pending"]
         text = client.get(base + "/text").text
         assert "本人：[00:00] 我喜欢读书" in text and "其他人1：[00:12] 我喜欢散步" in text
-        row = client.get("/api/persona/sources").json()[0]
+        row = client.get("/api/persona/sources").json()["items"][0]
         assert row["n_target"] == 1 and row["expressions_others"] == 1
         for kind, plural in [("voice", "voices"), ("portrait", "portraits")]:
             candidate = claim[plural][0]
@@ -462,6 +462,6 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         observer = client.put(base + "/speaker", json={"speaker": None}, headers={"X-Twin": "1"}).json()
         wait_job(client, observer["job_id"])
         assert client.get(base + "/speakers").json()["voices"] == []
-        assert client.get("/api/persona/sources").json()[0]["n_target"] == 0
+        assert client.get("/api/persona/sources").json()["items"][0]["n_target"] == 0
         wait_processing(client)
         assert [True, False] in builds and [False, True] in builds and [False, False] in builds

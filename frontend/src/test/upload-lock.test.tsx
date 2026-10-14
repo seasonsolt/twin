@@ -14,6 +14,7 @@ import { ConfirmProvider } from '../components/ui';
 import { Onboarding } from '../pages/Onboarding';
 import type { Memory } from '../pages/Memories';
 import { useStatus } from '../stores/status';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -146,7 +147,8 @@ beforeEach(() => {
     if (path === '/api/me/assets') return Promise.resolve(json(empty));
     if (path === '/api/media/capabilities')
       return Promise.resolve(json({ available: speech }));
-    if (path === '/api/persona/sources') return Promise.resolve(json(rows));
+    if (isSourcesUrl(path))
+      return Promise.resolve(json(sourcesPage(path, rows)));
     if (path === '/api/persona/processing')
       return Promise.resolve(json({ state: processing }));
     if (path === '/api/media/audio')

@@ -20,6 +20,7 @@ import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 import { setPersonaId } from '../lib/persona';
 import type { IdentityData } from '../features/identity/useIdentity';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -68,30 +69,35 @@ beforeEach(() => {
         egress: [],
       });
     if (path === '/api/persona/processing') return json({ state: 'idle' });
-    if (path === '/api/persona/sources')
-      return json([
-        {
-          source_id: 'audio',
-          title: '访谈',
-          kind: 'audio',
-          status: 'needs_speaker',
-          duration_s: 7200,
-          remembered: 0,
-          detected_kind_label: '录音',
-          first_date: null,
-        },
-        {
-          source_id: 'note',
-          title: '日记',
-          status: 'remembered',
-          remembered: 3,
-          detected_kind_label: '笔记',
-          first_date: null,
-        },
-      ]);
+    if (isSourcesUrl(path))
+      return json(
+        sourcesPage(path, [
+          {
+            source_id: 'audio',
+            title: '访谈',
+            kind: 'audio',
+            status: 'needs_speaker',
+            duration_s: 7200,
+            remembered: 0,
+            detected_kind_label: '录音',
+            first_date: null,
+          },
+          {
+            source_id: 'note',
+            title: '日记',
+            status: 'remembered',
+            remembered: 3,
+            detected_kind_label: '笔记',
+            first_date: null,
+          },
+        ]),
+      );
     if (path === '/api/persona/coverage')
       return json({ facets: [], suggestions: [], kind_labels: {} });
-    if (path.startsWith('/api/persona/items')) return json([]);
+    if (path === '/api/persona/items/summary')
+      return json({ total: 0, unreviewed: 0, dimensions: [] });
+    if (path.startsWith('/api/persona/items'))
+      return json({ items: [], total: 0 });
     if (path.startsWith('/api/questionnaire'))
       return json({ questions: [], answers: {}, round: 'initial' });
     if (path === '/api/me/assets')

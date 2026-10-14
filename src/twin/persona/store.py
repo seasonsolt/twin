@@ -264,6 +264,10 @@ class PersonaStore:
         sources = [Source.model_validate_json(r[0]) for r in rows]
         return [source for source in sources if kind is None or source.kind is kind]
 
+    def count_sources(self) -> int:
+        with self._lock:
+            return int(self._db.execute("SELECT COUNT(*) FROM p_sources").fetchone()[0])
+
     def get_source(self, source_id: str) -> Source | None:
         with self._lock:
             row = self._db.execute("SELECT json FROM p_sources WHERE source_id = ?", (source_id,)).fetchone()
@@ -325,6 +329,24 @@ class PersonaStore:
             rows = self._db.execute(f"SELECT json FROM p_expressions{where} ORDER BY source_id, idx", params).fetchall()
         return [Expression.model_validate_json(r[0]) for r in rows]
 
+    def expression_counts(self) -> dict[str, tuple[int, int]]:
+        """Per source: (expressions, expressions by the target person)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT source_id, COUNT(*), SUM(is_target) FROM p_expressions GROUP BY source_id"
+            ).fetchall()
+        return {r[0]: (int(r[1]), int(r[2] or 0)) for r in rows}
+
+    def expression_owners(self) -> dict[str, str]:
+        with self._lock:
+            rows = self._db.execute("SELECT expression_id, source_id FROM p_expressions").fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def pending_source_ids(self) -> set[str]:
+        with self._lock:
+            rows = self._db.execute("SELECT key FROM p_meta WHERE key LIKE 'source_pending:%'").fetchall()
+        return {r[0].removeprefix("source_pending:") for r in rows}
+
     def get_expression(self, expression_id: str) -> Expression | None:
         with self._lock:
             row = self._db.execute(
@@ -365,8 +387,8 @@ class PersonaStore:
     # ------------------------------------------------------------ profile
 
     def replace_facet_items(self, facet_id: str, items: list[PersonaItem]) -> None:
-        """Replace a facet's items, carrying the person's reviews over to the items that still contain the reviewed
-        ones' candidates; reviews of items that disappear are dropped."""
+        """Replace a facet's items, carrying the person's reviews over to the items that continue the reviewed ones
+        (see ``carry_reviews``); reviews of items that disappear are dropped."""
         old = self.list_items(facet_id, raw=True)
         carried = carry_reviews(old, items, self.reviews())
         with self._tx() as db:
@@ -394,6 +416,124 @@ class PersonaStore:
         reviews = self.reviews()
         reviewed = [apply_review(i, reviews.get(i.item_id)) for i in items]
         return [i for i in reviewed if include_rejected or i.review is not ReviewStatus.REJECTED]
+
+    def query_items(
+        self,
+        *,
+        facet_ids: list[str] | None = None,
+        review: ReviewStatus | None = None,
+        text: str = "",
+        source_id: str | None = None,
+        by_evidence: bool = False,
+        include_rejected: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[PersonaItem], int]:
+        """One page of items with reviews applied, filtered in SQL, and the number of items matching the filters.
+        ``text`` matches the statement as shown (the edited one after an edit) and the evidence quotes;
+        ``source_id`` keeps items with evidence from that source; ``by_evidence`` puts the best-supported first."""
+        status = f"COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}')"
+        clauses: list[str] = []
+        params: list[object] = []
+        if facet_ids is not None:
+            clauses.append(f"i.facet_id IN ({','.join('?' * len(facet_ids))})" if facet_ids else "0")
+            params += facet_ids
+        if review is not None:
+            clauses.append(f"{status} = ?")
+            params.append(review.value)
+        elif not include_rejected:
+            clauses.append(f"{status} != ?")
+            params.append(ReviewStatus.REJECTED.value)
+        if needle := text.strip().lower():
+            clauses.append(
+                f"(instr(lower(CASE WHEN {status} = ? AND json_extract(r.json, '$.statement') != ''"
+                " THEN json_extract(r.json, '$.statement') ELSE json_extract(i.json, '$.statement') END), ?)"
+                " OR EXISTS (SELECT 1 FROM json_each(i.json, '$.evidence') e"
+                " WHERE instr(lower(json_extract(e.value, '$.quote')), ?)))"
+            )
+            params += [ReviewStatus.EDITED.value, needle, needle]
+        if source_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM json_each(i.json, '$.evidence') e"
+                " WHERE json_extract(e.value, '$.source_id') = ?)"
+            )
+            params.append(source_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
+        base = f"FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id{where}"
+        with self._lock:
+            total = int(self._db.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0])
+            rows = self._db.execute(
+                f"SELECT i.json, r.json {base} ORDER BY {order} LIMIT ? OFFSET ?",
+                [*params, -1 if limit is None else limit, offset],
+            ).fetchall()
+        items = [
+            apply_review(PersonaItem.model_validate_json(item), PReview.model_validate_json(review) if review else None)
+            for item, review in rows
+        ]
+        return items, total
+
+    def item_counts(self) -> dict[tuple[str, ReviewStatus], int]:
+        """Item counts per facet and review status (rejected items included)."""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT i.facet_id, COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}'), "
+                "COUNT(*) FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id GROUP BY 1, 2"
+            ).fetchall()
+        return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
+
+    def unreviewed_item_ids(self, facet_ids: list[str]) -> list[str]:
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT i.item_id FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+                f"WHERE i.facet_id IN ({','.join('?' * len(facet_ids))}) "
+                f"AND COALESCE(json_extract(r.json, '$.status'), ?) = ? ORDER BY i.item_id",
+                [*facet_ids, ReviewStatus.UNREVIEWED.value, ReviewStatus.UNREVIEWED.value],
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def has_items(self) -> bool:
+        """Whether any item is left after rejections."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT 1 FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+                "WHERE COALESCE(json_extract(r.json, '$.status'), '') != ? LIMIT 1",
+                (ReviewStatus.REJECTED.value,),
+            ).fetchone()
+        return row is not None
+
+    def count_items(self) -> int:
+        """Items left after rejections."""
+        return sum(n for (_, status), n in self.item_counts().items() if status is not ReviewStatus.REJECTED)
+
+    def get_items(self, item_ids: list[str]) -> dict[str, PersonaItem]:
+        """The named items that exist, with reviews applied."""
+        if not item_ids:
+            return {}
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT i.item_id, i.json, r.json FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+                f"WHERE i.item_id IN ({','.join('?' * len(item_ids))})",
+                item_ids,
+            ).fetchall()
+        return {
+            item_id: apply_review(
+                PersonaItem.model_validate_json(item), PReview.model_validate_json(review) if review else None
+            )
+            for item_id, item, review in rows
+        }
+
+    def item_support(self) -> list[tuple[str, str, str]]:
+        """(item_id, facet_id, expression_id) for every evidence of every item left after rejections, read without
+        decoding the items."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT i.item_id, i.facet_id, json_extract(e.value, '$.expression_id') "
+                "FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id, json_each(i.json, '$.evidence') e "
+                "WHERE COALESCE(json_extract(r.json, '$.status'), '') != ?",
+                (ReviewStatus.REJECTED.value,),
+            ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
 
     def get_item(self, item_id: str, *, raw: bool = False) -> PersonaItem | None:
         with self._lock:
@@ -520,6 +660,28 @@ class PersonaStore:
         if self.get_meta("built_at") is None or self.get_meta(f"source_pending:{source_id}") is not None:
             return "processing"
         return "remembered" if remembered else "nothing_found"
+
+    def source_statuses(self, sources: list[Source], remembered: dict[str, int]) -> dict[str, str]:
+        """``source_status`` for many sources, reading the per-source markers in one query."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key FROM p_meta "
+                "WHERE (key LIKE 'source_error:%' AND value != '') OR key LIKE 'source_pending:%'"
+            ).fetchall()
+        keys = {r[0] for r in rows}
+        built = self.get_meta("built_at") is not None
+        statuses: dict[str, str] = {}
+        for source in sources:
+            sid = source.source_id
+            if source.media_status not in (None, "ready"):
+                statuses[sid] = source.media_status
+            elif f"source_error:{sid}" in keys:
+                statuses[sid] = "failed"
+            elif not built or f"source_pending:{sid}" in keys:
+                statuses[sid] = "processing"
+            else:
+                statuses[sid] = "remembered" if remembered.get(sid) else "nothing_found"
+        return statuses
 
     def processing_result(
         self, source_ids: list[str], version: str | None, error: str | None, failed: list[str] | None = None

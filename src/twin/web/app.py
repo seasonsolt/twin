@@ -338,7 +338,7 @@ def create_app(
         @context.get("/api/status")
         def get_status() -> dict[str, Any]:
             with PersonaStore(resolved.db_path) as store:
-                counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
+                counts = {"sources": store.count_sources(), "items": store.count_items()}
                 egress = egress_status(resolved, external_only=True)
                 built = store.kernel_built()
                 scope = rebuild_scope(built, KERNEL)

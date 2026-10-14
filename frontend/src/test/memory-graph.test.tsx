@@ -26,6 +26,12 @@ import type { ProfileItem } from '../features/profile/types';
 import { setPersonaId } from '../lib/persona';
 import { usePersonas } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import {
+  isItemSummaryUrl,
+  isItemsUrl,
+  itemSummary,
+  itemsPage,
+} from './personaApi';
 
 const renderer = vi.hoisted(() => ({
   current: null as ForceGraphProps<MemoryNode, MemoryLink> | null,
@@ -266,8 +272,15 @@ beforeEach(() => {
           : row,
       );
       value = rows[0];
-    } else if (url.startsWith('/api/persona/items')) value = rows;
-    else if (url === '/api/persona/sources') value = sources;
+    } else if (isItemSummaryUrl(url)) value = itemSummary(rows);
+    else if (isItemsUrl(url))
+      value = itemsPage(
+        url,
+        rows,
+        Object.fromEntries(
+          sources.map(({ source_id, ...row }) => [source_id, row]),
+        ),
+      );
     else if (url === '/api/persona/coverage')
       value = {
         facets: [],
@@ -296,7 +309,15 @@ it('searches statements and quotes, counts matches, filters dimensions and revie
   const user = userEvent.setup();
   const search = screen.getByRole('textbox', { name: '搜索记忆和原话' });
   await user.type(search, '书页');
-  expect(screen.getByRole('status')).toHaveTextContent('1 条匹配');
+  // Search runs on the server, a moment after typing stops.
+  await waitFor(() =>
+    expect(screen.getByRole('status')).toHaveTextContent('1 条匹配'),
+  );
+  expect(
+    fetcher.mock.calls.some(([url]) =>
+      String(url).startsWith('/api/persona/items?q=%E4%B9%A6%E9%A1%B5'),
+    ),
+  ).toBe(true);
   const searchEdge = {
     source: 'item:b',
     target: 'source:s1',
@@ -318,9 +339,13 @@ it('searches statements and quotes, counts matches, filters dimensions and revie
   await user.click(screen.getByRole('button', { name: '关闭' }));
   await user.clear(search);
   await user.type(search, '喜欢');
-  expect(screen.getByRole('status')).toHaveTextContent('1 条匹配');
+  await waitFor(() =>
+    expect(screen.getByRole('status')).toHaveTextContent('1 条匹配'),
+  );
   await user.click(screen.getByRole('button', { name: '经历与身份' }));
-  expect(screen.getByRole('status')).toHaveTextContent('0 条匹配');
+  await waitFor(() =>
+    expect(screen.getByRole('status')).toHaveTextContent('0 条匹配'),
+  );
   expect(screen.queryByRole('button', { name: '节点 喜欢徒步' })).toBeNull();
   await user.click(screen.getByRole('button', { name: '经历与身份' }));
   await user.clear(search);
@@ -369,9 +394,14 @@ it('lists all supported items with dates on source click, navigates to an item, 
     await screen.findByRole('button', { name: '节点 旅行日记' }),
   );
   const dialog = screen.getByRole('dialog', { name: '旅行日记' });
-  expect(dialog).toHaveTextContent('支持 2 条记忆');
+  await waitFor(() => expect(dialog).toHaveTextContent('支持 2 条记忆'));
   const list = within(dialog).getByRole('list', { name: '资料支持的记忆' });
   expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+  expect(
+    fetcher.mock.calls.some(([url]) =>
+      String(url).startsWith('/api/persona/items?source_id=s1'),
+    ),
+  ).toBe(true);
   expect(list).toHaveTextContent('2026-01-02');
   await user.click(within(list).getByRole('button', { name: /喜欢徒步/ }));
   expect(await screen.findByRole('dialog', { name: '这条记忆' })).toBeVisible();
@@ -411,8 +441,8 @@ it('highlights a hovered neighbourhood, focuses a dimension and stops animation/
     .setup()
     .click(screen.getByRole('button', { name: '节点 经历与身份' }));
   expect(renderer.fit).toHaveBeenCalled();
-  const request = fetcher.mock.calls.find(
-    ([url]) => url === '/api/persona/sources',
+  const request = fetcher.mock.calls.find(([url]) =>
+    String(url).startsWith('/api/persona/items?dimension='),
   )![1];
   act(() => view.unmount());
   expect(request?.signal?.aborted).toBe(true);

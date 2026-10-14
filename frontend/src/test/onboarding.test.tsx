@@ -9,6 +9,13 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { useReducedMotion } from 'motion/react';
 import { App } from '../App';
 import { useStatus, type Status } from '../stores/status';
+import {
+  isItemSummaryUrl,
+  isSourcesUrl,
+  itemSummary,
+  itemsPage,
+  sourcesPage,
+} from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -71,8 +78,10 @@ beforeEach(() => {
     if (url === '/api/status') return Promise.resolve(json(status));
     if (url === '/api/persona/state')
       return Promise.resolve(json({ stale: false }));
-    if (url === '/api/persona/sources' || url.startsWith('/api/persona/items'))
-      return Promise.resolve(json([]));
+    if (isSourcesUrl(url)) return Promise.resolve(json(sourcesPage(url, [])));
+    if (isItemSummaryUrl(url)) return Promise.resolve(json(itemSummary([])));
+    if (url.startsWith('/api/persona/items'))
+      return Promise.resolve(json(itemsPage(url, [])));
     if (url === '/api/persona/processing')
       return Promise.resolve(json({ state: processing }));
     if (url === '/api/persona/coverage')

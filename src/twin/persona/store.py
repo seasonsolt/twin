@@ -307,6 +307,21 @@ class PersonaStore:
                     shutil.rmtree(self.path.parent / "media-sources" / source.media_sha, ignore_errors=True)
             return deleted
 
+    def reextract_source(self, source_id: str) -> int | None:
+        """Forget what was extracted from a source, so the next build asks the model again even though its chunks
+        are unchanged; the profile keeps the old items until that build merges. Returns the chunks forgotten, or
+        None when there is no such source."""
+        with self._tx() as db:
+            if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
+                return None
+            chunks = [r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE source_id = ?", (source_id,))]
+            db.executemany("DELETE FROM p_candidates WHERE chunk_id = ?", [(c,) for c in chunks])
+            db.execute("DELETE FROM p_chunks WHERE source_id = ?", (source_id,))
+            self._sources_changed(db)
+            db.execute("DELETE FROM p_meta WHERE key = ?", (f"source_error:{source_id}",))
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_pending:{source_id}", uuid.uuid4().hex))
+        return len(chunks)
+
     # ------------------------------------------------------------ expressions
 
     def list_expressions(

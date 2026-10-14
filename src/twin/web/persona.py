@@ -453,6 +453,15 @@ def register(
         queue_build()
         return {"deleted": True}
 
+    @app.post("/api/persona/sources/{source_id}/reextract", status_code=202)
+    def reextract_source(source_id: str) -> dict[str, int]:
+        with ingestion.lock, open_store() as store:
+            forgotten = store.reextract_source(source_id)
+        if forgotten is None:
+            raise HTTPException(404, f"找不到资料 {source_id}")
+        queue_build()
+        return {"chunks": forgotten}
+
     @app.post("/api/persona/build", status_code=202)
     def start_build() -> dict[str, str]:
         with open_store() as store:

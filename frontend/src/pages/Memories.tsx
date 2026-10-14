@@ -517,6 +517,13 @@ export function Memories({
       await api('/api/kernel/rebuild', { method: 'POST', signal });
       void useStatus.getState().refresh();
     });
+  const reextract = (memory: Memory) =>
+    void mutate((signal) =>
+      api(
+        `/api/persona/sources/${encodeURIComponent(memory.source_id)}/reextract`,
+        { method: 'POST', signal },
+      ),
+    );
   const retranscribe = (memory: Memory) =>
     void mutate((signal) =>
       api(
@@ -926,6 +933,17 @@ export function Memories({
                             className="min-h-11"
                           >
                             {memory.media_sha ? '重新转写' : '重试'}
+                          </Button>
+                        )}
+                        {memory.status === 'nothing_found' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => reextract(memory)}
+                            disabled={busy}
+                            className="min-h-11"
+                          >
+                            重新整理
                           </Button>
                         )}
                       </div>

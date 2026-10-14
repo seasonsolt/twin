@@ -370,3 +370,63 @@ def test_web_shows_chunk_progress_while_a_build_runs(settings: Settings) -> None
         assert "progress" not in client.get("/api/persona/processing").json()
         [source] = client.get("/api/persona/sources").json()["items"]
         assert source["status"] == "remembered" and "chunks_total" not in source
+
+
+def test_a_source_that_found_nothing_is_extracted_again(settings: Settings) -> None:
+    with PersonaStore(":memory:") as store:
+        empty, other = imported(store, settings), imported(store, settings, "测试乙.md")
+        llm = FakeLLM(lambda system, user, schema: {"items": []})
+        pf.build_profile(store, llm, settings)
+        assert pf.source_memories(store)[empty].build_status == "no_items"
+        assert pf.build_profile(store, llm, settings).chunks_extracted == 0  # done chunks are never asked again
+
+        assert store.reextract_source("src_missing") is None
+        assert store.reextract_source(empty) == 1
+        assert pf.profile_stale(store) and store.source_status(empty, 0) == "processing"
+        assert pf.source_memories(store)[empty].chunks_extracted == 0
+        report = pf.build_profile(store, FakeLLM(handler), settings)
+        assert report.chunks_extracted == 1  # only the source asked for, not the other unchanged one
+        memories = pf.source_memories(store)
+        assert memories[empty].build_status == "remembered" and memories[other].build_status == "no_items"
+        assert not pf.profile_stale(store)
+
+
+def test_web_and_cli_reextract(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with PersonaStore(settings.db_path) as store:
+        sids = [imported(store, settings, f"测试{n}.md") for n in range(3)]
+        pf.build_profile(store, FakeLLM(lambda system, user, schema: {"items": []}), settings)
+    app = create_app(settings, llm_factory=lambda: FakeLLM(handler), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        assert client.post("/api/persona/sources/src_missing/reextract", headers=HEADERS).status_code == 404
+        response = client.post(f"/api/persona/sources/{sids[0]}/reextract", headers=HEADERS)
+        assert response.status_code == 202 and response.json() == {"chunks": 1}
+        deadline = time.monotonic() + 5
+        while (
+            client.get("/api/persona/processing").json()["state"] != "idle"
+            or client.get("/api/persona/state").json()["stale"]
+        ):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        rows = {s["source_id"]: s for s in client.get("/api/persona/sources").json()["items"]}
+        assert rows[sids[0]]["status"] == "remembered" and rows[sids[1]]["status"] == "nothing_found"
+        assert rows[sids[1]]["nothing_found_reason"] == "模型没有从中提炼出结论"
+        assert rows[sids[1]]["extraction"]["returned"] == 0
+
+    config = tmp_path / "twin.toml"
+    config.write_text('target_name = "合成人物"\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_settings", lambda ctx: settings)
+    runner = CliRunner()
+    args = ["--config", str(config), "persona", "reextract"]
+    assert runner.invoke(cli.app, args).exit_code != 0
+    missing = runner.invoke(cli.app, [*args, "src_missing"])
+    assert missing.exit_code != 0 and "找不到资料：src_missing" in missing.output
+    settings.kernel.max_auto_rebuild_chunks = 1
+    gated = runner.invoke(cli.app, [*args, "--nothing-found"])
+    assert gated.exit_code != 0 and "将重抽 2 份资料的 2 个分段，超过费用闸" in gated.output
+    with PersonaStore(settings.db_path) as store:
+        assert not pf.profile_stale(store)
+    done = runner.invoke(cli.app, [*args, "--nothing-found", "--yes"])
+    assert done.exit_code == 0 and "已标记 2 份资料（2 个分段）重新抽取" in done.output
+    with PersonaStore(settings.db_path) as store:
+        memories = pf.source_memories(store)
+        assert [memories[s].chunks_extracted for s in sids] == [1, 0, 0] and pf.profile_stale(store)

@@ -102,6 +102,10 @@ beforeEach(() => {
       state = { state: 'queued' };
       return json({ job_id: 'j1' }, 202);
     }
+    if (url.endsWith('/reextract') && init.method === 'POST') {
+      state = { state: 'queued' };
+      return json({ chunks: 1 }, 202);
+    }
     throw new Error(`Unexpected API ${url}`);
   });
   vi.stubGlobal('fetch', fetcher);
@@ -310,6 +314,17 @@ it('renders all four memory statuses in plain words', async () => {
   await waitFor(() =>
     expect(
       fetcher.mock.calls.some(([url]) => url === '/api/persona/build'),
+    ).toBe(true),
+  );
+  const reextract = within(list).getAllByRole('button', { name: '重新整理' });
+  expect(reextract).toHaveLength(2); // only the two rows that found nothing
+  await waitFor(() => expect(reextract[1]).toBeEnabled());
+  fireEvent.click(reextract[1]);
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) => url === '/api/persona/sources/s7/reextract',
+      ),
     ).toBe(true),
   );
 });

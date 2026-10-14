@@ -931,6 +931,39 @@ def persona_sources(ctx: typer.Context) -> None:
             )
 
 
+@persona_app.command("reextract")
+def persona_reextract(
+    ctx: typer.Context,
+    source_ids: Annotated[list[str] | None, typer.Argument(help="资料编号，可以多个")] = None,
+    nothing_found: Annotated[
+        bool, typer.Option("--nothing-found", help="加上所有已抽取过、但没有形成记忆的资料")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="分段数超过费用闸时确认")] = False,
+) -> None:
+    """让模型重新抽取指定资料：资料没变也重抽，下次构建时生效。"""
+    settings = _settings(ctx)
+    with _persona_store(settings) as store:
+        selected = list(dict.fromkeys(source_ids or []))
+        if missing := [sid for sid in selected if store.get_source(sid) is None]:
+            raise _fail(f"找不到资料：{'、'.join(missing)}")
+        if nothing_found:
+            memories = source_memories(store)
+            selected += [
+                sid
+                for sid, m in memories.items()
+                if m.build_status == "no_items" and m.chunks_extracted and sid not in selected
+            ]
+        if not selected:
+            raise _fail("没有要重新抽取的资料：请给出资料编号，或加 --nothing-found")
+        extracted = store.extraction_stats()
+        chunks = sum(extracted.get(sid, (0, None))[0] for sid in selected)
+        if chunks > settings.kernel.max_auto_rebuild_chunks and not yes:
+            raise _fail(f"将重抽 {len(selected)} 份资料的 {chunks} 个分段，超过费用闸；请确认后加 --yes")
+        for sid in selected:
+            store.reextract_source(sid)
+    _say(f"已标记 {len(selected)} 份资料（{chunks} 个分段）重新抽取，运行 twin persona build 生效")
+
+
 @persona_app.command("build")
 @_command_usage("build")
 def persona_build(ctx: typer.Context) -> None:

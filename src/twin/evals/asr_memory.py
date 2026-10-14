@@ -171,7 +171,7 @@ def memory_items(lines: list[tuple[str, str, bool]], llm: LLM, settings: Setting
         candidates = [
             c
             for chunk in chunks_for(store, parsed.source, allowed, settings)
-            for c in extract_chunk(llm, chunk, allowed, settings)
+            for c in extract_chunk(llm, chunk, allowed, settings).candidates
         ]
     groups: dict[str, list[Any]] = defaultdict(list)
     for candidate in candidates:

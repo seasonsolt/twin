@@ -927,6 +927,7 @@ def persona_sources(ctx: typer.Context) -> None:
                 f"原话 {memory.expressions_total}（本人 {memory.expressions_target} / "
                 f"他人 {memory.expressions_others}）  "
                 f"支撑档案 {memory.items_supported} 条  涉及：{facets}  {status}"
+                + (f"（{memory.nothing_found_reason}）" if memory.nothing_found_reason else "")
             )
 
 
@@ -955,6 +956,13 @@ def persona_build(ctx: typer.Context) -> None:
             f"资料 {report.sources} 份，分块 {report.chunks_total}（本次抽取 {report.chunks_extracted}），"
             f"候选 {report.candidates} 条，合并细项 {report.facets_merged} 个，档案条目 {report.items} 条"
         )
+        if report.chunks_extracted:
+            x = report.extraction
+            _say(
+                f"本次模型提炼 {x.returned} 条结论，保留 {x.kept} 条；丢弃：细项不可用 {x.off_facet} 条，"
+                f"没有可核对的引文 {x.unsupported} 条（引文对不上 {x.quotes_unmatched} 处、"
+                f"编号不存在 {x.quotes_misnumbered} 处、风格引用他人记述 {x.quotes_narrated_style} 处）"
+            )
         _say(report.change_summary())
         for facet_id, diff in sorted(report.facet_diffs.items()):
             if diff.added or diff.changed or diff.removed:

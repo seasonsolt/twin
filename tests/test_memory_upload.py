@@ -21,7 +21,7 @@ from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import CallTally, FakeLLM
 from twin.persona import profile as pf
-from twin.persona.items import PersonaCandidate, PersonaItem, PEvidence, PReview
+from twin.persona.items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence, PReview
 from twin.persona.schema import ChatDraft, EvidenceClass, ReviewStatus, SourceKind
 from twin.persona.sources import parse_text
 from twin.persona.store import PersonaStore
@@ -98,6 +98,9 @@ def test_source_support_is_deduplicated_and_joins_expression_ids(settings: Setti
             "facets": [],
             "contributes_nothing": True,
             "build_status": "not_built",
+            "chunks_extracted": 0,
+            "extraction": None,
+            "nothing_found_reason": "",
         }
         before = store.get_meta("sources_changed_at")
         pf.source_memories(store)
@@ -190,7 +193,7 @@ def test_build_diffs_compare_raw_ids_and_statements_and_noop(
             PersonaCandidate(candidate_id=f"c{fid}", chunk_id="test", facet_id=fid, statement="测试", evidence=[])
             for fid in ("2.1", "4.2")
         ]
-        monkeypatch.setattr(pf, "extract_chunk", lambda *args: candidates)
+        monkeypatch.setattr(pf, "extract_chunk", lambda *args: pf.Extraction(candidates, ExtractStats()))
         outcomes = {
             "2.1": [item("same", "2.1", eid, statement="修改后的测试表述"), item("added", "2.1", eid)],
             "4.2": [item("evidence_only", "4.2", "changed_evidence")],

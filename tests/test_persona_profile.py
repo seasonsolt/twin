@@ -11,7 +11,7 @@ from twin.config import Settings
 from twin.llm import FakeLLM, LLMError, LLMTruncated
 from twin.persona import profile as pf
 from twin.persona.dimensions import FACETS
-from twin.persona.items import item_as_of
+from twin.persona.items import ExtractStats, item_as_of
 from twin.persona.schema import EvidenceClass
 from twin.persona.sources import parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
@@ -224,6 +224,52 @@ def test_chunks_split_at_the_size_limit(
     chunks = pf.chunks_for(store, chat, pf.consented_facets(store), settings)
     assert len(chunks) == 2 and all(len(c.entries) == 1 for c in chunks)
     assert chunks[0].text.startswith("[1] 2026-09-01 · 群_2026-09\n语境：李四：这单签了，首付 10%\n本人：")
+
+
+@pytest.mark.usefixtures("gated_life_facets")
+def test_extraction_counts_what_it_dropped_and_why(store: PersonaStore, settings: Settings) -> None:
+    report = pf.build_profile(store, FakeLLM(handler), settings)
+    # Per entry the handler adds an unconsented 9.3 and a quote of entry 99; the chat adds one fabricated quote.
+    assert report.extraction == ExtractStats(
+        returned=15, kept=4, off_facet=5, unsupported=6, quotes_unmatched=1, quotes_misnumbered=5
+    )
+    q, chat = (s.source_id for s in store.list_sources())
+    assert store.extraction_stats() == {
+        q: (1, ExtractStats(returned=8, kept=2, off_facet=3, unsupported=3, quotes_misnumbered=3)),
+        chat: (
+            1,
+            ExtractStats(returned=7, kept=2, off_facet=2, unsupported=3, quotes_unmatched=1, quotes_misnumbered=2),
+        ),
+    }
+    assert pf.source_memories(store)[chat].nothing_found_reason == ""  # it supports memories
+
+
+def test_a_source_without_memories_says_why(settings: Settings) -> None:
+    def answer(found: list[dict[str, Any]]) -> Any:
+        return lambda system, user, schema: {"items": found} if schema is pf.ExtractDraft else {"items": []}
+
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    sid = store.list_sources()[0].source_id
+    memory = pf.source_memories(store)[sid]
+    assert (memory.chunks_extracted, memory.extraction, memory.nothing_found_reason) == (0, None, "")
+
+    pf.build_profile(store, FakeLLM(answer([])), settings)
+    memory = pf.source_memories(store)[sid]
+    assert memory.build_status == "no_items" and memory.chunks_extracted == 1
+    assert memory.nothing_found_reason == "模型没有从中提炼出结论"
+
+    store.put_source(parse_chat("群_2026-10.txt", CHAT.replace("09-0", "10-0"), settings))
+    sid = store.list_sources()[1].source_id
+    misquoted = [
+        {"facet_id": "4.2", "statement": "追问对照组", "quotes": [{"n": 2, "quote": "从来不看数据"}]},
+        {"facet_id": "4.2", "statement": "编号越界", "quotes": [{"n": 9, "quote": "对照组"}]},
+        {"facet_id": "0.0", "statement": "没有这个细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+    ]
+    pf.build_profile(store, FakeLLM(answer(misquoted)), settings)
+    assert pf.source_memories(store)[sid].nothing_found_reason == (
+        "模型提炼了 3 条结论，校验后全部丢弃：引文与原文对不上 1 处，引用了不存在的条目 1 处，细项不可用或结论为空 1 条"
+    )
 
 
 def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(

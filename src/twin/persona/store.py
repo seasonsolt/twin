@@ -22,7 +22,7 @@ import numpy as np
 from ..embed import Matrix
 from ..media.schema import AVATAR_ALIASES, AVATAR_PRESETS
 from ..util import prepare_private_file
-from .items import PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
+from .items import ExtractStats, PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
 from .kernel import KERNEL, KernelVersion, kernel_json
 from .schema import ChatReply, Expression, ParsedSource, ReviewStatus, Source, SourceKind
 
@@ -53,7 +53,11 @@ CREATE TABLE IF NOT EXISTS p_vectors (
     namespace TEXT NOT NULL, ref_id TEXT NOT NULL, text_sha TEXT NOT NULL, vec BLOB NOT NULL,
     PRIMARY KEY (namespace, ref_id));
 """
-_MIGRATIONS: tuple[str, ...] = (_SCHEMA,)
+_MIGRATIONS: tuple[str, ...] = (
+    _SCHEMA,
+    # 2: per-chunk extraction counts (``ExtractStats`` JSON); NULL for chunks extracted before it.
+    "ALTER TABLE p_chunks ADD COLUMN stats TEXT;",
+)
 
 
 SNAPSHOT_DIR = "kernel-snapshots"
@@ -360,15 +364,35 @@ class PersonaStore:
         with self._lock:
             return self._db.execute("SELECT 1 FROM p_chunks WHERE chunk_id = ?", (chunk_id,)).fetchone() is not None
 
-    def put_chunk(self, chunk_id: str, source_id: str, candidates: list[PersonaCandidate]) -> None:
-        """Record a processed chunk with its candidates (possibly none), replacing an earlier run of it."""
+    def put_chunk(
+        self, chunk_id: str, source_id: str, candidates: list[PersonaCandidate], stats: ExtractStats | None = None
+    ) -> None:
+        """Record a processed chunk with its candidates (possibly none) and extraction counts, replacing an earlier
+        run of it."""
         with self._tx() as db:
             db.execute("DELETE FROM p_candidates WHERE chunk_id = ?", (chunk_id,))
-            db.execute("INSERT OR REPLACE INTO p_chunks VALUES (?, ?)", (chunk_id, source_id))
+            db.execute(
+                "INSERT OR REPLACE INTO p_chunks (chunk_id, source_id, stats) VALUES (?, ?, ?)",
+                (chunk_id, source_id, stats.model_dump_json() if stats else None),
+            )
             db.executemany(
                 "INSERT INTO p_candidates VALUES (?, ?, ?, ?)",
                 [(c.candidate_id, c.chunk_id, c.facet_id, c.model_dump_json()) for c in candidates],
             )
+
+    def extraction_stats(self) -> dict[str, tuple[int, ExtractStats | None]]:
+        """Per source: its chunks extracted, and their summed counts (None when none was counted, i.e. every chunk
+        was extracted before counts were kept)."""
+        with self._lock:
+            rows = self._db.execute("SELECT source_id, stats FROM p_chunks").fetchall()
+        result: dict[str, tuple[int, ExtractStats | None]] = {}
+        for source_id, value in rows:
+            chunks, total = result.get(source_id, (0, None))
+            if value is not None:
+                stats = ExtractStats.model_validate_json(value)
+                total = stats if total is None else total + stats
+            result[source_id] = (chunks + 1, total)
+        return result
 
     def drop_stale_chunks(self, live: set[str]) -> int:
         """Forget chunks (and their candidates) that the current sources no longer produce."""

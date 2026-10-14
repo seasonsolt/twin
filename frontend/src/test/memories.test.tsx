@@ -266,6 +266,14 @@ it('renders all four memory statuses in plain words', async () => {
       status: 'nothing_found',
       remembered: 0,
     },
+    {
+      ...memory,
+      source_id: 's7',
+      title: '对不上的文档',
+      status: 'nothing_found',
+      remembered: 0,
+      extraction: { kept: 0, unsupported: 2 },
+    },
     { ...memory, source_id: 's4', title: '失败文档', status: 'failed' },
     {
       ...memory,
@@ -291,6 +299,7 @@ it('renders all four memory statuses in plain words', async () => {
   expect(list).toHaveTextContent('已记住 3 条');
   expect(list).toHaveTextContent('正在记住…');
   expect(list).toHaveTextContent('没找到关于你的内容');
+  expect(list).toHaveTextContent('找到一些内容，但没能和原文对上');
   expect(list).toHaveTextContent('处理失败');
   expect(list).toHaveTextContent('正在记住… 2/5 段');
   expect(list).toHaveTextContent('已读完，等待合并');

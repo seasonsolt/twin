@@ -28,9 +28,11 @@ def test_store_migration_and_reopen(tmp_path: Path) -> None:
     with sqlite3.connect(path) as db:
         db.executescript(storage._SCHEMA)
         db.execute("INSERT INTO p_meta VALUES ('identity:name', '本人')")
+        db.execute("INSERT INTO p_chunks VALUES ('ch_old', 'src_old')")
     for _ in range(2):
         with PersonaStore(path) as store:
             assert store.get_meta("identity:name") == "本人"
+            assert store.extraction_stats() == {"src_old": (1, None)}  # extracted before counts were kept
         with sqlite3.connect(path) as db:
             assert db.execute("PRAGMA user_version").fetchone()[0] == len(storage._MIGRATIONS)
     with PersonaStore(tmp_path / "new.db"):
@@ -47,7 +49,7 @@ def test_newer_and_failed_migration(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     with pytest.raises(sqlite3.Error):
         PersonaStore(path)
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.execute("PRAGMA user_version").fetchone()[0] == len(storage._MIGRATIONS) - 1
         assert db.execute("SELECT name FROM sqlite_master WHERE name='extra'").fetchone() is None
         assert db.execute("SELECT value FROM p_meta WHERE key='saved'").fetchone()[0] == "yes"
         db.execute("PRAGMA user_version=99")
@@ -247,8 +249,8 @@ def test_cli_reports_database_schema(tmp_path: Path, monkeypatch: pytest.MonkeyP
     config.write_text('db_path = "twin.db"\n')
     result = CliRunner().invoke(app, ["--config", str(config), "kernel", "status"])
     assert result.exit_code == 0, result.output
-    assert "schema：2" in result.output
-    assert KERNEL.schema == 1
+    assert f"schema：{len(storage._MIGRATIONS)}" in result.output
+    assert KERNEL.schema == len(storage._MIGRATIONS) - 1
 
 
 def test_failed_build_keeps_kernel(tmp_path: Path) -> None:

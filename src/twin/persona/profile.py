@@ -27,7 +27,7 @@ from ..config import Settings
 from ..llm import LLM, LLMError, failure_summary, retry_truncated
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
-from .items import PersonaCandidate, PersonaItem, PEvidence
+from .items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence
 from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
@@ -81,6 +81,32 @@ class SourceMemory:
     facets: list[dict[str, str]]
     contributes_nothing: bool
     build_status: Literal["not_built", "remembered", "no_items"]
+    chunks_extracted: int = 0
+    # Summed over the chunks extracted since counts were kept; None when there is none.
+    extraction: ExtractStats | None = None
+    # Why a built source supports no memory, when the counts tell; empty otherwise.
+    nothing_found_reason: str = ""
+
+
+def nothing_found_reason(stats: ExtractStats | None) -> str:
+    if stats is None:
+        return ""
+    if stats.returned == 0:
+        return "模型没有从中提炼出结论"
+    if stats.kept:
+        return f"提炼出 {stats.kept} 条结论，但都没有留在当前档案里（可能已被否定）"
+    causes = [
+        f"{label} {n} 处"
+        for label, n in (
+            ("引文与原文对不上", stats.quotes_unmatched),
+            ("引用了不存在的条目", stats.quotes_misnumbered),
+            ("表达风格引用了他人记述", stats.quotes_narrated_style),
+        )
+        if n
+    ]
+    if stats.off_facet:
+        causes.append(f"细项不可用或结论为空 {stats.off_facet} 条")
+    return f"模型提炼了 {stats.returned} 条结论，校验后全部丢弃：" + "，".join(causes)
 
 
 def source_memories(store: PersonaStore, sources: Sequence[Source] | None = None) -> dict[str, SourceMemory]:
@@ -96,12 +122,15 @@ def source_memories(store: PersonaStore, sources: Sequence[Source] | None = None
             facets.setdefault(source_id, set()).add(facet_id)
     built_at = store.get_meta("built_at")
     pending = store.pending_source_ids()
+    extracted = store.extraction_stats()
     result: dict[str, SourceMemory] = {}
     for source in store.list_sources() if sources is None else sources:
         sid = source.source_id
         total, target = counts.get(sid, (0, 0))
         count = len(supported.get(sid, set()))
         built = built_at is not None and sid not in pending
+        chunks, stats = extracted.get(sid, (0, None))
+        reason = "" if not built or count else nothing_found_reason(stats) if target else "资料里没有识别出本人说的话"
         result[sid] = SourceMemory(
             expressions_total=total,
             expressions_target=target,
@@ -110,6 +139,9 @@ def source_memories(store: PersonaStore, sources: Sequence[Source] | None = None
             facets=[{"facet_id": fid, "name": FACET_BY_ID[fid].name} for fid in sorted(facets.get(sid, set()))],
             contributes_nothing=count == 0,
             build_status="not_built" if not built else "remembered" if count else "no_items",
+            chunks_extracted=chunks,
+            extraction=stats,
+            nothing_found_reason=reason,
         )
     return result
 
@@ -267,7 +299,13 @@ def prompt_fingerprint() -> str:
     )
 
 
-def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> list[PersonaCandidate]:
+@dataclass(frozen=True)
+class Extraction:
+    candidates: list[PersonaCandidate]
+    stats: ExtractStats
+
+
+def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> Extraction:
     klass = evidence_class(chunk.source.kind)
     system = EXTRACT_SYSTEM.format(
         name=settings.target_name,
@@ -287,20 +325,27 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
         )
     )
     candidates: list[PersonaCandidate] = []
+    stats = ExtractStats(returned=len(draft.items))
     for i, item in enumerate(draft.items):
         facet = item.facet_id.strip()
         if facet not in allowed or not item.statement.strip():
+            stats.off_facet += 1
             continue
         evidence: list[PEvidence] = []
         for ref in item.quotes[:MAX_QUOTES]:
             if not 1 <= ref.n <= len(chunk.entries):
+                stats.quotes_misnumbered += 1
                 continue
             entry = chunk.entries[ref.n - 1]
             own_words = not entry.narrated or ref.own_words
             if not own_words and FACET_BY_ID[facet].dimension_id == STYLE_DIMENSION:
+                stats.quotes_narrated_style += 1
                 continue  # how he talks can only rest on his own words, never on a narrator's
             found = verify_quote(ref.quote, entry.text)
-            if found is None or any(e.expression_id == entry.expression_id and e.quote == found for e in evidence):
+            if found is None:
+                stats.quotes_unmatched += 1
+                continue
+            if any(e.expression_id == entry.expression_id and e.quote == found for e in evidence):
                 continue
             evidence.append(
                 PEvidence(
@@ -324,7 +369,10 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
                     evidence=evidence,
                 )
             )
-    return candidates
+        else:
+            stats.unsupported += 1
+    stats.kept = len(candidates)
+    return Extraction(candidates, stats)
 
 
 # ---------------------------------------------------------------- merge
@@ -477,6 +525,8 @@ class BuildReport:
     chunks_total: int = 0
     chunks_extracted: int = 0
     chunks_dropped: int = 0
+    # What this build's extraction calls returned and dropped; ``candidates`` counts every stored one.
+    extraction: ExtractStats = field(default_factory=ExtractStats)
     candidates: int = 0
     facets_merged: int = 0
     items: int = 0
@@ -579,13 +629,14 @@ def _extract_and_merge(
     safe_progress: Progress,
     totals: dict[str, int],
 ) -> None:
-    def persist(chunk: Chunk, outcome: list[PersonaCandidate] | Exception) -> None:
+    def persist(chunk: Chunk, outcome: Extraction | Exception) -> None:
         if isinstance(outcome, Exception):
             report.failures.append(f"extract {chunk.chunk_id}: {failure_summary(outcome)}")
             report.failed_sources.add(chunk.source.source_id)
         else:
-            store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome)
+            store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome.candidates, outcome.stats)
             report.chunks_extracted += 1
+            report.extraction += outcome.stats
 
     run_parallel(
         lambda c: extract_chunk(llm, c, allowed, settings),

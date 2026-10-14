@@ -32,6 +32,22 @@ class PersonaCandidate(BaseModel):
     evidence: list[PEvidence]
 
 
+class ExtractStats(BaseModel):
+    """What extraction calls returned and why conclusions were dropped: counts only, never text. Kept per chunk, so a
+    source that yields no memory can tell a model that found nothing from conclusions that failed verification."""
+
+    returned: int = 0  # conclusions the model returned
+    kept: int = 0  # conclusions kept as candidates
+    off_facet: int = 0  # dropped: a facet not offered, or an empty statement
+    unsupported: int = 0  # dropped: none of its quotes survived
+    quotes_unmatched: int = 0  # quotes not found in the entry they name
+    quotes_misnumbered: int = 0  # quotes naming an entry the chunk does not have
+    quotes_narrated_style: int = 0  # style quotes taken from someone else's narration
+
+    def __add__(self, other: ExtractStats) -> ExtractStats:
+        return ExtractStats(**{name: getattr(self, name) + getattr(other, name) for name in ExtractStats.model_fields})
+
+
 class PersonaItem(BaseModel):
     item_id: str
     facet_id: str

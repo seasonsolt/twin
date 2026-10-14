@@ -226,6 +226,29 @@ def test_chunks_split_at_the_size_limit(
     assert chunks[0].text.startswith("[1] 2026-09-01 · 群_2026-09\n语境：李四：这单签了，首付 10%\n本人：")
 
 
+def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.pseudonymize_others = True
+    allowed = pf.consented_facets(store)
+    sources = store.list_sources()
+    per_source = [c for s in sources for c in pf.chunks_for(store, s, allowed, settings)]
+    assert "他人" in "".join(c.text for c in per_source)  # the view pseudonymised 李四 in the context
+    views: list[str | None] = []
+    original = pf.expression_view
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        views.append(kwargs.get("source_id"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pf, "expression_view", counted)
+    assert pf.corpus_chunks(store, sources, allowed, settings) == per_source
+    assert pf.pending_chunks(store, settings) == len(per_source)
+    report = pf.build_profile(store, FakeLLM(handler), settings)
+    assert report.chunks_total == len(per_source)
+    assert views == [None, None, None]
+
+
 def test_only_questionnaire_extraction_asks_to_cover_every_stated_answer(
     store: PersonaStore, settings: Settings
 ) -> None:

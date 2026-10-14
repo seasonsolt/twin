@@ -68,12 +68,8 @@ def profile_stale(store: PersonaStore) -> bool:
 
 def pending_chunks(store: PersonaStore, settings: Settings) -> int:
     allowed = consented_facets(store)
-    return sum(
-        not store.has_chunk(chunk.chunk_id)
-        for source in store.list_sources()
-        if source.media_status in (None, "ready")
-        for chunk in chunks_for(store, source, allowed, settings)
-    )
+    sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
+    return sum(not store.has_chunk(chunk.chunk_id) for chunk in corpus_chunks(store, sources, allowed, settings))
 
 
 @dataclass(frozen=True)
@@ -157,7 +153,21 @@ def consented_facets(store: PersonaStore) -> frozenset[str]:
 
 
 def chunks_for(store: PersonaStore, source: Source, allowed: frozenset[str], settings: Settings) -> list[Chunk]:
-    entries = expression_view(store, settings, source_id=source.source_id, target_only=True)
+    return _chunk(source, expression_view(store, settings, source_id=source.source_id, target_only=True), allowed)
+
+
+def corpus_chunks(
+    store: PersonaStore, sources: Sequence[Source], allowed: frozenset[str], settings: Settings
+) -> list[Chunk]:
+    """The chunks of every source in ``sources``, cut from one view of the whole corpus: ``chunks_for`` per source
+    would read and pseudonymise every expression once per source."""
+    by_source: dict[str, list[Expression]] = {}
+    for e in expression_view(store, settings, target_only=True):
+        by_source.setdefault(e.source_id, []).append(e)
+    return [c for s in sources for c in _chunk(s, by_source.get(s.source_id, []), allowed)]
+
+
+def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str]) -> list[Chunk]:
     chunks: list[Chunk] = []
     current: list[Expression] = []
     size = 0
@@ -539,7 +549,7 @@ def build_profile(
 
     sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
     report.sources = len(sources)
-    chunks = [c for s in sources for c in chunks_for(store, s, allowed, settings)]
+    chunks = corpus_chunks(store, sources, allowed, settings)
     report.chunks_total = len(chunks)
     report.chunks_dropped = store.drop_stale_chunks({c.chunk_id for c in chunks})
     todo = [c for c in chunks if not store.has_chunk(c.chunk_id)]

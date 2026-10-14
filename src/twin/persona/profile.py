@@ -50,7 +50,7 @@ KERNEL_AWAITING_NOTICE = "记忆内核已升级，需要管理员确认后重新
 def stale_reason(store: PersonaStore) -> Literal["sources", "kernel", None]:
     built_at = store.get_meta("built_at")
     if built_at is None:
-        return "sources" if store.list_sources() else None
+        return "sources" if store.count_sources() else None
     changed_at = store.get_meta("sources_changed_at")
     if (
         changed_at
@@ -87,31 +87,29 @@ class SourceMemory:
     build_status: Literal["not_built", "remembered", "no_items"]
 
 
-def source_memories(store: PersonaStore) -> dict[str, SourceMemory]:
-    """Query current, non-rejected profile support via expression IDs, once per source and item."""
-    expressions = store.list_expressions()
-    owners = {e.expression_id: e.source_id for e in expressions}
-    totals: dict[str, int] = {}
-    targets: dict[str, int] = {}
+def source_memories(store: PersonaStore, sources: Sequence[Source] | None = None) -> dict[str, SourceMemory]:
+    """Query current, non-rejected profile support via expression IDs, once per source and item, for ``sources``
+    (default: all of them). Read with SQL aggregates, so it stays cheap with tens of thousands of items."""
+    counts = store.expression_counts()
+    owners = store.expression_owners()
     supported: dict[str, set[str]] = {}
     facets: dict[str, set[str]] = {}
-    for e in expressions:
-        totals[e.source_id] = totals.get(e.source_id, 0) + 1
-        targets[e.source_id] = targets.get(e.source_id, 0) + int(e.is_target)
-    for item in store.list_items():
-        for source_id in {owners[e.expression_id] for e in item.evidence if e.expression_id in owners}:
-            supported.setdefault(source_id, set()).add(item.item_id)
-            facets.setdefault(source_id, set()).add(item.facet_id)
+    for item_id, facet_id, expression_id in store.item_support():
+        if (source_id := owners.get(expression_id)) is not None:
+            supported.setdefault(source_id, set()).add(item_id)
+            facets.setdefault(source_id, set()).add(facet_id)
     built_at = store.get_meta("built_at")
+    pending = store.pending_source_ids()
     result: dict[str, SourceMemory] = {}
-    for source in store.list_sources():
+    for source in store.list_sources() if sources is None else sources:
         sid = source.source_id
+        total, target = counts.get(sid, (0, 0))
         count = len(supported.get(sid, set()))
-        built = built_at is not None and store.get_meta(f"source_pending:{sid}") is None
+        built = built_at is not None and sid not in pending
         result[sid] = SourceMemory(
-            expressions_total=totals.get(sid, 0),
-            expressions_target=targets.get(sid, 0),
-            expressions_others=totals.get(sid, 0) - targets.get(sid, 0),
+            expressions_total=total,
+            expressions_target=target,
+            expressions_others=total - target,
             items_supported=count,
             facets=[{"facet_id": fid, "name": FACET_BY_ID[fid].name} for fid in sorted(facets.get(sid, set()))],
             contributes_nothing=count == 0,

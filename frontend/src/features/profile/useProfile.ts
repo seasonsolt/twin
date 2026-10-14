@@ -7,23 +7,30 @@ import { api } from '../../lib/api';
 import { getPersonaId } from '../../lib/persona';
 import { toast } from '../../components/ui';
 import { useStatus } from '../../stores/status';
-import type { Coverage, ProfileItem, ReviewStatus } from './types';
+import type { Coverage, ItemSummary, ProfileItem, ReviewStatus } from './types';
 
+/** The list showing a reviewed item: it shows the change at once and re-reads itself if saving fails. */
+export interface ReviewedList {
+  replace: (item: ProfileItem) => void;
+  reload: () => Promise<void>;
+}
+
+/** Profile counts and suggestions, and the reviews that change them. Items themselves are read a page at a
+ * time with `usePagedItems`, so a profile with tens of thousands of items never loads them all. */
 export function useProfile(active: boolean) {
   const personaId = usePersonaId();
   const [coverage, setCoverage] = useState<Coverage | null>(null);
-  const [items, setItems] = useState<ProfileItem[]>([]);
+  const [summary, setSummary] = useState<ItemSummary | null>(null);
   const [coverageError, setCoverageError] = useState('');
-  const [itemsError, setItemsError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState('');
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const batchRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
   const coverageRequest = useRef<AbortController | null>(null);
-  const itemsRequest = useRef<AbortController | null>(null);
+  const summaryRequest = useRef<AbortController | null>(null);
   const mutations = useRef(new Set<AbortController>());
-  const optimistic = useRef(new Map<string, ProfileItem>());
+  const reviewing = useRef(new Set<string>());
   const refreshCoverage = useCallback(async () => {
     if (!alive.current) return;
     coverageRequest.current?.abort();
@@ -44,89 +51,80 @@ export function useProfile(active: boolean) {
           failure instanceof Error ? failure.message : '建议加载失败',
         );
     }
-  }, [personaId]);
-  const latestCoverageRefresh = useRef(refreshCoverage);
-  useEffect(() => {
-    latestCoverageRefresh.current = refreshCoverage;
-  }, [refreshCoverage]);
-  const refreshItems = useCallback(async () => {
+  }, [personaId, setCoverage, setCoverageError]);
+  const refreshSummary = useCallback(async () => {
     if (!alive.current) return;
-    itemsRequest.current?.abort();
+    summaryRequest.current?.abort();
     const request = new AbortController();
-    itemsRequest.current = request;
-    setLoading(true);
+    summaryRequest.current = request;
     try {
-      const rows = await api<ProfileItem[]>(
-        '/api/persona/items?include_rejected=false',
-        { signal: request.signal, headers: { 'X-Twin-Persona': personaId } },
-      );
+      const counts = await api<ItemSummary>('/api/persona/items/summary', {
+        signal: request.signal,
+        headers: { 'X-Twin-Persona': personaId },
+      });
       if (!request.signal.aborted && alive.current) {
-        const merged = rows.map(
-          (item) => optimistic.current.get(item.item_id) ?? item,
-        );
-        for (const [id, item] of optimistic.current)
-          if (!merged.some((row) => row.item_id === id)) merged.push(item);
-        setItems(merged);
-        setItemsError('');
+        setSummary(counts);
+        setSummaryError('');
       }
     } catch (failure) {
       if (!request.signal.aborted && alive.current)
-        setItemsError(
+        setSummaryError(
           failure instanceof Error ? failure.message : '条目加载失败',
         );
-    } finally {
-      if (!request.signal.aborted && alive.current) setLoading(false);
     }
-  }, [personaId]);
-  const latestItemsRefresh = useRef(refreshItems);
+  }, [personaId, setSummary, setSummaryError]);
+  const latest = useRef({ refreshCoverage, refreshSummary });
   useEffect(() => {
-    latestItemsRefresh.current = refreshItems;
-  }, [refreshItems]);
+    latest.current = { refreshCoverage, refreshSummary };
+  }, [refreshCoverage, refreshSummary]);
   useEffect(() => {
     alive.current = active;
-    optimistic.current = new Map();
+    reviewing.current = new Set();
     const requests = mutations.current;
     return () => {
       alive.current = false;
       coverageRequest.current?.abort();
-      itemsRequest.current?.abort();
+      summaryRequest.current?.abort();
       requests.forEach((request) => request.abort());
     };
   }, [active, personaId]);
   useEffect(() => {
-    if (active) void refreshCoverage();
-    return () => coverageRequest.current?.abort();
-  }, [active, refreshCoverage]);
-  useEffect(() => {
-    if (active) void refreshItems();
-    return () => itemsRequest.current?.abort();
-  }, [active, refreshItems]);
+    if (active) {
+      void refreshCoverage();
+      void refreshSummary();
+    }
+  }, [active, refreshCoverage, refreshSummary]);
+  const afterChange = async (signal: AbortSignal) => {
+    void latest.current.refreshSummary();
+    void latest.current.refreshCoverage();
+    await useStatus.getState().refresh(signal);
+  };
   const review = async (
     item: ProfileItem,
     status: ReviewStatus,
-    statement?: string,
+    statement: string | undefined,
+    list: ReviewedList,
   ) => {
     if (
       !alive.current ||
-      optimistic.current.has(item.item_id) ||
+      reviewing.current.has(item.item_id) ||
       (batchRequest.current && !batchRequest.current.signal.aborted)
     )
       return false;
     const request = new AbortController();
-    const reviewed = optimistic.current;
+    const started = reviewing.current;
     mutations.current.add(request);
+    started.add(item.item_id);
+    setPending(new Set(started));
     const extracted = item.extracted_statement || item.statement;
-    const updated: ProfileItem = {
-      ...item,
-      review: status,
-      statement: status === 'edited' ? statement! : extracted,
-      extracted_statement: status === 'edited' ? extracted : '',
-    };
-    optimistic.current.set(item.item_id, updated);
-    setPending(new Set(optimistic.current.keys()));
-    setItems((rows) =>
-      rows.map((row) => (row.item_id === item.item_id ? updated : row)),
-    );
+    // A rejected item leaves the list only once the rejection is saved.
+    if (status !== 'rejected')
+      list.replace({
+        ...item,
+        review: status,
+        statement: status === 'edited' ? statement! : extracted,
+        extracted_statement: status === 'edited' ? extracted : '',
+      });
     try {
       const saved = await api<ProfileItem>(
         `/api/persona/items/${encodeURIComponent(item.item_id)}/review`,
@@ -134,28 +132,18 @@ export function useProfile(active: boolean) {
           method: 'POST',
           json: { status, statement: statement ?? null, note: '' },
           signal: request.signal,
+          headers: { 'X-Twin-Persona': personaId },
         },
       );
       if (request.signal.aborted || !alive.current) return false;
-      optimistic.current.set(item.item_id, saved);
-      setItems((rows) =>
-        rows.map((row) => (row.item_id === item.item_id ? saved : row)),
-      );
-      void latestItemsRefresh.current();
+      list.replace(saved);
       toast('审核已保存', 'success');
-      void latestCoverageRefresh.current();
-      await useStatus.getState().refresh(request.signal);
+      await afterChange(request.signal);
       return !request.signal.aborted && alive.current;
     } catch (failure) {
       if (!request.signal.aborted && alive.current) {
-        itemsRequest.current?.abort();
-        setLoading(false);
-        setItems((rows) =>
-          rows.some((row) => row.item_id === item.item_id)
-            ? rows.map((row) => (row.item_id === item.item_id ? item : row))
-            : [...rows, item],
-        );
-        void latestItemsRefresh.current();
+        list.replace(item);
+        void list.reload();
         toast(
           failure instanceof Error ? failure.message : '审核失败，已恢复原条目',
           'danger',
@@ -164,43 +152,37 @@ export function useProfile(active: boolean) {
       return false;
     } finally {
       mutations.current.delete(request);
-      reviewed.delete(item.item_id);
+      started.delete(item.item_id);
       if (!request.signal.aborted && alive.current)
-        setPending(new Set(optimistic.current.keys()));
+        setPending(new Set(started));
     }
   };
-  const confirmItems = async (rows: ProfileItem[]) => {
+  /** Confirm every unreviewed item of a dimension on the server, however many there are. */
+  const confirmDimension = async (dimensionId: string) => {
     if (
       !alive.current ||
       getPersonaId() !== personaId ||
-      optimistic.current.size > 0 ||
+      reviewing.current.size > 0 ||
       (batchRequest.current && !batchRequest.current.signal.aborted)
     )
       return false;
-    const ids = rows
-      .filter((item) => item.review === 'unreviewed')
-      .map((item) => item.item_id);
-    if (!ids.length) return false;
     const request = new AbortController();
     batchRequest.current = request;
     mutations.current.add(request);
     setBatchBusy(true);
-    setPending(new Set(ids));
     try {
       const saved = await api<{ updated: number }>(
         '/api/persona/items/review-batch',
         {
           method: 'POST',
-          json: { item_ids: ids, status: 'confirmed' },
+          json: { dimension_id: dimensionId, status: 'confirmed' },
           signal: request.signal,
           headers: { 'X-Twin-Persona': personaId },
         },
       );
       if (request.signal.aborted || !alive.current) return false;
-      void latestItemsRefresh.current();
-      void latestCoverageRefresh.current();
       toast(`已确认 ${saved.updated} 条`, 'success');
-      await useStatus.getState().refresh(request.signal);
+      await afterChange(request.signal);
       return !request.signal.aborted && alive.current;
     } catch (failure) {
       if (!request.signal.aborted && alive.current)
@@ -212,23 +194,20 @@ export function useProfile(active: boolean) {
     } finally {
       mutations.current.delete(request);
       if (batchRequest.current === request) batchRequest.current = null;
-      if (!request.signal.aborted && alive.current) {
-        setBatchBusy(false);
-        setPending(new Set(optimistic.current.keys()));
-      }
+      if (!request.signal.aborted && alive.current) setBatchBusy(false);
     }
   };
   return {
     coverage,
-    items,
+    summary,
     coverageError,
-    itemsError,
-    loading,
+    summaryError,
+    loading: summary === null && !summaryError,
     pending,
     batchBusy,
-    confirmItems,
+    confirmDimension,
     refreshCoverage,
-    refreshItems,
+    refreshSummary,
     review,
   };
 }

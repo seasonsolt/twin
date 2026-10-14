@@ -15,6 +15,7 @@ import { api } from '../lib/api';
 import { getPersonaId, setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -83,8 +84,8 @@ beforeEach(() => {
     if (path === '/api/persona/state') return json({ stale: false });
     if (path === '/api/media/capabilities')
       return json({ available: false, video: { available: false } });
-    if (path === '/api/persona/sources' || path === '/api/jobs')
-      return json([]);
+    if (isSourcesUrl(path)) return json(sourcesPage(path, []));
+    if (path === '/api/jobs') return json([]);
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     throw new Error(path);
   });

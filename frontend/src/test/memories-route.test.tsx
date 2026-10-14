@@ -1,6 +1,13 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { App } from '../App';
+import {
+  isItemSummaryUrl,
+  isSourcesUrl,
+  itemSummary,
+  itemsPage,
+  sourcesPage,
+} from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -25,28 +32,31 @@ it.each([
               ? { email: null, admin: true, auth_enabled: false }
               : url === '/api/personas'
                 ? [{ id: 'default', name: '测试人', is_default: true }]
-                : url === '/api/persona/sources' ||
-                    url.startsWith('/api/persona/items')
-                  ? []
-                  : url === '/api/persona/processing'
-                    ? { state: 'idle' }
-                    : url === '/api/persona/coverage'
-                      ? { facets: [], suggestions: [], kind_labels: {} }
-                      : url === '/api/identity'
-                        ? {
-                            name: '测试人',
-                            name_source: 'user',
-                            about: '',
-                            aliases: [],
-                            egress: [],
-                          }
-                        : url === '/api/media/capabilities'
-                          ? { available: false }
-                          : {
-                              target_name: '测试人',
-                              counts: { sources: 1, items: 0 },
-                              egress: [],
-                            },
+                : isSourcesUrl(url)
+                  ? sourcesPage(url, [])
+                  : isItemSummaryUrl(url)
+                    ? itemSummary([])
+                    : url.startsWith('/api/persona/items')
+                      ? itemsPage(url, [])
+                      : url === '/api/persona/processing'
+                        ? { state: 'idle' }
+                        : url === '/api/persona/coverage'
+                          ? { facets: [], suggestions: [], kind_labels: {} }
+                          : url === '/api/identity'
+                            ? {
+                                name: '测试人',
+                                name_source: 'user',
+                                about: '',
+                                aliases: [],
+                                egress: [],
+                              }
+                            : url === '/api/media/capabilities'
+                              ? { available: false }
+                              : {
+                                  target_name: '测试人',
+                                  counts: { sources: 1, items: 0 },
+                                  egress: [],
+                                },
           ),
         ),
     ),

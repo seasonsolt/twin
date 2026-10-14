@@ -320,7 +320,7 @@ class WeComBotRunner:
                 return
             messages = [*session.history, ChatTurn(role="user", content=question)]
             with PersonaStore(self.settings.db_path) as store:
-                if not store.list_items():
+                if not store.has_items():
                     reply = no_profile_reply(store)
                 else:
                     llm, embedder = await asyncio.to_thread(

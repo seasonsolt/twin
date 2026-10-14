@@ -87,7 +87,7 @@ def test_chunk_resume_finish_limits_and_csrf(client: TestClient, tmp_path: Path)
     assert wait_job(client, result["job_id"])["status"] == "done"
     assert client.post(path + "/finish", headers=HEADERS).json()["source_id"] == result["source_id"]
     assert client.get(path).json()["offset"] == len(data)
-    row = client.get("/api/persona/sources").json()[0]
+    row = client.get("/api/persona/sources").json()["items"][0]
     assert row["status"] == "needs_asr" and row["duration_s"] == 1
     folder = tmp_path / "media-sources" / row["media_sha"]
     assert (folder / "original.wav").read_bytes() == data
@@ -134,7 +134,7 @@ def test_dedupe_retry_transcript_and_delete(
     wait_job(client, result["job_id"])
     duplicate = finish(client, wav_bytes(), "另一名字.wav")
     assert duplicate["source_id"] == result["source_id"] and not duplicate["new"]
-    assert len(client.get("/api/persona/sources").json()) == 1
+    assert len(client.get("/api/persona/sources").json()["items"]) == 1
 
     class FakeTranscriber:
         diarizes = True
@@ -241,7 +241,7 @@ def test_http_ingestion_requires_confirmation(client: TestClient, monkeypatch: p
     monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: transcriber)
     result = finish(client, wav_bytes())
     assert wait_job(client, result["job_id"])["status"] == "done"
-    row = client.get("/api/persona/sources").json()[0]
+    row = client.get("/api/persona/sources").json()["items"][0]
     assert row["status"] == "needs_speaker" and row["n_target"] == 0
     base = f"/api/persona/sources/{result['source_id']}"
     claim = client.get(base + "/speakers").json()
@@ -316,7 +316,7 @@ def test_no_asr_still_saved_without_ffmpeg(client: TestClient, monkeypatch: pyte
     monkeypatch.setattr("twin.web.uploads.extract_audio", missing)
     result = finish(client, wav_bytes())
     assert wait_job(client, result["job_id"])["status"] == "done"
-    assert client.get("/api/persona/sources").json()[0]["status"] == "needs_asr"
+    assert client.get("/api/persona/sources").json()["items"][0]["status"] == "needs_asr"
 
 
 def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -102,7 +102,7 @@ def persona_handler(system: str, user: str, schema: type[BaseModel]) -> dict[str
 def test_persona_pages(tmp_path: Path) -> None:
     browser = make_browser(make_settings(tmp_path), persona_handler)
     headers = {**ACCEPT, "X-Twin": "1"}
-    assert browser.get("/api/persona/sources") == []
+    assert browser.get("/api/persona/sources")["items"] == []
     error = browser.client.post("/api/persona/build", headers=headers)
     assert error.status_code == 400 and "还没有导入资料" in error.json()["detail"]
 
@@ -113,7 +113,7 @@ def test_persona_pages(tmp_path: Path) -> None:
     )
     assert imported["imported"][0]["declined_facets"] == ["9.1"] and imported["skipped"][0]["file"] == "bad.pptx"
     browser.post("/api/persona/import", params={"kind": "chat"}, files=uploads({"群.txt": PERSONA_CHAT}))
-    sources = browser.get("/api/persona/sources")
+    sources = browser.get("/api/persona/sources")["items"]
     assert [s["evidence_class"] for s in sources] == ["self_report", "behavior"]
 
     build = browser.run("/api/persona/build")["result"]
@@ -130,7 +130,7 @@ def test_persona_pages(tmp_path: Path) -> None:
     )
     assert bad.status_code == 400
 
-    item_id = browser.get("/api/persona/items")[0]["item_id"]
+    item_id = browser.get("/api/persona/items")["items"][0]["item_id"]
 
     def review(body: dict[str, Any], expected: int = 200) -> Any:
         response = browser.client.post(f"/api/persona/items/{item_id}/review", headers=headers, json=body)
@@ -143,8 +143,8 @@ def test_persona_pages(tmp_path: Path) -> None:
     assert edited["statement"] == "他只认到账的钱" and edited["extracted_statement"] == "他认为回款第一"
     assert "必须给出新的表述" in review({"status": "edited", "statement": " "}, 400)["detail"]
     review({"status": "rejected"})
-    assert browser.get("/api/persona/items") == []
-    assert len(browser.get("/api/persona/items", {"include_rejected": "true"})) == 1
+    assert browser.get("/api/persona/items")["items"] == []
+    assert len(browser.get("/api/persona/items", {"include_rejected": "true"})["items"]) == 1
     assert review({"status": "unreviewed"})["review"] == "unreviewed"
     missing = browser.client.post("/api/persona/items/pi_x/review", headers=headers, json={"status": "confirmed"})
     assert missing.status_code == 404
@@ -152,7 +152,7 @@ def test_persona_pages(tmp_path: Path) -> None:
     assert asked["confirmed"] == 0 and asked["asked"] == 0  # the fake chat tagged no topic
 
     deleted = browser.client.delete(f"/api/persona/sources/{sources[1]['source_id']}", headers=headers)
-    assert deleted.status_code == 200 and len(browser.get("/api/persona/sources")) == 1
+    assert deleted.status_code == 200 and len(browser.get("/api/persona/sources")["items"]) == 1
 
 
 def batch_items(settings: Settings) -> list[str]:
@@ -264,8 +264,8 @@ def test_questionnaire_page(tmp_path: Path) -> None:
     submitted = browser.post("/api/persona/questionnaire/submit", json={"round": "initial", "answers": answers})
     assert submitted["job_id"] and "正在构建" in submitted["notice"]
     assert browser.wait(submitted["job_id"])["status"] == "done"
-    assert [s["kind"] for s in browser.get("/api/persona/sources")] == ["questionnaire"]
-    assert browser.get("/api/persona/items")[0]["facet_id"] == "2.1"
+    assert [s["kind"] for s in browser.get("/api/persona/sources")["items"]] == ["questionnaire"]
+    assert browser.get("/api/persona/items")["items"][0]["facet_id"] == "2.1"
 
     after = browser.get("/api/persona/questionnaire")
     assert after["status"] == "submitted" and "retest_from" not in after

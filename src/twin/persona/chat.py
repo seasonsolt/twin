@@ -382,7 +382,7 @@ class PersonaChat:
     ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
+        if persist and not self.store.has_items() and self.store.get_meta("built_at") is None:
             return no_profile_reply(self.store, as_of)
         ctx = self._search(messages, as_of, today)
         ctx.today = today
@@ -400,7 +400,7 @@ class PersonaChat:
     ) -> AsyncGenerator[str | ChatReply]:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
+        if persist and not self.store.has_items() and self.store.get_meta("built_at") is None:
             reply = no_profile_reply(self.store, as_of)
             yield reply.reply
             yield reply

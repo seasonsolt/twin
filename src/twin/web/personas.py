@@ -133,7 +133,7 @@ class Personas:
         name, _ = stored_identity(settings.db_path)
         portrait = AssetStore(settings.db_path).path("portrait")
         with PersonaStore(settings.db_path) as store:
-            sources = len(store.list_sources())
+            sources = store.count_sources()
         return {
             **entry,
             "name": name or settings.target_name,

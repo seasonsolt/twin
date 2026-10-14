@@ -14,6 +14,7 @@ import { Memories, type Memory } from '../pages/Memories';
 import { api } from '../lib/api';
 import { useAuth } from '../stores/auth';
 import { useStatus } from '../stores/status';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('../lib/mediaUpload', async (original) => ({
   ...(await original<typeof import('../lib/mediaUpload')>()),
@@ -67,7 +68,7 @@ beforeEach(() => {
   importError = false;
   vi.mocked(toast).mockClear();
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
-    if (url === '/api/persona/sources') return json(rows);
+    if (isSourcesUrl(url)) return json(sourcesPage(url, rows));
     if (url === '/api/persona/processing') return json(state);
     if (url === '/api/status')
       return json({

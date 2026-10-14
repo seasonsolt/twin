@@ -26,6 +26,13 @@ vi.mock('../components/ui', async (original) => ({
 }));
 import { reviewLabels, type ProfileItem } from '../features/profile/types';
 import { useStatus } from '../stores/status';
+import {
+  isItemSummaryUrl,
+  isSourcesUrl,
+  itemSummary,
+  itemsPage,
+  sourcesPage,
+} from './personaApi';
 
 const item: ProfileItem = {
   item_id: 'i/1',
@@ -74,7 +81,7 @@ beforeEach(() => {
           avatar: null,
         }),
       );
-    if (url === '/api/persona/sources') return Promise.resolve(json([]));
+    if (isSourcesUrl(url)) return Promise.resolve(json(sourcesPage(url, [])));
     if (url === '/api/persona/processing')
       return Promise.resolve(json({ state: 'idle' }));
     if (url === '/api/media/capabilities')
@@ -94,10 +101,9 @@ beforeEach(() => {
           })),
         }),
       );
+    if (isItemSummaryUrl(url)) return Promise.resolve(json(itemSummary(rows)));
     if (url.startsWith('/api/persona/items?'))
-      return Promise.resolve(
-        json(rows.filter((row) => row.review !== 'rejected')),
-      );
+      return Promise.resolve(json(itemsPage(url, rows)));
     if (url.endsWith('/review') || url.endsWith('/review-batch'))
       return new Promise<Response>((resolve) => {
         resolveReview = resolve;
@@ -281,11 +287,15 @@ it('keeps server order, shows five items, and resets expansion after switching t
       .map((card) => card.getAttribute('aria-label')),
   ).toEqual(rows.slice(1, 6).map((row) => row.statement));
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: '展开其余 2 条' }));
+  await user.click(
+    await screen.findByRole('button', { name: '展开其余 2 条' }),
+  );
   expect(screen.getAllByRole('article')).toHaveLength(7);
   await user.click(screen.getByRole('button', { name: '收起' }));
   expect(screen.getAllByRole('article')).toHaveLength(5);
-  await user.click(screen.getByRole('button', { name: '展开其余 2 条' }));
+  await user.click(
+    await screen.findByRole('button', { name: '展开其余 2 条' }),
+  );
   await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
   expect(screen.getAllByRole('article')).toHaveLength(1);
   expect(screen.queryByRole('button', { name: /展开其余/ })).toBeNull();
@@ -314,7 +324,9 @@ it('confirms all unreviewed items in only the selected dimension, refreshes, and
   mountOverview();
   const selected = await screen.findByRole('tab', { name: /看重什么 7/ });
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: '展开其余 2 条' }));
+  await user.click(
+    await screen.findByRole('button', { name: '展开其余 2 条' }),
+  );
   await user.click(screen.getByRole('button', { name: '全部确认（5）' }));
   let dialog = screen.getByRole('dialog', { name: '确认这 5 条？' });
   expect(dialog).toHaveTextContent(
@@ -333,8 +345,9 @@ it('confirms all unreviewed items in only the selected dimension, refreshes, and
   const options = fetcher.mock.calls.find(([url]) =>
     url.endsWith('/review-batch'),
   )![1] as RequestInit;
+  // The server finds the dimension's unreviewed items itself, so any number of them can be confirmed at once.
   expect(JSON.parse(options.body as string)).toEqual({
-    item_ids: selectedItems.map((row) => row.item_id),
+    dimension_id: 'D2',
     status: 'confirmed',
   });
   expect(new Headers(options.headers).get('X-Twin-Persona')).toBe('default');
@@ -372,7 +385,9 @@ it('reports batch failures without changing the current tab or expanded items', 
   mountOverview();
   const selected = await screen.findByRole('tab', { name: /看重什么 7/ });
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: '展开其余 2 条' }));
+  await user.click(
+    await screen.findByRole('button', { name: '展开其余 2 条' }),
+  );
   await user.click(screen.getByRole('button', { name: '全部确认（7）' }));
   await user.click(
     within(screen.getByRole('dialog')).getByRole('button', {
@@ -430,7 +445,9 @@ it('preserves the selected tab and expansion through confirmation, editing, and 
     name: /看重什么 7\s*· 1 待确认/,
   });
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: '展开其余 2 条' }));
+  await user.click(
+    await screen.findByRole('button', { name: '展开其余 2 条' }),
+  );
   await user.click(
     within(screen.getByRole('article', { name: target.statement })).getByRole(
       'button',
@@ -477,7 +494,9 @@ it('resets the tab and expansion when switching twins', async () => {
   await user.click(
     screen.getByRole('tab', { name: /看重什么 7\s*· 7 待确认/ }),
   );
-  await user.click(screen.getByRole('button', { name: '展开其余 2 条' }));
+  await user.click(
+    await screen.findByRole('button', { name: '展开其余 2 条' }),
+  );
   expect(screen.getAllByRole('article')).toHaveLength(7);
   act(() => {
     setPersonaId('friend');

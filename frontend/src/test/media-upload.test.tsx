@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { uploadMedia, type UploadProgress } from '../lib/mediaUpload';
 import { Memories } from '../pages/Memories';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
@@ -167,15 +168,17 @@ it('shows upload percent/MB and all media row states with retranscription', asyn
     remembered: 2,
   });
   const fetcher = vi.fn(async (url: string) => {
-    if (url === '/api/persona/sources')
-      return json([
-        media('extracting'),
-        media('transcribing'),
-        media('processing'),
-        media('remembered'),
-        media('failed'),
-        media('needs_asr', 'audio'),
-      ]);
+    if (isSourcesUrl(url))
+      return json(
+        sourcesPage(url, [
+          media('extracting'),
+          media('transcribing'),
+          media('processing'),
+          media('remembered'),
+          media('failed'),
+          media('needs_asr', 'audio'),
+        ]),
+      );
     if (url === '/api/persona/processing') return json({ state: 'idle' });
     if (url === '/api/status')
       return json({ counts: { sources: 6, items: 2 }, egress: [] });

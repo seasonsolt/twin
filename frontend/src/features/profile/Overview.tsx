@@ -8,9 +8,10 @@ import {
   useConfirm,
 } from '../../components/ui';
 import { usePersonaId } from '../../lib/usePersonaState';
-import type { ProfileItem } from './types';
+import type { ItemQuery } from './types';
 import { ItemCard } from './ItemCard';
 import { useProfile } from './useProfile';
+import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
 import { useStatus } from '../../stores/status';
 
 export const topics: Record<string, string> = {
@@ -45,63 +46,92 @@ const backendNames: Record<string, string> = {
   judge: '回答检查',
 };
 
+const COLLAPSED = 5;
+
 function DimensionItems({
-  items,
+  dimension,
   profile,
 }: {
-  items: ProfileItem[];
+  dimension: { id: string; total: number; unreviewed: number };
   profile: ReturnType<typeof useProfile>;
 }) {
+  const [query] = useState<ItemQuery>(() => ({ dimension: [dimension.id] }));
+  const page = usePagedItems(query);
   const [expanded, setExpanded] = useState(false);
   const confirm = useConfirm();
-  const unreviewed = items.filter((item) => item.review === 'unreviewed');
   const confirmAll = async () => {
     if (
-      await confirm({
-        title: `确认这 ${unreviewed.length} 条？`,
+      (await confirm({
+        title: `确认这 ${dimension.unreviewed} 条？`,
         body: '确认后，分身回答时会优先依据它们。可以随时逐条撤销。',
         confirmLabel: '全部确认',
-      })
+      })) &&
+      (await profile.confirmDimension(dimension.id))
     )
-      await profile.confirmItems(unreviewed);
+      await page.reload();
   };
+  const shown = expanded ? page.items : page.items.slice(0, COLLAPSED);
+  const remaining = page.total - shown.length;
   return (
     <div className="space-y-2 md:space-y-3">
-      {unreviewed.length > 0 && (
+      {dimension.unreviewed > 0 && (
         <div className="flex justify-end">
           <Button
             variant="secondary"
             size="sm"
             loading={profile.batchBusy}
-            disabled={
-              profile.pending.size > 0 ||
-              profile.loading ||
-              !!profile.itemsError
-            }
+            disabled={profile.pending.size > 0}
             onClick={() => void confirmAll()}
           >
-            全部确认（{unreviewed.length}）
+            全部确认（{dimension.unreviewed}）
           </Button>
         </div>
       )}
-      {(expanded ? items : items.slice(0, 5)).map((item) => (
+      {page.error && (
+        <p role="alert" className="text-danger">
+          {page.error}{' '}
+          <Button variant="ghost" onClick={() => void page.reload()}>
+            重试
+          </Button>
+        </p>
+      )}
+      {shown.map((item) => (
         <ItemCard
           key={item.item_id}
           item={item}
           pending={profile.pending.has(item.item_id)}
-          onReview={profile.review}
+          onReview={(reviewed, status, statement) =>
+            profile.review(reviewed, status, statement, page)
+          }
           kindLabels={profile.coverage?.kind_labels ?? {}}
         />
       ))}
-      {items.length > 5 && (
-        <Button
-          variant="ghost"
-          aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
-        >
-          {expanded ? '收起' : `展开其余 ${items.length - 5} 条`}
-        </Button>
-      )}
+      {page.loading && <Skeleton className="h-24" />}
+      <div className="flex flex-wrap gap-2">
+        {!page.loading && remaining > 0 && (
+          <Button
+            variant="ghost"
+            aria-expanded={expanded}
+            onClick={() => {
+              if (expanded) page.loadMore();
+              else setExpanded(true);
+            }}
+          >
+            {expanded
+              ? `再看 ${Math.min(remaining, ITEM_PAGE_SIZE)} 条（还有 ${remaining} 条）`
+              : `展开其余 ${remaining} 条`}
+          </Button>
+        )}
+        {expanded && (
+          <Button
+            variant="ghost"
+            aria-expanded
+            onClick={() => setExpanded(false)}
+          >
+            收起
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -109,27 +139,14 @@ function DimensionItems({
 export function Overview() {
   const personaId = usePersonaId();
   const profile = useProfile(true);
-  const dimensions = Object.entries(topics)
-    .map(([id, title]) => {
-      const items = profile.items.filter(
-        (item) => item.dimension_id === id && item.review !== 'rejected',
-      );
-      return {
-        id,
-        title,
-        items,
-        unreviewed: items.filter((item) => item.review === 'unreviewed').length,
-      };
-    })
-    .filter((dimension) => dimension.items.length > 0);
-  const total = dimensions.reduce(
-    (sum, dimension) => sum + dimension.items.length,
-    0,
-  );
-  const unreviewed = dimensions.reduce(
-    (sum, dimension) => sum + dimension.unreviewed,
-    0,
-  );
+  const dimensions = (profile.summary?.dimensions ?? []).map((row) => ({
+    id: row.dimension_id,
+    title: topics[row.dimension_id] ?? row.name,
+    total: row.total,
+    unreviewed: row.unreviewed,
+  }));
+  const total = profile.summary?.total ?? 0;
+  const unreviewed = profile.summary?.unreviewed ?? 0;
   const defaultDimension =
     dimensions.find((dimension) => dimension.unreviewed > 0) ?? dimensions[0];
   const status = useStatus((state) => state.data);
@@ -153,15 +170,18 @@ export function Overview() {
           我了解到的他
         </h3>
         {profile.loading && <Skeleton className="h-24" />}
-        {profile.itemsError && (
+        {profile.summaryError && (
           <p role="alert" className="text-danger">
-            {profile.itemsError}{' '}
-            <Button variant="ghost" onClick={() => void profile.refreshItems()}>
+            {profile.summaryError}{' '}
+            <Button
+              variant="ghost"
+              onClick={() => void profile.refreshSummary()}
+            >
               重试
             </Button>
           </p>
         )}
-        {!profile.loading && !profile.itemsError && !profile.items.length && (
+        {profile.summary && !dimensions.length && (
           <EmptyState
             title="还不够了解你"
             body="添加一些记忆，让我慢慢认识你。"
@@ -183,20 +203,26 @@ export function Overview() {
               key={personaId}
               scrollable
               defaultValue={defaultDimension.id}
-              items={dimensions.map(({ id, title, items, unreviewed }) => ({
-                value: id,
+              items={dimensions.map((dimension) => ({
+                value: dimension.id,
                 label: (
                   <>
-                    {title} {items.length}
-                    {unreviewed > 0 && (
+                    {dimension.title} {dimension.total}
+                    {dimension.unreviewed > 0 && (
                       <span className="ml-1 text-xs opacity-70">
                         {' · '}
-                        {unreviewed} 待确认
+                        {dimension.unreviewed} 待确认
                       </span>
                     )}
                   </>
                 ),
-                content: <DimensionItems items={items} profile={profile} />,
+                content: (
+                  <DimensionItems
+                    key={`${personaId}-${dimension.id}`}
+                    dimension={dimension}
+                    profile={profile}
+                  />
+                ),
               }))}
             />
           </div>

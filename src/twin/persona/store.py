@@ -322,13 +322,16 @@ class PersonaStore:
         with self._tx() as db:
             self._insert_ledger(db, [entry])
 
-    def replace_ledger_source(self, source_id: str, entries: list[LedgerEntry], done: str) -> None:
+    def replace_ledger_source(self, source_id: str, entries: list[LedgerEntry], done: str) -> bool:
         """Swap a source's unreviewed entries for ``entries``; entries the person reviewed stay. ``done`` records the
-        extractor version that processed the source."""
+        extractor version that processed the source. False, writing nothing, when the source was deleted meanwhile."""
         with self._tx() as db:
+            if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
+                return False
             self._drop_ledger(db, source_id, reviewed=False)
             self._insert_ledger(db, entries)
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"ledger_done:{source_id}", done))
+            return True
 
     def ledger_done(self, source_id: str) -> str | None:
         """The extractor version that last processed the source, None when it never was."""

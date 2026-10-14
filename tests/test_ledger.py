@@ -4,6 +4,8 @@ import datetime as dt
 import json
 import re
 import sqlite3
+from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -55,8 +57,9 @@ def ledger_ids(user: str) -> list[str]:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> PersonaStore:
-    return PersonaStore(tmp_path / "twin.db")
+def store(tmp_path: Path) -> Iterator[PersonaStore]:
+    with PersonaStore(tmp_path / "twin.db") as opened:
+        yield opened
 
 
 def test_entries_rest_on_numbered_lines_with_checked_quotes_and_dates(store: PersonaStore) -> None:
@@ -206,7 +209,7 @@ def test_only_meetings_with_the_person_and_others_are_read(store: PersonaStore) 
 
 def test_schema_one_store_gains_the_ledger_table(tmp_path: Path) -> None:
     path = tmp_path / "twin.db"
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.executescript(storage._SCHEMA)
         db.execute("INSERT INTO p_meta VALUES ('identity:name', '张总')")
         db.execute("PRAGMA user_version = 1")
@@ -266,3 +269,69 @@ def test_another_owners_follow_up_does_not_reopen_the_commitment(store: PersonaS
     fix, check = [e for e in entries if e.kind == "commitment"]
     assert check.relates_to == fix.entry_id
     assert lg.current_status(fix, entries) == "reopened" and lg.current_status(check, entries) == "open"
+
+
+def entry(entry_id: str, kind: str, owner: str, day: str, line: int = 1, **extra: Any) -> lg.LedgerEntry:
+    return lg.LedgerEntry(
+        entry_id=entry_id,
+        source_id=f"s{day}",
+        expression_id=f"s{day}:{line:04d}",
+        meeting_date=dt.date.fromisoformat(day),
+        meeting_title="周会",
+        kind=kind,  # type: ignore[arg-type]
+        speaker=owner,
+        quote=entry_id,
+        owner=owner,
+        what=f"事情{entry_id}",
+        confidence=0.9,
+        extractor=lg.LEDGER_VERSION,
+        created_at="now",
+        updated_at="now",
+        **extra,
+    )
+
+
+def test_brief_lists_open_threads_once_with_a_question_for_each() -> None:
+    today = dt.date(2026, 10, 20)
+    ledger = [
+        # Restated with a new deadline: only the restatement shows, with the later deadline.
+        entry("quote", "commitment", "老王", "2026-10-12", due=dt.date(2026, 10, 16)),
+        entry("quote2", "commitment", "老王", "2026-10-14", due=dt.date(2026, 10, 22), relates_to="quote"),
+        entry("data", "commitment", "老王", "2026-10-12", 2, due=dt.date(2026, 10, 14)),
+        entry("data-late", "progress", "周敏", "2026-10-19", status="not_done", relates_to="data"),
+        entry("sent", "commitment", "老王", "2026-10-12", 3),
+        entry("sent-done", "progress", "老王", "2026-10-19", 2, status="claimed_done", relates_to="sent"),
+        entry("closed", "commitment", "老王", "2026-10-12", 4, status="confirmed_done"),
+        entry("dropped", "commitment", "老王", "2026-10-12", 5, review=ReviewStatus.REJECTED),
+        entry("old-due", "commitment", "老王", "2026-10-12", 6, due=dt.date(2026, 10, 15)),
+        entry("price", "objection", "老王", "2026-10-12", 7),
+        entry("mine", "commitment", lg.SELF, "2026-10-12", 8, counterpart="老王"),
+        entry("other", "commitment", "刘婷", "2026-10-12", 9),
+    ]
+    result = lg.brief(ledger, "老王", today)
+    assert [e.entry_id for e in result.theirs] == ["data", "old-due", "quote2", "sent"]
+    assert [e.entry_id for e in result.mine] == ["mine"]
+    assert [e.entry_id for e in result.progress] == ["sent-done", "data-late"]
+    assert [e.entry_id for e in result.objections] == ["price"]
+    questions = {q.entry_id: q.text for q in result.questions}
+    assert questions == {
+        "old-due": "「事情old-due」原定10月15日前，现在进展如何？",
+        "data": "「事情data」上次说还没完成，现在到哪一步了，新的时间是？",
+        "quote2": "「事情quote2」10月22日前能按时完成吗？",
+        "sent": "「事情sent」说已经完成了，能把结果发我看一下吗？",
+        "price": "上次你提到事情price，这个顾虑现在解决了吗？",
+    }
+    assert lg.people(ledger) == ["老王", "刘婷", "周敏"]
+    assert lg.brief(ledger, "没人", today).questions == []
+
+
+def test_a_meeting_deleted_while_it_is_read_leaves_no_entries(store: PersonaStore) -> None:
+    meeting(store, "m1", "2026-10-12", [("本人", "老王你说说。"), ("其他人1", "我周五前给您一版新报价方案。")])
+
+    def handler(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        store.delete_source("m1")
+        return {"speakers": [], "items": [item(2, "我周五前给您一版新报价方案")]}
+
+    report = lg.build_ledger(store, FakeLLM(handler), NAME)
+    assert report.sources == 0 and store.list_ledger() == []
+    assert store.ledger_done("m1") is None

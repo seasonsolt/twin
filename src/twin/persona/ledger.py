@@ -125,7 +125,7 @@ def is_meeting(source: Source) -> bool:
     return source.kind in MEETING_KINDS and 0 < source.n_target < source.n_expressions
 
 
-def _root(entry: LedgerEntry, by_id: dict[str, LedgerEntry]) -> str:
+def thread_root(entry: LedgerEntry, by_id: dict[str, LedgerEntry]) -> str:
     """The first entry of the thread a decision or commitment restates (itself when it restates none). Only the same
     owner's entry is restated: another owner's linked commitment (checking on it, chasing it) is a task of its own."""
     seen = {entry.entry_id}
@@ -149,8 +149,8 @@ def current_status(entry: LedgerEntry, ledger: list[LedgerEntry]) -> LedgerStatu
         return entry.status
     live = [e for e in ledger if e.review is not ReviewStatus.REJECTED]
     by_id = {e.entry_id: e for e in live} | {entry.entry_id: entry}
-    root = _root(entry, by_id)
-    thread = {e.entry_id for e in live if e.kind != "progress" and _root(e, by_id) == root} | {entry.entry_id}
+    root = thread_root(entry, by_id)
+    thread = {e.entry_id for e in live if e.kind != "progress" and thread_root(e, by_id) == root} | {entry.entry_id}
     events = [
         e
         for e in live
@@ -250,6 +250,7 @@ def extract_meeting(
     ledger: list[LedgerEntry],
     name: str,
     effort: Effort = "medium",
+    reasoning_effort: str | None = None,
 ) -> tuple[list[LedgerEntry], int]:
     """New entries of one meeting and the number of model items dropped. ``ledger`` is every entry already kept,
     including the reviewed entries of this meeting, which are neither repeated nor replaced."""
@@ -259,7 +260,13 @@ def extract_meeting(
     dropped = 0
     now = _now()
     for window in _windows(expressions):
-        draft = llm.structured(system=SYSTEM, user=_user(source, name, kept, window), schema=LedgerDraft, effort=effort)
+        draft = llm.structured(
+            system=SYSTEM,
+            user=_user(source, name, kept, window),
+            schema=LedgerDraft,
+            effort=effort,
+            reasoning_effort=reasoning_effort,
+        )
         lines = dict(window)
         known = {e.entry_id for e in kept}
         for item in draft.items:
@@ -278,6 +285,7 @@ def build_ledger(
     name: str,
     *,
     effort: Effort = "medium",
+    reasoning_effort: str | None = None,
     force: bool = False,
     log: Callable[[str], None] | None = None,
 ) -> LedgerReport:
@@ -292,8 +300,10 @@ def build_ledger(
         ledger = [
             e for e in store.list_ledger() if e.source_id != source.source_id or e.review is not ReviewStatus.UNREVIEWED
         ]
-        entries, dropped = extract_meeting(llm, source, store.list_expressions(source.source_id), ledger, name, effort)
-        store.replace_ledger_source(source.source_id, entries, LEDGER_VERSION)
+        expressions = store.list_expressions(source.source_id)
+        entries, dropped = extract_meeting(llm, source, expressions, ledger, name, effort, reasoning_effort)
+        if not store.replace_ledger_source(source.source_id, entries, LEDGER_VERSION):
+            continue  # deleted while it was being read
         report.sources += 1
         report.entries += len(entries)
         report.dropped += dropped
@@ -344,3 +354,115 @@ def confirmation_message(entry: LedgerEntry) -> str | None:
         parts.append(f"（前提：{entry.condition}）")
     parts.append("。有出入直接回我。")
     return "".join(parts)
+
+
+def latest_of_threads(ledger: list[LedgerEntry]) -> list[LedgerEntry]:
+    """The latest entry of each decision or commitment thread (it carries the current deadline), rejected ones aside."""
+    live = [e for e in ledger if e.review is not ReviewStatus.REJECTED]
+    by_id = {e.entry_id: e for e in live}
+    latest: dict[str, LedgerEntry] = {}
+    for e in live:
+        if e.kind not in ("decision", "commitment"):
+            continue
+        root = thread_root(e, by_id)
+        if root not in latest or (e.meeting_date or dt.date.min, e.expression_id) > (
+            latest[root].meeting_date or dt.date.min,
+            latest[root].expression_id,
+        ):
+            latest[root] = e
+    return list(latest.values())
+
+
+@dataclass
+class BriefQuestion:
+    entry_id: str
+    text: str
+
+
+@dataclass
+class Brief:
+    """What to bring up with one person before meeting them, each line resting on a ledger entry."""
+
+    person: str
+    as_of: dt.date
+    # Their commitments not yet confirmed done, overdue first.
+    theirs: list[LedgerEntry]
+    # What the person (本人) promised them.
+    mine: list[LedgerEntry]
+    # Latest progress reports on their commitments.
+    progress: list[LedgerEntry]
+    # Objections they raised.
+    objections: list[LedgerEntry]
+    questions: list[BriefQuestion]
+
+
+BRIEF_PROGRESS = 10
+BRIEF_OBJECTIONS = 5
+
+
+def _day(d: dt.date) -> str:
+    return f"{d.month}月{d.day}日"
+
+
+def _question(entry: LedgerEntry, status: LedgerStatus, as_of: dt.date) -> str | None:
+    what = f"「{entry.what}」"
+    if status == "not_done":
+        return f"{what}上次说还没完成，现在到哪一步了，新的时间是？"
+    if status == "reopened":
+        return f"{what}又出了问题，这次打算怎么处理、什么时候能好？"
+    if status == "claimed_done":
+        return f"{what}说已经完成了，能把结果发我看一下吗？"
+    if status not in ("open", "unknown"):
+        return None
+    if entry.due and entry.due < as_of:
+        return f"{what}原定{_day(entry.due)}前，现在进展如何？"
+    if entry.due:
+        return f"{what}{_day(entry.due)}前能按时完成吗？"
+    return f"{what}现在进展如何，大概什么时候能完成？"
+
+
+def brief(ledger: list[LedgerEntry], person: str, as_of: dt.date) -> Brief:
+    """The pre-meeting brief for ``person`` as of ``as_of``: open commitments, what was promised to them, recent
+    progress, their objections, and one question per commitment that needs following up."""
+    live = [e for e in ledger if e.review is not ReviewStatus.REJECTED]
+    by_id = {e.entry_id: e for e in live}
+    status = {e.entry_id: current_status(e, live) for e in live}
+    latest = [e for e in latest_of_threads(live) if e.kind == "commitment" and status[e.entry_id] != "confirmed_done"]
+
+    def urgency(e: LedgerEntry) -> tuple[int, dt.date]:
+        return (0 if e.due and e.due < as_of else 1 if e.due else 2, e.due or dt.date.max)
+
+    theirs = sorted((e for e in latest if e.owner == person), key=urgency)
+    mine = sorted((e for e in latest if e.owner == SELF and e.counterpart == person), key=urgency)
+    threads = {thread_root(e, by_id) for e in live if e.kind == "commitment" and e.owner == person}
+    progress = [
+        e
+        for e in live
+        if e.kind == "progress"
+        and (e.owner == person or (e.relates_to in by_id and thread_root(by_id[e.relates_to], by_id) in threads))
+    ]
+    progress.sort(key=lambda e: (e.meeting_date or dt.date.min, e.expression_id), reverse=True)
+    objections = [e for e in live if e.kind == "objection" and e.owner == person]
+    objections.sort(key=lambda e: (e.meeting_date or dt.date.min, e.expression_id), reverse=True)
+    questions = [BriefQuestion(e.entry_id, text) for e in theirs if (text := _question(e, status[e.entry_id], as_of))]
+    questions += [
+        BriefQuestion(e.entry_id, f"上次你提到{e.what}，这个顾虑现在解决了吗？") for e in objections[:BRIEF_OBJECTIONS]
+    ]
+    return Brief(
+        person=person,
+        as_of=as_of,
+        theirs=theirs,
+        mine=mine,
+        progress=progress[:BRIEF_PROGRESS],
+        objections=objections[:BRIEF_OBJECTIONS],
+        questions=questions,
+    )
+
+
+def people(ledger: list[LedgerEntry]) -> list[str]:
+    """Everyone other than the person who owns an entry, most entries first."""
+    counts: dict[str, int] = {}
+    for e in ledger:
+        if e.review is not ReviewStatus.REJECTED and e.owner not in (SELF, UNKNOWN_OWNER, ""):
+            counts[e.owner] = counts.get(e.owner, 0) + 1
+    return sorted(counts, key=lambda name: (-counts[name], name))

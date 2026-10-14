@@ -236,6 +236,9 @@ def register(
     from . import claims
 
     claims.register(app, settings, ingestion)
+    from . import ledger
+
+    ledger.register(app, settings, backends, jobs)
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():

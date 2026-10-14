@@ -29,7 +29,7 @@ from typing import Any, Literal
 from ..embed import EmbedError
 from ..llm import LLMError
 
-JobKind = Literal["persona_build", "chat", "video", "media_ingest"]
+JobKind = Literal["persona_build", "chat", "video", "media_ingest", "ledger_build"]
 JobStatus = Literal["queued", "running", "done", "failed"]
 Log = Callable[[str], None]
 JobFn = Callable[[Log], object]
@@ -39,6 +39,7 @@ JOB_LABELS: dict[JobKind, str] = {
     "chat": "和分身聊天",
     "video": "生成视频",
     "media_ingest": "转写音视频",
+    "ledger_build": "整理承诺账本",
 }
 EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
 MAX_PROGRESS_LINES = 500
@@ -133,6 +134,7 @@ class JobManager:
         self._answer_slots = threading.BoundedSemaphore(max(1, answer_workers))
         self._media_slot = threading.BoundedSemaphore(1)
         self._video_slot = threading.BoundedSemaphore(1)
+        self._ledger_slot = threading.BoundedSemaphore(1)
         self._describe_error = describe_error
         self.persona_id: str | None = None
 
@@ -192,6 +194,18 @@ class JobManager:
         with self._lock:
             job = self._exclusive_slot[0]
             return job if job is not None and job.active and job.kind in kinds else None
+
+    def active_of(self, kind: JobKind) -> Job | None:
+        """This persona's queued or running job of ``kind``, if any."""
+        with self._lock:
+            return next(
+                (
+                    j
+                    for j in self._jobs.values()
+                    if j.kind == kind and j.active and (self.persona_id is None or j.persona_id == self.persona_id)
+                ),
+                None,
+            )
 
     def snapshot(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -273,6 +287,8 @@ class JobManager:
             if job.kind == "media_ingest"
             else self._video_slot
             if job.kind == "video"
+            else self._ledger_slot
+            if job.kind == "ledger_build"
             else (None if job.kind in EXCLUSIVE_KINDS else self._answer_slots)
         )
         if slot is not None:

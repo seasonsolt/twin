@@ -37,6 +37,7 @@ LAYERS: dict[str, int] = {
     "web.assets": 9,
     "web.uploads": 9,
     "web.claims": 9,
+    "web.ledger": 9,
     "identity": 1,
     "persona": 1,
     "persona.dimensions": 1,

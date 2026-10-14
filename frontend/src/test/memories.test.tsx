@@ -46,6 +46,7 @@ let state: {
   notice?: string;
   kernel_rebuild?: string;
   kernel_pending?: number;
+  progress?: { phase: 'extract' | 'merge'; done: number; total: number };
 };
 const v4 = { schema: 1, prompt: 'persona-v4', taxonomy: 'v1' };
 const v5 = { schema: 1, prompt: 'persona-v5', taxonomy: 'v1' };
@@ -265,6 +266,22 @@ it('renders all four memory statuses in plain words', async () => {
       remembered: 0,
     },
     { ...memory, source_id: 's4', title: '失败文档', status: 'failed' },
+    {
+      ...memory,
+      source_id: 's5',
+      title: '长文档',
+      status: 'processing',
+      chunks_done: 2,
+      chunks_total: 5,
+    },
+    {
+      ...memory,
+      source_id: 's6',
+      title: '读完的文档',
+      status: 'processing',
+      chunks_done: 3,
+      chunks_total: 3,
+    },
   ];
   mount();
   await loaded();
@@ -274,6 +291,8 @@ it('renders all four memory statuses in plain words', async () => {
   expect(list).toHaveTextContent('正在记住…');
   expect(list).toHaveTextContent('没找到关于你的内容');
   expect(list).toHaveTextContent('处理失败');
+  expect(list).toHaveTextContent('正在记住… 2/5 段');
+  expect(list).toHaveTextContent('已读完，等待合并');
   expect(list.textContent).not.toMatch(
     /本人|他人|原话|支撑档案|细项|自述|行为/,
   );
@@ -333,6 +352,24 @@ it('polls processing every two seconds and stops at idle, with retry only on err
     await vi.advanceTimersByTimeAsync(2000);
   });
   expect(screen.getByRole('status')).toHaveTextContent('正在记住…');
+  state = {
+    state: 'running',
+    progress: { phase: 'extract', done: 812, total: 4300 },
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    '正在记住… 已读 812/4300 段',
+  );
+  state = {
+    state: 'running',
+    progress: { phase: 'merge', done: 4300, total: 4300 },
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(screen.getByRole('status')).toHaveTextContent('正在合并记忆…');
   state = { state: 'idle', last_error: '模型暂时不可用' };
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2000);

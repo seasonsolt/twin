@@ -473,6 +473,9 @@ class BuildReport:
     facets_merged: int = 0
     items: int = 0
     failures: list[str] = field(default_factory=list)
+    # Sources with a chunk that failed to extract; the others are remembered when the merge succeeds.
+    failed_sources: set[str] = field(default_factory=set)
+    merge_failed: bool = False
     # Facets saved after a partial merge (see ``MergeDegraded``); they are merged again on the next build.
     degraded: list[str] = field(default_factory=list)
     facet_diffs: dict[str, FacetItemDiff] = field(default_factory=dict)
@@ -542,10 +545,36 @@ def build_profile(
     report.chunks_total = len(chunks)
     report.chunks_dropped = store.drop_stale_chunks({c.chunk_id for c in chunks})
     todo = [c for c in chunks if not store.has_chunk(c.chunk_id)]
+    pending = store.pending_versions([s.source_id for s in sources])
+    totals: dict[str, int] = {}
+    for chunk in chunks:
+        totals[chunk.source.source_id] = totals.get(chunk.source.source_id, 0) + 1
+    store.set_build_progress("extract", totals)
+    try:
+        _extract_and_merge(store, llm, settings, report, todo, allowed, safe_progress, totals)
+    finally:
+        store.clear_build_progress()
+    # A build that learned nothing (every chunk failed) is not recorded; one that lost only some sources is.
+    if not report.merge_failed and (report.chunks_extracted or not report.failures):
+        settled = {sid: value for sid, value in pending.items() if sid not in report.failed_sources}
+        store.finish_build(built_at, sources_changed_at, settled, complete=not report.failures, kernel=KERNEL)
+    return report
 
+
+def _extract_and_merge(
+    store: PersonaStore,
+    llm: LLM,
+    settings: Settings,
+    report: BuildReport,
+    todo: list[Chunk],
+    allowed: frozenset[str],
+    safe_progress: Progress,
+    totals: dict[str, int],
+) -> None:
     def persist(chunk: Chunk, outcome: list[PersonaCandidate] | Exception) -> None:
         if isinstance(outcome, Exception):
             report.failures.append(f"extract {chunk.chunk_id}: {failure_summary(outcome)}")
+            report.failed_sources.add(chunk.source.source_id)
         else:
             store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome)
             report.chunks_extracted += 1
@@ -558,6 +587,7 @@ def build_profile(
         label=lambda c: f"persona extract {c.chunk_id}",
         on_result=persist,
     )
+    store.set_build_progress("merge", totals)
     candidates = [c for c in store.list_candidates() if c.facet_id in allowed]
     report.candidates = len(candidates)
     by_facet: dict[str, list[PersonaCandidate]] = {}
@@ -580,6 +610,7 @@ def build_profile(
             items = outcome.items
         elif isinstance(outcome, Exception):
             report.failures.append(f"merge {facet_id}: {failure_summary(outcome)}")
+            report.merge_failed = True
             return
         else:
             items = outcome
@@ -600,6 +631,3 @@ def build_profile(
         merge, jobs, settings.max_workers, safe_progress, label=lambda j: f"persona merge {j[0]}", on_result=save
     )
     report.items = len(store.list_items())
-    if not report.failures:
-        store.mark_profile_built(built_at, sources_changed_at, KERNEL)
-    return report

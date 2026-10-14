@@ -128,6 +128,8 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         "facets_merged": report.facets_merged,
         "items": report.items,
         "failures": report.failures,
+        "failed_sources": sorted(report.failed_sources),
+        "merge_failed": report.merge_failed,
         "facet_diffs": {fid: asdict(diff) for fid, diff in report.facet_diffs.items()},
         "items_added": report.items_added,
         "items_changed": report.items_changed,
@@ -204,9 +206,11 @@ def register(
             version = store.get_meta("sources_changed_at")
             store.clear_source_errors()
         error = None
+        failed: list[str] = []
         try:
             result = run_persona_build(settings, backends.llm(), backends.embedder(), log)
-            if result.get("failures"):
+            failed = result["failed_sources"]
+            if result["merge_failed"]:
                 error = "部分记忆处理失败，请重新处理"
             return result
         except Exception:
@@ -215,7 +219,7 @@ def register(
             raise RuntimeError(error) from None
         finally:
             with open_store() as store:
-                store.processing_result(ids, version, error)
+                store.processing_result(ids, version, error, failed)
 
     processing = PersonaProcessing(jobs, automatic_build, lambda snapshot: None)
     app.state.processing = processing
@@ -297,6 +301,14 @@ def register(
             )
             view["last_finished_at"] = store.get_meta("processing_last_finished_at") or view["last_finished_at"]
             view["last_error"] = store.get_meta("processing_last_error") or view["last_error"]
+            progress = store.build_progress() if view["state"] == "running" else None
+        if progress:
+            phase, chunks = progress
+            view["progress"] = {
+                "phase": phase,
+                "done": sum(done for done, _ in chunks.values()),
+                "total": sum(total for _, total in chunks.values()),
+            }
         return view
 
     @app.post("/api/persona/notes")
@@ -326,17 +338,24 @@ def register(
 
     @app.get("/api/persona/sources")
     def list_sources() -> list[dict[str, Any]]:
+        running = processing.view()["state"] == "running"
         with open_store() as store:
             memories = source_memories(store)
-            return [
-                {
+            progress = store.build_progress() if running else None
+            chunks = progress[1] if progress else {}
+            rows = []
+            for s in store.list_sources():
+                status = store.source_status(s.source_id, memories[s.source_id].items_supported)
+                row = {
                     **source_view(s),
                     **asdict(memories[s.source_id]),
-                    "status": store.source_status(s.source_id, memories[s.source_id].items_supported),
+                    "status": status,
                     "remembered": memories[s.source_id].items_supported,
                 }
-                for s in store.list_sources()
-            ]
+                if status == "processing" and s.source_id in chunks:
+                    row["chunks_done"], row["chunks_total"] = chunks[s.source_id]
+                rows.append(row)
+            return rows
 
     @app.get("/api/persona/state")
     def get_state() -> dict[str, Any]:

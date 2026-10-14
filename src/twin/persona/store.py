@@ -252,7 +252,10 @@ class PersonaStore:
                 ],
             )
             self._sources_changed(db)
-            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, '1')", (f"source_pending:{source.source_id}",))
+            # A fresh value per change, so a build that read the old value cannot settle a change made while it ran.
+            db.execute(
+                "INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_pending:{source.source_id}", uuid.uuid4().hex)
+            )
         return existed is None
 
     def list_sources(self, kind: SourceKind | None = None) -> list[Source]:
@@ -460,6 +463,54 @@ class PersonaStore:
                 db.execute("INSERT OR REPLACE INTO p_meta VALUES ('kernel:built', ?)", (kernel_json(kernel),))
                 db.execute("DELETE FROM p_meta WHERE key = 'kernel_rebuild'")
 
+    def pending_versions(self, source_ids: list[str]) -> dict[str, str]:
+        with self._lock:
+            rows = self._db.execute("SELECT key, value FROM p_meta WHERE key LIKE 'source_pending:%'").fetchall()
+        pending = {key.removeprefix("source_pending:"): value for key, value in rows}
+        return {source_id: pending[source_id] for source_id in source_ids if source_id in pending}
+
+    def finish_build(
+        self,
+        built_at: str,
+        sources_changed_at: str | None,
+        settled: dict[str, str],
+        *,
+        complete: bool,
+        kernel: KernelVersion = KERNEL,
+    ) -> None:
+        """Record a build whose merge succeeded. ``settled`` maps each source the build fully extracted to the pending
+        value it read; a source changed since then keeps its newer pending value. ``complete`` means no chunk failed,
+        which is required before the kernel counts as rebuilt."""
+        with self._tx() as db:
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES ('built_at', ?)", (built_at,))
+            db.executemany(
+                "DELETE FROM p_meta WHERE key = ? AND value = ?",
+                [(f"source_pending:{source_id}", value) for source_id, value in settled.items()],
+            )
+            current = db.execute("SELECT value FROM p_meta WHERE key = 'sources_changed_at'").fetchone()
+            if complete and (current[0] if current else None) == sources_changed_at:
+                db.execute("INSERT OR REPLACE INTO p_meta VALUES ('kernel:built', ?)", (kernel_json(kernel),))
+                db.execute("DELETE FROM p_meta WHERE key = 'kernel_rebuild'")
+
+    def set_build_progress(self, phase: str, totals: dict[str, int]) -> None:
+        self.set_meta("build_progress", json.dumps({"phase": phase, "totals": totals}))
+
+    def clear_build_progress(self) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM p_meta WHERE key = 'build_progress'")
+
+    def build_progress(self) -> tuple[str, dict[str, tuple[int, int]]] | None:
+        """The running build's phase and, per source, (chunks extracted, chunks to extract)."""
+        value = self.get_meta("build_progress")
+        if not value:
+            return None
+        plan = json.loads(value)
+        with self._lock:
+            rows = self._db.execute("SELECT source_id, COUNT(*) FROM p_chunks GROUP BY source_id").fetchall()
+        done = dict(rows)
+        totals: dict[str, int] = plan["totals"]
+        return plan["phase"], {sid: (min(done.get(sid, 0), total), total) for sid, total in totals.items()}
+
     def source_status(self, source_id: str, remembered: int) -> str:
         source = self.get_source(source_id)
         if source and source.media_status not in (None, "ready"):
@@ -470,19 +521,24 @@ class PersonaStore:
             return "processing"
         return "remembered" if remembered else "nothing_found"
 
-    def processing_result(self, source_ids: list[str], version: str | None, error: str | None) -> None:
-        """Do not assign an old build's failure to memories added while it ran."""
+    def processing_result(
+        self, source_ids: list[str], version: str | None, error: str | None, failed: list[str] | None = None
+    ) -> None:
+        """``error`` failed the whole build: it goes to every source in it, unless memories were added while it ran.
+        ``failed`` names the sources with a chunk that failed; only they are marked, the rest were remembered."""
+        failed = failed or []
+        summary = error or (f"{len(failed)} 条记忆处理失败，可点重试" if failed else "")
         with self._tx() as db:
             db.execute(
                 "INSERT OR REPLACE INTO p_meta VALUES ('processing_last_finished_at', ?)",
                 (dt.datetime.now(dt.UTC).isoformat(),),
             )
-            db.execute("INSERT OR REPLACE INTO p_meta VALUES ('processing_last_error', ?)", (error or "",))
-            if self.get_meta("sources_changed_at") == version:
-                for source_id in source_ids:
-                    db.execute(
-                        "INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_error:{source_id}", error or "")
-                    )
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES ('processing_last_error', ?)", (summary,))
+            marked = source_ids if error and self.get_meta("sources_changed_at") == version else failed
+            db.executemany(
+                "INSERT OR REPLACE INTO p_meta VALUES (?, ?)",
+                [(f"source_error:{source_id}", error or "部分内容处理失败") for source_id in marked],
+            )
 
     def clear_source_errors(self) -> None:
         with self._tx() as db:

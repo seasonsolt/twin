@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 import sqlite3
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -222,9 +224,47 @@ def test_failures_and_midbuild_changes_do_not_acknowledge_stale_input(settings: 
             return handler(system, user, schema)
 
         report = pf.build_profile(store, FakeLLM(mutate), settings)
-        assert not report.failures and pf.profile_stale(store) and store.get_meta("built_at") is None
+        # The build is recorded as of its start, so the change made while it ran still shows as stale and pending.
+        assert not report.failures and pf.profile_stale(store) and store.get_meta("built_at") is not None
+        assert store.source_status(sid, 0) == "processing"
         pf.build_profile(store, FakeLLM(handler), settings)
         assert not pf.profile_stale(store)
+
+
+def test_a_failed_source_does_not_hold_back_the_others(settings: Settings) -> None:
+    with PersonaStore(":memory:") as store:
+        good = imported(store, settings, "测试乙.md")
+        parsed = parse_text(SourceKind.DOCUMENT, "测试丙.md", "坏的一段：先核对测试数据。", settings)
+        store.put_source(parsed)
+        bad = parsed.source.source_id
+        seen: list[tuple[str, dict[str, tuple[int, int]]] | None] = []
+        fail = True
+
+        def flaky(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+            seen.append(store.build_progress())
+            if schema is pf.MergeDraft:
+                return {
+                    "items": [{"statement": "核对测试数据", "candidate_ids": re.findall(r"\[(pc_[0-9a-f]+)\]", user)}]
+                }
+            if "坏的" in user and fail:
+                raise RuntimeError("timeout")
+            return handler(system, user, schema)
+
+        report = pf.build_profile(store, FakeLLM(flaky), settings)
+        assert report.failed_sources == {bad} and not report.merge_failed
+        assert seen and all(p is not None and p[0] == "extract" and p[1][good][1] == 1 for p in seen)
+        seen.clear()
+        assert store.build_progress() is None
+        assert store.source_status(good, 1) == "remembered" and store.source_status(bad, 0) == "processing"
+        store.processing_result([good, bad], store.get_meta("sources_changed_at"), None, sorted(report.failed_sources))
+        assert store.source_status(good, 1) == "remembered" and store.source_status(bad, 0) == "failed"
+        assert store.get_meta("processing_last_error") == "1 条记忆处理失败，可点重试"
+
+        store.clear_source_errors()
+        fail = False
+        assert not pf.build_profile(store, FakeLLM(flaky), settings).failures
+        assert seen[-1] is not None and seen[-1][0] == "merge" and seen[-1][1][good] == (1, 1)
+        assert store.source_status(bad, 1) == "remembered" and not pf.profile_stale(store)
 
 
 def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> None:
@@ -296,3 +336,34 @@ def test_cli_sources_build_and_stale_chat(settings: Settings, monkeypatch: pytes
     chat = runner.invoke(cli.app, [*args, "chat", "合成问题"])
     assert chat.exit_code == 0 and pf.STALE_PROFILE_NOTICE in chat.stderr
     assert "合成测试回复" in chat.stdout
+
+
+def test_web_shows_chunk_progress_while_a_build_runs(settings: Settings) -> None:
+    started, release = threading.Event(), threading.Event()
+
+    def slow(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is pf.ExtractDraft:
+            started.set()
+            assert release.wait(5)
+        return handler(system, user, schema)
+
+    app = create_app(settings, llm_factory=lambda: FakeLLM(slow), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.post(
+            "/api/persona/import?kind=document",
+            files={"files": ("测试.md", "先核对测试数据。".encode())},
+            headers=HEADERS,
+        )
+        job = client.post("/api/persona/build", headers=HEADERS).json()["job_id"]
+        assert started.wait(5)
+        assert client.get("/api/persona/processing").json()["progress"] == {"phase": "extract", "done": 0, "total": 1}
+        [source] = client.get("/api/persona/sources").json()
+        assert (source["status"], source["chunks_done"], source["chunks_total"]) == ("processing", 0, 1)
+        release.set()
+        for _ in range(200):
+            if client.get(f"/api/jobs/{job}").json()["status"] in {"done", "failed"}:
+                break
+            time.sleep(0.02)
+        assert "progress" not in client.get("/api/persona/processing").json()
+        [source] = client.get("/api/persona/sources").json()
+        assert source["status"] == "remembered" and "chunks_total" not in source

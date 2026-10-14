@@ -63,12 +63,34 @@ export interface Memory {
   transcribed_s?: number;
   media_sha?: string | null;
   candidates_pending?: boolean;
+  chunks_done?: number;
+  chunks_total?: number;
 }
 interface Processing {
   state: 'idle' | 'queued' | 'running';
+  progress?: { phase: 'extract' | 'merge'; done: number; total: number };
   notice?: string | null;
   last_error?: string | null;
 }
+
+// A source's chunks are read one by one; once all are read it waits for the shared merge at the end of the build.
+const processingLabel = (memory: Memory) => {
+  const total = memory.chunks_total ?? 0;
+  if (total > 0) {
+    const done = memory.chunks_done ?? 0;
+    return done < total ? `正在记住… ${done}/${total} 段` : '已读完，等待合并';
+  }
+  return memory.media_sha ? '整理中' : '正在记住…';
+};
+
+const processingText = (processing: Processing) => {
+  if (processing.state === 'queued') return '等待记住…';
+  const progress = processing.progress;
+  if (progress?.phase === 'merge') return '正在合并记忆…';
+  if (progress && progress.total > 0)
+    return `正在记住… 已读 ${progress.done}/${progress.total} 段`;
+  return '正在记住…';
+};
 
 const mediaPending = (memory: Memory) =>
   ['queued', 'extracting', 'transcribing'].includes(memory.status);
@@ -620,9 +642,7 @@ export function Memories({
             )
           )}
           {processing.state !== 'idle' && (
-            <ThinkingLabel
-              text={processing.state === 'queued' ? '等待记住…' : '正在记住…'}
-            />
+            <ThinkingLabel text={processingText(processing)} />
           )}
           {embedded && building && processing.state === 'idle' && (
             <p role="status">正在整理记忆…</p>
@@ -770,9 +790,7 @@ export function Memories({
                           ) : memory.status === 'transcribing' ? (
                             `转写中 ${Math.min(100, Math.floor(((memory.transcribed_s ?? 0) / (memory.duration_s || 1)) * 100))}% · ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
                           ) : memory.status === 'processing' ? (
-                            <ThinkingLabel
-                              text={memory.media_sha ? '整理中' : '正在记住…'}
-                            />
+                            <ThinkingLabel text={processingLabel(memory)} />
                           ) : memory.status === 'remembered' ? (
                             `已加入 · 已记住 ${memory.remembered} 条`
                           ) : memory.status === 'nothing_found' ? (

@@ -3,7 +3,8 @@
 Each job runs in its own daemon thread, so stopping the server never waits for a long build.
 Profile builds are exclusive (a second submission raises ``JobConflict``).
 Chats run side by side, at most ``answer_workers`` at once, the rest stay queued, and at most
-``MAX_PENDING_ANSWERS`` of them may be unfinished (one more raises ``TooManyJobs``). Jobs live only in memory.
+``MAX_PENDING_ANSWERS`` of them may be unfinished (one more raises ``TooManyJobs``); streamed chats are admitted
+with ``admit_stream`` and share both limits with chat jobs. Jobs live only in memory.
 
 Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (from the ``[n/N]`` lines), a tally of the
 ``ok`` / ``FAILED`` lines of the current stage and, separately, its milestones (stage markers and Chinese summaries).
@@ -11,6 +12,7 @@ Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (f
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import datetime as dt
 import logging
@@ -21,7 +23,8 @@ import subprocess
 import sys
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -98,6 +101,102 @@ def _iso(value: dt.datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+class Slots:
+    """At most ``size`` holders at once, handed over first come first served to threads (``acquire``) and to
+    coroutines (``acquire_async``, which waits without occupying a thread) alike."""
+
+    def __init__(self, size: int) -> None:
+        self._lock = threading.Lock()
+        self._free = size
+        # Each waiter takes over a released slot when called under ``_lock``; False means it can no longer.
+        self._waiters: deque[Callable[[], bool]] = deque()
+
+    def acquire(self) -> None:
+        with self._lock:
+            if self._free and not self._waiters:
+                self._free -= 1
+                return
+            granted = threading.Event()
+
+            def grant() -> bool:
+                granted.set()
+                return True
+
+            self._waiters.append(grant)
+        granted.wait()
+
+    async def acquire_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[None] = loop.create_future()
+        granted = False
+
+        def wake() -> None:
+            if not future.done():
+                future.set_result(None)
+
+        def grant() -> bool:
+            nonlocal granted
+            try:
+                loop.call_soon_threadsafe(wake)
+            except RuntimeError:  # the event loop is closed
+                return False
+            granted = True
+            return True
+
+        with self._lock:
+            if self._free and not self._waiters:
+                self._free -= 1
+                return
+            self._waiters.append(grant)
+        try:
+            await future
+        except BaseException:
+            with self._lock:
+                if not granted:
+                    self._waiters.remove(grant)
+                    raise
+            # Handed a slot while being cancelled: pass it on.
+            self.release()
+            raise
+
+    def release(self) -> None:
+        with self._lock:
+            while self._waiters:
+                if self._waiters.popleft()():
+                    return
+            self._free += 1
+
+
+class StreamTicket:
+    """A streamed chat counted as pending from ``JobManager.admit_stream`` until ``close``; inside ``running`` it
+    also holds one of the chat worker slots. ``close`` is idempotent and frees the slot too, so a stream that ends
+    without unwinding still gives both back."""
+
+    def __init__(self, slots: Slots, done: Callable[[], None]) -> None:
+        self._slots, self._done = slots, done
+        self._holding = self._closed = False
+
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        await self._slots.acquire_async()
+        self._holding = True
+        try:
+            yield
+        finally:
+            self._release_slot()
+
+    def _release_slot(self) -> None:
+        if self._holding:
+            self._holding = False
+            self._slots.release()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._release_slot()
+            self._done()
+
+
 @dataclass(eq=False)
 class Job:
     job_id: str
@@ -130,7 +229,8 @@ class JobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._exclusive_slot: list[Job | None] = [None]
-        self._answer_slots = threading.BoundedSemaphore(max(1, answer_workers))
+        self._answer_slots = Slots(max(1, answer_workers))
+        self._streams = [0]
         self._media_slot = threading.BoundedSemaphore(1)
         self._video_slot = threading.BoundedSemaphore(1)
         self._describe_error = describe_error
@@ -161,12 +261,7 @@ class JobManager:
             if (exclusive or require_idle) and self._exclusive_slot[0] is not None and self._exclusive_slot[0].active:
                 raise JobConflict(self._exclusive_slot[0])
             if not exclusive:
-                pending = sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
-                if pending >= MAX_PENDING_ANSWERS:
-                    raise TooManyJobs(
-                        f"已有 {pending} 个聊天任务在排队或运行（上限 {MAX_PENDING_ANSWERS} 个），"
-                        "请等前面的任务完成后再提交"
-                    )
+                self._check_pending()
             job = Job(
                 job_id=self._new_id(), kind=kind, title=title, created=_now(), persona_id=self.persona_id or "default"
             )
@@ -186,6 +281,26 @@ class JobManager:
             job.done.set()
             raise
         return job
+
+    def admit_stream(self) -> StreamTicket:
+        """Count one streamed chat against the pending limit (``TooManyJobs`` when full); the caller must ``close``
+        the ticket once the stream ends."""
+        with self._lock:
+            self._check_pending()
+            self._streams[0] += 1
+
+        def done() -> None:
+            with self._lock:
+                self._streams[0] -= 1
+
+        return StreamTicket(self._answer_slots, done)
+
+    def _check_pending(self) -> None:
+        pending = self._streams[0] + sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
+        if pending >= MAX_PENDING_ANSWERS:
+            raise TooManyJobs(
+                f"已有 {pending} 个聊天任务在排队或运行（上限 {MAX_PENDING_ANSWERS} 个），请等前面的任务完成后再提交"
+            )
 
     def active_exclusive(self, kinds: frozenset[JobKind] = EXCLUSIVE_KINDS) -> Job | None:
         """The running (or queued) exclusive job whose kind is in ``kinds``, if any."""

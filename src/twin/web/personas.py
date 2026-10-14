@@ -15,6 +15,7 @@ from urllib.parse import parse_qs
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -63,7 +64,10 @@ class Personas:
         self.path = self.root / "personas.json"
         self.lock = threading.RLock()
         self.apps: dict[str, FastAPI] = {}
+        # Requests in flight per persona; guarded by its own lock, held only for a count, so a finishing request
+        # never waits for ``lock``. Counting up also takes ``lock``, which makes it atomic with deletion's check.
         self.requests: dict[str, int] = {}
+        self.requests_lock = threading.Lock()
         self.removing: set[str] = set()
         self.make_app: Callable[[str, Settings], FastAPI]
         self.on_removed: Callable[[str], None] = lambda _: None
@@ -119,6 +123,18 @@ class Personas:
                 "video": self.settings.video.model_copy(update={"require_assets": True}),
             }
         )
+
+    def enter(self, persona_id: str) -> None:
+        with self.lock, self.requests_lock:
+            self.requests[persona_id] = self.requests.get(persona_id, 0) + 1
+
+    def leave(self, persona_id: str) -> None:
+        with self.requests_lock:
+            self.requests[persona_id] -= 1
+
+    def in_flight(self, persona_id: str) -> int:
+        with self.requests_lock:
+            return self.requests.get(persona_id, 0)
 
     def application(self, persona_id: str) -> FastAPI:
         with self.lock:
@@ -271,7 +287,7 @@ class Personas:
                     raise HTTPException(400, "默认分身不能删除")
                 context = self.apps.get(persona_id)
                 if (
-                    self.requests.get(persona_id, 0)
+                    self.in_flight(persona_id)
                     or self.jobs.has_active(persona_id)
                     or (context is not None and not context.state.processing.close_if_idle())
                 ):
@@ -317,43 +333,57 @@ class PersonaMiddleware:
             )[0]
         management = path == "/api/personas" or path.startswith("/api/personas/")
         try:
-            with self.registry.lock:
-                if persona_id is not None and not management:
-                    scope["twin_visitor"] = self.registry.check_access(persona_id, identity, str(scope["method"]), path)
-                elif persona_id is not None:
-                    self.registry.check_owner(persona_id, identity, deleted=path.endswith("/restore"))
-                if management:
-                    context = None
-                else:
-                    if persona_id is None:
-                        persona_id = (
-                            self.registry.data["default"]
-                            if identity["admin"]
-                            else next(
-                                (
-                                    p["id"]
-                                    for p in self.registry.data["personas"]
-                                    if not p.get("deleted_at") and self.registry.accessible(p, identity)
-                                ),
-                                None,
-                            )
-                        )
-                    if persona_id is None:
-                        await JSONResponse({"detail": "先新建一个分身", "code": "no_persona"}, status_code=409)(
-                            scope, receive, send
-                        )
-                        return
-                    context = self.registry.application(persona_id)
-                    self.registry.requests[persona_id] = self.registry.requests.get(persona_id, 0) + 1
+            # The registry's thread lock can be held by a slow handler (listing every persona, emptying the trash);
+            # waiting for it here on the event loop would stall every other request.
+            if management:
+                if persona_id is not None:
+                    await run_in_threadpool(self.check_management, persona_id, identity, path)
+            else:
+                entered = await run_in_threadpool(self.enter, scope, identity, persona_id, path)
         except HTTPException as exc:
             await JSONResponse({"detail": exc.detail}, status_code=exc.status_code)(scope, receive, send)
             return
         if management:
             await self.app(scope, receive, send)
-        else:
-            assert context is not None and persona_id is not None
-            try:
-                await context(scope, receive, send)
-            finally:
-                with self.registry.lock:
-                    self.registry.requests[persona_id] -= 1
+            return
+        if entered is None:
+            await JSONResponse({"detail": "先新建一个分身", "code": "no_persona"}, status_code=409)(
+                scope, receive, send
+            )
+            return
+        context, persona_id = entered
+        try:
+            await context(scope, receive, send)
+        finally:
+            self.registry.leave(persona_id)
+
+    def check_management(self, persona_id: str, identity: dict[str, Any], path: str) -> None:
+        with self.registry.lock:
+            self.registry.check_owner(persona_id, identity, deleted=path.endswith("/restore"))
+
+    def enter(
+        self, scope: Scope, identity: dict[str, Any], persona_id: str | None, path: str
+    ) -> tuple[FastAPI, str] | None:
+        """The persona's route context, counted as in flight until ``leave``; None when there is no persona yet."""
+        registry = self.registry
+        with registry.lock:
+            if persona_id is not None:
+                scope["twin_visitor"] = registry.check_access(persona_id, identity, str(scope["method"]), path)
+            else:
+                persona_id = (
+                    registry.data["default"]
+                    if identity["admin"]
+                    else next(
+                        (
+                            p["id"]
+                            for p in registry.data["personas"]
+                            if not p.get("deleted_at") and registry.accessible(p, identity)
+                        ),
+                        None,
+                    )
+                )
+                if persona_id is None:
+                    return None
+            context = registry.application(persona_id)
+            registry.enter(persona_id)
+            return context, persona_id

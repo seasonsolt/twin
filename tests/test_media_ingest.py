@@ -115,16 +115,51 @@ def test_large_stream_bypasses_json_cap_and_rolls_back(client: TestClient, tmp_p
     assert client.get(f"/api/uploads/{uid}").json()["offset"] == 0
 
 
-def test_cleanup_and_disk_resume(tmp_path: Path) -> None:
+def test_cleanup_and_disk_resume(client: TestClient, tmp_path: Path) -> None:
     uploads = Uploads(tmp_path)
     old = uploads.create(UploadBody(filename="a.mp4", size=5))
     uploads.append(old["id"], b"12")
     assert Uploads(tmp_path).load(old["id"])["offset"] == 2
     metadata, part = uploads.paths(old["id"])
+    (uploads.root / "notes.json").write_text("{}")
+    os.utime(uploads.root / "notes.json", (time.time() - 86401, time.time() - 86401))
     os.utime(metadata, (time.time() - 86401, time.time() - 86401))
-    fresh = uploads.create(UploadBody(filename="fresh.mov", size=MAX_MEDIA_SIZE))
+    # Creating an upload removes the ones untouched for a day, and leaves files that are not uploads alone.
+    response = client.post("/api/uploads", headers=HEADERS, json={"filename": "fresh.mov", "size": MAX_MEDIA_SIZE})
+    assert response.status_code == 200
     assert not metadata.exists() and not part.exists()
-    assert uploads.load(fresh["id"])["size"] == MAX_MEDIA_SIZE
+    assert (uploads.root / "notes.json").exists()
+    assert uploads.load(response.json()["id"])["size"] == MAX_MEDIA_SIZE
+
+
+def test_a_slow_chunk_does_not_hold_up_other_uploads(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    slow, other = create(client, b"x" * 4), create(client, b"y" * 4)
+    started, release = threading.Event(), threading.Event()
+    append = Uploads.append
+
+    def stalled(self: Uploads, upload_id: str, chunk: bytes) -> None:
+        if upload_id == slow:
+            started.set()
+            assert release.wait(5)
+        append(self, upload_id, chunk)
+
+    monkeypatch.setattr(Uploads, "append", stalled)
+    result: list[int] = []
+    sending = threading.Thread(
+        target=lambda: result.append(
+            client.put(f"/api/uploads/{slow}?offset=0", headers=HEADERS, content=b"xxxx").status_code
+        )
+    )
+    sending.start()
+    try:
+        assert started.wait(5)
+        assert client.put(f"/api/uploads/{other}?offset=0", headers=HEADERS, content=b"yyyy").json()["offset"] == 4
+        assert client.post(f"/api/uploads/{other}/finish", headers=HEADERS).status_code == 200
+    finally:
+        release.set()
+        sending.join(5)
+    assert result == [200]
+    assert client.get(f"/api/uploads/{slow}", headers=HEADERS).json()["offset"] == 4
 
 
 def test_dedupe_retry_transcript_and_delete(

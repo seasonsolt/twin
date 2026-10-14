@@ -242,6 +242,36 @@ def _rrf(*rankings: list[str]) -> list[tuple[str, float]]:
     return sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
 
 
+class _Corpus[T]:
+    """The stored vectors of one namespace and a keyword index over ``candidates``, built once and ranked against
+    as many times as a retrieval needs."""
+
+    def __init__(
+        self, vectors: tuple[list[str], np.ndarray], candidates: dict[str, T], text: Callable[[T], str]
+    ) -> None:
+        self.vectors, self.candidates, self.text = vectors, candidates, text
+        self.bm25 = BM25({ref: text(candidate) for ref, candidate in candidates.items()})
+
+    def subset(self, candidates: dict[str, T]) -> _Corpus[T]:
+        """The same vectors with keywords weighted within ``candidates`` alone."""
+        return _Corpus(self.vectors, candidates, self.text)
+
+    def rank(self, queries: Sequence[tuple[str, np.ndarray]], k: int) -> list[tuple[T, float]]:
+        """RRF over a vector and a keyword ranking for each query."""
+        if not self.candidates:
+            return []
+        ids, matrix = self.vectors
+        rankings: list[list[str]] = []
+        for query, vector in queries:
+            if ids:
+                sims = matrix @ vector
+                order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in self.candidates)
+                rankings.append([ref for _, ref in reversed(order)])
+            scores = self.bm25.scores(query)
+            rankings.append(sorted(scores, key=lambda ref: (-scores[ref], ref)))
+        return [(self.candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
+
+
 def _rank[T](
     store: PersonaStore,
     namespace: str,
@@ -253,17 +283,7 @@ def _rank[T](
     """RRF over a vector and a keyword ranking for each query."""
     if not candidates:
         return []
-    ids, matrix = store.get_vectors(namespace)
-    bm25 = BM25({ref: text(candidate) for ref, candidate in candidates.items()})
-    rankings: list[list[str]] = []
-    for query, vector in queries:
-        if ids:
-            sims = matrix @ vector
-            order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in candidates)
-            rankings.append([ref for _, ref in reversed(order)])
-        scores = bm25.scores(query)
-        rankings.append(sorted(scores, key=lambda ref: (-scores[ref], ref)))
-    return [(candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
+    return _Corpus(store.get_vectors(namespace), candidates, text).rank(queries, k)
 
 
 def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref: Callable[[T], str]) -> None:
@@ -319,30 +339,19 @@ class PersonaChat:
             others = others_view(self.store, self.settings, until=as_of)
             vectors = embedding.result()
         queries = list(zip(main, vectors[: len(main)], strict=True))
-        ranked_items = _rank(self.store, ITEMS_NS, queries, items, item_text, K_ITEMS)
+        # Each namespace's vectors and keyword index are loaded once and shared by every ranking below.
+        item_corpus = _Corpus(self.store.get_vectors(ITEMS_NS), items, item_text)
+        expr_corpus = _Corpus(self.store.get_vectors(EXPRESSIONS_NS), expressions, expression_text)
+        ranked_items = item_corpus.rank(queries, K_ITEMS)
         k_expressions = K_EXPRESSIONS_SPAN if needs_derivation(query) else K_EXPRESSIONS
-        ranked_expr = _rank(self.store, EXPRESSIONS_NS, queries, expressions, expression_text, k_expressions)
+        ranked_expr = expr_corpus.rank(queries, k_expressions)
         window = time_window(query, today or as_of or dt.date.today())
         if window is not None:
             within = {ref: e for ref, e in expressions.items() if e.date and window[0] <= e.date <= window[1]}
-            _add_new(
-                ranked_expr,
-                _rank(self.store, EXPRESSIONS_NS, queries, within, expression_text, K_WINDOW),
-                lambda e: e.expression_id,
-            )
+            _add_new(ranked_expr, expr_corpus.subset(within).rank(queries, K_WINDOW), lambda e: e.expression_id)
         for alternative in zip(alternatives, vectors[len(main) :], strict=True):
-            _add_new(
-                ranked_items,
-                _rank(self.store, ITEMS_NS, [alternative], items, item_text, K_ALTERNATIVE_ITEMS),
-                lambda i: i.item_id,
-            )
-            _add_new(
-                ranked_expr,
-                _rank(
-                    self.store, EXPRESSIONS_NS, [alternative], expressions, expression_text, K_ALTERNATIVE_EXPRESSIONS
-                ),
-                lambda e: e.expression_id,
-            )
+            _add_new(ranked_items, item_corpus.rank([alternative], K_ALTERNATIVE_ITEMS), lambda i: i.item_id)
+            _add_new(ranked_expr, expr_corpus.rank([alternative], K_ALTERNATIVE_EXPRESSIONS), lambda e: e.expression_id)
         # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
         ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS)
         core: list[PersonaItem] = []

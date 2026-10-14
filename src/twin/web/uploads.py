@@ -11,7 +11,8 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,27 @@ class UploadBody(BaseModel):
     type: str = Field(default="", max_length=200)
 
 
+class UploadLocks:
+    """One ``asyncio.Lock`` per upload id, dropped once nobody holds or waits for it."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, tuple[asyncio.Lock, int]] = {}
+
+    @asynccontextmanager
+    async def hold(self, upload_id: str) -> AsyncIterator[None]:
+        lock, users = self._locks.get(upload_id, (asyncio.Lock(), 0))
+        self._locks[upload_id] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            lock, users = self._locks[upload_id]
+            if users == 1:
+                del self._locks[upload_id]
+            else:
+                self._locks[upload_id] = (lock, users - 1)
+
+
 class Uploads:
     def __init__(self, data: Path) -> None:
         self.root = data / "uploads"
@@ -82,15 +104,32 @@ class Uploads:
             raise HTTPException(400, "文件不能为空")
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.root.chmod(0o700)
-        for metadata in self.root.glob("*.json"):
-            if metadata.stat().st_mtime < time.time() - 86400:
-                self.cancel(metadata.stem)
         upload_id = uuid.uuid4().hex
         metadata, part = self.paths(upload_id)
         metadata.touch(mode=0o600)
         part.touch(mode=0o600)
         self.save(upload_id, {"filename": name, "size": body.size, "type": body.type})
         return {"id": upload_id, "offset": 0, "chunk_size": CHUNK_SIZE}
+
+    def stale(self) -> list[str]:
+        """Uploads untouched for a day, which ``expire`` removes."""
+        return [
+            metadata.stem
+            for metadata in self.root.glob("*.json")
+            if re.fullmatch(r"[0-9a-f]{32}", metadata.stem) and self._stale(metadata)
+        ]
+
+    def expire(self, upload_id: str) -> None:
+        metadata, _ = self.paths(upload_id)
+        if self._stale(metadata):
+            self.cancel(upload_id)
+
+    @staticmethod
+    def _stale(metadata: Path) -> bool:
+        try:
+            return metadata.stat().st_mtime < time.time() - 86400
+        except FileNotFoundError:
+            return False
 
     def cancel(self, upload_id: str) -> None:
         metadata, part = self.paths(upload_id)
@@ -326,29 +365,33 @@ def register(
 ) -> MediaIngestion:
     uploads = Uploads(settings.db_path.parent)
     ingestion = MediaIngestion(settings, jobs, queue_build, llm)
-    # Serialize append/finish/cancel across requests, including stream rollback on disconnect.
-    lock = asyncio.Lock()
+    # Serialize append/finish/cancel of one upload, including stream rollback on disconnect; a slow chunk of one
+    # file never holds up the others.
+    locks = UploadLocks()
 
     @app.post("/api/uploads")
     async def create(body: UploadBody) -> dict[str, Any]:
-        async with lock:
-            return await run_in_threadpool(uploads.create, body)
+        if uploads.root.is_dir():
+            for upload_id in await run_in_threadpool(uploads.stale):
+                async with locks.hold(upload_id):
+                    await run_in_threadpool(uploads.expire, upload_id)
+        return await run_in_threadpool(uploads.create, body)
 
     @app.get("/api/uploads/{upload_id}")
     async def get(upload_id: str) -> dict[str, int]:
-        async with lock:
+        async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
             return {"offset": info["offset"], "size": info["size"]}
 
     @app.delete("/api/uploads/{upload_id}")
     async def cancel(upload_id: str) -> dict[str, bool]:
-        async with lock:
+        async with locks.hold(upload_id):
             await run_in_threadpool(uploads.cancel, upload_id)
             return {"deleted": True}
 
     @app.put("/api/uploads/{upload_id}")
     async def append(upload_id: str, request: Request, offset: int) -> Any:
-        async with lock:
+        async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
             if offset != info["offset"] or info.get("source_id"):
                 return JSONResponse({"offset": info["offset"]}, status_code=409)
@@ -369,7 +412,7 @@ def register(
 
     @app.post("/api/uploads/{upload_id}/finish")
     async def finish(upload_id: str) -> dict[str, Any]:
-        async with lock:
+        async with locks.hold(upload_id):
             return await run_in_threadpool(ingestion.finish, uploads, upload_id)
 
     @app.post("/api/persona/sources/{source_id}/transcribe", status_code=202)

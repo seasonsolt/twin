@@ -126,15 +126,15 @@ flowchart LR
 
 | 基准 | 测什么 | **twin** | 公开最好成绩 | Second Me 升级版 |
 | :-- | :-- | :-: | :-: | :-: |
-| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 80%<br/><sub>正式集</sub> | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
-| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 51%<br/><sub>正式集</sub> | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | 在多次长对话里记住、更新并推算事实 | 82%<br/><sub>正式集</sub> | **95%**<br/><sub>Mastra，gpt-5-mini 作答，自报</sub> | 0% |
+| [PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2) | 从对话里推断没明说的偏好 | 55%<br/><sub>正式集</sub> | **55%**<br/><sub>作者的代理式记忆，论文</sub> | — |
 | [Twin-2K-500](https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500) | 像本人一样答问卷，按达到真人重测的比例计 | 60% | **88%**<br/><sub>GPT-4.1-mini 数字孪生</sub> | 4% |
 
 - **twin 成绩**：都由 `gpt-6-luna` 作答。
-  - LongMemEval 和 PersonaMem-v2 是记忆内核 persona-v5（2026-10-12）在正式集上的成绩，跑 3 次取平均。
-    - LongMemEval：30 题，每种题型 5 题。3 次在 73%–90% 之间，评委为 `gpt-6.1-sol`。
-    - PersonaMem-v2：8 人 201 题。3 次在 50%–52% 之间。
-    - 同一内核在开发集上为 LongMemEval 85%（36 题）、PersonaMem-v2 55%（4 人 108 题）。开发集用于日常迭代，题目与正式集不重叠。
+  - LongMemEval 和 PersonaMem-v2 是记忆内核 persona-v5（2026-10-14，第 40 轮）在正式集上的成绩，跑 3 次取平均。
+    - LongMemEval：30 题，每种题型 5 题。3 次在 77%–90% 之间，评委为 `gpt-6.1-sol`。
+    - PersonaMem-v2：8 人 201 题。3 次在 54%–57% 之间。
+    - 同一内核在开发集上为 LongMemEval 82%（36 题）、PersonaMem-v2 54%（4 人 108 题）。开发集用于日常迭代，题目与正式集不重叠。
     - 2026-10-10 旧代码在 LongMemEval 正式集上为 33%，由作答模型自己评分。
   - Twin-2K-500 是 2026-10-10 代码的正式抽样，10 人。
 - **公开成绩**：截至 2026-10，取自各自的论文或博客。题量、作答模型、评委和打分细则都和 twin 不同，只能看量级。LongMemEval 的高分都是厂商自报，还没有独立复现，而且分数随作答模型变化很大。
@@ -142,6 +142,18 @@ flowchart LR
 - **Twin-2K-500**：暂停迭代。
 - **Second Me**：同题小样本，6 题或 2 人。
 - **怎么迭代**：每次改动在开发集上跑 3 次，用配对符号检验判断变化是否超出波动。细节见 [验证与失误分析](docs/BENCHMARK_VALIDATION.md)。
+
+### 迭代走势
+
+蓝线是开发集，橙点是正式集，竖线是同一代码跑 3 次的范围，空心点是没有合并的实验。
+
+![LongMemEval 各轮走势](docs/assets/trend-longmemeval.webp)
+
+![PersonaMem-v2 各轮走势](docs/assets/trend-personamem2.webp)
+
+薄弱题型单独加题复测：多会话、知识更新、时间推理各 48–73 题，每题跑 2 次。题量扩大处折线断开。
+
+![LongMemEval 薄弱题型走势](docs/assets/trend-weak-types.webp)
 
 ## 技术路线
 

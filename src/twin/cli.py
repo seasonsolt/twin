@@ -1478,7 +1478,7 @@ def _run_twin2k500(
 
 SUITE_SIZES = {
     "dev": {"lme": 3, "pm": 24, "pm2": 4, "t2k": 4},
-    "formal": {"lme": 5, "pm": 30, "pm2": 8, "t2k": 10},
+    "formal": {"lme": 10, "pm": 30, "pm2": 8, "t2k": 10},
 }
 
 

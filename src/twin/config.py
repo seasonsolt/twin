@@ -201,6 +201,8 @@ class ASRSettings(BaseModel):
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
     egress: Literal["local", "external"] | None = None
+    # Proofread each media transcript with [llm] before speakers are claimed; sends the transcript text to [llm].
+    clean: bool = True
 
 
 class VisionSettings(BaseModel):

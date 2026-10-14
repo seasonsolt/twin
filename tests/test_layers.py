@@ -24,6 +24,7 @@ LAYERS: dict[str, int] = {
     "media.asr": 2,
     "media.ingest": 7,
     "media.claim": 7,
+    "media.clean": 8,
     "media.check": 8,
     "media.script": 7,
     "media.adapters": 7,

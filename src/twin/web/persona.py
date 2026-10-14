@@ -232,7 +232,7 @@ def register(
 
     from . import uploads
 
-    ingestion = uploads.register(app, settings, jobs, queue_build)
+    ingestion = uploads.register(app, settings, jobs, queue_build, backends.llm)
     from . import claims
 
     claims.register(app, settings, ingestion)

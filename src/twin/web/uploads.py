@@ -22,8 +22,17 @@ from starlette.concurrency import run_in_threadpool
 
 from ..assets import AssetStore
 from ..config import Settings
+from ..llm import LLM
 from ..media.claim import Analysis, analyse, vision_candidates, voice_candidates
-from ..media.ingest import MEDIA_EXTENSIONS, VIDEO_EXTENSIONS, CommandTranscriber, extract_audio, make_transcriber
+from ..media.clean import clean_segments
+from ..media.ingest import (
+    MEDIA_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    CommandTranscriber,
+    Segment,
+    extract_audio,
+    make_transcriber,
+)
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
 from ..persona.store import PersonaStore, stored_identity
@@ -101,8 +110,10 @@ class Uploads:
 
 
 class MediaIngestion:
-    def __init__(self, settings: Settings, jobs: JobManager, queue_build: Callable[[], None]) -> None:
-        self.settings, self.jobs, self.queue_build = settings, jobs, queue_build
+    def __init__(
+        self, settings: Settings, jobs: JobManager, queue_build: Callable[[], None], llm: Callable[[], LLM]
+    ) -> None:
+        self.settings, self.jobs, self.queue_build, self.llm = settings, jobs, queue_build, llm
         self.lock = threading.RLock()
         self.active: dict[str, Job] = {}
 
@@ -176,6 +187,8 @@ class MediaIngestion:
             if isinstance(transcriber, CommandTranscriber):
                 transcriber.diarize, transcriber.reference = True, reference
             segments = transcriber.transcribe(audio, duration, progress)
+            if self.settings.asr.clean and segments:
+                segments = self.clean(segments, log)
             log("[3/6] 区分说话人")
             analysis = analyse(
                 segments, getattr(transcriber, "speakers", []), reference is not None, diarized=transcriber.diarizes
@@ -196,6 +209,18 @@ class MediaIngestion:
         except Exception:
             self.update(source_id, job_id, media_status="failed")
             raise JobError("音视频转写失败，请检查 ffmpeg 和语音识别配置后重试") from None
+
+    def clean(self, segments: list[Segment], log: Log) -> list[Segment]:
+        """Proofread with [llm]; without a working model the transcript goes on as recognized."""
+        try:
+            llm = self.llm()
+        except Exception:
+            log("[2/6] 未配置文字模型，跳过转写校对")
+            return segments
+        result = clean_segments(llm, segments, lambda done, total: log(f"[2/6] 校对转写（{done} / {total} 批）"))
+        note = f"，{result.failed_batches} 批失败保留原文" if result.failed_batches else ""
+        log(f"[2/6] 校对完成：修正 {result.changed} 段{note}")
+        return result.segments
 
     def store_analysis(self, store: PersonaStore, source: Source, analysis: Analysis) -> None:
         source = source.model_copy(
@@ -296,9 +321,11 @@ class MediaIngestion:
             return {**source.model_dump(mode="json"), "new": new, "job_id": job.job_id if job else source.media_job_id}
 
 
-def register(app: FastAPI, settings: Settings, jobs: JobManager, queue_build: Callable[[], None]) -> MediaIngestion:
+def register(
+    app: FastAPI, settings: Settings, jobs: JobManager, queue_build: Callable[[], None], llm: Callable[[], LLM]
+) -> MediaIngestion:
     uploads = Uploads(settings.db_path.parent)
-    ingestion = MediaIngestion(settings, jobs, queue_build)
+    ingestion = MediaIngestion(settings, jobs, queue_build, llm)
     # Serialize append/finish/cancel across requests, including stream rollback on disconnect.
     lock = asyncio.Lock()
 

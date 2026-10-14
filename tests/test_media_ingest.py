@@ -277,7 +277,7 @@ def test_transcript_paragraphs_and_timestamps() -> None:
 def test_single_media_worker_and_job_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = JobManager(4, describe_error)
     settings = Settings(db_path=tmp_path / "twin.db", asr=ASRSettings(provider="command", command="unused"))
-    ingestion = MediaIngestion(settings, jobs, lambda: None)
+    ingestion = MediaIngestion(settings, jobs, lambda: None, lambda: FakeLLM(lambda *_: {}))
     uploads = Uploads(tmp_path)
     started, release = threading.Event(), threading.Event()
     concurrent: list[int] = []
@@ -347,3 +347,36 @@ def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monk
     assert wait_job(client, new["job_id"])["status"] == "done"
     text = client.get(f"/api/persona/sources/{new['source_id']}/text").text
     assert "新转写" in text and "旧转写" not in text
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_transcript_is_proofread_before_speakers_are_claimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from twin.media.clean import Edits
+
+    proofread: list[str] = []
+
+    def handler(system: str, user: str, schema: type) -> dict[str, Any]:
+        if schema is not Edits:
+            return {"items": []}
+        proofread.append(user)
+        return {"edits": [{"id": 0, "text": "我们用限界上下文划分模块。"}]}
+
+    class FakeTranscriber:
+        diarizes = True
+
+        def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
+            return [Segment(start=0, end=1, text="我们用涨号上下文划分模块。")]
+
+    settings = Settings(db_path=tmp_path / "twin.db", max_workers=1, asr=ASRSettings(clean=enabled))
+    app = create_app(settings, llm_factory=lambda: FakeLLM(handler), embedder_factory=HashingEmbedder)
+    monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: FakeTranscriber())
+    with TestClient(app, base_url="http://localhost") as client:
+        result = finish(client, wav_bytes())
+        job = wait_job(client, result["job_id"])
+        assert job["status"] == "done"
+        text = client.get(f"/api/persona/sources/{result['source_id']}/text").text
+    assert len(proofread) == int(enabled)
+    assert bool([s for s in job["progress"] if "校对完成：修正 1 段" in s]) is enabled
+    assert ("限界上下文" if enabled else "涨号上下文") in text

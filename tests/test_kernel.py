@@ -47,7 +47,7 @@ def test_newer_and_failed_migration(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     with pytest.raises(sqlite3.Error):
         PersonaStore(path)
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
         assert db.execute("SELECT name FROM sqlite_master WHERE name='extra'").fetchone() is None
         assert db.execute("SELECT value FROM p_meta WHERE key='saved'").fetchone()[0] == "yes"
         db.execute("PRAGMA user_version=99")
@@ -247,8 +247,8 @@ def test_cli_reports_database_schema(tmp_path: Path, monkeypatch: pytest.MonkeyP
     config.write_text('db_path = "twin.db"\n')
     result = CliRunner().invoke(app, ["--config", str(config), "kernel", "status"])
     assert result.exit_code == 0, result.output
-    assert "schema：2" in result.output
-    assert KERNEL.schema == 1
+    assert "schema：3" in result.output
+    assert KERNEL.schema == 2
 
 
 def test_failed_build_keeps_kernel(tmp_path: Path) -> None:

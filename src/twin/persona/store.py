@@ -24,7 +24,7 @@ from ..media.schema import AVATAR_ALIASES, AVATAR_PRESETS
 from ..util import prepare_private_file
 from .items import PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
 from .kernel import KERNEL, KernelVersion, kernel_json
-from .schema import ChatReply, Expression, ParsedSource, ReviewStatus, Source, SourceKind
+from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p_sources (
@@ -53,7 +53,13 @@ CREATE TABLE IF NOT EXISTS p_vectors (
     namespace TEXT NOT NULL, ref_id TEXT NOT NULL, text_sha TEXT NOT NULL, vec BLOB NOT NULL,
     PRIMARY KEY (namespace, ref_id));
 """
-_MIGRATIONS: tuple[str, ...] = (_SCHEMA,)
+_LEDGER = """
+CREATE TABLE IF NOT EXISTS p_ledger (
+    entry_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, meeting_date TEXT, expression_id TEXT NOT NULL,
+    review TEXT NOT NULL, json TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS p_ledger_source ON p_ledger(source_id);
+"""
+_MIGRATIONS: tuple[str, ...] = (_SCHEMA, _LEDGER)
 
 
 SNAPSHOT_DIR = "kernel-snapshots"
@@ -289,12 +295,76 @@ class PersonaStore:
             if deleted:
                 self._sources_changed(db)
                 db.execute(
-                    "DELETE FROM p_meta WHERE key IN (?, ?)",
-                    (f"source_pending:{source_id}", f"source_error:{source_id}"),
+                    "DELETE FROM p_meta WHERE key IN (?, ?, ?)",
+                    (f"source_pending:{source_id}", f"source_error:{source_id}", f"ledger_done:{source_id}"),
                 )
+                self._drop_ledger(db, source_id, reviewed=True)
                 if source and source.media_sha and re.fullmatch(r"[0-9a-f]{64}", source.media_sha):
                     shutil.rmtree(self.path.parent / "media-sources" / source.media_sha, ignore_errors=True)
             return deleted
+
+    # ------------------------------------------------------------ commitment ledger
+
+    def list_ledger(self) -> list[LedgerEntry]:
+        """Every ledger entry, in meeting order and, within a meeting, in the order the words were said."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT json FROM p_ledger ORDER BY meeting_date, source_id, expression_id, entry_id"
+            ).fetchall()
+        return [LedgerEntry.model_validate_json(r[0]) for r in rows]
+
+    def get_ledger_entry(self, entry_id: str) -> LedgerEntry | None:
+        with self._lock:
+            row = self._db.execute("SELECT json FROM p_ledger WHERE entry_id = ?", (entry_id,)).fetchone()
+        return LedgerEntry.model_validate_json(row[0]) if row else None
+
+    def put_ledger_entry(self, entry: LedgerEntry) -> None:
+        with self._tx() as db:
+            self._insert_ledger(db, [entry])
+
+    def replace_ledger_source(self, source_id: str, entries: list[LedgerEntry], done: str) -> None:
+        """Swap a source's unreviewed entries for ``entries``; entries the person reviewed stay. ``done`` records the
+        extractor version that processed the source."""
+        with self._tx() as db:
+            self._drop_ledger(db, source_id, reviewed=False)
+            self._insert_ledger(db, entries)
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"ledger_done:{source_id}", done))
+
+    def ledger_done(self, source_id: str) -> str | None:
+        """The extractor version that last processed the source, None when it never was."""
+        return self.get_meta(f"ledger_done:{source_id}")
+
+    @staticmethod
+    def _insert_ledger(db: sqlite3.Connection, entries: list[LedgerEntry]) -> None:
+        db.executemany(
+            "INSERT OR REPLACE INTO p_ledger VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    e.entry_id,
+                    e.source_id,
+                    e.meeting_date.isoformat() if e.meeting_date else None,
+                    e.expression_id,
+                    e.review.value,
+                    e.model_dump_json(),
+                )
+                for e in entries
+            ],
+        )
+
+    @staticmethod
+    def _drop_ledger(db: sqlite3.Connection, source_id: str, *, reviewed: bool) -> None:
+        """Delete a source's entries (only the unreviewed ones unless ``reviewed``) and unlink entries that pointed
+        at them."""
+        query = "SELECT entry_id FROM p_ledger WHERE source_id = ?" + ("" if reviewed else " AND review = ?")
+        params = (source_id,) if reviewed else (source_id, ReviewStatus.UNREVIEWED.value)
+        gone = {r[0] for r in db.execute(query, params)}
+        if not gone:
+            return
+        db.executemany("DELETE FROM p_ledger WHERE entry_id = ?", [(g,) for g in gone])
+        linked = [LedgerEntry.model_validate_json(r[0]) for r in db.execute("SELECT json FROM p_ledger")]
+        PersonaStore._insert_ledger(
+            db, [e.model_copy(update={"relates_to": None}) for e in linked if e.relates_to in gone]
+        )
 
     # ------------------------------------------------------------ expressions
 

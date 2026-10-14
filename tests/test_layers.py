@@ -55,6 +55,7 @@ LAYERS: dict[str, int] = {
     "persona.questionnaire": 4,
     "persona.profile": 5,
     "persona.derive": 5,
+    "persona.ledger": 5,
     "persona.locate": 5,
     "persona.rewrite": 5,
     "persona.style": 5,

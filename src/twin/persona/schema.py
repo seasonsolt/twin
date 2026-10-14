@@ -176,3 +176,42 @@ class ReviewStatus(StrEnum):
     CONFIRMED = "confirmed"
     EDITED = "edited"
     REJECTED = "rejected"
+
+
+LedgerKind = Literal["decision", "commitment", "objection", "progress"]
+LedgerStatus = Literal["open", "claimed_done", "evidenced", "confirmed_done", "not_done", "reopened", "unknown"]
+
+
+class LedgerEntry(BaseModel):
+    """One decision, commitment, objection or progress report of the commitment ledger (承诺账本).
+
+    Each entry rests on one expression of a meeting source; ``quote`` is verbatim from it unless ``quote_exact`` is
+    False (the model's quote did not match, so the whole line stands as the evidence)."""
+
+    entry_id: str
+    source_id: str
+    expression_id: str
+    meeting_date: dt.date | None = None
+    meeting_title: str = ""
+    kind: LedgerKind
+    speaker: str
+    quote: str
+    quote_exact: bool = True
+    owner: str
+    counterpart: str = ""
+    what: str
+    due: dt.date | None = None
+    due_text: str = ""
+    condition: str = ""
+    # Earlier entry this one reports on (progress) or restates with a new deadline (commitment).
+    relates_to: str | None = None
+    # A progress entry's reported status; a decision or commitment's status as the person set it (None: derived).
+    status: LedgerStatus | None = None
+    confidence: float = Field(ge=0, le=1)
+    review: ReviewStatus = ReviewStatus.UNREVIEWED
+    # Who can see the entry; entries never leave the twin until the person publishes them.
+    visibility: Literal["private"] = "private"
+    version: int = 1
+    extractor: str
+    created_at: str
+    updated_at: str

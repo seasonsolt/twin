@@ -1,0 +1,346 @@
+"""Commitment ledger (承诺账本): the decisions, commitments, objections and progress reports said in meetings.
+
+A meeting source is a claimed recording or a transcript in which the person and others speak. Each one is read once
+per extractor version, in date order, one structured call per window of lines; every call sees the ledger built so
+far, so a progress report can point back to the commitment it is about. The model only names a numbered line; code
+maps it to the expression, keeps the quote only when it is verbatim (else the whole line stands as the evidence),
+checks dates and links, and drops what it cannot place. Entries start unreviewed; the person confirms, corrects or
+rejects them, and a rebuild never touches a reviewed entry.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+from ..llm import LLM, Effort
+from .schema import Expression, LedgerEntry, LedgerKind, LedgerStatus, ReviewStatus, Source, SourceKind
+from .store import PersonaStore
+
+LEDGER_VERSION = "ledger-v1"
+MEETING_KINDS = frozenset({SourceKind.AUDIO, SourceKind.VIDEO, SourceKind.INTERVIEW})
+# Lines per call are capped by characters so a long meeting is read in a few windows, each seeing the entries the
+# earlier windows produced.
+WINDOW_CHARS = 40_000
+# The newest entries the model sees as the existing ledger.
+CONTEXT_ENTRIES = 200
+# A due date this far before the meeting or after it is a misread, not a deadline.
+DUE_BEFORE = dt.timedelta(days=31)
+DUE_AFTER = dt.timedelta(days=730)
+
+KIND_LABELS: dict[LedgerKind, str] = {"decision": "决定", "commitment": "承诺", "objection": "异议", "progress": "进展"}
+STATUS_LABELS: dict[LedgerStatus, str] = {
+    "open": "进行中",
+    "claimed_done": "本人称已完成",
+    "evidenced": "已有交付证据",
+    "confirmed_done": "对方确认完成",
+    "not_done": "未完成",
+    "reopened": "重新打开",
+    "unknown": "未知",
+}
+_KINDS = {label: kind for kind, label in KIND_LABELS.items()}
+_STATUSES = {label: status for status, label in STATUS_LABELS.items()}
+SELF = "本人"
+UNKNOWN_OWNER = "未知"
+
+DraftKind = Literal["决定", "承诺", "异议", "进展"]
+DraftStatus = Literal["进行中", "本人称已完成", "已有交付证据", "对方确认完成", "未完成", "重新打开", "未知", ""]
+
+
+class SpeakerGuess(BaseModel):
+    label: str = Field(description="转写里的说话人标签，例如 其他人1")
+    name: str = Field(description="推断出的名字；推断不出写 未知")
+    basis: str = Field(description="推断依据，例如 本人点名老王后紧接着回答")
+
+
+class LedgerDraftItem(BaseModel):
+    kind: DraftKind
+    line: int = Field(description="所在行的行号，即转写里每行开头的数字")
+    quote: str = Field(description="从该行逐字摘录的连续片段，一字不改")
+    owner: str = Field(description="负责人名字；本人写 本人；推断不出写 未知")
+    counterpart: str = Field(default="", description="对谁承诺或向谁汇报；不明确留空")
+    what: str = Field(
+        description="一句话说清要做的事、定下的事、反对的点或进展：直接写事情本身，不写负责人名字，不加括号说明来源"
+        "或经过；提到本人时写「我」，例如「周五前给我一版新报价方案」"
+    )
+    due: str = Field(default="", description="换算后的截止日期 YYYY-MM-DD；没说期限留空")
+    due_text: str = Field(default="", description="原话里的期限说法，例如 周五前")
+    condition: str = Field(default="", description="承诺成立的前提条件；没有留空")
+    relates_to: str = Field(default="", description="进展或复述对应的已有账本条目 id，原样复制；没有留空")
+    status: DraftStatus = Field(default="", description="只有进展填写：对应条目的最新状态")
+    confidence: float = Field(ge=0, le=1)
+
+
+class LedgerDraft(BaseModel):
+    speakers: list[SpeakerGuess] = Field(default_factory=list)
+    items: list[LedgerDraftItem] = Field(default_factory=list, description="这段转写里的条目；没有就为空列表")
+
+
+SYSTEM = """你在为「本人」整理会议承诺账本。从会议转写中找出四类条目：
+
+- 决定：有拍板权的人当场定下的事，例如「必须」「就这么定」「先冻结」。
+- 承诺：某人答应在某个时间前做某件事。包括：替别人应承的（负责人写被安排的人）；\
+被安排后口头接受的（「好的」「没问题」）；有前提的承诺（写进 condition）。\
+不包括玩笑、假设和预测；含糊的「看看」「考虑」如果要记，confidence 低于 0.5。
+- 异议：对决定或方案明确表示不同意或保留意见，哪怕随后话题被岔开。
+- 进展：对「已有账本」里某条的状态更新，例如已完成、没完成、问题又出现。填 relates_to 和 status，\
+不要再记成新承诺。只是转述别人的新期限时，记成承诺并填 relates_to。
+
+规则：
+- line 填所在行开头的行号；quote 从那一行逐字摘录连续片段，不改字、不拼接。
+- 转写只区分本人和其他人N。按上下文推断其他人N是谁（例如本人点名某人后紧接着回答的人），在 speakers 里写依据；\
+推断不出写「未知」，不要猜。owner 用推断出的名字。
+- due 按会议日期换算成具体日期：「周五」指本周五，「下周X」指下一周的周X，\
+「本周」「这周」指本周五，「今天」指会议当天，「明天」指次日。当场改口以最后的说法为准。没说期限就留空，不要编。
+- 同一件事在多行提到时只记一条，选最能说明它的那一行。同一句话可以同时产生不同类型的条目。
+- 「已有账本」里已经记过的同一件事不要重复记。"""
+
+
+@dataclass
+class LedgerReport:
+    sources: int = 0
+    entries: int = 0
+    dropped: int = 0
+
+
+def _now() -> str:
+    return dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _iso(text: str) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(text.strip()) if text.strip() else None
+    except ValueError:
+        return None
+
+
+def is_meeting(source: Source) -> bool:
+    """A source the ledger reads: a recording or transcript in which the person and at least one other person speak."""
+    return source.kind in MEETING_KINDS and 0 < source.n_target < source.n_expressions
+
+
+def _root(entry: LedgerEntry, by_id: dict[str, LedgerEntry]) -> str:
+    """The first entry of the thread a decision or commitment restates (itself when it restates none). Only the same
+    owner's entry is restated: another owner's linked commitment (checking on it, chasing it) is a task of its own."""
+    seen = {entry.entry_id}
+    while (
+        (parent := by_id.get(entry.relates_to or ""))
+        and parent.kind != "progress"
+        and parent.owner == entry.owner
+        and parent.entry_id not in seen
+    ):
+        seen.add(parent.entry_id)
+        entry = parent
+    return entry.entry_id
+
+
+def current_status(entry: LedgerEntry, ledger: list[LedgerEntry]) -> LedgerStatus:
+    """A decision or commitment's status: what the person set, else the latest event of its thread (the entry and
+    the entries restating it): a progress report gives its status, a later restatement (a new deadline) reopens it."""
+    if entry.kind == "progress":
+        return entry.status or "unknown"
+    if entry.status is not None:
+        return entry.status
+    live = [e for e in ledger if e.review is not ReviewStatus.REJECTED]
+    by_id = {e.entry_id: e for e in live} | {entry.entry_id: entry}
+    root = _root(entry, by_id)
+    thread = {e.entry_id for e in live if e.kind != "progress" and _root(e, by_id) == root} | {entry.entry_id}
+    events = [
+        e
+        for e in live
+        if (e.kind == "progress" and e.relates_to in thread) or (e.entry_id in thread and e.entry_id != root)
+    ]
+    if not events:
+        return "open"
+    latest = max(events, key=lambda e: (e.meeting_date or dt.date.min, e.expression_id, e.kind == "progress"))
+    return (latest.status or "unknown") if latest.kind == "progress" else "open"
+
+
+def _context(ledger: list[LedgerEntry]) -> str:
+    rows = [
+        {
+            "id": e.entry_id,
+            "类型": KIND_LABELS[e.kind],
+            "负责人": e.owner,
+            "内容": e.what,
+            "截止": e.due.isoformat() if e.due else "",
+            "状态": STATUS_LABELS[current_status(e, ledger)],
+            "会议日期": e.meeting_date.isoformat() if e.meeting_date else "",
+        }
+        for e in ledger
+        if e.kind in ("decision", "commitment") and e.review is not ReviewStatus.REJECTED
+    ][-CONTEXT_ENTRIES:]
+    return json.dumps(rows, ensure_ascii=False, indent=1) if rows else "（空）"
+
+
+def _label(expression: Expression) -> str:
+    return SELF if expression.is_target else expression.speaker
+
+
+def _windows(expressions: list[Expression]) -> list[list[tuple[int, Expression]]]:
+    windows: list[list[tuple[int, Expression]]] = [[]]
+    size = 0
+    for n, expression in enumerate(expressions, 1):
+        line = len(expression.text) + len(_label(expression)) + 8
+        if windows[-1] and size + line > WINDOW_CHARS:
+            windows.append([])
+            size = 0
+        windows[-1].append((n, expression))
+        size += line
+    return [w for w in windows if w]
+
+
+def _user(source: Source, name: str, ledger: list[LedgerEntry], window: list[tuple[int, Expression]]) -> str:
+    day = source.first_date
+    when = f"{day.isoformat()}（周{'一二三四五六日'[day.weekday()]}）" if day else "未知"
+    lines = "\n".join(f"{n}. {_label(e)}：{' '.join(e.text.split())}" for n, e in window)
+    return (
+        f"会议：{source.title}\n会议日期：{when}\n本人是{name}。\n\n"
+        f"已有账本：\n{_context(ledger)}\n\n转写（每行开头是行号）：\n{lines}"
+    )
+
+
+def _entry(
+    item: LedgerDraftItem, lines: dict[int, Expression], source: Source, known: set[str], now: str
+) -> LedgerEntry | None:
+    expression = lines.get(item.line)
+    if expression is None:
+        return None
+    quote = item.quote.strip()
+    exact = bool(quote) and quote in expression.text
+    due = _iso(item.due)
+    if due and source.first_date and not (source.first_date - DUE_BEFORE <= due <= source.first_date + DUE_AFTER):
+        due = None
+    kind = _KINDS[item.kind]
+    return LedgerEntry(
+        entry_id=uuid.uuid4().hex[:16],
+        source_id=source.source_id,
+        expression_id=expression.expression_id,
+        meeting_date=source.first_date,
+        meeting_title=source.title,
+        kind=kind,
+        speaker=_label(expression),
+        quote=quote if exact else expression.text,
+        quote_exact=exact,
+        owner=item.owner.strip() or UNKNOWN_OWNER,
+        counterpart=item.counterpart.strip(),
+        what=item.what.strip(),
+        due=due,
+        due_text=item.due_text.strip(),
+        condition=item.condition.strip(),
+        relates_to=item.relates_to if item.relates_to in known else None,
+        status=(_STATUSES.get(item.status) or "unknown") if kind == "progress" else None,
+        confidence=item.confidence,
+        extractor=LEDGER_VERSION,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def extract_meeting(
+    llm: LLM,
+    source: Source,
+    expressions: list[Expression],
+    ledger: list[LedgerEntry],
+    name: str,
+    effort: Effort = "medium",
+) -> tuple[list[LedgerEntry], int]:
+    """New entries of one meeting and the number of model items dropped. ``ledger`` is every entry already kept,
+    including the reviewed entries of this meeting, which are neither repeated nor replaced."""
+    kept = list(ledger)
+    reviewed = {(e.expression_id, e.kind) for e in ledger if e.source_id == source.source_id}
+    new: list[LedgerEntry] = []
+    dropped = 0
+    now = _now()
+    for window in _windows(expressions):
+        draft = llm.structured(system=SYSTEM, user=_user(source, name, kept, window), schema=LedgerDraft, effort=effort)
+        lines = dict(window)
+        known = {e.entry_id for e in kept}
+        for item in draft.items:
+            entry = _entry(item, lines, source, known, now)
+            if entry is None or (entry.expression_id, entry.kind) in reviewed:
+                dropped += 1
+                continue
+            new.append(entry)
+            kept.append(entry)
+    return new, dropped
+
+
+def build_ledger(
+    store: PersonaStore,
+    llm: LLM,
+    name: str,
+    *,
+    effort: Effort = "medium",
+    force: bool = False,
+    log: Callable[[str], None] | None = None,
+) -> LedgerReport:
+    """Read every meeting source the current extractor has not read yet (all of them with ``force``), oldest first."""
+    report = LedgerReport()
+    meetings = [s for s in store.list_sources() if is_meeting(s)]
+    meetings.sort(key=lambda s: (s.first_date or dt.date.min, s.source_id))
+    todo = [s for s in meetings if force or store.ledger_done(s.source_id) != LEDGER_VERSION]
+    for k, source in enumerate(todo, 1):
+        if log:
+            log(f"[{k}/{len(todo)}] 整理承诺：{source.title}")
+        ledger = [
+            e for e in store.list_ledger() if e.source_id != source.source_id or e.review is not ReviewStatus.UNREVIEWED
+        ]
+        entries, dropped = extract_meeting(llm, source, store.list_expressions(source.source_id), ledger, name, effort)
+        store.replace_ledger_source(source.source_id, entries, LEDGER_VERSION)
+        report.sources += 1
+        report.entries += len(entries)
+        report.dropped += dropped
+    return report
+
+
+EDITABLE = frozenset({"owner", "counterpart", "what", "due", "condition", "status"})
+
+
+def review_entry(
+    store: PersonaStore,
+    entry_id: str,
+    action: Literal["confirm", "edit", "reject", "reset"],
+    changes: dict[str, Any] | None = None,
+) -> LedgerEntry:
+    """Confirm, correct, reject or reset an entry. Corrections take only the editable fields and bump the version."""
+    entry = store.get_ledger_entry(entry_id)
+    if entry is None:
+        raise KeyError(entry_id)
+    update: dict[str, Any] = {"updated_at": _now(), "version": entry.version + 1}
+    if action == "edit":
+        unknown = set(changes or {}) - EDITABLE
+        if unknown:
+            raise ValueError(f"不能修改的字段：{', '.join(sorted(unknown))}")
+        update.update(changes or {})
+        update["review"] = ReviewStatus.EDITED
+    else:
+        update["review"] = {
+            "confirm": ReviewStatus.CONFIRMED,
+            "reject": ReviewStatus.REJECTED,
+            "reset": ReviewStatus.UNREVIEWED,
+        }[action]
+    revised = LedgerEntry.model_validate({**entry.model_dump(), **update})
+    store.put_ledger_entry(revised)
+    return revised
+
+
+def confirmation_message(entry: LedgerEntry) -> str | None:
+    """A message the person can send the owner to confirm a commitment; None when there is no one else to ask."""
+    if entry.kind != "commitment" or entry.owner in (SELF, UNKNOWN_OWNER, ""):
+        return None
+    when = f"{entry.meeting_date.month}月{entry.meeting_date.day}日" if entry.meeting_date else ""
+    meeting = f"{when}{entry.meeting_title}".strip()
+    parts = [f"{entry.owner}，确认一下{meeting}上说的：{entry.what}"]
+    if entry.due:
+        parts.append(f"，{entry.due.month}月{entry.due.day}日前")
+    if entry.condition:
+        parts.append(f"（前提：{entry.condition}）")
+    parts.append("。有出入直接回我。")
+    return "".join(parts)

@@ -75,7 +75,7 @@ it.each([
     within(screen.getByRole('navigation', { name: '主导航' })).getAllByRole(
       'link',
     ),
-  ).toHaveLength(2);
+  ).toHaveLength(3);
   expect(screen.getAllByRole('button', { name: '切换分身' })).toHaveLength(1);
   expect(screen.getByRole('tablist', { name: '档案章节' })).toBeInTheDocument();
 });

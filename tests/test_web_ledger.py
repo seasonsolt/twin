@@ -195,7 +195,7 @@ def test_brief_for_one_person(web: Callable[[Handler], TestClient], tmp_path: Pa
     assert [e["kind"] for e in brief["objections"]] == ["objection"]
     assert [q["text"] for q in brief["questions"]] == [
         "「周五前给我一版新报价方案」原定10月16日前，现在进展如何？",
-        "上次你提到实施费单列像变相涨价，这个顾虑现在解决了吗？",
+        "上次你说「实施费单列像变相涨价」，这个顾虑现在解决了吗？",
     ]
     assert brief["questions"][0]["entry_id"] == brief["theirs"][0]["entry_id"]
     assert client.get("/api/persona/ledger/brief").status_code == 400

@@ -191,7 +191,7 @@ it.each(['overview', 'graph', 'memories', 'assets', 'channels'])(
       within(screen.getByRole('navigation', { name: '底部导航' })).getAllByRole(
         'link',
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   },
 );
 

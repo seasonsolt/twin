@@ -319,7 +319,7 @@ def test_brief_lists_open_threads_once_with_a_question_for_each() -> None:
         "data": "「事情data」上次说还没完成，现在到哪一步了，新的时间是？",
         "quote2": "「事情quote2」10月22日前能按时完成吗？",
         "sent": "「事情sent」说已经完成了，能把结果发我看一下吗？",
-        "price": "上次你提到事情price，这个顾虑现在解决了吗？",
+        "price": "上次你说「price」，这个顾虑现在解决了吗？",
     }
     assert lg.people(ledger) == ["老王", "刘婷", "周敏"]
     assert lg.brief(ledger, "没人", today).questions == []

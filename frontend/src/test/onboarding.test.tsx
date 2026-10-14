@@ -176,7 +176,7 @@ it('skips persistently without adding a self-introduction', async () => {
   expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
 });
 it.each(['user', 'memories'])(
-  'does not onboard when %s is already present; navigation has exactly two items',
+  'does not onboard when %s is already present; navigation has chat, profile and ledger',
   async (present) => {
     if (present === 'user') identity.name_source = 'user';
     else status.counts.sources = 1;
@@ -186,7 +186,7 @@ it.each(['user', 'memories'])(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '档案']);
+    ).toEqual(['聊天', '档案', '账本']);
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
   },
 );

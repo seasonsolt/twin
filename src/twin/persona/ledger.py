@@ -446,7 +446,8 @@ def brief(ledger: list[LedgerEntry], person: str, as_of: dt.date) -> Brief:
     objections.sort(key=lambda e: (e.meeting_date or dt.date.min, e.expression_id), reverse=True)
     questions = [BriefQuestion(e.entry_id, text) for e in theirs if (text := _question(e, status[e.entry_id], as_of))]
     questions += [
-        BriefQuestion(e.entry_id, f"上次你提到{e.what}，这个顾虑现在解决了吗？") for e in objections[:BRIEF_OBJECTIONS]
+        BriefQuestion(e.entry_id, f"上次你说「{e.quote}」，这个顾虑现在解决了吗？")
+        for e in objections[:BRIEF_OBJECTIONS]
     ]
     return Brief(
         person=person,

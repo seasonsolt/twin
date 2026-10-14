@@ -10,7 +10,7 @@ import { Link, Navigate, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
-import { BookUser, MessageCircle } from 'lucide-react';
+import { BookUser, ListChecks, MessageCircle } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { Button, Skeleton, Tooltip } from '../ui';
@@ -32,6 +32,7 @@ const Onboarding = lazy(() =>
 export const navItems = [
   { route: 'chat', title: '聊天', icon: MessageCircle },
   { route: 'profile', title: '档案', icon: BookUser },
+  { route: 'ledger', title: '账本', icon: ListChecks },
 ];
 
 function useNavItems() {
@@ -80,7 +81,7 @@ function BottomTabs() {
   return (
     <nav
       aria-label="底部导航"
-      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${items.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
+      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3'][items.length - 1]}`}
     >
       {items.map(({ route, title, icon: Icon }) => (
         <NavLink

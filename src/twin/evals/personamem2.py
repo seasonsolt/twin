@@ -25,6 +25,7 @@ from .persona_runtime import (
     PersonaRuntime,
     ProfileCache,
     SourceInput,
+    chat_model,
     in_order,
     limit_calls,
     preparation_key,
@@ -372,7 +373,7 @@ def run_evaluation(
             try:
                 runtime = PersonaRuntime(
                     settings, limit_calls(make_llm(settings.llm), call_slots), make_embedder(settings.embed),
-                    profile_cache, grant_gated,
+                    profile_cache, grant_gated, chat_model(settings, call_slots),
                 )  # fmt: skip
                 cleanup.callback(runtime.close)
                 system = TwinSystem(runtime)

@@ -386,6 +386,9 @@ class Settings(BaseModel):
     # Evaluation judges (``[[judges]]`` tables). Empty: the main ``llm`` judges. Use 2-3 models of families
     # other than the twin's, since a judge tends to prefer output resembling its own.
     judges: list[LLMSettings] = Field(default_factory=list)
+    # Evaluation only (``[eval_chat_llm]``): the model the twin answers public benchmarks with, while profiles still
+    # build with ``llm``. Benchmarks never use the production ``[chat_llm]``.
+    eval_chat_llm: LLMSettings | None = None
     embed: EmbedSettings = Field(default_factory=EmbedSettings)
     pricing: dict[str, Price] = Field(default_factory=dict)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)

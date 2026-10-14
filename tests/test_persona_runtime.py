@@ -239,6 +239,28 @@ def test_personamem_raw_response_official_score_and_prefix_cache(
     assert sum(c[0] == "ExtractDraft" for c in llm.calls) == 1
 
 
+def test_eval_chat_llm_answers_while_main_model_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    main, answering = fake_persona("from main"), fake_persona("from eval chat")
+    built: list[str | None] = []
+
+    def make(config: LLMSettings, section: str = "llm") -> FakeLLM:
+        built.append(config.model)
+        return answering
+
+    monkeypatch.setattr(pr, "make_llm", make)
+    settings = Settings(llm=LLMSettings(model="eval-main"), eval_chat_llm=LLMSettings(model="eval-answer"))
+    runtime = pr.PersonaRuntime(settings, main, HashingEmbedder(), chat_llm=pr.chat_model(settings, None))
+    sources = (pr.SourceInput("s", "chat", (("user", "I prefer Atlas", "2024/01/01 (Mon) 10:00"),)),)
+    try:
+        reply = runtime.predict("subject", sources, "project?")
+    finally:
+        runtime.close()
+    assert built == ["eval-answer"] and reply.reply == "from eval chat"
+    assert any(c[0] == "ExtractDraft" for c in main.calls)
+    assert not any(c[0] == "ExtractDraft" for c in answering.calls)
+    assert pr.chat_model(Settings(chat_llm=LLMSettings(model="production-private")), None) is None
+
+
 @pytest.mark.usefixtures("gated_life_facets")
 def test_twin_questionnaire_reuse_and_no_consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     llm = fake_persona("B")

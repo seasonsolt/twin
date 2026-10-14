@@ -31,6 +31,7 @@ from .persona_runtime import (
     PersonaRuntime,
     ProfileCache,
     SourceInput,
+    chat_model,
     in_order,
     limit_calls,
     preparation_key,
@@ -479,7 +480,9 @@ def run_evaluation(
                 )
                 embedder = make_embedder(settings.embed)
                 if system == "twin":
-                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache, grant_gated)
+                    runtime = PersonaRuntime(
+                        settings, llm, embedder, profile_cache, grant_gated, chat_model(settings, call_slots)
+                    )
                     cleanup.callback(runtime.close)
                     baseline = TwinSystem(runtime)
                 else:

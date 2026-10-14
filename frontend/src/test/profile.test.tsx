@@ -153,9 +153,9 @@ it('renders only overview by default, keeps the header, and supports section lin
   expect(view.container.querySelector('.stage-header')).toBe(header);
   expect(screen.queryByRole('textbox', { name: '名字' })).toBeNull();
   await userEvent.setup().click(screen.getByRole('button', { name: '编辑' }));
-  expect(
-    await screen.findByRole('dialog', { name: '名字与介绍' }),
-  ).toBeVisible();
+  // The dialog fades in from opacity 0, even with reduced motion.
+  const dialog = await screen.findByRole('dialog', { name: '名字与介绍' });
+  await waitFor(() => expect(dialog).toBeVisible());
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('朋友');
 });
 

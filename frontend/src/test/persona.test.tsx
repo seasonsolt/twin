@@ -135,6 +135,9 @@ const mountOverview = () =>
     </ConfirmProvider>,
   );
 const article = () => within(screen.getByRole('article'));
+// A tab loads its items after it mounts, and switching tabs mounts the new one, so wait for its cards.
+const cards = (count: number) =>
+  waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(count));
 async function complete(
   status: ProfileItem['review'],
   statement = item.statement,
@@ -281,6 +284,7 @@ it('keeps server order, shows five items, and resets expansion after switching t
   rows[1].review = 'confirmed';
   mountOverview();
   await screen.findByRole('tab', { name: /看重什么 7\s*· 6 待确认/ });
+  await cards(5);
   expect(
     screen
       .getAllByRole('article')
@@ -297,12 +301,12 @@ it('keeps server order, shows five items, and resets expansion after switching t
     await screen.findByRole('button', { name: '展开其余 2 条' }),
   );
   await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
-  expect(screen.getAllByRole('article')).toHaveLength(1);
+  await cards(1);
   expect(screen.queryByRole('button', { name: /展开其余/ })).toBeNull();
   await user.click(
     screen.getByRole('tab', { name: /看重什么 7\s*· 6 待确认/ }),
   );
-  expect(screen.getAllByRole('article')).toHaveLength(5);
+  await cards(5);
   expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
 });
 
@@ -510,6 +514,6 @@ it('resets the tab and expansion when switching twins', async () => {
   await user.click(
     screen.getByRole('tab', { name: /看重什么 7\s*· 7 待确认/ }),
   );
-  expect(screen.getAllByRole('article')).toHaveLength(5);
+  await cards(5);
   expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
 });

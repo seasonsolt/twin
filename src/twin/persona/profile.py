@@ -16,15 +16,17 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
+from ..usage import call_totals, collect_calls
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence
@@ -560,6 +562,8 @@ class BuildReport:
     # Facets saved after a partial merge (see ``MergeDegraded``); they are merged again on the next build.
     degraded: list[str] = field(default_factory=list)
     facet_diffs: dict[str, FacetItemDiff] = field(default_factory=dict)
+    # The model calls this build made (``usage.call_totals``: attempts, retryable errors by cause, tokens, cost).
+    calls: dict[str, Any] = field(default_factory=dict)
 
     @property
     def items_added(self) -> int:
@@ -632,9 +636,13 @@ def build_profile(
         totals[chunk.source.source_id] = totals.get(chunk.source.source_id, 0) + 1
     store.set_build_progress("extract", totals)
     try:
-        _extract_and_merge(store, llm, settings, report, todo, allowed, safe_progress, totals)
+        with collect_calls() as rows:
+            _extract_and_merge(store, llm, settings, report, todo, allowed, safe_progress, totals)
     finally:
         store.clear_build_progress()
+        report.calls = {"started_at": built_at, "models": sorted({r.model for r in rows}), **call_totals(rows)}
+        if rows:  # a build with nothing to do keeps the last real build's record
+            store.set_meta("build:last_calls", json.dumps(report.calls, ensure_ascii=False))
     # A build that learned nothing (every chunk failed) is not recorded; one that lost only some sources is.
     if not report.merge_failed and (report.chunks_extracted or not report.failures):
         settled = {sid: value for sid, value in pending.items() if sid not in report.failed_sources}

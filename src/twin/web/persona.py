@@ -43,6 +43,7 @@ from ..persona.questionnaire import Round, round_view, save_draft, submit_initia
 from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, Source, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
+from ..usage import transient_summary
 from .backends import Backends
 from .conversations import append_reply, append_user, owner
 from .jobs import JobManager, PersonaProcessing
@@ -131,6 +132,8 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
             log(f"FAILED {failure}")
         for degraded in report.degraded:
             log(f"未完全合并，下次构建会重试：{degraded}")
+        if note := transient_summary(report.calls.get("transient", {})):
+            log(note)
         log("[2/2] 更新检索向量")
         index_persona(store, embedder, settings, log)
     if report.failures and report.chunks_extracted == 0 and report.facets_merged == 0:
@@ -150,6 +153,7 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         "items_changed": report.items_changed,
         "items_removed": report.items_removed,
         "facets_changed": report.facets_changed,
+        "calls": report.calls,
     }
 
 
@@ -315,6 +319,7 @@ def register(
                 else None
             )
             view["last_finished_at"] = store.get_meta("processing_last_finished_at") or view["last_finished_at"]
+            view["last_calls"] = json.loads(store.get_meta("build:last_calls") or "null")
             view["last_error"] = store.get_meta("processing_last_error") or view["last_error"]
             progress = store.build_progress() if view["state"] == "running" else None
         if progress:

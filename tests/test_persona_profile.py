@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from typing import Any
 
@@ -188,6 +189,16 @@ def test_extract_and_merge_use_effective_reasoning_effort(
     assert {call["schema"] for call in options} == {pf.ExtractDraft, pf.MergeDraft}
     assert all(call["reasoning_effort"] == expected for call in options)
     assert all(call["effort"] == settings.llm.effort_extract for call in options)
+
+
+def test_a_build_records_the_model_calls_it_made(store: PersonaStore, settings: Settings) -> None:
+    llm = FakeLLM(handler)
+    report = pf.build_profile(store, llm, settings)
+    assert report.calls["calls"] == len(llm.calls) > 0 and report.calls["failures"] == 0
+    assert report.calls["transient"] == {} and report.calls["models"] == [llm.name]
+    assert json.loads(store.get_meta("build:last_calls") or "") == report.calls
+    assert pf.build_profile(store, llm, settings).calls["calls"] == 0
+    assert json.loads(store.get_meta("build:last_calls") or "") == report.calls
 
 
 def test_failed_chunk_is_reported_and_retried_next_build(store: PersonaStore, settings: Settings) -> None:

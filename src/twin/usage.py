@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 from functools import wraps
@@ -57,6 +57,8 @@ class CallRow:
     known_cost_usd: float = 0.0
     reported_cost_usd: float | None = None
     unknown_usage_attempts: int = 0
+    # Attempts that failed with a retryable error, by ``transient_cause``; the last may have ended the call.
+    transient: dict[str, int] = field(default_factory=dict)
 
 
 def canonical_endpoint(base_url: str) -> str:
@@ -78,6 +80,30 @@ def _field(value: Any, name: str) -> Any:
 
 def _number(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def call_totals(selected: list[CallRow]) -> dict[str, Any]:
+    """Counts, tokens and cost summed over ``selected``; no text."""
+    result: dict[str, Any] = {
+        "calls": len(selected),
+        "failures": sum(not r.success for r in selected),
+        "attempts": sum(r.attempts for r in selected),
+        "characters": sum(r.characters for r in selected),
+        "unknown_cost_calls": sum(r.estimated_cost_usd is None for r in selected),
+        "known_cost_usd": sum(r.known_cost_usd for r in selected),
+        "reported_cost_usd": sum(r.reported_cost_usd or 0 for r in selected),
+    }
+    for name in ("input_tokens", "output_tokens", "reasoning_tokens", "cached_tokens"):
+        values = [getattr(r, name) for r in selected]
+        result[name] = sum(v for v in values if v is not None) if any(v is not None for v in values) else None
+    result["unknown_usage_attempts"] = sum(r.unknown_usage_attempts for r in selected)
+    transient: dict[str, int] = {}
+    for r in selected:
+        for cause, n in r.transient.items():
+            transient[cause] = transient.get(cause, 0) + n
+    result["transient"] = dict(sorted(transient.items()))
+    result["estimated_cost_usd"] = None if result["unknown_cost_calls"] else result["known_cost_usd"]
+    return result
 
 
 class UsageRecorder:
@@ -142,31 +168,17 @@ class UsageRecorder:
     def summary(self) -> dict[str, Any]:
         with self._lock:
             rows = list(self.rows)
-
-        def aggregate(selected: list[CallRow]) -> dict[str, Any]:
-            result: dict[str, Any] = {
-                "calls": len(selected),
-                "failures": sum(not r.success for r in selected),
-                "attempts": sum(r.attempts for r in selected),
-                "characters": sum(r.characters for r in selected),
-                "unknown_cost_calls": sum(r.estimated_cost_usd is None for r in selected),
-                "known_cost_usd": sum(r.known_cost_usd for r in selected),
-                "reported_cost_usd": sum(r.reported_cost_usd or 0 for r in selected),
-            }
-            for name in ("input_tokens", "output_tokens", "reasoning_tokens", "cached_tokens"):
-                values = [getattr(r, name) for r in selected]
-                result[name] = sum(v for v in values if v is not None) if any(v is not None for v in values) else None
-            result["unknown_usage_attempts"] = sum(r.unknown_usage_attempts for r in selected)
-            result["estimated_cost_usd"] = None if result["unknown_cost_calls"] else result["known_cost_usd"]
-            return result
-
         groups = sorted({(r.stage, r.model) for r in rows})
         return {
             "stages": [
-                {"stage": stage, "model": model, **aggregate([r for r in rows if (r.stage, r.model) == (stage, model)])}
+                {
+                    "stage": stage,
+                    "model": model,
+                    **call_totals([r for r in rows if (r.stage, r.model) == (stage, model)]),
+                }
                 for stage, model in groups
             ],
-            "totals": aggregate(rows),
+            "totals": call_totals(rows),
         }
 
     def write(self, directory: Path) -> None:
@@ -195,7 +207,24 @@ class UsageRecorder:
             f"输出 {tokens('output_tokens')} token（推理 {tokens('reasoning_tokens')}、"
             f"缓存 {tokens('cached_tokens')}），"
             f"未报告用量的尝试 {total['unknown_usage_attempts']} 次，字符 {total['characters']}；{money}。"
+            + transient_summary(total["transient"])
         )
+
+
+TRANSIENT_LABELS = {
+    "429": "限流 429",
+    "5xx": "服务端 5xx",
+    "408": "请求超时 408",
+    "409": "冲突 409",
+    "timeout": "等待超时",
+    "connection": "连接失败",
+}
+
+
+def transient_summary(transient: Mapping[str, int]) -> str:
+    if not transient:
+        return ""
+    return "可重试的错误：" + "、".join(f"{TRANSIENT_LABELS.get(c, c)} {n} 次" for c, n in transient.items()) + "。"
 
 
 _stage: ContextVar[str] = ContextVar("call_stage", default="other")
@@ -438,11 +467,25 @@ def request[R](
         try:
             return attempt(call, input_estimate=input_estimate, output_cap=output_cap, characters=characters)
         except Exception as error:
-            status = getattr(error, "status_code", None)
-            transient = type(error).__name__ in {"APIConnectionError", "APITimeoutError"} or (
-                isinstance(status, int) and (status in {408, 409, 429} or status >= 500)
-            )
-            if retry == retries or not transient:
+            cause = transient_cause(error)
+            if cause is not None and (row := _active.get()) is not None:
+                row.transient[cause] = row.transient.get(cause, 0) + 1
+            if retry == retries or cause is None:
                 raise
             sleep(_retry_delay(error, retry, random_fn, now))
     raise AssertionError("unreachable")
+
+
+def transient_cause(error: Exception) -> str | None:
+    """Why a failed attempt is worth retrying (a key of ``TRANSIENT_LABELS``), or None when it is not."""
+    name = type(error).__name__
+    if name == "APITimeoutError":  # a subclass of APIConnectionError in the OpenAI and Anthropic SDKs
+        return "timeout"
+    if name == "APIConnectionError":
+        return "connection"
+    status = getattr(error, "status_code", None)
+    if not isinstance(status, int):
+        return None
+    if status in {408, 409, 429}:
+        return str(status)
+    return "5xx" if status >= 500 else None

@@ -11,7 +11,8 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,17 @@ from starlette.concurrency import run_in_threadpool
 
 from ..assets import AssetStore
 from ..config import Settings
+from ..llm import LLM
 from ..media.claim import Analysis, analyse, vision_candidates, voice_candidates
-from ..media.ingest import MEDIA_EXTENSIONS, VIDEO_EXTENSIONS, CommandTranscriber, extract_audio, make_transcriber
+from ..media.clean import clean_segments
+from ..media.ingest import (
+    MEDIA_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    CommandTranscriber,
+    Segment,
+    extract_audio,
+    make_transcriber,
+)
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
 from ..persona.store import PersonaStore, stored_identity
@@ -39,6 +49,27 @@ class UploadBody(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     size: int
     type: str = Field(default="", max_length=200)
+
+
+class UploadLocks:
+    """One ``asyncio.Lock`` per upload id, dropped once nobody holds or waits for it."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, tuple[asyncio.Lock, int]] = {}
+
+    @asynccontextmanager
+    async def hold(self, upload_id: str) -> AsyncIterator[None]:
+        lock, users = self._locks.get(upload_id, (asyncio.Lock(), 0))
+        self._locks[upload_id] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            lock, users = self._locks[upload_id]
+            if users == 1:
+                del self._locks[upload_id]
+            else:
+                self._locks[upload_id] = (lock, users - 1)
 
 
 class Uploads:
@@ -73,15 +104,32 @@ class Uploads:
             raise HTTPException(400, "文件不能为空")
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.root.chmod(0o700)
-        for metadata in self.root.glob("*.json"):
-            if metadata.stat().st_mtime < time.time() - 86400:
-                self.cancel(metadata.stem)
         upload_id = uuid.uuid4().hex
         metadata, part = self.paths(upload_id)
         metadata.touch(mode=0o600)
         part.touch(mode=0o600)
         self.save(upload_id, {"filename": name, "size": body.size, "type": body.type})
         return {"id": upload_id, "offset": 0, "chunk_size": CHUNK_SIZE}
+
+    def stale(self) -> list[str]:
+        """Uploads untouched for a day, which ``expire`` removes."""
+        return [
+            metadata.stem
+            for metadata in self.root.glob("*.json")
+            if re.fullmatch(r"[0-9a-f]{32}", metadata.stem) and self._stale(metadata)
+        ]
+
+    def expire(self, upload_id: str) -> None:
+        metadata, _ = self.paths(upload_id)
+        if self._stale(metadata):
+            self.cancel(upload_id)
+
+    @staticmethod
+    def _stale(metadata: Path) -> bool:
+        try:
+            return metadata.stat().st_mtime < time.time() - 86400
+        except FileNotFoundError:
+            return False
 
     def cancel(self, upload_id: str) -> None:
         metadata, part = self.paths(upload_id)
@@ -101,8 +149,10 @@ class Uploads:
 
 
 class MediaIngestion:
-    def __init__(self, settings: Settings, jobs: JobManager, queue_build: Callable[[], None]) -> None:
-        self.settings, self.jobs, self.queue_build = settings, jobs, queue_build
+    def __init__(
+        self, settings: Settings, jobs: JobManager, queue_build: Callable[[], None], llm: Callable[[], LLM]
+    ) -> None:
+        self.settings, self.jobs, self.queue_build, self.llm = settings, jobs, queue_build, llm
         self.lock = threading.RLock()
         self.active: dict[str, Job] = {}
 
@@ -176,6 +226,8 @@ class MediaIngestion:
             if isinstance(transcriber, CommandTranscriber):
                 transcriber.diarize, transcriber.reference = True, reference
             segments = transcriber.transcribe(audio, duration, progress)
+            if self.settings.asr.clean and segments:
+                segments = self.clean(segments, log)
             log("[3/6] 区分说话人")
             analysis = analyse(
                 segments, getattr(transcriber, "speakers", []), reference is not None, diarized=transcriber.diarizes
@@ -196,6 +248,18 @@ class MediaIngestion:
         except Exception:
             self.update(source_id, job_id, media_status="failed")
             raise JobError("音视频转写失败，请检查 ffmpeg 和语音识别配置后重试") from None
+
+    def clean(self, segments: list[Segment], log: Log) -> list[Segment]:
+        """Proofread with [llm]; without a working model the transcript goes on as recognized."""
+        try:
+            llm = self.llm()
+        except Exception:
+            log("[2/6] 未配置文字模型，跳过转写校对")
+            return segments
+        result = clean_segments(llm, segments, lambda done, total: log(f"[2/6] 校对转写（{done} / {total} 批）"))
+        note = f"，{result.failed_batches} 批失败保留原文" if result.failed_batches else ""
+        log(f"[2/6] 校对完成：修正 {result.changed} 段{note}")
+        return result.segments
 
     def store_analysis(self, store: PersonaStore, source: Source, analysis: Analysis) -> None:
         source = source.model_copy(
@@ -296,32 +360,38 @@ class MediaIngestion:
             return {**source.model_dump(mode="json"), "new": new, "job_id": job.job_id if job else source.media_job_id}
 
 
-def register(app: FastAPI, settings: Settings, jobs: JobManager, queue_build: Callable[[], None]) -> MediaIngestion:
+def register(
+    app: FastAPI, settings: Settings, jobs: JobManager, queue_build: Callable[[], None], llm: Callable[[], LLM]
+) -> MediaIngestion:
     uploads = Uploads(settings.db_path.parent)
-    ingestion = MediaIngestion(settings, jobs, queue_build)
-    # Serialize append/finish/cancel across requests, including stream rollback on disconnect.
-    lock = asyncio.Lock()
+    ingestion = MediaIngestion(settings, jobs, queue_build, llm)
+    # Serialize append/finish/cancel of one upload, including stream rollback on disconnect; a slow chunk of one
+    # file never holds up the others.
+    locks = UploadLocks()
 
     @app.post("/api/uploads")
     async def create(body: UploadBody) -> dict[str, Any]:
-        async with lock:
-            return await run_in_threadpool(uploads.create, body)
+        if uploads.root.is_dir():
+            for upload_id in await run_in_threadpool(uploads.stale):
+                async with locks.hold(upload_id):
+                    await run_in_threadpool(uploads.expire, upload_id)
+        return await run_in_threadpool(uploads.create, body)
 
     @app.get("/api/uploads/{upload_id}")
     async def get(upload_id: str) -> dict[str, int]:
-        async with lock:
+        async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
             return {"offset": info["offset"], "size": info["size"]}
 
     @app.delete("/api/uploads/{upload_id}")
     async def cancel(upload_id: str) -> dict[str, bool]:
-        async with lock:
+        async with locks.hold(upload_id):
             await run_in_threadpool(uploads.cancel, upload_id)
             return {"deleted": True}
 
     @app.put("/api/uploads/{upload_id}")
     async def append(upload_id: str, request: Request, offset: int) -> Any:
-        async with lock:
+        async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
             if offset != info["offset"] or info.get("source_id"):
                 return JSONResponse({"offset": info["offset"]}, status_code=409)
@@ -342,7 +412,7 @@ def register(app: FastAPI, settings: Settings, jobs: JobManager, queue_build: Ca
 
     @app.post("/api/uploads/{upload_id}/finish")
     async def finish(upload_id: str) -> dict[str, Any]:
-        async with lock:
+        async with locks.hold(upload_id):
             return await run_in_threadpool(ingestion.finish, uploads, upload_id)
 
     @app.post("/api/persona/sources/{source_id}/transcribe", status_code=202)

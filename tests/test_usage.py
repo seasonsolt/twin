@@ -28,6 +28,8 @@ from twin.usage import (
     canonical_endpoint,
     record_usage,
     request,
+    tracked,
+    transient_cause,
 )
 from twin.util import fingerprint, run_parallel
 
@@ -173,7 +175,9 @@ def test_real_sdk_retries_are_visible(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (row.input_tokens, row.output_tokens, row.unknown_usage_attempts) == (10, 5, 1)
     assert row.estimated_cost_usd is None
     assert row.known_cost_usd == pytest.approx(15 / 1_000_000)
+    assert row.transient == {"429": 1} and recorder.summary()["totals"]["transient"] == {"429": 1}
     assert "费用未知" in recorder.chinese_summary()
+    assert recorder.chinese_summary().endswith("可重试的错误：限流 429 1 次。")
 
 
 def test_embedding_batch_rows_usage_and_character_fallback() -> None:
@@ -495,3 +499,37 @@ def test_retry_exhaustion_does_not_sleep_after_last_attempt(retries: int) -> Non
         request(fail, retries, sleep=sleeps.append, random_fn=lambda: 0.0)
     assert caught.value is error and calls == retries + 1
     assert sleeps == [0.2] * retries
+
+
+@pytest.mark.parametrize(
+    "error,cause",
+    [
+        (retry_error(429), "429"),
+        (retry_error(408), "408"),
+        (retry_error(409), "409"),
+        (retry_error(503), "5xx"),
+        (retry_error(400), None),
+        (openai.APITimeoutError(request=httpx.Request("POST", "https://example.com/v1")), "timeout"),
+        (openai.APIConnectionError(request=httpx.Request("POST", "https://example.com/v1")), "connection"),
+        (ValueError("bad"), None),
+    ],
+)
+def test_retryable_errors_are_counted_by_cause(error: Exception, cause: str | None) -> None:
+    assert transient_cause(error) == cause
+    sleeps: list[float] = []
+
+    def always(_: object = None) -> str:
+        raise error
+
+    class Backend:
+        model = "model"
+
+        @tracked("backend")
+        def call(self) -> str:
+            return request(always, 2, sleep=sleeps.append, random_fn=lambda: 0.0)
+
+    recorder = UsageRecorder()
+    with record_usage(recorder), pytest.raises(type(error)):
+        Backend().call()
+    [row] = recorder.rows
+    assert row.transient == ({cause: 3} if cause else {}) and len(sleeps) == (2 if cause else 0)

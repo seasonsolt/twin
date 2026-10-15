@@ -3,7 +3,8 @@
 Engines are scripts under deploy/asr-eval run by their own Python (the compute pack venv, an MLX venv), so model
 dependencies never enter twin's environment. A run sends one JSON request on stdin and reads one JSON line per item
 back; every line is appended to a cache keyed by the engine identity, so an interrupted run resumes and a rerun with
-an unchanged engine only rescores.
+an unchanged engine only rescores. Cached lines record the audio path too: manifests that reuse ids for different
+audio (AliMeeting's far and near clips) share a cache directory without reading each other's transcripts.
 """
 
 from __future__ import annotations
@@ -212,8 +213,9 @@ def _open_append(path: Path) -> TextIO:
     return stream
 
 
-def _read_cache(path: Path) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
+def _read_cache(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """{(id, audio path): row}; lines written before the audio path was recorded never match and are redone."""
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
@@ -221,7 +223,7 @@ def _read_cache(path: Path) -> dict[str, dict[str, Any]]:
             except json.JSONDecodeError:
                 continue  # a run killed mid-write leaves at most one partial last line
             if isinstance(row, dict) and isinstance(row.get("id"), str) and isinstance(row.get("text"), str):
-                rows[row["id"]] = row
+                rows[(row["id"], str(row.get("audio")))] = row
     return rows
 
 
@@ -237,7 +239,7 @@ def transcribe(
     private_directory(cache_dir)
     cache = cache_dir / f"{engine.name}-{fingerprint(identity)[:12]}.jsonl"
     done = _read_cache(cache)
-    todo = [item for item in items if item.id not in done]
+    todo = [item for item in items if (item.id, str(item.audio)) not in done]
     if progress is not None:
         progress(engine.name, len(items) - len(todo), len(items))
     if todo:
@@ -249,7 +251,7 @@ def transcribe(
         if engine.kind in PACK_KINDS:
             request["pack"] = str(engine.pack)
         private_directory(log_dir)
-        wanted = {item.id for item in todo}
+        wanted = {item.id: str(item.audio) for item in todo}
         with open_private(log_dir / f"{engine.name}.log") as log, _open_append(cache) as sink:
             process = subprocess.Popen(
                 [str(engine.python), "-I", str(engine.script)],
@@ -270,19 +272,20 @@ def transcribe(
                     continue  # stray library output; engines keep results on stdout and logs on stderr
                 if not isinstance(row, dict) or row.get("id") not in wanted or not isinstance(row.get("text"), str):
                     continue
+                row["audio"] = wanted[row["id"]]
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")
                 sink.flush()
-                done[row["id"]] = row
+                done[(row["id"], row["audio"])] = row
                 finished += 1
                 if progress is not None:
                     progress(engine.name, finished, len(items))
             code = process.wait()
         if code != 0:
             raise RuntimeError(f"引擎 {engine.name} 退出码 {code}，日志见 {log_dir / (engine.name + '.log')}")
-        missing = wanted - done.keys()
+        missing = [key for key in wanted.items() if key not in done]
         if missing:
             raise RuntimeError(f"引擎 {engine.name} 有 {len(missing)} 条没有返回结果")
-    return {item.id: done[item.id] for item in items}, identity
+    return {item.id: done[(item.id, str(item.audio))] for item in items}, identity
 
 
 def score_tokens(text: str) -> list[str]:

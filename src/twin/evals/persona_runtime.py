@@ -20,13 +20,13 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import Any, Literal
 
-from ..config import Settings, configuration_fingerprint
+from ..config import Settings, configuration_fingerprint, make_llm
 from ..embed import Embedder
 from ..llm import LLM, T
 from ..persona.chat import PersonaChat, index_persona
 from ..persona.profile import build_profile
 from ..persona.schema import ChatReply, ChatTurn, Expression, ParsedSource, Source, SourceKind
-from ..persona.sources import parse_chat, source_id_for
+from ..persona.sources import parse_chat, parse_note, source_id_for
 from ..persona.store import PersonaStore
 from ..usage import active_recorder, call_stage, collect_calls
 from ..util import fingerprint, private_directory, run_parallel
@@ -43,8 +43,8 @@ LIMITATIONS = [
 @dataclass(frozen=True)
 class SourceInput:
     name: str
-    kind: Literal["chat", "questionnaire"]
-    # Chat: (role, text, date). Questionnaire: (question/context, answer, date).
+    kind: Literal["chat", "questionnaire", "intro"]
+    # Chat: (role, text, date). Questionnaire: (question/context, answer, date). Intro: ("", self-introduction, "").
     entries: tuple[tuple[str, str, str], ...]
     narrated: bool = False
 
@@ -130,6 +130,15 @@ def limit_calls(llm: LLM, slots: threading.Semaphore | None) -> LLM:
     return llm if slots is None else LimitedLLM(llm, slots)
 
 
+def chat_model(settings: Settings, slots: threading.Semaphore | None) -> LLM | None:
+    """The model a configured ``[eval_chat_llm]`` answers with; None keeps answering on the profile model."""
+    return (
+        None
+        if settings.eval_chat_llm is None
+        else limit_calls(make_llm(settings.eval_chat_llm, "eval_chat_llm"), slots)
+    )
+
+
 def in_order[A, R](fn: Callable[[A], R], items: Sequence[A], workers: int) -> Iterator[tuple[A, R]]:
     """Run ``fn`` over items ``workers`` at a time and yield each result in input order as soon as it and every
     earlier one are done, so callers persist rows in a stable order while later items are still running. An
@@ -165,7 +174,7 @@ def preparation_key(subject: str, sources: tuple[SourceInput, ...], settings: Se
 
 def parse_source(source: SourceInput, settings: Settings) -> ParsedSource | None:
     entries = [entry for entry in source.entries if entry[1].strip()]
-    if not entries:
+    if not entries or source.kind == "intro":
         return None
     if source.kind == "chat":
         return parse_chat(
@@ -216,7 +225,8 @@ class PersonaRuntime:
     """One run's disk cache; stores are closed between questions, including failed builds.
 
     ``predict`` may run in several threads once ``prepare`` has built the subjects; ``metadata`` is the calling
-    thread's last answer."""
+    thread's last answer. Profiles are built with ``llm``; answers use ``chat_llm`` when given, so a different
+    answering model reuses the cached profiles."""
 
     def __init__(
         self,
@@ -225,6 +235,7 @@ class PersonaRuntime:
         embedder: Embedder,
         cache: ProfileCache | None = None,
         grant_gated: bool = False,
+        chat_llm: LLM | None = None,
     ) -> None:
         self._temporary = TemporaryDirectory(prefix="twin-public-eval-")
         self.root = Path(self._temporary.name)
@@ -235,10 +246,11 @@ class PersonaRuntime:
                 "db_path": self.root / "unused.db",
                 "target_name": TARGET,
                 "target_aliases": [],
-                "chat_llm": None,
+                "chat_llm": settings.eval_chat_llm if chat_llm is not None else None,
             },
         )
         self.llm, self.embedder, self.cache, self.grant_gated = llm, embedder, cache, grant_gated
+        self.chat_llm = chat_llm or llm
         self._states: dict[str, bool] = {}
         # Built by ``prepare``, waiting for the subject's first question.
         self._prepared: dict[str, dict[str, Any]] = {}
@@ -261,7 +273,7 @@ class PersonaRuntime:
     def configuration(self) -> str:
         return configuration_fingerprint(
             self.settings,
-            self.llm,
+            self.chat_llm,
             self.embedder,
             [],
             # Only a granted run adds the field, so default runs keep their earlier fingerprint.
@@ -290,7 +302,10 @@ class PersonaRuntime:
     def _prepare(
         self, store: PersonaStore, sources: tuple[SourceInput, ...], settings: Settings, metadata: dict[str, Any]
     ) -> None:
-        store.set_identity(TARGET, "", None)
+        # A benchmark's description of the user enters as the person's self-introduction, as one written in the app
+        # would: a note of their own, kept as the identity's "about".
+        about = "\n\n".join(text for s in sources if s.kind == "intro" for _, text, _ in s.entries if text.strip())
+        store.set_identity(TARGET, about, parse_note(about, settings, "自我介绍") if about else None)
         for source in sources:
             parsed = parse_source(source, settings)
             if parsed is not None:
@@ -370,7 +385,7 @@ class PersonaRuntime:
         settings = self._db_settings(key)
         with PersonaStore(settings.db_path) as store:
             with self._stage(self.metadata, "answer"):
-                reply = PersonaChat(store, self.llm, self.embedder, settings).reply(
+                reply = PersonaChat(store, self.chat_llm, self.embedder, settings).reply(
                     [ChatTurn(role="user", content=prompt)], persist=False, today=today
                 )
             self.metadata.update(reply.model_dump(mode="json"))

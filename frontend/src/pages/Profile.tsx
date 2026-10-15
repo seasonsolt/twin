@@ -17,7 +17,7 @@ import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
 import { forgetPersona, personaUrl } from '../lib/persona';
 import { usePersonas } from '../stores/personas';
-import { Memories } from './Memories';
+import { Memories, type SourcePage } from './Memories';
 
 const MemoryGraphPanel = lazy(
   () => import('../features/profile/graph/MemoryGraphPanel'),
@@ -64,15 +64,13 @@ export function Profile() {
   useEffect(() => {
     if (section !== 'overview') return;
     const controller = new AbortController();
-    void api<{ status: string }[]>('/api/persona/sources', {
+    void api<SourcePage>('/api/persona/sources?limit=0', {
       signal: controller.signal,
       headers: { 'X-Twin-Persona': personaId },
     })
-      .then((rows) => {
+      .then((page) => {
         if (!controller.signal.aborted)
-          setSpeakerCount(
-            rows.filter((row) => row.status === 'needs_speaker').length,
-          );
+          setSpeakerCount(page.summary.needs_speaker);
       })
       .catch(() => {});
     return () => controller.abort();

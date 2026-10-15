@@ -31,6 +31,7 @@ from .persona_runtime import (
     PersonaRuntime,
     ProfileCache,
     SourceInput,
+    chat_model,
     in_order,
     limit_calls,
     preparation_key,
@@ -169,7 +170,9 @@ def load_dataset(path: Path) -> tuple[Case, ...]:
 
 
 SAMPLE_SEED = "longmemeval-v1"
-FORMAL_PER_TYPE = 5
+# Per-type sizes of the formal sample: 5 was the first milestone sample, 10 the larger one. Each size is its own
+# seeded draw, so the dev split leaves out the questions of every size.
+FORMAL_SIZES = (5, 10)
 SPLITS = ("formal", "dev")
 
 
@@ -201,7 +204,8 @@ def select_cases(
 ) -> tuple[Case, ...]:
     """Slice questions in source order, or with ``per_type`` draw that many of every question type, reproducibly
     for the same data and seed, and keep them in source order. The ``dev`` split draws only from questions outside
-    the documented formal sample, so iterating on it cannot tune the twin to the formal questions. ``types`` keeps
+    every documented formal sample (``FORMAL_SIZES``), so iterating on it cannot tune the twin to the formal
+    questions; a formal per-type draw takes one of those sizes. ``types`` keeps
     the per-type draw to those question types (each type's draw is the same as without it), to focus on a weak one."""
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset nonnegative")
@@ -213,10 +217,12 @@ def select_cases(
     if split == "dev":
         if per_type is None:
             raise ValueError("the dev split is a seeded sample; pass per_type")
-        formal = _per_type_sample(cases, FORMAL_PER_TYPE, SAMPLE_SEED, set())
+        formal = set().union(*(_per_type_sample(cases, size, SAMPLE_SEED, set()) for size in FORMAL_SIZES))
         chosen = _per_type_sample(cases, per_type, f"{seed}:dev", formal, drawn)
         return tuple(c for c in cases if c.input.question_id in chosen)
     if per_type is not None:
+        if per_type not in FORMAL_SIZES:
+            raise ValueError(f"the formal split draws {' or '.join(map(str, FORMAL_SIZES))} questions per type")
         chosen = _per_type_sample(cases, per_type, seed, set(), drawn)
         return tuple(c for c in cases if c.input.question_id in chosen)
     selected = tuple(cases[offset : offset + limit])
@@ -479,7 +485,9 @@ def run_evaluation(
                 )
                 embedder = make_embedder(settings.embed)
                 if system == "twin":
-                    runtime = PersonaRuntime(settings, llm, embedder, profile_cache, grant_gated)
+                    runtime = PersonaRuntime(
+                        settings, llm, embedder, profile_cache, grant_gated, chat_model(settings, call_slots)
+                    )
                     cleanup.callback(runtime.close)
                     baseline = TwinSystem(runtime)
                 else:

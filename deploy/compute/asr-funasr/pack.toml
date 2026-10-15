@@ -1,5 +1,5 @@
 name = "asr-funasr"
-version = "1.2.0"
+version = "1.2.1"
 kind = "command"
 platforms = ["darwin-arm64"]
 python = "3.12"

@@ -63,12 +63,80 @@ export interface Memory {
   transcribed_s?: number;
   media_sha?: string | null;
   candidates_pending?: boolean;
+  chunks_done?: number;
+  chunks_total?: number;
+  extraction?: { kept: number; unsupported: number } | null;
 }
+export interface SourceSummary {
+  total: number;
+  duration_s: number;
+  needs_speaker: number;
+  busy: number;
+}
+export interface SourcePage {
+  items: Memory[];
+  total: number;
+  summary: SourceSummary;
+  attention?: Memory[];
+}
+const PAGE_SIZE = 50;
+const UPLOAD_BATCH_FILES = 200;
+const UPLOAD_BATCH_BYTES = 256 * 1024 ** 2;
+
+/** Documents in upload order, cut into requests the server accepts; a file larger than a batch goes alone. */
+export function uploadBatches(files: File[]) {
+  const batches: File[][] = [];
+  let current: File[] = [];
+  let bytes = 0;
+  for (const file of files) {
+    if (
+      current.length &&
+      (current.length >= UPLOAD_BATCH_FILES ||
+        bytes + file.size > UPLOAD_BATCH_BYTES)
+    ) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(file);
+    bytes += file.size;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+// The server's largest page: polling re-reads at most this many of the rows already shown.
+const MAX_PAGE = 500;
+const emptySummary: SourceSummary = {
+  total: 0,
+  duration_s: 0,
+  needs_speaker: 0,
+  busy: 0,
+};
 interface Processing {
   state: 'idle' | 'queued' | 'running';
+  progress?: { phase: 'extract' | 'merge'; done: number; total: number };
   notice?: string | null;
   last_error?: string | null;
 }
+
+// A source's chunks are read one by one; once all are read it waits for the shared merge at the end of the build.
+const processingLabel = (memory: Memory) => {
+  const total = memory.chunks_total ?? 0;
+  if (total > 0) {
+    const done = memory.chunks_done ?? 0;
+    return done < total ? `正在记住… ${done}/${total} 段` : '已读完，等待合并';
+  }
+  return memory.media_sha ? '整理中' : '正在记住…';
+};
+
+const processingText = (processing: Processing) => {
+  if (processing.state === 'queued') return '等待记住…';
+  const progress = processing.progress;
+  if (progress?.phase === 'merge') return '正在合并记忆…';
+  if (progress && progress.total > 0)
+    return `正在记住… 已读 ${progress.done}/${progress.total} 段`;
+  return '正在记住…';
+};
 
 const mediaPending = (memory: Memory) =>
   ['queued', 'extracting', 'transcribing'].includes(memory.status);
@@ -76,6 +144,11 @@ const memoryPending = (memory: Memory) =>
   memory.status === 'processing' ||
   (memory.candidates_pending &&
     !['failed', 'needs_asr', 'needs_speaker'].includes(memory.status));
+// The model drew conclusions from it, but none of their quotes matched the text.
+const misquoted = (memory: Memory) =>
+  !!memory.extraction &&
+  memory.extraction.kept === 0 &&
+  memory.extraction.unsupported > 0;
 function MemoryWork({
   memory,
   visible,
@@ -192,7 +265,12 @@ export function Memories({
   const mobile = useMobile();
   const [adding, setAdding] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<SourceSummary>(emptySummary);
+  // Memories being transcribed or waiting for the person, wherever they are in the list.
+  const [attention, setAttention] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
   const admin = useAuth((state) => state.identity?.admin ?? false);
   const kernel = useStatus((state) => state.data?.kernel);
@@ -204,7 +282,7 @@ export function Memories({
     null,
   );
   usePendingWork(busy, busyLabel);
-  const building = processing.state !== 'idle' || memories.some(memoryPending);
+  const building = processing.state !== 'idle' || summary.busy > 0;
   usePendingWork(building, '正在整理记忆…', true);
   const failedFiles = useRef<File[]>([]);
   const [skipped, setSkipped] = useState<{ file: string; reason: string }[]>(
@@ -217,38 +295,52 @@ export function Memories({
   } | null>(null);
   const alive = useRef(false);
   const request = useRef<AbortController | null>(null);
+  const more = useRef<AbortController | null>(null);
   const previewRequest = useRef<AbortController | null>(null);
   const mutation = useRef<AbortController | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shown = useRef(0);
+  useEffect(() => {
+    shown.current = memories.length;
+  }, [memories]);
   const refresh = useCallback(
     async function reload() {
       request.current?.abort();
       if (timer.current) clearTimeout(timer.current);
       const controller = new AbortController();
       request.current = controller;
+      const limit = Math.min(MAX_PAGE, Math.max(PAGE_SIZE, shown.current));
       try {
-        const [rows, state] = await Promise.all([
-          api<Memory[]>('/api/persona/sources', {
-            signal: controller.signal,
-            headers: { 'X-Twin-Persona': personaId },
-          }),
+        const [page, state] = await Promise.all([
+          api<SourcePage>(
+            `/api/persona/sources?limit=${limit}&attention=true`,
+            {
+              signal: controller.signal,
+              headers: { 'X-Twin-Persona': personaId },
+            },
+          ),
           api<Processing>('/api/persona/processing', {
             headers: { 'X-Twin-Persona': personaId },
             signal: controller.signal,
           }),
         ]);
         if (!alive.current || controller.signal.aborted) return;
-        setMemories(rows);
-        onSpeakerCount?.(
-          rows.filter((row) => row.status === 'needs_speaker').length,
-        );
+        // Rows past the re-read ones stay as they were; they refresh when the person pages to them again.
+        setMemories((rows) => {
+          const fresh = new Set(page.items.map((row) => row.source_id));
+          return [
+            ...page.items,
+            ...rows.slice(limit).filter((row) => !fresh.has(row.source_id)),
+          ].slice(0, page.total);
+        });
+        setTotal(page.total);
+        setSummary(page.summary);
+        setAttention(page.attention ?? []);
+        onSpeakerCount?.(page.summary.needs_speaker);
         setLoading(false);
         setProcessing(state);
         setError('');
-        if (
-          state.state !== 'idle' ||
-          rows.some((row) => mediaPending(row) || memoryPending(row))
-        )
+        if (state.state !== 'idle' || page.summary.busy > 0)
           timer.current = setTimeout(() => void reload(), 2000);
         else void useStatus.getState().refresh();
       } catch (err) {
@@ -261,6 +353,34 @@ export function Memories({
     },
     [personaId, onSpeakerCount],
   );
+  const loadMore = async () => {
+    if (more.current) return;
+    const controller = new AbortController();
+    more.current = controller;
+    setLoadingMore(true);
+    try {
+      const page = await api<SourcePage>(
+        `/api/persona/sources?limit=${PAGE_SIZE}&offset=${memories.length}`,
+        { signal: controller.signal, headers: { 'X-Twin-Persona': personaId } },
+      );
+      if (!alive.current || controller.signal.aborted) return;
+      setMemories((rows) => {
+        const seen = new Set(rows.map((row) => row.source_id));
+        return [
+          ...rows,
+          ...page.items.filter((row) => !seen.has(row.source_id)),
+        ];
+      });
+      setTotal(page.total);
+      setSummary(page.summary);
+    } catch (err) {
+      if (alive.current && !controller.signal.aborted)
+        setError(err instanceof Error ? err.message : '无法读取记忆');
+    } finally {
+      if (more.current === controller) more.current = null;
+      if (alive.current && !controller.signal.aborted) setLoadingMore(false);
+    }
+  };
   useEffect(() => {
     alive.current = active;
     failedFiles.current = [];
@@ -269,6 +389,8 @@ export function Memories({
     return () => {
       alive.current = false;
       request.current?.abort();
+      more.current?.abort();
+      more.current = null;
       previewRequest.current?.abort();
       mutation.current?.abort();
       if (timer.current) clearTimeout(timer.current);
@@ -326,38 +448,56 @@ export function Memories({
             } else documents.push(file);
           }
           if (documents.length) {
-            const form = new FormData();
-            documents.forEach((file) =>
-              form.append('files', file, file.webkitRelativePath || file.name),
-            );
             const size = documents.reduce((sum, file) => sum + file.size, 0);
-            setBusyLabel(`正在上传 ${completed + 1}/${files.length}…`);
-            setUploadProgress({
-              name: documents.map((file) => file.name).join('、'),
-              offset: 0,
-              size,
-              paused: false,
-            });
-            const result = await uploadForm<{
-              imported: Memory[];
-              skipped: { file: string; reason: string }[];
-            }>('/api/persona/import', form, signal, (percent) => {
-              if (!alive.current) return;
-              setUploadProgress({
-                name: documents.map((file) => file.name).join('、'),
-                offset: (size * percent) / 100,
-                size,
-                paused: false,
-              });
-              setBusyLabel(
-                percent === 100
-                  ? '正在处理文件…'
-                  : `正在上传 ${completed + Math.min(documents.length, Math.floor((documents.length * percent) / 100) + 1)}/${files.length}…`,
+            const name =
+              documents
+                .slice(0, 3)
+                .map((file) => file.name)
+                .join('、') +
+              (documents.length > 3 ? ` 等 ${documents.length} 个文件` : '');
+            let sent = 0;
+            let added = 0;
+            setUploadProgress({ name, offset: 0, size, paused: false });
+            // The server takes up to 500 files and 1 GB per request; a large folder goes up in batches.
+            for (const batch of uploadBatches(documents)) {
+              const form = new FormData();
+              batch.forEach((file) =>
+                form.append(
+                  'files',
+                  file,
+                  file.webkitRelativePath || file.name,
+                ),
               );
-            });
-            ignored.push(...result.skipped);
-            if (alive.current && result.imported.length)
-              toast('已添加，正在记住…', 'success');
+              const bytes = batch.reduce((sum, file) => sum + file.size, 0);
+              const before = completed;
+              setBusyLabel(`正在上传 ${completed + 1}/${files.length}…`);
+              const result = await uploadForm<{
+                imported: Memory[];
+                skipped: { file: string; reason: string }[];
+              }>('/api/persona/import', form, signal, (percent) => {
+                if (!alive.current) return;
+                setUploadProgress({
+                  name,
+                  offset: sent + (bytes * percent) / 100,
+                  size,
+                  paused: false,
+                });
+                setBusyLabel(
+                  percent === 100
+                    ? '正在处理文件…'
+                    : `正在上传 ${before + Math.min(batch.length, Math.floor((batch.length * percent) / 100) + 1)}/${files.length}…`,
+                );
+              });
+              sent += bytes;
+              completed += batch.length;
+              added += result.imported.length;
+              ignored.push(...result.skipped);
+              // Files already sent are not sent again if a later batch fails and the person retries.
+              failedFiles.current = failedFiles.current.filter(
+                (file) => !batch.includes(file),
+              );
+            }
+            if (alive.current && added) toast('已添加，正在记住…', 'success');
           }
           failedFiles.current = [];
           if (alive.current) setSkipped(ignored);
@@ -377,6 +517,13 @@ export function Memories({
       await api('/api/kernel/rebuild', { method: 'POST', signal });
       void useStatus.getState().refresh();
     });
+  const reextract = (memory: Memory) =>
+    void mutate((signal) =>
+      api(
+        `/api/persona/sources/${encodeURIComponent(memory.source_id)}/reextract`,
+        { method: 'POST', signal },
+      ),
+    );
   const retranscribe = (memory: Memory) =>
     void mutate((signal) =>
       api(
@@ -441,9 +588,10 @@ export function Memories({
       addPanel.current?.querySelector<HTMLElement>('textarea, input')?.focus();
     }
   };
-  const recordingHours =
-    memories.reduce((total, memory) => total + (memory.duration_s ?? 0), 0) /
-    3600;
+  const recordingHours = summary.duration_s / 3600;
+  const firstSpeaker = attention.find(
+    (memory) => memory.status === 'needs_speaker',
+  );
   const fileInput = (folder: boolean) => (
     <div
       aria-busy={busy}
@@ -592,8 +740,7 @@ export function Memories({
           )}
           {!embedded && (
             <p className="mt-2 text-secondary">
-              {memories.length} 条 · {Number(recordingHours.toFixed(1))}{' '}
-              小时录音
+              {summary.total} 条 · {Number(recordingHours.toFixed(1))} 小时录音
             </p>
           )}
           <p className="my-2 text-sm text-secondary">
@@ -620,14 +767,12 @@ export function Memories({
             )
           )}
           {processing.state !== 'idle' && (
-            <ThinkingLabel
-              text={processing.state === 'queued' ? '等待记住…' : '正在记住…'}
-            />
+            <ThinkingLabel text={processingText(processing)} />
           )}
           {embedded && building && processing.state === 'idle' && (
             <p role="status">正在整理记忆…</p>
           )}
-          {memories.map((memory) => (
+          {attention.map((memory) => (
             <MemoryWork
               key={memory.source_id}
               memory={memory}
@@ -653,22 +798,13 @@ export function Memories({
             </p>
           )}
         </header>
-        {memories.some((memory) => memory.status === 'needs_speaker') && (
+        {summary.needs_speaker > 0 && firstSpeaker && (
           <Button
             variant="secondary"
             className="speaker-banner min-h-11 w-full text-left"
-            onClick={() =>
-              void view(
-                memories.find((memory) => memory.status === 'needs_speaker')!,
-              )
-            }
+            onClick={() => void view(firstSpeaker)}
           >
-            有{' '}
-            {
-              memories.filter((memory) => memory.status === 'needs_speaker')
-                .length
-            }{' '}
-            段录音需要确认哪位是你
+            有 {summary.needs_speaker} 段录音需要确认哪位是你
           </Button>
         )}
         {(!mobile || embedded) && (
@@ -770,14 +906,14 @@ export function Memories({
                           ) : memory.status === 'transcribing' ? (
                             `转写中 ${Math.min(100, Math.floor(((memory.transcribed_s ?? 0) / (memory.duration_s || 1)) * 100))}% · ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
                           ) : memory.status === 'processing' ? (
-                            <ThinkingLabel
-                              text={memory.media_sha ? '整理中' : '正在记住…'}
-                            />
+                            <ThinkingLabel text={processingLabel(memory)} />
                           ) : memory.status === 'remembered' ? (
                             `已加入 · 已记住 ${memory.remembered} 条`
                           ) : memory.status === 'nothing_found' ? (
                             memory.media_sha ? (
                               '已加入'
+                            ) : misquoted(memory) ? (
+                              '找到一些内容，但没能和原文对上'
                             ) : (
                               '没找到关于你的内容'
                             )
@@ -797,6 +933,17 @@ export function Memories({
                             className="min-h-11"
                           >
                             {memory.media_sha ? '重新转写' : '重试'}
+                          </Button>
+                        )}
+                        {memory.status === 'nothing_found' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => reextract(memory)}
+                            disabled={busy}
+                            className="min-h-11"
+                          >
+                            重新整理
                           </Button>
                         )}
                       </div>
@@ -864,6 +1011,17 @@ export function Memories({
                 }))}
               />
             </LayoutScope>
+            {memories.length < total && (
+              <Button
+                variant="ghost"
+                className="mt-3 min-h-11 w-full"
+                loading={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                再看 {Math.min(PAGE_SIZE, total - memories.length)} 条（还有{' '}
+                {total - memories.length} 条）
+              </Button>
+            )}
           </section>
         )}
         {mobile && !embedded && (

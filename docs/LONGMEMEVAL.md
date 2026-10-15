@@ -57,7 +57,7 @@ uv run twin --config twin.toml eval-longmemeval \
 
 `--limit` 默认 3 且必须大于零，`--offset` 默认 0 且必须非负；没有选中题目会报错。
 
-正式测试集：LongMemEval S 的 6 种题型各随机抽 5 题，共 30 题，种子 `longmemeval-v1`，用 `--per-type 5 --score` 运行。
+正式测试集：LongMemEval S 的 6 种题型各随机抽 10 题，共 60 题，种子 `longmemeval-v1`，用 `--per-type 10 --score` 运行。早期里程碑用每类 5 题（30 题，`--per-type 5`），两份是各自独立抽的，开发集都不会抽到。
 每种题型用 `random.Random(f"{seed}:{题型}")` 独立抽样，同样的数据和种子总是选中同样的题目，选中题目按源顺序运行；
 `per_type` 与种子计入配置指纹。成绩按题型分别报告，并保留"评委为主模型、不是官方 GPT-4o 评委"的边界。
 输出路径先于输入和后端验证，必须位于所有 git 仓库之外，包括符号链接解析后的路径。

@@ -532,7 +532,10 @@ def test_report_and_usage_do_not_serialize_custom_backend_names(
         assert "PRIVATE_JUDGE_ID" not in (out / name).read_text()
 
 
-def test_per_type_sample_is_seeded_balanced_and_in_source_order(tmp_path: Path) -> None:
+def test_per_type_sample_is_seeded_balanced_and_in_source_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(lm, "FORMAL_SIZES", (2,))
     items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(4)]
     cases = lm.load_dataset(dataset(tmp_path, items))
     selected = lm.select_cases(cases, per_type=2)
@@ -542,27 +545,28 @@ def test_per_type_sample_is_seeded_balanced_and_in_source_order(tmp_path: Path) 
     assert [order.index(c.input.question_id) for c in selected] == sorted(
         order.index(c.input.question_id) for c in selected
     )
-    with pytest.raises(ValueError):
-        lm.select_cases(cases, per_type=5)
+    for per_type in (3, 5):
+        with pytest.raises(ValueError):
+            lm.select_cases(cases, per_type=per_type)
 
 
 def test_dev_split_never_draws_formal_questions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(lm, "FORMAL_PER_TYPE", 2)
-    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(5)]
+    monkeypatch.setattr(lm, "FORMAL_SIZES", (1, 2))
+    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(6)]
     cases = lm.load_dataset(dataset(tmp_path, items))
-    formal = {c.input.question_id for c in lm.select_cases(cases, per_type=2)}
+    formal = {c.input.question_id for size in (1, 2) for c in lm.select_cases(cases, per_type=size)}
     dev = lm.select_cases(cases, per_type=3, split="dev")
     assert dev == lm.select_cases(cases, per_type=3, split="dev")
     assert not formal & {c.input.question_id for c in dev}
     assert all(sum(c.question_type == t for c in dev) == 3 for t in lm.QUESTION_TYPES)
-    for options in ({"per_type": 4, "split": "dev"}, {"split": "dev"}, {"per_type": 1, "split": "holdout"}):
+    for options in ({"per_type": 5, "split": "dev"}, {"split": "dev"}, {"per_type": 1, "split": "holdout"}):
         with pytest.raises(ValueError):
             lm.select_cases(cases, **options)  # type: ignore[arg-type]
 
 
 def test_types_focus_the_draw_on_some_question_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(lm, "FORMAL_PER_TYPE", 2)
-    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(6)]
+    monkeypatch.setattr(lm, "FORMAL_SIZES", (2, 3))
+    items = [item(f"{t}-{i}", t) for t in lm.QUESTION_TYPES for i in range(10)]
     cases = lm.load_dataset(dataset(tmp_path, items))
     for split in ("formal", "dev"):
         everything = lm.select_cases(cases, per_type=3, split=split)

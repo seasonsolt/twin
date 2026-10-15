@@ -28,9 +28,11 @@ def test_store_migration_and_reopen(tmp_path: Path) -> None:
     with sqlite3.connect(path) as db:
         db.executescript(storage._SCHEMA)
         db.execute("INSERT INTO p_meta VALUES ('identity:name', '本人')")
+        db.execute("INSERT INTO p_chunks VALUES ('ch_old', 'src_old')")
     for _ in range(2):
         with PersonaStore(path) as store:
             assert store.get_meta("identity:name") == "本人"
+            assert store.extraction_stats() == {"src_old": (1, None)}  # extracted before counts were kept
         with sqlite3.connect(path) as db:
             assert db.execute("PRAGMA user_version").fetchone()[0] == len(storage._MIGRATIONS)
     with PersonaStore(tmp_path / "new.db"):
@@ -47,7 +49,7 @@ def test_newer_and_failed_migration(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     with pytest.raises(sqlite3.Error):
         PersonaStore(path)
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute("PRAGMA user_version").fetchone()[0] == len(storage._MIGRATIONS) - 1
         assert db.execute("SELECT name FROM sqlite_master WHERE name='extra'").fetchone() is None
         assert db.execute("SELECT value FROM p_meta WHERE key='saved'").fetchone()[0] == "yes"
         db.execute("PRAGMA user_version=99")
@@ -247,8 +249,8 @@ def test_cli_reports_database_schema(tmp_path: Path, monkeypatch: pytest.MonkeyP
     config.write_text('db_path = "twin.db"\n')
     result = CliRunner().invoke(app, ["--config", str(config), "kernel", "status"])
     assert result.exit_code == 0, result.output
-    assert "schema：3" in result.output
-    assert KERNEL.schema == 2
+    assert f"schema：{len(storage._MIGRATIONS)}" in result.output
+    assert KERNEL.schema == len(storage._MIGRATIONS) - 1
 
 
 def test_failed_build_keeps_kernel(tmp_path: Path) -> None:
@@ -356,3 +358,63 @@ def test_cli_snapshots_and_restore(tmp_path: Path) -> None:
     with PersonaStore(db) as store:
         assert store.get_meta("identity:name") == "旧"
     assert any(p.name.endswith("before-restore.db") for p in storage.list_snapshots(db))
+
+
+def test_reviews_survive_a_prompt_upgrade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A new prompt re-extracts every chunk, so every candidate id changes; the person's reviews still follow the
+    traits, matched by the expressions they quote and their wording."""
+    import re
+
+    from twin.persona.items import PReview
+    from twin.persona.schema import ReviewStatus
+
+    wording = {
+        "old": {"回款": "做事先看回款", "跑步": "每周跑步三次", "开会": "开会先听别人说"},
+        "new": {"回款": "做事优先看回款", "跑步": "坚持每周跑步三次", "开会": "开会时先让别人说"},
+    }
+    version = "old"
+
+    def handler(system: str, user: str, schema: type) -> dict[str, object]:
+        if schema is profile.ExtractDraft:
+            found = re.findall(r"\[(\d+)\][^\n]*\n本人：([^\n]*)", user)
+            facet = {"回款": "2.1", "跑步": "2.1", "开会": "4.2"}
+            return {
+                "items": [
+                    {
+                        "facet_id": facet[key],
+                        "statement": wording[version][key],
+                        "quotes": [{"n": int(n), "quote": text}],
+                    }
+                    for n, text in found
+                    for key in facet
+                    if key in text
+                ]
+            }
+        if schema is profile.MergeDraft:
+            listed = re.findall(r"\[(pc_[0-9a-f]+)\][^：]*：(.*)", user)
+            return {"items": [{"statement": s, "candidate_ids": [i]} for i, s in listed]}
+        raise AssertionError(schema)
+
+    settings = Settings(db_path=tmp_path / "twin.db", target_name="本人")
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_note("我做事先看回款。\n\n我每周跑步三次。\n\n开会我习惯先听别人说。", settings))
+        profile.build_profile(store, FakeLLM(handler), settings)
+        by_text = {i.statement: i.item_id for i in store.list_items()}
+        at = "2026-10-14T10:00:00"
+        store.set_review(by_text["做事先看回款"], PReview(status=ReviewStatus.CONFIRMED, reviewed_at=at))
+        store.set_review(
+            by_text["每周跑步三次"], PReview(status=ReviewStatus.EDITED, statement="一周跑三次步", reviewed_at=at)
+        )
+        store.set_review(by_text["开会先听别人说"], PReview(status=ReviewStatus.REJECTED, reviewed_at=at))
+
+        version = "new"
+        monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, prompt="next"))
+        profile.build_profile(store, FakeLLM(handler), settings)
+        after = {i.extracted_statement or i.statement: i for i in store.list_items(include_rejected=True)}
+        assert set(after) == {"做事优先看回款", "坚持每周跑步三次", "开会时先让别人说"}
+        assert not set(by_text.values()) & {i.item_id for i in after.values()}  # every item is new
+        assert after["做事优先看回款"].review is ReviewStatus.CONFIRMED
+        assert after["坚持每周跑步三次"].review is ReviewStatus.EDITED
+        assert after["坚持每周跑步三次"].statement == "一周跑三次步"
+        assert after["开会时先让别人说"].review is ReviewStatus.REJECTED
+        assert len(store.reviews()) == 3

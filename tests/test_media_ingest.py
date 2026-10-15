@@ -87,7 +87,7 @@ def test_chunk_resume_finish_limits_and_csrf(client: TestClient, tmp_path: Path)
     assert wait_job(client, result["job_id"])["status"] == "done"
     assert client.post(path + "/finish", headers=HEADERS).json()["source_id"] == result["source_id"]
     assert client.get(path).json()["offset"] == len(data)
-    row = client.get("/api/persona/sources").json()[0]
+    row = client.get("/api/persona/sources").json()["items"][0]
     assert row["status"] == "needs_asr" and row["duration_s"] == 1
     folder = tmp_path / "media-sources" / row["media_sha"]
     assert (folder / "original.wav").read_bytes() == data
@@ -115,16 +115,51 @@ def test_large_stream_bypasses_json_cap_and_rolls_back(client: TestClient, tmp_p
     assert client.get(f"/api/uploads/{uid}").json()["offset"] == 0
 
 
-def test_cleanup_and_disk_resume(tmp_path: Path) -> None:
+def test_cleanup_and_disk_resume(client: TestClient, tmp_path: Path) -> None:
     uploads = Uploads(tmp_path)
     old = uploads.create(UploadBody(filename="a.mp4", size=5))
     uploads.append(old["id"], b"12")
     assert Uploads(tmp_path).load(old["id"])["offset"] == 2
     metadata, part = uploads.paths(old["id"])
+    (uploads.root / "notes.json").write_text("{}")
+    os.utime(uploads.root / "notes.json", (time.time() - 86401, time.time() - 86401))
     os.utime(metadata, (time.time() - 86401, time.time() - 86401))
-    fresh = uploads.create(UploadBody(filename="fresh.mov", size=MAX_MEDIA_SIZE))
+    # Creating an upload removes the ones untouched for a day, and leaves files that are not uploads alone.
+    response = client.post("/api/uploads", headers=HEADERS, json={"filename": "fresh.mov", "size": MAX_MEDIA_SIZE})
+    assert response.status_code == 200
     assert not metadata.exists() and not part.exists()
-    assert uploads.load(fresh["id"])["size"] == MAX_MEDIA_SIZE
+    assert (uploads.root / "notes.json").exists()
+    assert uploads.load(response.json()["id"])["size"] == MAX_MEDIA_SIZE
+
+
+def test_a_slow_chunk_does_not_hold_up_other_uploads(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    slow, other = create(client, b"x" * 4), create(client, b"y" * 4)
+    started, release = threading.Event(), threading.Event()
+    append = Uploads.append
+
+    def stalled(self: Uploads, upload_id: str, chunk: bytes) -> None:
+        if upload_id == slow:
+            started.set()
+            assert release.wait(5)
+        append(self, upload_id, chunk)
+
+    monkeypatch.setattr(Uploads, "append", stalled)
+    result: list[int] = []
+    sending = threading.Thread(
+        target=lambda: result.append(
+            client.put(f"/api/uploads/{slow}?offset=0", headers=HEADERS, content=b"xxxx").status_code
+        )
+    )
+    sending.start()
+    try:
+        assert started.wait(5)
+        assert client.put(f"/api/uploads/{other}?offset=0", headers=HEADERS, content=b"yyyy").json()["offset"] == 4
+        assert client.post(f"/api/uploads/{other}/finish", headers=HEADERS).status_code == 200
+    finally:
+        release.set()
+        sending.join(5)
+    assert result == [200]
+    assert client.get(f"/api/uploads/{slow}", headers=HEADERS).json()["offset"] == 4
 
 
 def test_dedupe_retry_transcript_and_delete(
@@ -134,7 +169,7 @@ def test_dedupe_retry_transcript_and_delete(
     wait_job(client, result["job_id"])
     duplicate = finish(client, wav_bytes(), "另一名字.wav")
     assert duplicate["source_id"] == result["source_id"] and not duplicate["new"]
-    assert len(client.get("/api/persona/sources").json()) == 1
+    assert len(client.get("/api/persona/sources").json()["items"]) == 1
 
     class FakeTranscriber:
         diarizes = True
@@ -241,7 +276,7 @@ def test_http_ingestion_requires_confirmation(client: TestClient, monkeypatch: p
     monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: transcriber)
     result = finish(client, wav_bytes())
     assert wait_job(client, result["job_id"])["status"] == "done"
-    row = client.get("/api/persona/sources").json()[0]
+    row = client.get("/api/persona/sources").json()["items"][0]
     assert row["status"] == "needs_speaker" and row["n_target"] == 0
     base = f"/api/persona/sources/{result['source_id']}"
     claim = client.get(base + "/speakers").json()
@@ -277,7 +312,7 @@ def test_transcript_paragraphs_and_timestamps() -> None:
 def test_single_media_worker_and_job_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = JobManager(4, describe_error)
     settings = Settings(db_path=tmp_path / "twin.db", asr=ASRSettings(provider="command", command="unused"))
-    ingestion = MediaIngestion(settings, jobs, lambda: None)
+    ingestion = MediaIngestion(settings, jobs, lambda: None, lambda: FakeLLM(lambda *_: {}))
     uploads = Uploads(tmp_path)
     started, release = threading.Event(), threading.Event()
     concurrent: list[int] = []
@@ -316,7 +351,7 @@ def test_no_asr_still_saved_without_ffmpeg(client: TestClient, monkeypatch: pyte
     monkeypatch.setattr("twin.web.uploads.extract_audio", missing)
     result = finish(client, wav_bytes())
     assert wait_job(client, result["job_id"])["status"] == "done"
-    assert client.get("/api/persona/sources").json()[0]["status"] == "needs_asr"
+    assert client.get("/api/persona/sources").json()["items"][0]["status"] == "needs_asr"
 
 
 def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -347,3 +382,36 @@ def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monk
     assert wait_job(client, new["job_id"])["status"] == "done"
     text = client.get(f"/api/persona/sources/{new['source_id']}/text").text
     assert "新转写" in text and "旧转写" not in text
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_transcript_is_proofread_before_speakers_are_claimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from twin.media.clean import Edits
+
+    proofread: list[str] = []
+
+    def handler(system: str, user: str, schema: type) -> dict[str, Any]:
+        if schema is not Edits:
+            return {"items": []}
+        proofread.append(user)
+        return {"edits": [{"id": 0, "text": "我们用限界上下文划分模块。"}]}
+
+    class FakeTranscriber:
+        diarizes = True
+
+        def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
+            return [Segment(start=0, end=1, text="我们用涨号上下文划分模块。")]
+
+    settings = Settings(db_path=tmp_path / "twin.db", max_workers=1, asr=ASRSettings(clean=enabled))
+    app = create_app(settings, llm_factory=lambda: FakeLLM(handler), embedder_factory=HashingEmbedder)
+    monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: FakeTranscriber())
+    with TestClient(app, base_url="http://localhost") as client:
+        result = finish(client, wav_bytes())
+        job = wait_job(client, result["job_id"])
+        assert job["status"] == "done"
+        text = client.get(f"/api/persona/sources/{result['source_id']}/text").text
+    assert len(proofread) == int(enabled)
+    assert bool([s for s in job["progress"] if "校对完成：修正 1 段" in s]) is enabled
+    assert ("限界上下文" if enabled else "涨号上下文") in text

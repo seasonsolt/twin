@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import re
 import secrets
 import shutil
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -24,6 +27,8 @@ from ..media.schema import default_avatar
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..util import private_directory
 from .jobs import JobManager
+
+logger = logging.getLogger(__name__)
 
 
 class NameBody(BaseModel):
@@ -63,7 +68,10 @@ class Personas:
         self.path = self.root / "personas.json"
         self.lock = threading.RLock()
         self.apps: dict[str, FastAPI] = {}
+        # Requests in flight per persona; guarded by its own lock, held only for a count, so a finishing request
+        # never waits for ``lock``. Counting up also takes ``lock``, which makes it atomic with deletion's check.
         self.requests: dict[str, int] = {}
+        self.requests_lock = threading.Lock()
         self.removing: set[str] = set()
         self.make_app: Callable[[str, Settings], FastAPI]
         self.on_removed: Callable[[str], None] = lambda _: None
@@ -86,32 +94,55 @@ class Personas:
         private_directory(self.root)
         AssetStore.write(self.path, json.dumps(self.data, ensure_ascii=False).encode())
 
-    def purge_trash(self) -> None:
+    def purge_trash(self) -> list[Path]:
+        """Forget personas deleted a week ago (under ``lock``); returns their directories, which the caller removes
+        with ``remove_trash`` after letting go of ``lock``, as deleting many files can take long."""
         expired = [
             entry
             for entry in self.data["personas"]
             if entry.get("deleted_at")
             and dt.datetime.fromisoformat(entry["deleted_at"]) + dt.timedelta(days=7) <= self.clock()
         ]
-        for entry in expired:
-            directory = self.root / "trash" / entry["trash_directory"]
-            if directory.exists():
-                shutil.rmtree(directory)
         if expired:
             self.data["personas"] = [entry for entry in self.data["personas"] if entry not in expired]
             self.save()
+        return [self.root / "trash" / entry["trash_directory"] for entry in expired]
 
-    def settings_for(self, persona_id: str) -> Settings:
+    @staticmethod
+    def remove_trash(directories: list[Path]) -> None:
+        for directory in directories:
+            try:
+                shutil.rmtree(directory)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning("could not remove expired trash %s", directory.name, exc_info=True)
+
+    def check_live(self, persona_id: str) -> None:
         if persona_id in self.removing or not any(
             p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]
         ):
             raise HTTPException(404, "分身不存在")
+
+    def directory(self, persona_id: str) -> Path:
+        """Where a live persona keeps its data, found without opening its database."""
+        self.check_live(persona_id)
+        return self._settings(persona_id, read_name=False).db_path.parent
+
+    def settings_for(self, persona_id: str) -> Settings:
+        self.check_live(persona_id)
+        return self._settings(persona_id)
+
+    def _settings(self, persona_id: str, *, read_name: bool = True) -> Settings:
+        """A persona's settings; without ``read_name``, its stored name is not read and ``target_name`` falls back
+        to 本人."""
         if persona_id == self.data["default"]:
             return self.settings.model_copy()
+        db_path = self.root / "personas" / persona_id / "twin.db"
         return self.settings.model_copy(
             update={
-                "db_path": self.root / "personas" / persona_id / "twin.db",
-                "target_name": stored_identity(self.root / "personas" / persona_id / "twin.db")[0] or "本人",
+                "db_path": db_path,
+                "target_name": (stored_identity(db_path)[0] if read_name else None) or "本人",
                 "target_aliases": [],
                 "avatar": self.settings.avatar.model_copy(
                     update={"image_path": None, "preset": default_avatar(persona_id)}
@@ -120,20 +151,40 @@ class Personas:
             }
         )
 
+    def enter(self, persona_id: str) -> None:
+        with self.lock, self.requests_lock:
+            self.requests[persona_id] = self.requests.get(persona_id, 0) + 1
+
+    def leave(self, persona_id: str) -> None:
+        with self.requests_lock:
+            self.requests[persona_id] -= 1
+
+    def in_flight(self, persona_id: str) -> int:
+        with self.requests_lock:
+            return self.requests.get(persona_id, 0)
+
     def application(self, persona_id: str) -> FastAPI:
         with self.lock:
-            settings = self.settings_for(persona_id)
-            if persona_id not in self.apps:
-                self.apps[persona_id] = self.make_app(persona_id, settings)
+            # Every request comes through here: only a persona's first request reads its database.
+            if persona_id in self.apps:
+                self.check_live(persona_id)
+            else:
+                self.apps[persona_id] = self.make_app(persona_id, self.settings_for(persona_id))
             return self.apps[persona_id]
 
     def view(self, entry: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+        self.check_live(entry["id"])
+        return self._view(entry, identity, self._settings(entry["id"], read_name=False), self.data["default"])
+
+    def _view(
+        self, entry: dict[str, Any], identity: dict[str, Any], settings: Settings, default: str
+    ) -> dict[str, Any]:
+        """Reads the persona's files; needs no ``lock`` given a copy of ``entry``, the persona counted as in flight."""
         persona_id = entry["id"]
-        settings = self.settings_for(persona_id)
         name, _ = stored_identity(settings.db_path)
         portrait = AssetStore(settings.db_path).path("portrait")
         with PersonaStore(settings.db_path) as store:
-            sources = len(store.list_sources())
+            sources = store.count_sources()
         return {
             **entry,
             "name": name or settings.target_name,
@@ -142,7 +193,7 @@ class Personas:
             else None,
             "avatar_preset": stored_avatar(settings.db_path, settings.avatar.preset),
             "sources": sources,
-            "is_default": persona_id == self.data["default"],
+            "is_default": persona_id == default,
             "public": bool(entry.get("public")),
             "can_manage": self.accessible(entry, identity),
         }
@@ -178,17 +229,33 @@ class Personas:
     def register(self, app: FastAPI) -> None:
         @app.get("/api/personas")
         def list_personas(request: Request) -> list[dict[str, Any]]:
+            identity = request.scope["twin_identity"]
+            # Only the registry is read under the lock; each persona's files are read after letting go of it, so
+            # requests to every persona do not wait for the listing. Each listed persona counts as in flight until
+            # its files are read: opening the database of one moved to the trash meanwhile would create it again.
             with self.lock:
-                self.purge_trash()
-                identity = request.scope["twin_identity"]
-                return [self.view(entry, identity) for entry in self.data["personas"] if self.visible(entry, identity)]
+                expired = self.purge_trash()
+                listed = [
+                    (dict(entry), self._settings(entry["id"], read_name=False))
+                    for entry in self.data["personas"]
+                    if self.visible(entry, identity)
+                ]
+                default = self.data["default"]
+                for entry, _ in listed:
+                    self.enter(entry["id"])
+            try:
+                self.remove_trash(expired)
+                return [self._view(entry, identity, settings, default) for entry, settings in listed]
+            finally:
+                for entry, _ in listed:
+                    self.leave(entry["id"])
 
         @app.get("/api/personas/trash")
         def list_trash(request: Request) -> list[dict[str, Any]]:
             with self.lock:
-                self.purge_trash()
+                expired = self.purge_trash()
                 identity = request.scope["twin_identity"]
-                return [
+                trash = [
                     {
                         "id": entry["id"],
                         "name": entry["name"],
@@ -200,25 +267,31 @@ class Personas:
                     for entry in self.data["personas"]
                     if entry.get("deleted_at") and self.accessible(entry, identity)
                 ]
+            self.remove_trash(expired)
+            return trash
 
         @app.post("/api/personas/{persona_id}/restore")
         def restore_persona(persona_id: str, request: Request) -> dict[str, Any]:
-            with self.lock:
-                self.purge_trash()
-                identity = request.scope["twin_identity"]
-                self.check_owner(persona_id, identity, deleted=True)
-                entry = next(p for p in self.data["personas"] if p["id"] == persona_id and p.get("deleted_at"))
-                directory = self.root / "personas" / persona_id
-                if directory.exists() or any(
-                    p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]
-                ):
-                    raise HTTPException(409, "分身 ID 已存在，无法恢复")
-                private_directory(directory.parent)
-                (self.root / "trash" / entry["trash_directory"]).rename(directory)
-                for key in ("deleted_at", "trash_directory", "name"):
-                    entry.pop(key)
-                self.save()
-                view = self.view(entry, identity)
+            expired: list[Path] = []
+            try:
+                with self.lock:
+                    expired = self.purge_trash()
+                    identity = request.scope["twin_identity"]
+                    self.check_owner(persona_id, identity, deleted=True)
+                    entry = next(p for p in self.data["personas"] if p["id"] == persona_id and p.get("deleted_at"))
+                    directory = self.root / "personas" / persona_id
+                    if directory.exists() or any(
+                        p["id"] == persona_id and not p.get("deleted_at") for p in self.data["personas"]
+                    ):
+                        raise HTTPException(409, "分身 ID 已存在，无法恢复")
+                    private_directory(directory.parent)
+                    (self.root / "trash" / entry["trash_directory"]).rename(directory)
+                    for key in ("deleted_at", "trash_directory", "name"):
+                        entry.pop(key)
+                    self.save()
+                    view = self.view(entry, identity)
+            finally:
+                self.remove_trash(expired)
             self.on_restored(persona_id)
             return view
 
@@ -271,7 +344,7 @@ class Personas:
                     raise HTTPException(400, "默认分身不能删除")
                 context = self.apps.get(persona_id)
                 if (
-                    self.requests.get(persona_id, 0)
+                    self.in_flight(persona_id)
                     or self.jobs.has_active(persona_id)
                     or (context is not None and not context.state.processing.close_if_idle())
                 ):
@@ -317,43 +390,57 @@ class PersonaMiddleware:
             )[0]
         management = path == "/api/personas" or path.startswith("/api/personas/")
         try:
-            with self.registry.lock:
-                if persona_id is not None and not management:
-                    scope["twin_visitor"] = self.registry.check_access(persona_id, identity, str(scope["method"]), path)
-                elif persona_id is not None:
-                    self.registry.check_owner(persona_id, identity, deleted=path.endswith("/restore"))
-                if management:
-                    context = None
-                else:
-                    if persona_id is None:
-                        persona_id = (
-                            self.registry.data["default"]
-                            if identity["admin"]
-                            else next(
-                                (
-                                    p["id"]
-                                    for p in self.registry.data["personas"]
-                                    if not p.get("deleted_at") and self.registry.accessible(p, identity)
-                                ),
-                                None,
-                            )
-                        )
-                    if persona_id is None:
-                        await JSONResponse({"detail": "先新建一个分身", "code": "no_persona"}, status_code=409)(
-                            scope, receive, send
-                        )
-                        return
-                    context = self.registry.application(persona_id)
-                    self.registry.requests[persona_id] = self.registry.requests.get(persona_id, 0) + 1
+            # The registry's thread lock can be held by a slow handler (listing every persona, emptying the trash);
+            # waiting for it here on the event loop would stall every other request.
+            if management:
+                if persona_id is not None:
+                    await run_in_threadpool(self.check_management, persona_id, identity, path)
+            else:
+                entered = await run_in_threadpool(self.enter, scope, identity, persona_id, path)
         except HTTPException as exc:
             await JSONResponse({"detail": exc.detail}, status_code=exc.status_code)(scope, receive, send)
             return
         if management:
             await self.app(scope, receive, send)
-        else:
-            assert context is not None and persona_id is not None
-            try:
-                await context(scope, receive, send)
-            finally:
-                with self.registry.lock:
-                    self.registry.requests[persona_id] -= 1
+            return
+        if entered is None:
+            await JSONResponse({"detail": "先新建一个分身", "code": "no_persona"}, status_code=409)(
+                scope, receive, send
+            )
+            return
+        context, persona_id = entered
+        try:
+            await context(scope, receive, send)
+        finally:
+            self.registry.leave(persona_id)
+
+    def check_management(self, persona_id: str, identity: dict[str, Any], path: str) -> None:
+        with self.registry.lock:
+            self.registry.check_owner(persona_id, identity, deleted=path.endswith("/restore"))
+
+    def enter(
+        self, scope: Scope, identity: dict[str, Any], persona_id: str | None, path: str
+    ) -> tuple[FastAPI, str] | None:
+        """The persona's route context, counted as in flight until ``leave``; None when there is no persona yet."""
+        registry = self.registry
+        with registry.lock:
+            if persona_id is not None:
+                scope["twin_visitor"] = registry.check_access(persona_id, identity, str(scope["method"]), path)
+            else:
+                persona_id = (
+                    registry.data["default"]
+                    if identity["admin"]
+                    else next(
+                        (
+                            p["id"]
+                            for p in registry.data["personas"]
+                            if not p.get("deleted_at") and registry.accessible(p, identity)
+                        ),
+                        None,
+                    )
+                )
+                if persona_id is None:
+                    return None
+            context = registry.application(persona_id)
+            registry.enter(persona_id)
+            return context, persona_id

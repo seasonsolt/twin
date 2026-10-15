@@ -927,7 +927,41 @@ def persona_sources(ctx: typer.Context) -> None:
                 f"原话 {memory.expressions_total}（本人 {memory.expressions_target} / "
                 f"他人 {memory.expressions_others}）  "
                 f"支撑档案 {memory.items_supported} 条  涉及：{facets}  {status}"
+                + (f"（{memory.nothing_found_reason}）" if memory.nothing_found_reason else "")
             )
+
+
+@persona_app.command("reextract")
+def persona_reextract(
+    ctx: typer.Context,
+    source_ids: Annotated[list[str] | None, typer.Argument(help="资料编号，可以多个")] = None,
+    nothing_found: Annotated[
+        bool, typer.Option("--nothing-found", help="加上所有已抽取过、但没有形成记忆的资料")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="分段数超过费用闸时确认")] = False,
+) -> None:
+    """让模型重新抽取指定资料：资料没变也重抽，下次构建时生效。"""
+    settings = _settings(ctx)
+    with _persona_store(settings) as store:
+        selected = list(dict.fromkeys(source_ids or []))
+        if missing := [sid for sid in selected if store.get_source(sid) is None]:
+            raise _fail(f"找不到资料：{'、'.join(missing)}")
+        if nothing_found:
+            memories = source_memories(store)
+            selected += [
+                sid
+                for sid, m in memories.items()
+                if m.build_status == "no_items" and m.chunks_extracted and sid not in selected
+            ]
+        if not selected:
+            raise _fail("没有要重新抽取的资料：请给出资料编号，或加 --nothing-found")
+        extracted = store.extraction_stats()
+        chunks = sum(extracted.get(sid, (0, None))[0] for sid in selected)
+        if chunks > settings.kernel.max_auto_rebuild_chunks and not yes:
+            raise _fail(f"将重抽 {len(selected)} 份资料的 {chunks} 个分段，超过费用闸；请确认后加 --yes")
+        for sid in selected:
+            store.reextract_source(sid)
+    _say(f"已标记 {len(selected)} 份资料（{chunks} 个分段）重新抽取，运行 twin persona build 生效")
 
 
 @persona_app.command("build")
@@ -955,6 +989,14 @@ def persona_build(ctx: typer.Context) -> None:
             f"资料 {report.sources} 份，分块 {report.chunks_total}（本次抽取 {report.chunks_extracted}），"
             f"候选 {report.candidates} 条，合并细项 {report.facets_merged} 个，档案条目 {report.items} 条"
         )
+        if report.chunks_extracted:
+            x = report.extraction
+            _say(
+                f"本次模型提炼 {x.returned} 条结论，保留 {x.kept} 条；丢弃：细项不可用 {x.off_facet} 条，"
+                f"没有可核对的引文 {x.unsupported} 条（引文对不上 {x.quotes_unmatched} 处、"
+                f"编号不存在 {x.quotes_misnumbered} 处、风格引用他人记述 {x.quotes_narrated_style} 处）"
+                + (f"；回复被截断后拆分重抽 {x.splits} 次" if x.splits else "")
+            )
         _say(report.change_summary())
         for facet_id, diff in sorted(report.facet_diffs.items()):
             if diff.added or diff.changed or diff.removed:
@@ -1478,7 +1520,7 @@ def _run_twin2k500(
 
 SUITE_SIZES = {
     "dev": {"lme": 3, "pm": 24, "pm2": 4, "t2k": 4},
-    "formal": {"lme": 5, "pm": 30, "pm2": 8, "t2k": 10},
+    "formal": {"lme": 10, "pm": 30, "pm2": 8, "t2k": 10},
 }
 
 
@@ -1790,6 +1832,87 @@ def eval_asr_command(
     for engine in card["engines"]:
         strict = engine["metrics"]["strict"]
         _say(f"{engine['engine']}: CER {100 * strict['cer']:.2f}%  RTF {engine['rtf']:.4f}")
+    _say(f"成绩单已写入 {out / 'scorecard.md'}。")
+
+
+@app.command("eval-asr-memory")
+def eval_asr_memory_command(
+    sessions: Annotated[Path, typer.Option("--sessions", help="AliMeeting 场次清单")],
+    base_cache: Annotated[Path, typer.Option("--base-cache", help="原 ASR 缓存 JSONL")],
+    clean_cache: Annotated[Path, typer.Option("--clean-cache", help="固定 L4 方案的清洗 JSONL")],
+    llm_config: Annotated[Path, typer.Option("--llm-config", help="仅读取 TOML 的 [llm]，不访问用户数据")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外输出目录")],
+    cache: Annotated[Path, typer.Option("--cache", help="仓库外模型响应缓存")],
+    public_alimeeting: Annotated[bool, typer.Option("--public-alimeeting", help="确认仅使用公开 AliMeeting")] = False,
+    workers: Annotated[int, typer.Option("--workers", min=1, max=6)] = 2,
+    one_target_per_session: Annotated[
+        bool, typer.Option("--one-target-per-session", help="按 l6-test-v1 SHA256 每个有 L5 目标的场次选一人")
+    ] = False,
+    limit: Annotated[int | None, typer.Option("--limit", min=1, help="仅用于 Eval 冒烟检查的人次数")] = None,
+) -> None:
+    """L6：用原生产抽取和合并比较 gold / ASR / 清洗记忆，并测量重复抽取及裁判噪声。"""
+    import tomllib
+
+    from .config import LLMSettings, Settings, make_llm
+    from .evals.asr_memory import run_memory_benchmark
+    from .evals.personal import ensure_output_directory
+
+    if not public_alimeeting:
+        raise typer.BadParameter("必须确认 --public-alimeeting；禁止发送私人录音或资料")
+    with _errors():
+        ensure_output_directory(out, allow_in_repo=False)
+        ensure_output_directory(cache, allow_in_repo=False)
+        config = LLMSettings.model_validate(tomllib.loads(llm_config.read_text())["llm"])
+        settings = Settings(target_name="本人", llm=config)
+        llm = make_llm(config.model_copy(update={"max_retries": 0}))
+        card = run_memory_benchmark(
+            manifest=sessions,
+            base_cache=base_cache,
+            clean_cache=clean_cache,
+            out=out,
+            cache=cache,
+            settings=settings,
+            llm=llm,
+            workers=workers,
+            limit=limit,
+            one_per_session=one_target_per_session,
+        )
+    _say(f"L6 已评分 {card['people']} 人次；成绩单：{out / 'scorecard.md'}")
+
+
+@app.command("eval-asr-session")
+def eval_asr_session_command(
+    sessions: Annotated[
+        Path, typer.Option("--sessions", help="整场清单 JSONL：id/audio/duration/reference/references")
+    ],
+    engines: Annotated[Path, typer.Option("--engines", help="引擎 TOML：name/command；第一个 [[engine]] 是基线")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的输出目录")],
+    cache: Annotated[Path | None, typer.Option("--cache", help="转写缓存目录，默认清单旁的 asr-cache/")] = None,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """整场语音识别评测：按 twin [asr] command 转写整场会议，给出切分、说话人和本人话语三层成绩；已缓存的不重跑。"""
+    from .evals.asr_session import load_session_engines, run_session_benchmark
+    from .evals.personal import ensure_output_directory
+
+    last: dict[str, int] = {}
+
+    def progress(name: str, done: int, total: int) -> None:
+        if done != last.get(name):
+            _say(f"{name}: {done}/{total}")
+        last[name] = done
+
+    with _errors():
+        cache_dir = cache if cache is not None else sessions.parent / "asr-cache"
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        ensure_output_directory(cache_dir, allow_in_repo=allow_in_repo)
+        card = run_session_benchmark(
+            sessions, load_session_engines(engines), out, cache_dir=cache_dir, progress=progress
+        )
+    for engine in card["engines"]:
+        cer = engine["segmentation"]["strict"]["cer"]["rate"]
+        der = engine["speakers"]["der_0.25"]["rate"]
+        cpcer = engine["speakers"]["strict"]["cpcer"]["rate"]
+        _say(f"{engine['engine']}: 整场 CER {100 * cer:.2f}%  DER {100 * der:.2f}%  cpCER {100 * cpcer:.2f}%")
     _say(f"成绩单已写入 {out / 'scorecard.md'}。")
 
 

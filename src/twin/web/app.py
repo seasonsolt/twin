@@ -272,7 +272,7 @@ def create_app(
             if path.is_file():
                 with PersonaStore(path):
                     pass
-    hub = WeComHub(settings, registry, backends)
+    hub = WeComHub(settings, registry, backends, jobs)
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
     registry.on_restored = lambda persona_id: anyio.from_thread.run(hub.persona_restored, persona_id)
     app.state.channels = hub
@@ -338,7 +338,7 @@ def create_app(
         @context.get("/api/status")
         def get_status() -> dict[str, Any]:
             with PersonaStore(resolved.db_path) as store:
-                counts = {"sources": len(store.list_sources()), "items": len(store.list_items())}
+                counts = {"sources": store.count_sources(), "items": store.count_items()}
                 egress = egress_status(resolved, external_only=True)
                 built = store.kernel_built()
                 scope = rebuild_scope(built, KERNEL)

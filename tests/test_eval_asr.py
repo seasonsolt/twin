@@ -195,3 +195,23 @@ def test_interrupted_cache_resumes_only_missing_items(tmp_path: Path, monkeypatc
     assert calls.read_text().split() == ["4", "2"]
     run_benchmark(manifest, [engine], tmp_path / "out", split="full", cache_dir=cache)
     assert calls.read_text().split() == ["4", "2"]
+
+
+def test_same_ids_on_other_audio_are_transcribed_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # AliMeeting's far and near manifests reuse clip ids for different recordings and share one cache directory.
+    texts = {f"u{i}": "预算" for i in range(3)}
+    (tmp_path / "far").mkdir()
+    (tmp_path / "near").mkdir()
+    far, near = _manifest(tmp_path / "far", texts), _manifest(tmp_path / "near", texts)
+    engine_root = tmp_path / "engines"
+    engine_root.mkdir()
+    (engine_root / "fake.py").write_text(FAKE_ENGINE)
+    monkeypatch.setattr(asr, "ENGINE_ROOT", engine_root)
+    monkeypatch.setitem(asr.KINDS, "fake", "fake.py")
+    refs, calls = tmp_path / "refs.json", tmp_path / "calls.txt"
+    refs.write_text(json.dumps(texts, ensure_ascii=False))
+    engine = Engine("exact", "fake", Path(sys.executable), None, {"refs": str(refs), "calls": str(calls)})
+    cache = tmp_path / "cache"
+    for manifest in (far, near, far, near):
+        run_benchmark(manifest, [engine], tmp_path / "out", split="full", cache_dir=cache)
+    assert calls.read_text().split() == ["3", "3"]

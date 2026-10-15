@@ -14,6 +14,7 @@ import { Memories, type Memory } from '../pages/Memories';
 import { api } from '../lib/api';
 import { useAuth } from '../stores/auth';
 import { useStatus } from '../stores/status';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('../lib/mediaUpload', async (original) => ({
   ...(await original<typeof import('../lib/mediaUpload')>()),
@@ -46,6 +47,7 @@ let state: {
   notice?: string;
   kernel_rebuild?: string;
   kernel_pending?: number;
+  progress?: { phase: 'extract' | 'merge'; done: number; total: number };
 };
 const v4 = { schema: 1, prompt: 'persona-v4', taxonomy: 'v1' };
 const v5 = { schema: 1, prompt: 'persona-v5', taxonomy: 'v1' };
@@ -66,7 +68,7 @@ beforeEach(() => {
   importError = false;
   vi.mocked(toast).mockClear();
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
-    if (url === '/api/persona/sources') return json(rows);
+    if (isSourcesUrl(url)) return json(sourcesPage(url, rows));
     if (url === '/api/persona/processing') return json(state);
     if (url === '/api/status')
       return json({
@@ -99,6 +101,10 @@ beforeEach(() => {
     if (url === '/api/persona/build') {
       state = { state: 'queued' };
       return json({ job_id: 'j1' }, 202);
+    }
+    if (url.endsWith('/reextract') && init.method === 'POST') {
+      state = { state: 'queued' };
+      return json({ chunks: 1 }, 202);
     }
     throw new Error(`Unexpected API ${url}`);
   });
@@ -264,7 +270,31 @@ it('renders all four memory statuses in plain words', async () => {
       status: 'nothing_found',
       remembered: 0,
     },
+    {
+      ...memory,
+      source_id: 's7',
+      title: '对不上的文档',
+      status: 'nothing_found',
+      remembered: 0,
+      extraction: { kept: 0, unsupported: 2 },
+    },
     { ...memory, source_id: 's4', title: '失败文档', status: 'failed' },
+    {
+      ...memory,
+      source_id: 's5',
+      title: '长文档',
+      status: 'processing',
+      chunks_done: 2,
+      chunks_total: 5,
+    },
+    {
+      ...memory,
+      source_id: 's6',
+      title: '读完的文档',
+      status: 'processing',
+      chunks_done: 3,
+      chunks_total: 3,
+    },
   ];
   mount();
   await loaded();
@@ -273,7 +303,10 @@ it('renders all four memory statuses in plain words', async () => {
   expect(list).toHaveTextContent('已记住 3 条');
   expect(list).toHaveTextContent('正在记住…');
   expect(list).toHaveTextContent('没找到关于你的内容');
+  expect(list).toHaveTextContent('找到一些内容，但没能和原文对上');
   expect(list).toHaveTextContent('处理失败');
+  expect(list).toHaveTextContent('正在记住… 2/5 段');
+  expect(list).toHaveTextContent('已读完，等待合并');
   expect(list.textContent).not.toMatch(
     /本人|他人|原话|支撑档案|细项|自述|行为/,
   );
@@ -281,6 +314,17 @@ it('renders all four memory statuses in plain words', async () => {
   await waitFor(() =>
     expect(
       fetcher.mock.calls.some(([url]) => url === '/api/persona/build'),
+    ).toBe(true),
+  );
+  const reextract = within(list).getAllByRole('button', { name: '重新整理' });
+  expect(reextract).toHaveLength(2); // only the two rows that found nothing
+  await waitFor(() => expect(reextract[1]).toBeEnabled());
+  fireEvent.click(reextract[1]);
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) => url === '/api/persona/sources/s7/reextract',
+      ),
     ).toBe(true),
   );
 });
@@ -333,6 +377,24 @@ it('polls processing every two seconds and stops at idle, with retry only on err
     await vi.advanceTimersByTimeAsync(2000);
   });
   expect(screen.getByRole('status')).toHaveTextContent('正在记住…');
+  state = {
+    state: 'running',
+    progress: { phase: 'extract', done: 812, total: 4300 },
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    '正在记住… 已读 812/4300 段',
+  );
+  state = {
+    state: 'running',
+    progress: { phase: 'merge', done: 4300, total: 4300 },
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(screen.getByRole('status')).toHaveTextContent('正在合并记忆…');
   state = { state: 'idle', last_error: '模型暂时不可用' };
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2000);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from typing import Any
 
@@ -11,7 +12,7 @@ from twin.config import Settings
 from twin.llm import FakeLLM, LLMError, LLMTruncated
 from twin.persona import profile as pf
 from twin.persona.dimensions import FACETS
-from twin.persona.items import item_as_of
+from twin.persona.items import ExtractStats, item_as_of
 from twin.persona.schema import EvidenceClass
 from twin.persona.sources import parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
@@ -190,6 +191,16 @@ def test_extract_and_merge_use_effective_reasoning_effort(
     assert all(call["effort"] == settings.llm.effort_extract for call in options)
 
 
+def test_a_build_records_the_model_calls_it_made(store: PersonaStore, settings: Settings) -> None:
+    llm = FakeLLM(handler)
+    report = pf.build_profile(store, llm, settings)
+    assert report.calls["calls"] == len(llm.calls) > 0 and report.calls["failures"] == 0
+    assert report.calls["transient"] == {} and report.calls["models"] == [llm.name]
+    assert json.loads(store.get_meta("build:last_calls") or "") == report.calls
+    assert pf.build_profile(store, llm, settings).calls["calls"] == 0
+    assert json.loads(store.get_meta("build:last_calls") or "") == report.calls
+
+
 def test_failed_chunk_is_reported_and_retried_next_build(store: PersonaStore, settings: Settings) -> None:
     def flaky(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
         if schema is pf.ExtractDraft and "对照组" in user:
@@ -216,6 +227,36 @@ def test_a_truncated_call_is_made_once_more(store: PersonaStore, settings: Setti
     assert report.failures == [] and report.chunks_extracted == 2 and report.items > 0
 
 
+@pytest.mark.usefixtures("gated_life_facets")
+def test_a_chunk_cut_off_twice_is_extracted_in_halves(settings: Settings) -> None:
+    plain = PersonaStore(":memory:")
+    plain.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    seen: list[int] = []
+
+    def long_replies(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is pf.ExtractDraft:
+            seen.append(len(entries(user)))
+            if len(entries(user)) > 1:
+                raise LLMTruncated("hit max_tokens")
+        return handler(system, user, schema)
+
+    report = pf.build_profile(plain, FakeLLM(long_replies), settings)
+    assert report.failures == [] and report.chunks_extracted == 1
+    assert seen == [2, 2, 1, 1]  # the whole chunk twice, then each half
+    assert report.extraction.splits == 1 and report.extraction.kept == 2
+    [chunk] = pf.chunks_for(plain, plain.list_sources()[0], pf.consented_facets(plain), settings)
+    candidates = plain.list_candidates()
+    assert {c.chunk_id for c in candidates} == {chunk.chunk_id}
+    assert len({c.candidate_id for c in candidates}) == len(candidates) == 2
+    assert sorted(c.statement for c in candidates) == ["他把回款放在第一位", "他追问对照组"]
+
+    def always_cut_off(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise LLMTruncated("hit max_tokens")
+
+    with pytest.raises(LLMTruncated):  # a single entry cannot be split further
+        pf.extract_chunk(FakeLLM(always_cut_off), chunk, pf.consented_facets(plain), settings)
+
+
 def test_chunks_split_at_the_size_limit(
     store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -224,6 +265,75 @@ def test_chunks_split_at_the_size_limit(
     chunks = pf.chunks_for(store, chat, pf.consented_facets(store), settings)
     assert len(chunks) == 2 and all(len(c.entries) == 1 for c in chunks)
     assert chunks[0].text.startswith("[1] 2026-09-01 · 群_2026-09\n语境：李四：这单签了，首付 10%\n本人：")
+
+
+@pytest.mark.usefixtures("gated_life_facets")
+def test_extraction_counts_what_it_dropped_and_why(store: PersonaStore, settings: Settings) -> None:
+    report = pf.build_profile(store, FakeLLM(handler), settings)
+    # Per entry the handler adds an unconsented 9.3 and a quote of entry 99; the chat adds one fabricated quote.
+    assert report.extraction == ExtractStats(
+        returned=15, kept=4, off_facet=5, unsupported=6, quotes_unmatched=1, quotes_misnumbered=5
+    )
+    q, chat = (s.source_id for s in store.list_sources())
+    assert store.extraction_stats() == {
+        q: (1, ExtractStats(returned=8, kept=2, off_facet=3, unsupported=3, quotes_misnumbered=3)),
+        chat: (
+            1,
+            ExtractStats(returned=7, kept=2, off_facet=2, unsupported=3, quotes_unmatched=1, quotes_misnumbered=2),
+        ),
+    }
+    assert pf.source_memories(store)[chat].nothing_found_reason == ""  # it supports memories
+
+
+def test_a_source_without_memories_says_why(settings: Settings) -> None:
+    def answer(found: list[dict[str, Any]]) -> Any:
+        return lambda system, user, schema: {"items": found} if schema is pf.ExtractDraft else {"items": []}
+
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    sid = store.list_sources()[0].source_id
+    memory = pf.source_memories(store)[sid]
+    assert (memory.chunks_extracted, memory.extraction, memory.nothing_found_reason) == (0, None, "")
+
+    pf.build_profile(store, FakeLLM(answer([])), settings)
+    memory = pf.source_memories(store)[sid]
+    assert memory.build_status == "no_items" and memory.chunks_extracted == 1
+    assert memory.nothing_found_reason == "模型没有从中提炼出结论"
+
+    store.put_source(parse_chat("群_2026-10.txt", CHAT.replace("09-0", "10-0"), settings))
+    sid = store.list_sources()[1].source_id
+    misquoted = [
+        {"facet_id": "4.2", "statement": "追问对照组", "quotes": [{"n": 2, "quote": "从来不看数据"}]},
+        {"facet_id": "4.2", "statement": "编号越界", "quotes": [{"n": 9, "quote": "对照组"}]},
+        {"facet_id": "0.0", "statement": "没有这个细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+    ]
+    pf.build_profile(store, FakeLLM(answer(misquoted)), settings)
+    assert pf.source_memories(store)[sid].nothing_found_reason == (
+        "模型提炼了 3 条结论，校验后全部丢弃：引文与原文对不上 1 处，引用了不存在的条目 1 处，细项不可用或结论为空 1 条"
+    )
+
+
+def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.pseudonymize_others = True
+    allowed = pf.consented_facets(store)
+    sources = store.list_sources()
+    per_source = [c for s in sources for c in pf.chunks_for(store, s, allowed, settings)]
+    assert "他人" in "".join(c.text for c in per_source)  # the view pseudonymised 李四 in the context
+    views: list[str | None] = []
+    original = pf.expression_view
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        views.append(kwargs.get("source_id"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pf, "expression_view", counted)
+    assert pf.corpus_chunks(store, sources, allowed, settings) == per_source
+    assert pf.pending_chunks(store, settings) == len(per_source)
+    report = pf.build_profile(store, FakeLLM(handler), settings)
+    assert report.chunks_total == len(per_source)
+    assert views == [None, None, None]
 
 
 def test_only_questionnaire_extraction_asks_to_cover_every_stated_answer(
@@ -269,6 +379,51 @@ def test_reviews_follow_items_through_a_re_merge(store: PersonaStore, settings: 
     store.set_review(old.item_id, review)
     store.replace_facet_items("2.1", [grown])
     assert store.reviews() == {"pi_grown": review}  # the old item's review moved, nothing left dangling
+
+
+def test_reviews_follow_re_extracted_items_by_evidence_and_wording() -> None:
+    from twin.persona.items import PersonaItem, PEvidence, PReview, carry_reviews
+    from twin.persona.schema import ReviewStatus, SourceKind
+
+    def item(item_id: str, statement: str, expressions: list[str], members: list[str]) -> PersonaItem:
+        evidence = [
+            PEvidence(
+                expression_id=e,
+                source_id="s1",
+                source_kind=SourceKind.DOCUMENT,
+                evidence_class=EvidenceClass.BEHAVIOR,
+                quote="原话",
+            )
+            for e in expressions
+        ]
+        return PersonaItem(
+            item_id=item_id, facet_id="2.1", statement=statement, evidence=evidence, member_candidate_ids=members
+        )
+
+    at = "2026-10-14T10:00:00"
+    confirmed = PReview(status=ReviewStatus.CONFIRMED, reviewed_at=at)
+    rejected = PReview(status=ReviewStatus.REJECTED, reviewed_at=at)
+    money = item("pi_money", "做事先看回款", ["e1"], ["pc_a"])
+    # Two traits drawn from the same expression: the wording decides which one continues the reviewed item.
+    paid = item("pi_paid", "做事优先看回款", ["e1"], ["pc_x"])
+    risk = item("pi_risk", "签约前先问风险", ["e1"], ["pc_y"])
+    assert carry_reviews([money], [risk, paid], {"pi_money": confirmed}) == {"pi_paid": confirmed}
+    # A similar wording quoting nothing the old item quoted is a different occasion, not a re-extraction.
+    elsewhere = item("pi_elsewhere", "做事先看回款", ["e9"], ["pc_z"])
+    assert carry_reviews([money], [elsewhere], {"pi_money": confirmed}) == {}
+    # An edit is matched by the person's wording as well as the extracted one.
+    edited = PReview(status=ReviewStatus.EDITED, statement="签约前先问风险", reviewed_at=at)
+    vague = item("pi_vague", "看重安全", ["e1"], ["pc_b"])
+    assert carry_reviews([vague], [paid, risk], {"pi_vague": edited}) == {"pi_risk": edited}
+    # Old items merged into one new item: the rejection wins, as with surviving candidates.
+    twin = item("pi_twin", "做事先看回款", ["e1"], ["pc_c"])
+    assert carry_reviews([money, twin], [paid], {"pi_money": confirmed, "pi_twin": rejected}) == {"pi_paid": rejected}
+    # A survivor keeps its review by candidates; nothing moves by wording while any candidate survives (a split).
+    grown = item("pi_grown", "做事先看回款", ["e1"], ["pc_a", "pc_new"])
+    assert carry_reviews([money], [grown, paid], {"pi_money": confirmed}) == {"pi_grown": confirmed}
+    both = item("pi_both", "做事先看回款", ["e1"], ["pc_a", "pc_d"])
+    half = item("pi_half", "做事先看回款", ["e1"], ["pc_a"])
+    assert carry_reviews([both], [half, paid], {"pi_both": confirmed}) == {}
 
 
 def test_statement_prompts_omit_pronoun_subjects() -> None:

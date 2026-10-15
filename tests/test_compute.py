@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.2.0", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.2.1", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -111,7 +111,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.2.0" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.2.1" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -318,10 +318,33 @@ def script():
 def test_script_pure_functions(script, tmp_path, capsys):
     audio = tmp_path / "audio.wav"
     audio.touch()
-    assert script.parse_request({"audio": str(audio), "language": "invalid"}) == (audio, "auto", False, None, [])
+    assert script.parse_request({"audio": str(audio), "language": "invalid"}) == (
+        audio,
+        "auto",
+        False,
+        None,
+        [],
+        {},
+        script.CLUSTER_THRESHOLD,
+    )
+    assert script.parse_request({"audio": str(audio), "cluster_threshold": 0.7})[-1] == 0.7
+    for bad in (True, "0.7", 0.05, 1.0):
+        with pytest.raises(ValueError, match="cluster_threshold"):
+            script.parse_request({"audio": str(audio), "cluster_threshold": bad})
     for request in ([], {}, {"audio": "relative.wav"}, {"audio": str(audio), "diarize": "yes"}):
         with pytest.raises(ValueError):
             script.parse_request(request)
+    # Several voices in one run; a missing voice is skipped like a missing `reference`.
+    request = {"audio": str(audio), "references": {"A": str(audio), "B": str(tmp_path / "missing.wav")}}
+    assert script.parse_request(request)[-2] == {"A": audio}
+    for references in (
+        ["x"],
+        {"A": 1},
+        {"": str(audio)},
+        {f"v{i}": str(audio) for i in range(script.MAX_REFERENCES + 1)},
+    ):
+        with pytest.raises(ValueError, match="references"):
+            script.parse_request({"audio": str(audio), "references": references})
     windows, hop, total = script.make_windows([[0, 3000]])
     assert windows == [(0, 0, 1500), (0, 750, 2250), (0, 1500, 3000)]
     assert (hop, total) == (750, 3000)
@@ -365,21 +388,36 @@ def test_script_hotwords_and_upload(script, tmp_path):
             script.parse_hotwords(bad)
     header = json.dumps({"diarize": True, "hotwords": ["魔搭"], "audio_bytes": 3, "audio_suffix": ".WAV"}).encode()
     body = header + b"\nabc"
-    audio, language, diarize, reference, hotwords = script.read_upload(io.BytesIO(body), len(body), tmp_path)
-    assert (audio.name, audio.read_bytes(), language, diarize, reference, hotwords) == (
+    audio, language, diarize, reference, hotwords, references, threshold = script.read_upload(
+        io.BytesIO(body), len(body), tmp_path
+    )
+    assert threshold == script.CLUSTER_THRESHOLD
+    assert (audio.name, audio.read_bytes(), language, diarize, reference, hotwords, references) == (
         "audio.wav",
         b"abc",
         "auto",
         True,
         None,
         ["魔搭"],
+        {},
     )
+    voices = [{"name": "A", "bytes": 2, "suffix": ".wav"}, {"name": "B", "bytes": 1}]
+    header = json.dumps({"audio_bytes": 3, "reference_bytes": 1, "references": voices, "cluster_threshold": 0.65})
+    body = header.encode() + b"\nabcRAAB"
+    (tmp_path / "multi").mkdir()
+    *_, reference, _, references, threshold = script.read_upload(io.BytesIO(body), len(body), tmp_path / "multi")
+    assert threshold == 0.65
+    assert reference.read_bytes() == b"R"
+    assert {name: path.read_bytes() for name, path in references.items()} == {"A": b"AA", "B": b"B"}
     for meta, data, length in (
         ({"audio_bytes": 3}, b"abc", 99),
         ({"audio_bytes": 0}, b"", None),
         ({"audio_bytes": True}, b"a", None),
         ({"audio_bytes": 3, "audio_suffix": "/../x"}, b"abc", None),
         ({"audio_bytes": 3, "reference_bytes": 2}, b"abc", None),
+        ({"audio_bytes": 3, "references": [{"name": "A", "bytes": 0}]}, b"abc", None),
+        ({"audio_bytes": 3, "references": [{"name": "A", "bytes": 1}, {"name": "A", "bytes": 1}]}, b"abcxy", None),
+        ({"audio_bytes": 3, "references": "A"}, b"abc", None),
     ):
         raw = json.dumps(meta).encode() + b"\n" + data
         with pytest.raises(ValueError):
@@ -402,10 +440,12 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         def __init__(self):
             self.calls = []
 
-        def transcribe(self, audio, diarize, reference, hotwords, progress):
+        def transcribe(self, audio, diarize, reference, hotwords, progress, references, cluster_threshold):
+            self.threshold = cluster_threshold
             self.calls.append(
                 (audio.read_bytes(), audio.suffix, diarize, reference and reference.read_bytes(), hotwords)
             )
+            self.voices = {name: path.read_bytes() for name, path in references.items()}
             progress(0.5)
             if audio.read_bytes() == b"boom":
                 raise RuntimeError("显存不足")
@@ -425,11 +465,19 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         result = remote.transcribe(url, request, hotwords=remote.read_hotwords(words))
         assert result["ok"] is True and result["segments"][0]["text"] == "你好"
         assert engine.calls[-1] == (b"RIFF-audio", ".wav", True, b"ref", ["邓郁松", "魔搭"])
+        assert engine.voices == {}
+        other = tmp_path / "other.wav"
+        other.write_bytes(b"other")
+        many = {**request, "references": {"A": str(reference), "B": str(other), "C": str(tmp_path / "gone.wav")}}
+        assert remote.transcribe(url, many)["ok"] is True
+        assert engine.voices == {"A": b"ref", "B": b"other"}
+        assert remote.transcribe(url, {**request, "cluster_threshold": 0.7})["ok"] is True
+        assert engine.threshold == 0.7
         assert "@@twin-progress 0.5000" in capfd.readouterr().err
         audio.write_bytes(b"boom")
         assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
         with urllib.request.urlopen(url + "/health") as response:
-            assert json.loads(response.read()) == {"ok": True, "version": "1.2.0", "device": "cuda", "busy": False}
+            assert json.loads(response.read()) == {"ok": True, "version": "1.2.1", "device": "cuda", "busy": False}
         bad = b'{"audio_bytes": 1, "hotwords": "x"}\nA'
         with pytest.raises(urllib.error.HTTPError) as rejected:
             urllib.request.urlopen(urllib.request.Request(url + "/transcribe", data=bad, method="POST"))
@@ -471,7 +519,7 @@ def test_remote_uploads_wav_as_lossless_flac(script, remote, tmp_path):
     class FakeEngine:
         device = "cpu"
 
-        def transcribe(self, audio, diarize, reference, hotwords, progress):
+        def transcribe(self, audio, diarize, reference, hotwords, progress, references, cluster_threshold):
             seen.append((audio.suffix, audio.stat().st_size))
             return {"ok": True, "segments": []}
 

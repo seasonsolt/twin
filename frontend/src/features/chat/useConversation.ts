@@ -56,6 +56,8 @@ function loadLegacy(key: string): Turn[] {
   }
 }
 const migrations = new Map<string, Promise<string>>();
+// The server keeps at most this many turns of an imported conversation; older ones are left out.
+const MAX_IMPORTED_TURNS = 500;
 function migrate(key: string, turns: Turn[], headers: HeadersInit) {
   const existing = migrations.get(key);
   if (existing) return existing;
@@ -68,7 +70,10 @@ function migrate(key: string, turns: Turn[], headers: HeadersInit) {
   }
   const pending = api<{ id: string }>('/api/conversations', {
     method: 'POST',
-    json: { turns, migration_id: migrationId },
+    json: {
+      turns: turns.slice(-MAX_IMPORTED_TURNS),
+      migration_id: migrationId,
+    },
     headers,
   })
     .then(({ id }) => {

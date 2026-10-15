@@ -201,6 +201,8 @@ class ASRSettings(BaseModel):
     timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
     egress: Literal["local", "external"] | None = None
+    # Proofread each media transcript with [llm] before speakers are claimed; sends the transcript text to [llm].
+    clean: bool = True
 
 
 class VisionSettings(BaseModel):
@@ -384,6 +386,9 @@ class Settings(BaseModel):
     # Evaluation judges (``[[judges]]`` tables). Empty: the main ``llm`` judges. Use 2-3 models of families
     # other than the twin's, since a judge tends to prefer output resembling its own.
     judges: list[LLMSettings] = Field(default_factory=list)
+    # Evaluation only (``[eval_chat_llm]``): the model the twin answers public benchmarks with, while profiles still
+    # build with ``llm``. Benchmarks never use the production ``[chat_llm]``.
+    eval_chat_llm: LLMSettings | None = None
     embed: EmbedSettings = Field(default_factory=EmbedSettings)
     pricing: dict[str, Price] = Field(default_factory=dict)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)

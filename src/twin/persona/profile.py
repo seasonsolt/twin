@@ -16,18 +16,20 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..llm import LLM, LLMError, failure_summary, retry_truncated
+from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
+from ..usage import call_totals, collect_calls
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
-from .items import PersonaCandidate, PersonaItem, PEvidence
+from .items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence
 from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
@@ -50,7 +52,7 @@ KERNEL_AWAITING_NOTICE = "记忆内核已升级，需要管理员确认后重新
 def stale_reason(store: PersonaStore) -> Literal["sources", "kernel", None]:
     built_at = store.get_meta("built_at")
     if built_at is None:
-        return "sources" if store.list_sources() else None
+        return "sources" if store.count_sources() else None
     changed_at = store.get_meta("sources_changed_at")
     if (
         changed_at
@@ -68,12 +70,8 @@ def profile_stale(store: PersonaStore) -> bool:
 
 def pending_chunks(store: PersonaStore, settings: Settings) -> int:
     allowed = consented_facets(store)
-    return sum(
-        not store.has_chunk(chunk.chunk_id)
-        for source in store.list_sources()
-        if source.media_status in (None, "ready")
-        for chunk in chunks_for(store, source, allowed, settings)
-    )
+    sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
+    return sum(not store.has_chunk(chunk.chunk_id) for chunk in corpus_chunks(store, sources, allowed, settings))
 
 
 @dataclass(frozen=True)
@@ -85,37 +83,67 @@ class SourceMemory:
     facets: list[dict[str, str]]
     contributes_nothing: bool
     build_status: Literal["not_built", "remembered", "no_items"]
+    chunks_extracted: int = 0
+    # Summed over the chunks extracted since counts were kept; None when there is none.
+    extraction: ExtractStats | None = None
+    # Why a built source supports no memory, when the counts tell; empty otherwise.
+    nothing_found_reason: str = ""
 
 
-def source_memories(store: PersonaStore) -> dict[str, SourceMemory]:
-    """Query current, non-rejected profile support via expression IDs, once per source and item."""
-    expressions = store.list_expressions()
-    owners = {e.expression_id: e.source_id for e in expressions}
-    totals: dict[str, int] = {}
-    targets: dict[str, int] = {}
+def nothing_found_reason(stats: ExtractStats | None) -> str:
+    if stats is None:
+        return ""
+    if stats.returned == 0:
+        return "模型没有从中提炼出结论"
+    if stats.kept:
+        return f"提炼出 {stats.kept} 条结论，但都没有留在当前档案里（可能已被否定）"
+    causes = [
+        f"{label} {n} 处"
+        for label, n in (
+            ("引文与原文对不上", stats.quotes_unmatched),
+            ("引用了不存在的条目", stats.quotes_misnumbered),
+            ("表达风格引用了他人记述", stats.quotes_narrated_style),
+        )
+        if n
+    ]
+    if stats.off_facet:
+        causes.append(f"细项不可用或结论为空 {stats.off_facet} 条")
+    return f"模型提炼了 {stats.returned} 条结论，校验后全部丢弃：" + "，".join(causes)
+
+
+def source_memories(store: PersonaStore, sources: Sequence[Source] | None = None) -> dict[str, SourceMemory]:
+    """Query current, non-rejected profile support via expression IDs, once per source and item, for ``sources``
+    (default: all of them). Read with SQL aggregates, so it stays cheap with tens of thousands of items."""
+    counts = store.expression_counts()
+    owners = store.expression_owners()
     supported: dict[str, set[str]] = {}
     facets: dict[str, set[str]] = {}
-    for e in expressions:
-        totals[e.source_id] = totals.get(e.source_id, 0) + 1
-        targets[e.source_id] = targets.get(e.source_id, 0) + int(e.is_target)
-    for item in store.list_items():
-        for source_id in {owners[e.expression_id] for e in item.evidence if e.expression_id in owners}:
-            supported.setdefault(source_id, set()).add(item.item_id)
-            facets.setdefault(source_id, set()).add(item.facet_id)
+    for item_id, facet_id, expression_id in store.item_support():
+        if (source_id := owners.get(expression_id)) is not None:
+            supported.setdefault(source_id, set()).add(item_id)
+            facets.setdefault(source_id, set()).add(facet_id)
     built_at = store.get_meta("built_at")
+    pending = store.pending_source_ids()
+    extracted = store.extraction_stats()
     result: dict[str, SourceMemory] = {}
-    for source in store.list_sources():
+    for source in store.list_sources() if sources is None else sources:
         sid = source.source_id
+        total, target = counts.get(sid, (0, 0))
         count = len(supported.get(sid, set()))
-        built = built_at is not None and store.get_meta(f"source_pending:{sid}") is None
+        built = built_at is not None and sid not in pending
+        chunks, stats = extracted.get(sid, (0, None))
+        reason = "" if not built or count else nothing_found_reason(stats) if target else "资料里没有识别出本人说的话"
         result[sid] = SourceMemory(
-            expressions_total=totals.get(sid, 0),
-            expressions_target=targets.get(sid, 0),
-            expressions_others=totals.get(sid, 0) - targets.get(sid, 0),
+            expressions_total=total,
+            expressions_target=target,
+            expressions_others=total - target,
             items_supported=count,
             facets=[{"facet_id": fid, "name": FACET_BY_ID[fid].name} for fid in sorted(facets.get(sid, set()))],
             contributes_nothing=count == 0,
             build_status="not_built" if not built else "remembered" if count else "no_items",
+            chunks_extracted=chunks,
+            extraction=stats,
+            nothing_found_reason=reason,
         )
     return result
 
@@ -159,7 +187,25 @@ def consented_facets(store: PersonaStore) -> frozenset[str]:
 
 
 def chunks_for(store: PersonaStore, source: Source, allowed: frozenset[str], settings: Settings) -> list[Chunk]:
-    entries = expression_view(store, settings, source_id=source.source_id, target_only=True)
+    return _chunk(source, expression_view(store, settings, source_id=source.source_id, target_only=True), allowed)
+
+
+def corpus_chunks(
+    store: PersonaStore, sources: Sequence[Source], allowed: frozenset[str], settings: Settings
+) -> list[Chunk]:
+    """The chunks of every source in ``sources``, cut from one view of the whole corpus: ``chunks_for`` per source
+    would read and pseudonymise every expression once per source."""
+    by_source: dict[str, list[Expression]] = {}
+    for e in expression_view(store, settings, target_only=True):
+        by_source.setdefault(e.source_id, []).append(e)
+    return [c for s in sources for c in _chunk(s, by_source.get(s.source_id, []), allowed)]
+
+
+def _render(entries: Sequence[Expression]) -> str:
+    return "\n\n".join(render_entry(n, e) for n, e in enumerate(entries, 1))
+
+
+def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str]) -> list[Chunk]:
     chunks: list[Chunk] = []
     current: list[Expression] = []
     size = 0
@@ -167,7 +213,7 @@ def chunks_for(store: PersonaStore, source: Source, allowed: frozenset[str], set
     def close() -> None:
         if not current:
             return
-        text = "\n\n".join(render_entry(n, e) for n, e in enumerate(current, 1))
+        text = _render(current)
         key = "\x1f".join([KERNEL.prompt, source.source_id, ",".join(sorted(allowed)), text])
         chunk_id = "ch_" + hashlib.sha256(key.encode()).hexdigest()[:16]
         chunks.append(Chunk(chunk_id, source, tuple(current), text))
@@ -259,7 +305,32 @@ def prompt_fingerprint() -> str:
     )
 
 
-def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> list[PersonaCandidate]:
+@dataclass(frozen=True)
+class Extraction:
+    candidates: list[PersonaCandidate]
+    stats: ExtractStats
+
+
+def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> Extraction:
+    """Extract a chunk; one whose reply is cut off twice is extracted again as two halves, down to single entries,
+    and a single entry that is still cut off fails the chunk. The halves' candidates keep the chunk's id, so the
+    chunk is stored, and retried after a failure, as one."""
+    try:
+        return _extract(llm, chunk, allowed, settings)
+    except LLMTruncated:
+        if len(chunk.entries) < 2:
+            raise
+    middle = len(chunk.entries) // 2
+    parts = [
+        extract_chunk(llm, Chunk(f"{chunk.chunk_id}/{n}", chunk.source, entries, _render(entries)), allowed, settings)
+        for n, entries in ((1, chunk.entries[:middle]), (2, chunk.entries[middle:]))
+    ]
+    stats = parts[0].stats + parts[1].stats
+    stats.splits += 1
+    return Extraction([c.model_copy(update={"chunk_id": chunk.chunk_id}) for p in parts for c in p.candidates], stats)
+
+
+def _extract(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings) -> Extraction:
     klass = evidence_class(chunk.source.kind)
     system = EXTRACT_SYSTEM.format(
         name=settings.target_name,
@@ -279,20 +350,27 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
         )
     )
     candidates: list[PersonaCandidate] = []
+    stats = ExtractStats(returned=len(draft.items))
     for i, item in enumerate(draft.items):
         facet = item.facet_id.strip()
         if facet not in allowed or not item.statement.strip():
+            stats.off_facet += 1
             continue
         evidence: list[PEvidence] = []
         for ref in item.quotes[:MAX_QUOTES]:
             if not 1 <= ref.n <= len(chunk.entries):
+                stats.quotes_misnumbered += 1
                 continue
             entry = chunk.entries[ref.n - 1]
             own_words = not entry.narrated or ref.own_words
             if not own_words and FACET_BY_ID[facet].dimension_id == STYLE_DIMENSION:
+                stats.quotes_narrated_style += 1
                 continue  # how he talks can only rest on his own words, never on a narrator's
             found = verify_quote(ref.quote, entry.text)
-            if found is None or any(e.expression_id == entry.expression_id and e.quote == found for e in evidence):
+            if found is None:
+                stats.quotes_unmatched += 1
+                continue
+            if any(e.expression_id == entry.expression_id and e.quote == found for e in evidence):
                 continue
             evidence.append(
                 PEvidence(
@@ -316,7 +394,10 @@ def extract_chunk(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Set
                     evidence=evidence,
                 )
             )
-    return candidates
+        else:
+            stats.unsupported += 1
+    stats.kept = len(candidates)
+    return Extraction(candidates, stats)
 
 
 # ---------------------------------------------------------------- merge
@@ -469,13 +550,20 @@ class BuildReport:
     chunks_total: int = 0
     chunks_extracted: int = 0
     chunks_dropped: int = 0
+    # What this build's extraction calls returned and dropped; ``candidates`` counts every stored one.
+    extraction: ExtractStats = field(default_factory=ExtractStats)
     candidates: int = 0
     facets_merged: int = 0
     items: int = 0
     failures: list[str] = field(default_factory=list)
+    # Sources with a chunk that failed to extract; the others are remembered when the merge succeeds.
+    failed_sources: set[str] = field(default_factory=set)
+    merge_failed: bool = False
     # Facets saved after a partial merge (see ``MergeDegraded``); they are merged again on the next build.
     degraded: list[str] = field(default_factory=list)
     facet_diffs: dict[str, FacetItemDiff] = field(default_factory=dict)
+    # The model calls this build made (``usage.call_totals``: attempts, retryable errors by cause, tokens, cost).
+    calls: dict[str, Any] = field(default_factory=dict)
 
     @property
     def items_added(self) -> int:
@@ -538,17 +626,48 @@ def build_profile(
 
     sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
     report.sources = len(sources)
-    chunks = [c for s in sources for c in chunks_for(store, s, allowed, settings)]
+    chunks = corpus_chunks(store, sources, allowed, settings)
     report.chunks_total = len(chunks)
     report.chunks_dropped = store.drop_stale_chunks({c.chunk_id for c in chunks})
     todo = [c for c in chunks if not store.has_chunk(c.chunk_id)]
+    pending = store.pending_versions([s.source_id for s in sources])
+    totals: dict[str, int] = {}
+    for chunk in chunks:
+        totals[chunk.source.source_id] = totals.get(chunk.source.source_id, 0) + 1
+    store.set_build_progress("extract", totals)
+    try:
+        with collect_calls() as rows:
+            _extract_and_merge(store, llm, settings, report, todo, allowed, safe_progress, totals)
+    finally:
+        store.clear_build_progress()
+        report.calls = {"started_at": built_at, "models": sorted({r.model for r in rows}), **call_totals(rows)}
+        if rows:  # a build with nothing to do keeps the last real build's record
+            store.set_meta("build:last_calls", json.dumps(report.calls, ensure_ascii=False))
+    # A build that learned nothing (every chunk failed) is not recorded; one that lost only some sources is.
+    if not report.merge_failed and (report.chunks_extracted or not report.failures):
+        settled = {sid: value for sid, value in pending.items() if sid not in report.failed_sources}
+        store.finish_build(built_at, sources_changed_at, settled, complete=not report.failures, kernel=KERNEL)
+    return report
 
-    def persist(chunk: Chunk, outcome: list[PersonaCandidate] | Exception) -> None:
+
+def _extract_and_merge(
+    store: PersonaStore,
+    llm: LLM,
+    settings: Settings,
+    report: BuildReport,
+    todo: list[Chunk],
+    allowed: frozenset[str],
+    safe_progress: Progress,
+    totals: dict[str, int],
+) -> None:
+    def persist(chunk: Chunk, outcome: Extraction | Exception) -> None:
         if isinstance(outcome, Exception):
             report.failures.append(f"extract {chunk.chunk_id}: {failure_summary(outcome)}")
+            report.failed_sources.add(chunk.source.source_id)
         else:
-            store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome)
+            store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome.candidates, outcome.stats)
             report.chunks_extracted += 1
+            report.extraction += outcome.stats
 
     run_parallel(
         lambda c: extract_chunk(llm, c, allowed, settings),
@@ -558,6 +677,7 @@ def build_profile(
         label=lambda c: f"persona extract {c.chunk_id}",
         on_result=persist,
     )
+    store.set_build_progress("merge", totals)
     candidates = [c for c in store.list_candidates() if c.facet_id in allowed]
     report.candidates = len(candidates)
     by_facet: dict[str, list[PersonaCandidate]] = {}
@@ -580,6 +700,7 @@ def build_profile(
             items = outcome.items
         elif isinstance(outcome, Exception):
             report.failures.append(f"merge {facet_id}: {failure_summary(outcome)}")
+            report.merge_failed = True
             return
         else:
             items = outcome
@@ -600,6 +721,3 @@ def build_profile(
         merge, jobs, settings.max_workers, safe_progress, label=lambda j: f"persona merge {j[0]}", on_result=save
     )
     report.items = len(store.list_items())
-    if not report.failures:
-        store.mark_profile_built(built_at, sources_changed_at, KERNEL)
-    return report

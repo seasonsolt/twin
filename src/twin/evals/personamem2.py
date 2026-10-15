@@ -25,6 +25,7 @@ from .persona_runtime import (
     PersonaRuntime,
     ProfileCache,
     SourceInput,
+    chat_model,
     in_order,
     limit_calls,
     preparation_key,
@@ -186,6 +187,31 @@ def _history(path: Path) -> tuple[Turn, ...]:
     return tuple(result)
 
 
+# The note limit for a self-introduction; persona descriptions run to a few thousand characters.
+MAX_INTRO_CHARS = 20000
+
+
+def persona_intro(prompt: str) -> str:
+    """The persona JSON of a system prompt as plain lines, one paragraph per field, so each field is found on its own;
+    text that is not such JSON is kept as it is."""
+    start = prompt.find("{")
+    try:
+        persona = json.loads(prompt[start:]) if start >= 0 else None
+    except json.JSONDecodeError:
+        persona = None
+    if not isinstance(persona, dict):
+        return prompt.strip()[:MAX_INTRO_CHARS]
+
+    def plain(value: Any) -> str:
+        if isinstance(value, dict):
+            return "; ".join(f"{str(k).replace('_', ' ')}: {plain(v)}" for k, v in value.items())
+        if isinstance(value, list):
+            return "; ".join(plain(v) for v in value)
+        return str(value)
+
+    return "\n\n".join(f"{str(k).replace('_', ' ')}: {plain(v)}" for k, v in persona.items())[:MAX_INTRO_CHARS]
+
+
 def options_for(row: Row) -> tuple[tuple[str, ...], str]:
     """Shuffle the four answers per question. Upstream seeds with Python's salted ``hash()``, which differs between
     processes, so a content-derived seed is used instead; the gold letter follows the shuffle."""
@@ -263,7 +289,13 @@ class TwinSystem:
 
     @staticmethod
     def sources(question: QuestionInput) -> tuple[SourceInput, ...]:
-        return (SourceInput("history", "chat", tuple((turn.role, turn.content, "") for turn in question.history)),)
+        """The conversation, and the persona description the history opens with as the user's self-introduction:
+        upstream hands every model that system prompt, and it describes the user, not a third speaker."""
+        intro = tuple(("", persona_intro(t.content), "") for t in question.history if t.role == "system")
+        chat = SourceInput(
+            "history", "chat", tuple((t.role, t.content, "") for t in question.history if t.role != "system")
+        )
+        return (SourceInput("persona", "intro", intro), chat) if intro else (chat,)
 
     def prepare(self, questions: Iterable[QuestionInput], workers: int) -> None:
         self.runtime.prepare(
@@ -341,7 +373,7 @@ def run_evaluation(
             try:
                 runtime = PersonaRuntime(
                     settings, limit_calls(make_llm(settings.llm), call_slots), make_embedder(settings.embed),
-                    profile_cache, grant_gated,
+                    profile_cache, grant_gated, chat_model(settings, call_slots),
                 )  # fmt: skip
                 cleanup.callback(runtime.close)
                 system = TwinSystem(runtime)

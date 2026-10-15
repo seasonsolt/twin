@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from difflib import SequenceMatcher
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -29,6 +30,23 @@ class PersonaCandidate(BaseModel):
     statement: str
     applies_when: str = ""
     evidence: list[PEvidence]
+
+
+class ExtractStats(BaseModel):
+    """What extraction calls returned and why conclusions were dropped: counts only, never text. Kept per chunk, so a
+    source that yields no memory can tell a model that found nothing from conclusions that failed verification."""
+
+    returned: int = 0  # conclusions the model returned
+    kept: int = 0  # conclusions kept as candidates
+    off_facet: int = 0  # dropped: a facet not offered, or an empty statement
+    unsupported: int = 0  # dropped: none of its quotes survived
+    quotes_unmatched: int = 0  # quotes not found in the entry they name
+    quotes_misnumbered: int = 0  # quotes naming an entry the chunk does not have
+    quotes_narrated_style: int = 0  # style quotes taken from someone else's narration
+    splits: int = 0  # times a chunk was halved because its reply was cut off twice
+
+    def __add__(self, other: ExtractStats) -> ExtractStats:
+        return ExtractStats(**{name: getattr(self, name) + getattr(other, name) for name in ExtractStats.model_fields})
 
 
 class PersonaItem(BaseModel):
@@ -78,20 +96,62 @@ def apply_review(item: PersonaItem, review: PReview | None) -> PersonaItem:
 
 def carry_reviews(old: list[PersonaItem], new: list[PersonaItem], reviews: dict[str, PReview]) -> dict[str, PReview]:
     """Reviews for a facet's re-merged items: a new item inherits the review of an old item whose candidates it all
-    still contains (the same trait, possibly with more evidence). A new item covering several reviewed old ones takes
-    a rejection first, then an edit, then a confirmation; anything else starts unreviewed."""
+    still contains (the same trait, possibly with more evidence). An old item none of whose candidates survive was
+    re-extracted (a new prompt changes every candidate id): its review moves to the one new item that best matches it
+    by quoted expressions and wording, if any is close enough. A new item covering several reviewed old ones takes a
+    rejection first, then an edit, then a confirmation; anything else starts unreviewed."""
     rank = {ReviewStatus.REJECTED: 0, ReviewStatus.EDITED: 1, ReviewStatus.CONFIRMED: 2}
-    carried: dict[str, PReview] = {}
+    by_candidate: dict[str, list[PersonaItem]] = {}
+    by_expression: dict[str, list[PersonaItem]] = {}
     for item in new:
-        members = set(item.member_candidate_ids)
-        inherited = [
-            reviews[o.item_id]
-            for o in old
-            if o.item_id in reviews and o.member_candidate_ids and set(o.member_candidate_ids) <= members
-        ]
-        if inherited:
-            carried[item.item_id] = min(inherited, key=lambda r: rank.get(r.status, 3))
-    return carried
+        for c in item.member_candidate_ids:
+            by_candidate.setdefault(c, []).append(item)
+        for e in {e.expression_id for e in item.evidence}:
+            by_expression.setdefault(e, []).append(item)
+    inherited: dict[str, list[PReview]] = {}
+    for o in old:
+        review = reviews.get(o.item_id)
+        if review is None:
+            continue
+        members = set(o.member_candidate_ids)
+        if members & by_candidate.keys():
+            heirs = by_candidate.get(o.member_candidate_ids[0], [])
+            for item in [i for i in heirs if members <= set(i.member_candidate_ids)]:
+                inherited.setdefault(item.item_id, []).append(review)
+        elif match := _re_extracted(o, review, by_expression):
+            inherited.setdefault(match.item_id, []).append(review)
+    return {i: min(found, key=lambda r: rank.get(r.status, 3)) for i, found in inherited.items()}
+
+
+# How close a re-extracted item must be to a reviewed old one to take its review: shared quoted expressions
+# (Jaccard) and wording similarity, weighted equally. Sharing no expression never matches.
+_RE_EXTRACTED_MIN = 0.35
+
+
+def _re_extracted(old: PersonaItem, review: PReview, by_expression: dict[str, list[PersonaItem]]) -> PersonaItem | None:
+    """The new item that best continues ``old``, among those quoting at least one of its expressions."""
+    quoted = {e.expression_id for e in old.evidence}
+    # The old wordings are the fixed second sequence, which SequenceMatcher indexes once and reuses.
+    matchers = [SequenceMatcher(None, b=w) for w in (old.statement, review.statement) if w]
+    best: tuple[float, str] | None = None
+    found: dict[str, PersonaItem] = {}
+    for expression in quoted:
+        for item in by_expression.get(expression, []):
+            found[item.item_id] = item
+    for item in found.values():
+        theirs = {e.expression_id for e in item.evidence}
+        overlap = len(quoted & theirs) / len(quoted | theirs)
+        floor = max(_RE_EXTRACTED_MIN, best[0] if best else 0.0)
+        wording = 0.0
+        for matcher in matchers:
+            matcher.set_seq1(item.statement)
+            # quick_ratio bounds ratio from above: skip the exact comparison when even the bound cannot win.
+            if (overlap + matcher.quick_ratio()) / 2 >= floor:
+                wording = max(wording, matcher.ratio())
+        score = (overlap + wording) / 2
+        if score >= floor and (best is None or (score, item.item_id) > best):
+            best = (score, item.item_id)
+    return found[best[1]] if best else None
 
 
 def item_as_of(item: PersonaItem, as_of: dt.date) -> PersonaItem | None:

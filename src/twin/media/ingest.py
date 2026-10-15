@@ -12,9 +12,9 @@ import time
 import wave
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Annotated, Protocol
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from .asr import SpeechRecognizer
 from .schema import TranscriptionRequest
@@ -47,6 +47,9 @@ class Speaker(BaseModel):
     similarity: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
+_SIMILARITY: TypeAdapter[float | None] = TypeAdapter(Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None)
+
+
 class Transcriber(Protocol):
     diarizes: bool
 
@@ -63,7 +66,11 @@ class CommandTranscriber:
         self.command, self.language = command, language
         self.diarize = False
         self.reference: Path | None = None
+        # Optional extra voices compared in the same run (asr-funasr 1.2.1+); older commands ignore them, leaving
+        # `similarities` empty.
+        self.references: dict[str, Path] = {}
         self.speakers: list[Speaker] = []
+        self.similarities: dict[str, dict[str, float | None]] = {}
 
     def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
         progress(0, duration)
@@ -72,7 +79,9 @@ class CommandTranscriber:
             request["diarize"] = True
         if self.reference:
             request["reference"] = str(self.reference.resolve())
-        self.speakers = []
+        if self.references:
+            request["references"] = {name: str(path.resolve()) for name, path in self.references.items()}
+        self.speakers, self.similarities = [], {}
         try:
             stdout = self._run(json.dumps(request), duration, progress)
             payload = json.loads(stdout.strip().splitlines()[-1])
@@ -82,6 +91,8 @@ class CommandTranscriber:
             self.speakers = [Speaker.model_validate(s) for s in payload.get("speakers", [])]
             if len({s.id for s in self.speakers}) != len(self.speakers):
                 raise ValueError()
+            if self.references:
+                self.similarities = _similarities(payload.get("speakers", []), set(self.references))
         except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
             raise RuntimeError("语音识别失败，请检查语音识别配置后重试") from None
         progress(duration, duration)
@@ -135,6 +146,16 @@ class CommandTranscriber:
         if process.returncode:
             raise subprocess.CalledProcessError(process.returncode, self.command)
         return "".join(output)
+
+
+def _similarities(rows: list[object], names: set[str]) -> dict[str, dict[str, float | None]]:
+    """Speaker id → {voice name: similarity} for the requested voices; speakers without the field are left out."""
+    result: dict[str, dict[str, float | None]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(values := row.get("similarities"), dict):
+            continue
+        result[str(row["id"])] = {name: _SIMILARITY.validate_python(values[name]) for name in names if name in values}
+    return result
 
 
 def silence_chunks(audio: Path, duration: float) -> list[tuple[float, float]]:

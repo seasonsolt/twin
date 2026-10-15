@@ -76,6 +76,16 @@ class Analysis(BaseModel):
         ]
 
 
+# Cosine similarity between the person's reference voice and a speaker cluster, measured with twin eval-asr-session on
+# AliMeeting Eval + Test (far-field meetings, headset reference voices). The best cluster is claimed from AUTO_CLAIM:
+# people absent from the meeting never passed 0.44. Diarization often splits one person into several clusters, so
+# further clusters are claimed too, but only from ALSO_CLAIM: small clusters of another person (overlapped speech)
+# reached 0.53. Unclaimed clusters from ALSO_SUGGEST are offered as "maybe you".
+AUTO_CLAIM = 0.5
+ALSO_CLAIM = 0.55
+ALSO_SUGGEST = 0.45
+
+
 def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: bool, diarized: bool = True) -> Analysis:
     if not any(s.text.strip() for s in segments):
         raise ValueError("没有识别到文字")
@@ -93,27 +103,26 @@ def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: boo
     ]
     ranked = sorted((s for s in speakers if s.similarity is not None), key=lambda s: s.similarity or 0, reverse=True)
     suggested = ranked[0].id if diarized and has_reference and ranked else None
-    chosen = None
-    if (
-        diarized
-        and len(speakers) == 1
-        and (not has_reference or (speakers[0].similarity is not None and speakers[0].similarity >= 0.6))
-    ):
-        chosen = speakers[0].id
-    if len(speakers) > 1 and suggested:
-        best = ranked[0].similarity or 0
-        runner = (ranked[1].similarity or 0) if len(ranked) > 1 else 0
-        if len(ranked) == len(speakers) and best >= 0.6 and best - runner >= 0.1 - 1e-9:
-            chosen = suggested
+    claimed: list[str] = []
+    if diarized and len(speakers) == 1 and not has_reference:
+        claimed = [speakers[0].id]
+    elif suggested and len(ranked) == len(speakers) and (ranked[0].similarity or 0) >= AUTO_CLAIM - 1e-9:
+        claimed = [suggested] + [s.id for s in ranked[1:] if (s.similarity or 0) >= ALSO_CLAIM - 1e-9]
     return Analysis(
         segments=segments,
         speakers=speakers,
-        claimed=[chosen] if chosen else [],
+        claimed=claimed,
         diarized=diarized,
-        also_suggested=[s.id for s in ranked if s.id != suggested and (s.similarity or 0) >= 0.6] if suggested else [],
-        confirmed=chosen is not None,
+        also_suggested=[
+            s.id
+            for s in ranked
+            if s.id != suggested and s.id not in claimed and (s.similarity or 0) >= ALSO_SUGGEST - 1e-9
+        ]
+        if suggested
+        else [],
+        confirmed=bool(claimed),
         suggested=suggested,
-        automatic=chosen is not None,
+        automatic=bool(claimed),
     )
 
 

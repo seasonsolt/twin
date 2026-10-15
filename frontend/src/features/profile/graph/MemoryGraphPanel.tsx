@@ -15,15 +15,81 @@ import { api } from '../../../lib/api';
 import { useMobile } from '../../../lib/useMobile';
 import { usePersonaId } from '../../../lib/usePersonaState';
 import { ItemCard } from '../ItemCard';
-import { useProfile } from '../useProfile';
+import type { ItemPage, ItemQuery, ItemSource, ProfileItem } from '../types';
+import { useProfile, type ReviewedList } from '../useProfile';
+import { itemsUrl, usePagedItems } from '../usePagedItems';
 import {
   buildMemoryGraph,
+  dimensionColorToken,
   endpointId,
-  type GraphSource,
   type GraphTwin,
   type MemoryNode,
 } from './buildMemoryGraph';
 import { useGraphPalette } from './rendering';
+
+// The graph draws at most this many items, shared out between the dimensions so each one shows its
+// best-supported items; search and the source drawer reach the rest and add what is opened.
+const GRAPH_ITEMS = 360;
+const MIN_PER_DIMENSION = 20;
+const SEARCH_LIMIT = 20;
+const SOURCE_PAGE = 50;
+
+function useGraphItems(dimensionIds: string[] | null) {
+  const personaId = usePersonaId();
+  const [items, setItems] = useState<ProfileItem[]>([]);
+  const [sources, setSources] = useState<Record<string, ItemSource>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const key = dimensionIds?.join(',') ?? null;
+  useEffect(() => {
+    if (key === null) return;
+    const ids = key ? key.split(',') : [];
+    const controller = new AbortController();
+    const each = Math.max(
+      MIN_PER_DIMENSION,
+      Math.floor(GRAPH_ITEMS / Math.max(1, ids.length)),
+    );
+    setLoading(true);
+    void Promise.all(
+      ids.map((id) =>
+        api<ItemPage>(
+          itemsUrl(
+            { dimension: [id], sort: 'evidence', with_sources: true },
+            each,
+          ),
+          {
+            signal: controller.signal,
+            headers: { 'X-Twin-Persona': personaId },
+          },
+        ),
+      ),
+    )
+      .then((pages) => {
+        if (controller.signal.aborted) return;
+        setItems(pages.flatMap((page) => page.items));
+        setSources(Object.assign({}, ...pages.map((page) => page.sources)));
+        setError('');
+      })
+      .catch((failure: unknown) => {
+        if (!controller.signal.aborted)
+          setError(failure instanceof Error ? failure.message : '条目加载失败');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [key, personaId, attempt]);
+  const replace = useCallback((item: ProfileItem) => {
+    setItems((rows) =>
+      item.review === 'rejected'
+        ? rows.filter((row) => row.item_id !== item.item_id)
+        : rows.map((row) => (row.item_id === item.item_id ? item : row)),
+    );
+  }, []);
+  const reload = useCallback(async () => setAttempt((n) => n + 1), []);
+  return { items, sources, loading, error, replace, reload };
+}
 
 const Graph3D = lazy(() => import('./Graph3D'));
 const Graph2D = lazy(() => import('./Graph2D'));
@@ -52,17 +118,14 @@ function supportsWebGL() {
 }
 
 export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
-  const personaId = usePersonaId();
   const profile = useProfile(true);
   const mobile = useMobile();
   const { reduced } = useMotionPreset();
   const palette = useGraphPalette();
   const [webgl] = useState(supportsWebGL);
   const [failed, setFailed] = useState(false);
-  const [sources, setSources] = useState<GraphSource[]>([]);
-  const [sourceError, setSourceError] = useState('');
-  const [attempt, setAttempt] = useState(0);
   const [query, setQuery] = useState('');
+  const [needle, setNeedle] = useState('');
   const [hiddenDimensions, setHiddenDimensions] = useState(new Set<string>());
   const [unreviewed, setUnreviewed] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -70,28 +133,40 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
   const [focus, setFocus] = useState<{ id: string; sequence: number } | null>(
     null,
   );
+  // Items opened from search or a source that the graph did not draw yet.
+  const [opened, setOpened] = useState<ProfileItem[]>([]);
   const host = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const summary = profile.summary;
+  const dimensionIds = useMemo(
+    () => summary?.dimensions.map((row) => row.dimension_id) ?? null,
+    [summary],
+  );
+  const drawn = useGraphItems(dimensionIds);
   useEffect(() => {
-    const controller = new AbortController();
-    void api<GraphSource[]>('/api/persona/sources', {
-      signal: controller.signal,
-      headers: { 'X-Twin-Persona': personaId },
-    })
-      .then((rows) => {
-        if (!controller.signal.aborted) {
-          setSources(rows);
-          setSourceError('');
-        }
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted)
-          setSourceError(
-            error instanceof Error ? error.message : '资料加载失败',
-          );
-      });
-    return () => controller.abort();
-  }, [personaId, attempt]);
+    const timer = setTimeout(
+      () => setNeedle(query.trim().toLocaleLowerCase()),
+      250,
+    );
+    return () => clearTimeout(timer);
+  }, [query]);
+  const shownDimensions = dimensionIds?.filter(
+    (id) => !hiddenDimensions.has(id),
+  );
+  // The chips and "only unreviewed" narrow search and the source drawer on the server as well.
+  const filters: ItemQuery = {
+    ...(shownDimensions && shownDimensions.length < (dimensionIds?.length ?? 0)
+      ? { dimension: shownDimensions }
+      : {}),
+    ...(unreviewed ? { review: 'unreviewed' } : {}),
+  };
+  const nothingShown = shownDimensions?.length === 0;
+  const searchQuery =
+    needle && !nothingShown
+      ? { ...filters, q: needle, with_sources: true }
+      : null;
+  // usePagedItems compares queries by value, so a fresh object each render does not re-read.
+  const search = usePagedItems(searchQuery, SEARCH_LIMIT);
   useEffect(() => {
     const element = host.current;
     if (!element) return;
@@ -113,24 +188,43 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
   }, [clear]);
+  const items = useMemo(() => {
+    const drawnIds = new Set(drawn.items.map((item) => item.item_id));
+    return [
+      ...drawn.items,
+      ...opened.filter((item) => !drawnIds.has(item.item_id)),
+    ];
+  }, [drawn.items, opened]);
+  const sources = useMemo(
+    () =>
+      Object.entries({ ...search.sources, ...drawn.sources }).map(
+        ([source_id, source]) => ({ source_id, ...source }),
+      ),
+    [drawn.sources, search.sources],
+  );
   const graph = useMemo(
-    () => buildMemoryGraph(profile.items, sources, twin),
-    [profile.items, sources, twin],
+    () => buildMemoryGraph(items, sources, twin),
+    [items, sources, twin],
   );
   const nodes = useMemo(
     () => new Map(graph.nodes.map((node) => [node.id, node])),
     [graph],
   );
-  const dimensions = graph.nodes.filter((node) => node.kind === 'dimension');
+  const dimensions = (summary?.dimensions ?? []).map((row) => ({
+    id: `dimension:${row.dimension_id}`,
+    dimensionId: row.dimension_id,
+    label: row.name,
+    colorToken: dimensionColorToken(row.dimension_id),
+  }));
   const eligibleItems = useMemo(
     () =>
-      profile.items.filter(
+      items.filter(
         (item) =>
           item.review !== 'rejected' &&
           !hiddenDimensions.has(item.dimension_id) &&
           (!unreviewed || item.review === 'unreviewed'),
       ),
-    [profile.items, hiddenDimensions, unreviewed],
+    [items, hiddenDimensions, unreviewed],
   );
   const visible = useMemo(() => {
     const ids = new Set([`twin:${twin.id}`]);
@@ -143,19 +237,10 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
     }
     return ids;
   }, [eligibleItems, twin.id]);
-  const needle = query.trim().toLocaleLowerCase();
+  const searching = !!searchQuery;
   const matches = useMemo(
-    () =>
-      needle
-        ? eligibleItems.filter(
-            (item) =>
-              item.statement.toLocaleLowerCase().includes(needle) ||
-              item.evidence.some((evidence) =>
-                evidence.quote.toLocaleLowerCase().includes(needle),
-              ),
-          )
-        : [],
-    [eligibleItems, needle],
+    () => (searching ? search.items : []),
+    [searching, search.items],
   );
   const adjacency = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -192,19 +277,37 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
     setSelected(node.id);
     fly(node.id);
   };
+  const open = (item: ProfileItem) => {
+    if (!items.some((row) => row.item_id === item.item_id))
+      setOpened((rows) => [...rows, item]);
+    const id = `item:${item.item_id}`;
+    setHovered(null);
+    setSelected(id);
+    fly(id);
+  };
   const selection =
     selected && visible.has(selected) ? nodes.get(selected) : undefined;
   const item = selection?.itemId
-    ? profile.items.find((item) => item.item_id === selection.itemId)
+    ? items.find((item) => item.item_id === selection.itemId)
     : undefined;
-  const supported =
-    selection?.kind === 'source'
-      ? eligibleItems.filter((item) =>
-          item.evidence.some(
-            (evidence) => evidence.source_id === selection.sourceId,
-          ),
-        )
-      : [];
+  const sourceId = selection?.kind === 'source' ? selection.sourceId : null;
+  const supported = usePagedItems(
+    sourceId && !nothingShown ? { ...filters, source_id: sourceId } : null,
+    SOURCE_PAGE,
+  );
+  const reviewed: ReviewedList = {
+    replace: (row) => {
+      drawn.replace(row);
+      search.replace(row);
+      supported.replace(row);
+      setOpened((rows) =>
+        row.review === 'rejected'
+          ? rows.filter((other) => other.item_id !== row.item_id)
+          : rows.map((other) => (other.item_id === row.item_id ? row : other)),
+      );
+    },
+    reload: drawn.reload,
+  };
   const graphProps = {
     graph,
     ...size,
@@ -221,6 +324,9 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
   };
   const twoD = <Graph2D {...graphProps} />;
   const hasItems = graph.nodes.some((node) => node.kind === 'item');
+  const total = (unreviewed ? summary?.unreviewed : summary?.total) ?? 0;
+  const itemsError = profile.summaryError || drawn.error;
+  const loadingItems = profile.loading || (drawn.loading && !hasItems);
   return (
     <div className="memory-graph-panel">
       <div className="memory-graph-controls" aria-label="图谱筛选">
@@ -228,7 +334,7 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
           className="memory-graph-search"
           onSubmit={(event) => {
             event.preventDefault();
-            if (matches[0]) click(nodes.get(`item:${matches[0].item_id}`)!);
+            if (matches[0]) open(matches[0]);
           }}
         >
           <input
@@ -239,8 +345,12 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
           />
           <output aria-live="polite">
             {needle
-              ? `${matches.length} 条匹配`
-              : `${eligibleItems.length} 条记忆`}
+              ? search.loading
+                ? '搜索中…'
+                : `${search.total} 条匹配`
+              : eligibleItems.length < total
+                ? `显示 ${eligibleItems.length} / ${total} 条记忆`
+                : `${eligibleItems.length} 条记忆`}
           </output>
         </form>
         <div className="memory-graph-chips">
@@ -279,21 +389,28 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
               <button
                 key={item.item_id}
                 type="button"
-                onClick={() => click(nodes.get(`item:${item.item_id}`)!)}
+                onClick={() => open(item)}
               >
                 {item.statement}
               </button>
             ))}
           </div>
         )}
-        {profile.itemsError ? (
+        {itemsError ? (
           <div className="memory-graph-notice" role="alert">
-            {profile.itemsError}
-            <Button onClick={() => void profile.refreshItems()}>重试</Button>
+            {itemsError}
+            <Button
+              onClick={() => {
+                void profile.refreshSummary();
+                void drawn.reload();
+              }}
+            >
+              重试
+            </Button>
           </div>
         ) : !hasItems ? (
           <div className="memory-graph-notice">
-            {profile.loading ? (
+            {loadingItems ? (
               <Skeleton className="h-24 w-64" />
             ) : (
               <EmptyState
@@ -347,17 +464,6 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
           点击节点查看
         </p>
       </div>
-      {sourceError && (
-        <p role="alert" className="text-danger">
-          {sourceError}{' '}
-          <Button
-            variant="ghost"
-            onClick={() => setAttempt((value) => value + 1)}
-          >
-            重试资料
-          </Button>
-        </p>
-      )}
       <Dialog
         open={!!item || selection?.kind === 'source'}
         popover={!mobile}
@@ -379,22 +485,24 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
             key={item.item_id}
             item={item}
             pending={profile.pending.has(item.item_id)}
-            onReview={profile.review}
+            onReview={(row, status, statement) =>
+              profile.review(row, status, statement, reviewed)
+            }
             kindLabels={profile.coverage?.kind_labels ?? {}}
           />
         )}
         {selection?.kind === 'source' && (
           <>
             <p className="mb-3 text-sm text-secondary">
-              {selection.date} · 支持 {supported.length} 条记忆
+              {selection.date} · 支持 {supported.total} 条记忆
             </p>
             <ul className="space-y-3" aria-label="资料支持的记忆">
-              {supported.map((item) => (
+              {supported.items.map((item) => (
                 <li key={item.item_id}>
                   <button
                     type="button"
                     className="w-full rounded-lg bg-surface p-3 text-left"
-                    onClick={() => click(nodes.get(`item:${item.item_id}`)!)}
+                    onClick={() => open(item)}
                   >
                     <span className="block break-words">{item.statement}</span>
                     <span className="text-xs text-secondary">
@@ -406,6 +514,29 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
                 </li>
               ))}
             </ul>
+            {supported.error && (
+              <p role="alert" className="mt-3 text-danger">
+                {supported.error}{' '}
+                <Button variant="ghost" onClick={() => void supported.reload()}>
+                  重试
+                </Button>
+              </p>
+            )}
+            {supported.hasMore && (
+              <Button
+                variant="ghost"
+                className="mt-3"
+                loading={supported.loading}
+                onClick={supported.loadMore}
+              >
+                再看{' '}
+                {Math.min(
+                  SOURCE_PAGE,
+                  supported.total - supported.items.length,
+                )}{' '}
+                条
+              </Button>
+            )}
           </>
         )}
       </Dialog>

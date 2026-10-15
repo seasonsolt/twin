@@ -54,7 +54,7 @@ def test_answer_turns_the_question_into_a_memory_and_queues_processing(web: tupl
     done = client.post(f"{url}/answer", json={"text": "报价只认实施费打包，不单列。"}).json()
     assert done["followup"]["status"] == "answered" and done["source_title"] == "回答：你怎么看远岚的报价"
 
-    sources = client.get("/api/persona/sources").json()
+    sources = client.get("/api/persona/sources").json()["items"]
     (source,) = [s for s in sources if s["source_id"] == done["source_id"]]
     assert source["kind_label"] == "访谈" and source["evidence_class"] == "self_report"
     assert client.get("/api/persona/processing").json()["state"] == "queued"

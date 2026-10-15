@@ -215,7 +215,7 @@ def test_schema_one_store_gains_the_ledger_table(tmp_path: Path) -> None:
         db.execute("PRAGMA user_version = 1")
     with PersonaStore(path) as store:
         assert store.get_meta("identity:name") == "张总"
-        assert store.list_ledger() == [] and store.schema_version() == 2
+        assert store.list_ledger() == [] and store.schema_version() == len(storage._MIGRATIONS)
 
 
 def test_restated_commitment_shares_its_thread_status(store: PersonaStore) -> None:

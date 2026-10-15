@@ -185,9 +185,9 @@ def test_identity_memories_and_questionnaire_are_isolated(web: TestClient) -> No
     a, b = create(web, "甲"), create(web, "乙")
     note = web.post("/api/persona/notes", json={"text": "甲的独有记忆"}, headers=headers(a)).json()
     source_id = note["source_id"]
-    assert len(web.get("/api/persona/sources", headers=headers(a)).json()) == 1
-    assert web.get("/api/persona/sources", headers=headers(b)).json() == []
-    assert web.get("/api/persona/sources").json() == []
+    assert len(web.get("/api/persona/sources", headers=headers(a)).json()["items"]) == 1
+    assert web.get("/api/persona/sources", headers=headers(b)).json()["items"] == []
+    assert web.get("/api/persona/sources").json()["items"] == []
     assert web.get(f"/api/persona/sources/{source_id}/text", headers=headers(b)).status_code == 404
     assert web.get("/api/identity?persona=" + a).json()["name"] == "甲"
     assert web.get("/api/identity?persona=" + a, headers=headers(b)).json()["name"] == "乙"
@@ -353,10 +353,10 @@ def test_uploads_and_ingestion_jobs_keep_their_persona(web: TestClient, monkeypa
         assert started.wait(2)
         assert web.delete(f"/api/personas/{a}", headers=CSRF).status_code == 409
         assert web.get("/api/jobs", headers=headers(b)).json() == []
-        assert web.get("/api/persona/sources", headers=headers(b)).json() == []
+        assert web.get("/api/persona/sources", headers=headers(b)).json()["items"] == []
         release.set()
         assert registry(web).jobs.wait(accepted["job_id"], 5)
-        source = web.get("/api/persona/sources", headers=headers(a)).json()[0]
+        source = web.get("/api/persona/sources", headers=headers(a)).json()["items"][0]
         assert source["media_status"] == "ready"
         assert "测试转写" in web.get(f"/api/persona/sources/{source['source_id']}/text", headers=headers(a)).text
         original = registry(web).settings_for(a).db_path.parent / "media-sources" / source["media_sha"] / "original.mp3"
@@ -472,7 +472,7 @@ def test_delete_and_restore_preserve_all_persona_data(web: TestClient, tmp_path:
         assert restored.status_code == 200 and restored.json()["name"] == "保留的分身"
         assert reopened.get("/api/personas/trash").json() == []
         assert len(reopened.get("/api/personas").json()) == 2
-        assert len(reopened.get("/api/persona/sources", headers=headers(persona)).json()) == 1
+        assert len(reopened.get("/api/persona/sources", headers=headers(persona)).json()["items"]) == 1
     assert not trashed.exists()
     for folder in ("assets", "media-cache", "media-sources", "uploads"):
         assert (settings.db_path.parent / folder / "sentinel").read_bytes() == b"intact"

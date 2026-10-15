@@ -21,6 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from contextvars import copy_context
 from dataclasses import dataclass, field
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 from pydantic import ValidationError
@@ -29,6 +31,7 @@ from ..config import Settings
 from ..embed import Embedder, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
+from .connect import connect
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
@@ -48,7 +51,7 @@ from .schema import (
     ReviewStatus,
     SourceKind,
 )
-from .sources import expression_view
+from .sources import ExpressionView
 from .store import PersonaStore
 from .style import extreme_rate
 from .when import time_window
@@ -129,13 +132,16 @@ def expression_text(e: Expression) -> str:
     return _clip(f"{e.context}\n{e.text}" if e.context else e.text, 1000)
 
 
-def others_view(store: PersonaStore, settings: Settings, until: dt.date | None = None) -> dict[str, Expression]:
-    """What other people said to the person, in the same privacy view as the person's own words."""
-    sources = {s.source_id: s for s in store.list_sources()}
+def others_view(
+    store: PersonaStore, settings: Settings, until: dt.date | None = None, view: ExpressionView | None = None
+) -> dict[str, Expression]:
+    """What other people said to the person, in the same privacy view as the person's own words; ``view``, when
+    given, is that view already read from ``store``."""
+    view = view or ExpressionView(store, settings)
     return {
         e.expression_id: e
-        for e in expression_view(store, settings, until=until)
-        if not e.is_target and sources[e.source_id].media_status in (None, "ready")
+        for e in view.select(until=until)
+        if not e.is_target and view.sources[e.source_id].media_status in (None, "ready")
     }
 
 
@@ -150,12 +156,11 @@ def index_persona(
     new or changed, drop what is gone; a different embedding model rebuilds a namespace. Returns texts embedded
     per namespace. Raw corpus text must not be sent to an external embedding service when privacy is enabled."""
     fingerprint = embedder_fingerprint(embedder)
+    view = ExpressionView(store, settings)
     wanted = {
         ITEMS_NS: {i.item_id: item_text(i) for i in store.list_items()},
-        EXPRESSIONS_NS: {
-            e.expression_id: expression_text(e) for e in expression_view(store, settings, target_only=True)
-        },
-        OTHERS_NS: {ref: _clip(e.text, 1000) for ref, e in others_view(store, settings).items()},
+        EXPRESSIONS_NS: {e.expression_id: expression_text(e) for e in view.select(target_only=True)},
+        OTHERS_NS: {ref: _clip(e.text, 1000) for ref, e in others_view(store, settings, view=view).items()},
     }
     embedded: dict[str, int] = {}
     for namespace, docs in wanted.items():
@@ -195,6 +200,8 @@ class PersonaContext:
     derived: list[str] = field(default_factory=list)
     # Records stating the asked item, in the order they were said, for questions about the present or latest state.
     located: list[str] = field(default_factory=list)
+    # Records joined through a shared name, time, place or person to give the asked item (see ``connect``).
+    connected: list[str] = field(default_factory=list)
     # Share of the person's graded questionnaire answers at the strongest end (see ``style``); None when too few.
     extreme_rate: float | None = None
     # What other people said to the person; citable, but never the person's own view, so never trusted.
@@ -226,19 +233,24 @@ def ledger_ref(entry: LedgerEntry) -> str:
     return LEDGER_PREFIX + entry.entry_id
 
 
-def _visible_items(store: PersonaStore, settings: Settings, as_of: dt.date | None) -> list[PersonaItem]:
+def _visible_items(
+    store: PersonaStore, settings: Settings, as_of: dt.date | None, view: ExpressionView | None = None
+) -> list[PersonaItem]:
+    """``view``, when given, is the privacy view already read from ``store``."""
     items = store.list_items()
     if as_of is not None:
         items = [t for i in items if (t := item_as_of(i, as_of)) is not None]
+    view = view or ExpressionView(store, settings)
+    stored = {e.expression_id: e for e in view.corpus}
     # Evidence quotes are expression text too. A profile built with privacy disabled may
     # contain raw quotes; use the same boundary view, which also protects quotes already containing codes.
     quotes: list[Expression] = []
     for item in items:
         for ev in item.evidence:
-            entry = store.get_expression(ev.expression_id)
+            entry = stored.get(ev.expression_id)
             if entry is not None:
                 quotes.append(entry.model_copy(update={"text": ev.quote}))
-    viewed = expression_view(store, settings, expressions=quotes)
+    viewed = view.select(expressions=quotes)
     by_quote = {(raw.expression_id, raw.text): view.text for raw, view in zip(quotes, viewed, strict=True)}
     return [
         item.model_copy(
@@ -262,6 +274,36 @@ def _rrf(*rankings: list[str]) -> list[tuple[str, float]]:
     return sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
 
 
+class _Corpus[T]:
+    """The stored vectors of one namespace and a keyword index over ``candidates``, built once and ranked against
+    as many times as a retrieval needs."""
+
+    def __init__(
+        self, vectors: tuple[list[str], np.ndarray], candidates: dict[str, T], text: Callable[[T], str]
+    ) -> None:
+        self.vectors, self.candidates, self.text = vectors, candidates, text
+        self.bm25 = BM25({ref: text(candidate) for ref, candidate in candidates.items()})
+
+    def subset(self, candidates: dict[str, T]) -> _Corpus[T]:
+        """The same vectors with keywords weighted within ``candidates`` alone."""
+        return _Corpus(self.vectors, candidates, self.text)
+
+    def rank(self, queries: Sequence[tuple[str, np.ndarray]], k: int) -> list[tuple[T, float]]:
+        """RRF over a vector and a keyword ranking for each query."""
+        if not self.candidates:
+            return []
+        ids, matrix = self.vectors
+        rankings: list[list[str]] = []
+        for query, vector in queries:
+            if ids:
+                sims = matrix @ vector
+                order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in self.candidates)
+                rankings.append([ref for _, ref in reversed(order)])
+            scores = self.bm25.scores(query)
+            rankings.append(sorted(scores, key=lambda ref: (-scores[ref], ref)))
+        return [(self.candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
+
+
 def _rank[T](
     store: PersonaStore,
     namespace: str,
@@ -273,22 +315,30 @@ def _rank[T](
     """RRF over a vector and a keyword ranking for each query."""
     if not candidates:
         return []
-    ids, matrix = store.get_vectors(namespace)
-    bm25 = BM25({ref: text(candidate) for ref, candidate in candidates.items()})
-    rankings: list[list[str]] = []
-    for query, vector in queries:
-        if ids:
-            sims = matrix @ vector
-            order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in candidates)
-            rankings.append([ref for _, ref in reversed(order)])
-        scores = bm25.scores(query)
-        rankings.append(sorted(scores, key=lambda ref: (-scores[ref], ref)))
-    return [(candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
+    return _Corpus(store.get_vectors(namespace), candidates, text).rank(queries, k)
 
 
 def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref: Callable[[T], str]) -> None:
     seen = {ref(x) for x, _ in ranked}
     ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
+
+
+async def off_loop[T](fn: Callable[[], T], discard: Callable[[T], object] | None = None) -> T:
+    """``fn()`` in a worker thread. A caller cancelled meanwhile still waits for it: ``fn`` may be using a SQLite
+    store that the caller closes as soon as it unwinds. ``discard`` disposes of a result nobody will receive."""
+    work = asyncio.ensure_future(asyncio.to_thread(fn))
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        [result] = await asyncio.gather(work, return_exceptions=True)
+        if discard is not None and not isinstance(result, BaseException):
+            discard(result)
+        raise
+
+
+async def open_store_off_loop(path: Path) -> PersonaStore:
+    """A store opened off the event loop; one opened for a caller cancelled meanwhile is closed again."""
+    return await off_loop(partial(PersonaStore, path), PersonaStore.close)
 
 
 def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:
@@ -337,37 +387,26 @@ class PersonaChat:
         # Start network embedding while assembling the persona's stable material.
         with ThreadPoolExecutor(max_workers=1) as pool:
             embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
-            items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of)}
-            expressions = {
-                e.expression_id: e for e in expression_view(self.store, self.settings, target_only=True, until=as_of)
-            }
-            others = others_view(self.store, self.settings, until=as_of)
+            # One read of the corpus serves the evidence quotes, the person's own words and other people's.
+            view = ExpressionView(self.store, self.settings)
+            items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of, view)}
+            expressions = {e.expression_id: e for e in view.select(target_only=True, until=as_of)}
+            others = others_view(self.store, self.settings, until=as_of, view=view)
             vectors = embedding.result()
         queries = list(zip(main, vectors[: len(main)], strict=True))
-        ranked_items = _rank(self.store, ITEMS_NS, queries, items, item_text, K_ITEMS)
+        # Each namespace's vectors and keyword index are loaded once and shared by every ranking below.
+        item_corpus = _Corpus(self.store.get_vectors(ITEMS_NS), items, item_text)
+        expr_corpus = _Corpus(self.store.get_vectors(EXPRESSIONS_NS), expressions, expression_text)
+        ranked_items = item_corpus.rank(queries, K_ITEMS)
         k_expressions = K_EXPRESSIONS_SPAN if needs_derivation(query) else K_EXPRESSIONS
-        ranked_expr = _rank(self.store, EXPRESSIONS_NS, queries, expressions, expression_text, k_expressions)
+        ranked_expr = expr_corpus.rank(queries, k_expressions)
         window = time_window(query, today or as_of or dt.date.today())
         if window is not None:
             within = {ref: e for ref, e in expressions.items() if e.date and window[0] <= e.date <= window[1]}
-            _add_new(
-                ranked_expr,
-                _rank(self.store, EXPRESSIONS_NS, queries, within, expression_text, K_WINDOW),
-                lambda e: e.expression_id,
-            )
+            _add_new(ranked_expr, expr_corpus.subset(within).rank(queries, K_WINDOW), lambda e: e.expression_id)
         for alternative in zip(alternatives, vectors[len(main) :], strict=True):
-            _add_new(
-                ranked_items,
-                _rank(self.store, ITEMS_NS, [alternative], items, item_text, K_ALTERNATIVE_ITEMS),
-                lambda i: i.item_id,
-            )
-            _add_new(
-                ranked_expr,
-                _rank(
-                    self.store, EXPRESSIONS_NS, [alternative], expressions, expression_text, K_ALTERNATIVE_EXPRESSIONS
-                ),
-                lambda e: e.expression_id,
-            )
+            _add_new(ranked_items, item_corpus.rank([alternative], K_ALTERNATIVE_ITEMS), lambda i: i.item_id)
+            _add_new(ranked_expr, expr_corpus.rank([alternative], K_ALTERNATIVE_EXPRESSIONS), lambda e: e.expression_id)
         # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
         ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS)
         core: list[PersonaItem] = []
@@ -410,8 +449,8 @@ class PersonaChat:
     ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
-            return no_profile_reply(self.store, as_of)
+        if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
+            return unbuilt
         ctx = self._search(messages, as_of, today)
         ctx.today = today
         self._derive(messages, ctx)
@@ -428,26 +467,24 @@ class PersonaChat:
     ) -> AsyncGenerator[str | ChatReply]:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if persist and not self.store.list_items() and self.store.get_meta("built_at") is None:
-            reply = no_profile_reply(self.store, as_of)
-            yield reply.reply
-            yield reply
+        # Every store read and write runs off the event loop, which other requests share.
+        if persist and (unbuilt := await off_loop(partial(self._unbuilt_reply, as_of))) is not None:
+            yield unbuilt.reply
+            yield unbuilt
             return
-        retrieval = asyncio.create_task(asyncio.to_thread(self._search, messages, as_of))
-        try:
-            ctx = await asyncio.shield(retrieval)
-        except asyncio.CancelledError:
-            # The SQLite store must outlive the retrieval worker, even after a client disconnects.
-            await retrieval
-            raise
-        await asyncio.to_thread(self._derive, messages, ctx)
-        system = chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx)
-        user = chat_user_message(messages, ctx)
+        ctx = await off_loop(partial(self._search, messages, as_of))
+        await off_loop(partial(self._derive, messages, ctx))
+        system, user = await off_loop(
+            lambda: (
+                chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
+                chat_user_message(messages, ctx),
+            )
+        )
         effort = self.settings.effective_chat_llm.effort_twin
         stream = getattr(self.llm, "stream", None)
         if stream is None:
-            draft = await asyncio.to_thread(
-                self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort
+            draft = await off_loop(
+                partial(self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort)
             )
             yield draft.reply
         else:
@@ -464,7 +501,13 @@ class PersonaChat:
             if delta := parser.finish():
                 yield delta
             draft = parser.draft()
-        yield self._finalize(draft, ctx, messages, as_of, persist=persist)
+        yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist))
+
+    def _unbuilt_reply(self, as_of: dt.date | None) -> ChatReply | None:
+        """The reply while nothing has been built yet; None once there is a profile to answer from."""
+        if not self.store.has_items() and self.store.get_meta("built_at") is None:
+            return no_profile_reply(self.store, as_of)
+        return None
 
     def _search(
         self, messages: Sequence[ChatTurn], as_of: dt.date | None, today: dt.date | None = None
@@ -478,20 +521,27 @@ class PersonaChat:
         return self.retrieve(query, as_of, found.hints, found.alternatives, today)
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
-        """Fill ``ctx.derived`` for span, order and total questions and ``ctx.located`` for questions about the
-        present or latest state; a failed call only leaves its part empty."""
+        """Fill ``ctx.derived`` for span, order and total questions, ``ctx.located`` for questions about the
+        present or latest state and ``ctx.connected`` for questions about the person, all at once; a failed call
+        only leaves its part empty."""
         material = "\n".join(_material_lines(ctx))
         effort = self.settings.effective_chat_llm.effort_extract
-        try:
-            question = messages[-1].content
-            today = ctx.today or ctx.as_of or dt.date.today()
-            ctx.derived = derive(self.llm, question, material, today, ctx.ids, effort, present=needs_locating(question))
-        except LLMError:
-            ctx.derived = []
-        try:
-            ctx.located = locate(self.llm, messages[-1].content, material, _said_dates(ctx), effort)
-        except LLMError:
-            ctx.located = []
+        question = messages[-1].content
+        today = ctx.today or ctx.as_of or dt.date.today()
+        steps: dict[str, Callable[[], list[str]]] = {
+            "derived": lambda: derive(
+                self.llm, question, material, today, ctx.ids, effort, present=needs_locating(question)
+            ),
+            "located": lambda: locate(self.llm, question, material, _said_dates(ctx), effort),
+            "connected": lambda: connect(self.llm, question, material, ctx.ids, effort),
+        }
+        with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+            futures = {name: pool.submit(copy_context().run, step) for name, step in steps.items()}
+        for name, future in futures.items():
+            try:
+                setattr(ctx, name, future.result())
+            except LLMError:
+                setattr(ctx, name, [])
 
     def _finalize(
         self,
@@ -877,6 +927,13 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
         lines += ["", "【推算】（程序按上面资料里核对过的日期和数量算出）", *ctx.derived]
     if ctx.located:
         lines += ["", "【对上号】（资料里直接说到所问这一项的，按说出的日期先后排列）", *ctx.located]
+    if ctx.connected:
+        lines += [
+            "",
+            "【连起来】（把几条记录按共同的名字、事物、时间、地点或人连起来得出的；连接合理时据此回答，"
+            "在正文里点明依据的记录）",
+            *ctx.connected,
+        ]
     if ctx.window is not None:
         lo, hi = ctx.window
         lines += [

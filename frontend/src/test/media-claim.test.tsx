@@ -7,6 +7,7 @@ import { ASSETS_CHANGED } from '../features/assets/SelfAssets';
 import { MediaClaim, RecordingShortcut } from '../features/sources/MediaClaim';
 import { setPersonaId } from '../lib/persona';
 import { Memories } from '../pages/Memories';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('../components/ui', async (original) => ({
   ...(await original<typeof import('../components/ui')>()),
@@ -62,21 +63,23 @@ beforeEach(() => {
   setPersonaId('p-test');
   vi.mocked(toast).mockClear();
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
-    if (url === '/api/persona/sources')
-      return json([
-        {
-          source_id: 'recording',
-          title: '我的录音',
-          first_date: null,
-          detected_kind_label: '音频',
-          kind: 'audio',
-          status: chosen === undefined ? 'needs_speaker' : 'remembered',
-          remembered: 1,
-          media_sha: 'sha',
-          voice_candidates: chosen?.length ? 1 : 0,
-          portrait_candidates: chosen?.length ? 1 : 0,
-        },
-      ]);
+    if (isSourcesUrl(url))
+      return json(
+        sourcesPage(url, [
+          {
+            source_id: 'recording',
+            title: '我的录音',
+            first_date: null,
+            detected_kind_label: '音频',
+            kind: 'audio',
+            status: chosen === undefined ? 'needs_speaker' : 'remembered',
+            remembered: 1,
+            media_sha: 'sha',
+            voice_candidates: chosen?.length ? 1 : 0,
+            portrait_candidates: chosen?.length ? 1 : 0,
+          },
+        ]),
+      );
     if (url === '/api/persona/processing') return json({ state: 'idle' });
     if (url === '/api/status')
       return json({ counts: { sources: 1, items: 0 }, egress: [] });
@@ -249,7 +252,7 @@ it('hides the onboarding recording shortcut when no candidates exist', async () 
     render(<RecordingShortcut />);
   });
   expect(fetcher).toHaveBeenCalledWith(
-    '/api/persona/sources',
+    '/api/persona/sources?candidates=true&limit=20',
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
   expect(screen.queryByText('从你的视频里挑一个')).not.toBeInTheDocument();

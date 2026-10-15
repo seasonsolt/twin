@@ -11,6 +11,7 @@ import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
 import { usePersonas } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import { isSourcesUrl, sourcesPage } from './personaApi';
 
 const css = readFileSync('src/design/tokens.css', 'utf8');
 const desktopCss = css.slice(css.indexOf('@media (min-width: 1200px)'));
@@ -45,16 +46,17 @@ beforeEach(() => {
           JSON.stringify(
             path === '/api/personas'
               ? [persona]
-              : path === '/api/persona/sources' ||
-                  path.startsWith('/api/conversations?')
-                ? []
-                : path === '/api/status'
-                  ? { target_name: '小林', counts: { sources: 1, items: 0 } }
-                  : path === '/api/persona/processing'
-                    ? { state: 'idle' }
-                    : path === '/api/media/capabilities'
-                      ? { available: false, video: { available: false } }
-                      : { stale: false },
+              : isSourcesUrl(path)
+                ? sourcesPage(path, [])
+                : path.startsWith('/api/conversations?')
+                  ? []
+                  : path === '/api/status'
+                    ? { target_name: '小林', counts: { sources: 1, items: 0 } }
+                    : path === '/api/persona/processing'
+                      ? { state: 'idle' }
+                      : path === '/api/media/capabilities'
+                        ? { available: false, video: { available: false } }
+                        : { stale: false },
           ),
         ),
     ),

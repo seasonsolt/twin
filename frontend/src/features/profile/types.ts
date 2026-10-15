@@ -62,3 +62,31 @@ export interface Coverage {
     sources: string[];
   }[];
 }
+export interface ItemSummary {
+  total: number;
+  unreviewed: number;
+  dimensions: {
+    dimension_id: string;
+    name: string;
+    total: number;
+    unreviewed: number;
+  }[];
+}
+export interface ItemQuery {
+  dimension?: string[];
+  review?: ReviewStatus;
+  q?: string;
+  source_id?: string;
+  sort?: 'facet' | 'evidence';
+  with_sources?: boolean;
+}
+export interface ItemSource {
+  title: string;
+  first_date: string | null;
+  kind: string;
+}
+export interface ItemPage {
+  items: ProfileItem[];
+  total: number;
+  sources?: Record<string, ItemSource>;
+}

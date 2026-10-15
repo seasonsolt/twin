@@ -128,9 +128,14 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   defaulting to `"grounded"`. Missing mode on legacy drafts/replies becomes `"abstain"` when `abstain=true`,
   otherwise `"grounded"`; missing `abstain` is derived as `mode == "abstain"`. Explicit inconsistencies are rejected.
 - Owner-specific answers remain evidence-grounded; unsupported owner questions, commitments and judgements of
-  specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, begin with a short
-  general-knowledge/non-owner-view notice, may omit citations, and have confidence capped at 0.5.
-  The frontend adds a neutral `通用回答 · 非本人观点` badge; `需要本人确认` is reserved for abstention.
+  specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, may omit citations, and
+  have confidence capped at 0.5; they are said as know-how, never as the owner's own experience.
+- The twin speaks as the owner at every boundary, not as an assistant referring to them: replies never mention
+  material, records, the ledger or being a twin (unless asked whether it is the person or an AI), and never say
+  "ask the person" or "needs the person's confirmation". A gap in basic personal facts is passed over for later, a
+  forgotten detail is not recalled, an undecided plan is not yet sayable, a commitment is deferred ("let me get back to
+  you"; the abstention reaches the owner's 待回答 queue), and another person is not judged behind their back. Only the
+  wording changes: mode, abstention and confidence follow the rules above.
 - `"inferred"` is the best inference for "what would they choose/do/prefer/think" questions the material does not
   answer directly but has indirect evidence for (related past answers, stated values, traits, habits). The text states
   it is an inference and never presents it as something the owner said or did; factual recall, commitments and

@@ -128,7 +128,7 @@ def test_prompt_quotation_and_general_rules(store: PersonaStore, settings: Setti
     prompt = pc.chat_system_prompt(settings.target_name, ctx)
     assert '引号（「」『』“”""）只能包住逐字出现在【说话样本】或【检索资料】中的文字' in prompt
     assert "强调、转述或术语不要加引号" in prompt and "绝不能把转述当作本人的原话" in prompt
-    assert "开头用一句简短的话说明这是通用知识、不是本人观点" in prompt
+    assert "通用的内容像本人分享常识那样直接说，不把它说成自己的经历或一贯做法" in prompt
     assert "mode 设为 general" in prompt and "citations 可以为空" in prompt
     assert "confidence 不超过 0.5" in prompt
     assert "citations 填你用到的资料编号（方括号里的原样复制，如 pi_1a2b3c4d5e6f）" in prompt
@@ -157,7 +157,9 @@ def test_prompt_ordered_mode_checklist_and_style() -> None:
     assert "关键前提和记录不是一回事" in checklist and "就自己算出结果并列出" in checklist
     assert "以日期最晚的为准" in checklist
     assert "不能把个人问题改成通用回答来掩盖缺失" in checklist
-    assert "即使有相关资料，也只对这部分说明需要本人确认" in checklist[restricted:general]
+    assert (
+        "即使有相关资料，这部分也不当场答应或拍板，像本人那样说先不定、想好了回头答复" in checklist[restricted:general]
+    )
     assert "评价某个具体的他人" in checklist[restricted:general]
     assert "其余能回答的部分继续回答" in checklist[restricted:general]
     assert "通用知识、方法、一般话题的看法" in checklist[general:]
@@ -180,8 +182,8 @@ def test_prompt_substantive_answers_are_not_abstentions() -> None:
         in modes
     )
     assert "混合请求按实质回答部分选择 mode" in modes
-    assert "只有没有实质回答、只能说明无资料或需要本人确认时，mode 设为 abstain，abstain 为 true" in modes
-    assert "具体得我本人定或细节得由我本人来定，不算弃权" in modes
+    assert "只有没有实质回答、只能说想不起来、没想过或先不答应时，mode 设为 abstain，abstain 为 true" in modes
+    assert "实质回答末尾补一句具体的我再定、细节回头再说，不算弃权" in modes
     assert "mode 保持 grounded/general，abstain=false" in modes
     assert "不要为了避免弃权而给个人问题编造答案" in modes
 
@@ -293,14 +295,14 @@ def test_prompt_inference_branch_sits_in_the_personal_step_before_abstaining() -
     checklist = prompt.split("## 写回复前，按顺序检查", 1)[1].split("## 整体 mode 与弃权", 1)[0]
     personal, restricted = checklist.index("1. "), checklist.index("2. ")
     step = checklist[personal:restricted]
-    infer, abstain = step.index("归为 inferred"), step.index("就用本人的口吻简短说明资料里没记这件事")
+    infer, abstain = step.index("归为 inferred"), step.index("就像本人想不起来或没想过那样简短说一句")
     assert infer < abstain
     assert "发生过什么、在哪、何时、谁，以及本人生活里的事实数字（几个孩子、收入、日期、实付价格）才是事实回忆" in step
     assert "本人会给出的个人估计（认为多少比例的人支持、可能性有多大、会做几次" in step
     assert step.index("个人估计") < infer
     assert "没有相关的间接依据，或问的是事实回忆" in step
     modes = prompt.split("## 整体 mode 与弃权\n", 1)[1].split("## 规则", 1)[0]
-    assert "我没直接说过，但按我……，大概会……" in modes
+    assert "这个我没细想过，不过按我……，大概会……" in modes
     assert "不把推测说成我说过或做过的事，不编造经历" in modes
     assert "citations 至少填一条用到的间接资料，没有就改为 abstain" in modes
     assert "confidence 不超过 0.5" in modes
@@ -315,7 +317,6 @@ def test_prompt_format_constraint_forbids_prefixed_commentary_in_every_substanti
     assert "无论 mode 是 grounded、general 还是 inferred" in fmt
     assert "正文都恰好是该标签或数字，不加前缀、单位、解释，也不加说明通用知识或推测的句子" in fmt
     assert "回答的身份由 mode 标明" in fmt
-    assert "对方限定了输出格式时除外，见输出格式" in prompt
 
 
 INFERENCE: dict[str, Any] = {
@@ -399,7 +400,7 @@ def test_reply_language_follows_the_asker(store: PersonaStore, settings: Setting
     prompt = pc.chat_system_prompt(settings.target_name, ctx)
     rules = prompt.split("## 规则\n", 1)[1].split("## 输出格式", 1)[0]
     assert "7. 回复语言跟随对方最后一句话" in rules
-    assert "对方用英文，整段回复（包括说明是通用知识、没有记录或需要本人确认的句子）都用英文" in rules
+    assert "对方用英文，整段回复（包括说想不起来或先不答应的句子）都用英文" in rules
     assert "对方用中文就用中文" in rules and "引用的原话保持原文逐字，不翻译、不改写" in rules
     for text, instruction in (
         ("Which store did I redeem the coupon at?", "整段回复用英文。"),
@@ -693,3 +694,21 @@ def test_record_ids_written_into_the_reply_move_to_citations(store: PersonaStore
     # Only ids of retrieved records are taken out; anything else in brackets is left as written.
     assert reply.reply == "三个孩子。 [pi_000000000000] 见 [链接]"
     assert reply.citations == [item_id]
+
+
+def test_prompt_speaks_as_the_person_at_every_boundary() -> None:
+    """The twin is the person in the conversation: a gap, a promise it will not make, a person it will not judge and
+    general know-how are all said the way the person would say them, never as an assistant referring to them."""
+    prompt = pc.chat_system_prompt("张三", pc.PersonaContext([], [], [], []))
+    assert prompt.startswith("你是张三的数字分身。对话里你就是张三") and "不把自己和张三分成两个人" in prompt
+    voice = prompt.split("## 说话的身份\n", 1)[1].split("## 写回复前", 1)[0]
+    for banned in ("“资料”", "“档案”", "“数字分身”", "“得问我本人”", "“需要本人确认”", "“这不是我本人的经验”"):
+        assert banned in voice
+    assert "不说忘了或没想过，像随口带过那样说回头再跟你聊" in voice
+    assert "说记不太清、一时想不起来" in voice and "说现在还不好说" in voice
+    assert "不当场答应，说先看看安排、想好了回头给准话" in voice
+    assert "不在背后下评语" in voice and "不复述对方的问题" in voice and "但不编" in voice
+    assert "判断规则照下文不变" in voice
+    assert "如实说自己是张三的数字分身；没被问到时不主动提" in prompt
+    for old in ("资料里没记这件事", "说明需要本人确认", "这不是我本人的经验，我先说通用做法"):
+        assert old not in prompt

@@ -38,15 +38,28 @@ class ExtractStats(BaseModel):
 
     returned: int = 0  # conclusions the model returned
     kept: int = 0  # conclusions kept as candidates
-    off_facet: int = 0  # dropped: a facet not offered, or an empty statement
+    off_facet: int = 0  # dropped: a facet not offered (before counts were split: or an empty statement)
+    empty_statement: int = 0  # dropped: an empty statement
     unsupported: int = 0  # dropped: none of its quotes survived
     quotes_unmatched: int = 0  # quotes not found in the entry they name
     quotes_misnumbered: int = 0  # quotes naming an entry the chunk does not have
     quotes_narrated_style: int = 0  # style quotes taken from someone else's narration
     splits: int = 0  # times a chunk was halved because its reply was cut off twice
+    # What the model wrote as the facet of each ``off_facet`` conclusion, cut to FACET_SAMPLE_CHARS, and how often.
+    unknown_facets: dict[str, int] = Field(default_factory=dict)
 
     def __add__(self, other: ExtractStats) -> ExtractStats:
-        return ExtractStats(**{name: getattr(self, name) + getattr(other, name) for name in ExtractStats.model_fields})
+        merged: dict[str, object] = {}
+        for name in ExtractStats.model_fields:
+            mine, theirs = getattr(self, name), getattr(other, name)
+            if isinstance(mine, dict):
+                merged[name] = {k: mine.get(k, 0) + theirs.get(k, 0) for k in sorted(mine.keys() | theirs.keys())}
+            else:
+                merged[name] = mine + theirs
+        return ExtractStats.model_validate(merged)
+
+
+FACET_SAMPLE_CHARS = 16
 
 
 class PersonaItem(BaseModel):

@@ -65,7 +65,7 @@ export interface Memory {
   candidates_pending?: boolean;
   chunks_done?: number;
   chunks_total?: number;
-  extraction?: { kept: number; unsupported: number } | null;
+  extraction?: { returned: number; kept: number } | null;
 }
 export interface SourceSummary {
   total: number;
@@ -144,11 +144,11 @@ const memoryPending = (memory: Memory) =>
   memory.status === 'processing' ||
   (memory.candidates_pending &&
     !['failed', 'needs_asr', 'needs_speaker'].includes(memory.status));
-// The model drew conclusions from it, but none of their quotes matched the text.
+// The model drew conclusions from it, but none passed the checks (quotes, facet).
 const misquoted = (memory: Memory) =>
   !!memory.extraction &&
-  memory.extraction.kept === 0 &&
-  memory.extraction.unsupported > 0;
+  memory.extraction.returned > 0 &&
+  memory.extraction.kept === 0;
 function MemoryWork({
   memory,
   visible,
@@ -913,7 +913,7 @@ export function Memories({
                             memory.media_sha ? (
                               '已加入'
                             ) : misquoted(memory) ? (
-                              '找到一些内容，但没能和原文对上'
+                              '找到一些内容，但没通过核对'
                             ) : (
                               '没找到关于你的内容'
                             )

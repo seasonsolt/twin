@@ -272,14 +272,33 @@ def test_extraction_counts_what_it_dropped_and_why(store: PersonaStore, settings
     report = pf.build_profile(store, FakeLLM(handler), settings)
     # Per entry the handler adds an unconsented 9.3 and a quote of entry 99; the chat adds one fabricated quote.
     assert report.extraction == ExtractStats(
-        returned=15, kept=4, off_facet=5, unsupported=6, quotes_unmatched=1, quotes_misnumbered=5
+        returned=15,
+        kept=4,
+        off_facet=5,
+        unsupported=6,
+        quotes_unmatched=1,
+        quotes_misnumbered=5,
+        unknown_facets={"9.3": 5},
     )
     q, chat = (s.source_id for s in store.list_sources())
     assert store.extraction_stats() == {
-        q: (1, ExtractStats(returned=8, kept=2, off_facet=3, unsupported=3, quotes_misnumbered=3)),
+        q: (
+            1,
+            ExtractStats(
+                returned=8, kept=2, off_facet=3, unsupported=3, quotes_misnumbered=3, unknown_facets={"9.3": 3}
+            ),
+        ),
         chat: (
             1,
-            ExtractStats(returned=7, kept=2, off_facet=2, unsupported=3, quotes_unmatched=1, quotes_misnumbered=2),
+            ExtractStats(
+                returned=7,
+                kept=2,
+                off_facet=2,
+                unsupported=3,
+                quotes_unmatched=1,
+                quotes_misnumbered=2,
+                unknown_facets={"9.3": 2},
+            ),
         ),
     }
     assert pf.source_memories(store)[chat].nothing_found_reason == ""  # it supports memories
@@ -305,12 +324,90 @@ def test_a_source_without_memories_says_why(settings: Settings) -> None:
     misquoted = [
         {"facet_id": "4.2", "statement": "追问对照组", "quotes": [{"n": 2, "quote": "从来不看数据"}]},
         {"facet_id": "4.2", "statement": "编号越界", "quotes": [{"n": 9, "quote": "对照组"}]},
-        {"facet_id": "0.0", "statement": "没有这个细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+        {"facet_id": "D4", "statement": "没有这个细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+        {"facet_id": "D4", "statement": "还是没有", "quotes": [{"n": 2, "quote": "对照组"}]},
+        {
+            "facet_id": "思考方式与追问习惯之类的很长很长名字",
+            "statement": "名字太长",
+            "quotes": [{"n": 2, "quote": "对照组"}],
+        },
+        {"facet_id": "4.2", "statement": " ", "quotes": [{"n": 2, "quote": "对照组"}]},
     ]
     pf.build_profile(store, FakeLLM(answer(misquoted)), settings)
-    assert pf.source_memories(store)[sid].nothing_found_reason == (
-        "模型提炼了 3 条结论，校验后全部丢弃：引文与原文对不上 1 处，引用了不存在的条目 1 处，细项不可用或结论为空 1 条"
+    memory = pf.source_memories(store)[sid]
+    assert memory.extraction is not None and memory.extraction.unknown_facets == {
+        "D4": 2,
+        "思考方式与追问习惯之类的很长很长": 1,
+    }
+    assert memory.nothing_found_reason == (
+        "模型提炼了 6 条结论，校验后全部丢弃：引文与原文对不上 1 处，引用了不存在的条目 1 处，"
+        "细项不在可用列表里 3 条（模型写的是 “D4”×2、“思考方式与追问习惯之类的很长很长”×1），结论为空 1 条"
     )
+    legacy = ExtractStats(returned=2, off_facet=2)  # counted before facets and empty statements were told apart
+    assert pf.nothing_found_reason(legacy) == "模型提炼了 2 条结论，校验后全部丢弃：细项不可用或结论为空 2 条"
+
+
+@pytest.mark.parametrize(
+    "written, facet",
+    [
+        ("2.1", "2.1"),
+        (" 8.2 正在做的事", "8.2"),
+        ("8.2：近期在做的事", "8.2"),
+        ("细项 8．2", "8.2"),
+        ("4.2 / 4.1", "4.2"),
+        ("D8", "D8"),
+        ("D8 最近在关注", "D8 最近在关注"),
+        ("8.2.1", "8.2.1"),
+        ("2026.10", "2026.10"),
+    ],
+)
+def test_facet_ids_are_read_from_how_models_write_them(written: str, facet: str) -> None:
+    assert pf.facet_id(written) == facet
+
+
+@pytest.mark.usefixtures("gated_life_facets")
+def test_a_facet_written_with_its_name_is_kept(settings: Settings) -> None:
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    named = [
+        {"facet_id": "4.2 追问习惯", "statement": "追问对照组", "quotes": [{"n": 2, "quote": "对照组是谁挑的"}]},
+        {"facet_id": "D4", "statement": "说不清细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+    ]
+    report = pf.build_profile(
+        store, FakeLLM(lambda s, u, schema: {"items": named if schema is pf.ExtractDraft else []}), settings
+    )
+    assert [c.facet_id for c in store.list_candidates()] == ["4.2"]
+    assert report.extraction.kept == 1 and report.extraction.unknown_facets == {"D4": 1}
+
+
+def test_only_the_chunks_that_found_nothing_are_extracted_again(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pf, "CHUNK_CHARS", 40)  # one chunk per entry
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    store.put_source(parse_chat("群_2026-10.txt", CHAT.replace("09-0", "10-0"), settings))
+    sep, oct_ = (s.source_id for s in store.list_sources())
+
+    def money_only(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        found = [n for n, text in entries(user).items() if "钱进了账户" in text]
+        quotes = [{"n": n, "quote": "钱进了账户"} for n in found]
+        items = [{"facet_id": "2.1", "statement": "回款第一", "quotes": quotes}] if found else []
+        return {"items": items} if schema is pf.ExtractDraft else {"items": []}
+
+    assert pf.build_profile(store, FakeLLM(money_only), settings).chunks_extracted == 4
+    assert store.empty_chunks() == {sep: 1, oct_: 1}
+    kept = {c.candidate_id for c in store.list_candidates()}
+
+    assert store.reextract_source("src_missing", empty_only=True) is None
+    assert store.reextract_source(sep, empty_only=True) == 1
+    assert {c.candidate_id for c in store.list_candidates()} == kept  # chunks with candidates are untouched
+    assert store.reextract_source(sep, empty_only=True) == 0  # nothing left to forget: not marked again
+    llm = FakeLLM(handler)
+    report = pf.build_profile(store, llm, settings)
+    assert report.chunks_extracted == 1 and len([n for n, _, _ in llm.calls if n == "ExtractDraft"]) == 1
+    assert store.empty_chunks() == {oct_: 1}
+    assert not pf.profile_stale(store)
 
 
 def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(

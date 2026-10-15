@@ -460,6 +460,10 @@ def test_answer_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
             await peer.send(message())
             frames = await peer.receive("aibot_respond_msg")
             assert frames[-1][1]["body"]["stream"]["content"] == APOLOGY
+            # The apology goes out before the cancelled answer is waited for, so its stream may close just after.
+            async with asyncio.timeout(2):
+                while not closed:
+                    await asyncio.sleep(0.01)
             assert closed == [True]
 
     asyncio.run(check())

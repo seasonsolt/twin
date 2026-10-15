@@ -32,9 +32,9 @@ flowchart TB
 | --- | --- | --- |
 | L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` `persona.lexical` · `persona.schema/items/dimensions` `media.schema` · `llm` `embed` `config` `media.tts/asr` · `persona.store` |
 | L1 | 4 | `persona.sources` `persona.questionnaire` `persona.quotes` |
-| L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） |
+| L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） `persona.office`（Word/Excel 交付） |
 | L3 | 6 | `persona.chat` |
-| L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` |
+| L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` `persona.work`（工作模式：Deep Agents 干活、交付文件） |
 | 评测 | 8 | `evals.*` `media.check` |
 | L5 | 9 | `cli` `web.*` `channels.wecom` `frontend/` `api` `mcp_server` |
 
@@ -82,6 +82,8 @@ sequenceDiagram
 | 有据 | 本人的观点、经历、做法，资料里有 | 只引用未确认转述时 0.6 |
 | 通用 | 与本人无关的知识和方法 | 0.5 |
 | 弃权 | 关于本人但资料里没有；替本人承诺；评价具体他人 | 0.3 |
+
+**工作模式**（`persona.work`，网页「工作」）和聊天分开：聊天是上面这条受控的问答路径，工作是一个 LangChain Deep Agents 循环，按步骤调用工具、交付文件，同样以本人第一人称说话。关于本人的内容只能来自 `recall`（就是聊天的检索，本人自己的任务带上承诺账本），`write_word` / `write_excel` 交付 Office 文件，Deep Agents 自带的文件工具只能在该任务的目录里读写（虚拟根目录，没有 shell）。本人和访客都能用；访客的任务看不到账本和待回答的问题，每人只看得到自己的任务。任务存在库旁边的 `work/<task_id>/`，每一轮作为后台任务运行。需要能调用工具的模型服务（openai_compat 或 anthropic），claude_cli 不支持。
 
 ## 5. 部署（参考）
 

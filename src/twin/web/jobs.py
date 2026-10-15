@@ -37,7 +37,7 @@ from starlette.types import Receive, Scope, Send
 from ..embed import EmbedError
 from ..llm import LLMError
 
-JobKind = Literal["persona_build", "chat", "video", "media_ingest", "ledger_build"]
+JobKind = Literal["persona_build", "chat", "video", "media_ingest", "ledger_build", "work"]
 JobStatus = Literal["queued", "running", "done", "failed"]
 Log = Callable[[str], None]
 JobFn = Callable[[Log], object]
@@ -48,6 +48,7 @@ JOB_LABELS: dict[JobKind, str] = {
     "video": "生成视频",
     "media_ingest": "转写音视频",
     "ledger_build": "整理承诺账本",
+    "work": "工作任务",
 }
 EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
 MAX_PROGRESS_LINES = 500

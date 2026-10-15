@@ -28,7 +28,7 @@ from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from . import assets, media, persona
 from .auth import Auth, AuthMiddleware, forwarded_prefix
-from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory
+from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
 
@@ -251,18 +251,20 @@ def create_app(
     *,
     llm_factory: LLMFactory | None = None,
     embedder_factory: EmbedderFactory | None = None,
+    work_model_factory: WorkModelFactory | None = None,
     synthesizer_factory: Callable[[], SpeechSynthesizer] | None = None,
     allowed_hosts: Iterable[str] = (),
 ) -> FastAPI:
     """The web UI application. ``llm_factory`` / ``embedder_factory`` default to ``config.make_llm(settings.llm)``
     and ``config.make_embedder(settings.embed)``; both are called lazily, once. ``synthesizer_factory`` defaults to
     ``config.make_synthesizer(settings.tts)`` and is also lazy, so speech failures do not affect other routes.
+    ``work_model_factory`` defaults to work mode's LangChain model for the chat model settings.
     Injected factories are offline test seams. All configured backends are used as configured;
     restart the web server to apply configuration changes to cached backends.
     ``allowed_hosts`` adds host names (besides localhost, 127.0.0.1 and [::1]) the server answers to, for
     ``twin ui --host <address>``."""
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
-    backends = Backends(settings, llm_factory, embedder_factory)
+    backends = Backends(settings, llm_factory, embedder_factory, work_model_factory)
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)
     registry = Personas(settings, jobs)

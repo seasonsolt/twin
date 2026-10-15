@@ -52,6 +52,10 @@ VISITOR_ROUTES = [
         ("POST", r"/api/persona/chat/stream"),
         ("GET|POST", r"/api/conversations"),
         ("GET|PATCH|DELETE", r"/api/conversations/[^/]+"),
+        # Work mode: each visitor sees only their own tasks (``web.work``).
+        ("GET|POST", r"/api/persona/work"),
+        ("GET|DELETE", r"/api/persona/work/[^/]+"),
+        ("GET", r"/api/persona/work/[^/]+/files/.+"),
     ]
 ]
 

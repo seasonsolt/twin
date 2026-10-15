@@ -1,0 +1,395 @@
+"""Work mode: the agent turn (tools, deliverables, the visitor's narrower toolbox), the task store, and the web
+routes, where each task is only its starter's, in the role they started it in."""
+
+from __future__ import annotations
+
+import datetime as dt
+import io
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+from docx import Document
+from fastapi.testclient import TestClient
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from openpyxl import load_workbook
+from pydantic import PrivateAttr
+
+from twin.config import AuthSettings, LLMSettings, Settings, SMTPSettings
+from twin.embed import HashingEmbedder
+from twin.llm import FakeLLM
+from twin.persona import ledger as lg
+from twin.persona.chat import index_persona
+from twin.persona.items import PersonaItem
+from twin.persona.office import docx_bytes, xlsx_bytes
+from twin.persona.store import PersonaStore
+from twin.persona.work import WorkStore, WorkTask, run_turn, work_model
+from twin.web import create_app
+from twin.web.jobs import PersonaProcessing
+
+TODAY = dt.date(2026, 10, 20)
+CSRF = {"X-Twin": "1"}
+MEMBER = "member@xjjk.com"
+OTHER = "other@xjjk.com"
+
+Step = Callable[[list[BaseMessage]], AIMessage]
+
+
+def call(name: str, **args: Any) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{name}"}])
+
+
+class Scripted(BaseChatModel):
+    """A tool-calling chat model that plays ``steps`` in order, then replies "做完了。"; it keeps what it saw."""
+
+    steps: list[Step]
+    _seen: list[list[BaseMessage]] = PrivateAttr(default_factory=list)
+    _tools: list[str] = PrivateAttr(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted"
+
+    def bind_tools(self, tools: Sequence[Any], **_: Any) -> Scripted:  # type: ignore[override]
+        self._tools = [getattr(t, "name", None) or t.get("name") for t in tools]
+        return self
+
+    def _generate(self, messages: list[BaseMessage], *_: Any, **__: Any) -> ChatResult:
+        self._seen.append(list(messages))
+        message = self.steps.pop(0)(messages) if self.steps else AIMessage(content="做完了。")
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+    @property
+    def system(self) -> str:
+        return "\n".join(str(m.content) for m in self._seen[-1] if isinstance(m, SystemMessage))
+
+    def tool_results(self) -> dict[str, str]:
+        return {str(m.name): str(m.content) for m in self._seen[-1] if isinstance(m, ToolMessage)}
+
+
+def seed(path: Path) -> None:
+    with PersonaStore(path) as store:
+        store.set_meta("built_at", "2026-10-19")
+        store.replace_facet_items(
+            "2.1", [PersonaItem(item_id="pi_test", facet_id="2.1", statement="回款优先，先收钱再扩张", evidence=[])]
+        )
+        store.put_ledger_entry(
+            lg.LedgerEntry(
+                entry_id="0123456789abcdef",
+                source_id="s1",
+                expression_id="s1:0001",
+                meeting_date=dt.date(2026, 10, 12),
+                meeting_title="周一经营会",
+                kind="commitment",
+                speaker="其他人1",
+                quote="报价方案周四给你，没问题",
+                owner="老王",
+                counterpart=lg.SELF,
+                what="给华澜新报价方案",
+                confidence=0.9,
+                extractor=lg.LEDGER_VERSION,
+                created_at="now",
+                updated_at="now",
+            )
+        )
+        index_persona(store, HashingEmbedder(), Settings(db_path=path))
+
+
+def step(store: WorkStore, task: WorkTask, model: Scripted, settings: Settings, text: str) -> Any:
+    log: list[str] = []
+    files = store.files_dir(task.task_id)
+    llm = FakeLLM(lambda *_: {})
+    turn = run_turn(task, text, settings, model, llm, HashingEmbedder(), files, log.append, name="张总", today=TODAY)
+    return turn, log
+
+
+# ── office files ──
+
+
+def test_word_keeps_headings_lists_bold_and_tables() -> None:
+    body = "## 本周\n- **回款**：华澜到账\n1. 下周跟进\n\n| 事项 | 负责人 |\n| --- | --- |\n| 报价 | 老王 |\n普通一段"
+    document = Document(io.BytesIO(docx_bytes("周报", body)))
+    paragraphs = [(p.style.name if p.style else "", p.text) for p in document.paragraphs]
+    assert paragraphs == [
+        ("Title", "周报"),
+        ("Heading 2", "本周"),
+        ("List Bullet", "回款：华澜到账"),
+        ("List Number", "下周跟进"),
+        ("Normal", "普通一段"),
+    ]
+    assert [r.bold for r in document.paragraphs[2].runs] == [True, None]
+    (table,) = document.tables
+    assert [[c.text for c in row.cells] for row in table.rows] == [["事项", "负责人"], ["报价", "老王"]]
+
+
+def test_excel_has_a_bold_frozen_header_and_safe_unique_sheet_names() -> None:
+    data = xlsx_bytes([("承诺/进展", [["事项", "截止"], ["报价", "2026-10-16"]]), ("承诺:进展", [["a"]])])
+    workbook = load_workbook(io.BytesIO(data))
+    assert workbook.sheetnames == ["承诺 进展", "承诺 进展 (2)"]
+    sheet = workbook["承诺 进展"]
+    assert [[c.value for c in row] for row in sheet.iter_rows()] == [["事项", "截止"], ["报价", "2026-10-16"]]
+    assert sheet["A1"].font.bold and sheet.freeze_panes == "A2"
+    with pytest.raises(ValueError):
+        xlsx_bytes([])
+
+
+# ── the agent turn ──
+
+
+def test_the_persons_own_task_recalls_with_the_ledger_and_hands_over_office_files(tmp_path: Path) -> None:
+    seed(tmp_path / "twin.db")
+    settings = Settings(db_path=tmp_path / "twin.db")
+    store = WorkStore(settings.db_path)
+    task = store.create("把老王的报价整理成表", MEMBER, visitor=False)
+    model = Scripted(
+        steps=[
+            lambda _: call("recall", query="老王 报价方案"),
+            lambda _: call("write_excel", path="报价跟进", sheets=[{"name": "承诺", "rows": [["事项"], ["报价"]]}]),
+            lambda _: call("write_word", path="周报.docx", title="周报", markdown="- 报价已催"),
+            lambda _: call("write_file", file_path="/草稿/要点.md", content="先收钱"),
+            lambda _: AIMessage(content="表和周报都写好了：报价跟进.xlsx、周报.docx。"),
+        ]
+    )
+    turn, log = step(store, task, model, settings, "把老王的报价整理成表")
+    assert {"recall", "pending_questions", "write_word", "write_excel", "write_file"} <= set(model._tools)
+    assert "你就是张总本人" in model.system and "会上定了什么和谁答应了什么" in model.system
+    recalled = model.tool_results()["recall"]
+    assert "给华澜新报价方案" in recalled and "回款优先" in recalled
+    assert turn.content == "表和周报都写好了：报价跟进.xlsx、周报.docx。"
+    assert turn.files == ["周报.docx", "报价跟进.xlsx", "草稿/要点.md"]
+    assert (
+        log
+        == turn.steps
+        == [
+            "回想：老王 报价方案",
+            "写 Excel：报价跟进.xlsx",
+            "写 Word：周报.docx",
+            "写文件：草稿/要点.md",
+        ]
+    )
+    assert [f["path"] for f in store.files(task.task_id)] == turn.files
+    assert (store.files_dir(task.task_id) / "草稿" / "要点.md").read_text(encoding="utf-8") == "先收钱"
+
+
+def test_a_visitors_task_has_no_ledger_and_no_pending_questions(tmp_path: Path) -> None:
+    seed(tmp_path / "twin.db")
+    settings = Settings(db_path=tmp_path / "twin.db")
+    store = WorkStore(settings.db_path)
+    task = store.create("你怎么看回款", OTHER, visitor=True)
+    model = Scripted(steps=[lambda _: call("recall", query="老王 报价方案 回款")])
+    step(store, task, model, settings, "你怎么看回款")
+    assert "pending_questions" not in model._tools and "recall" in model._tools
+    assert "不要替自己答应新的事" in model.system and "会上定了什么" not in model.system
+    recalled = model.tool_results()["recall"]
+    assert "回款优先" in recalled and "给华澜新报价方案" not in recalled
+
+
+def test_files_stay_inside_the_task_directory(tmp_path: Path) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db")
+    store = WorkStore(settings.db_path)
+    task = store.create("写", None, visitor=False)
+    model = Scripted(steps=[lambda _: call("write_word", path="../../逃出去", title="", markdown="x")])
+    turn, _ = step(store, task, model, settings, "写")
+    assert model.tool_results()["write_word"] == "没做成：文件只能写在工作目录里"
+    assert turn.files == [] and not list(tmp_path.glob("*.docx"))
+    assert store.file(task.task_id, "../task.json") is None
+
+
+def test_a_continued_task_sees_its_earlier_turns(tmp_path: Path) -> None:
+    from twin.persona.work import WorkTurn
+
+    settings = Settings(db_path=tmp_path / "twin.db")
+    store = WorkStore(settings.db_path)
+    task = store.create("起个提纲", None, visitor=False)
+    task.turns = [WorkTurn(role="user", content="起个提纲", at="t"), WorkTurn(role="assistant", content="好", at="t")]
+    model = Scripted(steps=[])
+    step(store, task, model, settings, "再加一节")
+    texts = [str(m.content) for m in model._seen[0] if not isinstance(m, SystemMessage)]
+    assert texts == ["起个提纲", "好", "再加一节"]
+
+
+def test_the_cli_model_cannot_drive_tools() -> None:
+    with pytest.raises(ValueError, match="claude_cli 不支持"):
+        work_model(LLMSettings(provider="claude_cli"))
+
+
+# ── web ──
+
+
+def wait_idle(client: TestClient, task_id: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    for _ in range(200):
+        task: dict[str, Any] = client.get(f"/api/persona/work/{task_id}", headers=headers).json()
+        if task["status"] != "running":
+            return task
+        threading.Event().wait(0.02)
+    raise AssertionError("the turn never finished")
+
+
+@pytest.fixture
+def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, list[Scripted]]]:
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    settings = Settings(target_name="张总", db_path=tmp_path / "twin.db")
+    models: list[Scripted] = []
+    app = create_app(
+        settings,
+        llm_factory=lambda: FakeLLM(lambda *_: {}),
+        embedder_factory=HashingEmbedder,
+        work_model_factory=lambda: models[0],
+    )
+    with TestClient(app, base_url="http://127.0.0.1", headers=CSRF) as client:
+        yield client, models
+
+
+def test_a_task_runs_in_the_background_and_its_files_download(local: tuple[TestClient, list[Scripted]]) -> None:
+    client, models = local
+    models.append(
+        Scripted(
+            steps=[
+                lambda _: call("write_word", path="周报", title="周报", markdown="本周回款"),
+                lambda _: AIMessage(content="周报写好了。"),
+                lambda _: AIMessage(content="改好了。"),
+            ]
+        )
+    )
+    assert client.get("/api/persona/work").json() == {"tasks": []}
+    assert client.post("/api/persona/work", json={"text": "   "}).status_code == 400
+    started = client.post("/api/persona/work", json={"text": "写本周周报"})
+    assert started.status_code == 202
+    task_id = started.json()["task"]["task_id"]
+    task = wait_idle(client, task_id)
+    assert task["status"] == "idle" and task["title"] == "写本周周报"
+    assert [(t["role"], t["content"]) for t in task["turns"]] == [("user", "写本周周报"), ("assistant", "周报写好了。")]
+    assert task["turns"][1]["files"] == ["周报.docx"] and [f["path"] for f in task["files"]] == ["周报.docx"]
+    download = client.get(f"/api/persona/work/{task_id}/files/周报.docx")
+    assert download.status_code == 200 and Document(io.BytesIO(download.content)).paragraphs[0].text == "周报"
+    assert client.get(f"/api/persona/work/{task_id}/files/../task.json").status_code == 404
+
+    assert client.post("/api/persona/work", json={"text": "加一句", "task_id": task_id}).status_code == 202
+    again = wait_idle(client, task_id)
+    assert [t["content"] for t in again["turns"]] == ["写本周周报", "周报写好了。", "加一句", "改好了。"]
+    (listed,) = client.get("/api/persona/work").json()["tasks"]
+    assert listed["task_id"] == task_id and listed["turns"] == 4
+
+    assert client.delete(f"/api/persona/work/{task_id}").json() == {"deleted": True}
+    assert client.get(f"/api/persona/work/{task_id}").status_code == 404
+    assert client.post("/api/persona/work", json={"text": "x", "task_id": "w_000000000000"}).status_code == 404
+
+
+def test_a_task_runs_one_turn_at_a_time(local: tuple[TestClient, list[Scripted]]) -> None:
+    client, models = local
+    release = threading.Event()
+
+    def hold(_: list[BaseMessage]) -> AIMessage:
+        release.wait(5)
+        return AIMessage(content="好了。")
+
+    models.append(Scripted(steps=[hold]))
+    task_id = client.post("/api/persona/work", json={"text": "慢慢做"}).json()["task"]["task_id"]
+    running = client.get(f"/api/persona/work/{task_id}").json()
+    assert running["status"] == "running" and running["job_id"]
+    assert client.post("/api/persona/work", json={"text": "再来", "task_id": task_id}).status_code == 409
+    assert client.delete(f"/api/persona/work/{task_id}").status_code == 409
+    release.set()
+    assert wait_idle(client, task_id)["turns"][-1]["content"] == "好了。"
+
+
+def test_a_failed_turn_is_marked_and_the_task_can_go_on(local: tuple[TestClient, list[Scripted]]) -> None:
+    client, models = local
+
+    def broken(_: list[BaseMessage]) -> AIMessage:
+        raise RuntimeError("upstream exploded with a secret prompt")
+
+    models.append(Scripted(steps=[broken, lambda _: AIMessage(content="这次好了。")]))
+    task_id = client.post("/api/persona/work", json={"text": "做"}).json()["task"]["task_id"]
+    failed = wait_idle(client, task_id)
+    assert failed["status"] == "failed" and "secret" not in failed["error"]
+    assert client.post("/api/persona/work", json={"text": "再试", "task_id": task_id}).status_code == 202
+    assert wait_idle(client, task_id)["turns"][-1]["content"] == "这次好了。"
+
+
+def test_without_a_tool_calling_model_work_mode_says_so(tmp_path: Path) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db", llm=LLMSettings(provider="claude_cli"))
+    app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {}), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://127.0.0.1", headers=CSRF) as client:
+        answer = client.post("/api/persona/work", json={"text": "写周报"})
+        assert answer.status_code == 503 and "claude_cli 不支持" in answer.json()["detail"]
+        assert client.get("/api/persona/work").json() == {"tasks": []}
+
+
+@pytest.fixture
+def signed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, list[Scripted]]]:
+    monkeypatch.setenv("TWIN_SMTP_PASSWORD", "test-only")
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    sender = MagicMock()
+    monkeypatch.setattr("twin.web.auth.send_code", sender)
+    settings = Settings(
+        db_path=tmp_path / "twin.db",
+        auth=AuthSettings(
+            enabled=True, smtp=SMTPSettings(host="smtp.example.com", username="test", from_address="t@example.com")
+        ),
+    )
+    models: list[Scripted] = []
+    app = create_app(
+        settings,
+        llm_factory=lambda: FakeLLM(lambda *_: {}),
+        embedder_factory=HashingEmbedder,
+        work_model_factory=lambda: models[0],
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        client.app.state.sender = sender  # type: ignore[attr-defined]
+        yield client, models
+
+
+def login(client: TestClient, email: str) -> str:
+    client.post("/api/auth/request", json={"email": email}, headers=CSRF)
+    code = str(client.app.state.sender.call_args.args[2])  # type: ignore[attr-defined]
+    assert client.post("/api/auth/verify", json={"email": email, "code": code}, headers=CSRF).status_code == 200
+    return str(client.cookies["twin_session"])
+
+
+def test_a_visitor_works_with_a_public_twin_and_sees_only_their_own_tasks(
+    signed: tuple[TestClient, list[Scripted]], tmp_path: Path
+) -> None:
+    client, models = signed
+    model = Scripted(
+        steps=[
+            lambda _: call("write_word", path="私事", title="", markdown="本人的"),
+            lambda _: AIMessage(content="写好了。"),
+            lambda _: call("write_word", path="访客", title="", markdown="访客的"),
+            lambda _: AIMessage(content="给你写好了。"),
+        ]
+    )
+    models.append(model)
+    member = login(client, MEMBER)
+    persona = client.post("/api/personas", json={"name": "测试分身"}, headers=CSRF).json()["id"]
+    seed(tmp_path / "personas" / persona / "twin.db")
+    assert client.patch(f"/api/personas/{persona}", json={"public": True}, headers=CSRF).status_code == 200
+    headers = {**CSRF, "X-Twin-Persona": persona}
+    own = client.post("/api/persona/work", json={"text": "写私事"}, headers=headers).json()["task"]["task_id"]
+    assert wait_idle(client, own, headers)["status"] == "idle"
+    assert "pending_questions" in model._tools
+
+    login(client, OTHER)
+    assert client.get("/api/persona/work", headers=headers).json() == {"tasks": []}
+    assert client.get(f"/api/persona/work/{own}", headers=headers).status_code == 404
+    assert client.get(f"/api/persona/work/{own}/files/私事.docx", headers=headers).status_code == 404
+    assert client.delete(f"/api/persona/work/{own}", headers=headers).status_code == 404
+    assert client.post("/api/persona/work", json={"text": "接着写", "task_id": own}, headers=headers).status_code == 404
+    started = client.post("/api/persona/work", json={"text": "帮我写点东西"}, headers=headers)
+    assert started.status_code == 202
+    theirs = started.json()["task"]["task_id"]
+    task = wait_idle(client, theirs, headers)
+    assert task["visitor"] and task["by"] == OTHER and task["files"][0]["path"] == "访客.docx"
+    assert "pending_questions" not in model._tools and "不要替自己答应新的事" in model.system
+    assert client.get(f"/api/persona/work/{theirs}/files/访客.docx", headers=headers).status_code == 200
+    # Visitors still never reach the person's own pages.
+    assert client.get("/api/persona/followups", headers=headers).status_code == 403
+
+    client.cookies.set("twin_session", member)
+    assert [t["task_id"] for t in client.get("/api/persona/work", headers=headers).json()["tasks"]] == [own]
+    assert client.get(f"/api/persona/work/{theirs}", headers=headers).status_code == 404

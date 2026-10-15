@@ -923,6 +923,11 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     return lines
 
 
+def material_text(ctx: PersonaContext) -> str:
+    """The retrieved material as the chat model reads it, for another caller (work mode) to read the same way."""
+    return "\n".join(_material_lines(ctx))
+
+
 def reply_language(text: str) -> str | None:
     """The asker's language when it is plainly Chinese, English, Japanese or Korean, decided here: material in
     another language otherwise pulls the reply into it. None when it is something else."""

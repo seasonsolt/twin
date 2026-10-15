@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from ..config import Settings, make_embedder, make_llm
 from ..embed import Embedder
@@ -10,6 +11,8 @@ from ..llm import LLM
 
 LLMFactory = Callable[[], LLM]
 EmbedderFactory = Callable[[], Embedder]
+# Work mode's LangChain chat model (``persona.work.work_model``); typed loosely so this module needs no LangChain.
+WorkModelFactory = Callable[[], Any]
 
 
 class BackendUnavailable(Exception):
@@ -21,17 +24,23 @@ class Backends:
     endpoints that call a model; browsing keeps working."""
 
     def __init__(
-        self, settings: Settings, llm_factory: LLMFactory | None, embedder_factory: EmbedderFactory | None
+        self,
+        settings: Settings,
+        llm_factory: LLMFactory | None,
+        embedder_factory: EmbedderFactory | None,
+        work_model_factory: WorkModelFactory | None = None,
     ) -> None:
         self._settings = settings
         self._llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.llm))
         self._chat_llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.effective_chat_llm, "chat_llm"))
         self._embedder_factory: EmbedderFactory = embedder_factory or (lambda: make_embedder(settings.embed))
+        self._work_model_factory: WorkModelFactory = work_model_factory or self._default_work_model
         self._lock = threading.Lock()
         self._llm: LLM | None = None
         self._chat_llm: LLM | None = None
         self._embedder: Embedder | None = None
         self._judges: list[Judge] | None = None
+        self._work_model: Any = None
 
     def llm(self) -> LLM:
         with self._lock:
@@ -67,6 +76,21 @@ class Backends:
                 except Exception as e:
                     raise BackendUnavailable(f"无法初始化向量化后端 {self._settings.embed.provider}：{e}") from e
             return self._embedder
+
+    def _default_work_model(self) -> Any:
+        from ..persona.work import work_model
+
+        return work_model(self._settings.effective_chat_llm)
+
+    def work_model(self) -> Any:
+        """The tool-calling chat model of work mode, built from the chat model's settings."""
+        with self._lock:
+            if self._work_model is None:
+                try:
+                    self._work_model = self._work_model_factory()
+                except Exception as e:
+                    raise BackendUnavailable(f"无法初始化工作模式的模型：{e}") from e
+            return self._work_model
 
     def judges(self) -> list[Judge]:
         """The ``[[judges]]`` panel; empty when none is configured (the main model then judges)."""

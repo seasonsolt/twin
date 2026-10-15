@@ -279,6 +279,9 @@ def register(
     from . import followups
 
     followups.register(app, settings, queue_build)
+    from . import work
+
+    work.register(app, settings, backends, jobs)
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():

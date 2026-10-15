@@ -8,7 +8,6 @@ import logging
 import re
 import secrets
 import shutil
-import sqlite3
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -180,7 +179,7 @@ class Personas:
     def _view(
         self, entry: dict[str, Any], identity: dict[str, Any], settings: Settings, default: str
     ) -> dict[str, Any]:
-        """Reads the persona's files; needs no ``lock`` given a copy of ``entry``."""
+        """Reads the persona's files; needs no ``lock`` given a copy of ``entry``, the persona counted as in flight."""
         persona_id = entry["id"]
         name, _ = stored_identity(settings.db_path)
         portrait = AssetStore(settings.db_path).path("portrait")
@@ -232,7 +231,8 @@ class Personas:
         def list_personas(request: Request) -> list[dict[str, Any]]:
             identity = request.scope["twin_identity"]
             # Only the registry is read under the lock; each persona's files are read after letting go of it, so
-            # requests to every persona do not wait for the listing.
+            # requests to every persona do not wait for the listing. Each listed persona counts as in flight until
+            # its files are read: opening the database of one moved to the trash meanwhile would create it again.
             with self.lock:
                 expired = self.purge_trash()
                 listed = [
@@ -241,19 +241,14 @@ class Personas:
                     if self.visible(entry, identity)
                 ]
                 default = self.data["default"]
-            self.remove_trash(expired)
-            views = []
-            for entry, settings in listed:
-                try:
-                    views.append(self._view(entry, identity, settings, default))
-                except (OSError, sqlite3.Error):
-                    with self.lock:
-                        # Deleted while being listed: its directory has just moved to the trash.
-                        if entry["id"] not in self.removing and any(
-                            p["id"] == entry["id"] and not p.get("deleted_at") for p in self.data["personas"]
-                        ):
-                            raise
-            return views
+                for entry, _ in listed:
+                    self.enter(entry["id"])
+            try:
+                self.remove_trash(expired)
+                return [self._view(entry, identity, settings, default) for entry, settings in listed]
+            finally:
+                for entry, _ in listed:
+                    self.leave(entry["id"])
 
         @app.get("/api/personas/trash")
         def list_trash(request: Request) -> list[dict[str, Any]]:

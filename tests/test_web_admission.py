@@ -336,15 +336,21 @@ def test_listing_personas_reads_their_files_without_the_registry_lock(
         assert {p["id"] for p in listed} == {"default", kept}
         assert len(removed) == 1 and removed[0].startswith(gone)
 
-        # A persona deleted while the listing reads its files is left out; any other failure is not hidden.
-        def deleted_meanwhile(self: personas.Personas, entry: dict[str, Any], *args: Any) -> Any:
+        # A persona whose files are being read cannot be deleted meanwhile: reading it after its directory moved to
+        # the trash would create its database again and block restoring it.
+        refused: list[int] = []
+
+        def delete_meanwhile(self: personas.Personas, entry: dict[str, Any], *args: Any) -> Any:
             if entry["id"] == kept:
-                with self.lock:
-                    self.removing.add(kept)
-                raise sqlite3.OperationalError("unable to open database file")
+                refused.append(web.delete(f"/api/personas/{kept}", headers=HEADERS).status_code)
             return view(self, entry, *args)
 
-        monkeypatch.setattr(personas.Personas, "_view", deleted_meanwhile)
+        monkeypatch.setattr(personas.Personas, "_view", delete_meanwhile)
+        assert {p["id"] for p in web.get("/api/personas", headers=HEADERS).json()} == {"default", kept}
+        assert refused == [409] and registry.in_flight(kept) == 0
+
+        # One already being deleted is left out of the listing.
+        registry.removing.add(kept)
         assert [p["id"] for p in web.get("/api/personas", headers=HEADERS).json()] == ["default"]
         registry.removing.discard(kept)
 

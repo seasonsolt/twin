@@ -25,7 +25,7 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from ..config import Settings
 from ..embed import Embedder
 from ..llm import LLM
-from ..persona.chat import PersonaChat, index_persona, no_profile_reply, off_loop
+from ..persona.chat import PersonaChat, index_persona, no_profile_reply, off_loop, open_store_off_loop
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
 from ..persona.items import PReview
@@ -684,7 +684,7 @@ def register(
                 return
             # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
             async with ticket.running():
-                with await off_loop(partial(PersonaStore, settings.db_path)) as store:
+                with await open_store_off_loop(settings.db_path) as store:
                     chat = PersonaChat(store, llm, embedder, settings)
                     async with aclosing(chat.stream_reply(messages)) as replies:
                         async for result in replies:

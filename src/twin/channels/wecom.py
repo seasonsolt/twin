@@ -22,7 +22,7 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from ..assets import AssetStore
 from ..config import Settings
-from ..persona.chat import HISTORY_TURNS, PersonaChat, no_profile_reply, off_loop
+from ..persona.chat import HISTORY_TURNS, PersonaChat, no_profile_reply, off_loop, open_store_off_loop
 from ..persona.schema import ChatReply, ChatTurn
 from ..persona.store import PersonaStore, stored_identity
 from ..service import resolve_citations
@@ -328,7 +328,7 @@ class WeComBotRunner:
                 return
             messages = [*session.history, ChatTurn(role="user", content=question)]
             # The store is opened, read and written off the event loop, which every bot and the web UI share.
-            with await off_loop(partial(PersonaStore, self.settings.db_path)) as store:
+            with await open_store_off_loop(self.settings.db_path) as store:
                 reply: ChatReply | None
                 if not await off_loop(store.has_items):
                     reply = await off_loop(partial(no_profile_reply, store))

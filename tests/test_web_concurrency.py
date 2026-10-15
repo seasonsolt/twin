@@ -18,7 +18,7 @@ from test_chat_streaming import StreamingLLM, seed
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
-from twin.persona.chat import PersonaChat
+from twin.persona.chat import PersonaChat, open_store_off_loop
 from twin.persona.store import PersonaStore
 from twin.web import create_app, persona
 from twin.web.jobs import AdmittedStream, JobConflict, JobManager, TooManyJobs, describe_error
@@ -237,3 +237,33 @@ def test_preparation_reserves_admission_and_rolls_it_back_on_failure(
     job = manager.submit(kind, "accepted", lambda log: "done")
     assert manager.wait(job.job_id, 3)
     assert manager.snapshot(job.job_id)["status"] == "done"
+
+
+def test_a_store_opened_for_a_cancelled_caller_is_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    opening, release = threading.Event(), threading.Event()
+    closed: list[PersonaStore] = []
+    init, close = PersonaStore.__init__, PersonaStore.close
+
+    def slow_init(self: PersonaStore, path: Path | str) -> None:
+        opening.set()
+        release.wait(5)
+        init(self, path)
+
+    def counted_close(self: PersonaStore) -> None:
+        closed.append(self)
+        close(self)
+
+    monkeypatch.setattr(PersonaStore, "__init__", slow_init)
+    monkeypatch.setattr(PersonaStore, "close", counted_close)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(open_store_off_loop(tmp_path / "twin.db"))
+        await asyncio.to_thread(opening.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert len(closed) == 1

@@ -21,6 +21,7 @@ from contextlib import aclosing
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 from pydantic import ValidationError
@@ -299,15 +300,22 @@ def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref
     ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
 
 
-async def off_loop[T](fn: Callable[[], T]) -> T:
+async def off_loop[T](fn: Callable[[], T], discard: Callable[[T], object] | None = None) -> T:
     """``fn()`` in a worker thread. A caller cancelled meanwhile still waits for it: ``fn`` may be using a SQLite
-    store that the caller closes as soon as it unwinds."""
+    store that the caller closes as soon as it unwinds. ``discard`` disposes of a result nobody will receive."""
     work = asyncio.ensure_future(asyncio.to_thread(fn))
     try:
         return await asyncio.shield(work)
     except asyncio.CancelledError:
-        await asyncio.gather(work, return_exceptions=True)
+        [result] = await asyncio.gather(work, return_exceptions=True)
+        if discard is not None and not isinstance(result, BaseException):
+            discard(result)
         raise
+
+
+async def open_store_off_loop(path: Path) -> PersonaStore:
+    """A store opened off the event loop; one opened for a caller cancelled meanwhile is closed again."""
+    return await off_loop(partial(PersonaStore, path), PersonaStore.close)
 
 
 def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatReply:

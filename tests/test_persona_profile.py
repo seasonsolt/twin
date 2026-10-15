@@ -380,6 +380,36 @@ def test_a_facet_written_with_its_name_is_kept(settings: Settings) -> None:
     assert report.extraction.kept == 1 and report.extraction.unknown_facets == {"D4": 1}
 
 
+def test_only_the_chunks_that_found_nothing_are_extracted_again(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pf, "CHUNK_CHARS", 40)  # one chunk per entry
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    store.put_source(parse_chat("群_2026-10.txt", CHAT.replace("09-0", "10-0"), settings))
+    sep, oct_ = (s.source_id for s in store.list_sources())
+
+    def money_only(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        found = [n for n, text in entries(user).items() if "钱进了账户" in text]
+        quotes = [{"n": n, "quote": "钱进了账户"} for n in found]
+        items = [{"facet_id": "2.1", "statement": "回款第一", "quotes": quotes}] if found else []
+        return {"items": items} if schema is pf.ExtractDraft else {"items": []}
+
+    assert pf.build_profile(store, FakeLLM(money_only), settings).chunks_extracted == 4
+    assert store.empty_chunks() == {sep: 1, oct_: 1}
+    kept = {c.candidate_id for c in store.list_candidates()}
+
+    assert store.reextract_source("src_missing", empty_only=True) is None
+    assert store.reextract_source(sep, empty_only=True) == 1
+    assert {c.candidate_id for c in store.list_candidates()} == kept  # chunks with candidates are untouched
+    assert store.reextract_source(sep, empty_only=True) == 0  # nothing left to forget: not marked again
+    llm = FakeLLM(handler)
+    report = pf.build_profile(store, llm, settings)
+    assert report.chunks_extracted == 1 and len([n for n, _, _ in llm.calls if n == "ExtractDraft"]) == 1
+    assert store.empty_chunks() == {oct_: 1}
+    assert not pf.profile_stale(store)
+
+
 def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(
     store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -307,16 +307,31 @@ class PersonaStore:
                     shutil.rmtree(self.path.parent / "media-sources" / source.media_sha, ignore_errors=True)
             return deleted
 
-    def reextract_source(self, source_id: str) -> int | None:
-        """Forget what was extracted from a source, so the next build asks the model again even though its chunks
-        are unchanged; the profile keeps the old items until that build merges. Returns the chunks forgotten, or
-        None when there is no such source."""
+    def empty_chunks(self) -> dict[str, int]:
+        """Per source, how many of its extracted chunks yielded no candidate."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT source_id, COUNT(*) FROM p_chunks "
+                "WHERE chunk_id NOT IN (SELECT chunk_id FROM p_candidates) GROUP BY source_id"
+            ).fetchall()
+        return {source_id: count for source_id, count in rows}
+
+    def reextract_source(self, source_id: str, *, empty_only: bool = False) -> int | None:
+        """Forget what was extracted from a source (with ``empty_only``, only its chunks that yielded no candidate),
+        so the next build asks the model again even though those chunks are unchanged; the profile keeps the old
+        items until that build merges. Returns the chunks forgotten, or None when there is no such source; a source
+        with nothing to forget is left as it is."""
         with self._tx() as db:
             if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
                 return None
-            chunks = [r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE source_id = ?", (source_id,))]
+            empty = " AND chunk_id NOT IN (SELECT chunk_id FROM p_candidates)" if empty_only else ""
+            chunks = [
+                r[0] for r in db.execute(f"SELECT chunk_id FROM p_chunks WHERE source_id = ?{empty}", (source_id,))
+            ]
+            if not chunks:
+                return 0
             db.executemany("DELETE FROM p_candidates WHERE chunk_id = ?", [(c,) for c in chunks])
-            db.execute("DELETE FROM p_chunks WHERE source_id = ?", (source_id,))
+            db.executemany("DELETE FROM p_chunks WHERE chunk_id = ?", [(c,) for c in chunks])
             self._sources_changed(db)
             db.execute("DELETE FROM p_meta WHERE key = ?", (f"source_error:{source_id}",))
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_pending:{source_id}", uuid.uuid4().hex))

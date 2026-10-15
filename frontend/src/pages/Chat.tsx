@@ -8,7 +8,10 @@ import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
-import { useComposerLayout } from '../features/chat/useComposerLayout';
+import {
+  useComposerLayout,
+  usePinnedMessage,
+} from '../features/chat/useComposerLayout';
 import { ConversationHistory } from '../features/chat/ConversationHistory';
 import { videoUrl } from '../features/chat/useReplyVideos';
 import type { Turn } from '../features/chat/types';
@@ -140,9 +143,23 @@ export function Chat() {
       stateRequest.current?.abort();
     };
   }, [active, refreshState]);
+  // A message the person sends goes to the top with room for the reply below; a conversation opened from
+  // history shows its end.
+  const pinNext = useRef(false);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const latestUser =
+    [...chat.turns].reverse().find((turn) => turn.role === 'user')?.id ?? null;
   useEffect(() => {
-    if (active) end.current?.scrollIntoView?.({ block: 'end' });
-  }, [active, end, chat.turns, chat.busy, composerHeight]);
+    if (!pinNext.current || !latestUser) return;
+    pinNext.current = false;
+    setPinned(latestUser);
+  }, [latestUser, setPinned]);
+  const pinnedId =
+    pinned && chat.turns.some((turn) => turn.id === pinned) ? pinned : null;
+  const space = usePinnedMessage(pinnedId, end, composer);
+  useEffect(() => {
+    if (active && !pinnedId) end.current?.scrollIntoView?.({ block: 'end' });
+  }, [active, end, pinnedId, chat.turns, chat.busy, composerHeight]);
   const currentTurn = chat.turns.find(
     (turn) => turn.id === (videoId || audio.id || chat.newest),
   );
@@ -175,6 +192,7 @@ export function Chat() {
   };
   const newConversation = () => {
     chat.clear();
+    setPinned(null);
     stopPlayback();
   };
   const history = (
@@ -195,11 +213,13 @@ export function Chat() {
     audio.stop();
     audio.unlock();
     void refreshState();
+    pinNext.current = true;
     void chat.send();
   };
   return (
     <div
       className="chat-page"
+      data-empty={!chat.turns.length && !chat.loading}
       style={{ '--composer-height': `${composerHeight}px` } as CSSProperties}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
@@ -239,7 +259,7 @@ export function Chat() {
         <div className="chat-scroll">
           <div className="chat-column-grid">
             <PersonaFade>
-              <div className="chat-conversation flex flex-col justify-end space-y-4">
+              <div className="chat-conversation flex flex-col space-y-4">
                 {stale && canManage && (
                   <p role="status" className="text-xs text-secondary">
                     新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
@@ -327,6 +347,9 @@ export function Chat() {
                           <article
                             aria-label={
                               turn.role === 'user' ? '你说' : '分身回复'
+                            }
+                            data-pin={
+                              turn.role === 'user' ? turn.id : undefined
                             }
                             className={
                               turn.role === 'user'
@@ -474,6 +497,7 @@ export function Chat() {
                   </div>
                 )}
                 <div ref={end} />
+                {space > 0 && <div aria-hidden style={{ height: space }} />}
               </div>
             </PersonaFade>
           </div>

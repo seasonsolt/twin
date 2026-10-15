@@ -637,7 +637,7 @@ it('moves the composer above the visual viewport keyboard and cleans up on leavi
     document.documentElement.style.getPropertyValue('--keyboard-inset'),
   ).toBe('');
 });
-it('scrolls to the newest message on both send and receive', async () => {
+it('puts a sent message at the top and lets the reply grow below it instead of chasing it', async () => {
   vi.useFakeTimers();
   const scroll = vi.fn();
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -645,15 +645,37 @@ it('scrolls to the newest message on both send and receive', async () => {
     value: scroll,
   });
   mount();
-  const initial = scroll.mock.calls.length;
   await submit();
-  expect(scroll.mock.calls.length).toBeGreaterThan(initial);
+  await act(async () => {
+    vi.advanceTimersByTime(50);
+  });
+  const starts = scroll.mock.contexts.filter(
+    (_: unknown, index: number) =>
+      (scroll.mock.calls[index][0] as ScrollIntoViewOptions | undefined)
+        ?.block === 'start',
+  );
+  const pinned = starts.at(-1) as HTMLElement | undefined;
+  expect(pinned).toHaveAttribute('aria-label', '你说');
+  expect(pinned).toHaveAttribute('data-pin');
+  expect(document.querySelector('.chat-page')).toHaveAttribute(
+    'data-empty',
+    'false',
+  );
   const sent = scroll.mock.calls.length;
   await act(async () => {
     streamController.enqueue(encode('final', reply));
     streamController.close();
   });
-  expect(scroll.mock.calls.length).toBeGreaterThan(sent);
+  await act(async () => {
+    vi.advanceTimersByTime(50);
+  });
+  expect(
+    scroll.mock.calls
+      .slice(sent)
+      .filter(
+        ([options]) => (options as ScrollIntoViewOptions)?.block === 'end',
+      ),
+  ).toEqual([]);
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
 it('keeps user messages plain and applies strict CJK typography', () => {
@@ -734,11 +756,10 @@ it.each([true, false])(
       'rounded-full',
     );
     expect(bubble.querySelectorAll('p')).toHaveLength(2);
-    expect(view.container.querySelector('.chat-conversation')).toHaveClass(
-      'flex',
-      'flex-col',
-      'justify-end',
-    );
+    // Top-aligned like ChatGPT: the thread starts at the top, not above the composer.
+    const conversation = view.container.querySelector('.chat-conversation');
+    expect(conversation).toHaveClass('flex', 'flex-col');
+    expect(conversation).not.toHaveClass('justify-end');
     await userEvent.setup().click(citations);
     expect(screen.getByRole('list', { name: '回答依据' })).toBeVisible();
   },

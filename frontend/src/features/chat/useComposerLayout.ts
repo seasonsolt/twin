@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 
 /** The conversation layout chat and work share: the pinned composer's height (the thread leaves room for it),
  * the phone keyboard's inset, and the end of the thread to scroll to. */
@@ -59,4 +65,72 @@ export function useComposerLayout(active: boolean) {
     };
   }, [active]);
   return { end, composer, composerHeight };
+}
+
+const REPLY_GAP = 16;
+
+/** ChatGPT's way with a message just sent: it goes to the top of the visible thread and the space below it is
+ * kept open for the reply, shrinking as the reply grows. ``pinned`` is the ``data-pin`` of that message (null:
+ * nothing pinned, e.g. a conversation opened from history, which shows its end instead). Returns the height of
+ * the space to render after ``end``. */
+export function usePinnedMessage(
+  pinned: string | null,
+  end: RefObject<HTMLElement | null>,
+  composer: RefObject<HTMLElement | null>,
+) {
+  const [space, setSpace] = useState(0);
+  const scrolled = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!pinned) {
+      setSpace(0);
+      scrolled.current = null;
+      return;
+    }
+    const target = document.querySelector<HTMLElement>(
+      `[data-pin="${CSS.escape(pinned)}"]`,
+    );
+    const marker = end.current;
+    const form = composer.current;
+    if (!target || !marker || !form) {
+      setSpace(0);
+      return;
+    }
+    // The thread scrolls in its own column on a wide screen, and with the window otherwise.
+    const scroller = target.closest<HTMLElement>('.chat-scroll');
+    const own =
+      scroller !== null &&
+      ['auto', 'scroll'].includes(getComputedStyle(scroller).overflowY);
+    const measure = () => {
+      const top = own ? scroller.getBoundingClientRect().top : 0;
+      const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+      const visible = form.getBoundingClientRect().top - top - margin;
+      const content =
+        marker.getBoundingClientRect().top - target.getBoundingClientRect().top;
+      setSpace(Math.max(0, Math.round(visible - content - REPLY_GAP)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (marker.parentElement) observer.observe(marker.parentElement);
+    observer.observe(form);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [pinned, end, composer]);
+  useEffect(() => {
+    if (!pinned || scrolled.current === pinned) return;
+    const target = document.querySelector<HTMLElement>(
+      `[data-pin="${CSS.escape(pinned)}"]`,
+    );
+    if (!target) return;
+    // After the space below is in place, so the message can reach the top; a later change of the space before
+    // the frame cancels this one and schedules it again.
+    const frame = requestAnimationFrame(() => {
+      scrolled.current = pinned;
+      target.scrollIntoView?.({ block: 'start' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pinned, space]);
+  return space;
 }

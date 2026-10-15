@@ -113,6 +113,11 @@ it('starts a task, shows its progress while it runs, then the reply and the file
   expect(
     await screen.findByRole('heading', { name: '交给本人一件事' }),
   ).toBeInTheDocument();
+  // A new task, like a new ChatGPT conversation, centres the greeting and the composer on a wide screen.
+  expect(document.querySelector('.chat-page')).toHaveAttribute(
+    'data-empty',
+    'true',
+  );
   await user.click(
     screen.getByRole('button', { name: '按我的口吻写一份本周周报' }),
   );
@@ -131,6 +136,14 @@ it('starts a task, shows its progress while it runs, then the reply and the file
   ).toBeInTheDocument();
   expect(screen.getByRole('article', { name: '你说' })).toHaveTextContent(
     '写周报',
+  );
+  expect(screen.getByRole('article', { name: '你说' })).toHaveAttribute(
+    'data-pin',
+    'w_aaaaaaaaaaaa:0',
+  );
+  expect(document.querySelector('.chat-page')).toHaveAttribute(
+    'data-empty',
+    'false',
   );
 
   task = {

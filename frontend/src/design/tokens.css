@@ -522,6 +522,11 @@
   max-width: 792px;
   margin: 0 auto;
 }
+/* A message just sent goes to the top of the thread (``usePinnedMessage``), below the fixed stage once it has
+   folded on a phone or tablet. */
+.chat-conversation [data-pin] {
+  scroll-margin-top: calc(108px + env(safe-area-inset-top, 0px));
+}
 .stage-space {
   position: relative;
   flex-shrink: 0;
@@ -1491,6 +1496,29 @@
     width: 100%;
     max-width: none;
     margin-inline: 0;
+  }
+  .chat-conversation [data-pin] {
+    scroll-margin-top: 24px;
+  }
+  /* A new conversation, like ChatGPT's: the greeting and the composer together in the middle of the column. */
+  .chat-page[data-empty='true'] .chat-thread {
+    justify-content: center;
+    padding-bottom: 12dvh;
+  }
+  .chat-page[data-empty='true'] .chat-scroll {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .chat-page[data-empty='true'] .chat-scroll > .chat-column-grid,
+  .chat-page[data-empty='true'] .chat-conversation {
+    min-height: 0;
+  }
+  .chat-page[data-empty='true'] .chat-conversation {
+    padding-bottom: 0;
+  }
+  .chat-page[data-empty='true'] .chat-composer {
+    padding-top: 8px;
+    border-top-color: transparent;
   }
   .memories-page,
   .about-page,

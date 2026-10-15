@@ -19,7 +19,10 @@ import {
 import type { Capabilities } from '../features/avatar/types';
 import { ChatStage } from '../features/chat/ChatStage';
 import { MessageText } from '../features/chat/MessageText';
-import { useComposerLayout } from '../features/chat/useComposerLayout';
+import {
+  useComposerLayout,
+  usePinnedMessage,
+} from '../features/chat/useComposerLayout';
 import { WorkHistory } from '../features/work/WorkHistory';
 import type {
   WorkFile,
@@ -103,16 +106,19 @@ function Steps({ steps }: { steps: string[] }) {
 function Turn({
   taskId,
   turn,
+  pin,
   files,
 }: {
   taskId: string;
   turn: WorkTurn;
+  pin: string;
   files: Map<string, WorkFile>;
 }) {
   if (turn.role === 'user')
     return (
       <article
         aria-label="你说"
+        data-pin={pin}
         className="user-bubble ml-auto w-fit max-w-[85%] px-4 py-3"
       >
         <MessageText text={turn.content} plain />
@@ -233,14 +239,39 @@ export function Work() {
     return () => window.clearInterval(timer);
   }, [running, taskId, loadTask, loadTasks]);
 
+  // A message the person sends (a new task, a follow-up or a word while it runs) goes to the top with room for
+  // the reply below; a task opened from the list shows its end.
+  const pinNext = useRef(false);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const latestUser = task
+    ? task.turns.map((turn) => turn.role).lastIndexOf('user')
+    : -1;
+  const latestPin =
+    task && latestUser >= 0 ? `${task.task_id}:${latestUser}` : null;
   useEffect(() => {
-    if (active) end.current?.scrollIntoView?.({ block: 'end' });
-  }, [active, end, task?.turns.length, task?.progress.length, composerHeight]);
+    if (!pinNext.current || !latestPin) return;
+    pinNext.current = false;
+    setPinned(latestPin);
+  }, [latestPin, setPinned]);
+  const pinnedId =
+    pinned && task && pinned.startsWith(`${task.task_id}:`) ? pinned : null;
+  const space = usePinnedMessage(pinnedId, end, composer);
+  useEffect(() => {
+    if (active && !pinnedId) end.current?.scrollIntoView?.({ block: 'end' });
+  }, [
+    active,
+    end,
+    pinnedId,
+    task?.turns.length,
+    task?.progress.length,
+    composerHeight,
+  ]);
 
   const send = async () => {
     const text = draft.trim();
     if (!text || sending) return;
     setSending(true);
+    pinNext.current = true;
     try {
       const started = await api<WorkStarted>('/api/persona/work', {
         method: 'POST',
@@ -251,6 +282,7 @@ export function Work() {
       await loadTask(started.task.task_id);
       await loadTasks();
     } catch (failure) {
+      pinNext.current = false;
       toast(failure instanceof Error ? failure.message : '发送失败', 'danger');
     } finally {
       setSending(false);
@@ -322,6 +354,7 @@ export function Work() {
   return (
     <div
       className="chat-page"
+      data-empty={current === null}
       style={{ '--composer-height': `${composerHeight}px` } as CSSProperties}
     >
       <ChatStage
@@ -345,7 +378,7 @@ export function Work() {
         <div className="chat-scroll">
           <div className="chat-column-grid">
             <PersonaFade>
-              <div className="chat-conversation flex flex-col justify-end space-y-4">
+              <div className="chat-conversation flex flex-col space-y-4">
                 <div aria-live="polite" aria-relevant="additions text">
                   {current === null && (
                     <EmptyState
@@ -384,6 +417,7 @@ export function Work() {
                           key={index}
                           taskId={task.task_id}
                           turn={turn}
+                          pin={`${task.task_id}:${index}`}
                           files={files}
                         />
                       ))}
@@ -416,6 +450,7 @@ export function Work() {
                   </div>
                 )}
                 <div ref={end} />
+                {space > 0 && <div aria-hidden style={{ height: space }} />}
               </div>
             </PersonaFade>
           </div>

@@ -56,6 +56,7 @@ VISITOR_ROUTES = [
         ("GET|POST", r"/api/persona/work"),
         ("GET|DELETE", r"/api/persona/work/[^/]+"),
         ("GET", r"/api/persona/work/[^/]+/files/.+"),
+        ("POST", r"/api/persona/work/[^/]+/stop"),
     ]
 ]
 

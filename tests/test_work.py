@@ -15,7 +15,7 @@ import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from openpyxl import load_workbook
 from pydantic import PrivateAttr
@@ -280,22 +280,95 @@ def test_a_task_runs_in_the_background_and_its_files_download(local: tuple[TestC
     assert client.post("/api/persona/work", json={"text": "x", "task_id": "w_000000000000"}).status_code == 404
 
 
-def test_a_task_runs_one_turn_at_a_time(local: tuple[TestClient, list[Scripted]]) -> None:
+class Hold:
+    """A step that waits for the test to let it go, after telling it the model call has started."""
+
+    def __init__(self, reply: AIMessage) -> None:
+        self.entered, self.release, self.reply = threading.Event(), threading.Event(), reply
+
+    def __call__(self, _: list[BaseMessage]) -> AIMessage:
+        self.entered.set()
+        assert self.release.wait(5)
+        return self.reply
+
+
+def start(client: TestClient, text: str, hold: Hold) -> str:
+    task_id: str = client.post("/api/persona/work", json={"text": text}).json()["task"]["task_id"]
+    assert hold.entered.wait(5)
+    return task_id
+
+
+def test_a_message_while_it_runs_reaches_the_agent_at_its_next_step(local: tuple[TestClient, list[Scripted]]) -> None:
     client, models = local
-    release = threading.Event()
+    hold = Hold(AIMessage(content="周报写好了。"))
 
-    def hold(_: list[BaseMessage]) -> AIMessage:
-        release.wait(5)
-        return AIMessage(content="好了。")
+    def heard(messages: list[BaseMessage]) -> AIMessage:
+        assert [str(m.content) for m in messages if isinstance(m, HumanMessage)] == ["写周报", "顺便列个待办"]
+        return AIMessage(content="周报写好了，待办也列了。")
 
-    models.append(Scripted(steps=[hold]))
-    task_id = client.post("/api/persona/work", json={"text": "慢慢做"}).json()["task"]["task_id"]
+    models.append(Scripted(steps=[hold, heard]))
+    task_id = start(client, "写周报", hold)
     running = client.get(f"/api/persona/work/{task_id}").json()
-    assert running["status"] == "running" and running["job_id"]
-    assert client.post("/api/persona/work", json={"text": "再来", "task_id": task_id}).status_code == 409
+    assert running["status"] == "running" and running["job_id"] and not running["stopping"]
+    steered = client.post("/api/persona/work", json={"text": "顺便列个待办", "task_id": task_id})
+    assert steered.status_code == 202 and steered.json()["steered"]
+    shown = client.get(f"/api/persona/work/{task_id}").json()
+    assert [t["content"] for t in shown["turns"]] == ["写周报", "顺便列个待办"] and shown["status"] == "running"
     assert client.delete(f"/api/persona/work/{task_id}").status_code == 409
+    hold.release.set()
+    task = wait_idle(client, task_id)
+    assert [(t["role"], t["content"]) for t in task["turns"]] == [
+        ("user", "写周报"),
+        ("user", "顺便列个待办"),
+        ("assistant", "周报写好了，待办也列了。"),
+    ]
+    assert task["turns"][-1]["steps"] == ["看到新消息：顺便列个待办"]
+
+
+def test_a_message_the_turn_never_read_gets_a_turn_of_its_own(
+    local: tuple[TestClient, list[Scripted]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from twin.persona.work import WorkTurn
+
+    client, models = local
+    models.append(Scripted(steps=[]))
+    entered, release = threading.Event(), threading.Event()
+    seen: list[tuple[list[str], str]] = []
+
+    def run_turn(task: WorkTask, text: str, *_: Any, **__: Any) -> WorkTurn:
+        seen.append(([t.content for t in task.turns], text))
+        if len(seen) == 1:  # finishes without looking at its messages again
+            entered.set()
+            assert release.wait(5)
+        return WorkTurn(role="assistant", content=f"答：{text}", at="t")
+
+    monkeypatch.setattr("twin.web.work.run_turn", run_turn)
+    task_id = client.post("/api/persona/work", json={"text": "第一件"}).json()["task"]["task_id"]
+    assert entered.wait(5)
+    assert client.post("/api/persona/work", json={"text": "第二件", "task_id": task_id}).json()["steered"]
     release.set()
-    assert wait_idle(client, task_id)["turns"][-1]["content"] == "好了。"
+    task = wait_idle(client, task_id)
+    assert [t["content"] for t in task["turns"]] == ["第一件", "答：第一件", "第二件", "答：第二件"]
+    assert seen == [([], "第一件"), (["第一件", "答：第一件"], "第二件")]
+
+
+def test_a_stop_ends_the_turn_at_its_next_step_and_keeps_what_it_wrote(
+    local: tuple[TestClient, list[Scripted]],
+) -> None:
+    client, models = local
+    hold = Hold(call("write_word", path="半成品", title="", markdown="写到一半"))
+    models.append(Scripted(steps=[hold]))
+    task_id = start(client, "写方案", hold)
+    assert client.post(f"/api/persona/work/{task_id}/stop").json() == {"stopping": True}
+    assert client.get(f"/api/persona/work/{task_id}").json()["stopping"]
+    hold.release.set()
+    task = wait_idle(client, task_id)
+    assert task["turns"][-1]["content"] == "好，先停在这里。" and task["turns"][-1]["files"] == ["半成品.docx"]
+    assert len(models[0]._seen) == 1  # no model call after the stop
+    assert client.post(f"/api/persona/work/{task_id}/stop").status_code == 409
+    models[0].steps.append(lambda _: AIMessage(content="接着来。"))
+    assert client.post("/api/persona/work", json={"text": "继续", "task_id": task_id}).json()["steered"] is False
+    assert wait_idle(client, task_id)["turns"][-1]["content"] == "接着来。"
 
 
 def test_a_failed_turn_is_marked_and_the_task_can_go_on(local: tuple[TestClient, list[Scripted]]) -> None:

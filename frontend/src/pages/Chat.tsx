@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  type CSSProperties,
-} from 'react';
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import { useLocation } from 'react-router';
 import { ArrowUp, Play } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
@@ -14,6 +8,7 @@ import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
+import { useComposerLayout } from '../features/chat/useComposerLayout';
 import { ConversationHistory } from '../features/chat/ConversationHistory';
 import { videoUrl } from '../features/chat/useReplyVideos';
 import type { Turn } from '../features/chat/types';
@@ -116,9 +111,7 @@ export function Chat() {
   }, [active, assetVersion, personaId]);
   const stateRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
-  const end = useRef<HTMLDivElement>(null);
-  const composer = useRef<HTMLFormElement>(null);
-  const [composerHeight, setComposerHeight] = useState(76);
+  const { end, composer, composerHeight } = useComposerLayout(active);
   const refreshState = useCallback(async () => {
     stateRequest.current?.abort();
     const controller = new AbortController();
@@ -147,61 +140,9 @@ export function Chat() {
       stateRequest.current?.abort();
     };
   }, [active, refreshState]);
-  useLayoutEffect(() => {
-    const form = composer.current;
-    if (!form) return;
-    const resize = () =>
-      setComposerHeight(form.getBoundingClientRect().height || 76);
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(form);
-    return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    if (!active) return;
-    const viewport = window.visualViewport;
-    const root = document.documentElement;
-    let frame = 0;
-    const update = () => {
-      const inset = viewport
-        ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
-        : 0;
-      const mobile = window.matchMedia('(max-width: 767px)').matches;
-      const focused = document.activeElement?.matches(
-        'input, textarea, select',
-      );
-      const keyboard = mobile && !!focused && inset > 120;
-      root.dataset.keyboard = String(keyboard);
-      root.style.setProperty(
-        '--keyboard-inset',
-        keyboard ? `${inset}px` : '0px',
-      );
-      cancelAnimationFrame(frame);
-      if (focused)
-        frame = requestAnimationFrame(() =>
-          end.current?.scrollIntoView?.({ block: 'end' }),
-        );
-    };
-    update();
-    viewport?.addEventListener('resize', update);
-    viewport?.addEventListener('scroll', update);
-    window.addEventListener('resize', update);
-    document.addEventListener('focusin', update);
-    document.addEventListener('focusout', update);
-    return () => {
-      cancelAnimationFrame(frame);
-      viewport?.removeEventListener('resize', update);
-      viewport?.removeEventListener('scroll', update);
-      window.removeEventListener('resize', update);
-      document.removeEventListener('focusin', update);
-      document.removeEventListener('focusout', update);
-      delete root.dataset.keyboard;
-      root.style.removeProperty('--keyboard-inset');
-    };
-  }, [active]);
   useEffect(() => {
     if (active) end.current?.scrollIntoView?.({ block: 'end' });
-  }, [active, chat.turns, chat.busy, composerHeight]);
+  }, [active, end, chat.turns, chat.busy, composerHeight]);
   const currentTurn = chat.turns.find(
     (turn) => turn.id === (videoId || audio.id || chat.newest),
   );

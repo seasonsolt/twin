@@ -1,31 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { useLocation } from 'react-router';
 import {
   ArrowUp,
   Download,
   FileSpreadsheet,
   FileText,
-  LoaderCircle,
-  Plus,
-  Trash2,
+  Square,
 } from 'lucide-react';
-import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
-import { api } from '../lib/api';
-import { withBase } from '../lib/base';
-import { getPersonaId } from '../lib/persona';
-import { cn } from '../lib/utils';
+import { ThinkingLabel } from '../components/effects/ThinkingLabel';
+import { PersonaFade } from '../components/motion/PersonaFade';
 import {
-  Badge,
   Button,
-  Card,
   EmptyState,
-  IconButton,
-  Skeleton,
   Textarea,
   toast,
   useConfirm,
 } from '../components/ui';
-import { StageHeader } from '../components/layout/StageHeader';
+import type { Capabilities } from '../features/avatar/types';
+import { ChatStage } from '../features/chat/ChatStage';
 import { MessageText } from '../features/chat/MessageText';
+import { useComposerLayout } from '../features/chat/useComposerLayout';
+import { WorkHistory } from '../features/work/WorkHistory';
 import type {
   WorkFile,
   WorkStarted,
@@ -33,9 +28,26 @@ import type {
   WorkTask,
   WorkTurn,
 } from '../features/work/types';
+import { api } from '../lib/api';
+import { withBase } from '../lib/base';
+import { getPersonaId } from '../lib/persona';
+import { loadEssential, peekEssential } from '../lib/personaPrefetch';
+import { useDesktop } from '../lib/useMobile';
+import {
+  usePersonaId,
+  usePersonaState as useState,
+} from '../lib/usePersonaState';
+import { usePersonas } from '../stores/personas';
+import { useStatus } from '../stores/status';
 
 const POLL_MS = 1500;
 const MAX_TEXT = 8000;
+const STARTERS = [
+  '把最近会上答应别人的事整理成 Excel',
+  '按我的口吻写一份本周周报',
+  '列一下我还没回答的问题',
+];
+const noop = () => undefined;
 
 export function fileUrl(taskId: string, path: string) {
   const encoded = path.split('/').map(encodeURIComponent).join('/');
@@ -52,13 +64,6 @@ function size(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function when(iso: string) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 function FileCard({ taskId, file }: { taskId: string; file: WorkFile }) {
   const name = file.path.split('/').pop() ?? file.path;
   const Icon = /\.xlsx$/iu.test(name) ? FileSpreadsheet : FileText;
@@ -66,7 +71,7 @@ function FileCard({ taskId, file }: { taskId: string; file: WorkFile }) {
     <a
       href={fileUrl(taskId, file.path)}
       download={name}
-      className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-primary hover:bg-soft"
+      className="flex min-h-11 items-center gap-3 rounded-2xl border border-border bg-surface px-3 py-2 text-primary hover:bg-soft"
     >
       <Icon aria-hidden className="size-5 shrink-0 text-secondary" />
       <span className="min-w-0 flex-1">
@@ -82,7 +87,7 @@ function FileCard({ taskId, file }: { taskId: string; file: WorkFile }) {
 function Steps({ steps }: { steps: string[] }) {
   if (!steps.length) return null;
   return (
-    <details className="text-sm text-secondary">
+    <details className="mb-1 text-sm text-secondary">
       <summary className="cursor-pointer select-none">
         做了 {steps.length} 步
       </summary>
@@ -96,33 +101,39 @@ function Steps({ steps }: { steps: string[] }) {
 }
 
 function Turn({
-  task,
+  taskId,
   turn,
   files,
 }: {
-  task: WorkTask;
+  taskId: string;
   turn: WorkTurn;
   files: Map<string, WorkFile>;
 }) {
   if (turn.role === 'user')
     return (
-      <div className="flex justify-end">
-        <p className="max-w-[85%] rounded-2xl bg-soft px-4 py-2 whitespace-pre-wrap">
-          {turn.content}
-        </p>
-      </div>
+      <article
+        aria-label="你说"
+        className="user-bubble ml-auto w-fit max-w-[85%] px-4 py-3"
+      >
+        <MessageText text={turn.content} plain />
+      </article>
     );
   const delivered = turn.files
     .map((path) => files.get(path))
     .filter((file): file is WorkFile => file !== undefined);
   return (
-    <article aria-label="回复" className="space-y-2">
+    <article
+      aria-label="回复"
+      className="mr-auto w-full max-w-[90%] min-w-0 space-y-2 text-primary"
+    >
       <Steps steps={turn.steps} />
-      <MessageText text={turn.content} />
+      <div className="twin-bubble min-w-0">
+        <MessageText text={turn.content} />
+      </div>
       {delivered.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2">
           {delivered.map((file) => (
-            <FileCard key={file.path} taskId={task.task_id} file={file} />
+            <FileCard key={file.path} taskId={taskId} file={file} />
           ))}
         </div>
       )}
@@ -130,67 +141,44 @@ function Turn({
   );
 }
 
-function TaskList({
-  tasks,
-  current,
-  onOpen,
-  onNew,
-}: {
-  tasks: WorkSummary[] | null;
-  current: string | null;
-  onOpen: (taskId: string) => void;
-  onNew: () => void;
-}) {
-  return (
-    <nav aria-label="任务" className="space-y-2">
-      <Button
-        variant="secondary"
-        className="w-full"
-        onClick={onNew}
-        aria-pressed={current === null}
-      >
-        <Plus aria-hidden className="size-4" />
-        新任务
-      </Button>
-      {tasks === null && <Skeleton className="h-24" />}
-      <ul className="space-y-1">
-        {tasks?.map((task) => (
-          <li key={task.task_id}>
-            <button
-              type="button"
-              onClick={() => onOpen(task.task_id)}
-              aria-current={task.task_id === current ? 'page' : undefined}
-              className={cn(
-                'flex min-h-11 w-full flex-col rounded-lg px-3 py-2 text-left hover:bg-soft',
-                task.task_id === current && 'bg-soft font-medium',
-              )}
-            >
-              <span className="truncate">{task.title}</span>
-              <span className="flex items-center gap-2 text-xs text-secondary">
-                {when(task.updated_at)}
-                {task.status === 'running' && <Badge tone="info">在做</Badge>}
-                {task.status === 'failed' && (
-                  <Badge tone="danger">没做成</Badge>
-                )}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
-
 export function Work() {
   const personaId = usePersonaId();
+  const { pathname } = useLocation();
+  const active = pathname === '/work';
+  const desktop = useDesktop();
   const confirm = useConfirm();
-  const [tasks, setTasks] = usePersonaState<WorkSummary[] | null>(null);
-  const [current, setCurrent] = usePersonaState<string | null>(null);
-  const [task, setTask] = usePersonaState<WorkTask | null>(null);
-  const [error, setError] = usePersonaState('');
-  const [text, setText] = useState('');
+  const status = useStatus((state) => state.data);
+  const persona = usePersonas((state) =>
+    state.items.find((item) => item.id === state.id),
+  );
+  const name = status?.target_name || persona?.name || '本人';
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(
+    () =>
+      peekEssential<Capabilities>('/api/media/capabilities', personaId) ?? null,
+  );
+  const [tasks, setTasks] = useState<WorkSummary[] | null>(null);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [task, setTask] = useState<WorkTask | null>(null);
+  const [error, setError] = useState('');
+  const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const bottom = useRef<HTMLDivElement>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyTrigger = useRef<HTMLElement | null>(null);
+  const { end, composer, composerHeight } = useComposerLayout(active);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadEssential<Capabilities>(
+      '/api/media/capabilities',
+      personaId,
+      controller.signal,
+    )
+      .then((data) => {
+        if (!controller.signal.aborted) setCapabilities(data);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [personaId, setCapabilities]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -218,6 +206,10 @@ export function Work() {
   }, [loadTasks, personaId]);
 
   useEffect(() => {
+    if (desktop) setHistoryOpen(false);
+  }, [desktop, setHistoryOpen]);
+
+  useEffect(() => {
     if (current === null) {
       setTask(null);
       return;
@@ -242,19 +234,19 @@ export function Work() {
   }, [running, taskId, loadTask, loadTasks]);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView?.({ block: 'end' });
-  }, [task?.turns.length, task?.progress.length]);
+    if (active) end.current?.scrollIntoView?.({ block: 'end' });
+  }, [active, end, task?.turns.length, task?.progress.length, composerHeight]);
 
   const send = async () => {
-    const value = text.trim();
-    if (!value || sending || running) return;
+    const text = draft.trim();
+    if (!text || sending) return;
     setSending(true);
     try {
       const started = await api<WorkStarted>('/api/persona/work', {
         method: 'POST',
-        json: { text: value, ...(current ? { task_id: current } : {}) },
+        json: { text, ...(current ? { task_id: current } : {}) },
       });
-      setText('');
+      setDraft('');
       setCurrent(started.task.task_id);
       await loadTask(started.task.task_id);
       await loadTasks();
@@ -265,147 +257,220 @@ export function Work() {
     }
   };
 
-  const remove = async () => {
-    if (!task) return;
+  const stop = async () => {
+    if (!taskId) return;
+    try {
+      await api(`/api/persona/work/${encodeURIComponent(taskId)}/stop`, {
+        method: 'POST',
+      });
+      await loadTask(taskId);
+    } catch (failure) {
+      toast(failure instanceof Error ? failure.message : '没能停下', 'danger');
+    }
+  };
+
+  const remove = async (row: WorkSummary) => {
     const ok = await confirm({
-      title: '删除这个任务',
-      body: '对话和做出来的文件都会删掉，不能恢复。',
+      title: '删除任务？',
+      body: `“${row.title}”和做出来的文件都会删掉，不能恢复。`,
       confirmLabel: '删除',
       tone: 'danger',
     });
     if (!ok) return;
     try {
-      await api(`/api/persona/work/${encodeURIComponent(task.task_id)}`, {
+      await api(`/api/persona/work/${encodeURIComponent(row.task_id)}`, {
         method: 'DELETE',
       });
-      setCurrent(null);
+      if (row.task_id === current) setCurrent(null);
       await loadTasks();
     } catch (failure) {
       toast(failure instanceof Error ? failure.message : '删除失败', 'danger');
     }
   };
 
+  const openHistory = () => {
+    historyTrigger.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setHistoryOpen(true);
+    void loadTasks();
+  };
+  const history = (
+    <WorkHistory
+      tasks={tasks}
+      error={error}
+      current={current}
+      open={active && historyOpen}
+      onOpenChange={setHistoryOpen}
+      onOpen={setCurrent}
+      onNew={() => setCurrent(null)}
+      onDelete={(row) => void remove(row)}
+      onRetry={() => void loadTasks()}
+      name={name}
+      inline={desktop}
+      returnFocus={historyTrigger}
+    />
+  );
+  // The stage shows who is working; it does not speak or play video here.
+  const stageCapabilities = capabilities && {
+    ...capabilities,
+    available: false,
+    video: undefined,
+  };
   const files = new Map(task?.files.map((file) => [file.path, file]) ?? []);
   return (
-    <div>
-      <StageHeader />
-      <div className="page-content grid gap-6 md:grid-cols-[14rem_minmax(0,1fr)]">
-        <aside className={cn(current !== null && 'max-md:hidden')}>
-          <TaskList
-            tasks={tasks}
-            current={current}
-            onOpen={setCurrent}
-            onNew={() => setCurrent(null)}
-          />
-        </aside>
-        <section aria-label="工作区" className="min-w-0 space-y-4">
-          {error && (
-            <div role="alert" className="space-y-2 text-danger">
-              <p>{error}</p>
-              <Button variant="secondary" onClick={() => void loadTasks()}>
-                重试加载
-              </Button>
-            </div>
-          )}
-          {current === null ? (
-            <header className="space-y-2">
-              <h2 className="text-2xl font-semibold">交代一件事</h2>
-              <p className="text-sm text-secondary">
-                聊天是问答；这里交给我去做：整理表格、写周报和方案，做完把 Word
-                或 Excel 文件交给你。
-              </p>
-            </header>
-          ) : task ? (
-            <header className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="md:hidden"
-                  onClick={() => setCurrent(null)}
-                >
-                  全部任务
-                </Button>
-                <h2 className="truncate text-xl font-semibold">{task.title}</h2>
-              </div>
-              <IconButton
-                label="删除任务"
-                onClick={() => void remove()}
-                disabled={running}
-              >
-                <Trash2 aria-hidden className="size-4" />
-              </IconButton>
-            </header>
-          ) : (
-            <Skeleton className="h-40" />
-          )}
-          {task && (
-            <div className="space-y-5">
-              {task.turns.map((turn, index) => (
-                <Turn key={index} task={task} turn={turn} files={files} />
-              ))}
-              {running && (
-                <div aria-live="polite">
-                  <Card className="space-y-2">
-                    <p className="flex items-center gap-2 font-medium">
-                      <LoaderCircle
-                        aria-hidden
-                        className="size-4 animate-spin motion-reduce:animate-none"
-                      />
-                      正在做
-                    </p>
-                    {task.progress.length > 0 && (
-                      <ol className="list-decimal space-y-0.5 pl-5 text-sm text-secondary">
-                        {task.progress.map((line, index) => (
-                          <li key={index}>{line}</li>
+    <div
+      className="chat-page"
+      style={{ '--composer-height': `${composerHeight}px` } as CSSProperties}
+    >
+      <ChatStage
+        name={name}
+        capabilities={stageCapabilities}
+        videoPlaying={false}
+        voiceCaption=""
+        level={0}
+        speaking={false}
+        onToggle={noop}
+        onVideoPlaying={noop}
+        onVideoError={noop}
+        onClear={() => setCurrent(null)}
+        onHistory={openHistory}
+        history={desktop ? history : undefined}
+        newLabel="新任务"
+        historyLabel="任务记录"
+      />
+      {!desktop && history}
+      <div className="chat-thread">
+        <div className="chat-scroll">
+          <div className="chat-column-grid">
+            <PersonaFade>
+              <div className="chat-conversation flex flex-col justify-end space-y-4">
+                <div aria-live="polite" aria-relevant="additions text">
+                  {current === null && (
+                    <EmptyState
+                      title={`交给${name}一件事`}
+                      body="聊天是问答；这里交代要做的事，做完把 Word 或 Excel 文件交给你。做的过程中可以随时插话或叫停。"
+                    >
+                      <div
+                        className="starter-chips flex flex-wrap justify-center gap-3"
+                        aria-label="可以交代的事"
+                      >
+                        {STARTERS.map((starter) => (
+                          <button
+                            key={starter}
+                            type="button"
+                            className="starter-chip min-h-11 rounded-full border border-primary px-4 text-primary"
+                            onClick={() => {
+                              setDraft(starter);
+                              document.getElementById('work-input')?.focus();
+                            }}
+                          >
+                            {starter}
+                          </button>
                         ))}
-                      </ol>
-                    )}
-                  </Card>
+                      </div>
+                    </EmptyState>
+                  )}
+                  {current !== null && !task && (
+                    <p role="status" className="text-sm text-secondary">
+                      正在加载任务…
+                    </p>
+                  )}
+                  {task && (
+                    <div className="space-y-4">
+                      {task.turns.map((turn, index) => (
+                        <Turn
+                          key={index}
+                          taskId={task.task_id}
+                          turn={turn}
+                          files={files}
+                        />
+                      ))}
+                      {running && (
+                        <div className="space-y-1 py-1">
+                          <ThinkingLabel
+                            text={task.stopping ? '正在停下…' : '正在做…'}
+                          />
+                          {task.progress.length > 0 && (
+                            <ol
+                              aria-label="进度"
+                              className="list-decimal space-y-0.5 pl-5 text-sm text-secondary"
+                            >
+                              {task.progress.map((line, index) => (
+                                <li key={index}>{line}</li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-              {task.status === 'failed' && task.error && (
-                <p role="alert" className="text-danger">
-                  {task.error}
-                </p>
-              )}
-              <div ref={bottom} />
-            </div>
-          )}
-          {current === null && tasks?.length === 0 && (
-            <EmptyState
-              title="还没有任务"
-              body="比如：把最近会上答应别人的事整理成 Excel；按我的口吻写一份本周周报。"
-            />
-          )}
-          <form
-            className="flex items-end gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void send();
-            }}
-          >
+                {task?.status === 'failed' && task.error && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-danger"
+                  >
+                    {task.error}
+                  </div>
+                )}
+                <div ref={end} />
+              </div>
+            </PersonaFade>
+          </div>
+        </div>
+        <form
+          ref={composer}
+          aria-label="交代的事"
+          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl md:left-[var(--sidebar-width,0px)]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send();
+          }}
+        >
+          <div className="composer-field mx-auto flex max-w-3xl items-end gap-1 bg-surface py-1 pr-1 pl-2">
             <Textarea
+              id="work-input"
               aria-label="要做的事"
-              placeholder={
-                current === null ? '说说要做什么' : '接着说，或者让我改一改'
-              }
-              value={text}
+              rows={1}
+              maxRows={5}
               maxLength={MAX_TEXT}
-              maxRows={8}
-              onChange={(event) => setText(event.target.value)}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
               onSend={() => void send()}
-              className="flex-1"
+              className="min-h-11 border-0 bg-transparent px-2 py-2.5 shadow-none focus-visible:outline-none"
+              placeholder={
+                running
+                  ? '插一句，下一步就会看到'
+                  : current === null
+                    ? `交给${name}一件事…`
+                    : '接着说，或者让我改一改'
+              }
             />
-            <IconButton
-              label="交代"
+            {running && (
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label="停下"
+                className="size-11 min-h-11 rounded-full p-0"
+                disabled={task.stopping}
+                onClick={() => void stop()}
+              >
+                <Square className="size-4 fill-current" aria-hidden />
+              </Button>
+            )}
+            <Button
               type="submit"
-              disabled={!text.trim() || sending || running}
+              aria-label={running ? '插话' : '交代'}
+              className="send-button size-11 min-h-11 rounded-full p-0"
+              loading={sending}
+              disabled={!draft.trim()}
             >
-              <ArrowUp aria-hidden className="size-5" />
-            </IconButton>
-          </form>
-        </section>
+              {!sending && <ArrowUp className="size-5" aria-hidden />}
+            </Button>
+          </div>
+        </form>
       </div>
     </div>
   );

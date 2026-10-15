@@ -48,6 +48,8 @@ export function ChatStage({
   onClear,
   onHistory,
   history,
+  newLabel = '新对话',
+  historyLabel = '对话记录',
 }: {
   name: string;
   capabilities: Capabilities | null;
@@ -63,6 +65,9 @@ export function ChatStage({
   onClear(): void;
   onHistory?(): void;
   history?: ReactNode;
+  /** The header buttons' words on a phone, for a page other than chat (work: 新任务, 任务记录). */
+  newLabel?: string;
+  historyLabel?: string;
 }) {
   const { reduced } = useMotionPreset();
   const personaId = usePersonaId();
@@ -201,14 +206,14 @@ export function ChatStage({
                 <button
                   type="button"
                   className="stage-new"
-                  aria-label="对话记录"
+                  aria-label={historyLabel}
                   onClick={onHistory}
                 >
                   <History size={20} aria-hidden />
                 </button>
               )}
               <button type="button" className="stage-new" onClick={onClear}>
-                新对话
+                {newLabel}
               </button>
             </div>
           )

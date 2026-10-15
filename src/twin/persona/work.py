@@ -17,6 +17,7 @@ import datetime as dt
 import functools
 import re
 import secrets
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,8 +186,9 @@ SYSTEM = """\
 不编造任何个人事实、数字、人名或日期。写给别人看的东西（周报、邮件、方案、总结）用你自己的口吻、用词和习惯。
 
 ## 交付
-要交付文件时用 write_word 写 Word、用 write_excel 写 Excel，文件名直接用中文也可以；草稿、Markdown 或文本\
-可以用 write_file 写进工作目录，短的内容直接写在回复里。事情有好几步时先用 write_todos 列出来再做。\
+要交付文件时用 write_word 写 Word、用 write_excel 写 Excel，路径直接写文件名（例如“周报.docx”），中文也可以，\
+不用另建文件夹；草稿、Markdown 或文本可以用 write_file 写，短的内容直接写在回复里。\
+事情有好几步时先用 write_todos 列出来再做。\
 做完后在回复里用一两句话说清做了什么、文件叫什么；只写文件名，不写链接，下载入口界面会附上。
 
 ## 说话
@@ -313,6 +315,74 @@ def _files_changed(root: Path, before: dict[str, float]) -> list[str]:
     return sorted(path for path, mtime in current.items() if before.get(path) != mtime)
 
 
+class Steering:
+    """What the person says to a turn in flight, from another thread: more messages, or a request to stop.
+
+    The agent reads new messages before each model call, and once more when it is about to finish, so a message is
+    seen at the next step rather than after the whole turn. A stop ends the turn at the next step (a model call or
+    tool call in progress runs to its end) and drops the messages it had not read yet."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._inbox: list[str] = []
+        self._stopped = False
+
+    def say(self, text: str) -> None:
+        with self._lock:
+            self._inbox.append(text)
+
+    def take(self) -> list[str]:
+        with self._lock:
+            taken, self._inbox = self._inbox, []
+            return taken
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped, self._inbox = True, []
+
+    @property
+    def stopped(self) -> bool:
+        with self._lock:
+            return self._stopped
+
+    def resume(self) -> None:
+        """Clear a stop, for the next turn of the same task."""
+        with self._lock:
+            self._stopped = False
+
+
+STOPPED = "好，先停在这里。"
+
+
+def _steering_middleware(steering: Steering, note: Log) -> Any:
+    from langchain.agents.middleware import AgentMiddleware, hook_config
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    def heard(texts: list[str]) -> list[HumanMessage]:
+        for text in texts:
+            note(f"看到新消息：{text.strip()[:STEP_TEXT]}")
+        return [HumanMessage(text) for text in texts]
+
+    class Steer(AgentMiddleware):
+        @hook_config(can_jump_to=["end"])
+        def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+            if steering.stopped:
+                return {"jump_to": "end"}
+            texts = steering.take()
+            return {"messages": heard(texts)} if texts else None
+
+        @hook_config(can_jump_to=["model"])
+        def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+            last = state["messages"][-1]
+            if not isinstance(last, AIMessage) or last.tool_calls or steering.stopped:
+                return None
+            # About to finish: a message that came in meanwhile gets an answer in this turn.
+            texts = steering.take()
+            return {"messages": heard(texts), "jump_to": "model"} if texts else None
+
+    return Steer()
+
+
 def run_turn(
     task: WorkTask,
     text: str,
@@ -325,8 +395,10 @@ def run_turn(
     *,
     name: str,
     today: dt.date | None = None,
+    steering: Steering | None = None,
 ) -> WorkTurn:
-    """Run one turn of ``task`` for the request ``text`` and return the agent's reply; the caller stores both."""
+    """Run one turn of ``task`` for the request ``text`` and return the agent's reply; the caller stores both.
+    ``steering`` carries what the person says while it runs."""
     from deepagents import create_deep_agent
     from deepagents.backends import FilesystemBackend
     from langchain_core.messages import AIMessage
@@ -351,6 +423,7 @@ def run_turn(
         tools=toolbox.tools(),
         system_prompt=system,
         backend=FilesystemBackend(root_dir=files, virtual_mode=True),
+        middleware=[_steering_middleware(steering, note)] if steering is not None else (),
     )
     history = [{"role": t.role, "content": t.content} for t in task.turns[-HISTORY_TURNS:]]
     before = {p.relative_to(files).as_posix(): p.stat().st_mtime for p in files.rglob("*") if p.is_file()}
@@ -372,6 +445,8 @@ def run_turn(
                         reply = message.text.strip()
     except GraphRecursionError:
         reply = (reply + "\n\n" if reply else "") + "这件事步骤太多，我先做到这里，你看看还缺什么再告诉我。"
+    if steering is not None and steering.stopped:
+        reply = STOPPED
     files_changed = sorted(set(_files_changed(files, before)) | toolbox.written)
     return WorkTurn(
         role="assistant",

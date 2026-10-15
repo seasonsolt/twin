@@ -33,9 +33,13 @@ export interface WorkTask {
   files: WorkFile[];
   /** Progress lines of the turn in flight; empty otherwise. */
   progress: string[];
+  /** A stop was asked for and the turn has not reached its next step yet. */
+  stopping: boolean;
 }
 
 export interface WorkStarted {
   task: WorkSummary;
   job_id: string;
+  /** The message went to the turn in flight instead of starting one. */
+  steered: boolean;
 }

@@ -60,13 +60,26 @@ beforeEach(() => {
     turns: [turn('user', '写周报')],
     files: [],
     progress: ['回想：本周的事'],
+    stopping: false,
   };
   let tasks: unknown[] = [];
   fetcher = vi.fn(async (url: string, options?: RequestInit) => {
     const method = options?.method ?? 'GET';
     if (url === '/api/persona/work' && method === 'POST') {
+      const body = JSON.parse(String(options?.body)) as { task_id?: string };
       tasks = [{ ...task, turns: 1 }];
-      return json({ task: tasks[0], job_id: 'j1' }, 202);
+      return json(
+        {
+          task: tasks[0],
+          job_id: 'j1',
+          steered: !!body.task_id && task.status === 'running',
+        },
+        202,
+      );
+    }
+    if (url === `/api/persona/work/${task.task_id}/stop`) {
+      task = { ...task, stopping: true };
+      return json({ stopping: true }, 202);
     }
     if (url === '/api/persona/work') return json({ tasks });
     if (url === `/api/persona/work/${task.task_id}` && method === 'DELETE') {
@@ -97,13 +110,28 @@ const setup = () =>
 it('starts a task, shows its progress while it runs, then the reply and the files to download', async () => {
   const user = userEvent.setup();
   setup();
-  expect(await screen.findByText('还没有任务')).toBeInTheDocument();
+  expect(
+    await screen.findByRole('heading', { name: '交给本人一件事' }),
+  ).toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: '按我的口吻写一份本周周报' }),
+  );
+  expect(screen.getByLabelText('要做的事')).toHaveValue(
+    '按我的口吻写一份本周周报',
+  );
+  await user.clear(screen.getByLabelText('要做的事'));
   await user.type(screen.getByLabelText('要做的事'), '写周报');
   await user.click(screen.getByRole('button', { name: '交代' }));
   expect(calls('POST')).toEqual([['/api/persona/work', { text: '写周报' }]]);
-  expect(await screen.findByText('正在做')).toBeInTheDocument();
-  expect(screen.getByText('回想：本周的事')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '交代' })).toBeDisabled();
+  expect(await screen.findByText('正在做…')).toBeInTheDocument();
+  expect(
+    within(screen.getByRole('list', { name: '进度' })).getByText(
+      '回想：本周的事',
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByRole('article', { name: '你说' })).toHaveTextContent(
+    '写周报',
+  );
 
   task = {
     ...task,
@@ -131,13 +159,10 @@ it('starts a task, shows its progress while it runs, then the reply and the file
     '/api/persona/work/w_aaaaaaaaaaaa/files/%E5%91%A8%E6%8A%A5.docx',
   );
   expect(file).toHaveTextContent('36 KB');
-  expect(screen.queryByText('正在做')).not.toBeInTheDocument();
+  expect(screen.queryByText('正在做…')).not.toBeInTheDocument();
   expect(
-    within(screen.getByRole('navigation', { name: '任务' })).getByRole(
-      'button',
-      { name: /写周报/u },
-    ),
-  ).toHaveAttribute('aria-current', 'page');
+    screen.queryByRole('button', { name: '停下' }),
+  ).not.toBeInTheDocument();
 
   // Continuing sends the task id along.
   await user.type(screen.getByLabelText('要做的事'), '再短一点');
@@ -148,7 +173,35 @@ it('starts a task, shows its progress while it runs, then the reply and the file
   ]);
 }, 10_000);
 
-it('deletes a task after confirming, and says why a task did not get done', async () => {
+it('takes a message and a stop while the task runs', async () => {
+  const user = userEvent.setup();
+  setup();
+  await user.type(await screen.findByLabelText('要做的事'), '写周报');
+  await user.click(screen.getByRole('button', { name: '交代' }));
+  expect(await screen.findByText('正在做…')).toBeInTheDocument();
+  const input = screen.getByLabelText('要做的事');
+  expect(input).toBeEnabled();
+  expect(input).toHaveAttribute('placeholder', '插一句，下一步就会看到');
+  task = { ...task, turns: [...task.turns, turn('user', '顺便列个待办')] };
+  await user.type(input, '顺便列个待办');
+  await user.click(screen.getByRole('button', { name: '插话' }));
+  expect(calls('POST').at(-1)).toEqual([
+    '/api/persona/work',
+    { text: '顺便列个待办', task_id: 'w_aaaaaaaaaaaa' },
+  ]);
+  await waitFor(() =>
+    expect(screen.getAllByRole('article', { name: '你说' })).toHaveLength(2),
+  );
+
+  await user.click(screen.getByRole('button', { name: '停下' }));
+  expect(calls('POST').at(-1)?.[0]).toBe(
+    '/api/persona/work/w_aaaaaaaaaaaa/stop',
+  );
+  expect(await screen.findByText('正在停下…')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '停下' })).toBeDisabled();
+});
+
+it('deletes a task from the task list after confirming, and says why a task did not get done', async () => {
   task = {
     ...task,
     status: 'failed',
@@ -160,18 +213,26 @@ it('deletes a task after confirming, and says why a task did not get done', asyn
   await user.type(await screen.findByLabelText('要做的事'), '写周报');
   await user.click(screen.getByRole('button', { name: '交代' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('没做成');
-  await user.click(screen.getByRole('button', { name: '删除任务' }));
+  await user.click(screen.getByRole('button', { name: '任务记录' }));
+  const sheet = await screen.findByRole('dialog', { name: '任务记录' });
+  expect(
+    within(sheet).getByRole('button', { name: /^写周报/u }),
+  ).toHaveAttribute('aria-current', 'true');
+  await user.click(within(sheet).getByRole('button', { name: '删除写周报' }));
   await user.click(
-    within(await screen.findByRole('dialog')).getByRole('button', {
-      name: '删除',
-    }),
+    within(await screen.findByRole('dialog', { name: '删除任务？' })).getByRole(
+      'button',
+      { name: '删除' },
+    ),
   );
   await waitFor(() =>
     expect(calls('DELETE')).toEqual([
       [`/api/persona/work/${task.task_id}`, null],
     ]),
   );
-  expect(await screen.findByText('交代一件事')).toBeInTheDocument();
+  expect(
+    await screen.findByRole('heading', { name: '交给本人一件事' }),
+  ).toBeInTheDocument();
 });
 
 it('names the twin in a download link, which cannot send the persona header', async () => {
@@ -213,5 +274,44 @@ it('gives a visitor of a public twin chat and work, and nothing to manage', asyn
     ).toEqual(['聊天', '工作']);
   } finally {
     usePersonas.setState(previous);
+  }
+});
+
+it('puts the task list in the stage on a wide screen, where chat keeps its conversations', async () => {
+  vi.mocked(window.matchMedia).mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === '(min-width: 1200px)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+  try {
+    const user = userEvent.setup();
+    setup();
+    const list = await screen.findByRole('region', { name: '交给本人的事' });
+    expect(
+      screen.queryByRole('button', { name: '任务记录' }),
+    ).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('要做的事'), '写周报');
+    await user.click(screen.getByRole('button', { name: '交代' }));
+    expect(
+      await within(list).findByRole('button', { name: /^写周报/u }),
+    ).toHaveAttribute('aria-current', 'true');
+    await user.click(within(list).getByRole('button', { name: '新任务' }));
+    expect(
+      await screen.findByRole('heading', { name: '交给本人一件事' }),
+    ).toBeInTheDocument();
+  } finally {
+    vi.mocked(window.matchMedia).mockImplementation(
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
   }
 });

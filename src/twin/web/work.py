@@ -2,13 +2,13 @@
 
 A task belongs to whoever started it, in the role they started it in: the person's own tasks, and each visitor's
 of a public twin, are only listed and opened by them. A turn runs as a background job; the task records its
-progress lines while it runs and the reply with its files once it ends.
+progress lines while it runs and the reply with its files once it ends. While it runs, a new message goes to the
+agent at its next step instead of waiting, and a stop ends it at the next step.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -17,7 +17,17 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..persona.store import stored_identity
-from ..persona.work import MAX_TEXT, WorkStore, WorkTask, WorkTurn, now, run_turn, summary_view, task_view
+from ..persona.work import (
+    MAX_TEXT,
+    Steering,
+    WorkStore,
+    WorkTask,
+    WorkTurn,
+    now,
+    run_turn,
+    summary_view,
+    task_view,
+)
 from .backends import Backends, BackendUnavailable
 from .conversations import owner
 from .jobs import Job, JobManager, Log
@@ -32,6 +42,8 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
     store = WorkStore(settings.db_path)
     # Starting a turn checks and marks the task running in one step, so a task never runs two turns at once.
     admission = threading.Lock()
+    # The turn in flight of each running task, to say more to it or stop it; guarded by ``admission``.
+    steerings: dict[str, Steering] = {}
 
     def who(request: Request) -> tuple[str | None, bool]:
         return owner(request), bool(request.scope.get("twin_visitor"))
@@ -46,6 +58,8 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
         data = task_view(store, task)
         snapshot = jobs.snapshot(task.job_id) if task.job_id and task.status == "running" else None
         data["progress"] = snapshot["progress"] if snapshot else []
+        steering = steerings.get(task.task_id)
+        data["stopping"] = task.status == "running" and steering is not None and steering.stopped
         if task.status == "running" and snapshot is None:
             # The server restarted during the turn: the job is gone, so the turn is too.
             data["status"], data["error"] = "failed", "上次没做完就中断了，可以再说一次"
@@ -62,6 +76,7 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
 
     @app.post("/api/persona/work", status_code=202)
     def start_work(body: WorkBody, request: Request) -> dict[str, Any]:
+        """Start a task, continue one, or, while it runs, say something more to it."""
         text = body.text.strip()
         if not text:
             raise HTTPException(400, "说一下要做什么")
@@ -77,9 +92,15 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
                 task = store.create(text, by, visitor)
             else:
                 task = mine(request, body.task_id)
-                if view(task)["status"] == "running":
-                    raise HTTPException(409, "上一句还在做，等它做完再说")
+                steering = steerings.get(task.task_id)
+                if steering is not None and view(task)["status"] == "running":
+                    task.turns.append(WorkTurn(role="user", content=text, at=now()))
+                    task.updated_at = task.turns[-1].at
+                    store.save(task)
+                    steering.say(text)
+                    return {"task": summary_view(task), "job_id": task.job_id, "steered": True}
             history = task.model_copy(deep=True)
+            steering = Steering()
 
             def prepare(job: Job) -> None:
                 # Marked running with its job before the job starts, so a reader never sees a running task
@@ -88,32 +109,53 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
                 task.status, task.error, task.job_id = "running", None, job.job_id
                 task.updated_at = task.turns[-1].at
                 store.save(task)
-
-            def finish(update: Callable[[WorkTask], None]) -> None:
-                with admission:
-                    current = store.get(task.task_id)
-                    if current is not None:  # None: deleted while it ran
-                        update(current)
-                        store.save(current)
+                steerings[task.task_id] = steering
 
             def work(log: Log) -> dict[str, Any]:
                 files = store.files_dir(task.task_id)
+                snapshot, request_text = history, text
                 try:
-                    turn = run_turn(history, text, settings, model, llm, embedder, files, log, name=name)
+                    while True:
+                        turn = run_turn(
+                            snapshot,
+                            request_text,
+                            settings,
+                            model,
+                            llm,
+                            embedder,
+                            files,
+                            log,
+                            name=name,
+                            steering=steering,
+                        )
+                        with admission:
+                            current = store.get(task.task_id)
+                            if current is None:  # deleted while it ran
+                                steerings.pop(task.task_id, None)
+                                return {"task_id": task.task_id}
+                            # Messages that came in after the agent last looked are the newest user turns; the
+                            # reply goes before them, and they get a turn of their own.
+                            unread = steering.take()
+                            at = len(current.turns) - len(unread)
+                            current.turns.insert(at, turn)
+                            current.updated_at = now()
+                            if not unread:
+                                current.status = "idle"
+                                steerings.pop(task.task_id, None)
+                            store.save(current)
+                        if not unread:
+                            return {"task_id": task.task_id}
+                        steering.resume()
+                        snapshot = current.model_copy(update={"turns": current.turns[: at + 1]}, deep=True)
+                        request_text = "\n\n".join(unread)
                 except Exception:
-
-                    def failed(current: WorkTask) -> None:
-                        current.status, current.error = "failed", "这件事没做成，可以换个说法再试一次"
-
-                    finish(failed)
+                    with admission:
+                        steerings.pop(task.task_id, None)
+                        failed = store.get(task.task_id)
+                        if failed is not None:
+                            failed.status, failed.error = "failed", "这件事没做成，可以换个说法再试一次"
+                            store.save(failed)
                     raise
-
-                def done(current: WorkTask) -> None:
-                    current.turns.append(turn)
-                    current.status, current.updated_at = "idle", turn.at
-
-                finish(done)
-                return {"task_id": task.task_id}
 
             try:
                 job = jobs.submit("work", task.title, work, prepare=prepare)
@@ -121,7 +163,18 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
                 if body.task_id is None:  # not admitted: a new task would stay behind empty
                     store.delete(task.task_id)
                 raise
-        return {"task": summary_view(task), "job_id": job.job_id}
+        return {"task": summary_view(task), "job_id": job.job_id, "steered": False}
+
+    @app.post("/api/persona/work/{task_id}/stop", status_code=202)
+    def stop_work(task_id: str, request: Request) -> dict[str, bool]:
+        """Stop the turn in flight at its next step; what it already wrote stays."""
+        task = mine(request, task_id)
+        with admission:
+            steering = steerings.get(task.task_id)
+            if steering is None or view(task)["status"] != "running":
+                raise HTTPException(409, "现在没有在做的事")
+            steering.stop()
+        return {"stopping": True}
 
     @app.get("/api/persona/work/{task_id}/files/{path:path}")
     def download_work_file(task_id: str, path: str, request: Request) -> FileResponse:

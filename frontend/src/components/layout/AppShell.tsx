@@ -36,6 +36,8 @@ export const navItems = [
   { route: 'ledger', title: '账本', icon: ListChecks, visitor: false },
 ];
 
+// Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
+const conversationRoutes = new Set(['/chat', '/work']);
 const visitorRoutes = new Set(
   navItems.filter((item) => item.visitor).map((item) => item.route),
 );
@@ -246,6 +248,7 @@ export function AppShell() {
   const mobile = useMobile();
   const { error } = useStatus();
   const location = useLocation();
+  const conversation = conversationRoutes.has(location.pathname);
   const outlet = useOutlet();
   const twinLevel = location.pathname === '/twins';
   const canManage = useCanManage();
@@ -351,9 +354,9 @@ export function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className={`app-main mx-auto w-full flex-1 outline-none ${location.pathname === '/chat' ? 'chat-main' : 'max-w-6xl content-main'}`}
+          className={`app-main mx-auto w-full flex-1 outline-none ${conversation ? 'chat-main' : 'max-w-6xl content-main'}`}
         >
-          {location.pathname === '/chat' ? (
+          {conversation ? (
             outlet
           ) : (
             <PageTransition route={location.pathname}>

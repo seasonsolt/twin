@@ -1,10 +1,12 @@
 export interface Citation {
   id: string;
-  kind: 'item' | 'expression';
+  kind: 'item' | 'expression' | 'file';
   text: string;
   facet?: string;
   date?: string | null;
   channel?: string;
+  file_name?: string;
+  locator?: string;
 }
 
 export interface ChatReply {
@@ -18,6 +20,8 @@ export interface ChatReply {
   as_of?: string | null;
   cited?: Citation[];
   mode?: 'grounded' | 'general' | 'inferred' | 'abstain';
+  elapsed_ms?: number;
+  completed_at?: string;
 }
 
 export interface Turn {

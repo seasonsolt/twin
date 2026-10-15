@@ -87,6 +87,7 @@ def _allowed_form(host: str) -> str:
 
 _HOST_DETAIL = "请求的主机名不被允许：请用 twin ui 打印的地址（http://127.0.0.1:端口 或 http://localhost:端口）打开"
 _BODY_DETAIL = f"请求内容太大（上限 {MAX_JSON_BYTES // (1024 * 1024)} MB），请删减后再提交"
+_CHAT_ATTACHMENT_BODY_DETAIL = "聊天附件请求超过 52 MB，请减少附件后重试"
 
 
 async def _read_body(receive: Receive, limit: int) -> tuple[list[Message], bool]:
@@ -157,9 +158,32 @@ class SecurityMiddleware:
                 await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send_hardened)
                 return
         media_chunk = scope["method"] == "PUT" and str(scope.get("path", "")).startswith("/api/uploads/")
+        chat_attachment = scope["method"] == "POST" and scope.get("path") == persona.CHAT_ATTACHMENT_PATH
+        if chat_attachment:
+            limit = persona.MAX_CHAT_ATTACHMENT_REQUEST_BYTES
+            declared = headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > limit:
+                await JSONResponse({"detail": _CHAT_ATTACHMENT_BODY_DETAIL}, status_code=413)(
+                    scope, receive, send_hardened
+                )
+                return
+            messages, too_large = await _read_body(receive, limit)
+            if too_large:
+                await JSONResponse({"detail": _CHAT_ATTACHMENT_BODY_DETAIL}, status_code=413)(
+                    scope, receive, send_hardened
+                )
+                return
+            pending = deque(messages)
+            del messages
+            upstream_receive = receive
+
+            async def buffered_attachment_receive() -> Message:
+                return pending.popleft() if pending else await upstream_receive()
+
+            receive = buffered_attachment_receive
         if (
             scope["method"] not in SAFE_METHODS
-            and scope.get("path") not in {UPLOAD_PATH, *assets.UPLOAD_PATHS}
+            and scope.get("path") not in {UPLOAD_PATH, persona.CHAT_ATTACHMENT_PATH, *assets.UPLOAD_PATHS}
             and not media_chunk
         ):
             declared = headers.get("content-length", "")

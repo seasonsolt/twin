@@ -62,6 +62,7 @@ LAYERS: dict[str, int] = {
     "persona.style": 5,
     "persona.coverage": 5,
     "persona.chat": 6,
+    "persona.attachments": 6,
     "evals.provenance": 8,
     "evals.personal": 8,
     "evals.persona_runtime": 8,

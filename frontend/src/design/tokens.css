@@ -885,6 +885,25 @@
 .twin-bubble[data-speaking='true'] {
   outline: 2px solid var(--accent);
 }
+.reply-details {
+  margin-top: 2px;
+}
+.reply-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+.reply-details summary::-webkit-details-marker {
+  display: none;
+}
+.reply-details[open] summary > span:last-child svg {
+  transform: rotate(180deg);
+}
+.reply-details summary svg {
+  transition: transform 150ms ease;
+}
+.reply-details-content {
+  margin-bottom: 4px;
+}
 .reply-play {
   display: grid;
   place-items: center;

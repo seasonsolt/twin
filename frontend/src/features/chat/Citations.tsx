@@ -10,8 +10,12 @@ export function CitationCard({ citation }: { citation: Citation }) {
       <Badge>
         {citation.kind === 'item'
           ? citation.facet || '档案'
-          : [citation.date, citation.channel].filter(Boolean).join(' · ') ||
-            '原话'}
+          : citation.kind === 'file'
+            ? [citation.file_name, citation.locator]
+                .filter(Boolean)
+                .join(' · ') || '附件'
+            : [citation.date, citation.channel].filter(Boolean).join(' · ') ||
+              '原话'}
       </Badge>
       <blockquote className="mt-2 whitespace-pre-wrap">
         {citation.text}

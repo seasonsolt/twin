@@ -42,6 +42,7 @@ import { MediaClaim } from '../features/sources/MediaClaim';
 
 const accept =
   '.txt,.md,.pdf,.docx,.epub,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus';
+const MAX_FOLDER_UPLOAD_BYTES = 500 * 1024 * 1024;
 export interface Memory {
   source_id: string;
   title: string;
@@ -72,6 +73,9 @@ export interface SourceSummary {
   duration_s: number;
   needs_speaker: number;
   busy: number;
+  remembered: number;
+  nothing_found: number;
+  failed: number;
 }
 export interface SourcePage {
   items: Memory[];
@@ -111,10 +115,15 @@ const emptySummary: SourceSummary = {
   duration_s: 0,
   needs_speaker: 0,
   busy: 0,
+  remembered: 0,
+  nothing_found: 0,
+  failed: 0,
 };
 interface Processing {
   state: 'idle' | 'queued' | 'running';
   progress?: { phase: 'extract' | 'merge'; done: number; total: number };
+  stage?: { current: number; total: number; label: string } | null;
+  tally?: { done: number; failed: number; total: number | null } | null;
   notice?: string | null;
   last_error?: string | null;
 }
@@ -130,7 +139,7 @@ const processingLabel = (memory: Memory) => {
 };
 
 const processingText = (processing: Processing) => {
-  if (processing.state === 'queued') return '等待记住…';
+  if (processing.state === 'queued') return '记忆整理排队中';
   const progress = processing.progress;
   if (progress?.phase === 'merge') return '正在合并记忆…';
   if (progress && progress.total > 0)
@@ -285,6 +294,7 @@ export function Memories({
   const building = processing.state !== 'idle' || summary.busy > 0;
   usePendingWork(building, '正在整理记忆…', true);
   const failedFiles = useRef<File[]>([]);
+  const failedUploadIsFolder = useRef(false);
   const [skipped, setSkipped] = useState<{ file: string; reason: string }[]>(
     [],
   );
@@ -408,10 +418,11 @@ export function Memories({
     setBusy(true);
     setBusyLabel(label);
     setError('');
+    setSkipped([]);
     try {
       await fn(controller.signal);
       if (!alive.current || controller.signal.aborted) return;
-      if (added) toast('已添加，正在记住…', 'success');
+      if (added) toast('已添加，等待整理结果', 'success');
       await refresh();
     } catch (err) {
       if (alive.current && !controller.signal.aborted)
@@ -421,10 +432,15 @@ export function Memories({
       if (alive.current && !controller.signal.aborted) setBusy(false);
     }
   };
-  const upload = (files: File[]) =>
+  const upload = (files: File[], folder = false) =>
     void mutate(
       async (signal) => {
+        failedFiles.current = [];
+        failedUploadIsFolder.current = folder;
         if (!files.length) return;
+        const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+        if (folder && totalSize > MAX_FOLDER_UPLOAD_BYTES)
+          throw new Error('文件夹内容超过 500 MB，请分批上传');
         failedFiles.current = files;
         const documents: File[] = [];
         const ignored: { file: string; reason: string }[] = [];
@@ -456,10 +472,14 @@ export function Memories({
                 .join('、') +
               (documents.length > 3 ? ` 等 ${documents.length} 个文件` : '');
             let sent = 0;
+            let sentFiles = 0;
             let added = 0;
             setUploadProgress({ name, offset: 0, size, paused: false });
-            // The server takes up to 500 files and 1 GB per request; a large folder goes up in batches.
-            for (const batch of uploadBatches(documents)) {
+            // Keep the folder cap while retaining the server's bounded batches for ordinary multi-file uploads.
+            const batches = folder
+              ? documents.map((file) => [file])
+              : uploadBatches(documents);
+            for (const batch of batches) {
               const form = new FormData();
               batch.forEach((file) =>
                 form.append(
@@ -470,6 +490,7 @@ export function Memories({
               );
               const bytes = batch.reduce((sum, file) => sum + file.size, 0);
               const before = completed;
+              failedFiles.current = documents.slice(sentFiles);
               setBusyLabel(`正在上传 ${completed + 1}/${files.length}…`);
               const result = await uploadForm<{
                 imported: Memory[];
@@ -489,13 +510,12 @@ export function Memories({
                 );
               });
               sent += bytes;
+              sentFiles += batch.length;
               completed += batch.length;
               added += result.imported.length;
               ignored.push(...result.skipped);
               // Files already sent are not sent again if a later batch fails and the person retries.
-              failedFiles.current = failedFiles.current.filter(
-                (file) => !batch.includes(file),
-              );
+              failedFiles.current = documents.slice(sentFiles);
             }
             if (alive.current && added) toast('已添加，正在记住…', 'success');
           }
@@ -599,7 +619,7 @@ export function Memories({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
-        if (!busy) upload(Array.from(event.dataTransfer.files));
+        if (!busy) upload(Array.from(event.dataTransfer.files), folder);
       }}
     >
       <p className="text-sm text-secondary">
@@ -616,11 +636,12 @@ export function Memories({
         className="min-h-11 max-w-full text-base"
         {...(folder ? { webkitdirectory: '' } : {})}
         onChange={(event) => {
-          upload(Array.from(event.target.files ?? []));
+          upload(Array.from(event.target.files ?? []), folder);
           event.target.value = '';
         }}
       />
       <p className="text-xs text-tertiary">
+        {folder && '文件夹内容总量最多 500 MB。'}
         TXT、Markdown、PDF、Word、EPUB、HTML、CSV、JSON、SRT、VTT；每个文件最多
         1 GB。音频、视频最多 4
         GB，支持断点续传。刷新后重新选择同一文件即可继续。
@@ -766,8 +787,43 @@ export function Memories({
               </p>
             )
           )}
-          {processing.state !== 'idle' && (
-            <ThinkingLabel text={processingText(processing)} />
+          {(processing.state !== 'idle' || summary.busy > 0) && (
+            <div
+              aria-live="polite"
+              className="space-y-1 text-sm text-secondary"
+            >
+              <ThinkingLabel text={processingText(processing)} />
+              <p>
+                {processingText(processing)} · 共 {summary.total} 份 · 已记住{' '}
+                {summary.remembered} 份
+                {summary.nothing_found > 0 &&
+                  ` · 已处理无结果 ${summary.nothing_found} 份`}
+                {summary.busy > 0 && ` · 整理中 ${summary.busy} 份`}
+                {summary.failed > 0 && ` · 失败 ${summary.failed} 份`}
+                {summary.total -
+                  summary.remembered -
+                  summary.nothing_found -
+                  summary.failed -
+                  summary.busy >
+                  0 &&
+                  ` · 待处理或确认 ${
+                    summary.total -
+                    summary.remembered -
+                    summary.nothing_found -
+                    summary.failed -
+                    summary.busy
+                  } 份`}
+              </p>
+              {processing.stage && (
+                <p className="text-xs">
+                  当前阶段 {processing.stage.current}/{processing.stage.total} ·{' '}
+                  {processing.stage.label}
+                  {processing.tally &&
+                    processing.tally.done + processing.tally.failed > 0 &&
+                    ` · 已完成 ${processing.tally.done} 项，失败 ${processing.tally.failed} 项`}
+                </p>
+              )}
+            </div>
           )}
           {embedded && building && processing.state === 'idle' && (
             <p role="status">正在整理记忆…</p>
@@ -827,7 +883,7 @@ export function Memories({
               disabled={busy}
               onClick={() =>
                 failedFiles.current.length
-                  ? upload(failedFiles.current)
+                  ? upload(failedFiles.current, failedUploadIsFolder.current)
                   : void refresh()
               }
             >
@@ -1052,7 +1108,12 @@ export function Memories({
                     <Button
                       variant="ghost"
                       disabled={busy}
-                      onClick={() => upload(failedFiles.current)}
+                      onClick={() =>
+                        upload(
+                          failedFiles.current,
+                          failedUploadIsFolder.current,
+                        )
+                      }
                     >
                       重试上传
                     </Button>

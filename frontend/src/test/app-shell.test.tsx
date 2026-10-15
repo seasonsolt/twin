@@ -108,7 +108,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(screen.getByRole('heading', { name: '概览' })).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   } finally {
     rendered.unmount();
     useStatus.setState({ data: previous.data, error: previous.error });

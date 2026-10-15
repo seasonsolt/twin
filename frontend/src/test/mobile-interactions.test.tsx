@@ -101,7 +101,7 @@ it.each([375, 390, 767])(
       within(tabs)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '档案', '账本']);
+    ).toEqual(['聊天', '工作', '档案', '账本']);
     expect(within(tabs).getByRole('link', { name: '聊天' })).toHaveAttribute(
       'aria-current',
       'page',
@@ -149,7 +149,7 @@ it.each([768, 1024, 1280, 1440])(
     );
     const view = mount();
     const nav = await screen.findByRole('navigation', { name: '主导航' });
-    expect(within(nav).getAllByRole('link')).toHaveLength(3);
+    expect(within(nav).getAllByRole('link')).toHaveLength(4);
     expect(view.container.querySelector('.nav-rail')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '切换分身' })).toBeVisible();
     expect(

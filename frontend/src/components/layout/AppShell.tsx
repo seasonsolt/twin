@@ -10,7 +10,7 @@ import { Link, Navigate, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
-import { BookUser, ListChecks, MessageCircle } from 'lucide-react';
+import { BookUser, Briefcase, ListChecks, MessageCircle } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { Button, Skeleton, Tooltip } from '../ui';
@@ -30,13 +30,19 @@ const Onboarding = lazy(() =>
 );
 
 export const navItems = [
-  { route: 'chat', title: '聊天', icon: MessageCircle },
-  { route: 'profile', title: '档案', icon: BookUser },
-  { route: 'ledger', title: '账本', icon: ListChecks },
+  { route: 'chat', title: '聊天', icon: MessageCircle, visitor: true },
+  { route: 'work', title: '工作', icon: Briefcase, visitor: true },
+  { route: 'profile', title: '档案', icon: BookUser, visitor: false },
+  { route: 'ledger', title: '账本', icon: ListChecks, visitor: false },
 ];
 
+const visitorRoutes = new Set(
+  navItems.filter((item) => item.visitor).map((item) => item.route),
+);
+
 function useNavItems() {
-  return useCanManage() ? navItems : navItems.slice(0, 1);
+  const canManage = useCanManage();
+  return canManage ? navItems : navItems.filter((item) => item.visitor);
 }
 
 function Navigation() {
@@ -81,7 +87,7 @@ function BottomTabs() {
   return (
     <nav
       aria-label="底部导航"
-      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3'][items.length - 1]}`}
+      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'][items.length - 1]}`}
     >
       {items.map(({ route, title, icon: Icon }) => (
         <NavLink
@@ -285,7 +291,11 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, [twinLevel, personaId, setOnboarding, setNoPersona]);
-  if (!canManage && !twinLevel && location.pathname !== '/chat')
+  if (
+    !canManage &&
+    !twinLevel &&
+    !visitorRoutes.has(location.pathname.slice(1))
+  )
     return <Navigate to="/chat" replace />;
   if (noPersona && !twinLevel)
     return (

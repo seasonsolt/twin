@@ -199,7 +199,7 @@ it.each(['overview', 'graph', 'memories', 'assets', 'channels'])(
       within(screen.getByRole('navigation', { name: '底部导航' })).getAllByRole(
         'link',
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   },
 );
 

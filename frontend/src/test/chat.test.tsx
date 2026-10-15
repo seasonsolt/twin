@@ -744,17 +744,25 @@ it.each([true, false])(
   },
 );
 
-it('citation disclosure expands and collapses using keyboard and shows both citation kinds', async () => {
+it('citation disclosure expands and collapses using keyboard and shows every citation kind', async () => {
   render(
     <Citations
       cited={[
         ...reply.cited!,
         { id: 'i1', kind: 'item', facet: '价值观', text: '档案内容' },
+        {
+          id: 'le_1',
+          kind: 'ledger',
+          ledger_kind: '承诺',
+          date: '2026-10-12',
+          channel: '周一经营会',
+          text: '我周五前给您一版新报价方案',
+        },
       ]}
     />,
   );
   const user = userEvent.setup();
-  const disclosure = screen.getByRole('button', { name: '依据 2' });
+  const disclosure = screen.getByRole('button', { name: '依据 3' });
   expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await user.tab();
   await user.keyboard('{Enter}');
@@ -767,6 +775,10 @@ it('citation disclosure expands and collapses using keyboard and shows both cita
     expect(screen.getByText('2024-01-01 · 访谈')).toBeVisible(),
   );
   expect(screen.getByText('价值观')).toBeVisible();
+  expect(
+    screen.getByText('账本 · 承诺 · 2026-10-12 · 周一经营会'),
+  ).toBeVisible();
+  expect(screen.getByText('我周五前给您一版新报价方案')).toBeVisible();
   await user.keyboard(' ');
   expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await waitFor(() =>

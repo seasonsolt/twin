@@ -271,7 +271,9 @@ def test_another_owners_follow_up_does_not_reopen_the_commitment(store: PersonaS
     assert lg.current_status(fix, entries) == "reopened" and lg.current_status(check, entries) == "open"
 
 
-def entry(entry_id: str, kind: str, owner: str, day: str, line: int = 1, **extra: Any) -> lg.LedgerEntry:
+def entry(
+    entry_id: str, kind: str, owner: str, day: str, line: int = 1, what: str = "", **extra: Any
+) -> lg.LedgerEntry:
     return lg.LedgerEntry(
         entry_id=entry_id,
         source_id=f"s{day}",
@@ -282,7 +284,7 @@ def entry(entry_id: str, kind: str, owner: str, day: str, line: int = 1, **extra
         speaker=owner,
         quote=entry_id,
         owner=owner,
-        what=f"事情{entry_id}",
+        what=what or f"事情{entry_id}",
         confidence=0.9,
         extractor=lg.LEDGER_VERSION,
         created_at="now",
@@ -335,3 +337,38 @@ def test_a_meeting_deleted_while_it_is_read_leaves_no_entries(store: PersonaStor
     report = lg.build_ledger(store, FakeLLM(handler), NAME)
     assert report.sources == 0 and store.list_ledger() == []
     assert store.ledger_done("m1") is None
+
+
+def test_chat_sees_the_named_persons_entries_open_ones_on_ledger_words_and_nothing_otherwise() -> None:
+    today = dt.date(2026, 10, 20)
+    ledger = [
+        entry("quote", "commitment", "老王", "2026-10-12", due=dt.date(2026, 10, 16)),
+        entry("quote2", "commitment", "老王", "2026-10-14", due=dt.date(2026, 10, 22), relates_to="quote"),
+        entry("export", "commitment", "陈工", "2026-10-12", 2, what="修好报表导出", due=dt.date(2026, 10, 15)),
+        entry(
+            "export-again", "progress", "陈工", "2026-10-19", status="reopened", relates_to="export", what="导出又慢了"
+        ),
+        entry("budget", "decision", lg.SELF, "2026-10-12", 3, what="冻结市场预算"),
+        entry("fair", "objection", "刘婷", "2026-10-12", 4, what="反对停办展会"),
+        entry("done", "commitment", "小李", "2026-10-12", 5, status="confirmed_done", what="发工单数据"),
+        entry("wrong", "commitment", "老王", "2026-10-12", 6, review=ReviewStatus.REJECTED),
+    ]
+
+    def ids(query: str, as_of: dt.date | None = None) -> list[str]:
+        return [e.entry_id for e, _ in lg.for_chat(ledger, query, today, as_of)]
+
+    # The named person's entries first; a restated commitment shows once, as its latest version.
+    assert ids("老王最近怎么样") == ["quote2"]
+    # Ledger words bring the open decisions and commitments, overdue first, each report right behind what it is
+    # about; a confirmed one is done.
+    assert ids("还有哪些事没完成？") == ["export", "export-again", "quote2", "budget"]
+    found = dict((e.entry_id, s) for e, s in lg.for_chat(ledger, "报表导出现在怎样", today))
+    assert list(found) == ["export", "export-again"] and found == {"export": "reopened", "export-again": "reopened"}
+    assert ids("你最喜欢什么颜色？") == [] and lg.for_chat([], "老王答应了什么", today) == []
+    # By an earlier date, the later restatement and the report on the export are not known yet.
+    assert ids("老王答应了什么", dt.date(2026, 10, 13)) == ["quote", "export", "budget"]
+    # A report that shares no words with the question still follows the commitment it is about.
+    assert ids("报表现在怎样") == ["export", "export-again"]
+    assert dict((e.entry_id, s) for e, s in lg.for_chat(ledger, "报表导出", today, dt.date(2026, 10, 13))) == {
+        "export": "open"
+    }

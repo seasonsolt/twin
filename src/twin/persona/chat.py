@@ -1,7 +1,8 @@
 """Chat with the general digital twin: the person's profile and words, answering in their place.
 
 Each turn retrieves the profile items and the person's own expressions most related to the conversation, plus
-what other people said to the person (labelled as theirs, never the person's view), adds an always-on core (the
+what other people said to the person (labelled as theirs, never the person's view) and, for the person themselves,
+the commitment ledger entries the question is about (``ledger.for_chat``), adds an always-on core (the
 best-supported items per dimension) and recent voice samples, and asks the model to answer in the first person,
 from that material only. Everything is restricted to what was known on ``as_of`` when one is given. Answers cite
 the ids they rest on; an answer without a valid citation, or one the model abstains on, gets its confidence capped.
@@ -31,11 +32,22 @@ from ..util import Progress
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
+from .ledger import KIND_LABELS, SELF, STATUS_LABELS, for_chat
 from .lexical import BM25, tokenize
 from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
 from .rewrite import Rewrite, rewrite
-from .schema import MAX_TOPIC_FACETS, ChatDraft, ChatReply, ChatTurn, Expression, SourceKind
+from .schema import (
+    MAX_TOPIC_FACETS,
+    ChatDraft,
+    ChatReply,
+    ChatTurn,
+    Expression,
+    LedgerEntry,
+    LedgerStatus,
+    ReviewStatus,
+    SourceKind,
+)
 from .sources import expression_view
 from .store import PersonaStore
 from .style import extreme_rate
@@ -46,6 +58,8 @@ ITEMS_NS = "items"
 INLINE_ID = re.compile(r"[ \t]*\[([A-Za-z]+_[0-9a-f]+(?:#\d+)?)\]")
 EXPRESSIONS_NS = "expressions"
 OTHERS_NS = "others"
+# Ledger entries are cited by their id behind this prefix, so a citation names its kind like every other record.
+LEDGER_PREFIX = "le_"
 K_ITEMS = 12
 K_EXPRESSIONS = 12
 # Order, span and total questions gather events scattered over many conversations.
@@ -187,6 +201,8 @@ class PersonaContext:
     others: list[tuple[Expression, float]] = field(default_factory=list)
     # The dates a relative time in the question ("last Saturday") can mean (see ``time_window``).
     window: tuple[dt.date, dt.date] | None = None
+    # Commitment ledger entries the question is about, with their current status; only in the person's own chat.
+    ledger: list[tuple[LedgerEntry, LedgerStatus]] = field(default_factory=list)
 
     # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
     trusted: set[str] = field(default_factory=set)
@@ -197,10 +213,17 @@ class PersonaContext:
             {i.item_id for i in items}
             | {e.expression_id for e, _ in self.expressions}
             | {e.expression_id for e, _ in self.others}
+            | {ledger_ref(e) for e, _ in self.ledger}
         )
-        self.trusted = {i.item_id for i in items if i.verified} | {
-            e.expression_id for e, _ in self.expressions if not e.narrated
-        }
+        self.trusted = (
+            {i.item_id for i in items if i.verified}
+            | {e.expression_id for e, _ in self.expressions if not e.narrated}
+            | {ledger_ref(e) for e, _ in self.ledger if e.review in (ReviewStatus.CONFIRMED, ReviewStatus.EDITED)}
+        )
+
+
+def ledger_ref(entry: LedgerEntry) -> str:
+    return LEDGER_PREFIX + entry.entry_id
 
 
 def _visible_items(store: PersonaStore, settings: Settings, as_of: dt.date | None) -> list[PersonaItem]:
@@ -287,11 +310,16 @@ def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatR
 
 
 class PersonaChat:
-    def __init__(self, store: PersonaStore, llm: LLM, embedder: Embedder, settings: Settings) -> None:
+    def __init__(
+        self, store: PersonaStore, llm: LLM, embedder: Embedder, settings: Settings, *, ledger: bool = False
+    ) -> None:
+        """``ledger``: whether the commitment ledger is material, only when the person themselves is asking; it is
+        private, so a visitor, a channel or an agent never sees it."""
         self.store = store
         self.llm = llm
         self.embedder = embedder
         self.settings = settings
+        self.ledger = ledger
 
     def retrieve(
         self,
@@ -357,6 +385,8 @@ class PersonaChat:
         voice = [e.text for e in said[:VOICE_SAMPLES]]
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
         style = extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated)
+        day = today or as_of or dt.date.today()
+        entries = for_chat(self.store.list_ledger(), query, day, as_of) if self.ledger else []
         return PersonaContext(
             ranked_items,
             ranked_expr,
@@ -367,6 +397,7 @@ class PersonaChat:
             extreme_rate=style,
             others=ranked_others,
             window=window,
+            ledger=entries,
         )
 
     def reply(
@@ -634,9 +665,14 @@ CHAT_SYSTEM = """\
 “别人对我说过的话”可以用来回答别人告诉过我、推荐过、提到过什么，按事实回忆归为 grounded 并引用它；\
 但它不是我的观点、偏好或经历，不能拿来当作我说过或做过的事。用户消息里有【推算】时，其中的日期、间隔、\
 先后和合计是程序按核对过的资料算出的，所问的一项在【推算】里有就算资料给出了，直接用它回答并引用对应的资料编号，\
-归为 grounded。
-2. 是要替本人答应、承诺、做决定，或评价某个具体的他人吗？不替本人答应事情或做承诺。即使有相关资料，\
-也只对这部分说明需要本人确认，不代答。其余能回答的部分继续回答，不要因一个承诺请求就拒绝整题。
+归为 grounded。\
+检索资料里有“承诺账本”时，问到会上定了什么、谁答应了什么、谁有异议、事情进展到哪、什么时候到期、该追问谁，\
+都以账本为准：照条目说清是谁、对谁、做什么、截止哪天、现在什么状态，状态用账本标的当前状态（它已按之后会上的\
+进展算过），截止日期早于今天又没完成的要点明已经过期；引用用到的账本条目编号，归为 grounded。像自己记得会上的事\
+那样用自己的话说，不要提“账本”“程序整理”“状态”这些字眼；标“本人未确认”的条目照样用，只在负责人或日期\
+明显拿不准时补一句以会上原话为准。账本没有的承诺和进展不要补。
+2. 是要替本人答应、承诺、做决定，或评价某个具体的他人吗？不替本人答应事情或做承诺\
+（复述账本里已经说过的承诺不算新答应）。即使有相关资料，也只对这部分说明需要本人确认，不代答。其余能回答的部分继续回答，不要因一个承诺请求就拒绝整题。
 3. 其余不需要本人资料的问题，包括通用知识、方法、一般话题的看法，归为 general：充分帮助，给出判断、理由或可执行\
 步骤，不能因档案没有相关内容就说得问本人。对方要的是建议或推荐（怎么解决、去哪、做什么、买什么）时，先看资料里\
 有没有和这件事相关的本人情况（用过或买过的东西、去过的地方、喜好、正在做的事），有就围绕它们给建议并引用，\
@@ -711,6 +747,7 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
             materials.append(_clip(expression.context, 160))
     materials.extend(_excerpt(e.text, ctx.query, _other_chars(n)) for n, (e, _) in enumerate(ctx.others))
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
+    materials.extend(e.quote for e, _ in ctx.ledger)
     return materials
 
 
@@ -758,10 +795,40 @@ def _render_other(e: Expression, query: str, rank: int) -> str:
     return f"- [{e.expression_id}] {head} {e.speaker} 说「{_excerpt(e.text, query, _other_chars(rank))}」"
 
 
+# The ledger's labels speak of the owner as 本人; in the twin's first-person chat that would read as the twin itself.
+CHAT_STATUS_LABELS: dict[LedgerStatus, str] = {
+    **STATUS_LABELS,
+    "claimed_done": "负责人说已完成",
+    "evidenced": "有交付证据",
+}
+
+
+def _who(name: str) -> str:
+    return "我" if name == SELF else name or "未写明"
+
+
+def _render_ledger(e: LedgerEntry, status: LedgerStatus, today: dt.date) -> str:
+    head = " ".join(x for x in (e.meeting_date.isoformat() if e.meeting_date else "", e.meeting_title) if x)
+    whom = f"（对{_who(e.counterpart)}）" if e.counterpart else ""
+    parts = [f"{KIND_LABELS[e.kind]}：{_who(e.owner)}{whom}{e.what}"]
+    if e.due:
+        late = "，已过期" if e.due < today and status not in ("confirmed_done", "evidenced") else ""
+        parts.append(f"截止 {e.due.isoformat()}{late}")
+    if e.condition:
+        parts.append(f"前提：{e.condition}")
+    if e.kind != "objection":
+        parts.append(f"{'报告的状态' if e.kind == 'progress' else '当前状态'}：{CHAT_STATUS_LABELS[status]}")
+    reviewed = "本人已确认" if e.review in (ReviewStatus.CONFIRMED, ReviewStatus.EDITED) else "本人未确认"
+    parts.append(reviewed)
+    speaker = "我" if e.speaker == SELF else e.speaker
+    return f"- [{ledger_ref(e)}] {head} · {'；'.join(parts)}。原话（{speaker} 说）：「{_clip(e.quote, QUOTE_CHARS)}」"
+
+
 def _said_dates(ctx: PersonaContext) -> dict[str, dt.date | None]:
     """The day each retrieved record was said: an item by its latest evidence, an expression by its own date."""
     dates: dict[str, dt.date | None] = {i.item_id: i.last_seen() for i, _ in ctx.items}
     dates.update((e.expression_id, e.date) for e, _ in [*ctx.expressions, *ctx.others])
+    dates.update((ledger_ref(e), e.meeting_date) for e, _ in ctx.ledger)
     return dates
 
 
@@ -782,6 +849,10 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     if ctx.others:
         lines.append("别人对我说过的话（是别人说的，不是我的观点或经历）：")
         lines.extend(_render_other(e, ctx.query, n) for n, (e, _) in enumerate(ctx.others))
+    if ctx.ledger:
+        today = ctx.today or ctx.as_of or dt.date.today()
+        lines.append("会上的决定、承诺、异议和进展（承诺账本；状态是程序按之后会上的进展算出的）：")
+        lines.extend(_render_ledger(e, status, today) for e, status in ctx.ledger)
     return lines
 
 

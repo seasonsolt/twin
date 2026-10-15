@@ -4,15 +4,20 @@ import { Badge, Button } from '../../components/ui';
 import { useMotionPreset } from '../../design/motion';
 import type { Citation } from './types';
 
+function citationLabel(citation: Citation): string {
+  if (citation.kind === 'item') return citation.facet || '档案';
+  const when = [citation.date, citation.channel].filter(Boolean).join(' · ');
+  if (citation.kind === 'ledger')
+    return [`账本 · ${citation.ledger_kind ?? '条目'}`, when]
+      .filter(Boolean)
+      .join(' · ');
+  return when || '原话';
+}
+
 export function CitationCard({ citation }: { citation: Citation }) {
   return (
     <li className="rounded-md border border-border bg-canvas p-3 text-sm">
-      <Badge>
-        {citation.kind === 'item'
-          ? citation.facet || '档案'
-          : [citation.date, citation.channel].filter(Boolean).join(' · ') ||
-            '原话'}
-      </Badge>
+      <Badge>{citationLabel(citation)}</Badge>
       <blockquote className="mt-2 whitespace-pre-wrap">
         {citation.text}
       </blockquote>

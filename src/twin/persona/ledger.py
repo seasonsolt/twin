@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ..llm import LLM, Effort
+from .lexical import BM25
 from .schema import Expression, LedgerEntry, LedgerKind, LedgerStatus, ReviewStatus, Source, SourceKind
 from .store import PersonaStore
 
@@ -458,6 +460,80 @@ def brief(ledger: list[LedgerEntry], person: str, as_of: dt.date) -> Brief:
         objections=objections[:BRIEF_OBJECTIONS],
         questions=questions,
     )
+
+
+# Entries shown to the chat at most, and the share of the best keyword score an entry needs to be shown on keywords
+# alone (without its person or a ledger word in the question).
+CHAT_ENTRIES = 12
+CHAT_KEYWORD_SHARE = 0.4
+# Words that ask about the ledger itself: who promised what, what was decided, objected to, done, or due.
+LEDGER_CUE = re.compile(
+    r"答应|承诺|欠|待办|跟进|进展|进度|截止|到期|逾期|拖|决定|定了|定下|拍板|负责|谁来|交付|完成|做完|搞定|落实|"
+    r"异议|反对|顾虑|意见|账本|会上|开会|周会|例会|评审|见面|追问|催|deadline|todo",
+    re.IGNORECASE,
+)
+
+
+def for_chat(
+    ledger: list[LedgerEntry], query: str, today: dt.date, as_of: dt.date | None = None
+) -> list[tuple[LedgerEntry, LedgerStatus]]:
+    """The entries a chat question is about, each with its current status, most relevant first: those of a person
+    the question names, then, when the question asks about the ledger (a promise, a decision, a deadline), the open
+    decisions and commitments by urgency, then entries sharing its keywords; a progress report follows the decision or
+    commitment it is about. Only what was said by ``as_of`` counts, and statuses are worked out from that alone.
+    Empty when the question touches none of it."""
+    live = [
+        e
+        for e in ledger
+        if e.review is not ReviewStatus.REJECTED and (as_of is None or (e.meeting_date or dt.date.min) <= as_of)
+    ]
+    if not live:
+        return []
+    status = {e.entry_id: current_status(e, live) for e in live}
+    current = {e.entry_id for e in latest_of_threads(live)}
+    # Earlier versions of a restated commitment are superseded by the latest one, which carries the deadline.
+    candidates = [e for e in live if e.kind in ("objection", "progress") or e.entry_id in current]
+    names = {n for e in live for n in (e.owner, e.counterpart) if n not in (SELF, UNKNOWN_OWNER, "")}
+    named = {n for n in names if n in query}
+    cue = bool(LEDGER_CUE.search(query))
+    keywords = BM25({e.entry_id: f"{e.owner} {e.counterpart} {e.what} {e.quote} {e.meeting_title}" for e in candidates})
+    scores = keywords.scores(query)
+    best = max(scores.values(), default=0.0)
+
+    def score(e: LedgerEntry) -> float:
+        total = 2.0 if named & {e.owner, e.counterpart} else 0.0
+        share = scores.get(e.entry_id, 0.0) / best if best else 0.0
+        if share >= CHAT_KEYWORD_SHARE or total:
+            total += share
+        if cue and e.kind in ("decision", "commitment") and status[e.entry_id] != "confirmed_done":
+            total += 0.5
+        return total
+
+    def urgency(e: LedgerEntry) -> tuple[int, dt.date]:
+        return (0 if e.due and e.due < today else 1 if e.due else 2, e.due or dt.date.max)
+
+    by_id = {e.entry_id: e for e in live}
+
+    def thread(e: LedgerEntry) -> str:
+        """The decision or commitment thread an entry belongs to; an objection or a loose report is its own."""
+        about = by_id.get(e.relates_to or "") if e.kind == "progress" else e
+        return thread_root(about, by_id) if about is not None and about.kind != "progress" else e.entry_id
+
+    groups: dict[str, list[LedgerEntry]] = {}
+    for e in candidates:
+        groups.setdefault(thread(e), []).append(e)
+    ranked: list[tuple[float, tuple[int, dt.date], str, LedgerEntry]] = []
+    for root, members in groups.items():
+        # A report shows when the entry it is about does, right behind it, so the two are read together.
+        heads = [e for e in members if e.kind != "progress"] or members
+        best_score = max(score(e) for e in heads)
+        if best_score <= 0:
+            continue
+        head = min(heads, key=urgency)
+        members.sort(key=lambda e: (e.kind == "progress", e.meeting_date or dt.date.min, e.expression_id))
+        ranked.extend((best_score, urgency(head), root, e) for e in members)
+    ranked.sort(key=lambda row: (-row[0], row[1], row[2]))
+    return [(e, status[e.entry_id]) for *_, e in ranked[:CHAT_ENTRIES]]
 
 
 def people(ledger: list[LedgerEntry]) -> list[str]:

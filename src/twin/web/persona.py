@@ -24,11 +24,12 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from ..config import Settings
 from ..embed import Embedder
 from ..llm import LLM
-from ..persona.chat import PersonaChat, index_persona, no_profile_reply
+from ..persona.chat import LEDGER_PREFIX, PersonaChat, index_persona, no_profile_reply
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, FACET_BY_ID, TAXONOMY_VERSION
 from ..persona.items import PReview
 from ..persona.kernel import KERNEL, rebuild_scope
+from ..persona.ledger import KIND_LABELS as LEDGER_KIND_LABELS
 from ..persona.profile import (
     KERNEL_AWAITING_NOTICE,
     KERNEL_STALE_NOTICE,
@@ -147,7 +148,8 @@ def run_chat(
 ) -> dict[str, Any]:
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
-        reply = PersonaChat(store, llm, embedder, settings).reply(messages)
+        # This route is the person's own (visitors only reach the stream), so the ledger is material.
+        reply = PersonaChat(store, llm, embedder, settings, ledger=True).reply(messages)
         return append_reply(store, conversation_id, email, chat_payload(store, reply))
 
 
@@ -161,6 +163,17 @@ def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
         elif (e := store.get_expression(ref)) is not None:
             day = e.date.isoformat() if e.date else None
             cited.append({"id": ref, "kind": "expression", "date": day, "channel": e.channel, "text": e.text})
+        elif ref.startswith(LEDGER_PREFIX) and (entry := store.get_ledger_entry(ref[len(LEDGER_PREFIX) :])) is not None:
+            cited.append(
+                {
+                    "id": ref,
+                    "kind": "ledger",
+                    "ledger_kind": LEDGER_KIND_LABELS[entry.kind],
+                    "date": entry.meeting_date.isoformat() if entry.meeting_date else None,
+                    "channel": entry.meeting_title,
+                    "text": entry.quote,
+                }
+            )
     return {**reply.model_dump(mode="json"), "cited": cited}
 
 
@@ -491,6 +504,8 @@ def register(
     def stream_chat(body: ChatBody, request: Request) -> StreamingResponse:
         messages = validate_chat(body)
         email = owner(request)
+        # The ledger is private: only the person themselves, never a visitor of a public twin, chats with it.
+        ledger = not request.scope.get("twin_visitor")
         with open_store() as store:
             append_user(store, body.conversation_id, email, messages[-1].content)
 
@@ -504,7 +519,7 @@ def register(
                     )
                     return
                 llm, embedder = await run_in_threadpool(lambda: (backends.chat_llm(), backends.embedder()))
-                chat = PersonaChat(store, llm, embedder, settings)
+                chat = PersonaChat(store, llm, embedder, settings, ledger=ledger)
                 async with aclosing(chat.stream_reply(messages)) as replies:
                     async for result in replies:
                         if isinstance(result, str):

@@ -994,7 +994,7 @@ def persona_chat(
     with _persona_store(settings) as store:
         if profile_stale(store):
             _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
-        twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
+        twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings, ledger=True)
         history: list[ChatTurn] = []
         while True:
             text = message if message is not None else typer.prompt("你", default="", show_default=False)

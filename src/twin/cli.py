@@ -993,10 +993,14 @@ def persona_build(ctx: typer.Context) -> None:
             x = report.extraction
             _say(
                 f"本次模型提炼 {x.returned} 条结论，保留 {x.kept} 条；丢弃：细项不可用 {x.off_facet} 条，"
+                f"结论为空 {x.empty_statement} 条，"
                 f"没有可核对的引文 {x.unsupported} 条（引文对不上 {x.quotes_unmatched} 处、"
                 f"编号不存在 {x.quotes_misnumbered} 处、风格引用他人记述 {x.quotes_narrated_style} 处）"
                 + (f"；回复被截断后拆分重抽 {x.splits} 次" if x.splits else "")
             )
+            if x.unknown_facets:
+                common = sorted(x.unknown_facets.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+                _say("不在可用列表里的细项（模型写法×次数）：" + "、".join(f"“{f}”×{n}" for f, n in common))
         _say(report.change_summary())
         for facet_id, diff in sorted(report.facet_diffs.items()):
             if diff.added or diff.changed or diff.removed:

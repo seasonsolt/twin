@@ -272,14 +272,33 @@ def test_extraction_counts_what_it_dropped_and_why(store: PersonaStore, settings
     report = pf.build_profile(store, FakeLLM(handler), settings)
     # Per entry the handler adds an unconsented 9.3 and a quote of entry 99; the chat adds one fabricated quote.
     assert report.extraction == ExtractStats(
-        returned=15, kept=4, off_facet=5, unsupported=6, quotes_unmatched=1, quotes_misnumbered=5
+        returned=15,
+        kept=4,
+        off_facet=5,
+        unsupported=6,
+        quotes_unmatched=1,
+        quotes_misnumbered=5,
+        unknown_facets={"9.3": 5},
     )
     q, chat = (s.source_id for s in store.list_sources())
     assert store.extraction_stats() == {
-        q: (1, ExtractStats(returned=8, kept=2, off_facet=3, unsupported=3, quotes_misnumbered=3)),
+        q: (
+            1,
+            ExtractStats(
+                returned=8, kept=2, off_facet=3, unsupported=3, quotes_misnumbered=3, unknown_facets={"9.3": 3}
+            ),
+        ),
         chat: (
             1,
-            ExtractStats(returned=7, kept=2, off_facet=2, unsupported=3, quotes_unmatched=1, quotes_misnumbered=2),
+            ExtractStats(
+                returned=7,
+                kept=2,
+                off_facet=2,
+                unsupported=3,
+                quotes_unmatched=1,
+                quotes_misnumbered=2,
+                unknown_facets={"9.3": 2},
+            ),
         ),
     }
     assert pf.source_memories(store)[chat].nothing_found_reason == ""  # it supports memories
@@ -305,12 +324,27 @@ def test_a_source_without_memories_says_why(settings: Settings) -> None:
     misquoted = [
         {"facet_id": "4.2", "statement": "追问对照组", "quotes": [{"n": 2, "quote": "从来不看数据"}]},
         {"facet_id": "4.2", "statement": "编号越界", "quotes": [{"n": 9, "quote": "对照组"}]},
-        {"facet_id": "0.0", "statement": "没有这个细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+        {"facet_id": "D4", "statement": "没有这个细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+        {"facet_id": "D4", "statement": "还是没有", "quotes": [{"n": 2, "quote": "对照组"}]},
+        {
+            "facet_id": "思考方式与追问习惯之类的很长很长名字",
+            "statement": "名字太长",
+            "quotes": [{"n": 2, "quote": "对照组"}],
+        },
+        {"facet_id": "4.2", "statement": " ", "quotes": [{"n": 2, "quote": "对照组"}]},
     ]
     pf.build_profile(store, FakeLLM(answer(misquoted)), settings)
-    assert pf.source_memories(store)[sid].nothing_found_reason == (
-        "模型提炼了 3 条结论，校验后全部丢弃：引文与原文对不上 1 处，引用了不存在的条目 1 处，细项不可用或结论为空 1 条"
+    memory = pf.source_memories(store)[sid]
+    assert memory.extraction is not None and memory.extraction.unknown_facets == {
+        "D4": 2,
+        "思考方式与追问习惯之类的很长很长": 1,
+    }
+    assert memory.nothing_found_reason == (
+        "模型提炼了 6 条结论，校验后全部丢弃：引文与原文对不上 1 处，引用了不存在的条目 1 处，"
+        "细项不在可用列表里 3 条（模型写的是 “D4”×2、“思考方式与追问习惯之类的很长很长”×1），结论为空 1 条"
     )
+    legacy = ExtractStats(returned=2, off_facet=2)  # counted before facets and empty statements were told apart
+    assert pf.nothing_found_reason(legacy) == "模型提炼了 2 条结论，校验后全部丢弃：细项不可用或结论为空 2 条"
 
 
 def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(

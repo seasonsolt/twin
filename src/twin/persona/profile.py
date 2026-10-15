@@ -29,7 +29,7 @@ from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
 from ..usage import call_totals, collect_calls
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
-from .items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence
+from .items import FACET_SAMPLE_CHARS, ExtractStats, PersonaCandidate, PersonaItem, PEvidence
 from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
@@ -106,8 +106,14 @@ def nothing_found_reason(stats: ExtractStats | None) -> str:
         )
         if n
     ]
-    if stats.off_facet:
+    if stats.off_facet and stats.unknown_facets:
+        common = sorted(stats.unknown_facets.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        written = "、".join(f"“{facet}”×{n}" for facet, n in common)
+        causes.append(f"细项不在可用列表里 {stats.off_facet} 条（模型写的是 {written}）")
+    elif stats.off_facet:  # counted before facets and empty statements were told apart
         causes.append(f"细项不可用或结论为空 {stats.off_facet} 条")
+    if stats.empty_statement:
+        causes.append(f"结论为空 {stats.empty_statement} 条")
     return f"模型提炼了 {stats.returned} 条结论，校验后全部丢弃：" + "，".join(causes)
 
 
@@ -353,8 +359,13 @@ def _extract(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings
     stats = ExtractStats(returned=len(draft.items))
     for i, item in enumerate(draft.items):
         facet = item.facet_id.strip()
-        if facet not in allowed or not item.statement.strip():
+        if not item.statement.strip():
+            stats.empty_statement += 1
+            continue
+        if facet not in allowed:
             stats.off_facet += 1
+            sample = facet[:FACET_SAMPLE_CHARS]
+            stats.unknown_facets[sample] = stats.unknown_facets.get(sample, 0) + 1
             continue
         evidence: list[PEvidence] = []
         for ref in item.quotes[:MAX_QUOTES]:

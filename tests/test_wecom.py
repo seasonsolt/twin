@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import ServerConnection, serve
 
-from twin.channels.wecom import APOLOGY, FALLBACK, WeComBotRunner, WeComHub, citation_footer
+from twin.channels.wecom import APOLOGY, BUSY, FALLBACK, WeComBotRunner, WeComHub, citation_footer
 from twin.config import AuthSettings, Settings, SMTPSettings, WeComSettings, load_settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
@@ -24,6 +24,7 @@ from twin.persona.items import PersonaItem, PEvidence
 from twin.persona.schema import ChatReply, ChatTurn, EvidenceClass, SourceKind
 from twin.persona.sources import parse_chat
 from twin.persona.store import PersonaStore
+from twin.web import jobs
 from twin.web.app import create_app
 from twin.web.backends import Backends
 from twin.web.jobs import JobManager, describe_error
@@ -873,3 +874,36 @@ def test_legacy_config_ignored(tmp_path: Path) -> None:
     )
     assert load_settings(config).wecom.model_dump() == {"url": "wss://openws.work.weixin.qq.com"}
     assert WeComSettings().url == "wss://openws.work.weixin.qq.com"
+
+
+def test_answers_share_the_chat_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    running_now: list[None] = []
+    peak = 0
+
+    async def stream(self: PersonaChat, messages: Sequence[ChatTurn]) -> AsyncIterator[str | ChatReply]:
+        nonlocal peak
+        running_now.append(None)
+        peak = max(peak, len(running_now))
+        await asyncio.sleep(0.05)
+        running_now.pop()
+        yield reply()
+
+    monkeypatch.setattr(PersonaChat, "stream_reply", stream)
+    manager = JobManager(1, describe_error)
+
+    async def check() -> None:
+        async with running(tmp_path, monkeypatch, jobs=manager) as (runner, peer):
+            await peer.send(message("m1"))
+            await peer.send(message("m2", **{"from": {"userid": "another-user"}}))
+            answered = {(await peer.receive("aibot_respond_msg"))[-1][1]["headers"]["req_id"] for _ in range(2)}
+            assert answered == {"req-m1", "req-m2"}
+            # Two people, one chat worker: the answers ran one after the other, and gave their places back.
+            assert peak == 1 and manager._streams == [0]
+            monkeypatch.setattr(jobs, "MAX_PENDING_ANSWERS", 0)
+            await peer.send(message("m3"))
+            frames = await peer.receive("aibot_respond_msg", "req-m3")
+            assert frames[-1][1]["body"]["stream"]["content"] == BUSY
+            session = runner.sessions[("default", "single", "private-user")]
+            assert [turn.content for turn in session.history] == ["私密问题", "最终回答"]
+
+    asyncio.run(check())

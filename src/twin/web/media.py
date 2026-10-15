@@ -39,7 +39,7 @@ from ..media.tts import (
 )
 from ..media.video import VideoSynthesizer
 from ..util import private_directory
-from .jobs import JobError, JobManager
+from .jobs import AdmittedStream, JobError, JobManager
 
 AUDIO_NAME = re.compile(r"[0-9a-f]{64}\.(wav|mp3)")
 VIDEO_NAME = re.compile(r"[0-9a-f]{64}\.mp4")
@@ -248,17 +248,19 @@ def register(
             raise HTTPException(400, "没有可播放的语音内容")
         if body.segments is not None and any(index >= len(script.segments) for index in body.segments):
             raise HTTPException(400, "语音分段索引超出范围")
-        try:
-            synth = speech()
-            private_directory(cache_dir)
-            cache_dir.chmod(0o700)
-            requests = cache_dir / "requests"
-            private_directory(requests)
-            requests.chmod(0o700)
-            rendered = render_audio(script, synth, cache_dir, segments=body.segments)
-            manifest = AudioManifest.model_validate_json((cache_dir / rendered.manifest_file).read_bytes())
-        except OSError:
-            raise MediaUnavailable("无法保存语音文件") from None
+        # Speech queues for a few synthesis workers shared by every persona; too long a queue is refused.
+        with video_jobs.admit_speech() as ticket, ticket.holding():
+            try:
+                synth = speech()
+                private_directory(cache_dir)
+                cache_dir.chmod(0o700)
+                requests = cache_dir / "requests"
+                private_directory(requests)
+                requests.chmod(0o700)
+                rendered = render_audio(script, synth, cache_dir, segments=body.segments)
+                manifest = AudioManifest.model_validate_json((cache_dir / rendered.manifest_file).read_bytes())
+            except OSError:
+                raise MediaUnavailable("无法保存语音文件") from None
         return {
             "script": script.model_dump(mode="json"),
             "segment_count": len(script.segments),
@@ -282,24 +284,28 @@ def register(
         if not script.segments:
             raise HTTPException(400, "没有可播放的语音内容")
 
+        ticket = video_jobs.admit_speech()
+
         async def generate() -> AsyncIterator[bytes]:
             # A fixed output rate lets the first frame pass through proxies before upstream synthesis starts.
             yield frame(1, {"sample_rate": SAMPLE_RATE, "segments": len(script.segments)})
             try:
-                synth = await asyncio.to_thread(speech)
-                chunks = stream_audio(script, synth, cache_dir)
-                try:
-                    async for chunk in chunks:
-                        yield chunk
-                finally:
-                    await chunks.aclose()
+                async with ticket.running():
+                    synth = await asyncio.to_thread(speech)
+                    chunks = stream_audio(script, synth, cache_dir)
+                    try:
+                        async for chunk in chunks:
+                            yield chunk
+                    finally:
+                        await chunks.aclose()
             except MediaError as exc:
                 yield frame(4, {"detail": speech_error(exc)[1]})
             except Exception:
                 yield frame(4, {"detail": "语音服务不可用，请检查语音配置"})
 
-        return StreamingResponse(
+        return AdmittedStream(
             generate(),
+            ticket,
             media_type="application/octet-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
@@ -326,24 +332,27 @@ def register(
     def clip(body: MediaBody) -> FileResponse:
         script = make_script(body)
         path: Path | None = None
-        try:
-            private_directory(cache_dir)
-            with tempfile.NamedTemporaryFile(dir=cache_dir.parent, suffix=".mp4", delete=False) as output:
-                path = Path(output.name)
-            render_clip(script, speech(), AVATAR_PRESETS[selected_avatar()], path, font_path=settings.media.font_path)
-            return FileResponse(
-                path,
-                media_type="video/mp4",
-                filename="twin-media.mp4",
-                headers={"Cache-Control": "private, no-store"},
-                background=BackgroundTask(path.unlink, missing_ok=True),
-            )
-        except (MediaError, OSError) as exc:
-            if path is not None:
-                path.unlink(missing_ok=True)
-            if isinstance(exc, OSError):
-                raise MediaUnavailable("无法保存视频文件") from None
-            raise
+        with video_jobs.admit_speech() as ticket:
+            try:
+                private_directory(cache_dir)
+                with tempfile.NamedTemporaryFile(dir=cache_dir.parent, suffix=".mp4", delete=False) as output:
+                    path = Path(output.name)
+                with ticket.holding():
+                    avatar = AVATAR_PRESETS[selected_avatar()]
+                    render_clip(script, speech(), avatar, path, font_path=settings.media.font_path)
+                return FileResponse(
+                    path,
+                    media_type="video/mp4",
+                    filename="twin-media.mp4",
+                    headers={"Cache-Control": "private, no-store"},
+                    background=BackgroundTask(path.unlink, missing_ok=True),
+                )
+            except (MediaError, OSError) as exc:
+                if path is not None:
+                    path.unlink(missing_ok=True)
+                if isinstance(exc, OSError):
+                    raise MediaUnavailable("无法保存视频文件") from None
+                raise
 
     @app.post("/api/media/video")
     def submit_video(body: MediaBody) -> dict[str, str]:

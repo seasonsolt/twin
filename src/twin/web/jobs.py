@@ -3,7 +3,9 @@
 Each job runs in its own daemon thread, so stopping the server never waits for a long build.
 Profile builds are exclusive (a second submission raises ``JobConflict``).
 Chats run side by side, at most ``answer_workers`` at once, the rest stay queued, and at most
-``MAX_PENDING_ANSWERS`` of them may be unfinished (one more raises ``TooManyJobs``). Jobs live only in memory.
+``MAX_PENDING_ANSWERS`` of them may be unfinished (one more raises ``TooManyJobs``); streamed chats are admitted
+with ``admit_stream`` and share both limits with chat jobs. Speech is synthesized ``SPEECH_WORKERS`` at a time with
+at most ``MAX_PENDING_SPEECH`` requests waiting or running (``admit_speech``). Jobs live only in memory.
 
 Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (from the ``[n/N]`` lines), a tally of the
 ``ok`` / ``FAILED`` lines of the current stage and, separately, its milestones (stage markers and Chinese summaries).
@@ -11,6 +13,7 @@ Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (f
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import datetime as dt
 import logging
@@ -21,10 +24,15 @@ import subprocess
 import sys
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+import anyio
+from starlette.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from ..embed import EmbedError
 from ..llm import LLMError
@@ -44,6 +52,8 @@ EXCLUSIVE_KINDS: frozenset[JobKind] = frozenset({"persona_build"})
 MAX_PROGRESS_LINES = 500
 MAX_MILESTONES = 2000
 MAX_PENDING_ANSWERS = 20
+SPEECH_WORKERS = 2
+MAX_PENDING_SPEECH = 8
 LISTED_JOBS = 50
 KEPT_JOBS = 200
 
@@ -98,6 +108,118 @@ def _iso(value: dt.datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+class Slots:
+    """At most ``size`` holders at once, handed over first come first served to threads (``acquire``) and to
+    coroutines (``acquire_async``, which waits without occupying a thread) alike."""
+
+    def __init__(self, size: int) -> None:
+        self._lock = threading.Lock()
+        self._free = size
+        # Each waiter takes over a released slot when called under ``_lock``; False means it can no longer.
+        self._waiters: deque[Callable[[], bool]] = deque()
+
+    def acquire(self) -> None:
+        with self._lock:
+            if self._free and not self._waiters:
+                self._free -= 1
+                return
+            granted = threading.Event()
+
+            def grant() -> bool:
+                granted.set()
+                return True
+
+            self._waiters.append(grant)
+        granted.wait()
+
+    async def acquire_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[None] = loop.create_future()
+        granted = False
+
+        def wake() -> None:
+            if not future.done():
+                future.set_result(None)
+
+        def grant() -> bool:
+            nonlocal granted
+            try:
+                loop.call_soon_threadsafe(wake)
+            except RuntimeError:  # the event loop is closed
+                return False
+            granted = True
+            return True
+
+        with self._lock:
+            if self._free and not self._waiters:
+                self._free -= 1
+                return
+            self._waiters.append(grant)
+        try:
+            await future
+        except BaseException:
+            with self._lock:
+                if not granted:
+                    self._waiters.remove(grant)
+                    raise
+            # Handed a slot while being cancelled: pass it on.
+            self.release()
+            raise
+
+    def release(self) -> None:
+        with self._lock:
+            while self._waiters:
+                if self._waiters.popleft()():
+                    return
+            self._free += 1
+
+
+class Ticket:
+    """A request counted as pending from ``JobManager.admit_stream`` / ``admit_speech`` until ``close`` (or the end
+    of a ``with`` block); inside ``running`` (coroutines) or ``holding`` (threads) it also holds one of the worker
+    slots. ``close`` is idempotent and frees the slot too, so a request that ends without unwinding still gives both
+    back."""
+
+    def __init__(self, slots: Slots, done: Callable[[], None]) -> None:
+        self._slots, self._done = slots, done
+        self._holding = self._closed = False
+
+    def __enter__(self) -> Ticket:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        await self._slots.acquire_async()
+        self._holding = True
+        try:
+            yield
+        finally:
+            self._release_slot()
+
+    @contextmanager
+    def holding(self) -> Iterator[None]:
+        self._slots.acquire()
+        self._holding = True
+        try:
+            yield
+        finally:
+            self._release_slot()
+
+    def _release_slot(self) -> None:
+        if self._holding:
+            self._holding = False
+            self._slots.release()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._release_slot()
+            self._done()
+
+
 @dataclass(eq=False)
 class Job:
     job_id: str
@@ -130,7 +252,10 @@ class JobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._exclusive_slot: list[Job | None] = [None]
-        self._answer_slots = threading.BoundedSemaphore(max(1, answer_workers))
+        self._answer_slots = Slots(max(1, answer_workers))
+        self._streams = [0]
+        self._speech_slots = Slots(SPEECH_WORKERS)
+        self._speech = [0]
         self._media_slot = threading.BoundedSemaphore(1)
         self._video_slot = threading.BoundedSemaphore(1)
         self._describe_error = describe_error
@@ -161,22 +286,27 @@ class JobManager:
             if (exclusive or require_idle) and self._exclusive_slot[0] is not None and self._exclusive_slot[0].active:
                 raise JobConflict(self._exclusive_slot[0])
             if not exclusive:
-                pending = sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
-                if pending >= MAX_PENDING_ANSWERS:
-                    raise TooManyJobs(
-                        f"已有 {pending} 个聊天任务在排队或运行（上限 {MAX_PENDING_ANSWERS} 个），"
-                        "请等前面的任务完成后再提交"
-                    )
+                self._check_pending()
             job = Job(
                 job_id=self._new_id(), kind=kind, title=title, created=_now(), persona_id=self.persona_id or "default"
             )
-            # Capture input and persist acceptance before a worker can run, under the same admission lock as builds.
-            if prepare is not None:
-                prepare(job)
+            # Reserve admission before preparing input. Preparation can write to SQLite, so it must run without
+            # this lock; the queued record still counts against limits and prevents deletion or a second build.
             self._jobs[job.job_id] = job
             if exclusive:
                 self._exclusive_slot[0] = job
             self._evict()
+        try:
+            if prepare is not None:
+                prepare(job)
+        except BaseException:
+            with self._lock:
+                self._jobs.pop(job.job_id)
+                if self._exclusive_slot[0] is job:
+                    self._exclusive_slot[0] = None
+                job.status, job.finished = "failed", _now()
+            job.done.set()
+            raise
         try:
             threading.Thread(target=self._run, args=(job, fn), name=f"twin-{job.job_id}", daemon=True).start()
         except BaseException:
@@ -186,6 +316,40 @@ class JobManager:
             job.done.set()
             raise
         return job
+
+    def admit_stream(self) -> Ticket:
+        """Count one streamed chat against the pending limit (``TooManyJobs`` when full); the caller must ``close``
+        the ticket once the stream ends."""
+        with self._lock:
+            self._check_pending()
+            self._streams[0] += 1
+
+        def done() -> None:
+            with self._lock:
+                self._streams[0] -= 1
+
+        return Ticket(self._answer_slots, done)
+
+    def admit_speech(self) -> Ticket:
+        """Count one speech synthesis against ``MAX_PENDING_SPEECH`` (``TooManyJobs`` when full); the caller must
+        ``close`` the ticket once it is done."""
+        with self._lock:
+            if self._speech[0] >= MAX_PENDING_SPEECH:
+                raise TooManyJobs(f"正在合成的语音太多（上限 {MAX_PENDING_SPEECH} 段），请稍后再试")
+            self._speech[0] += 1
+
+        def done() -> None:
+            with self._lock:
+                self._speech[0] -= 1
+
+        return Ticket(self._speech_slots, done)
+
+    def _check_pending(self) -> None:
+        pending = self._streams[0] + sum(1 for j in self._jobs.values() if j.active and j.kind not in EXCLUSIVE_KINDS)
+        if pending >= MAX_PENDING_ANSWERS:
+            raise TooManyJobs(
+                f"已有 {pending} 个聊天任务在排队或运行（上限 {MAX_PENDING_ANSWERS} 个），请等前面的任务完成后再提交"
+            )
 
     def active_exclusive(self, kinds: frozenset[JobKind] = EXCLUSIVE_KINDS) -> Job | None:
         """The running (or queued) exclusive job whose kind is in ``kinds``, if any."""
@@ -300,6 +464,30 @@ class JobManager:
             if slot is not None:
                 slot.release()
             job.done.set()
+
+
+class AdmittedStream(StreamingResponse):
+    """A streamed response that gives its ``ticket`` back once the response ends, even when the client left before
+    the stream started."""
+
+    def __init__(self, content: AsyncIterator[Any], ticket: Ticket | None, **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self.ticket = ticket
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # A disconnect cancels Starlette's task group. Cleanup must finish despite that cancellation, and a
+            # failed send can leave the iterator suspended at a yield rather than closing it automatically.
+            with anyio.CancelScope(shield=True):
+                try:
+                    close = getattr(self.body_iterator, "aclose", None)
+                    if close is not None:
+                        await close()
+                finally:
+                    if self.ticket is not None:
+                        self.ticket.close()
 
 
 class PersonaProcessing:

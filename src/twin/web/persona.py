@@ -14,6 +14,7 @@ from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -24,7 +25,7 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from ..config import Settings
 from ..embed import Embedder
 from ..llm import LLM
-from ..persona.chat import PersonaChat, index_persona, no_profile_reply
+from ..persona.chat import PersonaChat, index_persona, no_profile_reply, off_loop
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
 from ..persona.items import PReview
@@ -46,7 +47,7 @@ from ..persona.store import PersonaStore, stored_identity
 from ..usage import transient_summary
 from .backends import Backends
 from .conversations import append_reply, append_user, owner
-from .jobs import JobManager, PersonaProcessing
+from .jobs import AdmittedStream, Job, JobManager, PersonaProcessing, Ticket
 
 MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
@@ -430,25 +431,32 @@ def register(
     ) -> dict[str, Any]:
         when = _date(date, "date")
         received = await read_uploads(request)
-        imported: list[dict[str, Any]] = []
-        skipped: list[dict[str, str]] = []
-        with open_store() as store:
-            for raw_name, data in received:
-                relative = Path(raw_name.replace("\\", "/"))
-                name = relative.name
-                if any(part.startswith(".") for part in relative.parts):
-                    skipped.append({"file": raw_name, "reason": "已跳过隐藏文件"})
-                    continue
-                try:
-                    parsed = parse_upload(name, data, settings, kind, when)
-                except ValueError as e:
-                    skipped.append({"file": raw_name, "reason": str(e)})
-                    continue
-                new = store.put_source(parsed)
-                imported.append({**source_view(parsed.source), "new": new, "skipped_lines": len(parsed.skipped_lines)})
-        if imported:
-            queue_build()
-        return {"imported": imported, "skipped": skipped}
+
+        # Parsing documents and writing them to SQLite would stall every other request on the event loop.
+        def store_all() -> dict[str, Any]:
+            imported: list[dict[str, Any]] = []
+            skipped: list[dict[str, str]] = []
+            with open_store() as store:
+                for raw_name, data in received:
+                    relative = Path(raw_name.replace("\\", "/"))
+                    name = relative.name
+                    if any(part.startswith(".") for part in relative.parts):
+                        skipped.append({"file": raw_name, "reason": "已跳过隐藏文件"})
+                        continue
+                    try:
+                        parsed = parse_upload(name, data, settings, kind, when)
+                    except ValueError as e:
+                        skipped.append({"file": raw_name, "reason": str(e)})
+                        continue
+                    new = store.put_source(parsed)
+                    imported.append(
+                        {**source_view(parsed.source), "new": new, "skipped_lines": len(parsed.skipped_lines)}
+                    )
+            if imported:
+                queue_build()
+            return {"imported": imported, "skipped": skipped}
+
+        return await run_in_threadpool(store_all)
 
     @app.delete("/api/persona/sources/{source_id}")
     def delete_source(source_id: str) -> dict[str, bool]:
@@ -613,22 +621,31 @@ def register(
         data["taxonomy"] = TAXONOMY_VERSION
         return data
 
+    # A chat is admitted (backends ready, a place in the chat queue) before its user turn is saved, so a rejected
+    # message, which the page offers to send again, leaves nothing behind.
+
     @app.post("/api/persona/chat", status_code=202)
     def start_chat(body: ChatBody, request: Request) -> Any:
         messages = validate_chat(body)
         email = owner(request)
         with open_store() as store:
-            append_user(store, body.conversation_id, email, messages[-1].content)
             if not store.has_items():
+                append_user(store, body.conversation_id, email, messages[-1].content)
                 reply = no_profile_reply(store)
                 return JSONResponse(
                     append_reply(store, body.conversation_id, email, chat_payload(store, reply)), status_code=200
                 )
         llm, embedder = backends.chat_llm(), backends.embedder()
+
+        def accept(job: Job) -> None:
+            with open_store() as store:
+                append_user(store, body.conversation_id, email, messages[-1].content)
+
         job = jobs.submit(
             "chat",
             "和分身聊天",
             lambda log: run_chat(settings, llm, embedder, messages, log, body.conversation_id, email),
+            prepare=accept,
         )
         return {"job_id": job.job_id}
 
@@ -637,27 +654,44 @@ def register(
         messages = validate_chat(body)
         email = owner(request)
         with open_store() as store:
-            append_user(store, body.conversation_id, email, messages[-1].content)
-
-        async def produce() -> AsyncGenerator[str]:
+            profiled = store.has_items()
+        ticket: Ticket | None = None
+        if profiled:
+            llm, embedder = backends.chat_llm(), backends.embedder()
+            ticket = jobs.admit_stream()
+        try:
             with open_store() as store:
-                if not store.has_items():
-                    reply = no_profile_reply(store)
-                    yield sse_event("delta", {"text": reply.reply})
-                    yield sse_event(
-                        "final", append_reply(store, body.conversation_id, email, chat_payload(store, reply))
-                    )
-                    return
-                llm, embedder = await run_in_threadpool(lambda: (backends.chat_llm(), backends.embedder()))
-                chat = PersonaChat(store, llm, embedder, settings)
-                async with aclosing(chat.stream_reply(messages)) as replies:
-                    async for result in replies:
-                        if isinstance(result, str):
-                            yield sse_event("delta", {"text": result})
-                        else:
-                            yield sse_event(
-                                "final", append_reply(store, body.conversation_id, email, chat_payload(store, result))
-                            )
+                append_user(store, body.conversation_id, email, messages[-1].content)
+        except BaseException:
+            if ticket is not None:
+                ticket.close()
+            raise
+
+        def save(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
+            return append_reply(store, body.conversation_id, email, chat_payload(store, reply))
+
+        def unbuilt() -> tuple[str, dict[str, Any]]:
+            with open_store() as store:
+                reply = no_profile_reply(store)
+                return reply.reply, save(store, reply)
+
+        # The store is opened, read and written off the event loop, which other requests share.
+        async def produce() -> AsyncGenerator[str]:
+            if ticket is None:
+                text, final = await off_loop(unbuilt)
+                yield sse_event("delta", {"text": text})
+                yield sse_event("final", final)
+                return
+            # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
+            async with ticket.running():
+                with await off_loop(partial(PersonaStore, settings.db_path)) as store:
+                    chat = PersonaChat(store, llm, embedder, settings)
+                    async with aclosing(chat.stream_reply(messages)) as replies:
+                        async for result in replies:
+                            if isinstance(result, str):
+                                yield sse_event("delta", {"text": result})
+                            else:
+                                yield sse_event("final", await off_loop(partial(save, store, result)))
 
         async def events() -> AsyncGenerator[str]:
             yield ": connected\n\n"
@@ -676,13 +710,17 @@ def register(
                 # Backend errors can contain prompts, URLs or credentials; never reflect them to the browser.
                 yield sse_event("error", {"detail": "分身暂时无法回复，请重试"})
             finally:
-                if pending is not None:
-                    pending.cancel()
-                    await asyncio.gather(pending, return_exceptions=True)
-                await stream.aclose()
+                # Cancel the pending operation once, then let its worker finish before closing the store and
+                # releasing the ticket. Starlette's cancelled scope would otherwise cancel this gather again.
+                with anyio.CancelScope(shield=True):
+                    if pending is not None:
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+                    await stream.aclose()
 
-        return StreamingResponse(
+        return AdmittedStream(
             events(),
+            ticket,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

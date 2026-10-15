@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -93,60 +94,82 @@ def expression_view(
     until: dt.date | None = None,
     expressions: list[Expression] | None = None,
 ) -> list[Expression]:
-    """The L2/L3 view, never written back to L1.
+    """The L2/L3 view, never written back to L1 (see ``ExpressionView``)."""
+    return ExpressionView(store, settings).select(
+        source_id=source_id, target_only=target_only, until=until, expressions=expressions
+    )
+
+
+class ExpressionView:
+    """The L2/L3 view, never written back to L1, read from the store once and selected from as often as needed.
 
     Known names are non-target speakers in the raw corpus (not guessed from prose); the same name is replaced in
     every source kind, including documents. Legacy sources bypass replacement entirely: their lost
     names cannot be recovered, and hashing their codes again would change existing profiles. Target names/aliases
     and existing codes are protected even when they contain another speaker's name.
     """
-    sources = {s.source_id: s for s in store.list_sources()}
-    corpus = store.list_expressions()
-    entries = [
-        e
-        for e in (corpus if expressions is None else expressions)
-        if (source_id is None or e.source_id == source_id)
-        and (not target_only or (e.is_target and sources[e.source_id].media_status in (None, "ready")))
-        and (until is None or (e.date is not None and e.date <= until))
-    ]
-    if not settings.pseudonymize_others:
-        return entries
-    protected = {
-        settings.target_name,
-        store.get_meta("identity:name") or settings.target_name,
-        *settings.target_aliases,
-    }
-    others = {
-        e.speaker
-        for e in corpus
-        if sources[e.source_id].text_state == "raw"
-        and not e.is_target
-        and not settings.is_target(e.speaker)
-        and len(e.speaker) >= MIN_NAME_CHARS
-        and not re.fullmatch(r"他人[0-9A-F]{4}|其他人\d+", e.speaker)
-    }
-    if not others:
-        return entries
-    names = sorted(others | protected, key=lambda n: (-len(n), n))
-    pattern = re.compile(r"他人[0-9A-F]{4}|" + "|".join(re.escape(n) for n in names if n))
-    codes = {n: pseudonym(n) for n in others - protected}
 
-    def swap(text: str) -> str:
-        return pattern.sub(lambda m: codes.get(m.group(0), m.group(0)), text)
+    def __init__(self, store: PersonaStore, settings: Settings) -> None:
+        self.sources = {s.source_id: s for s in store.list_sources()}
+        self.corpus = store.list_expressions()
+        self._swap: Callable[[str], str] | None = None
+        if not settings.pseudonymize_others:
+            return
+        protected = {
+            settings.target_name,
+            store.get_meta("identity:name") or settings.target_name,
+            *settings.target_aliases,
+        }
+        others = {
+            e.speaker
+            for e in self.corpus
+            if self.sources[e.source_id].text_state == "raw"
+            and not e.is_target
+            and not settings.is_target(e.speaker)
+            and len(e.speaker) >= MIN_NAME_CHARS
+            and not re.fullmatch(r"他人[0-9A-F]{4}|其他人\d+", e.speaker)
+        }
+        if not others:
+            return
+        names = sorted(others | protected, key=lambda n: (-len(n), n))
+        pattern = re.compile(r"他人[0-9A-F]{4}|" + "|".join(re.escape(n) for n in names if n))
+        codes = {n: pseudonym(n) for n in others - protected}
+        self._swap = lambda text: pattern.sub(lambda m: codes.get(m.group(0), m.group(0)), text)
 
-    return [
-        e.model_copy(
-            update={
-                "speaker": e.speaker if e.is_target else swap(e.speaker),
-                "text": swap(e.text),
-                "context": swap(e.context),
-                "channel": swap(e.channel),
-            }
-        )
-        if sources[e.source_id].text_state == "raw"
-        else e
-        for e in entries
-    ]
+    def select(
+        self,
+        *,
+        source_id: str | None = None,
+        target_only: bool = False,
+        until: dt.date | None = None,
+        expressions: list[Expression] | None = None,
+    ) -> list[Expression]:
+        """The corpus (or ``expressions``) in the view, narrowed to one source, the person's own words (from sources
+        that are ready) and what was said up to ``until``."""
+        sources = self.sources
+        entries = [
+            e
+            for e in (self.corpus if expressions is None else expressions)
+            if (source_id is None or e.source_id == source_id)
+            and (not target_only or (e.is_target and sources[e.source_id].media_status in (None, "ready")))
+            and (until is None or (e.date is not None and e.date <= until))
+        ]
+        swap = self._swap
+        if swap is None:
+            return entries
+        return [
+            e.model_copy(
+                update={
+                    "speaker": e.speaker if e.is_target else swap(e.speaker),
+                    "text": swap(e.text),
+                    "context": swap(e.context),
+                    "channel": swap(e.channel),
+                }
+            )
+            if sources[e.source_id].text_state == "raw"
+            else e
+            for e in entries
+        ]
 
 
 def _message_context(recent: list[str], speaker: str, text: str, target: bool) -> str:

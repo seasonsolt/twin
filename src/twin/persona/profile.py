@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -311,6 +312,19 @@ def prompt_fingerprint() -> str:
     )
 
 
+_FACET_NUMBER = re.compile(r"(?<![\d.．])(\d{1,2})\s*[.．]\s*(\d{1,2})(?![\d.．])")
+
+
+def facet_id(written: str) -> str:
+    """The facet a model named, read from how models write it besides the bare id: "8.2 正在做的事", "8.2：…",
+    "细项 8．2". Anything else is returned as written, and dropped as a facet that is not offered."""
+    written = written.strip()
+    if written in FACET_BY_ID:
+        return written
+    match = _FACET_NUMBER.search(written)
+    return f"{int(match[1])}.{int(match[2])}" if match else written
+
+
 @dataclass(frozen=True)
 class Extraction:
     candidates: list[PersonaCandidate]
@@ -358,13 +372,13 @@ def _extract(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings
     candidates: list[PersonaCandidate] = []
     stats = ExtractStats(returned=len(draft.items))
     for i, item in enumerate(draft.items):
-        facet = item.facet_id.strip()
+        facet = facet_id(item.facet_id)
         if not item.statement.strip():
             stats.empty_statement += 1
             continue
         if facet not in allowed:
             stats.off_facet += 1
-            sample = facet[:FACET_SAMPLE_CHARS]
+            sample = item.facet_id.strip()[:FACET_SAMPLE_CHARS]
             stats.unknown_facets[sample] = stats.unknown_facets.get(sample, 0) + 1
             continue
         evidence: list[PEvidence] = []

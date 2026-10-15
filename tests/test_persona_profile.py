@@ -347,6 +347,39 @@ def test_a_source_without_memories_says_why(settings: Settings) -> None:
     assert pf.nothing_found_reason(legacy) == "模型提炼了 2 条结论，校验后全部丢弃：细项不可用或结论为空 2 条"
 
 
+@pytest.mark.parametrize(
+    "written, facet",
+    [
+        ("2.1", "2.1"),
+        (" 8.2 正在做的事", "8.2"),
+        ("8.2：近期在做的事", "8.2"),
+        ("细项 8．2", "8.2"),
+        ("4.2 / 4.1", "4.2"),
+        ("D8", "D8"),
+        ("D8 最近在关注", "D8 最近在关注"),
+        ("8.2.1", "8.2.1"),
+        ("2026.10", "2026.10"),
+    ],
+)
+def test_facet_ids_are_read_from_how_models_write_them(written: str, facet: str) -> None:
+    assert pf.facet_id(written) == facet
+
+
+@pytest.mark.usefixtures("gated_life_facets")
+def test_a_facet_written_with_its_name_is_kept(settings: Settings) -> None:
+    store = PersonaStore(":memory:")
+    store.put_source(parse_chat("群_2026-09.txt", CHAT, settings))
+    named = [
+        {"facet_id": "4.2 追问习惯", "statement": "追问对照组", "quotes": [{"n": 2, "quote": "对照组是谁挑的"}]},
+        {"facet_id": "D4", "statement": "说不清细项", "quotes": [{"n": 2, "quote": "对照组"}]},
+    ]
+    report = pf.build_profile(
+        store, FakeLLM(lambda s, u, schema: {"items": named if schema is pf.ExtractDraft else []}), settings
+    )
+    assert [c.facet_id for c in store.list_candidates()] == ["4.2"]
+    assert report.extraction.kept == 1 and report.extraction.unknown_facets == {"D4": 1}
+
+
 def test_a_build_views_the_corpus_once_and_cuts_the_same_chunks(
     store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:

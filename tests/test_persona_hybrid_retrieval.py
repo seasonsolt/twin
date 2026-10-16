@@ -9,7 +9,7 @@ import pytest
 from coverage import Coverage
 
 from twin.config import Settings
-from twin.embed import Matrix
+from twin.embed import EmbedError, Matrix
 from twin.llm import FakeLLM
 from twin.persona import chat as pc
 from twin.persona.items import PersonaItem
@@ -114,13 +114,59 @@ def test_keyword_ranking_includes_candidates_without_vectors_and_excludes_stale_
             [("stale", "sha", np.array([1.0, 0.0])), ("b", "sha", np.array([0.0, 1.0]))],
         )
         candidates = {"a": "rare", "b": "other"}
-        ranked = pc._rank(store, pc.ITEMS_NS, [("rare", np.array([1.0, 0.0]))], candidates, str, 12)
+        ranked = pc._rank(store, pc.ITEMS_NS, [("rare", np.array([1.0, 0.0]))], candidates, str, 12, "test")
         assert ranked == [("rare", 1 / 61), ("other", 1 / 61)]
         # A rewrite hint is one more pair of rankings fused with equal weight.
         hinted = pc._rank(
-            store, pc.ITEMS_NS, [("rare", np.array([1.0, 0.0])), ("other", np.array([0.0, 1.0]))], candidates, str, 12
+            store,
+            pc.ITEMS_NS,
+            [("rare", np.array([1.0, 0.0])), ("other", np.array([0.0, 1.0]))],
+            candidates,
+            str,
+            12,
+            "test",
         )
         assert hinted == [("other", 3 / 61), ("rare", 1 / 61)]
+
+
+class WiderEmbedder:
+    """Another model: a different vector space and dimension than ``ConstantEmbedder``."""
+
+    name = "wider"
+    cluster_threshold = 0.6
+
+    def embed(self, texts: list[str]) -> Matrix:
+        return np.tile(np.array([0.0, 0.0, 1.0], dtype=np.float32), (len(texts), 1))
+
+
+class UnreachableEmbedder:
+    name = "unreachable"
+    cluster_threshold = 0.6
+
+    def embed(self, texts: list[str]) -> Matrix:
+        raise EmbedError("connection refused")
+
+
+def test_retrieval_ranks_by_keywords_after_a_model_change_or_while_the_service_is_down() -> None:
+    settings = Settings(target_name="张三")
+    items = [
+        PersonaItem(item_id="pi_000", facet_id="2.1", statement="负责QX-7项目", evidence=[]),
+        PersonaItem(item_id="pi_001", facet_id="2.1", statement="日常工作安排", evidence=[]),
+    ]
+    with PersonaStore(":memory:") as store:
+        store.replace_facet_items("2.1", items)
+        pc.index_persona(store, ConstantEmbedder(), settings)
+        assert not pc.index_stale(store, ConstantEmbedder())
+        # Vectors of the old model are never compared with the new model's queries (2 vs 3 dimensions).
+        assert pc.index_stale(store, WiderEmbedder())
+        for embedder in (WiderEmbedder(), UnreachableEmbedder()):
+            chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), embedder, settings)
+            assert [item.item_id for item, _ in chat.retrieve("QX-7").items] == ["pi_000"]
+        assert [i.item_id for i in pc.search_items(store, WiderEmbedder(), "QX-7", 5)] == ["pi_000"]
+        pc.index_persona(store, WiderEmbedder(), settings)
+        assert not pc.index_stale(store, WiderEmbedder())
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), WiderEmbedder(), settings)
+        assert len(chat.retrieve("QX-7").items) == 2
 
 
 def test_expression_keywords_use_privacy_view_and_context_without_vectors() -> None:

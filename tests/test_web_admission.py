@@ -194,6 +194,7 @@ def test_retrieval_loads_each_namespace_once(tmp_path: Path, monkeypatch: pytest
 
     monkeypatch.setattr(PersonaStore, "get_vectors", counted)
     with PersonaStore(tmp_path / "twin.db") as store:
+        pc.index_persona(store, HashingEmbedder(), Settings())
         chat = pc.PersonaChat(store, StreamingLLM(lambda *_: {}), HashingEmbedder(), Settings())
         chat.retrieve("上周六怎么安排？", hints="回款", alternatives=["数据", "核对", "计划"])
     assert len(loads) == len(set(loads)) and {pc.ITEMS_NS, pc.EXPRESSIONS_NS} <= set(loads)

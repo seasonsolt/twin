@@ -28,7 +28,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from ..config import Settings
-from ..embed import Embedder, embedder_fingerprint
+from ..embed import Embedder, EmbedError, Matrix, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
 from .connect import connect
@@ -61,6 +61,7 @@ ITEMS_NS = "items"
 INLINE_ID = re.compile(r"[ \t]*\[([A-Za-z]+_[0-9a-f]+(?:#\d+)?)\]")
 EXPRESSIONS_NS = "expressions"
 OTHERS_NS = "others"
+VECTOR_NAMESPACES = (ITEMS_NS, EXPRESSIONS_NS, OTHERS_NS)
 # Ledger entries are cited by their id behind this prefix, so a citation names its kind like every other record.
 LEDGER_PREFIX = "le_"
 K_ITEMS = 12
@@ -180,7 +181,25 @@ def index_persona(
     return embedded
 
 
+def index_stale(store: PersonaStore, embedder: Embedder) -> bool:
+    """Some namespace still holds vectors of another embedding model, which retrieval leaves out until
+    ``index_persona`` embeds them again."""
+    fingerprint = embedder_fingerprint(embedder)
+    return any(store.get_meta(f"embedder:{namespace}") not in (None, fingerprint) for namespace in VECTOR_NAMESPACES)
+
+
 # ---------------------------------------------------------------- retrieval
+
+NO_VECTORS: tuple[list[str], Matrix] = ([], np.zeros((0, 0), dtype=np.float32))
+
+
+def _space_vectors(store: PersonaStore, namespace: str, fingerprint: str | None) -> tuple[list[str], Matrix]:
+    """The namespace's stored vectors when they are in the query's embedding space (``fingerprint``), else none:
+    after a model change, or with no query vector, ranking falls back to keywords instead of comparing vectors of
+    different spaces."""
+    if fingerprint is None or store.get_meta(f"embedder:{namespace}") != fingerprint:
+        return NO_VECTORS
+    return store.get_vectors(namespace)
 
 
 @dataclass
@@ -312,11 +331,12 @@ def _rank[T](
     candidates: dict[str, T],
     text: Callable[[T], str],
     k: int,
+    fingerprint: str | None,
 ) -> list[tuple[T, float]]:
-    """RRF over a vector and a keyword ranking for each query."""
+    """RRF over a vector and a keyword ranking for each query; ``fingerprint`` is the queries' embedding space."""
     if not candidates:
         return []
-    return _Corpus(store.get_vectors(namespace), candidates, text).rank(queries, k)
+    return _Corpus(_space_vectors(store, namespace, fingerprint), candidates, text).rank(queries, k)
 
 
 def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref: Callable[[T], str]) -> None:
@@ -331,7 +351,7 @@ def search_items(store: PersonaStore, embedder: Embedder | None, query: str, k: 
     """
     items = {i.item_id: i for i in store.list_items()}
     vector = embedder.embed([_clip(query, 2000)])[0] if embedder is not None else np.zeros(0, dtype=np.float32)
-    vectors = store.get_vectors(ITEMS_NS) if embedder is not None else ([], np.zeros((0, 0), dtype=np.float32))
+    vectors = _space_vectors(store, ITEMS_NS, embedder_fingerprint(embedder) if embedder is not None else None)
     corpus = _Corpus(vectors, items, lambda i: "\n".join([item_text(i), *(e.quote for e in i.evidence)]))
     return [item for item, _ in corpus.rank([(query, vector)], k)]
 
@@ -405,11 +425,16 @@ class PersonaChat:
             items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of, view)}
             expressions = {e.expression_id: e for e in view.select(target_only=True, until=as_of)}
             others = others_view(self.store, self.settings, until=as_of, view=view)
-            vectors = embedding.result()
+            fingerprint: str | None = embedder_fingerprint(self.embedder)
+            try:
+                vectors = embedding.result()
+            except EmbedError:
+                # An embedding service that is down (a local Ollama that was quit) leaves keywords to rank alone.
+                fingerprint, vectors = None, np.zeros((len(texts), 0), dtype=np.float32)
         queries = list(zip(main, vectors[: len(main)], strict=True))
         # Each namespace's vectors and keyword index are loaded once and shared by every ranking below.
-        item_corpus = _Corpus(self.store.get_vectors(ITEMS_NS), items, item_text)
-        expr_corpus = _Corpus(self.store.get_vectors(EXPRESSIONS_NS), expressions, expression_text)
+        item_corpus = _Corpus(_space_vectors(self.store, ITEMS_NS, fingerprint), items, item_text)
+        expr_corpus = _Corpus(_space_vectors(self.store, EXPRESSIONS_NS, fingerprint), expressions, expression_text)
         ranked_items = item_corpus.rank(queries, K_ITEMS)
         k_expressions = K_EXPRESSIONS_SPAN if needs_derivation(query) else K_EXPRESSIONS
         ranked_expr = expr_corpus.rank(queries, k_expressions)
@@ -421,7 +446,7 @@ class PersonaChat:
             _add_new(ranked_items, item_corpus.rank([alternative], K_ALTERNATIVE_ITEMS), lambda i: i.item_id)
             _add_new(ranked_expr, expr_corpus.rank([alternative], K_ALTERNATIVE_EXPRESSIONS), lambda e: e.expression_id)
         # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
-        ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS)
+        ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS, fingerprint)
         core, voice = self._portrait(list(items.values()), list(expressions.values()))
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
         style = extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated)

@@ -8,7 +8,7 @@ import datetime as dt
 import json
 import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
-from contextlib import aclosing, asynccontextmanager, contextmanager
+from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
@@ -29,6 +29,7 @@ from ..persona.chat import (
     LEDGER_PREFIX,
     PersonaChat,
     index_persona,
+    index_stale,
     no_profile_reply,
     off_loop,
     open_store_off_loop,
@@ -56,7 +57,7 @@ from ..persona.store import PersonaStore, stored_identity
 from ..usage import transient_summary
 from .backends import Backends, BackendUnavailable
 from .conversations import append_reply, append_user, owner
-from .jobs import AdmittedStream, Job, JobManager, PersonaProcessing, Ticket
+from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
 
 MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
@@ -309,6 +310,26 @@ def register(
                     store.set_meta("kernel_rebuild", "awaiting_confirmation")
             else:
                 processing.queue()
+                return
+        resume_index()
+
+    def reindex(log: Log) -> dict[str, Any]:
+        log("检索向量来自之前的向量模型，按当前模型重新向量化（只调用向量模型）")
+        with open_store() as store:
+            return {"embedded": index_persona(store, backends.embedder(), settings, log)}
+
+    def resume_index() -> None:
+        """A changed [embed] model re-embeds the index at startup, without waiting for the next build; until it
+        finishes, retrieval leaves the old model's vectors out and ranks by keywords."""
+        try:
+            embedder = backends.embedder()
+        except BackendUnavailable:
+            return
+        with open_store() as store:
+            behind = index_stale(store, embedder)
+        if behind:
+            with suppress(JobConflict):
+                jobs.submit("persona_build", "更新检索向量", reindex)
 
     previous_lifespan = app.router.lifespan_context
 

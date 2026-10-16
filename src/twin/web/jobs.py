@@ -8,7 +8,8 @@ with ``admit_stream`` and share both limits with chat jobs. Speech is synthesize
 at most ``MAX_PENDING_SPEECH`` requests waiting or running (``admit_speech``). Jobs live only in memory.
 
 Besides the last ``MAX_PROGRESS_LINES`` progress lines, a job keeps its stage (from the ``[n/N]`` lines), a tally of the
-``ok`` / ``FAILED`` lines of the current stage and, separately, its milestones (stage markers and Chinese summaries).
+``ok`` / ``FAILED`` lines (or the latest ``progress done/total`` line) of the current stage and, separately, its
+milestones (stage markers and Chinese summaries).
 """
 
 from __future__ import annotations
@@ -63,6 +64,8 @@ logger = logging.getLogger(__name__)
 
 # "[2/4] 抽取候选条目": the start of a pipeline stage.
 STAGE_LINE = re.compile(r"^\[(\d+)/(\d+)\]\s*(.*)$")
+# "progress 512/20000 expressions": how far the current stage is, for work counted in items rather than calls.
+COUNT_LINE = re.compile(r"^progress (\d+)/(\d+)\b")
 
 CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _HOME_SEP = r"(?=[/\\]|$|[^\w.-])"
@@ -441,6 +444,8 @@ class JobManager:
             job.stage = {"current": int(stage[1]), "total": int(stage[2]), "label": stage[3].strip()}
             job.tally_done = job.tally_failed = 0
             job.tally_total = None
+        elif (count := COUNT_LINE.match(line)) is not None:
+            job.tally_done, job.tally_total = int(count[1]), int(count[2])
         elif line.startswith("ok "):
             job.tally_done += 1
         elif line.startswith("FAILED "):

@@ -692,6 +692,10 @@ class PersonaStore:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (key, value))
 
+    def delete_meta(self, key: str) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM p_meta WHERE key = ?", (key,))
+
     def meta_with_prefix(self, prefix: str) -> dict[str, str]:
         """Every meta value whose key starts with ``prefix``, by the rest of the key."""
         with self._lock:

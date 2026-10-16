@@ -8,6 +8,11 @@ import type { Citation } from './types';
 
 function citationLabel(citation: Citation): string {
   if (citation.kind === 'item') return citation.facet || '档案';
+  if (citation.kind === 'file')
+    return (
+      [citation.file_name, citation.locator].filter(Boolean).join(' · ') ||
+      '附件'
+    );
   const when = [citation.date, citation.channel].filter(Boolean).join(' · ');
   if (citation.kind === 'ledger')
     return [`账本 · ${citation.ledger_kind ?? '条目'}`, when]

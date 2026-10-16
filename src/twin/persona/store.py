@@ -553,6 +553,7 @@ class PersonaStore:
         review: ReviewStatus | None = None,
         text: str = "",
         source_id: str | None = None,
+        conflict: bool = False,
         by_evidence: bool = False,
         include_rejected: bool = False,
         limit: int | None = None,
@@ -560,7 +561,8 @@ class PersonaStore:
     ) -> tuple[list[PersonaItem], int]:
         """One page of items with reviews applied, filtered in SQL, and the number of items matching the filters.
         ``text`` matches the statement as shown (the edited one after an edit) and the evidence quotes;
-        ``source_id`` keeps items with evidence from that source; ``by_evidence`` puts the best-supported first."""
+        ``source_id`` keeps items with evidence from that source; ``conflict`` keeps items whose evidence disagrees;
+        ``by_evidence`` puts the best-supported first."""
         status = f"COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}')"
         clauses: list[str] = []
         params: list[object] = []
@@ -587,6 +589,8 @@ class PersonaStore:
                 " WHERE json_extract(e.value, '$.source_id') = ?)"
             )
             params.append(source_id)
+        if conflict:
+            clauses.append("COALESCE(json_extract(i.json, '$.conflict'), '') != ''")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
         base = f"FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id{where}"
@@ -610,16 +614,6 @@ class PersonaStore:
                 "COUNT(*) FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id GROUP BY 1, 2"
             ).fetchall()
         return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
-
-    def unreviewed_item_ids(self, facet_ids: list[str]) -> list[str]:
-        with self._lock:
-            rows = self._db.execute(
-                f"SELECT i.item_id FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
-                f"WHERE i.facet_id IN ({','.join('?' * len(facet_ids))}) "
-                f"AND COALESCE(json_extract(r.json, '$.status'), ?) = ? ORDER BY i.item_id",
-                [*facet_ids, ReviewStatus.UNREVIEWED.value, ReviewStatus.UNREVIEWED.value],
-            ).fetchall()
-        return [r[0] for r in rows]
 
     def has_items(self) -> bool:
         """Whether any item is left after rejections."""
@@ -688,17 +682,6 @@ class PersonaStore:
                 db.execute("DELETE FROM p_reviews WHERE item_id = ?", (item_id,))
             else:
                 db.execute("INSERT OR REPLACE INTO p_reviews VALUES (?, ?)", (item_id, review.model_dump_json()))
-
-    def set_reviews(self, item_ids: list[str], review: PReview) -> None:
-        with self._tx() as db:
-            db.execute("BEGIN IMMEDIATE")
-            for item_id in item_ids:
-                if db.execute("SELECT 1 FROM p_items WHERE item_id = ?", (item_id,)).fetchone() is None:
-                    raise KeyError(item_id)
-            db.executemany(
-                "INSERT OR REPLACE INTO p_reviews VALUES (?, ?)",
-                [(item_id, review.model_dump_json()) for item_id in item_ids],
-            )
 
     def get_meta(self, key: str) -> str | None:
         with self._lock:

@@ -211,7 +211,8 @@ class PersonaContext:
     # Commitment ledger entries the question is about, with their current status; only in the person's own chat.
     ledger: list[tuple[LedgerEntry, LedgerStatus]] = field(default_factory=list)
 
-    # Citable ids an answer can rest on without lowering its confidence: confirmed items and the person's own words.
+    # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
+    # reviewed by them, and the person's own words.
     trusted: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
@@ -223,7 +224,7 @@ class PersonaContext:
             | {ledger_ref(e) for e, _ in self.ledger}
         )
         self.trusted = (
-            {i.item_id for i in items if i.verified}
+            {i.item_id for i in items if i.trusted}
             | {e.expression_id for e, _ in self.expressions if not e.narrated}
             | {ledger_ref(e) for e, _ in self.ledger if e.review in (ReviewStatus.CONFIRMED, ReviewStatus.EDITED)}
         )
@@ -321,6 +322,18 @@ def _rank[T](
 def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref: Callable[[T], str]) -> None:
     seen = {ref(x) for x, _ in ranked}
     ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
+
+
+def search_items(store: PersonaStore, embedder: Embedder | None, query: str, k: int) -> list[PersonaItem]:
+    """The person's items closest to ``query``, ranked the way chat retrieval ranks them (meaning and keywords, RRF),
+    so searching shows what the twin would draw on; keywords also reach the evidence quotes. Reviews are applied and
+    rejected items left out. With no ``embedder`` (or no stored vectors) only keywords rank, and only matches count.
+    """
+    items = {i.item_id: i for i in store.list_items()}
+    vector = embedder.embed([_clip(query, 2000)])[0] if embedder is not None else np.zeros(0, dtype=np.float32)
+    vectors = store.get_vectors(ITEMS_NS) if embedder is not None else ([], np.zeros((0, 0), dtype=np.float32))
+    corpus = _Corpus(vectors, items, lambda i: "\n".join([item_text(i), *(e.quote for e in i.evidence)]))
+    return [item for item, _ in corpus.rank([(query, vector)], k)]
 
 
 async def off_loop[T](fn: Callable[[], T], discard: Callable[[T], object] | None = None) -> T:

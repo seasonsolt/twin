@@ -1,5 +1,5 @@
 """Paged, filtered profile items and memories: the store's SQL filters agree with the full lists, and the web routes
-page, count and batch-confirm without the browser ever holding every row."""
+page, count and search without the browser ever holding every row."""
 
 from __future__ import annotations
 
@@ -33,13 +33,20 @@ def evidence(source_id: str, quote: str) -> PEvidence:
 
 
 def seed_items(store: PersonaStore) -> None:
-    """24 items over four facets; item ``n`` has ``n % 4 + 1`` evidence and every third is reviewed."""
+    """24 items over four facets; item ``n`` has ``n % 4 + 1`` evidence, every third is reviewed and every fifth has
+    conflicting evidence."""
     by_facet: dict[str, list[PersonaItem]] = {}
     for n in range(24):
         facet = FACETS[n % 4]
         quotes = [evidence(f"s{k}", f"原话{n}-{k}") for k in range(n % 4 + 1)]
         by_facet.setdefault(facet, []).append(
-            PersonaItem(item_id=f"pi_{n:02d}", facet_id=facet, statement=f"合成条目{n}", evidence=quotes)
+            PersonaItem(
+                item_id=f"pi_{n:02d}",
+                facet_id=facet,
+                statement=f"合成条目{n}",
+                evidence=quotes,
+                conflict="说的和做的不一样" if n % 5 == 0 else "",
+            )
         )
     for facet, items in by_facet.items():
         store.replace_facet_items(facet, items)
@@ -82,6 +89,7 @@ def test_query_items_matches_the_full_list_under_every_filter() -> None:
             ({"text": "改写6"}, [i for i in everything if i.item_id == "pi_06"]),
             ({"text": "原话7-3"}, [i for i in everything if i.item_id == "pi_07"]),
             ({"source_id": "s3"}, [i for i in everything if len(i.evidence) == 4 and i.review != "rejected"]),
+            ({"conflict": True}, [i for i in everything if i.conflict and i.review != "rejected"]),
         ]
         for filters, expected in cases:
             items, total = store.query_items(**filters)
@@ -115,7 +123,6 @@ def test_item_counts_and_dimension_ids() -> None:
             if (n := sum(i.facet_id == facet and i.review is status for i in everything))
         }
         assert store.count_items() == len(store.list_items()) == 21 and store.has_items()
-        assert store.unreviewed_item_ids(["2.1"]) == ["pi_01", "pi_05", "pi_13", "pi_17"]
         assert set(store.get_items(["pi_00", "pi_missing"])) == {"pi_00"}
 
 
@@ -136,37 +143,37 @@ def test_items_route_pages_filters_and_summarises(settings: Settings, client: Te
     assert client.get("/api/persona/items", params={"limit": 501}, headers=HEADERS).status_code == 400
 
     summary = client.get("/api/persona/items/summary", headers=HEADERS).json()
-    assert summary["total"] == 21 and summary["unreviewed"] == 21 - 5
-    by_dimension = {d["dimension_id"]: (d["total"], d["unreviewed"]) for d in summary["dimensions"]}
-    expected: dict[str, list[int]] = {}
+    assert summary["total"] == 21 and summary["conflicts"] == 5 and "unreviewed" not in summary
+    by_dimension = {d["dimension_id"]: d["total"] for d in summary["dimensions"]}
+    expected: dict[str, int] = {}
     with PersonaStore(settings.db_path) as store:
         for item in store.list_items():
-            row = expected.setdefault(FACET_BY_ID[item.facet_id].dimension_id, [0, 0])
-            row[0] += 1
-            row[1] += item.review is ReviewStatus.UNREVIEWED
-    assert by_dimension == {d: (t, u) for d, (t, u) in expected.items()}
+            dimension_id = FACET_BY_ID[item.facet_id].dimension_id
+            expected[dimension_id] = expected.get(dimension_id, 0) + 1
+    assert by_dimension == expected
     assert [d["dimension_id"] for d in summary["dimensions"]] == sorted(by_dimension)
 
 
-def test_batch_review_confirms_a_whole_dimension(settings: Settings, client: TestClient) -> None:
+def test_search_finds_items_by_statement_or_quote_and_never_a_rejected_one(
+    settings: Settings, client: TestClient
+) -> None:
     with PersonaStore(settings.db_path) as store:
         seed_items(store)
-        before = store.reviews()
-    response = client.post(
-        "/api/persona/items/review-batch", headers=HEADERS, json={"dimension_id": "D2", "status": "confirmed"}
-    )
-    assert response.json() == {"updated": 8}
-    with PersonaStore(settings.db_path) as store:
-        reviews = store.reviews()
-        # Earlier reviews (including the rejected and edited ones) are untouched; only unreviewed D2 items changed.
-        assert {k: v for k, v in reviews.items() if k in before} == before
-        assert {i.review for i in store.list_items() if i.facet_id.startswith("2.")} <= {"confirmed", "edited"}
-    for body in (
-        {"status": "confirmed"},
-        {"item_ids": ["pi_01"], "dimension_id": "D2", "status": "confirmed"},
-        {"dimension_id": "D99", "status": "confirmed"},
-    ):
-        assert client.post("/api/persona/items/review-batch", headers=HEADERS, json=body).status_code == 400
+
+    def search(q: str, **params: Any) -> list[str]:
+        response = client.get("/api/persona/items/search", params={"q": q, **params}, headers=HEADERS)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == len(body["items"])
+        return [i["item_id"] for i in body["items"]]
+
+    assert search("原话7-3")[0] == "pi_07"  # only pi_07 has a fourth quote 7-3
+    assert search("改写6")[0] == "pi_06"  # the statement as the person edited it
+    assert "pi_03" not in search("合成条目3")  # rejected
+    assert len(search("合成条目", limit=3)) == 3
+    assert client.get("/api/persona/items/search", params={"q": "  "}, headers=HEADERS).status_code == 400
+    assert client.get("/api/persona/items/search", headers=HEADERS).status_code == 400
+    assert client.get("/api/persona/items/search", params={"q": "x", "limit": 0}, headers=HEADERS).status_code == 400
 
 
 def test_sources_route_pages_with_summary_attention_and_filters(settings: Settings, client: TestClient) -> None:

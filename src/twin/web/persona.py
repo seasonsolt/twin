@@ -17,15 +17,23 @@ from typing import Annotated, Any, Literal
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 
 from ..config import Settings
-from ..embed import Embedder
+from ..embed import Embedder, EmbedError
 from ..llm import LLM
-from ..persona.chat import LEDGER_PREFIX, PersonaChat, index_persona, no_profile_reply, off_loop, open_store_off_loop
+from ..persona.chat import (
+    LEDGER_PREFIX,
+    PersonaChat,
+    index_persona,
+    no_profile_reply,
+    off_loop,
+    open_store_off_loop,
+    search_items,
+)
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
 from ..persona.items import PReview
@@ -46,7 +54,7 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..usage import transient_summary
-from .backends import Backends
+from .backends import Backends, BackendUnavailable
 from .conversations import append_reply, append_user, owner
 from .jobs import AdmittedStream, Job, JobManager, PersonaProcessing, Ticket
 
@@ -56,6 +64,8 @@ MAX_CHAT_TURNS = 40
 MAX_MESSAGE_CHARS = 4000
 PAGE_SIZE = 50
 MAX_PAGE_SIZE = 500
+# Search shows the closest items, best first: enough to find the wrong one, short enough to read.
+SEARCH_SIZE = 20
 MEDIA_PENDING = frozenset({"queued", "extracting", "transcribing"})
 # Sources the memory page lists apart from the paged list: work in progress and work waiting for the person.
 NEEDS_ATTENTION = MEDIA_PENDING | {"failed", "needs_asr", "needs_speaker"}
@@ -78,27 +88,6 @@ class ReviewBody(BaseModel):
     status: ReviewStatus
     statement: str | None = Field(default=None, max_length=1000)
     note: str = Field(default="", max_length=1000)
-
-
-class BatchReviewBody(BaseModel):
-    """Confirm the listed items, or with ``dimension_id`` every unreviewed item of that dimension."""
-
-    item_ids: list[str] | None = Field(default=None, min_length=1, max_length=500)
-    dimension_id: str | None = None
-    status: Literal["confirmed"]
-
-    @field_validator("item_ids")
-    @classmethod
-    def unique_ids(cls, value: list[str] | None) -> list[str] | None:
-        if value is not None and len(set(value)) != len(value):
-            raise ValueError("档案条目不能重复")
-        return value
-
-    @model_validator(mode="after")
-    def one_target(self) -> BatchReviewBody:
-        if (self.item_ids is None) == (self.dimension_id is None):
-            raise ValueError("请给出 item_ids 或 dimension_id 中的一项")
-        return self
 
 
 class ChatBody(BaseModel):
@@ -529,14 +518,16 @@ def register(
         review: ReviewStatus | None = None,
         q: Annotated[str, Query(max_length=200)] = "",
         source_id: str | None = None,
+        conflict: bool = False,
         sort: Literal["facet", "evidence"] = "facet",
         limit: Annotated[int, Query(ge=0, le=MAX_PAGE_SIZE)] = PAGE_SIZE,
         offset: Annotated[int, Query(ge=0)] = 0,
         with_sources: bool = False,
     ) -> dict[str, Any]:
         """One page of profile items and how many match. Filters: ``dimension`` (repeatable), ``review``, ``q``
-        (statement or quote), ``source_id`` (evidence from that source). ``sort=evidence`` lists the best-supported
-        items first; ``with_sources`` adds the title and date of every source the page cites."""
+        (statement or quote), ``source_id`` (evidence from that source), ``conflict`` (evidence that disagrees).
+        ``sort=evidence`` lists the best-supported items first; ``with_sources`` adds the title and date of every
+        source the page cites."""
         if unknown := [d for d in dimension or () if d not in DIMENSION_BY_ID]:
             raise HTTPException(400, f"未知的维度 {unknown[0]}")
         facet_ids = [f.facet_id for f in FACETS if f.dimension_id in set(dimension)] if dimension else None
@@ -546,6 +537,7 @@ def register(
                 review=review,
                 text=q,
                 source_id=source_id,
+                conflict=conflict,
                 by_evidence=sort == "evidence",
                 include_rejected=include_rejected,
                 limit=limit,
@@ -561,33 +553,43 @@ def register(
                 }
         return result
 
+    @app.get("/api/persona/items/search")
+    def search_profile_items(
+        q: Annotated[str, Query(min_length=1, max_length=200)],
+        limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = SEARCH_SIZE,
+    ) -> dict[str, Any]:
+        """The items closest to ``q`` by meaning and keywords, best first, as chat retrieval finds them: where the
+        person looks for what the twin knows about something, to correct or remove it. Falls back to keywords alone
+        when the embedding service is unavailable."""
+        query = q.strip()
+        if not query:
+            raise HTTPException(400, "请输入要找的内容")
+        with open_store() as store:
+            try:
+                found = search_items(store, backends.embedder(), query, limit)
+            except (BackendUnavailable, EmbedError, ValueError):
+                found = search_items(store, None, query, limit)
+        return {"items": [item_view(i) for i in found], "total": len(found)}
+
     @app.get("/api/persona/items/summary")
     def items_summary() -> dict[str, Any]:
-        """Item counts per dimension in taxonomy order, rejected items left out."""
+        """Item counts per dimension in taxonomy order, rejected items left out, and how many have evidence that
+        disagrees (worth a look, never a queue to work through)."""
         with open_store() as store:
             counts = store.item_counts()
-        totals: dict[str, list[int]] = {}
+            _, conflicts = store.query_items(conflict=True, limit=0)
+        totals: dict[str, int] = {}
         for (facet_id, status), n in counts.items():
             if status is ReviewStatus.REJECTED or facet_id not in FACET_BY_ID:
                 continue
-            row = totals.setdefault(FACET_BY_ID[facet_id].dimension_id, [0, 0])
-            row[0] += n
-            row[1] += n if status is ReviewStatus.UNREVIEWED else 0
+            dimension_id = FACET_BY_ID[facet_id].dimension_id
+            totals[dimension_id] = totals.get(dimension_id, 0) + n
         dimensions = [
-            {
-                "dimension_id": d.dimension_id,
-                "name": d.name,
-                "total": totals[d.dimension_id][0],
-                "unreviewed": totals[d.dimension_id][1],
-            }
+            {"dimension_id": d.dimension_id, "name": d.name, "total": totals[d.dimension_id]}
             for d in DIMENSIONS
             if d.dimension_id in totals
         ]
-        return {
-            "total": sum(d["total"] for d in dimensions),
-            "unreviewed": sum(d["unreviewed"] for d in dimensions),
-            "dimensions": dimensions,
-        }
+        return {"total": sum(totals.values()), "conflicts": conflicts, "dimensions": dimensions}
 
     @app.post("/api/persona/items/{item_id}/review")
     def review_item(item_id: str, body: ReviewBody) -> dict[str, Any]:
@@ -611,25 +613,6 @@ def register(
             item = store.get_item(item_id)
         assert item is not None
         return item_view(item)
-
-    @app.post("/api/persona/items/review-batch")
-    def review_batch(body: BatchReviewBody) -> dict[str, int]:
-        review = PReview(
-            status=ReviewStatus.CONFIRMED,
-            note="",
-            reviewed_at=dt.datetime.now().isoformat(timespec="seconds"),
-        )
-        if body.dimension_id is not None and body.dimension_id not in DIMENSION_BY_ID:
-            raise HTTPException(400, f"未知的维度 {body.dimension_id}")
-        with open_store() as store:
-            ids = body.item_ids or store.unreviewed_item_ids(
-                [f.facet_id for f in FACETS if f.dimension_id == body.dimension_id]
-            )
-            try:
-                store.set_reviews(ids, review)
-            except KeyError as e:
-                raise HTTPException(404, f"找不到档案条目 {e.args[0]}（可能已在重新构建时合并）") from e
-        return {"updated": len(ids)}
 
     @app.get("/api/persona/coverage")
     def get_coverage(as_of: str | None = None) -> dict[str, Any]:

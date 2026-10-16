@@ -80,6 +80,13 @@ class PersonaItem(BaseModel):
     def verified(self) -> bool:
         return self.review in (ReviewStatus.CONFIRMED, ReviewStatus.EDITED)
 
+    @property
+    def trusted(self) -> bool:
+        """Whether an answer can rest on the item at full confidence: it stands on the person's own words, or the
+        person reviewed it. An item standing only on what others said about them stays tentative. Nobody needs to
+        confirm items one by one: the person finds and corrects the wrong ones."""
+        return self.verified or any(e.own_words for e in self.evidence)
+
     def occasions(self, until: dt.date | None = None) -> int:
         """Distinct occasions backing the item: one per source and day (an undated source counts once)."""
         return len({(e.source_id, e.date) for e in self.evidence if until is None or (e.date and e.date <= until)})

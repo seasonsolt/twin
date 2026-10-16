@@ -452,7 +452,11 @@ def test_retrieve_respects_as_of(store: PersonaStore, settings: Settings) -> Non
 def test_reply_filters_citations_and_caps_confidence(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     pc.index_persona(store, embedder, settings)
-    item_id = store.list_items("2.1")[0].item_id
+    item = store.list_items("2.1")[0]
+    item_id = item.item_id
+    # Only what others said about the person backs the item, so an answer resting on it alone stays tentative.
+    narrated = item.model_copy(update={"evidence": [e.model_copy(update={"own_words": False}) for e in item.evidence]})
+    store.replace_facet_items("2.1", [narrated])
     cite = {"reply": "钱到账才算。", "citations": [f"[{item_id}]", "pi_fake"], "confidence": 0.9, "abstain": False}
     answers = iter(
         [
@@ -472,7 +476,7 @@ def test_reply_filters_citations_and_caps_confidence(store: PersonaStore, settin
     chat = pc.PersonaChat(store, llm, embedder, settings)
     history = [ChatTurn(role="user", content="你怎么看签大单？")]
     first = chat.reply(history)
-    assert first.citations == [item_id] and first.confidence == 0.6  # rests on an unreviewed item only
+    assert first.citations == [item_id] and first.confidence == 0.6  # rests on others' words only
     assert first.topic_facets == ["2.1"] and not first.abstain
     _, system, user = llm.calls[0]
     assert "张三的数字分身" in system and "说白了钱进了账户才叫收入" in system  # voice sample
@@ -487,8 +491,26 @@ def test_reply_filters_citations_and_caps_confidence(store: PersonaStore, settin
     store.set_review(item_id, PReview(status=ReviewStatus.CONFIRMED, reviewed_at="2026-10-03T10:00:00"))
     third = chat.reply([ChatTurn(role="user", content="签大单看什么？")])
     assert third.confidence == 0.9 and "；本人已确认" in llm.calls[2][1] + llm.calls[2][2]
+    # The person's own words back an item without anyone confirming it.
+    store.set_review(item_id, None)
+    store.replace_facet_items("2.1", [item])
+    answers = iter([cite])
+    assert chat.reply([ChatTurn(role="user", content="签大单看什么？")]).confidence == 0.9
     with pytest.raises(ValueError, match="last message"):
         chat.reply(history[:2])
+
+
+def test_search_items_ranks_like_retrieval_and_hides_rejected(store: PersonaStore, settings: Settings) -> None:
+    embedder = HashingEmbedder()
+    pc.index_persona(store, embedder, settings)
+    money = store.list_items("2.1")[0]
+    found = pc.search_items(store, embedder, "钱进了账户才叫收入", 3)
+    assert found[0].item_id == money.item_id and len(found) <= 3
+    # Without embeddings, keywords alone rank and only matches come back.
+    assert [i.item_id for i in pc.search_items(store, None, "钱进了账户", 5)] == [money.item_id]
+    assert pc.search_items(store, None, "完全无关的话题zzz", 5) == []
+    store.set_review(money.item_id, PReview(status=ReviewStatus.REJECTED, reviewed_at="2026-10-03T10:00:00"))
+    assert money.item_id not in {i.item_id for i in pc.search_items(store, embedder, "钱进了账户才叫收入", 10)}
 
 
 def test_reviews_edit_and_reject_what_the_twin_sees(store: PersonaStore, settings: Settings) -> None:

@@ -75,8 +75,8 @@ def test_import_build_coverage_and_chat_end_to_end(config: Path, tmp_path: Path)
     assert "| 9.1 兴趣爱好 | 还不了解 |" in md and "未授权" not in md
     reply = run(config, "chat", "你看重什么？").stdout
     assert (
-        "张明的分身：钱到账才算。" in reply and "置信度 0.60" in reply and "依据 pi_" in reply
-    )  # cites an unreviewed item only
+        "张明的分身：钱到账才算。" in reply and "置信度 0.80" in reply and "依据 pi_" in reply
+    )  # an unreviewed item, but it stands on the person's own words
 
 
 @pytest.mark.parametrize("configured", [False, True])

@@ -19,6 +19,8 @@ import hashlib
 import json
 import re
 from collections.abc import Sequence
+from concurrent.futures import Executor, ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal
@@ -507,11 +509,19 @@ class MergeDegraded(Exception):
 
 
 def merge_facet(
-    llm: LLM, facet_id: str, candidates: Sequence[PersonaCandidate], settings: Settings
+    llm: LLM,
+    facet_id: str,
+    candidates: Sequence[PersonaCandidate],
+    settings: Settings,
+    pool: Executor | None = None,
+    progress: Progress | None = None,
 ) -> list[PersonaItem]:
     """Merge a facet's candidates in batches. A batch whose call fails (usually a timeout on a long reply) is
     merged again as two halves; a half that still fails keeps its candidates as separate items, and the facet
-    raises ``MergeDegraded`` carrying every item instead of losing them all."""
+    raises ``MergeDegraded`` carrying every item instead of losing them all.
+
+    The batches are independent: with ``pool`` they run there, so a facet with many candidates does not merge one
+    batch after another while the build's other workers sit idle; ``progress`` hears of each finished batch."""
     if len(candidates) == 1:
         c = candidates[0]
         return [_item_from(facet_id, c.statement, c.applies_when, [c], "")]
@@ -546,16 +556,12 @@ def merge_facet(
         )
         return merged
 
-    items: list[PersonaItem] = []
-    failure: LLMError | None = None
-    ordered = sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
-    for start in range(0, len(ordered), MAX_MERGE_CANDIDATES):
-        batch = ordered[start : start + MAX_MERGE_CANDIDATES]
+    def merge_part(batch: Sequence[PersonaCandidate]) -> tuple[list[PersonaItem], LLMError | None]:
         try:
-            items.extend(merge_batch(batch))
-            continue
+            return merge_batch(batch), None
         except LLMError as error:
             failure = error
+        items: list[PersonaItem] = []
         middle = len(batch) // 2
         for half in (batch[:middle], batch[middle:]):
             if len(half) < 2:
@@ -565,6 +571,29 @@ def merge_facet(
                 items.extend(merge_batch(half))
             except LLMError:
                 items.extend(_item_from(facet_id, c.statement, c.applies_when, [c], "") for c in half)
+        return items, failure
+
+    ordered = sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
+    batches = [ordered[start : start + MAX_MERGE_CANDIDATES] for start in range(0, len(ordered), MAX_MERGE_CANDIDATES)]
+
+    def run(number: int) -> tuple[list[PersonaItem], LLMError | None]:
+        outcome = merge_part(batches[number])
+        if progress and len(batches) > 1:
+            progress(f"merged {facet_id} batch {number + 1}/{len(batches)}")
+        return outcome
+
+    if pool is None:
+        outcomes = [run(number) for number in range(len(batches))]
+    else:
+        futures = [pool.submit(copy_context().run, run, number) for number in range(len(batches))]
+        try:
+            outcomes = [future.result() for future in futures]
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    items = [item for merged, _ in outcomes for item in merged]
+    failure = next((error for _, error in outcomes if error is not None), None)
     if failure is not None:
         raise MergeDegraded(items, failure)
     return items
@@ -725,9 +754,12 @@ def _extract_and_merge(
         if store.get_meta(f"merge:{facet.facet_id}") != _merge_key(by_facet.get(facet.facet_id, []))
     ]
 
+    # Every facet's batches share one pool of ``max_workers``, so the largest facet does not finish alone.
+    pool = ThreadPoolExecutor(max_workers=max(1, settings.max_workers))
+
     def merge(job: tuple[str, list[PersonaCandidate]]) -> list[PersonaItem]:
         facet_id, members = job
-        return merge_facet(llm, facet_id, members, settings) if members else []
+        return merge_facet(llm, facet_id, members, settings, pool=pool, progress=safe_progress) if members else []
 
     def save(job: tuple[str, list[PersonaCandidate]], outcome: list[PersonaItem] | Exception) -> None:
         facet_id, members = job
@@ -753,7 +785,9 @@ def _extract_and_merge(
         store.set_meta(f"merge:{facet_id}", _merge_key(members))
         report.facets_merged += 1
 
-    run_parallel(
-        merge, jobs, settings.max_workers, safe_progress, label=lambda j: f"persona merge {j[0]}", on_result=save
-    )
+    try:
+        # The facet threads only wait on ``pool``; it bounds the model calls.
+        run_parallel(merge, jobs, len(jobs), safe_progress, label=lambda j: f"persona merge {j[0]}", on_result=save)
+    finally:
+        pool.shutdown(cancel_futures=True)
     report.items = len(store.list_items())

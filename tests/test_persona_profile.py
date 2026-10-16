@@ -550,6 +550,32 @@ def test_a_failed_merge_keeps_candidates_and_is_merged_next_build(store: Persona
     assert [i.statement for i in store.list_items("2.1")] == ["他认为钱进了账户才算收入"]
 
 
+def test_a_facets_merge_batches_run_at_once_in_the_pool(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    pf.build_profile(store, FakeLLM(handler), settings)
+    base = [c for c in store.list_candidates() if c.facet_id == "2.1"]
+    candidates = [c.model_copy(update={"candidate_id": f"pc_{n:016x}"}) for n in range(6) for c in base[:1]]
+    monkeypatch.setattr(pf, "MAX_MERGE_CANDIDATES", 2)
+    # each call waits until all three batches are in flight, which one batch after another never reaches
+    together = threading.Barrier(3, timeout=5)
+
+    def merge(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        together.wait()
+        return {"items": [{"statement": "合并", "candidate_ids": re.findall(r"\[(pc_[0-9a-f]+)\]", user)}]}
+
+    lines: list[str] = []
+    with ThreadPoolExecutor(3) as pool:
+        items = pf.merge_facet(FakeLLM(merge), "2.1", candidates, settings, pool=pool, progress=lines.append)
+    assert [i.member_candidate_ids for i in items] == [
+        [c.candidate_id for c in candidates[n : n + 2]] for n in (0, 2, 4)
+    ]
+    assert sorted(lines) == [f"merged 2.1 batch {n}/3" for n in (1, 2, 3)]
+
+
 def test_a_failed_merge_batch_is_merged_again_in_halves(store: PersonaStore, settings: Settings) -> None:
     pf.build_profile(store, FakeLLM(handler), settings)
     base = [c for c in store.list_candidates() if c.facet_id == "2.1"]

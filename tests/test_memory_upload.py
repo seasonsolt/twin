@@ -198,7 +198,7 @@ def test_build_diffs_compare_raw_ids_and_statements_and_noop(
             "2.1": [item("same", "2.1", eid, statement="修改后的测试表述"), item("added", "2.1", eid)],
             "4.2": [item("evidence_only", "4.2", "changed_evidence")],
         }
-        monkeypatch.setattr(pf, "merge_facet", lambda llm, fid, members, settings: outcomes[fid])
+        monkeypatch.setattr(pf, "merge_facet", lambda llm, fid, members, settings, **_: outcomes[fid])
         report = pf.build_profile(store, FakeLLM(handler), settings)
         assert report.facet_diffs["2.1"] == pf.FacetItemDiff(added=1, changed=1, removed=1)
         assert report.facet_diffs["2.2"] == pf.FacetItemDiff(removed=1)

@@ -164,3 +164,38 @@ def ensure_asr() -> int:
         print(f"  录音转写暂未开启：{error}")
         print("  文字聊天不受影响；处理后重新运行 ./scripts/local-up.sh 会再次尝试。")
     return 0
+
+
+def ensure_embed() -> int:
+    """Retrieve by meaning with bge-m3 on the local Ollama unless [embed] was set by hand; the hashing embedder
+    stays the fallback, so this never blocks chat."""
+    from . import ollama
+
+    text = CONFIG.read_text(encoding="utf-8")
+    try:
+        updated = ollama.config_text(text)
+    except ValueError:
+        return 0  # check_local_config already reported a twin.toml that does not parse
+    if updated is None:
+        return 0
+    managed = updated == text
+    if not managed:
+        print("开启按语义检索：本机 Ollama 运行向量模型 bge-m3，数据不出本机。")
+    try:
+        ollama.prepare(lambda line: print(f"  {line}"))
+    except ollama.OllamaError as error:
+        if managed:
+            print(f"  向量模型 bge-m3 暂不可用：{error}")
+            print("  聊天先只按关键词检索；Ollama 恢复后重新运行 ./scripts/local-up.sh 即可。")
+        else:
+            print(f"  暂未开启，检索继续使用本机轻量后端 hashing（只按字面匹配）：{error}")
+            print("  处理后重新运行 ./scripts/local-up.sh 会再次尝试。")
+        return 0
+    if not managed:
+        try:
+            ollama.write_config(CONFIG, updated)
+        except (ValueError, OSError) as error:
+            print(f"  写入 ./twin.toml 失败，检索继续使用 hashing：{error}")
+            return 0
+        print("  已启用 bge-m3；已有记忆会在服务启动后按新模型重新向量化。")
+    return 0

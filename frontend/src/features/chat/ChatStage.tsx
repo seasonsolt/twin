@@ -113,18 +113,22 @@ export function ChatStage({
           ? 'done'
           : undefined
       : undefined;
-  const height = useSpring(desktop ? 470 : 360, springs.snappy);
-  const size = useSpring(desktop ? 128 : 196, springs.snappy);
+  // The big portrait is a stage for the twin's voice and video; without either, a phone or tablet keeps the
+  // compact bar and gives the height to the conversation.
+  const media = !!(capabilities?.available || capabilities?.video?.available);
+  const compact = collapsed || !media;
+  const height = useSpring(desktop ? 470 : compact ? 96 : 360, springs.snappy);
+  const size = useSpring(desktop ? 128 : compact ? 60 : 196, springs.snappy);
   const targetHeight = desktop
     ? 470
-    : collapsed
+    : compact
       ? videoStatus
         ? 128
         : 96
       : videoStatus
         ? 392
         : 360;
-  const targetSize = desktop ? 128 : collapsed ? 60 : 196;
+  const targetSize = desktop ? 128 : compact ? 60 : 196;
   useEffect(() => {
     if (reduced) {
       height.jump(targetHeight);
@@ -173,7 +177,7 @@ export function ChatStage({
       }
     }
   }, [url, turn?.id, videoPlaying, open]);
-  const small = collapsed && !desktop;
+  const small = compact && !desktop;
   const videoText = url && videoPlaying ? (turn?.content ?? '') : '';
   const plainReply = useMemo(() => stripMarkdown(videoText), [videoText]);
   const plainVoiceCaption = useMemo(

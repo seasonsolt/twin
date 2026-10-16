@@ -186,6 +186,33 @@ it('starts a task, shows its progress while it runs, then the reply and the file
   ]);
 }, 10_000);
 
+it('shows what a directly answered reply rests on, as chat does', async () => {
+  task = {
+    ...task,
+    status: 'idle',
+    progress: [],
+    turns: [
+      turn('user', '你怎么看扩张？'),
+      turn('assistant', '先收钱，再说扩张。', {
+        cited: [
+          { id: 'pi_1', kind: 'item', facet: '价值观', text: '回款优先' },
+        ],
+      }),
+    ],
+  };
+  const user = userEvent.setup();
+  setup();
+  await user.type(await screen.findByLabelText('要做的事'), '你怎么看扩张？');
+  await user.click(screen.getByRole('button', { name: '交代' }));
+  const reply = await screen.findByRole('article', { name: '回复' });
+  expect(within(reply).queryByText(/做了 \d+ 步/u)).toBeNull();
+  await user.click(within(reply).getByRole('button', { name: '依据 1' }));
+  const evidence = within(reply).getByRole('list', { name: '回答依据' });
+  await waitFor(() =>
+    expect(within(evidence).getByText('回款优先')).toBeVisible(),
+  );
+});
+
 it('takes a message and a stop while the task runs', async () => {
   const user = userEvent.setup();
   setup();

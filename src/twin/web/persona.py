@@ -7,7 +7,7 @@ import asyncio
 import datetime as dt
 import json
 import math
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import asdict
 from functools import partial
@@ -165,9 +165,14 @@ def run_chat(
 
 
 def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
-    items = store.get_items(list(reply.citations))
+    return {**reply.model_dump(mode="json"), "cited": cited_view(store, reply.citations)}
+
+
+def cited_view(store: PersonaStore, citations: Sequence[str]) -> list[dict[str, Any]]:
+    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out."""
+    items = store.get_items(list(citations))
     cited: list[dict[str, Any]] = []
-    for ref in reply.citations:
+    for ref in citations:
         if (item := items.get(ref)) is not None and item.review is not ReviewStatus.REJECTED:
             facet = FACET_BY_ID[item.facet_id].name
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
@@ -185,7 +190,7 @@ def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
                     "text": entry.quote,
                 }
             )
-    return {**reply.model_dump(mode="json"), "cited": cited}
+    return cited
 
 
 def validate_chat(body: ChatBody) -> list[ChatTurn]:
@@ -270,7 +275,7 @@ def register(
     followups.register(app, settings, queue_build)
     from . import work
 
-    work.register(app, settings, backends, jobs)
+    work.register(app, settings, backends, jobs, cited_view)
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():

@@ -422,19 +422,7 @@ class PersonaChat:
             _add_new(ranked_expr, expr_corpus.rank([alternative], K_ALTERNATIVE_EXPRESSIONS), lambda e: e.expression_id)
         # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
         ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS)
-        core: list[PersonaItem] = []
-        for d in DIMENSIONS:
-            own = [i for i in items.values() if FACET_BY_ID[i.facet_id].dimension_id == d.dimension_id]
-            own.sort(key=lambda i: (-i.occasions(), i.item_id))
-            core.extend(own[:CORE_PER_DIMENSION])
-        chats = {s.source_id for s in self.store.list_sources(SourceKind.CHAT)}
-        said = [
-            e
-            for e in expressions.values()
-            if VOICE_MIN_CHARS <= len(e.text) <= VOICE_MAX_CHARS and e.source_id in chats
-        ]
-        said.sort(key=lambda e: (e.date or dt.date.min, e.expression_id), reverse=True)
-        voice = [e.text for e in said[:VOICE_SAMPLES]]
+        core, voice = self._portrait(list(items.values()), list(expressions.values()))
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
         style = extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated)
         day = today or as_of or dt.date.today()
@@ -451,6 +439,26 @@ class PersonaChat:
             window=window,
             ledger=entries,
         )
+
+    def _portrait(
+        self, items: Sequence[PersonaItem], expressions: Sequence[Expression]
+    ) -> tuple[list[PersonaItem], list[str]]:
+        """The best-supported items of each dimension and the person's latest chat messages, from ``items`` and
+        ``expressions`` already in the privacy view."""
+        core: list[PersonaItem] = []
+        for d in DIMENSIONS:
+            own = [i for i in items if FACET_BY_ID[i.facet_id].dimension_id == d.dimension_id]
+            own.sort(key=lambda i: (-i.occasions(), i.item_id))
+            core.extend(own[:CORE_PER_DIMENSION])
+        chats = {s.source_id for s in self.store.list_sources(SourceKind.CHAT)}
+        said = [e for e in expressions if VOICE_MIN_CHARS <= len(e.text) <= VOICE_MAX_CHARS and e.source_id in chats]
+        said.sort(key=lambda e: (e.date or dt.date.min, e.expression_id), reverse=True)
+        return core, [e.text for e in said[:VOICE_SAMPLES]]
+
+    def portrait(self) -> tuple[list[PersonaItem], list[str]]:
+        """What every chat prompt carries whatever is asked: the core items and the voice samples."""
+        view = ExpressionView(self.store, self.settings)
+        return self._portrait(_visible_items(self.store, self.settings, None, view), view.select(target_only=True))
 
     def reply(
         self,
@@ -850,11 +858,18 @@ STYLE_SECTION = """
 按这个比例倾向最强烈的一端，不要因为是推测就默认选温和的选项。"""
 
 
+def portrait_text(core: Sequence[PersonaItem], voice: Sequence[str]) -> tuple[str, str]:
+    """The core items and voice samples as chat's prompt shows them, for another prompt (work mode) to show alike."""
+    return (
+        "\n".join(_render_item(i) for i in core) or "（档案还是空的）",
+        "\n".join(f"- 「{_clip(t, VOICE_MAX_CHARS)}」" for t in voice) or "（暂无本人原话，用简洁的口语）",
+    )
+
+
 def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     scope = f"{ctx.as_of.isoformat()}（含）以前的资料" if ctx.as_of else "档案里收录的全部资料"
     today = (ctx.today or ctx.as_of or dt.date.today()).isoformat()
-    core = "\n".join(_render_item(i) for i in ctx.core) or "（档案还是空的）"
-    voice = "\n".join(f"- 「{_clip(t, VOICE_MAX_CHARS)}」" for t in ctx.voice) or "（暂无本人原话，用简洁的口语）"
+    core, voice = portrait_text(ctx.core, ctx.voice)
     facets = " ".join(f"{f.facet_id} {f.name}；" for f in FACETS)
     style = "" if ctx.extreme_rate is None else STYLE_SECTION.format(rate=ctx.extreme_rate)
     return CHAT_SYSTEM.format(name=name, scope=scope, today=today, core=core, style=style, voice=voice, facets=facets)

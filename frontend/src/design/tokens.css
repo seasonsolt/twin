@@ -940,8 +940,16 @@
   }
 }
 .composer-field {
-  border: 2px solid var(--text-primary);
+  border: 1px solid var(--border);
   border-radius: 28px;
+  box-shadow: 0 2px 12px rgb(43 29 22 / 0.08);
+}
+.composer-field:focus-within {
+  border-color: var(--text-tertiary);
+}
+/* Like ChatGPT's composer: the hint sits back so what you type stands out. */
+.composer-field textarea::placeholder {
+  color: color-mix(in srgb, var(--text-tertiary) 60%, transparent);
 }
 .send-button,
 .send-button:hover,

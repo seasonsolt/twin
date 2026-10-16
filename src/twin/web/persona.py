@@ -394,7 +394,8 @@ def register(
         resume_index()
 
     def reindex(log: Log) -> dict[str, Any]:
-        log("检索向量来自之前的向量模型，按当前模型重新向量化（只调用向量模型）")
+        log("[1/1] 更新检索向量")
+        log("检索向量来自之前的向量模型或上次没有完成，按当前模型补齐（只调用向量模型）")
         with open_store() as store:
             return {"embedded": index_persona(store, backends.embedder(), settings, log)}
 

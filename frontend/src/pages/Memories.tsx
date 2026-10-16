@@ -141,6 +141,9 @@ const processingLabel = (memory: Memory) => {
 const processingText = (processing: Processing) => {
   if (processing.state === 'queued') return '记忆整理排队中';
   const progress = processing.progress;
+  // After extraction and merge the build embeds the memories for retrieval, counted in tally.
+  if (!progress && processing.stage?.label === '更新检索向量')
+    return '正在更新检索向量…';
   if (progress?.phase === 'merge') return '正在合并记忆…';
   if (progress && progress.total > 0)
     return `正在记住… 已读 ${progress.done}/${progress.total} 段`;
@@ -820,7 +823,7 @@ export function Memories({
                   {processing.stage.label}
                   {processing.tally &&
                     processing.tally.done + processing.tally.failed > 0 &&
-                    ` · 已完成 ${processing.tally.done} 项，失败 ${processing.tally.failed} 项`}
+                    ` · 已完成 ${processing.tally.done}${processing.tally.total ? `/${processing.tally.total}` : ''} 项，失败 ${processing.tally.failed} 项`}
                 </p>
               )}
             </div>

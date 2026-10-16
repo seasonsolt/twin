@@ -63,6 +63,10 @@ INLINE_ID = re.compile(r"[ \t]*\[([A-Za-z]+_[0-9a-f]+(?:#\d+)?)\]")
 EXPRESSIONS_NS = "expressions"
 OTHERS_NS = "others"
 VECTOR_NAMESPACES = (ITEMS_NS, EXPRESSIONS_NS, OTHERS_NS)
+# Texts embedded and stored per step of ``index_persona``: a few seconds on a local model.
+INDEX_SLICE = 256
+# Set while ``index_persona`` has texts left to embed.
+INDEX_PENDING = "index_pending"
 # Ledger entries are cited by their id behind this prefix, so a citation names its kind like every other record.
 LEDGER_PREFIX = "le_"
 K_ITEMS = 12
@@ -156,7 +160,11 @@ def index_persona(
 ) -> dict[str, int]:
     """Bring the vector namespaces in line with the profile and the privacy view of expressions: embed what is
     new or changed, drop what is gone; a different embedding model rebuilds a namespace. Returns texts embedded
-    per namespace. Raw corpus text must not be sent to an external embedding service when privacy is enabled."""
+    per namespace. Raw corpus text must not be sent to an external embedding service when privacy is enabled.
+
+    Texts are embedded and stored ``INDEX_SLICE`` at a time, reporting ``done/total`` after each: a large corpus on a
+    local model takes a long while, and a failure or restart keeps what was stored, which the next run (or
+    ``index_stale`` at startup) continues from."""
     fingerprint = embedder_fingerprint(embedder)
     view = ExpressionView(store, settings)
     wanted = {
@@ -164,29 +172,46 @@ def index_persona(
         EXPRESSIONS_NS: {e.expression_id: expression_text(e) for e in view.select(target_only=True)},
         OTHERS_NS: {ref: _clip(e.text, 1000) for ref, e in others_view(store, settings, view=view).items()},
     }
-    embedded: dict[str, int] = {}
+    plan: dict[str, tuple[list[str], list[str]]] = {}
     for namespace, docs in wanted.items():
         if store.get_meta(f"embedder:{namespace}") not in (None, fingerprint):
             store.clear_vectors(namespace)
         known = store.vector_shas(namespace)
-        changed = [ref for ref, text in docs.items() if known.get(ref) != _sha(text)]
-        removed = [ref for ref in known if ref not in docs]
-        upserts: list[tuple[str, str, np.ndarray]] = []
-        if changed:
-            vectors = embedder.embed([docs[ref] for ref in changed])
-            upserts = [(ref, _sha(docs[ref]), vectors[k]) for k, ref in enumerate(changed)]
-        store.update_vectors(namespace, fingerprint, upserts, removed)
-        embedded[namespace] = len(changed)
+        plan[namespace] = (
+            [ref for ref, text in docs.items() if known.get(ref) != _sha(text)],
+            [ref for ref in known if ref not in docs],
+        )
+    total = sum(len(changed) for changed, _ in plan.values())
+    if total:
+        store.set_meta(INDEX_PENDING, fingerprint)
+        if progress:
+            progress(f"需要向量化 {total} 条文字")
+    done = 0
+    for namespace, (changed, removed) in plan.items():
+        docs = wanted[namespace]
+        store.update_vectors(namespace, fingerprint, deletes=removed)
+        for start in range(0, len(changed), INDEX_SLICE):
+            refs = changed[start : start + INDEX_SLICE]
+            vectors = embedder.embed([docs[ref] for ref in refs])
+            store.update_vectors(
+                namespace, fingerprint, [(ref, _sha(docs[ref]), vectors[k]) for k, ref in enumerate(refs)]
+            )
+            done += len(refs)
+            if progress:
+                progress(f"progress {done}/{total} {namespace}")
         if progress:
             progress(f"persona index {namespace}: {len(changed)} embedded, {len(removed)} removed, {len(docs)} total")
-    return embedded
+    store.delete_meta(INDEX_PENDING)
+    return {namespace: len(changed) for namespace, (changed, _) in plan.items()}
 
 
 def index_stale(store: PersonaStore, embedder: Embedder) -> bool:
     """Some namespace still holds vectors of another embedding model, which retrieval leaves out until
-    ``index_persona`` embeds them again."""
+    ``index_persona`` embeds them again, or an earlier ``index_persona`` stopped before embedding everything."""
     fingerprint = embedder_fingerprint(embedder)
-    return any(store.get_meta(f"embedder:{namespace}") not in (None, fingerprint) for namespace in VECTOR_NAMESPACES)
+    return store.get_meta(INDEX_PENDING) is not None or any(
+        store.get_meta(f"embedder:{namespace}") not in (None, fingerprint) for namespace in VECTOR_NAMESPACES
+    )
 
 
 # ---------------------------------------------------------------- retrieval

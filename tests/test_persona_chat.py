@@ -436,6 +436,42 @@ def test_index_is_incremental_and_follows_the_embedding_space(store: PersonaStor
     assert store.get_vectors("items")[1].shape == (2, 256)
 
 
+def test_index_stores_each_slice_and_continues_after_a_failure(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from twin.embed import EmbedError
+    from twin.web.jobs import JobManager
+
+    class FailsOnce(HashingEmbedder):
+        calls = 0
+
+        def embed(self, texts: list[str]) -> Any:
+            FailsOnce.calls += 1
+            if FailsOnce.calls == 3:
+                raise EmbedError("timed out")
+            return super().embed(texts)
+
+    monkeypatch.setattr(pc, "INDEX_SLICE", 1)
+    embedder, lines = FailsOnce(), []
+    with pytest.raises(EmbedError):
+        pc.index_persona(store, embedder, settings, lines.append)
+    # the two slices embedded before the failure are kept, and startup knows the index is unfinished
+    assert len(store.get_vectors("items")[0]) == 2 and not store.get_vectors("expressions")[0]
+    assert pc.index_stale(store, embedder)
+    assert lines[:3] == ["需要向量化 8 条文字", "progress 1/8 items", "progress 2/8 items"]
+    lines.clear()
+    assert pc.index_persona(store, embedder, settings, lines.append) == {"items": 0, "expressions": 4, "others": 2}
+    assert not pc.index_stale(store, embedder)
+    assert [line for line in lines if line.startswith("progress")][-1] == "progress 6/6 others"
+    job = SimpleNamespace(milestones=[], stage=None, tally_done=0, tally_failed=0, tally_total=None)
+    for line in ["[2/2] 更新检索向量", *lines]:
+        JobManager._track(job, line)  # type: ignore[arg-type]
+    assert (job.tally_done, job.tally_total) == (6, 6) and job.milestones == [
+        "[2/2] 更新检索向量",
+        "需要向量化 6 条文字",
+    ]
+
+
 def test_retrieve_respects_as_of(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     pc.index_persona(store, embedder, settings)

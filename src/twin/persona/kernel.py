@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-PROMPT_VERSION = "persona-v5"
+PROMPT_VERSION = "persona-v6"
 TAXONOMY_VERSION = "v2"
 
 # Content fingerprints of each released version. Changing the extraction prompts or the taxonomy without bumping
@@ -16,6 +16,7 @@ TAXONOMY_VERSION = "v2"
 PROMPT_FINGERPRINTS = {
     "persona-v4": "a04b10cde3156c9131d60d3faf62113dc9120dc620f6647d5874265e85424953",
     "persona-v5": "cf0cdafbd3252d51755f38c7afbbf50c45d8ebb81b3e77cd5646b4f24b70f9c4",
+    "persona-v6": "198573d74d889724d9198406ddda5b10c5b5a858271f1535fc64b48c57d26780",
 }
 TAXONOMY_FINGERPRINTS = {
     "v1": "709b4a45adf588753f44a56e67780c93d76cb5f41f48caf89e991c20c77c5624",

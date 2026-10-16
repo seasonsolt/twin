@@ -77,6 +77,7 @@ LAYERS: dict[str, int] = {
     "evals.twin2k500": 8,
     "evals.survey": 8,
     "evals.scorecard": 8,
+    "evals.extraction": 8,
     "evals.asr": 8,
     "evals.diarization": 8,
     "evals.asr_session": 8,

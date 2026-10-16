@@ -1811,6 +1811,83 @@ def eval_scorecard_command(
     _say(f"Scorecard written to {suite / 'scorecard.md'}.")
 
 
+@app.command("eval-extract")
+def eval_extract_command(
+    ctx: typer.Context,
+    cases: Annotated[Path, typer.Option("--cases", help="题单 JSONL：LongMemEval 证据轮次与关键事实")],
+    dataset: Annotated[Path, typer.Option("--dataset", help="LongMemEval S cleaned JSON")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的评测目录，各变体写在其下的 <variant>/")],
+    variant: Annotated[str, typer.Option("--variant", help="baseline 或 v1、v2……")] = "baseline",
+    reps: Annotated[int, typer.Option("--reps", min=1, help="每块重复几次")] = 2,
+    per_type: Annotated[int | None, typer.Option("--per-type", min=1, help="试跑：每种题型只取题单里的前几块")] = None,
+    workers: Annotated[int, typer.Option("--workers", min=1, help="同时评测几块")] = 4,
+    timeout_s: Annotated[float, typer.Option("--timeout-s", min=1, help="每块（抽取加评分）的总时限")] = 600,
+    approve_harness: Annotated[
+        bool, typer.Option("--approve-harness", help="批准当前的运行器、评分和题单（改动后需重新批准）")
+    ] = False,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """逐块抽取评测：每块是 LongMemEval 一段会话里含人工标注证据的块，评它是否抽出关键事实、保留结论是否有依据。"""
+    import re
+
+    from .evals.extraction import (
+        VARIANT_PATTERN,
+        HarnessChanged,
+        check_harness,
+        first_per_type,
+        load_cases,
+        load_sessions,
+        run_eval,
+        same_model,
+        served_model,
+        write_state,
+    )
+    from .evals.harness import Judge
+    from .evals.personal import ensure_output_directory
+    from .util import private_directory
+
+    with _errors():
+        if not re.fullmatch(VARIANT_PATTERN, variant):
+            raise ValueError("--variant 只能是 baseline 或 v1、v2……")
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        settings = _benchmark_settings(ctx, keep_judges=True)
+        if not settings.judges:
+            raise ValueError("配置里没有 [[judges]]；评委要和被测的 [llm] 分开配置")
+        selected = load_cases(cases)
+        if per_type is not None:
+            selected = first_per_type(selected, per_type)
+        private_directory(out)
+        try:
+            check_harness(out, cases, approve_harness)
+        except HarnessChanged as e:
+            _say(str(e))
+            raise typer.Exit(code=2) from None
+        llm = make_llm(settings.llm, "llm")
+        served = served_model(llm)
+        if served is not None and not same_model(settings.llm.model or "", served):
+            raise ValueError(f"服务端返回的模型 {served} 与配置的 {settings.llm.model} 不一致")
+        judges = [
+            (f"j{i}:{config.model}", Judge(make_llm(config, f"judges[{i}]"), config.effort_twin))
+            for i, config in enumerate(settings.judges)
+        ]
+        write_state(out, settings, judges)
+        summary = run_eval(
+            settings,
+            llm,
+            judges,
+            selected,
+            load_sessions(dataset, selected),
+            out,
+            variant=variant,
+            reps=reps,
+            workers=workers,
+            timeout_s=timeout_s,
+            progress=_progress,
+        )
+    _say(f"served model: {served or 'not reported'}")
+    _say(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 @app.command("eval-asr")
 def eval_asr_command(
     manifest: Annotated[Path, typer.Option("--manifest", help="评测清单 JSONL：id/audio/text/duration/group")],

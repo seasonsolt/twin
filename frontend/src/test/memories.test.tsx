@@ -43,6 +43,8 @@ const memory: Memory = {
 let rows: Memory[];
 let state: {
   state: 'idle' | 'queued' | 'running';
+  stage?: { current: number; total: number; label: string } | null;
+  tally?: { done: number; failed: number; total: number | null } | null;
   last_error?: string;
   notice?: string;
   kernel_rebuild?: string;
@@ -188,7 +190,7 @@ it('has three add tabs without kind, date or manual build controls; saves notes'
   await user.type(screen.getByLabelText('要记住的文字'), '我喜欢散步');
   await user.click(screen.getByRole('button', { name: '保存' }));
   await waitFor(() =>
-    expect(toast).toHaveBeenCalledWith('已添加，正在记住…', 'success'),
+    expect(toast).toHaveBeenCalledWith('已添加，等待整理结果', 'success'),
   );
   const init = fetcher.mock.calls.find(
     ([url]) => url === '/api/persona/notes',
@@ -234,6 +236,60 @@ it('uploads multiple files and dropped files with no kind query', async () => {
   expect(init.body.get('files').name).toBe('drop.txt');
 });
 
+it('uploads a folder over 100 MiB as separate document requests', async () => {
+  mount();
+  await loaded();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('tab', { name: '上传文件夹' }));
+  const input = screen.getByLabelText('选择文件夹');
+  const files = ['a.txt', 'b.txt', 'c.txt'].map((name) => {
+    const file = new File(['x'], name);
+    Object.defineProperty(file, 'size', { value: 40 * 1024 * 1024 });
+    Object.defineProperty(file, 'webkitRelativePath', {
+      value: `folder/${name}`,
+    });
+    return file;
+  });
+  Object.defineProperty(input, 'files', { configurable: true, value: files });
+  fireEvent.change(input);
+
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/persona/import'),
+    ).toHaveLength(3),
+  );
+  const requests = fetcher.mock.calls.filter(
+    ([url]) => url === '/api/persona/import',
+  );
+  expect(requests.map(([, init]) => init.body.get('files').name)).toEqual([
+    'folder/a.txt',
+    'folder/b.txt',
+    'folder/c.txt',
+  ]);
+});
+
+it('rejects a folder larger than 500 MiB before sending any files', async () => {
+  mount();
+  await loaded();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('tab', { name: '上传文件夹' }));
+  const input = screen.getByLabelText('选择文件夹');
+  const file = new File(['x'], 'large.txt');
+  Object.defineProperty(file, 'size', { value: 500 * 1024 * 1024 + 1 });
+  Object.defineProperty(file, 'webkitRelativePath', {
+    value: 'folder/large.txt',
+  });
+  Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+  fireEvent.change(input);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '文件夹内容超过 500 MB，请分批上传',
+  );
+  expect(
+    fetcher.mock.calls.filter(([url]) => url === '/api/persona/import'),
+  ).toHaveLength(0);
+});
+
 it('uploads folders with relative names and displays skipped reasons', async () => {
   mount();
   await loaded();
@@ -251,6 +307,27 @@ it('uploads folders with relative names and displays skipped reasons', async () 
     ([url]) => url === '/api/persona/import',
   )![1];
   expect(init.body.get('files').name).toBe('folder/a.txt');
+});
+
+it('clears stale skipped-file notices when a later upload starts', async () => {
+  mount();
+  await loaded();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('tab', { name: '上传文件' }));
+  await user.upload(
+    screen.getByLabelText('选择文件'),
+    new File(['旧文件'], 'old.txt'),
+  );
+  expect(
+    await screen.findByRole('list', { name: '跳过的文件' }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole('tab', { name: '写一段' }));
+  await user.type(screen.getByLabelText('要记住的文字'), '我喜欢散步');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  await waitFor(() =>
+    expect(screen.queryByRole('list', { name: '跳过的文件' })).toBeNull(),
+  );
 });
 
 it('renders all four memory statuses in plain words', async () => {
@@ -368,7 +445,7 @@ it('polls processing every two seconds and stops at idle, with retry only on err
   state = { state: 'queued' };
   mount();
   await act(async () => {});
-  expect(screen.getByRole('status')).toHaveTextContent('等待记住…');
+  expect(screen.getByRole('status')).toHaveTextContent('记忆整理排队中');
   expect(
     screen.queryByRole('button', { name: '重新处理' }),
   ).not.toBeInTheDocument();
@@ -410,6 +487,33 @@ it('polls processing every two seconds and stops at idle, with retry only on err
   expect(
     fetcher.mock.calls.filter(([url]) => url === '/api/persona/processing'),
   ).toHaveLength(calls);
+});
+
+it('summarizes memory completion and the active build stage', async () => {
+  rows = [
+    memory,
+    {
+      ...memory,
+      source_id: 's/2',
+      title: '待整理资料',
+      status: 'processing',
+      remembered: 0,
+    },
+  ];
+  state = {
+    state: 'running',
+    stage: { current: 1, total: 2, label: '抽取并合并人格档案' },
+    tally: { done: 4, failed: 1, total: null },
+  };
+  mount();
+  await loaded();
+
+  expect(screen.getByText(/正在记住… · 共 2 份/)).toHaveTextContent(
+    '正在记住… · 共 2 份 · 已记住 1 份 · 整理中 1 份',
+  );
+  expect(screen.getByText(/当前阶段 1\/2/)).toHaveTextContent(
+    '当前阶段 1/2 · 抽取并合并人格档案 · 已完成 4 项，失败 1 项',
+  );
 });
 
 it('keeps Chinese upload errors and aborts uploads on unmount', async () => {

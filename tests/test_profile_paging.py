@@ -191,7 +191,15 @@ def test_sources_route_pages_with_summary_attention_and_filters(settings: Settin
         store.update_source(voiced.model_copy(update={"voice_candidates": 2, "duration_s": 30.0}))
     page = client.get("/api/persona/sources", params={"limit": 3}, headers=HEADERS).json()
     assert [row["source_id"] for row in page["items"]] == ids[:3] and page["total"] == 7
-    assert page["summary"] == {"total": 7, "duration_s": 120.0, "needs_speaker": 1, "busy": 6}
+    assert page["summary"] == {
+        "total": 7,
+        "duration_s": 120.0,
+        "needs_speaker": 1,
+        "remembered": 0,
+        "nothing_found": 0,
+        "failed": 0,
+        "busy": 6,
+    }
     assert "attention" not in page
     rest = client.get("/api/persona/sources", params={"limit": 3, "offset": 6}, headers=HEADERS).json()
     assert [row["source_id"] for row in rest["items"]] == ids[6:]

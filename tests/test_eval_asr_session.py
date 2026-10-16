@@ -1,6 +1,7 @@
 """Whole-session ASR benchmark: manifests, the [asr] command contract, run caching, claims and the scorecard."""
 
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -88,7 +89,7 @@ def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
     for name, plan in (("good", GOOD), ("merged", MERGED)):
         plan_file = tmp_path / f"{name}.json"
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
-        command = f"{sys.executable} {script} {plan_file} {tmp_path / 'calls.jsonl'}"
+        command = " ".join([shlex.quote(str(x)) for x in (sys.executable, script, plan_file, tmp_path / "calls.jsonl")])
         blocks.append(f'[[engine]]\nname = "{name}"\ncommand = "{command}"\nfiles = ["{plan_file}"]\n')
     engines.write_text("\n".join(blocks), encoding="utf-8")
     return manifest, engines, tmp_path / "calls.jsonl"
@@ -191,7 +192,9 @@ def test_one_run_per_session_when_the_command_compares_every_voice(tmp_path: Pat
     manifest.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     script, plan = tmp_path / "fake.py", tmp_path / "good.json"
     blocks = [
-        f'[[engine]]\nname = "{name}"\ncommand = "{sys.executable} {script} {plan} {calls}{suffix}"\n'
+        f'[[engine]]\nname = "{name}"\ncommand = "'
+        + " ".join([*(shlex.quote(str(x)) for x in (sys.executable, script, plan, calls)), suffix.strip()])
+        + '"\n'
         for name, suffix in (("multi", " multi"), ("old", ""))
     ]
     engines = tmp_path / "pair.toml"

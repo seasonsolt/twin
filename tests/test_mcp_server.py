@@ -24,7 +24,7 @@ from twin.service import ServiceAnswer, answer_question
 
 
 @pytest.fixture
-def chat() -> Iterator[PersonaChat]:
+def chat(tmp_path: Path) -> Iterator[PersonaChat]:
     with PersonaStore(":memory:") as store:
         yield PersonaChat(
             store,
@@ -39,7 +39,7 @@ def chat() -> Iterator[PersonaChat]:
                 }
             ),
             HashingEmbedder(),
-            Settings(target_name="张三"),
+            Settings(db_path=tmp_path / "twin.db", target_name="张三"),
         )
 
 

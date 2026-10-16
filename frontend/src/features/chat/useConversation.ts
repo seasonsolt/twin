@@ -113,6 +113,7 @@ export function useConversation(active: boolean) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const id = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [restoreFailed, setRestoreFailed] = useState(false);
@@ -165,7 +166,10 @@ export function useConversation(active: boolean) {
   );
   useEffect(() => {
     mounted.current = active;
-    if (!active) return;
+    if (!active) {
+      setAttachments([]);
+      return;
+    }
     const controller = new AbortController();
     request.current = controller;
     const stop = () => {
@@ -187,6 +191,7 @@ export function useConversation(active: boolean) {
       : undefined;
     setTurns(cached?.turns ?? legacy);
     setDraft('');
+    setAttachments([]);
     failed.current = null;
     setBusy(false);
     setError('');
@@ -285,18 +290,34 @@ export function useConversation(active: boolean) {
         if (controller.signal.aborted || !mounted.current) return;
         selectId(created.id);
       }
-      const response = await api<Response>('/api/persona/chat/stream', {
-        method: 'POST',
-        json: {
-          conversation_id: id.current,
-          messages: pending
-            .slice(-40)
-            .map(({ role, content }) => ({ role, content })),
-        },
-        headers: headers(),
-        signal: controller.signal,
-        responseType: 'stream',
-      });
+      const payload = {
+        conversation_id: id.current,
+        messages: pending
+          .slice(-40)
+          .map(({ role, content }) => ({ role, content })),
+      };
+      const response = attachments.length
+        ? await (() => {
+            const form = new FormData();
+            form.append('payload', JSON.stringify(payload));
+            attachments.forEach((file) =>
+              form.append('files', file, file.name),
+            );
+            return api<Response>('/api/persona/chat/stream-with-files', {
+              method: 'POST',
+              form,
+              headers: headers(),
+              signal: controller.signal,
+              responseType: 'stream',
+            });
+          })()
+        : await api<Response>('/api/persona/chat/stream', {
+            method: 'POST',
+            json: payload,
+            headers: headers(),
+            signal: controller.signal,
+            responseType: 'stream',
+          });
       const twin: Turn = {
         id: crypto.randomUUID(),
         role: 'twin',
@@ -320,6 +341,7 @@ export function useConversation(active: boolean) {
           setTurns([...pending, { ...twin }]);
           setNewest(twin.id);
           failed.current = null;
+          setAttachments([]);
           void refreshHistory();
           break;
         } else if (event === 'error') {
@@ -349,6 +371,7 @@ export function useConversation(active: boolean) {
     selectId(null);
     setTurns([]);
     setDraft('');
+    setAttachments([]);
     setBusy(false);
     setLoading(false);
     setRestoreFailed(false);
@@ -376,6 +399,7 @@ export function useConversation(active: boolean) {
       setTurns(conversation.turns);
       setRestoreFailed(false);
       setDraft('');
+      setAttachments([]);
       setNewest(null);
       failed.current = null;
       return true;
@@ -412,6 +436,8 @@ export function useConversation(active: boolean) {
     conversationId,
     draft,
     setDraft,
+    attachments,
+    setAttachments,
     busy,
     loading,
     restoreFailed,

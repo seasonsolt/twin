@@ -239,7 +239,10 @@ it.each([
       screen.queryByRole('button', { name: '在后台继续处理' }),
     ).not.toBeInTheDocument();
     act(() => Xhr.last.progress(50));
-    expect(screen.getByText(/上传中 50%.*MB/)).toBeInTheDocument();
+    const progressStatus = screen
+      .getByRole('progressbar', { name: '上传进度' })
+      .closest('[role="status"]');
+    expect(progressStatus).toHaveTextContent(/上传中\s*50%.*MB/);
     act(() => Xhr.last.progress(100));
     locked('正在处理照片…');
     act(() =>
@@ -337,13 +340,27 @@ it.each(['上传文件', '上传文件夹'])(
     locked('正在上传 1/3…');
     expect(Xhr.last.path).toBe('/api/persona/import');
     expect(Xhr.last.headers['X-Twin']).toBe('1');
-    expect(Xhr.last.body?.getAll('files')).toHaveLength(3);
+    const folder = tab === '上传文件夹';
+    expect(Xhr.last.body?.getAll('files')).toHaveLength(folder ? 1 : 3);
     act(() => Xhr.last.progress(50));
-    locked('正在上传 2/3…');
-    expect(screen.getByText(/上传中 50%.*MB/)).toBeInTheDocument();
+    locked(folder ? '正在上传 1/3…' : '正在上传 2/3…');
+    const progressStatus = screen
+      .getByRole('progressbar', { name: '上传进度' })
+      .closest('[role="status"]');
+    expect(progressStatus).toHaveTextContent(
+      folder ? /上传中\s*16%.*MB/ : /上传中\s*50%.*MB/,
+    );
     expect(
       screen.queryByRole('button', { name: '在后台继续处理' }),
     ).not.toBeInTheDocument();
+    if (folder) {
+      for (const [index, name] of ['b.txt', 'c.txt'].entries()) {
+        await act(async () => Xhr.last.complete({ imported: [], skipped: [] }));
+        locked(`正在上传 ${index + 2}/3…`);
+        expect(Xhr.last.body?.getAll('files')).toHaveLength(1);
+        expect(Xhr.last.body?.get('files')).toHaveProperty('name', name);
+      }
+    }
     vi.useFakeTimers();
     rows = [media('1')];
     processing = 'running';
@@ -354,7 +371,9 @@ it.each(['上传文件', '上传文件夹'])(
     fireEvent.click(screen.getByRole('button', { name: '在后台继续处理' }));
     expect(screen.getByRole('button', { name: '继续' })).toBeEnabled();
     expect(screen.getByText(/录音 1 · 正在转写/)).toBeInTheDocument();
-    expect(screen.getByText('正在记住…')).toBeInTheDocument();
+    expect(
+      screen.getByText(/正在记住… · 共 1 份 · 已记住 0 份 · 整理中 1 份/),
+    ).toBeInTheDocument();
     rows = [{ ...media('1'), transcribed_s: 240 }];
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);

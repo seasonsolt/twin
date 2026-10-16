@@ -27,7 +27,7 @@ def token(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 @pytest.fixture
-def chat() -> Iterator[PersonaChat]:
+def chat(tmp_path: Path) -> Iterator[PersonaChat]:
     with PersonaStore(":memory:") as store:
         yield PersonaChat(
             store,
@@ -42,7 +42,7 @@ def chat() -> Iterator[PersonaChat]:
                 }
             ),
             HashingEmbedder(),
-            Settings(),
+            Settings(db_path=tmp_path / "twin.db"),
         )
 
 

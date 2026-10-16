@@ -134,7 +134,9 @@ it.each([true, false])(
     expect(screen.getByRole('button', { name: '录一段' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: '继续' }));
     await screen.findByRole('heading', { name: '添加记忆' });
-    expect(await screen.findAllByText('等待记住…')).toHaveLength(1);
+    expect(
+      await screen.findByText(/记忆整理排队中 · 共 0 份 · 已记住 0 份/),
+    ).toBeInTheDocument();
     expect(screen.getAllByRole('tab')).toHaveLength(3);
     expect(
       screen.getByRole('button', { name: '正在整理记忆…' }),

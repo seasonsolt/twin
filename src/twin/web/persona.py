@@ -7,6 +7,7 @@ import asyncio
 import datetime as dt
 import json
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
 from dataclasses import asdict
@@ -17,7 +18,7 @@ from typing import Annotated, Any, Literal
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
@@ -25,6 +26,13 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from ..config import Settings
 from ..embed import Embedder, EmbedError
 from ..llm import LLM
+from ..persona.attachments import (
+    MAX_CHAT_ATTACHMENT_BYTES,
+    MAX_CHAT_ATTACHMENT_COUNT,
+    MAX_CHAT_EXTRACTED_CHARS,
+    AttachmentPassage,
+    select_attachment_passages,
+)
 from ..persona.chat import (
     LEDGER_PREFIX,
     PersonaChat,
@@ -54,6 +62,7 @@ from ..persona.questionnaire import Round, round_view, save_draft, submit_initia
 from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, Source, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
+from ..persona.text import extract_text
 from ..usage import transient_summary
 from .backends import Backends, BackendUnavailable
 from .conversations import append_reply, append_user, owner
@@ -63,6 +72,8 @@ MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
 MAX_CHAT_TURNS = 40
 MAX_MESSAGE_CHARS = 4000
+CHAT_ATTACHMENT_PATH = "/api/persona/chat/stream-with-files"
+MAX_CHAT_ATTACHMENT_REQUEST_BYTES = MAX_CHAT_ATTACHMENT_BYTES + 2 * 1024 * 1024
 PAGE_SIZE = 50
 MAX_PAGE_SIZE = 500
 # Search shows the closest items, best first: enough to find the wrong one, short enough to read.
@@ -165,13 +176,19 @@ def run_chat(
         return append_reply(store, conversation_id, email, chat_payload(store, reply))
 
 
-def chat_payload(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
-    return {**reply.model_dump(mode="json"), "cited": cited_view(store, reply.citations)}
+def chat_payload(
+    store: PersonaStore, reply: ChatReply, attachment_passages: Sequence[AttachmentPassage] = ()
+) -> dict[str, Any]:
+    return {**reply.model_dump(mode="json"), "cited": cited_view(store, reply.citations, attachment_passages)}
 
 
-def cited_view(store: PersonaStore, citations: Sequence[str]) -> list[dict[str, Any]]:
-    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out."""
+def cited_view(
+    store: PersonaStore, citations: Sequence[str], attachment_passages: Sequence[AttachmentPassage] = ()
+) -> list[dict[str, Any]]:
+    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out.
+    ``attachment_passages`` are the files sent with this turn, which are cited but never stored."""
     items = store.get_items(list(citations))
+    attachments = {passage.citation_id: passage for passage in attachment_passages}
     cited: list[dict[str, Any]] = []
     for ref in citations:
         if (item := items.get(ref)) is not None and item.review is not ReviewStatus.REJECTED:
@@ -191,7 +208,70 @@ def cited_view(store: PersonaStore, citations: Sequence[str]) -> list[dict[str, 
                     "text": entry.quote,
                 }
             )
+        elif (passage := attachments.get(ref)) is not None:
+            cited.append(
+                {
+                    "id": ref,
+                    "kind": "file",
+                    "file_name": passage.file_name,
+                    "locator": passage.locator,
+                    "text": passage.text,
+                }
+            )
     return cited
+
+
+async def read_chat_attachment_request(request: Request) -> tuple[ChatBody, list[AttachmentPassage]]:
+    """Parse bounded multipart attachments as transient text; never create persona sources from chat files."""
+    try:
+        form = await request.form(max_files=MAX_CHAT_ATTACHMENT_COUNT, max_fields=1)
+    except Exception:
+        raise HTTPException(400, "上传格式无效，请重新选择文件") from None
+    try:
+        raw_payload = form.get("payload")
+        if not isinstance(raw_payload, str):
+            raise HTTPException(400, "缺少聊天内容")
+        try:
+            body = ChatBody.model_validate_json(raw_payload)
+        except ValidationError:
+            raise HTTPException(400, "聊天内容格式无效") from None
+        validate_chat(body)
+        uploads = form.getlist("files")
+        if not 1 <= len(uploads) <= MAX_CHAT_ATTACHMENT_COUNT:
+            raise HTTPException(400, f"一次最多附加 {MAX_CHAT_ATTACHMENT_COUNT} 个文件")
+
+        total_bytes = 0
+        total_chars = 0
+        documents: list[tuple[str, str]] = []
+        for upload in uploads:
+            if not isinstance(upload, UploadFile):
+                raise HTTPException(400, "附件格式无效，请重新选择文件")
+            file_name = (upload.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+            if not file_name or file_name.startswith("."):
+                raise HTTPException(400, "附件文件名无效")
+            data = await upload.read(MAX_CHAT_ATTACHMENT_BYTES + 1)
+            if len(data) > MAX_CHAT_ATTACHMENT_BYTES:
+                raise HTTPException(413, "单次附件总量不能超过 50 MB")
+            total_bytes += len(data)
+            if total_bytes > MAX_CHAT_ATTACHMENT_BYTES:
+                raise HTTPException(413, "单次附件总量不能超过 50 MB")
+            try:
+                extracted = await run_in_threadpool(extract_text, file_name, data)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from None
+            if not extracted.strip():
+                raise HTTPException(400, f"{file_name} 中没有可提取的文字")
+            total_chars += len(extracted)
+            if total_chars > MAX_CHAT_EXTRACTED_CHARS:
+                raise HTTPException(413, f"附件提取文字超过 {MAX_CHAT_EXTRACTED_CHARS // 10_000} 万字，请拆分后上传")
+            documents.append((file_name, extracted))
+        try:
+            passages = await run_in_threadpool(select_attachment_passages, documents, body.messages[-1].content)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        return body, passages
+    finally:
+        await form.close()
 
 
 def validate_chat(body: ChatBody) -> list[ChatTurn]:
@@ -347,6 +427,11 @@ def register(
     @app.get("/api/persona/processing")
     def get_processing() -> dict[str, Any]:
         view = processing.view()
+        if view["job_id"] is not None:
+            snapshot = jobs.snapshot(view["job_id"])
+            if snapshot is not None:
+                view["stage"] = snapshot["stage"]
+                view["tally"] = snapshot["tally"]
         with open_store() as store:
             view["kernel_rebuild"] = store.get_meta("kernel_rebuild")
             awaiting = view["kernel_rebuild"] == "awaiting_confirmation" and stale_reason(store) == "kernel"
@@ -443,6 +528,9 @@ def register(
                 "total": len(sources),
                 "duration_s": sum(s.duration_s or 0 for s in sources),
                 "needs_speaker": sum(statuses[s.source_id] == "needs_speaker" for s in sources),
+                "remembered": sum(statuses[s.source_id] == "remembered" for s in sources),
+                "nothing_found": sum(statuses[s.source_id] == "nothing_found" for s in sources),
+                "failed": sum(statuses[s.source_id] == "failed" for s in sources),
                 "busy": sum(busy(s) for s in sources),
             },
         }
@@ -680,14 +768,16 @@ def register(
         )
         return {"job_id": job.job_id}
 
-    @app.post("/api/persona/chat/stream")
-    def stream_chat(body: ChatBody, request: Request) -> StreamingResponse:
+    def stream_chat_response(
+        body: ChatBody, request: Request, attachment_passages: Sequence[AttachmentPassage] = ()
+    ) -> StreamingResponse:
         messages = validate_chat(body)
         email = owner(request)
         # The ledger is private: only the person themselves, never a visitor of a public twin, chats with it.
         ledger = not request.scope.get("twin_visitor")
         with open_store() as store:
-            profiled = store.has_items()
+            # Files sent with the turn are material even before anything is built.
+            profiled = store.has_items() or bool(attachment_passages)
         ticket: Ticket | None = None
         if profiled:
             llm, embedder = backends.chat_llm(), backends.embedder()
@@ -700,8 +790,13 @@ def register(
                 ticket.close()
             raise
 
+        started_at = time.monotonic()
+
         def save(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
-            return append_reply(store, body.conversation_id, email, chat_payload(store, reply))
+            payload = chat_payload(store, reply, attachment_passages)
+            payload["elapsed_ms"] = max(0, round((time.monotonic() - started_at) * 1000))
+            payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
+            return append_reply(store, body.conversation_id, email, payload)
 
         def unbuilt() -> tuple[str, dict[str, Any]]:
             with open_store() as store:
@@ -719,7 +814,10 @@ def register(
             async with ticket.running():
                 with await open_store_off_loop(settings.db_path) as store:
                     chat = PersonaChat(store, llm, embedder, settings, ledger=ledger)
-                    async with aclosing(chat.stream_reply(messages)) as replies:
+                    # A turn with files stays out of the chat log, since its files are not kept.
+                    async with aclosing(
+                        chat.stream_reply(messages, attachments=attachment_passages, persist=not attachment_passages)
+                    ) as replies:
                         async for result in replies:
                             if isinstance(result, str):
                                 yield sse_event("delta", {"text": result})
@@ -757,6 +855,15 @@ def register(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/api/persona/chat/stream")
+    def stream_chat(body: ChatBody, request: Request) -> StreamingResponse:
+        return stream_chat_response(body, request)
+
+    @app.post(CHAT_ATTACHMENT_PATH)
+    async def stream_chat_with_files(request: Request) -> StreamingResponse:
+        body, passages = await read_chat_attachment_request(request)
+        return stream_chat_response(body, request, passages)
 
     @app.get("/api/persona/questionnaire")
     def get_questionnaire(round: Round = "initial") -> dict[str, Any]:

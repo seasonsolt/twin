@@ -154,7 +154,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | --- | --- |
 主导航恰好三个入口：聊天、记忆、关于你。
 
-| `#/chat`（默认） | 多轮聊天、依据、内联语音与真人视频；无日期输入或资料截止提示 |
+| `#/chat`（默认） | 多轮聊天、文件附件问答、依据、内联语音与真人视频；无日期输入或资料截止提示 |
 | `#/memories` | 写一段、上传文件/文件夹、自动记住、说话人确认、声音/形象候选采纳、文字预览和删除 |
 | `#/about` | 编辑名字与介绍、形象/音色、我了解到的你、还想多了解、外部服务 |
 | `#/sources` | 重定向至 `#/memories`，兼容旧书签 |
@@ -166,7 +166,9 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 名字保存到 p_meta 的 identity:name，介绍保存到 identity:about；有效名字为用户保存值，否则为配置 target_name。用户保存的名字也参与说话人匹配，配置名字与别名仍有效。介绍设定或变化时，事务内替换标题为“自我介绍”的笔记，并触发自动处理；清空介绍删除旧笔记。单独改名字不重复添加笔记。
 
-聊天使用 MessageList、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。通过 fetch 读取 `POST /api/persona/chat/stream` 的 SSE，首个 delta 后隐藏思考指示，正文直接追加，不使用 ReplyReveal 的人工延迟；final 用引号校验后的正文替换并附加依据。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。离页、切换分身或新请求取消旧流。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时流直接返回友好的弃权回复，不初始化模型。旧聊天任务接口仍可用。
+聊天使用 MessageList、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。通过 fetch 读取 `POST /api/persona/chat/stream` 的 SSE，首个 delta 后隐藏思考指示，正文直接追加，不使用 ReplyReveal 的人工延迟；final 用引号校验后的正文替换并附加依据。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。离页、切换分身或新请求取消旧流。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时普通聊天流直接返回友好的弃权回复，不初始化模型。旧聊天任务接口仍可用。
+
+聊天输入框支持最多 5 个可提取文字的附件，单文件和单次总量均不超过 50 MiB，提取文字合计最多 200 万字符；支持 TXT、Markdown、PDF 文字层、Word、EPUB、HTML、CSV、JSON、SRT、VTT，不做 OCR。附件经 `POST /api/persona/chat/stream-with-files` 作为 multipart 本轮上下文处理，不写入 PersonaStore、不触发档案重建；后端按当前问题选取有限摘录，文件引用以“附件名 · 摘录 N”显示。原文件不保存，但回答和引用摘录随对话记录保存；后续追问需重新附加。附件内容会发往配置的聊天模型，界面对此有提示。没有档案时，带附件的聊天仍可依据文件内容回答。
 
 每条分身回复（包括弃权）左侧由 `features/chat/ChatAvatar.tsx` 显示 36px 圆头像，优先级为 **肖像 > VRM 静态预览 > 分身选中的插画形象**；图片或模型失败继续回退。插画使用 220×220 正方形 SVG 的圆形裁剪，支持眨眼和 0–3 级口型。非弃权回复下方只提供主按钮“播放”（播放中为“暂停”），触控区域至少 44×44px；general 回答同样支持，保留原回答全部正文，不追加提示。弃权不提供媒体操作，也不启动视频任务。
 

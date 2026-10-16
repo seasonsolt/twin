@@ -333,6 +333,8 @@ def test_processing_endpoint_running_follow_up_and_startup_resume(
 
     def block(*args: Any) -> dict[str, Any]:
         calls.append(1)
+        args[-1]("[1/2] 抽取并合并人格档案")
+        args[-1]("ok persona extract ch_test")
         started.set()
         assert release.wait(5)
         return run_persona_build(*args)
@@ -343,6 +345,8 @@ def test_processing_endpoint_running_follow_up_and_startup_resume(
     assert started.wait(5)
     running = client.get("/api/persona/processing").json()
     assert running["state"] == "running" and running["job_id"]
+    assert running["stage"] == {"current": 1, "total": 2, "label": "抽取并合并人格档案"}
+    assert running["tally"] == {"done": 1, "failed": 0, "total": None}
     for number in range(5):
         client.post("/api/persona/notes", json={"text": f"next {number}"})
     release.set()

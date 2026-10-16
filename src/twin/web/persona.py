@@ -446,6 +446,7 @@ def register(
             view["last_calls"] = json.loads(store.get_meta("build:last_calls") or "null")
             view["last_error"] = store.get_meta("processing_last_error") or view["last_error"]
             progress = store.build_progress() if view["state"] == "running" else None
+            merging = store.merge_progress() if progress and progress[0] == "merge" else None
         if progress:
             phase, chunks = progress
             view["progress"] = {
@@ -453,6 +454,8 @@ def register(
                 "done": sum(done for done, _ in chunks.values()),
                 "total": sum(total for _, total in chunks.values()),
             }
+            if merging:
+                view["progress"]["merged"], view["progress"]["to_merge"] = merging
         return view
 
     @app.post("/api/persona/notes")

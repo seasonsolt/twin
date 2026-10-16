@@ -19,7 +19,7 @@ import hashlib
 import json
 import re
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
@@ -515,6 +515,11 @@ class MergeDegraded(Exception):
         self.cause = cause
 
 
+def merge_order(candidates: Sequence[PersonaCandidate]) -> list[PersonaCandidate]:
+    """A facet's candidates in the order its merge batches are cut from: earliest evidence first."""
+    return sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
+
+
 def merge_batches(ordered: Sequence[PersonaCandidate]) -> list[list[PersonaCandidate]]:
     """``ordered`` cut into merge batches at content-defined points (see ``MERGE_CUT_WINDOW``)."""
     marks = [int(hashlib.sha256(c.candidate_id.encode()).hexdigest()[:12], 16) for c in ordered]
@@ -579,6 +584,7 @@ def merge_facet(
     pool: Executor | None = None,
     progress: Progress | None = None,
     cache: MergeCache | None = None,
+    batch_done: Callable[[], None] | None = None,
 ) -> list[PersonaItem]:
     """Merge a facet's candidates in batches. A batch whose call fails (usually a timeout on a long reply) is
     merged again as two halves; a half that still fails keeps its candidates as separate items, and the facet
@@ -586,7 +592,8 @@ def merge_facet(
 
     The batches are independent: with ``pool`` they run there, so a facet with many candidates does not merge one
     batch after another while the build's other workers sit idle; ``progress`` hears of each finished batch. With
-    ``cache``, a batch merged before (the same candidates, shown the same way) is not sent to the model again."""
+    ``cache``, a batch merged before (the same candidates, shown the same way) is not sent to the model again.
+    ``batch_done`` is called once per batch as it finishes, merged or taken from the cache."""
     if len(candidates) == 1:
         c = candidates[0]
         return [_item_from(facet_id, c.statement, c.applies_when, [c], "")]
@@ -644,11 +651,12 @@ def merge_facet(
                 items.extend(_item_from(facet_id, c.statement, c.applies_when, [c], "") for c in half)
         return items, failure
 
-    ordered = sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
-    batches = merge_batches(ordered)
+    batches = merge_batches(merge_order(candidates))
 
     def run(number: int) -> tuple[list[PersonaItem], LLMError | None]:
         outcome = merge_part(batches[number])
+        if batch_done is not None:
+            batch_done()
         if progress and len(batches) > 1:
             progress(f"merged {facet_id} batch {number + 1}/{len(batches)}")
         return outcome
@@ -828,6 +836,17 @@ def _extract_and_merge(
     # Every facet's batches share one pool of ``max_workers``, so the largest facet does not finish alone.
     pool = ThreadPoolExecutor(max_workers=max(1, settings.max_workers))
     caches: dict[str, MergeCache] = {}
+    # Batches to merge, for the progress shown while the build merges (a lone candidate needs no merge).
+    merge_total = sum(len(merge_batches(merge_order(members))) for _, members in jobs if len(members) > 1)
+    merged = 0
+    merged_lock = threading.Lock()
+    store.set_merge_progress(0, merge_total)
+
+    def batch_done() -> None:
+        nonlocal merged
+        with merged_lock:
+            merged += 1
+            store.set_merge_progress(merged, merge_total)
 
     def merge(job: tuple[str, list[PersonaCandidate]]) -> list[PersonaItem]:
         facet_id, members = job
@@ -835,7 +854,9 @@ def _extract_and_merge(
             return []
         cache = MergeCache(store, facet_id)
         caches[facet_id] = cache
-        return merge_facet(llm, facet_id, members, settings, pool=pool, progress=safe_progress, cache=cache)
+        return merge_facet(
+            llm, facet_id, members, settings, pool=pool, progress=safe_progress, cache=cache, batch_done=batch_done
+        )
 
     def save(job: tuple[str, list[PersonaCandidate]], outcome: list[PersonaItem] | Exception) -> None:
         facet_id, members = job

@@ -4,7 +4,14 @@ import {
   usePersonaState as useState,
 } from '../lib/usePersonaState';
 import { useLocation } from 'react-router';
-import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
+import {
+  Check,
+  MoreHorizontal,
+  Plus,
+  Upload,
+  Video,
+  AudioLines,
+} from 'lucide-react';
 import { StageHeader } from '../components/layout/StageHeader';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
@@ -121,7 +128,14 @@ const emptySummary: SourceSummary = {
 };
 interface Processing {
   state: 'idle' | 'queued' | 'running';
-  progress?: { phase: 'extract' | 'merge'; done: number; total: number };
+  progress?: {
+    phase: 'extract' | 'merge';
+    done: number;
+    total: number;
+    // Merge batches finished and to finish, once the build merges.
+    merged?: number;
+    to_merge?: number;
+  };
   stage?: { current: number; total: number; label: string } | null;
   tally?: { done: number; failed: number; total: number | null } | null;
   notice?: string | null;
@@ -144,7 +158,10 @@ const processingText = (processing: Processing) => {
   // After extraction and merge the build embeds the memories for retrieval, counted in tally.
   if (!progress && processing.stage?.label === '更新检索向量')
     return '正在更新检索向量…';
-  if (progress?.phase === 'merge') return '正在合并记忆…';
+  if (progress?.phase === 'merge')
+    return progress.to_merge
+      ? `正在合并记忆… 已合并 ${progress.merged ?? 0}/${progress.to_merge} 批`
+      : '正在合并记忆…';
   if (progress && progress.total > 0)
     return `正在记住… 已读 ${progress.done}/${progress.total} 段`;
   return '正在记住…';
@@ -611,46 +628,76 @@ export function Memories({
       addPanel.current?.querySelector<HTMLElement>('textarea, input')?.focus();
     }
   };
+  const [dragging, setDragging] = useState<'files' | 'folder' | null>(null);
   const recordingHours = summary.duration_s / 3600;
   const firstSpeaker = attention.find(
     (memory) => memory.status === 'needs_speaker',
   );
-  const fileInput = (folder: boolean) => (
-    <div
-      aria-busy={busy}
-      className={`space-y-3 rounded-lg border border-dashed border-border p-6 ${busy ? 'opacity-60' : ''}`}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => {
-        event.preventDefault();
-        if (!busy) upload(Array.from(event.dataTransfer.files), folder);
-      }}
-    >
-      <p className="text-sm text-secondary">
-        {folder
-          ? '选择文件夹，自动跳过隐藏文件和不支持的格式。'
-          : '拖放文件到这里，或选择多个文件。'}
-      </p>
-      <input
-        type="file"
-        aria-label={folder ? '选择文件夹' : '选择文件'}
-        multiple
-        accept={accept}
-        disabled={busy}
-        className="min-h-11 max-w-full text-base"
-        {...(folder ? { webkitdirectory: '' } : {})}
-        onChange={(event) => {
-          upload(Array.from(event.target.files ?? []), folder);
-          event.target.value = '';
+  const fileInput = (folder: boolean) => {
+    const over = dragging === (folder ? 'folder' : 'files');
+    return (
+      // The whole area picks files: the native control stays for keyboard and screen readers, but out of sight.
+      <label
+        aria-busy={busy}
+        className={`flex flex-col items-center gap-3 rounded-lg border-2 border-dashed p-6 text-center transition-colors focus-within:ring-2 focus-within:ring-accent ${
+          over ? 'border-accent bg-soft' : 'border-border hover:bg-soft'
+        } ${busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          if (!busy) setDragging(folder ? 'folder' : 'files');
         }}
-      />
-      <p className="text-xs text-tertiary">
-        {folder && '文件夹内容总量最多 500 MB。'}
-        TXT、Markdown、PDF、Word、EPUB、HTML、CSV、JSON、SRT、VTT；每个文件最多
-        1 GB。音频、视频最多 4
-        GB，支持断点续传。刷新后重新选择同一文件即可继续。
-      </p>
-    </div>
-  );
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setDragging(null);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(null);
+          if (!busy) upload(Array.from(event.dataTransfer.files), folder);
+        }}
+      >
+        <Upload aria-hidden className="size-8 text-secondary" />
+        {/* A phone cannot drag files in, so there the button says it all. */}
+        {(over || !mobile) && (
+          <span className="font-medium">
+            {over
+              ? '松开即可上传'
+              : folder
+                ? '点击选择文件夹，或把文件拖到这里'
+                : '点击选择文件，或拖到这里'}
+          </span>
+        )}
+        <span className="inline-flex min-h-11 items-center rounded-full bg-accent px-4 font-medium text-on-accent">
+          {folder ? '选择文件夹' : '选择文件'}
+        </span>
+        <input
+          type="file"
+          aria-label={folder ? '选择文件夹' : '选择文件'}
+          multiple
+          accept={accept}
+          disabled={busy}
+          className="sr-only"
+          {...(folder ? { webkitdirectory: '' } : {})}
+          onChange={(event) => {
+            upload(Array.from(event.target.files ?? []), folder);
+            event.target.value = '';
+          }}
+        />
+        <span className="space-y-1 text-xs text-tertiary">
+          <span className="block">
+            文档：TXT、Markdown、PDF、Word、EPUB、HTML、CSV、JSON、SRT、VTT，每个最多
+            1 GB
+            {folder &&
+              '；文件夹总量最多 500 MB，自动跳过隐藏文件和不支持的格式'}
+          </span>
+          <span className="block">
+            录音和视频：每个最多 4 GB，断点续传，刷新后重新选择同一文件即可继续
+          </span>
+        </span>
+      </label>
+    );
+  };
   const addContent = (
     <>
       <Tabs

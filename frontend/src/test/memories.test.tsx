@@ -49,7 +49,13 @@ let state: {
   notice?: string;
   kernel_rebuild?: string;
   kernel_pending?: number;
-  progress?: { phase: 'extract' | 'merge'; done: number; total: number };
+  progress?: {
+    phase: 'extract' | 'merge';
+    done: number;
+    total: number;
+    merged?: number;
+    to_merge?: number;
+  };
 };
 const v4 = { schema: 1, prompt: 'persona-v4', taxonomy: 'v1' };
 const v5 = { schema: 1, prompt: 'persona-v5', taxonomy: 'v1' };
@@ -472,6 +478,22 @@ it('polls processing every two seconds and stops at idle, with retry only on err
     await vi.advanceTimersByTimeAsync(2000);
   });
   expect(screen.getByRole('status')).toHaveTextContent('正在合并记忆…');
+  state = {
+    state: 'running',
+    progress: {
+      phase: 'merge',
+      done: 4300,
+      total: 4300,
+      merged: 37,
+      to_merge: 120,
+    },
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    '正在合并记忆… 已合并 37/120 批',
+  );
   state = { state: 'idle', last_error: '模型暂时不可用' };
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2000);

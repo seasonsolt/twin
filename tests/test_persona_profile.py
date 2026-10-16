@@ -703,6 +703,29 @@ def test_build_merges_from_the_cache_and_drops_it_with_the_facet(store: PersonaS
     assert store.meta_with_prefix("merge_batch:") == cached
 
 
+def test_build_reports_merge_batches_as_they_finish(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reported: list[tuple[int, int]] = []
+    record = store.set_merge_progress
+    monkeypatch.setattr(
+        store, "set_merge_progress", lambda done, total: (reported.append((done, total)), record(done, total))
+    )
+    pf.build_profile(store, FakeLLM(handler), settings)
+    total = reported[0][1]
+    # every facet with more than one candidate is one batch here
+    assert total == sum(len(c) > 1 for c in _by_facet(store).values()) > 0
+    assert reported == [(n, total) for n in range(total + 1)]
+    assert store.merge_progress() is None  # cleared with the build's progress
+
+
+def _by_facet(store: PersonaStore) -> dict[str, list[PersonaCandidate]]:
+    groups: dict[str, list[PersonaCandidate]] = {}
+    for c in store.list_candidates():
+        groups.setdefault(c.facet_id, []).append(c)
+    return groups
+
+
 def test_a_failed_merge_batch_is_merged_again_in_halves(store: PersonaStore, settings: Settings) -> None:
     pf.build_profile(store, FakeLLM(handler), settings)
     base = [c for c in store.list_candidates() if c.facet_id == "2.1"]

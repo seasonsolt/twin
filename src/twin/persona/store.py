@@ -761,7 +761,18 @@ class PersonaStore:
 
     def clear_build_progress(self) -> None:
         with self._tx() as db:
-            db.execute("DELETE FROM p_meta WHERE key = 'build_progress'")
+            db.execute("DELETE FROM p_meta WHERE key IN ('build_progress', 'merge_progress')")
+
+    def set_merge_progress(self, done: int, total: int) -> None:
+        self.set_meta("merge_progress", json.dumps({"done": done, "total": total}))
+
+    def merge_progress(self) -> tuple[int, int] | None:
+        """The running build's merge batches: (merged, to merge), once it has reached the merge."""
+        value = self.get_meta("merge_progress")
+        if not value:
+            return None
+        progress = json.loads(value)
+        return progress["done"], progress["total"]
 
     def build_progress(self) -> tuple[str, dict[str, tuple[int, int]]] | None:
         """The running build's phase and, per source, (chunks extracted, chunks to extract)."""

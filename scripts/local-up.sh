@@ -6,6 +6,7 @@ original_args=("$@")
 update=true
 demo=false
 asr=true
+embed=true
 open_browser=true
 dry_run=false
 port=8765
@@ -16,6 +17,7 @@ while [[ $# -gt 0 ]]; do
         --demo) demo=true; shift ;;
         --no-open) open_browser=false; shift ;;
         --no-asr) asr=false; shift ;;
+        --no-embed) embed=false; shift ;;
         --no-update) update=false; shift ;;
         --dry-run) dry_run=true; shift ;;
         --model|--base-url)
@@ -37,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2 ;;
         --help|-h)
-            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--no-update] [--port N] [--base-url URL --model NAME] [--dry-run]'
+            echo '用法：./scripts/local-up.sh [--demo] [--no-open] [--no-asr] [--no-embed] [--no-update] [--port N] [--base-url URL --model NAME] [--dry-run]'
             exit 0 ;;
         *) echo "错误：未知参数 $1" >&2; exit 2 ;;
     esac
@@ -75,7 +77,7 @@ update_stable() {
 }
 if "$update" && ! "$dry_run"; then update_stable; fi
 
-echo '本地验证：默认开启文字聊天和录音转写，数据默认保存在本仓库 data/。'
+echo '本地验证：默认开启文字聊天、录音转写和按语义检索，数据默认保存在本仓库 data/。'
 echo '更新代码：stable 分支每次启动自动更新；其他分支停止服务后运行 git pull && ./scripts/local-up.sh'
 echo '数据库迁移和记忆内核增量重建由应用自动完成（保留费用闸）。'
 if "$dry_run"; then
@@ -87,6 +89,7 @@ if "$dry_run"; then
     echo '缺少 [llm] model/base_url 或密钥时在终端逐项询问并保存（密钥写入 .env，不回显）；非终端则提示后退出。'
     echo '创建数据目录 data/（权限 700）'
     if "$asr"; then echo '未配置 [asr] 时：twin compute install asr-funasr --download-models（已有模型直接复用；失败不阻塞启动）'; fi
+    if "$embed"; then echo '[embed] 为默认 hashing 时：缺少 Ollama 用 Homebrew 安装，启动 Ollama，下载 bge-m3（约 1.2 GB），探测成功后写入 [embed]；任何一步失败都继续用 hashing，不阻塞启动'; fi
     echo 'twin --config ./twin.toml doctor --local（只展示，不阻塞；不检查常驻服务）'
     echo "端口 $port 被占用时自动改用后续空闲端口"
     if "$demo"; then echo 'twin --config ./twin.toml demo seed'; fi
@@ -105,6 +108,14 @@ if "$asr" && ! command -v ffmpeg >/dev/null 2>&1; then
         echo '提示：未找到 ffmpeg 和 Homebrew，录音转写暂不可用；安装 Homebrew 后重新运行本脚本。'
     fi
 fi
+if "$embed" && ! command -v ollama >/dev/null 2>&1 && [[ ! -d /Applications/Ollama.app ]]; then
+    if command -v brew >/dev/null 2>&1; then
+        echo '安装 Ollama（本机向量模型需要）…'
+        brew install ollama || echo '提示：Ollama 安装失败，检索暂用 hashing；文字聊天不受影响。'
+    else
+        echo '提示：未找到 Ollama 和 Homebrew，检索暂用 hashing；从 https://ollama.com 安装后重新运行本脚本。'
+    fi
+fi
 uv sync --frozen
 export PATH="$repo_root/.venv/bin:$PATH"
 if [[ ! -e .env ]]; then
@@ -119,6 +130,7 @@ fi
 python -c 'import sys; from twin.ops.local import check_local_config
 raise SystemExit(check_local_config(set_model=sys.argv[1], set_base_url=sys.argv[2]))' "$model" "$base_url"
 if "$asr"; then python -c 'from twin.ops.local import ensure_asr; raise SystemExit(ensure_asr())'; fi
+if "$embed"; then python -c 'from twin.ops.local import ensure_embed; raise SystemExit(ensure_embed())'; fi
 echo '环境自检：'
 twin --config ./twin.toml doctor --local || echo '以上 ✗ 项不阻塞本地启动，可稍后处理。'
 if "$demo"; then twin --config ./twin.toml demo seed; fi

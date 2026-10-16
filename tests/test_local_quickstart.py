@@ -13,9 +13,9 @@ from typer.testing import CliRunner
 
 from twin import cli
 from twin.config import Settings, load_settings
-from twin.ops import demo
+from twin.ops import demo, ollama
 from twin.ops.envfile import load_env_file, selected_env_file
-from twin.ops.local import check_local_config, ensure_asr, set_llm_value
+from twin.ops.local import check_local_config, ensure_asr, ensure_embed, set_llm_value
 from twin.ops.paths import TwinPaths
 from twin.persona.schema import SourceKind
 from twin.persona.sources import expression_view, parse_note, parse_source
@@ -454,3 +454,165 @@ def test_local_up_updates_stable_and_restarts(tmp_path: Path, case: str) -> None
         assert "NEW SCRIPT" not in result.stdout
         assert "缺少 uv" in result.stderr
         assert ("跳过自动更新" in result.stdout) == (case == "dirty")
+
+
+def _init_config() -> str:
+    """The twin.toml that ./scripts/local-up.sh generates on first run."""
+    result = RUNNER.invoke(cli.app, ["--config", "twin.toml", "init", "twin.toml"])
+    assert result.exit_code == 0, result.output
+    return Path("twin.toml").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("state", ["default", "default-fails", "managed", "managed-down", "handwritten"])
+def test_ensure_embed(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], state: str) -> None:
+    config = _init_config()
+    if state.startswith("managed"):
+        config = ollama.config_text(config) or ""
+    if state == "handwritten":
+        config = config.replace(
+            'provider = "hashing"', 'provider = "openai_compat"\nmodel = "m"\nbase_url = "http://x/v1"'
+        )
+    Path("twin.toml").write_text(config, encoding="utf-8")
+    calls = []
+
+    def prepare(progress):  # type: ignore[no-untyped-def]
+        calls.append(True)
+        if state.endswith(("fails", "down")):
+            raise ollama.OllamaError("未安装 Ollama")
+
+    monkeypatch.setattr(ollama, "prepare", prepare)
+    assert ensure_embed() == 0
+    assert calls == ([] if state == "handwritten" else [True])
+    embed = load_settings(Path("twin.toml")).embed
+    enabled = state in {"default", "managed", "managed-down"}
+    assert (embed.provider, embed.model if enabled else None) == (
+        ("openai_compat", "bge-m3") if enabled else ("hashing" if state != "handwritten" else "openai_compat", None)
+    )
+    output = capsys.readouterr().out
+    assert ("继续使用本机轻量后端 hashing" in output) == (state == "default-fails")
+    assert ("聊天先只按关键词检索" in output) == (state == "managed-down")
+    assert ("已启用 bge-m3" in output) == (state == "default")
+
+
+def test_embed_config_replaces_only_the_default_table() -> None:
+    template = _init_config()
+    managed = ollama.config_text(template)
+    table = re.search(r'\[embed\]\n(?:#.*\n)*provider = "hashing"\napi_key_env = "TWIN_EMBED_KEY"\n', template)
+    assert table is not None
+    # Only the table changes: the comments that follow it stay with what they introduce.
+    assert managed == template.replace(table.group(), ollama.BLOCK)
+    Path("twin.toml").write_text(managed, encoding="utf-8")
+    embed = load_settings(Path("twin.toml")).embed
+    assert (embed.provider, embed.model, embed.base_url, embed.egress) == (
+        "openai_compat",
+        "bge-m3",
+        "http://127.0.0.1:11434/v1",
+        "local",
+    )
+    assert ollama.config_text(managed) == managed
+    assert ollama.config_text('[llm]\nmodel = "m"\n') == '[llm]\nmodel = "m"\n' + ollama.BLOCK
+    assert ollama.config_text('[embed]\nprovider = "hashing"\nbatch_size = 8\n') is None
+
+
+class FakeResponse:
+    def __init__(self, events: list[dict[str, object]]) -> None:
+        self.lines = [json.dumps(event).encode() + b"\n" for event in events]
+
+    def __enter__(self) -> list[bytes]:
+        return self.lines
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize("outcome", ["success", "proxy", "cut"])
+def test_ollama_pull_reports_progress_and_tells_a_refused_download_apart(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    total = 1_200_000_000
+    events: list[dict[str, object]] = [{"status": "pulling manifest"}]
+    events += [{"status": "pulling", "total": total, "completed": total * k // 4} for k in range(5)]
+    if outcome == "success":
+        events.append({"status": "success"})
+    if outcome == "proxy":
+        refused = "redirect target not allowed: x.r2.cloudflarestorage.com resolves to non-public 198.18.3.1"
+        events = [{"status": "pulling", "total": total, "completed": 0}, {"error": refused}]
+    monkeypatch.setattr(ollama._OPENER, "open", lambda request, timeout: FakeResponse(events))
+    lines: list[str] = []
+    if outcome == "success":
+        ollama.pull(lines.append)
+        assert lines[1:] == ["  20%", "  50%", "  70%", "  100%"]
+        return
+    with pytest.raises(ollama.OllamaError) as raised:
+        ollama.pull(lines.append)
+    # A refusal before any byte arrives prints no progress line.
+    assert (len(lines) == 1) == (outcome == "proxy")
+    assert isinstance(raised.value, ollama.DownloadRefused) == (outcome == "proxy")
+    assert ("下载中断" in str(raised.value)) == (outcome == "cut")
+
+
+@pytest.mark.parametrize("intact", [True, False])
+def test_refused_pull_fetches_the_registry_files_checks_and_imports_them(
+    monkeypatch: pytest.MonkeyPatch, intact: bool
+) -> None:
+    import hashlib
+    import io
+
+    weights = b"gguf-weights" * 1000
+    digest = "sha256:" + hashlib.sha256(weights if intact else b"other").hexdigest()
+    manifest = {
+        "layers": [
+            {"mediaType": "application/vnd.ollama.image.model", "digest": digest, "size": len(weights)},
+            {"mediaType": "application/vnd.ollama.image.license", "digest": "sha256:lic", "size": 3},
+        ]
+    }
+    registry = {
+        f"{ollama.REGISTRY}/manifests/latest": json.dumps(manifest).encode(),
+        f"{ollama.REGISTRY}/blobs/{digest}": weights,
+        f"{ollama.REGISTRY}/blobs/sha256:lic": b"MIT",
+    }
+    uploads: list[tuple[str, bytes]] = []
+    created: list[dict[str, object]] = []
+
+    def urlopen(request: object, timeout: float) -> io.BytesIO:
+        url = request if isinstance(request, str) else request.full_url  # type: ignore[attr-defined]
+        return io.BytesIO(registry[url])
+
+    def upload(request, timeout):  # type: ignore[no-untyped-def]
+        uploads.append((request.full_url, request.data.read()))
+        return io.BytesIO(b"")
+
+    def refused(progress):  # type: ignore[no-untyped-def]
+        raise ollama.DownloadRefused("resolves to non-public 198.18.3.1")
+
+    monkeypatch.setattr(ollama.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(ollama._OPENER, "open", upload)
+    monkeypatch.setattr(ollama, "_call", lambda path, body, timeout: created.append(body) or {"status": "success"})
+    monkeypatch.setattr(ollama, "start", lambda: None)
+    monkeypatch.setattr(ollama, "has_model", lambda: False)
+    monkeypatch.setattr(ollama, "pull", refused)
+    probed: list[list[str]] = []
+    monkeypatch.setattr(ollama, "make_embedder", lambda settings: type("E", (), {"embed": staticmethod(probed.append)}))
+    if not intact:
+        with pytest.raises(ollama.OllamaError, match="校验不通过"):
+            ollama.prepare(lambda line: None)
+        assert uploads == [] and created == [] and probed == []
+        return
+    ollama.prepare(lambda line: None)
+    assert uploads == [(f"{ollama.OLLAMA}/api/blobs/{digest}", weights)]
+    assert created == [{"model": "bge-m3", "files": {"model.gguf": digest}, "stream": False, "license": "MIT"}]
+    assert probed == [["连通测试"]]
+
+
+def test_local_up_dry_run_embed_opt_out(tmp_path: Path) -> None:
+    def run(*options: str) -> str:
+        return subprocess.run(
+            ["/bin/bash", str(ROOT / "scripts/local-up.sh"), "--dry-run", *options],
+            env={**os.environ, "REPO_ROOT": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    assert "bge-m3" in run()
+    assert "bge-m3" not in run("--no-embed")

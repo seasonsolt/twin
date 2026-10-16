@@ -430,3 +430,27 @@ def test_web_and_cli_reextract(settings: Settings, monkeypatch: pytest.MonkeyPat
     with PersonaStore(settings.db_path) as store:
         memories = pf.source_memories(store)
         assert [memories[s].chunks_extracted for s in sids] == [1, 0, 0] and pf.profile_stale(store)
+
+
+def test_cli_reextracts_only_empty_chunks(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with PersonaStore(settings.db_path) as store:
+        found, empty = imported(store, settings, "有结论.md"), imported(store, settings, "无结论.md")
+        pf.build_profile(store, FakeLLM(lambda s, u, schema: {"items": []}), settings)
+        store.reextract_source(found)
+        pf.build_profile(store, FakeLLM(handler), settings)
+        assert store.empty_chunks() == {empty: 1}
+    config = tmp_path / "twin.toml"
+    config.write_text('target_name = "合成人物"\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_settings", lambda ctx: settings)
+    runner = CliRunner()
+    args = ["--config", str(config), "persona", "reextract", "--empty-chunks"]
+    none = runner.invoke(cli.app, [*args, found])
+    assert none.exit_code != 0 and "没有一条结论也没抽出的分段" in none.output
+    settings.kernel.max_auto_rebuild_chunks = 0
+    gated = runner.invoke(cli.app, args)
+    assert gated.exit_code != 0 and "将重抽 1 份资料的 1 个分段，超过费用闸" in gated.output
+    done = runner.invoke(cli.app, [*args, "--yes"])
+    assert done.exit_code == 0 and "已标记 1 份资料（1 个分段）重新抽取" in done.output
+    with PersonaStore(settings.db_path) as store:
+        assert store.empty_chunks() == {} and pf.profile_stale(store)
+        assert pf.source_memories(store)[found].chunks_extracted == 1

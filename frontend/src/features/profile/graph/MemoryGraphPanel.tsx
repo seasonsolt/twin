@@ -127,7 +127,7 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
   const [query, setQuery] = useState('');
   const [needle, setNeedle] = useState('');
   const [hiddenDimensions, setHiddenDimensions] = useState(new Set<string>());
-  const [unreviewed, setUnreviewed] = useState(false);
+  const [conflicted, setConflicted] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ id: string; sequence: number } | null>(
@@ -153,12 +153,12 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
   const shownDimensions = dimensionIds?.filter(
     (id) => !hiddenDimensions.has(id),
   );
-  // The chips and "only unreviewed" narrow search and the source drawer on the server as well.
+  // The chips and "only conflicts" narrow search and the source drawer on the server as well.
   const filters: ItemQuery = {
     ...(shownDimensions && shownDimensions.length < (dimensionIds?.length ?? 0)
       ? { dimension: shownDimensions }
       : {}),
-    ...(unreviewed ? { review: 'unreviewed' } : {}),
+    ...(conflicted ? { conflict: true } : {}),
   };
   const nothingShown = shownDimensions?.length === 0;
   const searchQuery =
@@ -222,9 +222,9 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
         (item) =>
           item.review !== 'rejected' &&
           !hiddenDimensions.has(item.dimension_id) &&
-          (!unreviewed || item.review === 'unreviewed'),
+          (!conflicted || !!item.conflict.trim()),
       ),
-    [items, hiddenDimensions, unreviewed],
+    [items, hiddenDimensions, conflicted],
   );
   const visible = useMemo(() => {
     const ids = new Set([`twin:${twin.id}`]);
@@ -324,7 +324,7 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
   };
   const twoD = <Graph2D {...graphProps} />;
   const hasItems = graph.nodes.some((node) => node.kind === 'item');
-  const total = (unreviewed ? summary?.unreviewed : summary?.total) ?? 0;
+  const total = (conflicted ? summary?.conflicts : summary?.total) ?? 0;
   const itemsError = profile.summaryError || drawn.error;
   const loadingItems = profile.loading || (drawn.loading && !hasItems);
   return (
@@ -375,10 +375,10 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
           ))}
           <button
             type="button"
-            aria-pressed={unreviewed}
-            onClick={() => setUnreviewed(!unreviewed)}
+            aria-pressed={conflicted}
+            onClick={() => setConflicted(!conflicted)}
           >
-            只看待确认
+            只看有矛盾
           </button>
         </div>
       </div>
@@ -453,8 +453,8 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
                 {node.label}
               </li>
             ))}
-            <li>○ 待确认 · 较暗空心</li>
-            <li>● 已确认 / 已修改 · 实心发光</li>
+            <li>● 本人说过或改过 · 实心发光</li>
+            <li>○ 只有别人的说法 · 较暗空心</li>
             <li style={{ color: palette['--graph-danger'] }}>◎ 存在矛盾</li>
             <li>□ 资料来源</li>
           </ul>

@@ -128,9 +128,14 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   defaulting to `"grounded"`. Missing mode on legacy drafts/replies becomes `"abstain"` when `abstain=true`,
   otherwise `"grounded"`; missing `abstain` is derived as `mode == "abstain"`. Explicit inconsistencies are rejected.
 - Owner-specific answers remain evidence-grounded; unsupported owner questions, commitments and judgements of
-  specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, begin with a short
-  general-knowledge/non-owner-view notice, may omit citations, and have confidence capped at 0.5.
-  The frontend adds a neutral `通用回答 · 非本人观点` badge; `需要本人确认` is reserved for abstention.
+  specific other people abstain. Unrelated general knowledge/how-to answers use `"general"`, may omit citations, and
+  have confidence capped at 0.5; they are said as know-how, never as the owner's own experience.
+- The twin speaks as the owner at every boundary, not as an assistant referring to them: replies never mention
+  material, records, the ledger or being a twin (unless asked whether it is the person or an AI), and never say
+  "ask the person" or "needs the person's confirmation". A gap in basic personal facts is passed over for later, a
+  forgotten detail is not recalled, an undecided plan is not yet sayable, a commitment is deferred ("let me get back to
+  you"; the abstention reaches the owner's 待回答 queue), and another person is not judged behind their back. Only the
+  wording changes: mode, abstention and confidence follow the rules above.
 - `"inferred"` is the best inference for "what would they choose/do/prefer/think" questions the material does not
   answer directly but has indirect evidence for (related past answers, stated values, traits, habits). The text states
   it is an inference and never presents it as something the owner said or did; factual recall, commitments and
@@ -221,6 +226,8 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - BuildReport 提供派生总计 `items_added/items_changed/items_removed/facets_changed` 和 `change_summary()`。facets_changed 只计算有非零 diff 的细项；无变化增量构建总计为零。构建日志仅使用编号、计数及错误类型，不记录条目文本、来源标题或异常正文。
 - 只有无失败且输入版本仍未变的构建，才由 `mark_profile_built` 同事务更新 built_at 并清除 pending 标记；built_at 记录本次构建开始时间。部分失败或构建期间来源改变仍保持 stale，已完成结果保留供重试。CLI build/chat 在 stale 时向 stderr 提示，chat 仍运行。
 - 细项合并调用失败（多为长输出超时）时，`merge_facet` 把这批候选分成两半各合并一次，仍失败的一半保留为未合并的单条条目，并抛出携带全部条目的 `MergeDegraded`。构建照常保存这些条目，记入 `BuildReport.degraded`（不进 `failures`，不阻止 `mark_profile_built`），但不写该细项的合并键，下次构建会重新合并。预算停止等非模型错误不降级。
+- 条目不再逐条确认（破坏性变更，前端同步）：删除 `POST /api/persona/items/review-batch`；`GET /api/persona/items/summary` 去掉 `unreviewed`（总数和各维度），追加 `conflicts`（证据矛盾的未删条目数）。`GET /api/persona/items` 追加 `conflict=true`。新增 `GET /api/persona/items/search?q=&limit=20`（`q` 1–200 字、去空白后非空，`limit` 1–500），返回 `{items, total}`，按 `chat.search_items` 排序：聊天的条目混合检索（向量 + BM25，RRF 60），关键词还覆盖证据原话；嵌入服务不可用时只按关键词、只返回命中。访客不可用。
+- 作答置信度：`PersonaItem.trusted` = 本人确认或修改过，或至少一条证据是本人原话（`own_words`）；只引用不可信条目（只有别人转述）的回答封顶 0.6，此前是只引用未确认条目就封顶。`review` 字段和 `confirmed` 状态保留，旧库的确认照常生效。
 
 ## Generic evaluation schema (code layer 1)
 

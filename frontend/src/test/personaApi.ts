@@ -87,7 +87,8 @@ export function itemsPage(
         evidenceOf(row).some((e) =>
           e.quote.toLocaleLowerCase().includes(needle),
         )) &&
-      (!source || evidenceOf(row).some((e) => e.source_id === source)),
+      (!source || evidenceOf(row).some((e) => e.source_id === source)) &&
+      (query.get('conflict') !== 'true' || !!String(row.conflict ?? '')),
   );
   if (query.get('sort') === 'evidence')
     matching = [...matching].sort(
@@ -120,13 +121,30 @@ export function itemSummary(fixtures: readonly object[]) {
       dimension_id: id,
       name: String(inDimension[0].dimension_name ?? id),
       total: inDimension.length,
-      unreviewed: inDimension.filter((row) => row.review === 'unreviewed')
-        .length,
     };
   });
   return {
     total: shown.length,
-    unreviewed: shown.filter((row) => row.review === 'unreviewed').length,
+    conflicts: shown.filter((row) => !!String(row.conflict ?? '')).length,
     dimensions,
   };
+}
+
+export const isItemSearchUrl = (url: string) =>
+  url.startsWith('/api/persona/items/search?');
+
+/** The server ranks by meaning; the fake keeps the items whose statement or quotes contain the query. */
+export function itemSearch(url: string, fixtures: readonly object[]) {
+  const needle = (params(url).get('q') ?? '').toLocaleLowerCase();
+  const items = (fixtures as Row[])
+    .filter(
+      (row) =>
+        row.review !== 'rejected' &&
+        (String(row.statement).toLocaleLowerCase().includes(needle) ||
+          evidenceOf(row).some((e) =>
+            e.quote.toLocaleLowerCase().includes(needle),
+          )),
+    )
+    .slice(0, 20);
+  return { items, total: items.length };
 }

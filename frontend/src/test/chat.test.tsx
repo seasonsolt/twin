@@ -18,7 +18,6 @@ import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { conversationServer } from './conversationServer';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyDetails } from '../features/chat/ReplyDetails';
 import type { ChatReply } from '../features/chat/types';
 
 vi.mock('motion/react', async (original) => {
@@ -115,10 +114,7 @@ beforeEach(async () => {
         backend: null,
         video: { available: true },
       });
-    if (
-      url === '/api/persona/chat/stream' ||
-      url === '/api/persona/chat/stream-with-files'
-    ) {
+    if (url === '/api/persona/chat/stream') {
       if (fail) {
         fail = false;
         return json({ detail: '还没有人格档案，请先构建' }, 400);
@@ -197,128 +193,6 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
   ).toBe(false);
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy();
-});
-
-it('sends a selected file with the question and clears it after the reply', async () => {
-  mount();
-  const user = userEvent.setup();
-  const file = new File(['合同期限是一年。'], '合同.txt', {
-    type: 'text/plain',
-  });
-  await user.upload(screen.getByLabelText('选择附件'), file);
-  expect(screen.getByText('合同.txt')).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('你说'), {
-    target: { value: '合同期限是多少？' },
-  });
-  await user.click(screen.getByRole('button', { name: '发送' }));
-
-  const request = fetchMock.mock.calls.find(
-    ([url]) => url === '/api/persona/chat/stream-with-files',
-  )![1];
-  expect(request.body).toBeInstanceOf(FormData);
-  const form = request.body as FormData;
-  expect(JSON.parse(String(form.get('payload'))).messages.at(-1)).toEqual({
-    role: 'user',
-    content: '合同期限是多少？',
-  });
-  expect((form.get('files') as File).name).toBe('合同.txt');
-  expect(new Headers(request.headers).has('Content-Type')).toBe(false);
-
-  await act(async () => {
-    streamController.enqueue(encode('delta', { text: reply.reply }));
-    streamController.enqueue(encode('final', reply));
-    streamController.close();
-  });
-  await waitFor(() => expect(screen.queryByText('合同.txt')).toBeNull());
-});
-
-it('keeps a selected file for retry when the reply stream fails', async () => {
-  mount();
-  const user = userEvent.setup();
-  const file = new File(['合同期限是一年。'], '合同.txt', {
-    type: 'text/plain',
-  });
-  await user.upload(screen.getByLabelText('选择附件'), file);
-  fireEvent.change(screen.getByLabelText('你说'), {
-    target: { value: '合同期限是多少？' },
-  });
-  await user.click(screen.getByRole('button', { name: '发送' }));
-  await act(async () => {
-    streamController.enqueue(encode('error', { detail: '模型暂时不可用' }));
-    streamController.close();
-  });
-
-  expect(screen.getByText('合同.txt')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '重试' }));
-
-  const requests = fetchMock.mock.calls.filter(
-    ([url]) => url === '/api/persona/chat/stream-with-files',
-  );
-  expect(requests).toHaveLength(2);
-  const retriedForm = requests.at(-1)![1]!.body as FormData;
-  const retriedFile = retriedForm.get('files') as File;
-  expect(retriedFile.name).toBe('合同.txt');
-  expect(retriedFile.size).toBe(file.size);
-});
-
-it('shows reply generation time and expandable answer processing summary', async () => {
-  mount();
-  await submit();
-
-  await act(async () => {
-    streamController.enqueue(encode('delta', { text: reply.reply }));
-    streamController.enqueue(
-      encode('final', {
-        ...reply,
-        elapsed_ms: 2350,
-        completed_at: '2026-10-13T12:34:00.000Z',
-        cited: [
-          ...reply.cited!,
-          {
-            id: 'file_1_p0001',
-            kind: 'file',
-            file_name: '合同.txt',
-            locator: '摘录 1',
-            text: '合同期限是一年。',
-          },
-        ],
-      }),
-    );
-    streamController.close();
-  });
-
-  const article = screen.getByRole('article', { name: '分身回复' });
-  expect(article).toHaveTextContent(/生成用时 2\.4 秒 · .* 完成/);
-  const summary = within(article).getByText('处理摘要');
-  const disclosure = summary.closest('details')!;
-  expect(disclosure).not.toHaveAttribute('open');
-  await userEvent.setup().click(summary);
-  expect(disclosure).toHaveAttribute('open');
-  expect(disclosure).toHaveTextContent('回答方式：结合档案资料');
-  expect(disclosure).toHaveTextContent('记忆依据 1 条');
-  expect(disclosure).toHaveTextContent('附件依据 1 条');
-});
-
-it('explains an abstaining reply without implying all source material is missing', () => {
-  render(
-    <ReplyDetails
-      reply={{
-        reply: '我先说能确定的部分。',
-        citations: [],
-        confidence: 0,
-        abstain: true,
-        abstain_reason: '',
-        retrieved_ids: [],
-        mode: 'abstain',
-        elapsed_ms: 1250,
-        completed_at: '2026-10-14T10:45:01.177Z',
-      }}
-    />,
-  );
-
-  fireEvent.click(screen.getByText('处理摘要'));
-  expect(screen.getByText('回答方式：未形成确定结论')).toBeInTheDocument();
-  expect(screen.getByText('原因：模型未说明具体原因')).toBeInTheDocument();
 });
 
 it.each([false, true])(
@@ -694,7 +568,7 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
   expect(css).toContain('env(safe-area-inset-bottom');
   expect(css).toContain('-webkit-tap-highlight-color: transparent');
 });
-it('shares a bounded 760px desktop grid between conversation and composer', () => {
+it('shares a centered, bounded 880px desktop grid between conversation and composer', () => {
   const view = mount();
   expect(
     view.container.querySelector(
@@ -706,8 +580,9 @@ it('shares a bounded 760px desktop grid between conversation and composer', () =
   );
   const css = readFileSync('src/design/tokens.css', 'utf8');
   expect(css).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
-  expect(css).toContain('clamp(32px, calc((100% - 760px) / 2), 96px)');
-  expect(css).toContain('minmax(0, 760px) minmax(32px, 1fr)');
+  expect(css).toContain(
+    'grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr)',
+  );
   expect(css).toMatch(/\.stage-decorations\s*\{[^}]*overflow: hidden;/);
   expect(readFileSync('src/features/chat/history.css', 'utf8')).toMatch(
     /\.stage-history\s*\{[^}]*background: var\(--accent\);/,
@@ -763,7 +638,7 @@ it('moves the composer above the visual viewport keyboard and cleans up on leavi
     document.documentElement.style.getPropertyValue('--keyboard-inset'),
   ).toBe('');
 });
-it('scrolls to the newest message on both send and receive', async () => {
+it('puts a sent message at the top and lets the reply grow below it instead of chasing it', async () => {
   vi.useFakeTimers();
   const scroll = vi.fn();
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -771,15 +646,37 @@ it('scrolls to the newest message on both send and receive', async () => {
     value: scroll,
   });
   mount();
-  const initial = scroll.mock.calls.length;
   await submit();
-  expect(scroll.mock.calls.length).toBeGreaterThan(initial);
+  await act(async () => {
+    vi.advanceTimersByTime(50);
+  });
+  const starts = scroll.mock.contexts.filter(
+    (_: unknown, index: number) =>
+      (scroll.mock.calls[index][0] as ScrollIntoViewOptions | undefined)
+        ?.block === 'start',
+  );
+  const pinned = starts.at(-1) as HTMLElement | undefined;
+  expect(pinned).toHaveAttribute('aria-label', '你说');
+  expect(pinned).toHaveAttribute('data-pin');
+  expect(document.querySelector('.chat-page')).toHaveAttribute(
+    'data-empty',
+    'false',
+  );
   const sent = scroll.mock.calls.length;
   await act(async () => {
     streamController.enqueue(encode('final', reply));
     streamController.close();
   });
-  expect(scroll.mock.calls.length).toBeGreaterThan(sent);
+  await act(async () => {
+    vi.advanceTimersByTime(50);
+  });
+  expect(
+    scroll.mock.calls
+      .slice(sent)
+      .filter(
+        ([options]) => (options as ScrollIntoViewOptions)?.block === 'end',
+      ),
+  ).toEqual([]);
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
 it('keeps user messages plain and applies strict CJK typography', () => {
@@ -860,28 +757,28 @@ it.each([true, false])(
       'rounded-full',
     );
     expect(bubble.querySelectorAll('p')).toHaveLength(2);
-    expect(view.container.querySelector('.chat-conversation')).toHaveClass(
-      'flex',
-      'flex-col',
-      'justify-end',
-    );
+    // Top-aligned like ChatGPT: the thread starts at the top, not above the composer.
+    const conversation = view.container.querySelector('.chat-conversation');
+    expect(conversation).toHaveClass('flex', 'flex-col');
+    expect(conversation).not.toHaveClass('justify-end');
     await userEvent.setup().click(citations);
     expect(screen.getByRole('list', { name: '回答依据' })).toBeVisible();
   },
 );
 
-it('citation disclosure expands and collapses using keyboard and shows memory and file citations', async () => {
+it('citation disclosure expands and collapses using keyboard and shows every citation kind', async () => {
   render(
     <Citations
       cited={[
         ...reply.cited!,
         { id: 'i1', kind: 'item', facet: '价值观', text: '档案内容' },
         {
-          id: 'file_1_p0001',
-          kind: 'file',
-          file_name: '合同.txt',
-          locator: '摘录 1',
-          text: '合同期限是一年。',
+          id: 'le_1',
+          kind: 'ledger',
+          ledger_kind: '承诺',
+          date: '2026-10-12',
+          channel: '周一经营会',
+          text: '我周五前给您一版新报价方案',
         },
       ]}
     />,
@@ -900,8 +797,10 @@ it('citation disclosure expands and collapses using keyboard and shows memory an
     expect(screen.getByText('2024-01-01 · 访谈')).toBeVisible(),
   );
   expect(screen.getByText('价值观')).toBeVisible();
-  expect(screen.getByText('合同.txt · 摘录 1')).toBeVisible();
-  expect(screen.getByText('合同期限是一年。')).toBeVisible();
+  expect(
+    screen.getByText('账本 · 承诺 · 2026-10-12 · 周一经营会'),
+  ).toBeVisible();
+  expect(screen.getByText('我周五前给您一版新报价方案')).toBeVisible();
   await user.keyboard(' ');
   expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await waitFor(() =>

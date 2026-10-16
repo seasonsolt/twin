@@ -25,6 +25,12 @@ const Questionnaire = lazy(() =>
     default: module.Questionnaire,
   })),
 );
+const Ledger = lazy(() =>
+  import('./pages/Ledger').then((module) => ({ default: module.Ledger })),
+);
+const Work = lazy(() =>
+  import('./pages/Work').then((module) => ({ default: module.Work })),
+);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
@@ -51,7 +57,9 @@ export function App() {
                     />
                     <Route path="twins" element={<Twins />} />
                     <Route path="chat" element={<Chat />} />
+                    <Route path="work" element={<Work />} />
                     <Route path="profile" element={<Profile />} />
+                    <Route path="ledger" element={<Ledger />} />
                     <Route
                       path="memories"
                       element={

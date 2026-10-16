@@ -282,3 +282,28 @@ it('keeps the accent glow for non-stage avatars on light backgrounds', () => {
   );
   expect(view.container.querySelector('.stage-speaking-ring')).toBeNull();
 });
+
+it.each([390, 768])(
+  'keeps the compact bar at %spx unless the twin can speak or show video',
+  (width) => {
+    preference.width = width;
+    preference.reduced = true;
+    const stage = (capabilities: Capabilities | null) =>
+      render(
+        <MemoryRouter>
+          <ChatStage {...props} capabilities={capabilities} />
+        </MemoryRouter>,
+      ).container.querySelector<HTMLElement>('.chat-stage')!;
+    for (const capabilities of [
+      null,
+      { ...caps, available: false, video: { available: false } },
+    ]) {
+      const bar = stage(capabilities);
+      expect(bar).toHaveAttribute('data-collapsed', 'true');
+      expect(bar).toHaveStyle({ height: '96px' });
+    }
+    const big = stage(caps);
+    expect(big).toHaveAttribute('data-collapsed', 'false');
+    expect(big).toHaveStyle({ height: '360px' });
+  },
+);

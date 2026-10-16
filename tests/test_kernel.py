@@ -3,9 +3,11 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import sqlite3
+import time
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -14,8 +16,9 @@ from twin.cli import app
 from twin.config import KernelSettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
-from twin.persona import profile
+from twin.persona import chat, profile
 from twin.persona import store as storage
+from twin.persona.items import PersonaItem
 from twin.persona.kernel import KERNEL, LEGACY_KERNEL, PROMPT_VERSION, KernelVersion, kernel_json, rebuild_scope
 from twin.persona.sources import parse_note
 from twin.persona.store import NewerStoreError, PersonaStore
@@ -418,3 +421,39 @@ def test_reviews_survive_a_prompt_upgrade(tmp_path: Path, monkeypatch: pytest.Mo
         assert after["坚持每周跑步三次"].statement == "一周跑三次步"
         assert after["开会时先让别人说"].review is ReviewStatus.REJECTED
         assert len(store.reviews()) == 3
+
+
+@pytest.mark.parametrize("old_model", [True, False])
+def test_startup_reembeds_an_index_of_another_embedding_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_model: bool
+) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db")
+    embedder = HashingEmbedder()
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_note("我喜欢写程序", settings))
+        store.mark_profile_built(dt.datetime.now(dt.UTC).isoformat(), store.get_meta("sources_changed_at"), KERNEL)
+        item = PersonaItem(item_id="pi_000", facet_id="2.1", statement="喜欢写程序", evidence=[])
+        store.replace_facet_items("2.1", [item])
+        if old_model:
+            store.update_vectors(chat.ITEMS_NS, "old-model", [("pi_000", "sha", np.ones(2, dtype=np.float32))], [])
+        else:
+            chat.index_persona(store, embedder, settings)
+
+    def unexpected(self: PersonaProcessing) -> None:
+        pytest.fail("档案已是最新，不应重新抽取")
+
+    monkeypatch.setattr(PersonaProcessing, "queue", unexpected)
+    application = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {}), embedder_factory=HashingEmbedder)
+    with TestClient(application, base_url="http://localhost") as client:
+        jobs = client.get("/api/jobs").json()
+        assert [job["title"] for job in jobs] == (["更新检索向量"] if old_model else [])
+        for job in jobs:
+            deadline = time.monotonic() + 10
+            while (status := client.get(f"/api/jobs/{job['job_id']}").json()["status"]) in {"queued", "running"}:
+                assert time.monotonic() < deadline
+                time.sleep(0.05)
+            assert status == "done"
+    with PersonaStore(settings.db_path) as store:
+        assert not chat.index_stale(store, embedder)
+        ids, matrix = store.get_vectors(chat.ITEMS_NS)
+        assert ids == ["pi_000"] and matrix.shape == (1, embedder.dim)

@@ -105,7 +105,7 @@ export const nodeAlpha = (node: MemoryNode, props: GraphViewProps) =>
     ? 1
     : props.highlighted && !props.highlighted.has(node.id)
       ? 0.12
-      : node.review === 'unreviewed'
+      : node.secondhand
         ? 0.5
         : 1;
 export const linkVisible = (link: MemoryLink, visible: Set<string>) =>

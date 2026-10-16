@@ -938,6 +938,10 @@ def persona_reextract(
     nothing_found: Annotated[
         bool, typer.Option("--nothing-found", help="加上所有已抽取过、但没有形成记忆的资料")
     ] = False,
+    empty_chunks: Annotated[
+        bool,
+        typer.Option("--empty-chunks", help="只重抽当时一条结论也没抽出的分段；不指定资料时针对所有资料"),
+    ] = False,
     yes: Annotated[bool, typer.Option("--yes", help="分段数超过费用闸时确认")] = False,
 ) -> None:
     """让模型重新抽取指定资料：资料没变也重抽，下次构建时生效。"""
@@ -953,14 +957,26 @@ def persona_reextract(
                 for sid, m in memories.items()
                 if m.build_status == "no_items" and m.chunks_extracted and sid not in selected
             ]
+        if empty_chunks:
+            empty = store.empty_chunks()
+            if not selected:
+                selected = [s.source_id for s in store.list_sources()]
+            counts = {sid: empty.get(sid, 0) for sid in selected}
+        else:
+            extracted = store.extraction_stats()
+            counts = {sid: extracted.get(sid, (0, None))[0] for sid in selected}
+        selected = [sid for sid in selected if counts[sid] or not empty_chunks]
         if not selected:
-            raise _fail("没有要重新抽取的资料：请给出资料编号，或加 --nothing-found")
-        extracted = store.extraction_stats()
-        chunks = sum(extracted.get(sid, (0, None))[0] for sid in selected)
+            raise _fail(
+                "没有一条结论也没抽出的分段"
+                if empty_chunks
+                else "没有要重新抽取的资料：请给出资料编号，或加 --nothing-found / --empty-chunks"
+            )
+        chunks = sum(counts[sid] for sid in selected)
         if chunks > settings.kernel.max_auto_rebuild_chunks and not yes:
             raise _fail(f"将重抽 {len(selected)} 份资料的 {chunks} 个分段，超过费用闸；请确认后加 --yes")
         for sid in selected:
-            store.reextract_source(sid)
+            store.reextract_source(sid, empty_only=empty_chunks)
     _say(f"已标记 {len(selected)} 份资料（{chunks} 个分段）重新抽取，运行 twin persona build 生效")
 
 
@@ -993,10 +1009,14 @@ def persona_build(ctx: typer.Context) -> None:
             x = report.extraction
             _say(
                 f"本次模型提炼 {x.returned} 条结论，保留 {x.kept} 条；丢弃：细项不可用 {x.off_facet} 条，"
+                f"结论为空 {x.empty_statement} 条，"
                 f"没有可核对的引文 {x.unsupported} 条（引文对不上 {x.quotes_unmatched} 处、"
                 f"编号不存在 {x.quotes_misnumbered} 处、风格引用他人记述 {x.quotes_narrated_style} 处）"
                 + (f"；回复被截断后拆分重抽 {x.splits} 次" if x.splits else "")
             )
+            if x.unknown_facets:
+                common = sorted(x.unknown_facets.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+                _say("不在可用列表里的细项（模型写法×次数）：" + "、".join(f"“{f}”×{n}" for f, n in common))
         _say(report.change_summary())
         for facet_id, diff in sorted(report.facet_diffs.items()):
             if diff.added or diff.changed or diff.removed:
@@ -1036,7 +1056,7 @@ def persona_chat(
     with _persona_store(settings) as store:
         if profile_stale(store):
             _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
-        twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
+        twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings, ledger=True)
         history: list[ChatTurn] = []
         while True:
             text = message if message is not None else typer.prompt("你", default="", show_default=False)
@@ -1789,6 +1809,83 @@ def eval_scorecard_command(
         previous = json.loads(baseline.read_text(encoding="utf-8")) if baseline is not None else None
         write_scorecard(suite, card, compare(card, previous) if previous is not None else None)
     _say(f"Scorecard written to {suite / 'scorecard.md'}.")
+
+
+@app.command("eval-extract")
+def eval_extract_command(
+    ctx: typer.Context,
+    cases: Annotated[Path, typer.Option("--cases", help="题单 JSONL：LongMemEval 证据轮次与关键事实")],
+    dataset: Annotated[Path, typer.Option("--dataset", help="LongMemEval S cleaned JSON")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的评测目录，各变体写在其下的 <variant>/")],
+    variant: Annotated[str, typer.Option("--variant", help="baseline 或 v1、v2……")] = "baseline",
+    reps: Annotated[int, typer.Option("--reps", min=1, help="每块重复几次")] = 2,
+    per_type: Annotated[int | None, typer.Option("--per-type", min=1, help="试跑：每种题型只取题单里的前几块")] = None,
+    workers: Annotated[int, typer.Option("--workers", min=1, help="同时评测几块")] = 4,
+    timeout_s: Annotated[float, typer.Option("--timeout-s", min=1, help="每块（抽取加评分）的总时限")] = 600,
+    approve_harness: Annotated[
+        bool, typer.Option("--approve-harness", help="批准当前的运行器、评分和题单（改动后需重新批准）")
+    ] = False,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """逐块抽取评测：每块是 LongMemEval 一段会话里含人工标注证据的块，评它是否抽出关键事实、保留结论是否有依据。"""
+    import re
+
+    from .evals.extraction import (
+        VARIANT_PATTERN,
+        HarnessChanged,
+        check_harness,
+        first_per_type,
+        load_cases,
+        load_sessions,
+        run_eval,
+        same_model,
+        served_model,
+        write_state,
+    )
+    from .evals.harness import Judge
+    from .evals.personal import ensure_output_directory
+    from .util import private_directory
+
+    with _errors():
+        if not re.fullmatch(VARIANT_PATTERN, variant):
+            raise ValueError("--variant 只能是 baseline 或 v1、v2……")
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        settings = _benchmark_settings(ctx, keep_judges=True)
+        if not settings.judges:
+            raise ValueError("配置里没有 [[judges]]；评委要和被测的 [llm] 分开配置")
+        selected = load_cases(cases)
+        if per_type is not None:
+            selected = first_per_type(selected, per_type)
+        private_directory(out)
+        try:
+            check_harness(out, cases, approve_harness)
+        except HarnessChanged as e:
+            _say(str(e))
+            raise typer.Exit(code=2) from None
+        llm = make_llm(settings.llm, "llm")
+        served = served_model(llm)
+        if served is not None and not same_model(settings.llm.model or "", served):
+            raise ValueError(f"服务端返回的模型 {served} 与配置的 {settings.llm.model} 不一致")
+        judges = [
+            (f"j{i}:{config.model}", Judge(make_llm(config, f"judges[{i}]"), config.effort_twin))
+            for i, config in enumerate(settings.judges)
+        ]
+        write_state(out, settings, judges)
+        summary = run_eval(
+            settings,
+            llm,
+            judges,
+            selected,
+            load_sessions(dataset, selected),
+            out,
+            variant=variant,
+            reps=reps,
+            workers=workers,
+            timeout_s=timeout_s,
+            progress=_progress,
+        )
+    _say(f"served model: {served or 'not reported'}")
+    _say(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 @app.command("eval-asr")

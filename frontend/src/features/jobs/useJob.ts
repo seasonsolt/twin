@@ -24,6 +24,9 @@ export const jobLabels: Record<string, string> = {
   persona_build: '构建人格档案',
   chat: '和分身聊天',
   video: '生成视频',
+  media_ingest: '转写音视频',
+  ledger_build: '整理承诺账本',
+  work: '工作任务',
 };
 export const statusLabels = {
   queued: '排队中',

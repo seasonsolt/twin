@@ -10,7 +10,7 @@ import { Link, Navigate, NavLink, useLocation, useOutlet } from 'react-router';
 import { motion } from 'motion/react';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
-import { BookUser, MessageCircle } from 'lucide-react';
+import { BookUser, Briefcase, ListChecks, MessageCircle } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { Button, Skeleton, Tooltip } from '../ui';
@@ -30,12 +30,21 @@ const Onboarding = lazy(() =>
 );
 
 export const navItems = [
-  { route: 'chat', title: '聊天', icon: MessageCircle },
-  { route: 'profile', title: '档案', icon: BookUser },
+  { route: 'chat', title: '聊天', icon: MessageCircle, visitor: true },
+  { route: 'work', title: '工作', icon: Briefcase, visitor: true },
+  { route: 'profile', title: '档案', icon: BookUser, visitor: false },
+  { route: 'ledger', title: '账本', icon: ListChecks, visitor: false },
 ];
 
+// Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
+const conversationRoutes = new Set(['/chat', '/work']);
+const visitorRoutes = new Set(
+  navItems.filter((item) => item.visitor).map((item) => item.route),
+);
+
 function useNavItems() {
-  return useCanManage() ? navItems : navItems.slice(0, 1);
+  const canManage = useCanManage();
+  return canManage ? navItems : navItems.filter((item) => item.visitor);
 }
 
 function Navigation() {
@@ -80,7 +89,7 @@ function BottomTabs() {
   return (
     <nav
       aria-label="底部导航"
-      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${items.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
+      className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'][items.length - 1]}`}
     >
       {items.map(({ route, title, icon: Icon }) => (
         <NavLink
@@ -239,6 +248,7 @@ export function AppShell() {
   const mobile = useMobile();
   const { error } = useStatus();
   const location = useLocation();
+  const conversation = conversationRoutes.has(location.pathname);
   const outlet = useOutlet();
   const twinLevel = location.pathname === '/twins';
   const canManage = useCanManage();
@@ -284,7 +294,11 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, [twinLevel, personaId, setOnboarding, setNoPersona]);
-  if (!canManage && !twinLevel && location.pathname !== '/chat')
+  if (
+    !canManage &&
+    !twinLevel &&
+    !visitorRoutes.has(location.pathname.slice(1))
+  )
     return <Navigate to="/chat" replace />;
   if (noPersona && !twinLevel)
     return (
@@ -316,7 +330,9 @@ export function AppShell() {
       );
   }
   return (
-    <div className="app-shell flex min-h-dvh">
+    <div
+      className={`app-shell flex min-h-dvh ${conversation ? 'conversation-shell' : ''}`}
+    >
       <a
         href="#main"
         onClick={(event) => {
@@ -328,7 +344,7 @@ export function AppShell() {
         跳至主内容
       </a>
       {!mobile && <TwinRail />}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="app-column flex min-w-0 flex-1 flex-col">
         {error && !twinLevel && (
           <div
             role="alert"
@@ -340,9 +356,9 @@ export function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className={`app-main mx-auto w-full flex-1 outline-none ${location.pathname === '/chat' ? 'chat-main' : 'max-w-6xl content-main'}`}
+          className={`app-main mx-auto w-full flex-1 outline-none ${conversation ? 'chat-main' : 'max-w-6xl content-main'}`}
         >
-          {location.pathname === '/chat' ? (
+          {conversation ? (
             outlet
           ) : (
             <PageTransition route={location.pathname}>

@@ -1,11 +1,7 @@
 import type { SourceKind } from '../sources/types';
+/** An item is used as soon as it is extracted; the person only steps in to correct one (edited) or remove it
+ * (rejected). `confirmed` survives from when items were confirmed one by one. */
 export type ReviewStatus = 'unreviewed' | 'confirmed' | 'edited' | 'rejected';
-export const reviewLabels: Record<ReviewStatus, string> = {
-  unreviewed: '待确认',
-  confirmed: '已确认',
-  edited: '已修改',
-  rejected: '已否定',
-};
 export interface ProfileItem {
   item_id: string;
   dimension_id: string;
@@ -64,12 +60,12 @@ export interface Coverage {
 }
 export interface ItemSummary {
   total: number;
-  unreviewed: number;
+  /** Items whose evidence disagrees: worth a look, not a queue. */
+  conflicts: number;
   dimensions: {
     dimension_id: string;
     name: string;
     total: number;
-    unreviewed: number;
   }[];
 }
 export interface ItemQuery {
@@ -77,6 +73,7 @@ export interface ItemQuery {
   review?: ReviewStatus;
   q?: string;
   source_id?: string;
+  conflict?: boolean;
   sort?: 'facet' | 'evidence';
   with_sources?: boolean;
 }
@@ -90,3 +87,9 @@ export interface ItemPage {
   total: number;
   sources?: Record<string, ItemSource>;
 }
+
+/** Whether the item stands only on what others said about the person: the twin answers from it tentatively. */
+export const secondhand = (item: ProfileItem) =>
+  item.review !== 'edited' &&
+  item.review !== 'confirmed' &&
+  !item.evidence.some((evidence) => evidence.own_words);

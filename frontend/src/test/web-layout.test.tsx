@@ -149,13 +149,14 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
     view.container.querySelector('.stage-space')?.parentElement,
   ).toHaveClass('chat-page');
   expect(desktopCss).toContain(
-    'grid-template-columns: clamp(360px, 28vw, 400px) minmax(0, 1fr)',
+    'grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr)',
   );
   expect(desktopCss).toMatch(/\.chat-scroll\s*\{[^}]*overflow-y: auto/s);
   expect(desktopCss).toMatch(/\.chat-composer\s*\{[^}]*position: static/s);
   expect(desktopCss).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
-  expect(desktopCss).toContain('clamp(32px, calc((100% - 760px) / 2), 96px)');
-  expect(desktopCss).toContain('minmax(0, 760px) minmax(32px, 1fr)');
+  expect(desktopCss).toContain(
+    'grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr)',
+  );
   expect(
     within(thread as HTMLElement).getByRole('form', { name: '消息输入' }),
   ).toHaveClass('chat-column-grid');
@@ -167,8 +168,8 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
     within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
   ).toBeNull();
   expect(stage.querySelector('.stage-speaking')).toHaveStyle({
-    width: '210px',
-    height: '210px',
+    width: '128px',
+    height: '128px',
   });
   expect(stage.querySelector('.stage-circle')).toHaveClass('size-full');
   expect(stage.querySelector('.stage-name button')).toBeNull();
@@ -188,7 +189,12 @@ it('keeps desktop stage and scrolling conversation separate with the composer in
     /\.chat-stage\s*\{[^}]*justify-content: flex-start/s,
   );
   expect(desktopCss).toMatch(
-    /\.stage-space\s*\{[^}]*position: sticky[^}]*height: 100dvh/s,
+    /\.stage-space\s*\{[^}]*position: sticky[^}]*height: 100% !important/s,
+  );
+  // The page fills the window, so a banner above it shortens the page instead of pushing the composer off.
+  expect(desktopCss).toMatch(/\.conversation-shell\s*\{\s*height: 100dvh/s);
+  expect(desktopCss).toMatch(
+    /\.chat-page\s*\{[^}]*flex: 1;[^}]*min-height: 0/s,
   );
   expect(desktopCss).toMatch(
     /\.chat-conversation\s*\{[^}]*min-height: 100%[^}]*max-width: none[^}]*padding: 32px 0 24px/s,

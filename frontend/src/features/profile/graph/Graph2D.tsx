@@ -123,7 +123,7 @@ export default function Graph2D(props: GraphViewProps) {
           ctx.fillStyle = color;
           ctx.strokeStyle = color;
           ctx.lineWidth = 1.5 / scale;
-          const solid = node.review !== 'unreviewed';
+          const solid = !node.secondhand;
           ctx.shadowColor = color;
           ctx.shadowBlur =
             props.highlighted?.has(node.id) || node.kind === 'dimension'

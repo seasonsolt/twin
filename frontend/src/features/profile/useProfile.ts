@@ -4,7 +4,6 @@ import {
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
 import { api } from '../../lib/api';
-import { getPersonaId } from '../../lib/persona';
 import { toast } from '../../components/ui';
 import { useStatus } from '../../stores/status';
 import type { Coverage, ItemSummary, ProfileItem, ReviewStatus } from './types';
@@ -15,6 +14,13 @@ export interface ReviewedList {
   reload: () => Promise<void>;
 }
 
+const savedMessages: Record<ReviewStatus, string> = {
+  edited: '改好了，之后按这条回答',
+  rejected: '删掉了，之后不会再用它',
+  unreviewed: '恢复成原来的说法',
+  confirmed: '已保存',
+};
+
 /** Profile counts and suggestions, and the reviews that change them. Items themselves are read a page at a
  * time with `usePagedItems`, so a profile with tens of thousands of items never loads them all. */
 export function useProfile(active: boolean) {
@@ -24,8 +30,6 @@ export function useProfile(active: boolean) {
   const [coverageError, setCoverageError] = useState('');
   const [summaryError, setSummaryError] = useState('');
   const [pending, setPending] = useState<Set<string>>(new Set());
-  const [batchBusy, setBatchBusy] = useState(false);
-  const batchRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
   const coverageRequest = useRef<AbortController | null>(null);
   const summaryRequest = useRef<AbortController | null>(null);
@@ -105,12 +109,7 @@ export function useProfile(active: boolean) {
     statement: string | undefined,
     list: ReviewedList,
   ) => {
-    if (
-      !alive.current ||
-      reviewing.current.has(item.item_id) ||
-      (batchRequest.current && !batchRequest.current.signal.aborted)
-    )
-      return false;
+    if (!alive.current || reviewing.current.has(item.item_id)) return false;
     const request = new AbortController();
     const started = reviewing.current;
     mutations.current.add(request);
@@ -137,7 +136,7 @@ export function useProfile(active: boolean) {
       );
       if (request.signal.aborted || !alive.current) return false;
       list.replace(saved);
-      toast('审核已保存', 'success');
+      toast(savedMessages[status], 'success');
       await afterChange(request.signal);
       return !request.signal.aborted && alive.current;
     } catch (failure) {
@@ -145,7 +144,7 @@ export function useProfile(active: boolean) {
         list.replace(item);
         void list.reload();
         toast(
-          failure instanceof Error ? failure.message : '审核失败，已恢复原条目',
+          failure instanceof Error ? failure.message : '没有保存，已恢复原条目',
           'danger',
         );
       }
@@ -157,46 +156,6 @@ export function useProfile(active: boolean) {
         setPending(new Set(started));
     }
   };
-  /** Confirm every unreviewed item of a dimension on the server, however many there are. */
-  const confirmDimension = async (dimensionId: string) => {
-    if (
-      !alive.current ||
-      getPersonaId() !== personaId ||
-      reviewing.current.size > 0 ||
-      (batchRequest.current && !batchRequest.current.signal.aborted)
-    )
-      return false;
-    const request = new AbortController();
-    batchRequest.current = request;
-    mutations.current.add(request);
-    setBatchBusy(true);
-    try {
-      const saved = await api<{ updated: number }>(
-        '/api/persona/items/review-batch',
-        {
-          method: 'POST',
-          json: { dimension_id: dimensionId, status: 'confirmed' },
-          signal: request.signal,
-          headers: { 'X-Twin-Persona': personaId },
-        },
-      );
-      if (request.signal.aborted || !alive.current) return false;
-      toast(`已确认 ${saved.updated} 条`, 'success');
-      await afterChange(request.signal);
-      return !request.signal.aborted && alive.current;
-    } catch (failure) {
-      if (!request.signal.aborted && alive.current)
-        toast(
-          failure instanceof Error ? failure.message : '审核失败，请重试',
-          'danger',
-        );
-      return false;
-    } finally {
-      mutations.current.delete(request);
-      if (batchRequest.current === request) batchRequest.current = null;
-      if (!request.signal.aborted && alive.current) setBatchBusy(false);
-    }
-  };
   return {
     coverage,
     summary,
@@ -204,8 +163,6 @@ export function useProfile(active: boolean) {
     summaryError,
     loading: summary === null && !summaryError,
     pending,
-    batchBusy,
-    confirmDimension,
     refreshCoverage,
     refreshSummary,
     review,

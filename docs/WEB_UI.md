@@ -180,7 +180,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 记忆列表用 MessageList 展示标题、可选日期（无日期不显示前导分隔符）、笔记/文档/聊天记录/问卷/访谈和状态：正在记住…（ThinkingLabel）、已记住 N 条、没找到关于你的内容、处理失败＋重试。“查看”打开只读 Dialog，展示隐私视图的前 20000 字；“删除”通过 ConfirmDialog 确认，成功后自动重新处理。页头显示精简处理指示，非 idle 时每 2 秒轮询 processing 与列表；只在 last_error 存在时显示小的“重新处理”，无构建卡片或构建汇总。离页清理请求和计时器。媒体行另有音频/视频图标、时长、等待转写/提取音频/转写中 x/y 分钟/整理中/已加入/失败状态；未配置 ASR 显示“需要配置语音识别”，可点“重新转写”。媒体任务未结束时也每 2 秒轮询列表，详情为时间戳转写正文。
 
-关于你页（About.tsx）用名字与介绍的内联表单调用 PUT identity。其下「形象」可选择照片，在 3:4 框内拖动/双指缩放并用 XHR 上传；「声音」可录制（朗读提示、计时/音量、30 秒自动停、回放/重录/使用）或上传录音/视频，保存后可播放处理后的参考 WAV，有语音服务时自动准备试听。两者均可恢复默认，上传时禁用按钮并显示进度，输入 16px、点击区域至少 44px。本人上传肖像优先；无上传时保留配置 VRM/肖像/2D 预览。聊天头像立即使用带 sha 版本的肖像 URL，声音变更清空客户端音频缓存。"我了解到的你"按九个口语主题分组：经历与身份、看重什么、怎么做决定、怎么思考、擅长什么、说话方式、和人相处、最近在关注、生活与喜好。每条显示表述和“依据”折叠引用，用“对 / 改一下 / 不对”调用原 review API，状态显示待确认 / 已确认 / 已修改 / 已否定；失败回滚并保留修改草稿。隐藏内部编号、比例、等级与来源矩阵。“还想多了解”从 coverage suggestions 映射为主题建议，去重后最多五条，链接到记忆。不再保留 Profile、Identity 页面和 CoverageOverview/虚拟档案列表。
+关于你页（About.tsx）用名字与介绍的内联表单调用 PUT identity。其下「形象」可选择照片，在 3:4 框内拖动/双指缩放并用 XHR 上传；「声音」可录制（朗读提示、计时/音量、30 秒自动停、回放/重录/使用）或上传录音/视频，保存后可播放处理后的参考 WAV，有语音服务时自动准备试听。两者均可恢复默认，上传时禁用按钮并显示进度，输入 16px、点击区域至少 44px。本人上传肖像优先；无上传时保留配置 VRM/肖像/2D 预览。聊天头像立即使用带 sha 版本的肖像 URL，声音变更清空客户端音频缓存。"我了解到的你"按九个口语主题分组：经历与身份、看重什么、怎么做决定、怎么思考、擅长什么、说话方式、和人相处、最近在关注、生活与喜好。条目抽出来就用，不逐条确认：顶部检索框按意思找记忆（`/api/persona/items/search`，和聊天同一套检索），结果和分组列表里每条都能“改一下 / 删掉”，改过的可“恢复原样”；只标“你改过”和“只有别人的说法”。有证据矛盾的条目时显示“有矛盾的 N 条”，想看再点。失败回滚并保留修改草稿。聊天回答的“依据”里，本人可以直接改或删引用到的记忆，访客只看依据。隐藏内部编号、比例、等级与来源矩阵。“还想多了解”从 coverage suggestions 映射为主题建议，去重后最多五条，链接到记忆。不再保留 Profile、Identity 页面和 CoverageOverview/虚拟档案列表。
 
 可选的“回答几个问题”有 20 题、九个日常主题，全部可以跳过，所有已答内容都成为记忆。按 API section 分组，用 FlowStepper 导航到首个未答组；跳过清空答案，空答案不计已答。草稿 800ms 防抖、版本化串行 PUT；保存回答等待草稿成功，确认说明记忆导入与替换。离页完成待写草稿，小于 60KB 时尽力 keepalive，不另存个人答案。仅未保存且写入中的离开才警告。没有轮次切换或重测入口。
 
@@ -217,8 +217,10 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `GET /api/uploads/{id}` / `DELETE /api/uploads/{id}` | `{offset,size}` / 取消并删除分片；不存在 GET 返回中文 404 |
 | `POST /api/uploads/{id}/finish` | 完成后 SHA 去重、保留原件、排队 media_ingest；返回来源字段、new、job_id；可重复调用 |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
-| `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数 |
-| `POST /api/persona/items/{id}/review` | confirmed/edited/rejected/unreviewed；edited 必须非空 |
+| `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |
+| `GET /api/persona/items/search?q=` | 按意思和关键词找条目（聊天的混合检索，向量不可用时只按关键词），最多 20 条，不含已删 |
+| `GET /api/persona/items/summary` | 各维度条目数和证据矛盾的条目数 |
+| `POST /api/persona/items/{id}/review` | edited/rejected/unreviewed（恢复原样）；edited 必须非空；confirmed 仍接受但界面不再使用 |
 | `GET /api/persona/coverage?as_of=...` | 完成度、来源矩阵、等级标签、分类版本、建议 |
 | `POST /api/persona/chat` | messages（≤40 条、每条≤4000 字、最后非空 user）；有档案时 202 job_id，结果 ChatReply + cited；无档案时 200 直接返回友好弃权回复 |
 | `POST /api/persona/chat/stream` | 同样的请求与鉴权/分身隔离；200 text/event-stream，delta `{text}` → final `ChatReply + cited`，失败为 error `{detail}`；立即发送注释、等待期间每 10 秒心跳；no-cache、X-Accel-Buffering: no |

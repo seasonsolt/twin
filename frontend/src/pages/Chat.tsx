@@ -1,20 +1,17 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  type CSSProperties,
-} from 'react';
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import { useLocation } from 'react-router';
-import { ArrowUp, Paperclip, Play, X } from 'lucide-react';
+import { ArrowUp, Play } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { Badge, Button, EmptyState, Textarea } from '../components/ui';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyDetails } from '../features/chat/ReplyDetails';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
+import {
+  useComposerLayout,
+  usePinnedMessage,
+} from '../features/chat/useComposerLayout';
 import { ConversationHistory } from '../features/chat/ConversationHistory';
 import { videoUrl } from '../features/chat/useReplyVideos';
 import type { Turn } from '../features/chat/types';
@@ -32,14 +29,6 @@ import { usePersonas } from '../stores/personas';
 import { useDesktop } from '../lib/useMobile';
 import { PersonaFade } from '../components/motion/PersonaFade';
 
-const CHAT_ATTACHMENT_ACCEPT =
-  '.txt,.md,.pdf,.docx,.epub,.html,.htm,.csv,.json,.srt,.vtt';
-const CHAT_ATTACHMENT_SUFFIXES = new Set(
-  'txt md pdf docx epub html htm csv json srt vtt'.split(' '),
-);
-const MAX_CHAT_ATTACHMENT_COUNT = 5;
-const MAX_CHAT_ATTACHMENT_BYTES = 50 * 1024 * 1024;
-
 export function Chat() {
   const personaId = usePersonaId();
   const { pathname } = useLocation();
@@ -55,8 +44,6 @@ export function Chat() {
     if (desktop) setHistoryOpen(false);
   }, [desktop]);
   const historyTrigger = useRef<HTMLElement | null>(null);
-  const attachmentInput = useRef<HTMLInputElement>(null);
-  const [attachmentError, setAttachmentError] = useState('');
   const openHistory = () => {
     historyTrigger.current =
       document.activeElement instanceof HTMLElement
@@ -127,9 +114,7 @@ export function Chat() {
   }, [active, assetVersion, personaId]);
   const stateRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
-  const end = useRef<HTMLDivElement>(null);
-  const composer = useRef<HTMLFormElement>(null);
-  const [composerHeight, setComposerHeight] = useState(76);
+  const { end, composer, composerHeight } = useComposerLayout(active);
   const refreshState = useCallback(async () => {
     stateRequest.current?.abort();
     const controller = new AbortController();
@@ -158,61 +143,23 @@ export function Chat() {
       stateRequest.current?.abort();
     };
   }, [active, refreshState]);
-  useLayoutEffect(() => {
-    const form = composer.current;
-    if (!form) return;
-    const resize = () =>
-      setComposerHeight(form.getBoundingClientRect().height || 76);
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(form);
-    return () => observer.disconnect();
-  }, []);
+  // A message the person sends goes to the top with room for the reply below; a conversation opened from
+  // history shows its end.
+  const pinNext = useRef(false);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const latestUser =
+    [...chat.turns].reverse().find((turn) => turn.role === 'user')?.id ?? null;
   useEffect(() => {
-    if (!active) return;
-    const viewport = window.visualViewport;
-    const root = document.documentElement;
-    let frame = 0;
-    const update = () => {
-      const inset = viewport
-        ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
-        : 0;
-      const mobile = window.matchMedia('(max-width: 767px)').matches;
-      const focused = document.activeElement?.matches(
-        'input, textarea, select',
-      );
-      const keyboard = mobile && !!focused && inset > 120;
-      root.dataset.keyboard = String(keyboard);
-      root.style.setProperty(
-        '--keyboard-inset',
-        keyboard ? `${inset}px` : '0px',
-      );
-      cancelAnimationFrame(frame);
-      if (focused)
-        frame = requestAnimationFrame(() =>
-          end.current?.scrollIntoView?.({ block: 'end' }),
-        );
-    };
-    update();
-    viewport?.addEventListener('resize', update);
-    viewport?.addEventListener('scroll', update);
-    window.addEventListener('resize', update);
-    document.addEventListener('focusin', update);
-    document.addEventListener('focusout', update);
-    return () => {
-      cancelAnimationFrame(frame);
-      viewport?.removeEventListener('resize', update);
-      viewport?.removeEventListener('scroll', update);
-      window.removeEventListener('resize', update);
-      document.removeEventListener('focusin', update);
-      document.removeEventListener('focusout', update);
-      delete root.dataset.keyboard;
-      root.style.removeProperty('--keyboard-inset');
-    };
-  }, [active]);
+    if (!pinNext.current || !latestUser) return;
+    pinNext.current = false;
+    setPinned(latestUser);
+  }, [latestUser, setPinned]);
+  const pinnedId =
+    pinned && chat.turns.some((turn) => turn.id === pinned) ? pinned : null;
+  const space = usePinnedMessage(pinnedId, end, composer);
   useEffect(() => {
-    if (active) end.current?.scrollIntoView?.({ block: 'end' });
-  }, [active, chat.turns, chat.busy, composerHeight]);
+    if (active && !pinnedId) end.current?.scrollIntoView?.({ block: 'end' });
+  }, [active, end, pinnedId, chat.turns, chat.busy, composerHeight]);
   const currentTurn = chat.turns.find(
     (turn) => turn.id === (videoId || audio.id || chat.newest),
   );
@@ -245,7 +192,7 @@ export function Chat() {
   };
   const newConversation = () => {
     chat.clear();
-    setAttachmentError('');
+    setPinned(null);
     stopPlayback();
   };
   const history = (
@@ -265,49 +212,14 @@ export function Chat() {
       return;
     audio.stop();
     audio.unlock();
-    setAttachmentError('');
     void refreshState();
+    pinNext.current = true;
     void chat.send();
-  };
-  const addAttachments = (files: File[]) => {
-    if (!files.length) return;
-    const next = [...chat.attachments, ...files];
-    if (next.length > MAX_CHAT_ATTACHMENT_COUNT) {
-      setAttachmentError(`一次最多附加 ${MAX_CHAT_ATTACHMENT_COUNT} 个文件`);
-      return;
-    }
-    const unsupported = files.find(
-      (file) =>
-        !CHAT_ATTACHMENT_SUFFIXES.has(
-          file.name.split('.').at(-1)?.toLowerCase() ?? '',
-        ),
-    );
-    if (unsupported) {
-      setAttachmentError(
-        `暂不支持 ${unsupported.name}，请上传可提取文字的文档`,
-      );
-      return;
-    }
-    const oversized = files.find(
-      (file) => file.size > MAX_CHAT_ATTACHMENT_BYTES,
-    );
-    if (oversized) {
-      setAttachmentError(`${oversized.name} 超过 50 MB，请拆分后上传`);
-      return;
-    }
-    if (
-      next.reduce((total, file) => total + file.size, 0) >
-      MAX_CHAT_ATTACHMENT_BYTES
-    ) {
-      setAttachmentError('单次附件总量不能超过 50 MB');
-      return;
-    }
-    setAttachmentError('');
-    chat.setAttachments(next);
   };
   return (
     <div
       className="chat-page"
+      data-empty={!chat.turns.length && !chat.loading}
       style={{ '--composer-height': `${composerHeight}px` } as CSSProperties}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
@@ -347,7 +259,7 @@ export function Chat() {
         <div className="chat-scroll">
           <div className="chat-column-grid">
             <PersonaFade>
-              <div className="chat-conversation flex flex-col justify-end space-y-4">
+              <div className="chat-conversation flex flex-col space-y-4">
                 {stale && canManage && (
                   <p role="status" className="text-xs text-secondary">
                     新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
@@ -436,6 +348,9 @@ export function Chat() {
                             aria-label={
                               turn.role === 'user' ? '你说' : '分身回复'
                             }
+                            data-pin={
+                              turn.role === 'user' ? turn.id : undefined
+                            }
                             className={
                               turn.role === 'user'
                                 ? 'user-bubble ml-auto w-fit max-w-[85%] px-4 py-3'
@@ -459,9 +374,6 @@ export function Chat() {
                                 }
                               />
                             </div>
-                            {turn.role === 'twin' && turn.reply && (
-                              <ReplyDetails reply={turn.reply} />
-                            )}
                             {turn.reply && (
                               <>
                                 <div
@@ -585,6 +497,7 @@ export function Chat() {
                   </div>
                 )}
                 <div ref={end} />
+                {space > 0 && <div aria-hidden style={{ height: space }} />}
               </div>
             </PersonaFade>
           </div>
@@ -598,77 +511,7 @@ export function Chat() {
             send();
           }}
         >
-          {chat.attachments.length > 0 && (
-            <div
-              className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2"
-              role="list"
-              aria-label="已添加附件"
-            >
-              {chat.attachments.map((file, index) => (
-                <div
-                  key={`${file.name}-${file.size}-${index}`}
-                  className="flex min-h-10 max-w-full items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-sm"
-                  role="listitem"
-                >
-                  <span className="max-w-56 truncate">{file.name}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="size-8 min-h-8 min-w-8 rounded-full p-0"
-                    aria-label={`移除附件 ${file.name}`}
-                    disabled={chat.busy}
-                    onClick={() => {
-                      chat.setAttachments(
-                        chat.attachments.filter((_, i) => i !== index),
-                      );
-                      setAttachmentError('');
-                    }}
-                  >
-                    <X className="size-4" aria-hidden />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-          {attachmentError && (
-            <p
-              role="alert"
-              className="mx-auto mb-2 max-w-3xl text-sm text-danger"
-            >
-              {attachmentError}
-            </p>
-          )}
-          {chat.attachments.length > 0 && (
-            <p className="mx-auto mb-2 max-w-3xl text-xs text-tertiary">
-              原文件仅在本次请求中处理，不进入长期资料；提取文字会发送给当前配置的聊天模型。后续追问需重新附加，回答和引用摘录会保存在聊天记录。
-            </p>
-          )}
           <div className="composer-field mx-auto flex max-w-3xl items-end gap-1 bg-surface py-1 pr-1 pl-2">
-            <input
-              ref={attachmentInput}
-              type="file"
-              aria-label="选择附件"
-              accept={CHAT_ATTACHMENT_ACCEPT}
-              multiple
-              className="sr-only"
-              disabled={chat.busy || chat.loading || chat.restoreFailed}
-              onChange={(event) => {
-                addAttachments(Array.from(event.currentTarget.files ?? []));
-                event.currentTarget.value = '';
-              }}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              className="size-11 min-h-11 min-w-11 rounded-full p-0"
-              aria-label="添加附件"
-              title="添加文件（PDF 仅支持文字层，不支持扫描件 OCR）"
-              disabled={chat.busy || chat.loading || chat.restoreFailed}
-              onClick={() => attachmentInput.current?.click()}
-            >
-              <Paperclip className="size-5" aria-hidden />
-            </Button>
             <Textarea
               id="chat-input"
               aria-label="你说"
@@ -693,10 +536,6 @@ export function Chat() {
               {!chat.busy && <ArrowUp className="size-5" aria-hidden />}
             </Button>
           </div>
-          <p className="mx-auto mt-1 max-w-3xl text-xs text-tertiary">
-            支持 TXT / MD / PDF / Word / EPUB / HTML / CSV / JSON / SRT /
-            VTT；最多 5 个，合计不超过 50 MiB。
-          </p>
         </form>
       </div>
     </div>

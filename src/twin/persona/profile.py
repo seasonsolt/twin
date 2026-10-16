@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -29,7 +30,7 @@ from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
 from ..usage import call_totals, collect_calls
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
-from .items import ExtractStats, PersonaCandidate, PersonaItem, PEvidence
+from .items import FACET_SAMPLE_CHARS, ExtractStats, PersonaCandidate, PersonaItem, PEvidence
 from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
@@ -106,8 +107,14 @@ def nothing_found_reason(stats: ExtractStats | None) -> str:
         )
         if n
     ]
-    if stats.off_facet:
+    if stats.off_facet and stats.unknown_facets:
+        common = sorted(stats.unknown_facets.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        written = "、".join(f"“{facet}”×{n}" for facet, n in common)
+        causes.append(f"细项不在可用列表里 {stats.off_facet} 条（模型写的是 {written}）")
+    elif stats.off_facet:  # counted before facets and empty statements were told apart
         causes.append(f"细项不可用或结论为空 {stats.off_facet} 条")
+    if stats.empty_statement:
+        causes.append(f"结论为空 {stats.empty_statement} 条")
     return f"模型提炼了 {stats.returned} 条结论，校验后全部丢弃：" + "，".join(causes)
 
 
@@ -261,9 +268,17 @@ EXTRACT_SYSTEM = """\
 规则：
 1. 只写有原文支撑的结论，每条至少引用 1 条、最多 {max_quotes} 条。quote 必须从对应编号条目"本人："或"记述："之后\
 逐字复制，不改写、不拼接、不加省略号；不能引用"语境"里别人说的话。
-2. 结论要具体，不加人称代词主语（我、他、她等）。例如"在成都做产品经理"、"做决定前喜欢先睡一觉"，不写"他做事认真"。
-3. 一条结论只讲一件事，只归一个细项；同一件事有多处原话就合在一条里引用。
-4. 不写对任何具体他人的评价，不记录别人的隐私；涉及他人时只记录{name}自己的做法和观点。
+2. 结论要具体，不加人称代词主语（我、他、她等）。例如"在成都做产品经理"、"做决定前喜欢先睡一觉"，不写"他做事认真"。\
+原话里的专有名称和数字原样写进结论，不要概括掉：人名、宠物名，书、剧、电影、节目、歌曲、歌单等作品名，品牌型号、\
+地名，数量、金额、时长、次数、比例；专有名称可保留外文原文，其余照常用中文写。原话提到的时间（今天、上周、\
+三周前）、东西的来源（谁送的、在哪买的）和同去的人也一并写上。例如写"上周在宜家买了 3 盆多肉"，不写"在养多肉"；\
+写"读完了《百年孤独》"，不写"喜欢读小说"。
+3. 一条结论只讲一件事，只归一个细项；同一件事有多处原话就合在一条里引用。做过、买过、去过、认识了谁这类具体经历，\
+记成这件事本身，不要只概括成兴趣或习惯；能看出兴趣时另记一条。只见到一次的做法记成这一次的事，不要推成习惯、\
+一贯的偏好或说话方式；本人明说的偏好和习惯照记。
+4. {name}说起的身边人的情况（家人、朋友、同事等是谁，做了什么，近况和变化）照实记录：结论以这个人开头，\
+原话说了和{name}的关系就写上，没说不要补，如"朋友小林上个月搬到了杭州"、"前同事老周现在带一个 8 人团队"；\
+家人归 9.3，同事、上级归 1.4，朋友和其他人归 7.3。不写对具体他人的评价和褒贬（如"小林做事靠谱"）。
 5. 寒暄、事务性的只言片语（"好的""收到"）不提炼。表达风格类细项（6.x）可以根据他的用词、句式、语气提炼，\
 引用最能体现这种风格的原话。
 6. 他常请别人帮忙（润色邮件、改文案、问问题）：草稿和问题里顺带透露的个人情况，如住在哪、做什么、身体状况、\
@@ -303,6 +318,19 @@ def prompt_fingerprint() -> str:
             "merge_schema": MergeDraft.model_json_schema(),
         }
     )
+
+
+_FACET_NUMBER = re.compile(r"(?<![\d.．])(\d{1,2})\s*[.．]\s*(\d{1,2})(?![\d.．])")
+
+
+def facet_id(written: str) -> str:
+    """The facet a model named, read from how models write it besides the bare id: "8.2 正在做的事", "8.2：…",
+    "细项 8．2". Anything else is returned as written, and dropped as a facet that is not offered."""
+    written = written.strip()
+    if written in FACET_BY_ID:
+        return written
+    match = _FACET_NUMBER.search(written)
+    return f"{int(match[1])}.{int(match[2])}" if match else written
 
 
 @dataclass(frozen=True)
@@ -352,9 +380,14 @@ def _extract(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings
     candidates: list[PersonaCandidate] = []
     stats = ExtractStats(returned=len(draft.items))
     for i, item in enumerate(draft.items):
-        facet = item.facet_id.strip()
-        if facet not in allowed or not item.statement.strip():
+        facet = facet_id(item.facet_id)
+        if not item.statement.strip():
+            stats.empty_statement += 1
+            continue
+        if facet not in allowed:
             stats.off_facet += 1
+            sample = item.facet_id.strip()[:FACET_SAMPLE_CHARS]
+            stats.unknown_facets[sample] = stats.unknown_facets.get(sample, 0) + 1
             continue
         evidence: list[PEvidence] = []
         for ref in item.quotes[:MAX_QUOTES]:
@@ -421,9 +454,12 @@ MERGE_SYSTEM = """\
 下面是从{name}的不同资料里提炼出的一组结论，都属于细项"{facet_id} {facet_name}"（{facet_desc}）。\
 每条有编号、来源类别（本人自述 / 实际行为）和日期。
 
-请把讲同一个底层特点的结论归为一组，每组写一条合并后的结论：
-1. 每个候选编号必须归入且只归入一组；讲的不是同一件事就不要合并。
-2. 合并后的结论要保留具体内容，不加人称代词主语，不要概括成空话；适用情境不同时写进 applies_when。
+请把说同一件事的结论归为一组（同一个事实、事件或偏好的重复或补充），每组写一条合并后的结论：
+1. 每个候选编号必须归入且只归入一组。只是话题相近不算同一件事：不同的事件、物品、人物、数量各自成组，\
+不要为了归纳把它们并成一张清单或一个类别；拿不准时宁可不合并。
+2. 合并后的结论必须保留每个成员里的名称、型号、数量、金额、频率、时间、地点和同行的人，原样写出，\
+不改写成类别或“若干”；写不进一句话就说明不该合并。一次发生的事写成那件事，不推成习惯或性格。\
+不加人称代词主语；适用情境不同时写进 applies_when。
 3. 内容冲突时，优先参考本人实际做过的事；在 conflict 里简短说明差别，不确定时不要替本人下定论。没有冲突时留空。"""
 
 

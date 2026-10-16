@@ -100,7 +100,9 @@ beforeEach(() => {
       );
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     if (path === '/api/persona/items/summary')
-      return json({ total: 0, unreviewed: 0, dimensions: [] });
+      return json({ total: 0, conflicts: 0, dimensions: [] });
+    if (path === '/api/persona/followups')
+      return json({ items: [], pending: 0 });
     if (path.startsWith('/api/persona/items'))
       return json({ items: [], total: 0 });
     if (path === '/api/persona/coverage')
@@ -131,7 +133,7 @@ it('renders only overview by default, keeps the header, and supports section lin
     within(nav)
       .getAllByRole('tab')
       .map((tab) => tab.textContent),
-  ).toEqual(['概览', '图谱', '记忆', '形象和声音', '接入']);
+  ).toEqual(['概览', '图谱', '记忆', '待回答', '形象和声音', '接入']);
   expect(within(nav).getByRole('tab', { name: '概览' })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -153,9 +155,9 @@ it('renders only overview by default, keeps the header, and supports section lin
   expect(view.container.querySelector('.stage-header')).toBe(header);
   expect(screen.queryByRole('textbox', { name: '名字' })).toBeNull();
   await userEvent.setup().click(screen.getByRole('button', { name: '编辑' }));
-  expect(
-    await screen.findByRole('dialog', { name: '名字与介绍' }),
-  ).toBeVisible();
+  // The dialog fades in from opacity 0, even with reduced motion.
+  const dialog = await screen.findByRole('dialog', { name: '名字与介绍' });
+  await waitFor(() => expect(dialog).toBeVisible());
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('朋友');
 });
 
@@ -197,7 +199,7 @@ it.each(['overview', 'graph', 'memories', 'assets', 'channels'])(
       within(screen.getByRole('navigation', { name: '底部导航' })).getAllByRole(
         'link',
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   },
 );
 
@@ -227,6 +229,7 @@ it.each([
   ['overview', '概览'],
   ['graph', '图谱'],
   ['memories', '记忆'],
+  ['questions', '待回答'],
   ['assets', '形象和声音'],
   ['channels', '接入'],
   ['unknown', '概览'],

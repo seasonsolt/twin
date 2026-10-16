@@ -1,0 +1,57 @@
+{
+  "about": "三场虚构会议的标准答案。kinds：可接受的类型；at：可接受的锚点时间；owners：可接受的负责人（空表示不评）；dues：可接受的截止日期（null 表示可以没有截止日期；字段缺省表示不评）；due_range：截止日期落在区间内即可；relates_to：进展或复述应关联的前序条目；required=false 表示抽到不扣分、漏掉也不扣分。current：跑完全部会议后这条承诺的当前状态；traps 是不该抽成任何条目的话。",
+  "meetings": [
+    {
+      "file": "2026-10-12-经营会.txt",
+      "speakers": {"其他人1": "老王", "其他人2": "刘婷", "其他人3": "陈工"},
+      "items": [
+        {"id": "m1-1", "kinds": ["决定"], "at": ["00:41"], "owners": ["本人"], "due_range": ["2026-10-16", "2026-10-18"], "required": true, "note": "客户问题本周必须解决"},
+        {"id": "m1-2", "current": "本人称已完成", "kinds": ["承诺"], "at": ["00:47"], "owners": ["老王"], "dues": ["2026-10-16"], "required": true, "note": "周五前给新报价方案"},
+        {"id": "m1-3", "kinds": ["决定"], "at": ["01:33", "01:05"], "owners": [], "required": false, "note": "「行，先这么定」采纳报价思路"},
+        {"id": "m1-4", "kinds": ["承诺"], "at": ["01:10"], "owners": ["刘婷"], "required": false, "note": "同意砍定制项"},
+        {"id": "m1-5", "kinds": ["异议"], "at": ["01:10"], "owners": ["刘婷"], "required": true, "note": "实施费单列像变相涨价"},
+        {"id": "m1-6", "current": "重新打开", "kinds": ["承诺"], "at": ["01:40", "02:02"], "owners": ["陈工"], "dues": ["2026-10-15"], "required": true, "note": "报表导出修复，周三改口周四"},
+        {"id": "m1-7", "current": "未完成", "kinds": ["承诺"], "at": ["02:10"], "owners": ["小李"], "dues": ["2026-10-14"], "required": true, "note": "老王替不在场的小李应承：周三前拉工单数据发群"},
+        {"id": "m1-8", "kinds": ["承诺"], "at": ["02:25"], "owners": ["刘婷"], "required": false, "note": "「我回去看看吧」，含糊"},
+        {"id": "m1-9", "kinds": ["承诺"], "at": ["02:38"], "owners": ["本人"], "due_range": ["2026-10-19", "2026-10-25"], "due_optional": true, "required": true, "note": "下周约远岚老板吃饭"},
+        {"id": "m1-10", "kinds": ["决定"], "at": ["02:56"], "owners": ["本人"], "required": true, "note": "市场预算本季度冻结"},
+        {"id": "m1-11", "kinds": ["承诺"], "at": ["02:56"], "owners": ["本人"], "required": false, "note": "和财务对账"},
+        {"id": "m1-12", "kinds": ["异议"], "at": ["03:12"], "owners": ["刘婷"], "required": true, "note": "展会不能停"},
+        {"id": "m1-13", "kinds": ["决定"], "at": ["03:20"], "owners": ["本人"], "required": false, "note": "展会下次再议"}
+      ],
+      "traps": [{"at": "02:50", "note": "请喝奶茶是玩笑"}]
+    },
+    {
+      "file": "2026-10-14-产品评审.txt",
+      "speakers": {"其他人1": "刘婷", "其他人2": "陈工"},
+      "items": [
+        {"id": "m2-1", "kinds": ["承诺"], "at": ["00:48"], "owners": ["刘婷"], "required": false, "note": "我去对法务"},
+        {"id": "m2-2", "kinds": ["承诺"], "at": ["00:48"], "owners": ["刘婷"], "dues": ["2026-10-22"], "condition": true, "required": true, "note": "法务下周二前回复则下周四演示"},
+        {"id": "m2-3", "kinds": ["异议"], "at": ["00:30"], "owners": ["陈工", "其他人2"], "required": false, "note": "两周有点紧"},
+        {"id": "m2-4", "kinds": ["决定"], "at": ["01:05", "01:35"], "owners": ["本人"], "required": true, "note": "优先级改为远岚先、华澜后放两周"},
+        {"id": "m2-5", "kinds": ["异议"], "at": ["01:22"], "owners": ["陈工", "其他人2"], "required": true, "note": "停下华澜报表切换成本高"},
+        {"id": "m2-6", "kinds": ["进展"], "at": ["01:42"], "owners": [], "relates_to": ["m1-6"], "required": true, "note": "索引修复已上线（本人称）"},
+        {"id": "m2-7", "current": "本人称已完成", "kinds": ["承诺", "进展"], "at": ["02:00"], "owners": ["老王"], "dues": ["2026-10-14"], "relates_to": ["m1-2"], "required": true, "note": "刘婷转述：老王今天下班前发报价"},
+        {"id": "m2-8", "kinds": ["承诺"], "at": ["02:08"], "owners": ["本人"], "dues": ["2026-10-15"], "required": true, "note": "明天上午看完回复老王"},
+        {"id": "m2-9", "kinds": ["承诺"], "at": ["02:15"], "owners": ["陈工", "其他人2"], "dues": [null], "required": true, "note": "上线前补自动化测试"},
+        {"id": "m2-10", "kinds": ["进展"], "at": ["00:14"], "owners": [], "relates_to": ["m1-8"], "required": false, "note": "「我回去看看吧」的跟进：看过了，可以做"}
+      ],
+      "traps": []
+    },
+    {
+      "file": "2026-10-19-周会.txt",
+      "speakers": {"其他人1": "周敏", "其他人2": "老王"},
+      "items": [
+        {"id": "m3-1", "kinds": ["进展"], "at": ["00:16"], "owners": [], "relates_to": ["m1-2", "m2-7"], "required": true, "note": "报价方案周三已发"},
+        {"id": "m3-2", "kinds": ["承诺"], "at": ["00:16"], "owners": ["老王"], "required": false, "note": "「这周签」更像预测"},
+        {"id": "m3-3", "kinds": ["进展"], "at": ["00:36"], "owners": [], "relates_to": ["m1-6", "m2-6"], "status": ["重新打开"], "required": true, "note": "工单关了又被报，修复存疑"},
+        {"id": "m3-4", "current": "进行中", "kinds": ["承诺"], "at": ["01:02", "01:12"], "owners": ["周敏"], "dues": ["2026-10-20"], "required": true, "note": "今天跟陈工确认，明早告诉我"},
+        {"id": "m3-5", "kinds": ["进展"], "at": ["01:15"], "owners": [], "relates_to": ["m1-7"], "status": ["未完成"], "required": true, "note": "小李的工单数据没发群里"},
+        {"id": "m3-6", "current": "进行中", "kinds": ["承诺"], "at": ["01:24", "01:30", "01:15"], "owners": ["老王"], "dues": ["2026-10-19"], "required": true, "note": "老王盯小李今天必须发"},
+        {"id": "m3-7", "kinds": ["进展", "承诺"], "at": ["01:33"], "owners": [], "relates_to": ["m1-9"], "required": false, "note": "已约周四见远岚老板"},
+        {"id": "m3-8", "kinds": ["决定"], "at": ["01:24"], "owners": ["本人"], "required": false, "note": "本人定下今天必须发，与 m1-1 同类"}
+      ],
+      "traps": []
+    }
+  ]
+}

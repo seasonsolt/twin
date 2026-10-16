@@ -24,7 +24,7 @@ from ..media.schema import AVATAR_ALIASES, AVATAR_PRESETS
 from ..util import prepare_private_file
 from .items import ExtractStats, PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
 from .kernel import KERNEL, KernelVersion, kernel_json
-from .schema import ChatReply, Expression, ParsedSource, ReviewStatus, Source, SourceKind
+from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p_sources (
@@ -53,10 +53,18 @@ CREATE TABLE IF NOT EXISTS p_vectors (
     namespace TEXT NOT NULL, ref_id TEXT NOT NULL, text_sha TEXT NOT NULL, vec BLOB NOT NULL,
     PRIMARY KEY (namespace, ref_id));
 """
+_LEDGER = """
+CREATE TABLE IF NOT EXISTS p_ledger (
+    entry_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, meeting_date TEXT, expression_id TEXT NOT NULL,
+    review TEXT NOT NULL, json TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS p_ledger_source ON p_ledger(source_id);
+"""
 _MIGRATIONS: tuple[str, ...] = (
     _SCHEMA,
     # 2: per-chunk extraction counts (``ExtractStats`` JSON); NULL for chunks extracted before it.
     "ALTER TABLE p_chunks ADD COLUMN stats TEXT;",
+    # 3: the commitment ledger (承诺账本).
+    _LEDGER,
 )
 
 
@@ -300,23 +308,105 @@ class PersonaStore:
             if deleted:
                 self._sources_changed(db)
                 db.execute(
-                    "DELETE FROM p_meta WHERE key IN (?, ?)",
-                    (f"source_pending:{source_id}", f"source_error:{source_id}"),
+                    "DELETE FROM p_meta WHERE key IN (?, ?, ?)",
+                    (f"source_pending:{source_id}", f"source_error:{source_id}", f"ledger_done:{source_id}"),
                 )
+                self._drop_ledger(db, source_id, reviewed=True)
                 if source and source.media_sha and re.fullmatch(r"[0-9a-f]{64}", source.media_sha):
                     shutil.rmtree(self.path.parent / "media-sources" / source.media_sha, ignore_errors=True)
             return deleted
 
-    def reextract_source(self, source_id: str) -> int | None:
-        """Forget what was extracted from a source, so the next build asks the model again even though its chunks
-        are unchanged; the profile keeps the old items until that build merges. Returns the chunks forgotten, or
-        None when there is no such source."""
+    # ------------------------------------------------------------ commitment ledger
+
+    def list_ledger(self) -> list[LedgerEntry]:
+        """Every ledger entry, in meeting order and, within a meeting, in the order the words were said."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT json FROM p_ledger ORDER BY meeting_date, source_id, expression_id, entry_id"
+            ).fetchall()
+        return [LedgerEntry.model_validate_json(r[0]) for r in rows]
+
+    def get_ledger_entry(self, entry_id: str) -> LedgerEntry | None:
+        with self._lock:
+            row = self._db.execute("SELECT json FROM p_ledger WHERE entry_id = ?", (entry_id,)).fetchone()
+        return LedgerEntry.model_validate_json(row[0]) if row else None
+
+    def put_ledger_entry(self, entry: LedgerEntry) -> None:
+        with self._tx() as db:
+            self._insert_ledger(db, [entry])
+
+    def replace_ledger_source(self, source_id: str, entries: list[LedgerEntry], done: str) -> bool:
+        """Swap a source's unreviewed entries for ``entries``; entries the person reviewed stay. ``done`` records the
+        extractor version that processed the source. False, writing nothing, when the source was deleted meanwhile."""
+        with self._tx() as db:
+            if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
+                return False
+            self._drop_ledger(db, source_id, reviewed=False)
+            self._insert_ledger(db, entries)
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"ledger_done:{source_id}", done))
+            return True
+
+    def ledger_done(self, source_id: str) -> str | None:
+        """The extractor version that last processed the source, None when it never was."""
+        return self.get_meta(f"ledger_done:{source_id}")
+
+    @staticmethod
+    def _insert_ledger(db: sqlite3.Connection, entries: list[LedgerEntry]) -> None:
+        db.executemany(
+            "INSERT OR REPLACE INTO p_ledger VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    e.entry_id,
+                    e.source_id,
+                    e.meeting_date.isoformat() if e.meeting_date else None,
+                    e.expression_id,
+                    e.review.value,
+                    e.model_dump_json(),
+                )
+                for e in entries
+            ],
+        )
+
+    @staticmethod
+    def _drop_ledger(db: sqlite3.Connection, source_id: str, *, reviewed: bool) -> None:
+        """Delete a source's entries (only the unreviewed ones unless ``reviewed``) and unlink entries that pointed
+        at them."""
+        query = "SELECT entry_id FROM p_ledger WHERE source_id = ?" + ("" if reviewed else " AND review = ?")
+        params = (source_id,) if reviewed else (source_id, ReviewStatus.UNREVIEWED.value)
+        gone = {r[0] for r in db.execute(query, params)}
+        if not gone:
+            return
+        db.executemany("DELETE FROM p_ledger WHERE entry_id = ?", [(g,) for g in gone])
+        linked = [LedgerEntry.model_validate_json(r[0]) for r in db.execute("SELECT json FROM p_ledger")]
+        PersonaStore._insert_ledger(
+            db, [e.model_copy(update={"relates_to": None}) for e in linked if e.relates_to in gone]
+        )
+
+    def empty_chunks(self) -> dict[str, int]:
+        """Per source, how many of its extracted chunks yielded no candidate."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT source_id, COUNT(*) FROM p_chunks "
+                "WHERE chunk_id NOT IN (SELECT chunk_id FROM p_candidates) GROUP BY source_id"
+            ).fetchall()
+        return {source_id: count for source_id, count in rows}
+
+    def reextract_source(self, source_id: str, *, empty_only: bool = False) -> int | None:
+        """Forget what was extracted from a source (with ``empty_only``, only its chunks that yielded no candidate),
+        so the next build asks the model again even though those chunks are unchanged; the profile keeps the old
+        items until that build merges. Returns the chunks forgotten, or None when there is no such source; a source
+        with nothing to forget is left as it is."""
         with self._tx() as db:
             if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
                 return None
-            chunks = [r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE source_id = ?", (source_id,))]
+            empty = " AND chunk_id NOT IN (SELECT chunk_id FROM p_candidates)" if empty_only else ""
+            chunks = [
+                r[0] for r in db.execute(f"SELECT chunk_id FROM p_chunks WHERE source_id = ?{empty}", (source_id,))
+            ]
+            if not chunks:
+                return 0
             db.executemany("DELETE FROM p_candidates WHERE chunk_id = ?", [(c,) for c in chunks])
-            db.execute("DELETE FROM p_chunks WHERE source_id = ?", (source_id,))
+            db.executemany("DELETE FROM p_chunks WHERE chunk_id = ?", [(c,) for c in chunks])
             self._sources_changed(db)
             db.execute("DELETE FROM p_meta WHERE key = ?", (f"source_error:{source_id}",))
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_pending:{source_id}", uuid.uuid4().hex))
@@ -463,6 +553,7 @@ class PersonaStore:
         review: ReviewStatus | None = None,
         text: str = "",
         source_id: str | None = None,
+        conflict: bool = False,
         by_evidence: bool = False,
         include_rejected: bool = False,
         limit: int | None = None,
@@ -470,7 +561,8 @@ class PersonaStore:
     ) -> tuple[list[PersonaItem], int]:
         """One page of items with reviews applied, filtered in SQL, and the number of items matching the filters.
         ``text`` matches the statement as shown (the edited one after an edit) and the evidence quotes;
-        ``source_id`` keeps items with evidence from that source; ``by_evidence`` puts the best-supported first."""
+        ``source_id`` keeps items with evidence from that source; ``conflict`` keeps items whose evidence disagrees;
+        ``by_evidence`` puts the best-supported first."""
         status = f"COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}')"
         clauses: list[str] = []
         params: list[object] = []
@@ -497,6 +589,8 @@ class PersonaStore:
                 " WHERE json_extract(e.value, '$.source_id') = ?)"
             )
             params.append(source_id)
+        if conflict:
+            clauses.append("COALESCE(json_extract(i.json, '$.conflict'), '') != ''")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
         base = f"FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id{where}"
@@ -520,16 +614,6 @@ class PersonaStore:
                 "COUNT(*) FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id GROUP BY 1, 2"
             ).fetchall()
         return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
-
-    def unreviewed_item_ids(self, facet_ids: list[str]) -> list[str]:
-        with self._lock:
-            rows = self._db.execute(
-                f"SELECT i.item_id FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
-                f"WHERE i.facet_id IN ({','.join('?' * len(facet_ids))}) "
-                f"AND COALESCE(json_extract(r.json, '$.status'), ?) = ? ORDER BY i.item_id",
-                [*facet_ids, ReviewStatus.UNREVIEWED.value, ReviewStatus.UNREVIEWED.value],
-            ).fetchall()
-        return [r[0] for r in rows]
 
     def has_items(self) -> bool:
         """Whether any item is left after rejections."""
@@ -599,17 +683,6 @@ class PersonaStore:
             else:
                 db.execute("INSERT OR REPLACE INTO p_reviews VALUES (?, ?)", (item_id, review.model_dump_json()))
 
-    def set_reviews(self, item_ids: list[str], review: PReview) -> None:
-        with self._tx() as db:
-            db.execute("BEGIN IMMEDIATE")
-            for item_id in item_ids:
-                if db.execute("SELECT 1 FROM p_items WHERE item_id = ?", (item_id,)).fetchone() is None:
-                    raise KeyError(item_id)
-            db.executemany(
-                "INSERT OR REPLACE INTO p_reviews VALUES (?, ?)",
-                [(item_id, review.model_dump_json()) for item_id in item_ids],
-            )
-
     def get_meta(self, key: str) -> str | None:
         with self._lock:
             row = self._db.execute("SELECT value FROM p_meta WHERE key = ?", (key,)).fetchone()
@@ -618,6 +691,14 @@ class PersonaStore:
     def set_meta(self, key: str, value: str) -> None:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (key, value))
+
+    def meta_with_prefix(self, prefix: str) -> dict[str, str]:
+        """Every meta value whose key starts with ``prefix``, by the rest of the key."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key, value FROM p_meta WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+            ).fetchall()
+        return {key[len(prefix) :]: value for key, value in rows}
 
     def kernel_built(self) -> KernelVersion | None:
         value = self.get_meta("kernel:built")
@@ -913,9 +994,12 @@ class PersonaStore:
 
     # ------------------------------------------------------------ chat log (what people ask, where the twin abstains)
 
-    def log_chat(self, question: str, reply: ChatReply) -> None:
+    def log_chat(self, question: str, reply: ChatReply, previous: str = "") -> None:
+        """Log one answered question; ``previous`` is the asker's turn before it, for a follow-up like 「那他呢？」."""
         entry = {
             "question": question[:2000],
+            "previous": previous[:500],
+            "reason": reply.abstain_reason[:500],
             "abstain": reply.abstain,
             "mode": reply.mode,
             "confidence": reply.confidence,
@@ -931,6 +1015,12 @@ class PersonaStore:
                     json.dumps(entry, ensure_ascii=False),
                 ),
             )
+
+    def chat_abstentions(self) -> list[tuple[str, dict[str, Any]]]:
+        """``(asked at, logged entry)`` of every question the twin abstained on, oldest first."""
+        with self._lock:
+            rows = self._db.execute("SELECT at, json FROM p_chat_log WHERE abstain = 1 ORDER BY id").fetchall()
+        return [(at, json.loads(raw)) for at, raw in rows]
 
     def chat_demand(self) -> dict[str, tuple[int, int]]:
         """Per facet: how many logged questions touched it and how many of those it abstained on or could only infer."""

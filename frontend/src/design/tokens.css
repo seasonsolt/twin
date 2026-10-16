@@ -522,6 +522,11 @@
   max-width: 792px;
   margin: 0 auto;
 }
+/* A message just sent goes to the top of the thread (``usePinnedMessage``), below the fixed stage once it has
+   folded on a phone or tablet. */
+.chat-conversation [data-pin] {
+  scroll-margin-top: calc(108px + env(safe-area-inset-top, 0px));
+}
 .stage-space {
   position: relative;
   flex-shrink: 0;
@@ -954,8 +959,16 @@
   }
 }
 .composer-field {
-  border: 2px solid var(--text-primary);
+  border: 1px solid var(--border);
   border-radius: 28px;
+  box-shadow: 0 2px 12px rgb(43 29 22 / 0.08);
+}
+.composer-field:focus-within {
+  border-color: var(--text-tertiary);
+}
+/* Like ChatGPT's composer: the hint sits back so what you type stands out. */
+.composer-field textarea::placeholder {
+  color: color-mix(in srgb, var(--text-tertiary) 60%, transparent);
 }
 .send-button,
 .send-button:hover,
@@ -1420,21 +1433,33 @@
   .content-main {
     max-width: 1184px;
   }
+  /* A conversation page fills the window and no more: a banner above it (an error) takes its height from the
+     page, so the composer stays on screen. */
+  .conversation-shell {
+    height: 100dvh;
+  }
+  .conversation-shell > .app-column,
+  .chat-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
   .chat-page {
     display: grid;
-    grid-template-columns: clamp(360px, 28vw, 400px) minmax(0, 1fr);
+    grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
     padding-bottom: 0;
-    height: 100dvh;
   }
   .stage-space {
     position: sticky;
     top: 0;
-    height: 100dvh !important;
+    height: 100% !important;
   }
   .chat-stage {
     position: relative;
     inset: auto;
-    height: 100dvh !important;
+    height: 100% !important;
     border-radius: 0;
     display: flex;
     flex-direction: column;
@@ -1442,8 +1467,11 @@
   }
   .chat-stage .stage-person {
     flex-shrink: 0;
-    padding-top: max(40px, 3dvh);
-    padding-bottom: 8px;
+    padding-top: 28px;
+    padding-bottom: 4px;
+  }
+  .chat-stage .stage-name {
+    font-size: 30px;
   }
   .chat-stage .stage-caption {
     margin-top: 6px;
@@ -1452,19 +1480,19 @@
     display: none;
   }
   .chat-stage .stage-decorations {
-    height: 210px;
+    height: 160px;
   }
   .chat-stage .stage-decorations .stage-sun {
-    width: 150px;
-    height: 150px;
-    top: 16px;
-    left: calc(50% - 180px);
+    width: 96px;
+    height: 96px;
+    top: 20px;
+    left: calc(50% - 116px);
   }
   .chat-stage .stage-decorations .stage-coral {
-    width: 100px;
-    height: 100px;
-    top: 80px;
-    right: -35px;
+    width: 72px;
+    height: 72px;
+    top: 56px;
+    right: -24px;
   }
   .chat-thread {
     display: flex;
@@ -1482,9 +1510,7 @@
   }
   .chat-column-grid {
     display: grid;
-    grid-template-columns:
-      clamp(32px, calc((100% - 760px) / 2), 96px)
-      minmax(0, 760px) minmax(32px, 1fr);
+    grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr);
   }
   .chat-column-grid > * {
     grid-column: 2;
@@ -1510,6 +1536,29 @@
     width: 100%;
     max-width: none;
     margin-inline: 0;
+  }
+  .chat-conversation [data-pin] {
+    scroll-margin-top: 24px;
+  }
+  /* A new conversation, like ChatGPT's: the greeting and the composer together in the middle of the column. */
+  .chat-page[data-empty='true'] .chat-thread {
+    justify-content: center;
+    padding-bottom: 12dvh;
+  }
+  .chat-page[data-empty='true'] .chat-scroll {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .chat-page[data-empty='true'] .chat-scroll > .chat-column-grid,
+  .chat-page[data-empty='true'] .chat-conversation {
+    min-height: 0;
+  }
+  .chat-page[data-empty='true'] .chat-conversation {
+    padding-bottom: 0;
+  }
+  .chat-page[data-empty='true'] .chat-composer {
+    padding-top: 8px;
+    border-top-color: transparent;
   }
   .memories-page,
   .about-page,

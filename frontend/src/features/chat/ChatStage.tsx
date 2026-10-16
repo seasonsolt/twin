@@ -48,6 +48,8 @@ export function ChatStage({
   onClear,
   onHistory,
   history,
+  newLabel = '新对话',
+  historyLabel = '对话记录',
 }: {
   name: string;
   capabilities: Capabilities | null;
@@ -63,6 +65,9 @@ export function ChatStage({
   onClear(): void;
   onHistory?(): void;
   history?: ReactNode;
+  /** The header buttons' words on a phone, for a page other than chat (work: 新任务, 任务记录). */
+  newLabel?: string;
+  historyLabel?: string;
 }) {
   const { reduced } = useMotionPreset();
   const personaId = usePersonaId();
@@ -108,18 +113,22 @@ export function ChatStage({
           ? 'done'
           : undefined
       : undefined;
-  const height = useSpring(desktop ? 470 : 360, springs.snappy);
-  const size = useSpring(desktop ? 210 : 196, springs.snappy);
+  // The big portrait is a stage for the twin's voice and video; without either, a phone or tablet keeps the
+  // compact bar and gives the height to the conversation.
+  const media = !!(capabilities?.available || capabilities?.video?.available);
+  const compact = collapsed || !media;
+  const height = useSpring(desktop ? 470 : compact ? 96 : 360, springs.snappy);
+  const size = useSpring(desktop ? 128 : compact ? 60 : 196, springs.snappy);
   const targetHeight = desktop
     ? 470
-    : collapsed
+    : compact
       ? videoStatus
         ? 128
         : 96
       : videoStatus
         ? 392
         : 360;
-  const targetSize = desktop ? 210 : collapsed ? 60 : 196;
+  const targetSize = desktop ? 128 : compact ? 60 : 196;
   useEffect(() => {
     if (reduced) {
       height.jump(targetHeight);
@@ -168,7 +177,7 @@ export function ChatStage({
       }
     }
   }, [url, turn?.id, videoPlaying, open]);
-  const small = collapsed && !desktop;
+  const small = compact && !desktop;
   const videoText = url && videoPlaying ? (turn?.content ?? '') : '';
   const plainReply = useMemo(() => stripMarkdown(videoText), [videoText]);
   const plainVoiceCaption = useMemo(
@@ -201,14 +210,14 @@ export function ChatStage({
                 <button
                   type="button"
                   className="stage-new"
-                  aria-label="对话记录"
+                  aria-label={historyLabel}
                   onClick={onHistory}
                 >
                   <History size={20} aria-hidden />
                 </button>
               )}
               <button type="button" className="stage-new" onClick={onClear}>
-                新对话
+                {newLabel}
               </button>
             </div>
           )

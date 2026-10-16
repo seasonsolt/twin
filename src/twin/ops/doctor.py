@@ -187,7 +187,15 @@ def inspect_installation(
             checks.append(Check(name, False, "未开启，无法转写录音", "运行 twin compute install asr-funasr"))
             continue
         if not enabled:
-            checks.append(Check(name, None, "本机轻量后端" if section.provider == "hashing" else "未开启（可选）"))
+            checks.append(
+                Check(
+                    name,
+                    None,
+                    "本机轻量后端 hashing，只按字面检索；./scripts/local-up.sh 会启用本机 bge-m3"
+                    if section.provider == "hashing"
+                    else "未开启（可选）",
+                )
+            )
             continue
         endpoint = section.base_url or (os.environ.get("OPENAI_BASE_URL") if name in {"LLM", "向量"} else None)
         if endpoint:

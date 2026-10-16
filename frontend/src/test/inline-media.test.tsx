@@ -435,7 +435,7 @@ it.each([375, 390, 768, 1024, 1199, 1200, 1280, 1440])(
     const css = readFileSync('src/design/tokens.css', 'utf8');
     expect(css).toContain('@media (min-width: 1200px)');
     expect(css).toContain(
-      'grid-template-columns: clamp(360px, 28vw, 400px) minmax(0, 1fr)',
+      'grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr)',
     );
   },
 );

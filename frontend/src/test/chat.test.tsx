@@ -568,7 +568,7 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
   expect(css).toContain('env(safe-area-inset-bottom');
   expect(css).toContain('-webkit-tap-highlight-color: transparent');
 });
-it('shares a bounded 760px desktop grid between conversation and composer', () => {
+it('shares a centered, bounded 880px desktop grid between conversation and composer', () => {
   const view = mount();
   expect(
     view.container.querySelector(
@@ -580,8 +580,9 @@ it('shares a bounded 760px desktop grid between conversation and composer', () =
   );
   const css = readFileSync('src/design/tokens.css', 'utf8');
   expect(css).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
-  expect(css).toContain('clamp(32px, calc((100% - 760px) / 2), 96px)');
-  expect(css).toContain('minmax(0, 760px) minmax(32px, 1fr)');
+  expect(css).toContain(
+    'grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr)',
+  );
   expect(css).toMatch(/\.stage-decorations\s*\{[^}]*overflow: hidden;/);
   expect(readFileSync('src/features/chat/history.css', 'utf8')).toMatch(
     /\.stage-history\s*\{[^}]*background: var\(--accent\);/,

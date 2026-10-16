@@ -1414,21 +1414,33 @@
   .content-main {
     max-width: 1184px;
   }
+  /* A conversation page fills the window and no more: a banner above it (an error) takes its height from the
+     page, so the composer stays on screen. */
+  .conversation-shell {
+    height: 100dvh;
+  }
+  .conversation-shell > .app-column,
+  .chat-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
   .chat-page {
     display: grid;
-    grid-template-columns: clamp(360px, 28vw, 400px) minmax(0, 1fr);
+    grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
     padding-bottom: 0;
-    height: 100dvh;
   }
   .stage-space {
     position: sticky;
     top: 0;
-    height: 100dvh !important;
+    height: 100% !important;
   }
   .chat-stage {
     position: relative;
     inset: auto;
-    height: 100dvh !important;
+    height: 100% !important;
     border-radius: 0;
     display: flex;
     flex-direction: column;
@@ -1436,8 +1448,11 @@
   }
   .chat-stage .stage-person {
     flex-shrink: 0;
-    padding-top: max(40px, 3dvh);
-    padding-bottom: 8px;
+    padding-top: 28px;
+    padding-bottom: 4px;
+  }
+  .chat-stage .stage-name {
+    font-size: 30px;
   }
   .chat-stage .stage-caption {
     margin-top: 6px;
@@ -1446,19 +1461,19 @@
     display: none;
   }
   .chat-stage .stage-decorations {
-    height: 210px;
+    height: 160px;
   }
   .chat-stage .stage-decorations .stage-sun {
-    width: 150px;
-    height: 150px;
-    top: 16px;
-    left: calc(50% - 180px);
+    width: 96px;
+    height: 96px;
+    top: 20px;
+    left: calc(50% - 116px);
   }
   .chat-stage .stage-decorations .stage-coral {
-    width: 100px;
-    height: 100px;
-    top: 80px;
-    right: -35px;
+    width: 72px;
+    height: 72px;
+    top: 56px;
+    right: -24px;
   }
   .chat-thread {
     display: flex;
@@ -1476,9 +1491,7 @@
   }
   .chat-column-grid {
     display: grid;
-    grid-template-columns:
-      clamp(32px, calc((100% - 760px) / 2), 96px)
-      minmax(0, 760px) minmax(32px, 1fr);
+    grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr);
   }
   .chat-column-grid > * {
     grid-column: 2;

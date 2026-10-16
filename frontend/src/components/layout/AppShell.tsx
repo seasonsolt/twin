@@ -330,7 +330,9 @@ export function AppShell() {
       );
   }
   return (
-    <div className="app-shell flex min-h-dvh">
+    <div
+      className={`app-shell flex min-h-dvh ${conversation ? 'conversation-shell' : ''}`}
+    >
       <a
         href="#main"
         onClick={(event) => {
@@ -342,7 +344,7 @@ export function AppShell() {
         跳至主内容
       </a>
       {!mobile && <TwinRail />}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="app-column flex min-w-0 flex-1 flex-col">
         {error && !twinLevel && (
           <div
             role="alert"

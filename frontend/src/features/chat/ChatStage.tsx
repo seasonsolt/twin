@@ -114,7 +114,7 @@ export function ChatStage({
           : undefined
       : undefined;
   const height = useSpring(desktop ? 470 : 360, springs.snappy);
-  const size = useSpring(desktop ? 210 : 196, springs.snappy);
+  const size = useSpring(desktop ? 128 : 196, springs.snappy);
   const targetHeight = desktop
     ? 470
     : collapsed
@@ -124,7 +124,7 @@ export function ChatStage({
       : videoStatus
         ? 392
         : 360;
-  const targetSize = desktop ? 210 : collapsed ? 60 : 196;
+  const targetSize = desktop ? 128 : collapsed ? 60 : 196;
   useEffect(() => {
     if (reduced) {
       height.jump(targetHeight);

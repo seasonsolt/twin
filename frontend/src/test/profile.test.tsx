@@ -100,7 +100,7 @@ beforeEach(() => {
       );
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     if (path === '/api/persona/items/summary')
-      return json({ total: 0, unreviewed: 0, dimensions: [] });
+      return json({ total: 0, conflicts: 0, dimensions: [] });
     if (path === '/api/persona/followups')
       return json({ items: [], pending: 0 });
     if (path.startsWith('/api/persona/items'))

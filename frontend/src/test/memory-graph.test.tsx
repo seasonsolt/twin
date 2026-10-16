@@ -303,7 +303,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it('searches statements and quotes, counts matches, filters dimensions and review, and flies on Enter', async () => {
+it('searches statements and quotes, counts matches, filters dimensions and conflicts, and flies on Enter', async () => {
   render(<MemoryGraphPanel twin={twin} />);
   await screen.findByRole('button', { name: '节点 喜欢徒步' });
   const user = userEvent.setup();
@@ -349,9 +349,10 @@ it('searches statements and quotes, counts matches, filters dimensions and revie
   expect(screen.queryByRole('button', { name: '节点 喜欢徒步' })).toBeNull();
   await user.click(screen.getByRole('button', { name: '经历与身份' }));
   await user.clear(search);
-  await user.click(screen.getByRole('button', { name: '只看待确认' }));
+  await user.click(screen.getByRole('button', { name: '只看有矛盾' }));
   expect(screen.queryByRole('button', { name: '节点 习惯读书' })).toBeNull();
-  expect(screen.getByRole('button', { name: '只看待确认' })).toHaveAttribute(
+  expect(screen.getByText('当前筛选下没有记忆')).toBeVisible();
+  expect(screen.getByRole('button', { name: '只看有矛盾' })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
@@ -365,9 +366,14 @@ it('opens the real ItemCard, saves reviews in place without restarting the graph
   );
   const layout = renderer.current!.graphData;
   const dialog = screen.getByRole('dialog', { name: '这条记忆' });
-  await waitFor(() => expect(within(dialog).getByText('待确认')).toBeVisible());
-  await user.click(within(dialog).getByRole('button', { name: '对' }));
-  await waitFor(() => expect(within(dialog).getByText('已确认')).toBeVisible());
+  await user.click(
+    await within(dialog).findByRole('button', { name: '改一下' }),
+  );
+  fireEvent.change(within(dialog).getByLabelText('修改表述'), {
+    target: { value: '喜欢爬山' },
+  });
+  await user.click(within(dialog).getByRole('button', { name: '保存修改' }));
+  await waitFor(() => expect(within(dialog).getByText('你改过')).toBeVisible());
   expect(
     fetcher.mock.calls.some(
       ([url, init]) =>
@@ -375,15 +381,15 @@ it('opens the real ItemCard, saves reviews in place without restarting the graph
     ),
   ).toBe(true);
   expect(renderer.current!.graphData).toBe(layout);
-  expect(layout!.nodes.find((node) => node.id === 'item:a')!.review).toBe(
-    'confirmed',
+  expect(layout!.nodes.find((node) => node.id === 'item:a')!.label).toBe(
+    '喜欢爬山',
   );
   await waitFor(() =>
-    expect(within(dialog).getByRole('button', { name: '不对' })).toBeEnabled(),
+    expect(within(dialog).getByRole('button', { name: '删掉' })).toBeEnabled(),
   );
-  await user.click(within(dialog).getByRole('button', { name: '不对' }));
+  await user.click(within(dialog).getByRole('button', { name: '删掉' }));
   await waitFor(() =>
-    expect(screen.queryByRole('button', { name: '节点 喜欢徒步' })).toBeNull(),
+    expect(screen.queryByRole('button', { name: '节点 喜欢爬山' })).toBeNull(),
   );
 });
 
@@ -490,16 +496,15 @@ it('rolls a failed review back without replacing the layout', async () => {
   await userEvent
     .setup()
     .click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: '对' }),
+      within(screen.getByRole('dialog')).getByRole('button', { name: '删掉' }),
     );
   await waitFor(() =>
     expect(
-      within(screen.getByRole('dialog')).getByRole('button', { name: '对' }),
+      within(screen.getByRole('dialog')).getByRole('button', { name: '删掉' }),
     ).toBeEnabled(),
   );
-  expect(layout!.nodes.find((node) => node.id === 'item:a')!.review).toBe(
-    'unreviewed',
-  );
+  expect(layout!.nodes.some((node) => node.id === 'item:a')).toBe(true);
+  expect(screen.getByRole('button', { name: '节点 喜欢徒步' })).toBeVisible();
   expect(renderer.current!.graphData).toBe(layout);
 });
 
@@ -508,7 +513,8 @@ it('batches the target 3D workload, updates review and highlight attributes, and
     Array.from({ length: 2000 }, (_, i) =>
       item(String(i), {
         dimension_id: `D${(i % 9) + 1}`,
-        evidence: [evidence(`s${i % 300}`)],
+        // The first item stands only on what others said, so it is drawn hollow.
+        evidence: [{ ...evidence(`s${i % 300}`), own_words: i !== 0 }],
         conflict: i === 0 ? '冲突' : '',
       }),
     ),
@@ -562,7 +568,7 @@ it('batches the target 3D workload, updates review and highlight attributes, and
   expect(geometry.getAttribute('position').count).toBe(2300);
   expect(geometry.getAttribute('hollow').getX(0)).toBe(1);
   expect(geometry.getAttribute('conflict').getX(0)).toBe(1);
-  graph.nodes.find((node) => node.id === 'item:0')!.review = 'confirmed';
+  graph.nodes.find((node) => node.id === 'item:0')!.secondhand = false;
   props.highlighted = new Set(['item:0']);
   batch.update(props);
   expect(particles.geometry).toBe(geometry);

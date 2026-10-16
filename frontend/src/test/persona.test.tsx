@@ -24,11 +24,13 @@ vi.mock('../components/ui', async (original) => ({
   ...(await original<typeof import('../components/ui')>()),
   toast: vi.fn(),
 }));
-import { reviewLabels, type ProfileItem } from '../features/profile/types';
+import type { ProfileItem } from '../features/profile/types';
 import { useStatus } from '../stores/status';
 import {
+  isItemSearchUrl,
   isItemSummaryUrl,
   isSourcesUrl,
+  itemSearch,
   itemSummary,
   itemsPage,
   sourcesPage,
@@ -104,7 +106,9 @@ beforeEach(() => {
     if (isItemSummaryUrl(url)) return Promise.resolve(json(itemSummary(rows)));
     if (url.startsWith('/api/persona/items?'))
       return Promise.resolve(json(itemsPage(url, rows)));
-    if (url.endsWith('/review') || url.endsWith('/review-batch'))
+    if (isItemSearchUrl(url))
+      return Promise.resolve(json(itemSearch(url, rows)));
+    if (url.endsWith('/review'))
       return new Promise<Response>((resolve) => {
         resolveReview = resolve;
       });
@@ -153,21 +157,33 @@ async function complete(
   await act(async () => resolveReview(json(updated)));
 }
 
-it('uses plain review status labels', () => {
-  expect(reviewLabels).toEqual({
-    unreviewed: '待确认',
-    confirmed: '已确认',
-    edited: '已修改',
-    rejected: '已否定',
-  });
+it('marks only what is worth knowing: an edit, or a memory resting on what others said', async () => {
+  rows = [
+    { ...item, item_id: 'a', statement: '本人说过的' },
+    { ...item, item_id: 'b', statement: '改过的', review: 'edited' },
+    {
+      ...item,
+      item_id: 'c',
+      statement: '别人说的',
+      evidence: [{ ...item.evidence[0], own_words: false }],
+    },
+  ];
+  mountOverview();
+  await cards(3);
+  const card = (name: string) => within(screen.getByRole('article', { name }));
+  expect(card('本人说过的').queryByText('你改过')).toBeNull();
+  expect(card('本人说过的').queryByText('只有别人的说法')).toBeNull();
+  expect(card('改过的').getByText('你改过')).toBeVisible();
+  expect(card('别人说的').getByText('只有别人的说法')).toBeVisible();
+  // Nothing waits for a confirmation.
+  expect(screen.queryByText(/待确认|已确认/)).toBeNull();
+  expect(screen.queryByRole('button', { name: /^对$|全部确认/ })).toBeNull();
 });
 
 it('groups by plain topics, hides internal ids/metrics, caps suggestions and links optional questions', async () => {
   mount();
   await screen.findByRole('article');
-  expect(
-    screen.getByRole('tab', { name: /看重什么 1\s*· 1 待确认/ }),
-  ).toBeVisible();
+  expect(screen.getByRole('tab', { name: '看重什么 1' })).toBeVisible();
   expect(screen.queryByText('internal')).not.toBeInTheDocument();
   expect(screen.queryByText('2.1')).not.toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
@@ -179,26 +195,27 @@ it('groups by plain topics, hides internal ids/metrics, caps suggestions and lin
   fireEvent.click(article().getByRole('button', { name: '依据 · 展开' }));
   expect(article().getByText('我会先听听')).toBeInTheDocument();
 });
-it('confirms with X-Twin, rolls back errors, and can undo', async () => {
+it('removes a memory with X-Twin once saved, and keeps it when saving fails', async () => {
   const user = userEvent.setup();
   mount();
   await screen.findByRole('article');
-  await user.click(article().getByRole('button', { name: '对' }));
-  expect(article().getByText('已确认')).toBeVisible();
+  await user.click(article().getByRole('button', { name: '删掉' }));
   await act(async () => resolveReview(json({ detail: '保存失败' }, 500)));
-  expect(article().getByText('待确认')).toBeVisible();
-  await user.click(article().getByRole('button', { name: '对' }));
-  await complete('confirmed');
-  const options = fetcher.mock.calls.find(([url]) =>
-    url.endsWith('/review'),
-  )![1] as RequestInit;
+  expect(toast).toHaveBeenCalledWith('保存失败', 'danger');
+  expect(screen.getByRole('article')).toBeVisible();
+  await user.click(article().getByRole('button', { name: '删掉' }));
+  const options = fetcher.mock.calls
+    .filter(([url]) => String(url).endsWith('/review'))
+    .at(-1)![1] as RequestInit;
   expect(new Headers(options.headers).get('X-Twin')).toBe('1');
-  expect(JSON.parse(options.body as string).status).toBe('confirmed');
-  await user.click(article().getByRole('button', { name: '撤销审核' }));
-  await complete('unreviewed');
-  expect(article().getByText('待确认')).toBeVisible();
+  expect(JSON.parse(options.body as string).status).toBe('rejected');
+  await complete('rejected');
+  expect(toast).toHaveBeenCalledWith('删掉了，之后不会再用它', 'success');
+  await waitFor(() =>
+    expect(screen.queryByRole('article')).not.toBeInTheDocument(),
+  );
 });
-it('edits inline, retains failed drafts, and saves new wording', async () => {
+it('edits inline, retains failed drafts, saves new wording, and can go back to the original', async () => {
   const user = userEvent.setup();
   mount();
   await screen.findByRole('article');
@@ -210,20 +227,20 @@ it('edits inline, retains failed drafts, and saves new wording', async () => {
   expect(input).toHaveValue('先核对事实');
   await user.click(article().getByRole('button', { name: '保存修改' }));
   await complete('edited', '先核对事实');
-  expect(article().getByText('已修改')).toBeVisible();
+  expect(article().getByText('你改过')).toBeVisible();
+  expect(article().getByText('原提炼：先听大家的意见')).toBeVisible();
   expect(article().queryByLabelText('修改表述')).not.toBeInTheDocument();
-});
-it('rejects an item and removes it from About', async () => {
-  mount();
-  await screen.findByRole('article');
-  fireEvent.click(article().getByRole('button', { name: '不对' }));
-  await complete('rejected');
-  expect(screen.queryByRole('article')).not.toBeInTheDocument();
+  await user.click(article().getByRole('button', { name: '恢复原样' }));
+  await complete('unreviewed');
+  expect(article().queryByText('你改过')).toBeNull();
+  expect(
+    article().queryByRole('button', { name: '恢复原样' }),
+  ).not.toBeInTheDocument();
 });
 it('aborts outstanding reads and reviews on unmount', async () => {
   const view = mount();
   await screen.findByRole('article');
-  fireEvent.click(article().getByRole('button', { name: '对' }));
+  fireEvent.click(article().getByRole('button', { name: '删掉' }));
   const options = fetcher.mock.calls.find(([url]) =>
     url.endsWith('/review'),
   )![1] as RequestInit;
@@ -245,7 +262,7 @@ function dimensionItems(
   }));
 }
 
-it('counts non-rejected items and defaults to the first dimension awaiting review', async () => {
+it('counts non-rejected items and opens the first topic', async () => {
   rows = [
     ...dimensionItems('D1', 2, 'confirmed'),
     ...dimensionItems('D2', 7),
@@ -253,44 +270,29 @@ it('counts non-rejected items and defaults to the first dimension awaiting revie
     ...dimensionItems('D9', 3, 'rejected'),
   ];
   mountOverview();
-  const tab = await screen.findByRole('tab', {
-    name: /看重什么 7\s*· 7 待确认/,
-  });
+  const tab = await screen.findByRole('tab', { name: '经历与身份 2' });
   expect(tab).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getByRole('tab', { name: '经历与身份 2' })).toBeVisible();
-  expect(
-    screen.getByRole('tab', { name: /怎么做决定 1\s*· 1 待确认/ }),
-  ).toBeVisible();
+  expect(screen.getByRole('tab', { name: '看重什么 7' })).toBeVisible();
+  expect(screen.getByRole('tab', { name: '怎么做决定 1' })).toBeVisible();
   expect(screen.getAllByRole('tab')).toHaveLength(3);
-  expect(screen.getByText('共 10 条，其中 8 条待你确认')).toBeVisible();
+  expect(
+    screen.getByText('共 10 条，回答时都会用到。哪条不对，搜一下改掉或删掉。'),
+  ).toBeVisible();
   expect(screen.getByRole('tablist')).toHaveClass('overflow-x-auto', 'w-full');
   expect(tab).toHaveClass('shrink-0', 'whitespace-nowrap');
 });
 
-it('defaults to the first populated dimension when everything is reviewed', async () => {
-  rows = [
-    ...dimensionItems('D2', 1, 'edited'),
-    ...dimensionItems('D3', 1, 'confirmed'),
-  ];
-  mountOverview();
-  expect(
-    await screen.findByRole('tab', { name: '看重什么 1' }),
-  ).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getByText('共 2 条，其中 0 条待你确认')).toBeVisible();
-});
-
 it('keeps server order, shows five items, and resets expansion after switching tabs', async () => {
-  rows = [...dimensionItems('D1', 1, 'confirmed'), ...dimensionItems('D2', 7)];
-  rows[1].review = 'confirmed';
+  rows = [...dimensionItems('D2', 7), ...dimensionItems('D1', 1, 'confirmed')];
   mountOverview();
-  await screen.findByRole('tab', { name: /看重什么 7\s*· 6 待确认/ });
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('tab', { name: '看重什么 7' }));
   await cards(5);
   expect(
     screen
       .getAllByRole('article')
       .map((card) => card.getAttribute('aria-label')),
-  ).toEqual(rows.slice(1, 6).map((row) => row.statement));
-  const user = userEvent.setup();
+  ).toEqual(rows.slice(0, 5).map((row) => row.statement));
   await user.click(
     await screen.findByRole('button', { name: '展开其余 2 条' }),
   );
@@ -303,167 +305,91 @@ it('keeps server order, shows five items, and resets expansion after switching t
   await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
   await cards(1);
   expect(screen.queryByRole('button', { name: /展开其余/ })).toBeNull();
-  await user.click(
-    screen.getByRole('tab', { name: /看重什么 7\s*· 6 待确认/ }),
-  );
+  await user.click(screen.getByRole('tab', { name: '看重什么 7' }));
   await cards(5);
   expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
 });
 
-it('confirms all unreviewed items in only the selected dimension, refreshes, and preserves expansion', async () => {
+it('finds memories by search, and corrects or removes them right in the results', async () => {
   rows = [
-    ...dimensionItems('D1', 1, 'confirmed'),
     ...dimensionItems('D2', 7),
-    ...dimensionItems('D2', 1, 'rejected').map((row) => ({
-      ...row,
-      item_id: 'rejected',
-    })),
-    ...dimensionItems('D3', 2),
+    {
+      ...item,
+      item_id: 'overtime',
+      dimension_id: 'D3',
+      statement: '不鼓励加班',
+      evidence: [{ ...item.evidence[0], quote: '到点就走' }],
+    },
   ];
-  rows[1].review = 'confirmed';
-  rows[2].review = 'edited';
-  const selectedItems = rows.filter(
-    (row) => row.dimension_id === 'D2' && row.review === 'unreviewed',
-  );
   mountOverview();
-  const selected = await screen.findByRole('tab', { name: /看重什么 7/ });
   const user = userEvent.setup();
-  await user.click(
-    await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
-  await user.click(screen.getByRole('button', { name: '全部确认（5）' }));
-  let dialog = screen.getByRole('dialog', { name: '确认这 5 条？' });
-  expect(dialog).toHaveTextContent(
-    '确认后，分身回答时会优先依据它们。可以随时逐条撤销。',
-  );
-  await user.click(within(dialog).getByRole('button', { name: '取消' }));
-  expect(
-    fetcher.mock.calls.some(([url]) => url.endsWith('/review-batch')),
-  ).toBe(false);
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  await user.click(screen.getByRole('button', { name: '全部确认（5）' }));
-  dialog = screen.getByRole('dialog', { name: '确认这 5 条？' });
-  await user.click(within(dialog).getByRole('button', { name: '全部确认' }));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(screen.getByRole('button', { name: '全部确认（5）' })).toBeDisabled();
-  const options = fetcher.mock.calls.find(([url]) =>
-    url.endsWith('/review-batch'),
-  )![1] as RequestInit;
-  // The server finds the dimension's unreviewed items itself, so any number of them can be confirmed at once.
-  expect(JSON.parse(options.body as string)).toEqual({
-    dimension_id: 'D2',
-    status: 'confirmed',
-  });
-  expect(new Headers(options.headers).get('X-Twin-Persona')).toBe('default');
-  expect(new Headers(options.headers).get('X-Twin')).toBe('1');
-  const ids = new Set(selectedItems.map((row) => row.item_id));
-  rows = rows.map((row) =>
-    ids.has(row.item_id) ? { ...row, review: 'confirmed' } : row,
-  );
-  await act(async () => resolveReview(json({ updated: 5 })));
+  await screen.findByRole('tab', { name: '看重什么 7' });
+  await user.type(screen.getByLabelText('搜索记忆'), '到点');
+  const results = await screen.findByRole('region', { name: '搜索结果' });
   await waitFor(() =>
-    expect(screen.queryByRole('button', { name: /^全部确认/ })).toBeNull(),
+    expect(within(results).getAllByRole('article')).toHaveLength(1),
   );
-  expect(toast).toHaveBeenCalledWith('已确认 5 条', 'success');
+  expect(screen.queryByRole('tablist')).toBeNull();
+  const search = fetcher.mock.calls.find(([url]) => isItemSearchUrl(url))!;
+  expect(search[0]).toBe('/api/persona/items/search?q=%E5%88%B0%E7%82%B9');
   expect(
-    fetcher.mock.calls.filter(([url]) => url.startsWith('/api/persona/items?')),
-  ).toHaveLength(2);
+    new Headers((search[1] as RequestInit).headers).get('X-Twin-Persona'),
+  ).toBe('default');
+  const card = within(within(results).getByRole('article'));
+  await user.click(card.getByRole('button', { name: '改一下' }));
+  fireEvent.change(card.getByLabelText('修改表述'), {
+    target: { value: '加班要看情况' },
+  });
+  await user.click(card.getByRole('button', { name: '保存修改' }));
+  await complete('edited', '加班要看情况', rows.at(-1));
   expect(
-    fetcher.mock.calls.filter(([url]) => url === '/api/persona/coverage'),
-  ).toHaveLength(2);
-  expect(fetcher.mock.calls.some(([url]) => url === '/api/status')).toBe(true);
-  expect(selected).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getAllByRole('article')).toHaveLength(7);
-  expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute(
-    'aria-expanded',
-    'true',
-  );
-  await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
-  expect(screen.queryByRole('button', { name: /^全部确认/ })).toBeNull();
-  await user.click(screen.getByRole('tab', { name: /怎么做决定 2/ }));
-  expect(screen.getByRole('button', { name: '全部确认（2）' })).toBeVisible();
-});
-
-it('reports batch failures without changing the current tab or expanded items', async () => {
-  rows = dimensionItems('D2', 7);
-  mountOverview();
-  const selected = await screen.findByRole('tab', { name: /看重什么 7/ });
-  const user = userEvent.setup();
+    within(results).getByRole('article', { name: '加班要看情况' }),
+  ).toBeVisible();
   await user.click(
-    await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
-  await user.click(screen.getByRole('button', { name: '全部确认（7）' }));
-  await user.click(
-    within(screen.getByRole('dialog')).getByRole('button', {
-      name: '全部确认',
+    within(within(results).getByRole('article')).getByRole('button', {
+      name: '删掉',
     }),
   );
-  await act(async () => resolveReview(json({ detail: '批量确认失败' }, 500)));
-  expect(toast).toHaveBeenCalledWith('批量确认失败', 'danger');
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(screen.getByRole('button', { name: '全部确认（7）' })).toBeEnabled();
-  expect(selected).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getAllByRole('article')).toHaveLength(7);
-  expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute(
-    'aria-expanded',
-    'true',
+  await complete('rejected', '加班要看情况', rows.at(-1));
+  await waitFor(() =>
+    expect(within(results).queryByRole('article')).toBeNull(),
   );
-  expect(
-    fetcher.mock.calls.filter(([url]) => url.startsWith('/api/persona/items?')),
-  ).toHaveLength(1);
+  expect(within(results).getByText('没找到相关的记忆')).toBeVisible();
+  await user.clear(screen.getByLabelText('搜索记忆'));
+  expect(await screen.findByRole('tablist')).toBeVisible();
 });
 
-it('aborts batch confirmation when switching twins', async () => {
-  rows = dimensionItems('D2', 7);
+it('offers a look at memories whose evidence disagrees, without making it a chore', async () => {
+  rows = [
+    ...dimensionItems('D2', 3),
+    { ...dimensionItems('D3', 1)[0], conflict: '说的和做的不一样' },
+  ];
   mountOverview();
   const user = userEvent.setup();
-  await user.click(
-    await screen.findByRole('button', { name: '全部确认（7）' }),
+  const toggle = await screen.findByRole('button', { name: '有矛盾的 1 条' });
+  expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await user.click(toggle);
+  const list = await screen.findByRole('region', { name: '有矛盾的记忆' });
+  await waitFor(() =>
+    expect(within(list).getAllByRole('article')).toHaveLength(1),
   );
-  await user.click(
-    within(screen.getByRole('dialog')).getByRole('button', {
-      name: '全部确认',
-    }),
-  );
-  const options = fetcher.mock.calls.find(([url]) =>
-    url.endsWith('/review-batch'),
-  )![1] as RequestInit;
-  act(() => {
-    setPersonaId('friend');
-    usePersonas.setState({ id: 'friend' });
-  });
-  expect(options.signal?.aborted).toBe(true);
-  await act(async () => resolveReview(json({ updated: 7 })));
-  expect(toast).not.toHaveBeenCalledWith('已确认 7 条', 'success');
+  expect(within(list).getByText('矛盾：说的和做的不一样')).toBeVisible();
   expect(
-    await screen.findByRole('button', { name: '全部确认（7）' }),
-  ).toBeEnabled();
+    fetcher.mock.calls.some(([url]) => String(url).includes('conflict=true')),
+  ).toBe(true);
+  await user.click(toggle);
+  expect(await screen.findByRole('tablist')).toBeVisible();
 });
 
-it('preserves the selected tab and expansion through confirmation, editing, and rejection', async () => {
-  rows = [...dimensionItems('D2', 7, 'confirmed'), ...dimensionItems('D3', 1)];
-  rows[6].review = 'unreviewed';
-  const target = rows[6];
+it('preserves the selected tab and expansion through editing and removal', async () => {
+  rows = [...dimensionItems('D1', 1), ...dimensionItems('D2', 7)];
+  const target = rows[7];
   mountOverview();
-  const selected = await screen.findByRole('tab', {
-    name: /看重什么 7\s*· 1 待确认/,
-  });
   const user = userEvent.setup();
+  const selected = await screen.findByRole('tab', { name: '看重什么 7' });
+  await user.click(selected);
   await user.click(
     await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
-  await user.click(
-    within(screen.getByRole('article', { name: target.statement })).getByRole(
-      'button',
-      { name: '对' },
-    ),
-  );
-  await complete('confirmed', target.statement, target);
-  expect(selected).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getAllByRole('article')).toHaveLength(7);
-  expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute(
-    'aria-expanded',
-    'true',
   );
   const card = within(screen.getByRole('article', { name: target.statement }));
   await user.click(card.getByRole('button', { name: '改一下' }));
@@ -474,15 +400,19 @@ it('preserves the selected tab and expansion through confirmation, editing, and 
   await complete('edited', '新的表述', target);
   expect(selected).toHaveAttribute('aria-selected', 'true');
   expect(screen.getAllByRole('article')).toHaveLength(7);
+  expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
   await user.click(
     within(screen.getByRole('article', { name: '新的表述' })).getByRole(
       'button',
-      { name: '不对' },
+      { name: '删掉' },
     ),
   );
   await complete('rejected', target.statement, target);
   expect(selected).toHaveAttribute('aria-selected', 'true');
-  expect(selected).toHaveTextContent('看重什么 6');
+  await waitFor(() => expect(selected).toHaveTextContent('看重什么 6'));
   expect(screen.getAllByRole('article')).toHaveLength(6);
   expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute(
     'aria-expanded',
@@ -493,11 +423,9 @@ it('preserves the selected tab and expansion through confirmation, editing, and 
 it('resets the tab and expansion when switching twins', async () => {
   rows = [...dimensionItems('D1', 1), ...dimensionItems('D2', 7)];
   mountOverview();
-  await screen.findByRole('tab', { name: /经历与身份 1\s*· 1 待确认/ });
+  await screen.findByRole('tab', { name: '经历与身份 1' });
   const user = userEvent.setup();
-  await user.click(
-    screen.getByRole('tab', { name: /看重什么 7\s*· 7 待确认/ }),
-  );
+  await user.click(screen.getByRole('tab', { name: '看重什么 7' }));
   await user.click(
     await screen.findByRole('button', { name: '展开其余 2 条' }),
   );
@@ -507,13 +435,12 @@ it('resets the tab and expansion when switching twins', async () => {
     usePersonas.setState({ id: 'friend' });
   });
   await waitFor(() =>
-    expect(
-      screen.getByRole('tab', { name: /经历与身份 1\s*· 1 待确认/ }),
-    ).toHaveAttribute('aria-selected', 'true'),
+    expect(screen.getByRole('tab', { name: '经历与身份 1' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    ),
   );
-  await user.click(
-    screen.getByRole('tab', { name: /看重什么 7\s*· 7 待确认/ }),
-  );
+  await user.click(screen.getByRole('tab', { name: '看重什么 7' }));
   await cards(5);
   expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
 });

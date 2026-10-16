@@ -1,4 +1,4 @@
-import type { ProfileItem, ReviewStatus } from '../types';
+import { secondhand, type ProfileItem } from '../types';
 
 export interface GraphSource {
   source_id: string;
@@ -20,7 +20,8 @@ export interface MemoryNode {
   dimensionId?: string;
   colorToken: string;
   size: number;
-  review?: ReviewStatus;
+  /** An item standing only on what others said about the person: drawn hollow and dim. */
+  secondhand?: boolean;
   conflict?: boolean;
   itemId?: string;
   sourceId?: string;
@@ -106,7 +107,7 @@ export function buildMemoryGraph(
       dimensionId: item.dimension_id,
       colorToken,
       size: 2 + Math.min(4, Math.sqrt(item.evidence.length)),
-      review: item.review,
+      secondhand: secondhand(item),
       conflict: !!item.conflict.trim(),
     });
     links.push({ source: dimension, target: id, kind: 'item', weight: 1 });

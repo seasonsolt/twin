@@ -151,9 +151,7 @@ export class Graph3DBatch {
       this.geometry
         .getAttribute('size')
         .setX(index, node.size * (highlighted ? 5 : 4));
-      this.geometry
-        .getAttribute('hollow')
-        .setX(index, node.review === 'unreviewed' ? 1 : 0);
+      this.geometry.getAttribute('hollow').setX(index, node.secondhand ? 1 : 0);
       this.geometry.getAttribute('conflict').setX(index, node.conflict ? 1 : 0);
       this.geometry
         .getAttribute('square')

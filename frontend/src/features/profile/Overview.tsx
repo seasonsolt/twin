@@ -3,13 +3,14 @@ import {
   Button,
   Card,
   EmptyState,
+  Input,
   Skeleton,
   Tabs,
-  useConfirm,
 } from '../../components/ui';
 import { usePersonaId } from '../../lib/usePersonaState';
 import type { ItemQuery } from './types';
 import { ItemCard } from './ItemCard';
+import { useItemSearch } from './useItemSearch';
 import { useProfile } from './useProfile';
 import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
 import { useStatus } from '../../stores/status';
@@ -48,45 +49,16 @@ const backendNames: Record<string, string> = {
 
 const COLLAPSED = 5;
 
-function DimensionItems({
-  dimension,
-  profile,
-}: {
-  dimension: { id: string; total: number; unreviewed: number };
-  profile: ReturnType<typeof useProfile>;
-}) {
-  const [query] = useState<ItemQuery>(() => ({ dimension: [dimension.id] }));
+type Profile = ReturnType<typeof useProfile>;
+
+/** Items matching a fixed query: the first few, then more a page at a time. */
+function ItemList({ query, profile }: { query: ItemQuery; profile: Profile }) {
   const page = usePagedItems(query);
   const [expanded, setExpanded] = useState(false);
-  const confirm = useConfirm();
-  const confirmAll = async () => {
-    if (
-      (await confirm({
-        title: `确认这 ${dimension.unreviewed} 条？`,
-        body: '确认后，分身回答时会优先依据它们。可以随时逐条撤销。',
-        confirmLabel: '全部确认',
-      })) &&
-      (await profile.confirmDimension(dimension.id))
-    )
-      await page.reload();
-  };
   const shown = expanded ? page.items : page.items.slice(0, COLLAPSED);
   const remaining = page.total - shown.length;
   return (
     <div className="space-y-2 md:space-y-3">
-      {dimension.unreviewed > 0 && (
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={profile.batchBusy}
-            disabled={profile.pending.size > 0}
-            onClick={() => void confirmAll()}
-          >
-            全部确认（{dimension.unreviewed}）
-          </Button>
-        </div>
-      )}
       {page.error && (
         <p role="alert" className="text-danger">
           {page.error}{' '}
@@ -136,6 +108,56 @@ function DimensionItems({
   );
 }
 
+/** What the twin would draw on for a search, best first, each ready to correct or remove. */
+function SearchResults({
+  search,
+  profile,
+}: {
+  search: ReturnType<typeof useItemSearch>;
+  profile: Profile;
+}) {
+  return (
+    <section aria-label="搜索结果" className="space-y-2 md:space-y-3">
+      {search.error && (
+        <p role="alert" className="text-danger">
+          {search.error}{' '}
+          <Button variant="ghost" onClick={() => void search.reload()}>
+            重试
+          </Button>
+        </p>
+      )}
+      {search.loading && !search.items.length && <Skeleton className="h-24" />}
+      {!search.loading && !search.error && !search.items.length && (
+        <p className="text-sm text-secondary">没找到相关的记忆</p>
+      )}
+      {search.items.map((item) => (
+        <ItemCard
+          key={item.item_id}
+          item={item}
+          pending={profile.pending.has(item.item_id)}
+          onReview={(reviewed, status, statement) =>
+            profile.review(reviewed, status, statement, search)
+          }
+          kindLabels={profile.coverage?.kind_labels ?? {}}
+        />
+      ))}
+    </section>
+  );
+}
+
+const conflictQuery: ItemQuery = { conflict: true };
+
+function DimensionItems({
+  dimensionId,
+  profile,
+}: {
+  dimensionId: string;
+  profile: Profile;
+}) {
+  const [query] = useState<ItemQuery>(() => ({ dimension: [dimensionId] }));
+  return <ItemList query={query} profile={profile} />;
+}
+
 export function Overview() {
   const personaId = usePersonaId();
   const profile = useProfile(true);
@@ -143,12 +165,12 @@ export function Overview() {
     id: row.dimension_id,
     title: topics[row.dimension_id] ?? row.name,
     total: row.total,
-    unreviewed: row.unreviewed,
   }));
   const total = profile.summary?.total ?? 0;
-  const unreviewed = profile.summary?.unreviewed ?? 0;
-  const defaultDimension =
-    dimensions.find((dimension) => dimension.unreviewed > 0) ?? dimensions[0];
+  const conflicts = profile.summary?.conflicts ?? 0;
+  const [text, setText] = useState('');
+  const [showConflicts, setShowConflicts] = useState(false);
+  const search = useItemSearch(text);
   const status = useStatus((state) => state.data);
   const wanted = [
     ...new Set(
@@ -195,36 +217,59 @@ export function Overview() {
           </EmptyState>
         )}
         {dimensions.length > 0 && (
-          <div className="min-w-0">
-            <p className="mb-3 text-sm text-secondary">
-              共 {total} 条，其中 {unreviewed} 条待你确认
+          <div className="min-w-0 space-y-3">
+            <p className="text-sm text-secondary">
+              共 {total} 条，回答时都会用到。哪条不对，搜一下改掉或删掉。
             </p>
-            <Tabs
-              key={personaId}
-              scrollable
-              defaultValue={defaultDimension.id}
-              items={dimensions.map((dimension) => ({
-                value: dimension.id,
-                label: (
-                  <>
-                    {dimension.title} {dimension.total}
-                    {dimension.unreviewed > 0 && (
-                      <span className="ml-1 text-xs opacity-70">
-                        {' · '}
-                        {dimension.unreviewed} 待确认
-                      </span>
-                    )}
-                  </>
-                ),
-                content: (
-                  <DimensionItems
-                    key={`${personaId}-${dimension.id}`}
-                    dimension={dimension}
-                    profile={profile}
-                  />
-                ),
-              }))}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                type="search"
+                aria-label="搜索记忆"
+                placeholder="搜一件事，比如：怎么看加班"
+                value={text}
+                maxLength={200}
+                onChange={(event) => setText(event.target.value)}
+                className="min-w-0 flex-1 basis-56"
+              />
+              {conflicts > 0 && !search.query && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-pressed={showConflicts}
+                  onClick={() => setShowConflicts(!showConflicts)}
+                >
+                  有矛盾的 {conflicts} 条
+                </Button>
+              )}
+            </div>
+            {search.query ? (
+              <SearchResults search={search} profile={profile} />
+            ) : showConflicts && conflicts > 0 ? (
+              <section aria-label="有矛盾的记忆">
+                <ItemList
+                  key={`${personaId}-conflicts`}
+                  query={conflictQuery}
+                  profile={profile}
+                />
+              </section>
+            ) : (
+              <Tabs
+                key={personaId}
+                scrollable
+                defaultValue={dimensions[0].id}
+                items={dimensions.map((dimension) => ({
+                  value: dimension.id,
+                  label: `${dimension.title} ${dimension.total}`,
+                  content: (
+                    <DimensionItems
+                      key={`${personaId}-${dimension.id}`}
+                      dimensionId={dimension.id}
+                      profile={profile}
+                    />
+                  ),
+                }))}
+              />
+            )}
           </div>
         )}
       </Card>

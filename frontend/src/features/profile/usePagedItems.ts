@@ -16,6 +16,7 @@ export function itemsUrl(query: ItemQuery, limit: number, offset = 0) {
   if (query.review) params.set('review', query.review);
   if (query.q?.trim()) params.set('q', query.q.trim());
   if (query.source_id) params.set('source_id', query.source_id);
+  if (query.conflict) params.set('conflict', 'true');
   if (query.sort) params.set('sort', query.sort);
   if (query.with_sources) params.set('with_sources', 'true');
   params.set('limit', String(limit));

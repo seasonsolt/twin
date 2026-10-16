@@ -1,16 +1,10 @@
 import { useId, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Badge, Button, Field, Textarea, toast } from '../../components/ui';
-import type { Tone } from '../../components/ui/controls';
 import { useMotionPreset } from '../../design/motion';
-import { reviewLabels, type ProfileItem, type ReviewStatus } from './types';
+import { secondhand, type ProfileItem, type ReviewStatus } from './types';
 
-const reviewTones: Record<ReviewStatus, Tone> = {
-  unreviewed: 'neutral',
-  confirmed: 'success',
-  edited: 'info',
-  rejected: 'danger',
-};
+/** What the twin remembers, ready to use: the person corrects a wrong one or removes it, never confirms. */
 export function ItemCard({
   item,
   pending,
@@ -39,11 +33,12 @@ export function ItemCard({
       aria-label={item.statement}
       className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
     >
-      <div className="flex flex-wrap gap-2">
-        <Badge tone={reviewTones[item.review]}>
-          {reviewLabels[item.review]}
-        </Badge>
-      </div>
+      {(item.review === 'edited' || secondhand(item)) && (
+        <div className="flex flex-wrap gap-2">
+          {item.review === 'edited' && <Badge tone="info">你改过</Badge>}
+          {secondhand(item) && <Badge>只有别人的说法</Badge>}
+        </div>
+      )}
       <p className="whitespace-pre-wrap break-words text-md">
         {item.statement}
       </p>
@@ -145,16 +140,7 @@ export function ItemCard({
           </div>
         </form>
       ) : (
-        <div className="flex flex-wrap gap-2" aria-label="条目审核操作">
-          <Button
-            size="sm"
-            disabled={
-              pending || item.review === 'confirmed' || item.review === 'edited'
-            }
-            onClick={() => send('confirmed')}
-          >
-            对
-          </Button>
+        <div className="flex flex-wrap gap-2" aria-label="修改这条记忆">
           <Button
             size="sm"
             variant="secondary"
@@ -168,20 +154,21 @@ export function ItemCard({
           </Button>
           <Button
             size="sm"
-            variant="danger"
+            variant="ghost"
+            className="text-danger"
             disabled={pending}
             onClick={() => send('rejected')}
           >
-            不对
+            删掉
           </Button>
-          {item.review !== 'unreviewed' && (
+          {item.review === 'edited' && (
             <Button
               size="sm"
               variant="ghost"
               disabled={pending}
               onClick={() => send('unreviewed')}
             >
-              撤销审核
+              恢复原样
             </Button>
           )}
         </div>

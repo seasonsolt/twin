@@ -18,6 +18,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import threading
 from collections.abc import Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextvars import copy_context
@@ -43,6 +44,12 @@ CHUNK_CHARS = 6000
 ENTRY_CHARS = 1500
 CONTEXT_CHARS = 300
 MAX_MERGE_CANDIDATES = 80
+# Merge batches are packed, up to MAX_MERGE_CANDIDATES, from segments that end at a candidate whose id hashes higher
+# than those of the MERGE_CUT_WINDOW candidates on either side: the cuts follow the candidates themselves, not their
+# positions, so adding or removing a candidate changes only its own batch (rarely a few after it) and the others
+# merge from the cache. A facet of up to MAX_MERGE_CANDIDATES candidates stays one batch.
+MERGE_CUT_WINDOW = 14
+MERGE_CACHE_PREFIX = "merge_batch:"
 MAX_QUOTES = 3
 STYLE_DIMENSION = "D6"
 
@@ -508,6 +515,62 @@ class MergeDegraded(Exception):
         self.cause = cause
 
 
+def merge_batches(ordered: Sequence[PersonaCandidate]) -> list[list[PersonaCandidate]]:
+    """``ordered`` cut into merge batches at content-defined points (see ``MERGE_CUT_WINDOW``)."""
+    marks = [int(hashlib.sha256(c.candidate_id.encode()).hexdigest()[:12], 16) for c in ordered]
+    segments: list[list[PersonaCandidate]] = []
+    current: list[PersonaCandidate] = []
+    for i, candidate in enumerate(ordered):
+        current.append(candidate)
+        peak = marks[i] == max(marks[max(0, i - MERGE_CUT_WINDOW) : i + MERGE_CUT_WINDOW + 1])
+        if peak or len(current) == MAX_MERGE_CANDIDATES:
+            segments.append(current)
+            current = []
+    if current:
+        segments.append(current)
+    batches: list[list[PersonaCandidate]] = []
+    for segment in segments:
+        if batches and len(batches[-1]) + len(segment) <= MAX_MERGE_CANDIDATES:
+            batches[-1].extend(segment)
+        else:
+            batches.append(list(segment))
+    return batches
+
+
+class MergeCache:
+    """A facet's merged batches, by exactly what the model was shown: a build merges only the batches whose
+    candidates changed, and one stopped halfway keeps the batches it finished. ``prune`` drops the batches this
+    merge did not use, once the facet is saved."""
+
+    def __init__(self, store: PersonaStore, facet_id: str) -> None:
+        self.store = store
+        self.prefix = f"{MERGE_CACHE_PREFIX}{facet_id}:"
+        self.used: set[str] = set()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def key(system: str, user: str) -> str:
+        return content_digest([KERNEL.prompt, KERNEL.taxonomy, system, user])
+
+    def get(self, key: str) -> MergeDraft | None:
+        with self._lock:
+            self.used.add(key)
+        value = self.store.get_meta(self.prefix + key)
+        if value is None:
+            return None
+        try:
+            return MergeDraft.model_validate_json(value)
+        except ValueError:
+            return None
+
+    def put(self, key: str, draft: MergeDraft) -> None:
+        self.store.set_meta(self.prefix + key, draft.model_dump_json())
+
+    def prune(self) -> None:
+        for key in self.store.meta_with_prefix(self.prefix).keys() - self.used:
+            self.store.delete_meta(self.prefix + key)
+
+
 def merge_facet(
     llm: LLM,
     facet_id: str,
@@ -515,13 +578,15 @@ def merge_facet(
     settings: Settings,
     pool: Executor | None = None,
     progress: Progress | None = None,
+    cache: MergeCache | None = None,
 ) -> list[PersonaItem]:
     """Merge a facet's candidates in batches. A batch whose call fails (usually a timeout on a long reply) is
     merged again as two halves; a half that still fails keeps its candidates as separate items, and the facet
     raises ``MergeDegraded`` carrying every item instead of losing them all.
 
     The batches are independent: with ``pool`` they run there, so a facet with many candidates does not merge one
-    batch after another while the build's other workers sit idle; ``progress`` hears of each finished batch."""
+    batch after another while the build's other workers sit idle; ``progress`` hears of each finished batch. With
+    ``cache``, a batch merged before (the same candidates, shown the same way) is not sent to the model again."""
     if len(candidates) == 1:
         c = candidates[0]
         return [_item_from(facet_id, c.statement, c.applies_when, [c], "")]
@@ -531,15 +596,21 @@ def merge_facet(
     )
 
     def merge_batch(batch: Sequence[PersonaCandidate]) -> list[PersonaItem]:
-        call = partial(
-            llm.structured,
-            system=system,
-            user=_render_candidates(batch),
-            schema=MergeDraft,
-            effort=settings.llm.effort_extract,
-            reasoning_effort=settings.llm.effective_reasoning_effort_extract,
-        )
-        draft = retry_truncated(call)
+        user = _render_candidates(batch)
+        key = MergeCache.key(system, user)
+        draft = cache.get(key) if cache is not None else None
+        if draft is None:
+            call = partial(
+                llm.structured,
+                system=system,
+                user=user,
+                schema=MergeDraft,
+                effort=settings.llm.effort_extract,
+                reasoning_effort=settings.llm.effective_reasoning_effort_extract,
+            )
+            draft = retry_truncated(call)
+            if cache is not None:
+                cache.put(key, draft)
         by_id = {c.candidate_id: c for c in batch}
         used: set[str] = set()
         merged: list[PersonaItem] = []
@@ -574,7 +645,7 @@ def merge_facet(
         return items, failure
 
     ordered = sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
-    batches = [ordered[start : start + MAX_MERGE_CANDIDATES] for start in range(0, len(ordered), MAX_MERGE_CANDIDATES)]
+    batches = merge_batches(ordered)
 
     def run(number: int) -> tuple[list[PersonaItem], LLMError | None]:
         outcome = merge_part(batches[number])
@@ -756,10 +827,15 @@ def _extract_and_merge(
 
     # Every facet's batches share one pool of ``max_workers``, so the largest facet does not finish alone.
     pool = ThreadPoolExecutor(max_workers=max(1, settings.max_workers))
+    caches: dict[str, MergeCache] = {}
 
     def merge(job: tuple[str, list[PersonaCandidate]]) -> list[PersonaItem]:
         facet_id, members = job
-        return merge_facet(llm, facet_id, members, settings, pool=pool, progress=safe_progress) if members else []
+        if not members:
+            return []
+        cache = MergeCache(store, facet_id)
+        caches[facet_id] = cache
+        return merge_facet(llm, facet_id, members, settings, pool=pool, progress=safe_progress, cache=cache)
 
     def save(job: tuple[str, list[PersonaCandidate]], outcome: list[PersonaItem] | Exception) -> None:
         facet_id, members = job
@@ -783,6 +859,8 @@ def _extract_and_merge(
         if isinstance(outcome, MergeDegraded):
             return
         store.set_meta(f"merge:{facet_id}", _merge_key(members))
+        # Merged and saved: the batches it did not use (candidates since changed or removed) are no longer needed.
+        (caches.get(facet_id) or MergeCache(store, facet_id)).prune()
         report.facets_merged += 1
 
     try:

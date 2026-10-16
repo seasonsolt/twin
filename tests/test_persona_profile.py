@@ -12,8 +12,8 @@ from twin.config import Settings
 from twin.llm import FakeLLM, LLMError, LLMTruncated
 from twin.persona import profile as pf
 from twin.persona.dimensions import FACETS
-from twin.persona.items import ExtractStats, item_as_of
-from twin.persona.schema import EvidenceClass
+from twin.persona.items import ExtractStats, PersonaCandidate, PEvidence, item_as_of
+from twin.persona.schema import EvidenceClass, SourceKind
 from twin.persona.sources import parse_chat, parse_questionnaire
 from twin.persona.store import PersonaStore
 from twin.usage import BudgetExceeded
@@ -548,6 +548,159 @@ def test_a_failed_merge_keeps_candidates_and_is_merged_next_build(store: Persona
     assert second.degraded == [] and second.facets_merged == 1
     assert [name for name, _, _ in llm.calls] == ["MergeDraft"]
     assert [i.statement for i in store.list_items("2.1")] == ["他认为钱进了账户才算收入"]
+
+
+def test_a_facets_merge_batches_run_at_once_in_the_pool(
+    store: PersonaStore, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    pf.build_profile(store, FakeLLM(handler), settings)
+    base = [c for c in store.list_candidates() if c.facet_id == "2.1"]
+    candidates = [c.model_copy(update={"candidate_id": f"pc_{n:016x}"}) for n in range(6) for c in base[:1]]
+    monkeypatch.setattr(
+        pf, "merge_batches", lambda ordered: [list(ordered[n : n + 2]) for n in range(0, len(ordered), 2)]
+    )
+    # each call waits until all three batches are in flight, which one batch after another never reaches
+    together = threading.Barrier(3, timeout=5)
+
+    def merge(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        together.wait()
+        return {"items": [{"statement": "合并", "candidate_ids": re.findall(r"\[(pc_[0-9a-f]+)\]", user)}]}
+
+    lines: list[str] = []
+    with ThreadPoolExecutor(3) as pool:
+        items = pf.merge_facet(FakeLLM(merge), "2.1", candidates, settings, pool=pool, progress=lines.append)
+    assert [i.member_candidate_ids for i in items] == [
+        [c.candidate_id for c in candidates[n : n + 2]] for n in (0, 2, 4)
+    ]
+    assert sorted(lines) == [f"merged 2.1 batch {n}/3" for n in (1, 2, 3)]
+
+
+def synthetic_candidates(count: int, start: int = 0) -> list[PersonaCandidate]:
+    return [
+        PersonaCandidate(
+            candidate_id=f"pc_{n:016x}",
+            chunk_id="ch_test",
+            facet_id="2.1",
+            statement=f"结论 {n}",
+            evidence=[
+                PEvidence(
+                    expression_id=f"e{n}",
+                    source_id="s",
+                    source_kind=SourceKind.CHAT,
+                    evidence_class=EvidenceClass.SELF_REPORT,
+                    date=dt.date(2026, 1, 1) + dt.timedelta(days=n),
+                    quote="原话",
+                )
+            ],
+        )
+        for n in range(start, start + count)
+    ]
+
+
+def ordered_ids(batches: list[list[PersonaCandidate]]) -> list[tuple[str, ...]]:
+    return [tuple(c.candidate_id for c in batch) for batch in batches]
+
+
+def test_merge_batches_are_cut_by_content_so_an_edit_changes_only_its_own_batch() -> None:
+    import random
+
+    candidates = synthetic_candidates(2000)
+    batches = pf.merge_batches(candidates)
+    assert [c for batch in batches for c in batch] == candidates
+    assert all(len(b) <= pf.MAX_MERGE_CANDIDATES for b in batches)
+    assert sum(map(len, batches)) / len(batches) > 60  # close to the maximum, so few merges are split
+    assert pf.merge_batches(candidates[:80]) == [candidates[:80]]  # a facet that fits stays one batch
+    before = set(ordered_ids(batches))
+    rng = random.Random(7)
+    changed: list[int] = []
+    for trial in range(200):
+        edited = list(candidates)
+        position = rng.randrange(len(edited))
+        if trial % 2:
+            del edited[position]
+        else:
+            edited.insert(position, synthetic_candidates(1, start=10_000 + trial)[0])
+        changed.append(len(set(ordered_ids(pf.merge_batches(edited))) - before))
+    # one candidate changes its own batch; now and then the packing settles only some batches later
+    assert min(changed) >= 1 and sum(changed) / len(changed) < 1.6
+    assert sum(n == 1 for n in changed) >= 0.85 * len(changed) and max(changed) <= 15
+    # the fixed slices of before: every batch after the edit would have moved
+    sliced = [candidates[i : i + 80] for i in range(0, len(candidates), 80)]
+    shifted = [[synthetic_candidates(1, start=9999)[0], *candidates][i : i + 80] for i in range(0, 2001, 80)]
+    assert len(set(ordered_ids(shifted)) - set(ordered_ids(sliced))) == len(shifted)
+
+
+def test_merge_reuses_cached_batches_and_prunes_the_unused(settings: Settings) -> None:
+    store = PersonaStore(":memory:")
+    calls: list[int] = []
+
+    def merge(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        ids = re.findall(r"\[(pc_[0-9a-f]+)\]", user)
+        calls.append(len(ids))
+        return {"items": [{"statement": f"合并 {ids[0]}", "candidate_ids": ids}]}
+
+    llm = FakeLLM(merge)
+    candidates = synthetic_candidates(400)
+    cache = pf.MergeCache(store, "2.1")
+    first = pf.merge_facet(llm, "2.1", candidates, settings, cache=cache)
+    batches = len(pf.merge_batches(candidates))
+    assert len(calls) == batches > 3
+    cache.prune()
+    assert len(store.meta_with_prefix("merge_batch:2.1:")) == batches
+
+    calls.clear()
+    again = pf.merge_facet(llm, "2.1", candidates, settings, cache=pf.MergeCache(store, "2.1"))
+    assert calls == [] and [i.model_dump() for i in again] == [i.model_dump() for i in first]
+
+    calls.clear()
+    grown = candidates[:200] + synthetic_candidates(1, start=10_000) + candidates[200:]
+    cache = pf.MergeCache(store, "2.1")
+    items = pf.merge_facet(llm, "2.1", grown, settings, cache=cache)
+    assert 1 <= len(calls) <= 3 and sum(calls) < len(grown) // 2
+    old_batches, new_batches = set(ordered_ids(pf.merge_batches(candidates))), set(ordered_ids(pf.merge_batches(grown)))
+    # only the batches that changed were sent to the model; every other batch kept its items (one per batch here)
+    assert len(calls) == len(new_batches - old_batches)
+    assert len({i.item_id for i in first} - {i.item_id for i in items}) == len(old_batches - new_batches)
+    cache.prune()
+    assert len(store.meta_with_prefix("merge_batch:2.1:")) == len(pf.merge_batches(grown))
+
+
+def test_a_merge_stopped_halfway_keeps_its_finished_batches(settings: Settings) -> None:
+    store = PersonaStore(":memory:")
+    candidates = synthetic_candidates(400)
+    batches = len(pf.merge_batches(candidates))
+    calls: list[int] = []
+
+    def stops(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        calls.append(1)
+        if len(calls) > 2:
+            raise BudgetExceeded("budget")
+        return {"items": []}
+
+    with pytest.raises(BudgetExceeded):
+        pf.merge_facet(FakeLLM(stops), "2.1", candidates, settings, cache=pf.MergeCache(store, "2.1"))
+    assert len(store.meta_with_prefix("merge_batch:2.1:")) == 2
+    calls.clear()
+    pf.merge_facet(FakeLLM(lambda *a: {"items": []}), "2.1", candidates, settings, cache=pf.MergeCache(store, "2.1"))
+    assert len(store.meta_with_prefix("merge_batch:2.1:")) == batches
+
+
+def test_build_merges_from_the_cache_and_drops_it_with_the_facet(store: PersonaStore, settings: Settings) -> None:
+    pf.build_profile(store, FakeLLM(handler), settings)
+    cached = store.meta_with_prefix("merge_batch:")
+    items = {i.item_id: i.statement for i in store.list_items()}
+    assert cached
+    # the facet's merge record is lost (a build stopped before saving it): merging again calls no model
+    for key in store.meta_with_prefix("merge:"):
+        store.delete_meta(f"merge:{key}")
+    llm = FakeLLM(handler)
+    pf.build_profile(store, llm, settings)
+    assert "MergeDraft" not in [name for name, _, _ in llm.calls]
+    assert {i.item_id: i.statement for i in store.list_items()} == items
+    assert store.meta_with_prefix("merge_batch:") == cached
 
 
 def test_a_failed_merge_batch_is_merged_again_in_halves(store: PersonaStore, settings: Settings) -> None:

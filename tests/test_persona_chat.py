@@ -472,6 +472,18 @@ def test_index_stores_each_slice_and_continues_after_a_failure(
     ]
 
 
+def test_index_cleared_by_an_interrupted_run_without_the_marker_is_stale(
+    store: PersonaStore, settings: Settings
+) -> None:
+    embedder = HashingEmbedder()
+    assert not pc.index_stale(store, embedder)  # nothing indexed yet
+    pc.index_persona(store, embedder, settings)
+    store.clear_vectors("others")  # an earlier release cleared it for the new model, then stopped
+    assert pc.index_stale(store, embedder)
+    assert pc.index_persona(store, embedder, settings)["others"] == 2
+    assert not pc.index_stale(store, embedder)
+
+
 def test_retrieve_respects_as_of(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     pc.index_persona(store, embedder, settings)

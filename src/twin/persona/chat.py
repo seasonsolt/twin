@@ -207,10 +207,12 @@ def index_persona(
 
 def index_stale(store: PersonaStore, embedder: Embedder) -> bool:
     """Some namespace still holds vectors of another embedding model, which retrieval leaves out until
-    ``index_persona`` embeds them again, or an earlier ``index_persona`` stopped before embedding everything."""
+    ``index_persona`` embeds them again, or an earlier ``index_persona`` stopped before embedding everything: it left
+    its marker, or (before the marker existed) it cleared a namespace for a new model but never filled it."""
     fingerprint = embedder_fingerprint(embedder)
-    return store.get_meta(INDEX_PENDING) is not None or any(
-        store.get_meta(f"embedder:{namespace}") not in (None, fingerprint) for namespace in VECTOR_NAMESPACES
+    spaces = [store.get_meta(f"embedder:{namespace}") for namespace in VECTOR_NAMESPACES]
+    return store.get_meta(INDEX_PENDING) is not None or (
+        any(space is not None for space in spaces) and any(space != fingerprint for space in spaces)
     )
 
 

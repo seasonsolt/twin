@@ -1,3 +1,5 @@
+import type { Citation } from '../chat/types';
+
 export type WorkStatus = 'idle' | 'running' | 'failed';
 
 export interface WorkTurn {
@@ -6,6 +8,8 @@ export interface WorkTurn {
   at: string;
   steps: string[];
   files: string[];
+  /** A reply answered on chat's path: what it rests on, shown as chat shows it. */
+  cited?: Citation[];
 }
 
 export interface WorkFile {

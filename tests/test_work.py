@@ -158,6 +158,9 @@ def test_the_persons_own_task_recalls_with_the_ledger_and_hands_over_office_file
     turn, log = step(store, task, model, settings, "把老王的报价整理成表")
     assert {"recall", "pending_questions", "write_word", "write_excel", "write_file"} <= set(model._tools)
     assert "你就是张总本人" in model.system and "会上定了什么和谁答应了什么" in model.system
+    # The same core items and voice samples chat carries, so a task sounds like the person too.
+    assert "## 核心画像" in model.system and "[pi_test] 核心价值排序：回款优先，先收钱再扩张" in model.system
+    assert "## 说话样本" in model.system and "不把回复写成带小标题、列表的报告" in model.system
     recalled = model.tool_results()["recall"]
     assert "给华澜新报价方案" in recalled and "回款优先" in recalled
     assert turn.content == "表和周报都写好了：报价跟进.xlsx、周报.docx。"
@@ -187,6 +190,48 @@ def test_a_visitors_task_has_no_ledger_and_no_pending_questions(tmp_path: Path) 
     assert "不要替自己答应新的事" in model.system and "会上定了什么" not in model.system
     recalled = model.tool_results()["recall"]
     assert "回款优先" in recalled and "给华澜新报价方案" not in recalled
+
+
+def answering(kind: str = "answer") -> FakeLLM:
+    """A chat model that routes the message to ``kind`` and, on chat's path, answers from pi_test."""
+    draft = {
+        "reply": "先收钱，再说扩张。",
+        "citations": ["[pi_test]"],
+        "confidence": 0.9,
+        "abstain": False,
+        "mode": "grounded",
+        "asked": "怎么看扩张",
+        "answered": True,
+    }
+    return FakeLLM(lambda _s, _u, schema: {"kind": kind} if schema.__name__ == "Route" else draft)
+
+
+def test_a_question_is_answered_on_chats_path_without_the_agent(tmp_path: Path) -> None:
+    from twin.persona.work import WorkTurn
+
+    seed(tmp_path / "twin.db")
+    settings = Settings(db_path=tmp_path / "twin.db")
+    store = WorkStore(settings.db_path)
+    task = store.create("写周报", MEMBER, visitor=False)
+    task.turns = [WorkTurn(role="user", content="写周报", at="t"), WorkTurn(role="assistant", content="写好了", at="t")]
+    model = Scripted(steps=[])
+    llm = answering()
+    log: list[str] = []
+    files = store.files_dir(task.task_id)
+    turn = run_turn(task, "你怎么看扩张？", settings, model, llm, HashingEmbedder(), files, log.append, name="张总")
+    assert model._seen == [] and log == ["直接回答"] and turn.steps == []
+    assert turn.content == "先收钱，再说扩张。" and turn.citations == ["pi_test"] and turn.files == []
+    route_call = next(user for name, _, user in llm.calls if name == "Route")
+    assert "张总：写好了" in route_call and "现在这句话：你怎么看扩张？" in route_call
+    # Chat saw the whole conversation, as it would in chat.
+    _, _, chat_user = next(c for c in llm.calls if c[0] == "ChatDraft")
+    assert "对方：写周报" in chat_user and "你：写好了" in chat_user
+
+    # Something to make goes to the agent, which sees the person's voice.
+    made = run_turn(
+        task, "整理成表", settings, model, answering("task"), HashingEmbedder(), files, log.append, name="张总"
+    )
+    assert made.content == "做完了。" and len(model._seen) == 1 and made.citations == []
 
 
 def test_files_stay_inside_the_task_directory(tmp_path: Path) -> None:
@@ -278,6 +323,25 @@ def test_a_task_runs_in_the_background_and_its_files_download(local: tuple[TestC
     assert client.delete(f"/api/persona/work/{task_id}").json() == {"deleted": True}
     assert client.get(f"/api/persona/work/{task_id}").status_code == 404
     assert client.post("/api/persona/work", json={"text": "x", "task_id": "w_000000000000"}).status_code == 404
+
+
+def test_an_answered_turn_shows_what_it_rests_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    settings = Settings(target_name="张总", db_path=tmp_path / "twin.db")
+    seed(settings.db_path)
+    model = Scripted(steps=[])
+    app = create_app(
+        settings, llm_factory=answering, embedder_factory=HashingEmbedder, work_model_factory=lambda: model
+    )
+    with TestClient(app, base_url="http://127.0.0.1", headers=CSRF) as client:
+        task_id = client.post("/api/persona/work", json={"text": "你怎么看扩张？"}).json()["task"]["task_id"]
+        task = wait_idle(client, task_id)
+    question, answer = task["turns"]
+    assert "cited" not in question and model._seen == []
+    assert answer["content"] == "先收钱，再说扩张。" and answer["steps"] == []
+    assert answer["cited"] == [
+        {"id": "pi_test", "kind": "item", "facet": "核心价值排序", "text": "回款优先，先收钱再扩张"}
+    ]
 
 
 class Hold:

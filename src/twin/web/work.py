@@ -2,13 +2,15 @@
 
 A task belongs to whoever started it, in the role they started it in: the person's own tasks, and each visitor's
 of a public twin, are only listed and opened by them. A turn runs as a background job; the task records its
-progress lines while it runs and the reply with its files once it ends. While it runs, a new message goes to the
+progress lines while it runs and the reply with its files once it ends; a reply answered on chat's path shows
+what it rests on, as chat does. While it runs, a new message goes to the
 agent at its next step instead of waiting, and a stop ends it at the next step.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,7 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..persona.store import stored_identity
+from ..persona.store import PersonaStore, stored_identity
 from ..persona.work import (
     MAX_TEXT,
     Steering,
@@ -38,7 +40,11 @@ class WorkBody(BaseModel):
     task_id: str | None = None
 
 
-def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobManager) -> None:
+CitedView = Callable[[PersonaStore, Sequence[str]], list[dict[str, Any]]]
+
+
+def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobManager, cited: CitedView) -> None:
+    """``cited`` says what a turn's citations are, as chat shows them."""
     store = WorkStore(settings.db_path)
     # Starting a turn checks and marks the task running in one step, so a task never runs two turns at once.
     admission = threading.Lock()
@@ -56,6 +62,11 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
 
     def view(task: WorkTask) -> dict[str, Any]:
         data = task_view(store, task)
+        if any(t.citations for t in task.turns):
+            with PersonaStore(settings.db_path) as persona:
+                for turn, shown in zip(task.turns, data["turns"], strict=True):
+                    if turn.citations:
+                        shown["cited"] = cited(persona, turn.citations)
         snapshot = jobs.snapshot(task.job_id) if task.job_id and task.status == "running" else None
         data["progress"] = snapshot["progress"] if snapshot else []
         steering = steerings.get(task.task_id)

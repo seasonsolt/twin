@@ -18,6 +18,7 @@ import {
 } from '../components/ui';
 import type { Capabilities } from '../features/avatar/types';
 import { ChatStage } from '../features/chat/ChatStage';
+import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import {
   useComposerLayout,
@@ -136,6 +137,11 @@ function Turn({
       <div className="twin-bubble min-w-0">
         <MessageText text={turn.content} />
       </div>
+      {!!turn.cited?.length && (
+        <div className="reply-actions mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-2">
+          <Citations cited={turn.cited} />
+        </div>
+      )}
       {delivered.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2">
           {delivered.map((file) => (

@@ -1,12 +1,14 @@
 export interface Citation {
   id: string;
-  kind: 'item' | 'expression' | 'ledger';
+  kind: 'item' | 'expression' | 'ledger' | 'file';
   text: string;
   facet?: string;
   /** A ledger citation's entry kind: 决定、承诺、异议 or 进展. */
   ledger_kind?: string;
   date?: string | null;
   channel?: string;
+  file_name?: string;
+  locator?: string;
 }
 
 export interface ChatReply {
@@ -20,6 +22,8 @@ export interface ChatReply {
   as_of?: string | null;
   cited?: Citation[];
   mode?: 'grounded' | 'general' | 'inferred' | 'abstain';
+  elapsed_ms?: number;
+  completed_at?: string;
 }
 
 export interface Turn {

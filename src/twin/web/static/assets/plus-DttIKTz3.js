@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:src/twin/web/static/assets/plus-DttIKTz3.js
-import{c as a}from"./index-Cfr7fcDD.js";const e={name:"plus",size:24,node:[["path",{d:"M5 12h14",key:"1ays0h"}],["path",{d:"M12 5v14",key:"s699le"}]]};e.node;const s=a(e);export{s as P};
-========
-import{c as a}from"./index-CJcsNccI.js";const e={name:"plus",size:24,node:[["path",{d:"M5 12h14",key:"1ays0h"}],["path",{d:"M12 5v14",key:"s699le"}]]};e.node;const s=a(e);export{s as P};
->>>>>>>> origin/stable:src/twin/web/static/assets/plus-Ca_Amtw8.js

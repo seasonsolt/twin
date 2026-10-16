@@ -179,16 +179,17 @@ def run_chat(
 def chat_payload(
     store: PersonaStore, reply: ChatReply, attachment_passages: Sequence[AttachmentPassage] = ()
 ) -> dict[str, Any]:
-    return {**reply.model_dump(mode="json"), "cited": cited_view(store, reply.citations, attachment_passages)}
+    return {
+        **reply.model_dump(mode="json"),
+        "cited": cited_view(store, reply.citations, {p.citation_id: p for p in attachment_passages}),
+    }
 
 
 def cited_view(
-    store: PersonaStore, citations: Sequence[str], attachment_passages: Sequence[AttachmentPassage] = ()
+    store: PersonaStore, citations: Sequence[str], attachments: dict[str, AttachmentPassage] | None = None
 ) -> list[dict[str, Any]]:
-    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out.
-    ``attachment_passages`` are the files sent with this turn, which are cited but never stored."""
+    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out."""
     items = store.get_items(list(citations))
-    attachments = {passage.citation_id: passage for passage in attachment_passages}
     cited: list[dict[str, Any]] = []
     for ref in citations:
         if (item := items.get(ref)) is not None and item.review is not ReviewStatus.REJECTED:
@@ -197,6 +198,16 @@ def cited_view(
         elif (e := store.get_expression(ref)) is not None:
             day = e.date.isoformat() if e.date else None
             cited.append({"id": ref, "kind": "expression", "date": day, "channel": e.channel, "text": e.text})
+        elif (passage := (attachments or {}).get(ref)) is not None:
+            cited.append(
+                {
+                    "id": ref,
+                    "kind": "file",
+                    "file_name": passage.file_name,
+                    "locator": passage.locator,
+                    "text": passage.text,
+                }
+            )
         elif ref.startswith(LEDGER_PREFIX) and (entry := store.get_ledger_entry(ref[len(LEDGER_PREFIX) :])) is not None:
             cited.append(
                 {
@@ -206,16 +217,6 @@ def cited_view(
                     "date": entry.meeting_date.isoformat() if entry.meeting_date else None,
                     "channel": entry.meeting_title,
                     "text": entry.quote,
-                }
-            )
-        elif (passage := attachments.get(ref)) is not None:
-            cited.append(
-                {
-                    "id": ref,
-                    "kind": "file",
-                    "file_name": passage.file_name,
-                    "locator": passage.locator,
-                    "text": passage.text,
                 }
             )
     return cited
@@ -780,7 +781,6 @@ def register(
         # The ledger is private: only the person themselves, never a visitor of a public twin, chats with it.
         ledger = not request.scope.get("twin_visitor")
         with open_store() as store:
-            # Files sent with the turn are material even before anything is built.
             profiled = store.has_items() or bool(attachment_passages)
         ticket: Ticket | None = None
         if profiled:
@@ -818,7 +818,6 @@ def register(
             async with ticket.running():
                 with await open_store_off_loop(settings.db_path) as store:
                     chat = PersonaChat(store, llm, embedder, settings, ledger=ledger)
-                    # A turn with files stays out of the chat log, since its files are not kept.
                     async with aclosing(
                         chat.stream_reply(messages, attachments=attachment_passages, persist=not attachment_passages)
                     ) as replies:

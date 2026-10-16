@@ -587,16 +587,16 @@ class PersonaChat:
             draft = parser.draft()
         yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist))
 
+    @staticmethod
+    def _attach_files(ctx: PersonaContext, attachments: Sequence[AttachmentPassage]) -> None:
+        ctx.attachments = list(attachments)
+        ctx.ids.update(passage.citation_id for passage in attachments)
+
     def _unbuilt_reply(self, as_of: dt.date | None) -> ChatReply | None:
         """The reply while nothing has been built yet; None once there is a profile to answer from."""
         if not self.store.has_items() and self.store.get_meta("built_at") is None:
             return no_profile_reply(self.store, as_of)
         return None
-
-    @staticmethod
-    def _attach_files(ctx: PersonaContext, attachments: Sequence[AttachmentPassage]) -> None:
-        ctx.attachments = list(attachments)
-        ctx.ids.update(passage.citation_id for passage in attachments)
 
     def _search(
         self, messages: Sequence[ChatTurn], as_of: dt.date | None, today: dt.date | None = None
@@ -665,8 +665,6 @@ class PersonaChat:
             reason = f"回复没有给出所问内容：{draft.asked.strip()}"
         elif not reason and unsupported:
             reason = "没有相关的间接依据，不做推测"
-        elif not reason and draft.abstain:
-            reason = "模型标记为未形成确定结论，未说明具体原因"
         if abstain:
             confidence = min(confidence, UNCITED_CONFIDENCE_CAP)
         elif draft.mode == "general":
@@ -905,8 +903,8 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
             materials.append(_clip(expression.context, 160))
     materials.extend(_excerpt(e.text, ctx.query, _other_chars(n)) for n, (e, _) in enumerate(ctx.others))
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
-    materials.extend(e.quote for e, _ in ctx.ledger)
     materials.extend(passage.text for passage in ctx.attachments)
+    materials.extend(e.quote for e, _ in ctx.ledger)
     return materials
 
 
@@ -1022,16 +1020,16 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     if ctx.others:
         lines.append("别人对我说过的话（是别人说的，不是我的观点或经历）：")
         lines.extend(_render_other(e, ctx.query, n) for n, (e, _) in enumerate(ctx.others))
-    if ctx.ledger:
-        today = ctx.today or ctx.as_of or dt.date.today()
-        lines.append("会上的决定、承诺、异议和进展（承诺账本；状态是程序按之后会上的进展算出的）：")
-        lines.extend(_render_ledger(e, status, today) for e, status in ctx.ledger)
     if ctx.attachments:
         lines.append("本次上传文件摘录（只用于当前问题，不是本人档案）：")
         lines.extend(
             f"- [{passage.citation_id}] {passage.file_name}（{passage.locator}）：{passage.text}"
             for passage in ctx.attachments
         )
+    if ctx.ledger:
+        today = ctx.today or ctx.as_of or dt.date.today()
+        lines.append("会上的决定、承诺、异议和进展（承诺账本；状态是程序按之后会上的进展算出的）：")
+        lines.extend(_render_ledger(e, status, today) for e, status in ctx.ledger)
     return lines
 
 

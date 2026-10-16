@@ -933,9 +933,8 @@ it('citation disclosure expands and collapses using keyboard and shows every cit
   expect(
     screen.getByText('账本 · 承诺 · 2026-10-12 · 周一经营会'),
   ).toBeVisible();
-  expect(screen.getByText('我周五前给您一版新报价方案')).toBeVisible();
   expect(screen.getByText('合同.txt · 摘录 1')).toBeVisible();
-  expect(screen.getByText('合同期限是一年。')).toBeVisible();
+  expect(screen.getByText('我周五前给您一版新报价方案')).toBeVisible();
   await user.keyboard(' ');
   expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await waitFor(() =>

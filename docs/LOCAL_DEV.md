@@ -92,7 +92,7 @@ uv run twin --config ./twin.toml compute status
 
 - **回退**：任何一步失败都只提示原因、不阻塞启动，检索继续使用 `hashing`（本机按字符片段计算，只能按字面匹配），下次运行脚本再试。只想保留 `hashing` 时加 `--no-embed`。
 - **运行中 Ollama 退出**：聊天和记忆搜索自动只按关键词检索，不报错；重新打开 Ollama 即恢复。
-- **下载失败提示 `non-public`**：代理软件的 fake-ip / TUN 模式把下载地址解析成了内网 IP，Ollama 拒绝下载。把 `r2.cloudflarestorage.com` 加入代理的 fake-ip 过滤名单后重新运行脚本。
+- **开着代理也能下载**：代理软件的 fake-ip / TUN 模式会把下载地址解析成内网 IP，Ollama 因此拒绝下载；这时脚本改为自己从同一个 Ollama 官方源下载模型文件，按清单校验 sha256 后通过 Ollama 的接口导入，结果与 `ollama pull` 相同，无需改代理设置。
 - **自己配置的向量服务**：`[embed]` 已手写其他服务时脚本不改动；本工具只替换模板里默认的 `hashing` 表。停止网页后，Ollama 仍按它自己的方式运行，需要时在菜单栏退出或结束 `ollama serve` 进程。
 
 ## 会议录音演示

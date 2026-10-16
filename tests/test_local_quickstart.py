@@ -526,7 +526,9 @@ class FakeResponse:
 
 
 @pytest.mark.parametrize("outcome", ["success", "proxy", "cut"])
-def test_ollama_pull_reports_progress_and_explains_failures(monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
+def test_ollama_pull_reports_progress_and_tells_a_refused_download_apart(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
     total = 1_200_000_000
     events: list[dict[str, object]] = [{"status": "pulling manifest"}]
     events += [{"status": "pulling", "total": total, "completed": total * k // 4} for k in range(5)]
@@ -534,17 +536,72 @@ def test_ollama_pull_reports_progress_and_explains_failures(monkeypatch: pytest.
         events.append({"status": "success"})
     if outcome == "proxy":
         refused = "redirect target not allowed: x.r2.cloudflarestorage.com resolves to non-public 198.18.3.1"
-        events = [{"error": refused}]
+        events = [{"status": "pulling", "total": total, "completed": 0}, {"error": refused}]
     monkeypatch.setattr(ollama._OPENER, "open", lambda request, timeout: FakeResponse(events))
     lines: list[str] = []
     if outcome == "success":
         ollama.pull(lines.append)
-        assert lines[1:] == ["  0%", "  20%", "  50%", "  70%", "  100%"]
+        assert lines[1:] == ["  20%", "  50%", "  70%", "  100%"]
         return
     with pytest.raises(ollama.OllamaError) as raised:
         ollama.pull(lines.append)
-    assert ("fake-ip" in str(raised.value)) == (outcome == "proxy")
+    # A refusal before any byte arrives prints no progress line.
+    assert (len(lines) == 1) == (outcome == "proxy")
+    assert isinstance(raised.value, ollama.DownloadRefused) == (outcome == "proxy")
     assert ("下载中断" in str(raised.value)) == (outcome == "cut")
+
+
+@pytest.mark.parametrize("intact", [True, False])
+def test_refused_pull_fetches_the_registry_files_checks_and_imports_them(
+    monkeypatch: pytest.MonkeyPatch, intact: bool
+) -> None:
+    import hashlib
+    import io
+
+    weights = b"gguf-weights" * 1000
+    digest = "sha256:" + hashlib.sha256(weights if intact else b"other").hexdigest()
+    manifest = {
+        "layers": [
+            {"mediaType": "application/vnd.ollama.image.model", "digest": digest, "size": len(weights)},
+            {"mediaType": "application/vnd.ollama.image.license", "digest": "sha256:lic", "size": 3},
+        ]
+    }
+    registry = {
+        f"{ollama.REGISTRY}/manifests/latest": json.dumps(manifest).encode(),
+        f"{ollama.REGISTRY}/blobs/{digest}": weights,
+        f"{ollama.REGISTRY}/blobs/sha256:lic": b"MIT",
+    }
+    uploads: list[tuple[str, bytes]] = []
+    created: list[dict[str, object]] = []
+
+    def urlopen(request: object, timeout: float) -> io.BytesIO:
+        url = request if isinstance(request, str) else request.full_url  # type: ignore[attr-defined]
+        return io.BytesIO(registry[url])
+
+    def upload(request, timeout):  # type: ignore[no-untyped-def]
+        uploads.append((request.full_url, request.data.read()))
+        return io.BytesIO(b"")
+
+    def refused(progress):  # type: ignore[no-untyped-def]
+        raise ollama.DownloadRefused("resolves to non-public 198.18.3.1")
+
+    monkeypatch.setattr(ollama.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(ollama._OPENER, "open", upload)
+    monkeypatch.setattr(ollama, "_call", lambda path, body, timeout: created.append(body) or {"status": "success"})
+    monkeypatch.setattr(ollama, "start", lambda: None)
+    monkeypatch.setattr(ollama, "has_model", lambda: False)
+    monkeypatch.setattr(ollama, "pull", refused)
+    probed: list[list[str]] = []
+    monkeypatch.setattr(ollama, "make_embedder", lambda settings: type("E", (), {"embed": staticmethod(probed.append)}))
+    if not intact:
+        with pytest.raises(ollama.OllamaError, match="校验不通过"):
+            ollama.prepare(lambda line: None)
+        assert uploads == [] and created == [] and probed == []
+        return
+    ollama.prepare(lambda line: None)
+    assert uploads == [(f"{ollama.OLLAMA}/api/blobs/{digest}", weights)]
+    assert created == [{"model": "bge-m3", "files": {"model.gguf": digest}, "stream": False, "license": "MIT"}]
+    assert probed == [["连通测试"]]
 
 
 def test_local_up_dry_run_embed_opt_out(tmp_path: Path) -> None:

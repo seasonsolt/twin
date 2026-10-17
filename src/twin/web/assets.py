@@ -7,6 +7,7 @@ import math
 import subprocess
 import tempfile
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Annotated, Any
 
@@ -137,7 +138,8 @@ def voice(path: Path, directory: Path) -> tuple[bytes, float]:
         return clean.getvalue(), duration
 
 
-def register(app: FastAPI, settings: Settings) -> None:
+def register(app: FastAPI, settings: Settings, on_voice: Callable[[], object] | None = None) -> None:
+    """``on_voice`` runs after a new voice is saved, so recordings are compared with it."""
     store = AssetStore(settings.db_path)
 
     @app.get("/api/me/assets")
@@ -179,6 +181,8 @@ def register(app: FastAPI, settings: Settings) -> None:
             content, duration = await run_in_threadpool(voice, Path(upload.name), store.directory)
             profile = await run_in_threadpool(store.save, "voice", content, duration)
             await run_in_threadpool(store.publish_voice, settings.tts.voice_dir)
+            if on_voice is not None:
+                await run_in_threadpool(on_voice)
             return profile
 
     @app.get("/api/me/voice/reference")

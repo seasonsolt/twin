@@ -30,7 +30,7 @@ uv run twin --config ./twin.toml compute install asr-funasr --download-models
 
 已有模型时去掉 `--download-models`，不会下载模型。安装会向当前配置写入 `[asr] provider = "command"`、本机命令路径、`language = "zh"`、`egress = "local"`，不覆盖已有手写节。重启网页后生效；详见 [会议录音转写](LOCAL_DEV.md#会议录音转写默认开启)。也可手动配置遵守以下契约的其他命令。换识别模型或改参数前，先用 [语音识别评测](ASR_EVAL.md) 与当前基线对比。
 
-命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`；评测可再加 `"references": {"<名称>": "<绝对 WAV 路径>"}`（最多 32 份，asr-funasr 1.2.1 起），每个说话人另返回 `"similarities": {"<名称>": 0.71}`，一次转写比较多份声音。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
+命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`；评测可再加 `"references": {"<名称>": "<绝对 WAV 路径>"}`（最多 32 份，asr-funasr 1.2.1 起），每个说话人另返回 `"similarities": {"<名称>": 0.71}`，一次转写比较多份声音。asr-funasr 1.3.0 起每个说话人另返回 `"embedding"`（单位声纹）；请求带 `"embed": true` 时只计算 `audio` 整段的声纹，返回 `{"ok": true, "embedding": [...]}`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
 
 ### 视频形象候选命令
 
@@ -178,7 +178,7 @@ B2 的 `SynthCapabilities.voices: list[str] | None = None` 为追加字段：`No
 
 API：`GET /api/me/assets`（profile、speech_clone、video），`PUT /api/me/portrait`（multipart file，最多 15MB；可选 x/y/w/h 归一化裁剪），
 `DELETE /api/me/portrait`，`PUT /api/me/voice`（multipart file，最多 95MB），
-`GET /api/me/voice/reference`，`DELETE /api/me/voice`。Content-Length 超限在解析前拒绝；FastAPI/Starlette 解析上传（大文件落盘），再按块校验大小并复制到数据目录临时文件，失败后清理。
+`GET /api/me/voice/reference`，`DELETE /api/me/voice`。保存本人声音后（上传、录制或从录音采纳），后台任务“按本人声音重新比对说话人”用转写时存下的声纹重新判断已转写的录音，不重新转写：本人亲手确认过的保持不变，其余按与转写时相同的门槛重新认领或改为待确认，认领有变的录音重新整理记忆。转写服务早于 1.3.0、或录音转写时还没有声纹的，保持原样。Content-Length 超限在解析前拒绝；FastAPI/Starlette 解析上传（大文件落盘），再按块校验大小并复制到数据目录临时文件，失败后清理。
 `/api/media/avatar-image` 优先返回本人肖像，能力 URL 加 `?v=<sha>` 避免旧头像缓存。
 
 `[tts].voice_dir` 为可选路径（相对 TOML 目录）；配置后发布 `<id>.wav`（0644）给语音容器，

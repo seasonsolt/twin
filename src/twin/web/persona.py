@@ -13,7 +13,7 @@ from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -67,6 +67,9 @@ from ..usage import transient_summary
 from .backends import Backends, BackendUnavailable
 from .conversations import append_reply, append_user, owner
 from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
+
+if TYPE_CHECKING:
+    from .uploads import MediaIngestion
 
 MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
@@ -294,7 +297,7 @@ def register(
     backends: Backends,
     jobs: JobManager,
     read_uploads: Callable[[Request], Awaitable[list[tuple[str, bytes]]]],
-) -> None:
+) -> MediaIngestion:
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
         with PersonaStore(settings.db_path) as store:
@@ -904,6 +907,8 @@ def register(
             # Model not configured or another build running: the answers are saved, the build can start later.
             return {"round": "initial", "job_id": None, "notice": f"{notice}；构建没有自动开始：{e}"}
         return {"round": "initial", "job_id": job.job_id, "notice": f"{notice}，正在构建人格档案"}
+
+    return ingestion
 
 
 async def read_uploads(request: Request) -> list[tuple[str, bytes]]:

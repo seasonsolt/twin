@@ -78,7 +78,7 @@ def register(app: FastAPI, settings: Settings, ingestion: MediaIngestion) -> Non
             "automatic": analysis.automatic,
             "speakers": [
                 {
-                    **s.model_dump(),
+                    **s.model_dump(exclude={"embedding"}),
                     "suggested": s.id == analysis.suggested,
                     "also_suggested": s.id in analysis.also_suggested,
                     "samples": [
@@ -177,6 +177,7 @@ def register(app: FastAPI, settings: Settings, ingestion: MediaIngestion) -> Non
                 content, duration = voice(path, assets.directory)
                 profile = assets.save("voice", content, duration)
                 assets.publish_voice(settings.tts.voice_dir)
+                ingestion.rescore()
                 return profile
             return assets.save("portrait", portrait(path, face_crop(candidate, path)))
 

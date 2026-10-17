@@ -19,7 +19,15 @@ from twin.config import ASRSettings, Settings, VisionSettings
 from twin.egress import egress_status
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
-from twin.media.claim import Analysis, analyse, intervals, sample_windows, vision_candidates, voice_windows
+from twin.media.claim import (
+    Analysis,
+    analyse,
+    intervals,
+    rescore,
+    sample_windows,
+    vision_candidates,
+    voice_windows,
+)
 from twin.media.ingest import CommandTranscriber, Segment, Speaker
 from twin.persona.profile import build_profile
 from twin.persona.schema import Source, SourceKind
@@ -465,3 +473,96 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert client.get("/api/persona/sources").json()["items"][0]["n_target"] == 0
         wait_processing(client)
         assert [True, False] in builds and [False, True] in builds and [False, False] in builds
+
+
+def voiceprinted(*similarities: float | None) -> list[Speaker]:
+    """S1, S2 with unit voiceprints; the reference [1, 0] gives the stated similarities."""
+    return [
+        Speaker(id=f"S{i + 1}", seconds=12, similarity=s, embedding=[x, math.sqrt(1 - x * x)])
+        for i, (s, x) in enumerate(zip(similarities, (0.3, 0.8), strict=True))
+    ]
+
+
+def test_rescore_decides_again_from_stored_voiceprints() -> None:
+    pending = analyse(segments(), voiceprinted(None, None), False)
+    assert not pending.confirmed and pending.speakers[1].embedding == pytest.approx([0.8, 0.6])
+    decided = rescore(pending, [1.0, 0.0])
+    assert decided is not None
+    assert (decided.claimed, decided.automatic, decided.suggested) == (["S2"], True, "S2")
+    assert [s.similarity for s in decided.speakers] == [0.3, 0.8]
+    assert decided.revision != pending.revision
+    # The same decision again changes nothing; a voice that matches nobody withdraws an automatic claim.
+    assert rescore(decided, [1.0, 0.0]) is None
+    withdrawn = rescore(decided, [0.0, -1.0])
+    assert withdrawn is not None and not withdrawn.confirmed and withdrawn.claimed == []
+    chosen = pending.model_copy(update={"claimed": ["S1"], "confirmed": True, "automatic": False})
+    assert rescore(chosen, [1.0, 0.0]) is None
+    observer = pending.model_copy(update={"claimed": [], "confirmed": True, "automatic": False})
+    assert rescore(observer, [1.0, 0.0]) is None
+    legacy = analyse(segments(), [Speaker(id="S1", seconds=12), Speaker(id="S2", seconds=12)], False)
+    assert rescore(legacy, [1.0, 0.0]) is None
+    assert rescore(pending, [1.0, 0.0, 0.0]) is None
+    assert rescore(pending.model_copy(update={"diarized": False}), [1.0, 0.0]) is None
+    assert Analysis.model_validate_json(decided.model_dump_json()).speakers[1].embedding == pytest.approx([0.8, 0.6])
+
+
+def test_command_voiceprint_contract(tmp_path: Path) -> None:
+    voice = tmp_path / "voice.wav"
+    voice.write_bytes(tone(1))
+    script = tmp_path / "driver.py"
+    script.write_text(
+        "import json,sys\nr=json.load(sys.stdin)\n"
+        f"assert r == {{'audio': {str(voice.resolve())!r}, 'language': 'zh', 'embed': True}}\n"
+        'print("log")\nprint(json.dumps({"ok": True, "embedding": [0.6, 0.8]}))\n'
+    )
+    assert CommandTranscriber(f"python3 {shlex.quote(str(script))}").embed(voice) == [0.6, 0.8]
+    # Packs before 1.3.0 transcribe the voice instead; failures and malformed vectors give no voiceprint either.
+    for payload in [
+        {"ok": True, "segments": [segments()[0].model_dump()]},
+        {"ok": False, "error": "显存不足"},
+        {"ok": True, "embedding": []},
+        {"ok": True, "embedding": ["x"]},
+    ]:
+        assert CommandTranscriber("echo " + shlex.quote(json.dumps(payload))).embed(voice) is None
+    assert CommandTranscriber("exit 1").embed(voice) is None
+
+
+def test_saving_a_voice_rescores_recordings_without_transcribing_again(tmp_path: Path) -> None:
+    calls = tmp_path / "calls.txt"
+    payload = {
+        "ok": True,
+        "segments": [s.model_dump() for s in segments()],
+        "speakers": [s.model_dump() for s in voiceprinted(None, None)],
+    }
+    driver = tmp_path / "asr.py"
+    driver.write_text(
+        "import json,sys\nr=json.load(sys.stdin)\n"
+        f"open({str(calls)!r}, 'a').write(('embed' if r.get('embed') else 'transcribe') + '\\n')\n"
+        "if r.get('embed'):\n    print(json.dumps({'ok': True, 'embedding': [1.0, 0.0]}))\n"
+        f"else:\n    print(json.dumps({payload!r}))\n"
+    )
+    settings = Settings(
+        db_path=tmp_path / "twin.db", asr=ASRSettings(provider="command", command=f"python3 {shlex.quote(str(driver))}")
+    )
+    app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://localhost") as client:
+        first, second = upload(client, tone()), upload(client, tone(25))
+        base = "/api/persona/sources/"
+        claim = client.get(base + first["source_id"] + "/speakers").json()
+        assert not claim["confirmed"] and "embedding" not in claim["speakers"][0]
+        kept = client.put(base + second["source_id"] + "/speaker", json={"speakers": ["S1"]}, headers={"X-Twin": "1"})
+        wait_job(client, kept.json()["job_id"])
+        saved = client.put("/api/me/voice", files={"file": ("record.wav", tone(12))}, headers={"X-Twin": "1"})
+        assert saved.status_code == 200
+        for _ in range(300):
+            claim = client.get(base + first["source_id"] + "/speakers").json()
+            if claim["confirmed"]:
+                break
+            time.sleep(0.02)
+        assert (claim["claimed"], claim["automatic"]) == (["S2"], True)
+        assert client.get(base + second["source_id"] + "/speakers").json()["claimed"] == ["S1"]
+        wait_processing(client)
+        with PersonaStore(settings.db_path) as store:
+            source = store.get_source(first["source_id"])
+            assert source and source.media_status == "ready" and source.n_target == 1
+    assert calls.read_text().split() == ["transcribe", "transcribe", "embed"]

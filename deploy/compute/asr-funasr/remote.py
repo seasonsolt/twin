@@ -111,7 +111,7 @@ def send(parts, payload, hotwords, timeout):
         try:
             connection.request(
                 "POST",
-                parts.path.rstrip("/") + "/transcribe",
+                parts.path.rstrip("/") + ("/embed" if payload.get("embed") is True else "/transcribe"),
                 body=body(header, files),
                 headers={"Content-Type": "application/octet-stream", "Content-Length": str(length)},
             )

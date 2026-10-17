@@ -41,13 +41,20 @@ class Segment(BaseModel):
         return self
 
 
+Embedding = Annotated[list[Annotated[float, Field(allow_inf_nan=False)]], Field(min_length=1, max_length=1024)]
+
+
 class Speaker(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     seconds: float = Field(ge=0, allow_inf_nan=False)
     similarity: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    # Unit voiceprint of the speaker (asr-funasr 1.3.0+), kept so a new reference voice is compared without
+    # transcribing again.
+    embedding: Embedding | None = None
 
 
 _SIMILARITY: TypeAdapter[float | None] = TypeAdapter(Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None)
+_EMBEDDING: TypeAdapter[list[float]] = TypeAdapter(Embedding)
 
 
 class Transcriber(Protocol):
@@ -97,6 +104,16 @@ class CommandTranscriber:
             raise RuntimeError("语音识别失败，请检查语音识别配置后重试") from None
         progress(duration, duration)
         return segments
+
+    def embed(self, voice: Path) -> list[float] | None:
+        """The voiceprint of a whole recording (asr-funasr 1.3.0+); None when the command cannot give one."""
+        request = {"audio": str(voice.resolve()), "language": self.language, "embed": True}
+        try:
+            stdout = self._run(json.dumps(request), 60, lambda done, total: None)
+            payload = json.loads(stdout.strip().splitlines()[-1])
+            return _EMBEDDING.validate_python(payload["embedding"]) if payload.get("ok") is True else None
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, KeyError, AttributeError):
+            return None
 
     def _run(self, request: str, duration: float, progress: Progress) -> str:
         """Run the command; `@@twin-progress <0..1>` lines on stderr become progress in this (the job's) thread."""

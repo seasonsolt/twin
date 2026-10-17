@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""离线会议转写命令；只在执行请求时导入模型依赖。`--serve` 常驻一个本机 HTTP 服务供 remote.py 调用。"""
+"""离线会议转写命令；只在执行请求时导入模型依赖。`--serve` 常驻一个本机 HTTP 服务供 remote.py 调用。
+
+请求带 `"embed": true` 时只计算整段音频的声纹（用于本人声音），不转写。"""
 
 import argparse
 import contextlib
@@ -149,6 +151,11 @@ def similarity(value):
     return round(min(1.0, max(0.0, value)), 3) if value is not None and math.isfinite(value) else None
 
 
+def vector(value):
+    """A unit voiceprint as JSON; twin keeps each speaker's so a new reference voice is compared without re-running."""
+    return [round(float(x), 6) for x in value]
+
+
 def emit(payload):
     print(json.dumps(payload, ensure_ascii=False, allow_nan=False), flush=True)
 
@@ -200,6 +207,14 @@ class Engine:
         value = self.spk.generate(input=clip, disable_pbar=True)[0]["spk_embedding"]
         value = np.asarray(value.detach().cpu() if hasattr(value, "detach") else value, dtype=np.float32).reshape(-1)
         return value / (np.linalg.norm(value) + 1e-9)
+
+    def voice(self, path):
+        import librosa
+
+        return self.embed(librosa.load(str(path), sr=16000, mono=True)[0])
+
+    def embedding(self, audio):
+        return {"ok": True, "embedding": vector(self.voice(audio))}
 
     def embed_all(self, clips, done):
         # Equal-length groups avoid zero padding, so batched embeddings match single-clip ones. Small groups stay
@@ -311,15 +326,13 @@ class Engine:
                     )
         speakers = []
         if diarize:
-
-            def voice(path):
-                return self.embed(librosa.load(str(path), sr=16000, mono=True)[0])
-
-            ref = voice(reference) if reference and centroids else None
-            voices = {name: voice(path) for name, path in (references or {}).items()} if centroids else {}
+            ref = self.voice(reference) if reference and centroids else None
+            voices = {name: self.voice(path) for name, path in (references or {}).items()} if centroids else {}
             for label in order:
                 value = float(np.dot(ref, centroids[label])) if ref is not None and label in centroids else None
                 speaker = {"id": names[label], "seconds": round(totals[label], 2), "similarity": similarity(value)}
+                if label in centroids:
+                    speaker["embedding"] = vector(centroids[label])
                 if references:
                     speaker["similarities"] = {
                         name: similarity(float(np.dot(vec, centroids[label])) if label in centroids else None)
@@ -329,11 +342,13 @@ class Engine:
         return {"ok": True, "segments": segments, **({"speakers": speakers} if diarize else {})}
 
 
-def run(request=None, *, device="auto", check=False):
+def run(request=None, *, device="auto", check=False, embed=False):
     engine = Engine(device)
     if check:
         return engine.check()
     audio, _language, diarize, reference, hotwords, references, cluster_threshold = request
+    if embed:
+        return engine.embedding(audio)
     return engine.transcribe(audio, diarize, reference, hotwords, report, references, cluster_threshold)
 
 
@@ -414,7 +429,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
             self.reply(200, {"ok": True, "version": version, "device": engine.device, "busy": busy.locked()})
 
         def do_POST(self):
-            if self.path != "/transcribe":
+            if self.path not in {"/transcribe", "/embed"}:
                 return self.reply(404, {"ok": False, "error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length", ""))
@@ -441,15 +456,18 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                 line({"queued": busy.locked()})
                 with busy:
                     try:
-                        result = engine.transcribe(
-                            audio,
-                            diarize,
-                            reference,
-                            hotwords,
-                            lambda f: line({"progress": round(f, 4)}),
-                            references,
-                            threshold,
-                        )
+                        if self.path == "/embed":
+                            result = engine.embedding(audio)
+                        else:
+                            result = engine.transcribe(
+                                audio,
+                                diarize,
+                                reference,
+                                hotwords,
+                                lambda f: line({"progress": round(f, 4)}),
+                                references,
+                                threshold,
+                            )
                     except (BrokenPipeError, ConnectionResetError):
                         raise
                     except Exception as error:
@@ -487,18 +505,20 @@ def main():
         sys.stderr.write(f"listening on http://{args.host}:{args.port}\n")
         server.serve_forever()
         return 0
+    embed = False
     try:
         payload = None if args.check else json.loads(sys.stdin.read())
         if isinstance(payload, dict) and args.cluster_threshold is not None:
             payload.setdefault("cluster_threshold", args.cluster_threshold)
         request = None if payload is None else parse_request(payload)
+        embed = isinstance(payload, dict) and payload.get("embed") is True
         # Redirect native library writes as well as Python prints throughout imports/inference.
         sys.stdout.flush()
         saved = os.dup(1)
         try:
             os.dup2(2, 1)
             with contextlib.redirect_stdout(sys.stderr):
-                payload = run(request, device=args.device, check=args.check)
+                payload = run(request, device=args.device, check=args.check, embed=embed)
         finally:
             os.dup2(saved, 1)
             os.close(saved)

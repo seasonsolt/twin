@@ -98,6 +98,7 @@ def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: boo
             if sid in metadata
             else sum(s.end - s.start for s in segments if s.speaker == sid),
             similarity=metadata[sid].similarity if sid in metadata else None,
+            embedding=metadata[sid].embedding if sid in metadata else None,
         )
         for sid in ids
     ]
@@ -124,6 +125,31 @@ def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: boo
         suggested=suggested,
         automatic=bool(claimed),
     )
+
+
+def rescore(analysis: Analysis, reference: list[float]) -> Analysis | None:
+    """Decide again with a new reference voice from the stored voiceprints, as `analyse` would have after transcribing.
+
+    None when nothing changes, the person chose the speakers themselves, or a speaker has no voiceprint (transcribed
+    before asr-funasr 1.3.0)."""
+    if not analysis.diarized or (analysis.confirmed and not analysis.automatic):
+        return None
+    if any(s.embedding is None or len(s.embedding) != len(reference) for s in analysis.speakers):
+        return None
+
+    def similarity(embedding: list[float]) -> float:
+        # Both are unit vectors, rounded like asr-funasr's own similarity.
+        return round(min(1.0, max(0.0, sum(a * b for a, b in zip(embedding, reference, strict=True)))), 3)
+
+    speakers = [s.model_copy(update={"similarity": similarity(s.embedding or [])}) for s in analysis.speakers]
+    decided = analyse(analysis.segments, speakers, True)
+    if (decided.claimed, decided.suggested, decided.also_suggested) == (
+        analysis.claimed,
+        analysis.suggested,
+        analysis.also_suggested,
+    ):
+        return None
+    return decided
 
 
 def intervals(analysis: Analysis, speaker: str | None = None) -> list[tuple[float, float]]:

@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from ..assets import AssetStore
 from ..config import Settings
 from ..llm import LLM
-from ..media.claim import Analysis, analyse, vision_candidates, voice_candidates
+from ..media.claim import Analysis, analyse, rescore, vision_candidates, voice_candidates
 from ..media.clean import clean_segments
 from ..media.ingest import (
     MEDIA_EXTENSIONS,
@@ -38,7 +38,7 @@ from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
 from ..persona.store import PersonaStore, stored_identity
 from ..util import private_directory
-from .jobs import Job, JobError, JobManager, Log
+from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 
 CHUNK_SIZE = 8 * 1024 * 1024
 MAX_CHUNK_SIZE = 16 * 1024 * 1024
@@ -238,6 +238,9 @@ class MediaIngestion:
                     return {"deleted": True}
                 analysis.save(folder)
                 self.store_analysis(store, current, analysis)
+            if AssetStore(self.settings.db_path).path("voice") != reference:
+                # The voice changed while this recording was transcribing; that rescore skipped it.
+                self.rescore()
             if not analysis.confirmed:
                 log("请确认哪位是你")
                 return {"source_id": source_id, "status": "needs_speaker"}
@@ -248,6 +251,50 @@ class MediaIngestion:
         except Exception:
             self.update(source_id, job_id, media_status="failed")
             raise JobError("音视频转写失败，请检查 ffmpeg 和语音识别配置后重试") from None
+
+    def rescore(self) -> Job | None:
+        """Queue a fresh speaker decision for every recording after the reference voice changed; nothing is
+        transcribed again. None when the job queue is full: those recordings keep their current decision."""
+        try:
+            return self.jobs.submit("media_ingest", "按本人声音重新比对说话人", self.run_rescore)
+        except TooManyJobs:
+            return None
+
+    def run_rescore(self, log: Log) -> dict[str, Any]:
+        reference = AssetStore(self.settings.db_path).path("voice")
+        transcriber = make_transcriber(self.settings.asr)
+        if reference is None or not isinstance(transcriber, CommandTranscriber):
+            return {"changed": 0}
+        log("计算本人声音的声纹")
+        embedding = transcriber.embed(reference)
+        if embedding is None:
+            log("转写服务不能单独计算声纹（需要 asr-funasr 1.3.0 或更新），已有录音保持原样")
+            return {"changed": 0}
+        with PersonaStore(self.settings.db_path) as store:
+            source_ids = [s.source_id for s in store.list_sources() if s.media_sha]
+        changed: list[tuple[str, Analysis]] = []
+        for source_id in source_ids:
+            # Recordings still transcribing read the new voice themselves; a choice the person made stays.
+            with self.lock, PersonaStore(self.settings.db_path) as store:
+                source = store.get_source(source_id)
+                if source is None or not source.media_sha or source.media_status not in {"ready", "needs_speaker"}:
+                    continue
+                folder = self.settings.db_path.parent / "media-sources" / source.media_sha
+                if not (folder / "analysis.json").is_file():
+                    continue
+                decided = rescore(Analysis.load(folder), embedding)
+                if decided is None:
+                    continue
+                decided.save(folder)
+                self.store_analysis(store, source, decided)
+                changed.append((source_id, decided))
+        log(f"重新比对完成：{len(changed)} 段录音的说话人有变化")
+        for source_id, decided in changed:
+            if decided.confirmed:
+                self.candidates(source_id, decided.revision, log)
+        if changed:
+            self.queue_build()
+        return {"changed": len(changed)}
 
     def clean(self, segments: list[Segment], log: Log) -> list[Segment]:
         """Proofread with [llm]; without a working model the transcript goes on as recognized."""

@@ -425,8 +425,8 @@ def create_app(
                 raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}（服务重启后任务记录会清空）")
             return snapshot
 
-        persona.register(context, resolved, backends, scoped_jobs, persona.read_uploads)
-        assets.register(context, resolved)
+        ingestion = persona.register(context, resolved, backends, scoped_jobs, persona.read_uploads)
+        assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(
             context,
             resolved,

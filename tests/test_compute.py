@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.2.1", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.0", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -111,7 +111,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.2.1" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.3.0" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -451,6 +451,10 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
                 raise RuntimeError("显存不足")
             return {"ok": True, "segments": [{"start": 0.0, "end": 1.0, "text": "你好", "speaker": "S1"}]}
 
+        def embedding(self, audio):
+            self.embedded = audio.read_bytes()
+            return {"ok": True, "embedding": [0.6, 0.8]}
+
     engine = FakeEngine()
     server = script.make_server(engine, "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -473,11 +477,14 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         assert engine.voices == {"A": b"ref", "B": b"other"}
         assert remote.transcribe(url, {**request, "cluster_threshold": 0.7})["ok"] is True
         assert engine.threshold == 0.7
+        calls = len(engine.calls)
+        assert remote.transcribe(url, {"audio": str(reference), "embed": True}) == {"ok": True, "embedding": [0.6, 0.8]}
+        assert engine.embedded == b"ref" and len(engine.calls) == calls
         assert "@@twin-progress 0.5000" in capfd.readouterr().err
         audio.write_bytes(b"boom")
         assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
         with urllib.request.urlopen(url + "/health") as response:
-            assert json.loads(response.read()) == {"ok": True, "version": "1.2.1", "device": "cuda", "busy": False}
+            assert json.loads(response.read()) == {"ok": True, "version": "1.3.0", "device": "cuda", "busy": False}
         bad = b'{"audio_bytes": 1, "hotwords": "x"}\nA'
         with pytest.raises(urllib.error.HTTPError) as rejected:
             urllib.request.urlopen(urllib.request.Request(url + "/transcribe", data=bad, method="POST"))
@@ -535,3 +542,21 @@ def test_remote_uploads_wav_as_lossless_flac(script, remote, tmp_path):
     assert seen[0][0] == ".flac" and seen[0][1] < audio.stat().st_size
     assert seen[1] == (".wav", audio.stat().st_size)
     assert remote.compress(tmp_path / "voice.m4a", tmp_path) == tmp_path / "voice.m4a"
+
+
+def test_embed_request_skips_transcription(script, monkeypatch, tmp_path):
+    class FakeEngine:
+        def __init__(self, device):
+            pass
+
+        def embedding(self, audio):
+            return {"ok": True, "embedding": script.vector([0.123456789, 1])}
+
+        def transcribe(self, *args):
+            raise AssertionError("embed must not transcribe")
+
+    monkeypatch.setattr(script, "Engine", FakeEngine)
+    voice = tmp_path / "voice.wav"
+    voice.write_bytes(b"x")
+    request = script.parse_request({"audio": str(voice), "embed": True})
+    assert script.run(request, embed=True) == {"ok": True, "embedding": [0.123457, 1.0]}

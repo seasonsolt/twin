@@ -54,7 +54,9 @@ def recording(library: Library, name: str, segments: list[Segment], speakers: li
     for original in folder.glob("original.*"):
         original.unlink()
     Library._write_transcript(folder, transcript)
-    library.update(added.id, status="ready", transcript_id=transcript.id, segments=len(segments))
+    library.update(
+        added.id, status="ready", transcript_id=transcript.id, segments=len(segments), speakers=len(speakers)
+    )
     return added.id
 
 
@@ -225,6 +227,7 @@ def test_known_voices_are_taken_without_asking_and_new_long_voices_become_unname
     assert view["S1"].auto and view["S2"].auto and view["S1"].decision == "confirmed"
     assert view["S3"].decision == "none"  # Too short to make anyone of.
     assert not team.classify(first)  # Nothing left that the voice settles.
+    assert team.identities()[first] == (["未命名 1", "未命名 2"], 2)  # S3 still waits for the owner.
 
     lead = view["S1"].person_id
     assert lead is not None
@@ -308,6 +311,9 @@ def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -
         assert taken.status_code == 409
         names = {p["name"]: p["auto"] for p in web.get("/api/library/people").json()["items"]}
         assert names == {"张总": False, "李总": False}
+        rows = {r["id"]: r for r in web.get("/api/library").json()["recordings"]}
+        assert (rows[first]["people"], rows[first]["unsettled"]) == (["张总"], 1)
+        assert (rows[second]["people"], rows[second]["unsettled"]) == (["张总", "李总"], 0)
 
 
 # ------------------------------------------------------------------ the gate

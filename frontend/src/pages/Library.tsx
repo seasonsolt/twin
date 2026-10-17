@@ -26,6 +26,9 @@ export interface Recording {
   speakers: number;
   segments: number;
   created_at: string;
+  // Who the speakers were recognised as, and how many still wait for the owner.
+  people: string[];
+  unsettled: number;
 }
 export interface LibraryState {
   recordings: Recording[];
@@ -45,6 +48,14 @@ const statusLabel: Record<Recording['status'], [string, Tone]> = {
   ready: ['已转写', 'success'],
   failed: ['失败', 'danger'],
 };
+/** A transcribed recording is described by how far its speakers are identified. */
+function identityLabel(recording: Recording): [string, Tone] {
+  if (recording.status !== 'ready') return statusLabel[recording.status];
+  if (!recording.unsettled) return ['已认人', 'success'];
+  return recording.unsettled === recording.speakers
+    ? ['还没认人', 'warning']
+    : [`${recording.unsettled} 位待确认`, 'warning'];
+}
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 const minutes = (seconds: number | null) =>
   seconds === null ? '' : `${Math.max(1, Math.round(seconds / 60))} 分钟`;
@@ -197,7 +208,7 @@ export function Library() {
         ) : (
           <ul aria-label="录音列表" className="space-y-3">
             {library.recordings.map((recording) => {
-              const [label, tone] = statusLabel[recording.status];
+              const [label, tone] = identityLabel(recording);
               return (
                 <li
                   key={recording.id}
@@ -226,6 +237,7 @@ export function Library() {
                         recording.status === 'ready'
                           ? `${recording.speakers} 位说话人`
                           : '',
+                        recording.people.join('、'),
                         recording.status === 'transcribing' &&
                         recording.duration_s
                           ? `已转写 ${Math.round((recording.transcribed_s / recording.duration_s) * 100)}%`

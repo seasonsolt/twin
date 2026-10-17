@@ -404,8 +404,17 @@ class Libraries:
         self.kick(owner)
         library = self.library(owner)
         recordings = library.list()
+        identities = self.team(owner).identities()
         return {
-            "recordings": [view(r) for r in recordings],
+            "recordings": [
+                {
+                    **view(r),
+                    # Who was recognised, and how many speakers still wait for the owner.
+                    "people": identities.get(r.id, ([], 0))[0],
+                    "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
+                }
+                for r in recordings
+            ],
             "pending": sum(r.status in {"queued", "transcribing"} for r in recordings),
             "max_pending": self.settings.library.max_pending,
             "asr": isinstance(make_transcriber(self.settings.asr), CommandTranscriber),

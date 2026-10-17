@@ -482,10 +482,12 @@ def create_app(
                 await stack.enter_async_context(context.router.lifespan_context(context))
             await hub.start()
             monitor.start()
+            libraries.start()
             try:
                 yield
             finally:
                 await anyio.to_thread.run_sync(monitor.stop)
+                await anyio.to_thread.run_sync(libraries.stop)
                 await hub.stop()
                 for context in list(registry.apps.values()):
                     context.state.processing.close()

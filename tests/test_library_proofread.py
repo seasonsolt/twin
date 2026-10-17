@@ -295,6 +295,30 @@ def test_a_spent_quota_holds_proofreading_and_rebuilds_and_says_so(
     assert wanted_done(library, pid)[0] != wanted_done(library, pid)[1]
 
 
+@pytest.fixture
+def fast_wake(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("twin.web.library.WAKE_SECONDS", 0.05)
+
+
+def test_held_work_goes_on_when_the_quota_frees_up_without_anyone_looking(
+    fast_wake: None, web: TestClient, tmp_path: Path, model: Model
+) -> None:
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    limit(web, 1000)
+    library.spend("proofread", 1000)
+    zhang = confirm(web, rec, "S2", new_person="张总")["person_id"]
+    pid = web.post(f"/api/library/people/{zhang}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: web.get("/api/library").json()["quota"]["waiting_twins"] == 1)
+    assert model.proofreads == 0 and not open_twin(web, pid)
+
+    # Room again, and nobody opens the library page: only the twin's own status is read below.
+    limit(web, 0)
+    until(lambda: open_twin(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
+    recording = library.get(rec)
+    assert recording is not None and recording.proofread == recording.transcript_id and model.proofreads == 1
+
+
 @needs_ffmpeg
 def test_a_retried_recording_waits_for_the_quota_before_proofreading(
     web: TestClient, tmp_path: Path, model: Model

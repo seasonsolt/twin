@@ -57,6 +57,9 @@ GIB = 1024**3
 # Waits before rewriting a twin's sources again after a failed attempt; after the last, the twin stays closed until
 # the next change or restart.
 SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
+# How often every library is woken without anyone looking: twins held for the quota are rebuilt and proofreading
+# goes on once the quota frees up, even if nobody opens the library page.
+WAKE_SECONDS = 60.0
 
 
 class PersonBody(BaseModel):
@@ -99,6 +102,8 @@ class Libraries:
         # The proofreading job of each owner, and per owner the twins whose rebuild waits for the quota.
         self.proofreading: dict[str, Job] = {}
         self.paused: dict[str, set[str]] = {}
+        self._stop = threading.Event()
+        self._waker: threading.Thread | None = None
 
     def owner(self, request: Request) -> str:
         return owner_key(request.scope["twin_identity"]["email"])
@@ -126,6 +131,40 @@ class Libraries:
             owners.append(folder.name)
         # Reading every transcript of years of meetings must not hold up start-up.
         threading.Thread(target=self._settle, args=(owners,), name="library-settle", daemon=True).start()
+
+    def start(self) -> None:
+        """Wake every library every ``WAKE_SECONDS`` in the background (see ``wake``)."""
+        if self._waker is not None:
+            return
+        self._stop.clear()
+        self._waker = threading.Thread(target=self._wake_all, name="library-wake", daemon=True)
+        self._waker.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._waker is not None:
+            self._waker.join(5)
+            self._waker = None
+
+    def _wake_all(self) -> None:
+        while not self._stop.wait(WAKE_SECONDS):
+            with self.lock:
+                owners = sorted(self.opened)
+            for owner in owners:
+                try:
+                    self.wake(owner)
+                except Exception:
+                    logger.exception("library of %s could not be woken", owner)
+
+    def wake(self, owner: str) -> None:
+        """Carry on with what waits: once the quota has room, the twins held for it are rebuilt; the next
+        recording is transcribed and the next proofread."""
+        if not self.quota(owner)["exhausted"]:
+            with self.lock:
+                held = self.paused.pop(owner, set())
+            for persona_id in sorted(held):
+                self.sync(owner, persona_id)
+        self.kick(owner)
 
     def _settle(self, owners: list[str]) -> None:
         """Classify recordings transcribed before a crash (or before automatic classification existed), then bring
@@ -538,13 +577,8 @@ class Libraries:
         return {**view(library.get(recording.id) or recording), "new": new}
 
     def status(self, owner: str) -> dict[str, Any]:
+        self.wake(owner)
         quota = self.quota(owner)
-        if not quota["exhausted"]:
-            with self.lock:
-                held = self.paused.pop(owner, set())
-            for persona_id in sorted(held):
-                self.sync(owner, persona_id)
-        self.kick(owner)
         library = self.library(owner)
         recordings = library.list()
         identities = self.team(owner).identities()

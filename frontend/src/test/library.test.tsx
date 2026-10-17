@@ -187,3 +187,34 @@ it('tells for each transcribed recording whether its speakers are identified', a
   expect(partly.getByText(/张总、李总/u)).toBeInTheDocument();
   expect((await row('季会.m4a')).getByText('已认人')).toBeInTheDocument();
 });
+
+it('says when the batch quota holds proofreading and twin updates back', async () => {
+  state.recordings = [
+    recording({ id: 'a', filename: '周会.m4a', proofread: 'waiting' }),
+    recording({ id: 'b', filename: '月会.m4a', proofread: 'done' }),
+  ];
+  state.quota = {
+    limit: 20_000_000,
+    hours: 24,
+    used: 20_000_000,
+    exhausted: true,
+    resets_at: '2026-10-18T08:00:00+00:00',
+    waiting_proofread: 1,
+    waiting_twins: 2,
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      json(url === '/api/library' ? state : { items: [] }),
+    ),
+  );
+  show();
+  const notice = await screen.findByText(/本批次的大模型额度已用完/u);
+  expect(notice).toHaveTextContent('24 小时内已用 2,000 万 / 2,000 万 token');
+  expect(notice).toHaveTextContent('1 段录音的校对和 2 个分身的记忆更新已暂停');
+  expect(notice).toHaveTextContent('联系管理员');
+  const row = async (name: string) =>
+    within((await screen.findByRole('link', { name })).closest('li')!);
+  expect((await row('周会.m4a')).getByText(/待校对/u)).toBeInTheDocument();
+  expect((await row('月会.m4a')).getByText(/已校对/u)).toBeInTheDocument();
+});

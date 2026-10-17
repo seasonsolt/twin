@@ -3,9 +3,10 @@ several people can later be built from the same recordings.
 
 ``data/library/<owner_key>/`` holds ``library.db`` (the recordings and their status, which survives restarts),
 ``uploads/`` (chunked uploads still arriving) and ``recordings/<id>/``. A recording folder only ever gains files:
-``transcript-<transcript_id>.json`` and ``playback.flac`` are written once under a temporary name and never changed,
-so backups hard-link them. The upload itself is deleted once both are verified; only its file name, size and sha256
-are kept.
+``transcript-<transcript_id>.json``, ``playback.flac`` and, once someone in it is identified, the model's proofreading
+``clean-<transcript_id>.json`` are written once under a temporary name and never changed, so backups hard-link them.
+The upload itself is deleted once the transcript and playback copy are verified; only its file name, size and
+sha256 are kept.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import contextlib
 import datetime as dt
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -30,6 +32,8 @@ from pydantic import BaseModel, Field
 
 from ..util import prepare_private_file, private_directory
 from .ingest import VIDEO_EXTENSIONS, CommandTranscriber, Progress, Segment, Speaker, extract_audio
+
+logger = logging.getLogger(__name__)
 
 RecordingStatus = Literal["queued", "transcribing", "ready", "failed"]
 # Recordings that still take a transcription turn; they count against ``LibrarySettings.max_pending``.
@@ -54,7 +58,9 @@ CREATE TABLE IF NOT EXISTS recordings (
     segments INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    revision INTEGER NOT NULL DEFAULT 0
+    revision INTEGER NOT NULL DEFAULT 0,
+    -- The transcript the model was asked to proofread (once per transcript, whatever came of it).
+    proofread TEXT
 );
 -- The people of this account's meetings; a person may exist before (or without) a twin.
 CREATE TABLE IF NOT EXISTS people (
@@ -99,6 +105,13 @@ CREATE TABLE IF NOT EXISTS personas_sync (
     wanted INTEGER NOT NULL DEFAULT 1,
     done INTEGER NOT NULL DEFAULT 0
 );
+-- Model tokens the library spent (proofreading, and builds of its twins), for the batch quota.
+CREATE TABLE IF NOT EXISTS spending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    tokens INTEGER NOT NULL
+);
 """
 
 
@@ -120,6 +133,8 @@ class Recording(BaseModel):
     updated_at: str
     # Raised whenever the transcript or any decision about its speakers changes; a stale page is refused.
     revision: int = 0
+    # The transcript the model was asked to proofread, if any.
+    proofread: str | None = None
 
 
 class Transcript(BaseModel):
@@ -132,6 +147,25 @@ class Transcript(BaseModel):
     duration_s: float = Field(ge=0)
     segments: list[Segment]
     speakers: list[Speaker]
+
+
+class Cleaned(BaseModel):
+    """The model's proofreading of one transcript: the same segments, only their words corrected."""
+
+    transcript_id: str
+    created_at: str
+    changed: int = 0
+    failed_batches: int = 0
+    segments: list[Segment]
+
+
+def matches(transcript: Transcript, segments: list[Segment]) -> bool:
+    """Whether proofread ``segments`` are the transcript's segments one for one: same number, and each with the
+    same times and speaker. Only then may their words stand in for the transcript's."""
+    return len(segments) == len(transcript.segments) and all(
+        (a.start, a.end, a.speaker) == (b.start, b.end, b.speaker)
+        for a, b in zip(segments, transcript.segments, strict=True)
+    )
 
 
 class TranscriptionError(Exception):
@@ -173,6 +207,7 @@ class Library:
                 ("people", "auto", "INTEGER NOT NULL DEFAULT 0"),
                 ("attributions", "auto", "INTEGER NOT NULL DEFAULT 0"),
                 ("people", "gender", "TEXT NOT NULL DEFAULT ''"),
+                ("recordings", "proofread", "TEXT"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
@@ -346,6 +381,81 @@ class Library:
             with _SPEAKERS_LOCK:
                 _SPEAKERS[key] = found
         return found
+
+    def clean_path(self, recording: Recording) -> Path | None:
+        if not recording.transcript_id:
+            return None
+        return self.folder(recording.id) / f"clean-{recording.transcript_id}.json"
+
+    def cleaned(self, recording: Recording) -> Transcript | None:
+        """The transcript with the model's corrections, or as recognized when it was not proofread or the
+        proofreading does not match it segment for segment."""
+        transcript = self.transcript(recording)
+        path = self.clean_path(recording)
+        if transcript is None or path is None or not path.is_file():
+            return transcript
+        try:
+            clean = Cleaned.model_validate_json(path.read_text())
+        except (OSError, ValueError):
+            logger.warning("proofreading of %s is unreadable; using the transcript", recording.id)
+            return transcript
+        if clean.transcript_id != transcript.id or not matches(transcript, clean.segments):
+            logger.warning("proofreading of %s does not match its transcript; using the transcript", recording.id)
+            return transcript
+        return transcript.model_copy(update={"segments": clean.segments})
+
+    def unproofread(self) -> tuple[Recording, ...]:
+        """Transcribed recordings someone is identified in whose transcript was not proofread yet, oldest first."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT * FROM recordings r WHERE r.status = 'ready' AND r.transcript_id IS NOT NULL "
+                "AND r.proofread IS NOT r.transcript_id AND EXISTS (SELECT 1 FROM attributions a "
+                "WHERE a.recording_id = r.id AND a.transcript_id = r.transcript_id AND a.decision = 'confirmed') "
+                "ORDER BY r.created_at, r.id"
+            ).fetchall()
+        return tuple(Recording.model_validate(dict(row)) for row in rows)
+
+    def write_cleaned(self, recording: Recording, clean: Cleaned) -> bool:
+        """File the proofreading of the recording's transcript, if none is filed yet: written under a temporary
+        name and linked into place, so an existing file (which backups may hard-link) is never rewritten. False when
+        one was there already."""
+        transcript = self.transcript(recording)
+        path = self.clean_path(recording)
+        if transcript is None or path is None or clean.transcript_id != transcript.id:
+            raise ValueError("校对结果与转写不对应")
+        if not matches(transcript, clean.segments):
+            raise ValueError("校对结果与转写的段落不对应")
+        if path.exists():
+            return False
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(clean.model_dump(mode="json"), stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if Cleaned.model_validate_json(temporary.read_text()) != clean:
+                raise ValueError("校对结果写入校验失败")
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                return False
+            return True
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def spend(self, kind: str, tokens: int) -> None:
+        if tokens > 0:
+            with self._db() as db:
+                db.execute("INSERT INTO spending (at, kind, tokens) VALUES (?, ?, ?)", (_now(), kind, tokens))
+
+    def spent(self, since: dt.datetime) -> tuple[int, str | None]:
+        """Tokens spent since ``since``, and when the oldest of those was spent."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT COALESCE(SUM(tokens), 0), MIN(at) FROM spending WHERE at >= ?", (since.isoformat(),)
+            ).fetchone()
+        return int(row[0]), row[1]
 
     def _original(self, recording_id: str) -> Path | None:
         return next(self.folder(recording_id).glob("original.*"), None)

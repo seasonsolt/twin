@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -87,8 +88,11 @@ def clean_segments(
             logger.warning("transcript cleaning batch failed: %s", type(e).__name__)
             return None
 
+    # Each batch runs in the caller's context, so its calls are counted where the caller collects them.
+    contexts = [copy_context() for _ in batches]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        for done, (allowed, edits) in enumerate(zip(batches, pool.map(ask, batches), strict=True), 1):
+        answers = pool.map(lambda context, allowed: context.run(ask, allowed), contexts, batches)
+        for done, (allowed, edits) in enumerate(zip(batches, answers, strict=True), 1):
             if edits is None:
                 result.failed_batches += 1
             else:

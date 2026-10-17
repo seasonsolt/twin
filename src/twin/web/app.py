@@ -449,6 +449,7 @@ def create_app(
             scoped_jobs,
             persona.read_uploads,
             on_built=lambda version: libraries.built(persona_id, version),
+            on_spent=lambda tokens: libraries.spent_building(persona_id, tokens),
         )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(
@@ -463,7 +464,7 @@ def create_app(
 
     registry.make_app = persona_app
     registry.register(app)
-    libraries = library.register(app, settings, jobs, registry)
+    libraries = library.register(app, settings, jobs, registry, backends.llm)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

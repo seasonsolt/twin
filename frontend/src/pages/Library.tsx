@@ -5,15 +5,14 @@ import {
   Badge,
   Button,
   EmptyState,
-  Meter,
   Skeleton,
   useConfirm,
   type Tone,
 } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { api } from '../lib/api';
-import { Team } from '../features/library/Team';
-import { isMedia, uploadMedia, type UploadProgress } from '../lib/mediaUpload';
+import { UploadList } from '../features/library/UploadList';
+import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
 
 export interface Recording {
   id: string;
@@ -40,14 +39,6 @@ export interface LibraryState {
     headroom_bytes: number;
   };
 }
-interface Pick {
-  file: File;
-  progress?: UploadProgress;
-  error?: string;
-  done?: boolean;
-}
-
-const LIBRARY_UPLOADS = { base: '/api/library/uploads', scope: 'library' };
 const statusLabel: Record<Recording['status'], [string, Tone]> = {
   queued: ['排队中', 'neutral'],
   transcribing: ['转写中', 'info'],
@@ -61,20 +52,13 @@ const minutes = (seconds: number | null) =>
 export function Library() {
   const [library, setLibrary] = useState<LibraryState | null>(null);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [picks, setPicks] = useState<Pick[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const controller = useRef<AbortController | null>(null);
   const confirm = useConfirm();
 
-  // Bumped on every reload, so the people and review lists follow new transcripts.
-  const [version, setVersion] = useState(0);
   const load = useCallback(async () => {
     try {
       setLibrary(await api<LibraryState>('/api/library'));
-      setVersion((v) => v + 1);
       setError('');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载录音库');
@@ -83,50 +67,15 @@ export function Library() {
   useEffect(() => {
     void load();
   }, [load]);
+  const { add, uploading, notice, unfinished, stop } = useUploads(
+    () => void load(),
+  );
   const busy = uploading || !!library?.pending;
   useEffect(() => {
     if (!busy) return;
     const timer = setInterval(() => void load(), 3000);
     return () => clearInterval(timer);
   }, [busy, load]);
-  useEffect(() => () => controller.current?.abort(), []);
-
-  const add = async (files: File[]) => {
-    const media = files.filter(isMedia);
-    const skipped = files.length - media.length;
-    setNotice(skipped ? `已跳过 ${skipped} 个不是音视频的文件` : '');
-    if (!media.length) return;
-    const queue: Pick[] = media.map((file) => ({ file }));
-    setPicks((current) => [...current.filter((p) => !p.done), ...queue]);
-    setUploading(true);
-    const abort = new AbortController();
-    controller.current = abort;
-    const update = (pick: Pick, change: Partial<Pick>) =>
-      setPicks((current) =>
-        current.map((p) => (p.file === pick.file ? { ...p, ...change } : p)),
-      );
-    // One file at a time: the server admits each against free space and the queue limit.
-    for (const pick of queue) {
-      if (abort.signal.aborted) break;
-      try {
-        await uploadMedia(
-          pick.file,
-          abort.signal,
-          (progress) => update(pick, { progress }),
-          LIBRARY_UPLOADS,
-        );
-        update(pick, { done: true });
-      } catch (failure) {
-        if (failure instanceof DOMException && failure.name === 'AbortError')
-          break;
-        update(pick, {
-          error: failure instanceof Error ? failure.message : '上传失败',
-        });
-      }
-      void load();
-    }
-    setUploading(false);
-  };
 
   const retry = async (recording: Recording) => {
     try {
@@ -162,22 +111,21 @@ export function Library() {
   const room = capacity
     ? capacity.free_bytes - capacity.arriving_bytes - capacity.headroom_bytes
     : 0;
-  const unfinished = picks.filter((p) => !p.done);
   return (
     <div className="library-page">
       <StageHeader
         variant="brand"
         intro={
           <p className="stage-caption">
-            上传会议录音，自动区分并认出每个人，新出现的人自动建档。
+            全部会议录音：上传、转写进度和每段录音的说话人。
           </p>
         }
       />
       <div className="page-content space-y-6">
         <header className="flex flex-wrap items-center justify-between gap-4">
           <h2 className="text-2xl font-semibold">录音库</h2>
-          <Link to="/twins" className="text-sm text-accent underline">
-            返回我的分身
+          <Link to="/team" className="text-sm text-accent underline">
+            返回团队
           </Link>
         </header>
         <p className="text-sm text-secondary">
@@ -221,7 +169,7 @@ export function Library() {
             ref={input}
             type="file"
             multiple
-            accept="audio/*,video/*,.mkv,.caf,.amr,.opus,.m4a"
+            accept={MEDIA_ACCEPT}
             className="sr-only"
             aria-label="选择录音文件"
             onChange={(event) => {
@@ -238,45 +186,7 @@ export function Library() {
             </p>
           )}
         </section>
-        {unfinished.length > 0 && (
-          <section aria-label="上传进度" className="space-y-3">
-            {unfinished.map((pick) => (
-              <div
-                key={`${pick.file.name}-${pick.file.lastModified}-${pick.file.size}`}
-                className="rounded-xl bg-surface p-4"
-              >
-                {pick.error ? (
-                  <p className="text-sm">
-                    {pick.file.name}：
-                    <span className="text-danger">{pick.error}</span>
-                  </p>
-                ) : (
-                  <Meter
-                    label={
-                      pick.progress?.paused
-                        ? `${pick.file.name}（网络中断，恢复后继续）`
-                        : pick.file.name
-                    }
-                    value={
-                      pick.progress
-                        ? (pick.progress.offset / pick.progress.size) * 100
-                        : 0
-                    }
-                  />
-                )}
-              </div>
-            ))}
-            {uploading && (
-              <Button
-                variant="ghost"
-                onClick={() => controller.current?.abort()}
-              >
-                停止上传（已传的部分下次接着传）
-              </Button>
-            )}
-          </section>
-        )}
-        <Team version={version} />
+        <UploadList picks={unfinished} uploading={uploading} onStop={stop} />
         {!library ? (
           <Skeleton className="h-32" />
         ) : library.recordings.length === 0 ? (

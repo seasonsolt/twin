@@ -2,31 +2,31 @@
 
 :root {
   color-scheme: light;
-  --canvas: #fff4ea;
-  --soft: #fbe9dd;
+  --canvas: #f3f5f8;
+  --soft: #e5ebf4;
   --sun: #f5b83d;
-  --coral: #f0785f;
+  --coral: #5b8def;
   --note: #fde7b8;
   --font-persona: 'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', serif;
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --border: #f2dfcf;
-  --text-primary: #2b1d16;
-  --text-secondary: #6b4a3a;
-  --text-tertiary: #795442;
-  --accent: #c9432c;
-  --accent-ink: #b33723;
-  --accent-hover: #b33723;
-  --accent-pressed: #982c1c;
+  --border: #dbe1ea;
+  --text-primary: #17202c;
+  --text-secondary: #4a5566;
+  --text-tertiary: #566173;
+  --accent: #1f5fbf;
+  --accent-ink: #1a53a8;
+  --accent-hover: #1a53a8;
+  --accent-pressed: #154385;
   --on-accent: #ffffff;
   --success: #2e7d5b;
   --warning: #8a570b;
   --danger: #b72e38;
   --info: #2463ae;
   --sidebar: rgb(255 255 255 / 0.6);
-  --elevation-1: 0 2px 6px rgb(41 38 34 / 0.04);
-  --elevation-2: 0 6px 20px rgb(41 38 34 / 0.08);
-  --elevation-3: 0 16px 48px rgb(41 38 34 / 0.12);
+  --elevation-1: 0 2px 6px rgb(23 32 44 / 0.04);
+  --elevation-2: 0 6px 20px rgb(23 32 44 / 0.08);
+  --elevation-3: 0 16px 48px rgb(23 32 44 / 0.12);
   --card-shadow: 0 2px 0 var(--border);
   --graph-backdrop: #1c121b;
   --graph-ink: #fff0df;
@@ -837,14 +837,14 @@
 .message-text code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
-  background: #fbe9dd;
+  background: var(--soft);
   border-radius: 4px;
   padding: 0.1em 0.3em;
 }
 .message-text pre {
   max-width: 100%;
   overflow-x: auto;
-  background: #fbe9dd;
+  background: var(--soft);
   border-radius: 8px;
   padding: 0.75em 1em;
   white-space: pre;
@@ -961,7 +961,7 @@
 .composer-field {
   border: 1px solid var(--border);
   border-radius: 28px;
-  box-shadow: 0 2px 12px rgb(43 29 22 / 0.08);
+  box-shadow: 0 2px 12px rgb(23 32 44 / 0.08);
 }
 .composer-field:focus-within {
   border-color: var(--text-tertiary);
@@ -1262,7 +1262,7 @@
   }
   .rail-twin:hover,
   .stage-circle:is(button):hover {
-    box-shadow: 0 0 0 4px rgb(255 244 234 / 0.35);
+    box-shadow: 0 0 0 4px rgb(243 245 248 / 0.35);
   }
   .twin-card-select:hover,
   .twin-card-create:hover,

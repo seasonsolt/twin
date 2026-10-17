@@ -65,6 +65,22 @@ beforeEach(() => {
       }
       return json(items);
     }
+    // The account's recordings and people, with or without a twin.
+    if (path === '/api/library')
+      return json({
+        recordings: [],
+        pending: 0,
+        max_pending: 20,
+        asr: true,
+        capacity: {
+          free_bytes: 0,
+          arriving_bytes: 0,
+          arriving: 0,
+          headroom_bytes: 0,
+        },
+      });
+    if (path === '/api/library/people' || path === '/api/library/review')
+      return json({ items: [] });
     if (!items.length)
       return json({ detail: '先新建一个分身', code: 'no_persona' }, 409);
     if (path === '/api/identity')
@@ -282,7 +298,7 @@ it('shows the single sign-on name and leaves signing out to that site', async ()
 });
 
 it.each([0, 1, 2])(
-  'lands on the recording library after login with %s twins',
+  'lands on the team page after login with %s twins',
   async (count) => {
     items = Array.from({ length: count }, (_, index) => ({
       ...persona,
@@ -296,8 +312,8 @@ it.each([0, 1, 2])(
     await user.type(code, '012345');
     await user.click(screen.getByRole('button', { name: '登录' }));
     // No twin needs setting up first, not even for an account without one.
-    await screen.findByRole('heading', { name: '录音库' });
-    expect(window.location.hash).toBe('#/library');
+    await screen.findByRole('heading', { name: '从一段会议录音开始' });
+    expect(window.location.hash).toBe('#/team');
   },
 );
 

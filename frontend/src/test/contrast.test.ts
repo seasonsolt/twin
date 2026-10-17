@@ -33,15 +33,15 @@ const themes = [...css.matchAll(/:root\s*\{([^}]+)\}/g)]
   .filter((theme) => theme.canvas);
 
 describe('WCAG AA tokens', () => {
-  it('uses the warm palette even when the system is dark', () => {
+  it('uses the office palette even when the system is dark', () => {
     expect(themes).toHaveLength(1);
     expect(themes[0]).toMatchObject({
-      canvas: '#fff4ea',
-      accent: '#c9432c',
-      'text-primary': '#2b1d16',
-      'text-secondary': '#6b4a3a',
-      border: '#f2dfcf',
-      soft: '#fbe9dd',
+      canvas: '#f3f5f8',
+      accent: '#1f5fbf',
+      'text-primary': '#17202c',
+      'text-secondary': '#4a5566',
+      border: '#dbe1ea',
+      soft: '#e5ebf4',
       sun: '#f5b83d',
     });
     expect(css).not.toContain('prefers-color-scheme: dark');

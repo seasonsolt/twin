@@ -16,6 +16,7 @@ import {
   ListChecks,
   MessageCircle,
   Mic,
+  Users,
 } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
@@ -178,13 +179,19 @@ function TwinRail() {
           </span>
         </Tooltip>
       </div>
-      <NavLink
-        to="/library"
-        className="rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary hover:bg-soft aria-[current=page]:bg-primary aria-[current=page]:text-canvas"
-      >
-        <Mic aria-hidden className="size-5 shrink-0" />
-        <span className="whitespace-nowrap">录音库</span>
-      </NavLink>
+      {[
+        { to: '/team', title: '团队', icon: Users },
+        { to: '/library', title: '录音库', icon: Mic },
+      ].map(({ to, title, icon: Icon }) => (
+        <NavLink
+          key={to}
+          to={to}
+          className="rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary hover:bg-soft aria-[current=page]:bg-primary aria-[current=page]:text-canvas"
+        >
+          <Icon aria-hidden className="size-5 shrink-0" />
+          <span className="whitespace-nowrap">{title}</span>
+        </NavLink>
+      ))}
       <div className="my-3 border-t border-border" />
       <Navigation />
       {identity?.auth_enabled && (
@@ -266,6 +273,7 @@ export function AppShell() {
   // Account-level pages: not about the current twin, so no onboarding check or twin tabs.
   const twinLevel =
     location.pathname === '/twins' ||
+    location.pathname === '/team' ||
     location.pathname === '/library' ||
     location.pathname.startsWith('/library/');
   const canManage = useCanManage();

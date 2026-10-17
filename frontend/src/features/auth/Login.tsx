@@ -45,8 +45,8 @@ export function Login() {
   const verify = () =>
     work(async () => {
       await api('/api/auth/verify', { method: 'POST', json: { email, code } });
-      // Start from the recordings: people are found in them, not set up first.
-      window.location.hash = '#/library';
+      // Start from the team: people are found in the recordings, not set up first.
+      window.location.hash = '#/team';
       await useAuth.getState().login();
     });
   return (

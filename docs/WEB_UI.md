@@ -57,17 +57,20 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享
 
 设计令牌集中在 `frontend/src/design/tokens.css`，经 Tailwind v4 `@theme inline` 接入。使用系统字体，不加载外部字体或资产。
 
-| 变量 | 浅色 | 深色（prefers-color-scheme） |
-| --- | --- | --- |
-| canvas | `#FBF8F4` | `#141311` |
-| surface / surface-raised | `#FFFFFF` / `#FFFFFF` | `#201E1B` / `#2A2723` |
-| border | `#E5E0D9` | `#403B34` |
-| text-primary | `#292622` | `#F5F0E9` |
-| text-secondary / text-tertiary | `#625C54` / `#756E65` | `#C4BCB1` / `#ABA195` |
-| accent / hover / pressed | `#2563EB` / `#1D4ED8` / `#1E40AF` | `#8CB8FF` / `#A9CAFF` / `#BCD6FF` |
-| on-accent | `#FFFFFF` | `#141311` |
-| success / warning | `#187047` / `#8A570B` | `#7CDAA7` / `#ECC079` |
-| danger / info | `#B72E38` / `#2463AE` | `#FF9DA3` / `#8CB8FF` |
+办公场景的冷灰底、单一蓝色强调；系统深色模式下也使用同一套浅色令牌。
+
+| 变量 | 值 |
+| --- | --- |
+| canvas / soft | `#F3F5F8` / `#E5EBF4` |
+| surface / surface-raised | `#FFFFFF` / `#FFFFFF` |
+| border | `#DBE1EA` |
+| text-primary | `#17202C` |
+| text-secondary / text-tertiary | `#4A5566` / `#566173` |
+| accent / hover / pressed | `#1F5FBF` / `#1A53A8` / `#154385` |
+| on-accent | `#FFFFFF` |
+| sun / note（提示卡片） | `#F5B83D` / `#FDE7B8` |
+| success / warning | `#2E7D5B` / `#8A570B` |
+| danger / info | `#B72E38` / `#2463AE` |
 
 文字、强调及状态色在三种表面上由单元测试检查 WCAG AA ≥ 4.5:1。圆角 8/12/16/20px/full，字号 12/13/14/16/20/24/32px，正文 14px、行高 1.75；阴影和半透明侧栏也由令牌控制。状态色只表达状态。
 
@@ -154,7 +157,9 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | --- | --- |
 主导航恰好三个入口：聊天、记忆、关于你。
 
-| `#/chat`（默认） | 多轮聊天、文件附件问答、依据、内联语音与真人视频；无日期输入或资料截止提示 |
+| `#/team`（默认） | 团队：会议里出现过的人与分身、需要处理的事、上传会议录音；没有录音时是上传引导。只能和分身聊天的访客默认进 `#/chat` |
+| `#/library`、`#/library/<录音 id>` | 录音库（上传、转写进度、删除重试）/ 一段录音的说话人试听与确认 |
+| `#/chat` | 多轮聊天、文件附件问答、依据、内联语音与真人视频；无日期输入或资料截止提示 |
 | `#/memories` | 写一段、上传文件/文件夹、自动记住、说话人确认、声音/形象候选采纳、文字预览和删除 |
 | `#/about` | 编辑名字与介绍、形象/音色、我了解到的你、还想多了解、外部服务 |
 | `#/sources` | 重定向至 `#/memories`，兼容旧书签 |

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { MotionConfig } from 'motion/react';
 import { AppShell } from './components/layout/AppShell';
+import { useCanManage } from './stores/personas';
 import { AuthGate } from './features/auth/AuthGate';
 import {
   ConfirmProvider,
@@ -36,9 +37,18 @@ const Library = lazy(() =>
 const Recording = lazy(() =>
   import('./pages/Recording').then((module) => ({ default: module.Recording })),
 );
+const Home = lazy(() =>
+  import('./pages/Home').then((module) => ({ default: module.Home })),
+);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
+
+// Those who run the twins start from their team (no twin is set up first); a guest who may only talk to a twin
+// starts in its chat.
+function Start() {
+  return <Navigate to={useCanManage() ? '/team' : '/chat'} replace />;
+}
 
 export function App() {
   return (
@@ -50,8 +60,8 @@ export function App() {
               <Suspense fallback={<Skeleton className="h-40" />}>
                 <Routes>
                   <Route element={<AppShell />}>
-                    {/* Start from the recordings: people are found in them, not set up first. */}
-                    <Route index element={<Navigate to="/library" replace />} />
+                    <Route index element={<Start />} />
+                    <Route path="team" element={<Home />} />
                     <Route path="twins" element={<Twins />} />
                     <Route path="library" element={<Library />} />
                     <Route

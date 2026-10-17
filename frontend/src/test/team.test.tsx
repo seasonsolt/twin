@@ -178,16 +178,18 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   render(
     <MemoryRouter>
       <ConfirmProvider>
-        <Team version={0} />
+        <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  expect(await screen.findByText('像张总 70%')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: '去听一听' })).toHaveAttribute(
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  expect(await within(tasks).findByText(/S1 像张总/u)).toBeInTheDocument();
+  expect(within(tasks).getByRole('link', { name: '去听一听' })).toHaveAttribute(
     'href',
     '/library/rec_9',
   );
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
+  expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
   expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
   expect(created).toHaveLength(1);
@@ -235,12 +237,12 @@ it('lists new voices apart and names them before a twin can be made', async () =
   render(
     <MemoryRouter>
       <ConfirmProvider>
-        <Team version={0} />
+        <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const fresh = await screen.findByRole('region', { name: '新出现的声音' });
-  expect(within(fresh).getByText('未命名 1')).toBeInTheDocument();
+  const fresh = await screen.findByRole('region', { name: '需要你处理' });
+  expect(within(fresh).getByText(/未命名 1/u)).toBeInTheDocument();
   expect(
     within(fresh).queryByRole('button', { name: '生成分身' }),
   ).not.toBeInTheDocument();
@@ -255,5 +257,5 @@ it('lists new voices apart and names them before a twin can be made', async () =
   expect(
     await screen.findAllByRole('button', { name: '生成分身' }),
   ).toHaveLength(2);
-  expect(screen.queryByRole('region', { name: '新出现的声音' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
 });

@@ -177,6 +177,16 @@ export function PersonaSwitcher({
           ))}
           <div className="flex flex-wrap gap-4">
             <Link
+              to="/team"
+              className="min-h-11 text-accent underline"
+              onClick={() => {
+                navigating.current = true;
+                setOpen(false);
+              }}
+            >
+              团队
+            </Link>
+            <Link
               to="/library"
               className="min-h-11 text-accent underline"
               onClick={() => {

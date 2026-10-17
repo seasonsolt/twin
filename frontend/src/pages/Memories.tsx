@@ -8,7 +8,6 @@ import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
 import { StageHeader } from '../components/layout/StageHeader';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
-import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import {
   BuildProgress,
   INDEX_STAGE,
@@ -30,6 +29,7 @@ import {
   Textarea,
   toast,
   useConfirm,
+  TypingIndicator,
 } from '../components/ui';
 import { api } from '../lib/api';
 import {
@@ -981,7 +981,7 @@ export function Memories({
                           ) : memory.status === 'transcribing' ? (
                             `转写中 ${Math.min(100, Math.floor(((memory.transcribed_s ?? 0) / (memory.duration_s || 1)) * 100))}% · ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
                           ) : memory.status === 'processing' ? (
-                            <ThinkingLabel
+                            <TypingIndicator
                               text={processingLabel(memory, processing)}
                             />
                           ) : memory.status === 'remembered' ? (

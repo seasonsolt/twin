@@ -7,7 +7,6 @@ import {
   FileText,
   Square,
 } from 'lucide-react';
-import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { PersonaFade } from '../components/motion/PersonaFade';
 import {
   Card,
@@ -20,6 +19,7 @@ import {
   toast,
   useConfirm,
   Spacer,
+  TypingIndicator,
 } from '../components/ui';
 import type { Capabilities } from '../features/avatar/types';
 import { ChatStage } from '../features/chat/ChatStage';
@@ -432,7 +432,7 @@ export function Work() {
                       ))}
                       {running && (
                         <div className="space-y-1 py-1">
-                          <ThinkingLabel
+                          <TypingIndicator
                             text={task.stopping ? '正在停下…' : '正在做…'}
                           />
                           {task.progress.length > 0 && (

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Check, Circle, LoaderCircle } from 'lucide-react';
-import { ThinkingLabel } from '../../components/effects/ThinkingLabel';
-import { Card, Meter, Text } from '../../components/ui';
+import { Card, Meter, Text, TypingIndicator } from '../../components/ui';
 
 export interface Processing {
   state: 'idle' | 'queued' | 'running';
@@ -182,7 +181,7 @@ export function BuildProgress({
     <Card as="div" variant="outline" padding="md" aria-live="polite">
       <Text as="div" size="sm" className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <ThinkingLabel text={title} />
+          <TypingIndicator text={title} />
           {running && processing.started && (
             <Text as="span" size="xs" tone="tertiary" className="tabular-nums">
               已用时 {duration(since(processing.started, now))}

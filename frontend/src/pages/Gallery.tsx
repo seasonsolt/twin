@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Card,
+  Clip,
   Dialog,
   EmptyState,
   Field,
@@ -13,9 +14,13 @@ import {
   IconButton,
   Input,
   Meter,
+  PresenceRing,
+  Row,
   Section,
+  Select,
   Skeleton,
   Stack,
+  StreamText,
   Switch,
   Table,
   Tabs,
@@ -24,7 +29,10 @@ import {
   Toolbar,
   Tooltip,
   toast,
+  TypingIndicator,
   useConfirm,
+  usePresence,
+  type PresenceState,
 } from '../components/ui';
 import {
   DragDismiss,
@@ -40,8 +48,6 @@ import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { formatNumber } from '../lib/utils';
 import { PageKitStories } from './GalleryPageKit';
 import {
-  ReplyReveal,
-  ThinkingLabel,
   MetricNumber,
   MessageList,
   SpotlightAction,
@@ -443,6 +449,7 @@ export function Gallery() {
           </motion.div>
         </Story>
       </div>
+      <PresenceGallery />
       <ReactBitsGallery />
     </div>
   );
@@ -495,6 +502,95 @@ function ListDemo() {
   );
 }
 
+const presenceStates: { value: PresenceState; label: string }[] = [
+  { value: 'idle', label: '待机' },
+  { value: 'listening', label: '倾听' },
+  { value: 'thinking', label: '思考' },
+  { value: 'speaking', label: '说话' },
+];
+
+function PresenceDemo() {
+  const [state, setState] = useState<PresenceState>('speaking');
+  const [level, setLevel] = useState(2);
+  const presence = usePresence(state, level);
+  return (
+    <Stack gap={4}>
+      <Row gap={3} wrap>
+        <Select
+          aria-label="分身状态"
+          value={state}
+          onChange={(event) => setState(event.target.value as PresenceState)}
+        >
+          {presenceStates.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setLevel((level + 1) % 4)}
+        >
+          音量 {level} / 3
+        </Button>
+      </Row>
+      <Row gap={8} wrap>
+        <div className="relative">
+          <AvatarFrame size="2xl">周</AvatarFrame>
+          <PresenceRing presence={presence} />
+        </div>
+        <Clip shape="card">
+          <div className="grid place-items-center bg-accent p-8">
+            <div className="relative">
+              <AvatarFrame size="2xl" outlined>
+                周
+              </AvatarFrame>
+              <PresenceRing presence={presence} variant="ripple" />
+            </div>
+          </div>
+        </Clip>
+      </Row>
+    </Stack>
+  );
+}
+
+function PresenceGallery() {
+  return (
+    <Section
+      level={2}
+      gap={6}
+      title="分身的在场感"
+      description="持续的动效只留给分身本身：待机安静，倾听和说话跟着声音，思考时缓慢、无节拍地游移。"
+    >
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <EffectStory
+          title="PresenceRing · 四种状态"
+          note="光环不动；页面头像改为一个标出状态的小圆点，聊天舞台由文字说明状态。"
+        >
+          <PresenceDemo />
+        </EffectStory>
+        <Stack gap={6}>
+          <EffectStory
+            title="TypingIndicator · 思考中"
+            note="静止的文字，不扫过高光。"
+          >
+            <TypingIndicator />
+          </EffectStory>
+          <EffectStory
+            title="StreamText · 舞台字幕"
+            note="整句立即显示，不模糊、不逐词出现。"
+          >
+            <Text>
+              <StreamText text="我会先整理资料，再给出回答。 A quiet word-level reveal." />
+            </Text>
+          </EffectStory>
+        </Stack>
+      </div>
+    </Section>
+  );
+}
+
 function ReactBitsGallery() {
   return (
     <Section
@@ -504,15 +600,6 @@ function ReactBitsGallery() {
       description="短暂、局部的动效；页面只使用应用 wrapper，不直接依赖上游组件。"
     >
       <div className="grid items-start gap-6 lg:grid-cols-2">
-        <EffectStory
-          title="BlurText · 助手回复"
-          note="全文立即显示，不模糊、不逐词播放。"
-        >
-          <ReplyReveal text="我会先整理资料，再给出回答。 A quiet word-level reveal." />
-        </EffectStory>
-        <EffectStory title="ShinyText · 思考中" note="静态文字，不流动高光。">
-          <ThinkingLabel />
-        </EffectStory>
         <EffectStory
           title="CountUp · 指标"
           note="立即显示最终值，保留数字宽度。"

@@ -46,8 +46,8 @@ export default tseslint.config(
       'src/features/avatar/**',
       // The memory graph draws on a canvas with per-dimension colours and a dark theme of its own.
       'src/features/profile/graph/**',
-      // The chat stage: header height, portrait size, breathing scale and speaking rings follow springs and the
-      // voice level frame by frame (motion values in style), on a round portrait stage of its own.
+      // The chat stage: header height, portrait size and breathing scale follow springs and the voice level frame by
+      // frame (motion values in style), on a round portrait stage of its own. Its rings are PresenceRing.
       'src/features/chat/ChatStage.tsx',
       'src/test/**',
     ],

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMotionPreset } from '../../design/motion';
-import { SpeakingGlow } from './SpeakingGlow';
+import { PresenceRing, usePresence } from '../../components/ui';
 import type { AvatarSpec } from './types';
 import { PresetSvg } from './presets';
 
@@ -61,9 +61,10 @@ export function PortraitAvatar({
   speaking: boolean;
   onError(): void;
 }) {
+  const presence = usePresence(speaking ? 'speaking' : 'idle', mouthLevel);
   return (
     <div className="relative mx-auto w-full max-w-48 shrink-0">
-      <SpeakingGlow level={mouthLevel} speaking={speaking} />
+      <PresenceRing presence={presence} shape="card" />
       <img
         src={url}
         alt="肖像形象"

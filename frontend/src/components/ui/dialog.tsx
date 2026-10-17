@@ -281,7 +281,11 @@ export function SettingsDialog({
               <motion.div
                 initial={{ opacity: 0, scale: reduced ? 1 : 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: reduced ? 1 : 0.99, transition: exit }}
+                exit={{
+                  opacity: 0,
+                  scale: reduced ? 1 : 0.99,
+                  transition: exit,
+                }}
                 transition={transition}
                 className="fixed inset-0 z-50 flex flex-col bg-surface text-primary md:inset-auto md:top-1/2 md:left-1/2 md:h-[min(720px,calc(100dvh_-_48px))] md:w-[min(1040px,calc(100%_-_48px))] md:-translate-x-1/2 md:-translate-y-1/2 md:flex-row md:overflow-hidden md:rounded-lg md:border md:border-border md:shadow-elevation-3"
               >
@@ -294,9 +298,7 @@ export function SettingsDialog({
                       <RadixDialog.Title className="text-xl font-semibold">
                         {title}
                       </RadixDialog.Title>
-                      {note && (
-                        <p className="text-xs text-tertiary">{note}</p>
-                      )}
+                      {note && <p className="text-xs text-tertiary">{note}</p>}
                     </div>
                     <RadixDialog.Close asChild>
                       <IconButton label="关闭" className="md:hidden">
@@ -360,7 +362,10 @@ export function SettingsDialog({
                     </h3>
                     {actions}
                     <RadixDialog.Close asChild>
-                      <IconButton label="关闭" className="hidden md:inline-flex">
+                      <IconButton
+                        label="关闭"
+                        className="hidden md:inline-flex"
+                      >
                         <X className="size-5" />
                       </IconButton>
                     </RadixDialog.Close>

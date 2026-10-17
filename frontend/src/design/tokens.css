@@ -283,10 +283,38 @@
     background-position: -200% 0;
   }
 }
+/* TypingIndicator: a soft sheen passes over the words every few seconds, then rests. */
+.typing-indicator {
+  background: linear-gradient(
+      100deg,
+      var(--text-secondary) 40%,
+      var(--text-primary) 50%,
+      var(--text-secondary) 60%
+    )
+    0 0 / 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: typing-sheen 5s linear infinite;
+}
+@keyframes typing-sheen {
+  0% {
+    background-position: 100% 0;
+  }
+  60%,
+  100% {
+    background-position: -100% 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .skeleton {
     animation: none;
     background: var(--border);
+  }
+  .typing-indicator {
+    animation: none;
+    background: none;
+    color: var(--text-secondary);
   }
   *,
   *::before,
@@ -710,18 +738,22 @@
   flex-shrink: 0;
   overflow: visible;
 }
-.stage-speaking-ring {
+/* PresenceRing ripple: the twin's state around its portrait on the chat stage. */
+.presence-ripple {
   position: absolute;
   inset: -5px;
   border: 2px solid var(--canvas);
-  border-radius: 50%;
   pointer-events: none;
-  animation: stage-speaking-ring 1.6s ease-out infinite;
+  animation: presence-ripple 1.6s ease-out infinite;
 }
-.stage-speaking-ring + .stage-speaking-ring {
+.presence-ripple + .presence-ripple {
   animation-delay: -0.8s;
 }
-@keyframes stage-speaking-ring {
+.presence-ripple[data-still] {
+  animation: none;
+  opacity: var(--ring-opacity);
+}
+@keyframes presence-ripple {
   from {
     transform: scale(1);
     opacity: var(--ring-opacity);
@@ -766,7 +798,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .stage-speaking-ring,
+  .presence-ripple,
   .stage-video-spinner {
     animation: none;
   }

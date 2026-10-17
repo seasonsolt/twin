@@ -62,6 +62,15 @@
 }
 
 @theme inline {
+  /* Locked scales: Tailwind's defaults are cleared, so a class outside these steps (p-13, rounded-xl, text-4xl,
+     bg-green-500) generates no CSS at all. Add a step here only together with the component that needs it. */
+  --color-*: initial;
+  --radius-*: initial;
+  --text-*: initial;
+  --shadow-*: initial;
+  --spacing: initial;
+  --color-white: #fff;
+  --color-black: #000;
   --color-canvas: var(--canvas);
   --color-background: var(--canvas);
   --color-soft: var(--soft);
@@ -81,11 +90,6 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-info: var(--info);
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-full: 9999px;
   --shadow-elevation-1: var(--elevation-1);
   --shadow-elevation-2: var(--elevation-2);
   --shadow-elevation-3: var(--elevation-3);
@@ -93,14 +97,57 @@
   --font-sans:
     -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  /* Corners: controls 8, list rows 12, cards and dialogs 16, pills and portraits full. */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+  /* Type: 12 / 13 / 14 (body) / 15 / 16 / 18 / 22 / 26px, with Tailwind's line heights. */
   --text-xs: 12px;
+  --text-xs--line-height: calc(1 / 0.75);
   --text-sm: 13px;
+  --text-sm--line-height: calc(1.25 / 0.875);
   --text-base: 14px;
+  --text-base--line-height: calc(1.5 / 1);
   --text-md: 15px;
   --text-lg: 16px;
+  --text-lg--line-height: calc(1.75 / 1.125);
   --text-xl: 18px;
+  --text-xl--line-height: calc(1.75 / 1.25);
   --text-2xl: 22px;
+  --text-2xl--line-height: calc(2 / 1.5);
   --text-3xl: 26px;
+  --text-3xl--line-height: calc(2.25 / 1.875);
+  /* Spacing in 4px steps up to 64px; the larger steps are sizes (avatars, panels, menus). */
+  --spacing-0: 0px;
+  --spacing-0\.5: 2px;
+  --spacing-1: 4px;
+  --spacing-1\.5: 6px;
+  --spacing-2: 8px;
+  --spacing-2\.5: 10px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-7: 28px;
+  --spacing-8: 32px;
+  --spacing-9: 36px;
+  --spacing-10: 40px;
+  --spacing-11: 44px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+  --spacing-18: 72px;
+  --spacing-20: 80px;
+  --spacing-24: 96px;
+  --spacing-28: 112px;
+  --spacing-32: 128px;
+  --spacing-40: 160px;
+  --spacing-48: 192px;
+  --spacing-52: 208px;
+  --spacing-56: 224px;
+  --spacing-60: 240px;
+  --spacing-64: 256px;
+  --spacing-80: 320px;
 }
 
 @layer base {

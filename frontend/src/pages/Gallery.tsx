@@ -33,6 +33,7 @@ import {
 import { useMotionPreset } from '../design/motion';
 import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { formatNumber } from '../lib/utils';
+import { PageKitStories } from './GalleryPageKit';
 import {
   ReplyReveal,
   ThinkingLabel,
@@ -87,6 +88,7 @@ export function Gallery() {
         checked={disabled}
         onCheckedChange={setDisabled}
       />
+      <PageKitStories disabled={disabled} />
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <Story title="按钮与轻触反馈">
           <div className="flex flex-wrap gap-3">

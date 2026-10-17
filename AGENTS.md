@@ -32,8 +32,17 @@
 - 修改抽取/合并提示词、输出结构（`persona/profile.py`）或维度分类（`persona/dimensions.py`）时，必须同时提升 `persona/kernel.py` 的 `PROMPT_VERSION` / `TAXONOMY_VERSION` 并记录新指纹，否则 `tests/test_kernel.py` 失败；不提升版本，同事已有的记忆不会按新内核重新整理。
 - 数据库结构变化只能在 `persona/store.py` 的 `_MIGRATIONS` 末尾追加；迁移和新内核整理前会自动快照，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
 
+## 前端规则
+
+改界面（`frontend/src`）时：
+
+- **只用 `src/components/ui` 的组件**拼页面：骨架 `Page`/`Section`，布局 `Stack`/`Row`/`Toolbar`/`Grid`（间距只取 gap 档位），文字 `Heading`/`Text`/`TextLink`，容器 `Card`/`ListRow`/`Notice`，控件 `Button`/`Input`/`Select`/`Checkbox`/`Radio`/`FileDrop` 等。外观用组件参数（`tone`、`size`、`variant`、`gap`）表达，className 只放布局。
+- **缺组件时先在 `components/ui` 里加**（语义参数、不开放外观 className），在 `pages/GalleryPageKit.tsx`（`#/gallery`）里展示，再在页面里用。
+- **不写任意样式**：页面和功能代码里不手写 `button/input/select/textarea`，不写 `style`、任意值 `xx-[..]`、十六进制颜色、字号类、圆角类，也不能用 `eslint-disable`。`pnpm -C frontend lint` 会报错并说明该用哪个组件；豁免目录和原因写在 `frontend/eslint.config.js`。尺度（字号、圆角、间距、颜色）在 `design/tokens.css` 的 `@theme` 里锁定，超出档位的类不会生成。
+- **改界面后跑截图对比** `./scripts/screenshots.sh`（需要 Docker；`check.py --full` 和 CI 也会跑）。失败时差异图在 `frontend/e2e/.results/`。只有**有意**改变外观时才更新基线：`./scripts/screenshots.sh --update-snapshots`，逐张看过新图、确认只变了想变的地方，再和代码一起提交。页面新请求了接口时，在 `frontend/e2e/mockApi.ts` 补上固定数据。
+
 ## 开发约定
 
-- 检查：改动过程中运行 `uv run python scripts/check.py`，只跑受影响的测试（pytest-testmon 按代码改动挑选；改了前端时才跑前端检查和构建）。提交前运行一次 `uv run python scripts/check.py --full`，与 CI 一致。改了前端时一起提交 `src/twin/web/static`。
+- 检查：改动过程中运行 `uv run python scripts/check.py`，只跑受影响的测试（pytest-testmon 按代码改动挑选；改了前端时才跑前端检查和构建）。提交前运行一次 `uv run python scripts/check.py --full`，与 CI 一致（含关键页面截图对比，需要 Docker）。改了前端时一起提交 `src/twin/web/static`。
 - 密钥只放在环境变量或 `.env` 里，配置文件只写变量名。`twin.toml`、`.env`、`data/` 不入 git。
 - 不要提交密钥、本机路径、个人资料或会议内容。

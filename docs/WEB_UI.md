@@ -4,7 +4,7 @@
 
 ## 技术栈与目录
 
-Node 22、pnpm 10.32.1、React 19、严格 TypeScript、Vite、Tailwind CSS v4、`motion/react`、Radix Dialog/Tooltip/Tabs/Switch、lucide-react、zustand、clsx/tailwind-merge、react-router HashRouter。版本锁定在 `frontend/package.json` 和 `frontend/pnpm-lock.yaml`。测试使用 Vitest、Testing Library/user-event、jsdom；检查使用 ESLint、typescript-eslint、react-hooks 和 Prettier。
+Node 22、pnpm 10.32.1、React 19、严格 TypeScript、Vite、Tailwind CSS v4、`motion/react`、Radix Dialog/Tooltip/Tabs/Switch、lucide-react、zustand、clsx/tailwind-merge、react-router HashRouter。版本锁定在 `frontend/package.json` 和 `frontend/pnpm-lock.yaml`。测试使用 Vitest、Testing Library/user-event、jsdom，关键页面截图对比使用 Playwright（固定版本镜像）；检查使用 ESLint、typescript-eslint、react-hooks、本地样式规则 `eslint/twin-ui.js` 和 Prettier。
 
 ```text
 frontend/
@@ -15,12 +15,14 @@ frontend/
 │   ├── stores/       # 状态与可见性轮询
 │   ├── features/     # chat/、avatar/、jobs/、sources/、profile/、questionnaire/、identity/
 │   ├── pages/        # 聊天、记忆、关于你；首次引导、可选问卷与开发画廊
-│   ├── test/         # 行为、动效、可访问性及对比度测试
+│   ├── test/         # 行为、动效、可访问性、对比度及样式规则测试
 │   ├── App.tsx       # HashRouter 与按页 lazy 加载
 │   └── main.tsx      # React 入口
 ├── package.json / pnpm-lock.yaml
 ├── vite.config.ts / tsconfig.json
-├── eslint.config.js / .prettierrc.json
+├── e2e/              # 截图对比：pages.spec.ts、mockApi.ts（固定数据）、__screenshots__/ 基线
+├── eslint/           # 本地 ESLint 规则 twin-ui（样式护栏）
+├── eslint.config.js / .prettierrc.json / playwright.config.ts
 └── index.html
 src/twin/web/static/
 ├── index.html
@@ -49,7 +51,7 @@ uv run pytest -q -n auto
 
 Vite dev server 将 `/api` 代理到 `http://127.0.0.1:8765`，改写 Host 为目标主机，保持同源客户端请求与 `X-Twin: 1`，无需放宽后端 CSP 或开启 CORS。必须先启动 `twin ui`；若更改后端端口，同时调整 `frontend/vite.config.ts` 的 proxy target。开发服务器用于热更新，正式服务使用构建产物。
 
-CI 前端任务运行四项检查后执行 `git diff --exit-code src/twin/web/static` 和 `test -z "$(git status --porcelain src/twin/web/static)"`，同时检查跟踪文件差异及新增未跟踪产物；提交前必须同步构建结果。`.gitattributes` 将 index 与 assets 标记为生成文件。
+CI 前端任务运行四项检查和截图对比（`./scripts/screenshots.sh`，失败时上传差异图）后执行 `git diff --exit-code src/twin/web/static` 和 `test -z "$(git status --porcelain src/twin/web/static)"`，同时检查跟踪文件差异及新增未跟踪产物；提交前必须同步构建结果。`.gitattributes` 将 index 与 assets 标记为生成文件。
 
 ## 布局、令牌与可访问性
 
@@ -72,11 +74,44 @@ AppShell 桌面侧栏可折叠，图标态带 Tooltip，活动导航使用共享
 | success / warning | `#2E7D5B` / `#8A570B` |
 | danger / info | `#B72E38` / `#2463AE` |
 
-文字、强调及状态色在三种表面上由单元测试检查 WCAG AA ≥ 4.5:1。圆角 8/12/16/20px/full，字号 12/13/14/15/16/18/22/26px，正文 14px、行高 1.6；阴影和半透明侧栏也由令牌控制。状态色只表达状态。
+文字、强调及状态色在三种表面上由单元测试检查 WCAG AA ≥ 4.5:1。圆角 8（控件）/12（列表行、提示）/16px（卡片、对话框）/full，字号 12/13/14/15/16/18/22/26px，正文 14px、行高 1.6；阴影和半透明侧栏也由令牌控制。状态色只表达状态。
 
-UI primitives 包含 Button、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Badge、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider、Toast 和 Tooltip。Radix 提供焦点约束、键盘操作与 ARIA；确认默认聚焦取消，关闭后恢复原入口。通知只用 polite live region，不抢焦点。
+UI primitives 包含 Button、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Select、Checkbox、Radio、Slider、Chip、Badge、StatusDot、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider、Toast 和 Tooltip；页面级组件见下节。Radix 提供焦点约束、键盘操作与 ARIA；确认默认聚焦取消，关闭后恢复原入口。通知只用 polite live region，不抢焦点。
 
 twin 是个人工具，不添加免责声明。React 按文本渲染服务端内容，不执行用户 HTML，不输出个人文本日志。
+
+## 页面组件与样式护栏
+
+页面和功能代码只用 `components/ui` 拼界面，外观由组件的语义参数决定，className 只放布局：
+
+| 用途 | 组件 |
+| --- | --- |
+| 页面骨架 | `Page`（标题、说明、整页操作、旁注链接）、`Section`（小标题即区域名称；`framed` 放进描边卡片） |
+| 布局 | `Stack`、`Row`、`Toolbar`（两端对齐可换行）、`Grid`（2/3/4 列响应式）；只接受 gap 档位 0/1/2/3/4/5/6/8（×4px），不接受 className |
+| 文字 | `Heading`（display 26 / page 22 / title 18 / section 16 / item 15px）、`Text`（xs 12 / sm 13 / md 14 / lg 16px，控件里的名字用 xl 18 / 2xl 22px；语义 tone）、`TextLink`（站内、外链或像链接的按钮） |
+| 容器 | `Card`（raised/outline/note/soft/danger，padding 档位）、`ListRow`、`Notice`、`Disclosure`、`MediaFrame`、`Clip`（给视频、3D 视图等单个子元素裁成卡片/行/圆形圆角）、`Dialog`（`variant="sheet"` 手机底部弹层；`anchor` 贴着触发按钮的浮层位置） |
+| 数据 | `Stat`、`KeyValue`、`Meter`（`max` 计数上限、`size="sm"` 细条）、`AudioLevel`、`AvatarFrame`（`size="fill"` 填满外框、`outlined`）、`Portrait`（人像照片，裁向脸部）、`StepNumber`、`Skeleton`（`panel` 大面板占位） |
+| 选择与文件 | `Select`（原生 select 统一样式）、`Checkbox`、`Radio`、`Slider`、`Chip`、`Input`（`size="lg"` 登录等单字段表单）、`FileDrop`（拖放区）、`FileInput`（由按钮打开的隐藏文件选择） |
+| 操作 | `Button`（`shape="pill"`）、`IconButton`（`shape="circle"`、`size="lg"`）、`LinkButton`（按钮样式的链接，如下载）、`ActionMenu`（“⋯”操作菜单） |
+| 应用外壳 | `NavPill`（侧栏和底部标签栏的药丸导航，可带滑动高亮）、`PlainButton`（只有圆角形状的按钮，用于头像、分身行等外壳自绘控件）、`SkipLink`、`Spacer`（按测量高度留白） |
+
+`eslint/twin-ui.js` 在页面和功能代码里报错（中文提示应改用的组件）：手写 `button/input/select/textarea`；`style` 属性；className、`cn()` 参数和类名常量里的任意值 `xx-[..]`、十六进制颜色、字号类 `text-xs…3xl`、圆角类 `rounded-*`。这些目录豁免（原因写在 `eslint.config.js`）：`components/ui`（设计系统本身）、`components/motion`、`components/effects`、`components/reactbits`、`features/avatar`（插画与 3D 形象）、`features/profile/graph`（画布图谱）、`features/chat/ChatStage.tsx`（聊天舞台：高度、肖像尺寸、呼吸缩放和说话光环逐帧跟随弹簧和音量，写在 style 里的 motion 值）、`test`。页面代码里的 `eslint-disable` 不生效（`noInlineConfig`），例外只能写进配置。
+
+`design/tokens.css` 的 `@theme` 收窄了 Tailwind 尺度：颜色只有令牌色（无调色板）、圆角只有 sm/md/lg/full、字号只有上表 8 档、间距只有列出的档位（`--spacing` 置空：0–16 按 4px 递进，另有 7/9/11/18/20/24/28/32/40/48/52/56/60/64/80 作尺寸用；`p-13`、`rounded-xl`、`text-4xl`、`bg-green-500` 这类越界类不会生成）。比例宽度用分数类（`max-w-17/20`）。缺档位时先确认设计需要，再在 `@theme` 和 `lib/utils.ts` 的 tailwind-merge 配置里一起加。
+
+新增组件放在 `components/ui`，参数用语义（tone/size/variant/gap），在 `pages/GalleryPageKit.tsx`（`#/gallery`）展示。
+
+## 截图对比
+
+`frontend/e2e/pages.spec.ts` 对团队、录音库、录音详情、聊天、分身列表、档案概览、记忆、登录 8 个页面，在 1280×800 桌面和 375×812 手机上整页截图，逐像素对比 `e2e/__screenshots__/` 里的基线。页面读的是构建产物（`e2e/serve.mjs` 提供 `src/twin/web/static`），所有 `/api` 由 `e2e/mockApi.ts` 返回虚构的固定数据；没有 mock 的请求或页面报错都会让测试失败。时间固定为 2026-10-17 10:00（Asia/Shanghai），减少动态效果并关闭动画和光标。
+
+```sh
+./scripts/screenshots.sh                      # 先构建，再在 mcr.microsoft.com/playwright:v1.63.0-noble 里对比
+./scripts/screenshots.sh --update-snapshots   # 有意改变外观后重新生成基线
+./scripts/screenshots.sh -g chat              # 其余参数交给 playwright test
+```
+
+在固定镜像里跑，字体和渲染与机器无关：同一套基线在 arm64（本机）和 amd64（CI）上逐像素一致。需要 Docker；`check.py --full` 和 CI 都会跑。只有有意改变外观时才更新基线，逐张看过新图后与代码一起提交；对比失败时实际图和差异图在 `frontend/e2e/.results/`（CI 上传为 screenshot-diffs）。
 
 ## 动效与 React Bits wrappers
 

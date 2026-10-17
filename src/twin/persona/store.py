@@ -276,6 +276,25 @@ class PersonaStore:
         sources = [Source.model_validate_json(r[0]) for r in rows]
         return [source for source in sources if kind is None or source.kind is kind]
 
+    def read_corpus(self) -> tuple[list[Source], list[Expression]]:
+        """Every source and every expression (as ``list_sources`` and ``list_expressions`` order them) from one
+        snapshot: read one after the other, a source stored or removed in between (here or by another connection)
+        would leave expressions whose source is missing."""
+        with self._lock:
+            began = not self._db.in_transaction
+            if began:
+                self._db.execute("BEGIN")
+            try:
+                sources = self._db.execute("SELECT json FROM p_sources ORDER BY first_date, source_id").fetchall()
+                expressions = self._db.execute("SELECT json FROM p_expressions ORDER BY source_id, idx").fetchall()
+            finally:
+                if began:
+                    self._db.commit()
+        return (
+            [Source.model_validate_json(r[0]) for r in sources],
+            [Expression.model_validate_json(r[0]) for r in expressions],
+        )
+
     def count_sources(self) -> int:
         with self._lock:
             return int(self._db.execute("SELECT COUNT(*) FROM p_sources").fetchone()[0])

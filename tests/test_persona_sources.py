@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import sqlite3
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from twin.persona.dimensions import (
 from twin.persona.items import PersonaCandidate, PersonaItem, PEvidence
 from twin.persona.schema import EvidenceClass, SourceKind, evidence_class
 from twin.persona.sources import (
+    ExpressionView,
     expression_view,
     parse_chat,
     parse_document,
@@ -196,6 +198,44 @@ def test_other_speakers_are_pseudonymized_consistently_and_the_person_kept() -> 
     viewed = expression_view(store, settings, source_id=interview.source.source_id)
     assert viewed[0].speaker == code and viewed[1].speaker == "老张"
     store.close()
+
+
+@pytest.mark.parametrize("connections", [1, 2])
+def test_the_view_reads_sources_and_expressions_from_one_snapshot(tmp_path: Path, connections: int) -> None:
+    """A source stored or removed while the view is read (by a sync on this connection or another) is either
+    wholly in it or wholly out: never expressions whose source is missing."""
+    settings = Settings(target_name="张三", pseudonymize_others=True)
+    path = tmp_path / "persona.db"
+    reader = PersonaStore(path)
+    writer = reader if connections == 1 else PersonaStore(path)
+    reader.put_source(parse_chat("群.txt", "2026-09-01 10:00 李四：周报呢\n2026-09-01 10:01 张三：明天给\n", settings))
+    done = threading.Event()
+
+    def churn() -> None:
+        try:
+            for i in range(150):
+                chat = parse_chat(
+                    f"群{i}.txt", f"2026-09-02 10:00 王五：第{i}次\n2026-09-02 10:01 张三：好\n", settings
+                )
+                writer.put_source(chat)
+                writer.delete_source(chat.source.source_id)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=churn)
+    thread.start()
+    views = 0
+    try:
+        while not done.is_set() or views == 0:
+            view = ExpressionView(reader, settings)
+            assert {e.source_id for e in view.corpus} <= view.sources.keys()
+            view.select()
+            views += 1
+    finally:
+        thread.join()
+        if writer is not reader:
+            writer.close()
+        reader.close()
 
 
 @pytest.mark.parametrize("kind", ["meeting", "biography"])

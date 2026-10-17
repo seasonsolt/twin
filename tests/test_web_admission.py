@@ -213,23 +213,29 @@ def corpus(path: Path, settings: Settings) -> None:
             store.put_source(parse_chat(f"chat{day}.txt", CHAT.replace("第", f"{day}号第"), settings))
 
 
+def count_corpus_reads(monkeypatch: pytest.MonkeyPatch, reads: list[None]) -> None:
+    """Each read of the expressions, alone or with their sources, adds to ``reads``."""
+    for name in ("list_expressions", "read_corpus"):
+        original = getattr(PersonaStore, name)
+
+        def counted(self: PersonaStore, *args: Any, _original: Any = original, **kwargs: Any) -> Any:
+            reads.append(None)
+            return _original(self, *args, **kwargs)
+
+        monkeypatch.setattr(PersonaStore, name, counted)
+
+
 def test_pending_chunks_read_the_corpus_once_with_the_same_chunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = Settings(target_name="张三", pseudonymize_others=True)
     corpus(tmp_path / "twin.db", settings)
     reads: list[None] = []
-    list_expressions = PersonaStore.list_expressions
-
-    def counted(self: PersonaStore, *args: Any, **kwargs: Any) -> Any:
-        reads.append(None)
-        return list_expressions(self, *args, **kwargs)
-
     with PersonaStore(tmp_path / "twin.db") as store:
         allowed = consented_facets(store)
         sources = store.list_sources()
         one_by_one = [c for s in sources for c in chunks_for(store, s, allowed, settings)]
-        monkeypatch.setattr(PersonaStore, "list_expressions", counted)
+        count_corpus_reads(monkeypatch, reads)
         together = corpus_chunks(store, sources, allowed, settings)
         assert len(reads) == 1
         assert [(c.chunk_id, c.text) for c in together] == [(c.chunk_id, c.text) for c in one_by_one]
@@ -257,13 +263,7 @@ def test_retrieval_reads_the_corpus_once_and_no_expression_one_by_one(
             "2.1", [PersonaItem(item_id="pi_q", facet_id="2.1", statement="先核对", evidence=[evidence])]
         )
         reads: list[None] = []
-        list_expressions = PersonaStore.list_expressions
-
-        def counted(self: PersonaStore, *args: Any, **kwargs: Any) -> Any:
-            reads.append(None)
-            return list_expressions(self, *args, **kwargs)
-
-        monkeypatch.setattr(PersonaStore, "list_expressions", counted)
+        count_corpus_reads(monkeypatch, reads)
         monkeypatch.setattr(PersonaStore, "get_expression", lambda *_: pytest.fail("read one by one"))
         ctx = pc.PersonaChat(store, StreamingLLM(lambda *_: {}), HashingEmbedder(), settings).retrieve("核对数据")
     assert len(reads) == 1
@@ -277,7 +277,15 @@ def test_streamed_chats_use_the_store_off_the_event_loop(tmp_path: Path, monkeyp
     settings = Settings(db_path=tmp_path / "twin.db")
     seed(settings.db_path)
     on_loop: list[str] = []
-    for name in ("__init__", "list_items", "get_meta", "list_expressions", "append_conversation_turn", "log_chat"):
+    for name in (
+        "__init__",
+        "list_items",
+        "get_meta",
+        "list_expressions",
+        "read_corpus",
+        "append_conversation_turn",
+        "log_chat",
+    ):
         original = getattr(PersonaStore, name)
 
         def watched(self: PersonaStore, *args: Any, _name: str = name, _original: Any = original, **kwargs: Any) -> Any:

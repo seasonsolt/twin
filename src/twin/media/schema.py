@@ -182,11 +182,11 @@ AVATAR_PRESETS: dict[str, AvatarSpec] = {
         palette=dict(zip(("skin", "hair", "outfit", "background", "accent"), colors, strict=True)),
     )
     for preset, colors in {
-        "chestnut": ("#F3C4A2", "#4A2E26", "#E2A33B", "#F6C9A8", "#C9862A"),
-        "wave": ("#F6C8A4", "#B8523A", "#2F8C83", "#FFD9C2", "#F2C14E"),
-        "bun": ("#EDB48C", "#2C2320", "#7C8A4A", "#F7DF8E", "#E46A4E"),
-        "stone": ("#D6976E", "#2A2522", "#3F5F86", "#BFD3B4", "#2E4A6C"),
-        "silver": ("#F5CDB2", "#E4E1E6", "#8E4F6E", "#EFB7B3", "#6E3A55"),
+        "chestnut": ("#F3C4A2", "#4A2E26", "#24364F", "#D5E0EE", "#1F5FBF"),
+        "wave": ("#F6C8A4", "#3B2A24", "#3A4250", "#DCE3EA", "#4A6F9C"),
+        "bun": ("#EDB48C", "#2C2320", "#6B7A8F", "#E1E5EA", "#56657A"),
+        "stone": ("#D6976E", "#2A2522", "#2F3A48", "#D3DCE6", "#8C2F39"),
+        "silver": ("#F5CDB2", "#D9DBE0", "#3D4F6B", "#CDD5E1", "#2F3F57"),
     }.items()
 }
 

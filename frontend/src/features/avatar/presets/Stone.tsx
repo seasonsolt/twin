@@ -1,22 +1,17 @@
 import { Eyes, Mouth, type ArtProps } from './animation';
+import { Suit } from './attire';
 
 export function Stone({ blink, mouth }: ArtProps) {
   return (
     <>
-      <rect width="220" height="220" fill="#BFD3B4" />
-      <circle cx="38" cy="170" r="28" fill="#D6E3CE" />
-      <path
-        d="M28 220 C32 170 68 156 110 156 C152 156 188 170 192 220Z"
-        fill="#3F5F86"
-      />
-      <path
-        d="M80 158 L110 196 L140 158 L130 156 L110 180 L90 156Z"
-        fill="#2E4A6C"
-      />
-      <path d="M94 160 L110 182 L126 160Z" fill="#E8DCC6" />
-      <path
-        d="M95 136 L125 136 L127 162 C117 168 103 168 93 162Z"
-        fill="#B97A55"
+      <rect width="220" height="220" fill="#D3DCE6" />
+      <Suit
+        neck="#B97A55"
+        jacket="#2F3A48"
+        lapel="#232C37"
+        shirt="#DCE8F5"
+        collar
+        tie="#8C2F39"
       />
       <ellipse cx="54" cy="108" rx="9" ry="13" fill="#C88660" />
       <ellipse cx="166" cy="108" rx="9" ry="13" fill="#C88660" />
@@ -25,24 +20,24 @@ export function Stone({ blink, mouth }: ArtProps) {
         fill="#D6976E"
       />
       <path
-        d="M56 100 C54 60 80 42 110 42 C140 42 166 60 164 100 C160 82 150 70 140 66 C124 62 96 62 80 66 C70 70 60 82 56 100Z"
+        d="M56 100 C54 60 80 42 110 42 C140 42 166 60 164 100 C160 82 152 72 140 68 C124 62 96 62 80 68 C70 72 60 82 56 100Z"
         fill="#2A2522"
       />
       <path
         d="M66 126 C70 156 90 168 110 168 C130 168 150 156 154 126 C146 142 130 150 110 150 C90 150 74 142 66 126Z"
-        fill="#5A4136"
-        opacity=".55"
+        fill="#4A3A32"
+        opacity=".35"
       />
       <path
-        d="M74 92 L98 90"
+        d="M75 92 L98 90"
         stroke="#2A2522"
-        strokeWidth="6"
+        strokeWidth="5"
         strokeLinecap="round"
       />
       <path
-        d="M122 90 L146 92"
+        d="M122 90 L145 92"
         stroke="#2A2522"
-        strokeWidth="6"
+        strokeWidth="5"
         strokeLinecap="round"
       />
       <Eyes blink={blink} y={106}>
@@ -61,7 +56,7 @@ export function Stone({ blink, mouth }: ArtProps) {
       <Mouth level={mouth} y={138} color="#5A2A20">
         <path
           className="mouth"
-          d="M96 136 Q110 144 124 136"
+          d="M98 136 Q110 142 122 136"
           stroke="#5A2A20"
           strokeWidth="4"
           fill="none"

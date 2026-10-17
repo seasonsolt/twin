@@ -113,3 +113,64 @@ def test_gpu_install_dry_run_writes_no_files(tmp_path: Path) -> None:
     assert "ExitOnForwardFailure=yes" in result.stdout
     missing = subprocess.run(["bash", str(ROOT / "deploy/gpu/install.sh"), "--dry-run"], capture_output=True, text=True)
     assert missing.returncode == 2 and "--user" in missing.stderr
+
+
+def test_gpu_install_adds_the_embedding_service_to_the_same_tunnel(tmp_path: Path) -> None:
+    model = tmp_path / "bge-m3"
+    model.mkdir()
+    (model / "config.json").write_text("{}")
+    command = ["bash", str(ROOT / "deploy/gpu/install.sh"), "--user", getpass.getuser(), "--python", sys.executable]
+    command += ["--daw", "ubuntu@daw.example", "--embed-model", str(model), "--dry-run"]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
+    assert f"embed.py --model {model} --host 127.0.0.1 --port 18791" in result.stdout
+    assert "-R 127.0.0.1:18790:127.0.0.1:18790 -R 127.0.0.1:18791:127.0.0.1:18791 ubuntu@daw.example" in result.stdout
+    assert "After=network-online.target twin-asr.service twin-embed.service" in result.stdout
+    command[command.index(str(model))] = str(tmp_path / "missing")
+    missing = subprocess.run(command, capture_output=True, text=True)
+    assert missing.returncode == 2 and "不是模型目录" in missing.stderr
+
+
+@pytest.fixture
+def embed() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("gpu_embed", ROOT / "deploy/gpu/embed.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_embedding_passes_bound_padded_tokens(embed: ModuleType) -> None:
+    assert embed.passes([10, 5000, 30, 9000], budget=10000) == [[3], [1, 2], [0]]
+    groups = embed.passes([100] * 250, budget=16384)
+    assert [len(g) for g in groups] == [163, 87] and sorted(i for g in groups for i in g) == list(range(250))
+    assert embed.passes([]) == []
+
+
+def test_embedding_requests_follow_the_openai_shape(embed: ModuleType) -> None:
+    import json
+    import threading
+    import urllib.request
+
+    seen: list[list[str]] = []
+
+    def encode(texts: list[str]) -> list[list[float]]:
+        seen.append(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    status, body = embed.embeddings(encode, "BAAI/bge-m3", {"model": "BAAI/bge-m3", "input": ["你好", ""]})
+    assert status == 200 and [d["index"] for d in body["data"]] == [0, 1] and seen == [["你好", " "]]
+    assert embed.embeddings(encode, "m", {"input": "单条"})[1]["data"][0]["embedding"] == [1.0, 0.0]
+    for bad in ({"input": []}, {"input": [1]}, {"input": ["x"] * 257}, {"input": "x", "encoding_format": "base64"}, []):
+        assert embed.embeddings(encode, "m", bad)[0] == 400
+
+    server = embed.serve(encode, "BAAI/bge-m3", "127.0.0.1", 0, "cpu")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        assert json.load(urllib.request.urlopen(f"{base}/health"))["model"] == "BAAI/bge-m3"
+        request = urllib.request.Request(
+            f"{base}/v1/embeddings", data=json.dumps({"input": ["a"]}).encode(), method="POST"
+        )
+        assert json.load(urllib.request.urlopen(request))["data"][0]["embedding"] == [1.0, 0.0]
+    finally:
+        server.shutdown()

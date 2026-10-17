@@ -31,7 +31,6 @@ const recording = (change: Partial<Recording>): Recording => ({
 });
 let state: LibraryState;
 let people: Person[];
-let gpu: unknown[];
 beforeEach(() => {
   state = {
     recordings: [],
@@ -46,7 +45,6 @@ beforeEach(() => {
     },
   };
   people = [];
-  gpu = [];
   useAuth.setState({ identity: null });
   vi.stubGlobal(
     'fetch',
@@ -54,8 +52,6 @@ beforeEach(() => {
       if (url === '/api/library') return json(state);
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review') return json({ items: [] });
-      if (url === '/api/admin/gpu')
-        return json({ now: 0, interval: 60, window: 86400, services: gpu });
       throw new Error(url);
     }),
   );
@@ -133,32 +129,14 @@ it('shows the team, what needs settling and the way to upload more', async () =>
   );
 });
 
-it('shows administrators the GPU services, and nobody else', async () => {
-  gpu = [
-    {
-      key: 'asr',
-      name: '转写服务',
-      address: '127.0.0.1:18790',
-      latest: null,
-      since: null,
-      checks: 0,
-      failures: 0,
-      availability: null,
-      first_at: null,
-      last_failure: null,
-      buckets: [],
-    },
-  ];
-  const member = show();
-  await screen.findByRole('heading', { name: '从一段会议录音开始' });
-  expect(screen.queryByRole('heading', { name: 'GPU 服务' })).toBeNull();
-  member.unmount();
+it('keeps the service status off the team page, even for administrators', async () => {
   useAuth.setState({
     identity: { email: 'a@example.com', admin: true, auth_enabled: true },
   });
   show();
+  await screen.findByRole('heading', { name: '从一段会议录音开始' });
+  expect(screen.queryByText('GPU 服务')).toBeNull();
   expect(
-    await screen.findByRole('heading', { name: 'GPU 服务' }),
-  ).toBeInTheDocument();
-  expect(screen.getByText('尚未检查')).toBeInTheDocument();
+    vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('admin')),
+  ).toBe(false);
 });

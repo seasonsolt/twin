@@ -201,6 +201,9 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `#/persona`、`#/identity` | 重定向至 `#/about` |
 | `#/questionnaire` | 可选问卷，关于你中的“回答几个问题”链接；不在主导航中 |
 | `#/gallery` | 开发组件与动效画廊，仅通过 URL 访问 |
+| 任意页面 `?system=<分区>` | 管理员的「系统」弹窗盖在当前页上：监控、GPU 服务、向量服务、ASR 转写、TTS 朗读、视频服务、模型与 Token；关闭后去掉参数、回到原处 |
+
+「系统」是管理员的弹窗（`features/admin/SystemDialog.tsx`，外壳是 `components/ui` 的 `SettingsDialog`），从侧栏「系统」或手机上分身切换面板里的“系统”打开，打开的分区记在地址的 `?system=` 参数里，关闭后回到原页面，输入和滚动位置都在。服务的运行状态、开关、模型、密钥是否设置和 token 额度都只在这里，不进业务页面。管理员登录后，`stores/system.ts` 每 60 秒读一次 `/api/admin/system`；开着的服务检查失败时，侧栏入口和菜单里对应分区各显示一个红点，除此之外不打扰。朗读和视频开关、token 额度改完立即生效；其余配置只读，改 twin.toml 后重启。
 
 首次读取 identity 和 status：没有用户保存的名字（name_source=config）且没有记忆时，显示全页引导，不显示侧栏。FlowStepper 的四步为“你是谁”（名字与一段介绍、示例占位符）、“形象和声音”（与关于你共享裁剪/录音组件，可直接继续跳过）、“添加记忆”（嵌入记忆页添加区）、“开始聊天”。步骤内容有 p-5 / sm:p-6 内边距，两种动效模式均使用中文按钮，最后只保留一个“开始聊天”动作。第一步保存成功后才能继续；记忆可以不添加。可用“跳过”直接进入聊天，跳过会保存当前配置名（最多前 20 字），不添加介绍。保存名字后，即使删除全部记忆或刷新页面也不再出现引导；已有记忆的用户也不显示。开发画廊不受引导阻挡。
 
@@ -266,6 +269,9 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `GET /api/library/review` | 未决定且有候选的说话人，最像的在前 |
 | `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`、`auto` 未命名、`gender` 性别 male/female/空、`recording_id` 可试听的一段录音）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
 | `PATCH /api/library/people/{id}` | `{name?, gender?}`：改名（未命名的人起名后不再是“未命名”），重名 409；同场的分身随之重建，已有分身同步改名。改性别不重建；已有分身时，若当前插画形象与性别不符，换成该性别的一款（生成分身时同样按性别选） |
+| `GET /api/admin/system?refresh=` | 仅管理员（否则 403）。GPU 机器上各服务的检查记录（`services`：`key/name/enabled/address/latest/since/checks/failures/availability/first_at/last_failure/buckets`，每分钟一次、保留一天；朗读服务关闭时不检查）、`switches.tts/video`（`configured/enabled/missing/changed_at/changed_by`）、`config`（各服务 twin.toml 的主机、端口和模型，不含路径、命令、密钥）、`models`（`[llm]`/`[chat_llm]`）、`keys`（环境变量名、用途、`set`，从不含值）和 `quota`（当前账号用量加 `custom/default_limit/default_hours`）；`refresh=true` 立即检查一次（5 秒内不重复） |
+| `PUT /api/admin/system/switches/{tts\|video}` | `{enabled}`，立即生效并写入 `data/system.json`，返回同上；未配置 409，其他名字 404 |
+| `PUT /api/admin/system/quota` | `{batch_tokens?, batch_hours?}` 覆盖 `[library]` 的批次额度（0 为不限，小时 0–720），两项都空时恢复 twin.toml；立即生效，等额度的校对和重建在录音库下一次刷新时继续 |
 | `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}` |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |

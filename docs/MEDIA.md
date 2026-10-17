@@ -234,6 +234,10 @@ ffmpeg stderr 只捕获，不回显；错误只给通用中文提示，不记录
 
 `[video]` 默认 `provider = "none"`，启用时设为 `"remote"` 并配置非空 `command`，可选 `host`（SSH 别名，1–64 位字母、数字、点、下划线或连字符，不能以连字符开头）；省略或为空时通过 `bash -lc` 本机执行并复制输出文件，出境默认推断为本机，否则使用 SSH/scp。使用本人已有的 SSH 配置和凭据，不在配置或源码中保存密码。可选参数：`timeout_s = 3600`（正数，每次命令的超时）、`max_rounds = 4`（正整数）、`max_cer = 0.05`（非负有限数）、`pause_s = 0.25`（非负有限秒数）。`egress = "local"` / `"external"` 可显式声明；未声明的远端 SSH 一律推断为外部，并以 kind `video` 展示。
 
+### 网页里的朗读与视频开关
+
+配置了 `[tts]` 或 `[video]` 之后，管理员可以在网页侧栏「系统」里的「TTS 朗读」「视频服务」分区随时关闭或重新开启，立即对所有分身生效，不用重启。关闭朗读后，`/api/media/capabilities` 报告不可用，`POST /api/media/audio` 返回 503“管理员已关闭朗读”，服务器也不再定时检查朗读服务；关闭视频后，`POST /api/media/video` 返回 503“管理员已关闭视频”。开关状态存在数据库旁边的 `data/system.json`（权限 0600，随 `data/` 一起备份），配置文件不变。没人动过的开关跟随配置：配置了就是开着，所以升级后行为不变。没有配置的服务不能在网页里开启，要先写 twin.toml 再重启一次。
+
 #### 通用 SSH JSON 任务契约
 
 运行 `ssh -o BatchMode=yes <host> <command>`，请求 JSON 通过 stdin 传入（不作为命令参数），**最后一行 stdout** 必须是响应 JSON，前面的进度输出丢弃。请求：

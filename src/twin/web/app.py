@@ -159,7 +159,10 @@ class SecurityMiddleware:
                 detail = "照片不能超过 15 MB" if scope["path"] == "/api/me/portrait" else "文件太大，请选择较小的文件"
                 await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send_hardened)
                 return
-        media_chunk = scope["method"] == "PUT" and str(scope.get("path", "")).startswith("/api/uploads/")
+        # Chunks of a twin's or the account library's uploads: their routes cap each chunk themselves.
+        media_chunk = scope["method"] == "PUT" and str(scope.get("path", "")).startswith(
+            ("/api/uploads/", "/api/library/uploads/")
+        )
         chat_attachment = scope["method"] == "POST" and scope.get("path") == persona.CHAT_ATTACHMENT_PATH
         if chat_attachment:
             limit = persona.MAX_CHAT_ATTACHMENT_REQUEST_BYTES

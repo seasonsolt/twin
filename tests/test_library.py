@@ -82,6 +82,19 @@ def upload(client: TestClient, data: bytes, name: str = "周会.wav") -> Any:
     return client.post(f"/api/library/uploads/{uid}/finish", headers=HEADERS)
 
 
+def test_a_recording_arrives_in_chunks_of_the_size_the_page_sends(client: TestClient) -> None:
+    """The page sends 8 MiB per request, past the 1 MiB limit for ordinary requests; upload chunks are exempt."""
+    chunk = b"\0" * (8 * 1024 * 1024)
+    created = client.post(
+        "/api/library/uploads", headers=HEADERS, json={"filename": "周会.m4a", "size": 2 * len(chunk)}
+    )
+    uid = created.json()["id"]
+    for offset in (0, len(chunk)):
+        put = client.put(f"/api/library/uploads/{uid}?offset={offset}", headers=HEADERS, content=chunk)
+        assert put.status_code == 200, put.text
+    assert put.json()["offset"] == 2 * len(chunk)
+
+
 def settled(client: TestClient) -> dict[str, Any]:
     for _ in range(300):
         library = client.get("/api/library").json()

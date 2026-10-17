@@ -1,7 +1,15 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Button, Card, Dialog, Skeleton, useConfirm } from '../components/ui';
+import {
+  Button,
+  Card,
+  Dialog,
+  Heading,
+  Skeleton,
+  Text,
+  useConfirm,
+} from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { AvatarPreview } from '../features/avatar/AvatarPreview';
 import { AvatarPicker } from '../features/avatar/AvatarPicker';
@@ -170,18 +178,22 @@ export function Profile() {
               className="profile-section space-y-4"
               aria-label="概览"
             >
-              <h2 className="text-xl font-semibold">概览</h2>
+              <Heading level={2} size="title">
+                概览
+              </Heading>
               {speakerCount > 0 && (
                 <a
-                  className="speaker-banner block rounded-xl bg-note p-4 text-primary"
+                  className="speaker-banner block"
                   href="#/profile?section=memories"
                 >
                   有 {speakerCount} 段录音需要确认哪位是你
                 </a>
               )}
               <Overview />
-              <Card className="border border-danger/20 p-4 md:p-6">
-                <h2 className="mb-3 text-lg font-semibold">删除这个分身</h2>
+              <Card variant="danger" padding="roomy">
+                <Heading level={2} size="section" className="mb-3">
+                  删除这个分身
+                </Heading>
                 {current?.is_default ? (
                   <p className="text-secondary">默认分身不能删除</p>
                 ) : (
@@ -211,7 +223,7 @@ export function Profile() {
               className="profile-section min-w-0"
               aria-label="图谱"
             >
-              <Suspense fallback={<Skeleton className="h-[70vh]" />}>
+              <Suspense fallback={<Skeleton panel />}>
                 <MemoryGraphPanel
                   key={personaId}
                   twin={{
@@ -241,7 +253,9 @@ export function Profile() {
               className="profile-section space-y-4"
               aria-label="记忆"
             >
-              <h2 className="text-xl font-semibold">记忆</h2>
+              <Heading level={2} size="title">
+                记忆
+              </Heading>
               <Memories profile onSpeakerCount={setSpeakerCount} />
             </section>
           </TabsPrimitive.Content>
@@ -253,7 +267,9 @@ export function Profile() {
               className="profile-section space-y-4"
               aria-label="待回答"
             >
-              <h2 className="text-xl font-semibold">待回答</h2>
+              <Heading level={2} size="title">
+                待回答
+              </Heading>
               <Followups />
             </section>
           </TabsPrimitive.Content>
@@ -265,15 +281,17 @@ export function Profile() {
               className="profile-section space-y-4"
               aria-label="形象和声音"
             >
-              <h2 className="text-xl font-semibold">形象和声音</h2>
-              <p className="text-sm text-secondary">
+              <Heading level={2} size="title">
+                形象和声音
+              </Heading>
+              <Text size="sm" tone="secondary">
                 形象：
                 {modelName
                   ? `${modelName}（3D 模型）`
                   : identity.capabilities?.avatar_image
                     ? '肖像照片'
                     : `${presets[presetId(identity.data?.avatar)].name}（插画形象）`}
-              </p>
+              </Text>
               {identity.avatarError && (
                 <p role="alert" className="text-danger">
                   形象预览：{identity.avatarError}{' '}
@@ -309,7 +327,9 @@ export function Profile() {
               className="profile-section space-y-4"
               aria-label="接入"
             >
-              <h2 className="text-xl font-semibold">接入</h2>
+              <Heading level={2} size="title">
+                接入
+              </Heading>
               <Channels />
             </section>
           </TabsPrimitive.Content>

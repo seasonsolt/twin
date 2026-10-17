@@ -1,6 +1,7 @@
 import { useRef, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
+import { Clip, IconButton, LinkButton, Text } from '../../components/ui';
 import { personaUrl } from '../../lib/persona';
 import type { ChatReply } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
@@ -78,16 +79,24 @@ export function ReplyVideo({
             data-testid="video-swipe-area"
           >
             <div>
-              <p className="persona-name text-xl">{name}</p>
-              <Dialog.Title className="text-sm">真人版</Dialog.Title>
+              <Text size="lg" tone="inherit" className="persona-name">
+                {name}
+              </Text>
+              <Dialog.Title asChild>
+                <Text as="h2" size="sm" tone="inherit">
+                  真人版
+                </Text>
+              </Dialog.Title>
             </div>
             <Dialog.Close asChild>
-              <button
-                aria-label="关闭视频"
-                className="grid size-11 place-items-center rounded-full bg-canvas text-primary"
+              <IconButton
+                label="关闭视频"
+                shape="circle"
+                size="lg"
+                className="bg-canvas text-primary"
               >
                 <X size={20} aria-hidden />
-              </button>
+              </IconButton>
             </Dialog.Close>
           </div>
           <Dialog.Description id={`video-text-${id}`} className="sr-only">
@@ -100,50 +109,53 @@ export function ReplyVideo({
             }}
           >
             {ready && (
-              <video
-                controls
-                playsInline
-                autoPlay
-                preload="metadata"
-                poster={portrait}
-                src={url}
-                onLoadedMetadata={(event) => {
-                  event.currentTarget.currentTime = startTime;
-                }}
-                onTimeUpdate={(event) =>
-                  onTimeUpdate?.(event.currentTarget.currentTime)
-                }
-                onEnded={onEnded}
-                onPlaying={onPlaying}
-                onPause={onPause}
-                onError={() => {
-                  setOpen(false);
-                  onError();
-                }}
-                aria-label="回复的真人视频"
-                aria-describedby={`video-text-${id}`}
-                className="max-h-full max-w-full rounded-lg object-contain"
-              />
+              <Clip shape="card">
+                <video
+                  controls
+                  playsInline
+                  autoPlay
+                  preload="metadata"
+                  poster={portrait}
+                  src={url}
+                  onLoadedMetadata={(event) => {
+                    event.currentTarget.currentTime = startTime;
+                  }}
+                  onTimeUpdate={(event) =>
+                    onTimeUpdate?.(event.currentTarget.currentTime)
+                  }
+                  onEnded={onEnded}
+                  onPlaying={onPlaying}
+                  onPause={onPause}
+                  onError={() => {
+                    setOpen(false);
+                    onError();
+                  }}
+                  aria-label="回复的真人视频"
+                  aria-describedby={`video-text-${id}`}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </Clip>
             )}
           </div>
           <div className="shrink-0 py-2">
-            <a
+            <LinkButton
               href={url ?? undefined}
               download="twin-video.mp4"
-              className="inline-flex min-h-11 items-center rounded-full bg-canvas px-5 text-sm text-primary"
+              variant="secondary"
+              shape="pill"
             >
               保存
-            </a>
+            </LinkButton>
             {state?.result?.warnings.map((warning, index) => {
               const sentence = /^s(\d+): cer=/.exec(warning);
               return (
-                <p key={index} role="note" className="text-xs text-canvas">
+                <Text key={index} role="note" size="xs" tone="inherit">
                   {sentence
                     ? Number(sentence[1]) === 1
                       ? '开头提示回听与原文有出入'
                       : `第 ${Number(sentence[1]) - 1} 句回听与原文有出入`
                     : '视频生成有提示，请检查回听结果'}
-                </p>
+                </Text>
               );
             })}
           </div>

@@ -2,13 +2,21 @@ import {
   useEffect,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Link } from 'react-router';
 import { Check, ChevronDown } from 'lucide-react';
-import { Dialog, Input } from '../ui';
+import {
+  AvatarFrame,
+  Dialog,
+  type DialogAnchor,
+  Input,
+  PlainButton,
+  Row,
+  Stack,
+  Text,
+  TextLink,
+} from '../ui';
 import { personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useAuth } from '../../stores/auth';
@@ -20,16 +28,18 @@ export function PersonaPortrait({ persona }: { persona?: Persona }) {
   const url = persona?.avatar_url
     ? personaUrl(persona.avatar_url, persona.id)
     : undefined;
-  return url && failed !== url ? (
-    <img
-      src={url}
-      alt=""
-      onError={() => setFailed(url)}
-      className="persona-portrait size-12 shrink-0 rounded-full border-2 border-canvas object-cover"
-    />
-  ) : (
-    <span className="persona-portrait block size-12 shrink-0 overflow-hidden rounded-full">
-      <PresetSvg preset={persona?.avatar_preset} />
+  // The wrapper carries the size (48px, 96px on a twin card via .twin-card .persona-portrait).
+  return (
+    <span className="persona-portrait block size-12 shrink-0">
+      {url && failed !== url ? (
+        <AvatarFrame size="fill" outlined decorative={false}>
+          <img src={url} alt="" onError={() => setFailed(url)} />
+        </AvatarFrame>
+      ) : (
+        <AvatarFrame size="fill" decorative={false}>
+          <PresetSvg preset={persona?.avatar_preset} />
+        </AvatarFrame>
+      )}
     </span>
   );
 }
@@ -62,7 +72,7 @@ export function PersonaSwitcher({
     setLocalOpen(value);
     onOpenChange?.(value);
   };
-  const [anchor, setAnchor] = useState<CSSProperties>();
+  const [anchor, setAnchor] = useState<DialogAnchor>();
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const { id, pendingId, items, refresh, switchTo } = usePersonas();
@@ -114,16 +124,15 @@ export function PersonaSwitcher({
   }, [mobile, open, returnFocus]);
   return (
     <>
-      <button
+      <PlainButton
         ref={button}
-        type="button"
         aria-label={label}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-busy={pendingId !== null}
         className={
           className ??
-          `flex min-h-11 items-center gap-2 rounded-full px-3 text-base ${stage ? 'stage-switch' : 'hover:bg-soft'}`
+          `flex min-h-11 items-center gap-2 px-3 ${stage ? 'stage-switch' : 'hover:bg-soft'}`
         }
         onClick={() => {
           setError('');
@@ -141,22 +150,22 @@ export function PersonaSwitcher({
             <ChevronDown className="size-4" aria-hidden />
           </>
         )}
-      </button>
+      </PlainButton>
       <Dialog
         open={open}
         onOpenChange={setOpen}
         title="切换分身"
         body="每个分身都有独立的记忆、形象、声音和聊天。"
         popover={!mobile}
-        style={!mobile ? { ...anchor, translate: 'none' } : undefined}
-        className={`${mobile ? 'persona-sheet' : 'persona-popover'} [&_button]:min-h-11 [&_button]:min-w-11`}
+        anchor={mobile ? undefined : (anchor ?? {})}
+        className={mobile ? 'persona-sheet' : 'persona-popover'}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           if (!navigating.current)
             (returnFocus?.current ?? button.current)?.focus();
         }}
       >
-        <div className="space-y-3">
+        <Stack gap={3}>
           {searchable && (
             <Input
               type="search"
@@ -167,13 +176,14 @@ export function PersonaSwitcher({
             />
           )}
           {searchable && !shown.length && (
-            <p className="text-sm text-secondary">没有叫这个名字的分身</p>
+            <Text size="sm" tone="secondary">
+              没有叫这个名字的分身
+            </Text>
           )}
           {shown.map((persona) => (
-            <button
+            <PlainButton
               key={persona.id}
-              type="button"
-              className={`persona-row flex w-full items-center gap-3 rounded-full p-3 text-left ${persona.id === (pendingId ?? id) ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
+              className={`persona-row flex w-full items-center gap-3 p-3 text-left ${persona.id === (pendingId ?? id) ? 'bg-primary text-canvas' : 'bg-surface text-primary'}`}
               onClick={() => {
                 setOpen(false);
                 switchTo(persona.id);
@@ -181,71 +191,62 @@ export function PersonaSwitcher({
             >
               <PersonaPortrait persona={persona} />
               <span className="min-w-0 flex-1">
-                <span className="persona-name block truncate text-xl">
+                <Text
+                  as="span"
+                  size="xl"
+                  tone="inherit"
+                  truncate
+                  className="persona-name block"
+                >
                   {persona.name}
-                </span>
-                <span className="block text-sm">{persona.sources} 条记忆</span>
+                </Text>
+                <Text as="span" size="sm" tone="inherit" className="block">
+                  {persona.sources} 条记忆
+                </Text>
                 {identity?.admin &&
                   persona.owner &&
                   persona.owner !== identity.email && (
-                    <span className="block truncate text-xs">
+                    <Text
+                      as="span"
+                      size="xs"
+                      tone="inherit"
+                      truncate
+                      className="block"
+                    >
                       {persona.owner}
-                    </span>
+                    </Text>
                   )}
               </span>
               {persona.id === (pendingId ?? id) && (
                 <Check aria-label="当前分身" className="size-5" />
               )}
-            </button>
+            </PlainButton>
           ))}
-          <div className="flex flex-wrap gap-4">
-            <Link
-              to="/team"
-              className="min-h-11 text-accent underline"
-              onClick={() => {
-                navigating.current = true;
-                setOpen(false);
-              }}
-            >
-              团队
-            </Link>
-            <Link
-              to="/library"
-              className="min-h-11 text-accent underline"
-              onClick={() => {
-                navigating.current = true;
-                setOpen(false);
-              }}
-            >
-              录音库
-            </Link>
-            <Link
-              to="/twins"
-              className="min-h-11 text-accent underline"
-              onClick={() => {
-                navigating.current = true;
-                setOpen(false);
-              }}
-            >
-              全部分身
-            </Link>
-            <Link
-              to="/twins?create=1"
-              className="min-h-11 text-accent underline"
-              onClick={() => {
-                navigating.current = true;
-                setOpen(false);
-              }}
-            >
-              ＋ 新建分身
-            </Link>
-          </div>
+          <Row gap={4} wrap>
+            {[
+              { to: '/team', title: '团队' },
+              { to: '/library', title: '录音库' },
+              { to: '/twins', title: '全部分身' },
+              { to: '/twins?create=1', title: '＋ 新建分身' },
+            ].map(({ to, title }) => (
+              <TextLink
+                key={to}
+                to={to}
+                onClick={() => {
+                  navigating.current = true;
+                  setOpen(false);
+                }}
+              >
+                {title}
+              </TextLink>
+            ))}
+          </Row>
           {error && (
-            <p role="alert" className="text-danger">
+            <Text role="alert" tone="danger">
               {error}
-            </p>
+            </Text>
           )}
-        </div>
+        </Stack>
       </Dialog>
     </>
   );

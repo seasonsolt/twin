@@ -8,6 +8,7 @@ import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { useMobile } from '../../lib/useMobile';
 import { PersonaFade } from '../motion/PersonaFade';
 import { PresetSvg } from '../../features/avatar/presets';
+import { Text } from '../ui';
 
 export function StageHeader({
   variant = 'compact',
@@ -80,14 +81,14 @@ export function StageHeader({
           {mobile && switchable && !brand && variant !== 'future' ? (
             <PersonaSwitcher
               label="切换分身"
-              className="stage-global-switch flex items-center gap-2 rounded-full"
+              className="stage-global-switch flex items-center gap-2"
               trigger={
                 <>
                   <PersonaPortrait persona={current} />
                   {items.length > 1 && (
-                    <span className="text-xs text-secondary">
+                    <Text as="span" size="xs" tone="secondary">
                       {items.length} 个分身
-                    </span>
+                    </Text>
                   )}
                 </>
               }

@@ -8,8 +8,10 @@ import {
   Button,
   Card,
   Field,
+  Heading,
   Meter,
   Skeleton,
+  Text,
   Textarea,
   toast,
   useConfirm,
@@ -109,10 +111,10 @@ export function Questionnaire() {
       <StageHeader />
       <div className="page-content space-y-6">
         <header>
-          <h2 className="text-2xl font-semibold">回答几个问题</h2>
-          <p className="mt-2 text-sm text-secondary">
+          <Heading level={2}>回答几个问题</Heading>
+          <Text size="sm" tone="secondary" className="mt-2">
             想答哪题就答哪题，也可以直接添加记忆。回答自动保存，可以分几次填完。
-          </p>
+          </Text>
         </header>
         {draft.loading && <Skeleton className="h-40" />}
         {draft.error && (
@@ -137,7 +139,13 @@ export function Questionnaire() {
               value={questions.length ? (answered / questions.length) * 100 : 0}
               label={`已答 ${answered} / ${questions.length} 题`}
             />
-            <div role="status" className="min-h-6 text-sm text-secondary">
+            <Text
+              as="div"
+              role="status"
+              size="sm"
+              tone="secondary"
+              className="min-h-6"
+            >
               <AnimatePresence mode="wait" initial={false}>
                 <motion.span
                   key={statusText}
@@ -149,7 +157,7 @@ export function Questionnaire() {
                   {statusText}
                 </motion.span>
               </AnimatePresence>
-            </div>
+            </Text>
             {draft.saveError && (
               <p role="alert" className="text-danger">
                 {draft.saveError}{' '}
@@ -171,7 +179,9 @@ export function Questionnaire() {
                 title: section,
                 content: (
                   <section className="space-y-6 py-3" aria-label={section}>
-                    <h2 className="text-lg font-semibold">{section}</h2>
+                    <Heading level={2} size="section">
+                      {section}
+                    </Heading>
                     {questions
                       .filter((q) => q.section === section)
                       .map((q) => {
@@ -193,12 +203,13 @@ export function Questionnaire() {
                                 <Badge>可跳过：不填即不授权采集这一项</Badge>
                               )}
                             </div>
-                            <p
+                            <Text
                               id={`${id}-facets`}
-                              className="text-sm text-secondary"
+                              size="sm"
+                              tone="secondary"
                             >
                               相关内容：{q.facets.join('、')}
-                            </p>
+                            </Text>
                             <Field id={id} label="回答" help={help}>
                               <Textarea
                                 id={id}
@@ -223,14 +234,15 @@ export function Questionnaire() {
                                 >
                                   跳过
                                 </Button>
-                                <p
+                                <Text
                                   id={`${id}-skip`}
-                                  className="text-sm text-secondary"
+                                  size="sm"
+                                  tone="secondary"
                                 >
                                   {skipped
                                     ? `留空即跳过，不采集：${q.facets.join('、')}`
                                     : '跳过会清空此题回答，提交后不采集相关内容。'}
-                                </p>
+                                </Text>
                               </div>
                             )}
                           </div>

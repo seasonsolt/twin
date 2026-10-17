@@ -18,45 +18,57 @@ export const toneClasses: Record<Tone, string> = {
   info: 'text-info',
 };
 
-export type ButtonProps = Omit<HTMLMotionProps<'button'>, 'children'> & {
-  children?: ReactNode;
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
-  loading?: boolean;
+const buttonVariants = {
+  primary:
+    'bg-accent text-on-accent hover:bg-accent-hover active:bg-accent-pressed',
+  secondary: 'border border-tertiary/60 bg-surface text-primary hover:bg-soft',
+  ghost: 'bg-transparent text-secondary hover:bg-surface-raised',
+  danger: 'border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20',
 };
-export function Button({
+const buttonSizes = {
+  sm: 'min-h-8 px-3 text-sm',
+  md: 'min-h-9 px-4',
+  lg: 'min-h-10 px-5 text-md',
+};
+type ButtonLook = {
+  variant?: keyof typeof buttonVariants;
+  size?: keyof typeof buttonSizes;
+  /** pill: fully rounded ends, for a lone action on a photo or video. */
+  shape?: 'default' | 'pill';
+};
+const buttonClasses = ({
   variant = 'primary',
   size = 'md',
+  shape = 'default',
+}: ButtonLook) =>
+  cn(
+    'inline-flex shrink-0 items-center justify-center gap-2 font-medium disabled:cursor-not-allowed disabled:opacity-50',
+    shape === 'pill' ? 'rounded-full' : 'rounded-sm',
+    buttonVariants[variant],
+    buttonSizes[size],
+  );
+
+export type ButtonProps = Omit<HTMLMotionProps<'button'>, 'children'> &
+  ButtonLook & {
+    children?: ReactNode;
+    loading?: boolean;
+  };
+export function Button({
+  variant,
+  size,
+  shape,
   loading = false,
   disabled,
   className,
   children,
   ...props
 }: ButtonProps) {
-  const variants = {
-    primary:
-      'bg-accent text-on-accent hover:bg-accent-hover active:bg-accent-pressed',
-    secondary:
-      'border border-tertiary/60 bg-surface text-primary hover:bg-soft',
-    ghost: 'bg-transparent text-secondary hover:bg-surface-raised',
-    danger:
-      'border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20',
-  };
   return (
     <Pressable
       {...props}
       disabled={disabled || loading}
-      aria-busy={loading}
-      className={cn(
-        'inline-flex shrink-0 items-center justify-center gap-2 rounded-sm font-medium disabled:cursor-not-allowed disabled:opacity-50',
-        variants[variant],
-        {
-          sm: 'min-h-8 px-3 text-sm',
-          md: 'min-h-9 px-4',
-          lg: 'min-h-10 px-5 text-md',
-        }[size],
-        className,
-      )}
+      aria-busy={loading || props['aria-busy'] || false}
+      className={cn(buttonClasses({ variant, size, shape }), className)}
     >
       {loading && (
         <LoaderCircle
@@ -69,29 +81,95 @@ export function Button({
   );
 }
 
+/** A link (a download, another site) that looks like a Button. `className` is for layout only. */
+export function LinkButton({
+  variant,
+  size,
+  shape,
+  className,
+  ...props
+}: ComponentProps<'a'> & ButtonLook) {
+  return (
+    <a
+      {...props}
+      className={cn(buttonClasses({ variant, size, shape }), className)}
+    />
+  );
+}
+
+/**
+ * A bare round-ended button for the app's own chrome: a portrait that opens the twin switcher, a selectable row in
+ * it. It has the shape and nothing else: no colour, padding or hover lift, so the caller's layout classes set those.
+ * For an ordinary action use Button or IconButton.
+ */
+export function PlainButton({
+  shape = 'pill',
+  className,
+  ...props
+}: ComponentProps<'button'> & {
+  /** pill: fully rounded ends. circle: also centres its content, for a portrait or a count. */
+  shape?: 'pill' | 'circle';
+}) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className={cn(
+        'rounded-full',
+        shape === 'circle' && 'grid shrink-0 place-items-center',
+        className,
+      )}
+    />
+  );
+}
+
 export function IconButton({
   label,
   children,
+  shape = 'square',
+  size,
   ...props
-}: Omit<ButtonProps, 'children'> & { label: string; children: ReactNode }) {
+}: Omit<ButtonProps, 'children' | 'size' | 'shape'> & {
+  label: string;
+  children: ReactNode;
+  /** circle: a round button, such as send or attach in a composer. */
+  shape?: 'square' | 'circle';
+  /** md 36px (default), lg 44px. */
+  size?: 'md' | 'lg';
+}) {
   return (
     <Button
       variant="ghost"
       {...props}
       aria-label={label}
-      className={cn('size-9 p-0', props.className)}
+      className={cn(
+        'p-0',
+        size === 'lg' ? 'size-11 min-h-11' : 'size-9',
+        shape === 'circle' && 'rounded-full',
+        props.className,
+      )}
     >
       {children}
     </Button>
   );
 }
 
-export function Input({ className, ...props }: ComponentProps<'input'>) {
+export function Input({
+  size = 'md',
+  className,
+  ...props
+}: Omit<ComponentProps<'input'>, 'size'> & {
+  /** lg: the one prominent field of a short form (sign-in), 48px with a heavy border. */
+  size?: 'md' | 'lg';
+}) {
   return (
     <input
       {...props}
       className={cn(
-        'min-h-9 w-full rounded-sm border border-tertiary/60 bg-surface px-3 text-primary placeholder:text-tertiary hover:border-tertiary disabled:opacity-50',
+        'w-full rounded-sm bg-surface px-3 text-primary placeholder:text-tertiary disabled:opacity-50',
+        size === 'lg'
+          ? 'min-h-12 border-2 border-primary text-md'
+          : 'min-h-9 border border-tertiary/60 hover:border-tertiary',
         className,
       )}
     />
@@ -296,5 +374,27 @@ export function Chip({
     <span {...props} className={styles}>
       {children}
     </span>
+  );
+}
+
+/** A slider with its label in front, such as a zoom level. */
+export function Slider({
+  label,
+  className,
+  ...props
+}: Omit<ComponentProps<'input'>, 'type' | 'style' | 'className'> & {
+  label: ReactNode;
+  /** Layout only, such as a width. */
+  className?: string;
+}) {
+  return (
+    <label className={cn('flex items-center gap-3', className)}>
+      {label}
+      <input
+        {...props}
+        type="range"
+        className="min-h-11 flex-1 accent-accent disabled:opacity-50"
+      />
+    </label>
   );
 }

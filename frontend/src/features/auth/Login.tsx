@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Button } from '../../components/ui';
+import { useEffect, useId, useState } from 'react';
+import { Button, Card, Field, Heading, Input, Text } from '../../components/ui';
 import { StageHeader } from '../../components/layout/StageHeader';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
@@ -12,6 +12,8 @@ export function Login() {
   const [remaining, setRemaining] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const emailId = useId();
+  const codeId = useId();
   useEffect(() => {
     const update = () =>
       setRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
@@ -55,15 +57,20 @@ export function Login() {
         variant="brand"
         intro={<p className="stage-caption">留住记忆，让对话继续。</p>}
       />
-      <section className="mx-auto my-6 w-[calc(100%_-_32px)] max-w-sm space-y-6 rounded-xl bg-surface p-6 shadow-card">
-        <h2 className="text-xl font-semibold">
+      <Card className="mx-auto my-6 w-11/12 max-w-sm space-y-6">
+        <Heading level={2} size="title">
           {step === 'waitlist' ? '已加入等候名单' : '用邮箱登录'}
-        </h2>
+        </Heading>
         {step === 'waitlist' ? (
-          <div className="waitlist-message space-y-3 rounded-xl bg-canvas p-4">
-            <p className="break-all">{email}</p>
-            <p className="text-secondary">开放后会第一时间通知你</p>
-          </div>
+          <Card
+            as="div"
+            variant="soft"
+            padding="md"
+            className="waitlist-message space-y-3"
+          >
+            <Text breakAll>{email}</Text>
+            <Text tone="secondary">开放后会第一时间通知你</Text>
+          </Card>
         ) : (
           <form
             className="space-y-4"
@@ -73,9 +80,9 @@ export function Login() {
             }}
           >
             {step === 'email' ? (
-              <label className="block space-y-2">
-                <span>邮箱</span>
-                <input
+              <Field id={emailId} label="邮箱">
+                <Input
+                  id={emailId}
                   type="email"
                   autoComplete="email"
                   required
@@ -83,17 +90,17 @@ export function Login() {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   maxLength={254}
-                  className="block min-h-12 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md"
+                  size="lg"
                 />
-              </label>
+              </Field>
             ) : (
               <>
-                <p className="break-all text-sm text-secondary">
+                <Text size="sm" tone="secondary" breakAll>
                   验证码已发送至 {email}
-                </p>
-                <label className="block space-y-2">
-                  <span>6 位验证码</span>
-                  <input
+                </Text>
+                <Field id={codeId} label="6 位验证码">
+                  <Input
+                    id={codeId}
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     required
@@ -106,9 +113,10 @@ export function Login() {
                     }
                     pattern="[0-9]{6}"
                     maxLength={6}
-                    className="block min-h-12 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md tracking-widest"
+                    size="lg"
+                    className="tracking-widest"
                   />
-                </label>
+                </Field>
               </>
             )}
             <Button
@@ -144,11 +152,11 @@ export function Login() {
           </Button>
         )}
         {error && (
-          <p role="alert" className="text-sm text-danger">
+          <Text role="alert" size="sm" tone="danger">
             {error}
-          </p>
+          </Text>
         )}
-      </section>
+      </Card>
     </main>
   );
 }

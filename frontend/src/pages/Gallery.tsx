@@ -2,20 +2,26 @@ import { useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowRight, Plus } from 'lucide-react';
 import {
+  AvatarFrame,
   Badge,
   Button,
   Card,
   Dialog,
   EmptyState,
   Field,
+  Heading,
   IconButton,
   Input,
   Meter,
+  Section,
   Skeleton,
+  Stack,
   Switch,
   Table,
   Tabs,
+  Text,
   Textarea,
+  Toolbar,
   Tooltip,
   toast,
   useConfirm,
@@ -25,7 +31,6 @@ import {
   LayoutItem,
   LayoutScope,
   PageTransition,
-  Pressable,
   Reveal,
   Stagger,
   StaggerItem,
@@ -47,7 +52,9 @@ import {
 function Story({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Card className="space-y-5">
-      <h2 className="text-lg font-semibold">{title}</h2>
+      <Heading level={2} size="section">
+        {title}
+      </Heading>
       {children}
     </Card>
   );
@@ -69,13 +76,13 @@ export function Gallery() {
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="mb-2 text-sm text-secondary">设计系统 / F0</p>
-          <h1 className="text-2xl font-semibold">组件画廊</h1>
-          <p className="mt-3 text-secondary">
-            温暖的留白、安静的蓝色，以及自然的运动。
-          </p>
-        </div>
+        <Stack gap={2}>
+          <Text size="sm" tone="secondary">
+            设计系统 / F0
+          </Text>
+          <Heading level={1}>组件画廊</Heading>
+          <Text tone="secondary">温暖的留白、安静的蓝色，以及自然的运动。</Text>
+        </Stack>
         <Badge tone="info">
           {reduced ? '减少动态效果：仅淡入淡出' : '弹簧动效已启用'}
         </Badge>
@@ -127,23 +134,32 @@ export function Gallery() {
               </IconButton>
             </Tooltip>
           </div>
-          <Pressable
-            disabled={disabled}
-            className="rounded-md border border-border px-4 py-2"
+          <Card
+            interactive
+            variant="outline"
+            padding="sm"
             onClick={() => toast('轻触反馈')}
           >
-            Pressable · 悬停抬起 / 按下缩放
-          </Pressable>
+            Pressable（Card interactive）· 悬停抬起 / 按下缩放
+          </Card>
         </Story>
         <Story title="卡片与状态">
           <div className="grid gap-3 sm:grid-cols-2">
             <Card>
-              <h3 className="font-semibold">静态卡片</h3>
-              <p className="text-sm text-secondary">轻边框与硬偏移阴影。</p>
+              <Heading level={3} size="item">
+                静态卡片
+              </Heading>
+              <Text size="sm" tone="secondary">
+                轻边框与硬偏移阴影。
+              </Text>
             </Card>
             <Card interactive onClick={() => toast('交互卡片')}>
-              <h3 className="font-semibold">交互卡片</h3>
-              <p className="text-sm text-secondary">支持键盘与轻触反馈。</p>
+              <Heading level={3} size="item">
+                交互卡片
+              </Heading>
+              <Text size="sm" tone="secondary">
+                支持键盘与轻触反馈。
+              </Text>
             </Card>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -285,9 +301,9 @@ export function Gallery() {
               显示通知
             </Button>
           </div>
-          <p className="text-sm text-secondary">
+          <Text size="sm" tone="secondary">
             Escape 关闭，焦点限制在对话框内，关闭后返回入口。
-          </p>
+          </Text>
           <Dialog
             open={dialog}
             onOpenChange={setDialog}
@@ -335,11 +351,10 @@ export function Gallery() {
               <Reveal key="reveal">
                 <Stagger className="space-y-2">
                   {['第一项', '第二项', '第三项'].map((item) => (
-                    <StaggerItem
-                      key={item}
-                      className="rounded-md border border-border bg-canvas px-4 py-2"
-                    >
-                      {item}
+                    <StaggerItem key={item}>
+                      <Card as="div" variant="soft" padding="sm">
+                        {item}
+                      </Card>
                     </StaggerItem>
                   ))}
                 </Stagger>
@@ -367,11 +382,8 @@ export function Gallery() {
           <LayoutScope>
             <div className="flex gap-3">
               {(reversed ? ['B', 'A'] : ['A', 'B']).map((item) => (
-                <LayoutItem
-                  key={item}
-                  className="grid size-14 place-items-center rounded-md border border-border bg-accent/5 text-accent"
-                >
-                  {item}
+                <LayoutItem key={item}>
+                  <AvatarFrame size="xl">{item}</AvatarFrame>
                 </LayoutItem>
               ))}
             </div>
@@ -381,9 +393,9 @@ export function Gallery() {
           </PageTransition>
         </Story>
         <Story title="惯性拖动与回弹">
-          <p className="text-sm text-secondary">
+          <Text size="sm" tone="secondary">
             横向拖动超过 100px，或快速甩动关闭；不足阈值时回弹。
-          </p>
+          </Text>
           <AnimatePresence>
             {!dragged && (
               <DragDismiss
@@ -392,16 +404,19 @@ export function Gallery() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex items-center justify-between rounded-lg border border-border bg-canvas p-4"
               >
-                <span>试着拖动这张卡片</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setDragged(true)}
-                >
-                  关闭
-                </Button>
+                <Card as="div" variant="outline" padding="md">
+                  <Toolbar>
+                    <span>试着拖动这张卡片</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDragged(true)}
+                    >
+                      关闭
+                    </Button>
+                  </Toolbar>
+                </Card>
               </DragDismiss>
             )}
           </AnimatePresence>
@@ -412,20 +427,20 @@ export function Gallery() {
           )}
         </Story>
         <Story title="轻快的点缀">
-          <p className="text-sm text-secondary">
+          <Text size="sm" tone="secondary">
             bouncy 只用于轻松的示例反馈，不用于主要导航。
-          </p>
-          <motion.button
-            type="button"
-            disabled={disabled}
+          </Text>
+          <motion.div
+            className="w-fit"
             whileTap={
               reduced || disabled ? undefined : { rotate: -8, scale: 0.9 }
             }
             transition={transition}
-            className="rounded-xl border border-border bg-accent/5 px-5 py-3 text-accent disabled:opacity-50"
           >
-            轻触试试
-          </motion.button>
+            <Button variant="secondary" size="lg" disabled={disabled}>
+              轻触试试
+            </Button>
+          </motion.div>
         </Story>
       </div>
       <ReactBitsGallery />
@@ -446,7 +461,9 @@ function EffectStory({
   return (
     <Story title={title}>
       <div key={replay}>{children}</div>
-      <p className="text-sm text-secondary">减少动态效果：{note}</p>
+      <Text size="sm" tone="secondary">
+        减少动态效果：{note}
+      </Text>
       <Button
         variant="secondary"
         size="sm"
@@ -480,13 +497,12 @@ function ListDemo() {
 
 function ReactBitsGallery() {
   return (
-    <section aria-labelledby="react-bits-heading" className="space-y-6">
-      <h2 id="react-bits-heading" className="text-xl font-semibold">
-        React Bits 动效
-      </h2>
-      <p className="text-secondary">
-        短暂、局部的动效；页面只使用应用 wrapper，不直接依赖上游组件。
-      </p>
+    <Section
+      level={2}
+      gap={6}
+      title="React Bits 动效"
+      description="短暂、局部的动效；页面只使用应用 wrapper，不直接依赖上游组件。"
+    >
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <EffectStory
           title="BlurText · 助手回复"
@@ -524,10 +540,12 @@ function ReactBitsGallery() {
             label="查看示例资料"
             onClick={() => toast('这是示例资料', 'info')}
           >
-            <h3 className="font-semibold">查看示例资料</h3>
-            <p className="text-sm text-secondary">
+            <Heading level={3} size="item">
+              查看示例资料
+            </Heading>
+            <Text size="sm" tone="secondary">
               移动光标查看低强度蓝色光斑，也可用键盘打开。
-            </p>
+            </Text>
           </SpotlightAction>
         </EffectStory>
         <EffectStory
@@ -560,12 +578,12 @@ function ReactBitsGallery() {
           note="内容立即可见，无位移或滚动触发动画。"
         >
           <SectionReveal>
-            <p className="rounded-md border border-border bg-canvas p-4">
+            <Card as="div" variant="outline" padding="md">
               滚动到这里时，区块轻移 8px 并淡入；重播会重新触发。
-            </p>
+            </Card>
           </SectionReveal>
         </EffectStory>
       </div>
-    </section>
+    </Section>
   );
 }

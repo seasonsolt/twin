@@ -48,7 +48,7 @@ function Toast({ item }: { item: ToastMessage }) {
       initial={{ opacity: 0, y: reduced ? 0 : 12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, transition: exit }}
-      className="pointer-events-auto flex items-center gap-3 rounded-xl border border-border bg-canvas p-3 shadow-elevation-2"
+      className="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-canvas p-3 shadow-elevation-2"
     >
       <p className="flex-1 text-primary">{item.message}</p>
       <IconButton label="关闭通知" onClick={() => remove(item.id)}>

@@ -1,6 +1,14 @@
 import { useId, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Badge, Button, Textarea, toast } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Text,
+  Textarea,
+  toast,
+} from '../../components/ui';
+import { cn } from '../../lib/utils';
 import { useMotionPreset } from '../../design/motion';
 import { api } from '../../lib/api';
 import { useCanManage } from '../../stores/personas';
@@ -130,15 +138,20 @@ export function CitationCard({
   const [text, setText] = useState(citation.text);
   const [removed, setRemoved] = useState(false);
   return (
-    <li className="rounded-md border border-border bg-canvas p-3 text-sm">
+    <Card as="li" variant="outline" padding="sm">
       <Badge>{citationLabel(citation)}</Badge>
-      <blockquote
-        className={`mt-2 whitespace-pre-wrap${removed ? ' text-tertiary line-through' : ''}`}
+      <Text
+        as="blockquote"
+        size="sm"
+        tone={removed ? 'tertiary' : 'inherit'}
+        className={cn('mt-2 whitespace-pre-wrap', removed && 'line-through')}
       >
         {text}
-      </blockquote>
+      </Text>
       {removed ? (
-        <p className="mt-1 text-xs text-tertiary">已删掉</p>
+        <Text size="xs" tone="tertiary" className="mt-1">
+          已删掉
+        </Text>
       ) : (
         editable &&
         citation.kind === 'item' && (
@@ -151,7 +164,7 @@ export function CitationCard({
           />
         )
       )}
-    </li>
+    </Card>
   );
 }
 
@@ -172,9 +185,9 @@ export function Citations({ cited = [] }: { cited?: Citation[] }) {
         aria-controls={id}
         onClick={() => setOpen(!open)}
       >
-        <span className="rounded-full border border-primary px-3 py-0.5 text-xs text-primary">
+        <Badge className="border-primary text-primary">
           依据 {cited.length}
-        </span>
+        </Badge>
       </Button>
       <AnimatePresence initial={false}>
         {open && (

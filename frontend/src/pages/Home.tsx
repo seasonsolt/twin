@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router';
 import { Upload } from 'lucide-react';
-import { Button, Skeleton } from '../components/ui';
+import {
+  Button,
+  Card,
+  FileDrop,
+  FileInput,
+  Grid,
+  Heading,
+  Notice,
+  Page,
+  Skeleton,
+  Stack,
+  StepNumber,
+  Text,
+  TextLink,
+  Toolbar,
+} from '../components/ui';
 import { api } from '../lib/api';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
@@ -19,7 +33,6 @@ const STEPS: [string, string][] = [
 export function Home() {
   const [library, setLibrary] = useState<LibraryState | null>(null);
   const [error, setError] = useState('');
-  const [dragging, setDragging] = useState(false);
   // Bumped on every reload, so people and the review queue follow new transcripts.
   const [version, setVersion] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -46,120 +59,92 @@ export function Home() {
   }, [busy, load]);
 
   const picker = (
-    <input
+    <FileInput
       ref={input}
-      type="file"
+      label="选择录音文件"
       multiple
       accept={MEDIA_ACCEPT}
-      className="sr-only"
-      aria-label="选择录音文件"
-      onChange={(event) => {
-        const files = Array.from(event.currentTarget.files ?? []);
-        event.currentTarget.value = '';
-        void add(files);
-      }}
+      onFiles={(files) => void add(files)}
     />
   );
   const fresh = library !== null && library.recordings.length === 0;
   return (
     <div className="home-page">
-      <div className="page-content space-y-8">
+      <Page gap={8}>
         {error && (
-          <p role="alert" className="text-danger">
+          <Text role="alert" tone="danger">
             {error}
-          </p>
+          </Text>
         )}
         {notice && (
-          <p role="status" className="text-sm text-secondary">
+          <Text role="status" size="sm" tone="secondary">
             {notice}
-          </p>
+          </Text>
         )}
         {library && !library.asr && (
-          <p role="status" className="rounded-xl bg-note p-4 text-sm">
+          <Notice>
             还没有配置能区分说话人的转写服务（asr-funasr），录音会先排队，配置后自动开始转写。
-          </p>
+          </Notice>
         )}
         {!library ? (
           <Skeleton className="h-64" />
         ) : fresh ? (
           <>
-            <header className="space-y-2 text-center">
-              <h2 className="text-3xl font-semibold">从一段会议录音开始</h2>
-              <p className="text-secondary">
+            <Stack as="header" gap={2}>
+              <Heading level={2} size="display" align="center">
+                从一段会议录音开始
+              </Heading>
+              <Text tone="secondary" align="center">
                 不用先建档。上传后自动区分每个人、认出已知的人，新出现的人自动建档。
-              </p>
-            </header>
-            <section
-              aria-label="添加录音"
-              onDragOver={(event) => {
-                event.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault();
-                setDragging(false);
-                void add(Array.from(event.dataTransfer.files));
-              }}
-              className={`flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed bg-surface px-6 py-12 text-center ${dragging ? 'border-accent bg-soft' : 'border-tertiary'}`}
-            >
-              <Upload aria-hidden className="size-10" />
-              <p className="text-lg">把会议录音拖到这里</p>
-              <Button
-                disabled={uploading}
-                onClick={() => input.current?.click()}
-              >
-                选择文件
-              </Button>
-              {picker}
-              <p className="text-sm text-secondary">
-                音频或视频都可以，一次可以选多个。只有你的账号能看到。
-              </p>
-            </section>
+              </Text>
+            </Stack>
+            <FileDrop
+              label="添加录音"
+              size="lg"
+              title="把会议录音拖到这里"
+              inputLabel="选择录音文件"
+              accept={MEDIA_ACCEPT}
+              disabled={uploading}
+              onFiles={(files) => void add(files)}
+              hint="音频或视频都可以，一次可以选多个。只有你的账号能看到。"
+            />
             <UploadList
               picks={unfinished}
               uploading={uploading}
               onStop={stop}
             />
-            <ol
-              aria-label="接下来会发生什么"
-              className="grid gap-4 sm:grid-cols-3"
-            >
+            <Grid as="ol" columns={3} aria-label="接下来会发生什么">
               {STEPS.map(([title, body], i) => (
-                <li
+                <Card
+                  as="li"
                   key={title}
-                  className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-5"
+                  variant="outline"
+                  className="flex flex-col gap-2"
                 >
-                  <span
-                    aria-hidden
-                    className="grid size-8 place-items-center rounded-full bg-primary font-semibold text-canvas"
-                  >
-                    {i + 1}
-                  </span>
-                  <span className="font-semibold">{title}</span>
-                  <span className="text-sm text-secondary">{body}</span>
-                </li>
+                  <StepNumber>{i + 1}</StepNumber>
+                  <Text as="span" weight="semibold">
+                    {title}
+                  </Text>
+                  <Text as="span" size="sm" tone="secondary">
+                    {body}
+                  </Text>
+                </Card>
               ))}
-            </ol>
-            <p className="text-center text-secondary">
+            </Grid>
+            <Text tone="secondary" align="center">
               想先给自己建一个分身？
-              <Link
-                to="/twins?create=1"
-                className="inline-flex min-h-11 items-center text-accent underline"
-              >
-                用文字资料新建
-              </Link>
-            </p>
+              <TextLink to="/twins?create=1">用文字资料新建</TextLink>
+            </Text>
           </>
         ) : (
           <>
-            <header className="flex flex-wrap items-end justify-between gap-4">
-              <div className="space-y-1">
-                <h2 className="text-2xl font-semibold">团队</h2>
-                <p className="text-secondary">
+            <Toolbar as="header" gap={4} align="end">
+              <Stack gap={1}>
+                <Heading level={2}>团队</Heading>
+                <Text tone="secondary">
                   会议里出现过的人。上传新录音后，系统会自动认人，有拿不准的再请你确认。
-                </p>
-              </div>
+                </Text>
+              </Stack>
               <Button
                 disabled={uploading}
                 onClick={() => input.current?.click()}
@@ -168,24 +153,21 @@ export function Home() {
                 上传会议录音
               </Button>
               {picker}
-            </header>
+            </Toolbar>
             <UploadList
               picks={unfinished}
               uploading={uploading}
               onStop={stop}
             />
             <Team version={version} recordings={library.recordings} />
-            <p>
-              <Link
-                to="/library"
-                className="inline-flex min-h-11 items-center text-accent underline"
-              >
+            <Text>
+              <TextLink to="/library">
                 全部录音（{library.recordings.length}）
-              </Link>
-            </p>
+              </TextLink>
+            </Text>
           </>
         )}
-      </div>
+      </Page>
     </div>
   );
 }

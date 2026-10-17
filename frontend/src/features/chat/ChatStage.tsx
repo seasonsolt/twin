@@ -7,6 +7,7 @@ import {
 } from 'motion/react';
 import { History, LoaderCircle } from 'lucide-react';
 import { StageHeader } from '../../components/layout/StageHeader';
+import { Button, IconButton } from '../../components/ui';
 import { useMotionPreset, springs } from '../../design/motion';
 import type { Capabilities } from '../avatar/types';
 import { ChatAvatar } from './ChatAvatar';
@@ -207,18 +208,20 @@ export function ChatStage({
           !desktop && (
             <div className="flex items-center gap-1">
               {onHistory && (
-                <button
-                  type="button"
+                <IconButton
+                  variant="primary"
+                  shape="circle"
+                  size="lg"
                   className="stage-new"
-                  aria-label={historyLabel}
+                  label={historyLabel}
                   onClick={onHistory}
                 >
                   <History size={20} aria-hidden />
-                </button>
+                </IconButton>
               )}
-              <button type="button" className="stage-new" onClick={onClear}>
+              <Button className="stage-new" onClick={onClear}>
                 {newLabel}
-              </button>
+              </Button>
             </div>
           )
         }

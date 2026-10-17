@@ -2,9 +2,17 @@ import * as TabsPrimitive from '@radix-ui/react-tabs';
 import * as SwitchPrimitive from '@radix-ui/react-switch';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { motion } from 'motion/react';
-import { useId, useState, type ReactElement, type ReactNode } from 'react';
+import {
+  useId,
+  useState,
+  type ComponentType,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
+import { NavLink } from 'react-router';
 import { useMotionPreset } from '../../design/motion';
 import { LayoutScope } from '../motion';
+import { cn } from '../../lib/utils';
 
 export function Tabs({
   items,
@@ -128,3 +136,79 @@ export function Tooltip({
 }
 
 export const TooltipProvider = TooltipPrimitive.Provider;
+
+/**
+ * A pill-shaped link in the app's navigation; the current page's is filled dark. `stacked` puts the icon above a
+ * small label (the side rail), `inline` sets them side by side (the phone's bottom tabs). `indicator` names a
+ * highlight that slides between the links sharing it (wrap them in a LayoutScope).
+ */
+export function NavPill({
+  to,
+  icon: Icon,
+  label,
+  layout = 'stacked',
+  indicator,
+}: {
+  to: string;
+  icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  label: string;
+  layout?: 'stacked' | 'inline';
+  indicator?: string;
+}) {
+  const { reduced, transition } = useMotionPreset('layout');
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        cn(
+          'relative flex items-center justify-center rounded-full',
+          layout === 'stacked'
+            ? 'rail-link min-h-16 flex-col gap-1 text-xs text-primary'
+            : 'min-h-11 gap-2 text-sm text-secondary',
+          isActive && 'text-canvas',
+          isActive && layout === 'inline' && 'font-semibold',
+          // Hover tint for the rail comes from .rail-link in tokens.css (fine pointers only).
+          isActive && !indicator && 'bg-primary',
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && indicator && (
+            <motion.span
+              layoutId={reduced ? undefined : indicator}
+              initial={reduced ? { opacity: 0 } : false}
+              animate={{ opacity: 1 }}
+              transition={transition}
+              className="absolute inset-0 rounded-full bg-primary"
+            />
+          )}
+          <Icon aria-hidden className="relative size-5 shrink-0" />
+          <span className="relative whitespace-nowrap">{label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+}
+
+/** The first focusable thing on the page: hidden until focused, it moves focus to the element with `target`'s id. */
+export function SkipLink({
+  target,
+  children,
+}: {
+  target: string;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={`#${target}`}
+      onClick={(event) => {
+        event.preventDefault();
+        document.getElementById(target)?.focus();
+      }}
+      className="sr-only fixed top-2 left-2 z-70 rounded-md bg-surface p-2 focus:not-sr-only"
+    >
+      {children}
+    </a>
+  );
+}

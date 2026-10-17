@@ -1,6 +1,12 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { MoreHorizontal } from 'lucide-react';
-import { Button, Dialog, useConfirm } from '../../components/ui';
+import {
+  Button,
+  Dialog,
+  IconButton,
+  Input,
+  useConfirm,
+} from '../../components/ui';
 import type { useConversation, ConversationSummary } from './useConversation';
 import './history.css';
 
@@ -104,8 +110,8 @@ export function ConversationHistory({
   };
   const content = (
     <div className="history-content">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         className="history-new"
         aria-label="新对话"
         disabled={saving}
@@ -117,8 +123,8 @@ export function ConversationHistory({
         }}
       >
         ＋ 新对话
-      </button>
-      <input
+      </Button>
+      <Input
         type="search"
         aria-label="搜索对话"
         placeholder="搜索对话"
@@ -191,7 +197,7 @@ export function ConversationHistory({
                                   .finally(() => setSaving(false));
                               }}
                             >
-                              <input
+                              <Input
                                 autoFocus
                                 aria-label="对话标题"
                                 maxLength={200}
@@ -222,9 +228,9 @@ export function ConversationHistory({
                           ) : (
                             <>
                               <div className="history-entry-row">
-                                <button
-                                  type="button"
-                                  className="history-select"
+                                <Button
+                                  variant="ghost"
+                                  className="history-select font-normal text-current hover:bg-transparent"
                                   aria-current={
                                     row.id === chat.conversationId
                                       ? 'true'
@@ -248,11 +254,10 @@ export function ConversationHistory({
                                   <time dateTime={row.updated_at}>
                                     {relativeTime(row.updated_at, currentTime)}
                                   </time>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="history-more"
-                                  aria-label={`${row.title}的更多操作`}
+                                </Button>
+                                <IconButton
+                                  className="history-more text-current hover:bg-transparent"
+                                  label={`${row.title}的更多操作`}
                                   aria-expanded={menu === row.id}
                                   aria-haspopup="menu"
                                   disabled={saving}
@@ -262,7 +267,7 @@ export function ConversationHistory({
                                   }}
                                 >
                                   <MoreHorizontal size={18} aria-hidden />
-                                </button>
+                                </IconButton>
                               </div>
                               {menu === row.id && (
                                 <div
@@ -307,9 +312,9 @@ export function ConversationHistory({
                                     }
                                   }}
                                 >
-                                  <button
+                                  <Button
                                     autoFocus
-                                    type="button"
+                                    variant="ghost"
                                     role="menuitem"
                                     onClick={() => {
                                       setEditing(row.id);
@@ -318,15 +323,15 @@ export function ConversationHistory({
                                     }}
                                   >
                                     重命名
-                                  </button>
-                                  <button
-                                    type="button"
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
                                     role="menuitem"
                                     disabled={saving}
                                     onClick={() => void remove(row)}
                                   >
                                     删除
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </>

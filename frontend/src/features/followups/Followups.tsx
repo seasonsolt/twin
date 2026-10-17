@@ -6,7 +6,9 @@ import {
   Button,
   Card,
   EmptyState,
+  Row,
   Skeleton,
+  Text,
   Textarea,
   toast,
 } from '../../components/ui';
@@ -65,24 +67,26 @@ function Question({
     <Card>
       <article aria-labelledby={`${id}-question`} className="space-y-3">
         {item.previous && (
-          <p className="text-sm text-secondary">接着「{item.previous}」问：</p>
+          <Text size="sm" tone="secondary">
+            接着「{item.previous}」问：
+          </Text>
         )}
         <h3 id={`${id}-question`} className="font-medium">
           {item.question}
         </h3>
-        <div className="flex flex-wrap items-center gap-2 text-sm text-secondary">
-          <span>
+        <Row gap={2} wrap>
+          <Text as="span" size="sm" tone="secondary">
             {item.asked > 1 ? `被问了 ${item.asked} 次，最近` : '问于'}{' '}
             {when(item.last_at)}
-          </span>
+          </Text>
           {item.unresolved && (
             <Badge tone="warning">回答过，分身还是答不上，可以再补充</Badge>
           )}
-        </div>
+        </Row>
         {item.reason && (
-          <p className="text-sm text-tertiary">
+          <Text size="sm" tone="tertiary">
             分身没回答的原因：{item.reason}
-          </p>
+          </Text>
         )}
         <label htmlFor={id} className="sr-only">
           你的回答
@@ -94,9 +98,9 @@ function Question({
           onChange={(event) => setText(event.target.value)}
         />
         {error && (
-          <p role="alert" className="text-sm text-danger">
+          <Text role="alert" size="sm" tone="danger">
             {error}
-          </p>
+          </Text>
         )}
         <div className="flex flex-wrap gap-2">
           <Button
@@ -175,9 +179,9 @@ export function Followups() {
   const dismissed = data.items.filter((item) => item.status === 'dismissed');
   return (
     <div className="space-y-4">
-      <p className="text-sm text-secondary">
+      <Text size="sm" tone="secondary">
         别人问分身、分身答不上来的问题会出现在这里。你回答一次，分身以后就能用你的原话回答。
-      </p>
+      </Text>
       {!pending.length && (
         <EmptyState
           title="没有待回答的问题"
@@ -192,16 +196,16 @@ export function Followups() {
           <summary className="cursor-pointer text-secondary">
             已回答 {answered.length} 个
           </summary>
-          <ul className="space-y-1 pt-2 text-sm">
+          <ul className="space-y-1 pt-2">
             {answered.map((item) => (
-              <li key={item.followup_id}>
+              <Text as="li" key={item.followup_id} size="sm">
                 {item.question}
                 {item.handled_at && (
-                  <span className="text-tertiary">
+                  <Text as="span" size="inherit" tone="tertiary">
                     （{when(item.handled_at)} 回答，可以在「记忆」里查看或删除）
-                  </span>
+                  </Text>
                 )}
-              </li>
+              </Text>
             ))}
           </ul>
         </details>
@@ -211,17 +215,16 @@ export function Followups() {
           <summary className="cursor-pointer text-secondary">
             不用回答 {dismissed.length} 个
           </summary>
-          <ul className="space-y-2 pt-2 text-sm">
+          <ul className="space-y-2 pt-2">
             {dismissed.map((item) => (
-              <li
-                key={item.followup_id}
-                className="flex flex-wrap items-center gap-2"
-              >
-                <span>{item.question}</span>
+              <Row as="li" key={item.followup_id} gap={2} wrap>
+                <Text as="span" size="sm">
+                  {item.question}
+                </Text>
                 {item.asked_since > 0 && (
-                  <span className="text-tertiary">
+                  <Text as="span" size="sm" tone="tertiary">
                     之后又被问了 {item.asked_since} 次
-                  </span>
+                  </Text>
                 )}
                 <Button
                   size="sm"
@@ -244,7 +247,7 @@ export function Followups() {
                 >
                   放回待回答
                 </Button>
-              </li>
+              </Row>
             ))}
           </ul>
         </details>

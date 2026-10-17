@@ -1,9 +1,22 @@
-import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router';
 import { ArrowUp, Paperclip, Play, X } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
-import { Badge, Button, EmptyState, Textarea } from '../components/ui';
+import {
+  Badge,
+  Chip,
+  EmptyState,
+  FileInput,
+  IconButton,
+  Notice,
+  Text,
+  TextLink,
+  Textarea,
+  Button,
+  PlainButton,
+  Spacer,
+} from '../components/ui';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import { ReplyDetails } from '../features/chat/ReplyDetails';
@@ -125,7 +138,7 @@ export function Chat() {
   }, [active, assetVersion, personaId]);
   const stateRequest = useRef<AbortController | null>(null);
   const alive = useRef(false);
-  const { end, composer, composerHeight } = useComposerLayout(active);
+  const { page, end, composer, composerHeight } = useComposerLayout(active);
   const refreshState = useCallback(async () => {
     stateRequest.current?.abort();
     const controller = new AbortController();
@@ -267,9 +280,9 @@ export function Chat() {
   };
   return (
     <div
+      ref={page}
       className="chat-page"
       data-empty={!chat.turns.length && !chat.loading}
-      style={{ '--composer-height': `${composerHeight}px` } as CSSProperties}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
       <ChatStage
@@ -310,23 +323,20 @@ export function Chat() {
             <PersonaFade>
               <div className="chat-conversation flex flex-col space-y-4">
                 {status?.memory_updating && (
-                  <p role="status" className="text-sm text-secondary">
+                  <Text role="status" size="sm" tone="secondary">
                     记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。
-                  </p>
+                  </Text>
                 )}
                 {stale && canManage && (
-                  <p role="status" className="text-xs text-secondary">
+                  <Text role="status" size="xs" tone="secondary">
                     新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}
-                    <a
-                      className="inline-flex min-h-11 items-center text-accent underline"
-                      href="#/profile?section=memories"
-                    >
+                    <TextLink href="#/profile?section=memories">
                       查看记忆
-                    </a>
-                  </p>
+                    </TextLink>
+                  </Text>
                 )}
                 {stateError && (
-                  <div role="alert" className="text-sm text-danger">
+                  <Text as="div" role="alert" size="sm" tone="danger">
                     无法检查档案状态：{stateError}{' '}
                     <Button
                       variant="ghost"
@@ -335,7 +345,7 @@ export function Chat() {
                     >
                       重新检查
                     </Button>
-                  </div>
+                  </Text>
                 )}
                 <div
                   aria-live="polite"
@@ -343,9 +353,9 @@ export function Chat() {
                   data-testid="chat-messages"
                 >
                   {chat.loading && (
-                    <p role="status" className="text-sm text-secondary">
+                    <Text role="status" size="sm" tone="secondary">
                       正在加载对话…
-                    </p>
+                    </Text>
                   )}
                   {!chat.turns.length && !chat.loading && (
                     <EmptyState
@@ -367,26 +377,21 @@ export function Chat() {
                           '你周末一般怎么过？',
                           '遇到难事你会怎么做？',
                         ].map((starter) => (
-                          <button
+                          <Chip
                             key={starter}
-                            type="button"
-                            className="starter-chip min-h-11 rounded-full border border-primary px-4 text-primary"
                             onClick={() => {
                               chat.setDraft(starter);
                               document.getElementById('chat-input')?.focus();
                             }}
                           >
                             {starter}
-                          </button>
+                          </Chip>
                         ))}
                       </div>
                       {canManage && (
-                        <a
-                          className="inline-flex min-h-11 items-center text-accent underline"
-                          href="#/profile?section=memories"
-                        >
+                        <TextLink href="#/profile?section=memories">
                           添加记忆
-                        </a>
+                        </TextLink>
                       )}
                     </EmptyState>
                   )}
@@ -407,8 +412,8 @@ export function Chat() {
                             }
                             className={
                               turn.role === 'user'
-                                ? 'user-bubble ml-auto w-fit max-w-[85%] px-4 py-3'
-                                : 'mr-auto w-fit max-w-[90%] min-w-0 text-primary'
+                                ? 'user-bubble ml-auto w-fit max-w-17/20 px-4 py-3'
+                                : 'mr-auto w-fit max-w-9/10 min-w-0 text-primary'
                             }
                           >
                             <div
@@ -439,8 +444,8 @@ export function Chat() {
                                   className="reply-actions mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-2"
                                 >
                                   {capabilities?.available && (
-                                    <button
-                                      type="button"
+                                    <PlainButton
+                                      shape="circle"
                                       className="reply-play min-h-11 min-w-11"
                                       aria-label={
                                         (audio.id === turn.id &&
@@ -480,7 +485,7 @@ export function Chat() {
                                           <Play size={16} />
                                         )}
                                       </span>
-                                    </button>
+                                    </PlainButton>
                                   )}
                                   {turn.reply.mode === 'inferred' && (
                                     <Badge>推测 · 非本人表达</Badge>
@@ -498,30 +503,22 @@ export function Chat() {
                                   )}
                                 {capabilities?.available &&
                                   audio.errors[turn.id] && (
-                                    <p
-                                      role="alert"
-                                      className="text-xs text-danger"
-                                    >
+                                    <Text role="alert" size="xs" tone="danger">
                                       {audio.errors[turn.id]}
-                                    </p>
+                                    </Text>
                                   )}
                               </>
                             )}
                             {capabilities?.video?.available &&
                               video.videos[turn.id]?.status === 'failed' && (
-                                <p
-                                  role="alert"
-                                  className="text-xs text-secondary"
-                                >
+                                <Text role="alert" size="xs" tone="secondary">
                                   真人版生成失败 ·{' '}
-                                  <button
-                                    type="button"
-                                    className="min-h-11 underline"
+                                  <TextLink
                                     onClick={() => video.retry(turn.id)}
                                   >
                                     重试生成视频
-                                  </button>
-                                </p>
+                                  </TextLink>
+                                </Text>
                               )}
                           </article>
                         ),
@@ -535,26 +532,28 @@ export function Chat() {
                   )}
                 </div>
                 {chat.error && (
-                  <div
+                  <Notice
+                    tone="danger"
                     role="alert"
-                    className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-danger"
+                    actions={
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          void refreshState();
+                          chat.retry();
+                        }}
+                        disabled={chat.busy}
+                      >
+                        重试
+                      </Button>
+                    }
                   >
                     <p>分身没能回复：{chat.error}</p>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        void refreshState();
-                        chat.retry();
-                      }}
-                      disabled={chat.busy}
-                    >
-                      重试
-                    </Button>
-                  </div>
+                  </Notice>
                 )}
                 <div ref={end} />
-                {space > 0 && <div aria-hidden style={{ height: space }} />}
+                {space > 0 && <Spacer height={space} />}
               </div>
             </PersonaFade>
           </div>
@@ -562,7 +561,7 @@ export function Chat() {
         <form
           ref={composer}
           aria-label="消息输入"
-          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl md:left-[var(--sidebar-width,0px)]"
+          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl"
           onSubmit={(event) => {
             event.preventDefault();
             send();
@@ -577,68 +576,71 @@ export function Chat() {
               {chat.attachments.map((file, index) => (
                 <div
                   key={`${file.name}-${file.size}-${index}`}
-                  className="flex min-h-10 max-w-full items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-sm"
+                  className="max-w-full"
                   role="listitem"
                 >
-                  <span className="max-w-56 truncate">{file.name}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="size-8 min-h-8 min-w-8 rounded-full p-0"
-                    aria-label={`移除附件 ${file.name}`}
-                    disabled={chat.busy}
-                    onClick={() => {
-                      chat.setAttachments(
-                        chat.attachments.filter((_, i) => i !== index),
-                      );
-                      setAttachmentError('');
-                    }}
-                  >
-                    <X className="size-4" aria-hidden />
-                  </Button>
+                  <Chip>
+                    <Text
+                      as="span"
+                      size="inherit"
+                      tone="primary"
+                      truncate
+                      className="max-w-56"
+                    >
+                      {file.name}
+                    </Text>
+                    <IconButton
+                      shape="circle"
+                      label={`移除附件 ${file.name}`}
+                      disabled={chat.busy}
+                      onClick={() => {
+                        chat.setAttachments(
+                          chat.attachments.filter((_, i) => i !== index),
+                        );
+                        setAttachmentError('');
+                      }}
+                    >
+                      <X className="size-4" aria-hidden />
+                    </IconButton>
+                  </Chip>
                 </div>
               ))}
             </div>
           )}
           {attachmentError && (
-            <p
+            <Text
               role="alert"
-              className="mx-auto mb-2 max-w-3xl text-sm text-danger"
+              size="sm"
+              tone="danger"
+              className="mx-auto mb-2 max-w-3xl"
             >
               {attachmentError}
-            </p>
+            </Text>
           )}
           {chat.attachments.length > 0 && (
-            <p className="mx-auto mb-2 max-w-3xl text-xs text-tertiary">
+            <Text size="xs" tone="tertiary" className="mx-auto mb-2 max-w-3xl">
               原文件仅在本次请求中处理，不进入长期资料；提取文字会发送给当前配置的聊天模型。后续追问需重新附加，回答和引用摘录会保存在聊天记录。
-            </p>
+            </Text>
           )}
           <div className="composer-field mx-auto flex max-w-3xl items-end gap-1 bg-surface py-1 pr-1 pl-2">
-            <input
+            <FileInput
               ref={attachmentInput}
-              type="file"
-              aria-label="选择附件"
+              label="选择附件"
               accept={CHAT_ATTACHMENT_ACCEPT}
               multiple
-              className="sr-only"
               disabled={chat.busy || chat.loading || chat.restoreFailed}
-              onChange={(event) => {
-                addAttachments(Array.from(event.currentTarget.files ?? []));
-                event.currentTarget.value = '';
-              }}
+              onFiles={addAttachments}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              className="size-11 min-h-11 min-w-11 rounded-full p-0"
-              aria-label="添加附件"
+            <IconButton
+              shape="circle"
+              size="lg"
+              label="添加附件"
               title="添加文件（PDF 仅支持文字层，不支持扫描件 OCR）"
               disabled={chat.busy || chat.loading || chat.restoreFailed}
               onClick={() => attachmentInput.current?.click()}
             >
               <Paperclip className="size-5" aria-hidden />
-            </Button>
+            </IconButton>
             <Textarea
               id="chat-input"
               aria-label="你说"
@@ -651,22 +653,25 @@ export function Chat() {
               className="min-h-11 border-0 bg-transparent px-2 py-2.5 shadow-none focus-visible:outline-none"
               placeholder={`和${name}聊点什么…`}
             />
-            <Button
+            <IconButton
               type="submit"
-              aria-label="发送"
-              className="send-button size-11 min-h-11 rounded-full p-0"
+              variant="primary"
+              shape="circle"
+              size="lg"
+              label="发送"
+              className="send-button"
               loading={chat.busy}
               disabled={
                 !chat.draft.trim() || chat.loading || chat.restoreFailed
               }
             >
               {!chat.busy && <ArrowUp className="size-5" aria-hidden />}
-            </Button>
+            </IconButton>
           </div>
-          <p className="mx-auto mt-1 max-w-3xl text-xs text-tertiary">
+          <Text size="xs" tone="tertiary" className="mx-auto mt-1 max-w-3xl">
             支持 TXT / MD / PDF / Word / EPUB / HTML / CSV / JSON / SRT /
             VTT；最多 5 个，合计不超过 50 MiB。
-          </p>
+          </Text>
         </form>
       </div>
     </div>

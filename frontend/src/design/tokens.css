@@ -195,6 +195,23 @@
     }
   }
 }
+/* 44px touch targets on every screen size in these touch-first sheets and panels. Unlayered, so it wins over the
+   buttons' own min-h-9 utility. */
+.create-twin-sheet button,
+.persona-sheet button,
+.persona-popover button,
+.self-assets button,
+.self-assets label {
+  min-height: 44px;
+}
+.create-twin-sheet button,
+.persona-sheet button,
+.persona-popover button {
+  min-width: 44px;
+}
+.self-assets input {
+  font-size: 14px;
+}
 @media (min-width: 768px) {
   :root {
     --mobile-tabs-height: 0px;
@@ -1108,8 +1125,7 @@
 }
 .speaker-banner,
 .speaker-banner:hover,
-.speaker-banner:active,
-.recording-card {
+.speaker-banner:active {
   background: var(--note);
   color: var(--text-primary);
   border: 0;
@@ -1138,6 +1154,13 @@
 .memory-status.status-nothing_found:has(svg) {
   background: var(--surface);
   color: var(--success);
+}
+/* The phone's add button floats above the bottom tabs. */
+.memory-add {
+  bottom: calc(var(--mobile-tabs-height) + 16px);
+}
+.memory-list summary::-webkit-details-marker {
+  display: none;
 }
 .memory-add:hover,
 .memory-add:active {
@@ -1236,17 +1259,6 @@
   background: var(--coral);
   outline: 1px solid var(--accent);
 }
-.recording-bars {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 48px;
-}
-.recording-bars i {
-  width: 6px;
-  border-radius: 999px;
-  background: var(--text-primary);
-}
 @media (hover: hover) and (pointer: fine) {
   .rail-link:hover:not([aria-current='page']),
   .rail-all:hover,
@@ -1257,7 +1269,6 @@
   .stage-switch:hover {
     background: var(--accent-pressed);
   }
-  .starter-chip:hover,
   .reply-play:hover {
     background: var(--soft);
   }
@@ -1335,7 +1346,9 @@
     max-width: 824px;
     padding-inline: 32px;
   }
+  /* Fixed along the bottom, clear of the navigation rail. */
   .chat-composer {
+    left: var(--sidebar-width, 0px);
     padding-inline: 32px;
   }
   .chat-composer .composer-field {

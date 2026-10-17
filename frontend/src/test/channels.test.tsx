@@ -55,9 +55,9 @@ it('always shows an unbound channel and follows the persona API helper', async (
 });
 
 it.each([
-  ['connected', '', '已连接，同事可以在企业微信里和他聊', 'text-success'],
-  ['connecting', '', '连接中…', 'text-warning'],
-  ['error', 'Bot ID 或 Secret 不对', 'Bot ID 或 Secret 不对', 'text-danger'],
+  ['connected', '', '已连接，同事可以在企业微信里和他聊', 'bg-success'],
+  ['connecting', '', '连接中…', 'bg-warning'],
+  ['error', 'Bot ID 或 Secret 不对', 'Bot ID 或 Secret 不对', 'bg-danger'],
 ])(
   'renders %s with a status dot and Bot ID',
   async (status, detail, text, tone) => {

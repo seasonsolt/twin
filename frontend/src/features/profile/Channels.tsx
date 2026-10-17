@@ -1,5 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { Button, Card, Field, Input, useConfirm } from '../../components/ui';
+import {
+  Button,
+  Card,
+  Field,
+  Input,
+  StatusDot,
+  Text,
+  useConfirm,
+} from '../../components/ui';
 import { api } from '../../lib/api';
 import { getPersonaId } from '../../lib/persona';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
@@ -94,20 +102,19 @@ export function Channels() {
   };
 
   return (
-    <Card className="p-4 md:p-6">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+    <Card padding="roomy">
+      <Text as="div" size="sm" className="flex flex-wrap items-center gap-2">
         <span className="font-medium">企业微信</span>
         <div className="flex min-w-0 flex-1 basis-full items-center gap-2 sm:basis-auto">
           {bot && (
-            <span
-              aria-hidden
-              className={`size-2 shrink-0 rounded-full bg-current ${
+            <StatusDot
+              tone={
                 bot.status === 'connected'
-                  ? 'text-success'
+                  ? 'success'
                   : bot.status === 'connecting'
-                    ? 'text-warning'
-                    : 'text-danger'
-              }`}
+                    ? 'warning'
+                    : 'danger'
+              }
             />
           )}
           <span className="text-secondary" role={bot ? 'status' : undefined}>
@@ -141,11 +148,11 @@ export function Channels() {
             解绑
           </Button>
         )}
-      </div>
+      </Text>
       {bot && (
-        <p className="mt-2 break-all font-mono text-xs text-tertiary">
+        <Text size="xs" tone="tertiary" breakAll className="mt-2 font-mono">
           {bot.bot_id}
-        </p>
+        </Text>
       )}
       {form && (
         <form
@@ -182,10 +189,10 @@ export function Channels() {
               disabled={saving}
             />
           </Field>
-          <p className="text-sm text-secondary">
+          <Text size="sm" tone="secondary">
             企业微信 → 工作台 → 智能机器人 → 创建 → API 模式 →
             使用长连接，然后复制 Bot ID 和 Secret。
-          </p>
+          </Text>
           <div className="flex gap-2">
             <Button type="submit" loading={saving}>
               保存
@@ -205,9 +212,9 @@ export function Channels() {
         </form>
       )}
       {error && (
-        <p role="alert" className="mt-3 text-sm text-danger">
+        <Text role="alert" size="sm" tone="danger" className="mt-3">
           {error}
-        </p>
+        </Text>
       )}
     </Card>
   );

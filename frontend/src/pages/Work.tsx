@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router';
 import {
   ArrowUp,
@@ -10,11 +10,16 @@ import {
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import { PersonaFade } from '../components/motion/PersonaFade';
 import {
-  Button,
+  Card,
+  Chip,
   EmptyState,
+  IconButton,
+  Notice,
+  Text,
   Textarea,
   toast,
   useConfirm,
+  Spacer,
 } from '../components/ui';
 import type { Capabilities } from '../features/avatar/types';
 import { ChatStage } from '../features/chat/ChatStage';
@@ -72,26 +77,30 @@ function FileCard({ taskId, file }: { taskId: string; file: WorkFile }) {
   const name = file.path.split('/').pop() ?? file.path;
   const Icon = /\.xlsx$/iu.test(name) ? FileSpreadsheet : FileText;
   return (
-    <a
-      href={fileUrl(taskId, file.path)}
-      download={name}
-      className="flex min-h-11 items-center gap-3 rounded-2xl border border-border bg-surface px-3 py-2 text-primary hover:bg-soft"
-    >
-      <Icon aria-hidden className="size-5 shrink-0 text-secondary" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{file.path}</span>
-        <span className="text-xs text-secondary">{size(file.size)}</span>
-      </span>
-      <Download aria-hidden className="size-4 shrink-0 text-secondary" />
-      <span className="sr-only">下载</span>
-    </a>
+    <Card as="div" variant="outline" padding="none" className="overflow-hidden">
+      <a
+        href={fileUrl(taskId, file.path)}
+        download={name}
+        className="flex min-h-11 items-center gap-3 px-3 py-2 text-primary hover:bg-soft"
+      >
+        <Icon aria-hidden className="size-5 shrink-0 text-secondary" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{file.path}</span>
+          <Text as="span" size="xs" tone="secondary">
+            {size(file.size)}
+          </Text>
+        </span>
+        <Download aria-hidden className="size-4 shrink-0 text-secondary" />
+        <span className="sr-only">下载</span>
+      </a>
+    </Card>
   );
 }
 
 function Steps({ steps }: { steps: string[] }) {
   if (!steps.length) return null;
   return (
-    <details className="mb-1 text-sm text-secondary">
+    <Text as="details" size="sm" tone="secondary" className="mb-1">
       <summary className="cursor-pointer select-none">
         做了 {steps.length} 步
       </summary>
@@ -100,7 +109,7 @@ function Steps({ steps }: { steps: string[] }) {
           <li key={index}>{step}</li>
         ))}
       </ol>
-    </details>
+    </Text>
   );
 }
 
@@ -120,7 +129,7 @@ function Turn({
       <article
         aria-label="你说"
         data-pin={pin}
-        className="user-bubble ml-auto w-fit max-w-[85%] px-4 py-3"
+        className="user-bubble ml-auto w-fit max-w-17/20 px-4 py-3"
       >
         <MessageText text={turn.content} plain />
       </article>
@@ -131,7 +140,7 @@ function Turn({
   return (
     <article
       aria-label="回复"
-      className="mr-auto w-full max-w-[90%] min-w-0 space-y-2 text-primary"
+      className="mr-auto w-full max-w-9/10 min-w-0 space-y-2 text-primary"
     >
       <Steps steps={turn.steps} />
       <div className="twin-bubble min-w-0">
@@ -176,7 +185,7 @@ export function Work() {
   const [sending, setSending] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyTrigger = useRef<HTMLElement | null>(null);
-  const { end, composer, composerHeight } = useComposerLayout(active);
+  const { page, end, composer, composerHeight } = useComposerLayout(active);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -358,11 +367,7 @@ export function Work() {
   };
   const files = new Map(task?.files.map((file) => [file.path, file]) ?? []);
   return (
-    <div
-      className="chat-page"
-      data-empty={current === null}
-      style={{ '--composer-height': `${composerHeight}px` } as CSSProperties}
-    >
+    <div ref={page} className="chat-page" data-empty={current === null}>
       <ChatStage
         name={name}
         capabilities={stageCapabilities}
@@ -396,25 +401,23 @@ export function Work() {
                         aria-label="可以交代的事"
                       >
                         {STARTERS.map((starter) => (
-                          <button
+                          <Chip
                             key={starter}
-                            type="button"
-                            className="starter-chip min-h-11 rounded-full border border-primary px-4 text-primary"
                             onClick={() => {
                               setDraft(starter);
                               document.getElementById('work-input')?.focus();
                             }}
                           >
                             {starter}
-                          </button>
+                          </Chip>
                         ))}
                       </div>
                     </EmptyState>
                   )}
                   {current !== null && !task && (
-                    <p role="status" className="text-sm text-secondary">
+                    <Text role="status" size="sm" tone="secondary">
                       正在加载任务…
-                    </p>
+                    </Text>
                   )}
                   {task && (
                     <div className="space-y-4">
@@ -433,14 +436,17 @@ export function Work() {
                             text={task.stopping ? '正在停下…' : '正在做…'}
                           />
                           {task.progress.length > 0 && (
-                            <ol
+                            <Text
+                              as="ol"
                               aria-label="进度"
-                              className="list-decimal space-y-0.5 pl-5 text-sm text-secondary"
+                              size="sm"
+                              tone="secondary"
+                              className="list-decimal space-y-0.5 pl-5"
                             >
                               {task.progress.map((line, index) => (
                                 <li key={index}>{line}</li>
                               ))}
-                            </ol>
+                            </Text>
                           )}
                         </div>
                       )}
@@ -448,15 +454,12 @@ export function Work() {
                   )}
                 </div>
                 {task?.status === 'failed' && task.error && (
-                  <div
-                    role="alert"
-                    className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-danger"
-                  >
+                  <Notice tone="danger" role="alert">
                     {task.error}
-                  </div>
+                  </Notice>
                 )}
                 <div ref={end} />
-                {space > 0 && <div aria-hidden style={{ height: space }} />}
+                {space > 0 && <Spacer height={space} />}
               </div>
             </PersonaFade>
           </div>
@@ -464,7 +467,7 @@ export function Work() {
         <form
           ref={composer}
           aria-label="交代的事"
-          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl md:left-[var(--sidebar-width,0px)]"
+          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl"
           onSubmit={(event) => {
             event.preventDefault();
             void send();
@@ -490,26 +493,28 @@ export function Work() {
               }
             />
             {running && (
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="停下"
-                className="size-11 min-h-11 rounded-full p-0"
+              <IconButton
+                shape="circle"
+                size="lg"
+                label="停下"
                 disabled={task.stopping}
                 onClick={() => void stop()}
               >
                 <Square className="size-4 fill-current" aria-hidden />
-              </Button>
+              </IconButton>
             )}
-            <Button
+            <IconButton
               type="submit"
-              aria-label={running ? '插话' : '交代'}
-              className="send-button size-11 min-h-11 rounded-full p-0"
+              variant="primary"
+              shape="circle"
+              size="lg"
+              label={running ? '插话' : '交代'}
+              className="send-button"
               loading={sending}
               disabled={!draft.trim()}
             >
               {!sending && <ArrowUp className="size-5" aria-hidden />}
-            </Button>
+            </IconButton>
           </div>
         </form>
       </div>

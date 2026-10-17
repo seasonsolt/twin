@@ -1,6 +1,14 @@
 import { useId, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Badge, Button, Field, Textarea, toast } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Field,
+  Text,
+  Textarea,
+  toast,
+} from '../../components/ui';
 import { useMotionPreset } from '../../design/motion';
 import { secondhand, type ProfileItem, type ReviewStatus } from './types';
 
@@ -29,9 +37,11 @@ export function ItemCard({
     void onReview(item, status);
   };
   return (
-    <article
+    <Card
+      as="article"
+      padding="md"
       aria-label={item.statement}
-      className="space-y-3 rounded-xl bg-surface p-4 shadow-card"
+      className="space-y-3"
     >
       {(item.review === 'edited' || secondhand(item)) && (
         <div className="flex flex-wrap gap-2">
@@ -39,19 +49,21 @@ export function ItemCard({
           {secondhand(item) && <Badge>只有别人的说法</Badge>}
         </div>
       )}
-      <p className="whitespace-pre-wrap break-words text-md">
-        {item.statement}
-      </p>
+      <Text className="whitespace-pre-wrap break-words">{item.statement}</Text>
       {item.extracted_statement && (
-        <p className="text-sm text-secondary">
+        <Text size="sm" tone="secondary">
           原提炼：{item.extracted_statement}
-        </p>
+        </Text>
       )}
       {item.applies_when && (
-        <p className="text-sm text-secondary">适用：{item.applies_when}</p>
+        <Text size="sm" tone="secondary">
+          适用：{item.applies_when}
+        </Text>
       )}
       {item.conflict && (
-        <p className="text-sm text-warning">矛盾：{item.conflict}</p>
+        <Text size="sm" tone="warning">
+          矛盾：{item.conflict}
+        </Text>
       )}
       <Button
         variant="ghost"
@@ -76,13 +88,15 @@ export function ItemCard({
             transition={transition}
             className="overflow-hidden"
           >
-            <ul
+            <Text
+              as="ul"
+              size="sm"
               aria-label="条目证据"
-              className="space-y-3 border-l-2 border-border pl-3 text-sm"
+              className="space-y-3 border-l-2 border-border pl-3"
             >
               {item.evidence.map((evidence, i) => (
                 <li key={`${evidence.expression_id}-${i}`}>
-                  <p className="text-xs text-tertiary">
+                  <Text size="xs" tone="tertiary">
                     {[
                       evidence.date,
                       kindLabels[evidence.source_kind] ?? evidence.source_kind,
@@ -90,13 +104,13 @@ export function ItemCard({
                     ]
                       .filter(Boolean)
                       .join(' · ')}
-                  </p>
+                  </Text>
                   <blockquote className="whitespace-pre-wrap break-words">
                     {evidence.quote}
                   </blockquote>
                 </li>
               ))}
-            </ul>
+            </Text>
           </motion.div>
         )}
       </AnimatePresence>
@@ -173,6 +187,6 @@ export function ItemCard({
           )}
         </div>
       )}
-    </article>
+    </Card>
   );
 }

@@ -229,3 +229,8 @@ export function Section({
     </Stack>
   );
 }
+
+/** Empty room of a measured height (pixels), such as the space kept below a just-sent message for the reply. */
+export function Spacer({ height }: { height: number }) {
+  return <div aria-hidden style={{ height }} />;
+}

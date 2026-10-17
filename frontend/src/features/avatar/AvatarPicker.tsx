@@ -64,7 +64,7 @@ export function AvatarPicker({
     </div>
   );
   return collapsed ? (
-    <details className="rounded-xl bg-surface p-4">
+    <details className="rounded-lg bg-surface p-4">
       <summary className="cursor-pointer">没有照片时使用的插画形象</summary>
       <div className="mt-4">{picker}</div>
     </details>

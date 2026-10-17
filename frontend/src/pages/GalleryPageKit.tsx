@@ -1,30 +1,41 @@
 import { useState } from 'react';
-import { Mic } from 'lucide-react';
+import { Mic, Plus, Sparkles } from 'lucide-react';
 import {
+  ActionMenu,
   AvatarFrame,
   Badge,
   Button,
   Card,
   Checkbox,
   Chip,
+  Clip,
+  Disclosure,
   Field,
   FileDrop,
   Grid,
   Heading,
+  IconButton,
+  Input,
   KeyValue,
+  LinkButton,
   ListRow,
+  Meter,
+  NavPill,
   Notice,
   Page,
+  PlainButton,
   Radio,
   Row,
   Section,
   Select,
   Stack,
   Stat,
+  StatusDot,
+  StepNumber,
   Text,
   TextLink,
-  Toolbar,
   toast,
+  Toolbar,
   type Gap,
 } from '../components/ui';
 
@@ -294,6 +305,62 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               </AvatarFrame>
             ))}
           </Row>
+        </Card>
+      </Grid>
+
+      <Grid columns={2} gap={6}>
+        <Card className="space-y-4">
+          <Heading level={3}>控件补充</Heading>
+          <Field id="gallery-lg-input" label="突出的输入框 Input size=lg">
+            <Input id="gallery-lg-input" size="lg" placeholder="邮箱" />
+          </Field>
+          <Row gap={2} wrap>
+            <LinkButton href="#/gallery" variant="secondary" shape="pill">
+              链接按钮 LinkButton
+            </LinkButton>
+            <IconButton label="圆形图标按钮" shape="circle" size="lg">
+              <Plus aria-hidden className="size-5" />
+            </IconButton>
+            <ActionMenu
+              label="更多操作示例"
+              items={[
+                { label: '重命名', onSelect: () => toast('重命名') },
+                { label: '删除', onSelect: () => toast('删除') },
+              ]}
+            />
+          </Row>
+          <Meter label="读资料进度" value={42} max={60} />
+          <Meter label="细进度条" value={18} max={60} size="sm" hideLabel />
+          <Disclosure summary="展开说明 Disclosure" variant="outline">
+            <Text size="sm" tone="secondary">
+              收起的细节放在这里。
+            </Text>
+          </Disclosure>
+        </Card>
+        <Card className="space-y-4">
+          <Heading level={3}>外壳与媒体</Heading>
+          <Row gap={3}>
+            <PlainButton
+              shape="circle"
+              aria-label="外壳里的头像按钮 PlainButton"
+              className="size-12 hover:bg-soft"
+              onClick={() => toast('切换分身')}
+            >
+              <AvatarFrame size="fill" outlined>
+                周
+              </AvatarFrame>
+            </PlainButton>
+            <NavPill to="/gallery" icon={Sparkles} label="导航" />
+            <StepNumber>1</StepNumber>
+            <StatusDot tone="success" />
+          </Row>
+          <Text size="xl">控件里的名字 Text xl</Text>
+          <Text size="2xl">卡片里的名字 Text 2xl</Text>
+          <Clip shape="card">
+            <div className="grid h-24 place-items-center bg-primary text-canvas">
+              Clip：给视频、3D 视图裁圆角
+            </div>
+          </Clip>
         </Card>
       </Grid>
 

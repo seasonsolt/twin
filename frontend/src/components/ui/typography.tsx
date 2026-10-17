@@ -27,13 +27,15 @@ export const textTones: Record<TextTone, string> = {
   inherit: '',
 };
 
-export type TextSize = 'xs' | 'sm' | 'md' | 'lg' | 'inherit';
-/** 12 / 13 / 14 (body) / 16px. */
+export type TextSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'inherit';
+/** 12 / 13 / 14 (body) / 16 / 18 / 22px. xl and 2xl are for a name inside a control, where a Heading cannot go. */
 export const textSizes: Record<TextSize, string> = {
   xs: 'text-xs',
   sm: 'text-sm',
   md: 'text-base',
   lg: 'text-lg',
+  xl: 'text-xl',
+  '2xl': 'text-2xl',
   inherit: '',
 };
 const weights = {
@@ -43,11 +45,13 @@ const weights = {
   inherit: '',
 };
 
-export type HeadingSize = 'display' | 'page' | 'section' | 'item';
-/** display 26px (a first-run welcome), page 22px, section 16px, item 15px; all semibold. */
+export type HeadingSize = 'display' | 'page' | 'title' | 'section' | 'item';
+/** display 26px (a first-run welcome), page 22px, title 18px (a dialog or panel), section 16px, item 15px; all
+ * semibold. */
 const headingSizes: Record<HeadingSize, string> = {
   display: 'text-3xl',
   page: 'text-2xl',
+  title: 'text-xl',
   section: 'text-lg',
   item: 'text-md',
 };

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Dialog, toast } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Dialog,
+  Heading,
+  Radio,
+  Text,
+  toast,
+} from '../../components/ui';
 import { api, ApiError } from '../../lib/api';
 import { personaUrl } from '../../lib/persona';
 import { ASSETS_CHANGED } from '../assets/SelfAssets';
@@ -60,9 +70,9 @@ function SpeakerSample({ speaker }: { speaker: Speaker }) {
         onError={() => setError('试听失败，请重试')}
       />
       {error && (
-        <p role="alert" className="text-sm text-danger">
+        <Text role="alert" size="sm" tone="danger">
           {error}
-        </p>
+        </Text>
       )}
     </div>
   );
@@ -165,80 +175,74 @@ export function MediaClaim({
       {claim && (
         <>
           <fieldset disabled={busy} className="min-w-0 space-y-3">
-            <legend className="text-lg font-semibold">说话人</legend>
+            <Text as="legend" size="lg" weight="semibold">
+              说话人
+            </Text>
             {!claim.confirmed && (
-              <p className="text-sm text-secondary">请确认哪位是你</p>
+              <Text size="sm" tone="secondary">
+                请确认哪位是你
+              </Text>
             )}
             {claim.automatic && claim.speakers.length > 1 && (
-              <p className="text-sm text-secondary">已自动识别，可修改</p>
+              <Text size="sm" tone="secondary">
+                已自动识别，可修改
+              </Text>
             )}
             {!claim.diarized && (
-              <p className="text-sm text-secondary">当前转写服务不区分说话人</p>
+              <Text size="sm" tone="secondary">
+                当前转写服务不区分说话人
+              </Text>
             )}
             {!claim.diarized ? (
-              <label className="flex min-h-11 items-center gap-3 text-base">
-                <input
-                  type="radio"
-                  name={`speaker-${sourceId}`}
-                  className="size-5"
-                  checked={selection !== null && selection.length > 0}
-                  onChange={() => {
-                    dirty.current = true;
-                    setSelection(claim.speakers.map((speaker) => speaker.id));
-                  }}
-                />
-                整段都是我
-              </label>
-            ) : (
-              claim.speakers.map((speaker) => (
-                <div
-                  key={speaker.id}
-                  className="rounded-lg border border-border p-3"
-                >
-                  <label className="flex min-h-11 items-center gap-3 text-base">
-                    <input
-                      type="checkbox"
-                      value={speaker.id}
-                      checked={selection?.includes(speaker.id) ?? false}
-                      className="size-5"
-                      onChange={(event) => {
-                        dirty.current = true;
-                        setSelection(
-                          event.target.checked
-                            ? [...(selection ?? []), speaker.id]
-                            : (selection ?? []).filter(
-                                (id) => id !== speaker.id,
-                              ),
-                        );
-                      }}
-                    />
-                    <span>
-                      {speaker.id} ·{' '}
-                      {speaker.seconds < 60
-                        ? `${speaker.seconds.toFixed(0)} 秒`
-                        : `${(speaker.seconds / 60).toFixed(1)} 分钟`}
-                    </span>
-                    {speaker.suggested && <Badge tone="success">像你</Badge>}
-                    {speaker.also_suggested && <Badge>可能也是你</Badge>}
-                  </label>
-                  <SpeakerSample speaker={speaker} />
-                </div>
-              ))
-            )}
-            <label className="flex min-h-11 items-center gap-3 text-base">
-              <input
-                type="radio"
+              <Radio
+                label="整段都是我"
                 name={`speaker-${sourceId}`}
-                value="none"
-                className="size-5"
-                checked={selection !== null && selection.length === 0}
+                checked={selection !== null && selection.length > 0}
                 onChange={() => {
                   dirty.current = true;
-                  setSelection([]);
+                  setSelection(claim.speakers.map((speaker) => speaker.id));
                 }}
               />
-              都不是我（旁观资料）
-            </label>
+            ) : (
+              claim.speakers.map((speaker) => (
+                <Card key={speaker.id} as="div" variant="outline" padding="sm">
+                  <Checkbox
+                    value={speaker.id}
+                    checked={selection?.includes(speaker.id) ?? false}
+                    label={
+                      <>
+                        {speaker.id} ·{' '}
+                        {speaker.seconds < 60
+                          ? `${speaker.seconds.toFixed(0)} 秒`
+                          : `${(speaker.seconds / 60).toFixed(1)} 分钟`}
+                      </>
+                    }
+                    onChange={(event) => {
+                      dirty.current = true;
+                      setSelection(
+                        event.target.checked
+                          ? [...(selection ?? []), speaker.id]
+                          : (selection ?? []).filter((id) => id !== speaker.id),
+                      );
+                    }}
+                  >
+                    {speaker.suggested && <Badge tone="success">像你</Badge>}
+                    {speaker.also_suggested && <Badge>可能也是你</Badge>}
+                  </Checkbox>
+                  <SpeakerSample speaker={speaker} />
+                </Card>
+              ))
+            )}
+            <Radio
+              label="都不是我（旁观资料）"
+              name={`speaker-${sourceId}`}
+              value="none"
+              checked={selection !== null && selection.length === 0}
+              onChange={() => {
+                dirty.current = true;
+                setSelection([]);
+              }}
+            />
             <Button
               className="min-h-11"
               disabled={selection === null}
@@ -259,13 +263,13 @@ export function MediaClaim({
           {claim.confirmed && (
             <>
               <section aria-label="声音候选" className="space-y-3">
-                <h3 className="text-lg font-semibold">声音候选</h3>
+                <Heading level={3}>声音候选</Heading>
                 {!claim.voices.length && (
-                  <p className="text-sm text-secondary">
+                  <Text size="sm" tone="secondary">
                     {claim.pending
                       ? '正在从你的片段里挑选…'
                       : '暂无足够长的清晰片段'}
-                  </p>
+                  </Text>
                 )}
                 {claim.voices.map((candidate, i) => (
                   <div key={candidate.id} className="space-y-2">
@@ -293,20 +297,27 @@ export function MediaClaim({
                 ))}
               </section>
               <section aria-label="形象候选" className="space-y-3">
-                <h3 className="text-lg font-semibold">形象候选</h3>
+                <Heading level={3}>形象候选</Heading>
                 {!claim.portraits.length && (
-                  <p className="text-sm text-secondary">
+                  <Text size="sm" tone="secondary">
                     {claim.pending ? '正在提取形象候选…' : '暂无形象候选'}
-                  </p>
+                  </Text>
                 )}
                 <div className="grid grid-cols-2 gap-3">
                   {claim.portraits.map((candidate, i) => (
                     <div key={candidate.id} className="min-w-0 space-y-2">
-                      <img
-                        src={personaUrl(candidate.url)}
-                        alt={`形象候选 ${i + 1}`}
-                        className="aspect-[3/4] w-full rounded-lg object-cover"
-                      />
+                      <Card
+                        as="div"
+                        variant="soft"
+                        padding="none"
+                        className="overflow-hidden"
+                      >
+                        <img
+                          src={personaUrl(candidate.url)}
+                          alt={`形象候选 ${i + 1}`}
+                          className="aspect-3/4 w-full object-cover"
+                        />
+                      </Card>
                       <Button
                         className="min-h-11 w-full"
                         size="sm"
@@ -328,7 +339,7 @@ export function MediaClaim({
             </>
           )}
           {claim.candidate_error && (
-            <p role="status" className="text-sm text-danger">
+            <Text role="status" size="sm" tone="danger">
               {claim.candidate_error}{' '}
               <Button
                 variant="ghost"
@@ -345,7 +356,7 @@ export function MediaClaim({
               >
                 重试候选
               </Button>
-            </p>
+            </Text>
           )}
         </>
       )}

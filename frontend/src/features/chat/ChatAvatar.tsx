@@ -4,6 +4,7 @@ import { personaUrl } from '../../lib/persona';
 import { SpeakingGlow } from '../avatar/SpeakingGlow';
 import { Avatar } from '../avatar/Avatar';
 import { usePersonas } from '../../stores/personas';
+import { Clip, Portrait } from '../../components/ui';
 
 const Avatar3D = lazy(() => import('../avatar/Avatar3D'));
 
@@ -63,30 +64,31 @@ export function ChatAvatar({
   );
   return (
     <div className={`relative shrink-0 ${className}`} aria-label="分身头像">
-      <div className="size-full overflow-hidden rounded-full">
-        {portrait && failedPortrait !== portrait ? (
-          <img
-            src={portrait}
-            alt={`${name}的肖像`}
-            onError={() => setFailedPortrait(portrait)}
-            className="size-full object-cover object-[50%_30%]"
-          />
-        ) : model && failedModel !== model ? (
-          <StillBoundary key={model} fallback={initial}>
-            <Suspense fallback={initial}>
-              <Avatar3D
-                url={model}
-                still
-                mouth={0}
-                speaking={false}
-                onFallback={() => setFailedModel(model)}
-              />
-            </Suspense>
-          </StillBoundary>
-        ) : (
-          initial
-        )}
-      </div>
+      <Clip shape="circle">
+        <div className="size-full">
+          {portrait && failedPortrait !== portrait ? (
+            <Portrait
+              src={portrait}
+              alt={`${name}的肖像`}
+              onError={() => setFailedPortrait(portrait)}
+            />
+          ) : model && failedModel !== model ? (
+            <StillBoundary key={model} fallback={initial}>
+              <Suspense fallback={initial}>
+                <Avatar3D
+                  url={model}
+                  still
+                  mouth={0}
+                  speaking={false}
+                  onFallback={() => setFailedModel(model)}
+                />
+              </Suspense>
+            </StillBoundary>
+          ) : (
+            initial
+          )}
+        </div>
+      </Clip>
       {glow && <SpeakingGlow round level={level} speaking={speaking} />}
     </div>
   );

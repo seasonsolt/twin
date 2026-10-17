@@ -4,14 +4,7 @@ import {
   usePersonaState as useState,
 } from '../lib/usePersonaState';
 import { useLocation } from 'react-router';
-import {
-  Check,
-  MoreHorizontal,
-  Plus,
-  Upload,
-  Video,
-  AudioLines,
-} from 'lucide-react';
+import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
 import { StageHeader } from '../components/layout/StageHeader';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
@@ -28,9 +21,12 @@ import {
   Card,
   Dialog,
   EmptyState,
+  FileDrop,
+  Heading,
   IconButton,
   Skeleton,
   Tabs,
+  Text,
   Textarea,
   toast,
   useConfirm,
@@ -203,18 +199,18 @@ function MemoryWork({
   usePendingWork(pending, label, true);
   if (visible && ['failed', 'needs_asr'].includes(memory.status))
     return (
-      <p role="alert" className="text-sm text-danger">
+      <Text role="alert" size="sm" tone="danger">
         {memory.title} ·{' '}
         {memory.status === 'needs_asr' ? '需要配置语音识别' : '处理失败'}
         <Button variant="ghost" disabled={busy} onClick={onRetry}>
           重试
         </Button>
-      </p>
+      </Text>
     );
   return visible && pending ? (
-    <p role="status" aria-busy="true" className="text-sm text-secondary">
+    <Text role="status" aria-busy="true" size="sm" tone="secondary">
       {memory.title} · {label}
-    </p>
+    </Text>
   ) : null;
 }
 
@@ -239,34 +235,37 @@ function KernelLine({
   );
   if (kernel.scope === 'none')
     return (
-      <p className="text-sm text-secondary">
+      <Text size="sm" tone="secondary">
         {current}
         {' · 已是最新'}
-      </p>
+      </Text>
     );
   const from = kernel.built ? kernelLabel(kernel.built) : '旧版';
   if (processing.state !== 'idle')
     return (
-      <p role="status" className="text-sm text-secondary">
+      <Text role="status" size="sm" tone="secondary">
         {current}
         {` · 正在从 ${from} 升级，整理完成前沿用旧档案`}
-      </p>
+      </Text>
     );
   return (
-    <div
+    <Card
+      as="div"
+      variant="outline"
+      padding="sm"
       role="status"
-      className="space-y-1 rounded-lg border border-border p-3 text-sm"
+      className="space-y-1"
     >
-      <p>
+      <Text size="sm">
         {current}
         {' · 可以升级'}
-      </p>
-      <p className="text-secondary">
+      </Text>
+      <Text size="sm" tone="secondary">
         现有记忆按 {from} 整理，升级后按新版本重新整理
         {kernel.pending_chunks > 0 &&
           `，需重新整理 ${kernel.pending_chunks} 段，会调用模型`}
         。升级完成前沿用旧档案。
-      </p>
+      </Text>
       {admin ? (
         <Button
           className="min-h-11"
@@ -277,9 +276,11 @@ function KernelLine({
           升级记忆内核
         </Button>
       ) : (
-        <p className="text-secondary">请管理员升级。</p>
+        <Text size="sm" tone="secondary">
+          请管理员升级。
+        </Text>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -576,29 +577,34 @@ export function Memories({
       ),
     );
   const progressUI = uploadProgress && (
-    <div
+    <Card
+      as="div"
+      variant="outline"
+      padding="sm"
       role="status"
-      className="space-y-2 rounded-lg border border-border p-3"
+      className="space-y-2"
     >
-      <p className="truncate font-medium">{uploadProgress.name}</p>
-      <p className="text-sm text-secondary">
+      <Text weight="medium" truncate>
+        {uploadProgress.name}
+      </Text>
+      <Text size="sm" tone="secondary">
         {uploadProgress.paused
           ? '网络已断开，联网后继续上传'
           : '上传中，请保持页面打开'}
-      </p>
+      </Text>
       <progress
         className="h-2 w-full"
         aria-label="上传进度"
         max={uploadProgress.size || 1}
         value={uploadProgress.offset}
       />
-      <p className="text-sm text-secondary">
+      <Text size="sm" tone="secondary">
         上传中{' '}
         {Math.floor((uploadProgress.offset / (uploadProgress.size || 1)) * 100)}
         % · {(uploadProgress.offset / 1024 ** 2).toFixed(1)} /{' '}
         {(uploadProgress.size / 1024 ** 2).toFixed(1)} MB
-      </p>
-    </div>
+      </Text>
+    </Card>
   );
   const view = async (memory: Memory) => {
     previewRequest.current?.abort();
@@ -632,7 +638,6 @@ export function Memories({
       addPanel.current?.querySelector<HTMLElement>('textarea, input')?.focus();
     }
   };
-  const [dragging, setDragging] = useState<'files' | 'folder' | null>(null);
   const waiting =
     summary.total -
     summary.remembered -
@@ -643,71 +648,37 @@ export function Memories({
   const firstSpeaker = attention.find(
     (memory) => memory.status === 'needs_speaker',
   );
-  const fileInput = (folder: boolean) => {
-    const over = dragging === (folder ? 'folder' : 'files');
-    return (
-      // The whole area picks files: the native control stays for keyboard and screen readers, but out of sight.
-      <label
-        aria-busy={busy}
-        className={`flex flex-col items-center gap-3 rounded-lg border-2 border-dashed p-6 text-center transition-colors focus-within:ring-2 focus-within:ring-accent ${
-          over ? 'border-accent bg-soft' : 'border-border hover:bg-soft'
-        } ${busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          if (!busy) setDragging(folder ? 'folder' : 'files');
-        }}
-        onDragOver={(event) => event.preventDefault()}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-            setDragging(null);
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(null);
-          if (!busy) upload(Array.from(event.dataTransfer.files), folder);
-        }}
-      >
-        <Upload aria-hidden className="size-8 text-secondary" />
-        {/* A phone cannot drag files in, so there the button says it all. */}
-        {(over || !mobile) && (
-          <span className="font-medium">
-            {over
-              ? '松开即可上传'
-              : folder
-                ? '点击选择文件夹，或把文件拖到这里'
-                : '点击选择文件，或拖到这里'}
-          </span>
-        )}
-        <span className="inline-flex min-h-11 items-center rounded-full bg-accent px-4 font-medium text-on-accent">
-          {folder ? '选择文件夹' : '选择文件'}
-        </span>
-        <input
-          type="file"
-          aria-label={folder ? '选择文件夹' : '选择文件'}
-          multiple
-          accept={accept}
-          disabled={busy}
-          className="sr-only"
-          {...(folder ? { webkitdirectory: '' } : {})}
-          onChange={(event) => {
-            upload(Array.from(event.target.files ?? []), folder);
-            event.target.value = '';
-          }}
-        />
-        <span className="space-y-1 text-xs text-tertiary">
-          <span className="block">
+  const fileInput = (folder: boolean) => (
+    // A phone cannot drag files in, so there the button says it all.
+    <FileDrop
+      label={folder ? '文件夹上传区' : '文件上传区'}
+      title={
+        mobile
+          ? null
+          : folder
+            ? '点击选择文件夹，或把文件拖到这里'
+            : '点击选择文件，或拖到这里'
+      }
+      actionLabel={folder ? '选择文件夹' : '选择文件'}
+      accept={accept}
+      directory={folder}
+      disabled={busy}
+      onFiles={(files) => upload(files, folder)}
+      hint={
+        <>
+          <p>
             文档：TXT、Markdown、PDF、Word、EPUB、HTML、CSV、JSON、SRT、VTT，每个最多
             1 GB
             {folder &&
               '；文件夹总量最多 500 MB，自动跳过隐藏文件和不支持的格式'}
-          </span>
-          <span className="block">
+          </p>
+          <p>
             录音和视频：每个最多 4 GB，断点续传，刷新后重新选择同一文件即可继续
-          </span>
-        </span>
-      </label>
-    );
-  };
+          </p>
+        </>
+      }
+    />
+  );
   const addContent = (
     <>
       <Tabs
@@ -760,13 +731,19 @@ export function Memories({
       />
       {mobile && progressUI}
       {skipped.length > 0 && (
-        <ul aria-label="跳过的文件" className="mt-3 text-sm text-secondary">
+        <Text
+          as="ul"
+          size="sm"
+          tone="secondary"
+          aria-label="跳过的文件"
+          className="mt-3"
+        >
           {skipped.map((row, i) => (
             <li key={i}>
               {row.file}：{row.reason}
             </li>
           ))}
-        </ul>
+        </Text>
       )}
     </>
   );
@@ -794,14 +771,15 @@ export function Memories({
         <StageHeader
           right={
             mobile ? undefined : (
-              <button
-                type="button"
+              <IconButton
+                label="从舞台添加记忆"
+                shape="circle"
+                size="lg"
                 className="stage-add"
-                aria-label="从舞台添加记忆"
                 onClick={openAdd}
               >
                 <Plus size={24} aria-hidden />
-              </button>
+              </IconButton>
             )
           }
         />
@@ -815,18 +793,20 @@ export function Memories({
       >
         <header>
           {embedded ? (
-            <h2 className="text-xl font-semibold">添加记忆</h2>
+            <Heading level={2} size="title">
+              添加记忆
+            </Heading>
           ) : (
-            <h2 className="text-2xl font-semibold">他记得的事</h2>
+            <Heading level={2}>他记得的事</Heading>
           )}
           {!embedded && (
-            <p className="mt-2 text-secondary">
+            <Text tone="secondary" className="mt-2">
               {summary.total} 条 · {Number(recordingHours.toFixed(1))} 小时录音
-            </p>
+            </Text>
           )}
-          <p className="my-2 text-sm text-secondary">
+          <Text size="sm" tone="secondary" className="my-2">
             写一段话，或上传文件、文件夹。添加后会自动处理。
-          </p>
+          </Text>
           {profile && mobile && (
             <Button onClick={openAdd} className="min-h-11">
               添加记忆
@@ -842,9 +822,9 @@ export function Memories({
             />
           ) : (
             processing.notice && (
-              <p role="status" className="text-sm text-secondary">
+              <Text role="status" size="sm" tone="secondary">
                 {processing.notice}
-              </p>
+              </Text>
             )
           )}
           {(processing.state !== 'idle' || summary.busy > 0) && (
@@ -852,14 +832,14 @@ export function Memories({
               processing={processing}
               title={processingText(processing)}
             >
-              <p className="text-xs text-secondary">
+              <Text size="xs" tone="secondary">
                 共 {summary.total} 份 · 已记住 {summary.remembered} 份
                 {summary.nothing_found > 0 &&
                   ` · 已处理无结果 ${summary.nothing_found} 份`}
                 {summary.busy > 0 && ` · 整理中 ${summary.busy} 份`}
                 {summary.failed > 0 && ` · 失败 ${summary.failed} 份`}
                 {waiting > 0 && ` · 待处理或确认 ${waiting} 份`}
-              </p>
+              </Text>
             </BuildProgress>
           )}
           {embedded && building && processing.state === 'idle' && (
@@ -877,7 +857,7 @@ export function Memories({
             />
           ))}
           {processing.last_error && (
-            <p className="text-sm text-danger">
+            <Text size="sm" tone="danger">
               {processing.last_error}{' '}
               <Button
                 className="min-h-11"
@@ -888,7 +868,7 @@ export function Memories({
               >
                 重新处理
               </Button>
-            </p>
+            </Text>
           )}
         </header>
         {summary.needs_speaker > 0 && firstSpeaker && (
@@ -930,9 +910,9 @@ export function Memories({
         )}
         {!embedded && (
           <section className="memory-list">
-            <h2 className="mb-2 text-md font-semibold md:mb-4 md:text-lg">
+            <Heading level={2} size="section" className="mb-2 md:mb-4">
               已添加的记忆
-            </h2>
+            </Heading>
             {loading && <Skeleton className="h-24" />}
             {!loading && !memories.length && (
               <EmptyState
@@ -952,9 +932,11 @@ export function Memories({
                   id: memory.source_id,
                   text: memory.title,
                   content: (
-                    <article
+                    <Card
+                      as="article"
+                      padding="md"
                       aria-busy={mediaPending(memory) || memoryPending(memory)}
-                      className={`memory-card flex items-start justify-between gap-2 rounded-xl bg-surface p-4 shadow-card ${mediaPending(memory) || memoryPending(memory) ? 'opacity-60' : ''}`}
+                      className={`memory-card flex items-start justify-between gap-2 ${mediaPending(memory) || memoryPending(memory) ? 'opacity-60' : ''}`}
                     >
                       <div className="min-w-0 flex-1">
                         <h3 className="flex items-center gap-2 font-medium">
@@ -966,7 +948,7 @@ export function Memories({
                           )}
                           <span className="truncate">{memory.title}</span>
                         </h3>
-                        <p className="text-xs text-secondary">
+                        <Text size="xs" tone="secondary">
                           {[
                             memory.detected_kind_label,
                             memory.first_date,
@@ -976,7 +958,7 @@ export function Memories({
                           ]
                             .filter(Boolean)
                             .join(' · ')}
-                        </p>
+                        </Text>
                         <Badge
                           tone={
                             memory.status === 'failed' ? 'danger' : 'neutral'
@@ -1046,11 +1028,16 @@ export function Memories({
                         <details className="relative shrink-0">
                           <summary
                             aria-label={`${memory.title}的操作`}
-                            className="grid size-11 cursor-pointer list-none place-items-center rounded-md text-secondary [&::-webkit-details-marker]:hidden"
+                            className="grid size-11 cursor-pointer list-none place-items-center text-secondary"
                           >
                             <MoreHorizontal size={20} aria-hidden />
                           </summary>
-                          <div className="absolute right-0 z-10 grid min-w-28 rounded-md border border-border bg-surface p-1 shadow-elevation-2">
+                          <Card
+                            as="div"
+                            variant="outline"
+                            padding="none"
+                            className="absolute right-0 z-10 grid min-w-28 p-1 shadow-elevation-2"
+                          >
                             <Button
                               size="sm"
                               variant="ghost"
@@ -1078,7 +1065,7 @@ export function Memories({
                             >
                               删除
                             </Button>
-                          </div>
+                          </Card>
                         </details>
                       ) : (
                         <div className="flex gap-2">
@@ -1101,7 +1088,7 @@ export function Memories({
                           </Button>
                         </div>
                       )}
-                    </article>
+                    </Card>
                   ),
                 }))}
               />
@@ -1125,7 +1112,8 @@ export function Memories({
               <IconButton
                 label="添加记忆"
                 onClick={() => setAdding(true)}
-                className="memory-add fixed right-4 bottom-[calc(var(--mobile-tabs-height)+16px)] z-20 size-12 rounded-full bg-sun text-primary shadow-elevation-2"
+                shape="circle"
+                className="memory-add fixed right-4 z-20 size-12 bg-sun text-primary shadow-elevation-2"
               >
                 <Plus size={24} aria-hidden />
               </IconButton>
@@ -1137,7 +1125,7 @@ export function Memories({
               }}
               title="添加记忆"
               body="写一段话，或上传文件、文件夹。"
-              className="top-auto right-0 bottom-0 left-0 max-h-[85dvh] w-full translate-x-0 translate-y-0 rounded-b-none rounded-t-xl p-4 pb-[max(16px,env(safe-area-inset-bottom))]"
+              variant="sheet"
             >
               {addContent}
               {error && (
@@ -1183,9 +1171,13 @@ export function Memories({
               }}
             />
           )}
-          <pre className="whitespace-pre-wrap break-words font-sans text-sm">
+          <Text
+            as="pre"
+            size="sm"
+            className="whitespace-pre-wrap break-words font-sans"
+          >
             {preview?.text}
-          </pre>
+          </Text>
         </Dialog>
       </div>
     </div>

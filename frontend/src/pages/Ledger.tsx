@@ -7,12 +7,17 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Dialog,
   EmptyState,
   Field,
+  Heading,
   Input,
+  KeyValue,
+  Select,
   Skeleton,
   Tabs,
+  Text,
   Textarea,
   toast,
   useConfirm,
@@ -46,8 +51,6 @@ const reviewLabels = {
   edited: '已修改',
   rejected: '已驳回',
 };
-const selectClass =
-  'min-h-11 rounded-lg border-2 border-primary bg-surface px-3 text-md text-primary';
 
 function day(iso: string | null) {
   if (!iso) return '';
@@ -61,33 +64,29 @@ function today() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-function Select({
+function FilterSelect({
   label,
   value,
   onChange,
   options,
-  className,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: [string, string][];
-  className?: string;
 }) {
   return (
-    <label className={cn('flex flex-col gap-1 text-sm', className)}>
-      <span className="text-secondary">{label}</span>
-      <select
-        className={selectClass}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
+    <label className="flex flex-col gap-1">
+      <Text as="span" size="sm" tone="secondary">
+        {label}
+      </Text>
+      <Select value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map(([option, text]) => (
           <option key={option} value={option}>
             {text}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }
@@ -108,21 +107,17 @@ function Facts({ entry }: { entry: LedgerEntry }) {
     ]);
   if (entry.condition) facts.push(['前提', entry.condition]);
   if (!facts.length) return null;
-  return (
-    <dl className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-      {facts.map(([term, value]) => (
-        <div key={term} className="flex gap-1.5">
-          <dt className="text-secondary">{term}</dt>
-          <dd>{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+  return <KeyValue items={facts} layout="inline" />;
 }
 
 function Quote({ entry }: { entry: LedgerEntry }) {
   return (
-    <blockquote className="border-l-2 border-border pl-3 text-sm text-secondary">
+    <Text
+      as="blockquote"
+      size="sm"
+      tone="secondary"
+      className="border-l-2 border-border pl-3"
+    >
       <span className="text-tertiary">
         {day(entry.meeting_date)} {entry.meeting_title} · {entry.speaker}：
       </span>
@@ -132,7 +127,7 @@ function Quote({ entry }: { entry: LedgerEntry }) {
           （没有找到逐字原话，显示整句）
         </span>
       )}
-    </blockquote>
+    </Text>
   );
 }
 
@@ -359,7 +354,7 @@ function EditDialog({
           />
         </Field>
         {entry?.kind !== 'objection' && (
-          <Select
+          <FilterSelect
             label="状态"
             value={draft.status}
             onChange={set('status')}
@@ -367,9 +362,9 @@ function EditDialog({
           />
         )}
         {error && (
-          <p role="alert" className="text-sm text-danger">
+          <Text role="alert" size="sm" tone="danger">
             {error}
-          </p>
+          </Text>
         )}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>
@@ -417,7 +412,7 @@ function Entries({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end gap-3">
-        <Select
+        <FilterSelect
           label="类型"
           value={kind}
           onChange={setKind}
@@ -426,7 +421,7 @@ function Entries({
             ...(Object.entries(data.kind_labels) as [LedgerKind, string][]),
           ]}
         />
-        <Select
+        <FilterSelect
           label="负责人"
           value={person}
           onChange={setPerson}
@@ -436,7 +431,7 @@ function Entries({
             ...data.people.map((name): [string, string] => [name, name]),
           ]}
         />
-        <Select
+        <FilterSelect
           label="状态"
           value={status}
           onChange={setStatus}
@@ -445,14 +440,15 @@ function Entries({
             ...(Object.entries(data.status_labels) as [string, string][]),
           ]}
         />
-        <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={showRejected}
-            onChange={(event) => setShowRejected(event.target.checked)}
-          />
-          显示已驳回
-        </label>
+        <Checkbox
+          label={
+            <Text as="span" size="sm">
+              显示已驳回
+            </Text>
+          }
+          checked={showRejected}
+          onChange={(event) => setShowRejected(event.target.checked)}
+        />
       </div>
       {!rows.length && <p className="text-secondary">没有符合条件的条目。</p>}
       {groups.map((group) => (
@@ -461,9 +457,9 @@ function Entries({
           aria-label={`${day(group[0].meeting_date)}${group[0].meeting_title}`}
           className="space-y-3"
         >
-          <h3 className="text-lg font-semibold">
+          <Heading level={3}>
             {day(group[0].meeting_date)} {group[0].meeting_title}
-          </h3>
+          </Heading>
           {group.map((entry) => (
             <EntryCard
               key={entry.entry_id}
@@ -519,14 +515,16 @@ function Brief({ people, version }: { people: string[]; version: number }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end gap-3">
-        <Select
+        <FilterSelect
           label="见谁"
           value={person}
           onChange={setPerson}
           options={people.map((name): [string, string] => [name, name])}
         />
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-secondary">日期</span>
+        <label className="flex flex-col gap-1">
+          <Text as="span" size="sm" tone="secondary">
+            日期
+          </Text>
           <Input
             type="date"
             value={asOf}
@@ -544,7 +542,7 @@ function Brief({ people, version }: { people: string[]; version: number }) {
       {brief && (
         <>
           <Card className="space-y-2">
-            <h3 className="text-lg font-semibold">可以问的问题</h3>
+            <Heading level={3}>可以问的问题</Heading>
             {brief.questions.length ? (
               <ol className="list-decimal space-y-1 pl-5">
                 {brief.questions.map((question) => (
@@ -559,7 +557,7 @@ function Brief({ people, version }: { people: string[]; version: number }) {
           </Card>
           {sections.map(([title, entries, empty]) => (
             <section key={title} aria-label={title} className="space-y-3">
-              <h3 className="text-lg font-semibold">{title}</h3>
+              <Heading level={3}>{title}</Heading>
               {entries.length ? (
                 entries.map((entry) => (
                   <EntryCard key={entry.entry_id} entry={entry} />
@@ -656,10 +654,10 @@ export function Ledger() {
       <StageHeader />
       <div className="page-content space-y-6">
         <header className="space-y-2">
-          <h2 className="text-2xl font-semibold">承诺账本</h2>
-          <p className="text-sm text-secondary">
+          <Heading level={2}>承诺账本</Heading>
+          <Text size="sm" tone="secondary">
             从会议里记下的决定、承诺、异议和进展。每条都附着会上的原话，确认后再拿去跟进。
-          </p>
+          </Text>
         </header>
         {error && (
           <div role="alert" className="space-y-2 text-danger">

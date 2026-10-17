@@ -7,8 +7,10 @@ import {
 } from 'react';
 
 /** The conversation layout chat and work share: the pinned composer's height (the thread leaves room for it),
- * the phone keyboard's inset, and the end of the thread to scroll to. */
+ * the phone keyboard's inset, and the end of the thread to scroll to. The height is also written to `page` (the
+ * conversation's root element) as `--composer-height`, which the thread's bottom padding in tokens.css reads. */
 export function useComposerLayout(active: boolean) {
+  const page = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLFormElement>(null);
   const [composerHeight, setComposerHeight] = useState(76);
@@ -22,6 +24,9 @@ export function useComposerLayout(active: boolean) {
     observer.observe(form);
     return () => observer.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    page.current?.style.setProperty('--composer-height', `${composerHeight}px`);
+  }, [composerHeight]);
   useEffect(() => {
     if (!active) return;
     const viewport = window.visualViewport;
@@ -64,7 +69,7 @@ export function useComposerLayout(active: boolean) {
       root.style.removeProperty('--keyboard-inset');
     };
   }, [active]);
-  return { end, composer, composerHeight };
+  return { page, end, composer, composerHeight };
 }
 
 const REPLY_GAP = 16;

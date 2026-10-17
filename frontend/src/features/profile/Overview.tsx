@@ -3,9 +3,12 @@ import {
   Button,
   Card,
   EmptyState,
+  Heading,
   Input,
   Skeleton,
   Tabs,
+  Text,
+  TextLink,
 } from '../../components/ui';
 import { usePersonaId } from '../../lib/usePersonaState';
 import type { ItemQuery } from './types';
@@ -128,7 +131,9 @@ function SearchResults({
       )}
       {search.loading && !search.items.length && <Skeleton className="h-24" />}
       {!search.loading && !search.error && !search.items.length && (
-        <p className="text-sm text-secondary">没找到相关的记忆</p>
+        <Text size="sm" tone="secondary">
+          没找到相关的记忆
+        </Text>
       )}
       {search.items.map((item) => (
         <ItemCard
@@ -187,10 +192,10 @@ export function Overview() {
   ].slice(0, 5);
   return (
     <div className="about-knowledge space-y-4 md:space-y-6">
-      <Card className="p-4 md:p-6">
-        <h3 className="mb-3 text-md font-semibold md:mb-4 md:text-lg">
+      <Card padding="roomy">
+        <Heading level={3} className="mb-3 md:mb-4">
           我了解到的他
-        </h3>
+        </Heading>
         {profile.loading && <Skeleton className="h-24" />}
         {profile.summaryError && (
           <p role="alert" className="text-danger">
@@ -208,19 +213,14 @@ export function Overview() {
             title="还不够了解你"
             body="添加一些记忆，让我慢慢认识你。"
           >
-            <a
-              href="#/profile?section=memories"
-              className="text-accent underline"
-            >
-              添加记忆
-            </a>
+            <TextLink href="#/profile?section=memories">添加记忆</TextLink>
           </EmptyState>
         )}
         {dimensions.length > 0 && (
           <div className="min-w-0 space-y-3">
-            <p className="text-sm text-secondary">
+            <Text size="sm" tone="secondary">
               共 {total} 条，回答时都会用到。哪条不对，搜一下改掉或删掉。
-            </p>
+            </Text>
             <div className="flex flex-wrap items-center gap-2">
               <Input
                 type="search"
@@ -273,8 +273,10 @@ export function Overview() {
           </div>
         )}
       </Card>
-      <Card className="p-4 md:p-6">
-        <h3 className="mb-3 text-md font-semibold md:text-lg">还想多了解</h3>
+      <Card padding="roomy">
+        <Heading level={3} className="mb-3">
+          还想多了解
+        </Heading>
         {profile.coverageError && (
           <p role="alert">
             {profile.coverageError}{' '}
@@ -289,23 +291,15 @@ export function Overview() {
         <ul className="space-y-2">
           {wanted.map((text) => (
             <li key={text}>
-              <a
-                className="text-accent underline"
-                href="#/profile?section=memories"
-              >
-                {text}
-              </a>
+              <TextLink href="#/profile?section=memories">{text}</TextLink>
             </li>
           ))}
         </ul>
-        <a
-          className="mt-4 inline-block text-accent underline"
-          href="#/questionnaire"
-        >
-          回答几个问题
-        </a>
+        <div className="mt-4">
+          <TextLink href="#/questionnaire">回答几个问题</TextLink>
+        </div>
       </Card>
-      <section className="text-sm text-secondary" aria-label="外部服务">
+      <Text as="section" size="sm" tone="secondary" aria-label="外部服务">
         <h3 className="font-medium">外部服务</h3>
         {status &&
           (status.egress.some((row) => row.external) ? (
@@ -323,7 +317,7 @@ export function Overview() {
           ) : (
             <p>目前没有使用外部服务。</p>
           ))}
-      </section>
+      </Text>
     </div>
   );
 }

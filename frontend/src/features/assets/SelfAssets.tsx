@@ -5,7 +5,18 @@ import {
 } from '../../lib/usePersonaState';
 import Cropper, { type Area } from 'react-easy-crop';
 import 'react-easy-crop/react-easy-crop.css';
-import { Button } from '../../components/ui';
+import {
+  AudioLevel,
+  AvatarFrame,
+  Button,
+  Card,
+  FileInput,
+  Heading,
+  MediaFrame,
+  Row,
+  Slider,
+  Text,
+} from '../../components/ui';
 import { api } from '../../lib/api';
 import { personaUrl } from '../../lib/persona';
 import { uploadForm } from '../../lib/mediaUpload';
@@ -325,27 +336,25 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   );
 
   return (
-    <div className="self-assets space-y-5 [&_button]:min-h-11 [&_input]:text-base [&_label]:min-h-11">
-      <section
+    <div className="self-assets space-y-5">
+      <Card
         aria-label="形象"
         aria-busy={busy && busyKind === 'portrait'}
-        className={`space-y-3 rounded-xl bg-surface p-4 shadow-card ${busy && busyKind === 'portrait' ? 'opacity-60' : ''}`}
+        padding="md"
+        className={`space-y-3 ${busy && busyKind === 'portrait' ? 'opacity-60' : ''}`}
       >
-        <h2 className="text-md font-semibold">形象</h2>
-        <div className="flex items-center gap-3">
+        <Heading level={2} size="item">
+          形象
+        </Heading>
+        <Row gap={3}>
           {currentPortrait ? (
-            <img
-              src={currentPortrait}
-              alt="当前肖像"
-              className="size-18 rounded-full object-cover"
-            />
+            <AvatarFrame size="2xl" decorative={false}>
+              <img src={currentPortrait} alt="当前肖像" />
+            </AvatarFrame>
           ) : (
-            <div
-              className="flex size-18 items-center justify-center rounded-full bg-background text-secondary"
-              aria-label="肖像占位"
-            >
+            <AvatarFrame size="2xl" label="肖像占位" muted>
               未设置
-            </div>
+            </AvatarFrame>
           )}
           <Button
             variant="secondary"
@@ -363,17 +372,13 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
               恢复默认
             </Button>
           )}
-        </div>
-        <input
+        </Row>
+        <FileInput
           ref={portraitInput}
-          aria-label="选择照片"
-          type="file"
+          label="选择照片"
           accept="image/*"
-          hidden
           disabled={disabled}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = '';
+          onFiles={([file]) => {
             if (file) {
               setBusyKind('portrait');
               retryWork.current = null;
@@ -390,14 +395,14 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             }
           }}
         />
-        <p className="text-sm text-secondary">
+        <Text size="sm" tone="secondary">
           正脸、光线均匀、头肩入镜效果最好
-        </p>
+        </Text>
         {photoUrl && (
           <div className="space-y-3">
-            <div
-              className={`relative h-80 overflow-hidden rounded-lg ${previewUnavailable ? 'flex items-center justify-center bg-background p-6 text-center text-secondary' : 'bg-black'}`}
-              aria-label="裁剪照片"
+            <MediaFrame
+              label="裁剪照片"
+              tone={previewUnavailable ? 'soft' : 'dark'}
             >
               {previewUnavailable ? (
                 <p>这个格式无法在浏览器里预览，会自动居中裁剪</p>
@@ -426,29 +431,25 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
                   disableAutomaticStylesInjection
                 />
               )}
-            </div>
+            </MediaFrame>
             {!previewUnavailable && (
               <>
-                <label className="flex items-center gap-3">
-                  缩放
-                  <input
-                    aria-label="照片缩放"
-                    type="range"
-                    min={1}
-                    max={3}
-                    step={0.01}
-                    value={zoom}
-                    disabled={busy}
-                    onChange={(event) => setZoom(Number(event.target.value))}
-                    className="min-h-11 flex-1"
-                  />
-                </label>
-                <p className="text-sm text-secondary">
+                <Slider
+                  label="缩放"
+                  aria-label="照片缩放"
+                  min={1}
+                  max={3}
+                  step={0.01}
+                  value={zoom}
+                  disabled={busy}
+                  onChange={(event) => setZoom(Number(event.target.value))}
+                />
+                <Text size="sm" tone="secondary">
                   拖动照片或双指缩放，让脸部留在框内。
-                </p>
+                </Text>
               </>
             )}
-            <div className="flex gap-2">
+            <Row gap={2}>
               <Button
                 disabled={disabled || (!area && !previewUnavailable)}
                 loading={busy && busyKind === 'portrait'}
@@ -463,17 +464,20 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
               >
                 取消
               </Button>
-            </div>
+            </Row>
           </div>
         )}
         {busyKind === 'portrait' && errorFeedback}
-      </section>
-      <section
+      </Card>
+      <Card
         aria-label="声音"
         aria-busy={(busy && busyKind === 'voice') || recording}
-        className={`space-y-3 rounded-xl bg-surface p-4 shadow-card ${(busy && busyKind === 'voice') || recording ? 'opacity-60' : ''}`}
+        padding="md"
+        className={`space-y-3 ${(busy && busyKind === 'voice') || recording ? 'opacity-60' : ''}`}
       >
-        <h2 className="text-md font-semibold">声音</h2>
+        <Heading level={2} size="item">
+          声音
+        </Heading>
         <p>
           {profile?.voice
             ? `我的声音（${profile.voice.duration_s.toFixed(1)} 秒）`
@@ -489,7 +493,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             className="w-full max-w-sm"
           />
         )}
-        <div className="flex flex-wrap gap-2">
+        <Row gap={2} wrap>
           <Button
             variant="secondary"
             disabled={disabled}
@@ -514,26 +518,22 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
               恢复默认
             </Button>
           )}
-        </div>
-        <input
+        </Row>
+        <FileInput
           ref={voiceInput}
-          aria-label="选择录音或视频"
-          type="file"
+          label="选择录音或视频"
           accept="audio/*,video/*"
-          hidden
           disabled={disabled}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = '';
+          onFiles={([file]) => {
             if (file) save('voice', file);
           }}
         />
-        <p className="text-sm text-secondary">
+        <Text size="sm" tone="secondary">
           安静环境下说话至少 5 秒，会保留前 20 秒。
-        </p>
+        </Text>
         {recorder.state !== 'idle' && (
-          <div className="recording-card space-y-3 rounded-xl p-4">
-            <p className="text-md leading-relaxed">{passage}</p>
+          <Card as="div" variant="note" padding="md" className="space-y-3">
+            <Text size="lg">{passage}</Text>
             {recorder.state === 'requesting' && (
               <p role="status">正在打开麦克风…</p>
             )}
@@ -543,16 +543,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
                   <span className="recording-live" aria-hidden />
                   {recorder.seconds} / 30 秒
                 </p>
-                <div className="recording-bars" aria-hidden>
-                  {Array.from({ length: 12 }, (_, index) => (
-                    <i
-                      key={index}
-                      style={{
-                        height: `${8 + recorder.level * ((index % 3) + 1) * 12}px`,
-                      }}
-                    />
-                  ))}
-                </div>
+                <AudioLevel level={recorder.level} />
                 <meter
                   aria-label="录音音量"
                   value={recorder.level}
@@ -571,7 +562,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
                   src={recordingUrl || undefined}
                   className="w-full"
                 />
-                <div className="flex gap-2">
+                <Row gap={2}>
                   <Button
                     variant="secondary"
                     disabled={busy}
@@ -587,13 +578,13 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
                   >
                     使用
                   </Button>
-                </div>
+                </Row>
               </>
             )}
             <Button variant="ghost" disabled={busy} onClick={recorder.reset}>
               取消录音
             </Button>
-          </div>
+          </Card>
         )}
         {profile?.voice && caps?.available && (
           <div className="space-y-2">
@@ -616,11 +607,11 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
         )}
         {busyKind === 'voice' && errorFeedback}
         {recorder.error && (
-          <p role="alert" className="text-danger">
+          <Text role="alert" tone="danger">
             {recorder.error}
-          </p>
+          </Text>
         )}
-      </section>
+      </Card>
       {busy && (
         <div role="status">
           {size > 0 && (

@@ -1,6 +1,23 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import { Link, useParams } from 'react-router';
-import { Badge, Button, Input, Skeleton, type Tone } from '../components/ui';
+import { useParams } from 'react-router';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Disclosure,
+  Field,
+  Heading,
+  Input,
+  Page,
+  Row,
+  Select,
+  Skeleton,
+  Stack,
+  Text,
+  TextLink,
+  type Tone,
+} from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { api, ApiError } from '../lib/api';
 import { withBase } from '../lib/base';
@@ -58,8 +75,6 @@ const decisionLabel: Record<Speaker['decision'], [string, Tone]> = {
   unknown: ['不在名单里', 'neutral'],
   mixed: ['几个人混在一起', 'neutral'],
 };
-const selectClass =
-  'min-h-11 rounded-lg border-2 border-primary bg-surface px-3 text-md text-primary';
 const clock = (seconds: number) => {
   const s = Math.floor(seconds);
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -99,12 +114,14 @@ function SpeakerCard({
         : { action: 'confirm', person_id: person, sample },
     );
   return (
-    <li className="space-y-3 rounded-xl bg-surface p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <h3 className="font-semibold">{speaker.id}</h3>
-        <span className="text-sm text-secondary">
+    <Card as="li" padding="md" className="space-y-3">
+      <Row gap={3} wrap>
+        <Heading level={3} size="item">
+          {speaker.id}
+        </Heading>
+        <Text as="span" size="sm" tone="secondary">
           说了 {span(speaker.seconds)}
-        </span>
+        </Text>
         <Badge tone={tone}>
           {speaker.decision === 'confirmed' && owner
             ? `${label}：${owner.name}`
@@ -122,7 +139,7 @@ function SpeakerCard({
             不是{owner.name}
           </Button>
         )}
-      </div>
+      </Row>
       <div className="grid gap-2 sm:grid-cols-3">
         {Array.from({ length: speaker.samples }, (_, i) => (
           <audio
@@ -138,15 +155,19 @@ function SpeakerCard({
         ))}
       </div>
       {lines.length > 0 && (
-        <ul className="space-y-1 text-sm text-secondary">
+        <Stack as="ul" gap={1}>
           {lines.map((line, i) => (
-            <li key={i}>{line}</li>
+            <Text as="li" key={i} size="sm" tone="secondary">
+              {line}
+            </Text>
           ))}
-        </ul>
+        </Stack>
       )}
       {speaker.candidates.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span>声音像：</span>
+        <Row gap={2} wrap>
+          <Text as="span" size="sm">
+            声音像：
+          </Text>
           {speaker.candidates.map((c) => (
             <span key={c.person_id} className="inline-flex items-center gap-1">
               <Badge tone={speaker.near ? 'warning' : 'info'}>
@@ -165,16 +186,16 @@ function SpeakerCard({
             </span>
           ))}
           {speaker.near && (
-            <span className="text-secondary">两位很接近，请仔细听</span>
+            <Text as="span" size="sm" tone="secondary">
+              两位很接近，请仔细听
+            </Text>
           )}
-        </div>
+        </Row>
       )}
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-sm" htmlFor={`${id}-who`}>
-          <span className="text-secondary">这是谁</span>
-          <select
+      <Row gap={3} align="end" wrap>
+        <Field id={`${id}-who`} label="这是谁">
+          <Select
             id={`${id}-who`}
-            className={selectClass}
             value={person}
             onChange={(event) => setPerson(event.target.value)}
           >
@@ -185,8 +206,8 @@ function SpeakerCard({
               </option>
             ))}
             <option value="new">新的人…</option>
-          </select>
-        </label>
+          </Select>
+        </Field>
         {person === 'new' && (
           <Input
             aria-label="新人物的名字"
@@ -196,22 +217,19 @@ function SpeakerCard({
             onChange={(event) => setName(event.target.value)}
           />
         )}
-        <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={sample}
-            onChange={(event) => setSample(event.target.checked)}
-          />
-          这段声音清楚，用作声纹样本
-        </label>
+        <Checkbox
+          label="这段声音清楚，用作声纹样本"
+          checked={sample}
+          onChange={(event) => setSample(event.target.checked)}
+        />
         <Button
           disabled={busy || !person || (person === 'new' && !name.trim())}
           onClick={confirm}
         >
           确认
         </Button>
-      </div>
-      <div className="flex flex-wrap gap-2">
+      </Row>
+      <Row gap={2} wrap>
         <Button
           variant="secondary"
           size="sm"
@@ -238,8 +256,8 @@ function SpeakerCard({
             撤销
           </Button>
         )}
-      </div>
-    </li>
+      </Row>
+    </Card>
   );
 }
 
@@ -308,29 +326,28 @@ export function Recording() {
           </p>
         }
       />
-      <div className="page-content space-y-6">
-        <header className="flex flex-wrap items-center justify-between gap-4">
-          <h2 className="min-w-0 truncate text-2xl font-semibold">
-            {detail?.filename ?? '录音'}
-          </h2>
-          <Link to="/library" className="text-sm text-accent underline">
+      <Page
+        title={detail?.filename ?? '录音'}
+        aside={
+          <TextLink to="/library" size="sm">
             返回录音库
-          </Link>
-        </header>
+          </TextLink>
+        }
+      >
         {error && (
-          <p role="alert" className="text-danger">
+          <Text role="alert" tone="danger">
             {error}
-          </p>
+          </Text>
         )}
         {!detail ? (
           <Skeleton className="h-32" />
         ) : detail.status !== 'ready' ? (
-          <p role="status" className="text-secondary">
+          <Text role="status" tone="secondary">
             这段录音还没转写完。
-          </p>
+          </Text>
         ) : (
           <>
-            <ul aria-label="说话人" className="space-y-3">
+            <Stack as="ul" gap={3} aria-label="说话人">
               {detail.speakers.map((speaker) => (
                 <SpeakerCard
                   // A new revision starts every card from nothing chosen.
@@ -346,25 +363,22 @@ export function Recording() {
                   onDecide={(decision) => void decide(speaker, decision)}
                 />
               ))}
-            </ul>
-            <details className="rounded-xl bg-surface p-4">
-              <summary className="min-h-11 cursor-pointer content-center">
-                转写稿（{detail.segments.length} 段）
-              </summary>
-              <ol className="mt-3 space-y-1 text-sm">
+            </Stack>
+            <Disclosure summary={`转写稿（${detail.segments.length} 段）`}>
+              <Stack as="ol" gap={1}>
                 {detail.segments.map((s, i) => (
-                  <li key={i}>
-                    <span className="text-secondary">
+                  <Text as="li" key={i} size="sm">
+                    <Text as="span" size="inherit" tone="secondary">
                       [{clock(s.start)}] {who(s.speaker)}：
-                    </span>
+                    </Text>
                     {s.text}
-                  </li>
+                  </Text>
                 ))}
-              </ol>
-            </details>
+              </Stack>
+            </Disclosure>
           </>
         )}
-      </div>
+      </Page>
     </div>
   );
 }

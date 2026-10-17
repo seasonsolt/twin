@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { FlowStepper } from '../components/effects/FlowStepper';
-import { Button } from '../components/ui';
+import { Button, Heading, Text, TextLink } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { IdentityForm } from '../features/identity/IdentityForm';
 import { SelfAssets } from '../features/assets/SelfAssets';
@@ -106,9 +106,9 @@ export function Onboarding({
             className="onboarding-stage"
             name={twin.name.trim() || '新分身'}
             right={
-              <Link to="/twins" className="text-sm text-accent underline">
+              <TextLink to="/twins" size="sm">
                 返回我的分身
-              </Link>
+              </TextLink>
             }
             intro={
               <p className="stage-caption">{twin.about || '让我们认识一下'}</p>
@@ -134,7 +134,9 @@ export function Onboarding({
             title: '你是谁',
             content: (
               <div className="space-y-4">
-                <h2 className="text-xl font-semibold">你是谁</h2>
+                <Heading level={2} size="title">
+                  你是谁
+                </Heading>
                 <IdentityForm
                   identity={{
                     name: identity.onboarding_pending ? identity.name : '',
@@ -155,10 +157,12 @@ export function Onboarding({
             title: '形象和声音',
             content: (
               <div className="space-y-4">
-                <h2 className="text-xl font-semibold">形象和声音</h2>
-                <p className="text-secondary">
+                <Heading level={2} size="title">
+                  形象和声音
+                </Heading>
+                <Text tone="secondary">
                   可以现在设置，也可以直接继续，以后在档案里更换。
-                </p>
+                </Text>
                 <RecordingShortcut />
                 <SelfAssets />
               </div>
@@ -170,7 +174,9 @@ export function Onboarding({
             title: '开始聊天',
             content: (
               <div className="space-y-4">
-                <h2 className="text-xl font-semibold">开始聊天</h2>
+                <Heading level={2} size="title">
+                  开始聊天
+                </Heading>
                 <p>记忆会慢慢整理好，现在可以聊聊了。</p>
               </div>
             ),

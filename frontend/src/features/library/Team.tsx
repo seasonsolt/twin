@@ -1,12 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 import {
+  AvatarFrame,
   Badge,
   Button,
+  Card,
   Dialog,
   Field,
+  Grid,
   Input,
   Meter,
+  Radio,
+  Row,
+  Section,
+  Stack,
+  Text,
+  TextLink,
+  type TextTone,
   useConfirm,
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
@@ -23,9 +33,31 @@ interface Waiting extends Speaker {
 const minutes = (seconds: number) =>
   `${Math.max(1, Math.round(seconds / 60))} 分钟`;
 const recordingPath = (id: string) => `/library/${encodeURIComponent(id)}`;
-const task =
-  'flex flex-col gap-2 rounded-xl border border-border bg-surface p-4';
-const taskLabel = 'text-sm font-medium';
+
+/** One thing for the owner to settle: what kind of task it is, what it is about, and how to settle it. */
+function Task({
+  kind,
+  tone = 'warning',
+  children,
+}: {
+  kind: string;
+  tone?: TextTone;
+  children: ReactNode;
+}) {
+  return (
+    <Card
+      as="li"
+      variant="outline"
+      padding="md"
+      className="flex flex-col gap-2"
+    >
+      <Text as="span" size="sm" weight="medium" tone={tone}>
+        {kind}
+      </Text>
+      {children}
+    </Card>
+  );
+}
 
 function Unnamed({
   person,
@@ -38,13 +70,14 @@ function Unnamed({
 }) {
   const [name, setName] = useState('');
   return (
-    <li className={task}>
-      <span className={`${taskLabel} text-warning`}>新出现的声音</span>
-      <p className="font-medium">
+    <Task kind="新出现的声音">
+      <Text weight="medium">
         {person.name} · 在 {person.speakers} 段录音里出现
-      </p>
-      <form
-        className="flex flex-wrap gap-2"
+      </Text>
+      <Row
+        as="form"
+        gap={2}
+        wrap
         onSubmit={(event) => {
           event.preventDefault();
           if (name.trim()) onName(name.trim());
@@ -66,16 +99,13 @@ function Unnamed({
         >
           起名
         </Button>
-      </form>
+      </Row>
       {person.recording_id && (
-        <Link
-          to={recordingPath(person.recording_id)}
-          className="inline-flex min-h-11 items-center text-sm text-accent underline"
-        >
+        <TextLink to={recordingPath(person.recording_id)} size="sm">
           去听一听
-        </Link>
+        </TextLink>
       )}
-    </li>
+    </Task>
   );
 }
 
@@ -124,37 +154,33 @@ function EditPerson({
             onChange={(event) => setName(event.target.value)}
           />
         </Field>
-        <fieldset className="space-y-1.5">
-          <legend className="font-medium">性别</legend>
-          <div className="flex flex-wrap gap-x-6">
+        <Stack as="fieldset" gap={1}>
+          <Text as="legend" weight="medium">
+            性别
+          </Text>
+          <Row gap={6} wrap>
             {GENDERS.map(([value, label]) => (
-              <label
+              <Radio
                 key={label}
-                className="flex min-h-11 items-center gap-2 text-base"
-              >
-                <input
-                  type="radio"
-                  name="person-gender"
-                  className="size-5"
-                  checked={gender === value}
-                  onChange={() => setGender(value)}
-                />
-                {label}
-              </label>
+                name="person-gender"
+                label={label}
+                checked={gender === value}
+                onChange={() => setGender(value)}
+              />
             ))}
-          </div>
-          <p className="text-sm text-secondary">
+          </Row>
+          <Text size="sm" tone="secondary">
             分身的插画形象会换成对应性别的一款。
-          </p>
-        </fieldset>
-        <div className="flex justify-end gap-2">
+          </Text>
+        </Stack>
+        <Row gap={2} justify="end">
           <Button type="button" variant="ghost" onClick={onClose}>
             取消
           </Button>
           <Button type="submit" disabled={busy || !name.trim()}>
             保存
           </Button>
-        </div>
+        </Row>
       </form>
     </Dialog>
   );
@@ -285,20 +311,17 @@ export function Team({
   return (
     <>
       {error && (
-        <p role="alert" className="text-danger">
+        <Text role="alert" tone="danger">
           {error}
-        </p>
+        </Text>
       )}
       {tasks > 0 && (
-        <section
-          aria-label="需要你处理"
-          className="space-y-4 rounded-2xl border border-border bg-surface p-5"
+        <Section
+          title="需要你处理"
+          badge={<Badge tone="warning">{tasks}</Badge>}
+          framed
         >
-          <div className="flex items-center gap-3">
-            <h3 className="text-lg font-semibold">需要你处理</h3>
-            <Badge tone="warning">{tasks}</Badge>
-          </div>
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <Grid as="ul" columns={3} gap={3}>
             {unnamed.map((person) => (
               <Unnamed
                 key={person.id}
@@ -308,74 +331,68 @@ export function Team({
               />
             ))}
             {waiting.map((w) => (
-              <li key={`${w.recording_id}-${w.id}`} className={task}>
-                <span className={`${taskLabel} text-warning`}>拿不准是谁</span>
-                <p className="font-medium">
+              <Task key={`${w.recording_id}-${w.id}`} kind="拿不准是谁">
+                <Text weight="medium">
                   <span className="break-all">{w.filename}</span> · {w.id}{' '}
                   {w.candidates.length > 1
                     ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
                     : `像${w.candidates[0].name}`}
-                </p>
-                <Link
-                  to={recordingPath(w.recording_id)}
-                  className="inline-flex min-h-11 items-center text-sm text-accent underline"
-                >
+                </Text>
+                <TextLink to={recordingPath(w.recording_id)} size="sm">
                   去听一听
-                </Link>
-              </li>
+                </TextLink>
+              </Task>
             ))}
             {unsorted.map((r) => (
-              <li key={`unsorted-${r.id}`} className={task}>
-                <span className={`${taskLabel} text-warning`}>
-                  {r.unsettled === r.speakers ? '还没认人' : '还有人没认'}
-                </span>
-                <p className="font-medium">
+              <Task
+                key={`unsorted-${r.id}`}
+                kind={r.unsettled === r.speakers ? '还没认人' : '还有人没认'}
+              >
+                <Text weight="medium">
                   <span className="break-all">{r.filename}</span> ·{' '}
                   {r.unsettled} 位说话人待确认
-                </p>
-                <Link
-                  to={recordingPath(r.id)}
-                  className="inline-flex min-h-11 items-center text-sm text-accent underline"
-                >
+                </Text>
+                <TextLink to={recordingPath(r.id)} size="sm">
                   去认人
-                </Link>
-              </li>
+                </TextLink>
+              </Task>
             ))}
             {arriving.map((r) => (
-              <li key={r.id} className={task}>
-                <span
-                  className={`${taskLabel} ${r.status === 'failed' ? 'text-danger' : 'text-secondary'}`}
-                >
-                  {r.status === 'failed'
+              <Task
+                key={r.id}
+                tone={r.status === 'failed' ? 'danger' : 'secondary'}
+                kind={
+                  r.status === 'failed'
                     ? '转写失败'
                     : r.status === 'queued'
                       ? '排队转写'
-                      : '转写中'}
-                </span>
-                <p className="font-medium break-all">{r.filename}</p>
+                      : '转写中'
+                }
+              >
+                <Text weight="medium" breakAll>
+                  {r.filename}
+                </Text>
                 {r.status === 'transcribing' && r.duration_s ? (
                   <Meter
                     label="已转写"
                     value={(r.transcribed_s / r.duration_s) * 100}
                   />
                 ) : r.status === 'failed' ? (
-                  <Link
-                    to="/library"
-                    className="inline-flex min-h-11 items-center text-sm text-accent underline"
-                  >
+                  <TextLink to="/library" size="sm">
                     去录音库处理
-                  </Link>
+                  </TextLink>
                 ) : null}
-              </li>
+              </Task>
             ))}
-          </ul>
-        </section>
+          </Grid>
+        </Section>
       )}
-      <section aria-label="人物" className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold">人物</h3>
-          <form
-            className="flex gap-2"
+      <Section
+        title="人物"
+        actions={
+          <Row
+            as="form"
+            gap={2}
             onSubmit={(event) => {
               event.preventDefault();
               if (name.trim()) void add();
@@ -396,39 +413,39 @@ export function Team({
             >
               添加
             </Button>
-          </form>
-        </div>
+          </Row>
+        }
+      >
         {named && named.length === 0 && (
-          <p className="text-sm text-secondary">
+          <Text size="sm" tone="secondary">
             录音转写后，认出来的人会出现在这里；也可以打开录音，确认说话人是谁。
-          </p>
+          </Text>
         )}
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Grid as="ul" columns={3}>
           {named?.map((person) => (
-            <li
+            <Card
+              as="li"
               key={person.id}
-              className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-5"
+              variant="outline"
+              className="flex flex-col gap-4"
             >
-              <div className="flex items-center gap-3">
-                <span
-                  aria-hidden
-                  className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-full bg-soft text-lg font-semibold text-accent"
-                >
+              <Row gap={3}>
+                <AvatarFrame>
                   <PersonFace
                     person={person}
                     twin={twins.find((t) => t.id === person.persona_id)}
                   />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-lg font-semibold">
+                </AvatarFrame>
+                <Stack gap={0} grow>
+                  <Text size="lg" weight="semibold" truncate>
                     {person.name}
-                  </p>
-                  <p className="text-sm text-secondary">
+                  </Text>
+                  <Text size="sm" tone="secondary">
                     {person.speakers
                       ? `${person.speakers} 段录音 · ${minutes(person.seconds)}`
                       : '还没有确认过的发言'}
-                  </p>
-                </div>
+                  </Text>
+                </Stack>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -438,7 +455,7 @@ export function Team({
                 >
                   编辑
                 </Button>
-              </div>
+              </Row>
               <div>
                 {person.persona_id ? (
                   person.updating ? (
@@ -489,10 +506,10 @@ export function Team({
                   </>
                 )}
               </div>
-            </li>
+            </Card>
           ))}
-        </ul>
-      </section>
+        </Grid>
+      </Section>
       <EditPerson
         person={editing}
         busy={busy}

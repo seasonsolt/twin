@@ -1,4 +1,4 @@
-import { Button, Meter } from '../../components/ui';
+import { Button, Card, Meter, Stack, Text } from '../../components/ui';
 import type { Pick } from './useUploads';
 
 /** The files still uploading (or that failed), with a way to stop. */
@@ -13,17 +13,21 @@ export function UploadList({
 }) {
   if (!picks.length) return null;
   return (
-    <section aria-label="上传进度" className="space-y-3">
+    <Stack as="section" gap={3} aria-label="上传进度">
       {picks.map((pick) => (
-        <div
+        <Card
+          as="div"
+          variant="soft"
+          padding="md"
           key={`${pick.file.name}-${pick.file.lastModified}-${pick.file.size}`}
-          className="rounded-xl bg-surface p-4"
         >
           {pick.error ? (
-            <p className="text-sm">
+            <Text size="sm">
               {pick.file.name}：
-              <span className="text-danger">{pick.error}</span>
-            </p>
+              <Text as="span" size="inherit" tone="danger">
+                {pick.error}
+              </Text>
+            </Text>
           ) : (
             <Meter
               label={
@@ -38,13 +42,13 @@ export function UploadList({
               }
             />
           )}
-        </div>
+        </Card>
       ))}
       {uploading && (
         <Button variant="ghost" onClick={onStop}>
           停止上传（已传的部分下次接着传）
         </Button>
       )}
-    </section>
+    </Stack>
   );
 }

@@ -1,10 +1,15 @@
-import { type ComponentProps, type ReactNode } from 'react';
+import {
+  cloneElement,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { motion } from 'motion/react';
-import { Inbox } from 'lucide-react';
+import { Inbox, MoreHorizontal } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { Pressable } from '../motion';
 import { cn } from '../../lib/utils';
-import { toneClasses, type Tone } from './controls';
+import { Button, toneClasses, type Tone } from './controls';
 
 const cardVariants = {
   /** White card lifted off the canvas (the default). */
@@ -84,17 +89,28 @@ export function Badge({
   );
 }
 
+/**
+ * A progress bar. `value` counts up to `max` (100 by default, so a plain percent works); null means it is working
+ * without a known end. `size="sm"` is the thin bar for a step inside a list.
+ */
 export function Meter({
   value,
+  max = 100,
   label,
   hideLabel = false,
+  size = 'md',
 }: {
   value: number | null;
+  max?: number;
   label: string;
   hideLabel?: boolean;
+  size?: 'sm' | 'md';
 }) {
   const { reduced, transition } = useMotionPreset('gentle');
-  const percent = value === null ? null : Math.max(0, Math.min(100, value));
+  const percent =
+    value === null
+      ? null
+      : Math.max(0, Math.min(100, max > 0 ? (value / max) * 100 : 0));
   return (
     <div className="space-y-2">
       <div className={hideLabel ? 'sr-only' : 'flex justify-between text-sm'}>
@@ -106,10 +122,15 @@ export function Meter({
       <div
         role="progressbar"
         aria-label={label}
-        aria-valuemin={percent === null ? undefined : 0}
-        aria-valuemax={percent === null ? undefined : 100}
-        aria-valuenow={percent ?? undefined}
-        className="h-2 overflow-hidden rounded-full bg-border"
+        aria-valuemin={value === null ? undefined : 0}
+        aria-valuemax={value === null ? undefined : max}
+        aria-valuenow={
+          value === null ? undefined : Math.min(max, Math.max(0, value))
+        }
+        className={cn(
+          'overflow-hidden rounded-full',
+          size === 'sm' ? 'h-1.5 bg-soft' : 'h-2 bg-border',
+        )}
       >
         {percent === null ? (
           <div className="h-full w-full rounded-full bg-accent/30" />
@@ -135,12 +156,19 @@ export function Meter({
   );
 }
 
-export function Skeleton({ className, ...props }: ComponentProps<'div'>) {
+export function Skeleton({
+  panel = false,
+  className,
+  ...props
+}: ComponentProps<'div'> & {
+  /** Stands in for a view that fills most of the screen (a graph): 70% of the viewport's height. */
+  panel?: boolean;
+}) {
   return (
     <div
       {...props}
       aria-hidden
-      className={cn('skeleton h-4 rounded-sm', className)}
+      className={cn('skeleton h-4 rounded-sm', panel && 'h-[70vh]', className)}
     />
   );
 }
@@ -355,24 +383,234 @@ const frameSizes = {
   md: 'size-10 text-base',
   lg: 'size-12 text-lg',
   xl: 'size-16 text-xl',
+  '2xl': 'size-18 text-2xl',
+  /** Fills its parent, whose size the page sets. */
+  fill: 'size-full text-lg',
 };
-/** A round frame for a portrait, an illustration or a name's first character. */
+/**
+ * A round frame for a portrait (an <img> fills it), an illustration or a name's first character. Hidden from screen
+ * readers unless it has a `label`, or `decorative={false}` when the content names itself (an <img alt>). `muted` is
+ * for a placeholder word such as "未设置".
+ */
 export function AvatarFrame({
   size = 'lg',
+  label,
+  decorative = true,
+  muted = false,
+  outlined = false,
   children,
 }: {
   size?: keyof typeof frameSizes;
+  label?: string;
+  decorative?: boolean;
+  muted?: boolean;
+  /** A 2px ring in the canvas colour, so a photo stands off a background of the same tone. */
+  outlined?: boolean;
   children: ReactNode;
 }) {
   return (
     <span
-      aria-hidden
+      {...(label
+        ? { role: 'img', 'aria-label': label }
+        : decorative && { 'aria-hidden': true })}
       className={cn(
-        'grid shrink-0 place-items-center overflow-hidden rounded-full bg-soft font-semibold text-accent',
-        frameSizes[size],
+        'grid shrink-0 place-items-center overflow-hidden rounded-full [&>img]:size-full [&>img]:object-cover',
+        muted
+          ? 'bg-canvas text-sm text-secondary'
+          : 'bg-soft font-semibold text-accent',
+        // A placeholder word keeps its small size whatever the frame's.
+        muted ? frameSizes[size].split(' ')[0] : frameSizes[size],
+        outlined && 'border-2 border-canvas',
       )}
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * A portrait photo filling its frame, cropped towards the face (the upper part of the picture) rather than the middle.
+ */
+export function Portrait(props: Omit<ComponentProps<'img'>, 'className'>) {
+  return <img {...props} className="size-full object-cover object-[50%_30%]" />;
+}
+
+const clipShapes = {
+  /** A card's 16px corners. */
+  card: 'rounded-lg',
+  /** A list row's 12px corners. */
+  row: 'rounded-md',
+  circle: 'rounded-full',
+};
+/**
+ * Rounds and clips its one child (a video, a box holding a 3D view) to a shape from the scale, keeping the child's
+ * own element and layout classes.
+ */
+export function Clip({
+  shape,
+  children,
+}: {
+  shape: keyof typeof clipShapes;
+  children: ReactElement<{ className?: string }>;
+}) {
+  return cloneElement(children, {
+    className: cn(
+      children.props.className,
+      'overflow-hidden',
+      clipShapes[shape],
+    ),
+  });
+}
+
+/** A box for a picture or a cropper: clips to the card corners. */
+export function MediaFrame({
+  height = 'lg',
+  tone = 'dark',
+  label,
+  children,
+}: {
+  /** md 256px, lg 320px. */
+  height?: 'md' | 'lg';
+  /** dark behind a photo; soft for a message in place of one. */
+  tone?: 'dark' | 'soft';
+  label?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      aria-label={label}
+      className={cn(
+        'relative overflow-hidden rounded-lg',
+        height === 'md' ? 'h-64' : 'h-80',
+        tone === 'dark'
+          ? 'bg-black'
+          : 'flex items-center justify-center bg-canvas p-6 text-center text-secondary',
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Bars that rise with the microphone level (0–1) while recording. Decorative: give the level in text too. */
+export function AudioLevel({
+  level,
+  bars = 12,
+}: {
+  level: number;
+  bars?: number;
+}) {
+  return (
+    <div aria-hidden className="flex h-12 items-center gap-1">
+      {Array.from({ length: bars }, (_, index) => (
+        <i
+          key={index}
+          className="w-1.5 rounded-full bg-primary"
+          style={{ height: `${8 + level * ((index % 3) + 1) * 12}px` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+const dotTones: Record<Tone | 'accent', string> = {
+  neutral: 'bg-tertiary',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+  info: 'bg-info',
+  accent: 'bg-accent',
+};
+/** A small coloured dot before a status word; pair it with text, colour alone says nothing to everyone. */
+export function StatusDot({ tone = 'neutral' }: { tone?: Tone | 'accent' }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'inline-block size-2 shrink-0 rounded-full',
+        dotTones[tone],
+      )}
+    />
+  );
+}
+
+/** A card that opens to show more, such as a full transcript. The summary line is the toggle. */
+export function Disclosure({
+  summary,
+  defaultOpen = false,
+  variant = 'raised',
+  children,
+}: {
+  summary: ReactNode;
+  defaultOpen?: boolean;
+  variant?: 'raised' | 'outline' | 'plain';
+  children: ReactNode;
+}) {
+  return (
+    <details
+      open={defaultOpen || undefined}
+      className={cn(
+        variant === 'raised' && 'rounded-lg bg-surface p-4',
+        variant === 'outline' &&
+          'rounded-lg border border-border bg-surface p-4',
+      )}
+    >
+      <summary className="min-h-11 cursor-pointer content-center md:min-h-9">
+        {summary}
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
+
+/** The number of a step in a short how-it-works list. */
+export function StepNumber({ children }: { children: ReactNode }) {
+  return (
+    <span
+      aria-hidden
+      className="grid size-8 shrink-0 place-items-center rounded-full bg-primary font-semibold text-canvas"
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * A round "⋯" button that opens a short list of actions below it; choosing one closes the list. `className` places
+ * the menu (for example absolute in a card's corner).
+ */
+export function ActionMenu({
+  label,
+  items,
+  className,
+}: {
+  label: string;
+  items: { label: string; onSelect: () => void; disabled?: boolean }[];
+  className?: string;
+}) {
+  return (
+    <details className={className}>
+      <summary
+        aria-label={label}
+        className="grid size-11 cursor-pointer list-none place-items-center rounded-full text-secondary hover:bg-soft [&::-webkit-details-marker]:hidden"
+      >
+        <MoreHorizontal size={20} aria-hidden />
+      </summary>
+      <div className="absolute right-0 z-10 grid min-w-28 rounded-lg border border-border bg-surface p-1 shadow-elevation-2">
+        {items.map((item) => (
+          <Button
+            key={item.label}
+            variant="ghost"
+            disabled={item.disabled}
+            onClick={(event) => {
+              event.currentTarget.closest('details')?.removeAttribute('open');
+              item.onSelect();
+            }}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
+    </details>
   );
 }

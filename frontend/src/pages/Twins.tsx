@@ -1,7 +1,25 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
-import { Check, Globe, MoreHorizontal, Plus } from 'lucide-react';
-import { Button, Dialog, Skeleton, useConfirm } from '../components/ui';
+import { useEffect, useId, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { Check, Globe, Plus } from 'lucide-react';
+import {
+  ActionMenu,
+  AvatarFrame,
+  Badge,
+  Button,
+  Card,
+  Chip,
+  Dialog,
+  Field,
+  Heading,
+  Input,
+  Row,
+  Skeleton,
+  Stack,
+  Text,
+  TextLink,
+  Toolbar,
+  useConfirm,
+} from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { PersonaPortrait } from '../components/layout/PersonaSwitcher';
 import { NewTwin } from '../components/layout/NewTwin';
@@ -51,6 +69,7 @@ export function Twins() {
   const [trash, setTrash] = useState<TrashedPersona[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const confirm = useConfirm();
+  const nameId = useId();
   useEffect(() => {
     let alive = true;
     void refresh()
@@ -165,14 +184,16 @@ export function Twins() {
   const mine = items.filter((persona) => persona.can_manage !== false);
   const others = items.filter((persona) => persona.can_manage === false);
   const card = (persona: Persona) => (
-    <article
+    <Card
       key={persona.id}
-      className="twin-card relative rounded-xl bg-surface shadow-card"
+      as="article"
+      padding="none"
+      className="twin-card relative overflow-hidden"
       data-current={persona.id === id}
     >
-      <button
-        type="button"
-        className="twin-card-select flex h-full w-full min-w-0 flex-col items-center gap-3 rounded-xl p-6 text-center"
+      <Button
+        variant="ghost"
+        className="twin-card-select h-full w-full min-w-0 flex-col justify-start gap-3 p-6 text-center text-primary hover:bg-transparent"
         aria-label={`和${persona.name}聊天`}
         onClick={() => {
           navigate('/chat');
@@ -180,89 +201,91 @@ export function Twins() {
         }}
       >
         <PersonaPortrait persona={persona} />
-        <span className="persona-name max-w-full truncate text-2xl">
+        <Text
+          as="span"
+          size="2xl"
+          tone="inherit"
+          weight="inherit"
+          truncate
+          className="persona-name max-w-full"
+        >
           {persona.name}
-        </span>
-        <span className="text-sm text-secondary">{persona.sources} 条记忆</span>
+        </Text>
+        <Text as="span" size="sm" tone="secondary" weight="regular">
+          {persona.sources} 条记忆
+        </Text>
         {lastMessage(persona.id) && (
-          <span className="w-full truncate text-sm text-secondary">
+          <Text
+            as="span"
+            size="sm"
+            tone="secondary"
+            weight="regular"
+            truncate
+            className="w-full"
+          >
             {lastMessage(persona.id)}
-          </span>
+          </Text>
         )}
         {!!pending[persona.id] && (
-          <span className="rounded-full bg-note px-3 py-1 text-xs text-primary">
-            有 {pending[persona.id]} 段待确认
-          </span>
+          <Badge tone="warning">有 {pending[persona.id]} 段待确认</Badge>
         )}
         {persona.owner && persona.owner !== identity?.email && (
-          <span
-            className="max-w-full truncate text-xs text-tertiary"
+          <Text
+            as="span"
+            size="xs"
+            tone="tertiary"
+            weight="regular"
+            truncate
+            className="max-w-full"
             title={persona.owner}
           >
             {persona.owner}
-          </span>
+          </Text>
         )}
         {persona.public && persona.can_manage !== false && (
-          <span className="flex items-center gap-1 rounded-full bg-soft px-3 py-1 text-xs text-primary">
+          <Badge>
             <Globe size={14} aria-hidden />
             公开
-          </span>
+          </Badge>
         )}
         {persona.id === id && (
-          <span className="flex items-center gap-1 rounded-full bg-primary px-3 py-1 text-xs text-canvas">
+          <Chip pressed>
             <Check size={14} aria-hidden />
             当前分身
-          </span>
+          </Chip>
         )}
-      </button>
+      </Button>
       {persona.can_manage !== false && (
-        <details className="twin-card-menu absolute top-2 right-2">
-          <summary
-            aria-label={`管理${persona.name}`}
-            className="grid size-11 cursor-pointer list-none place-items-center rounded-full text-secondary hover:bg-soft [&::-webkit-details-marker]:hidden"
-          >
-            <MoreHorizontal size={20} aria-hidden />
-          </summary>
-          <div className="absolute right-0 z-10 grid min-w-28 rounded-lg border border-border bg-canvas p-1 shadow-elevation-2">
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={(event) => {
-                event.currentTarget.closest('details')?.removeAttribute('open');
+        <ActionMenu
+          label={`管理${persona.name}`}
+          className="twin-card-menu absolute top-2 right-2"
+          items={[
+            {
+              label: '重命名',
+              disabled: busy,
+              onSelect: () => {
                 setDraft(persona.name);
                 setEditing(persona);
-              }}
-            >
-              重命名
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={(event) => {
-                event.currentTarget.closest('details')?.removeAttribute('open');
-                void setPublic(persona, !persona.public);
-              }}
-            >
-              {persona.public ? '设为私有' : '设为公开'}
-            </Button>
-            {!persona.is_default && (
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={(event) => {
-                  event.currentTarget
-                    .closest('details')
-                    ?.removeAttribute('open');
-                  void remove(persona);
-                }}
-              >
-                删除
-              </Button>
-            )}
-          </div>
-        </details>
+              },
+            },
+            {
+              label: persona.public ? '设为私有' : '设为公开',
+              disabled: busy,
+              onSelect: () => void setPublic(persona, !persona.public),
+            },
+            ...(persona.is_default
+              ? []
+              : [
+                  {
+                    label: '删除',
+                    disabled: busy,
+                    onSelect: () => void remove(persona),
+                  },
+                ]),
+          ]}
+        />
       )}
-    </article>
+    </Card>
   );
   return (
     <div className="twins-page">
@@ -271,19 +294,22 @@ export function Twins() {
         intro={<p className="stage-caption">每个分身，都是一段独立的记忆。</p>}
       />
       <div className="page-content space-y-6">
-        <header className="flex flex-wrap items-center justify-between gap-4">
-          <h2 className="text-2xl font-semibold">我的分身</h2>
-          <Link to="/team" className="text-sm text-accent underline">
+        <Toolbar as="header" gap={4}>
+          <Heading level={2}>我的分身</Heading>
+          <TextLink to="/team" size="sm">
             团队
-          </Link>
+          </TextLink>
           {mobile && identity?.auth_enabled && (
-            <div className="min-w-0 text-sm">
-              <p
-                className="max-w-64 truncate text-secondary"
+            <div className="min-w-0">
+              <Text
+                size="sm"
+                tone="secondary"
+                truncate
+                className="max-w-64"
                 title={accountLabel(identity) || undefined}
               >
                 {accountLabel(identity)}
-              </p>
+              </Text>
               {identity.provider !== 'sso' && (
                 <Button
                   variant="ghost"
@@ -295,7 +321,7 @@ export function Twins() {
               )}
             </div>
           )}
-        </header>
+        </Toolbar>
         {loading && <Skeleton className="h-32" />}
         {error && (
           <p role="alert" className="text-danger">
@@ -309,77 +335,89 @@ export function Twins() {
           {mine.map(card)}
           <NewTwin
             initialOpen={params.get('create') === '1'}
-            className="twin-card twin-card-create flex min-h-60 flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-primary bg-transparent p-6 text-primary"
+            variant="card"
             onOpenChange={(open) => {
               if (!open && params.has('create'))
                 setParams({}, { replace: true });
             }}
           >
-            <span className="grid size-20 place-items-center rounded-full bg-soft">
+            <AvatarFrame size="xl">
               <Plus size={32} aria-hidden />
-            </span>
-            <span className="persona-name text-2xl">新建分身</span>
+            </AvatarFrame>
+            <Text
+              as="span"
+              size="2xl"
+              tone="inherit"
+              weight="inherit"
+              className="persona-name"
+            >
+              新建分身
+            </Text>
           </NewTwin>
         </div>
         {others.length > 0 && (
           <>
-            <h2 className="text-2xl font-semibold">公开分身</h2>
+            <Heading level={2}>公开分身</Heading>
             <div className="twins-grid" aria-label="公开分身列表">
               {others.map(card)}
             </div>
           </>
         )}
-        <details
-          onToggle={(event) => setTrashOpen(event.currentTarget.open)}
-          className="rounded-xl bg-surface p-4"
-        >
-          <summary className="min-h-11 cursor-pointer text-lg font-semibold">
-            最近删除
-          </summary>
-          <p className="mb-3 text-sm text-secondary">
-            删除后保留 7 天，到期后永久删除。
-          </p>
-          {trashLoading ? (
-            <Skeleton className="h-16" />
-          ) : trash.length === 0 ? (
-            <p className="text-sm text-secondary">暂无最近删除的分身</p>
-          ) : (
-            <ul className="space-y-3">
-              {trash.map((persona) => (
-                <li
-                  key={persona.id}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate">{persona.name}</p>
-                    <p className="text-xs text-secondary">
-                      删除于{' '}
-                      {new Date(persona.deleted_at).toLocaleDateString('zh-CN')}
-                      ，
-                      {new Date(persona.expires_at).toLocaleDateString('zh-CN')}{' '}
-                      到期
-                    </p>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    disabled={busy}
-                    aria-label={`恢复${persona.name}`}
-                    onClick={() =>
-                      void work(async () => {
-                        await api(`/api/personas/${persona.id}/restore`, {
-                          method: 'POST',
-                        });
-                        await refresh();
-                      })
-                    }
-                  >
-                    恢复
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </details>
+        <Card as="div" variant="outline" padding="md">
+          <details onToggle={(event) => setTrashOpen(event.currentTarget.open)}>
+            <summary className="min-h-11 cursor-pointer">
+              <Text as="span" size="lg" weight="semibold">
+                最近删除
+              </Text>
+            </summary>
+            <Text size="sm" tone="secondary" className="mb-3">
+              删除后保留 7 天，到期后永久删除。
+            </Text>
+            {trashLoading ? (
+              <Skeleton className="h-16" />
+            ) : trash.length === 0 ? (
+              <Text size="sm" tone="secondary">
+                暂无最近删除的分身
+              </Text>
+            ) : (
+              <Stack as="ul" gap={3}>
+                {trash.map((persona) => (
+                  <Row as="li" key={persona.id} gap={3} justify="between">
+                    <div className="min-w-0">
+                      <Text truncate>{persona.name}</Text>
+                      <Text size="xs" tone="secondary">
+                        删除于{' '}
+                        {new Date(persona.deleted_at).toLocaleDateString(
+                          'zh-CN',
+                        )}
+                        ，
+                        {new Date(persona.expires_at).toLocaleDateString(
+                          'zh-CN',
+                        )}{' '}
+                        到期
+                      </Text>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      disabled={busy}
+                      aria-label={`恢复${persona.name}`}
+                      onClick={() =>
+                        void work(async () => {
+                          await api(`/api/personas/${persona.id}/restore`, {
+                            method: 'POST',
+                          });
+                          await refresh();
+                        })
+                      }
+                    >
+                      恢复
+                    </Button>
+                  </Row>
+                ))}
+              </Stack>
+            )}
+          </details>
+        </Card>
         <Dialog
           open={editing !== null}
           onOpenChange={(open) => {
@@ -395,17 +433,16 @@ export function Twins() {
               void rename();
             }}
           >
-            <label className="block space-y-2">
-              分身名字
-              <input
+            <Field id={nameId} label="分身名字">
+              <Input
+                id={nameId}
                 autoFocus
                 required
                 maxLength={20}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                className="block min-h-11 w-full rounded-lg border-2 border-primary bg-surface px-3"
               />
-            </label>
+            </Field>
             <Button type="submit" loading={busy} disabled={!draft.trim()}>
               保存名字
             </Button>

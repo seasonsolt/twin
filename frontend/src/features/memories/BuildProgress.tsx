@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Check, Circle, LoaderCircle } from 'lucide-react';
 import { ThinkingLabel } from '../../components/effects/ThinkingLabel';
+import { Card, Meter, Text } from '../../components/ui';
 
 export interface Processing {
   state: 'idle' | 'queued' | 'running';
@@ -136,19 +137,13 @@ function StepRow({ step }: { step: BuildStep }) {
         )}
       </div>
       {step.state === 'running' && !!step.total && (
-        <div
-          role="progressbar"
-          aria-label={`${step.label}进度`}
-          aria-valuemin={0}
-          aria-valuemax={step.total}
-          aria-valuenow={step.done ?? 0}
-          className="ml-6 h-1.5 overflow-hidden rounded-full bg-soft"
-        >
-          <div
-            className="h-full rounded-full bg-accent transition-[width] duration-500"
-            style={{
-              width: `${Math.min(100, ((step.done ?? 0) / step.total) * 100)}%`,
-            }}
+        <div className="ml-6">
+          <Meter
+            size="sm"
+            hideLabel
+            label={`${step.label}进度`}
+            value={step.done ?? 0}
+            max={step.total}
           />
         </div>
       )}
@@ -184,36 +179,38 @@ export function BuildProgress({
   const steps = buildSteps(processing);
   const lines = liveness(processing, now);
   return (
-    <div
-      aria-live="polite"
-      className="space-y-3 rounded-lg border border-border p-4 text-sm"
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <ThinkingLabel text={title} />
-        {running && processing.started && (
-          <span className="tabular-nums text-xs text-tertiary">
-            已用时 {duration(since(processing.started, now))}
-          </span>
+    <Card as="div" variant="outline" padding="md" aria-live="polite">
+      <Text as="div" size="sm" className="space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <ThinkingLabel text={title} />
+          {running && processing.started && (
+            <Text as="span" size="xs" tone="tertiary" className="tabular-nums">
+              已用时 {duration(since(processing.started, now))}
+            </Text>
+          )}
+        </div>
+        {processing.state !== 'idle' && (
+          <ol aria-label="整理步骤" className="space-y-2">
+            {steps.map((step) => (
+              <StepRow key={step.label} step={step} />
+            ))}
+          </ol>
         )}
-      </div>
-      {processing.state !== 'idle' && (
-        <ol aria-label="整理步骤" className="space-y-2">
-          {steps.map((step) => (
-            <StepRow key={step.label} step={step} />
-          ))}
-        </ol>
-      )}
-      {lines.length > 0 && (
-        <ul
-          aria-label="实时状态"
-          className="space-y-0.5 text-xs text-secondary"
-        >
-          {lines.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      )}
-      {children}
-    </div>
+        {lines.length > 0 && (
+          <Text
+            as="ul"
+            size="xs"
+            tone="secondary"
+            aria-label="实时状态"
+            className="space-y-0.5"
+          >
+            {lines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </Text>
+        )}
+        {children}
+      </Text>
+    </Card>
   );
 }

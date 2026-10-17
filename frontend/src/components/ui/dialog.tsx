@@ -14,6 +14,11 @@ import { exitDurations, useMotionPreset } from '../../design/motion';
 import { Button, IconButton } from './controls';
 import { cn } from '../../lib/utils';
 
+export type DialogAnchor = Pick<
+  CSSProperties,
+  'left' | 'top' | 'bottom' | 'width' | 'maxHeight'
+>;
+
 export function Dialog({
   open,
   onOpenChange,
@@ -27,7 +32,8 @@ export function Dialog({
   className,
   exitTransition,
   popover = false,
-  style,
+  variant = 'center',
+  anchor,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -41,7 +47,10 @@ export function Dialog({
   className?: string;
   exitTransition?: Transition;
   popover?: boolean;
-  style?: CSSProperties;
+  /** center: a box in the middle of the screen. sheet: pinned to the bottom edge, full width (for phones). */
+  variant?: 'center' | 'sheet';
+  /** For a popover placed next to its trigger: the position the page measured. Replaces the centring. */
+  anchor?: DialogAnchor;
 }) {
   const { reduced, transition, exit: fade } = useMotionPreset('gentle');
   const exit = { ...fade, duration: exitDurations.dialog };
@@ -74,7 +83,7 @@ export function Dialog({
             >
               <motion.div
                 key="dialog"
-                style={style}
+                style={anchor && { ...anchor, translate: 'none' }}
                 initial={{ opacity: 0, scale: reduced ? 1 : 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{
@@ -84,7 +93,10 @@ export function Dialog({
                 }}
                 transition={transition}
                 className={cn(
-                  'fixed top-1/2 left-1/2 z-50 max-h-[85dvh] w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-canvas p-6 text-primary shadow-elevation-3',
+                  'fixed z-50 max-h-[85dvh] overflow-y-auto border border-border bg-canvas text-primary shadow-elevation-3',
+                  variant === 'sheet'
+                    ? 'top-auto right-0 bottom-0 left-0 w-full rounded-t-lg p-4 pb-[max(16px,env(safe-area-inset-bottom))]'
+                    : 'top-1/2 left-1/2 w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 rounded-lg p-6',
                   className,
                 )}
               >

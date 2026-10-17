@@ -1,6 +1,6 @@
 import { useState, type RefObject } from 'react';
 import { Trash2 } from 'lucide-react';
-import { Button, Dialog } from '../../components/ui';
+import { Button, Dialog, IconButton, Input } from '../../components/ui';
 import { dayGroup, relativeTime } from '../chat/ConversationHistory';
 import '../chat/history.css';
 import type { WorkSummary } from './types';
@@ -47,8 +47,8 @@ export function WorkHistory({
   );
   const content = (
     <div className="history-content">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         className="history-new"
         aria-label="新任务"
         onClick={() => {
@@ -58,8 +58,8 @@ export function WorkHistory({
         }}
       >
         ＋ 新任务
-      </button>
-      <input
+      </Button>
+      <Input
         type="search"
         aria-label="搜索任务"
         placeholder="搜索任务"
@@ -111,9 +111,9 @@ export function WorkHistory({
                           data-current={task.task_id === current}
                         >
                           <div className="history-entry-row">
-                            <button
-                              type="button"
-                              className="history-select"
+                            <Button
+                              variant="ghost"
+                              className="history-select font-normal text-current hover:bg-transparent"
                               aria-current={
                                 task.task_id === current ? 'true' : undefined
                               }
@@ -130,16 +130,15 @@ export function WorkHistory({
                                   ? '在做'
                                   : relativeTime(task.updated_at, currentTime)}
                               </time>
-                            </button>
-                            <button
-                              type="button"
-                              className="history-more"
-                              aria-label={`删除${task.title}`}
+                            </Button>
+                            <IconButton
+                              className="history-more text-current hover:bg-transparent"
+                              label={`删除${task.title}`}
                               disabled={task.status === 'running'}
                               onClick={() => onDelete(task)}
                             >
                               <Trash2 size={16} aria-hidden />
-                            </button>
+                            </IconButton>
                           </div>
                         </li>
                       ))}

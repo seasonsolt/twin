@@ -105,7 +105,7 @@ function FlowStepperBody({
         {completed ? (
           <p role="status">{completedText}</p>
         ) : reduced ? (
-          <div className="flow-static rounded-xl border border-border bg-surface">
+          <div className="flow-static rounded-lg border border-border bg-surface">
             <div
               aria-label="流程步骤"
               className="flow-indicators flex flex-wrap gap-3 p-5 sm:p-6"
@@ -158,7 +158,7 @@ function FlowStepperBody({
             onStepChange={setCurrent}
             onFinalStepCompleted={finish}
             className="flow-animated !block !p-0"
-            stepCircleContainerClassName="!max-w-none !rounded-xl !shadow-none"
+            stepCircleContainerClassName="!max-w-none !rounded-lg !shadow-none"
             stepContainerClassName="flow-indicators !p-5 sm:!p-6 !overflow-x-auto"
             contentClassName="!px-0"
             footerClassName="!px-5 !pb-5 sm:!px-6 sm:!pb-6"

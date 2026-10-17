@@ -6,8 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Link, Navigate, NavLink, useLocation, useOutlet } from 'react-router';
-import { motion } from 'motion/react';
+import { Navigate, useLocation, useOutlet } from 'react-router';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import {
@@ -18,9 +17,20 @@ import {
   Mic,
   Users,
 } from 'lucide-react';
-import { useMotionPreset } from '../../design/motion';
 import { startStatusPolling, useStatus } from '../../stores/status';
-import { Button, Skeleton, Tooltip } from '../ui';
+import {
+  Button,
+  Card,
+  Heading,
+  IconButton,
+  NavPill,
+  PlainButton,
+  Skeleton,
+  SkipLink,
+  Text,
+  TextLink,
+  Tooltip,
+} from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
@@ -56,37 +66,19 @@ function useNavItems() {
 }
 
 function Navigation() {
-  const { reduced, transition } = useMotionPreset('layout');
   const items = useNavItems();
   return (
     <LayoutScope>
       <nav aria-label="主导航" className="space-y-1">
-        {items.map(({ route, title, icon: Icon }) => {
-          const link = (
-            <NavLink
-              key={route}
-              to={`/${route}`}
-              className="rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary aria-[current=page]:text-canvas"
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && (
-                    <motion.span
-                      layoutId={reduced ? undefined : 'active-nav'}
-                      initial={reduced ? { opacity: 0 } : false}
-                      animate={{ opacity: 1 }}
-                      transition={transition}
-                      className="absolute inset-0 rounded-full bg-primary"
-                    />
-                  )}
-                  <Icon aria-hidden className="relative size-5 shrink-0" />
-                  <span className="relative whitespace-nowrap">{title}</span>
-                </>
-              )}
-            </NavLink>
-          );
-          return link;
-        })}
+        {items.map(({ route, title, icon }) => (
+          <NavPill
+            key={route}
+            to={`/${route}`}
+            icon={icon}
+            label={title}
+            indicator="active-nav"
+          />
+        ))}
       </nav>
     </LayoutScope>
   );
@@ -99,17 +91,14 @@ function BottomTabs() {
       aria-label="底部导航"
       className={`mobile-tabs fixed inset-x-0 bottom-0 z-30 grid gap-2 border-t border-border bg-canvas px-3 pt-2 md:hidden ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'][items.length - 1]}`}
     >
-      {items.map(({ route, title, icon: Icon }) => (
-        <NavLink
+      {items.map(({ route, title, icon }) => (
+        <NavPill
           key={route}
           to={`/${route}`}
-          className={({ isActive }) =>
-            `flex min-h-11 items-center justify-center gap-2 rounded-full text-sm ${isActive ? 'bg-primary font-semibold text-canvas' : 'text-secondary'}`
-          }
-        >
-          <Icon className="size-5" aria-hidden />
-          <span>{title}</span>
-        </NavLink>
+          icon={icon}
+          label={title}
+          layout="inline"
+        />
       ))}
     </nav>
   );
@@ -161,22 +150,22 @@ function TwinRail() {
           <span>
             <PersonaSwitcher
               label="切换分身"
-              className="rail-twin rounded-full ring-2 ring-accent ring-offset-2 ring-offset-canvas"
+              className="rail-twin ring-2 ring-accent ring-offset-2 ring-offset-canvas"
               trigger={<PersonaPortrait persona={current} />}
             />
           </span>
         </Tooltip>
         {shortcuts.map((persona) => (
           <Tooltip key={persona.id} label={persona.name}>
-            <button
-              type="button"
+            <PlainButton
+              shape="circle"
               aria-label={`切换到${persona.name}`}
               aria-busy={pendingId === persona.id}
-              className="rail-twin rounded-full hover:bg-soft"
+              className="rail-twin hover:bg-soft"
               onClick={() => void switchTo(persona.id)}
             >
               <PersonaPortrait persona={persona} />
-            </button>
+            </PlainButton>
           </Tooltip>
         ))}
         {hidden > 0 && (
@@ -184,49 +173,47 @@ function TwinRail() {
             <span>
               <PersonaSwitcher
                 label={`还有 ${hidden} 个分身`}
-                className="grid size-11 place-items-center rounded-full bg-soft text-sm font-semibold text-accent hover:bg-border"
-                trigger={`+${hidden}`}
+                className="grid size-11 place-items-center bg-soft hover:bg-border"
+                trigger={
+                  <Text as="span" size="sm" weight="semibold" tone="accent">
+                    +{hidden}
+                  </Text>
+                }
               />
             </span>
           </Tooltip>
         )}
         <Tooltip label="新建分身">
           <span>
-            <NewTwin className="grid size-11 place-items-center rounded-full text-2xl hover:bg-soft">
-              ＋
-            </NewTwin>
+            <NewTwin variant="rail" />
           </span>
         </Tooltip>
       </div>
       {[
         { to: '/team', title: '团队', icon: Users },
         { to: '/library', title: '录音库', icon: Mic },
-      ].map(({ to, title, icon: Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          className="rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary hover:bg-soft aria-[current=page]:bg-primary aria-[current=page]:text-canvas"
-        >
-          <Icon aria-hidden className="size-5 shrink-0" />
-          <span className="whitespace-nowrap">{title}</span>
-        </NavLink>
+      ].map(({ to, title, icon }) => (
+        <NavPill key={to} to={to} icon={icon} label={title} />
       ))}
       <div className="my-3 border-t border-border" />
       <Navigation />
       {identity?.auth_enabled && (
-        <div className="rail-account mt-auto pt-4 text-center text-xs">
+        <div className="rail-account mt-auto pt-4 text-center">
           <Popover.Root open={accountOpen} onOpenChange={setAccountOpen}>
             <Popover.Trigger asChild>
-              <button
+              <IconButton
                 ref={accountButton}
-                type="button"
-                aria-label="账户"
-                className="rail-account-button mx-auto grid size-11 place-items-center rounded-full bg-primary text-lg text-canvas"
+                label="账户"
+                shape="circle"
+                size="lg"
+                className="rail-account-button mx-auto bg-primary text-canvas"
               >
-                {Array.from(
-                  accountLabel(identity).trim() || '?',
-                )[0].toUpperCase()}
-              </button>
+                <Text as="span" size="lg" tone="inherit">
+                  {Array.from(
+                    accountLabel(identity).trim() || '?',
+                  )[0].toUpperCase()}
+                </Text>
+              </IconButton>
             </Popover.Trigger>
             <Popover.Portal>
               <Popover.Content
@@ -240,39 +227,46 @@ function TwinRail() {
                   event.preventDefault();
                   accountButton.current?.focus();
                 }}
-                className="account-popover z-50 rounded-xl border border-border bg-surface p-3 shadow-elevation-2"
+                className="account-popover z-50"
               >
-                <p className="mb-1 text-xs text-secondary">
-                  {accountLabel(identity)}
-                </p>
-                {identity.provider !== 'sso' && (
-                  <Button
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => {
-                      setBusy(true);
-                      setError('');
-                      void useAuth
-                        .getState()
-                        .logout()
-                        .catch((failure: unknown) =>
-                          setError(
-                            failure instanceof Error
-                              ? failure.message
-                              : '退出失败',
-                          ),
-                        )
-                        .finally(() => setBusy(false));
-                    }}
-                  >
-                    退出登录
-                  </Button>
-                )}
-                {error && (
-                  <p role="alert" className="break-words">
-                    {error}
-                  </p>
-                )}
+                <Card
+                  as="div"
+                  variant="outline"
+                  padding="sm"
+                  className="shadow-elevation-2"
+                >
+                  <Text size="xs" tone="secondary" className="mb-1">
+                    {accountLabel(identity)}
+                  </Text>
+                  {identity.provider !== 'sso' && (
+                    <Button
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        setBusy(true);
+                        setError('');
+                        void useAuth
+                          .getState()
+                          .logout()
+                          .catch((failure: unknown) =>
+                            setError(
+                              failure instanceof Error
+                                ? failure.message
+                                : '退出失败',
+                            ),
+                          )
+                          .finally(() => setBusy(false));
+                      }}
+                    >
+                      退出登录
+                    </Button>
+                  )}
+                  {error && (
+                    <p role="alert" className="break-words">
+                      {error}
+                    </p>
+                  )}
+                </Card>
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
@@ -349,10 +343,12 @@ export function AppShell() {
       <main className="entry-page min-h-dvh">
         <StageHeader variant="brand" />
         <section className="mx-auto max-w-sm space-y-6 px-4 py-8">
-          <h2 className="text-xl font-semibold">先新建一个分身</h2>
-          <Link to="/twins" className="text-sm text-accent underline">
+          <Heading level={2} size="title">
+            先新建一个分身
+          </Heading>
+          <TextLink to="/twins" size="sm">
             返回我的分身
-          </Link>
+          </TextLink>
           <NewTwin initialOpen />
         </section>
       </main>
@@ -377,24 +373,17 @@ export function AppShell() {
     <div
       className={`app-shell flex min-h-dvh ${conversation ? 'conversation-shell' : ''}`}
     >
-      <a
-        href="#main"
-        onClick={(event) => {
-          event.preventDefault();
-          document.getElementById('main')?.focus();
-        }}
-        className="sr-only fixed top-2 left-2 z-70 rounded-md bg-surface p-2 focus:not-sr-only"
-      >
-        跳至主内容
-      </a>
+      <SkipLink target="main">跳至主内容</SkipLink>
       {!mobile && <TwinRail />}
       <div className="app-column flex min-w-0 flex-1 flex-col">
         {error && !twinLevel && (
           <div
             role="alert"
-            className="border-b border-danger/20 bg-danger/5 px-5 py-2 text-sm text-danger"
+            className="border-b border-danger/20 bg-danger/5 px-5 py-2"
           >
-            {error}
+            <Text size="sm" tone="danger">
+              {error}
+            </Text>
           </div>
         )}
         <main

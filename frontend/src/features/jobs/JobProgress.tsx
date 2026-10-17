@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Badge, Button, Meter } from '../../components/ui';
+import { Badge, Button, Card, Meter, Row, Text } from '../../components/ui';
 import { crossfade } from '../../design/motion';
 import {
   jobLabels,
@@ -58,11 +58,13 @@ export function JobProgress({
         ? '检查 twin.toml 的 [llm] 配置和密钥所在的环境变量，修正后重启 twin ui 再试。'
         : '查看进度日志了解原因，修正后重试。';
   return (
-    <section
+    <Card
+      variant="outline"
+      padding="md"
       aria-label="人格档案构建进度"
-      className="mt-5 space-y-3 rounded-md border border-border p-4"
+      className="mt-5 space-y-3"
     >
-      <div className="flex flex-wrap items-center gap-3" role="status">
+      <Row gap={3} wrap role="status">
         <Badge
           tone={
             error || job?.status === 'failed'
@@ -82,16 +84,16 @@ export function JobProgress({
         </Badge>
         <span>{job ? jobLabels[job.kind] || '任务' : '正在提交任务…'}</span>
         {job && (
-          <span className="text-sm text-secondary">
+          <Text as="span" size="sm" tone="secondary">
             {job.finished
               ? '共用时'
               : job.status === 'queued'
                 ? '已等待'
                 : '已用时'}{' '}
             {elapsed(job.started ?? job.created, job.finished)}
-          </span>
+          </Text>
         )}
-      </div>
+      </Row>
       {(job || submitting) && (
         <Meter
           label="构建进度"
@@ -101,17 +103,19 @@ export function JobProgress({
         />
       )}
       <AnimatePresence mode="wait" initial={false}>
-        <motion.p
+        <Text
+          as={motion.p}
           key={stageText}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={crossfade}
-          className="text-sm text-secondary"
+          size="sm"
+          tone="secondary"
           aria-live="polite"
         >
           {stageText}
-        </motion.p>
+        </Text>
       </AnimatePresence>
       {retries > 0 && !disconnected && (
         <p role="status">无法连接本地服务，正在重试（第 {retries} 次）…</p>
@@ -121,9 +125,11 @@ export function JobProgress({
         <p>{summaries.at(-1) || '已开始，正在处理…'}</p>
       )}
       {stage && summaries.length > 0 && (
-        <ul className="space-y-1 text-sm text-secondary">
+        <ul className="space-y-1">
           {summaries.map((line, index) => (
-            <li key={index}>{line}</li>
+            <Text as="li" key={index} size="sm" tone="secondary">
+              {line}
+            </Text>
           ))}
         </ul>
       )}
@@ -134,34 +140,51 @@ export function JobProgress({
       )}
       {job && (
         <details>
-          <summary className="cursor-pointer text-sm text-secondary">
+          <Text
+            as="summary"
+            size="sm"
+            tone="secondary"
+            className="cursor-pointer"
+          >
             详细日志（{lines.length ? `英文，最近 ${lines.length} 行` : '暂无'}
             ）
-          </summary>
-          <pre
-            ref={log}
-            tabIndex={0}
-            aria-label="详细日志"
-            onScroll={(event) => {
-              const node = event.currentTarget;
-              nearBottom.current =
-                node.scrollHeight - node.scrollTop - node.clientHeight < 40;
-            }}
-            className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-canvas p-3 text-xs"
+          </Text>
+          <Card
+            as="div"
+            variant="soft"
+            padding="none"
+            className="mt-2 overflow-hidden"
           >
-            {lines.join('\n')}
-          </pre>
+            <Text
+              as="pre"
+              ref={log}
+              tabIndex={0}
+              aria-label="详细日志"
+              onScroll={(event) => {
+                const node = event.currentTarget;
+                nearBottom.current =
+                  node.scrollHeight - node.scrollTop - node.clientHeight < 40;
+              }}
+              size="xs"
+              breakAll
+              className="max-h-60 overflow-auto whitespace-pre-wrap p-3"
+            >
+              {lines.join('\n')}
+            </Text>
+          </Card>
         </details>
       )}
       {(error || job?.status === 'failed') && (
-        <div role="alert" className="space-y-2 text-sm text-danger">
-          <p>
+        <div role="alert" className="space-y-2">
+          <Text size="sm" tone="danger">
             {error ||
               job?.error ||
               `${jobLabels[job?.kind ?? ''] || '任务'}失败：任务失败`}
-          </p>
+          </Text>
           {job?.status === 'failed' && (
-            <p className="text-secondary">{failureHint}</p>
+            <Text size="sm" tone="secondary">
+              {failureHint}
+            </Text>
           )}
           <Button
             variant="secondary"
@@ -172,6 +195,6 @@ export function JobProgress({
           </Button>
         </div>
       )}
-    </section>
+    </Card>
   );
 }

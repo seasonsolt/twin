@@ -1,29 +1,41 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
-import { Button, Dialog } from '../ui';
+import { useId, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
+import { Plus } from 'lucide-react';
+import {
+  Button,
+  Card,
+  Dialog,
+  Field,
+  IconButton,
+  Input,
+  Stack,
+  Text,
+  TextLink,
+} from '../ui';
 import { StageHeader } from './StageHeader';
 import { api } from '../../lib/api';
-import { useMobile } from '../../lib/useMobile';
 import { usePersonas, type Persona } from '../../stores/personas';
 
 export function NewTwin({
   initialOpen = false,
   children = '新建分身',
-  className,
+  variant = 'button',
   onOpenChange,
 }: {
   initialOpen?: boolean;
+  /** The trigger's content (not used by the rail's round plus button). */
   children?: ReactNode;
-  className?: string;
+  /** button: a primary button; rail: the round plus in the side rail; card: the dashed tile in the twins grid. */
+  variant?: 'button' | 'rail' | 'card';
   onOpenChange?: (open: boolean) => void;
 }) {
-  const mobile = useMobile();
   const navigate = useNavigate();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(initialOpen);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const nameId = useId();
   const changeOpen = (value: boolean) => {
     setOpen(value);
     onOpenChange?.(value);
@@ -47,31 +59,54 @@ export function NewTwin({
       setBusy(false);
     }
   };
+  const triggerProps = {
+    ref: trigger,
+    'aria-haspopup': 'dialog' as const,
+    'aria-expanded': open,
+    onClick: () => {
+      setError('');
+      changeOpen(true);
+    },
+  };
   return (
     <>
-      <button
-        ref={trigger}
-        type="button"
-        aria-label="新建分身"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        className={
-          className ?? 'min-h-11 rounded-full bg-primary px-4 py-2 text-canvas'
-        }
-        onClick={() => {
-          setError('');
-          changeOpen(true);
-        }}
-      >
-        {children}
-      </button>
+      {variant === 'rail' ? (
+        <IconButton
+          {...triggerProps}
+          label="新建分身"
+          shape="circle"
+          size="lg"
+          className="rail-new text-primary"
+        >
+          <Plus aria-hidden className="size-6" />
+        </IconButton>
+      ) : variant === 'card' ? (
+        <Card
+          as="div"
+          variant="outline"
+          padding="none"
+          className="twin-card twin-card-create overflow-hidden border-2 border-dashed border-primary bg-transparent"
+        >
+          <Button
+            {...triggerProps}
+            variant="ghost"
+            aria-label="新建分身"
+            className="h-full min-h-60 w-full flex-col gap-4 p-6 text-primary hover:bg-transparent"
+          >
+            {children}
+          </Button>
+        </Card>
+      ) : (
+        <Button {...triggerProps} size="lg" aria-label="新建分身">
+          {children}
+        </Button>
+      )}
       <Dialog
         open={open}
         onOpenChange={changeOpen}
         title="新建分身"
         body="每个分身都有独立的记忆、形象、声音和聊天。"
-        className="create-twin-sheet [&_button]:min-h-11 [&_button]:min-w-11"
-        style={!mobile ? { translate: 'none' } : undefined}
+        className="create-twin-sheet"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           trigger.current?.focus();
@@ -83,39 +118,38 @@ export function NewTwin({
           intro={<p className="stage-caption">给未来的分身一个名字</p>}
         />
         <div className="space-y-3">
-          <Link
-            to="/twins"
-            className="text-sm text-accent underline"
-            onClick={() => changeOpen(false)}
-          >
+          <TextLink to="/twins" size="sm" onClick={() => changeOpen(false)}>
             返回我的分身
-          </Link>
-          <form
-            className="space-y-3"
+          </TextLink>
+          <Stack
+            as="form"
+            gap={3}
+            align="start"
             onSubmit={(event) => {
               event.preventDefault();
               void submit();
             }}
           >
-            <label className="block space-y-1">
-              分身名字
-              <input
-                autoFocus
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                maxLength={20}
-                required
-                className="block min-h-11 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md"
-              />
-            </label>
+            <div className="w-full">
+              <Field id={nameId} label="分身名字">
+                <Input
+                  id={nameId}
+                  autoFocus
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  maxLength={20}
+                  required
+                />
+              </Field>
+            </div>
             <Button type="submit" loading={busy} disabled={!draft.trim()}>
               创建并开始
             </Button>
-          </form>
+          </Stack>
           {error && (
-            <p role="alert" className="text-danger">
+            <Text role="alert" tone="danger">
               {error}
-            </p>
+            </Text>
           )}
         </div>
       </Dialog>

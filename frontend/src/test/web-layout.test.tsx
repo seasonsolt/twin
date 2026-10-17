@@ -114,7 +114,8 @@ it('removes centering translation for the wide fullscreen create dialog', async 
   await user.click(screen.getByRole('button', { name: '新建分身' }));
   const dialog = screen.getByRole('dialog', { name: '新建分身' });
   expect(dialog).toHaveClass('create-twin-sheet');
-  expect(dialog).toHaveStyle({ translate: 'none' });
+  // The sheet's own rule drops the dialog's centring translate (unlayered, so it beats the utility).
+  expect(css).toMatch(/\.create-twin-sheet\s*\{[^}]*translate: none/s);
   expect(desktopCss).toMatch(
     /\.create-twin-sheet > div:first-child\s*\{[^}]*grid-row: 1/s,
   );

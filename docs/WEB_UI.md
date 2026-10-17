@@ -166,7 +166,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 名字保存到 p_meta 的 identity:name，介绍保存到 identity:about；有效名字为用户保存值，否则为配置 target_name。用户保存的名字也参与说话人匹配，配置名字与别名仍有效。介绍设定或变化时，事务内替换标题为“自我介绍”的笔记，并触发自动处理；清空介绍删除旧笔记。单独改名字不重复添加笔记。
 
-聊天使用 MessageList、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。通过 fetch 读取 `POST /api/persona/chat/stream` 的 SSE，首个 delta 后隐藏思考指示，正文直接追加，不使用 ReplyReveal 的人工延迟；final 用引号校验后的正文替换并附加依据。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。离页、切换分身或新请求取消旧流。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时普通聊天流直接返回友好的弃权回复，不初始化模型。旧聊天任务接口仍可用。
+聊天使用 MessageList、ThinkingLabel、Textarea；Enter 发送、Shift+Enter 换行，IME 安全。通过 fetch 读取 `POST /api/persona/chat/stream` 的 SSE，首个 delta 后隐藏思考指示，正文直接追加，不使用 ReplyReveal 的人工延迟；final 用引号校验后的正文替换并附加依据；`stale`（团队分身的记忆在回答中途变了）与 `error` 一样撤回这条回答、恢复输入，`/api/status` 的 `memory_updating` 为真时聊天页显示“记忆更新中”。完成的往返仅保存在本标签页 sessionStorage；失败恢复输入并可重试，清空立即生效，不弹确认。离页、切换分身或新请求取消旧流。进入/发送时检查 stale，空对话与无记忆状态的添加入口指向 `#/memories`。网页聊天的请求不包含截止日期；advanced as_of 只保留在服务 API/MCP 和评测。没有档案时普通聊天流直接返回友好的弃权回复，不初始化模型。旧聊天任务接口仍可用。
 
 聊天输入框支持最多 5 个可提取文字的附件，单文件和单次总量均不超过 50 MiB，提取文字合计最多 200 万字符；支持 TXT、Markdown、PDF 文字层、Word、EPUB、HTML、CSV、JSON、SRT、VTT，不做 OCR。附件经 `POST /api/persona/chat/stream-with-files` 作为 multipart 本轮上下文处理，不写入 PersonaStore、不触发档案重建；后端按当前问题选取有限摘录，文件引用以“附件名 · 摘录 N”显示。原文件不保存，但回答和引用摘录随对话记录保存；后续追问需重新附加。附件内容会发往配置的聊天模型，界面对此有提示。没有档案时，带附件的聊天仍可依据文件内容回答。
 
@@ -219,7 +219,13 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `GET /api/library` | 当前账号的录音库（不属于某个分身，不看 `X-Twin-Persona`）：`{recordings,pending,max_pending,asr,capacity:{free_bytes,arriving_bytes,arriving,headroom_bytes}}`；同时补启排队中的转写 |
 | `POST/GET/PUT/DELETE /api/library/uploads…` | 与 `/api/uploads` 相同的分片协议；创建时排队数（排队/转写中 + 未传完）达到 `[library].max_pending` 返回 409，传完后可用空间会低于 `headroom_gb` 返回 507 |
 | `POST /api/library/uploads/{id}/finish` | 按 SHA 去重为录音（`new`），依次转写（与分身录音共用一个转写名额）；转写稿与 FLAC 试听文件校验后删除原件 |
-| `POST /api/library/recordings/{id}/retry` / `DELETE /api/library/recordings/{id}` | 失败且原件仍在时重新排队，否则 409 / 删除录音及其文件，转写中 409 |
+| `POST /api/library/recordings/{id}/retry` / `DELETE /api/library/recordings/{id}` | 失败且原件仍在时重新排队，否则 409 / 删除录音及其文件，转写中 409；删除会关闭用到它的团队分身直到重建 |
+| `GET /api/library/recordings/{id}` | 录音加 `transcript_id`、`revision`、`segments` 和 `speakers`（`decision`、`person_id`、`rejected`、`sample`、`candidates`、`near`、`samples`） |
+| `GET /api/library/recordings/{id}/speakers/{sid}/samples/{i}` | 该说话人第 i 段试听 WAV（0 起，个数见 `samples`） |
+| `PUT /api/library/recordings/{id}/speakers/{sid}` | `{transcript_id,revision,action:confirm\|unknown\|mixed\|reject\|clear,person_id?,new_person?,sample?}`，返回 `{revision,person_id}`；转写或修订号已变 409 |
+| `GET /api/library/review` | 未决定且有候选的说话人，最像的在前 |
+| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
+| `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}` |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |
 | `GET /api/persona/items/search?q=` | 按意思和关键词找条目（聊天的混合检索，向量不可用时只按关键词），最多 20 条，不含已删 |

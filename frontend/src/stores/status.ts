@@ -25,6 +25,8 @@ export interface KernelStatus {
 export interface Status {
   target_name: string;
   counts: { sources: number; items: number };
+  // A twin made from the recording library while it is brought in line with changed recordings: it cannot answer.
+  memory_updating?: boolean;
   kernel?: KernelStatus;
   llm: { provider: string; model: string };
   embed: { provider: string };

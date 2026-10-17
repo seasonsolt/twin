@@ -12,6 +12,7 @@ import {
 } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { api } from '../lib/api';
+import { Team } from '../features/library/Team';
 import { isMedia, uploadMedia, type UploadProgress } from '../lib/mediaUpload';
 
 export interface Recording {
@@ -68,9 +69,12 @@ export function Library() {
   const controller = useRef<AbortController | null>(null);
   const confirm = useConfirm();
 
+  // Bumped on every reload, so the people and review lists follow new transcripts.
+  const [version, setVersion] = useState(0);
   const load = useCallback(async () => {
     try {
       setLibrary(await api<LibraryState>('/api/library'));
+      setVersion((v) => v + 1);
       setError('');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载录音库');
@@ -272,6 +276,7 @@ export function Library() {
             )}
           </section>
         )}
+        <Team version={version} />
         {!library ? (
           <Skeleton className="h-32" />
         ) : library.recordings.length === 0 ? (
@@ -289,12 +294,22 @@ export function Library() {
                   className="flex flex-wrap items-center gap-3 rounded-xl bg-surface p-4"
                 >
                   <div className="min-w-0 flex-1 space-y-1">
-                    <p
-                      className="truncate font-medium"
-                      title={recording.filename}
-                    >
-                      {recording.filename}
-                    </p>
+                    {recording.status === 'ready' ? (
+                      <Link
+                        to={`/library/${encodeURIComponent(recording.id)}`}
+                        className="block truncate font-medium text-accent underline"
+                        title={recording.filename}
+                      >
+                        {recording.filename}
+                      </Link>
+                    ) : (
+                      <p
+                        className="truncate font-medium"
+                        title={recording.filename}
+                      >
+                        {recording.filename}
+                      </p>
+                    )}
                     <p className="text-sm text-secondary">
                       {[
                         minutes(recording.duration_s),

@@ -34,6 +34,9 @@ const Work = lazy(() =>
 const Library = lazy(() =>
   import('./pages/Library').then((module) => ({ default: module.Library })),
 );
+const Recording = lazy(() =>
+  import('./pages/Recording').then((module) => ({ default: module.Recording })),
+);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
@@ -60,6 +63,10 @@ export function App() {
                     />
                     <Route path="twins" element={<Twins />} />
                     <Route path="library" element={<Library />} />
+                    <Route
+                      path="library/:recordingId"
+                      element={<Recording />}
+                    />
                     <Route path="chat" element={<Chat />} />
                     <Route path="work" element={<Work />} />
                     <Route path="profile" element={<Profile />} />

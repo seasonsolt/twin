@@ -22,10 +22,12 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..config import Settings
 from ..embed import Embedder, EmbedError
 from ..llm import LLM
+from ..persona import gate
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
     MAX_CHAT_ATTACHMENT_COUNT,
@@ -287,6 +289,31 @@ def validate_chat(body: ChatBody) -> list[ChatTurn]:
     return messages
 
 
+STALE_REPLY = "记忆刚更新，这条回答可能已经过时，没有保存。请再问一次"
+# Reading a twin's memory: refused while a twin made from a recording library is being rebuilt (``gate``).
+GATED_PATHS = ("/api/persona/chat", "/api/persona/items", "/api/persona/followups", "/api/persona/ledger")
+
+
+class MemoryGateMiddleware:
+    """Refuse every read of a twin's memory while ``gate`` says it is being rebuilt; asking it questions is refused
+    again by ``PersonaChat`` itself, which also covers the service API, channels and the command line."""
+
+    def __init__(self, app: ASGIApp, db_path: Path) -> None:
+        self.app, self.db_path = app, db_path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path, method = str(scope.get("path", "")), scope.get("method")
+        if scope["type"] == "http" and (
+            path.startswith(GATED_PATHS) or (method == "POST" and path == "/api/persona/work")
+        ):
+            try:
+                await run_in_threadpool(gate.version_at, self.db_path)
+            except gate.MemoryUpdating as e:
+                await JSONResponse({"detail": str(e), "code": "memory_updating"}, status_code=409)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
@@ -297,7 +324,11 @@ def register(
     backends: Backends,
     jobs: JobManager,
     read_uploads: Callable[[Request], Awaitable[list[tuple[str, bytes]]]],
+    on_built: Callable[[int], None] | None = None,
 ) -> MediaIngestion:
+    """``on_built(version)``: a build completed without any failure, from the library sources written at
+    ``version`` (``gate.SYNCED``); a twin made from a recording library opens once that version is still wanted."""
+
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
         with PersonaStore(settings.db_path) as store:
@@ -316,6 +347,7 @@ def register(
                 )
             ]
             version = store.get_meta("sources_changed_at")
+            synced = store.get_meta(gate.SYNCED)
             store.clear_source_errors()
         error = None
         failed: list[str] = []
@@ -324,6 +356,8 @@ def register(
             failed = result["failed_sources"]
             if result["merge_failed"]:
                 error = "部分记忆处理失败，请重新处理"
+            elif not failed and synced is not None and on_built is not None:
+                on_built(int(synced))
             return result
         except Exception:
             error = "记忆处理失败，请检查模型配置后重试"
@@ -824,13 +858,17 @@ def register(
             # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
             async with ticket.running():
                 with await open_store_off_loop(settings.db_path) as store:
-                    chat = PersonaChat(store, llm, embedder, settings, ledger=ledger)
+                    # Off the loop: it checks the twin's memory gate, which reads the store.
+                    chat = await off_loop(partial(PersonaChat, store, llm, embedder, settings, ledger=ledger))
                     async with aclosing(
                         chat.stream_reply(messages, attachments=attachment_passages, persist=not attachment_passages)
                     ) as replies:
                         async for result in replies:
                             if isinstance(result, str):
                                 yield sse_event("delta", {"text": result})
+                            elif chat.stale:
+                                # The twin's memory changed while this was written: shown as outdated, not saved.
+                                yield sse_event("stale", {"detail": STALE_REPLY})
                             else:
                                 yield sse_event("final", await off_loop(partial(save, store, result)))
 
@@ -847,6 +885,8 @@ def register(
                         yield pending.result()
                     except StopAsyncIteration:
                         break
+            except gate.MemoryUpdating as e:
+                yield sse_event("error", {"detail": str(e), "code": "memory_updating"})
             except Exception:
                 # Backend errors can contain prompts, URLs or credentials; never reflect them to the browser.
                 yield sse_event("error", {"detail": "分身暂时无法回复，请重试"})

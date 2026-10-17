@@ -57,6 +57,8 @@ it('uploads several recordings to the account library one after another', async 
   const order: string[] = [];
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/library') return json(state);
+    if (url.startsWith('/api/library/people') || url === '/api/library/review')
+      return json({ items: [] });
     if (url === '/api/library/uploads') {
       const { filename } = JSON.parse(String(init?.body)) as {
         filename: string;
@@ -107,6 +109,8 @@ it('shows failures with a retry and asks before deleting', async () => {
   ];
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/library') return json(state);
+    if (url.startsWith('/api/library/people') || url === '/api/library/review')
+      return json({ items: [] });
     if (url.endsWith('/retry')) {
       state.recordings = [recording({ status: 'queued', error: '' })];
       return json(state.recordings[0], 202);
@@ -139,7 +143,9 @@ it('says recordings wait when no diarizing transcription service is set up', asy
   state.recordings = [recording({ status: 'queued', duration_s: null })];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => json(state)),
+    vi.fn(async (url: string) =>
+      json(url === '/api/library' ? state : { items: [] }),
+    ),
   );
   show();
   expect(

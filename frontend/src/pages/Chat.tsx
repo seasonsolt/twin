@@ -309,6 +309,11 @@ export function Chat() {
           <div className="chat-column-grid">
             <PersonaFade>
               <div className="chat-conversation flex flex-col space-y-4">
+                {status?.memory_updating && (
+                  <p role="status" className="text-sm text-secondary">
+                    记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。
+                  </p>
+                )}
                 {stale && canManage && (
                   <p role="status" className="text-xs text-secondary">
                     新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}

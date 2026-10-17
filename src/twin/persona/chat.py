@@ -31,6 +31,7 @@ from ..config import Settings
 from ..embed import Embedder, EmbedError, Matrix, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..util import Progress
+from . import gate
 from .attachments import AttachmentPassage
 from .connect import connect
 from .derive import derive, needs_derivation
@@ -259,6 +260,9 @@ class PersonaContext:
     window: tuple[dt.date, dt.date] | None = None
     # Commitment ledger entries the question is about, with their current status; only in the person's own chat.
     ledger: list[tuple[LedgerEntry, LedgerStatus]] = field(default_factory=list)
+    # A twin made from a recording library answers as a meeting record (see ``gate``): no profile items, only what
+    # was said in the meetings, dated, and what was decided there.
+    meeting_record: bool = False
 
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
@@ -427,7 +431,13 @@ class PersonaChat:
         self, store: PersonaStore, llm: LLM, embedder: Embedder, settings: Settings, *, ledger: bool = False
     ) -> None:
         """``ledger``: whether the commitment ledger is material, only when the person themselves is asking; it is
-        private, so a visitor, a channel or an agent never sees it."""
+        private, so a visitor, a channel or an agent never sees it. ``MemoryUpdating`` for a twin made from a
+        recording library while its memory is being rebuilt: every way of asking a twin goes through here."""
+        self.memory = gate.version(store)
+        self.meeting_record = gate.meeting_record(store)
+        # Set by an answer that finished after the twin's memory changed under it: not logged, not to be shown as
+        # current.
+        self.stale = False
         self.store = store
         self.llm = llm
         self.embedder = embedder
@@ -452,7 +462,7 @@ class PersonaChat:
             embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
             # One read of the corpus serves the evidence quotes, the person's own words and other people's.
             view = ExpressionView(self.store, self.settings)
-            items = {i.item_id: i for i in _visible_items(self.store, self.settings, as_of, view)}
+            items = self._items(as_of, view)
             expressions = {e.expression_id: e for e in view.select(target_only=True, until=as_of)}
             others = others_view(self.store, self.settings, until=as_of, view=view)
             fingerprint: str | None = embedder_fingerprint(self.embedder)
@@ -493,7 +503,14 @@ class PersonaChat:
             others=ranked_others,
             window=window,
             ledger=entries,
+            meeting_record=self.meeting_record,
         )
+
+    def _items(self, as_of: dt.date | None, view: ExpressionView) -> dict[str, PersonaItem]:
+        """The profile items an answer may use; none for a meeting record, whose portrait is not yet trusted."""
+        if self.meeting_record:
+            return {}
+        return {i.item_id: i for i in _visible_items(self.store, self.settings, as_of, view)}
 
     def _portrait(
         self, items: Sequence[PersonaItem], expressions: Sequence[Expression]
@@ -513,7 +530,7 @@ class PersonaChat:
     def portrait(self) -> tuple[list[PersonaItem], list[str]]:
         """What every chat prompt carries whatever is asked: the core items and the voice samples."""
         view = ExpressionView(self.store, self.settings)
-        return self._portrait(_visible_items(self.store, self.settings, None, view), view.select(target_only=True))
+        return self._portrait(list(self._items(None, view).values()), view.select(target_only=True))
 
     def reply(
         self,
@@ -538,7 +555,10 @@ class PersonaChat:
             schema=ChatDraft,
             effort=self.settings.effective_chat_llm.effort_twin,
         )
-        return self._finalize(draft, ctx, messages, as_of, persist=persist)
+        reply = self._finalize(draft, ctx, messages, as_of, persist=persist)
+        if self.stale:
+            raise gate.MemoryUpdating()
+        return reply
 
     async def stream_reply(
         self,
@@ -688,7 +708,8 @@ class PersonaChat:
             mode="abstain" if abstain else draft.mode,
             quotes_removed=quotes_removed,
         )
-        if persist:
+        self.stale = not gate.current(self.store, self.memory)
+        if persist and not self.stale:
             asked = [m.content for m in messages if m.role == "user"]
             self.store.log_chat(asked[-1], reply, asked[-2] if len(asked) > 1 else "")
         return reply
@@ -927,6 +948,17 @@ STYLE_SECTION = """
 按这个比例倾向最强烈的一端，不要因为是推测就默认选温和的选项。"""
 
 
+MEETING_RECORD_SECTION = """
+
+## 只凭会上的记录
+我记得的只有会议录音里我说过的话、别人当时说的话和会上定下的事，没有对我长期为人的总结。回答时：
+- 说到我的看法或做法，带上是哪天的会上说的（用原话标的日期）；转述别人的话要说清是谁说的。
+- 被问我一贯怎么看、现在会怎么决定时，按时间先后说清会上有过的表态；前后说法不同就都说出来，以最近的为准，\
+再点明这只是那几次会上的说法，不替现在的我下定论，mode 归为 grounded 并引用用到的原话。
+- 会上是在否定、假设、举例或转述别人的话时，照原意说，不当成我的立场。
+- 会上没谈过的，就说会上没聊到这个，不用常识或推测补成我的想法。"""
+
+
 def portrait_text(core: Sequence[PersonaItem], voice: Sequence[str]) -> tuple[str, str]:
     """The core items and voice samples as chat's prompt shows them, for another prompt (work mode) to show alike."""
     return (
@@ -941,7 +973,11 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     core, voice = portrait_text(ctx.core, ctx.voice)
     facets = " ".join(f"{f.facet_id} {f.name}；" for f in FACETS)
     style = "" if ctx.extreme_rate is None else STYLE_SECTION.format(rate=ctx.extreme_rate)
+    if ctx.meeting_record:
+        core = "（这个分身只按会上的记录回答，没有长期画像）"
     prompt = CHAT_SYSTEM.format(name=name, scope=scope, today=today, core=core, style=style, voice=voice, facets=facets)
+    if ctx.meeting_record:
+        prompt += MEETING_RECORD_SECTION
     if ctx.attachments:
         prompt += (
             "\n\n## 本次上传文件\n"

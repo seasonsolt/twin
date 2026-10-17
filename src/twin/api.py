@@ -22,6 +22,7 @@ from .config import Settings, make_embedder, make_llm
 from .embed import Embedder
 from .llm import LLM
 from .persona.chat import PersonaChat
+from .persona.gate import MemoryUpdating
 from .persona.store import PersonaStore
 from .service import MAX_QUESTION_CHARS, ServiceAnswer, ServiceIdentity, answer_question, public_identity
 from .usage import UsageRecorder, call_stage, record_usage
@@ -187,6 +188,8 @@ def create_api(
     def ask(body: AskRequest) -> ServiceAnswer | JSONResponse:
         try:
             return backend.ask(body.question, body.as_of)
+        except MemoryUpdating as e:
+            return JSONResponse({"detail": str(e), "code": "memory_updating"}, status_code=409)
         except Exception:
             return JSONResponse({"detail": BACKEND_UNAVAILABLE}, status_code=503)
 

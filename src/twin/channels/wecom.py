@@ -365,7 +365,7 @@ class WeComBotRunner:
             return None
         try:
             async with ticket.running() if ticket is not None else nullcontext():
-                chat = PersonaChat(store, llm, embedder, self.settings)
+                chat = await off_loop(partial(PersonaChat, store, llm, embedder, self.settings))
                 draft, sent, refreshed = "", "", float("-inf")
                 reply = None
                 async with aclosing(chat.stream_reply(messages)) as replies:

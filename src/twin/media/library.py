@@ -10,6 +10,7 @@ are kept.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -52,8 +53,46 @@ CREATE TABLE IF NOT EXISTS recordings (
     speakers INTEGER NOT NULL DEFAULT 0,
     segments INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+-- The people of this account's meetings; a person may exist before (or without) a twin.
+CREATE TABLE IF NOT EXISTS people (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    persona_id TEXT,
+    created_at TEXT NOT NULL
+);
+-- Voice samples a person was recognised by: the centroid of a speaker the owner confirmed and chose as a sample.
+CREATE TABLE IF NOT EXISTS voiceprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    recording_id TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+-- The owner's decisions about speakers; matching never writes here.
+CREATE TABLE IF NOT EXISTS attributions (
+    recording_id TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    decision TEXT NOT NULL DEFAULT 'none',
+    person_id TEXT,
+    rejected TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, transcript_id, speaker_id)
+);
+-- A twin may answer only while done == wanted: every change that affects its recordings raises wanted in the same
+-- transaction, and done follows once a complete build of exactly that state has succeeded.
+CREATE TABLE IF NOT EXISTS personas_sync (
+    persona_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    wanted INTEGER NOT NULL DEFAULT 1,
+    done INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -73,6 +112,8 @@ class Recording(BaseModel):
     segments: int = 0
     created_at: str
     updated_at: str
+    # Raised whenever the transcript or any decision about its speakers changes; a stale page is refused.
+    revision: int = 0
 
 
 class Transcript(BaseModel):
@@ -103,6 +144,10 @@ def _now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
 
 
+_SPEAKERS: dict[str, tuple[Speaker, ...]] = {}
+_SPEAKERS_LOCK = threading.Lock()
+
+
 class Library:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -116,14 +161,36 @@ class Library:
         prepare_private_file(self.db_path)
         with self._db() as db:
             db.execute("PRAGMA journal_mode=WAL")
-            db.execute(_SCHEMA)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(recordings)")}
+            if columns and "revision" not in columns:
+                db.execute("ALTER TABLE recordings ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            db.executescript(_SCHEMA)
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
         with closing(sqlite3.connect(self.db_path, timeout=30)) as db:
             db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys=ON")
             with db:
                 yield db
+
+    def read(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
+        """A connection for reading (writes made through it still commit as one)."""
+        return self._db()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction (``BEGIN IMMEDIATE``): a decision and the twins it reopens commit together."""
+        with closing(sqlite3.connect(self.db_path, timeout=30, isolation_level=None)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                yield db
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+            db.execute("COMMIT")
 
     def folder(self, recording_id: str) -> Path:
         return self.recordings / recording_id
@@ -223,14 +290,22 @@ class Library:
             return self.get(recording_id)
 
     def delete(self, recording_id: str) -> bool:
-        """Remove a recording that is not being transcribed. False when it is transcribing right now."""
+        """Remove a recording that is not being transcribed, with the decisions and voice samples taken from it;
+        the twins it fed are closed until they are rebuilt without it. False when it is transcribing right now."""
         with self.lock:
             recording = self.get(recording_id)
             if recording is None:
                 return True
             if recording.status == "transcribing":
                 return False
-            with self._db() as db:
+            with self.transaction() as db:
+                db.execute(
+                    "UPDATE personas_sync SET wanted = wanted + 1 WHERE person_id IN "
+                    "(SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed')",
+                    (recording_id,),
+                )
+                db.execute("DELETE FROM attributions WHERE recording_id = ?", (recording_id,))
+                db.execute("DELETE FROM voiceprints WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM recordings WHERE id = ?", (recording_id,))
             shutil.rmtree(self.folder(recording_id), ignore_errors=True)
             return True
@@ -240,6 +315,24 @@ class Library:
             return None
         path = self.folder(recording.id) / f"transcript-{recording.transcript_id}.json"
         return Transcript.model_validate_json(path.read_text()) if path.is_file() else None
+
+    def speakers(self, recording: Recording) -> tuple[Speaker, ...] | None:
+        """The speakers of the recording's transcript (durations and voiceprints), without its segments. A
+        published transcript never changes, so each is read once per process: lists over years of meetings do not
+        re-read every transcript."""
+        if not recording.transcript_id:
+            return None
+        key = str(self.folder(recording.id) / f"transcript-{recording.transcript_id}.json")
+        with _SPEAKERS_LOCK:
+            found = _SPEAKERS.get(key)
+        if found is None:
+            transcript = self.transcript(recording)
+            if transcript is None:
+                return None
+            found = tuple(transcript.speakers)
+            with _SPEAKERS_LOCK:
+                _SPEAKERS[key] = found
+        return found
 
     def _original(self, recording_id: str) -> Path | None:
         return next(self.folder(recording_id).glob("original.*"), None)

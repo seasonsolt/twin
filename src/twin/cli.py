@@ -37,6 +37,7 @@ from .persona.chat import PersonaChat, index_persona
 from .persona.coverage import coverage_report
 from .persona.coverage import report_markdown as coverage_markdown
 from .persona.dimensions import requires_consent
+from .persona.gate import MemoryUpdating
 from .persona.kernel import KERNEL, rebuild_scope
 from .persona.profile import (
     KERNEL_STALE_NOTICE,
@@ -1070,7 +1071,7 @@ def persona_chat(
             history.append(ChatTurn(role="user", content=text))
             try:
                 answer = twin.reply(history)
-            except (LLMError, EmbedError) as e:
+            except (LLMError, EmbedError, MemoryUpdating) as e:
                 raise _fail(str(e)) from e
             history.append(ChatTurn(role="twin", content=answer.reply))
             flag = (

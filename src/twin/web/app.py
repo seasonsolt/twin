@@ -23,6 +23,8 @@ from ..channels.wecom import WeComHub
 from ..config import Settings
 from ..egress import egress_status
 from ..media.tts import SpeechSynthesizer
+from ..persona import gate
+from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
@@ -354,6 +356,11 @@ def create_app(
             return JSONResponse({"detail": f"服务器内部错误：{describe_error(exc)}"}, status_code=500)
 
         scoped_jobs = jobs.scoped(persona_id)
+        context.add_middleware(persona.MemoryGateMiddleware, db_path=resolved.db_path)
+
+        @context.exception_handler(MemoryUpdating)
+        async def memory_updating(request: Request, exc: MemoryUpdating) -> JSONResponse:
+            return JSONResponse({"detail": str(exc), "code": "memory_updating"}, status_code=409)
 
         @context.exception_handler(JobConflict)
         async def scoped_conflict(request: Request, exc: JobConflict) -> JSONResponse:
@@ -386,8 +393,15 @@ def create_app(
                 )
             description = backends.describe()
             name = stored_identity(resolved.db_path)[0] or resolved.target_name
+            try:
+                updating = False
+                gate.version_at(resolved.db_path)
+            except MemoryUpdating:
+                updating = True
             return {
                 "target_name": name,
+                # A twin made from the recording library while it is rebuilt after a change: it does not answer.
+                "memory_updating": updating,
                 "counts": counts,
                 "kernel": {
                     "version": KERNEL.__dict__,
@@ -425,7 +439,14 @@ def create_app(
                 raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}（服务重启后任务记录会清空）")
             return snapshot
 
-        ingestion = persona.register(context, resolved, backends, scoped_jobs, persona.read_uploads)
+        ingestion = persona.register(
+            context,
+            resolved,
+            backends,
+            scoped_jobs,
+            persona.read_uploads,
+            on_built=lambda version: libraries.built(persona_id, version),
+        )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(
             context,
@@ -439,7 +460,7 @@ def create_app(
 
     registry.make_app = persona_app
     registry.register(app)
-    libraries = library.register(app, settings, jobs)
+    libraries = library.register(app, settings, jobs, registry)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

@@ -231,6 +231,37 @@ class Personas:
             raise HTTPException(403, "这是别人的公开分身，只能聊天")
         return True
 
+    def create(self, name: str, identity: dict[str, Any], *, onboarding: bool = True) -> dict[str, Any]:
+        """A new private twin owned by ``identity``, within the member limit (admins are not limited); returns its
+        registry entry. ``onboarding=False`` for a twin whose name and memory come from elsewhere."""
+        with self.lock:
+            limit = self.settings.auth.max_personas_per_member
+            if (
+                not identity["admin"]
+                and limit
+                and sum(p.get("owner") == identity["email"] and not p.get("deleted_at") for p in self.data["personas"])
+                >= limit
+            ):
+                raise HTTPException(409, f"最多可以建 {limit} 个分身")
+            persona_id = "p-" + secrets.token_hex(5)
+            directory = self.root / "personas" / persona_id
+            private_directory(directory.parent)
+            directory.parent.chmod(0o700)
+            directory.mkdir(mode=0o700)
+            with PersonaStore(directory / "twin.db") as store:
+                store.set_identity(name, "", None)
+                if onboarding:
+                    store.set_meta("onboarding_pending", "1")
+            entry = {"id": persona_id, "owner": identity["email"], "created_at": dt.datetime.now(dt.UTC).isoformat()}
+            self.data["personas"].append(entry)
+            self.save()
+            return entry
+
+    def entry(self, persona_id: str) -> dict[str, Any] | None:
+        """The registry entry of a twin that is not deleted."""
+        with self.lock:
+            return next((p for p in self.data["personas"] if p["id"] == persona_id and not p.get("deleted_at")), None)
+
     def register(self, app: FastAPI) -> None:
         @app.get("/api/personas")
         def list_personas(request: Request) -> list[dict[str, Any]]:
@@ -302,34 +333,9 @@ class Personas:
 
         @app.post("/api/personas", status_code=201)
         def create_persona(body: NameBody, request: Request) -> dict[str, Any]:
+            identity = request.scope["twin_identity"]
             with self.lock:
-                identity = request.scope["twin_identity"]
-                limit = self.settings.auth.max_personas_per_member
-                if (
-                    not identity["admin"]
-                    and limit
-                    and sum(
-                        p.get("owner") == identity["email"] and not p.get("deleted_at") for p in self.data["personas"]
-                    )
-                    >= limit
-                ):
-                    raise HTTPException(409, f"最多可以建 {limit} 个分身")
-                persona_id = "p-" + secrets.token_hex(5)
-                directory = self.root / "personas" / persona_id
-                private_directory(directory.parent)
-                directory.parent.chmod(0o700)
-                directory.mkdir(mode=0o700)
-                with PersonaStore(directory / "twin.db") as store:
-                    store.set_identity(body.name, "", None)
-                    store.set_meta("onboarding_pending", "1")
-                entry = {
-                    "id": persona_id,
-                    "owner": identity["email"],
-                    "created_at": dt.datetime.now(dt.UTC).isoformat(),
-                }
-                self.data["personas"].append(entry)
-                self.save()
-                return self.view(entry, identity)
+                return self.view(self.create(body.name, identity), identity)
 
         @app.patch("/api/personas/{persona_id}")
         def set_visibility(persona_id: str, body: VisibilityBody, request: Request) -> dict[str, Any]:

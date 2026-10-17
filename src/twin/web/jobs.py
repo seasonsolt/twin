@@ -37,6 +37,7 @@ from starlette.types import Receive, Scope, Send
 
 from ..embed import EmbedError
 from ..llm import LLMError
+from ..persona.gate import MemoryUpdating
 from ..usage import Activity, watch
 
 JobKind = Literal["persona_build", "chat", "video", "media_ingest", "ledger_build", "work"]
@@ -661,7 +662,7 @@ def describe_error(e: Exception) -> str:
 
 
 def _describe(e: Exception) -> str:
-    if isinstance(e, JobError):
+    if isinstance(e, JobError | MemoryUpdating):
         return str(e)
     if isinstance(e, LLMError):
         return f"调用大模型失败：{e}。请检查模型服务地址、密钥、网络和限流情况"

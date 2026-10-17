@@ -72,6 +72,11 @@ class UploadLocks:
                 self._locks[upload_id] = (lock, users - 1)
 
 
+def finished(info: dict[str, Any]) -> bool:
+    """Whether the upload was filed: as a persona source (``source_id``) or a library recording (``recording_id``)."""
+    return bool(info.get("source_id") or info.get("recording_id"))
+
+
 class Uploads:
     def __init__(self, data: Path) -> None:
         self.root = data / "uploads"
@@ -86,13 +91,28 @@ class Uploads:
         if not metadata.is_file():
             raise HTTPException(404, "找不到上传记录，请重新选择文件")
         info: dict[str, Any] = json.loads(metadata.read_text())
-        info["offset"] = info["size"] if info.get("source_id") else part.stat().st_size
+        info["offset"] = info["size"] if finished(info) else part.stat().st_size
         return info
 
     def save(self, upload_id: str, info: dict[str, Any]) -> None:
         metadata, _ = self.paths(upload_id)
         metadata.write_text(json.dumps(info, ensure_ascii=False))
         metadata.chmod(0o600)
+
+    def arriving(self) -> tuple[int, int]:
+        """(uploads still arriving, bytes they have yet to send)."""
+        count = remaining = 0
+        for metadata in self.root.glob("*.json") if self.root.is_dir() else ():
+            try:
+                info = json.loads(metadata.read_text())
+                if finished(info):
+                    continue
+                received = metadata.with_suffix(".part").stat().st_size
+            except (FileNotFoundError, ValueError):
+                continue
+            count += 1
+            remaining += max(0, int(info["size"]) - received)
+        return count, remaining
 
     def create(self, body: UploadBody) -> dict[str, Any]:
         name = Path(body.filename.replace("\\", "/")).name
@@ -412,35 +432,63 @@ def register(
 ) -> MediaIngestion:
     uploads = Uploads(settings.db_path.parent)
     ingestion = MediaIngestion(settings, jobs, queue_build, llm)
+    upload_routes(
+        app, "/api/uploads", lambda request: uploads, lambda request, upload_id: ingestion.finish(uploads, upload_id)
+    )
+
+    @app.post("/api/persona/sources/{source_id}/transcribe", status_code=202)
+    def retry(source_id: str) -> dict[str, str]:
+        job = ingestion.queue(source_id)
+        return {"source_id": source_id, "job_id": job.job_id}
+
+    return ingestion
+
+
+def upload_routes(
+    app: FastAPI,
+    prefix: str,
+    uploads_for: Callable[[Request], Uploads],
+    finish: Callable[[Request, str], dict[str, Any]],
+    admit: Callable[[Request, Uploads, UploadBody], None] | None = None,
+) -> None:
+    """Resumable chunked uploads under ``prefix``: create, query, cancel, append at an offset, and ``finish``, which
+    files the complete upload (it runs in a worker thread). ``admit`` may refuse a new upload with an HTTPException
+    before anything is written."""
     # Serialize append/finish/cancel of one upload, including stream rollback on disconnect; a slow chunk of one
     # file never holds up the others.
     locks = UploadLocks()
 
-    @app.post("/api/uploads")
-    async def create(body: UploadBody) -> dict[str, Any]:
+    @app.post(prefix)
+    async def create(body: UploadBody, request: Request) -> dict[str, Any]:
+        uploads = uploads_for(request)
         if uploads.root.is_dir():
             for upload_id in await run_in_threadpool(uploads.stale):
                 async with locks.hold(upload_id):
                     await run_in_threadpool(uploads.expire, upload_id)
+        if admit is not None:
+            await run_in_threadpool(admit, request, uploads, body)
         return await run_in_threadpool(uploads.create, body)
 
-    @app.get("/api/uploads/{upload_id}")
-    async def get(upload_id: str) -> dict[str, int]:
+    @app.get(prefix + "/{upload_id}")
+    async def get(upload_id: str, request: Request) -> dict[str, int]:
+        uploads = uploads_for(request)
         async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
             return {"offset": info["offset"], "size": info["size"]}
 
-    @app.delete("/api/uploads/{upload_id}")
-    async def cancel(upload_id: str) -> dict[str, bool]:
+    @app.delete(prefix + "/{upload_id}")
+    async def cancel(upload_id: str, request: Request) -> dict[str, bool]:
+        uploads = uploads_for(request)
         async with locks.hold(upload_id):
             await run_in_threadpool(uploads.cancel, upload_id)
             return {"deleted": True}
 
-    @app.put("/api/uploads/{upload_id}")
+    @app.put(prefix + "/{upload_id}")
     async def append(upload_id: str, request: Request, offset: int) -> Any:
+        uploads = uploads_for(request)
         async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
-            if offset != info["offset"] or info.get("source_id"):
+            if offset != info["offset"] or finished(info):
                 return JSONResponse({"offset": info["offset"]}, status_code=409)
             declared = request.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > min(MAX_CHUNK_SIZE, info["size"] - offset):
@@ -457,14 +505,7 @@ def register(
                 raise
             return {"offset": offset + received}
 
-    @app.post("/api/uploads/{upload_id}/finish")
-    async def finish(upload_id: str) -> dict[str, Any]:
+    @app.post(prefix + "/{upload_id}/finish")
+    async def finish_upload(upload_id: str, request: Request) -> dict[str, Any]:
         async with locks.hold(upload_id):
-            return await run_in_threadpool(ingestion.finish, uploads, upload_id)
-
-    @app.post("/api/persona/sources/{source_id}/transcribe", status_code=202)
-    def retry(source_id: str) -> dict[str, str]:
-        job = ingestion.queue(source_id)
-        return {"source_id": source_id, "job_id": job.job_id}
-
-    return ingestion
+            return await run_in_threadpool(finish, request, upload_id)

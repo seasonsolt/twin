@@ -190,13 +190,17 @@ function offsetOf(data: Record<string, unknown>, size: number): number {
   return data.offset;
 }
 
+/** Upload a recording in resumable chunks. By default it becomes a memory of the current twin; with
+ * `{ base: '/api/library/uploads', scope: 'library' }` it goes to the account's recording library instead
+ * (`scope` keeps the resume records of the two apart). */
 export async function uploadMedia(
   file: File,
   signal: AbortSignal,
   progress: (value: UploadProgress) => void,
+  { base = '/api/uploads', scope }: { base?: string; scope?: string } = {},
 ): Promise<void> {
   if (file.size > 4 * 1024 ** 3) throw new Error('音视频文件最多 4 GB');
-  const persona = getPersonaId();
+  const persona = scope ?? getPersonaId();
   let offset = 0;
   const report = (paused = false) =>
     progress({ name: file.name, offset, size: file.size, paused });
@@ -206,7 +210,7 @@ export async function uploadMedia(
   report();
   if (saved) {
     try {
-      const { data } = await send(`/api/uploads/${saved.id}`);
+      const { data } = await send(`${base}/${saved.id}`);
       offset = offsetOf(data, file.size);
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
@@ -218,7 +222,7 @@ export async function uploadMedia(
     }
   }
   if (!saved) {
-    const { data } = await send('/api/uploads', {
+    const { data } = await send(base, {
       method: 'POST',
       body: JSON.stringify({
         filename: file.name,
@@ -245,7 +249,7 @@ export async function uploadMedia(
   let conflicts = 0;
   while (offset < file.size) {
     const { response, data } = await send(
-      `/api/uploads/${saved.id}?offset=${offset}`,
+      `${base}/${saved.id}?offset=${offset}`,
       {
         method: 'PUT',
         body: file.slice(offset, Math.min(offset + CHUNK_SIZE, file.size)),
@@ -261,7 +265,7 @@ export async function uploadMedia(
     offset = next;
     report();
   }
-  await send(`/api/uploads/${saved.id}/finish`, { method: 'POST' });
+  await send(`${base}/${saved.id}/finish`, { method: 'POST' });
   save(
     savedUploads(persona).filter((upload) => upload.id !== saved.id),
     persona,

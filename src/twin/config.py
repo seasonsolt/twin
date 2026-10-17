@@ -122,6 +122,14 @@ class MediaSettings(BaseModel):
     font_path: str | None = None
 
 
+class LibrarySettings(BaseModel):
+    """An account's recording library: uploads are refused unless ``headroom_gb`` stays free after every file still
+    arriving, and at most ``max_pending`` recordings wait to be transcribed at once."""
+
+    headroom_gb: float = Field(default=20, ge=0)
+    max_pending: int = Field(default=20, gt=0)
+
+
 class AvatarSettings(BaseModel):
     preset: str = "chestnut"
     vrm_path: str | None = None
@@ -326,7 +334,8 @@ class AuthSettings(BaseModel):
     allowed_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
     admin_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
     session_days: int = Field(default=30, gt=0)
-    max_personas_per_member: int = Field(default=3, gt=0)
+    # 0: no limit (internal deployments).
+    max_personas_per_member: int = Field(default=3, ge=0)
     smtp: SMTPSettings = Field(default_factory=SMTPSettings)
     sso: SSOSettings = Field(default_factory=SSOSettings)
 
@@ -400,6 +409,7 @@ class Settings(BaseModel):
     vision: VisionSettings = Field(default_factory=VisionSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     media: MediaSettings = Field(default_factory=MediaSettings)
+    library: LibrarySettings = Field(default_factory=LibrarySettings)
     video: VideoSettings = Field(default_factory=VideoSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)

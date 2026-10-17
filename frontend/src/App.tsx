@@ -31,6 +31,9 @@ const Ledger = lazy(() =>
 const Work = lazy(() =>
   import('./pages/Work').then((module) => ({ default: module.Work })),
 );
+const Library = lazy(() =>
+  import('./pages/Library').then((module) => ({ default: module.Library })),
+);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
@@ -56,6 +59,7 @@ export function App() {
                       }
                     />
                     <Route path="twins" element={<Twins />} />
+                    <Route path="library" element={<Library />} />
                     <Route path="chat" element={<Chat />} />
                     <Route path="work" element={<Work />} />
                     <Route path="profile" element={<Profile />} />

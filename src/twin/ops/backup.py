@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -14,7 +15,10 @@ from ..util import open_private, prepare_private_file, private_directory
 from .paths import TwinPaths
 
 
-def _copy_tree(source: Path, target: Path, *, snapshot: bool) -> None:
+def _copy_tree(source: Path, target: Path, *, snapshot: bool, link: bool = False) -> None:
+    """Copy ``source`` into ``target``; SQLite databases as consistent snapshots when ``snapshot``. Files of library
+    recordings (``library/<owner>/recordings/``) are written once and never changed, so they are hard-linked
+    instead (copied when the target is on another file system): backups do not hold the audio again each time."""
     private_directory(target)
     target.chmod(0o700)
     for path in source.iterdir():
@@ -22,9 +26,15 @@ def _copy_tree(source: Path, target: Path, *, snapshot: bool) -> None:
             raise ValueError("备份或恢复目录不能包含符号链接")
         if path.name == "media-cache" or path.name.endswith((".part", "-wal", "-shm")):
             continue
+        # Uploads awaiting transcription are deleted once transcribed, so a backup does not keep them alive for
+        # weeks (a restored recording without one is re-uploaded); also skipped: a transcription's temporary audio
+        # and files not yet published under their final name.
+        if link and (path.name.startswith(("original.", "audio.wav")) or path.name.endswith(".tmp")):
+            continue
         destination = target / path.name
         if path.is_dir():
-            _copy_tree(path, destination, snapshot=snapshot)
+            recordings = path.name == "recordings" and source.parent.name == "library"
+            _copy_tree(path, destination, snapshot=snapshot, link=link or recordings)
         elif path.is_file():
             if snapshot and path.suffix == ".db":
                 prepare_private_file(destination)
@@ -34,6 +44,12 @@ def _copy_tree(source: Path, target: Path, *, snapshot: bool) -> None:
                 ):
                     src.backup(dst)
                     dst.execute("PRAGMA journal_mode=DELETE")
+            elif link:
+                try:
+                    os.link(path, destination)
+                except OSError:
+                    prepare_private_file(destination)
+                    shutil.copyfile(path, destination)
             else:
                 prepare_private_file(destination)
                 shutil.copyfile(path, destination)

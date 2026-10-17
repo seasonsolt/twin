@@ -32,6 +32,18 @@ uv run twin --config ./twin.toml compute install asr-funasr --download-models
 
 命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`；评测可再加 `"references": {"<名称>": "<绝对 WAV 路径>"}`（最多 32 份，asr-funasr 1.2.1 起），每个说话人另返回 `"similarities": {"<名称>": 0.71}`，一次转写比较多份声音。asr-funasr 1.3.0 起每个说话人另返回 `"embedding"`（单位声纹）；请求带 `"embed": true` 时只计算 `audio` 整段的声纹，返回 `{"ok": true, "embedding": [...]}`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
 
+### 账号录音库
+
+「我的分身 → 录音库」是账号级的会议录音库，不属于任何一个分身：一段会议只转写一次，之后可以给会上的多位同事分别建分身（P0b 起按声纹匹配说话人）。只有上传的账号能看到；登录关闭时只有一个本机库。数据在 `data/library/<账号键>/`，账号键是邮箱的哈希，路径里不出现邮箱：
+
+- `library.db`：录音和状态（排队中 / 转写中 / 已转写 / 失败），重启后转写中的录音重新排队并自动继续。
+- `recordings/<id>/transcript-<转写 id>.json`：全部分段（含空段，段号即后续引用的句子编号）与每位说话人的时长和声纹；`playback.flac`：16 kHz 单声道无损试听文件。两者写入临时文件、校验后才发布，之后不再修改；重新转写会生成新的转写 id。
+- 原件只在转写前保留：转写稿和试听文件校验通过后删除，只记文件名、大小和 SHA-256。同内容再次上传（任何文件名）视为同一录音。
+
+录音库要求能区分说话人且返回声纹的命令转写（asr-funasr 1.3.0 起）；没有时录音先排队，配置后自动开始。转写与分身自己的录音共用一个转写名额，一次一段；首版不做转写校对。上传前按真实可用空间准入：减去所有尚未传完的上传后仍须留出 `[library] headroom_gb`（默认 20 GB），否则 507；排队中、转写中和尚未传完的文件合计最多 `max_pending`（默认 20）个，否则 409。
+
+部署备份对 `library/*/recordings/` 下的文件用硬链接，不重复保存不可变大文件的数据块（跨文件系统时退回复制）；待转写的原件、转写中的临时音频和未发布的临时文件不进备份，所以从备份恢复后，当时还没转写完的录音需要重新上传。硬链接与线上文件共用同一份底层存储，只保护同盘的部署回滚，不能代替异地备份；数据库仍是一致性快照。
+
 ### 视频形象候选命令
 
 可选 `[vision] provider = "command"`、`command = "python /path/to/portraits.py"`、`egress = "local"`（或 external）。未配置时不生成形象候选，其他功能不受影响。人物确认后复用媒体任务后台执行，进度显示“提取形象候选”。stdin：
@@ -68,8 +80,8 @@ stdout 最后一行：`{"ok": true, "candidates": [{"time": 2.5, "image": "<out_
 | `media.schema` | L0 数据契约（1） | 全部媒体契约：`PresentableAnswer`、`MediaScript`、`MediaManifest`、`SpeechRequest`、`SpeechResult`、`LipSyncTrack`、`AvatarSpec`；只依赖标准库、pydantic 和 `util` |
 | `media.tts` | L0 模型后端（2） | `SpeechSynthesizer` 协议、两个后端适配器（Cloudflare `melotts`、自托管 HTTP）、测试用的静音实现 |
 | `media.asr` | L0 模型后端（2） | 语音评测与音视频记忆共用的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
-| `media.ingest` / `media.claim` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、说话人决策、声音/形象候选 |
-| `web.uploads` / `web.claims` | L5 接入（9） | 分片上传、原件保存、说话人确认/采纳、串行媒体任务与普通 persona 构建衔接 |
+| `media.ingest` / `media.claim` / `media.library` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、说话人决策、声音/形象候选、账号录音库存储与转写 |
+| `web.uploads` / `web.claims` / `web.library` | L5 接入（9） | 分片上传、原件保存、说话人确认/采纳、串行媒体任务与普通 persona 构建衔接、录音库路由与容量准入 |
 | `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |
 | `media.script` | 与 L4 同级（7） | 纯函数：`PresentableAnswer` 到 `MediaScript`（按句切分、弃权只出提示） |

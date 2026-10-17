@@ -590,3 +590,28 @@ def test_sso_login_service_down_means_signed_out(sso: tuple[TestClient, FakeLogi
 def test_sso_settings_are_validated(sso_settings: dict[str, str], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         AuthSettings(enabled=True, provider="sso", sso=SSOSettings(**sso_settings))
+
+
+def test_recording_library_belongs_to_the_signed_in_account(web: TestClient) -> None:
+    other = login(web, OTHER)
+    member = login(web)
+    # No twin yet: the library is the account's, not a twin's.
+    assert web.get("/api/library").json()["recordings"] == []
+    created = web.post("/api/library/uploads", json={"filename": "周会.wav", "size": 4}, headers=CSRF).json()
+    assert web.put(f"/api/library/uploads/{created['id']}?offset=0", content=b"RIFF", headers=CSRF).status_code == 200
+    recording = web.post(f"/api/library/uploads/{created['id']}/finish", headers=CSRF).json()
+    assert [r["id"] for r in web.get("/api/library").json()["recordings"]] == [recording["id"]]
+    web.cookies.set("twin_session", other)
+    assert web.get("/api/library").json()["recordings"] == []
+    assert web.get(f"/api/library/uploads/{created['id']}").status_code == 404
+    assert web.delete(f"/api/library/recordings/{recording['id']}", headers=CSRF).json() == {"deleted": True}
+    web.cookies.set("twin_session", member)
+    assert [r["id"] for r in web.get("/api/library").json()["recordings"]] == [recording["id"]]
+    web.cookies.clear()
+    assert web.get("/api/library").status_code == 401
+
+
+def test_persona_limit_zero_means_unlimited(web: TestClient) -> None:
+    web.app.state.personas.settings.auth.max_personas_per_member = 0  # type: ignore[union-attr]
+    login(web)
+    assert len({create(web) for _ in range(5)}) == 5

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Check, Globe, MoreHorizontal, Plus } from 'lucide-react';
 import { Button, Dialog, Skeleton, useConfirm } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
@@ -273,6 +273,9 @@ export function Twins() {
       <div className="page-content space-y-6">
         <header className="flex flex-wrap items-center justify-between gap-4">
           <h2 className="text-2xl font-semibold">我的分身</h2>
+          <Link to="/library" className="text-sm text-accent underline">
+            录音库
+          </Link>
           {mobile && identity?.auth_enabled && (
             <div className="min-w-0 text-sm">
               <p

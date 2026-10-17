@@ -216,6 +216,10 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `PUT /api/uploads/{id}?offset=N` | octet-stream 流式追加，≤16 MiB；不匹配时 409 `{offset}`，成功 `{offset}`；中断或超限回滚本次分片 |
 | `GET /api/uploads/{id}` / `DELETE /api/uploads/{id}` | `{offset,size}` / 取消并删除分片；不存在 GET 返回中文 404 |
 | `POST /api/uploads/{id}/finish` | 完成后 SHA 去重、保留原件、排队 media_ingest；返回来源字段、new、job_id；可重复调用 |
+| `GET /api/library` | 当前账号的录音库（不属于某个分身，不看 `X-Twin-Persona`）：`{recordings,pending,max_pending,asr,capacity:{free_bytes,arriving_bytes,arriving,headroom_bytes}}`；同时补启排队中的转写 |
+| `POST/GET/PUT/DELETE /api/library/uploads…` | 与 `/api/uploads` 相同的分片协议；创建时排队数（排队/转写中 + 未传完）达到 `[library].max_pending` 返回 409，传完后可用空间会低于 `headroom_gb` 返回 507 |
+| `POST /api/library/uploads/{id}/finish` | 按 SHA 去重为录音（`new`），依次转写（与分身录音共用一个转写名额）；转写稿与 FLAC 试听文件校验后删除原件 |
+| `POST /api/library/recordings/{id}/retry` / `DELETE /api/library/recordings/{id}` | 失败且原件仍在时重新排队，否则 409 / 删除录音及其文件，转写中 409 |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |
 | `GET /api/persona/items/search?q=` | 按意思和关键词找条目（聊天的混合检索，向量不可用时只按关键词），最多 20 条，不含已删 |

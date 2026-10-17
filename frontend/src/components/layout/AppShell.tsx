@@ -250,7 +250,9 @@ export function AppShell() {
   const location = useLocation();
   const conversation = conversationRoutes.has(location.pathname);
   const outlet = useOutlet();
-  const twinLevel = location.pathname === '/twins';
+  // Account-level pages: not about the current twin, so no onboarding check or twin tabs.
+  const twinLevel =
+    location.pathname === '/twins' || location.pathname === '/library';
   const canManage = useCanManage();
   const [onboarding, setOnboarding] = usePersonaState<IdentityData | null>(
     null,

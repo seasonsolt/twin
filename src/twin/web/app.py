@@ -26,7 +26,7 @@ from ..media.tts import SpeechSynthesizer
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
-from . import assets, media, persona
+from . import assets, library, media, persona
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
@@ -439,12 +439,14 @@ def create_app(
 
     registry.make_app = persona_app
     registry.register(app)
+    libraries = library.register(app, settings, jobs)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(previous_lifespan(application))
+            libraries.resume()
             for entry in registry.data["personas"]:
                 if entry.get("deleted_at"):
                     continue

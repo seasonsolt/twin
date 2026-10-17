@@ -302,7 +302,7 @@ All contracts are frozen and forbid extras. `CaseInput` exposes only identity, p
   `/api/admin/waitlist` is admin-only; allowing a user means changing config and restarting.
 - Registry entries add `owner: email|null`; missing owner migrates to null (admin-owned, including default).
   Admins see/manage all; members only their own. Creating assigns the session email and enforces
-  max_personas_per_member (default 3, 409). Cross-owner persona selection or deletion returns 404.
+  max_personas_per_member (default 3, 409; 0 = unlimited). Cross-owner persona selection or deletion returns 404.
   Members with no selection use their first twin, never default; none returns 409/no_persona.
   CLI/MCP keep using the configured database. Default portrait/voice fallbacks remain unchanged.
 - Frontend checks whoami, shows email/code/waitlist screens, resends after a 60-second countdown,

@@ -307,6 +307,7 @@ class Personas:
                 limit = self.settings.auth.max_personas_per_member
                 if (
                     not identity["admin"]
+                    and limit
                     and sum(
                         p.get("owner") == identity["email"] and not p.get("deleted_at") for p in self.data["personas"]
                     )
@@ -383,7 +384,7 @@ class PersonaMiddleware:
         if scope["type"] != "http" or not path.startswith("/api/"):
             await self.app(scope, receive, send)
             return
-        if path.startswith("/api/auth/") or path == "/api/whoami" or path.startswith("/api/admin/"):
+        if path.startswith(("/api/auth/", "/api/admin/", "/api/library/")) or path in {"/api/whoami", "/api/library"}:
             await self.app(scope, receive, send)
             return
         identity = scope["twin_identity"]

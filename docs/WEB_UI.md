@@ -126,6 +126,10 @@ twin 是个人工具，不添加免责声明。React 按文本渲染服务端内
 
 quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionPreset()` 实时响应系统减少动态效果：关闭位移、缩放、拖动、共享布局、shimmer 与眨眼，仅保留淡入淡出/立即更新。聊天头像在减少动态效果下关闭光环动画，仅保留静态说话圆点；语音仍按音频结束顺序推进。
 
+**3D 形象微动**（`features/avatar/motion.ts`，状态取自 `PresenceState`）：眨眼间隔在 2–6 秒间随机，约 15% 为连眨；思考时每次先等 0.2–0.7 秒，再把视线和头部移向上方或侧上方，保持 1–2 秒后用 0.9–1.8 秒缓慢移回，下一次间隔 1.2–4 秒，所有时长每次重新抽取，没有固定周期（依据会话中的认知性视线回避研究：Andrist 等，IVA 2013、HRI 2014）；回答一开始，视线 0.4 秒内回到用户。倾听时只保留很小的眼跳，胸口向用户前倾约 3°，头部回仰其中约六成，脸基本保持平视。说话沿用口型与轻微点头。减少动态效果时只保留稀疏的单次眨眼和口型，不前倾、不转头、不移开视线。聊天舞台的大头像会随状态实时运动，列表里的小头像只渲染一帧；肖像照片不做任何假口型。`#/gallery` 的“形象对比”可切换四种状态查看（需配置 VRM）。
+
+**路由过渡暂不使用 React `<ViewTransition>`**（2026-10 评估）：React 19.3.1 已稳定导出 `ViewTransition`，`HashRouter` 也已把导航包在 `startTransition` 里，技术上包住 `<Outlet>` 就能生效。暂不升级的原因：一是 `?section=` 这类页内切换同样是导航，会让整页交叉淡入，正属于“小而频繁的交互”，需要另外按路径过滤；二是页面懒加载，Suspense 骨架到内容的切换也会被截图过渡，和页面里 Motion 的入场动画叠在一起；三是注意力第一：切换页面时用户的注意力已经在目标页，150ms 的整页淡入不帮助聚焦，却要为此升级 React 小版本（19.3 的 transition 改为分开渲染，会影响懒加载时序）。以后若要加，只用于路径变化，不用于对话框、标签切换和设置层，减少动态效果时关闭 `::view-transition-*` 动画，并且不要同时给 `Link` 加 `viewTransition`，否则会出现两套过渡。
+
 应用仅从 `components/effects/` 导入 wrapper，ESLint 禁止业务代码直接导入 `components/reactbits/`。上游 TypeScript + Tailwind 源码、来源版本及 **MIT + Commons Clause** 许可保存在 `frontend/src/components/reactbits/NOTICE.md`；不作为独立组件库销售或再分发。GSAP 仅供 AnimatedContent/ScrollTrigger 使用，业务页按具体模块导入，避免不必要加载。全部资源本地打包，无 CDN。
 
 | wrapper | 上游/适配 | 行为与减少动态效果 |

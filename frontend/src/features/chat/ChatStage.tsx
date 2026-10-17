@@ -286,6 +286,8 @@ export function ChatStage({
                       capabilities={capabilities}
                       className="size-full"
                       glow={false}
+                      live={presence.state}
+                      level={level}
                     />
                   )}
                   {url && videoPlaying && (
@@ -315,6 +317,8 @@ export function ChatStage({
                     capabilities={capabilities}
                     className="size-full"
                     glow={false}
+                    live={presence.state}
+                    level={level}
                   />
                 </div>
               )}

@@ -103,7 +103,7 @@ let texture: THREE.Texture;
 const props = {
   url: '/api/media/avatar.vrm',
   mouth: 3,
-  speaking: true,
+  state: 'speaking' as const,
   onFallback: vi.fn(),
 };
 
@@ -171,9 +171,7 @@ const load = async () => {
 };
 
 it('renders the chat VRM preview once without a motion loop and disposes it', async () => {
-  const view = renderView(
-    <Avatar3D {...props} mouth={0} speaking={false} still />,
-  );
+  const view = renderView(<Avatar3D {...props} mouth={0} state="idle" still />);
   await load();
   expect(mocks.render).toHaveBeenCalledTimes(1);
   expect(screen.getByLabelText('VRM 静态头像')).toHaveAttribute(
@@ -218,7 +216,7 @@ it('schedules natural blinks, double blinks and rare reduced-motion blinks with 
   const blink = new BlinkScheduler(() => 0);
   const start = Date.now();
   const sample = () => blink.step((Date.now() - start) / 1000, false);
-  vi.advanceTimersByTime(2499);
+  vi.advanceTimersByTime(1999);
   expect(sample()).toBe(0);
   vi.advanceTimersByTime(1);
   expect(sample()).toBe(0);
@@ -243,12 +241,13 @@ it('schedules natural blinks, double blinks and rare reduced-motion blinks with 
 
 it('removes breathing, head motion, saccades and vowel variety in reduced motion', () => {
   const motion = new AvatarMotion();
-  let pose = motion.step(1 / 60, 3, true, false);
+  let pose = motion.step(1 / 60, 3, 'speaking', false);
   expect(pose.breath).not.toBe(0);
-  for (let i = 0; i < 120; i++) pose = motion.step(1 / 60, 3, true, false);
+  for (let i = 0; i < 120; i++)
+    pose = motion.step(1 / 60, 3, 'speaking', false);
   expect(pose.aa).toBeCloseTo(1);
-  expect(motion.step(1 / 60, 3, true, true).aa).toBeLessThanOrEqual(0.35);
-  for (let i = 0; i < 120; i++) pose = motion.step(1 / 60, 3, true, true);
+  expect(motion.step(1 / 60, 3, 'speaking', true).aa).toBeLessThanOrEqual(0.35);
+  for (let i = 0; i < 120; i++) pose = motion.step(1 / 60, 3, 'speaking', true);
   expect(pose).toMatchObject({
     pitch: 0,
     yaw: 0,
@@ -258,8 +257,31 @@ it('removes breathing, head motion, saccades and vowel variety in reduced motion
     gaze: { x: 0, y: 0 },
   });
   expect(pose.aa).toBeCloseTo(0.35);
-  for (let i = 0; i < 120; i++) pose = motion.step(1 / 60, 3, false, true);
+  for (let i = 0; i < 120; i++) pose = motion.step(1 / 60, 3, 'idle', true);
   expect(pose.aa).toBeCloseTo(0);
+});
+
+it('leans the chest towards the viewer while listening, and keeps it still under reduced motion', async () => {
+  const chest = model.humanoid.getNormalizedBoneNode('chest')!;
+  const view = renderView(<Avatar3D {...props} state="listening" />);
+  await load();
+  intersection([{ isIntersecting: true }]);
+  act(() => vi.advanceTimersByTime(3000));
+  expect(chest.rotation.x).toBeGreaterThan(0.035);
+  view.rerender(<Avatar3D {...props} state="idle" />);
+  act(() => vi.advanceTimersByTime(3000));
+  expect(Math.abs(chest.rotation.x)).toBeLessThan(0.012);
+  view.unmount();
+  // The test model is shared: put the chest back at rest before the second mount reads its rest pose.
+  chest.rotation.set(0, 0, 0);
+  mocks.reduced = true;
+  mocks.expression.mockClear();
+  renderView(<Avatar3D {...props} state="listening" />);
+  await load();
+  intersection([{ isIntersecting: true }]);
+  act(() => vi.advanceTimersByTime(3000));
+  expect(chest.rotation.x).toBe(0);
+  expect(mocks.expression).toHaveBeenCalledWith('blink', expect.any(Number));
 });
 
 it('starts and stops rendering with intersection and document visibility and cleans up', () => {
@@ -458,6 +480,13 @@ it('shares the demo lip track between both previews, replays and releases its ti
   expect(mouths()).toEqual(['3', '3']);
   fireEvent.click(screen.getByRole('button', { name: '重播口型演示' }));
   expect(mouths()).toEqual(['0', '0']);
+  // Thinking is shown on the 3D model by its eyes, so the mouth rests and the demo pauses.
+  fireEvent.change(screen.getByRole('combobox', { name: '3D 形象状态' }), {
+    target: { value: 'thinking' },
+  });
+  act(() => vi.advanceTimersByTime(480));
+  expect(mouths()).toEqual(['0', '0']);
+  expect(screen.getByRole('button', { name: '重播口型演示' })).toBeDisabled();
   view.unmount();
   expect(vi.getTimerCount()).toBe(0);
 });

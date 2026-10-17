@@ -63,7 +63,9 @@ CREATE TABLE IF NOT EXISTS people (
     persona_id TEXT,
     created_at TEXT NOT NULL,
     -- Made automatically from a voice that matched nobody, and not named by the owner yet.
-    auto INTEGER NOT NULL DEFAULT 0
+    auto INTEGER NOT NULL DEFAULT 0,
+    -- 'male', 'female', or '' when the owner has not said.
+    gender TEXT NOT NULL DEFAULT ''
 );
 -- Voice samples a person was recognised by: the centroid of a speaker the owner confirmed and chose as a sample.
 CREATE TABLE IF NOT EXISTS voiceprints (
@@ -166,10 +168,15 @@ class Library:
         with self._db() as db:
             db.execute("PRAGMA journal_mode=WAL")
             # Columns added since a table was first made.
-            for table, column in (("recordings", "revision"), ("people", "auto"), ("attributions", "auto")):
+            for table, column, kind in (
+                ("recordings", "revision", "INTEGER NOT NULL DEFAULT 0"),
+                ("people", "auto", "INTEGER NOT NULL DEFAULT 0"),
+                ("attributions", "auto", "INTEGER NOT NULL DEFAULT 0"),
+                ("people", "gender", "TEXT NOT NULL DEFAULT ''"),
+            ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
-                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
             db.executescript(_SCHEMA)
 
     @contextmanager

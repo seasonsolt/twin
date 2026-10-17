@@ -24,6 +24,7 @@ export interface Speaker {
   near: boolean;
   samples: number;
 }
+export type Gender = '' | 'male' | 'female';
 export interface Person {
   id: string;
   name: string;
@@ -34,6 +35,7 @@ export interface Person {
   updating: boolean;
   // Made from a voice that matched nobody, not named yet.
   auto: boolean;
+  gender: Gender;
   recording_id: string | null;
 }
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {

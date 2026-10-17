@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { Team } from '../features/library/Team';
 import { Recording, type Person, type Speaker } from '../pages/Recording';
+import { usePersonas } from '../stores/personas';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -34,6 +35,7 @@ const person = (change: Partial<Person>): Person => ({
   samples: 1,
   updating: false,
   auto: false,
+  gender: '',
   recording_id: 'rec_1',
   ...change,
 });
@@ -258,4 +260,75 @@ it('lists new voices apart and names them before a twin can be made', async () =
     await screen.findAllByRole('button', { name: '生成分身' }),
   ).toHaveLength(2);
   expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+});
+
+it('edits a person name and gender and opens the profile of their twin', async () => {
+  const patches: unknown[] = [];
+  const switched: string[] = [];
+  people = [person({ persona_id: 'p-1' })];
+  usePersonas.setState({
+    items: [
+      {
+        id: 'p-1',
+        name: '张总',
+        avatar_url: null,
+        avatar_preset: 'stone',
+        sources: 1,
+        created_at: '',
+        is_default: false,
+      },
+    ],
+    switchTo: async (id: string) => {
+      switched.push(id);
+    },
+    refresh: async () => {},
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/people/per_1' && init?.method === 'PATCH') {
+        patches.push(JSON.parse(String(init.body)));
+        people = [
+          person({ persona_id: 'p-1', name: '张总监', gender: 'male' }),
+        ];
+        return json({ updated: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/team']}>
+      <ConfirmProvider>
+        <Routes>
+          <Route path="/team" element={<Team version={0} recordings={[]} />} />
+          <Route path="/profile" element={<p>档案页</p>} />
+        </Routes>
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const row = (await screen.findByText('张总', { selector: 'p' })).closest(
+    'li',
+  )!;
+  // The twin's own illustration stands for them.
+  expect(
+    within(row).getByRole('img', { name: '插画形象：石', hidden: true }),
+  ).toBeInTheDocument();
+  await userEvent.click(within(row).getByRole('button', { name: '编辑张总' }));
+  const dialog = await screen.findByRole('dialog', { name: '编辑「张总」' });
+  await userEvent.clear(within(dialog).getByLabelText('名字'));
+  await userEvent.type(within(dialog).getByLabelText('名字'), '张总监');
+  await userEvent.click(within(dialog).getByLabelText('男'));
+  await userEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+  await waitFor(() =>
+    expect(patches).toEqual([{ name: '张总监', gender: 'male' }]),
+  );
+  expect(
+    await screen.findByText('张总监', { selector: 'p' }),
+  ).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await userEvent.click(screen.getByRole('button', { name: '张总监的档案' }));
+  expect(await screen.findByText('档案页')).toBeInTheDocument();
+  expect(switched).toEqual(['p-1']);
 });

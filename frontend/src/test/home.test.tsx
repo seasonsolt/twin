@@ -96,6 +96,7 @@ it('shows the team, what needs settling and the way to upload more', async () =>
       samples: 1,
       updating: false,
       auto: false,
+      gender: '',
       recording_id: 'rec_1',
     },
   ];

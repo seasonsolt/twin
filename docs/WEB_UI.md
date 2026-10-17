@@ -157,7 +157,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | --- | --- |
 主导航恰好三个入口：聊天、记忆、关于你。
 
-| `#/team`（默认） | 团队：会议里出现过的人与分身、需要处理的事、上传会议录音；没有录音时是上传引导。只能和分身聊天的访客默认进 `#/chat` |
+| `#/team`（默认） | 团队：会议里出现过的人与分身（卡片显示分身的形象，可“编辑”名字和性别，有分身时可去聊天或打开“档案”）、需要处理的事、上传会议录音；没有录音时是上传引导。只能和分身聊天的访客默认进 `#/chat` |
 | `#/library`、`#/library/<录音 id>` | 录音库（上传、转写进度、删除重试）/ 一段录音的说话人试听与确认 |
 | `#/chat` | 多轮聊天、文件附件问答、依据、内联语音与真人视频；无日期输入或资料截止提示 |
 | `#/memories` | 写一段、上传文件/文件夹、自动记住、说话人确认、声音/形象候选采纳、文字预览和删除 |
@@ -229,8 +229,8 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `GET /api/library/recordings/{id}/speakers/{sid}/samples/{i}` | 该说话人第 i 段试听 WAV（0 起，个数见 `samples`） |
 | `PUT /api/library/recordings/{id}/speakers/{sid}` | `{transcript_id,revision,action:confirm\|unknown\|mixed\|reject\|clear,person_id?,new_person?,sample?}`，返回 `{revision,person_id}`；转写或修订号已变 409 |
 | `GET /api/library/review` | 未决定且有候选的说话人，最像的在前 |
-| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`、`auto` 未命名、`recording_id` 可试听的一段录音）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
-| `PATCH /api/library/people/{id}` | `{name}` 改名（未命名的人起名后不再是“未命名”），重名 409；同场的分身随之重建，已有分身同步改名 |
+| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`、`auto` 未命名、`gender` 性别 male/female/空、`recording_id` 可试听的一段录音）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
+| `PATCH /api/library/people/{id}` | `{name?, gender?}`：改名（未命名的人起名后不再是“未命名”），重名 409；同场的分身随之重建，已有分身同步改名。改性别不重建；已有分身时，若当前插画形象与性别不符，换成该性别的一款（生成分身时同样按性别选） |
 | `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}` |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |

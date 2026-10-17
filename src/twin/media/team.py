@@ -29,6 +29,7 @@ from .ingest import Speaker, timestamp
 from .library import Library, Recording, Transcript
 
 Action = Literal["confirm", "unknown", "mixed", "reject", "clear"]
+Gender = Literal["", "male", "female"]
 Decision = Literal["none", "confirmed", "unknown", "mixed"]
 # A speaker is offered for review from this similarity to someone's voice samples: in AliMeeting calibration of the
 # single-person claim, people absent from a meeting never passed 0.44. The pilot recalibrates it.
@@ -59,6 +60,7 @@ class Person(BaseModel):
     created_at: str
     # Made from a voice that matched nobody, not named yet.
     auto: bool = False
+    gender: Gender = ""
     speakers: int = 0
     seconds: float = 0
     samples: int = 0
@@ -179,22 +181,57 @@ class Team:
                 return True
             if row["persona_id"]:
                 return False
-            touched = db.execute(
-                "SELECT DISTINCT recording_id FROM attributions WHERE person_id = ?", (person_id,)
-            ).fetchall()
-            for (recording_id,) in touched:
-                self._reopen(db, recording_id, {person_id})
-            db.execute(
-                "UPDATE attributions SET decision = 'none', person_id = NULL, updated_at = ? WHERE person_id = ?",
-                (_now(), person_id),
-            )
-            for rowid, rejected in db.execute(
-                "SELECT rowid, rejected FROM attributions WHERE rejected LIKE ?", (f'%"{person_id}"%',)
-            ).fetchall():
-                kept = [p for p in json.loads(rejected) if p != person_id]
-                db.execute("UPDATE attributions SET rejected = ? WHERE rowid = ?", (json.dumps(kept), rowid))
-            db.execute("DELETE FROM people WHERE id = ?", (person_id,))
+            self._forget(db, person_id)
         return True
+
+    @staticmethod
+    def _forget(db: sqlite3.Connection, person_id: str) -> None:
+        touched = db.execute(
+            "SELECT DISTINCT recording_id FROM attributions WHERE person_id = ?", (person_id,)
+        ).fetchall()
+        for (recording_id,) in touched:
+            Team._reopen(db, recording_id, {person_id})
+        db.execute(
+            "UPDATE attributions SET decision = 'none', person_id = NULL, updated_at = ? WHERE person_id = ?",
+            (_now(), person_id),
+        )
+        for rowid, rejected in db.execute(
+            "SELECT rowid, rejected FROM attributions WHERE rejected LIKE ?", (f'%"{person_id}"%',)
+        ).fetchall():
+            kept = [p for p in json.loads(rejected) if p != person_id]
+            db.execute("UPDATE attributions SET rejected = ? WHERE rowid = ?", (json.dumps(kept), rowid))
+        db.execute("DELETE FROM people WHERE id = ?", (person_id,))
+
+    def prune(self) -> bool:
+        """Forget unnamed people no current transcript has them speaking any more (the owner gave their voice to
+        someone else, or the recording is gone): an empty "who is this" would stay in the owner's queue forever.
+        Returns whether anyone was forgotten."""
+        with self.library.transaction() as db:
+            return self._prune(db)
+
+    @staticmethod
+    def _prune(db: sqlite3.Connection) -> bool:
+        empty = [
+            row[0]
+            for row in db.execute(
+                "SELECT p.id FROM people p WHERE p.auto = 1 AND p.persona_id IS NULL AND NOT EXISTS ("
+                "SELECT 1 FROM attributions a JOIN recordings r ON r.id = a.recording_id "
+                "AND r.transcript_id = a.transcript_id WHERE a.person_id = p.id AND a.decision = 'confirmed')"
+            )
+        ]
+        for person_id in empty:
+            Team._forget(db, person_id)
+        return bool(empty)
+
+    def set_gender(self, person_id: str, gender: Gender) -> str | None:
+        """Record whether the person is a man or a woman (or unsaid); returns their twin's id, if any. Sources do
+        not mention it, so no twin is rebuilt."""
+        with self.library.transaction() as db:
+            row = db.execute("SELECT persona_id FROM people WHERE id = ?", (person_id,)).fetchone()
+            if row is None:
+                raise ValueError("找不到这个人")
+            db.execute("UPDATE people SET gender = ? WHERE id = ?", (gender, person_id))
+            return str(row[0]) if row[0] else None
 
     # --------------------------------------------------------------- decisions
 
@@ -314,6 +351,7 @@ class Team:
                 )
             if before != after:
                 self._reopen(db, recording_id, {p for p in (before, after) if p})
+                self._prune(db)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return int(revision + 1)
 

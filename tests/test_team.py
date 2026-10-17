@@ -23,6 +23,7 @@ from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import Segment, Speaker
 from twin.media.library import Library, Transcript
+from twin.media.schema import AVATAR_GENDERS
 from twin.media.team import Stale, Team
 from twin.persona import gate
 from twin.persona.chat import PersonaChat
@@ -260,6 +261,25 @@ def test_known_voices_are_taken_without_asking_and_new_long_voices_become_unname
     assert next(s for s in team.speakers(library.get(second)) if s.id == "S1").decision == "none"  # type: ignore[arg-type]
 
 
+def test_an_unnamed_person_whose_voice_is_given_away_is_forgotten(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "local")
+    team = Team(library)
+    first = voices(library, "一.m4a", ([1.0, 0.0], 120), ([0.0, 1.0], 90))
+    assert team.classify(first)
+    unnamed = {p.name: p.id for p in team.people()}
+    zhang = team.add_person("张总")
+    decide(team, first, "S1", "reject", unnamed["未命名 2"])  # A denial names them too, and must not dangle.
+    # The owner hears 未命名 1 and says it is 张总: nobody is left for "who is this".
+    decide(team, first, "S1", "confirm", zhang.id)
+    assert {p.name for p in team.people()} == {"张总", "未命名 2"}
+    # Undoing the automatic decision forgets them as well, and the voice is not made into someone again.
+    decide(team, first, "S2", "clear")
+    assert [p.name for p in team.people()] == ["张总"]
+    assert not team.classify(first)
+    assert all(not s.rejected for s in team.speakers(library.get(first)))  # type: ignore[arg-type]
+    assert not team.prune()  # A named person stays even with nothing heard.
+
+
 def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "local")
     first = voices(library, "一.m4a", ([1.0, 0.0], 15), ([0.0, 1.0], 15))
@@ -445,6 +465,27 @@ def test_a_misattributed_fact_leaves_the_twin_and_reaches_the_right_one(web: Tes
     assert own == ["[00:06] 我反对压缩研发。"]
     people = {p["name"]: p for p in web.get("/api/library/people").json()["items"]}
     assert people["李总"]["persona_id"] == li_twin and people["张总"]["samples"] == 0
+
+
+def test_a_person_s_gender_dresses_their_twin(web: TestClient) -> None:
+    def preset(persona_id: str) -> str:
+        return str(web.get("/api/identity", headers={"X-Twin-Persona": persona_id}).json()["avatar_preset"])
+
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    assert web.patch(f"/api/library/people/{li}", json={"gender": "female"}, headers=HEADERS).status_code == 200
+    assert web.patch(f"/api/library/people/{li}", json={"gender": "other"}, headers=HEADERS).status_code == 400
+    assert web.get("/api/library/people").json()["items"][0]["gender"] == "female"
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    assert AVATAR_GENDERS[preset(pid)] == "female"
+    web.patch(f"/api/library/people/{li}", json={"gender": "male"}, headers=HEADERS)
+    chosen = preset(pid)
+    assert AVATAR_GENDERS[chosen] == "male"
+    # Name and gender in one change; a matching illustration (perhaps chosen by hand) is kept.
+    web.patch(f"/api/library/people/{li}", json={"name": "李总监", "gender": "male"}, headers=HEADERS)
+    assert preset(pid) == chosen
+    assert web.get("/api/library/people").json()["items"][0]["name"] == "李总监"
+    web.patch(f"/api/library/people/{li}", json={"gender": ""}, headers=HEADERS)
+    assert preset(pid) == chosen  # Unsaid changes nothing.
 
 
 def test_a_change_waiting_at_shutdown_is_carried_out_after_restart(

@@ -29,11 +29,12 @@ from ..config import Settings
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.ingest import CommandTranscriber, make_transcriber
 from ..media.library import Library, Recording, TranscriptionError, owner_key
-from ..media.team import SOURCE_PREFIX, Stale, Team, TwinSource
+from ..media.schema import AVATAR_GENDERS, default_avatar
+from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
 from ..persona import gate
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
-from ..persona.store import PersonaStore, stored_identity
+from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import Personas
 from .uploads import UploadBody, Uploads, upload_routes
@@ -45,6 +46,11 @@ GIB = 1024**3
 
 class PersonBody(BaseModel):
     name: str = Field(min_length=1, max_length=40)
+
+
+class PersonPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=40)
+    gender: Gender | None = None
 
 
 class DecisionBody(BaseModel):
@@ -94,6 +100,7 @@ class Libraries:
                 self.kick(folder.name)
             # Recordings transcribed before a crash, or before automatic classification existed.
             self.team(folder.name).classify_all()
+            self.team(folder.name).prune()
             for persona_id, _, wanted, done in Team(self.library(folder.name)).synced():
                 if wanted != done:
                     self.sync(folder.name, persona_id)
@@ -105,6 +112,7 @@ class Libraries:
 
     def changed(self, owner: str) -> None:
         """A decision changed some twins' wanted version: bring every waiting twin of the owner in line."""
+        self.team(owner).prune()
         for persona_id, _, wanted, done in self.team(owner).synced():
             if wanted != done:
                 self.sync(owner, persona_id)
@@ -183,6 +191,7 @@ class Libraries:
             with PersonaStore(self.registry.settings_for(entry["id"]).db_path) as store:
                 gate.link(store, self.library(owner).db_path, entry["id"])
             team.link(person_id, entry["id"])
+            self.dress(entry["id"], person.gender)
         self.sync(owner, entry["id"])
         return {"persona_id": entry["id"], "new": True}
 
@@ -210,16 +219,31 @@ class Libraries:
         self.changed(owner)
         return {"revision": revision, "person_id": person_id}
 
-    def rename(self, owner: str, person_id: str, name: str) -> dict[str, Any]:
+    def update(self, owner: str, person_id: str, body: PersonPatch) -> dict[str, Any]:
+        team = self.team(owner)
         try:
-            persona_id = self.team(owner).rename(person_id, name)
+            if body.gender is not None:
+                persona_id = team.set_gender(person_id, body.gender)
+                if persona_id:
+                    self.dress(persona_id, body.gender)
+            if body.name is not None:
+                persona_id = team.rename(person_id, body.name)
+                if persona_id and self.registry is not None and self.registry.entry(persona_id) is not None:
+                    with PersonaStore(self.registry.settings_for(persona_id).db_path) as store:
+                        store.set_meta("identity:name", " ".join(body.name.split()))
+                self.changed(owner)
         except ValueError as e:
             raise HTTPException(409 if "已经有" in str(e) else 400, str(e)) from None
-        if persona_id and self.registry is not None and self.registry.entry(persona_id) is not None:
-            with PersonaStore(self.registry.settings_for(persona_id).db_path) as store:
-                store.set_meta("identity:name", " ".join(name.split()))
-        self.changed(owner)
-        return {"renamed": True}
+        return {"updated": True}
+
+    def dress(self, persona_id: str, gender: str) -> None:
+        """Give the twin an illustration of the person's gender, unless the one it shows already is."""
+        if not gender or self.registry is None or self.registry.entry(persona_id) is None:
+            return
+        settings = self.registry.settings_for(persona_id)
+        if AVATAR_GENDERS[stored_avatar(settings.db_path, settings.avatar.preset)] != gender:
+            with PersonaStore(settings.db_path) as store:
+                store.set_meta("identity:avatar_preset", default_avatar(persona_id, gender))
 
     def detail(self, owner: str, recording_id: str) -> dict[str, Any]:
         library = self.library(owner)
@@ -466,8 +490,8 @@ def register(app: FastAPI, settings: Settings, jobs: JobManager, registry: Perso
             raise HTTPException(409, str(e)) from None
 
     @app.patch("/api/library/people/{person_id}")
-    def patch_person(person_id: str, body: PersonBody, request: Request) -> dict[str, Any]:
-        return libraries.rename(libraries.owner(request), person_id, body.name)
+    def patch_person(person_id: str, body: PersonPatch, request: Request) -> dict[str, Any]:
+        return libraries.update(libraries.owner(request), person_id, body)
 
     @app.delete("/api/library/people/{person_id}")
     def delete_person(person_id: str, request: Request) -> dict[str, bool]:

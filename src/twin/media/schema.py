@@ -194,9 +194,14 @@ AVATAR_PRESETS: dict[str, AvatarSpec] = {
 AVATAR_CHOICES = [{"id": key, "name": name} for key, name in AVATAR_NAMES.items()]
 
 
-def default_avatar(persona_id: str) -> str:
-    index = int.from_bytes(hashlib.sha256(persona_id.encode()).digest()[:8], "big") % len(AVATAR_PRESETS)
-    return list(AVATAR_PRESETS)[index]
+AVATAR_GENDERS = {"chestnut": "male", "stone": "male", "wave": "female", "bun": "female", "silver": "female"}
+
+
+def default_avatar(persona_id: str, gender: str = "") -> str:
+    """The persona's preset when none was chosen: fixed by its id, among the presets of ``gender`` if given."""
+    choices = [preset for preset in AVATAR_PRESETS if not gender or AVATAR_GENDERS[preset] == gender]
+    index = int.from_bytes(hashlib.sha256(persona_id.encode()).digest()[:8], "big") % len(choices)
+    return choices[index]
 
 
 class AudioPart(BaseModel):

@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Badge, Button, Input, Meter, useConfirm } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  Dialog,
+  Field,
+  Input,
+  Meter,
+  useConfirm,
+} from '../../components/ui';
+import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
-import { usePersonas } from '../../stores/personas';
+import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
-import type { Person, Speaker } from '../../pages/Recording';
+import type { Gender, Person, Speaker } from '../../pages/Recording';
 
 interface Waiting extends Speaker {
   recording_id: string;
@@ -70,6 +79,87 @@ function Unnamed({
   );
 }
 
+const GENDERS: [Gender, string][] = [
+  ['male', '男'],
+  ['female', '女'],
+  ['', '不填'],
+];
+
+function EditPerson({
+  person,
+  busy,
+  onClose,
+  onSave,
+}: {
+  person: Person | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (change: { name: string; gender: Gender }) => void;
+}) {
+  const [name, setName] = useState('');
+  const [gender, setGender] = useState<Gender>('');
+  useEffect(() => {
+    if (!person) return;
+    setName(person.name);
+    setGender(person.gender);
+  }, [person]);
+  return (
+    <Dialog
+      open={!!person}
+      onOpenChange={(open) => !open && onClose()}
+      title={`编辑「${person?.name ?? ''}」`}
+    >
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (name.trim()) onSave({ name: name.trim(), gender });
+        }}
+      >
+        <Field id="person-name" label="名字">
+          <Input
+            id="person-name"
+            maxLength={40}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <fieldset className="space-y-1.5">
+          <legend className="font-medium">性别</legend>
+          <div className="flex flex-wrap gap-x-6">
+            {GENDERS.map(([value, label]) => (
+              <label
+                key={label}
+                className="flex min-h-11 items-center gap-2 text-base"
+              >
+                <input
+                  type="radio"
+                  name="person-gender"
+                  className="size-5"
+                  checked={gender === value}
+                  onChange={() => setGender(value)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <p className="text-sm text-secondary">
+            分身的插画形象会换成对应性别的一款。
+          </p>
+        </fieldset>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={busy || !name.trim()}>
+            保存
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 /** What the owner has to settle (new voices, uncertain speakers, recordings on their way) and everyone found in
  * the recordings, each with their twin. */
 export function Team({
@@ -84,10 +174,12 @@ export function Team({
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<Person | null>(null);
   const confirm = useConfirm();
   const navigate = useNavigate();
   const refreshPersonas = usePersonas((state) => state.refresh);
   const switchTo = usePersonas((state) => state.switchTo);
+  const twins = usePersonas((state) => state.items);
 
   const load = useCallback(async () => {
     try {
@@ -160,9 +252,22 @@ export function Team({
         json: { name: value },
       }),
     );
-  const chat = async (personaId: string) => {
+  const edit = (person: Person, change: { name: string; gender: Gender }) =>
+    act(async () => {
+      await api(`/api/library/people/${encodeURIComponent(person.id)}`, {
+        method: 'PATCH',
+        json: {
+          ...(change.name !== person.name ? { name: change.name } : {}),
+          gender: change.gender,
+        },
+      });
+      setEditing(null);
+      // The twin's name and illustration follow.
+      if (person.persona_id) await refreshPersonas();
+    });
+  const open = async (personaId: string, page: '/chat' | '/profile') => {
     await switchTo(personaId);
-    void navigate('/chat');
+    void navigate(page);
   };
 
   const unnamed = people?.filter((p) => p.auto) ?? [];
@@ -281,11 +386,14 @@ export function Team({
               <div className="flex items-center gap-3">
                 <span
                   aria-hidden
-                  className="grid size-12 shrink-0 place-items-center rounded-full bg-soft text-lg font-semibold text-accent"
+                  className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-full bg-soft text-lg font-semibold text-accent"
                 >
-                  {Array.from(person.name)[0]}
+                  <PersonFace
+                    person={person}
+                    twin={twins.find((t) => t.id === person.persona_id)}
+                  />
                 </span>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="truncate text-lg font-semibold">
                     {person.name}
                   </p>
@@ -295,6 +403,15 @@ export function Team({
                       : '还没有确认过的发言'}
                   </p>
                 </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  aria-label={`编辑${person.name}`}
+                  onClick={() => setEditing(person)}
+                >
+                  编辑
+                </Button>
               </div>
               <div>
                 {person.persona_id ? (
@@ -309,13 +426,22 @@ export function Team({
               </div>
               <div className="mt-auto flex flex-wrap gap-2">
                 {person.persona_id ? (
-                  <Button
-                    className="flex-1"
-                    disabled={person.updating}
-                    onClick={() => void chat(person.persona_id!)}
-                  >
-                    {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
-                  </Button>
+                  <>
+                    <Button
+                      className="flex-1"
+                      disabled={person.updating}
+                      onClick={() => void open(person.persona_id!, '/chat')}
+                    >
+                      {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      aria-label={`${person.name}的档案`}
+                      onClick={() => void open(person.persona_id!, '/profile')}
+                    >
+                      档案
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Button
@@ -341,6 +467,22 @@ export function Team({
           ))}
         </ul>
       </section>
+      <EditPerson
+        person={editing}
+        busy={busy}
+        onClose={() => setEditing(null)}
+        onSave={(change) => editing && void edit(editing, change)}
+      />
     </>
+  );
+}
+
+/** The twin's portrait or illustration; the first character of the name before there is a twin. */
+function PersonFace({ person, twin }: { person: Person; twin?: Persona }) {
+  if (!twin) return <>{Array.from(person.name)[0]}</>;
+  return twin.avatar_url ? (
+    <img src={twin.avatar_url} alt="" className="size-full object-cover" />
+  ) : (
+    <Avatar preset={twin.avatar_preset} blinking={false} />
   );
 }

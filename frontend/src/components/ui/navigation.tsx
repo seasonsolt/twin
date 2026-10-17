@@ -191,6 +191,50 @@ export function NavPill({
   );
 }
 
+/**
+ * A rail entry that opens something over the page (a dialog) instead of going to a route. It looks like a stacked
+ * NavPill. `alert` puts a small red dot on the icon and adds its words to the accessible name: the one way the rail
+ * asks for attention.
+ */
+export function RailButton({
+  icon: Icon,
+  label,
+  onClick,
+  pressed = false,
+  alert,
+}: {
+  icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  label: string;
+  onClick: () => void;
+  /** The thing it opens is open. */
+  pressed?: boolean;
+  alert?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={alert ? `${label}（${alert}）` : undefined}
+      aria-expanded={pressed}
+      className={cn(
+        'rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary focus-visible:outline-2 focus-visible:outline-accent',
+        pressed && 'bg-soft',
+      )}
+    >
+      <span className="relative">
+        <Icon aria-hidden className="size-5 shrink-0" />
+        {alert && (
+          <span
+            aria-hidden
+            className="absolute -top-0.5 -right-1 size-2 rounded-full bg-danger ring-2 ring-canvas"
+          />
+        )}
+      </span>
+      <span className="whitespace-nowrap">{label}</span>
+    </button>
+  );
+}
+
 /** The first focusable thing on the page: hidden until focused, it moves focus to the element with `target`'s id. */
 export function SkipLink({
   target,

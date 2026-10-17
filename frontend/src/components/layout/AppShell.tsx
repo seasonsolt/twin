@@ -6,7 +6,12 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Navigate, useLocation, useOutlet } from 'react-router';
+import {
+  Navigate,
+  useLocation,
+  useOutlet,
+  useSearchParams,
+} from 'react-router';
 import * as Popover from '@radix-ui/react-popover';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import {
@@ -15,9 +20,16 @@ import {
   ListChecks,
   MessageCircle,
   Mic,
+  Settings2,
   Users,
 } from 'lucide-react';
 import { startStatusPolling, useStatus } from '../../stores/status';
+import { failing, startSystemPolling, useSystem } from '../../stores/system';
+import {
+  SYSTEM_PARAM,
+  SystemDialog,
+  useOpenSystem,
+} from '../../features/admin/SystemDialog';
 import {
   Button,
   Card,
@@ -25,6 +37,7 @@ import {
   IconButton,
   NavPill,
   PlainButton,
+  RailButton,
   Skeleton,
   SkipLink,
   Text,
@@ -195,6 +208,7 @@ function TwinRail() {
       ].map(({ to, title, icon }) => (
         <NavPill key={to} to={to} icon={icon} label={title} />
       ))}
+      {identity?.admin && <SystemEntry />}
       <div className="my-3 border-t border-border" />
       <Navigation />
       {identity?.auth_enabled && (
@@ -276,6 +290,22 @@ function TwinRail() {
   );
 }
 
+/** The administrator's way into the system dialog; a red dot when a switched-on service is failing. */
+function SystemEntry() {
+  const open = useOpenSystem();
+  const [params] = useSearchParams();
+  const down = useSystem((state) => failing(state.data).length);
+  return (
+    <RailButton
+      icon={Settings2}
+      label="系统"
+      pressed={params.has(SYSTEM_PARAM)}
+      alert={down ? `${down} 项服务异常` : undefined}
+      onClick={() => open()}
+    />
+  );
+}
+
 export function AppShell() {
   const personaId = usePersonaId();
   const mobile = useMobile();
@@ -296,6 +326,8 @@ export function AppShell() {
   const [checked, setChecked] = useState(false);
   const [noPersona, setNoPersona] = usePersonaState(false);
   useEffect(startStatusPolling, [personaId]);
+  const admin = useAuth((state) => state.identity?.admin);
+  useEffect(() => (admin ? startSystemPolling() : undefined), [admin]);
   useEffect(() => {
     if (twinLevel) return;
     const controller = new AbortController();
@@ -408,6 +440,7 @@ export function AppShell() {
         </main>
       </div>
       {mobile && !twinLevel && <BottomTabs />}
+      {admin && <SystemDialog />}
     </div>
   );
 }

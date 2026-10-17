@@ -21,6 +21,7 @@ import { personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
+import { useOpenSystem } from '../../features/admin/SystemDialog';
 import { PresetSvg } from '../../features/avatar/presets';
 
 export function PersonaPortrait({ persona }: { persona?: Persona }) {
@@ -85,6 +86,7 @@ export function PersonaSwitcher({
     : items;
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
+  const openSystem = useOpenSystem();
   useEffect(() => {
     if (!open) return;
     void refresh().catch((failure: unknown) =>
@@ -240,6 +242,17 @@ export function PersonaSwitcher({
                 {title}
               </TextLink>
             ))}
+            {identity?.admin && (
+              <TextLink
+                onClick={() => {
+                  navigating.current = true;
+                  setOpen(false);
+                  openSystem();
+                }}
+              >
+                系统
+              </TextLink>
+            )}
           </Row>
           {error && (
             <Text role="alert" tone="danger">

@@ -463,7 +463,8 @@ const sourceSummary = {
   failed: 0,
 };
 
-// The GPU health card administrators see on the start page: one service healthy all day, one with a bad hour.
+// The system dialog administrators open from the rail: two services on the GPU machine, healthy now (the embedding
+// service had a bad hour), speech switched off, video not configured.
 const gpuNow = NOW.getTime() / 1000;
 const gpuHours = (failing: number) =>
   Array.from({ length: 24 }, (_, i) => ({
@@ -471,7 +472,7 @@ const gpuHours = (failing: number) =>
     checks: 60,
     failures: i === failing ? 12 : 0,
   }));
-const gpu = {
+const system = {
   now: gpuNow,
   interval: 60,
   window: 86400,
@@ -479,6 +480,7 @@ const gpu = {
     {
       key: 'asr',
       name: '转写服务',
+      enabled: true,
       address: '127.0.0.1:18790',
       latest: {
         at: gpuNow - 30,
@@ -502,6 +504,7 @@ const gpu = {
     {
       key: 'embed',
       name: '文本向量服务',
+      enabled: true,
       address: '127.0.0.1:11434',
       latest: {
         at: gpuNow - 30,
@@ -522,12 +525,86 @@ const gpu = {
       last_failure: { at: gpuNow - 7 * 3600 - 600, reason: '连接超时' },
       buckets: gpuHours(16),
     },
+    {
+      key: 'tts',
+      name: '朗读服务',
+      enabled: false,
+      address: '127.0.0.1:8001',
+      latest: null,
+      since: null,
+      checks: 0,
+      failures: 0,
+      availability: null,
+      first_at: null,
+      last_failure: null,
+      buckets: gpuHours(-1).map((bucket) => ({ ...bucket, checks: 0 })),
+    },
   ],
+  switches: {
+    tts: {
+      configured: true,
+      enabled: false,
+      missing: null,
+      changed_at: '2026-10-16T01:20:00+00:00',
+      changed_by: 'admin@example.com',
+    },
+    video: {
+      configured: false,
+      enabled: false,
+      missing: 'twin.toml 里没有配置 [video]',
+      changed_at: null,
+      changed_by: null,
+    },
+  },
+  config: {
+    embed: [
+      ['接口', 'OpenAI 兼容'],
+      ['地址', '127.0.0.1:11434'],
+      ['模型', 'bge-m3'],
+      ['每批 / 超时 / 重试', '32 · 30 秒 · 2 次'],
+    ],
+    asr: [
+      ['接口', '命令'],
+      ['地址', '127.0.0.1:18790'],
+    ],
+    tts: [
+      ['接口', 'OpenAI 兼容'],
+      ['地址', '127.0.0.1:8001'],
+      ['模型', 'tts-example'],
+      ['预置音色', 'alloy'],
+    ],
+    video: [['接口', '未配置']],
+  },
+  models: [
+    {
+      use: '整理记忆、校对转写',
+      section: '[llm]',
+      provider: 'OpenAI 兼容',
+      model: 'example-model',
+      address: 'llm.example.com',
+      external: true,
+    },
+  ],
+  keys: [
+    { env: 'TWIN_LLM_KEY', use: '文字模型', set: true },
+    { env: 'TWIN_TTS_KEY', use: '朗读服务', set: false },
+    { env: 'TWIN_API_TOKEN', use: '外部调用 /api', set: false },
+  ],
+  quota: {
+    limit: 2_000_000,
+    hours: 24,
+    used: 640_000,
+    exhausted: false,
+    resets_at: null,
+    custom: false,
+    default_limit: 2_000_000,
+    default_hours: 24,
+  },
 };
 
 const handlers: Record<string, Handler> = {
   'GET /api/whoami': reply({ email: null, admin: true, auth_enabled: false }),
-  'GET /api/admin/gpu': reply(gpu),
+  'GET /api/admin/system': reply(system),
   'GET /api/personas': reply(personas),
   'GET /api/status': reply(status),
   'GET /api/identity': reply(identity),

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mic, Plus, Sparkles } from 'lucide-react';
+import { Activity, KeyRound, Mic, Plus, Sparkles } from 'lucide-react';
 import {
   ActionMenu,
   AvatarFrame,
@@ -29,6 +29,7 @@ import {
   Row,
   Section,
   Select,
+  SettingsDialog,
   Stack,
   Stat,
   StatusDot,
@@ -47,6 +48,8 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [sample, setSample] = useState(true);
   const [mine, setMine] = useState('all');
   const [filters, setFilters] = useState(['决定']);
+  const [settings, setSettings] = useState(false);
+  const [section, setSection] = useState('monitor');
   return (
     <Stack gap={6}>
       <Card>
@@ -377,6 +380,52 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           </Clip>
         </Card>
       </Grid>
+
+      <Card className="space-y-4">
+        <Heading level={3}>设置弹窗 SettingsDialog</Heading>
+        <Text size="sm" tone="secondary">
+          次要任务盖在当前页面上打开，关闭后回到原处；左侧菜单分组，异常只用一个红点提示。
+        </Text>
+        <Row gap={2}>
+          <Button
+            variant="secondary"
+            disabled={disabled}
+            onClick={() => setSettings(true)}
+          >
+            打开设置弹窗
+          </Button>
+        </Row>
+        <SettingsDialog
+          open={settings}
+          onOpenChange={setSettings}
+          title="系统"
+          note="仅管理员可见"
+          active={section}
+          onSelect={setSection}
+          sections={[
+            {
+              key: 'monitor',
+              label: '监控',
+              icon: Activity,
+              status: { label: '1 项异常', tone: 'danger' },
+            },
+            {
+              key: 'tts',
+              label: '朗读服务',
+              group: '服务',
+              status: { label: '已关闭' },
+            },
+            {
+              key: 'tokens',
+              label: '模型与 Token',
+              group: '设置',
+              icon: KeyRound,
+            },
+          ]}
+        >
+          <Text>当前分区：{section}</Text>
+        </SettingsDialog>
+      </Card>
 
       <Card className="space-y-5">
         <Heading level={3}>文件拖放 FileDrop</Heading>

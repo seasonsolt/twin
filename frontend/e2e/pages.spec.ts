@@ -7,6 +7,8 @@ const pages: {
   name: string;
   path: string;
   ready: string;
+  /** Dialogs are fixed to the viewport: shoot just that, not the page scrolled behind. */
+  viewport?: boolean;
   setup?: (page: Page) => Promise<unknown>;
 }[] = [
   { name: 'team', path: '/#/team', ready: '需要你处理' },
@@ -26,6 +28,18 @@ const pages: {
       ),
   },
   { name: 'twins', path: '/#/twins', ready: '周石言' },
+  {
+    name: 'system',
+    path: '/#/team?system=monitor',
+    ready: 'GPU 机器上的服务',
+    viewport: true,
+  },
+  {
+    name: 'system-tokens',
+    path: '/#/team?system=tokens',
+    ready: 'TWIN_LLM_KEY',
+    viewport: true,
+  },
   { name: 'profile', path: '/#/profile', ready: '做事方式' },
   {
     name: 'memories',
@@ -46,7 +60,7 @@ const pages: {
   },
 ];
 
-for (const { name, path, ready, setup } of pages) {
+for (const { name, path, ready, viewport, setup } of pages) {
   test(name, async ({ page }) => {
     const missing: string[] = [];
     const errors: string[] = [];
@@ -59,7 +73,7 @@ for (const { name, path, ready, setup } of pages) {
     await page.evaluate(() => document.fonts.ready);
     await expect(page).toHaveScreenshot(
       `${name}-${test.info().project.name}.png`,
-      { fullPage: true },
+      { fullPage: !viewport },
     );
     expect(errors, 'page errors').toEqual([]);
     expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);

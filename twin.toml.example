@@ -105,6 +105,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # 账号录音库（网页「我的分身 → 录音库」）：上传后预留的安全余量与同时排队的文件数。
 # 批次额度：录音库在任意 batch_hours 小时内最多花 batch_tokens 个大模型 token（转写校对与团队分身重建，
 # 新录音、重试、重建都计入）；用完后校对和重建暂停，页面会提示，窗口腾出后自动继续。0 表示不限。
+# 管理员也可以在网页「系统 → 模型与 Token」里临时改这两项（存在 data/system.json，立即生效）。
 # [library]
 # headroom_gb = 20
 # max_pending = 20

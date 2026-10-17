@@ -256,6 +256,31 @@ export function SettingsDialog({
   const { reduced, transition } = useMotionPreset('gentle');
   const exit = { ...crossfade, duration: exitDurations.dialog };
   const current = sections.find((section) => section.key === active);
+  const menu = useRef<HTMLUListElement>(null);
+  // On phones the menu is a scrolling row: keep the open section's chip in view.
+  // Positions come from layout (offsetLeft), not the screen, so the opening scale does not throw them off; again
+  // when the fonts load or a status arrives, since the chips widen with them.
+  const statuses = sections.map((section) => section.status?.label).join();
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const center = () => {
+      const list = menu.current;
+      const chip = list?.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!live || !list || !chip || list.scrollWidth <= list.clientWidth)
+        return;
+      list.scrollLeft =
+        chip.offsetLeft -
+        list.offsetLeft -
+        (list.clientWidth - chip.offsetWidth) / 2;
+    };
+    const frame = requestAnimationFrame(center);
+    void document.fonts?.ready.then(center);
+    return () => {
+      live = false;
+      cancelAnimationFrame(frame);
+    };
+  }, [open, active, statuses]);
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal forceMount>
@@ -277,13 +302,24 @@ export function SettingsDialog({
               forceMount
               asChild
               aria-describedby={undefined}
+              // Focus the dialog itself, not the first menu item: no ring on a choice nobody made yet. Tab then
+              // goes through the menu.
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+                (event.currentTarget as HTMLElement | null)?.focus();
+              }}
+              tabIndex={-1}
             >
               <motion.div
                 initial={{ opacity: 0, scale: reduced ? 1 : 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: reduced ? 1 : 0.99, transition: exit }}
+                exit={{
+                  opacity: 0,
+                  scale: reduced ? 1 : 0.99,
+                  transition: exit,
+                }}
                 transition={transition}
-                className="fixed inset-0 z-50 flex flex-col bg-surface text-primary md:inset-auto md:top-1/2 md:left-1/2 md:h-[min(720px,calc(100dvh_-_48px))] md:w-[min(1040px,calc(100%_-_48px))] md:-translate-x-1/2 md:-translate-y-1/2 md:flex-row md:overflow-hidden md:rounded-lg md:border md:border-border md:shadow-elevation-3"
+                className="fixed inset-0 z-50 flex flex-col bg-surface text-primary outline-none md:inset-auto md:top-1/2 md:left-1/2 md:h-[min(720px,calc(100dvh_-_48px))] md:w-[min(1040px,calc(100%_-_48px))] md:-translate-x-1/2 md:-translate-y-1/2 md:flex-row md:overflow-hidden md:rounded-lg md:border md:border-border md:shadow-elevation-3"
               >
                 <nav
                   aria-label={title}
@@ -294,9 +330,7 @@ export function SettingsDialog({
                       <RadixDialog.Title className="text-xl font-semibold">
                         {title}
                       </RadixDialog.Title>
-                      {note && (
-                        <p className="text-xs text-tertiary">{note}</p>
-                      )}
+                      {note && <p className="text-xs text-tertiary">{note}</p>}
                     </div>
                     <RadixDialog.Close asChild>
                       <IconButton label="关闭" className="md:hidden">
@@ -304,7 +338,10 @@ export function SettingsDialog({
                       </IconButton>
                     </RadixDialog.Close>
                   </div>
-                  <ul className="flex gap-1 overflow-x-auto px-3 py-3 md:mt-4 md:flex-col md:overflow-visible md:p-0">
+                  <ul
+                    ref={menu}
+                    className="flex gap-1 overflow-x-auto px-3 py-3 md:mt-4 md:flex-col md:overflow-visible md:p-0"
+                  >
                     {sections.map((section) => {
                       const selected = section.key === active;
                       const Icon = section.icon;
@@ -360,7 +397,10 @@ export function SettingsDialog({
                     </h3>
                     {actions}
                     <RadixDialog.Close asChild>
-                      <IconButton label="关闭" className="hidden md:inline-flex">
+                      <IconButton
+                        label="关闭"
+                        className="hidden md:inline-flex"
+                      >
                         <X className="size-5" />
                       </IconButton>
                     </RadixDialog.Close>

@@ -71,8 +71,14 @@ class PrivateAudioMiddleware:
         await self.app(scope, receive, send_private)
 
 
+class SpeechSwitchedOff(MediaUnavailable):
+    """An administrator switched speech off in the system settings."""
+
+
 def speech_error(exc: MediaError) -> tuple[int, str]:
     """Map backend-neutral errors without reflecting backend messages or credentials."""
+    if isinstance(exc, SpeechSwitchedOff):
+        return 503, "管理员已关闭朗读"
     if isinstance(exc, MediaInputTooLong):
         return 413, "朗读内容过长，请缩短回答后重试"
     if isinstance(exc, MediaTimeout):
@@ -107,8 +113,11 @@ def register(
     jobs: JobManager | None = None,
     name_factory: Callable[[], str] | None = None,
     avatar_factory: Callable[[], str] | None = None,
+    tts_off: Callable[[], bool] = lambda: False,
+    video_off: Callable[[], bool] = lambda: False,
 ) -> None:
-    """Register under the application's existing security middleware with lazy speech."""
+    """Register under the application's existing security middleware with lazy speech. ``tts_off`` /
+    ``video_off`` say whether an administrator switched speech or video off; checked on every request."""
     app.add_middleware(PrivateAudioMiddleware)
     cache_dir = settings.db_path.parent / "media-cache"
     assets = AssetStore(settings.db_path)
@@ -126,6 +135,8 @@ def register(
 
     def speech() -> SpeechSynthesizer:
         nonlocal synthesizer, selected_voice
+        if tts_off():
+            raise SpeechSwitchedOff
         with lock:
             try:
                 voice_id = assets.publish_voice(settings.tts.voice_dir) or settings.tts.voice
@@ -192,7 +203,7 @@ def register(
         asset_key = f"{portrait['sha'] if portrait else ''}:{profile['voice']['id'] if profile['voice'] else ''}"
         missing_assets = not allow_video_fallback and not own_video_assets()
         video_capability = {
-            "available": video_available and not missing_assets,
+            "available": video_available and not missing_assets and not video_off(),
             **({"reason": "先在「关于你」上传形象和声音"} if missing_assets else {}),
             **({"asset_key": asset_key} if portrait or profile["voice"] else {}),
         }
@@ -363,6 +374,8 @@ def register(
             raise HTTPException(503, "先在「关于你」上传形象和声音")
         if not video_available:
             raise HTTPException(503, "视频未配置，请设置 [video]")
+        if video_off():
+            raise HTTPException(503, "管理员已关闭视频")
         # Capture references before the job starts; later asset edits cannot select driver fallbacks.
         try:
             synth = video()

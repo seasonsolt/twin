@@ -1,8 +1,9 @@
-"""Health of the GPU services (transcription, text embeddings) that twin reaches over the GPU machine's tunnel.
+"""Health of the GPU services (transcription, text embeddings, speech) that twin reaches over the GPU machine's tunnel.
 
 The server checks them every minute and keeps the results of the last day in memory, so an administrator away from
 the office network can see in the browser whether they answer now and whether they stayed up. Only the host and port
-of each service are shown; paths, credentials and keys never leave the server.
+of each service are shown; paths, credentials and keys never leave the server. A service the administrator switched
+off is not checked.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
 
 from ..config import Settings
 
@@ -39,9 +39,13 @@ class Target:
     name: str
     # http(s)://host:port, without a path, credentials or query.
     origin: str
-    # For the embedding service: the OpenAI-compatible base URL (".../v1"), the model and the key's variable name.
+    health_url: str
+    # For the embedding service: its embeddings endpoint and model, asked for one real vector.
     embeddings_url: str | None = None
     model: str | None = None
+    # Asked when the service has no health endpoint (404): an OpenAI-compatible model list.
+    models_url: str | None = None
+    # The key's variable name; its value goes with every request to the service.
     api_key_env: str | None = None
 
 
@@ -102,10 +106,15 @@ def asr_url(settings: Settings) -> str | None:
     return None
 
 
+def _beside(base_url: str, name: str) -> str:
+    """``name`` beside an OpenAI-compatible base URL, which ends in /v1."""
+    return base_url.rstrip("/").removesuffix("/v1") + "/" + name
+
+
 def targets(settings: Settings) -> list[Target]:
     found: list[Target] = []
     if origin := _origin(asr_url(settings)):
-        found.append(Target("asr", "转写服务", origin))
+        found.append(Target("asr", "转写服务", origin, origin + "/health"))
     embed = settings.embed
     if embed.provider == "openai_compat" and (origin := _origin(embed.base_url)):
         assert embed.base_url is not None
@@ -114,20 +123,27 @@ def targets(settings: Settings) -> list[Target]:
                 "embed",
                 "文本向量服务",
                 origin,
+                _beside(embed.base_url, "health"),
                 embeddings_url=embed.base_url.rstrip("/") + "/embeddings",
                 model=embed.model,
                 api_key_env=embed.api_key_env,
             )
         )
+    tts = settings.tts
+    if tts.provider == "openai_compat" and (origin := _origin(tts.base_url)):
+        assert tts.base_url is not None
+        found.append(
+            Target(
+                "tts",
+                "朗读服务",
+                origin,
+                # The speech server in deploy/tts-moss answers /healthz.
+                _beside(tts.base_url, "healthz"),
+                models_url=tts.base_url.rstrip("/") + "/models",
+                api_key_env=tts.api_key_env,
+            )
+        )
     return found
-
-
-def _health_url(target: Target) -> str:
-    if target.embeddings_url is None:
-        return target.origin + "/health"
-    # The embedding base URL ends in /v1; its /health sits beside it.
-    base = target.embeddings_url.removesuffix("/embeddings").rstrip("/").removesuffix("/v1")
-    return base + "/health"
 
 
 def _failure(error: Exception) -> str:
@@ -159,8 +175,11 @@ class GpuMonitor:
         window: float = WINDOW,
         timeout: float = TIMEOUT,
         clock: Callable[[], float] = time.time,
+        active: Callable[[str], bool] = lambda key: True,
     ) -> None:
         self.interval, self.window, self.timeout, self.clock = interval, window, timeout, clock
+        # Whether the service with this key is switched on; a switched-off one is not checked.
+        self.active = active
         self.histories = [History(target) for target in targets(settings)]
         self.started_at = clock()
         self._lock = threading.Lock()
@@ -174,19 +193,30 @@ class GpuMonitor:
         at = self.clock()
         started = time.perf_counter()
         check = Check(at=at, ok=False)
-        with httpx.Client(timeout=self.timeout, trust_env=False, follow_redirects=False) as client:
+        headers = {}
+        key = os.environ.get(target.api_key_env or "")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        with httpx.Client(timeout=self.timeout, trust_env=False, follow_redirects=False, headers=headers) as client:
             try:
-                response = client.get(_health_url(target))
+                response = client.get(target.health_url)
                 check.latency_ms = round((time.perf_counter() - started) * 1000)
                 response.raise_for_status()
                 health = response.json()
                 if not isinstance(health, dict):
                     raise ValueError
             except httpx.HTTPStatusError as e:
-                # An embedding server without /health (Ollama) still counts if embeddings work.
-                if not (target.embeddings_url and e.response.status_code == 404):
+                # A server without a health endpoint (Ollama, a plain speech server) still counts if embeddings
+                # work or it lists its models.
+                if e.response.status_code != 404 or not (target.embeddings_url or target.models_url):
                     check.reason = _failure(e)
                     return check
+                if target.models_url:
+                    try:
+                        client.get(target.models_url).raise_for_status()
+                    except httpx.HTTPError as error:
+                        check.reason = _failure(error)
+                        return check
                 health = {}
             except httpx.HTTPError as e:
                 check.reason = _failure(e)
@@ -212,15 +242,9 @@ class GpuMonitor:
     def _embed(self, client: httpx.Client, target: Target, check: Check) -> str | None:
         """One tiny embeddings request, so a healthy-looking server that cannot embed is caught."""
         assert target.embeddings_url is not None
-        headers = {}
-        key = os.environ.get(target.api_key_env or "")
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
         started = time.perf_counter()
         try:
-            response = client.post(
-                target.embeddings_url, json={"model": target.model, "input": [PROBE_TEXT]}, headers=headers
-            )
+            response = client.post(target.embeddings_url, json={"model": target.model, "input": [PROBE_TEXT]})
             check.embeddings_ms = round((time.perf_counter() - started) * 1000)
             response.raise_for_status()
             vector = response.json()["data"][0]["embedding"]
@@ -232,21 +256,32 @@ class GpuMonitor:
             return "向量接口返回了空向量"
         return None
 
+    def _active(self) -> list[History]:
+        return [h for h in self.histories if self.active(h.target.key)]
+
     def check(self) -> None:
-        """Check every service at once and record the results."""
-        if not self.histories:
+        """Check every switched-on service at once and record the results."""
+        histories = self._active()
+        if not histories:
             return
-        with self._checking, ThreadPoolExecutor(len(self.histories)) as pool:
-            results = list(pool.map(lambda h: self._probe(h.target), self.histories))
+        with self._checking, ThreadPoolExecutor(len(histories)) as pool:
+            results = list(pool.map(lambda h: self._probe(h.target), histories))
         with self._lock:
-            for history, result in zip(self.histories, results, strict=True):
+            for history, result in zip(histories, results, strict=True):
                 history.checks.append(result)
                 while history.checks and history.checks[0].at < result.at - self.window:
                     history.checks.popleft()
 
     def fresh(self, age: float) -> bool:
+        histories = self._active()
         with self._lock:
-            return all(h.checks and h.checks[-1].at >= self.clock() - age for h in self.histories)
+            return all(h.checks and h.checks[-1].at >= self.clock() - age for h in histories)
+
+    def refresh(self, force: bool = False) -> None:
+        """Check now when the record is older than two rounds, or when ``force``d and older than five seconds (so
+        repeated clicks do not pile up)."""
+        if self.histories and (not self.fresh(self.interval * 2) or (force and not self.fresh(5))):
+            self.check()
 
     # ------------------------------------------------------------ reporting
 
@@ -276,6 +311,7 @@ class GpuMonitor:
         return {
             "key": target.key,
             "name": target.name,
+            "enabled": self.active(target.key),
             "address": target.origin.split("://", 1)[1],
             "latest": latest.view() if latest else None,
             "since": since,
@@ -308,15 +344,3 @@ class GpuMonitor:
             with suppress(Exception):
                 self.check()
             self._stop.wait(self.interval)
-
-
-def register(app: FastAPI, monitor: GpuMonitor) -> None:
-    @app.get("/api/admin/gpu")
-    def gpu_status(request: Request, refresh: bool = False) -> dict[str, Any]:
-        """The GPU services' state and their record of the last day; ``refresh`` checks them now first (a check
-        younger than five seconds is reused, so repeated clicks do not pile up)."""
-        if not request.scope["twin_identity"]["admin"]:
-            raise HTTPException(403, "仅管理员可查看 GPU 服务状态")
-        if monitor.histories and (not monitor.fresh(monitor.interval * 2) or (refresh and not monitor.fresh(5))):
-            monitor.check()
-        return monitor.snapshot()

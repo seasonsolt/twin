@@ -28,7 +28,7 @@ from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
-from . import assets, gpu, library, media, persona
+from . import assets, gpu, library, media, persona, system
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
@@ -310,9 +310,10 @@ def create_app(
     app.state.personas = registry
     app.state.auth = auth
     auth.register(app)
-    monitor = gpu.GpuMonitor(settings)
+    system_settings = system.SystemSettings(settings)
+    app.state.system = system_settings
+    monitor = gpu.GpuMonitor(settings, active=lambda key: key != "tts" or system_settings.enabled("tts"))
     app.state.gpu = monitor
-    gpu.register(app, monitor)
     app.add_middleware(PersonaMiddleware, registry=registry)
     app.add_middleware(AuthMiddleware, auth=auth)
     app.add_middleware(
@@ -462,12 +463,15 @@ def create_app(
             jobs=scoped_jobs,
             name_factory=lambda: stored_identity(resolved.db_path)[0] or resolved.target_name,
             avatar_factory=lambda: stored_avatar(resolved.db_path, resolved.avatar.preset),
+            tts_off=lambda: system_settings.off("tts"),
+            video_off=lambda: system_settings.off("video"),
         )
         return context
 
     registry.make_app = persona_app
     registry.register(app)
-    libraries = library.register(app, settings, jobs, registry, backends.llm)
+    libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits)
+    system.register(app, system_settings, monitor, libraries)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

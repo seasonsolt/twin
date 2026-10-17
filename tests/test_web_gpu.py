@@ -32,6 +32,8 @@ class Fake:
         self.embed_status = 200
         self.embedding: Any = [0.1, 0.2]
         self.delay = 0.0
+        # Answers for particular GET paths, instead of the health answer.
+        self.paths: dict[str, tuple[int, Any]] = {}
         self.requests: list[tuple[str, str, dict[str, str], Any]] = []
         fake = self
 
@@ -50,7 +52,7 @@ class Fake:
 
             def do_GET(self) -> None:
                 fake.requests.append(("GET", self.path, dict(self.headers), None))
-                self.answer(fake.health_status, fake.health)
+                self.answer(*fake.paths.get(self.path, (fake.health_status, fake.health)))
 
             def do_POST(self) -> None:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -262,25 +264,25 @@ def test_admin_endpoint(tmp_path: Path, asr: Fake, monkeypatch: pytest.MonkeyPat
     monitor: GpuMonitor = app.state.gpu
     monitor.interval = 3600  # no background round during the test
     client = TestClient(app, base_url="http://localhost")
-    assert client.get("/api/admin/gpu").status_code == 401
+    assert client.get("/api/admin/system").status_code == 401
 
     def login(email: str) -> None:
         client.post("/api/auth/request", json={"email": email}, headers=CSRF)
         assert client.post("/api/auth/verify", json={"email": email, "code": sent[-1]}, headers=CSRF).status_code == 200
 
     login("member@example.com")
-    assert client.get("/api/admin/gpu").status_code == 403
+    assert client.get("/api/admin/system").status_code == 403
     login("admin@example.com")
-    first = client.get("/api/admin/gpu")
+    first = client.get("/api/admin/system")
     assert first.status_code == 200
     assert service(first.json(), "asr")["latest"]["ok"] and len(asr.requests) == 1
     # A recent result is reused; refresh checks again, but not twice within five seconds.
-    client.get("/api/admin/gpu")
-    client.get("/api/admin/gpu?refresh=true")
+    client.get("/api/admin/system")
+    client.get("/api/admin/system?refresh=true")
     assert len(asr.requests) == 1
     monitor.histories[0].checks[-1].at -= 10
     asr.health_status = 500
-    body = client.get("/api/admin/gpu?refresh=true").json()
+    body = client.get("/api/admin/system?refresh=true").json()
     assert len(asr.requests) == 2
     one = service(body, "asr")
     assert one["latest"]["reason"] == "服务返回错误（HTTP 500）" and one["availability"] == 0.5
@@ -289,5 +291,5 @@ def test_admin_endpoint(tmp_path: Path, asr: Fake, monkeypatch: pytest.MonkeyPat
 
 def test_endpoint_without_gpu_services(tmp_path: Path) -> None:
     client = TestClient(create_app(Settings(db_path=tmp_path / "twin.db")), base_url="http://localhost")
-    body = client.get("/api/admin/gpu").json()
+    body = client.get("/api/admin/system").json()
     assert body["services"] == []

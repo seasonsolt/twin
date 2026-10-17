@@ -89,8 +89,11 @@ class Libraries:
         jobs: JobManager,
         registry: Personas | None = None,
         llm: Callable[[], LLM] | None = None,
+        limits: Callable[[], tuple[int, float]] | None = None,
     ) -> None:
         self.settings, self.jobs, self.registry, self.llm = settings, jobs, registry, llm
+        # The token quota (tokens per window of hours); an administrator can change it while the server runs.
+        self.limits = limits or (lambda: (settings.library.batch_tokens, settings.library.batch_hours))
         self.root = settings.db_path.parent / "library"
         self.lock = threading.RLock()
         self.opened: dict[str, Library] = {}
@@ -275,7 +278,7 @@ class Libraries:
     def quota(self, owner: str) -> dict[str, Any]:
         """The owner's batch quota: tokens spent in the last ``batch_hours``, and whether that leaves none, in
         which case ``resets_at`` says when the oldest of them leaves the window."""
-        limit, hours = self.settings.library.batch_tokens, self.settings.library.batch_hours
+        limit, hours = self.limits()
         window = dt.timedelta(hours=hours)
         used, oldest = self.library(owner).spent(dt.datetime.now(dt.UTC) - window)
         exhausted = bool(limit) and used >= limit
@@ -636,8 +639,9 @@ def register(
     jobs: JobManager,
     registry: Personas | None = None,
     llm: Callable[[], LLM] | None = None,
+    limits: Callable[[], tuple[int, float]] | None = None,
 ) -> Libraries:
-    libraries = Libraries(settings, jobs, registry, llm)
+    libraries = Libraries(settings, jobs, registry, llm, limits)
     app.state.libraries = libraries
 
     @app.get("/api/library")

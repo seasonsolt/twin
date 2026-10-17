@@ -615,10 +615,11 @@ export function ActionMenu({
   );
 }
 
+// Quiet when all is well, so a failed hour is what the eye finds.
 const historyTones = {
-  none: 'bg-border',
-  success: 'bg-success',
-  warning: 'bg-warning',
+  none: 'bg-soft',
+  success: 'bg-success/35',
+  warning: 'bg-warning/60',
   danger: 'bg-danger',
 };
 /**

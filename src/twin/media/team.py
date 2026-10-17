@@ -540,6 +540,19 @@ class Team:
                 affected,
             )
 
+    def proofread(self, recording_id: str, transcript_id: str, changed: bool) -> bool:
+        """Note that the recording's transcript was proofread; when its words changed, close the twins of everyone
+        identified in it, in the same transaction, so they are rebuilt from the corrected words. False when the
+        recording is gone or has another transcript now."""
+        with self.library.transaction() as db:
+            updated = db.execute(
+                "UPDATE recordings SET proofread = ? WHERE id = ? AND transcript_id = ?",
+                (transcript_id, recording_id, transcript_id),
+            ).rowcount
+            if updated and changed:
+                self._reopen(db, recording_id, set())
+            return bool(updated)
+
     # -------------------------------------------------------------- twin sync
 
     def link(self, person_id: str, persona_id: str) -> None:
@@ -596,7 +609,8 @@ class Team:
         parsed = []
         for recording_id, speakers in sorted(decided.items()):
             recording = self.library.get(recording_id)
-            transcript = self.library.transcript(recording) if recording else None
+            # The model's proofreading where there is one: the person's words as corrected.
+            transcript = self.library.cleaned(recording) if recording else None
             if recording is None or transcript is None:
                 continue
             parsed.append(self._source(recording, transcript, speakers, person_id, name, names))

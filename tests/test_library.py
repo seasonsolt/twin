@@ -19,7 +19,7 @@ from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import CommandTranscriber, Progress, Segment, Speaker
 from twin.media.library import Library, owner_key
-from twin.ops.backup import backup
+from twin.ops.backup import backup, restore
 from twin.ops.paths import TwinPaths
 from twin.web import create_app
 
@@ -157,6 +157,35 @@ def test_interrupted_transcription_is_queued_again(tmp_path: Path) -> None:
     assert resumed and resumed.status == "queued" and resumed.transcribed_s == 0
 
 
+@needs_ffmpeg
+def test_a_stop_right_after_publishing_leaves_a_ready_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recording is published before its upload is deleted: a stop in between never strands a queued recording
+    whose upload is gone, and the next start deletes the leftover upload."""
+    library = Library(tmp_path / "library" / "local")
+    part = tmp_path / "upload.part"
+    part.write_bytes(wav_bytes())
+    recording, _ = library.add(part, "会议.wav")
+    unlink = Path.unlink
+
+    def stopped(self: Path, missing_ok: bool = False) -> None:
+        if self.name.startswith("original."):
+            raise KeyboardInterrupt
+        unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", stopped)
+    with pytest.raises(KeyboardInterrupt):
+        library.transcribe(recording.id, FakeTranscriber(), lambda done, total: None)
+    monkeypatch.undo()
+    folder = library.folder(recording.id)
+    assert (folder / "original.wav").is_file()
+    published = library.get(recording.id)
+    assert published and published.status == "ready" and published.transcript_id
+    assert library.resume() == 0
+    assert not (folder / "original.wav").exists() and library.transcript(published) is not None
+
+
 def test_uploads_are_admitted_by_free_space_and_queue_length(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -197,3 +226,9 @@ def test_backups_hard_link_library_recordings(tmp_path: Path, monkeypatch: pytes
     assert (copied / "playback.flac").stat().st_ino == (folder / "playback.flac").stat().st_ino
     other = target / "data" / "notes" / "recordings" / "copy.txt"
     assert other.stat().st_ino != (data / "notes" / "recordings" / "copy.txt").stat().st_ino
+    # A restore copies: the restored recordings share no file with the backup.
+    restored = tmp_path / "restored"
+    restore(target, restored, tmp_path / "restored.toml", services_stopped=True)
+    back = restored / "library" / "local" / "recordings" / "rec_1"
+    assert sorted(p.name for p in back.iterdir()) == ["playback.flac", "transcript-a.json"]
+    assert (back / "playback.flac").stat().st_ino != (copied / "playback.flac").stat().st_ino

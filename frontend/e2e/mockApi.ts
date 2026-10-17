@@ -463,8 +463,71 @@ const sourceSummary = {
   failed: 0,
 };
 
+// The GPU health card administrators see on the start page: one service healthy all day, one with a bad hour.
+const gpuNow = NOW.getTime() / 1000;
+const gpuHours = (failing: number) =>
+  Array.from({ length: 24 }, (_, i) => ({
+    start: gpuNow - (24 - i) * 3600,
+    checks: 60,
+    failures: i === failing ? 12 : 0,
+  }));
+const gpu = {
+  now: gpuNow,
+  interval: 60,
+  window: 86400,
+  services: [
+    {
+      key: 'asr',
+      name: '转写服务',
+      address: '127.0.0.1:18790',
+      latest: {
+        at: gpuNow - 30,
+        ok: true,
+        latency_ms: 12,
+        reason: null,
+        version: '1.2',
+        device: 'cuda',
+        busy: false,
+        model: null,
+        embeddings_ms: null,
+      },
+      since: gpuNow - 86400,
+      checks: 1440,
+      failures: 0,
+      availability: 1,
+      first_at: gpuNow - 86400,
+      last_failure: null,
+      buckets: gpuHours(-1),
+    },
+    {
+      key: 'embed',
+      name: '文本向量服务',
+      address: '127.0.0.1:11434',
+      latest: {
+        at: gpuNow - 30,
+        ok: true,
+        latency_ms: 20,
+        reason: null,
+        version: null,
+        device: null,
+        busy: null,
+        model: 'bge-m3',
+        embeddings_ms: 35,
+      },
+      since: gpuNow - 7 * 3600,
+      checks: 1440,
+      failures: 12,
+      availability: 1428 / 1440,
+      first_at: gpuNow - 86400,
+      last_failure: { at: gpuNow - 7 * 3600 - 600, reason: '连接超时' },
+      buckets: gpuHours(16),
+    },
+  ],
+};
+
 const handlers: Record<string, Handler> = {
   'GET /api/whoami': reply({ email: null, admin: true, auth_enabled: false }),
+  'GET /api/admin/gpu': reply(gpu),
   'GET /api/personas': reply(personas),
   'GET /api/status': reply(status),
   'GET /api/identity': reply(identity),

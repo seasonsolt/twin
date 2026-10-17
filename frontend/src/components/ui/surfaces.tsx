@@ -614,3 +614,37 @@ export function ActionMenu({
     </details>
   );
 }
+
+const historyTones = {
+  none: 'bg-border',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+};
+/**
+ * A strip of equal slots, one per period (an hour of health checks), coloured by how that period went. Read as one
+ * image named `label`; each slot's `title` says what it holds.
+ */
+export function HistoryBar({
+  label,
+  slots,
+}: {
+  label: string;
+  slots: {
+    key: string | number;
+    tone: keyof typeof historyTones;
+    title: string;
+  }[];
+}) {
+  return (
+    <div role="img" aria-label={label} className="flex h-4 gap-px">
+      {slots.map((slot) => (
+        <span
+          key={slot.key}
+          title={slot.title}
+          className={cn('flex-1 rounded-[1px]', historyTones[slot.tone])}
+        />
+      ))}
+    </div>
+  );
+}

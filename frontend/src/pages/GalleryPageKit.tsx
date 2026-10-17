@@ -14,6 +14,7 @@ import {
   FileDrop,
   Grid,
   Heading,
+  HistoryBar,
   IconButton,
   Input,
   KeyValue,
@@ -354,6 +355,19 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             <StepNumber>1</StepNumber>
             <StatusDot tone="success" />
           </Row>
+          <HistoryBar
+            label="每小时检查结果示例 HistoryBar"
+            slots={(
+              [
+                'success',
+                'success',
+                'warning',
+                'success',
+                'danger',
+                'none',
+              ] as const
+            ).map((tone, i) => ({ key: i, tone, title: `第 ${i + 1} 小时` }))}
+          />
           <Text size="xl">控件里的名字 Text xl</Text>
           <Text size="2xl">卡片里的名字 Text 2xl</Text>
           <Clip shape="card">

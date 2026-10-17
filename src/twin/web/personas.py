@@ -24,6 +24,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ..assets import AssetStore
 from ..config import Settings
 from ..media.schema import default_avatar
+from ..persona import gate
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..util import private_directory
 from .jobs import JobManager
@@ -342,6 +343,9 @@ class Personas:
             with self.lock:
                 identity = request.scope["twin_identity"]
                 self.check_owner(persona_id, identity)
+                if body.public and gate.linked(self.settings_for(persona_id).db_path):
+                    # Made from colleagues' meetings: it speaks for someone who did not choose to be public.
+                    raise HTTPException(409, "由录音库生成的分身只能私有")
                 entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
                 entry["public"] = body.public
                 self.save()

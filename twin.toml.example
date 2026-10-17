@@ -103,9 +103,13 @@ api_key_env = "TWIN_EMBED_KEY"
 # egress = "local"
 
 # 账号录音库（网页「我的分身 → 录音库」）：上传后预留的安全余量与同时排队的文件数。
+# 批次额度：录音库在任意 batch_hours 小时内最多花 batch_tokens 个大模型 token（转写校对与团队分身重建，
+# 新录音、重试、重建都计入）；用完后校对和重建暂停，页面会提示，窗口腾出后自动继续。0 表示不限。
 # [library]
 # headroom_gb = 20
 # max_pending = 20
+# batch_tokens = 20000000
+# batch_hours = 24
 
 # 视频形象候选（可选）：stdin video/intervals/out_dir/max_candidates；stdout ok/candidates。
 # 仅返回 out_dir 内的普通图片，详情与可选 face_box 见 docs/MEDIA.md。

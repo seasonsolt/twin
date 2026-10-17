@@ -47,12 +47,21 @@ def version(store: PersonaStore) -> int | None:
 
 def version_at(db_path: Path) -> int | None:
     """``version`` without opening the twin's store (for checking every request)."""
+    return _version(db_path, _linked(db_path))
+
+
+def linked(db_path: Path) -> bool:
+    """Whether the twin at ``db_path`` is made from a recording library."""
+    return _linked(db_path) is not None
+
+
+def _linked(db_path: Path) -> str | None:
     try:
         with closing(sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)) as db:
             row = db.execute("SELECT value FROM p_meta WHERE key = ?", (LINK,)).fetchone()
     except sqlite3.Error:
         return None
-    return _version(db_path, row[0] if row else None)
+    return str(row[0]) if row and row[0] else None
 
 
 def _version(db_path: Path, linked: str | None) -> int | None:

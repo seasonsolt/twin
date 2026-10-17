@@ -8,6 +8,12 @@ The owner then says who each speaker is, and creates twins of those people. A tw
 in line with it by ``sync``: its recording sources are rewritten from the library's current decisions and an
 ordinary build follows; the twin answers again only once a build of exactly that state has succeeded
 (``persona.gate``).
+
+Once someone in a recording is identified, its transcript is proofread by the language model, once, in the same
+media slot; the corrected words then replace the recognized ones in every twin it feeds, which are rebuilt. What
+the library spends on the model (proofreading, and the builds of its twins) counts against a batch quota
+(``LibrarySettings.batch_tokens`` per ``batch_hours``); once it is spent, proofreading and rebuilds wait, and the
+library's status says so.
 """
 
 from __future__ import annotations
@@ -15,9 +21,12 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import logging
+import math
 import shutil
 import threading
+import time
 import uuid
+from collections.abc import Callable
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -26,15 +35,18 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
+from ..llm import LLM
 from ..media.claim import Analysis, cut, sample_windows
+from ..media.clean import BATCH, clean_segments
 from ..media.ingest import CommandTranscriber, make_transcriber
-from ..media.library import Library, Recording, TranscriptionError, owner_key
+from ..media.library import Cleaned, Library, Recording, TranscriptionError, owner_key
 from ..media.schema import AVATAR_GENDERS, default_avatar
 from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
 from ..persona import gate
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import Personas
 from .uploads import UploadBody, Uploads, upload_routes
@@ -42,6 +54,12 @@ from .uploads import UploadBody, Uploads, upload_routes
 logger = logging.getLogger(__name__)
 
 GIB = 1024**3
+# Waits before rewriting a twin's sources again after a failed attempt; after the last, the twin stays closed until
+# the next change or restart.
+SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
+# How often every library is woken without anyone looking: twins held for the quota are rebuilt and proofreading
+# goes on once the quota frees up, even if nobody opens the library page.
+WAKE_SECONDS = 60.0
 
 
 class PersonBody(BaseModel):
@@ -65,8 +83,14 @@ class DecisionBody(BaseModel):
 
 
 class Libraries:
-    def __init__(self, settings: Settings, jobs: JobManager, registry: Personas | None = None) -> None:
-        self.settings, self.jobs, self.registry = settings, jobs, registry
+    def __init__(
+        self,
+        settings: Settings,
+        jobs: JobManager,
+        registry: Personas | None = None,
+        llm: Callable[[], LLM] | None = None,
+    ) -> None:
+        self.settings, self.jobs, self.registry, self.llm = settings, jobs, registry, llm
         self.root = settings.db_path.parent / "library"
         self.lock = threading.RLock()
         self.opened: dict[str, Library] = {}
@@ -75,6 +99,11 @@ class Libraries:
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
         self.syncing: set[str] = set()
         self.again: set[str] = set()
+        # The proofreading job of each owner, and per owner the twins whose rebuild waits for the quota.
+        self.proofreading: dict[str, Job] = {}
+        self.paused: dict[str, set[str]] = {}
+        self._stop = threading.Event()
+        self._waker: threading.Thread | None = None
 
     def owner(self, request: Request) -> str:
         return owner_key(request.scope["twin_identity"]["email"])
@@ -93,17 +122,59 @@ class Libraries:
         still waiting for a change are brought in line."""
         if not self.root.is_dir():
             return
+        owners = []
         for folder in sorted(self.root.iterdir()):
             if not (folder / "library.db").is_file():
                 continue
             if self.library(folder.name).resume():
                 self.kick(folder.name)
-            # Recordings transcribed before a crash, or before automatic classification existed.
-            self.team(folder.name).classify_all()
-            self.team(folder.name).prune()
-            for persona_id, _, wanted, done in Team(self.library(folder.name)).synced():
-                if wanted != done:
-                    self.sync(folder.name, persona_id)
+            owners.append(folder.name)
+        # Reading every transcript of years of meetings must not hold up start-up.
+        threading.Thread(target=self._settle, args=(owners,), name="library-settle", daemon=True).start()
+
+    def start(self) -> None:
+        """Wake every library every ``WAKE_SECONDS`` in the background (see ``wake``)."""
+        if self._waker is not None:
+            return
+        self._stop.clear()
+        self._waker = threading.Thread(target=self._wake_all, name="library-wake", daemon=True)
+        self._waker.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._waker is not None:
+            self._waker.join(5)
+            self._waker = None
+
+    def _wake_all(self) -> None:
+        while not self._stop.wait(WAKE_SECONDS):
+            with self.lock:
+                owners = sorted(self.opened)
+            for owner in owners:
+                try:
+                    self.wake(owner)
+                except Exception:
+                    logger.exception("library of %s could not be woken", owner)
+
+    def wake(self, owner: str) -> None:
+        """Carry on with what waits: once the quota has room, the twins held for it are rebuilt; the next
+        recording is transcribed and the next proofread."""
+        if not self.quota(owner)["exhausted"]:
+            with self.lock:
+                held = self.paused.pop(owner, set())
+            for persona_id in sorted(held):
+                self.sync(owner, persona_id)
+        self.kick(owner)
+
+    def _settle(self, owners: list[str]) -> None:
+        """Classify recordings transcribed before a crash (or before automatic classification existed), then bring
+        every waiting twin in line."""
+        for owner in owners:
+            try:
+                self.team(owner).classify_all()
+                self.changed(owner)
+            except Exception:
+                logger.exception("library of %s could not be settled after start-up", owner)
 
     # ------------------------------------------------------------ twins
 
@@ -114,7 +185,8 @@ class Libraries:
         """A decision changed some twins' wanted version: bring every waiting twin of the owner in line."""
         self.team(owner).prune()
         for persona_id, _, wanted, done in self.team(owner).synced():
-            if wanted != done:
+            # A deleted twin (perhaps in the trash) is brought in line if it is restored and changed again.
+            if wanted != done and self.registry is not None and self.registry.entry(persona_id) is not None:
                 self.sync(owner, persona_id)
 
     def sync(self, owner: str, persona_id: str) -> None:
@@ -130,12 +202,20 @@ class Libraries:
         ).start()
 
     def _sync(self, owner: str, persona_id: str) -> None:
+        failures = 0
         while True:
             try:
                 self.write_sources(owner, persona_id)
             except Exception:
-                # The twin stays closed; the next change, build or restart tries again.
+                # The twin stays closed meanwhile; the rewrite reads the library afresh, so it covers any change
+                # made during the wait.
                 logger.exception("library sync of %s failed", persona_id)
+                if failures < len(SYNC_RETRY_SECONDS):
+                    time.sleep(SYNC_RETRY_SECONDS[failures])
+                    failures += 1
+                    with self.lock:
+                        self.again.discard(persona_id)
+                    continue
             with self.lock:
                 if persona_id not in self.again:
                     self.syncing.discard(persona_id)
@@ -150,6 +230,11 @@ class Libraries:
         if row is None or self.registry is None or self.registry.entry(persona_id) is None:
             return False
         _, person_id, wanted, _ = row
+        if self.quota(owner)["exhausted"]:
+            # The twin stays closed; ``status`` rewrites it once the quota frees up.
+            with self.lock:
+                self.paused.setdefault(owner, set()).add(persona_id)
+            return False
         db_path = self.registry.settings_for(persona_id).db_path
         person = team.person(person_id)
         name = stored_identity(db_path)[0] or (person.name if person else self.settings.target_name)
@@ -175,6 +260,114 @@ class Libraries:
         team = self.team(owner)
         if team.wanted(persona_id) is not None and not team.built(persona_id, version):
             self.sync(owner, persona_id)
+
+    def spent_building(self, persona_id: str, tokens: int) -> None:
+        """A build of a twin made from a library ended: what it spent counts against that library's quota."""
+        entry = self.registry.entry(persona_id) if self.registry is not None else None
+        if entry is None:
+            return
+        library = self.library(owner_key(entry.get("owner")))
+        if Team(library).wanted(persona_id) is not None:
+            library.spend("rebuild", tokens)
+
+    # ------------------------------------------------------------ quota and proofreading
+
+    def quota(self, owner: str) -> dict[str, Any]:
+        """The owner's batch quota: tokens spent in the last ``batch_hours``, and whether that leaves none, in
+        which case ``resets_at`` says when the oldest of them leaves the window."""
+        limit, hours = self.settings.library.batch_tokens, self.settings.library.batch_hours
+        window = dt.timedelta(hours=hours)
+        used, oldest = self.library(owner).spent(dt.datetime.now(dt.UTC) - window)
+        exhausted = bool(limit) and used >= limit
+        resets_at = (dt.datetime.fromisoformat(oldest) + window).isoformat() if exhausted and oldest else None
+        return {"limit": limit, "hours": hours, "used": used, "exhausted": exhausted, "resets_at": resets_at}
+
+    def proofread(self, owner: str) -> None:
+        """Start proofreading the owner's next recording that needs it, unless one is being proofread, no
+        language model is configured or the quota is spent (``status`` tries again)."""
+        if self.llm is None:
+            return
+        with self.lock:
+            job = self.proofreading.get(owner)
+            if job is not None and job.active:
+                return
+            waiting = self.library(owner).unproofread()
+            if not waiting or self.quota(owner)["exhausted"]:
+                return
+            try:
+                self.llm()
+            except Exception:
+                return
+            recording = waiting[0]
+            with contextlib.suppress(TooManyJobs):
+                self.proofreading[owner] = self.jobs.scoped(f"library:{owner}").submit(
+                    "media_ingest",
+                    f"校对 {recording.filename}",
+                    lambda log: self.run_proofread(owner, recording.id, log),
+                )
+
+    def run_proofread(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Proofread one recording's transcript once, filing the corrections next to it; when words changed, the
+        twins of everyone identified in it are closed and rebuilt from them. A model that fails on every batch
+        leaves the transcript as recognized."""
+        library = self.library(owner)
+        team = self.team(owner)
+        try:
+            recording = library.get(recording_id)
+            if recording is None or recording.transcript_id is None or recording.proofread == recording.transcript_id:
+                return {"skipped": True}
+            transcript = library.transcript(recording)
+            if transcript is None:
+                team.proofread(recording_id, recording.transcript_id, False)
+                return {"skipped": True}
+            if self.quota(owner)["exhausted"]:
+                log("录音库本批次的大模型额度已用完，校对暂停")
+                return {"paused": True}
+            assert self.llm is not None
+            llm = self.llm()
+            batches = math.ceil(len(transcript.segments) / BATCH)
+            rows: list[CallRow] = []
+            try:
+                with collect_calls() as rows:
+                    result = clean_segments(
+                        llm, transcript.segments, lambda done, total: log(f"[1/1] 校对转写（{done} / {total} 批）")
+                    )
+            finally:
+                library.spend("proofread", model_tokens(rows))
+            changed = False
+            if batches and result.failed_batches == batches:
+                log("校对失败，保留识别原文")
+            else:
+                clean = Cleaned(
+                    transcript_id=transcript.id,
+                    created_at=dt.datetime.now(dt.UTC).isoformat(),
+                    changed=result.changed,
+                    failed_batches=result.failed_batches,
+                    segments=result.segments,
+                )
+                try:
+                    changed = library.write_cleaned(recording, clean) and result.changed > 0
+                except (OSError, ValueError):
+                    logger.warning("proofreading of %s could not be filed", recording_id, exc_info=True)
+                note = f"，{result.failed_batches} 批失败保留原文" if result.failed_batches else ""
+                log(f"校对完成：修正 {result.changed} 段{note}")
+            if team.proofread(recording_id, transcript.id, changed) and changed:
+                self.changed(owner)
+            return {"recording_id": recording_id, "changed": result.changed}
+        finally:
+            with self.lock:
+                self.proofreading.pop(owner, None)
+            self.proofread(owner)
+
+    def proofread_state(self, library: Library, recording: Recording, waiting: set[str]) -> str:
+        """``done`` (corrections filed), ``failed`` (the model was asked and gave none), ``waiting`` (someone is
+        identified and proofreading is still to come) or empty."""
+        path = library.clean_path(recording)
+        if path is not None and path.is_file():
+            return "done"
+        if recording.transcript_id and recording.proofread == recording.transcript_id:
+            return "failed"
+        return "waiting" if recording.id in waiting else ""
 
     def create_twin(self, owner: str, person_id: str, identity: dict[str, Any]) -> dict[str, Any]:
         """The person's twin, created on first call: private, owned by the account, answering as a meeting record
@@ -217,6 +410,7 @@ class Libraries:
             # A new voice sample can settle speakers in every other recording.
             team.classify_all()
         self.changed(owner)
+        self.proofread(owner)
         return {"revision": revision, "person_id": person_id}
 
     def update(self, owner: str, person_id: str, body: PersonPatch) -> dict[str, Any]:
@@ -250,10 +444,12 @@ class Libraries:
         recording = library.get(recording_id)
         if recording is None:
             raise HTTPException(404, "找不到这段录音")
-        transcript = library.transcript(recording)
+        transcript = library.cleaned(recording)
         analysis = Analysis(segments=transcript.segments, speakers=transcript.speakers) if transcript else None
+        waiting = {r.id for r in library.unproofread()}
         return {
             **view(recording),
+            "proofread": self.proofread_state(library, recording, waiting),
             "speakers": [
                 {**s.model_dump(), "samples": len(sample_windows(analysis, s.id)) if analysis else 0}
                 for s in self.team(owner).speakers(recording)
@@ -291,7 +487,8 @@ class Libraries:
     def kick(self, owner: str) -> None:
         """Start transcribing the owner's next queued recording unless one is already running. Without a diarizing
         transcription service, or with the job queue full, recordings stay queued; the next status poll tries
-        again."""
+        again. Proofreading waiting for its turn starts too."""
+        self.proofread(owner)
         with self.lock:
             job = self.running.get(owner)
             if job is not None and job.active:
@@ -380,10 +577,14 @@ class Libraries:
         return {**view(library.get(recording.id) or recording), "new": new}
 
     def status(self, owner: str) -> dict[str, Any]:
-        self.kick(owner)
+        self.wake(owner)
+        quota = self.quota(owner)
         library = self.library(owner)
         recordings = library.list()
         identities = self.team(owner).identities()
+        waiting = {r.id for r in library.unproofread()}
+        with self.lock:
+            held_twins = len(self.paused.get(owner, ()))
         return {
             "recordings": [
                 {
@@ -391,6 +592,7 @@ class Libraries:
                     # Who was recognised, and how many speakers still wait for the owner.
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
+                    "proofread": self.proofread_state(library, r, waiting),
                 }
                 for r in recordings
             ],
@@ -398,6 +600,8 @@ class Libraries:
             "max_pending": self.settings.library.max_pending,
             "asr": isinstance(make_transcriber(self.settings.asr), CommandTranscriber),
             "capacity": self.capacity(),
+            # What waits for the quota: recordings to proofread and twins to rebuild.
+            "quota": {**quota, "waiting_proofread": len(waiting), "waiting_twins": held_twins},
         }
 
 
@@ -426,8 +630,15 @@ def view(recording: Recording) -> dict[str, Any]:
     return recording.model_dump(mode="json", exclude={"sha256"})
 
 
-def register(app: FastAPI, settings: Settings, jobs: JobManager, registry: Personas | None = None) -> Libraries:
-    libraries = Libraries(settings, jobs, registry)
+def register(
+    app: FastAPI,
+    settings: Settings,
+    jobs: JobManager,
+    registry: Personas | None = None,
+    llm: Callable[[], LLM] | None = None,
+) -> Libraries:
+    libraries = Libraries(settings, jobs, registry, llm)
+    app.state.libraries = libraries
 
     @app.get("/api/library")
     def get_library(request: Request) -> dict[str, Any]:

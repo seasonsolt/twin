@@ -35,6 +35,18 @@ export interface Recording {
   // Who the speakers were recognised as, and how many still wait for the owner.
   people: string[];
   unsettled: number;
+  // Whether the model proofread the transcript: done, gave nothing, still to come, or not due (no one identified).
+  proofread?: Proofread;
+}
+export type Proofread = 'done' | 'failed' | 'waiting' | '';
+export interface Quota {
+  limit: number;
+  hours: number;
+  used: number;
+  exhausted: boolean;
+  resets_at: string | null;
+  waiting_proofread: number;
+  waiting_twins: number;
 }
 export interface LibraryState {
   recordings: Recording[];
@@ -47,6 +59,7 @@ export interface LibraryState {
     arriving: number;
     headroom_bytes: number;
   };
+  quota?: Quota;
 }
 const statusLabel: Record<Recording['status'], [string, Tone]> = {
   queued: ['排队中', 'neutral'],
@@ -61,6 +74,28 @@ function identityLabel(recording: Recording): [string, Tone] {
   return recording.unsettled === recording.speakers
     ? ['还没认人', 'warning']
     : [`${recording.unsettled} 位待确认`, 'warning'];
+}
+const proofreadLabel: Record<Proofread, string> = {
+  done: '已校对',
+  failed: '校对未完成，使用识别原文',
+  waiting: '待校对',
+  '': '',
+};
+const tokens = (n: number) =>
+  n >= 10000 ? `${Math.round(n / 10000).toLocaleString()} 万` : `${n}`;
+/** What the spent quota holds back, and when it frees up. */
+export function quotaNotice(quota: Quota): string {
+  const held = [
+    quota.waiting_proofread ? `${quota.waiting_proofread} 段录音的校对` : '',
+    quota.waiting_twins ? `${quota.waiting_twins} 个分身的记忆更新` : '',
+  ].filter(Boolean);
+  const resumes = quota.resets_at
+    ? `，约 ${new Date(quota.resets_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 起自动继续`
+    : '';
+  return (
+    `本批次的大模型额度已用完（${quota.hours} 小时内已用 ${tokens(quota.used)} / ${tokens(quota.limit)} token）` +
+    `${held.length ? `，${held.join('和 ')}已暂停` : '，新的校对和分身更新会暂停'}${resumes}。需要更多额度请联系管理员。`
+  );
 }
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 const minutes = (seconds: number | null) =>
@@ -86,11 +121,22 @@ export function Library() {
     () => void load(),
   );
   const busy = uploading || !!library?.pending;
+  // Proofreading runs on the server; the page follows it, slowly while the quota holds it back.
+  const proofreading =
+    !!library?.recordings.some((r) => r.proofread === 'waiting') ||
+    !!library?.quota?.waiting_twins;
+  const interval = busy
+    ? 3000
+    : proofreading
+      ? library?.quota?.exhausted
+        ? 60000
+        : 3000
+      : 0;
   useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(() => void load(), 3000);
+    if (!interval) return;
+    const timer = setInterval(() => void load(), interval);
     return () => clearInterval(timer);
-  }, [busy, load]);
+  }, [interval, load]);
 
   const retry = async (recording: Recording) => {
     try {
@@ -156,6 +202,9 @@ export function Library() {
             {notice}
           </Text>
         )}
+        {library?.quota?.exhausted && (
+          <Notice>{quotaNotice(library.quota)}</Notice>
+        )}
         {library && !library.asr && (
           <Notice>
             还没有配置能区分说话人的转写服务（asr-funasr），录音会先排队，配置后自动开始转写。
@@ -216,6 +265,7 @@ export function Library() {
                       ? `${recording.speakers} 位说话人`
                       : '',
                     recording.people.join('、'),
+                    proofreadLabel[recording.proofread ?? ''],
                     recording.status === 'transcribing' && recording.duration_s
                       ? `已转写 ${Math.round((recording.transcribed_s / recording.duration_s) * 100)}%`
                       : '',

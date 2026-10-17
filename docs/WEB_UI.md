@@ -221,7 +221,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `PUT /api/uploads/{id}?offset=N` | octet-stream 流式追加，≤16 MiB；不匹配时 409 `{offset}`，成功 `{offset}`；中断或超限回滚本次分片 |
 | `GET /api/uploads/{id}` / `DELETE /api/uploads/{id}` | `{offset,size}` / 取消并删除分片；不存在 GET 返回中文 404 |
 | `POST /api/uploads/{id}/finish` | 完成后 SHA 去重、保留原件、排队 media_ingest；返回来源字段、new、job_id；可重复调用 |
-| `GET /api/library` | 当前账号的录音库（不属于某个分身，不看 `X-Twin-Persona`）：`{recordings,pending,max_pending,asr,capacity:{free_bytes,arriving_bytes,arriving,headroom_bytes}}`，每段录音另带 `people`（认出的人名）和 `unsettled`（还没定的说话人数），录音列表据此显示“已认人 / N 位待确认 / 还没认人”，团队页把有未定说话人、又不在“拿不准”队列里的录音列为“去认人”；同时补启排队中的转写 |
+| `GET /api/library` | 当前账号的录音库（不属于某个分身，不看 `X-Twin-Persona`）：`{recordings,pending,max_pending,asr,capacity:{free_bytes,arriving_bytes,arriving,headroom_bytes}}`，每段录音另带 `people`（认出的人名）和 `unsettled`（还没定的说话人数），录音列表据此显示“已认人 / N 位待确认 / 还没认人”，`proofread` 为 `done`/`failed`/`waiting`/空（已校对 / 校对未完成用原文 / 待校对 / 无人确认不校对）；`quota:{limit,hours,used,exhausted,resets_at,waiting_proofread,waiting_twins}` 是批次额度，用完时页面提示暂停了什么，额度腾出后这次请求会补启暂停的校对和分身重建；团队页把有未定说话人、又不在“拿不准”队列里的录音列为“去认人”；同时补启排队中的转写 |
 | `POST/GET/PUT/DELETE /api/library/uploads…` | 与 `/api/uploads` 相同的分片协议；创建时排队数（排队/转写中 + 未传完）达到 `[library].max_pending` 返回 409，传完后可用空间会低于 `headroom_gb` 返回 507 |
 | `POST /api/library/uploads/{id}/finish` | 按 SHA 去重为录音（`new`），依次转写（与分身录音共用一个转写名额）；转写稿与 FLAC 试听文件校验后删除原件 |
 | `POST /api/library/recordings/{id}/retry` / `DELETE /api/library/recordings/{id}` | 失败且原件仍在时重新排队，否则 409 / 删除录音及其文件，转写中 409；删除会关闭用到它的团队分身直到重建 |

@@ -65,7 +65,7 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
-from ..usage import transient_summary
+from ..usage import CallRow, collect_calls, model_tokens, transient_summary
 from .backends import Backends, BackendUnavailable
 from .conversations import append_reply, append_user, owner
 from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
@@ -325,9 +325,12 @@ def register(
     jobs: JobManager,
     read_uploads: Callable[[Request], Awaitable[list[tuple[str, bytes]]]],
     on_built: Callable[[int], None] | None = None,
+    on_spent: Callable[[int], None] | None = None,
 ) -> MediaIngestion:
     """``on_built(version)``: a build completed without any failure, from the library sources written at
-    ``version`` (``gate.SYNCED``); a twin made from a recording library opens once that version is still wanted."""
+    ``version`` (``gate.SYNCED``); a twin made from a recording library opens once that version is still wanted.
+    ``on_spent(tokens)``: a build of such a twin ended (however it ended) after spending ``tokens`` model tokens,
+    which count against the library's batch quota."""
 
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
@@ -351,8 +354,10 @@ def register(
             store.clear_source_errors()
         error = None
         failed: list[str] = []
+        rows: list[CallRow] = []
         try:
-            result = run_persona_build(settings, backends.llm(), backends.embedder(), log)
+            with collect_calls() as rows:
+                result = run_persona_build(settings, backends.llm(), backends.embedder(), log)
             failed = result["failed_sources"]
             if result["merge_failed"]:
                 error = "部分记忆处理失败，请重新处理"
@@ -366,6 +371,8 @@ def register(
         finally:
             with open_store() as store:
                 store.processing_result(ids, version, error, failed)
+            if synced is not None and on_spent is not None:
+                on_spent(model_tokens(rows))
 
     processing = PersonaProcessing(jobs, automatic_build, lambda snapshot: None)
     app.state.processing = processing

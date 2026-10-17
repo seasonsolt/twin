@@ -107,6 +107,18 @@ def call_totals(selected: list[CallRow]) -> dict[str, Any]:
     return result
 
 
+def model_tokens(selected: list[CallRow]) -> int:
+    """Tokens the language models of ``selected`` read and wrote, for quotas: embeddings are left out, and a call
+    whose provider did not report usage counts at least one token per character sent."""
+    total = 0
+    for row in selected:
+        if row.backend == "hashing" or row.backend.endswith("_embed"):
+            continue
+        known = (row.input_tokens or 0) + (row.output_tokens or 0)
+        total += max(known, row.characters) if row.unknown_usage_attempts else known
+    return total
+
+
 class UsageRecorder:
     """Thread-safe rows and budget gate. Budgeted attempts serialize admission and settlement.
 

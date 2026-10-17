@@ -96,10 +96,11 @@
   --text-xs: 12px;
   --text-sm: 13px;
   --text-base: 14px;
-  --text-md: 16px;
-  --text-lg: 20px;
-  --text-xl: 24px;
-  --text-2xl: 32px;
+  --text-md: 15px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 26px;
 }
 
 @layer base {
@@ -109,7 +110,7 @@
     color: var(--text-primary);
     font-family: var(--font-sans);
     font-size: 14px;
-    line-height: 1.75;
+    line-height: 1.6;
   }
   h1,
   h2,
@@ -129,7 +130,7 @@
   input,
   textarea,
   select {
-    font-size: 16px;
+    font-size: 14px;
   }
   button:not(:disabled),
   [role='switch']:not(:disabled) {

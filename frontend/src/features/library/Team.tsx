@@ -350,7 +350,7 @@ export function Team({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold">人物</h3>
           <form
-            className="flex flex-wrap gap-2"
+            className="flex gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               if (name.trim()) void add();
@@ -360,6 +360,7 @@ export function Team({
               aria-label="人物名字"
               placeholder="手动添加人物"
               maxLength={40}
+              className="w-48"
               value={name}
               onChange={(event) => setName(event.target.value)}
             />

@@ -148,7 +148,7 @@ it('puts the list first on mobile, adds through a bottom sheet, and exposes row 
       .getAllByRole('tab')
       .map((tab) => tab.textContent),
   ).toEqual(['写一段', '上传文件', '上传文件夹']);
-  expect(within(sheet).getByRole('textbox')).toHaveClass('text-md');
+  expect(within(sheet).getByRole('textbox')).not.toHaveClass('text-sm');
   await user.type(within(sheet).getByRole('textbox'), '手机上的记忆');
   await user.click(within(sheet).getByRole('button', { name: '保存' }));
   await waitFor(() =>

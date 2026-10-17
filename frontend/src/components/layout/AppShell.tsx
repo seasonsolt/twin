@@ -24,7 +24,8 @@ import { Button, Skeleton, Tooltip } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
-import { useCanManage, usePersonas } from '../../stores/personas';
+import { useCanManage, usePersonas, type Persona } from '../../stores/personas';
+import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
 import { accountLabel, useAuth } from '../../stores/auth';
@@ -114,9 +115,27 @@ function BottomTabs() {
   );
 }
 
+// Other twins shown in the rail beside the current one.
+const RAIL_SHORTCUTS = 2;
+
 function TwinRail() {
   const { id, items, pendingId, refresh, switchTo } = usePersonas();
   const current = items.find((item) => item.id === id);
+  // Collapsed to the current twin and the few used last; the rest are one click away in the switcher.
+  const [recent, setRecent] = useState(recentPersonas);
+  useEffect(() => {
+    rememberPersona(id);
+    setRecent(recentPersonas());
+  }, [id]);
+  const others = items.filter((item) => item.id !== id);
+  const rank = (persona: Persona) => {
+    const at = recent.indexOf(persona.id);
+    return at < 0 ? recent.length + others.indexOf(persona) : at;
+  };
+  const shortcuts = [...others]
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, RAIL_SHORTCUTS);
+  const hidden = others.length - shortcuts.length;
   const identity = useAuth((state) => state.identity);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountButton = useRef<HTMLButtonElement>(null);
@@ -147,29 +166,29 @@ function TwinRail() {
             />
           </span>
         </Tooltip>
-        {items
-          .filter((item) => item.id !== id)
-          .slice(0, 4)
-          .map((persona) => (
-            <Tooltip key={persona.id} label={persona.name}>
-              <button
-                type="button"
-                aria-label={`切换到${persona.name}`}
-                aria-busy={pendingId === persona.id}
-                className="rail-twin rounded-full hover:bg-soft"
-                onClick={() => void switchTo(persona.id)}
-              >
-                <PersonaPortrait persona={persona} />
-              </button>
-            </Tooltip>
-          ))}
-        {items.length > 5 && (
-          <Link
-            to="/twins"
-            className="grid min-h-11 place-items-center text-xs text-accent"
-          >
-            全部
-          </Link>
+        {shortcuts.map((persona) => (
+          <Tooltip key={persona.id} label={persona.name}>
+            <button
+              type="button"
+              aria-label={`切换到${persona.name}`}
+              aria-busy={pendingId === persona.id}
+              className="rail-twin rounded-full hover:bg-soft"
+              onClick={() => void switchTo(persona.id)}
+            >
+              <PersonaPortrait persona={persona} />
+            </button>
+          </Tooltip>
+        ))}
+        {hidden > 0 && (
+          <Tooltip label="全部分身">
+            <span>
+              <PersonaSwitcher
+                label={`还有 ${hidden} 个分身`}
+                className="grid size-11 place-items-center rounded-full bg-soft text-sm font-semibold text-accent hover:bg-border"
+                trigger={`+${hidden}`}
+              />
+            </span>
+          </Tooltip>
         )}
         <Tooltip label="新建分身">
           <span>

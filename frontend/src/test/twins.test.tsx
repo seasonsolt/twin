@@ -237,7 +237,7 @@ it.each([
   ).toHaveAttribute('src', `/api/media/avatar-image?persona=${B}`);
 });
 
-it('shows five rail portraits, all-twins and creation shortcuts, keeps its popover, and shows the account', async () => {
+it('collapses the rail to the current and two recent twins, opens the rest from +N, and shows the account', async () => {
   items.push(
     ...Array.from({ length: 6 }, (_, index) => ({
       ...items[1],
@@ -253,14 +253,12 @@ it('shows five rail portraits, all-twins and creation shortcuts, keeps its popov
   expect(aside).toHaveClass('bg-canvas', 'text-primary', 'border-r');
   expect(aside).not.toHaveClass('bg-accent');
   expect(switcher).toHaveClass('ring-accent');
-  expect(aside.querySelectorAll('.persona-portrait')).toHaveLength(5);
+  expect(aside.querySelectorAll('.persona-portrait')).toHaveLength(3);
   expect(
     within(aside).getAllByRole('button', { name: /^切换到/u }),
-  ).toHaveLength(4);
-  expect(within(aside).getByRole('link', { name: '全部' })).toHaveAttribute(
-    'href',
-    '#/twins',
-  );
+  ).toHaveLength(2);
+  const more = within(aside).getByRole('button', { name: '还有 5 个分身' });
+  expect(more).toHaveTextContent('+5');
   expect(within(aside).getByRole('button', { name: '新建分身' })).toBeVisible();
   expect(within(aside).queryByText(account.email)).not.toBeInTheDocument();
   const user = userEvent.setup();
@@ -276,11 +274,32 @@ it('shows five rail portraits, all-twins and creation shortcuts, keeps its popov
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
   );
   expect(accountButton).toHaveFocus();
+  // The last twin switched to moves up into the rail.
+  await user.click(more);
+  await user.click(
+    within(screen.getByRole('dialog', { name: '切换分身' })).getByRole(
+      'button',
+      { name: /分身5/u },
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      within(aside).getAllByRole('button', { name: /^切换到/u })[0],
+    ).toHaveAccessibleName('切换到主人'),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+  );
   await user.click(switcher);
   const twins = screen.getByRole('dialog', { name: '切换分身' });
   expect(within(twins).getAllByRole('button', { name: /条记忆/ })).toHaveLength(
     8,
   );
+  await user.type(within(twins).getByLabelText('搜索分身'), '分身5');
+  expect(within(twins).getAllByRole('button', { name: /条记忆/ })).toHaveLength(
+    1,
+  );
+  await user.clear(within(twins).getByLabelText('搜索分身'));
   expect(within(twins).getByRole('link', { name: '全部分身' })).toHaveAttribute(
     'href',
     '#/twins',

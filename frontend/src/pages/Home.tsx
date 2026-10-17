@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Upload } from 'lucide-react';
 import { Button, Skeleton } from '../components/ui';
-import { StageHeader } from '../components/layout/StageHeader';
 import { api } from '../lib/api';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
@@ -64,7 +63,6 @@ export function Home() {
   const fresh = library !== null && library.recordings.length === 0;
   return (
     <div className="home-page">
-      <StageHeader variant="brand" />
       <div className="page-content space-y-8">
         {error && (
           <p role="alert" className="text-danger">

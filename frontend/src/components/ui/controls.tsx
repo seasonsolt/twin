@@ -37,7 +37,7 @@ export function Button({
     primary:
       'bg-accent text-on-accent hover:bg-accent-hover active:bg-accent-pressed',
     secondary:
-      'border-2 border-primary bg-transparent text-primary hover:bg-soft',
+      'border border-tertiary/60 bg-surface text-primary hover:bg-soft',
     ghost: 'bg-transparent text-secondary hover:bg-surface-raised',
     danger:
       'border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20',
@@ -48,12 +48,12 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center gap-2 rounded-full font-medium disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex shrink-0 items-center justify-center gap-2 rounded-sm font-medium disabled:cursor-not-allowed disabled:opacity-50',
         variants[variant],
         {
-          sm: 'min-h-11 px-3 text-sm',
-          md: 'min-h-11 px-4',
-          lg: 'min-h-12 px-5 text-md',
+          sm: 'min-h-8 px-3 text-sm',
+          md: 'min-h-9 px-4',
+          lg: 'min-h-10 px-5 text-md',
         }[size],
         className,
       )}
@@ -79,7 +79,7 @@ export function IconButton({
       variant="ghost"
       {...props}
       aria-label={label}
-      className={cn('size-11 p-0', props.className)}
+      className={cn('size-9 p-0', props.className)}
     >
       {children}
     </Button>
@@ -91,7 +91,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
     <input
       {...props}
       className={cn(
-        'min-h-11 w-full rounded-lg border-2 border-primary bg-surface px-3 text-md text-primary placeholder:text-tertiary disabled:opacity-50',
+        'min-h-9 w-full rounded-sm border border-tertiary/60 bg-surface px-3 text-primary placeholder:text-tertiary hover:border-tertiary disabled:opacity-50',
         className,
       )}
     />
@@ -128,7 +128,7 @@ export function Textarea({
       value={value}
       rows={rows}
       className={cn(
-        'w-full resize-none rounded-lg border-2 border-primary bg-surface px-3 py-2 text-md leading-6 placeholder:text-tertiary disabled:opacity-50',
+        'w-full resize-none rounded-sm border border-tertiary/60 bg-surface px-3 py-2 leading-6 placeholder:text-tertiary hover:border-tertiary disabled:opacity-50',
         className,
       )}
       onChange={(event) => {

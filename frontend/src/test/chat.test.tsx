@@ -702,8 +702,8 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
   );
   const input = screen.getByRole('textbox', { name: '你说' });
   expect(input).toHaveAttribute('rows', '1');
-  expect(input).toHaveClass('text-md');
-  expect(input).not.toHaveClass('md:text-base');
+  // Phones get 16px from the global mobile rule below, so iOS does not zoom in.
+  expect(input).not.toHaveClass('text-sm', 'text-xs');
   expect(view.container.querySelector('time')).toBeNull();
   const css = readFileSync('src/design/tokens.css', 'utf8');
   expect(css).toContain('font-size: 16px !important');

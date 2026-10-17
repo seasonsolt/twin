@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { Link } from 'react-router';
 import { Check, ChevronDown } from 'lucide-react';
-import { Dialog } from '../ui';
+import { Dialog, Input } from '../ui';
 import { personaUrl } from '../../lib/persona';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useAuth } from '../../stores/auth';
@@ -33,6 +33,8 @@ export function PersonaPortrait({ persona }: { persona?: Persona }) {
     </span>
   );
 }
+
+const SEARCH_FROM = 6;
 
 export function PersonaSwitcher({
   stage = false,
@@ -62,7 +64,15 @@ export function PersonaSwitcher({
   };
   const [anchor, setAnchor] = useState<CSSProperties>();
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
   const { id, pendingId, items, refresh, switchTo } = usePersonas();
+  // A long team list gets a filter instead of scrolling past everyone.
+  const searchable = items.length > SEARCH_FROM;
+  const shown = query.trim()
+    ? items.filter((persona) =>
+        persona.name.toLowerCase().includes(query.trim().toLowerCase()),
+      )
+    : items;
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   useEffect(() => {
@@ -117,6 +127,7 @@ export function PersonaSwitcher({
         }
         onClick={() => {
           setError('');
+          setQuery('');
           navigating.current = false;
           setOpen(true);
         }}
@@ -146,7 +157,19 @@ export function PersonaSwitcher({
         }}
       >
         <div className="space-y-3">
-          {items.map((persona) => (
+          {searchable && (
+            <Input
+              type="search"
+              aria-label="搜索分身"
+              placeholder="搜索分身"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          )}
+          {searchable && !shown.length && (
+            <p className="text-sm text-secondary">没有叫这个名字的分身</p>
+          )}
+          {shown.map((persona) => (
             <button
               key={persona.id}
               type="button"

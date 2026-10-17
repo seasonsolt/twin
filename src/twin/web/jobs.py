@@ -37,6 +37,7 @@ from starlette.types import Receive, Scope, Send
 
 from ..embed import EmbedError
 from ..llm import LLMError
+from ..usage import Activity, watch
 
 JobKind = Literal["persona_build", "chat", "video", "media_ingest", "ledger_build", "work"]
 JobStatus = Literal["queued", "running", "done", "failed"]
@@ -106,7 +107,8 @@ class JobConflict(Exception):
 
 
 def _now() -> dt.datetime:
-    return dt.datetime.now().replace(microsecond=0)
+    """Local time with its offset, so a page in another time zone (or a remote viewer) reads the same instant."""
+    return dt.datetime.now().astimezone().replace(microsecond=0)
 
 
 def _iso(value: dt.datetime | None) -> str | None:
@@ -244,6 +246,8 @@ class Job:
     result: object = None
     error: str | None = None
     done: threading.Event = field(default_factory=threading.Event)
+    # Model calls in flight and the time of the last progress, so a long call does not look like a hang.
+    activity: Activity = field(default_factory=Activity)
 
     @property
     def active(self) -> bool:
@@ -421,6 +425,7 @@ class JobManager:
             "milestones": list(job.milestones),
             "stage": dict(job.stage) if job.stage is not None else None,
             "tally": {"done": job.tally_done, "failed": job.tally_failed, "total": job.tally_total},
+            "activity": job.activity.snapshot() if job.status == "running" else None,
             "error": job.error,
         }
         if with_result:
@@ -433,6 +438,8 @@ class JobManager:
             for line in lines:
                 job.progress.append(line)
                 self._track(job, line)
+        if lines:
+            job.activity.touch()
 
     @staticmethod
     def _track(job: Job, line: str) -> None:
@@ -466,8 +473,10 @@ class JobManager:
         try:
             with self._lock:
                 job.status, job.started = "running", _now()
+            job.activity.touch()
             try:
-                result = fn(lambda message: self._log(job, message))
+                with watch(job.activity):
+                    result = fn(lambda message: self._log(job, message))
             except Exception as e:
                 logger.exception("job %s (%s) failed", job.job_id, job.kind)
                 error = hide_home(f"{JOB_LABELS[job.kind]}失败：{self._describe_error(e)}")

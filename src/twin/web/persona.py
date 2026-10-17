@@ -434,6 +434,10 @@ def register(
             if snapshot is not None:
                 view["stage"] = snapshot["stage"]
                 view["tally"] = snapshot["tally"]
+                view["started"] = snapshot["started"]
+                view["activity"] = snapshot["activity"]
+        # The page counts elapsed and idle time from the server's clock, not the viewer's.
+        view["now"] = dt.datetime.now(dt.UTC).isoformat()
         with open_store() as store:
             view["kernel_rebuild"] = store.get_meta("kernel_rebuild")
             awaiting = view["kernel_rebuild"] == "awaiting_confirmation" and stale_reason(store) == "kernel"

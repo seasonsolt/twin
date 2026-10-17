@@ -347,6 +347,12 @@ def test_processing_endpoint_running_follow_up_and_startup_resume(
     assert running["state"] == "running" and running["job_id"]
     assert running["stage"] == {"current": 1, "total": 2, "label": "抽取并合并人格档案"}
     assert running["tally"] == {"done": 1, "failed": 0, "total": None}
+    # what the page needs to tick between polls: the start, the server's clock and the live activity
+    # each carries its offset, so a viewer in any time zone counts the same seconds
+    started, now = (dt.datetime.fromisoformat(running[key]) for key in ("started", "now"))
+    assert started.tzinfo is not None and now.tzinfo is not None and now >= started
+    assert running["activity"]["waiting"] == 0 and running["activity"]["retries"] == 0
+    assert dt.datetime.fromisoformat(running["activity"]["last_progress_at"]) >= started
     for number in range(5):
         client.post("/api/persona/notes", json={"text": f"next {number}"})
     release.set()

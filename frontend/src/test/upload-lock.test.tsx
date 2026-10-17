@@ -371,9 +371,12 @@ it.each(['上传文件', '上传文件夹'])(
     fireEvent.click(screen.getByRole('button', { name: '在后台继续处理' }));
     expect(screen.getByRole('button', { name: '继续' })).toBeEnabled();
     expect(screen.getByText(/录音 1 · 正在转写/)).toBeInTheDocument();
+    expect(screen.getByText(/^共 1 份/)).toHaveTextContent(
+      '共 1 份 · 已记住 0 份 · 整理中 1 份',
+    );
     expect(
-      screen.getByText(/正在记住… · 共 1 份 · 已记住 0 份 · 整理中 1 份/),
-    ).toBeInTheDocument();
+      screen.getByText(/^共 1 份/).closest('[aria-live]'),
+    ).toHaveTextContent('正在记住…');
     rows = [{ ...media('1'), transcribed_s: 240 }];
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);

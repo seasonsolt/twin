@@ -16,6 +16,11 @@ import { StageHeader } from '../components/layout/StageHeader';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
 import { ThinkingLabel } from '../components/effects/ThinkingLabel';
+import {
+  BuildProgress,
+  INDEX_STAGE,
+  type Processing,
+} from '../features/memories/BuildProgress';
 import { LayoutScope } from '../components/motion';
 import {
   Badge,
@@ -126,37 +131,36 @@ const emptySummary: SourceSummary = {
   nothing_found: 0,
   failed: 0,
 };
-interface Processing {
-  state: 'idle' | 'queued' | 'running';
-  progress?: {
-    phase: 'extract' | 'merge';
-    done: number;
-    total: number;
-    // Merge batches finished and to finish, once the build merges.
-    merged?: number;
-    to_merge?: number;
-  };
-  stage?: { current: number; total: number; label: string } | null;
-  tally?: { done: number; failed: number; total: number | null } | null;
-  notice?: string | null;
-  last_error?: string | null;
-}
 
-// A source's chunks are read one by one; once all are read it waits for the shared merge at the end of the build.
-const processingLabel = (memory: Memory) => {
+// A source's chunks are read one by one; once all are read it waits for the merge shared by the whole build, which
+// starts when every source of the build is read, then for the retrieval vectors.
+const processingLabel = (memory: Memory, processing: Processing) => {
   const total = memory.chunks_total ?? 0;
   if (total > 0) {
     const done = memory.chunks_done ?? 0;
-    return done < total ? `正在记住… ${done}/${total} 段` : '已读完，等待合并';
+    if (done < total) return `正在记住… ${done}/${total} 段`;
+    const progress = processing.progress;
+    if (progress?.phase === 'merge')
+      return progress.to_merge
+        ? `合并中 · 已合并 ${progress.merged ?? 0}/${progress.to_merge} 批`
+        : '合并中';
+    if (!progress && processing.stage?.label === INDEX_STAGE)
+      return '正在更新检索向量';
+    const left = progress ? progress.total - progress.done : 0;
+    return left > 0
+      ? `已读完，等其余 ${left} 段读完后合并`
+      : '已读完，等待合并';
   }
   return memory.media_sha ? '整理中' : '正在记住…';
 };
 
 const processingText = (processing: Processing) => {
   if (processing.state === 'queued') return '记忆整理排队中';
+  // No build: only uploads or recordings are still being read in.
+  if (processing.state === 'idle') return '正在处理资料…';
   const progress = processing.progress;
   // After extraction and merge the build embeds the memories for retrieval, counted in tally.
-  if (!progress && processing.stage?.label === '更新检索向量')
+  if (!progress && processing.stage?.label === INDEX_STAGE)
     return '正在更新检索向量…';
   if (progress?.phase === 'merge')
     return progress.to_merge
@@ -629,6 +633,12 @@ export function Memories({
     }
   };
   const [dragging, setDragging] = useState<'files' | 'folder' | null>(null);
+  const waiting =
+    summary.total -
+    summary.remembered -
+    summary.nothing_found -
+    summary.failed -
+    summary.busy;
   const recordingHours = summary.duration_s / 3600;
   const firstSpeaker = attention.find(
     (memory) => memory.status === 'needs_speaker',
@@ -838,42 +848,19 @@ export function Memories({
             )
           )}
           {(processing.state !== 'idle' || summary.busy > 0) && (
-            <div
-              aria-live="polite"
-              className="space-y-1 text-sm text-secondary"
+            <BuildProgress
+              processing={processing}
+              title={processingText(processing)}
             >
-              <ThinkingLabel text={processingText(processing)} />
-              <p>
-                {processingText(processing)} · 共 {summary.total} 份 · 已记住{' '}
-                {summary.remembered} 份
+              <p className="text-xs text-secondary">
+                共 {summary.total} 份 · 已记住 {summary.remembered} 份
                 {summary.nothing_found > 0 &&
                   ` · 已处理无结果 ${summary.nothing_found} 份`}
                 {summary.busy > 0 && ` · 整理中 ${summary.busy} 份`}
                 {summary.failed > 0 && ` · 失败 ${summary.failed} 份`}
-                {summary.total -
-                  summary.remembered -
-                  summary.nothing_found -
-                  summary.failed -
-                  summary.busy >
-                  0 &&
-                  ` · 待处理或确认 ${
-                    summary.total -
-                    summary.remembered -
-                    summary.nothing_found -
-                    summary.failed -
-                    summary.busy
-                  } 份`}
+                {waiting > 0 && ` · 待处理或确认 ${waiting} 份`}
               </p>
-              {processing.stage && (
-                <p className="text-xs">
-                  当前阶段 {processing.stage.current}/{processing.stage.total} ·{' '}
-                  {processing.stage.label}
-                  {processing.tally &&
-                    processing.tally.done + processing.tally.failed > 0 &&
-                    ` · 已完成 ${processing.tally.done}${processing.tally.total ? `/${processing.tally.total}` : ''} 项，失败 ${processing.tally.failed} 项`}
-                </p>
-              )}
-            </div>
+            </BuildProgress>
           )}
           {embedded && building && processing.state === 'idle' && (
             <p role="status">正在整理记忆…</p>
@@ -1012,7 +999,9 @@ export function Memories({
                           ) : memory.status === 'transcribing' ? (
                             `转写中 ${Math.min(100, Math.floor(((memory.transcribed_s ?? 0) / (memory.duration_s || 1)) * 100))}% · ${((memory.transcribed_s ?? 0) / 60).toFixed(1)}/${((memory.duration_s ?? 0) / 60).toFixed(1)} 分钟`
                           ) : memory.status === 'processing' ? (
-                            <ThinkingLabel text={processingLabel(memory)} />
+                            <ThinkingLabel
+                              text={processingLabel(memory, processing)}
+                            />
                           ) : memory.status === 'remembered' ? (
                             `已加入 · 已记住 ${memory.remembered} 条`
                           ) : memory.status === 'nothing_found' ? (

@@ -1,3 +1,4 @@
+import type { Processing } from '../features/memories/BuildProgress';
 import {
   act,
   fireEvent,
@@ -41,21 +42,11 @@ const memory: Memory = {
   remembered: 3,
 };
 let rows: Memory[];
-let state: {
-  state: 'idle' | 'queued' | 'running';
-  stage?: { current: number; total: number; label: string } | null;
-  tally?: { done: number; failed: number; total: number | null } | null;
+let state: Processing & {
   last_error?: string;
   notice?: string;
   kernel_rebuild?: string;
   kernel_pending?: number;
-  progress?: {
-    phase: 'extract' | 'merge';
-    done: number;
-    total: number;
-    merged?: number;
-    to_merge?: number;
-  };
 };
 const v4 = { schema: 1, prompt: 'persona-v4', taxonomy: 'v1' };
 const v5 = { schema: 1, prompt: 'persona-v5', taxonomy: 'v1' };
@@ -511,7 +502,9 @@ it('polls processing every two seconds and stops at idle, with retry only on err
   ).toHaveLength(calls);
 });
 
-it('summarizes memory completion and the active build stage', async () => {
+it('shows the whole build live: its steps, what it waits on and that it is still moving', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-16T10:05:00Z'));
   rows = [
     memory,
     {
@@ -520,22 +513,104 @@ it('summarizes memory completion and the active build stage', async () => {
       title: '待整理资料',
       status: 'processing',
       remembered: 0,
+      chunks_done: 3,
+      chunks_total: 3,
     },
   ];
   state = {
     state: 'running',
     stage: { current: 1, total: 2, label: '抽取并合并人格档案' },
     tally: { done: 4, failed: 1, total: null },
+    progress: { phase: 'extract', done: 118, total: 127 },
+    started: '2026-10-16T10:00:00Z',
+    now: '2026-10-16T10:05:00Z',
+    activity: {
+      waiting: 3,
+      longest_s: 48,
+      retries: 0,
+      last_progress_at: '2026-10-16T10:04:58Z',
+    },
   };
   mount();
-  await loaded();
+  await act(async () => {});
 
-  expect(screen.getByText(/正在记住… · 共 2 份/)).toHaveTextContent(
-    '正在记住… · 共 2 份 · 已记住 1 份 · 整理中 1 份',
+  const steps = screen.getByRole('list', { name: '整理步骤' });
+  expect(steps).toHaveTextContent('读资料（进行中）118/127 段');
+  expect(steps).toHaveTextContent('合并成记忆（未开始）');
+  expect(steps).toHaveTextContent('更新检索（未开始）');
+  expect(
+    screen.getByRole('progressbar', { name: '读资料进度' }),
+  ).toHaveAttribute('aria-valuenow', '118');
+  expect(screen.getByText(/^共 2 份/)).toHaveTextContent(
+    '共 2 份 · 已记住 1 份 · 整理中 1 份',
   );
-  expect(screen.getByText(/当前阶段 1\/2/)).toHaveTextContent(
-    '当前阶段 1/2 · 抽取并合并人格档案 · 已完成 4 项，失败 1 项',
+  const live = screen.getByRole('list', { name: '实时状态' });
+  expect(live).toHaveTextContent('正在等模型回复 · 3 个请求 · 最久已等 48 秒');
+  expect(live).toHaveTextContent('刚刚有进展');
+  expect(screen.getByText(/已用时/)).toHaveTextContent('已用时 5 分 0 秒');
+  // the card says what the read material waits for
+  expect(screen.getByRole('list', { name: '记忆列表' })).toHaveTextContent(
+    '已读完，等其余 9 段读完后合并',
   );
+
+  // between polls the clocks keep ticking
+  fetcher.mockClear();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(screen.getByText(/已用时/)).toHaveTextContent('已用时 5 分 1 秒');
+  expect(live).toHaveTextContent('最久已等 49 秒');
+
+  // merging, with a retry and a long quiet spell
+  state = {
+    ...state,
+    progress: {
+      phase: 'merge',
+      done: 127,
+      total: 127,
+      merged: 37,
+      to_merge: 120,
+    },
+    now: '2026-10-16T10:20:00Z',
+    activity: {
+      waiting: 0,
+      longest_s: 0,
+      retries: 2,
+      last_progress_at: '2026-10-16T10:13:00Z',
+    },
+  };
+  vi.setSystemTime(new Date('2026-10-16T10:20:00Z'));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  const merging = screen.getByRole('list', { name: '整理步骤' });
+  expect(merging).toHaveTextContent('读资料（已完成）');
+  expect(merging).toHaveTextContent('合并成记忆（进行中）37/120 批');
+  const quiet = screen.getByRole('list', { name: '实时状态' });
+  expect(quiet).toHaveTextContent('有请求超时或出错，正在自动重试（2 次）');
+  expect(quiet).toHaveTextContent('上次进展在 7 分');
+  expect(quiet).toHaveTextContent('已经有一阵没有进展');
+  expect(screen.getByRole('list', { name: '记忆列表' })).toHaveTextContent(
+    '合并中 · 已合并 37/120 批',
+  );
+
+  // embedding for retrieval, counted in the stage's tally
+  state = {
+    ...state,
+    progress: undefined,
+    stage: { current: 2, total: 2, label: '更新检索向量' },
+    tally: { done: 512, failed: 0, total: 2000 },
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(screen.getByRole('list', { name: '整理步骤' })).toHaveTextContent(
+    '合并成记忆（已完成）更新检索（进行中）512/2000 条',
+  );
+  expect(screen.getByRole('list', { name: '记忆列表' })).toHaveTextContent(
+    '正在更新检索向量',
+  );
+  vi.useRealTimers();
 });
 
 it('keeps Chinese upload errors and aborts uploads on unmount', async () => {

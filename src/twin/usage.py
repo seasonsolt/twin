@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import inspect
 import json
 import math
@@ -231,7 +232,59 @@ _stage: ContextVar[str] = ContextVar("call_stage", default="other")
 _recorder: ContextVar[UsageRecorder | None] = ContextVar("usage_recorder", default=None)
 _active: ContextVar[CallRow | None] = ContextVar("usage_call", default=None)
 _collectors: ContextVar[tuple[list[CallRow], ...]] = ContextVar("usage_collectors", default=())
+_activities: ContextVar[tuple[Activity, ...]] = ContextVar("usage_activities", default=())
 _default = UsageRecorder()
+
+
+class Activity:
+    """What a piece of work is doing right now, for a live progress view: the model calls it is waiting on, the
+    retries since it last moved on, and when that was. Calls made inside ``watch(activity)``, or in threads started
+    there with ``copy_context``, register themselves; ``touch`` marks progress the work reports itself."""
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._calls: dict[int, float] = {}
+        self._last = clock()
+        self._retries = 0
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last, self._retries = self._clock(), 0
+
+    def _begin(self, key: int) -> None:
+        with self._lock:
+            self._calls[key] = self._clock()
+
+    def _end(self, key: int) -> None:
+        with self._lock:
+            self._calls.pop(key, None)
+            self._last = self._clock()
+
+    def _retry(self) -> None:
+        with self._lock:
+            self._retries += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        """Calls in flight, how long the oldest has waited, retries since the last progress, and when that was."""
+        with self._lock:
+            now = self._clock()
+            oldest = min(self._calls.values(), default=None)
+            return {
+                "waiting": len(self._calls),
+                "longest_s": round(now - oldest, 1) if oldest is not None else 0.0,
+                "retries": self._retries,
+                "last_progress_at": dt.datetime.fromtimestamp(self._last, UTC).isoformat(),
+            }
+
+
+@contextmanager
+def watch(activity: Activity) -> Iterator[Activity]:
+    token = _activities.set((*_activities.get(), activity))
+    try:
+        yield activity
+    finally:
+        _activities.reset(token)
 
 
 def failure_directory(directory: Path) -> Path:
@@ -341,6 +394,9 @@ def tracked[**P, R](backend: str, *, zero: bool = False) -> Callable[[Callable[P
                 row.attempts = 1
             token = _active.set(row)
             start = time.perf_counter()
+            watching = _activities.get()
+            for activity in watching:
+                activity._begin(id(row))
             try:
                 result = fn(*args, **kwargs)
                 row.success = True
@@ -350,6 +406,8 @@ def tracked[**P, R](backend: str, *, zero: bool = False) -> Callable[[Callable[P
                 raise
             finally:
                 row.latency_seconds = time.perf_counter() - start
+                for activity in watching:
+                    activity._end(id(row))
                 recorder.add(row, zero)
                 _active.reset(token)
 
@@ -472,6 +530,8 @@ def request[R](
                 row.transient[cause] = row.transient.get(cause, 0) + 1
             if retry == retries or cause is None:
                 raise
+            for activity in _activities.get():
+                activity._retry()
             sleep(_retry_delay(error, retry, random_fn, now))
     raise AssertionError("unreachable")
 

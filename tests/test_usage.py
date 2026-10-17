@@ -533,3 +533,53 @@ def test_retryable_errors_are_counted_by_cause(error: Exception, cause: str | No
         Backend().call()
     [row] = recorder.rows
     assert row.transient == ({cause: 3} if cause else {}) and len(sleeps) == (2 if cause else 0)
+
+
+def test_activity_tracks_calls_in_flight_retries_and_progress() -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+
+    from twin.usage import Activity, watch
+
+    now = [1000.0]
+    activity = Activity(clock=lambda: now[0])
+    started, release = threading.Barrier(3), threading.Event()
+    flaky = [openai.APITimeoutError(request=httpx.Request("POST", "http://x"))]
+
+    def answer(_: object = None) -> str:
+        if flaky:
+            raise flaky.pop()
+        return "ok"
+
+    class Backend:
+        model = "model"
+
+        @tracked("backend")
+        def call(self) -> str:
+            started.wait(5)
+            assert release.wait(5)
+            return request(answer, 2, sleep=lambda _: None, random_fn=lambda: 0.0)
+
+    with record_usage(UsageRecorder()), watch(activity), ThreadPoolExecutor(2) as pool:
+        # calls made in threads started with copy_context register too
+        futures = [pool.submit(copy_context().run, Backend().call) for _ in range(2)]
+        started.wait(5)
+        now[0] = 1048.0
+        assert activity.snapshot()["waiting"] == 2 and activity.snapshot()["longest_s"] == 48.0
+        release.set()
+        assert [f.result() for f in futures] == ["ok", "ok"]
+    view = activity.snapshot()
+    # one timed-out attempt was retried; finished calls are no longer waited on and count as progress
+    assert (view["waiting"], view["retries"]) == (0, 1)
+    assert view["last_progress_at"] == "1970-01-01T00:17:28+00:00"
+    now[0] = 1100.0
+    activity.touch()
+    assert activity.snapshot()["retries"] == 0
+    assert activity.snapshot()["last_progress_at"] == "1970-01-01T00:18:20+00:00"
+    # outside ``watch`` nothing registers
+    with record_usage(UsageRecorder()):
+        release.set()
+        started = threading.Barrier(1)
+        Backend().call()
+    assert activity.snapshot()["waiting"] == 0 and activity.snapshot()["retries"] == 0

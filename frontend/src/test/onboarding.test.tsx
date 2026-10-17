@@ -134,9 +134,12 @@ it.each([true, false])(
     expect(screen.getByRole('button', { name: '录一段' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: '继续' }));
     await screen.findByRole('heading', { name: '添加记忆' });
+    expect(await screen.findByText(/^共 0 份/)).toHaveTextContent(
+      '共 0 份 · 已记住 0 份',
+    );
     expect(
-      await screen.findByText(/记忆整理排队中 · 共 0 份 · 已记住 0 份/),
-    ).toBeInTheDocument();
+      screen.getByText(/^共 0 份/).closest('[aria-live]'),
+    ).toHaveTextContent('记忆整理排队中');
     expect(screen.getAllByRole('tab')).toHaveLength(3);
     expect(
       screen.getByRole('button', { name: '正在整理记忆…' }),

@@ -2,7 +2,8 @@
 
 Quick check while iterating: ruff and mypy as usual, but only the tests the changes can affect, and the frontend
 checks only when ``frontend/`` changed since ``--base`` (default origin/main, else main; uncommitted and untracked
-files included). ``--full`` runs every check CI runs; run it once before committing or releasing.
+files included). ``--full`` runs every check CI runs, including the screenshot comparison of the key pages
+(scripts/screenshots.sh, in Docker); run it once before committing or releasing.
 
 Python tests are chosen by pytest-testmon, which records the code each test executes in ``.testmondata`` and reruns
 a test when that code changes; the first run in a checkout records every test and takes longer. A new worktree
@@ -155,6 +156,11 @@ def main() -> int:
             ("前端测试", ["pnpm", "-C", "frontend", "test", *([] if args.full else ["--changed", merge_base])]),
             ("前端构建", ["pnpm", "-C", "frontend", "build"]),
         ]
+        if args.full:
+            # Compares the build just made; about a minute, so only before committing.
+            steps.append(("截图对比", ["env", "TWIN_SCREENSHOTS_NO_BUILD=1", "./scripts/screenshots.sh"]))
+        else:
+            print("改了前端：截图对比只在 --full 时运行（./scripts/screenshots.sh）。")
     if args.dry_run:
         for title, command in steps:
             print(f"会跑 {title}：{' '.join(command)}")

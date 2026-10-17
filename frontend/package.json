@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . && prettier --check .",
     "test": "vitest run",
-    "build": "vite build"
+    "build": "vite build",
+    "screenshots": "../scripts/screenshots.sh",
+    "screenshots:update": "../scripts/screenshots.sh --update-snapshots"
   },
   "dependencies": {
     "@pixiv/three-vrm": "3.5.5",
@@ -38,6 +40,7 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.3",

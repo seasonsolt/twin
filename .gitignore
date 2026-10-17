@@ -24,3 +24,6 @@ frontend/node_modules/
 
 # Paper PDFs: third-party copyright, keep local only (see docs/paper/REFERENCES.md)
 docs/paper/refs/
+
+# Playwright screenshot diffs (baselines in frontend/e2e/__screenshots__ are committed)
+frontend/e2e/.results/

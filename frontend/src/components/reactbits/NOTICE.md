@@ -4,9 +4,10 @@
 - Install date: 2026-10-05
 - Method: `pnpm -C frontend dlx shadcn@latest add --cwd frontend @react-bits/<Name>-TS-TW --yes` (shadcn 4.21.2).
 - Source revision: `ca44b3f9ee180676a06d7de8ec6bea84cddff85b`.
-  All seven registry files were byte-for-byte checked against `src/ts-tailwind/` at this commit before the one marked lint fix.
+  All seven registry files (five remain) were byte-for-byte checked against `src/ts-tailwind/` at this commit before the one marked lint fix.
 - Registry: `https://reactbits.dev/r/{Name}-TS-TW.json`.
-- Components: BlurText, ShinyText, CountUp (`TextAnimations/`); AnimatedList, SpotlightCard, Stepper (`Components/`); AnimatedContent (`Animations/`). Each upstream file is `{category}/{Name}/{Name}.tsx`.
+- Components: BlurText, CountUp (`TextAnimations/`); AnimatedList, SpotlightCard, Stepper (`Components/`). Each upstream file is `{category}/{Name}/{Name}.tsx`.
+- Removed 2026-10-17: ShinyText (replaced by `TypingIndicator` in `components/ui`) and AnimatedContent (its GSAP ScrollTrigger reveal is now Motion's `whileInView` in `effects/SectionReveal`).
 - Local changes: Stepper's empty CheckIconProps interface becomes an equivalent type alias (marked inline); button defaults are Chinese, and `completeButtonText` makes the final action configurable. Upstream formatting is preserved via Prettier ignore; ESLint still checks all sources.
 - Use only inside this application. Do not sell, sublicense, or redistribute these components as a library or standalone bundle.
 

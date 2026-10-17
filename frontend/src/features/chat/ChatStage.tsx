@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import {
-  motion,
-  useSpring,
-  useTransform,
-  type MotionStyle,
-} from 'motion/react';
+import { motion, useSpring, useTransform } from 'motion/react';
 import { History, LoaderCircle } from 'lucide-react';
 import { StageHeader } from '../../components/layout/StageHeader';
-import { Button, IconButton } from '../../components/ui';
+import {
+  Button,
+  IconButton,
+  PresenceRing,
+  StreamText,
+  usePresence,
+} from '../../components/ui';
 import { useMotionPreset, springs } from '../../design/motion';
 import type { Capabilities } from '../avatar/types';
 import { ChatAvatar } from './ChatAvatar';
@@ -43,6 +44,7 @@ export function ChatStage({
   voiceCaption,
   level,
   speaking,
+  thinking = false,
   onToggle,
   onVideoPlaying,
   onVideoError,
@@ -60,6 +62,8 @@ export function ChatStage({
   voiceCaption: string;
   level: number;
   speaking: boolean;
+  /** Working on an answer that has not started to arrive. */
+  thinking?: boolean;
   onToggle(): void;
   onVideoPlaying(playing: boolean): void;
   onVideoError(): void;
@@ -77,17 +81,14 @@ export function ChatStage({
   const [open, setOpen] = useState(false);
   const [time, setTime] = useState(0);
   const [videoShown, setVideoShown] = useState(false);
-  const boundedLevel = Number.isFinite(level)
-    ? Math.max(0, Math.min(3, level))
-    : 0;
-  const intensity = useSpring(0, springs.gentle);
-  const breathing = useTransform(intensity, (value) => 1 + value * 0.03);
-  const expansion = useTransform(intensity, (value) => 1.08 + value * 0.16);
-  const opacity = useTransform(intensity, (value) => 0.3 + value * 0.45);
-  useEffect(() => {
-    if (reduced) intensity.jump(0);
-    else intensity.set(speaking ? 0.25 + (boundedLevel / 3) * 0.75 : 0);
-  }, [intensity, boundedLevel, speaking, reduced]);
+  const presence = usePresence(
+    speaking ? 'speaking' : thinking ? 'thinking' : 'idle',
+    level,
+  );
+  const breathing = useTransform(
+    presence.intensity,
+    (value) => 1 + value * 0.03,
+  );
   const circle = useRef<HTMLButtonElement>(null);
   const player = useRef<HTMLVideoElement>(null);
   const playbackError = useRef(onVideoError);
@@ -229,25 +230,13 @@ export function ChatStage({
           <div className="stage-portrait-content">
             <motion.div
               className="stage-speaking"
-              data-stage-level={speaking ? boundedLevel : 0}
-              style={
-                {
-                  width: reduced ? targetSize : size,
-                  height: reduced ? targetSize : size,
-                  '--ring-expansion': expansion,
-                  '--ring-opacity': opacity,
-                } as MotionStyle
-              }
+              data-stage-level={speaking ? presence.level : 0}
+              style={{
+                width: reduced ? targetSize : size,
+                height: reduced ? targetSize : size,
+              }}
             >
-              {speaking &&
-                !reduced &&
-                [0, 1].map((ring) => (
-                  <span
-                    key={ring}
-                    aria-hidden
-                    className="stage-speaking-ring"
-                  />
-                ))}
+              <PresenceRing presence={presence} variant="ripple" />
               {capabilities?.available || capabilities?.video?.available ? (
                 <motion.button
                   ref={circle}
@@ -355,7 +344,7 @@ export function ChatStage({
             aria-atomic="true"
             data-testid="stage-caption"
           >
-            {caption}
+            {caption && <StreamText key={caption} text={caption} />}
           </p>
         }
       >

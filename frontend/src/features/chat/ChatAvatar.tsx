@@ -1,10 +1,9 @@
 import { Component, lazy, Suspense, useState, type ReactNode } from 'react';
 import type { Capabilities } from '../avatar/types';
 import { personaUrl } from '../../lib/persona';
-import { SpeakingGlow } from '../avatar/SpeakingGlow';
 import { Avatar } from '../avatar/Avatar';
 import { usePersonas } from '../../stores/personas';
-import { Clip, Portrait } from '../../components/ui';
+import { Clip, Portrait, PresenceRing, usePresence } from '../../components/ui';
 
 const Avatar3D = lazy(() => import('../avatar/Avatar3D'));
 
@@ -49,6 +48,7 @@ export function ChatAvatar({
   const model = capabilities?.avatar_model?.url
     ? personaUrl(capabilities.avatar_model.url, personaId)
     : undefined;
+  const presence = usePresence(speaking ? 'speaking' : 'idle', level);
   const [failedPortrait, setFailedPortrait] = useState<string>();
   const [failedModel, setFailedModel] = useState<string>();
   const initial = (
@@ -89,7 +89,7 @@ export function ChatAvatar({
           )}
         </div>
       </Clip>
-      {glow && <SpeakingGlow round level={level} speaking={speaking} />}
+      {glow && <PresenceRing presence={presence} />}
     </div>
   );
 }

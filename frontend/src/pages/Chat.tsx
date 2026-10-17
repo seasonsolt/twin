@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router';
 import { ArrowUp, Paperclip, Play, X } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
-import { ThinkingLabel } from '../components/effects/ThinkingLabel';
 import {
   Badge,
   Chip,
@@ -16,6 +15,7 @@ import {
   Button,
   PlainButton,
   Spacer,
+  TypingIndicator,
 } from '../components/ui';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
@@ -294,6 +294,7 @@ export function Chat() {
         voiceCaption={audio.caption}
         level={audio.level}
         speaking={audio.speaking}
+        thinking={chat.busy && !chat.newest}
         onToggle={() =>
           toggleReply(
             currentTurn ??
@@ -527,7 +528,7 @@ export function Chat() {
                   />
                   {chat.busy && !chat.newest && (
                     <div className="py-3">
-                      <ThinkingLabel />
+                      <TypingIndicator />
                     </div>
                   )}
                 </div>

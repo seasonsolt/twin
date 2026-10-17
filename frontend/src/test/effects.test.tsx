@@ -3,17 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { useReducedMotion } from 'motion/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  segmentReply,
-  replyUnitDelay,
-} from '../components/effects/ReplyReveal';
-import {
   FlowStepper,
   MessageList,
   MetricNumber,
-  ReplyReveal,
   SectionReveal,
   SpotlightAction,
-  ThinkingLabel,
 } from '../components/effects';
 
 vi.mock('motion/react', async (original) => ({
@@ -34,19 +28,6 @@ beforeEach(() => {
 });
 
 describe('reduced-motion effects', () => {
-  it('renders the full reply and a single screen-reader copy immediately', () => {
-    const { container } = render(
-      <ReplyReveal text="完整的助手回复 without delay" />,
-    );
-    expect(container.querySelector('.sr-only')).toHaveTextContent(
-      '完整的助手回复 without delay',
-    );
-    expect(container.querySelector('[aria-hidden="true"]')).toHaveTextContent(
-      '完整的助手回复 without delay',
-    );
-    expect(container.querySelector('.blur-text')).toBeNull();
-  });
-
   it('shows the final metric immediately, with a reserved width and accessible value', () => {
     const { container } = render(<MetricNumber value={1280} suffix="%" />);
     expect(container.querySelector('.sr-only')).toHaveTextContent('1,280%');
@@ -54,14 +35,6 @@ describe('reduced-motion effects', () => {
       container.querySelector('[aria-hidden="true"]:not(.invisible)'),
     ).toHaveTextContent('1,280%');
     expect(container.querySelector('.invisible')).toHaveTextContent('1,280%');
-  });
-
-  it('renders a static thinking label and no animated spans', () => {
-    render(<ThinkingLabel />);
-    const status = screen.getByRole('status');
-    expect(status.textContent).toBe('思考中…');
-    expect(status.querySelector('.sr-only, [aria-hidden="true"]')).toBeNull();
-    expect(status.querySelector('[style]')).toBeNull();
   });
 
   it('renders message/source items without the upstream animations or staggering', () => {
@@ -122,62 +95,19 @@ describe('reduced-motion effects', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已完成');
   });
 
-  it('shows a section immediately, without GSAP styles or scroll triggers', () => {
+  it('shows a section immediately, without reveal styles', () => {
     const { container } = render(<SectionReveal>完整区块</SectionReveal>);
     expect(screen.getByText('完整区块')).toBeVisible();
     expect(container.querySelector('.invisible, [style]')).toBeNull();
   });
 });
 
-it('keeps replies/metrics accessible and renders animated thinking text exactly once', () => {
+it('keeps metrics accessible with one screen-reader copy', () => {
   vi.mocked(useReducedMotion).mockReturnValue(false);
-  const { container } = render(
-    <>
-      <ReplyReveal text="A full assistant reply" />
-      <ThinkingLabel />
-      <MetricNumber value={86} suffix="%" />
-    </>,
-  );
-  const copies = [...container.querySelectorAll('.sr-only')].map(
-    (node) => node.textContent,
-  );
-  expect(copies).toEqual(['A full assistant reply', '86%']);
-  const thinking = screen.getByRole('status');
-  expect(thinking.textContent).toBe('思考中…');
-  expect(screen.getAllByText('思考中…')).toHaveLength(1);
-  for (const span of container.querySelectorAll('.blur-text span, [style]')) {
-    if (thinking.contains(span)) continue;
-    expect(span.closest('[aria-hidden="true"]')).not.toBeNull();
-  }
-});
-
-it('segments Chinese into multiple reveal units without changing visible or screen-reader text', () => {
-  vi.mocked(useReducedMotion).mockReturnValue(false);
-  const text = '我会先听大家的意见。 Hello world!';
-  const { container } = render(<ReplyReveal text={text} />);
+  const { container } = render(<MetricNumber value={86} suffix="%" />);
   expect(
-    container.querySelectorAll('[data-reveal-unit]').length,
-  ).toBeGreaterThan(4);
-  expect(container.querySelector('.sr-only')?.textContent).toBe(text);
-  expect(container.querySelector('.blur-text')?.textContent).toBe(text);
-  expect(segmentReply('中文句子').length).toBeGreaterThan(1);
-  expect(replyUnitDelay(1000) * 999 + 0.12).toBeLessThanOrEqual(1.200001);
-});
-
-it('falls back to CJK characters and space-delimited Latin runs', () => {
-  vi.stubGlobal('Intl', { ...Intl, Segmenter: undefined });
-  expect(segmentReply('中文 hello world 日本語')).toEqual([
-    '中',
-    '文',
-    ' ',
-    'hello',
-    ' ',
-    'world',
-    ' ',
-    '日',
-    '本',
-    '語',
-  ]);
+    [...container.querySelectorAll('.sr-only')].map((node) => node.textContent),
+  ).toEqual(['86%']);
 });
 
 it('never intercepts global Tab navigation through the upstream list', () => {

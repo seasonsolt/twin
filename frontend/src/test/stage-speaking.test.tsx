@@ -71,17 +71,18 @@ it.each([390, 768, 1200])(
     const wrapper =
       view.container.querySelector<HTMLElement>('.stage-speaking')!;
     const circle = view.container.querySelector<HTMLElement>('.stage-circle')!;
-    const rings = wrapper.querySelectorAll('.stage-speaking-ring');
+    const layer = wrapper.querySelector<HTMLElement>(
+      '[data-presence="speaking"]',
+    )!;
+    expect(layer.parentElement).toBe(wrapper);
+    const rings = layer.querySelectorAll('.presence-ripple');
     expect(rings).toHaveLength(2);
-    rings.forEach((ring) => {
-      expect(ring.parentElement).toBe(wrapper);
-      expect(circle.contains(ring)).toBe(false);
-    });
+    rings.forEach((ring) => expect(circle.contains(ring)).toBe(false));
     expect(circle.querySelector('[data-portrait-glow]')).toBeNull();
     const expansion = () =>
-      Number(wrapper.style.getPropertyValue('--ring-expansion'));
+      Number(layer.style.getPropertyValue('--ring-expansion'));
     const opacity = () =>
-      Number(wrapper.style.getPropertyValue('--ring-opacity'));
+      Number(layer.style.getPropertyValue('--ring-opacity'));
     await waitFor(() => expect(expansion()).toBeCloseTo(1.12, 2));
     await waitFor(() => expect(opacity()).toBeCloseTo(0.4125, 2));
     expect(circle.style.transform).toContain('scale(');
@@ -109,18 +110,18 @@ it.each([390, 768, 1200])(
       'data-collapsed',
       String(width < 1200),
     );
-    expect(wrapper.querySelectorAll('.stage-speaking-ring')).toHaveLength(2);
+    expect(wrapper.querySelectorAll('.presence-ripple')).toHaveLength(2);
     document.querySelector('textarea.chat-composer')?.remove();
     view.rerender(
       <MemoryRouter>
         <ChatStage {...props} speaking={false} />
       </MemoryRouter>,
     );
-    expect(wrapper.querySelector('.stage-speaking-ring')).toBeNull();
+    expect(wrapper.querySelector('.presence-ripple')).toBeNull();
     await waitFor(() => expect(circle.style.transform).toBe('none'));
     expect(css).toMatch(/\.stage-speaking\s*\{[^}]*overflow: visible/s);
     expect(css).toMatch(
-      /\.stage-speaking-ring\s*\{[^}]*inset: -5px;[^}]*border: 2px solid var\(--canvas\);[^}]*animation: stage-speaking-ring 1\.6s ease-out infinite/s,
+      /\.presence-ripple\s*\{[^}]*inset: -5px;[^}]*border: 2px solid var\(--canvas\);[^}]*animation: presence-ripple 1\.6s ease-out infinite/s,
     );
     expect(css).toContain('animation-delay: -0.8s');
   },
@@ -138,7 +139,7 @@ it('uses a static speaking chip with no rings or breathing for reduced motion, i
       <ChatStage {...props} level={3} />
     </MemoryRouter>,
   );
-  expect(view.container.querySelector('.stage-speaking-ring')).toBeNull();
+  expect(view.container.querySelector('.presence-ripple')).toBeNull();
   expect(screen.getByRole('status', { name: '正在说话' })).toHaveTextContent(
     '正在说',
   );
@@ -280,7 +281,7 @@ it('keeps the accent glow for non-stage avatars on light backgrounds', () => {
     'data-glow-level',
     '3',
   );
-  expect(view.container.querySelector('.stage-speaking-ring')).toBeNull();
+  expect(view.container.querySelector('.presence-ripple')).toBeNull();
 });
 
 it.each([390, 768])(
@@ -307,3 +308,23 @@ it.each([390, 768])(
     expect(big).toHaveStyle({ height: '360px' });
   },
 );
+
+it('holds one still ring while the twin thinks, and speech takes over once it speaks', () => {
+  const view = render(
+    <MemoryRouter>
+      <ChatStage {...props} speaking={false} thinking />
+    </MemoryRouter>,
+  );
+  const rings = view.container.querySelectorAll('.presence-ripple');
+  expect(rings).toHaveLength(1);
+  expect(rings[0]).toHaveAttribute('data-still', '');
+  view.rerender(
+    <MemoryRouter>
+      <ChatStage {...props} thinking />
+    </MemoryRouter>,
+  );
+  expect(
+    view.container.querySelector('[data-presence="speaking"]'),
+  ).not.toBeNull();
+  expect(view.container.querySelectorAll('.presence-ripple')).toHaveLength(2);
+});

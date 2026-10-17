@@ -109,6 +109,7 @@ LAYERS: dict[str, int] = {
     "web.app": 9,
     "web.auth": 9,
     "web.backends": 9,
+    "web.gpu": 9,
     "web.jobs": 9,
     "web.persona": 9,
     "web.conversations": 9,

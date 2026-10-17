@@ -28,7 +28,7 @@ from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
-from . import assets, library, media, persona
+from . import assets, gpu, library, media, persona
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
@@ -310,6 +310,9 @@ def create_app(
     app.state.personas = registry
     app.state.auth = auth
     auth.register(app)
+    monitor = gpu.GpuMonitor(settings)
+    app.state.gpu = monitor
+    gpu.register(app, monitor)
     app.add_middleware(PersonaMiddleware, registry=registry)
     app.add_middleware(AuthMiddleware, auth=auth)
     app.add_middleware(
@@ -478,9 +481,11 @@ def create_app(
                 context = registry.application(entry["id"])
                 await stack.enter_async_context(context.router.lifespan_context(context))
             await hub.start()
+            monitor.start()
             try:
                 yield
             finally:
+                await anyio.to_thread.run_sync(monitor.stop)
                 await hub.stop()
                 for context in list(registry.apps.values()):
                     context.state.processing.close()

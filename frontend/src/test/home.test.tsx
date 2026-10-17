@@ -5,6 +5,7 @@ import { ConfirmProvider } from '../components/ui';
 import { Home } from '../pages/Home';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
+import { useAuth } from '../stores/auth';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -30,6 +31,7 @@ const recording = (change: Partial<Recording>): Recording => ({
 });
 let state: LibraryState;
 let people: Person[];
+let gpu: unknown[];
 beforeEach(() => {
   state = {
     recordings: [],
@@ -44,12 +46,16 @@ beforeEach(() => {
     },
   };
   people = [];
+  gpu = [];
+  useAuth.setState({ identity: null });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library') return json(state);
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/admin/gpu')
+        return json({ now: 0, interval: 60, window: 86400, services: gpu });
       throw new Error(url);
     }),
   );
@@ -125,4 +131,34 @@ it('shows the team, what needs settling and the way to upload more', async () =>
     'href',
     '/library',
   );
+});
+
+it('shows administrators the GPU services, and nobody else', async () => {
+  gpu = [
+    {
+      key: 'asr',
+      name: '转写服务',
+      address: '127.0.0.1:18790',
+      latest: null,
+      since: null,
+      checks: 0,
+      failures: 0,
+      availability: null,
+      first_at: null,
+      last_failure: null,
+      buckets: [],
+    },
+  ];
+  const member = show();
+  await screen.findByRole('heading', { name: '从一段会议录音开始' });
+  expect(screen.queryByRole('heading', { name: 'GPU 服务' })).toBeNull();
+  member.unmount();
+  useAuth.setState({
+    identity: { email: 'a@example.com', admin: true, auth_enabled: true },
+  });
+  show();
+  expect(
+    await screen.findByRole('heading', { name: 'GPU 服务' }),
+  ).toBeInTheDocument();
+  expect(screen.getByText('尚未检查')).toBeInTheDocument();
 });

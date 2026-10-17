@@ -3,6 +3,8 @@ import { Link } from 'react-router';
 import { Upload } from 'lucide-react';
 import { Button, Skeleton } from '../components/ui';
 import { api } from '../lib/api';
+import { useAuth } from '../stores/auth';
+import { GpuStatus } from '../features/admin/GpuStatus';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
@@ -15,8 +17,9 @@ const STEPS: [string, string][] = [
 ];
 
 /** The account's start page: the people found in its meeting recordings, what needs settling, and uploading. With
- * no recording yet, it is the way to the first one. */
+ * no recording yet, it is the way to the first one. Administrators also see the GPU services' health here. */
 export function Home() {
+  const admin = useAuth((state) => state.identity?.admin ?? false);
   const [library, setLibrary] = useState<LibraryState | null>(null);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -185,6 +188,7 @@ export function Home() {
             </p>
           </>
         )}
+        {admin && <GpuStatus />}
       </div>
     </div>
   );

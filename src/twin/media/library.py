@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS people (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     persona_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- Made automatically from a voice that matched nobody, and not named by the owner yet.
+    auto INTEGER NOT NULL DEFAULT 0
 );
 -- Voice samples a person was recognised by: the centroid of a speaker the owner confirmed and chose as a sample.
 CREATE TABLE IF NOT EXISTS voiceprints (
@@ -83,6 +85,8 @@ CREATE TABLE IF NOT EXISTS attributions (
     person_id TEXT,
     rejected TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL,
+    -- Taken by voice alone (``Team.classify``), not by the owner.
+    auto INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (recording_id, transcript_id, speaker_id)
 );
 -- A twin may answer only while done == wanted: every change that affects its recordings raises wanted in the same
@@ -161,9 +165,11 @@ class Library:
         prepare_private_file(self.db_path)
         with self._db() as db:
             db.execute("PRAGMA journal_mode=WAL")
-            columns = {row[1] for row in db.execute("PRAGMA table_info(recordings)")}
-            if columns and "revision" not in columns:
-                db.execute("ALTER TABLE recordings ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            # Columns added since a table was first made.
+            for table, column in (("recordings", "revision"), ("people", "auto"), ("attributions", "auto")):
+                columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                if columns and column not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
             db.executescript(_SCHEMA)
 
     @contextmanager

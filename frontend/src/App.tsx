@@ -1,7 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { MotionConfig } from 'motion/react';
-import { usePersonas } from './stores/personas';
 import { AppShell } from './components/layout/AppShell';
 import { AuthGate } from './features/auth/AuthGate';
 import {
@@ -42,7 +41,6 @@ const Gallery = lazy(() =>
 );
 
 export function App() {
-  const personaCount = usePersonas((state) => state.items.length);
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delayDuration={300}>
@@ -52,15 +50,8 @@ export function App() {
               <Suspense fallback={<Skeleton className="h-40" />}>
                 <Routes>
                   <Route element={<AppShell />}>
-                    <Route
-                      index
-                      element={
-                        <Navigate
-                          to={personaCount > 1 ? '/twins' : '/chat'}
-                          replace
-                        />
-                      }
-                    />
+                    {/* Start from the recordings: people are found in them, not set up first. */}
+                    <Route index element={<Navigate to="/library" replace />} />
                     <Route path="twins" element={<Twins />} />
                     <Route path="library" element={<Library />} />
                     <Route

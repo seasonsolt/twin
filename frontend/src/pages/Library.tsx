@@ -169,7 +169,7 @@ export function Library() {
         variant="brand"
         intro={
           <p className="stage-caption">
-            会议录音转写一次，之后可以给多位同事建分身。
+            上传会议录音，自动区分并认出每个人，新出现的人自动建档。
           </p>
         }
       />

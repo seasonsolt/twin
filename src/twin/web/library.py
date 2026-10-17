@@ -92,6 +92,8 @@ class Libraries:
                 continue
             if self.library(folder.name).resume():
                 self.kick(folder.name)
+            # Recordings transcribed before a crash, or before automatic classification existed.
+            self.team(folder.name).classify_all()
             for persona_id, _, wanted, done in Team(self.library(folder.name)).synced():
                 if wanted != done:
                     self.sync(folder.name, persona_id)
@@ -202,8 +204,22 @@ class Libraries:
             raise HTTPException(409, "这段录音刚被修改过，请刷新后再确认") from None
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
+        if body.action == "confirm" and body.sample:
+            # A new voice sample can settle speakers in every other recording.
+            team.classify_all()
         self.changed(owner)
         return {"revision": revision, "person_id": person_id}
+
+    def rename(self, owner: str, person_id: str, name: str) -> dict[str, Any]:
+        try:
+            persona_id = self.team(owner).rename(person_id, name)
+        except ValueError as e:
+            raise HTTPException(409 if "已经有" in str(e) else 400, str(e)) from None
+        if persona_id and self.registry is not None and self.registry.entry(persona_id) is not None:
+            with PersonaStore(self.registry.settings_for(persona_id).db_path) as store:
+                store.set_meta("identity:name", " ".join(name.split()))
+        self.changed(owner)
+        return {"renamed": True}
 
     def detail(self, owner: str, recording_id: str) -> dict[str, Any]:
         library = self.library(owner)
@@ -278,6 +294,9 @@ class Libraries:
             log("[1/2] 提取音频")
             recording = library.transcribe(recording_id, transcriber, progress)
             log(f"[2/2] 完成：{recording.segments} 段，{recording.speakers} 位说话人")
+            # Known voices go to their people and new long voices become unnamed people, without asking.
+            if self.team(owner).classify(recording_id):
+                self.changed(owner)
             return {"recording_id": recording_id, "status": recording.status}
         except TranscriptionError as exc:
             raise JobError(str(exc)) from None
@@ -445,6 +464,10 @@ def register(app: FastAPI, settings: Settings, jobs: JobManager, registry: Perso
             return libraries.team(libraries.owner(request)).add_person(body.name).model_dump()
         except ValueError as e:
             raise HTTPException(409, str(e)) from None
+
+    @app.patch("/api/library/people/{person_id}")
+    def patch_person(person_id: str, body: PersonBody, request: Request) -> dict[str, Any]:
+        return libraries.rename(libraries.owner(request), person_id, body.name)
 
     @app.delete("/api/library/people/{person_id}")
     def delete_person(person_id: str, request: Request) -> dict[str, bool]:

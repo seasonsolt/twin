@@ -203,6 +203,91 @@ def test_listing_people_and_candidates_reads_each_transcript_once(
     assert len(reads) == len(set(reads)) <= 2  # Never the same transcript twice.
 
 
+def voices(library: Library, name: str, *speakers: tuple[list[float], float]) -> str:
+    """A recording whose speakers S1, S2, ... have these voiceprints and speaking times."""
+    return recording(
+        library,
+        name,
+        [Segment(start=i, end=i + 1, text=f"第{i}位说话。", speaker=f"S{i + 1}") for i in range(len(speakers))],
+        [Speaker(id=f"S{i + 1}", seconds=seconds, embedding=vector) for i, (vector, seconds) in enumerate(speakers)],
+    )
+
+
+def test_known_voices_are_taken_without_asking_and_new_long_voices_become_unnamed_people(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "local")
+    team = Team(library)
+    first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 120), ([0.0, 1.0, 0.0], 90), ([0.0, 0.0, 1.0], 10))
+    assert team.classify(first)
+    view = {s.id: s for s in team.speakers(library.get(first))}  # type: ignore[arg-type]
+    assert [p.name for p in team.people()] == ["未命名 1", "未命名 2"]
+    assert view["S1"].auto and view["S2"].auto and view["S1"].decision == "confirmed"
+    assert view["S3"].decision == "none"  # Too short to make anyone of.
+    assert not team.classify(first)  # Nothing left that the voice settles.
+
+    lead = view["S1"].person_id
+    assert lead is not None
+    team.rename(lead, "张总")
+    with pytest.raises(ValueError, match="已经有"):
+        team.rename(lead, "未命名 2")
+    team.link(lead, "p-zhang")
+    team.built("p-zhang", 1)
+
+    second = voices(
+        library,
+        "二.m4a",
+        ([0.97, 0.03, 0.0], 100),  # 张总
+        ([0.02, 1.0, 0.0], 70),  # 未命名 2
+        ([0.6, 0.6, 0.2], 80),  # Like both: left for the owner.
+        ([0.99, 0.01, 0.0], 5),  # Like 张总 but too short to be sure.
+    )
+    assert team.classify(second)
+    view = {s.id: s for s in team.speakers(library.get(second))}  # type: ignore[arg-type]
+    people = {p.name: p for p in team.people()}
+    assert (view["S1"].person_id, view["S2"].person_id) == (lead, people["未命名 2"].id)
+    assert view["S3"].decision == view["S4"].decision == "none" and view["S3"].candidates
+    assert people["张总"].samples == 1 and not people["张总"].auto  # A match adds no sample.
+    assert people["未命名 2"].auto and people["未命名 2"].speakers == 2 and people["未命名 2"].recording_id
+    assert wanted_done(library, "p-zhang") == (2, 1)  # 张总's twin follows the new recording.
+
+    # Naming someone rebuilds everyone who speaks with them, since their sources call them by name.
+    team.built("p-zhang", 2)
+    team.rename(people["未命名 2"].id, "李总")
+    assert wanted_done(library, "p-zhang") == (3, 2)
+
+    # The owner says it is not 张总: that speaker is never classified again.
+    decide(team, second, "S1", "reject", lead)
+    assert not team.classify(second)
+    assert next(s for s in team.speakers(library.get(second)) if s.id == "S1").decision == "none"  # type: ignore[arg-type]
+
+
+def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "local")
+    first = voices(library, "一.m4a", ([1.0, 0.0], 15), ([0.0, 1.0], 15))
+    second = voices(library, "二.m4a", ([0.98, 0.02], 40), ([0.0, 1.0], 61))
+    settings = Settings(db_path=tmp_path / "twin.db")
+    app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://localhost") as web:
+        # Started with recordings never classified: the long new voice of the second became someone.
+        assert [p["name"] for p in web.get("/api/library/people").json()["items"]] == ["未命名 1"]
+        detail = web.get(f"/api/library/recordings/{first}").json()
+        confirm = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}
+        put = web.put(
+            f"/api/library/recordings/{first}/speakers/S1",
+            json={**confirm, "new_person": "张总", "sample": True},
+            headers=HEADERS,
+        )
+        zhang = put.json()["person_id"]
+        speakers = {s["id"]: s for s in web.get(f"/api/library/recordings/{second}").json()["speakers"]}
+        assert speakers["S1"]["person_id"] == zhang and speakers["S1"]["auto"] is True
+        unnamed = next(p for p in web.get("/api/library/people").json()["items"] if p["auto"])
+        renamed = web.patch(f"/api/library/people/{unnamed['id']}", json={"name": "李总"}, headers=HEADERS)
+        assert renamed.status_code == 200
+        taken = web.patch(f"/api/library/people/{unnamed['id']}", json={"name": "张总"}, headers=HEADERS)
+        assert taken.status_code == 409
+        names = {p["name"]: p["auto"] for p in web.get("/api/library/people").json()["items"]}
+        assert names == {"张总": False, "李总": False}
+
+
 # ------------------------------------------------------------------ the gate
 
 

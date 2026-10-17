@@ -282,7 +282,7 @@ it('shows the single sign-on name and leaves signing out to that site', async ()
 });
 
 it.each([0, 1, 2])(
-  'lands on the new flow, chat, or twins after login with %s twins',
+  'lands on the recording library after login with %s twins',
   async (count) => {
     items = Array.from({ length: count }, (_, index) => ({
       ...persona,
@@ -295,10 +295,9 @@ it.each([0, 1, 2])(
     const code = await requestCode(user);
     await user.type(code, '012345');
     await user.click(screen.getByRole('button', { name: '登录' }));
-    if (count === 0) await screen.findByRole('dialog', { name: '新建分身' });
-    else if (count === 1) await screen.findByRole('textbox', { name: '你说' });
-    else await screen.findByRole('heading', { name: '我的分身' });
-    expect(window.location.hash).toBe(count > 1 ? '#/twins' : '#/chat');
+    // No twin needs setting up first, not even for an account without one.
+    await screen.findByRole('heading', { name: '录音库' });
+    expect(window.location.hash).toBe('#/library');
   },
 );
 

@@ -18,6 +18,8 @@ export interface Speaker {
   person_id: string | null;
   rejected: string[];
   sample: boolean;
+  // Taken by voice alone, without the owner.
+  auto: boolean;
   candidates: Candidate[];
   near: boolean;
   samples: number;
@@ -30,6 +32,9 @@ export interface Person {
   seconds: number;
   samples: number;
   updating: boolean;
+  // Made from a voice that matched nobody, not named yet.
+  auto: boolean;
+  recording_id: string | null;
 }
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   transcript_id: string | null;
@@ -103,7 +108,18 @@ function SpeakerCard({
             ? `${label}：${owner.name}`
             : label}
         </Badge>
+        {speaker.auto && <Badge tone="info">按声音自动认出</Badge>}
         {speaker.sample && <Badge tone="info">声纹样本</Badge>}
+        {speaker.auto && owner && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => onDecide({ action: 'reject', person_id: owner.id })}
+          >
+            不是{owner.name}
+          </Button>
+        )}
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
         {Array.from({ length: speaker.samples }, (_, i) => (

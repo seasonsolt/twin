@@ -19,6 +19,7 @@ const speaker = (change: Partial<Speaker>): Speaker => ({
   person_id: null,
   rejected: [],
   sample: false,
+  auto: false,
   candidates: [],
   near: false,
   samples: 2,
@@ -32,6 +33,8 @@ const person = (change: Partial<Person>): Person => ({
   seconds: 600,
   samples: 1,
   updating: false,
+  auto: false,
+  recording_id: 'rec_1',
   ...change,
 });
 let revision: number;
@@ -57,6 +60,12 @@ beforeEach(() => {
               candidates: [{ person_id: 'per_1', name: '张总', score: 0.82 }],
             }),
             speaker({ id: 'S2', decision: 'confirmed', person_id: 'per_2' }),
+            speaker({
+              id: 'S3',
+              decision: 'confirmed',
+              person_id: 'per_1',
+              auto: true,
+            }),
           ],
           segments: [
             { start: 0, end: 4, text: '先看预算。', speaker: 'S1' },
@@ -182,4 +191,69 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
   expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
   expect(created).toHaveLength(1);
+});
+
+it('marks speakers recognised by voice and lets the owner say it is someone else', async () => {
+  showRecording();
+  const card = (await screen.findByRole('heading', { name: 'S3' })).closest(
+    'li',
+  )!;
+  expect(within(card).getByText('按声音自动认出')).toBeInTheDocument();
+  await userEvent.click(within(card).getByRole('button', { name: '不是张总' }));
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toMatchObject({
+    url: '/api/library/recordings/rec_1/speakers/S3',
+    action: 'reject',
+    person_id: 'per_1',
+  });
+});
+
+it('lists new voices apart and names them before a twin can be made', async () => {
+  const patches: unknown[] = [];
+  people = [
+    person({}),
+    person({
+      id: 'per_9',
+      name: '未命名 1',
+      auto: true,
+      recording_id: 'rec_9',
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/people/per_9' && init?.method === 'PATCH') {
+        patches.push(JSON.parse(String(init.body)));
+        people = [person({}), person({ id: 'per_9', name: '李总' })];
+        return json({ renamed: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const fresh = await screen.findByRole('region', { name: '新出现的声音' });
+  expect(within(fresh).getByText('未命名 1')).toBeInTheDocument();
+  expect(
+    within(fresh).queryByRole('button', { name: '生成分身' }),
+  ).not.toBeInTheDocument();
+  expect(within(fresh).getByRole('link', { name: '去听一听' })).toHaveAttribute(
+    'href',
+    '/library/rec_9',
+  );
+  await userEvent.type(within(fresh).getByLabelText('给未命名 1起名'), '李总');
+  await userEvent.click(within(fresh).getByRole('button', { name: '起名' }));
+  await waitFor(() => expect(patches).toEqual([{ name: '李总' }]));
+  // Named, they can have twins like anyone else.
+  expect(
+    await screen.findAllByRole('button', { name: '生成分身' }),
+  ).toHaveLength(2);
+  expect(screen.queryByRole('region', { name: '新出现的声音' })).toBeNull();
 });

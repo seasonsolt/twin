@@ -220,11 +220,12 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `POST/GET/PUT/DELETE /api/library/uploads…` | 与 `/api/uploads` 相同的分片协议；创建时排队数（排队/转写中 + 未传完）达到 `[library].max_pending` 返回 409，传完后可用空间会低于 `headroom_gb` 返回 507 |
 | `POST /api/library/uploads/{id}/finish` | 按 SHA 去重为录音（`new`），依次转写（与分身录音共用一个转写名额）；转写稿与 FLAC 试听文件校验后删除原件 |
 | `POST /api/library/recordings/{id}/retry` / `DELETE /api/library/recordings/{id}` | 失败且原件仍在时重新排队，否则 409 / 删除录音及其文件，转写中 409；删除会关闭用到它的团队分身直到重建 |
-| `GET /api/library/recordings/{id}` | 录音加 `transcript_id`、`revision`、`segments` 和 `speakers`（`decision`、`person_id`、`rejected`、`sample`、`candidates`、`near`、`samples`） |
+| `GET /api/library/recordings/{id}` | 录音加 `transcript_id`、`revision`、`segments` 和 `speakers`（`decision`、`person_id`、`rejected`、`sample`、`auto`、`candidates`、`near`、`samples`） |
 | `GET /api/library/recordings/{id}/speakers/{sid}/samples/{i}` | 该说话人第 i 段试听 WAV（0 起，个数见 `samples`） |
 | `PUT /api/library/recordings/{id}/speakers/{sid}` | `{transcript_id,revision,action:confirm\|unknown\|mixed\|reject\|clear,person_id?,new_person?,sample?}`，返回 `{revision,person_id}`；转写或修订号已变 409 |
 | `GET /api/library/review` | 未决定且有候选的说话人，最像的在前 |
-| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
+| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`、`auto` 未命名、`recording_id` 可试听的一段录音）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
+| `PATCH /api/library/people/{id}` | `{name}` 改名（未命名的人起名后不再是“未命名”），重名 409；同场的分身随之重建，已有分身同步改名 |
 | `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}` |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |

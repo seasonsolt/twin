@@ -1,11 +1,14 @@
 """People in an account's recording library: who each speaker is, how a speaker is matched to a person, and the
 twin sources that follow from those decisions.
 
-The owner decides; matching only proposes. A person is recognised by voice samples (the centroids of speakers the
-owner confirmed *and* chose as samples), and candidates are computed when asked, never stored, so nothing goes
-stale. Every decision raises the recording's ``revision`` (a page holding an older one is refused) and the
-``wanted`` version of every twin that had or now has a speaker in that recording, in the same transaction: those
-twins stay closed until a build of exactly that state completes (see ``Team.built``).
+The owner decides; matching proposes, and decides by itself only where the voice leaves no doubt (``classify``):
+a speaker whose voice is very close to one person's samples is taken to be that person, and a long voice matching
+nobody becomes a new unnamed person. Either is marked automatic and undone by any decision of the owner, after which
+that speaker is never classified again. A person is recognised by voice samples (the centroids of speakers the owner
+confirmed *and* chose as samples, and the voice an unnamed person was made from), and candidates are computed when
+asked, never stored, so nothing goes stale. Every decision raises the recording's ``revision`` (a page holding an
+older one is refused) and the ``wanted`` version of every twin that had or now has a speaker in that recording, in
+the same transaction: those twins stay closed until a build of exactly that state completes (see ``Team.built``).
 """
 
 from __future__ import annotations
@@ -32,6 +35,15 @@ Decision = Literal["none", "confirmed", "unknown", "mixed"]
 SHOW = 0.45
 # Candidates closer than this are shown together as "close, tell them apart".
 NEAR = 0.05
+# A speaker is taken to be someone without asking only this close to the person's samples, this much closer than to
+# anyone else, and after speaking this long (a short speaker's voiceprint is unsteady). Conservative until the pilot
+# calibrates them.
+AUTO = 0.75
+AUTO_MARGIN = 0.15
+AUTO_MIN_SECONDS = 20.0
+# A voice matching nobody becomes a new unnamed person after speaking this long; shorter ones wait for the owner.
+NEW_MIN_SECONDS = 60.0
+UNNAMED = "未命名"
 # Twin sources made from the library; the rest of the id names the recording and the person's own segments.
 SOURCE_PREFIX = "src_lib_"
 
@@ -45,9 +57,13 @@ class Person(BaseModel):
     name: str
     persona_id: str | None = None
     created_at: str
+    # Made from a voice that matched nobody, not named yet.
+    auto: bool = False
     speakers: int = 0
     seconds: float = 0
     samples: int = 0
+    # A recording the person speaks in, to hear them.
+    recording_id: str | None = None
 
 
 class Candidate(BaseModel):
@@ -76,6 +92,8 @@ class SpeakerView(BaseModel):
     person_id: str | None = None
     rejected: list[str] = []
     sample: bool = False
+    # The decision was taken by voice alone (``Team.classify``).
+    auto: bool = False
     candidates: list[Candidate] = []
     near: bool = False
 
@@ -115,6 +133,7 @@ class Team:
         seconds: dict[str, float] = {}
         counts: dict[str, int] = {}
         heard: dict[str, tuple[Speaker, ...]] = {}
+        heard_in: dict[str, str] = {}
         for person_id, recording_id, _, speaker_id in confirmed:
             if recording_id not in heard:
                 recording = self.library.get(recording_id)
@@ -122,7 +141,9 @@ class Team:
             speaker = next((s for s in heard[recording_id] if s.id == speaker_id), None)
             counts[person_id] = counts.get(person_id, 0) + 1
             seconds[person_id] = seconds.get(person_id, 0) + (speaker.seconds if speaker else 0)
+            heard_in.setdefault(person_id, recording_id)
         for person in people:
+            person.recording_id = heard_in.get(person.id)
             person.samples = samples.get(person.id, 0)
             person.speakers = counts.get(person.id, 0)
             person.seconds = round(seconds.get(person.id, 0), 1)
@@ -136,13 +157,17 @@ class Team:
         if not name:
             raise ValueError("名字不能为空")
         with self.library.transaction() as db:
-            if db.execute("SELECT 1 FROM people WHERE name = ?", (name,)).fetchone():
-                raise ValueError(f"已经有叫「{name}」的人")
-            person = Person(id="per_" + uuid.uuid4().hex[:12], name=name, created_at=_now())
-            db.execute(
-                "INSERT INTO people (id, name, persona_id, created_at) VALUES (?, ?, NULL, ?)",
-                (person.id, person.name, person.created_at),
-            )
+            return self._add_person(db, name)
+
+    @staticmethod
+    def _add_person(db: sqlite3.Connection, name: str, auto: bool = False) -> Person:
+        if db.execute("SELECT 1 FROM people WHERE name = ?", (name,)).fetchone():
+            raise ValueError(f"已经有叫「{name}」的人")
+        person = Person(id="per_" + uuid.uuid4().hex[:12], name=name, created_at=_now(), auto=auto)
+        db.execute(
+            "INSERT INTO people (id, name, persona_id, created_at, auto) VALUES (?, ?, NULL, ?, ?)",
+            (person.id, person.name, person.created_at, int(auto)),
+        )
         return person
 
     def delete_person(self, person_id: str) -> bool:
@@ -205,6 +230,7 @@ class Team:
                 person_id=row["person_id"] if row else None,
                 rejected=json.loads(row["rejected"]) if row else [],
                 sample=speaker.id in sampled,
+                auto=bool(row["auto"]) if row else False,
             )
             if view.decision == "none" and speaker.embedding:
                 # A speaker's own samples would match it perfectly; they only exist once it is decided anyway.
@@ -264,7 +290,8 @@ class Team:
                 decision, owner = action, None
             after = owner if decision == "confirmed" else None
             db.execute(
-                "INSERT OR REPLACE INTO attributions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO attributions (recording_id, transcript_id, speaker_id, decision, person_id, "
+                "rejected, updated_at, auto) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
                 (recording_id, transcript_id, speaker_id, decision, owner, json.dumps(rejected), _now()),
             )
             if before != after:
@@ -289,6 +316,108 @@ class Team:
                 self._reopen(db, recording_id, {p for p in (before, after) if p})
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return int(revision + 1)
+
+    def rename(self, person_id: str, name: str) -> str | None:
+        """Name a person (an unnamed one stops being automatic); returns their twin's id, if any. Everyone who
+        speaks with them is rebuilt, since their sources call the person by name."""
+        name = " ".join(name.split())
+        if not name:
+            raise ValueError("名字不能为空")
+        with self.library.transaction() as db:
+            row = db.execute("SELECT persona_id FROM people WHERE id = ?", (person_id,)).fetchone()
+            if row is None:
+                raise ValueError("找不到这个人")
+            if db.execute("SELECT 1 FROM people WHERE name = ? AND id != ?", (name, person_id)).fetchone():
+                raise ValueError(f"已经有叫「{name}」的人")
+            db.execute("UPDATE people SET name = ?, auto = 0 WHERE id = ?", (name, person_id))
+            together = {
+                r[0]
+                for r in db.execute(
+                    "SELECT DISTINCT b.person_id FROM attributions a JOIN attributions b "
+                    "ON b.recording_id = a.recording_id AND b.decision = 'confirmed' "
+                    "WHERE a.person_id = ? AND a.decision = 'confirmed'",
+                    (person_id,),
+                )
+            }
+            self._bump(db, together | {person_id})
+            return str(row[0]) if row[0] else None
+
+    def classify(self, recording_id: str) -> bool:
+        """Decide the recording's untouched speakers where the voice leaves no doubt: very close to one person's
+        samples (``AUTO``), or, for a long voice matching nobody, a new unnamed person kept by that voice. Returns
+        whether anything was decided. A speaker the owner has acted on is never classified, and a match adds no
+        voice sample, so mistakes do not spread."""
+        recording = self.library.get(recording_id)
+        if recording is None or recording.status != "ready" or recording.transcript_id is None:
+            return False
+        speakers = self.library.speakers(recording) or ()
+        with self.library.transaction() as db:
+            current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
+            if current is None or current[0] != recording.transcript_id:
+                return False
+            touched = {
+                row[0]
+                for row in db.execute(
+                    "SELECT speaker_id FROM attributions WHERE recording_id = ? AND transcript_id = ?",
+                    (recording_id, recording.transcript_id),
+                )
+            }
+            prints = self._prints(db)
+            decided: set[str] = set()
+            # Longest first: their voiceprints are the steadiest, and a new person is made from the clearest voice.
+            for speaker in sorted(speakers, key=lambda s: -s.seconds):
+                if speaker.id in touched or not speaker.embedding:
+                    continue
+                candidates = self._match(speaker.embedding, prints, set())
+                if candidates:
+                    best, runner = candidates[0], candidates[1].score if len(candidates) > 1 else 0.0
+                    if best.score < AUTO or best.score - runner < AUTO_MARGIN or speaker.seconds < AUTO_MIN_SECONDS:
+                        continue
+                    person_id = best.person_id
+                elif speaker.seconds >= NEW_MIN_SECONDS:
+                    person = self._add_person(db, self._unnamed(db), auto=True)
+                    person_id = person.id
+                    db.execute(
+                        "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
+                        "active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                        (
+                            person_id,
+                            recording_id,
+                            recording.transcript_id,
+                            speaker.id,
+                            json.dumps(speaker.embedding),
+                            _now(),
+                        ),
+                    )
+                    prints.append((person_id, person.name, speaker.embedding))
+                else:
+                    continue
+                db.execute(
+                    "INSERT INTO attributions (recording_id, transcript_id, speaker_id, decision, person_id, "
+                    "rejected, updated_at, auto) VALUES (?, ?, ?, 'confirmed', ?, '[]', ?, 1)",
+                    (recording_id, recording.transcript_id, speaker.id, person_id, _now()),
+                )
+                decided.add(person_id)
+            if not decided:
+                return False
+            self._reopen(db, recording_id, decided)
+            db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
+            return True
+
+    def classify_all(self) -> bool:
+        """``classify`` every transcribed recording, as after someone's voice samples changed."""
+        changed = False
+        for recording in self.library.list():
+            changed = self.classify(recording.id) or changed
+        return changed
+
+    @staticmethod
+    def _unnamed(db: sqlite3.Connection) -> str:
+        taken = {row[0] for row in db.execute("SELECT name FROM people WHERE name LIKE ?", (UNNAMED + " %",))}
+        n = 1
+        while f"{UNNAMED} {n}" in taken:
+            n += 1
+        return f"{UNNAMED} {n}"
 
     def review(self) -> list[dict[str, object]]:
         """Undecided speakers whose voice matches someone, best match first: the owner's confirmation queue."""
@@ -345,7 +474,11 @@ class Team:
                 "SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed'", (recording_id,)
             )
         }
-        affected = sorted(speaking | people)
+        Team._bump(db, speaking | people)
+
+    @staticmethod
+    def _bump(db: sqlite3.Connection, people: set[str]) -> None:
+        affected = sorted(people)
         if affected:
             db.execute(
                 f"UPDATE personas_sync SET wanted = wanted + 1 WHERE person_id IN ({','.join('?' * len(affected))})",

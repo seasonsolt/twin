@@ -3,7 +3,6 @@ import { Button } from '../../components/ui';
 import { StageHeader } from '../../components/layout/StageHeader';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
-import { usePersonas } from '../../stores/personas';
 
 export function Login() {
   const [email, setEmail] = useState('');
@@ -46,10 +45,9 @@ export function Login() {
   const verify = () =>
     work(async () => {
       await api('/api/auth/verify', { method: 'POST', json: { email, code } });
-      window.location.hash = '#/chat';
+      // Start from the recordings: people are found in them, not set up first.
+      window.location.hash = '#/library';
       await useAuth.getState().login();
-      if (usePersonas.getState().items.length > 1)
-        window.location.hash = '#/twins';
     });
   return (
     <main className="auth-page min-h-dvh bg-background">

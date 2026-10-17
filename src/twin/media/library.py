@@ -283,7 +283,8 @@ class Library:
             return recording, True
 
     def resume(self) -> int:
-        """After a restart: transcriptions that were cut off start again. Returns how many are waiting."""
+        """After a restart: transcriptions that were cut off start again, and an upload left behind by a stop
+        right after its recording was published is deleted. Returns how many are waiting."""
         with self.lock:
             with self._db() as db:
                 db.execute(
@@ -291,6 +292,10 @@ class Library:
                     "WHERE status = 'transcribing'",
                     (_now(),),
                 )
+                ready = [row[0] for row in db.execute("SELECT id FROM recordings WHERE status = 'ready'")]
+            for recording_id in ready:
+                if (original := self._original(recording_id)) is not None:
+                    original.unlink(missing_ok=True)
             return self.pending()
 
     def retry(self, recording_id: str) -> Recording | None:
@@ -388,8 +393,9 @@ class Library:
             )
             self._write_transcript(folder, transcript)
             self._encode_playback(audio, folder / "playback.flac")
-            original.unlink()
             audio.unlink(missing_ok=True)
+            # Published before the upload goes: a stop in between leaves a ready recording, never a queued one
+            # whose upload is gone.
             self.update(
                 recording_id,
                 status="ready",
@@ -405,6 +411,7 @@ class Library:
             if isinstance(exc, TranscriptionError):
                 raise
             raise TranscriptionError(message) from exc
+        original.unlink(missing_ok=True)
         result = self.get(recording_id)
         assert result is not None
         return result

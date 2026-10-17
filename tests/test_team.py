@@ -31,6 +31,7 @@ from twin.persona.items import PersonaItem
 from twin.persona.schema import ChatTurn
 from twin.persona.store import PersonaStore
 from twin.web import create_app
+from twin.web import library as web_library
 from twin.web.jobs import PersonaProcessing
 
 HEADERS = {"X-Twin": "1"}
@@ -287,8 +288,9 @@ def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -
     settings = Settings(db_path=tmp_path / "twin.db")
     app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)
     with TestClient(app, base_url="http://localhost") as web:
-        # Started with recordings never classified: the long new voice of the second became someone.
-        assert [p["name"] for p in web.get("/api/library/people").json()["items"]] == ["未命名 1"]
+        # Started with recordings never classified: the long new voice of the second becomes someone, in the
+        # background so that start-up does not wait for every transcript to be read.
+        until(lambda: [p["name"] for p in web.get("/api/library/people").json()["items"]] == ["未命名 1"])
         detail = web.get(f"/api/library/recordings/{first}").json()
         confirm = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}
         put = web.put(
@@ -465,6 +467,49 @@ def test_a_misattributed_fact_leaves_the_twin_and_reaches_the_right_one(web: Tes
     assert own == ["[00:06] 我反对压缩研发。"]
     people = {p["name"]: p for p in web.get("/api/library/people").json()["items"]}
     assert people["李总"]["persona_id"] == li_twin and people["张总"]["samples"] == 0
+
+
+def test_a_twin_from_the_library_stays_private(web: TestClient) -> None:
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    public = web.patch(f"/api/personas/{pid}", json={"public": True}, headers=HEADERS)
+    assert public.status_code == 409 and "私有" in public.json()["detail"]
+    assert web.patch(f"/api/personas/{pid}", json={"public": False}, headers=HEADERS).status_code == 200
+    own = web.post("/api/personas", json={"name": "自己"}, headers=HEADERS).json()["id"]
+    assert web.patch(f"/api/personas/{own}", json={"public": True}, headers=HEADERS).json()["public"] is True
+
+
+def test_a_failed_sync_is_tried_again(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_library, "SYNC_RETRY_SECONDS", (0.01, 0.01))
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    write = libraries.write_sources
+    calls: list[str] = []
+
+    def flaky(owner: str, persona_id: str) -> bool:
+        calls.append(persona_id)
+        if len(calls) == 1:
+            raise OSError("disk briefly unavailable")
+        return bool(write(owner, persona_id))
+
+    monkeypatch.setattr(libraries, "write_sources", flaky)
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    assert calls == [pid, pid]
+
+
+def test_a_deleted_twin_is_not_synced(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    assert web.delete(f"/api/personas/{pid}", headers=HEADERS).status_code == 200
+    synced: list[str] = []
+    monkeypatch.setattr(libraries, "sync", lambda owner, persona_id: synced.append(persona_id))
+    with libraries.library("local").transaction() as db:
+        db.execute("UPDATE personas_sync SET wanted = wanted + 1")
+    libraries.changed("local")
+    assert synced == []
 
 
 def test_a_person_s_gender_dresses_their_twin(web: TestClient) -> None:

@@ -464,6 +464,7 @@ def create_app(
     registry.make_app = persona_app
     registry.register(app)
     libraries = library.register(app, settings, jobs, registry)
+    app.state.libraries = libraries
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

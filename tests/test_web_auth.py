@@ -593,6 +593,8 @@ def test_sso_settings_are_validated(sso_settings: dict[str, str], message: str) 
 
 
 def test_recording_library_belongs_to_the_signed_in_account(web: TestClient) -> None:
+    # Whatever space this machine has left: admission by free space is tested in test_library.
+    web.app.state.libraries.settings.library.headroom_gb = 0  # type: ignore[attr-defined]
     other = login(web, OTHER)
     member = login(web)
     # No twin yet: the library is the account's, not a twin's.

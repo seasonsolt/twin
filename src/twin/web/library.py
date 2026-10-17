@@ -17,6 +17,7 @@ import datetime as dt
 import logging
 import shutil
 import threading
+import time
 import uuid
 from typing import Any, Literal
 
@@ -42,6 +43,9 @@ from .uploads import UploadBody, Uploads, upload_routes
 logger = logging.getLogger(__name__)
 
 GIB = 1024**3
+# Waits before rewriting a twin's sources again after a failed attempt; after the last, the twin stays closed until
+# the next change or restart.
+SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 
 
 class PersonBody(BaseModel):
@@ -93,17 +97,25 @@ class Libraries:
         still waiting for a change are brought in line."""
         if not self.root.is_dir():
             return
+        owners = []
         for folder in sorted(self.root.iterdir()):
             if not (folder / "library.db").is_file():
                 continue
             if self.library(folder.name).resume():
                 self.kick(folder.name)
-            # Recordings transcribed before a crash, or before automatic classification existed.
-            self.team(folder.name).classify_all()
-            self.team(folder.name).prune()
-            for persona_id, _, wanted, done in Team(self.library(folder.name)).synced():
-                if wanted != done:
-                    self.sync(folder.name, persona_id)
+            owners.append(folder.name)
+        # Reading every transcript of years of meetings must not hold up start-up.
+        threading.Thread(target=self._settle, args=(owners,), name="library-settle", daemon=True).start()
+
+    def _settle(self, owners: list[str]) -> None:
+        """Classify recordings transcribed before a crash (or before automatic classification existed), then bring
+        every waiting twin in line."""
+        for owner in owners:
+            try:
+                self.team(owner).classify_all()
+                self.changed(owner)
+            except Exception:
+                logger.exception("library of %s could not be settled after start-up", owner)
 
     # ------------------------------------------------------------ twins
 
@@ -114,7 +126,8 @@ class Libraries:
         """A decision changed some twins' wanted version: bring every waiting twin of the owner in line."""
         self.team(owner).prune()
         for persona_id, _, wanted, done in self.team(owner).synced():
-            if wanted != done:
+            # A deleted twin (perhaps in the trash) is brought in line if it is restored and changed again.
+            if wanted != done and self.registry is not None and self.registry.entry(persona_id) is not None:
                 self.sync(owner, persona_id)
 
     def sync(self, owner: str, persona_id: str) -> None:
@@ -130,12 +143,20 @@ class Libraries:
         ).start()
 
     def _sync(self, owner: str, persona_id: str) -> None:
+        failures = 0
         while True:
             try:
                 self.write_sources(owner, persona_id)
             except Exception:
-                # The twin stays closed; the next change, build or restart tries again.
+                # The twin stays closed meanwhile; the rewrite reads the library afresh, so it covers any change
+                # made during the wait.
                 logger.exception("library sync of %s failed", persona_id)
+                if failures < len(SYNC_RETRY_SECONDS):
+                    time.sleep(SYNC_RETRY_SECONDS[failures])
+                    failures += 1
+                    with self.lock:
+                        self.again.discard(persona_id)
+                    continue
             with self.lock:
                 if persona_id not in self.again:
                     self.syncing.discard(persona_id)

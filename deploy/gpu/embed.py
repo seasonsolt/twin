@@ -12,14 +12,16 @@ No key: the port is bound to loopback and reached only through the reverse tunne
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import struct
 import threading
 from collections.abc import Callable, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 MAX_LENGTH = 8192
 TOKENS_PER_PASS = 8192
 MAX_INPUTS = 256
@@ -85,13 +87,18 @@ def embeddings(encode: Encode, name: str, body: Any) -> tuple[int, dict[str, Any
         return 400, error("input 必须是字符串或非空字符串列表")
     if len(texts) > MAX_INPUTS:
         return 400, error(f"一次最多 {MAX_INPUTS} 条")
-    if body.get("encoding_format", "float") != "float":
-        return 400, error("只支持 encoding_format=float")
+    # The OpenAI Python client asks for base64 (little-endian float32) unless told otherwise.
+    encoding = body.get("encoding_format") or "float"
+    if encoding not in {"float", "base64"}:
+        return 400, error("encoding_format 只能是 float 或 base64")
     vectors = encode([t if t.strip() else " " for t in texts])
+    rows: list[Any] = (
+        vectors if encoding == "float" else [base64.b64encode(struct.pack(f"<{len(v)}f", *v)).decode() for v in vectors]
+    )
     return 200, {
         "object": "list",
         "model": name,
-        "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)],
+        "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(rows)],
         "usage": {"prompt_tokens": 0, "total_tokens": 0},
     }
 

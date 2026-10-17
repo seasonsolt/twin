@@ -160,8 +160,11 @@ def test_embedding_requests_follow_the_openai_shape(embed: ModuleType) -> None:
     status, body = embed.embeddings(encode, "BAAI/bge-m3", {"model": "BAAI/bge-m3", "input": ["你好", ""]})
     assert status == 200 and [d["index"] for d in body["data"]] == [0, 1] and seen == [["你好", " "]]
     assert embed.embeddings(encode, "m", {"input": "单条"})[1]["data"][0]["embedding"] == [1.0, 0.0]
-    for bad in ({"input": []}, {"input": [1]}, {"input": ["x"] * 257}, {"input": "x", "encoding_format": "base64"}, []):
+    for bad in ({"input": []}, {"input": [1]}, {"input": ["x"] * 257}, {"input": "x", "encoding_format": "int8"}, []):
         assert embed.embeddings(encode, "m", bad)[0] == 400
+
+    # twin's own client, which asks for base64, reads the same vectors back.
+    from twin.embed import OpenAICompatEmbedder
 
     server = embed.serve(encode, "BAAI/bge-m3", "127.0.0.1", 0, "cpu")
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -172,5 +175,7 @@ def test_embedding_requests_follow_the_openai_shape(embed: ModuleType) -> None:
             f"{base}/v1/embeddings", data=json.dumps({"input": ["a"]}).encode(), method="POST"
         )
         assert json.load(urllib.request.urlopen(request))["data"][0]["embedding"] == [1.0, 0.0]
+        client = OpenAICompatEmbedder("BAAI/bge-m3", base_url=f"{base}/v1", api_key_env="TWIN_TEST_UNSET_KEY")
+        assert client.embed(["甲", "乙"]).tolist() == [[1.0, 0.0], [1.0, 0.0]]
     finally:
         server.shutdown()

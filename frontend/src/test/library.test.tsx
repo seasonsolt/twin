@@ -23,6 +23,8 @@ const recording = (change: Partial<Recording>): Recording => ({
   speakers: 4,
   segments: 900,
   created_at: 'now',
+  people: [],
+  unsettled: 0,
   ...change,
 });
 let state: LibraryState;
@@ -152,4 +154,36 @@ it('says recordings wait when no diarizing transcription service is set up', asy
     await screen.findByText(/还没有配置能区分说话人的转写服务/u),
   ).toBeInTheDocument();
   expect(screen.getByText(/排队 1 \/ 20 个/u)).toBeInTheDocument();
+});
+
+it('tells for each transcribed recording whether its speakers are identified', async () => {
+  state.recordings = [
+    recording({ id: 'a', filename: '周会.m4a', unsettled: 4 }),
+    recording({
+      id: 'b',
+      filename: '月会.m4a',
+      people: ['张总', '李总'],
+      unsettled: 2,
+    }),
+    recording({
+      id: 'c',
+      filename: '季会.m4a',
+      people: ['张总'],
+      unsettled: 0,
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      json(url === '/api/library' ? state : { items: [] }),
+    ),
+  );
+  show();
+  const row = async (name: string) =>
+    within((await screen.findByRole('link', { name })).closest('li')!);
+  expect((await row('周会.m4a')).getByText('还没认人')).toBeInTheDocument();
+  const partly = await row('月会.m4a');
+  expect(partly.getByText('2 位待确认')).toBeInTheDocument();
+  expect(partly.getByText(/张总、李总/u)).toBeInTheDocument();
+  expect((await row('季会.m4a')).getByText('已认人')).toBeInTheDocument();
 });

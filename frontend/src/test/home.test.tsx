@@ -24,6 +24,8 @@ const recording = (change: Partial<Recording>): Recording => ({
   speakers: 3,
   segments: 100,
   created_at: 'now',
+  people: [],
+  unsettled: 0,
   ...change,
 });
 let state: LibraryState;
@@ -78,7 +80,7 @@ it('starts an account without recordings from uploading one, not from setting up
 it('shows the team, what needs settling and the way to upload more', async () => {
   state.pending = 1;
   state.recordings = [
-    recording({}),
+    recording({ people: ['张总'], unsettled: 1 }),
     recording({
       id: 'rec_2',
       filename: '月会.m4a',
@@ -108,6 +110,12 @@ it('shows the team, what needs settling and the way to upload more', async () =>
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
   expect(within(tasks).getByText('转写中')).toBeInTheDocument();
   expect(within(tasks).getByText('月会.m4a')).toBeInTheDocument();
+  // A speaker nobody resembles still asks for the owner, through its recording.
+  expect(within(tasks).getByText('还有人没认')).toBeInTheDocument();
+  expect(within(tasks).getByRole('link', { name: '去认人' })).toHaveAttribute(
+    'href',
+    '/library/rec_1',
+  );
   const people_ = screen.getByRole('region', { name: '人物' });
   expect(await within(people_).findByText('可以聊')).toBeInTheDocument();
   expect(

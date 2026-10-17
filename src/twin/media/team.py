@@ -457,6 +457,23 @@ class Team:
             n += 1
         return f"{UNNAMED} {n}"
 
+    def identities(self) -> dict[str, tuple[list[str], int]]:
+        """Per recording, the people its current transcript is attributed to (by name, in speaking order of their
+        first speaker) and how many of its speakers are settled (someone, nobody known, or several people)."""
+        found: dict[str, tuple[list[str], int]] = {}
+        with self.library.read() as db:
+            for row in db.execute(
+                "SELECT a.recording_id, a.decision, p.name FROM attributions a "
+                "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                "LEFT JOIN people p ON p.id = a.person_id AND a.decision = 'confirmed' "
+                "WHERE a.decision != 'none' ORDER BY a.recording_id, a.speaker_id"
+            ):
+                names, settled = found.get(row["recording_id"], ([], 0))
+                if row["name"] and row["name"] not in names:
+                    names.append(row["name"])
+                found[row["recording_id"]] = (names, settled + 1)
+        return found
+
     def review(self) -> list[dict[str, object]]:
         """Undecided speakers whose voice matches someone, best match first: the owner's confirmation queue."""
         queue: list[dict[str, object]] = []

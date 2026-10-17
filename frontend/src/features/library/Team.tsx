@@ -273,7 +273,15 @@ export function Team({
   const unnamed = people?.filter((p) => p.auto) ?? [];
   const named = people?.filter((p) => !p.auto);
   const arriving = recordings.filter((r) => r.status !== 'ready');
-  const tasks = unnamed.length + waiting.length + arriving.length;
+  // Speakers nobody's voice resembles (often short) are not in the review queue; their recording still asks.
+  const unsorted = recordings.filter(
+    (r) =>
+      r.status === 'ready' &&
+      r.unsettled > 0 &&
+      !waiting.some((w) => w.recording_id === r.id),
+  );
+  const tasks =
+    unnamed.length + waiting.length + unsorted.length + arriving.length;
   return (
     <>
       {error && (
@@ -313,6 +321,23 @@ export function Team({
                   className="inline-flex min-h-11 items-center text-sm text-accent underline"
                 >
                   去听一听
+                </Link>
+              </li>
+            ))}
+            {unsorted.map((r) => (
+              <li key={`unsorted-${r.id}`} className={task}>
+                <span className={`${taskLabel} text-warning`}>
+                  {r.unsettled === r.speakers ? '还没认人' : '还有人没认'}
+                </span>
+                <p className="font-medium">
+                  <span className="break-all">{r.filename}</span> ·{' '}
+                  {r.unsettled} 位说话人待确认
+                </p>
+                <Link
+                  to={recordingPath(r.id)}
+                  className="inline-flex min-h-11 items-center text-sm text-accent underline"
+                >
+                  去认人
                 </Link>
               </li>
             ))}

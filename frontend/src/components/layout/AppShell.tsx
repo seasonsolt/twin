@@ -45,7 +45,7 @@ export const navItems = [
   { route: 'chat', title: '聊天', icon: MessageCircle, visitor: true },
   { route: 'work', title: '工作', icon: Briefcase, visitor: true },
   { route: 'profile', title: '档案', icon: BookUser, visitor: false },
-  { route: 'ledger', title: '账本', icon: ListChecks, visitor: false },
+  { route: 'ledger', title: '承诺账本', icon: ListChecks, visitor: false },
 ];
 
 // Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
@@ -137,13 +137,24 @@ function TwinRail() {
       window.removeEventListener('twin-identity-changed', load);
     };
   }, [refresh]);
+  const name = current?.name || '本人';
+  // Three scopes, top to bottom: the team's space, the twin being worked on with its own pages, the other twins.
   return (
     <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col overflow-y-auto border-r border-border bg-canvas px-2 py-4 text-primary">
-      <div
-        className="flex flex-col items-center gap-2"
-        aria-label="分身快捷切换"
+      <nav aria-label="团队空间" className="flex flex-col gap-1">
+        {[
+          { to: '/team', title: '团队', icon: Users },
+          { to: '/library', title: '录音库', icon: Mic },
+        ].map(({ to, title, icon }) => (
+          <NavPill key={to} to={to} icon={icon} label={title} />
+        ))}
+      </nav>
+      <div className="my-3 border-t border-border" />
+      <section
+        aria-label={`当前分身：${name}`}
+        className="flex flex-col items-center gap-1"
       >
-        <Tooltip label={current?.name || '本人'}>
+        <Tooltip label={`切换分身（当前：${name}）`}>
           <span>
             <PersonaSwitcher
               label="切换分身"
@@ -152,6 +163,25 @@ function TwinRail() {
             />
           </span>
         </Tooltip>
+        <Text
+          as="span"
+          size="xs"
+          weight="semibold"
+          align="center"
+          truncate
+          className="mt-1 mb-2 w-full"
+        >
+          {name}
+        </Text>
+        <div className="w-full">
+          <Navigation />
+        </div>
+      </section>
+      <div className="my-3 border-t border-border" />
+      <div
+        className="flex flex-col items-center gap-2"
+        aria-label="分身快捷切换"
+      >
         {shortcuts.map((persona) => (
           <Tooltip key={persona.id} label={persona.name}>
             <PlainButton
@@ -186,14 +216,6 @@ function TwinRail() {
           </span>
         </Tooltip>
       </div>
-      {[
-        { to: '/team', title: '团队', icon: Users },
-        { to: '/library', title: '录音库', icon: Mic },
-      ].map(({ to, title, icon }) => (
-        <NavPill key={to} to={to} icon={icon} label={title} />
-      ))}
-      <div className="my-3 border-t border-border" />
-      <Navigation />
       <RailAccount />
     </aside>
   );

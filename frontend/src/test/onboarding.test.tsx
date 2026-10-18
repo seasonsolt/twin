@@ -200,7 +200,7 @@ it.each(['user', 'memories'])(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '工作', '档案', '账本']);
+    ).toEqual(['聊天', '工作', '档案', '承诺账本']);
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
   },
 );

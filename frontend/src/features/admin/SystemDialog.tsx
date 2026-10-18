@@ -5,6 +5,7 @@ import {
   AudioLines,
   Cpu,
   KeyRound,
+  LayoutGrid,
   RefreshCw,
   Video,
   Volume2,
@@ -41,12 +42,13 @@ import {
   type SwitchName,
   type SystemState,
 } from '../../stores/system';
+import { setFeatures } from '../../stores/auth';
 
 /** The search parameter that holds the open section: the dialog sits over any page and closing it returns there. */
 export const SYSTEM_PARAM = 'system';
 
 type SectionKey =
-  'monitor' | 'gpu' | 'embed' | 'asr' | 'tts' | 'video' | 'tokens';
+  'monitor' | 'gpu' | 'embed' | 'asr' | 'tts' | 'video' | 'features' | 'tokens';
 
 const SECTIONS: (Omit<SettingsSection, 'status'> & { key: SectionKey })[] = [
   { key: 'monitor', label: '监控', icon: Activity },
@@ -55,7 +57,8 @@ const SECTIONS: (Omit<SettingsSection, 'status'> & { key: SectionKey })[] = [
   { key: 'asr', label: 'ASR 转写', icon: AudioLines },
   { key: 'tts', label: 'TTS 朗读', icon: Volume2 },
   { key: 'video', label: '视频服务', icon: Video },
-  { key: 'tokens', label: '模型与 Token', group: '设置', icon: KeyRound },
+  { key: 'features', label: '功能', group: '设置', icon: LayoutGrid },
+  { key: 'tokens', label: '模型与 Token', icon: KeyRound },
 ];
 
 /** Opens the system dialog at a section, over the current page. */
@@ -109,6 +112,12 @@ function sectionStatus(
   if (key === 'monitor') {
     const count = failing(state).length;
     return count ? { label: `${count} 项异常`, tone: 'danger' } : undefined;
+  }
+  if (key === 'features') {
+    const off = Object.values(state.features ?? {}).filter(
+      (feature) => !feature.enabled,
+    ).length;
+    return off ? { label: `关闭 ${off} 项` } : undefined;
   }
   if (key === 'tokens')
     return state.quota.exhausted
@@ -585,6 +594,73 @@ function VideoPane({ state }: { state: SystemState }) {
   );
 }
 
+/** Switches 工作 and 承诺账本 on or off for everyone; the menu follows at once. Chat is the twin and always stays. */
+function FeatureRow({
+  name,
+  feature,
+}: {
+  name: 'work' | 'ledger';
+  feature: NonNullable<SystemState['features']>['work'];
+}) {
+  const put = useSystem((s) => s.put);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <Stack gap={2}>
+      <Switch
+        label={feature.label}
+        checked={feature.enabled}
+        disabled={busy}
+        onCheckedChange={(enabled) => {
+          setBusy(true);
+          setError('');
+          put(`/api/admin/system/features/${name}`, { enabled })
+            .then(() => setFeatures({ [name]: enabled }))
+            .catch((failure: unknown) =>
+              setError(failureText(failure, '切换失败')),
+            )
+            .finally(() => setBusy(false));
+        }}
+      />
+      {feature.changed_at && (
+        <Text size="xs" tone="tertiary">
+          {feature.changed_by ?? '本机'} 于{' '}
+          {clock(Date.parse(feature.changed_at) / 1000)}{' '}
+          {feature.enabled ? '开启' : '关闭'}
+        </Text>
+      )}
+      {error && (
+        <Text role="alert" size="sm" tone="danger">
+          {error}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+function Features({ state }: { state: SystemState }) {
+  const features = state.features;
+  return (
+    <Section
+      level={4}
+      title="功能"
+      description="关闭后所有分身、所有成员的菜单里都不再出现，已有的任务和记录保留，重新开启就回来。聊天是分身本身，始终开启。"
+    >
+      {features ? (
+        <Stack gap={4}>
+          <Switch label="聊天" checked disabled onCheckedChange={() => {}} />
+          <FeatureRow name="work" feature={features.work} />
+          <FeatureRow name="ledger" feature={features.ledger} />
+        </Stack>
+      ) : (
+        <Text size="sm" tone="secondary">
+          服务器版本不支持关闭功能。
+        </Text>
+      )}
+    </Section>
+  );
+}
+
 const HOURS = [1, 6, 12, 24, 72, 168];
 
 function QuotaForm({ quota }: { quota: SystemState['quota'] }) {
@@ -927,6 +1003,8 @@ export function SystemDialog() {
           <Gpu state={data} onSelect={select} />
         ) : active === 'video' ? (
           <VideoPane state={data} />
+        ) : active === 'features' ? (
+          <Features state={data} />
         ) : active === 'tokens' ? (
           <Tokens state={data} />
         ) : (

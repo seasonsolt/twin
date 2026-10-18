@@ -1,8 +1,9 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { MotionConfig } from 'motion/react';
 import { AppShell } from './components/layout/AppShell';
 import { useCanManage } from './stores/personas';
+import { featureOn, useAuth, type Feature } from './stores/auth';
 import { AuthGate } from './features/auth/AuthGate';
 import {
   ConfirmProvider,
@@ -50,6 +51,18 @@ function Start() {
   return <Navigate to={useCanManage() ? '/team' : '/chat'} replace />;
 }
 
+// A page an administrator switched off is not there: its address leads to chat, which always is.
+function FeaturePage({
+  feature,
+  children,
+}: {
+  feature: Feature;
+  children: ReactNode;
+}) {
+  const on = useAuth((state) => featureOn(state.identity, feature));
+  return on ? children : <Navigate to="/chat" replace />;
+}
+
 export function App() {
   return (
     <MotionConfig reducedMotion="user">
@@ -69,9 +82,23 @@ export function App() {
                       element={<Recording />}
                     />
                     <Route path="chat" element={<Chat />} />
-                    <Route path="work" element={<Work />} />
+                    <Route
+                      path="work"
+                      element={
+                        <FeaturePage feature="work">
+                          <Work />
+                        </FeaturePage>
+                      }
+                    />
                     <Route path="profile" element={<Profile />} />
-                    <Route path="ledger" element={<Ledger />} />
+                    <Route
+                      path="ledger"
+                      element={
+                        <FeaturePage feature="ledger">
+                          <Ledger />
+                        </FeaturePage>
+                      }
+                    />
                     <Route
                       path="memories"
                       element={

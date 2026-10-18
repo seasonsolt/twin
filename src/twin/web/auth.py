@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -101,6 +101,8 @@ class Auth:
         self.email = settings.enabled and not self.sso
         self.sso_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
         self.sso_seen: set[str] = set()
+        # More for /api/whoami beside the identity: which pages are switched on.
+        self.extra: Callable[[], dict[str, Any]] = dict
         if self.email:
             if not os.environ.get(settings.smtp.password_env):
                 raise ValueError(f"[auth.smtp] 缺少密码环境变量 {settings.smtp.password_env}")
@@ -311,7 +313,7 @@ class Auth:
         @app.get("/api/whoami")
         def whoami(request: Request) -> Response:
             identity = request.scope.get("twin_identity")
-            return JSONResponse(identity) if identity else login_required(self.login_url())
+            return JSONResponse({**identity, **self.extra()}) if identity else login_required(self.login_url())
 
         @app.get("/api/admin/waitlist")
         def waitlist(request: Request) -> list[dict[str, Any]]:

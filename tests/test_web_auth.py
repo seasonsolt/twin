@@ -267,6 +267,7 @@ def test_logout_expiration_csrf_and_static(web: TestClient) -> None:
         "admin": False,
         "auth_enabled": True,
         "provider": "email",
+        "features": {"work": True, "ledger": True},
     }
     assert web.post("/api/auth/logout").status_code == 403
     result = web.post("/api/auth/logout", headers=CSRF)
@@ -344,6 +345,7 @@ def test_auth_disabled_and_config_errors(tmp_path: Path, monkeypatch: pytest.Mon
             "admin": True,
             "auth_enabled": False,
             "provider": None,
+            "features": {"work": True, "ledger": True},
         }
         assert web.get("/api/status").status_code == 200
         assert not (tmp_path / "auth.db").exists()
@@ -551,6 +553,7 @@ def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> 
         "admin": False,
         "auth_enabled": True,
         "provider": "sso",
+        "features": {"work": True, "ledger": True},
     }
     own = create(web)
     calls = login.calls

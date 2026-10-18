@@ -10,6 +10,24 @@ export interface Identity {
   auth_enabled: boolean;
   /** 'sso' means signing in and out belongs to another app on this site. */
   provider?: 'email' | 'sso' | null;
+  /** Pages an administrator switched on or off for everyone; missing (an older server) means on. */
+  features?: Partial<Record<Feature, boolean>>;
+}
+
+/** Pages that can be switched off. Chat is the twin itself and never is. */
+export type Feature = 'work' | 'ledger';
+
+export const featureOn = (identity: Identity | null, feature: Feature) =>
+  identity?.features?.[feature] !== false;
+
+/** After an administrator switched a page, show it or hide it at once, without signing in again. */
+export function setFeatures(features: Partial<Record<Feature, boolean>>) {
+  useAuth.setState((state) => ({
+    identity: state.identity && {
+      ...state.identity,
+      features: { ...state.identity.features, ...features },
+    },
+  }));
 }
 
 export const accountLabel = (identity: Identity) =>

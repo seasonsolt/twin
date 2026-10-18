@@ -32,7 +32,7 @@ import { useCanManage, usePersonas, type Persona } from '../../stores/personas';
 import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
-import { accountLabel, useAuth } from '../../stores/auth';
+import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Onboarding = lazy(() =>
@@ -56,7 +56,15 @@ const visitorRoutes = new Set(
 
 function useNavItems() {
   const canManage = useCanManage();
-  return canManage ? navItems : navItems.filter((item) => item.visitor);
+  const identity = useAuth((state) => state.identity);
+  // A page an administrator switched off leaves the menu for everyone; chat always stays.
+  return navItems.filter(
+    (item) =>
+      (canManage || item.visitor) &&
+      (item.route !== 'work' && item.route !== 'ledger'
+        ? true
+        : featureOn(identity, item.route)),
+  );
 }
 
 function Navigation() {

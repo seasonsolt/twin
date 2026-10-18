@@ -326,7 +326,10 @@ def create_app(
                     resume()
 
     system_settings.listeners.append(system_changed)
+    auth.extra = lambda: {"features": system_settings.features()}
     app.add_middleware(PersonaMiddleware, registry=registry)
+    # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.
+    app.add_middleware(system.FeatureGate, system=system_settings)
     app.add_middleware(AuthMiddleware, auth=auth)
     app.add_middleware(
         SecurityMiddleware, allowed_hosts=LOOPBACK_HOSTS | {_allowed_form(h) for h in allowed_hosts if h.strip()}

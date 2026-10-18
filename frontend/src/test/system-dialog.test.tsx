@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AccountMenu } from '../components/ui';
 import { SystemDialog } from '../features/admin/SystemDialog';
 import { useSystem, type SystemState } from '../stores/system';
+import { useAuth } from '../stores/auth';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -73,6 +74,20 @@ beforeEach(() => {
         configured: false,
         enabled: false,
         missing: 'twin.toml 里没有配置 [video]',
+        changed_at: null,
+        changed_by: null,
+      },
+    },
+    features: {
+      work: {
+        label: '工作',
+        enabled: true,
+        changed_at: null,
+        changed_by: null,
+      },
+      ledger: {
+        label: '承诺账本',
+        enabled: true,
         changed_at: null,
         changed_by: null,
       },
@@ -147,6 +162,19 @@ beforeEach(() => {
               ...state.switches,
               tts: {
                 ...state.switches.tts,
+                enabled: (body as { enabled: boolean }).enabled,
+              },
+            },
+          };
+        const feature = /\/features\/(\w+)$/.exec(url)?.[1] as
+          'work' | 'ledger' | undefined;
+        if (feature && state.features)
+          state = {
+            ...state,
+            features: {
+              ...state.features,
+              [feature]: {
+                ...state.features[feature],
                 enabled: (body as { enabled: boolean }).enabled,
               },
             },
@@ -324,6 +352,37 @@ it('points a model elsewhere behind one button, and warns before changing the em
     await screen.findByRole('button', { name: '修改地址和模型' }),
   );
   expect(screen.getByText(/重新生成/)).toBeInTheDocument();
+});
+
+it('switches work off for everyone at once, and never chat', async () => {
+  const user = userEvent.setup();
+  useAuth.setState({
+    identity: {
+      email: null,
+      admin: true,
+      auth_enabled: false,
+      features: { work: true, ledger: true },
+    },
+  });
+  show('features');
+  const chat = await screen.findByRole('switch', { name: '聊天' });
+  expect(chat).toBeChecked();
+  expect(chat).toBeDisabled();
+  await user.click(screen.getByRole('switch', { name: '工作' }));
+  await vi.waitFor(() =>
+    expect(screen.getByRole('switch', { name: '工作' })).not.toBeChecked(),
+  );
+  expect(puts).toEqual([
+    { url: '/api/admin/system/features/work', body: { enabled: false } },
+  ]);
+  // The menu hides it without signing in again.
+  expect(useAuth.getState().identity?.features).toEqual({
+    work: false,
+    ledger: true,
+  });
+  expect(
+    screen.getByRole('button', { name: /功能.*关闭 1 项/ }),
+  ).toBeInTheDocument();
 });
 
 it('keeps the system settings in the account menu and marks the account button when a service fails', async () => {

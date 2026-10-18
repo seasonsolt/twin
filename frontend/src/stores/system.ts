@@ -68,12 +68,21 @@ export interface AuditEntry {
   set?: boolean;
 }
 
+export interface FeatureState {
+  label: string;
+  enabled: boolean;
+  changed_at: string | null;
+  changed_by: string | null;
+}
+
 export interface SystemState {
   now: number;
   interval: number;
   window: number;
   services: ServiceState[];
   switches: Record<SwitchName, SwitchState>;
+  /** 工作 and 承诺账本, which an administrator may switch off for everyone. */
+  features?: Record<'work' | 'ledger', FeatureState>;
   /** Label/value rows of twin.toml per service: hosts and models only. */
   config: Record<'embed' | 'asr' | 'tts' | 'video', [string, string][]>;
   models: {

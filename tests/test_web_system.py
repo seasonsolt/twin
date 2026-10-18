@@ -313,3 +313,41 @@ def test_env_values_read_back_as_written(tmp_path: Path, monkeypatch: pytest.Mon
         write_env_value(env, "BAD-NAME", "x")
     write_env_value(env, "TEST_ROUND_TRIP", None)
     assert env.read_text() == "" and stat.S_IMODE(env.stat().st_mode) == 0o600
+
+
+def test_admin_switches_work_and_ledger_off_but_never_chat(tmp_path: Path) -> None:
+    client = client_for(Settings(db_path=tmp_path / "twin.db"))
+    assert client.get("/api/whoami").json()["features"] == {"work": True, "ledger": True}
+    assert client.get("/api/persona/work").status_code == 200
+    assert client.get("/api/persona/ledger").status_code == 200
+
+    body = client.put("/api/admin/system/features/work", json={"enabled": False}, headers=CSRF).json()
+    assert body["features"]["work"] | {"changed_at": None} == {
+        "label": "工作",
+        "enabled": False,
+        "changed_at": None,
+        "changed_by": None,
+    }
+    client.put("/api/admin/system/features/ledger", json={"enabled": False}, headers=CSRF)
+    assert client.get("/api/whoami").json()["features"] == {"work": False, "ledger": False}
+    for path in ("/api/persona/work", "/api/persona/work/t1/stop", "/api/persona/ledger/brief"):
+        refused = client.get(path) if "stop" not in path else client.post(path, headers=CSRF)
+        assert refused.status_code == 403 and refused.json()["code"] == "feature_off", path
+    assert client.get("/api/persona/work").json()["detail"] == "管理员已关闭工作"
+    # Chat and everything else stay.
+    assert client.get("/api/status").status_code == 200
+    assert client.get("/api/persona/workspace-like").status_code != 403
+    refused = client.put("/api/admin/system/features/chat", json={"enabled": False}, headers=CSRF)
+    assert refused.status_code == 404 and "聊天不能关闭" in refused.json()["detail"]
+    system: SystemSettings = client.app.state.system
+    assert system.audit()[0] | {"at": None} == {
+        "at": None,
+        "by": None,
+        "action": "feature",
+        "feature": "ledger",
+        "enabled": False,
+    }
+    # Kept across a restart; switching back on brings the page back.
+    assert not SystemSettings(Settings(db_path=tmp_path / "twin.db")).feature_on("work")
+    client.put("/api/admin/system/features/work", json={"enabled": True}, headers=CSRF)
+    assert client.get("/api/persona/work").status_code == 200

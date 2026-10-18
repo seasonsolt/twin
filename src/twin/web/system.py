@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..assets import AssetStore
 from ..config import EmbedSettings, LLMSettings, Settings, egress_of
@@ -37,6 +39,10 @@ log = logging.getLogger(__name__)
 Switch = Literal["tts", "video"]
 SWITCHES: tuple[Switch, ...] = ("tts", "video")
 MAX_HOURS = 24 * 30
+# Pages an administrator may switch off for everyone. Chat is the twin itself and always stays.
+Feature = Literal["work", "ledger"]
+FEATURES: dict[Feature, str] = {"work": "工作", "ledger": "承诺账本"}
+FEATURE_PATHS: dict[str, Feature] = {"/api/persona/work": "work", "/api/persona/ledger": "ledger"}
 ModelSection = Literal["llm", "chat_llm", "embed"]
 MODEL_SECTIONS: tuple[ModelSection, ...] = ("llm", "chat_llm", "embed")
 MODEL_FIELDS = ("base_url", "model")
@@ -156,6 +162,38 @@ class SystemSettings:
             "changed_by": stored.get("by"),
         }
 
+    # ------------------------------------------------------------ features
+
+    def feature_on(self, name: Feature) -> bool:
+        """An untouched feature is on."""
+        with self._lock:
+            stored = self._data.get("features", {}).get(name, {})
+        return bool(stored.get("enabled", True)) if isinstance(stored, dict) else True
+
+    def features(self) -> dict[str, bool]:
+        return {name: self.feature_on(name) for name in FEATURES}
+
+    def set_feature(self, name: Feature, enabled: bool, by: str | None) -> None:
+        with self._lock:
+            self._data.setdefault("features", {})[name] = {"enabled": enabled, **self._stamp(by)}
+            self._save()
+        self._record(by, "feature", feature=name, enabled=enabled)
+
+    def feature_view(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            stored = dict(self._data.get("features", {}))
+        found: dict[str, dict[str, Any]] = {}
+        for name, label in FEATURES.items():
+            entry = stored.get(name)
+            entry = entry if isinstance(entry, dict) else {}
+            found[name] = {
+                "label": label,
+                "enabled": self.feature_on(name),
+                "changed_at": entry.get("at"),
+                "changed_by": entry.get("by"),
+            }
+        return found
+
     # ------------------------------------------------------------ quota
 
     def limits(self) -> tuple[int, float]:
@@ -262,6 +300,12 @@ class SystemSettings:
 
     def _changed(self, what: str, by: str | None, action: str, **detail: Any) -> None:
         self.generation += 1
+        self._record(by, action, **detail)
+        for listener in self.listeners:
+            listener(what)
+
+    def _record(self, by: str | None, action: str, **detail: Any) -> None:
+        """Append the change to the audit log, without any key's value."""
         entry = {**self._stamp(by), "action": action, **detail}
         try:
             private_directory(self.audit_path.parent)
@@ -271,8 +315,6 @@ class SystemSettings:
         except OSError:
             log.warning("系统设置审计记录 %s 无法写入", self.audit_path)
         log.info("管理员 %s 修改了系统设置：%s", by or "本机", json.dumps(detail, ensure_ascii=False))
-        for listener in self.listeners:
-            listener(what)
 
     def audit(self, limit: int = 20) -> list[dict[str, Any]]:
         """The latest changes, newest first."""
@@ -291,6 +333,25 @@ class SystemSettings:
             if len(found) >= limit:
                 break
         return found
+
+
+class FeatureGate:
+    """Refuses the API of a page an administrator switched off, for every twin and every caller."""
+
+    def __init__(self, app: ASGIApp, system: SystemSettings) -> None:
+        self.app, self.system = app, system
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            path = str(scope.get("path", ""))
+            for prefix, name in FEATURE_PATHS.items():
+                if (path == prefix or path.startswith(prefix + "/")) and not self.system.feature_on(name):
+                    response = JSONResponse(
+                        {"detail": f"管理员已关闭{FEATURES[name]}", "code": "feature_off"}, status_code=403
+                    )
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 # ---------------------------------------------------------------- read-only views of twin.toml and .env
@@ -419,6 +480,7 @@ def register(app: FastAPI, system: SystemSettings, monitor: GpuMonitor, librarie
         return {
             **monitor.snapshot(),
             "switches": {name: system.switch_view(name) for name in SWITCHES},
+            "features": system.feature_view(),
             "config": config_view(system.settings),
             "models": models_view(system.settings),
             "editable_models": editable_models(system),
@@ -488,4 +550,13 @@ def register(app: FastAPI, system: SystemSettings, monitor: GpuMonitor, librarie
             raise HTTPException(409, str(e)) from None
         except OSError:
             raise HTTPException(500, "密钥文件无法写入，请检查服务器上 env 文件所在目录的权限") from None
+        return view(request)
+
+    @app.put("/api/admin/system/features/{name}")
+    def put_feature(name: str, body: SwitchBody, request: Request) -> dict[str, Any]:
+        """Switch 工作 or 承诺账本 on or off for everyone at once; their data stays. Chat cannot be switched off."""
+        by = admin(request)
+        if name not in FEATURES:
+            raise HTTPException(404, "没有这个功能；聊天不能关闭")
+        system.set_feature(name, body.enabled, by)
         return view(request)

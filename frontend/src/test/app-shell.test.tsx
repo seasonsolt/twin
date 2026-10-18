@@ -1,10 +1,11 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { Profile } from '../pages/Profile';
 import { useStatus, type Status } from '../stores/status';
+import { useAuth } from '../stores/auth';
 import {
   isItemSummaryUrl,
   isSourcesUrl,
@@ -109,7 +110,26 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
     ).toHaveLength(4);
+    // Pages an administrator switched off leave the menu at once; chat always stays.
+    act(() =>
+      useAuth.setState({
+        identity: {
+          email: null,
+          admin: true,
+          auth_enabled: false,
+          features: { work: false, ledger: false },
+        },
+      }),
+    );
+    expect(
+      [
+        ...screen
+          .getByRole('navigation', { name: '主导航' })
+          .querySelectorAll('a'),
+      ].map((link) => link.textContent),
+    ).toEqual(['聊天', '档案']);
   } finally {
+    useAuth.setState({ identity: null });
     rendered.unmount();
     useStatus.setState({ data: previous.data, error: previous.error });
     vi.restoreAllMocks();

@@ -585,6 +585,15 @@ const system = {
       external: true,
     },
   ],
+  features: {
+    work: { label: '工作', enabled: true, changed_at: null, changed_by: null },
+    ledger: {
+      label: '承诺账本',
+      enabled: true,
+      changed_at: null,
+      changed_by: null,
+    },
+  },
   editable_models: [
     {
       name: 'llm',

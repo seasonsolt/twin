@@ -12,7 +12,8 @@ import { StrictMode, useEffect, useRef, useState } from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, TooltipProvider } from '../components/ui';
+import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
 import { ChatAvatar } from '../features/chat/ChatAvatar';
 import { ReplyVideo as FullscreenVideo } from '../features/chat/ReplyVideo';
@@ -100,6 +101,7 @@ let submitFail: boolean;
 beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
+  useChatLayout.setState({ sheet: undefined, stage: undefined });
   conversations = conversationServer();
   preference.reduced = false;
   paused = true;
@@ -254,13 +256,18 @@ it.each(['grounded', 'general', 'inferred', 'abstain'] as const)(
       ]),
     );
     const view = render(
-      <ConfirmProvider>
-        <MemoryRouter initialEntries={['/chat']}>
-          <Chat />
-        </MemoryRouter>
-      </ConfirmProvider>,
+      <TooltipProvider>
+        <ConfirmProvider>
+          <MemoryRouter initialEntries={['/chat']}>
+            <Chat />
+          </MemoryRouter>
+        </ConfirmProvider>
+      </TooltipProvider>,
     );
-    await screen.findAllByRole('img', { name: '本人的肖像' });
+    await screen.findByRole('button', { name: '让本人说这句' });
+    expect(
+      screen.queryByRole('complementary', { name: '本人的形象' }),
+    ).toBeNull();
     const article = screen.getByRole('article', { name: '分身回复' });
     expect(article.querySelector('.twin-bubble')).not.toBeNull();
     expect(within(article).getByText('先听听').tagName).toBe('STRONG');
@@ -316,13 +323,18 @@ it('hides video without capability, but keeps the voice action', async () => {
     ]),
   );
   render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/chat']}>
-        <Chat />
-      </MemoryRouter>
-    </ConfirmProvider>,
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Chat />
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
-  await screen.findAllByRole('img', { name: '本人的肖像' });
+  await screen.findByRole('button', { name: '让本人说这句' });
+  expect(
+    screen.queryByRole('complementary', { name: '本人的形象' }),
+  ).toBeNull();
   expect(screen.getByRole('button', { name: '让本人说这句' })).toBeVisible();
   expect(
     screen.queryByRole('button', { name: '生成视频' }),
@@ -331,11 +343,13 @@ it('hides video without capability, but keeps the voice action', async () => {
 function mountStage() {
   sessionStorage.setItem(CHAT_KEY, JSON.stringify(videoTurns));
   return render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/chat']}>
-        <Chat />
-      </MemoryRouter>
-    </ConfirmProvider>,
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Chat />
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
 }
 it('reply icons speak on the stage, update live captions and rings, and play a ready video when the portrait is tapped', async () => {
@@ -364,7 +378,8 @@ it('reply icons speak on the stage, update live captions and rings, and play a r
   await act(async () => {});
   const reply = screen.getByRole('article', { name: '分身回复' });
   expect(reply.querySelector('img, video')).toBeNull();
-  expect(within(reply).getAllByRole('button')).toHaveLength(1);
+  expect(within(reply).getAllByRole('button')).toHaveLength(2);
+  expect(within(reply).getByRole('button', { name: '复制' })).toBeVisible();
   fireEvent.click(within(reply).getByRole('button', { name: '让本人说这句' }));
   await act(async () => {});
   const audio = view.container.querySelector('audio')!;
@@ -406,16 +421,18 @@ it('reply icons speak on the stage, update live captions and rings, and play a r
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 it.each([375, 390, 768, 1024, 1199, 1200, 1280, 1440])(
-  'collapses on composer focus or scrolling away, expands on the circle, and uses a column at %spx',
+  'keeps the optional portrait open while focusing or scrolling and closes it explicitly at %spx',
   async (width) => {
     vi.stubGlobal('innerWidth', width);
     vi.stubGlobal(
       'matchMedia',
       vi.fn((query: string) => ({
         matches:
-          query === '(min-width: 1200px)'
-            ? width >= 1200
-            : query === '(max-width: 767px)' && width < 768,
+          query === '(min-width: 1280px)'
+            ? width >= 1280
+            : query === '(min-width: 1200px)'
+              ? width >= 1200
+              : query === '(max-width: 767px)' && width < 768,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),
@@ -423,44 +440,46 @@ it.each([375, 390, 768, 1024, 1199, 1200, 1280, 1440])(
     vi.stubGlobal('scrollY', 1000);
     const view = mountStage();
     await act(async () => {});
+    expect(
+      screen.queryByRole('complementary', { name: '本人的形象' }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole('button', { name: width < 768 ? '打开形象' : '形象' }),
+    );
     const stage = screen.getByRole('banner', { name: '本人的舞台' });
     expect(stage).toHaveAttribute('data-desktop', String(width >= 1200));
     fireEvent.focus(screen.getByRole('textbox', { name: '你说' }));
-    expect(stage).toHaveAttribute('data-collapsed', String(width < 1200));
-    if (width < 1200) {
-      fireEvent.click(screen.getByRole('button', { name: '展开舞台' }));
-      expect(stage).toHaveAttribute('data-collapsed', 'false');
-      Object.defineProperty(document.documentElement, 'scrollHeight', {
-        configurable: true,
-        value: 3000,
-      });
-      vi.stubGlobal('scrollY', 900);
-      fireEvent.scroll(window);
-      expect(stage).toHaveAttribute('data-collapsed', 'true');
-      expect(
-        view.container.querySelector('.stage-space')?.getAttribute('style'),
-      ).toBe(stage.getAttribute('style'));
-    }
-    const css = readFileSync('src/design/tokens.css', 'utf8');
-    expect(css).toContain('@media (min-width: 1200px)');
-    expect(css).toContain(
-      'grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr)',
-    );
+    expect(stage).toHaveAttribute('data-collapsed', 'false');
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      value: 3000,
+    });
+    vi.stubGlobal('scrollY', 900);
+    fireEvent.scroll(window);
+    expect(stage).toHaveAttribute('data-collapsed', 'false');
+    expect(
+      view.container.querySelector('.stage-space')?.parentElement,
+    ).toHaveClass('chat-surface-stage');
+    fireEvent.click(screen.getByRole('button', { name: '关闭形象' }));
+    expect(
+      screen.queryByRole('complementary', { name: '本人的形象' }),
+    ).toBeNull();
+    expect(screen.getByRole('textbox', { name: '你说' })).toBeVisible();
   },
 );
-it('jumps to collapsed/expanded heights with reduced motion and retains static speaking cues', async () => {
+it('opens the portrait for speech with reduced motion and retains static speaking cues', async () => {
   preference.reduced = true;
   vi.stubGlobal('innerWidth', 375);
   const view = mountStage();
   await act(async () => {});
   fireEvent.focus(screen.getByRole('textbox', { name: '你说' }));
-  const stage = screen.getByRole('banner', { name: '本人的舞台' });
-  expect(stage).toHaveStyle({ height: '96px' });
+  expect(screen.queryByRole('banner', { name: '本人的舞台' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '让本人说这句' }));
   await screen.findByRole('status', { name: '正在说话' });
-  expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '展开舞台' }));
+  const stage = screen.getByRole('banner', { name: '本人的舞台' });
+  expect(stage).toHaveAttribute('data-collapsed', 'false');
   expect(stage).toHaveStyle({ height: '392px' });
+  expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
 });
 it('ships only self-hosted unicode-range font slices, with swap and no body webfont', () => {
   const css = readFileSync('public/fonts/ma-shan-zheng/font.css', 'utf8');

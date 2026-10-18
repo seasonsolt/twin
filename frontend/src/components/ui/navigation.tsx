@@ -188,29 +188,36 @@ export function NavPill({
   to: string;
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   label: string;
-  layout?: 'stacked' | 'inline';
+  layout?: 'stacked' | 'inline' | 'rail';
   indicator?: string;
 }) {
   const { reduced, transition } = useMotionPreset('layout');
-  return (
+  const link = (
     <NavLink
+      aria-label={layout === 'rail' ? label : undefined}
       to={to}
       className={({ isActive }) =>
         cn(
-          'relative flex items-center justify-center rounded-full',
-          layout === 'stacked'
-            ? 'rail-link min-h-16 flex-col gap-1 text-xs text-primary'
-            : 'min-h-11 gap-2 text-sm text-secondary',
-          isActive && 'text-canvas',
+          'relative flex items-center justify-center',
+          layout === 'rail' ? 'size-11 rounded-md' : 'rounded-full',
+          layout === 'rail'
+            ? 'text-secondary hover:bg-white/60'
+            : layout === 'stacked'
+              ? 'rail-link min-h-16 flex-col gap-1 text-xs text-primary'
+              : 'min-h-11 gap-2 text-sm text-secondary',
+          isActive &&
+            (layout === 'rail'
+              ? 'bg-surface text-primary shadow-elevation-1'
+              : 'text-canvas'),
           isActive && layout === 'inline' && 'font-semibold',
           // Hover tint for the rail comes from .rail-link in tokens.css (fine pointers only).
-          isActive && !indicator && 'bg-primary',
+          isActive && !indicator && layout !== 'rail' && 'bg-primary',
         )
       }
     >
       {({ isActive }) => (
         <>
-          {isActive && indicator && (
+          {isActive && indicator && layout !== 'rail' && (
             <motion.span
               layoutId={reduced ? undefined : indicator}
               initial={reduced ? { opacity: 0 } : false}
@@ -220,10 +227,23 @@ export function NavPill({
             />
           )}
           <Icon aria-hidden className="relative size-5 shrink-0" />
-          <span className="relative whitespace-nowrap">{label}</span>
+          <span
+            className={
+              layout === 'rail' ? 'sr-only' : 'relative whitespace-nowrap'
+            }
+          >
+            {label}
+          </span>
         </>
       )}
     </NavLink>
+  );
+  return layout === 'rail' ? (
+    <Tooltip label={label}>
+      <span className="block">{link}</span>
+    </Tooltip>
+  ) : (
+    link
   );
 }
 

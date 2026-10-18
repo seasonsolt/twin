@@ -170,10 +170,10 @@ it.each([true, false])(
     ).not.toBeInTheDocument();
     expect(start.textContent).toBe('开始聊天');
     fireEvent.click(start);
-    await screen.findByRole('heading', { name: '小林' });
+    await screen.findByRole('heading', { name: '小林 / 新对话' });
     view.unmount();
     render(<App />);
-    await screen.findByRole('heading', { name: '小林' });
+    await screen.findByRole('heading', { name: '小林 / 新对话' });
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
   },
 );

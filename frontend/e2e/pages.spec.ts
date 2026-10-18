@@ -100,3 +100,49 @@ test('recording controls', async ({ page }) => {
   ).toBeEnabled();
   expect(missing).toEqual([]);
 });
+
+test('chat presentation controls', async ({ page }, info) => {
+  const missing: string[] = [];
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.addInitScript(() =>
+    localStorage.setItem('twin.current.conversation', 'c-plan'),
+  );
+  await page.goto('/#/chat');
+  await expect(
+    page.getByText('我会先把发布时间定在下周二').first(),
+  ).toBeVisible();
+  const mobile = info.project.name === 'mobile';
+  if (!mobile) {
+    const active = page
+      .getByRole('navigation', { name: '主导航', exact: true })
+      .getByRole('link', { name: '聊天', exact: true });
+    await expect(active).toHaveCSS('width', '44px');
+    await expect(active).toHaveCSS('height', '44px');
+    await expect(active).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await page.getByRole('button', { name: '收起对话列表' }).click();
+    await expect(
+      page.getByRole('heading', { name: '林舟 / 下周发布怎么安排' }),
+    ).toBeVisible();
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: '展开对话列表' }),
+    ).toBeVisible();
+  }
+  await page
+    .getByRole('button', { name: mobile ? '打开形象' : '形象', exact: true })
+    .click();
+  await expect(
+    page.getByRole('complementary', { name: '林舟的形象' }),
+  ).toBeVisible();
+  await expect
+    .soft(page)
+    .toHaveScreenshot(`chat-stage-${info.project.name}.png`);
+  await page.getByRole('button', { name: '关闭形象' }).click();
+  if (!mobile) await page.getByRole('button', { name: '展开对话列表' }).click();
+  await page.getByRole('button', { name: '新对话', exact: true }).click();
+  if (!mobile) await page.getByRole('button', { name: '收起对话列表' }).click();
+  await expect(page.getByRole('heading', { name: '和林舟聊聊' })).toBeVisible();
+  await expect(page).toHaveScreenshot(`chat-empty-${info.project.name}.png`);
+  expect(missing).toEqual([]);
+});

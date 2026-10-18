@@ -7,7 +7,7 @@ const twMerge = extendTailwindMerge({
   extend: {
     theme: {
       text: ['xs', 'sm', 'base', 'md', 'lg', 'xl', '2xl', '3xl'],
-      radius: ['sm', 'md', 'lg', 'full'],
+      radius: ['sm', 'md', 'lg', 'bubble', 'chat', 'full'],
     },
   },
 });

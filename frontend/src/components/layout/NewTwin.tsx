@@ -75,7 +75,7 @@ export function NewTwin({
           {...triggerProps}
           label="新建分身"
           shape="circle"
-          size="lg"
+          size="md"
           className="rail-new text-primary"
         >
           <Plus aria-hidden className="size-6" />

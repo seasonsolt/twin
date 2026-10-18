@@ -1,4 +1,4 @@
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, MoreHorizontal } from 'lucide-react';
 import { Badge, Row, Text, type Tone } from '../../components/ui';
 import { Citations } from './Citations';
 import type { ChatReply } from './types';
@@ -40,7 +40,7 @@ export function replyMode(reply: ChatReply) {
  */
 export function ReplyBasis({ reply }: { reply: ChatReply }) {
   const cited = reply.cited ?? [];
-  if (reply.verified === false && !cited.length) return null;
+  if (reply.verified === false) return null;
   const mode = replyMode(reply);
   const grounded = (reply.mode ?? 'grounded') === 'grounded' && !reply.abstain;
   return (
@@ -66,7 +66,13 @@ function formatElapsed(milliseconds: number) {
 }
 
 /** How the answer was made, for whoever wants to know: closed, and quieter than the answer and its evidence. */
-export function ReplyDetails({ reply }: { reply: ChatReply }) {
+export function ReplyDetails({
+  reply,
+  compact = false,
+}: {
+  reply: ChatReply;
+  compact?: boolean;
+}) {
   const elapsed = reply.elapsed_ms;
   const completed = reply.completed_at ? new Date(reply.completed_at) : null;
   if (
@@ -91,14 +97,27 @@ export function ReplyDetails({ reply }: { reply: ChatReply }) {
     reply.cited?.filter((citation) => citation.kind === 'file').length ?? 0;
 
   return (
-    <details className="reply-details">
+    <details
+      className={
+        compact ? 'reply-details reply-details-compact' : 'reply-details'
+      }
+    >
       <Text
         as="summary"
         size="xs"
         tone="tertiary"
         className="inline-flex min-h-11 items-center gap-1"
       >
-        处理详情 <ChevronDown size={14} aria-hidden />
+        {compact ? (
+          <>
+            <span className="sr-only">处理详情</span>
+            <MoreHorizontal size={18} aria-hidden />
+          </>
+        ) : (
+          <>
+            处理详情 <ChevronDown size={14} aria-hidden />
+          </>
+        )}
       </Text>
       <Text
         as="div"

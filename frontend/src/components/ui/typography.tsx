@@ -42,6 +42,7 @@ const weights = {
   regular: 'font-normal',
   medium: 'font-medium',
   semibold: 'font-semibold',
+  bold: 'font-bold',
   inherit: '',
 };
 
@@ -64,6 +65,7 @@ const defaultHeading: Record<1 | 2 | 3 | 4, HeadingSize> = {
 
 export function Heading({
   level = 2,
+  weight = 'semibold',
   size,
   tone = 'primary',
   align = 'start',
@@ -76,6 +78,7 @@ export function Heading({
 }: {
   /** The outline level (h1–h4); the look follows `size`. */
   level?: 1 | 2 | 3 | 4;
+  weight?: 'medium' | 'semibold' | 'bold';
   size?: HeadingSize;
   tone?: TextTone;
   align?: 'start' | 'center';
@@ -94,7 +97,7 @@ export function Heading({
       ref={ref}
       tabIndex={tabIndex}
       className={cn(
-        'font-semibold',
+        weights[weight],
         headingSizes[size ?? defaultHeading[level]],
         textTones[tone],
         align === 'center' && 'text-center',

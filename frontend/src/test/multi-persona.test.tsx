@@ -174,7 +174,7 @@ function switcher() {
 it('lists avatars and memory counts, switches without reload, persists and sends the selected header', async () => {
   const user = userEvent.setup();
   switcher();
-  await user.click(screen.getByRole('button', { name: '切换分身' }));
+  await user.click(screen.getByRole('button', { name: /^切换分身/ }));
   await screen.findByText('3 条记忆');
   expect(screen.getByLabelText('当前分身')).toBeInTheDocument();
   const friend = screen.getByRole('button', { name: /朋友.*3 条记忆/ });
@@ -255,7 +255,7 @@ it('creates, switches and opens onboarding even though the new identity already 
   window.location.hash = '#/chat';
   const user = userEvent.setup();
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: '切换分身' }));
+  await user.click(await screen.findByRole('button', { name: /^切换分身/ }));
   await user.click(screen.getByRole('link', { name: '＋ 新建分身' }));
   await user.type(
     await screen.findByRole('textbox', { name: '分身名字' }),
@@ -562,7 +562,7 @@ it('keeps the chat page and layout mounted through prefetch and its timeout, wit
   const view = render(<App />);
   const input = await screen.findByRole('textbox', { name: '你说' });
   const main = view.container.querySelector('#main');
-  const switcher = await screen.findByRole('button', { name: '切换分身' });
+  const switcher = await screen.findByRole('button', { name: /^切换分身/ });
   const original = fetcher.getMockImplementation()! as (
     path: string,
     init?: RequestInit,
@@ -597,9 +597,10 @@ it('keeps the chat page and layout mounted through prefetch and its timeout, wit
   expect(screen.getByRole('textbox', { name: '你说' })).toBe(input);
   expect(input).toHaveAttribute('placeholder', '和朋友聊点什么…');
   expect(view.container.querySelector('.skeleton')).toBeNull();
-  expect(
-    view.container.querySelector('.chat-stage svg[data-preset]'),
-  ).toBeInTheDocument();
+  expect(view.container.querySelector('.rail-current img')).toHaveAttribute(
+    'src',
+    `/api/media/avatar-image?persona=${B}`,
+  );
   await act(async () => {
     finish(json({ available: false, video: { available: false } }));
   });

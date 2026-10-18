@@ -11,7 +11,8 @@ import { readFileSync } from 'node:fs';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { useReducedMotion } from 'motion/react';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, TooltipProvider } from '../components/ui';
+import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
 import { useStatus } from '../stores/status';
 import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
@@ -98,6 +99,7 @@ beforeEach(async () => {
   vi.mocked(useReducedMotion).mockReturnValue(true);
   sessionStorage.clear();
   localStorage.clear();
+  useChatLayout.setState({ sheet: undefined, stage: undefined });
   conversations = conversationServer();
   fail = false;
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -108,6 +110,7 @@ beforeEach(async () => {
         target_name: '测试人',
         counts: { sources: 0, items: 0 },
       });
+    if (url === '/api/identity') return json({ about: '关注团队的协作方式。' });
     if (url === '/api/persona/state') return json({ stale: true });
     if (url === '/api/media/capabilities')
       return json({
@@ -146,15 +149,17 @@ function Navigation() {
 }
 function mount() {
   return render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/chat']}>
-        <Navigation />
-        <Routes>
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/sources" element={<p>其他页面</p>} />
-        </Routes>
-      </MemoryRouter>
-    </ConfirmProvider>,
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Navigation />
+          <Routes>
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/sources" element={<p>其他页面</p>} />
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
 }
 async function submit() {
@@ -165,7 +170,7 @@ async function submit() {
     fireEvent.keyDown(screen.getByLabelText('你说'), { key: 'Enter' });
   });
 }
-it('links empty chat to memories and accepts a friendly no-profile reply without polling', async () => {
+it('shows the real introduction and accepts a friendly no-profile reply without polling', async () => {
   const original = fetchMock.getMockImplementation()! as (
     url: string,
     init?: RequestInit,
@@ -184,10 +189,8 @@ it('links empty chat to memories and accepts a friendly no-profile reply without
       : original(url, init),
   );
   mount();
-  expect(screen.getByRole('link', { name: '添加记忆' })).toHaveAttribute(
-    'href',
-    '#/profile?section=memories',
-  );
+  expect(await screen.findByText('关注团队的协作方式。')).toBeVisible();
+  expect(screen.getByRole('heading', { name: '和测试人聊聊' })).toBeVisible();
   await submit();
   expect(
     await screen.findByRole('article', { name: '分身回复' }),
@@ -406,6 +409,10 @@ it.each([false, true])(
       screen.queryByRole('button', { name: '让测试人说这句' }) !== null,
     ).toBe(speech);
     expect(
+      screen.queryByRole('button', { name: '播放或暂停当前句' }),
+    ).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: '形象' }));
+    expect(
       screen.queryByRole('button', { name: '播放或暂停当前句' }) !== null,
     ).toBe(speech);
     expect(screen.queryByText(/真人版生成失败/)).not.toBeInTheDocument();
@@ -425,19 +432,16 @@ it.each([false, true])(
   },
 );
 
-it('fills and focuses the composer from each starter without sending', async () => {
+it('omits invented suggestions and keeps the empty composer ready without sending', async () => {
   mount();
   expect(screen.getByRole('heading', { name: '和测试人聊聊' })).toBeVisible();
-  const user = userEvent.setup();
-  for (const starter of [
-    '你最近在忙什么？',
-    '你周末一般怎么过？',
-    '遇到难事你会怎么做？',
-  ]) {
-    await user.click(screen.getByRole('button', { name: starter }));
-    expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue(starter);
-    expect(screen.getByRole('textbox', { name: '你说' })).toHaveFocus();
-  }
+  expect(screen.queryByLabelText('聊天开场白')).toBeNull();
+  expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue('');
+  expect(screen.getByRole('textbox', { name: '你说' })).toHaveAttribute(
+    'rows',
+    '2',
+  );
+  expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
   expect(
     fetchMock.mock.calls.some(([url]) => url === '/api/persona/chat/stream'),
   ).toBe(false);
@@ -494,9 +498,7 @@ it('streams progressively, hides thinking on the first delta, then replaces text
   expect(screen.queryByText(/置信度|%/)).not.toBeInTheDocument();
   expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
   expect(document.querySelector('input[type="date"]')).toBeNull();
-  expect(
-    screen.queryByRole('button', { name: /语音|视频/ }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '语音' })).toBeEnabled();
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   expect(conversations.rows.has(localStorage.getItem(CURRENT_CHAT_KEY)!)).toBe(
     true,
@@ -678,6 +680,7 @@ it('restores static history and clears immediately without confirmation', async 
   const { container } = mount();
   const user = userEvent.setup();
   expect(container.querySelector('.blur-text')).toBeNull();
+  await user.click(screen.getByRole('button', { name: '展开对话列表' }));
   await user.click(screen.getByRole('button', { name: '新对话' }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   await waitFor(() =>
@@ -735,7 +738,7 @@ it("drops an answer written while the twin's memory changed and offers to ask ag
   expect(screen.queryByText('过时的回答')).not.toBeInTheDocument();
   expect(screen.getByLabelText('你说')).toHaveValue('你怎么看？');
 });
-it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', () => {
+it('uses a bounded thread, a two-line composer and mobile-safe font sizes', () => {
   const view = mount();
   const messages = screen.getByTestId('chat-messages');
   expect(messages.className).not.toMatch(/overflow-y|(?:max-)?h-\[/);
@@ -747,11 +750,10 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
     expect(parent.className).not.toMatch(/overflow-y-(auto|scroll)/);
   }
   expect(screen.getByRole('form', { name: '消息输入' })).toHaveClass(
-    'fixed',
     'chat-composer',
   );
   const input = screen.getByRole('textbox', { name: '你说' });
-  expect(input).toHaveAttribute('rows', '1');
+  expect(input).toHaveAttribute('rows', '2');
   // Phones get 16px from the global mobile rule below, so iOS does not zoom in.
   expect(input).not.toHaveClass('text-sm', 'text-xs');
   expect(view.container.querySelector('time')).toBeNull();
@@ -760,7 +762,7 @@ it('uses page scrolling, a fixed one-line composer and mobile-safe font sizes', 
   expect(css).toContain('env(safe-area-inset-bottom');
   expect(css).toContain('-webkit-tap-highlight-color: transparent');
 });
-it('shares a centered, bounded 880px desktop grid between conversation and composer', () => {
+it('shares a centered, bounded 720px desktop grid between conversation and composer', () => {
   const view = mount();
   expect(
     view.container.querySelector(
@@ -770,15 +772,13 @@ it('shares a centered, bounded 880px desktop grid between conversation and compo
   expect(screen.getByRole('form', { name: '消息输入' })).toHaveClass(
     'chat-column-grid',
   );
-  const css = readFileSync('src/design/tokens.css', 'utf8');
-  expect(css).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
-  expect(css).toContain(
-    'grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr)',
+  const css = readFileSync('src/components/ui/chat.css', 'utf8');
+  expect(css).toMatch(/minmax\(\s*0,\s*var\(--spacing-chat-column\)\s*\)/);
+  expect(css).toMatch(
+    /\.chat-redesign \.chat-composer\s*\{\s*position: static/,
   );
-  expect(css).toMatch(/\.stage-decorations\s*\{[^}]*overflow: hidden;/);
-  expect(readFileSync('src/features/chat/history.css', 'utf8')).toMatch(
-    /\.stage-history\s*\{[^}]*background: var\(--accent\);/,
-  );
+  expect(css).toContain('.chat-surface-sheet');
+  expect(view.container.querySelector('.chat-surface-stage')).toBeNull();
 });
 it('caps composer growth at five lines', () => {
   mount();
@@ -1012,4 +1012,137 @@ it('opens the evidence in a side layer from the keyboard, shows every citation k
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
   );
   expect(evidence).toHaveFocus();
+});
+
+it('collapses and expands the sheet, preserves the draft and remembers the choice', async () => {
+  const view = mount();
+  fireEvent.change(screen.getByRole('textbox', { name: '你说' }), {
+    target: { value: '还没发出的想法' },
+  });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: '展开对话列表' }));
+  expect(screen.getByRole('region', { name: '和测试人的对话' })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '搜索对话' }));
+  expect(screen.getByRole('searchbox', { name: '搜索对话' })).toHaveFocus();
+  await user.click(screen.getByRole('button', { name: '收起对话列表' }));
+  expect(screen.queryByRole('region', { name: '和测试人的对话' })).toBeNull();
+  expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue(
+    '还没发出的想法',
+  );
+  expect(JSON.parse(localStorage.getItem('twin:chat-layout')!)).toMatchObject({
+    sheet: false,
+  });
+  view.unmount();
+  mount();
+  expect(screen.getByRole('button', { name: '展开对话列表' })).toBeVisible();
+});
+
+it('keeps the portrait closed initially, toggles it and remembers the choice', async () => {
+  const view = mount();
+  expect(
+    screen.queryByRole('complementary', { name: '测试人的形象' }),
+  ).toBeNull();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: '形象' }));
+  expect(
+    screen.getByRole('complementary', { name: '测试人的形象' }),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: '形象' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(JSON.parse(localStorage.getItem('twin:chat-layout')!)).toMatchObject({
+    stage: true,
+  });
+  view.unmount();
+  mount();
+  expect(
+    screen.getByRole('complementary', { name: '测试人的形象' }),
+  ).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '关闭形象' }));
+  expect(screen.getByRole('button', { name: '形象' })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+});
+
+it('puts attachment limits in the accessible tooltip, not in a permanent hint', async () => {
+  mount();
+  const hint = 'TXT、PDF、Word、EPUB 等，最多 5 个，共 50 MiB';
+  const attach = screen.getByRole('button', { name: `添加附件（${hint}）` });
+  expect(screen.queryByText(hint)).toBeNull();
+  await userEvent.setup().hover(attach);
+  expect(await screen.findByRole('tooltip')).toHaveTextContent(hint);
+});
+
+it('keeps last-answer actions visible and copies the answer', async () => {
+  sessionStorage.setItem(
+    CHAT_KEY,
+    JSON.stringify([
+      {
+        id: 'older',
+        role: 'twin',
+        content: '较早的回答',
+        reply,
+        timestamp: '2025-01-01T12:00:00Z',
+      },
+      {
+        id: 'last',
+        role: 'twin',
+        content: reply.reply,
+        reply,
+        timestamp: '2025-01-01T12:01:00Z',
+      },
+    ]),
+  );
+  const user = userEvent.setup();
+  const copy = vi.spyOn(navigator.clipboard, 'writeText');
+  mount();
+  const answers = await screen.findAllByRole('article', { name: '分身回复' });
+  expect(answers[0]).not.toHaveAttribute('data-last-answer');
+  expect(answers[1]).toHaveAttribute('data-last-answer', 'true');
+  const button = within(answers[1]).getByRole('button', { name: '复制' });
+  expect(button).toBeVisible();
+  await user.click(button);
+  expect(copy).toHaveBeenCalledWith(reply.reply);
+});
+
+it('honours choices without writable localStorage', async () => {
+  mount();
+  const write = vi
+    .spyOn(Storage.prototype, 'setItem')
+    .mockImplementation(() => {
+      throw new Error('denied');
+    });
+  try {
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: '展开对话列表' }));
+    expect(
+      screen.getByRole('region', { name: '和测试人的对话' }),
+    ).toBeVisible();
+  } finally {
+    write.mockRestore();
+  }
+});
+
+it('does not label unverified answers even if stale citation metadata is present', () => {
+  render(<ReplyBasis reply={{ ...reply, verified: false }} />);
+  expect(screen.queryByRole('group', { name: '回答依据摘要' })).toBeNull();
+  expect(screen.queryByText('资料不足，需要问本人')).toBeNull();
+});
+
+it('uses the remembered collapsed choice even on a wide screen', () => {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: query === '(min-width: 1280px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+  useChatLayout.setState({ sheet: false });
+  mount();
+  expect(screen.getByRole('button', { name: '展开对话列表' })).toBeVisible();
+  expect(screen.queryByRole('region', { name: '和测试人的对话' })).toBeNull();
 });

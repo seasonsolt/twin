@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, within, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
@@ -110,6 +110,38 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
     ).toHaveLength(4);
+    for (const label of [
+      '团队',
+      '录音库',
+      '聊天',
+      '工作',
+      '档案',
+      '承诺账本',
+    ]) {
+      const link = screen.getByRole('link', { name: label });
+      expect(link).toHaveAttribute('aria-label', label);
+      expect(link).toHaveClass('size-11', 'rounded-md');
+      expect(within(link).getByText(label)).toHaveClass('sr-only');
+    }
+    expect(screen.getByRole('link', { name: '档案' })).toHaveClass(
+      'bg-surface',
+      'shadow-elevation-1',
+    );
+    const switcher = screen.getByRole('button', {
+      name: '切换分身（当前：本人）',
+    });
+    await act(async () => switcher.click());
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: '切换分身' })).toBeVisible(),
+    );
+    await act(async () =>
+      within(screen.getByRole('dialog', { name: '切换分身' }))
+        .getByRole('button', { name: '关闭' })
+        .click(),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '切换分身' })).toBeNull(),
+    );
     // Pages an administrator switched off leave the menu at once; chat always stays.
     act(() =>
       useAuth.setState({

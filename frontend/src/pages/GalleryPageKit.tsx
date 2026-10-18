@@ -9,6 +9,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
+  ChatSurface,
+  ChatMessage,
+  ChatAction,
+  ChatInput,
+  ChatIdentity,
   AudioPlayer,
   DecisionBar,
   FileDropSurface,
@@ -71,6 +76,43 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [section, setSection] = useState('monitor');
   return (
     <Stack gap={6}>
+      <Section title="聊天与导航">
+        <Row gap={3}>
+          <NavPill to="/gallery" icon={Mic} label="图标导航" layout="rail" />
+          <ChatAction selected>形象</ChatAction>
+        </Row>
+        <ChatSurface variant="sheet">
+          <Stack gap={2}>
+            <ChatIdentity>
+              <AvatarFrame size="fill">林</AvatarFrame>
+            </ChatIdentity>
+            <ChatAction variant="row">新对话</ChatAction>
+          </Stack>
+        </ChatSurface>
+        <ChatSurface variant="panel">
+          <ChatMessage speaker="user">下周怎么安排？</ChatMessage>
+          <ChatMessage speaker="twin" last>
+            先确认团队的时间。
+          </ChatMessage>
+        </ChatSurface>
+        <ChatSurface variant="composer">
+          <ChatInput aria-label="示例消息" placeholder="聊点什么…" />
+          <ChatAction variant="send" aria-label="示例发送" disabled>
+            ↑
+          </ChatAction>
+        </ChatSurface>
+        <ChatSurface variant="empty">
+          <ChatIdentity size="empty">
+            <AvatarFrame size="fill">林</AvatarFrame>
+          </ChatIdentity>
+          <Heading size="display" weight="bold">
+            和林舟聊聊
+          </Heading>
+        </ChatSurface>
+        <ChatSurface variant="stage">
+          <Text tone="inherit">形象舞台</Text>
+        </ChatSurface>
+      </Section>
       <Card>
         <Page
           stackHeaderOnMobile

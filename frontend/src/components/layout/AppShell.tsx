@@ -78,6 +78,7 @@ function Navigation() {
             to={`/${route}`}
             icon={icon}
             label={title}
+            layout="rail"
             indicator="active-nav"
           />
         ))}
@@ -140,16 +141,16 @@ function TwinRail() {
   const name = current?.name || '本人';
   // Three scopes, top to bottom: the team's space, the twin being worked on with its own pages, the other twins.
   return (
-    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col overflow-y-auto border-r border-border bg-canvas px-2 py-4 text-primary">
+    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col items-center overflow-y-auto px-3 py-4">
       <nav aria-label="团队空间" className="flex flex-col gap-1">
         {[
           { to: '/team', title: '团队', icon: Users },
           { to: '/library', title: '录音库', icon: Mic },
         ].map(({ to, title, icon }) => (
-          <NavPill key={to} to={to} icon={icon} label={title} />
+          <NavPill key={to} to={to} icon={icon} label={title} layout="rail" />
         ))}
       </nav>
-      <div className="my-3 border-t border-border" />
+      <div className="rail-divider my-3 w-7" />
       <section
         aria-label={`当前分身：${name}`}
         className="flex flex-col items-center gap-1"
@@ -157,27 +158,17 @@ function TwinRail() {
         <Tooltip label={`切换分身（当前：${name}）`}>
           <span>
             <PersonaSwitcher
-              label="切换分身"
-              className="rail-twin ring-2 ring-accent ring-offset-2 ring-offset-canvas"
+              label={`切换分身（当前：${name}）`}
+              className="rail-current"
               trigger={<PersonaPortrait persona={current} />}
             />
           </span>
         </Tooltip>
-        <Text
-          as="span"
-          size="xs"
-          weight="semibold"
-          align="center"
-          truncate
-          className="mt-1 mb-2 w-full"
-        >
-          {name}
-        </Text>
         <div className="w-full">
           <Navigation />
         </div>
       </section>
-      <div className="my-3 border-t border-border" />
+      <div className="flex-1" />
       <div
         className="flex flex-col items-center gap-2"
         aria-label="分身快捷切换"
@@ -200,7 +191,7 @@ function TwinRail() {
             <span>
               <PersonaSwitcher
                 label={`还有 ${hidden} 个分身`}
-                className="grid size-11 place-items-center bg-soft hover:bg-border"
+                className="grid size-9 place-items-center bg-soft hover:bg-border"
                 trigger={
                   <Text as="span" size="sm" weight="semibold" tone="accent">
                     +{hidden}
@@ -382,7 +373,9 @@ export function AppShell() {
     >
       <SkipLink target="main">跳至主内容</SkipLink>
       {!mobile && <TwinRail />}
-      <div className="app-column flex min-w-0 flex-1 flex-col">
+      <div
+        className={`app-column flex min-w-0 flex-1 flex-col ${location.pathname === '/chat' ? 'chat-app-column' : ''}`}
+      >
         {error && !twinLevel && (
           <div
             role="alert"

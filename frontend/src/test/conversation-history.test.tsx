@@ -10,7 +10,8 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, TooltipProvider } from '../components/ui';
+import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
 import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { dayGroup, relativeTime } from '../features/chat/ConversationHistory';
@@ -50,6 +51,15 @@ let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
+  useChatLayout.setState({ sheet: undefined, stage: undefined });
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: query === '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   setPersonaId('default');
   server = conversationServer();
   useStatus.setState({ data: null, error: null });
@@ -72,11 +82,13 @@ beforeEach(() => {
 });
 function mount(strict = false) {
   const page = (
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/chat']}>
-        <Chat />
-      </MemoryRouter>
-    </ConfirmProvider>
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Chat />
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>
   );
   return render(strict ? <StrictMode>{page}</StrictMode> : page);
 }
@@ -90,7 +102,7 @@ async function send(text = '第一个问题') {
   await screen.findAllByText(reply.reply);
 }
 async function history() {
-  fireEvent.click(screen.getAllByRole('button', { name: '对话记录' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: '对话列表' })[0]);
   return screen.findByRole('dialog', { name: '对话记录' });
 }
 it('creates on first send, sends the id, starts fresh without deleting, and reopens after reload', async () => {
@@ -134,7 +146,7 @@ it.each(['desktop', 'tablet', 'mobile'])(
       vi.fn((query: string) => ({
         matches:
           (viewport === 'mobile' && query === '(max-width: 767px)') ||
-          (viewport === 'desktop' && query === '(min-width: 1200px)'),
+          (viewport === 'desktop' && query === '(min-width: 1280px)'),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),
@@ -150,31 +162,26 @@ it.each(['desktop', 'tablet', 'mobile'])(
     );
     await send();
     const cid = localStorage.getItem(CURRENT_CHAT_KEY)!;
+    if (viewport === 'tablet')
+      fireEvent.click(screen.getByRole('button', { name: '展开对话列表' }));
     fireEvent.click(screen.getByRole('button', { name: '新对话' }));
     const panel =
-      viewport === 'desktop'
+      viewport !== 'mobile'
         ? screen.getByRole('region', { name: '和本人的对话' })
         : await history();
     expect(panel).toHaveClass(
-      viewport === 'desktop' ? 'stage-history' : 'history-sheet',
+      viewport !== 'mobile' ? 'conversation-sheet-history' : 'history-sheet',
     );
-    if (viewport === 'desktop') {
-      const stage = panel.closest('.chat-stage')!;
-      expect(stage).not.toBeNull();
-      expect(panel.closest('.stage-portrait-area')).toBeNull();
+    if (viewport !== 'mobile') {
+      expect(panel.closest('.chat-surface-sheet')).not.toBeNull();
+      expect(panel.closest('.chat-stage')).toBeNull();
       expect(panel.querySelector('.stage-sun, .stage-coral')).toBeNull();
-      expect(
-        stage.querySelectorAll(
-          '.stage-portrait-area > .stage-decorations > span',
-        ),
-      ).toHaveLength(2);
-      expect(screen.queryByRole('button', { name: '对话记录' })).toBeNull();
       expect(screen.queryByRole('dialog')).toBeNull();
     } else {
       expect(
         screen
-          .getByRole('button', { name: '对话记录', hidden: true })
-          .closest('.stage-actions'),
+          .getByRole('button', { name: '对话列表', hidden: true })
+          .closest('.chat-topbar'),
       ).not.toBeNull();
       expect(within(panel).queryByText('找到以前的对话，接着聊。')).toBeNull();
       await waitFor(() =>
@@ -199,12 +206,16 @@ it.each(['desktop', 'tablet', 'mobile'])(
     );
     await send('继续聊');
     expect(server.rows.get(cid)!.turns).toHaveLength(4);
-    const reopened = viewport === 'desktop' ? panel : await history();
+    const reopened = viewport !== 'mobile' ? panel : await history();
     const current = await within(reopened).findByRole('button', {
       name: /^第一个问题\s/,
     });
     expect(current).toHaveAttribute('aria-current', 'true');
     expect(current.closest('li')).toHaveAttribute('data-current', 'true');
+    if (viewport !== 'mobile')
+      fireEvent.click(
+        within(reopened).getByRole('button', { name: '搜索对话' }),
+      );
     const input = within(reopened).getByRole('searchbox', { name: '搜索对话' });
     fireEvent.change(input, { target: { value: '保存的回答' } });
     await waitFor(() => expect(current).toBeVisible());
@@ -235,7 +246,9 @@ it.each([false, true])(
     vi.stubGlobal(
       'matchMedia',
       vi.fn((query: string) => ({
-        matches: desktop && query === '(min-width: 1200px)',
+        matches: desktop
+          ? query === '(min-width: 1280px)'
+          : query === '(max-width: 767px)',
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),
@@ -299,8 +312,9 @@ it('groups by local day and pages through older conversations', async () => {
   const panel = await history();
   await within(panel).findByText('今天');
   expect(
-    within(panel).getByRole('heading', { name: '昨天' }),
+    within(panel).getByRole('heading', { name: '更早' }),
   ).toBeInTheDocument();
+  expect(within(panel).queryByRole('heading', { name: '昨天' })).toBeNull();
   expect(within(panel).getByText('更早')).toBeInTheDocument();
   fireEvent.change(within(panel).getByRole('searchbox', { name: '搜索对话' }), {
     target: { value: '预览 0' },
@@ -311,18 +325,18 @@ it('groups by local day and pages through older conversations', async () => {
     target: { value: '' },
   });
   expect(panel.querySelectorAll('time')).toHaveLength(50);
-  fireEvent.click(within(panel).getByRole('button', { name: '更多对话' }));
+  fireEvent.click(within(panel).getByRole('button', { name: '显示更多' }));
   await within(panel).findByText('历史 51');
   expect(panel.querySelectorAll('time')).toHaveLength(52);
   expect(
-    within(panel).queryByRole('button', { name: '更多对话' }),
+    within(panel).queryByRole('button', { name: '显示更多' }),
   ).not.toBeInTheDocument();
 });
 it('shows a fade only while more rows are below the internal scroll position', async () => {
   vi.stubGlobal(
     'matchMedia',
     vi.fn((query: string) => ({
-      matches: query === '(min-width: 1200px)',
+      matches: query === '(min-width: 1280px)',
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })),
@@ -347,7 +361,7 @@ it('supports keyboard overflow actions and restores focus after closing the shee
   mount();
   await send();
   const user = userEvent.setup();
-  const trigger = screen.getByRole('button', { name: '对话记录' });
+  const trigger = screen.getByRole('button', { name: '对话列表' });
   await user.click(trigger);
   const sheet = await screen.findByRole('dialog', { name: '对话记录' });
   const more = await within(sheet).findByRole('button', {

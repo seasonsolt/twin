@@ -1,16 +1,30 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+  type ReactNode,
+} from 'react';
+import {
+  MoreHorizontal,
+  Search,
+  PanelLeftClose,
+  SquarePen,
+} from 'lucide-react';
 import {
   Button,
   Dialog,
   IconButton,
   Input,
   useConfirm,
+  ChatAction,
+  Row,
+  Text,
 } from '../../components/ui';
 import type { useConversation, ConversationSummary } from './useConversation';
 import './history.css';
 
-const groups = ['今天', '昨天', '更早'] as const;
+const groups = ['今天', '更早'] as const;
 const clock = () => new Date();
 
 export function dayGroup(timestamp: string, now: Date) {
@@ -41,6 +55,8 @@ export function ConversationHistory({
   inline = false,
   returnFocus,
   now = clock,
+  heading,
+  presence,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -51,6 +67,8 @@ export function ConversationHistory({
   inline?: boolean;
   returnFocus?: RefObject<HTMLElement | null>;
   now?: () => Date;
+  heading?: ReactNode;
+  presence?: string;
 }) {
   const confirm = useConfirm();
   const [menu, setMenu] = useState<string | null>(null);
@@ -58,6 +76,7 @@ export function ConversationHistory({
   const [editing, setEditing] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(!inline);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
@@ -110,8 +129,28 @@ export function ConversationHistory({
   };
   const content = (
     <div className="history-content">
-      <Button
-        variant="ghost"
+      {inline && (
+        <Row gap={1}>
+          <div className="min-w-0 flex-1">{heading}</div>
+          <IconButton
+            label="搜索对话"
+            aria-expanded={searchOpen}
+            onClick={() => setSearchOpen(!searchOpen)}
+          >
+            <Search size={18} aria-hidden />
+          </IconButton>
+          <IconButton label="收起对话列表" onClick={() => onOpenChange(false)}>
+            <PanelLeftClose size={18} aria-hidden />
+          </IconButton>
+        </Row>
+      )}
+      {inline && presence && (
+        <Text size="xs" tone="tertiary" className="px-3">
+          {presence}
+        </Text>
+      )}
+      <ChatAction
+        variant="row"
         className="history-new"
         aria-label="新对话"
         disabled={saving}
@@ -119,23 +158,26 @@ export function ConversationHistory({
           reset();
           setQuery('');
           onNew();
-          onOpenChange(false);
+          if (!inline) onOpenChange(false);
         }}
       >
-        ＋ 新对话
-      </Button>
-      <Input
-        type="search"
-        aria-label="搜索对话"
-        placeholder="搜索对话"
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setMenu(null);
-          if (scroll.current) scroll.current.scrollTop = 0;
-        }}
-        className="history-search"
-      />
+        <SquarePen size={18} aria-hidden /> 新对话
+      </ChatAction>
+      {searchOpen && (
+        <Input
+          autoFocus={inline}
+          type="search"
+          aria-label="搜索对话"
+          placeholder="搜索对话"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setMenu(null);
+            if (scroll.current) scroll.current.scrollTop = 0;
+          }}
+          className="history-search"
+        />
+      )}
       {(error || chat.historyError) && (
         <p role="alert" className="history-error">
           {error || chat.historyError}
@@ -159,7 +201,10 @@ export function ConversationHistory({
             )}
             {groups.map((group) => {
               const rows = filtered.filter(
-                (row) => dayGroup(row.updated_at, currentTime) === group,
+                (row) =>
+                  (dayGroup(row.updated_at, currentTime) === '今天'
+                    ? '今天'
+                    : '更早') === group,
               );
               return (
                 rows.length > 0 && (
@@ -243,7 +288,7 @@ export function ConversationHistory({
                                       if (loaded) {
                                         reset();
                                         onResume();
-                                        onOpenChange(false);
+                                        if (!inline) onOpenChange(false);
                                       }
                                     });
                                   }}
@@ -354,7 +399,7 @@ export function ConversationHistory({
                 disabled={chat.historyLoading}
                 onClick={() => void chat.refreshHistory(chat.history.length)}
               >
-                更多对话
+                显示更多
               </Button>
             )}
           </div>
@@ -364,8 +409,10 @@ export function ConversationHistory({
   );
   if (inline)
     return (
-      <section className="stage-history" aria-label={`和${name}的对话`}>
-        <h2 className="history-heading">和{name}的对话</h2>
+      <section
+        className="conversation-sheet-history"
+        aria-label={`和${name}的对话`}
+      >
         {content}
       </section>
     );

@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { NewTwin } from '../components/layout/NewTwin';
 import { Profile } from '../pages/Profile';
@@ -121,9 +121,11 @@ afterEach(() => {
 });
 function mount(page: React.ReactNode, route: string) {
   return render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={[route]}>{page}</MemoryRouter>
-    </ConfirmProvider>,
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={[route]}>{page}</MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
 }
 
@@ -144,33 +146,27 @@ it.each([
       })),
     );
     const view = mount(<Page />, `/${route}`);
-    const header = await screen.findByRole('banner', { name: '小林的舞台' });
+    const header = await screen.findByRole('banner', {
+      name: route === 'chat' ? '小林的聊天' : '小林的舞台',
+    });
     await waitFor(() => expect(header.querySelector('img')).not.toBeNull());
-    expect(header).toHaveClass('stage-header');
-    expect(within(header).getByRole('heading', { name: '小林' })).toHaveClass(
-      'persona-name',
+    expect(header).toHaveClass(
+      route === 'chat' ? 'chat-topbar' : 'stage-header',
     );
+    expect(within(header).getByRole('heading', { name: '小林' })).toBeVisible();
     expect(header.querySelector('img')?.src).toContain('persona=p-stage');
     expect(
       header.querySelectorAll(
         '[aria-hidden].stage-sun, [aria-hidden].stage-coral',
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(route === 'chat' ? 0 : 2);
     if (route === 'chat') {
+      expect(view.container.querySelector('.chat-stage')).toBeNull();
       expect(
-        header.querySelectorAll(
-          '.stage-portrait-area > .stage-decorations > span',
-        ),
-      ).toHaveLength(2);
-      expect(
-        header.querySelector('.stage-actions .stage-decorations'),
-      ).toBeNull();
-      expect(header.querySelector('.stage-name .stage-decorations')).toBeNull();
-      expect(
-        header.querySelector('.stage-caption .stage-decorations'),
-      ).toBeNull();
+        within(header).getByRole('button', { name: '打开形象' }),
+      ).toHaveAttribute('aria-pressed', 'false');
     }
-    fireEvent.click(within(header).getByRole('button', { name: '切换分身' }));
+    fireEvent.click(within(header).getByRole('button', { name: /^切换分身/ }));
     const sheet = await screen.findByRole('dialog', { name: '切换分身' });
     expect(within(sheet).getByText('小林').closest('button')).toHaveClass(
       'bg-primary',

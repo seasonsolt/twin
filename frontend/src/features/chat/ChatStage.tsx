@@ -53,8 +53,10 @@ export function ChatStage({
   history,
   newLabel = '新对话',
   historyLabel = '对话记录',
+  panel = false,
 }: {
   name: string;
+  panel?: boolean;
   capabilities: Capabilities | null;
   turn?: Turn;
   videoState?: ReplyVideoState;
@@ -118,7 +120,7 @@ export function ChatStage({
   // The big portrait is a stage for the twin's voice and video; without either, a phone or tablet keeps the
   // compact bar and gives the height to the conversation.
   const media = !!(capabilities?.available || capabilities?.video?.available);
-  const compact = collapsed || !media;
+  const compact = !panel && (collapsed || !media);
   const height = useSpring(desktop ? 470 : compact ? 96 : 360, springs.snappy);
   const size = useSpring(desktop ? 128 : compact ? 60 : 196, springs.snappy);
   const targetHeight = desktop
@@ -198,6 +200,7 @@ export function ChatStage({
     >
       <StageHeader
         variant="chat"
+        switchable={!panel}
         name={name}
         data-collapsed={small}
         data-desktop={desktop}
@@ -206,7 +209,8 @@ export function ChatStage({
         data-video-status={videoStatus}
         style={{ height: reduced ? targetHeight : height }}
         right={
-          !desktop && (
+          !desktop &&
+          !panel && (
             <div className="flex items-center gap-1">
               {onHistory && (
                 <IconButton

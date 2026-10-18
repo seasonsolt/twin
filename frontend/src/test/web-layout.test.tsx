@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { readFileSync } from 'node:fs';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
 import { NewTwin } from '../components/layout/NewTwin';
 import { Login } from '../features/auth/Login';
+import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
 import { usePersonas } from '../stores/personas';
@@ -26,6 +27,7 @@ const persona = {
 
 beforeEach(() => {
   sessionStorage.clear();
+  useChatLayout.setState({ sheet: undefined, stage: undefined });
   usePersonas.setState({ id: 'default', items: [persona] });
   useStatus.setState({ data: null, error: null });
   vi.stubGlobal('innerWidth', 1280);
@@ -33,7 +35,8 @@ beforeEach(() => {
   vi.stubGlobal(
     'matchMedia',
     vi.fn((query: string) => ({
-      matches: query === '(min-width: 1200px)',
+      matches:
+        query === '(min-width: 1200px)' || query === '(min-width: 1280px)',
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })),
@@ -65,9 +68,11 @@ beforeEach(() => {
 
 function mount(element: React.ReactNode) {
   return render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/chat']}>{element}</MemoryRouter>
-    </ConfirmProvider>,
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat']}>{element}</MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
 }
 
@@ -133,78 +138,51 @@ it('removes centering translation for the wide fullscreen create dialog', async 
   );
 });
 
-it('keeps desktop stage and scrolling conversation separate with the composer inside the conversation zone', async () => {
+it('keeps the sheet, optional stage and scrolling conversation separate with the composer inside the thread', async () => {
   const view = mount(<Chat />);
-  await waitFor(() =>
-    expect(view.container.querySelector('.chat-stage')).toHaveAttribute(
-      'data-desktop',
-      'true',
-    ),
-  );
+  expect(view.container.querySelector('.chat-stage')).toBeNull();
+  const sheet = screen.getByRole('region', { name: '和小林的对话' });
+  expect(sheet.closest('.chat-surface-sheet')).not.toBeNull();
+  await userEvent.setup().click(screen.getByRole('button', { name: '形象' }));
+  const stage = screen.getByRole('banner', { name: '小林的舞台' });
+  expect(stage).toHaveAttribute('data-desktop', 'true');
   const thread = view.container.querySelector('.chat-thread')!;
   expect(
     thread.querySelector('.chat-scroll .chat-conversation'),
   ).toBeInTheDocument();
   expect(
     within(thread as HTMLElement).getByRole('form', { name: '消息输入' }),
-  ).toBeInTheDocument();
+  ).toHaveClass('chat-column-grid');
   expect(
     view.container.querySelector('.stage-space')?.parentElement,
-  ).toHaveClass('chat-page');
-  expect(desktopCss).toContain(
-    'grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr)',
-  );
-  expect(desktopCss).toMatch(/\.chat-scroll\s*\{[^}]*overflow-y: auto/s);
-  expect(desktopCss).toMatch(/\.chat-composer\s*\{[^}]*position: static/s);
-  expect(desktopCss).toMatch(/\.chat-column-grid\s*\{\s*display: grid;/);
-  expect(desktopCss).toContain(
-    'grid-template-columns: minmax(32px, 1fr) minmax(0, 880px) minmax(32px, 1fr)',
-  );
-  expect(
-    within(thread as HTMLElement).getByRole('form', { name: '消息输入' }),
-  ).toHaveClass('chat-column-grid');
-  expect(desktopCss).toMatch(
-    /\.chat-composer \.composer-field\s*\{\s*width: 100%/s,
-  );
-  const stage = view.container.querySelector('.chat-stage')!;
-  expect(
-    within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
-  ).toBeNull();
+  ).toHaveClass('chat-surface-stage');
+  expect(stage).not.toContainElement(sheet);
+  expect(within(stage).queryByRole('button', { name: /切换/ })).toBeNull();
   expect(stage.querySelector('.stage-speaking')).toHaveStyle({
     width: '128px',
     height: '128px',
   });
   expect(stage.querySelector('.stage-circle')).toHaveClass('size-full');
   expect(stage.querySelector('.stage-name button')).toBeNull();
-  expect(stage.querySelector('.stage-footer')).toBeNull();
-  expect(stage.querySelector('.stage-history')).toContainElement(
-    screen.getByRole('button', { name: '新对话' }),
-  );
+  await userEvent
+    .setup()
+    .click(within(sheet).getByRole('button', { name: '搜索对话' }));
   expect(
-    within(stage as HTMLElement).getByRole('searchbox', { name: '搜索对话' }),
+    within(sheet).getByRole('searchbox', { name: '搜索对话' }),
   ).toBeVisible();
-  expect(
-    within(thread as HTMLElement).queryByRole('button', { name: '对话记录' }),
-  ).toBeNull();
   expect(screen.queryByRole('dialog', { name: '对话记录' })).toBeNull();
-  expect(css).toMatch(/\.chat-stage\s*\{[^}]*overflow: hidden/s);
-  expect(desktopCss).toMatch(
-    /\.chat-stage\s*\{[^}]*justify-content: flex-start/s,
+  const chatCss = readFileSync('src/components/ui/chat.css', 'utf8');
+  expect(chatCss).toMatch(
+    /\.chat-redesign \.chat-scroll\s*\{[^}]*overflow-y: auto/s,
   );
-  expect(desktopCss).toMatch(
-    /\.stage-space\s*\{[^}]*position: sticky[^}]*height: 100% !important/s,
+  expect(chatCss).toMatch(
+    /\.chat-redesign \.chat-composer\s*\{[^}]*position: static/s,
   );
-  // The page fills the window, so a banner above it shortens the page instead of pushing the composer off.
-  expect(desktopCss).toMatch(/\.conversation-shell\s*\{\s*height: 100dvh/s);
-  expect(desktopCss).toMatch(
-    /\.chat-page\s*\{[^}]*flex: 1;[^}]*min-height: 0/s,
-  );
-  expect(desktopCss).toMatch(
-    /\.chat-conversation\s*\{[^}]*min-height: 100%[^}]*max-width: none[^}]*padding: 32px 0 24px/s,
-  );
+  expect(chatCss).toMatch(/minmax\(\s*0,\s*var\(--spacing-chat-column\)\s*\)/);
+  expect(chatCss).toContain('height: 100dvh');
 });
 
-it('keeps switching in the rail on tablet too', async () => {
+it('starts with a collapsed sheet on tablet, with an accessible expand control', async () => {
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({
@@ -214,18 +192,14 @@ it('keeps switching in the rail on tablet too', async () => {
     })),
   );
   const view = mount(<Chat />);
-  await waitFor(() =>
-    expect(view.container.querySelector('.chat-stage')).toHaveAttribute(
-      'data-desktop',
-      'false',
-    ),
-  );
-  const stage = view.container.querySelector('.chat-stage')!;
+  expect(view.container.querySelector('.chat-stage')).toBeNull();
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: '展开对话列表' }));
+  const sheet = screen.getByRole('region', { name: '和小林的对话' });
+  expect(within(sheet).getByRole('button', { name: '新对话' })).toBeVisible();
   expect(
-    within(stage as HTMLElement).queryByRole('button', { name: /切换/ }),
-  ).toBeNull();
-  expect(
-    within(stage as HTMLElement).getByRole('button', { name: '新对话' }),
+    within(sheet).getByRole('button', { name: '切换分身（当前：小林）' }),
   ).toBeVisible();
 });
 

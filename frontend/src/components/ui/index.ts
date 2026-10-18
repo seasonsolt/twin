@@ -8,3 +8,10 @@ export * from './dialog';
 export * from './toast';
 export * from './presence';
 export * from './workflow';
+export {
+  ChatSurface,
+  ChatMessage,
+  ChatAction,
+  ChatInput,
+  ChatIdentity,
+} from './chat';

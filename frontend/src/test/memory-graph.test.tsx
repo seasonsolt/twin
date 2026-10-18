@@ -469,6 +469,7 @@ it('uses a bottom sheet on mobile and reuses the empty-state wording', async () 
     .setup()
     .click(await screen.findByRole('button', { name: '节点 喜欢徒步' }));
   expect(screen.getByRole('dialog')).toHaveClass('memory-graph-sheet');
+  expect(screen.getByRole('dialog').className).not.toMatch(/translate/);
   view.unmount();
   rows = [item('rejected', { review: 'rejected' })];
   render(<MemoryGraphPanel twin={twin} />);

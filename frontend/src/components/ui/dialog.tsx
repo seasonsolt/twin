@@ -48,10 +48,14 @@ export function Dialog({
   className?: string;
   exitTransition?: Transition;
   popover?: boolean;
-  /** center: a box in the middle of the screen. sheet: pinned to the bottom edge, full width (for phones). side: a
-   * full-height layer at the right edge, for reading something beside the page (the evidence of an answer); closing
-   * it leaves the page where it was. */
-  variant?: 'center' | 'sheet' | 'side';
+  /**
+   * center: a box in the middle of the screen. sheet: pinned to the bottom edge, full width (for phones).
+   * fullscreen: covers the whole window. drawer: a column at the top right, beside the page it explains.
+   * side: a full-height layer at the right edge, for reading something beside the page (the evidence of an answer);
+   * closing it leaves the page where it was.
+   * Only center is placed by translation; the others are placed by their edges, so no page rule has to undo it.
+   */
+  variant?: 'center' | 'sheet' | 'fullscreen' | 'drawer' | 'side';
   /** For a popover placed next to its trigger: the position the page measured. Replaces the centring. */
   anchor?: DialogAnchor;
 }) {
@@ -112,12 +116,18 @@ export function Dialog({
                 }}
                 transition={transition}
                 className={cn(
-                  'fixed z-50 max-h-[85dvh] overflow-y-auto border border-border bg-canvas text-primary shadow-elevation-3',
-                  variant === 'sheet'
-                    ? 'top-auto right-0 bottom-0 left-0 w-full rounded-t-lg p-4 pb-[max(16px,env(safe-area-inset-bottom))]'
-                    : variant === 'side'
-                      ? 'top-0 right-0 bottom-0 h-dvh max-h-dvh w-[min(440px,100%)] rounded-l-lg p-6 pb-[max(24px,env(safe-area-inset-bottom))]'
-                      : 'top-1/2 left-1/2 w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 rounded-lg p-6',
+                  'fixed z-50 overflow-y-auto border border-border bg-canvas text-primary shadow-elevation-3',
+                  {
+                    center:
+                      'top-1/2 left-1/2 max-h-[85dvh] w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 rounded-lg p-6',
+                    sheet:
+                      'top-auto right-0 bottom-0 left-0 max-h-[85dvh] w-full rounded-t-lg p-4 pb-[max(16px,env(safe-area-inset-bottom))]',
+                    fullscreen:
+                      'inset-0 h-dvh max-h-dvh w-full rounded-none border-0 p-4',
+                    drawer:
+                      'top-24 right-6 max-h-[calc(100dvh_-_120px)] w-[min(400px,calc(100%_-_48px))] rounded-lg p-6',
+                    side: 'top-0 right-0 bottom-0 h-dvh max-h-dvh w-[min(440px,100%)] rounded-l-lg p-6 pb-[max(24px,env(safe-area-inset-bottom))]',
+                  }[variant],
                   className,
                 )}
               >

@@ -110,8 +110,8 @@ class ExpressionView:
     """
 
     def __init__(self, store: PersonaStore, settings: Settings) -> None:
-        self.sources = {s.source_id: s for s in store.list_sources()}
-        self.corpus = store.list_expressions()
+        sources, self.corpus = store.read_corpus()
+        self.sources = {s.source_id: s for s in sources}
         self._swap: Callable[[str], str] | None = None
         if not settings.pseudonymize_others:
             return

@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,9 @@ TODAY = dt.date(2026, 10, 20)
 CSRF = {"X-Twin": "1"}
 MEMBER = "member@xjjk.com"
 OTHER = "other@xjjk.com"
+# How long a wait for the agent may take before the test gives up. Only a liveness bound: every wait ends as soon as
+# its event arrives, and a loaded machine can take ten seconds to reach a turn's first model call.
+PATIENCE = 60
 
 Step = Callable[[list[BaseMessage]], AIMessage]
 
@@ -267,7 +271,8 @@ def test_the_cli_model_cannot_drive_tools() -> None:
 
 
 def wait_idle(client: TestClient, task_id: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-    for _ in range(200):
+    deadline = time.monotonic() + PATIENCE
+    while time.monotonic() < deadline:
         task: dict[str, Any] = client.get(f"/api/persona/work/{task_id}", headers=headers).json()
         if task["status"] != "running":
             return task
@@ -352,13 +357,13 @@ class Hold:
 
     def __call__(self, _: list[BaseMessage]) -> AIMessage:
         self.entered.set()
-        assert self.release.wait(5)
+        assert self.release.wait(PATIENCE)
         return self.reply
 
 
 def start(client: TestClient, text: str, hold: Hold) -> str:
     task_id: str = client.post("/api/persona/work", json={"text": text}).json()["task"]["task_id"]
-    assert hold.entered.wait(5)
+    assert hold.entered.wait(PATIENCE)
     return task_id
 
 
@@ -403,12 +408,12 @@ def test_a_message_the_turn_never_read_gets_a_turn_of_its_own(
         seen.append(([t.content for t in task.turns], text))
         if len(seen) == 1:  # finishes without looking at its messages again
             entered.set()
-            assert release.wait(5)
+            assert release.wait(PATIENCE)
         return WorkTurn(role="assistant", content=f"答：{text}", at="t")
 
     monkeypatch.setattr("twin.web.work.run_turn", run_turn)
     task_id = client.post("/api/persona/work", json={"text": "第一件"}).json()["task"]["task_id"]
-    assert entered.wait(5)
+    assert entered.wait(PATIENCE)
     assert client.post("/api/persona/work", json={"text": "第二件", "task_id": task_id}).json()["steered"]
     release.set()
     task = wait_idle(client, task_id)

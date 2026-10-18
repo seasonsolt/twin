@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from time import perf_counter
+from time import process_time
 
 import numpy as np
 import pytest
@@ -193,9 +193,11 @@ def test_expression_keywords_use_privacy_view_and_context_without_vectors() -> N
 def test_bm25_5000_docs_under_one_second(record_property: Callable[[str, object], None]) -> None:
     text = "项目团队讨论数据分析预算安排客户需求产品研发风险管理工作计划交付质量业务发展合作方案"
     docs = {str(i): (text + chr(0x4E00 + i) + "检索测试补充材料" * 2)[:60] for i in range(5000)}
-    start = perf_counter()
+    # CPU time of this process, not wall time: other processes competing for the cores (a parallel suite, a busy
+    # release machine) do not count against the budget, only the work BM25 itself does.
+    start = process_time()
     scores = BM25(docs).scores("数据分析预算")
-    elapsed = perf_counter() - start
+    elapsed = process_time() - start
     record_property("bm25_seconds", elapsed)
     assert len(scores) == 5000
     # Coverage tracing (pytest-testmon recording the code each test runs) slows it severalfold; time it untraced.

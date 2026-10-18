@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, aclosing, nullcontext
 from dataclasses import dataclass, field
 from functools import partial
@@ -108,6 +108,8 @@ class WeComBotRunner:
         kicked_backoff: float = 60,
         answer_timeout: float = 530,
         rate_window: float = 60,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         sessions: dict[SessionKey, Session] | None = None,
         jobs: JobManager | None = None,
     ) -> None:
@@ -120,6 +122,8 @@ class WeComBotRunner:
         self.backoff_initial, self.backoff_max = backoff_initial, backoff_max
         self.subscribe_backoff, self.kicked_backoff = subscribe_backoff, kicked_backoff
         self.answer_timeout, self.rate_window = answer_timeout, rate_window
+        # The rate limit's clock and wait, replaceable so a test can move time on instead of waiting it out.
+        self.clock, self.sleep = clock, sleep
         self.status: Literal["connecting", "connected", "error"] = "connecting"
         self.detail = "连接中…"
         self._send_lock = asyncio.Lock()
@@ -269,15 +273,15 @@ class WeComBotRunner:
     ) -> bool:
         # Reserve the thirtieth slot for the final, guarded answer; drafts never block generation.
         while True:
-            now = time.monotonic()
+            now = self.clock()
             while session.sent and now - session.sent[0] >= self.rate_window:
                 session.sent.popleft()
             if len(session.sent) < (30 if finish else 29):
                 break
             if not finish:
                 return False
-            await asyncio.sleep(self.rate_window - (now - session.sent[0]))
-        session.sent.append(time.monotonic())
+            await self.sleep(self.rate_window - (now - session.sent[0]))
+        session.sent.append(self.clock())
         await self._send(
             socket,
             {

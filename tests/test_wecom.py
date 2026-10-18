@@ -424,21 +424,33 @@ def test_rate_limit_reserves_final(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(PersonaChat, "stream_reply", stream)
 
+    now = [1000.0]
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        # The clock moves on by what the limiter waits for; nothing else moves it.
+        slept.append(seconds)
+        now[0] += seconds
+        await asyncio.sleep(0)
+
     async def check() -> None:
-        async with running(tmp_path, monkeypatch, rate_window=0.15) as (runner, peer):
+        async with running(tmp_path, monkeypatch, clock=lambda: now[0], sleep=sleep) as (runner, peer):
             from twin.channels.wecom import Session
 
             session = Session()
-            session.sent.extend([time.monotonic()] * 29)
+            session.sent.extend([now[0]] * 29)
             runner.sessions[("default", "single", "private-user")] = session
+            now[0] += 10
+            # Twenty-nine sends in the last minute: the draft is dropped and the final answer takes the last slot.
             await peer.send(message())
             frames = await peer.receive("aibot_respond_msg")
             assert len(frames) == 1 and frames[0][1]["body"]["stream"]["finish"]
-            stamp = time.monotonic()
+            assert slept == [] and len(session.sent) == 30
+            # Thirty: the next final answer waits until the oldest twenty-nine leave the window, fifty seconds on.
             await peer.send(message("next"))
             frames = await peer.receive("aibot_respond_msg")
-            assert frames[-1][0] - stamp >= 0.10
-            assert len(session.sent) <= 30
+            assert len(frames) == 1 and frames[0][1]["body"]["stream"]["finish"]
+            assert slept == [50.0] and list(session.sent) == [1010.0, 1060.0]
 
     asyncio.run(check())
 

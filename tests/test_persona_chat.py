@@ -188,6 +188,33 @@ def test_prompt_substantive_answers_are_not_abstentions() -> None:
     assert "不要为了避免弃权而给个人问题编造答案" in modes
 
 
+def test_prompt_advice_on_the_askers_own_choice_is_given_not_deferred() -> None:
+    """A question like "should I start a company?" wants the person's view on the asker's own choice: answered with
+    a clear lean, not taken as a decision the person must not make, and not closed with "it's up to you, let's talk
+    later"."""
+    prompt = pc.chat_system_prompt("张三", pc.PersonaContext([], [], [], []))
+    voice = prompt.split("## 说话的身份\n", 1)[1].split("## 写回复前", 1)[0]
+    assert "这只管我自己要答应或决定的事" in voice and "不说“我不替你拍板”" in voice
+    checklist = prompt.split("## 写回复前，按顺序检查", 1)[1].split("## 整体 mode 与弃权", 1)[0]
+    restricted, general = (checklist.index(f"{n}. ") for n in (2, 3))
+    assert "不是替本人做决定，按第 3 条给出明确建议" in checklist[restricted:general]
+    assert "开头一两句就给出明确倾向" in checklist[general:]
+    assert "不把本人或本人公司自己的打算和取舍原样当成给对方的答案" in checklist[general:]
+    modes = prompt.split("## 整体 mode 与弃权\n", 1)[1].split("## 规则", 1)[0]
+    assert "只在真有要我回头定的事时才补这一句" in modes and "“回头再聊”“我不替你拍板”“看你自己”" in modes
+
+
+def test_meeting_record_prompt_speaks_without_reciting_sources() -> None:
+    """A twin made from recordings grounds its views in what was said in meetings without narrating "I said in a
+    meeting" at every turn, keeps the company's own choices from standing in for advice, and still advises."""
+    prompt = pc.chat_system_prompt("张三", pc.PersonaContext([], [], [], [], meeting_record=True))
+    section = prompt.split("## 只凭会上的记录\n", 1)[1]
+    assert "不逐句交代出处" in section and "“我当时讲”" in section
+    assert "带上是哪天的会上说的" not in section and "不替现在的我下定论" not in section
+    assert "不把这些取舍原样搬过去当答案" in section
+    assert "就说会上没聊到这个" in section and "不因会上没直接谈过就不答" in section
+
+
 @pytest.mark.parametrize("cited", [True, False])
 def test_general_reply_confidence_and_demand(store: PersonaStore, settings: Settings, cited: bool) -> None:
     item_id = store.list_items("2.1")[0].item_id

@@ -112,7 +112,9 @@ it('creates on first send, sends the id, starts fresh without deleting, and reop
   ).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /^依据 · / }));
   const evidence = await screen.findByRole('dialog', { name: '回答依据' });
-  expect(within(evidence).getByText('保存的依据')).toBeVisible();
+  await waitFor(() =>
+    expect(within(evidence).getByText('保存的依据')).toBeVisible(),
+  );
   fireEvent.click(within(evidence).getByRole('button', { name: '关闭' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   fireEvent.click(screen.getByRole('button', { name: '新对话' }));

@@ -949,6 +949,8 @@ it('opens the evidence in a side layer from the keyboard, shows every citation k
   expect(evidence).toHaveFocus();
   await user.keyboard('{Enter}');
   const layer = await screen.findByRole('dialog', { name: '回答依据' });
+  // The layer fades in; wait until it is shown before checking what it holds.
+  await waitFor(() => expect(layer).toBeVisible());
   expect(within(layer).getByRole('list', { name: '回答依据' })).toBeVisible();
   expect(within(layer).getByText('访谈 · 2024 年 1 月 1 日')).toBeVisible();
   expect(within(layer).getByText('价值观')).toBeVisible();

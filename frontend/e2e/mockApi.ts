@@ -337,33 +337,36 @@ const history = [
 ];
 
 const dimensions = [
-  ['d1', '做事方式', 18],
-  ['d2', '沟通风格', 12],
-  ['d3', '价值观', 9],
-  ['d4', '专业领域', 9],
+  ['D1', '经历与身份', 6],
+  ['D2', '看重什么', 12],
+  ['D3', '怎么做决定', 9],
+  ['D4', '怎么思考', 5],
+  ['D5', '擅长什么', 8],
+  ['D6', '说话方式', 6],
+  ['D7', '和人相处', 2],
+  ['D8', '最近在关注', 0],
+  ['D9', '生活与喜好', 0],
 ] as const;
 
 const itemSummary = {
   total: 48,
   conflicts: 1,
-  dimensions: dimensions.map(([dimension_id, name, total]) => ({
-    dimension_id,
-    name,
-    total,
-  })),
+  dimensions: dimensions
+    .filter(([, , total]) => total > 0)
+    .map(([dimension_id, name, total]) => ({ dimension_id, name, total })),
 };
 
-const statements: [string, string, string, string][] = [
-  ['d1', 'f-plan', '计划', '发布前会先确认测试环境和回滚方案'],
-  ['d1', 'f-plan', '计划', '习惯把一周要定的事写在周会开头'],
-  ['d1', 'f-decide', '怎么做决定', '拿不准的事先找最了解情况的人聊，再拍板'],
-  ['d2', 'f-tone', '说话方式', '开会时先讲结论，再补原因'],
-  ['d2', 'f-feedback', '反馈', '给同事反馈时会举具体的例子'],
-  ['d3', 'f-care', '在意什么', '在意团队成员能按时下班'],
-  ['d4', 'f-domain', '熟悉的领域', '熟悉会议纪要和知识库类产品'],
+const statements: [string, string, string, string, string][] = [
+  ['D2', '2.1', '核心价值排序', '在意团队成员能按时下班', '排期紧的时候'],
+  ['D2', '2.3', '做事的原则', '答应别人的事一定按时给回复', ''],
+  ['D2', '2.3', '做事的原则', '发布前会先确认测试环境和回滚方案', '上线前'],
+  ['D3', '3.3', '依据偏好', '拿不准的事先找最了解情况的人聊，再拍板', ''],
+  ['D3', '3.4', '常见取舍', '赶进度时宁可砍范围，也不降低质量', '临近发布'],
+  ['D6', '6.2', '句式与结构', '开会时先讲结论，再补原因', ''],
+  ['D5', '5.1', '拿手的事', '熟悉会议纪要和知识库类产品', ''],
 ];
 const items = statements.map(
-  ([dimension_id, facet_id, facet_name, statement], i) => ({
+  ([dimension_id, facet_id, facet_name, statement, applies_when], i) => ({
     item_id: `i-${i + 1}`,
     dimension_id,
     dimension_name: dimensions.find(([id]) => id === dimension_id)![1],
@@ -371,9 +374,9 @@ const items = statements.map(
     facet_name,
     statement,
     extracted_statement: statement,
-    applies_when: '',
-    conflict: i === 3 ? '另一段录音里他说过会先讲背景' : '',
-    occasions: 3 - (i % 3),
+    applies_when,
+    conflict: i === 4 ? '另一段录音里他说过赶工时可以先上线再修' : '',
+    occasions: 7 - i,
     review: i === 1 ? 'edited' : 'unreviewed',
     evidence: [
       {
@@ -382,38 +385,90 @@ const items = statements.map(
         source_kind: 'interview',
         quote: statement,
         date: '2026-10-15',
-        own_words: i !== 5,
+        own_words: i !== 3,
       },
     ],
   }),
 );
+
+// Facet levels per dimension, in facet order (see docs/PERSONA_DIMENSIONS.md).
+const facetLevels: [string, string, number][] = [
+  ['1.1', '现在的身份', 2],
+  ['1.2', '重要经历与转折', 1],
+  ['1.3', '常讲的经历与故事', 0],
+  ['1.4', '和身边人的协作', 1],
+  ['2.1', '核心价值排序', 3],
+  ['2.2', '不愿放弃的底线', 2],
+  ['2.3', '做事的原则', 3],
+  ['2.4', '怎么看待人与信任', 1],
+  ['3.1', '风险偏好', 2],
+  ['3.3', '依据偏好', 2],
+  ['3.4', '常见取舍', 2],
+  ['3.6', '做决定的节奏', 0],
+  ['4.1', '拆解问题的方式', 2],
+  ['4.2', '追问习惯', 1],
+  ['4.4', '对不确定性的处理', 0],
+  ['5.1', '拿手的事', 3],
+  ['5.2', '熟悉领域的看法', 2],
+  ['5.3', '自认不懂的领域', 0],
+  ['6.1', '用词与口头禅', 1],
+  ['6.2', '句式与结构', 2],
+  ['6.4', '和不同的人说话', 1],
+  ['7.3', '日常交往与合作', 1],
+  ['7.4', '冲突处理', 0],
+  ['8.1', '近期重点', 0],
+  ['8.2', '正在做的事', 0],
+  ['9.1', '兴趣爱好', 0],
+  ['9.2', '生活习惯与作息', 0],
+];
 
 const coverage = {
   taxonomy: 't3',
   as_of: '2026-10-17',
   level_labels: {
     '0': '还不了解',
-    '1': '有一点',
-    '2': '比较了解',
-    '3': '很了解',
+    '1': '已了解一些',
+    '2': '了解较多',
+    '3': '回答经过检查',
   },
   kind_labels: { chat: '聊天', document: '文档', interview: '访谈' },
-  dimensions: dimensions.map(([dimension_id, name], i) => ({
-    dimension_id,
+  dimensions: dimensions.map(([dimension_id, name]) => {
+    const own = facetLevels.filter(([id]) => `D${id[0]}` === dimension_id);
+    return {
+      dimension_id,
+      name,
+      facets: own.length,
+      consented: own.length,
+      covered: own.filter(([, , level]) => level > 0).length / own.length,
+      sufficient: own.filter(([, , level]) => level > 1).length / own.length,
+      verified: own.filter(([, , level]) => level > 2).length / own.length,
+      conflicts: dimension_id === 'D3' ? 1 : 0,
+    };
+  }),
+  facets: facetLevels.map(([facet_id, name, level]) => ({
+    facet_id,
     name,
-    facets: 4,
-    consented: 4,
-    covered: 4 - i,
-    sufficient: 3 - Math.min(i, 2),
-    verified: 1,
-    conflicts: i === 1 ? 1 : 0,
+    dimension_id: `D${facet_id[0]}`,
+    consented: true,
+    level,
+    sufficiency: level / 3,
+    confirmed: 0,
+    asked: 0,
+    abstained: 0,
+    conflicts: 0,
+    by_kind: {},
   })),
-  facets: [],
   suggestions: [
     {
-      facet_id: 'f-decide',
-      name: '怎么做决定',
-      reason: '只在一段录音里提到过',
+      facet_id: '8.1',
+      name: '近期重点',
+      reason: '还没有提到过',
+      sources: ['interview'],
+    },
+    {
+      facet_id: '9.1',
+      name: '兴趣爱好',
+      reason: '还没有提到过',
       sources: ['interview'],
     },
   ],
@@ -698,12 +753,34 @@ const handlers: Record<string, Handler> = {
   'GET /api/persona/items/summary': reply(itemSummary),
   'GET /api/persona/items': (url) => {
     const wanted = url.searchParams.getAll('dimension');
+    const limit = Number(url.searchParams.get('limit') ?? items.length);
     const rows = items.filter(
       (item) => !wanted.length || wanted.includes(item.dimension_id),
     );
-    return { items: rows, total: rows.length };
+    if (url.searchParams.get('sort') === 'evidence')
+      rows.sort((a, b) => b.occasions - a.occasions);
+    return { items: rows.slice(0, limit), total: rows.length };
   },
   'GET /api/persona/processing': reply({ state: 'idle' }),
+  'GET /api/persona/followups': reply({
+    pending: 1,
+    items: [
+      {
+        followup_id: 'q-1',
+        question: '你怎么看远程办公？',
+        previous: '我还没听你聊过远程办公。',
+        reason: '记忆里没有相关的内容',
+        asked: 2,
+        first_at: '2026-10-16T02:00:00Z',
+        last_at: '2026-10-17T03:00:00Z',
+        status: 'pending',
+        handled_at: null,
+        asked_since: 0,
+        source_id: null,
+        unresolved: true,
+      },
+    ],
+  }),
   'GET /api/persona/sources': (url) =>
     url.searchParams.get('limit') === '0'
       ? { items: [], total: memories.length, summary: sourceSummary }

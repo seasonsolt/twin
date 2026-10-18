@@ -262,7 +262,7 @@ function dimensionItems(
   }));
 }
 
-it('counts non-rejected items and opens the first topic', async () => {
+it('lays out all nine aspects in three layers, counts non-rejected items, and opens the first known one', async () => {
   rows = [
     ...dimensionItems('D1', 2, 'confirmed'),
     ...dimensionItems('D2', 7),
@@ -270,16 +270,45 @@ it('counts non-rejected items and opens the first topic', async () => {
     ...dimensionItems('D9', 3, 'rejected'),
   ];
   mountOverview();
-  const tab = await screen.findByRole('tab', { name: '经历与身份 2' });
+  const tab = await screen.findByRole('tab', { name: '看重什么 7' });
   expect(tab).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getByRole('tab', { name: '看重什么 7' })).toBeVisible();
-  expect(screen.getByRole('tab', { name: '怎么做决定 1' })).toBeVisible();
-  expect(screen.getAllByRole('tab')).toHaveLength(3);
   expect(
-    screen.getByText('共 10 条，回答时都会用到。哪条不对，搜一下改掉或删掉。'),
+    screen
+      .getAllByRole('tab')
+      .map((row) => row.textContent?.replace(/[\s\d]+$/, '')),
+  ).toEqual([
+    '看重什么',
+    '怎么思考',
+    '怎么做决定',
+    '说话方式',
+    '和人相处',
+    '擅长什么',
+    '经历与身份',
+    '最近在关注',
+    '生活与喜好',
+  ]);
+  expect(screen.getByRole('tab', { name: '经历与身份 2' })).toBeVisible();
+  expect(screen.getByRole('tab', { name: '怎么做决定 1' })).toBeVisible();
+  expect(screen.getByRole('tab', { name: '生活与喜好' })).toBeVisible();
+  expect(
+    screen.getByRole('img', { name: '九个方面里已了解 3 个' }),
   ).toBeVisible();
-  expect(screen.getByRole('tablist')).toHaveClass('overflow-x-auto', 'w-full');
-  expect(tab).toHaveClass('shrink-0', 'whitespace-nowrap');
+  expect(
+    screen.getByText(
+      '共 10 条记忆，回答时都会用到。哪条不对，在下面改掉或删掉。',
+    ),
+  ).toBeVisible();
+  expect(screen.getByRole('tablist', { name: '九个方面' })).toHaveClass(
+    'overflow-x-auto',
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('tab', { name: '生活与喜好' }));
+  const panel = screen.getByRole('tabpanel', { name: '生活与喜好' });
+  expect(within(panel).getByText('还不了解这一面。')).toBeVisible();
+  expect(
+    within(panel).getByRole('link', { name: '多写写你的生活与喜好' }),
+  ).toBeVisible();
+  expect(within(panel).queryByRole('article')).toBeNull();
 });
 
 it('keeps server order, shows five items, and resets expansion after switching tabs', async () => {
@@ -423,24 +452,72 @@ it('preserves the selected tab and expansion through editing and removal', async
 it('resets the tab and expansion when switching twins', async () => {
   rows = [...dimensionItems('D1', 1), ...dimensionItems('D2', 7)];
   mountOverview();
-  await screen.findByRole('tab', { name: '经历与身份 1' });
+  await screen.findByRole('tab', { name: '看重什么 7' });
   const user = userEvent.setup();
-  await user.click(screen.getByRole('tab', { name: '看重什么 7' }));
   await user.click(
     await screen.findByRole('button', { name: '展开其余 2 条' }),
   );
   expect(screen.getAllByRole('article')).toHaveLength(7);
+  await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
+  await cards(1);
   act(() => {
     setPersonaId('friend');
     usePersonas.setState({ id: 'friend' });
   });
   await waitFor(() =>
-    expect(screen.getByRole('tab', { name: '经历与身份 1' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: '看重什么 7' })).toHaveAttribute(
       'aria-selected',
       'true',
     ),
   );
-  await user.click(screen.getByRole('tab', { name: '看重什么 7' }));
   await cards(5);
   expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
 });
+
+it('keeps the surest points in step with a correction', async () => {
+  mountOverview();
+  const user = userEvent.setup();
+  const surest = await screen.findByRole('list', { name: '最有把握的几点' });
+  expect(within(surest).getByText('先听大家的意见')).toBeVisible();
+  const card = within(await screen.findByRole('article'));
+  await user.click(card.getByRole('button', { name: '改一下' }));
+  fireEvent.change(card.getByLabelText('修改表述'), {
+    target: { value: '先听一圈再拍板' },
+  });
+  await user.click(card.getByRole('button', { name: '保存修改' }));
+  await complete('edited', '先听一圈再拍板');
+  expect(await within(surest).findByText('先听一圈再拍板')).toBeVisible();
+  expect(within(surest).queryByText('先听大家的意见')).toBeNull();
+});
+
+it.each([
+  [false, 'ArrowDown', 'vertical'],
+  [true, 'ArrowRight', 'horizontal'],
+])(
+  'moves between aspects with the arrows that match the layout (phone: %s)',
+  async (phone, key, orientation) => {
+    vi.mocked(window.matchMedia).mockImplementation(
+      (query: string) =>
+        ({
+          matches: phone && query === '(max-width: 767px)',
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    rows = [...dimensionItems('D2', 2), ...dimensionItems('D4', 1)];
+    mountOverview();
+    const user = userEvent.setup();
+    const first = await screen.findByRole('tab', { name: '看重什么 2' });
+    expect(screen.getByRole('tablist', { name: '九个方面' })).toHaveAttribute(
+      'aria-orientation',
+      orientation,
+    );
+    first.focus();
+    await user.keyboard(`{${key}}`);
+    expect(screen.getByRole('tab', { name: '怎么思考 1' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  },
+);

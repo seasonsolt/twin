@@ -142,3 +142,23 @@ it('says so when nothing is waiting', async () => {
   render(<Followups />);
   expect(await screen.findByText('没有待回答的问题')).toBeInTheDocument();
 });
+
+it('quietly shows only waiting questions, and leaves once none is waiting', async () => {
+  const user = userEvent.setup();
+  const view = render(<Followups quiet />);
+  expect(
+    await screen.findByRole('heading', { name: '待你回答 2 个' }),
+  ).toBeVisible();
+  expect(screen.queryByText('已回答 1 个')).toBeNull();
+  expect(screen.queryByText(/不用回答 \d 个/)).toBeNull();
+  for (const name of ['你怎么看远岚的报价？', '你几点睡？']) {
+    const question = await screen.findByRole('article', { name });
+    await user.click(
+      within(question).getByRole('button', { name: '不用回答' }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('article', { name })).toBeNull(),
+    );
+  }
+  await waitFor(() => expect(view.container).toBeEmptyDOMElement());
+});

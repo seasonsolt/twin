@@ -117,12 +117,26 @@ const setup = () =>
     </ConfirmProvider>,
   );
 
+// External services are a setting of the twin, out of the way of its persona.
+async function openServices() {
+  fireEvent.click(screen.getByRole('button', { name: '设置' }));
+  const settings = await screen.findByRole('dialog', { name: '分身设置' });
+  fireEvent.click(within(settings).getByRole('button', { name: '外部服务' }));
+  // The dialog fades in from opacity 0, even with reduced motion.
+  await waitFor(() => expect(settings).toBeVisible());
+  return settings;
+}
+
 it('edits name/about in a dialog and saves with X-Twin, previews a closed-mouth avatar and names external services plainly', async () => {
   setup();
   await screen.findByRole('heading', { name: identity.name });
   expect(screen.queryByText('预置音色')).toBeNull();
-  expect(screen.getByText('朗读：speech.test')).toBeVisible();
+  expect(screen.queryByText('朗读：speech.test')).toBeNull();
+  const settings = await openServices();
+  expect(await within(settings).findByText('朗读：speech.test')).toBeVisible();
   expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
+  fireEvent.keyDown(settings, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   const avatar = await screen.findByRole('img', { name: '插画形象：栗' });
   expect(avatar).toHaveAttribute('data-mouth-level', '0');
   fireEvent.click(screen.getByRole('button', { name: '编辑' }));
@@ -268,6 +282,8 @@ it('describes external services using plain names, never provider ids or local s
   });
   setup();
   await screen.findByRole('heading', { name: identity.name });
+  await openServices();
+  await screen.findByText('大模型：api.example.com');
   for (const text of [
     '大模型：api.example.com',
     '向量：api.cloudflare.com',

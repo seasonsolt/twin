@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   EmptyState,
+  Heading,
   Row,
   Skeleton,
   Text,
@@ -143,7 +144,11 @@ function Question({
   );
 }
 
-export function Followups() {
+/**
+ * Questions the twin could not answer. `quiet` is for a page about something else: nothing at all unless a question
+ * is waiting, then a card with just the waiting ones (the full list, with what was answered or set aside, lives in the twin's settings).
+ */
+export function Followups({ quiet = false }: { quiet?: boolean }) {
   const personaId = usePersonaId();
   const [data, setData] = usePersonaState<FollowupList | null>(null);
   const [error, setError] = usePersonaState('');
@@ -164,6 +169,11 @@ export function Followups() {
     void load(controller.signal);
     return () => controller.abort();
   }, [load, personaId]);
+  if (
+    quiet &&
+    (error || !data?.items?.some((item) => item.status === 'pending'))
+  )
+    return null;
   if (error)
     return (
       <div role="alert" className="space-y-2 text-danger">
@@ -177,12 +187,12 @@ export function Followups() {
   const pending = data.items.filter((item) => item.status === 'pending');
   const answered = data.items.filter((item) => item.status === 'answered');
   const dismissed = data.items.filter((item) => item.status === 'dismissed');
-  return (
+  const list = (
     <div className="space-y-4">
       <Text size="sm" tone="secondary">
         别人问分身、分身答不上来的问题会出现在这里。你回答一次，分身以后就能用你的原话回答。
       </Text>
-      {!pending.length && (
+      {!pending.length && !quiet && (
         <EmptyState
           title="没有待回答的问题"
           body="分身答不上来时，问题会自动出现在这里。"
@@ -191,7 +201,7 @@ export function Followups() {
       {pending.map((item) => (
         <Question key={item.followup_id} item={item} onDone={() => load()} />
       ))}
-      {answered.length > 0 && (
+      {!quiet && answered.length > 0 && (
         <details className="space-y-2">
           <summary className="cursor-pointer text-secondary">
             已回答 {answered.length} 个
@@ -210,7 +220,7 @@ export function Followups() {
           </ul>
         </details>
       )}
-      {dismissed.length > 0 && (
+      {!quiet && dismissed.length > 0 && (
         <details className="space-y-2">
           <summary className="cursor-pointer text-secondary">
             不用回答 {dismissed.length} 个
@@ -253,5 +263,13 @@ export function Followups() {
         </details>
       )}
     </div>
+  );
+  return quiet ? (
+    <Card padding="roomy" aria-label="待你回答" className="space-y-3">
+      <Heading level={3}>待你回答 {pending.length} 个</Heading>
+      {list}
+    </Card>
+  ) : (
+    list
   );
 }

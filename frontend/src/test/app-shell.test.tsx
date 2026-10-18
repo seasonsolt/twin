@@ -95,7 +95,21 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       header.queryByText(/mock-model|example.test|remote-provider|外部/),
     ).not.toBeInTheDocument();
-    expect(screen.getByText('大模型：example.test')).toBeVisible();
+    expect(screen.queryByText('大模型：example.test')).toBeNull();
+    await act(async () => screen.getByRole('button', { name: '设置' }).click());
+    const settings = await screen.findByRole('dialog', { name: '分身设置' });
+    await act(async () =>
+      within(settings).getByRole('button', { name: '外部服务' }).click(),
+    );
+    expect(
+      await within(settings).findByText('大模型：example.test'),
+    ).toBeVisible();
+    await act(async () =>
+      within(settings).getAllByRole('button', { name: '关闭' })[0].click(),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '分身设置' })).toBeNull(),
+    );
     expect(
       screen.queryByText(/外部 ·|remote-provider/),
     ).not.toBeInTheDocument();
@@ -106,7 +120,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       'href',
       '/profile',
     );
-    expect(screen.getByRole('heading', { name: '概览' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '人格' })).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
     ).toHaveLength(4);

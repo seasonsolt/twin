@@ -123,18 +123,18 @@ afterEach(() => {
   Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
 });
 
-it('renders only overview by default, keeps the header, and supports section links and identity editing', async () => {
+it('renders only the persona by default, keeps the header, and supports section links and identity editing', async () => {
   const view = render(<App />);
   await screen.findByRole('heading', { name: '我了解到的他' });
-  const panel = screen.getByRole('tabpanel', { name: '概览' });
-  expect(panel).toHaveTextContent('删除这个分身');
+  const panel = screen.getByRole('tabpanel', { name: '人格' });
+  expect(panel).not.toHaveTextContent('删除这个分身');
   const nav = screen.getByRole('tablist', { name: '档案章节' });
   expect(
     within(nav)
       .getAllByRole('tab')
       .map((tab) => tab.textContent),
-  ).toEqual(['概览', '图谱', '记忆', '待回答', '形象和声音', '接入']);
-  expect(within(nav).getByRole('tab', { name: '概览' })).toHaveAttribute(
+  ).toEqual(['人格', '记忆', '形象和声音']);
+  expect(within(nav).getByRole('tab', { name: '人格' })).toHaveAttribute(
     'aria-selected',
     'true',
   );
@@ -161,7 +161,7 @@ it('renders only overview by default, keeps the header, and supports section lin
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('朋友');
 });
 
-it.each(['overview', 'graph', 'memories', 'assets', 'channels'])(
+it.each(['overview', 'memories', 'assets'])(
   'keeps the mobile profile and %s section mounted when switching twins',
   async (section) => {
     vi.stubGlobal(
@@ -215,46 +215,51 @@ it('switches panels with pointer and arrow keys, resets scroll, and never scroll
   expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0 });
   within(nav).getByRole('tab', { name: '形象和声音' }).focus();
   await user.keyboard('{ArrowRight}');
-  expect(window.location.hash).toBe('#/profile?section=channels');
+  expect(window.location.hash).toBe('#/profile?section=overview');
   expect(
-    await screen.findByRole('tabpanel', { name: '接入' }),
-  ).toHaveTextContent('企业微信');
+    await screen.findByRole('tabpanel', { name: '人格' }),
+  ).toHaveTextContent('我了解到的他');
   expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
   act(() => fireEvent.scroll(window));
-  expect(window.location.hash).toBe('#/profile?section=channels');
+  expect(window.location.hash).toBe('#/profile?section=overview');
   expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
 });
 
 it.each([
-  ['overview', '概览'],
-  ['graph', '图谱'],
+  ['overview', '人格'],
+  ['graph', '记忆'],
   ['memories', '记忆'],
-  ['questions', '待回答'],
+  ['questions', '人格'],
   ['assets', '形象和声音'],
-  ['channels', '接入'],
-  ['unknown', '概览'],
+  ['channels', '人格'],
+  ['unknown', '人格'],
 ])(
   'opens only the selected panel from the %s deep link',
   async (section, title) => {
     window.location.hash = `#/profile?section=${section}`;
     const view = render(<App />);
-    const panel = await screen.findByRole('tabpanel', { name: title });
-    const nav = screen.getByRole('tablist', { name: '档案章节' });
-    const tab = within(nav).getByRole('tab', { name: title });
+    // These links open the twin's settings over the persona, which hides the page behind it.
+    const hidden = section === 'channels' || section === 'questions';
+    const panel = await screen.findByRole('tabpanel', { name: title, hidden });
+    const nav = screen.getByRole('tablist', { name: '档案章节', hidden });
+    const tab = within(nav).getByRole('tab', { name: title, hidden });
     expect(tab).toHaveAttribute('aria-selected', 'true');
     expect(tab).toHaveAttribute('aria-controls', panel.id);
     expect(panel).toHaveAttribute('aria-labelledby', tab.id);
     expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
     if (section === 'graph') {
       expect(
+        within(panel).getByRole('button', { name: '图谱' }),
+      ).toHaveAttribute('aria-pressed', 'true');
+      expect(
         await within(panel).findByRole('textbox', { name: '搜索记忆和原话' }),
       ).toBeVisible();
       expect(await within(panel).findByText('还不够了解你')).toBeVisible();
     }
     if (section === 'channels') {
-      expect(within(panel).getByRole('button', { name: '绑定' })).toBeVisible();
+      const settings = await screen.findByRole('dialog', { name: '分身设置' });
       expect(
-        within(panel).getByRole('heading', { name: '接入', level: 2 }),
+        await within(settings).findByRole('button', { name: '绑定' }),
       ).toBeVisible();
     }
   },
@@ -271,7 +276,7 @@ it('mounts polling components only in their selected panel and aborts them when 
   ).toBe(false);
   const nav = screen.getByRole('tablist', { name: '档案章节' });
   const user = userEvent.setup();
-  await user.click(within(nav).getByRole('tab', { name: '接入' }));
+  await user.click(screen.getByRole('button', { name: '设置' }));
   await waitFor(() =>
     expect(fetcher.mock.calls.some(([path]) => path === '/api/channels')).toBe(
       true,
@@ -280,26 +285,41 @@ it('mounts polling components only in their selected panel and aborts them when 
   const channelRequest = fetcher.mock.calls.find(
     ([path]) => path === '/api/channels',
   )![1]!;
-  await user.click(within(nav).getByRole('tab', { name: '记忆' }));
+  const settings = screen.getByRole('dialog', { name: '分身设置' });
+  await user.click(within(settings).getByRole('button', { name: '外部服务' }));
   expect(channelRequest.signal?.aborted).toBe(true);
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await user.click(within(nav).getByRole('tab', { name: '记忆' }));
   await screen.findByRole('article');
   const memoryRequest = fetcher.mock.calls.find(
     ([path]) => path === '/api/persona/processing',
   )![1]!;
-  await user.click(within(nav).getByRole('tab', { name: '概览' }));
+  await user.click(within(nav).getByRole('tab', { name: '人格' }));
   expect(memoryRequest.signal?.aborted).toBe(true);
   expect(screen.queryByRole('article')).toBeNull();
 });
+
+// Deleting lives in the twin's settings, under its own section.
+async function openDelete(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: '设置' }));
+  const settings = await screen.findByRole('dialog', { name: '分身设置' });
+  await user.click(within(settings).getByRole('button', { name: '删除分身' }));
+  return settings;
+}
 
 it('protects the default twin and confirms deletion before clearing only the deleted twin and returning to all twins', async () => {
   sessionStorage.setItem(personaKey(CHAT_KEY, 'friend'), 'private');
   sessionStorage.setItem(CHAT_KEY, 'default history');
   render(<App />);
   const user = userEvent.setup();
+  await openDelete(user);
   await user.click(await screen.findByRole('button', { name: '删除这个分身' }));
   let dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
   await user.click(within(dialog).getByRole('button', { name: '取消' }));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: '删除「朋友」？' })).toBeNull(),
+  );
   expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(
     false,
   );
@@ -314,6 +334,7 @@ it('protects the default twin and confirms deletion before clearing only the del
   await screen.findByRole('heading', { name: '我的分身' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await user.click(await screen.findByRole('link', { name: '档案' }));
+  await openDelete(user);
   await screen.findByText('默认分身不能删除');
   await waitFor(() =>
     expect(screen.getByText('默认分身不能删除')).toBeVisible(),
@@ -334,8 +355,14 @@ it('keeps the profile and reports a blocked deletion without clearing local data
   );
   render(<App />);
   const user = userEvent.setup();
+  await openDelete(user);
   await user.click(await screen.findByRole('button', { name: '删除这个分身' }));
-  await user.click(screen.getByRole('button', { name: '删除分身' }));
+  await user.click(
+    within(screen.getByRole('dialog', { name: '删除「朋友」？' })).getByRole(
+      'button',
+      { name: '删除分身' },
+    ),
+  );
   expect(await screen.findByRole('alert')).toHaveTextContent(
     '这个分身还有任务在运行',
   );
@@ -344,3 +371,29 @@ it('keeps the profile and reports a blocked deletion without clearing local data
     'private',
   );
 });
+
+it.each([
+  ['channels', '接入', '绑定'],
+  ['questions', '问过的问题', '没有待回答的问题'],
+])(
+  'opens the %s setting from an old link even on a mounted profile, then reads as the persona',
+  async (section, title, content) => {
+    render(<App />);
+    await screen.findByRole('heading', { name: '我了解到的他' });
+    act(() => {
+      window.location.hash = `#/profile?section=${section}`;
+    });
+    const settings = await screen.findByRole('dialog', { name: '分身设置' });
+    expect(
+      within(settings).getByRole('heading', { name: title }),
+    ).toBeInTheDocument();
+    expect(await within(settings).findByText(content)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(window.location.hash).toBe('#/profile?section=overview'),
+    );
+    const user = userEvent.setup();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByRole('tabpanel', { name: '人格' })).toBeVisible();
+  },
+);

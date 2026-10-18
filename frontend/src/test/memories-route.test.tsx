@@ -68,7 +68,7 @@ it.each([
   await waitFor(() =>
     expect(
       screen.getByRole('tabpanel', {
-        name: section === 'memories' ? '记忆' : '概览',
+        name: section === 'memories' ? '记忆' : '人格',
       }),
     ).toBeVisible(),
   );

@@ -3,10 +3,13 @@ import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
   Button,
-  Card,
   Dialog,
   Heading,
+  Row,
+  SettingsDialog,
   Skeleton,
+  Stack,
+  Tabs,
   Text,
   useConfirm,
 } from '../components/ui';
@@ -25,6 +28,7 @@ import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
 import { forgetPersona, personaUrl } from '../lib/persona';
 import { usePersonas } from '../stores/personas';
+import { useStatus } from '../stores/status';
 import { Memories, type SourcePage } from './Memories';
 
 const MemoryGraphPanel = lazy(
@@ -32,14 +36,55 @@ const MemoryGraphPanel = lazy(
 );
 
 const sections = [
-  { id: 'overview', title: '概览' },
-  { id: 'graph', title: '图谱' },
+  { id: 'overview', title: '人格' },
   { id: 'memories', title: '记忆' },
-  { id: 'questions', title: '待回答' },
   { id: 'assets', title: '形象和声音' },
-  { id: 'channels', title: '接入' },
 ] as const;
 type Section = (typeof sections)[number]['id'];
+// Older links name sections that now live inside another one: the graph is a view of the memories, and channels
+// and the questions the twin asked are settings of the twin (waiting questions also show under the persona).
+const moved: Record<string, Section> = {
+  graph: 'memories',
+  questions: 'overview',
+  channels: 'overview',
+};
+const settingsSections = [
+  { key: 'channels', label: '接入' },
+  { key: 'questions', label: '问过的问题' },
+  { key: 'services', label: '外部服务' },
+  { key: 'delete', label: '删除分身' },
+];
+const backendNames: Record<string, string> = {
+  llm: '大模型',
+  embed: '向量',
+  tts: '朗读',
+  asr: '语音识别',
+  video: '视频生成',
+  vision: '形象提取',
+  judge: '回答检查',
+};
+
+/** Where the twin's data leaves this machine, so the person can tell at a glance. */
+function ExternalServices() {
+  const status = useStatus((state) => state.data);
+  if (!status) return <Skeleton className="h-16" />;
+  const external = status.egress.filter((row) => row.external);
+  return external.length ? (
+    <Stack as="ul" gap={2}>
+      {external.map((row, i) => (
+        <Text as="li" key={`${row.kind}-${i}`} size="sm">
+          {backendNames[row.kind] ??
+            (row.kind.startsWith('judge') ? '回答检查' : '数据处理')}
+          ：{row.host || '地址未提供'}
+        </Text>
+      ))}
+    </Stack>
+  ) : (
+    <Text size="sm" tone="secondary">
+      目前没有使用外部服务。
+    </Text>
+  );
+}
 
 export function Profile() {
   const personaId = usePersonaId();
@@ -50,9 +95,21 @@ export function Profile() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const [params, setParams] = useSearchParams();
-  const requested = params.get('section');
+  const requested = params.get('section') ?? '';
   const section: Section =
-    sections.find((item) => item.id === requested)?.id ?? 'overview';
+    sections.find((item) => item.id === requested)?.id ??
+    moved[requested] ??
+    'overview';
+  const view =
+    requested === 'graph' || params.get('view') === 'graph' ? 'graph' : 'list';
+  const [settings, setSettings] = useState<string | null>(null);
+  // An old channels or questions link opens that setting over the persona, then reads as the persona's link, so
+  // closing the dialog and going back and forward behave like any other dialog.
+  useEffect(() => {
+    if (requested !== 'channels' && requested !== 'questions') return;
+    setSettings(requested);
+    setParams({ section: 'overview' }, { replace: true });
+  }, [requested, setParams]);
   const [editing, setEditing] = usePersonaState(false);
   const [speakerCount, setSpeakerCount] = usePersonaState(0);
   const [busy, setBusy] = usePersonaState(false);
@@ -121,9 +178,18 @@ export function Profile() {
         variant="expanded"
         name={identity.data?.name}
         right={
-          <Button variant="secondary" onClick={() => setEditing(true)}>
-            编辑
-          </Button>
+          <Row gap={2}>
+            <Button variant="secondary" onClick={() => setEditing(true)}>
+              编辑
+            </Button>
+            <Button
+              variant="secondary"
+              aria-haspopup="dialog"
+              onClick={() => setSettings('channels')}
+            >
+              设置
+            </Button>
+          </Row>
         }
         portrait={
           identity.capabilities &&
@@ -176,10 +242,10 @@ export function Profile() {
             <section
               id="profile-overview"
               className="profile-section space-y-4"
-              aria-label="概览"
+              aria-label="人格"
             >
               <Heading level={2} size="title">
-                概览
+                人格
               </Heading>
               {speakerCount > 0 && (
                 <a
@@ -190,59 +256,7 @@ export function Profile() {
                 </a>
               )}
               <Overview />
-              <Card variant="danger" padding="roomy">
-                <Heading level={2} size="section" className="mb-3">
-                  删除这个分身
-                </Heading>
-                {current?.is_default ? (
-                  <p className="text-secondary">默认分身不能删除</p>
-                ) : (
-                  current && (
-                    <Button
-                      variant="danger"
-                      loading={busy}
-                      onClick={() => void remove()}
-                    >
-                      删除这个分身
-                    </Button>
-                  )
-                )}
-                {error && (
-                  <p role="alert" className="mt-3 text-danger">
-                    {error}
-                  </p>
-                )}
-              </Card>
-            </section>
-          </TabsPrimitive.Content>
-        )}
-        {section === 'graph' && (
-          <TabsPrimitive.Content value="graph" asChild>
-            <section
-              id="profile-graph"
-              className="profile-section min-w-0"
-              aria-label="图谱"
-            >
-              <Suspense fallback={<Skeleton panel />}>
-                <MemoryGraphPanel
-                  key={personaId}
-                  twin={{
-                    id: personaId,
-                    name: identity.data?.name || current?.name || '分身',
-                    avatarPreset:
-                      identity.data?.avatar_preset ??
-                      identity.data?.avatar ??
-                      current?.avatar_preset,
-                    portrait: identity.capabilities?.avatar_image
-                      ? personaUrl(
-                          identity.capabilities.avatar_image.url ||
-                            '/api/media/avatar-image',
-                          personaId,
-                        )
-                      : undefined,
-                  }}
-                />
-              </Suspense>
+              <Followups quiet />
             </section>
           </TabsPrimitive.Content>
         )}
@@ -253,24 +267,52 @@ export function Profile() {
               className="profile-section space-y-4"
               aria-label="记忆"
             >
-              <Heading level={2} size="title">
-                记忆
-              </Heading>
-              <Memories profile onSpeakerCount={setSpeakerCount} />
-            </section>
-          </TabsPrimitive.Content>
-        )}
-        {section === 'questions' && (
-          <TabsPrimitive.Content value="questions" asChild>
-            <section
-              id="profile-questions"
-              className="profile-section space-y-4"
-              aria-label="待回答"
-            >
-              <Heading level={2} size="title">
-                待回答
-              </Heading>
-              <Followups />
+              <Row gap={3} wrap justify="between">
+                <Heading level={2} size="title">
+                  记忆
+                </Heading>
+                <Tabs
+                  variant="filters"
+                  label="记忆的看法"
+                  value={view}
+                  onValueChange={(next) =>
+                    setParams(
+                      next === 'graph'
+                        ? { section: 'memories', view: 'graph' }
+                        : { section: 'memories' },
+                      { replace: true },
+                    )
+                  }
+                  items={[
+                    { value: 'list', label: '列表' },
+                    { value: 'graph', label: '图谱' },
+                  ]}
+                />
+              </Row>
+              {view === 'graph' ? (
+                <Suspense fallback={<Skeleton panel />}>
+                  <MemoryGraphPanel
+                    key={personaId}
+                    twin={{
+                      id: personaId,
+                      name: identity.data?.name || current?.name || '分身',
+                      avatarPreset:
+                        identity.data?.avatar_preset ??
+                        identity.data?.avatar ??
+                        current?.avatar_preset,
+                      portrait: identity.capabilities?.avatar_image
+                        ? personaUrl(
+                            identity.capabilities.avatar_image.url ||
+                              '/api/media/avatar-image',
+                            personaId,
+                          )
+                        : undefined,
+                    }}
+                  />
+                </Suspense>
+              ) : (
+                <Memories profile onSpeakerCount={setSpeakerCount} />
+              )}
             </section>
           </TabsPrimitive.Content>
         )}
@@ -320,21 +362,45 @@ export function Profile() {
             </section>
           </TabsPrimitive.Content>
         )}
-        {section === 'channels' && (
-          <TabsPrimitive.Content value="channels" asChild>
-            <section
-              id="profile-channels"
-              className="profile-section space-y-4"
-              aria-label="接入"
-            >
-              <Heading level={2} size="title">
-                接入
-              </Heading>
-              <Channels />
-            </section>
-          </TabsPrimitive.Content>
-        )}
       </div>
+      <SettingsDialog
+        open={settings !== null}
+        onOpenChange={(open) => setSettings(open ? 'channels' : null)}
+        title="分身设置"
+        note={identity.data?.name || current?.name}
+        sections={settingsSections}
+        active={settings ?? 'channels'}
+        onSelect={setSettings}
+      >
+        {settings === 'channels' && <Channels />}
+        {settings === 'questions' && <Followups />}
+        {settings === 'services' && <ExternalServices />}
+        {settings === 'delete' && (
+          <Stack gap={3} align="start">
+            <Text size="sm" tone="secondary">
+              删除后 7 天内可以在「最近删除」里恢复。
+            </Text>
+            {current?.is_default ? (
+              <Text tone="secondary">默认分身不能删除</Text>
+            ) : (
+              current && (
+                <Button
+                  variant="danger"
+                  loading={busy}
+                  onClick={() => void remove()}
+                >
+                  删除这个分身
+                </Button>
+              )
+            )}
+            {error && (
+              <Text role="alert" tone="danger">
+                {error}
+              </Text>
+            )}
+          </Stack>
+        )}
+      </SettingsDialog>
       <Dialog
         open={editing}
         onOpenChange={setEditing}

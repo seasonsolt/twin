@@ -40,7 +40,7 @@ const pages: {
     ready: 'TWIN_LLM_KEY',
     viewport: true,
   },
-  { name: 'profile', path: '/#/profile', ready: '做事方式' },
+  { name: 'profile', path: '/#/profile', ready: '最有把握的几点' },
   {
     name: 'memories',
     path: '/#/profile?section=memories',

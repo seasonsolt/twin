@@ -210,7 +210,7 @@ it.each(['persona', 'identity'])(
     identity.name_source = 'user';
     window.location.hash = `#/${route}`;
     render(<App />);
-    await screen.findByRole('heading', { name: '概览' });
+    await screen.findByRole('heading', { name: '人格' });
     expect(window.location.hash).toBe('#/profile');
   },
 );

@@ -9,6 +9,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
+  AspectRing,
+  LevelDots,
+  SideTabs,
   ChatSurface,
   ChatMessage,
   ChatAction,
@@ -76,8 +79,77 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [settings, setSettings] = useState(false);
   const [section, setSection] = useState('monitor');
   const [sheetWidth, setSheetWidth] = useState(280);
+  const [aspect, setAspect] = useState('D2');
   return (
     <Stack gap={6}>
+      <Section title="人格画像">
+        <Row gap={6} wrap>
+          <AspectRing
+            label="九个方面里已了解 6 个"
+            segments={[3, 2, 1, 2, 0, 1, 1, 3, 0].map((level, i) => ({
+              layer: i < 3 ? 'core' : i < 6 ? 'outer' : 'context',
+              level,
+            }))}
+          >
+            <Text size="xl" weight="semibold">
+              6/9
+            </Text>
+            <Text size="xs" tone="secondary">
+              个方面
+            </Text>
+          </AspectRing>
+          <Stack gap={2}>
+            {(['core', 'outer', 'context'] as const).map((layer, i) => (
+              <Row key={layer} gap={3}>
+                <LevelDots
+                  level={i + 1}
+                  layer={layer}
+                  label={`等级 ${i + 1}`}
+                />
+                <Text size="sm">{['内核', '外显', '处境'][i]}</Text>
+              </Row>
+            ))}
+          </Stack>
+        </Row>
+        <SideTabs
+          label="九个方面（示例）"
+          value={aspect}
+          onValueChange={setAspect}
+          groups={[
+            {
+              label: '内核',
+              layer: 'core',
+              items: [
+                {
+                  value: 'D2',
+                  label: '看重什么',
+                  trailing: <LevelDots level={3} />,
+                },
+                {
+                  value: 'D4',
+                  label: '怎么思考',
+                  trailing: <LevelDots level={1} />,
+                },
+              ],
+            },
+            {
+              label: '外显',
+              layer: 'outer',
+              items: [
+                {
+                  value: 'D6',
+                  label: '说话方式',
+                  trailing: <LevelDots level={2} layer="outer" />,
+                },
+              ],
+            },
+          ]}
+        >
+          <Text size="sm" tone="secondary">
+            选中的方面：{aspect}
+          </Text>
+        </SideTabs>
+      </Section>
       <Section title="聊天与导航">
         <Row gap={3}>
           <NavPill to="/gallery" icon={Mic} label="图标导航" layout="rail" />

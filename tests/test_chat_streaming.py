@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 
 from twin.config import LLMSettings, Settings
 from twin.embed import HashingEmbedder
-from twin.llm import FakeLLM, OpenAICompatLLM, hedged_stream
-from twin.persona.chat import ChatStreamParser, PersonaChat, chat_system_prompt, index_persona
+from twin.llm import FakeLLM, LLMError, OpenAICompatLLM, hedged_stream
+from twin.persona.chat import STREAM_REMINDER, ChatStreamParser, PersonaChat, chat_system_prompt, index_persona
 from twin.persona.items import PersonaItem
 from twin.persona.store import PersonaStore
 from twin.web import create_app
@@ -66,6 +66,21 @@ def test_parser_conservative_fallback_keeps_text(body: str, visible: str) -> Non
     assert draft.reply == visible
     assert draft.mode == "general" and not draft.abstain and draft.confidence == 0 and draft.citations == []
     assert not parser.verified
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "<<<META>>> " + json.dumps(META),
+        "<<<META>>>\n```json\n" + json.dumps(META) + "\n```",
+        "<<<META>>>\n元数据：" + json.dumps(META) + "\n以上。",
+    ],
+)
+def test_parser_reads_metadata_on_the_marker_line_in_a_code_block_or_among_words(tail: str) -> None:
+    parser = ChatStreamParser()
+    visible = "".join(parser.feed(ch) for ch in "回答正文\n" + tail) + parser.finish()
+    assert visible == "回答正文\n"
+    assert parser.draft().citations == META["citations"] and parser.verified
 
 
 @pytest.mark.parametrize(
@@ -409,6 +424,51 @@ def test_sse_invalid_metadata_keeps_text_and_logs_once(tmp_path: Path, body: str
             assert store._db.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 1
         queue = web.get("/api/persona/followups", headers={"X-Twin": "1"}).json()
         assert queue["pending"] == 0
+
+
+LONG_REPLY = (
+    "值得做，但得先想清楚一件事：你的垂类里，AI 到底解决了什么别人解决不了的问题，还是只是把原来靠人做的事换成机器做。"
+)
+
+
+@pytest.mark.parametrize("recovered", [True, False])
+def test_stream_without_metadata_recovers_it_without_touching_the_reply(tmp_path: Path, recovered: bool) -> None:
+    """A substantive reply that streamed without metadata gets it from one more call that only labels the reply; the
+    text already shown is never rewritten, and a failed recovery leaves the reply unverified as before."""
+    settings = Settings(db_path=tmp_path / "twin.db")
+    seed(settings.db_path)
+
+    class NoMetadataLLM(StreamingLLM):
+        async def stream(self, **kwargs: Any) -> AsyncIterator[str]:
+            self.calls.append(("stream", kwargs["system"], kwargs["user"]))
+            yield LONG_REPLY
+
+    def handler(system: str, user: str, schema: type[Any]) -> dict[str, Any]:
+        if schema.__name__ != "ChatMeta":
+            return {}
+        if not recovered:
+            raise LLMError("metadata failed too")
+        return {"citations": ["pi_test"], "confidence": 0.7, "mode": "grounded", "reply": "改写的回复"}
+
+    llm = NoMetadataLLM(handler)
+    with TestClient(
+        create_app(settings, llm_factory=lambda: llm, embedder_factory=HashingEmbedder), base_url="http://localhost"
+    ) as web:
+        response = web.post(
+            "/api/persona/chat/stream",
+            headers={"X-Twin": "1"},
+            json={"messages": [{"role": "user", "content": "年轻人还应该在 AI 垂类赛道创业吗？"}]},
+        )
+    final = parse_events(response)[-1][1]
+    assert final["reply"] == LONG_REPLY
+    stream_user = next(user for name, _, user in llm.calls if name == "stream")
+    assert stream_user.endswith(STREAM_REMINDER)
+    asks = [user for name, _, user in llm.calls if name == "ChatMeta"]
+    assert len(asks) == 1 and LONG_REPLY in asks[0] and "不要改写它" in asks[0]
+    if recovered:
+        assert final["verified"] is True and final["citations"] == ["pi_test"] and final["mode"] == "grounded"
+    else:
+        assert final["verified"] is False and final["citations"] == [] and final["mode"] == "general"
 
 
 def test_sse_error_is_sanitized(tmp_path: Path) -> None:

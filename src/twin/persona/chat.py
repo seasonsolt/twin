@@ -45,6 +45,7 @@ from .rewrite import Rewrite, rewrite
 from .schema import (
     MAX_TOPIC_FACETS,
     ChatDraft,
+    ChatMeta,
     ChatReply,
     ChatTurn,
     Expression,
@@ -596,7 +597,7 @@ class PersonaChat:
             parser = ChatStreamParser()
             async with aclosing(
                 hedged_stream(
-                    lambda: stream(system=system + STREAM_FORMAT, user=user, effort=effort),
+                    lambda: stream(system=system + STREAM_FORMAT, user=user + STREAM_REMINDER, effort=effort),
                     self.settings.effective_chat_llm.hedge_after_s,
                 )
             ) as chunks:
@@ -607,7 +608,26 @@ class PersonaChat:
                 yield delta
             draft = parser.draft()
             verified = parser.verified
+            if not verified and len(draft.reply.strip()) >= RECOVER_META_MIN_CHARS:
+                recovered = await off_loop(partial(self._recover_meta, system, user, draft.reply))
+                if recovered is not None:
+                    draft, verified = recovered, True
         yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist, verified=verified))
+
+    def _recover_meta(self, system: str, user: str, reply: str) -> ChatDraft | None:
+        """The metadata of a streamed reply that left it out or wrote it unreadably, asked for on its own: the reply
+        stays exactly as streamed, only what it rests on is filled in. None when that fails too."""
+        try:
+            meta = self.llm.structured(
+                system=system,
+                user=user + META_RECOVERY.format(reply=reply),
+                schema=ChatMeta,
+                effort=self.settings.effective_chat_llm.effort_extract,
+            )
+            draft = ChatDraft.model_validate({**meta.model_dump(exclude_unset=True), "reply": reply})
+        except (LLMError, ValidationError, ValueError):
+            return None
+        return draft if math.isfinite(draft.confidence) else None
 
     @staticmethod
     def _attach_files(ctx: PersonaContext, attachments: Sequence[AttachmentPassage]) -> None:
@@ -735,6 +755,28 @@ abstain 是布尔值，abstain_reason 是弃权原因字符串（不弃权时为
 """
 
 
+def _metadata_object(text: str) -> object:
+    """The first JSON object in the metadata, whatever surrounds it: models wrap it in a code block or add a word."""
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("no metadata object")
+    return json.JSONDecoder().raw_decode(text[start:])[0]
+
+
+# The format rule ends a long system prompt, where a model easily loses it; said again right before it writes.
+STREAM_REMINDER = "\n（写完正文后另起一行，单独输出 <<<META>>>，再输出元数据 JSON；不要用代码块包裹。）"
+
+# A reply this short that dropped its metadata is usually a greeting: nothing to check, not worth another call.
+RECOVER_META_MIN_CHARS = 40
+META_RECOVERY = """
+
+【你已经发出的回复】
+{reply}
+
+这段回复已经发给对方，不要改写它。只按上面的规则为它补上元数据：citations 填它实际用到的资料编号，\
+mode、confidence、abstain、abstain_reason、asked、answered、topic_facets 按它实际说的内容判断。"""
+
+
 class ChatStreamParser:
     """Hold only a possible delimiter at a line start, never expose metadata as reply text."""
 
@@ -757,15 +799,14 @@ class ChatStreamParser:
         output = ""
         while self.pending:
             if self.line_start:
-                line, separator, rest = self.pending.partition("\n")
-                if line.rstrip("\r") == self.marker:
-                    if not separator:
-                        break
+                # The metadata may follow on the marker's own line ("<<<META>>> {...}") as well as on the next.
+                if self.pending.startswith(self.marker):
                     self.in_metadata = True
-                    self.metadata = rest
+                    self.metadata = self.pending[len(self.marker) :]
                     self.pending = ""
                     break
-                if not separator and (self.marker.startswith(line) or line == self.marker + "\r"):
+                line, separator, _ = self.pending.partition("\n")
+                if not separator and self.marker.startswith(line):
                     break
             line, separator, rest = self.pending.partition("\n")
             output += line + separator
@@ -775,9 +816,6 @@ class ChatStreamParser:
         return output
 
     def finish(self) -> str:
-        if self.line_start and self.pending.rstrip("\r") == self.marker:
-            self.in_metadata = True
-            self.pending = ""
         output, self.pending = self.pending, ""
         self.text += output
         return output
@@ -786,7 +824,7 @@ class ChatStreamParser:
         try:
             if not self.in_metadata:
                 raise ValueError("missing delimiter")
-            metadata = json.loads(self.metadata)
+            metadata = _metadata_object(self.metadata)
             if not isinstance(metadata, dict):
                 raise ValueError("metadata must be an object")
             data = ChatDraft.model_validate({**metadata, "reply": self.text.rstrip("\r\n")})

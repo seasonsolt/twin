@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, create_model, field_validator, model_validator
 
 
 class SourceKind(StrEnum):
@@ -143,6 +143,14 @@ class ChatDraft(BaseModel):
         if self.abstain != (self.mode == "abstain"):
             raise ValueError("abstain must match mode")
         return self
+
+
+# A draft's metadata without its text: asked for on its own when a streamed reply left it out, so the reply already
+# shown stays exactly as it was. The draft's own validation runs once the text is added back.
+ChatMeta = create_model(
+    "ChatMeta",
+    **{name: (info.annotation, info) for name, info in ChatDraft.model_fields.items() if name != "reply"},  # type: ignore[call-overload]
+)
 
 
 class ChatReply(BaseModel):

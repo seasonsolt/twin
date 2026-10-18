@@ -5,7 +5,7 @@
   width: var(--spacing-chat-sheet);
   flex: 0 0 var(--spacing-chat-sheet);
   background: var(--canvas);
-  padding: 16px 12px;
+  padding: var(--spacing-4) var(--spacing-3);
   display: flex;
   min-height: 0;
 }
@@ -21,7 +21,7 @@
   position: relative;
   width: var(--spacing-chat-stage);
   flex: 0 0 var(--spacing-chat-stage);
-  margin: 0 16px 20px 0;
+  margin: 0 var(--spacing-4) var(--spacing-5) 0;
   overflow: hidden;
   background: var(--accent);
   color: var(--on-accent);
@@ -30,9 +30,9 @@
   @apply rounded-chat;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--spacing-1);
   width: 100%;
-  padding: 12px 12px 8px 16px;
+  padding: var(--spacing-3) var(--spacing-3) var(--spacing-2) var(--spacing-4);
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--elevation-2);
@@ -45,18 +45,18 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--spacing-3);
   text-align: center;
 }
 .chat-surface-empty > p {
-  max-width: 460px;
+  max-width: var(--spacing-chat-intro);
 }
 .chat-input {
   border: 0;
   border-radius: 0;
   background: transparent;
-  padding: 4px 0;
-  font-size: 15px;
+  padding: var(--spacing-1) 0;
+  font-size: var(--text-md);
   line-height: 1.6;
   box-shadow: none;
   resize: none;
@@ -65,8 +65,8 @@
   outline: none;
 }
 .chat-action-quiet {
-  padding: 0 12px;
-  min-height: 36px;
+  padding: 0 var(--spacing-3);
+  min-height: var(--spacing-9);
   background: transparent;
   color: var(--text-secondary);
 }
@@ -99,9 +99,9 @@
   @apply rounded-md;
   width: 100%;
   justify-content: flex-start;
-  padding: 0 12px;
-  min-height: 40px;
-  font-size: 15px;
+  padding: 0 var(--spacing-3);
+  min-height: var(--spacing-10);
+  font-size: var(--text-md);
   background: transparent;
   color: var(--text-primary);
 }
@@ -114,18 +114,18 @@
 }
 .chat-identity-sheet,
 .chat-identity-sheet .persona-portrait {
-  width: 32px;
-  height: 32px;
+  width: var(--spacing-8);
+  height: var(--spacing-8);
 }
 .chat-identity-mobile,
 .chat-identity-mobile .persona-portrait {
-  width: 36px;
-  height: 36px;
+  width: var(--spacing-9);
+  height: var(--spacing-9);
 }
 .chat-identity-empty,
 .chat-identity-empty .persona-portrait {
-  width: 64px;
-  height: 64px;
+  width: var(--spacing-16);
+  height: var(--spacing-16);
 }
 .chat-message {
   min-width: 0;
@@ -137,15 +137,15 @@
   width: fit-content;
   max-width: 85%;
   margin-left: auto;
-  padding: 12px 16px;
+  padding: var(--spacing-3) var(--spacing-4);
   background: var(--canvas);
 }
 .chat-message .message-text {
-  font-size: 16px;
+  font-size: var(--text-lg);
   line-height: 1.75;
 }
 .chat-message[data-speaker='user'] .message-text {
-  font-size: 15px;
+  font-size: var(--text-md);
   line-height: 1.6;
 }
 .chat-message .twin-bubble,
@@ -177,7 +177,7 @@
   position: relative;
 }
 .reply-details-compact > summary {
-  width: 36px;
+  width: var(--spacing-9);
   justify-content: center;
   cursor: pointer;
   list-style: none;
@@ -193,7 +193,7 @@
   top: 100%;
   width: var(--spacing-chat-sheet);
   max-width: 80vw;
-  padding: 12px;
+  padding: var(--spacing-3);
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--elevation-2);
@@ -212,12 +212,12 @@
   background: var(--soft);
 }
 .conversation-sheet-history .history-group-label {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-tertiary);
-  padding: 12px 12px 0;
+  padding: var(--spacing-3) var(--spacing-3) 0;
 }
 .conversation-sheet-history .history-title {
-  font-size: 15px;
+  font-size: var(--text-md);
   font-weight: 400;
 }
 .conversation-sheet-history .history-select time {
@@ -227,7 +227,7 @@
   gap: 0;
 }
 .conversation-sheet-history .history-new {
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: transparent;
 }
 
@@ -252,9 +252,9 @@
 .chat-topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 56px;
-  padding: 8px 16px;
+  gap: var(--spacing-2);
+  min-height: var(--spacing-chat-topbar);
+  padding: var(--spacing-2) var(--spacing-4);
   flex-shrink: 0;
 }
 .chat-redesign .chat-thread {
@@ -275,8 +275,8 @@
 .chat-redesign .chat-column-grid {
   display: grid;
   grid-template-columns:
-    minmax(16px, 1fr) minmax(0, var(--spacing-chat-column))
-    minmax(16px, 1fr);
+    minmax(var(--spacing-4), 1fr) minmax(0, var(--spacing-chat-column))
+    minmax(var(--spacing-4), 1fr);
 }
 .chat-redesign .chat-column-grid > * {
   grid-column: 2;
@@ -289,15 +289,15 @@
   min-height: 100%;
   max-width: none;
   margin: 0;
-  padding: 16px 0 24px;
+  padding: var(--spacing-4) 0 var(--spacing-6);
 }
 .chat-redesign .chat-conversation [data-pin] {
-  scroll-margin-top: 16px;
+  scroll-margin-top: var(--spacing-4);
 }
 .chat-redesign .chat-composer {
   position: static;
   flex-shrink: 0;
-  padding: 8px 0 20px;
+  padding: var(--spacing-2) 0 var(--spacing-5);
   background: var(--surface);
   border: 0;
   overflow: visible;
@@ -316,13 +316,13 @@
 }
 .chat-redesign .stage-space {
   position: relative;
-  height: 100% !important;
+  height: 100%;
 }
 .chat-redesign .chat-stage {
   position: relative;
   z-index: 0;
   inset: auto;
-  height: 100% !important;
+  height: 100%;
   border-radius: 0;
   display: flex;
   flex-direction: column;
@@ -333,17 +333,17 @@
   display: none;
 }
 .chat-redesign .chat-stage .stage-person {
-  padding: 32px 24px;
+  padding: var(--spacing-8) var(--spacing-6);
 }
 .chat-redesign .chat-stage .stage-name {
   font-family: inherit;
-  font-size: 22px;
+  font-size: var(--text-2xl);
 }
 .chat-redesign .stage-close {
   position: absolute;
   z-index: 10;
-  top: 12px;
-  right: 12px;
+  top: var(--spacing-3);
+  right: var(--spacing-3);
   color: var(--on-accent);
 }
 @media (max-width: 767px) {
@@ -356,12 +356,12 @@
     border-radius: 0;
   }
   .chat-topbar {
-    padding: 8px;
-    gap: 4px;
+    padding: var(--spacing-2);
+    gap: var(--spacing-1);
     border-bottom: 1px solid var(--border);
   }
   .chat-redesign .chat-composer {
-    padding-bottom: 8px;
+    padding-bottom: var(--spacing-2);
   }
   .chat-redesign[data-empty='true'] .chat-thread {
     padding-bottom: 0;
@@ -376,9 +376,9 @@
   .chat-redesign .chat-surface-stage {
     position: absolute;
     z-index: 30;
-    inset: 72px 12px auto;
+    inset: var(--spacing-18) var(--spacing-3) auto;
     width: auto;
-    height: 360px;
+    height: var(--spacing-chat-stage-compact);
     margin: 0;
     box-shadow: var(--elevation-3);
   }
@@ -387,9 +387,9 @@
   .chat-redesign .chat-surface-stage {
     position: absolute;
     z-index: 30;
-    top: 72px;
+    top: var(--spacing-18);
     right: 0;
-    bottom: 20px;
+    bottom: var(--spacing-5);
     box-shadow: var(--elevation-3);
   }
 }

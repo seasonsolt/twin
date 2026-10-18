@@ -159,6 +159,9 @@
   --spacing-chat-stage: 340px;
   --spacing-chat-column: 720px;
   --spacing-chat-send: 34px;
+  --spacing-chat-topbar: 56px;
+  --spacing-chat-stage-compact: 360px;
+  --spacing-chat-intro: 460px;
 }
 
 @layer base {

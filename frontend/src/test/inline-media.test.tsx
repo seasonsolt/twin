@@ -478,7 +478,8 @@ it('opens the portrait for speech with reduced motion and retains static speakin
   await screen.findByRole('status', { name: '正在说话' });
   const stage = screen.getByRole('banner', { name: '本人的舞台' });
   expect(stage).toHaveAttribute('data-collapsed', 'false');
-  expect(stage).toHaveStyle({ height: '392px' });
+  // As the chat's 形象 panel the stage fills its column instead of animating its own height.
+  expect(stage.style.height).toBe('');
   expect(view.container.querySelector('[data-portrait-glow]')).toBeNull();
 });
 it('ships only self-hosted unicode-range font slices, with swap and no body webfont', () => {

@@ -196,7 +196,8 @@ export function ChatStage({
   return (
     <motion.div
       className="stage-space"
-      style={{ height: reduced ? targetHeight : height }}
+      // As a chat panel the stage fills its column; the animated height belongs to the Work header.
+      style={panel ? undefined : { height: reduced ? targetHeight : height }}
     >
       <StageHeader
         variant="chat"
@@ -207,7 +208,7 @@ export function ChatStage({
         data-reduced-motion={reduced}
         data-speaking={speaking}
         data-video-status={videoStatus}
-        style={{ height: reduced ? targetHeight : height }}
+        style={panel ? undefined : { height: reduced ? targetHeight : height }}
         right={
           !desktop &&
           !panel && (

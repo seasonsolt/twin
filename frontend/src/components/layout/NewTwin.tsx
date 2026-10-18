@@ -106,6 +106,7 @@ export function NewTwin({
         onOpenChange={changeOpen}
         title="新建分身"
         body="每个分身都有独立的记忆、形象、声音和聊天。"
+        variant="fullscreen"
         className="create-twin-sheet"
         onCloseAutoFocus={(event) => {
           event.preventDefault();

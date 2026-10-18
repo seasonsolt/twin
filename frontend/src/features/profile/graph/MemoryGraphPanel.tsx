@@ -478,6 +478,7 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
           )
             event.preventDefault();
         }}
+        variant={mobile ? 'sheet' : 'drawer'}
         className={mobile ? 'memory-graph-sheet' : 'memory-graph-drawer'}
       >
         {item && (

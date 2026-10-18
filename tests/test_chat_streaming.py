@@ -108,18 +108,24 @@ def test_hedge_first_token_and_loser_closed(delays: list[float], hedge: float, e
 def test_hedge_preserves_arrival_order_when_both_tasks_are_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     original_wait = asyncio.wait
 
-    async def delayed_wait(*args: Any, **kwargs: Any) -> Any:
+    async def both_ready_first(*args: Any, **kwargs: Any) -> Any:
+        # Once both streams race, let both finish before the race's waiter resumes.
         if len(args[0]) == 2:
-            await asyncio.sleep(0.04)
+            await original_wait(args[0])
         return await original_wait(*args, **kwargs)
 
-    monkeypatch.setattr(asyncio, "wait", delayed_wait)
+    monkeypatch.setattr(asyncio, "wait", both_ready_first)
 
     async def run() -> None:
         started = 0
+        second_arrived = asyncio.Event()
 
         async def stream(index: int) -> AsyncIterator[str]:
-            await asyncio.sleep(0.03 if index == 0 else 0.001)
+            if index == 0:
+                # The first stream stays silent past the hedge and answers only after the second has.
+                await second_arrived.wait()
+            else:
+                second_arrived.set()
             yield str(index)
 
         def factory() -> AsyncIterator[str]:
@@ -129,6 +135,7 @@ def test_hedge_preserves_arrival_order_when_both_tasks_are_ready(monkeypatch: py
             return result
 
         assert [text async for text in hedged_stream(factory, 0.01)] == ["1"]
+        assert started == 2
 
     asyncio.run(run())
 

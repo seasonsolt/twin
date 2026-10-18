@@ -31,7 +31,9 @@ class Fake:
         self.health_status = 200
         self.embed_status = 200
         self.embedding: Any = [0.1, 0.2]
-        self.delay = 0.0
+        # While cleared, every answer hangs until it is set (or the server closes): a service that never replies.
+        self.answering = threading.Event()
+        self.answering.set()
         # Answers for particular GET paths, instead of the health answer.
         self.paths: dict[str, tuple[int, Any]] = {}
         self.requests: list[tuple[str, str, dict[str, str], Any]] = []
@@ -42,7 +44,7 @@ class Fake:
                 pass
 
             def answer(self, status: int, body: Any) -> None:
-                time.sleep(fake.delay)
+                fake.answering.wait()
                 data = json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -65,6 +67,7 @@ class Fake:
         threading.Thread(target=self.server.serve_forever, args=(0.05,), daemon=True).start()
 
     def close(self) -> None:
+        self.answering.set()
         self.server.shutdown()
         self.server.server_close()
 
@@ -102,7 +105,9 @@ def settings_for(tmp_path: Path, asr: str | None, embed: str | None, **auth: Any
 
 
 def monitor_for(tmp_path: Path, asr: str | None, embed: str | None, **options: Any) -> GpuMonitor:
-    return GpuMonitor(settings_for(tmp_path, asr, embed), timeout=0.5, **options)
+    # Long enough that a loaded machine never turns an answer into a timeout; test_timeout sets its own.
+    options.setdefault("timeout", 10.0)
+    return GpuMonitor(settings_for(tmp_path, asr, embed), **options)
 
 
 def service(snapshot: dict[str, Any], key: str) -> dict[str, Any]:
@@ -160,11 +165,14 @@ def test_healthy_services(tmp_path: Path, asr: Fake, embed: Fake, monkeypatch: p
 
 
 def test_timeout(tmp_path: Path, asr: Fake) -> None:
-    asr.delay = 1.0
-    monitor = monitor_for(tmp_path, asr.url, None)
-    started = time.perf_counter()
+    asr.answering.clear()
+    monitor = monitor_for(tmp_path, asr.url, None, timeout=0.5)
+    # A broken timeout would wait for the answer; it comes after a minute, so the check below would see it.
+    late = threading.Timer(60, asr.answering.set)
+    late.start()
     monitor.check()
-    assert time.perf_counter() - started < 0.9
+    late.cancel()
+    assert not asr.answering.is_set()
     latest = service(monitor.snapshot(), "asr")["latest"]
     assert not latest["ok"] and "响应超时" in latest["reason"]
 
@@ -236,7 +244,7 @@ def test_background_checks(tmp_path: Path, asr: Fake) -> None:
     monitor = monitor_for(tmp_path, asr.url, None, interval=0.05)
     monitor.start()
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while service(monitor.snapshot(), "asr")["checks"] < 3 and time.monotonic() < deadline:
             time.sleep(0.02)
     finally:

@@ -391,7 +391,9 @@ def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]
         yield client
 
 
-def until(check: Any, seconds: float = 15) -> None:
+def until(check: Any, seconds: float = 60) -> None:
+    """Wait for ``check`` to hold. ``seconds`` is only a liveness bound: a build on a loaded machine can take many
+    seconds, and the wait ends as soon as the check holds."""
     deadline = time.monotonic() + seconds
     while not check():
         if time.monotonic() > deadline:

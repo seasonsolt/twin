@@ -31,6 +31,7 @@ import {
   TextLink,
   Button,
   PlainButton,
+  ResizeHandle,
   Spacer,
   TypingIndicator,
 } from '../components/ui';
@@ -57,7 +58,7 @@ import { loadEssential, peekEssential } from '../lib/personaPrefetch';
 import { useStatus } from '../stores/status';
 import { usePersonas } from '../stores/personas';
 import { useMediaQuery, useMobile } from '../lib/useMobile';
-import { useChatLayout } from '../stores/chatLayout';
+import { SHEET_WIDTH, useChatLayout } from '../stores/chatLayout';
 import {
   PersonaSwitcher,
   PersonaPortrait,
@@ -352,7 +353,19 @@ export function Chat() {
       data-empty={!chat.turns.length && !chat.loading}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
-      {sheetOpen && <ChatSurface variant="sheet">{history}</ChatSurface>}
+      {sheetOpen && (
+        <ChatSurface variant="sheet" width={layout.sheetWidth}>
+          {history}
+          <ResizeHandle
+            label="调整对话列表宽度"
+            value={layout.sheetWidth ?? SHEET_WIDTH.default}
+            min={SHEET_WIDTH.min}
+            max={SHEET_WIDTH.max}
+            defaultValue={SHEET_WIDTH.default}
+            onChange={layout.setSheetWidth}
+          />
+        </ChatSurface>
+      )}
       {mobile && history}
       <ChatSurface
         variant="panel"

@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from 'react';
+import type { ComponentProps, CSSProperties, ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import { Button, type ButtonProps, Textarea } from './controls';
 import './chat.css';
@@ -6,13 +6,24 @@ import './chat.css';
 /** Conversation surfaces keep their appearance in the kit, not in page markup. */
 export function ChatSurface({
   variant,
+  width,
   className,
   ...props
-}: ComponentProps<'div'> & {
+}: Omit<ComponentProps<'div'>, 'style'> & {
   variant: 'sheet' | 'panel' | 'stage' | 'composer' | 'empty';
+  /** The sheet's width in CSS pixels, when the viewer has set one; otherwise --spacing-chat-sheet. */
+  width?: number;
 }) {
   return (
-    <div {...props} className={cn(`chat-surface-${variant}`, className)} />
+    <div
+      {...props}
+      style={
+        width === undefined
+          ? undefined
+          : ({ '--chat-sheet-width': `${width}px` } as CSSProperties)
+      }
+      className={cn(`chat-surface-${variant}`, className)}
+    />
   );
 }
 export function ChatMessage({

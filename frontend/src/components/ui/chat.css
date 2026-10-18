@@ -2,8 +2,9 @@
 
 .chat-surface-sheet {
   @apply rounded-tl-lg;
-  width: var(--spacing-chat-sheet);
-  flex: 0 0 var(--spacing-chat-sheet);
+  position: relative;
+  width: var(--chat-sheet-width, var(--spacing-chat-sheet));
+  flex: 0 0 var(--chat-sheet-width, var(--spacing-chat-sheet));
   background: var(--canvas);
   padding: var(--spacing-4) var(--spacing-3);
   display: flex;
@@ -197,6 +198,11 @@
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--elevation-2);
+}
+/* Too little room below inside the message list (the last answer, right above the composer): open upward. */
+.reply-details-compact[open][data-placement='top'] > .reply-details-content {
+  top: auto;
+  bottom: 100%;
 }
 .conversation-sheet-history {
   display: flex;

@@ -48,7 +48,7 @@ it('keeps the room below a sent message that brings it to the top, shrinking as 
   });
   // 800 visible - 200 of content - 16 of gap.
   expect(view.getByTestId('space')).toHaveStyle({ height: '584px' });
-  expect(scroll).toHaveBeenCalledWith({ block: 'start' });
+  expect(scroll).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
   expect(scroll.mock.contexts.at(-1)).toBe(view.getByTestId('m1'));
 
   // The reply grows past the screen: no room is left.
@@ -59,5 +59,23 @@ it('keeps the room below a sent message that brings it to the top, shrinking as 
 
   view.rerender(<Thread pinned={null} />);
   expect(view.queryByTestId('space')).toBeNull();
+  delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+});
+
+it('jumps to the sent message without gliding when the viewer asks for reduced motion', async () => {
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query: string) =>
+      ({ matches: query.includes('reduced-motion') }) as MediaQueryList,
+  );
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scroll,
+  });
+  render(<Thread pinned="m1" />);
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+  expect(scroll).toHaveBeenCalledWith({ block: 'start', behavior: 'auto' });
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });

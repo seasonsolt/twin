@@ -61,6 +61,7 @@ import {
   TextLink,
   toast,
   Toolbar,
+  ResizeHandle,
   type Gap,
 } from '../components/ui';
 
@@ -74,6 +75,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [filters, setFilters] = useState(['决定']);
   const [settings, setSettings] = useState(false);
   const [section, setSection] = useState('monitor');
+  const [sheetWidth, setSheetWidth] = useState(280);
   return (
     <Stack gap={6}>
       <Section title="聊天与导航">
@@ -81,13 +83,21 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           <NavPill to="/gallery" icon={Mic} label="图标导航" layout="rail" />
           <ChatAction selected>形象</ChatAction>
         </Row>
-        <ChatSurface variant="sheet">
+        <ChatSurface variant="sheet" width={sheetWidth}>
           <Stack gap={2}>
             <ChatIdentity>
               <AvatarFrame size="fill">林</AvatarFrame>
             </ChatIdentity>
             <ChatAction variant="row">新对话</ChatAction>
           </Stack>
+          <ResizeHandle
+            label="示例：调整宽度"
+            value={sheetWidth}
+            min={220}
+            max={440}
+            defaultValue={280}
+            onChange={setSheetWidth}
+          />
         </ChatSurface>
         <ChatSurface variant="panel">
           <ChatMessage speaker="user">下周怎么安排？</ChatMessage>

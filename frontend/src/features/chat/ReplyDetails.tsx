@@ -65,6 +65,32 @@ function formatElapsed(milliseconds: number) {
   return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
 }
 
+/** The nearest ancestor that scrolls vertically, whose visible box the opened details must fit in. */
+function scrollParent(element: HTMLElement): HTMLElement | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (/auto|scroll/u.test(getComputedStyle(node).overflowY)) return node;
+  }
+  return null;
+}
+
+/** Open the compact details upward when the space below the button, inside its scrolling list, is too short and
+ * the space above is not, then bring the whole of it into view: the last answer sits right above the composer. */
+export function placeDetails(details: HTMLDetailsElement) {
+  delete details.dataset.placement;
+  if (!details.open) return;
+  const content = details.querySelector<HTMLElement>('.reply-details-content');
+  if (!content) return;
+  const frame = scrollParent(details)?.getBoundingClientRect() ?? {
+    top: 0,
+    bottom: window.innerHeight,
+  };
+  const anchor = details.getBoundingClientRect();
+  const height = content.getBoundingClientRect().height;
+  if (anchor.bottom + height > frame.bottom && anchor.top - height >= frame.top)
+    details.dataset.placement = 'top';
+  content.scrollIntoView?.({ block: 'nearest' });
+}
+
 /** How the answer was made, for whoever wants to know: closed, and quieter than the answer and its evidence. */
 export function ReplyDetails({
   reply,
@@ -101,6 +127,9 @@ export function ReplyDetails({
       className={
         compact ? 'reply-details reply-details-compact' : 'reply-details'
       }
+      onToggle={(event) => {
+        if (compact) placeDetails(event.currentTarget);
+      }}
     >
       <Text
         as="summary"

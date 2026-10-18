@@ -133,7 +133,14 @@ export function usePinnedMessage(
     // the frame cancels this one and schedules it again.
     const frame = requestAnimationFrame(() => {
       scrolled.current = pinned;
-      target.scrollIntoView?.({ block: 'start' });
+      // Glide rather than jump, so the earlier answer is seen leaving upward instead of vanishing at once.
+      const reduced = window.matchMedia?.(
+        '(prefers-reduced-motion: reduce)',
+      ).matches;
+      target.scrollIntoView?.({
+        block: 'start',
+        behavior: reduced ? 'auto' : 'smooth',
+      });
     });
     return () => cancelAnimationFrame(frame);
   }, [pinned, space]);

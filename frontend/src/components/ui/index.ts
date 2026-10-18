@@ -8,6 +8,7 @@ export * from './dialog';
 export * from './toast';
 export * from './presence';
 export * from './workflow';
+export * from './resize';
 export {
   ChatSurface,
   ChatMessage,

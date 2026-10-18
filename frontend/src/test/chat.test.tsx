@@ -99,7 +99,11 @@ beforeEach(async () => {
   vi.mocked(useReducedMotion).mockReturnValue(true);
   sessionStorage.clear();
   localStorage.clear();
-  useChatLayout.setState({ sheet: undefined, stage: undefined });
+  useChatLayout.setState({
+    sheet: undefined,
+    stage: undefined,
+    sheetWidth: undefined,
+  });
   conversations = conversationServer();
   fail = false;
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -1035,6 +1039,69 @@ it('collapses and expands the sheet, preserves the draft and remembers the choic
   view.unmount();
   mount();
   expect(screen.getByRole('button', { name: '展开对话列表' })).toBeVisible();
+});
+
+it('resizes the sheet by dragging or with the keyboard, within limits, and remembers the width', async () => {
+  // jsdom has no pointer capture; the handle only needs it to keep the drag past its edge.
+  Object.assign(HTMLElement.prototype, {
+    setPointerCapture: vi.fn(),
+    releasePointerCapture: vi.fn(),
+    hasPointerCapture: vi.fn(() => true),
+  });
+  const view = mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: '展开对话列表' }));
+  const handle = screen.getByRole('separator', { name: '调整对话列表宽度' });
+  const sheet = () =>
+    screen
+      .getByRole('region', { name: '和测试人的对话' })
+      .closest('.chat-surface-sheet') as HTMLElement;
+  expect(handle).toHaveAttribute('aria-valuenow', '280');
+  expect(sheet().style.getPropertyValue('--chat-sheet-width')).toBe('');
+
+  fireEvent.pointerDown(handle, { button: 0, clientX: 300, pointerId: 1 });
+  fireEvent.pointerMove(handle, { clientX: 400, pointerId: 1 });
+  fireEvent.pointerUp(handle, { clientX: 400, pointerId: 1 });
+  expect(handle).toHaveAttribute('aria-valuenow', '380');
+  expect(sheet().style.getPropertyValue('--chat-sheet-width')).toBe('380px');
+  // Moving without a press does nothing.
+  fireEvent.pointerMove(handle, { clientX: 100, pointerId: 1 });
+  expect(handle).toHaveAttribute('aria-valuenow', '380');
+
+  fireEvent.pointerDown(handle, { button: 0, clientX: 380, pointerId: 2 });
+  fireEvent.pointerMove(handle, { clientX: 2000, pointerId: 2 });
+  fireEvent.pointerUp(handle, { pointerId: 2 });
+  expect(handle).toHaveAttribute('aria-valuenow', '440');
+
+  handle.focus();
+  await user.keyboard('{ArrowLeft}');
+  expect(handle).toHaveAttribute('aria-valuenow', '424');
+  await user.keyboard('{Home}');
+  expect(handle).toHaveAttribute('aria-valuenow', '220');
+  await user.keyboard('{ArrowLeft}');
+  expect(handle).toHaveAttribute('aria-valuenow', '220');
+  await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+  expect(handle).toHaveAttribute('aria-valuenow', '284');
+  expect(JSON.parse(localStorage.getItem('twin:chat-layout')!)).toMatchObject({
+    sheetWidth: 284,
+  });
+
+  view.unmount();
+  useChatLayout.setState({ sheetWidth: undefined });
+  localStorage.setItem(
+    'twin:chat-layout',
+    JSON.stringify({ sheet: true, sheetWidth: 9999 }),
+  );
+  vi.resetModules();
+  const { useChatLayout: reread } = await import('../stores/chatLayout');
+  expect(reread.getState().sheetWidth).toBe(440);
+
+  useChatLayout.setState({ sheetWidth: 284 });
+  mount();
+  const again = screen.getByRole('separator', { name: '调整对话列表宽度' });
+  expect(again).toHaveAttribute('aria-valuenow', '284');
+  await user.dblClick(again);
+  expect(again).toHaveAttribute('aria-valuenow', '280');
 });
 
 it('keeps the portrait closed initially, toggles it and remembers the choice', async () => {

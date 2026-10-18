@@ -29,6 +29,8 @@
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  /* A long unbroken title must not widen the list past its sheet: it is truncated instead. */
+  min-width: 0;
 }
 .history-new,
 .history-search {

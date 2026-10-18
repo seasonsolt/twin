@@ -186,10 +186,9 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   );
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
   expect(await within(tasks).findByText(/S1 像张总/u)).toBeInTheDocument();
-  expect(within(tasks).getByRole('link', { name: '去听一听' })).toHaveAttribute(
-    'href',
-    '/library/rec_9',
-  );
+  expect(
+    within(tasks).getByRole('link', { name: '试听并确认' }),
+  ).toHaveAttribute('href', '/library/rec_9');
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
@@ -248,10 +247,9 @@ it('lists new voices apart and names them before a twin can be made', async () =
   expect(
     within(fresh).queryByRole('button', { name: '生成分身' }),
   ).not.toBeInTheDocument();
-  expect(within(fresh).getByRole('link', { name: '去听一听' })).toHaveAttribute(
-    'href',
-    '/library/rec_9',
-  );
+  expect(
+    within(fresh).getByRole('link', { name: '试听并确认' }),
+  ).toHaveAttribute('href', '/library/rec_9');
   await userEvent.type(within(fresh).getByLabelText('给未命名 1起名'), '李总');
   await userEvent.click(within(fresh).getByRole('button', { name: '起名' }));
   await waitFor(() => expect(patches).toEqual([{ name: '李总' }]));
@@ -331,4 +329,154 @@ it('edits a person name and gender and opens the profile of their twin', async (
   await userEvent.click(screen.getByRole('button', { name: '张总监的档案' }));
   expect(await screen.findByText('档案页')).toBeInTheDocument();
   expect(switched).toEqual(['p-1']);
+});
+
+it('moves focus to the next voice after naming one, then hides the empty queue', async () => {
+  people = [
+    person({ id: 'first', name: '未命名 1', auto: true }),
+    person({ id: 'second', name: '未命名 2', auto: true }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (init?.method === 'PATCH') {
+        const id = url.split('/').at(-1);
+        people = people.map((p) =>
+          p.id === id
+            ? { ...p, auto: false, name: JSON.parse(String(init.body)).name }
+            : p,
+        );
+        return json({ renamed: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const first = await screen.findByLabelText('给未命名 1起名');
+  await userEvent.type(first, '张总');
+  await userEvent.click(
+    within(first.closest('li')!).getByRole('button', { name: '起名' }),
+  );
+  const next = screen.getByLabelText('给未命名 2起名');
+  await waitFor(() => expect(next).toHaveFocus());
+  await userEvent.type(next, '李总');
+  await userEvent.click(
+    within(next.closest('li')!).getByRole('button', { name: '起名' }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
+  );
+  expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
+  expect(screen.getAllByRole('region')[0]).toHaveAccessibleName('人物');
+});
+
+it('returns from a speaker confirmation to focus the next pending team item', async () => {
+  const originalFetch = fetch;
+  let reviewed = false;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/review')
+        return json({
+          items: reviewed
+            ? []
+            : [
+                {
+                  ...speaker({
+                    candidates: [
+                      { person_id: 'per_1', name: '张总', score: 0.7 },
+                    ],
+                  }),
+                  recording_id: 'rec_1',
+                  filename: '周会.m4a',
+                },
+              ],
+        });
+      if (url === '/api/library/people')
+        return json({
+          items: [
+            ...people,
+            person({ id: 'new', name: '未命名 1', auto: true }),
+          ],
+        });
+      const result = await originalFetch(url, init);
+      if (init?.method === 'PUT') reviewed = true;
+      return result;
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/team']}>
+      <ConfirmProvider>
+        <Routes>
+          <Route path="/team" element={<Team version={0} recordings={[]} />} />
+          <Route path="/library/:recordingId" element={<Recording />} />
+        </Routes>
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  const waiting = within(tasks).getByText('拿不准是谁').closest('li')!;
+  await userEvent.click(
+    within(waiting).getByRole('link', { name: '试听并确认' }),
+  );
+  const card = (await screen.findByRole('heading', { name: 'S1' })).closest(
+    'li',
+  )!;
+  await userEvent.selectOptions(within(card).getByLabelText('这是谁'), 'per_1');
+  await userEvent.click(within(card).getByRole('button', { name: '确认' }));
+  await waitFor(() =>
+    expect(screen.getByLabelText('给未命名 1起名')).toHaveFocus(),
+  );
+  expect(screen.queryByText('拿不准是谁')).toBeNull();
+});
+
+it('keeps uploads in the quiet processing group with progress and a stop action', async () => {
+  const stop = vi.fn();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: [] });
+      if (url === '/api/library/review') return json({ items: [] });
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team
+          version={0}
+          recordings={[]}
+          uploads={[
+            {
+              file: new File(['audio'], '上传.m4a'),
+              progress: {
+                name: '上传.m4a',
+                offset: 5,
+                size: 10,
+                paused: false,
+              },
+            },
+          ]}
+          onStopUpload={stop}
+        />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const progress = screen.getByRole('region', { name: '正在处理' });
+  expect(
+    within(progress).getByText('上传.m4a · 上传中 50%'),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+  await userEvent.click(
+    within(progress).getByRole('button', { name: /停止上传/u }),
+  );
+  expect(stop).toHaveBeenCalledOnce();
 });

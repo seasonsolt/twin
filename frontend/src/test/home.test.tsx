@@ -1,4 +1,5 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
@@ -110,14 +111,19 @@ it('shows the team, what needs settling and the way to upload more', async () =>
     screen.getByRole('button', { name: '上传会议录音' }),
   ).toBeInTheDocument();
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  expect(within(tasks).getByText('转写中')).toBeInTheDocument();
-  expect(within(tasks).getByText('月会.m4a')).toBeInTheDocument();
+  const progress = screen.getByRole('region', { name: '正在处理' });
+  expect(
+    within(progress).getByText('月会.m4a · 转写中 50%'),
+  ).toBeInTheDocument();
+  expect(
+    within(tasks).getByText('1', { selector: 'span' }),
+  ).toBeInTheDocument();
+  expect(within(tasks).queryByText(/月会/u)).toBeNull();
   // A speaker nobody resembles still asks for the owner, through its recording.
   expect(within(tasks).getByText('还有人没认')).toBeInTheDocument();
-  expect(within(tasks).getByRole('link', { name: '去认人' })).toHaveAttribute(
-    'href',
-    '/library/rec_1',
-  );
+  expect(
+    within(tasks).getByRole('link', { name: '试听并确认' }),
+  ).toHaveAttribute('href', '/library/rec_1');
   const people_ = screen.getByRole('region', { name: '人物' });
   expect(await within(people_).findByText('可以聊')).toBeInTheDocument();
   expect(
@@ -139,4 +145,97 @@ it('keeps the service status off the team page, even for administrators', async 
   expect(
     vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('admin')),
   ).toBe(false);
+});
+
+it('counts only actions while keeping queued work and memory organisation quiet', async () => {
+  people = [
+    {
+      id: 'new',
+      name: '未命名 1',
+      persona_id: null,
+      speakers: 1,
+      seconds: 600,
+      samples: 1,
+      updating: false,
+      auto: true,
+      gender: '',
+      recording_id: 'rec_1',
+    },
+    {
+      id: 'known',
+      name: '张总',
+      persona_id: 'p-1',
+      speakers: 1,
+      seconds: 600,
+      samples: 1,
+      updating: true,
+      auto: false,
+      gender: '',
+      recording_id: 'rec_1',
+    },
+  ];
+  state.recordings = [
+    recording({ status: 'failed' }),
+    recording({ id: 'queued', filename: '排队.m4a', status: 'queued' }),
+    recording({ id: 'proofread', filename: '校对.m4a', proofread: 'waiting' }),
+  ];
+  show();
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  expect(await within(tasks).findByText('新出现的声音')).toBeInTheDocument();
+  expect(
+    within(tasks).getByText('2', { selector: 'span' }),
+  ).toBeInTheDocument();
+  expect(within(tasks).getAllByRole('listitem')).toHaveLength(2);
+  expect(
+    within(tasks).getByRole('button', { name: '重试' }),
+  ).toBeInTheDocument();
+  const progress = screen.getByRole('region', { name: '正在处理' });
+  expect(within(progress).getByText('正在处理 3 项')).toBeInTheDocument();
+  expect(within(progress).getByText('排队.m4a · 排队转写')).toBeInTheDocument();
+  expect(within(progress).getByText('校对.m4a · 等待校对')).toBeInTheDocument();
+  expect(within(progress).getByText('张总 · 整理记忆中')).toBeInTheDocument();
+});
+
+it('retries through the existing endpoint and moves the recording into processing', async () => {
+  state.recordings = [recording({ status: 'failed' })];
+  const originalFetch = fetch;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (
+        url === '/api/library/recordings/rec_1/retry' &&
+        init?.method === 'POST'
+      ) {
+        state = {
+          ...state,
+          pending: 1,
+          recordings: [recording({ status: 'queued' })],
+        };
+        return json(state.recordings[0]);
+      }
+      return originalFetch(url, init);
+    }),
+  );
+  show();
+  await userEvent.click(await screen.findByRole('button', { name: '重试' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
+  );
+  expect(
+    within(screen.getByRole('region', { name: '正在处理' })).getByText(
+      '周会.m4a · 排队转写',
+    ),
+  ).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/library/recordings/rec_1/retry',
+    expect.objectContaining({ method: 'POST' }),
+  );
+});
+
+it('renders neither queue when there are no actions or background work', async () => {
+  state.recordings = [recording({})];
+  show();
+  await screen.findByRole('region', { name: '人物' });
+  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
 });

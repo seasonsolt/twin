@@ -52,11 +52,19 @@ export function Home() {
     () => void load(),
   );
   const busy = uploading || !!library?.pending;
+  // Uploads and transcription move by the second; waiting proofreads only need to leave 正在处理 eventually.
+  const interval = busy
+    ? 3000
+    : library?.recordings.some((r) => r.proofread === 'waiting')
+      ? library.quota?.exhausted
+        ? 60000
+        : 15000
+      : 0;
   useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(() => void load(), 3000);
+    if (!interval) return;
+    const timer = setInterval(() => void load(), interval);
     return () => clearInterval(timer);
-  }, [busy, load]);
+  }, [interval, load]);
 
   const picker = (
     <FileInput
@@ -155,11 +163,17 @@ export function Home() {
               {picker}
             </Toolbar>
             <UploadList
-              picks={unfinished}
-              uploading={uploading}
+              picks={unfinished.filter((pick) => pick.error)}
+              uploading={false}
               onStop={stop}
             />
-            <Team version={version} recordings={library.recordings} />
+            <Team
+              version={version}
+              recordings={library.recordings}
+              onReload={load}
+              uploads={unfinished.filter((pick) => !pick.error)}
+              onStopUpload={uploading ? stop : undefined}
+            />
             <Text>
               <TextLink to="/library">
                 全部录音（{library.recordings.length}）

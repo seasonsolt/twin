@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import {
   AvatarFrame,
   Badge,
@@ -9,7 +15,6 @@ import {
   Field,
   Grid,
   Input,
-  Meter,
   Radio,
   Row,
   Section,
@@ -24,6 +29,7 @@ import { api } from '../../lib/api';
 import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
+import type { Pick } from './useUploads';
 
 interface Waiting extends Speaker {
   recording_id: string;
@@ -63,10 +69,12 @@ function Unnamed({
   person,
   busy,
   onName,
+  taskState,
 }: {
   person: Person;
   busy: boolean;
   onName: (name: string) => void;
+  taskState: { teamTask: string };
 }) {
   const [name, setName] = useState('');
   return (
@@ -101,8 +109,12 @@ function Unnamed({
         </Button>
       </Row>
       {person.recording_id && (
-        <TextLink to={recordingPath(person.recording_id)} size="sm">
-          去听一听
+        <TextLink
+          to={recordingPath(person.recording_id)}
+          state={taskState}
+          size="sm"
+        >
+          试听并确认
         </TextLink>
       )}
     </Task>
@@ -186,14 +198,20 @@ function EditPerson({
   );
 }
 
-/** What the owner has to settle (new voices, uncertain speakers, recordings on their way) and everyone found in
+/** What the owner has to settle, quiet background progress, and everyone found in
  * the recordings, each with their twin. */
 export function Team({
   version,
   recordings,
+  onReload,
+  uploads = [],
+  onStopUpload,
 }: {
   version: number;
   recordings: Recording[];
+  onReload?: () => Promise<void>;
+  uploads?: Pick[];
+  onStopUpload?: () => void;
 }) {
   const [people, setPeople] = useState<Person[] | null>(null);
   const [waiting, setWaiting] = useState<Waiting[]>([]);
@@ -201,6 +219,11 @@ export function Team({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
+  const taskList = useRef<HTMLDivElement>(null);
+  const location = useLocation();
+  const [focusPending, setFocusPending] = useState<string | null>(
+    location.state?.resolvedTeamTask ?? null,
+  );
   const confirm = useConfirm();
   const navigate = useNavigate();
   const refreshPersonas = usePersonas((state) => state.refresh);
@@ -229,11 +252,12 @@ export function Team({
     return () => clearInterval(timer);
   }, [updating, load]);
 
-  const act = async (work: () => Promise<unknown>) => {
+  const act = async (work: () => Promise<unknown>, task?: string) => {
     setBusy(true);
     setError('');
     try {
       await work();
+      if (task) setFocusPending(task);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '操作失败');
     }
@@ -272,11 +296,13 @@ export function Team({
       );
   };
   const rename = (person: Person, value: string) =>
-    act(() =>
-      api(`/api/library/people/${encodeURIComponent(person.id)}`, {
-        method: 'PATCH',
-        json: { name: value },
-      }),
+    act(
+      () =>
+        api(`/api/library/people/${encodeURIComponent(person.id)}`, {
+          method: 'PATCH',
+          json: { name: value },
+        }),
+      `person-${person.id}`,
     );
   const edit = (person: Person, change: { name: string; gender: Gender }) =>
     act(async () => {
@@ -298,7 +324,14 @@ export function Team({
 
   const unnamed = people?.filter((p) => p.auto) ?? [];
   const named = people?.filter((p) => !p.auto);
-  const arriving = recordings.filter((r) => r.status !== 'ready');
+  const arriving = recordings.filter(
+    (r) => r.status === 'queued' || r.status === 'transcribing',
+  );
+  const failed = recordings.filter((r) => r.status === 'failed');
+  const organising = people?.filter((p) => p.updating) ?? [];
+  const proofreading = recordings.filter(
+    (r) => r.status === 'ready' && r.proofread === 'waiting',
+  );
   // Speakers nobody's voice resembles (often short) are not in the review queue; their recording still asks.
   const unsorted = recordings.filter(
     (r) =>
@@ -306,8 +339,37 @@ export function Team({
       r.unsettled > 0 &&
       !waiting.some((w) => w.recording_id === r.id),
   );
-  const tasks =
-    unnamed.length + waiting.length + unsorted.length + arriving.length;
+  const taskIds = [
+    ...unnamed.map((p) => `person-${p.id}`),
+    ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
+    ...unsorted.map((r) => `unsorted-${r.id}`),
+    ...failed.map((r) => `failed-${r.id}`),
+  ];
+  const tasks = taskIds.length;
+  const pending =
+    arriving.length + organising.length + proofreading.length + uploads.length;
+  const taskOrder = taskIds.join('|');
+  useEffect(() => {
+    if (!focusPending || !people || busy) return;
+    if (taskOrder.split('|').includes(focusPending)) return;
+    taskList.current
+      ?.querySelector<HTMLElement>('input, a, button:not(:disabled)')
+      ?.focus();
+    setFocusPending(null);
+    if (location.state?.resolvedTeamTask)
+      void navigate(location.pathname, { replace: true, state: null });
+  }, [focusPending, people, busy, taskOrder, location, navigate]);
+
+  const retry = (recording: Recording) =>
+    act(async () => {
+      await api(
+        `/api/library/recordings/${encodeURIComponent(recording.id)}/retry`,
+        {
+          method: 'POST',
+        },
+      );
+      await onReload?.();
+    }, `failed-${recording.id}`);
   return (
     <>
       {error && (
@@ -321,11 +383,12 @@ export function Team({
           badge={<Badge tone="warning">{tasks}</Badge>}
           framed
         >
-          <Grid as="ul" columns={3} gap={3}>
+          <Grid ref={taskList} as="ul" columns={3} gap={3}>
             {unnamed.map((person) => (
               <Unnamed
                 key={person.id}
                 person={person}
+                taskState={{ teamTask: `person-${person.id}` }}
                 busy={busy}
                 onName={(value) => void rename(person, value)}
               />
@@ -338,8 +401,12 @@ export function Team({
                     ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
                     : `像${w.candidates[0].name}`}
                 </Text>
-                <TextLink to={recordingPath(w.recording_id)} size="sm">
-                  去听一听
+                <TextLink
+                  to={recordingPath(w.recording_id)}
+                  state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
+                  size="sm"
+                >
+                  试听并确认
                 </TextLink>
               </Task>
             ))}
@@ -352,36 +419,28 @@ export function Team({
                   <span className="break-all">{r.filename}</span> ·{' '}
                   {r.unsettled} 位说话人待确认
                 </Text>
-                <TextLink to={recordingPath(r.id)} size="sm">
-                  去认人
+                <TextLink
+                  to={recordingPath(r.id)}
+                  state={{ teamTask: `unsorted-${r.id}` }}
+                  size="sm"
+                >
+                  试听并确认
                 </TextLink>
               </Task>
             ))}
-            {arriving.map((r) => (
-              <Task
-                key={r.id}
-                tone={r.status === 'failed' ? 'danger' : 'secondary'}
-                kind={
-                  r.status === 'failed'
-                    ? '转写失败'
-                    : r.status === 'queued'
-                      ? '排队转写'
-                      : '转写中'
-                }
-              >
+            {failed.map((r) => (
+              <Task key={r.id} kind="转写失败" tone="danger">
                 <Text weight="medium" breakAll>
                   {r.filename}
                 </Text>
-                {r.status === 'transcribing' && r.duration_s ? (
-                  <Meter
-                    label="已转写"
-                    value={(r.transcribed_s / r.duration_s) * 100}
-                  />
-                ) : r.status === 'failed' ? (
-                  <TextLink to="/library" size="sm">
-                    去录音库处理
-                  </TextLink>
-                ) : null}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void retry(r)}
+                >
+                  重试
+                </Button>
               </Task>
             ))}
           </Grid>
@@ -510,6 +569,58 @@ export function Team({
           ))}
         </Grid>
       </Section>
+      {pending > 0 && (
+        <Section label="正在处理" gap={2}>
+          <Text size="sm" tone="secondary">
+            正在处理 {pending} 项
+          </Text>
+          <Stack as="ul" gap={1}>
+            {uploads.map((pick) => (
+              <Text
+                as="li"
+                key={`${pick.file.name}-${pick.file.lastModified}-${pick.file.size}`}
+                size="sm"
+                tone="secondary"
+                breakAll
+              >
+                {pick.file.name} ·{' '}
+                {pick.progress?.paused
+                  ? '等待网络恢复'
+                  : `上传中 ${Math.round(pick.progress ? (pick.progress.offset / pick.progress.size) * 100 : 0)}%`}
+              </Text>
+            ))}
+            {arriving.map((r) => (
+              <Text as="li" key={r.id} size="sm" tone="secondary" breakAll>
+                {r.filename} · {r.status === 'queued' ? '排队转写' : '转写中'}
+                {r.status === 'transcribing' && r.duration_s
+                  ? ` ${Math.round(Math.min(100, (r.transcribed_s / r.duration_s) * 100))}%`
+                  : ''}
+              </Text>
+            ))}
+            {proofreading.map((r) => (
+              <Text
+                as="li"
+                key={`proofread-${r.id}`}
+                size="sm"
+                tone="secondary"
+                breakAll
+              >
+                {r.filename} · 等待校对
+              </Text>
+            ))}
+            {organising.map((p) => (
+              <Text as="li" key={p.id} size="sm" tone="secondary" breakAll>
+                {p.name} · 整理记忆中
+              </Text>
+            ))}
+          </Stack>
+          {uploads.length > 0 && onStopUpload && (
+            <TextLink size="sm" onClick={onStopUpload}>
+              停止上传（已传的部分下次接着传）
+            </TextLink>
+          )}
+        </Section>
+      )}
       <EditPerson
         person={editing}
         busy={busy}

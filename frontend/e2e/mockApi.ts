@@ -686,6 +686,11 @@ const handlers: Record<string, Handler> = {
     ],
   }),
   'GET /api/library/recordings/r-weekly': reply(weekly),
+  'POST /api/library/recordings/r-broken/retry': reply({
+    ...recordings.find((r) => r.id === 'r-broken'),
+    status: 'queued',
+    error: '',
+  }),
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/conversations': reply(history),
   'GET /api/conversations/c-plan': reply(conversation),

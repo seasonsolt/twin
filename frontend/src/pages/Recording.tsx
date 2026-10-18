@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import { useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import {
   Badge,
   Button,
@@ -263,6 +263,8 @@ function SpeakerCard({
 
 export function Recording() {
   const { recordingId = '' } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState('');
@@ -297,6 +299,15 @@ export function Recording() {
           ...decision,
         },
       });
+      if (
+        location.state?.teamTask &&
+        ['confirm', 'unknown', 'mixed'].includes(decision.action)
+      ) {
+        void navigate('/team', {
+          state: { resolvedTeamTask: location.state.teamTask },
+        });
+        return;
+      }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '保存失败');
       if (!(failure instanceof ApiError && failure.status === 409)) {

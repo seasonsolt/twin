@@ -9,6 +9,14 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
+  AudioPlayer,
+  DecisionBar,
+  FileDropSurface,
+  FileInput,
+  IdentityLink,
+  RouteButton,
+  Tabs,
+  VoiceChoice,
   AccountMenu,
   ActionMenu,
   AvatarFrame,
@@ -65,6 +73,9 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
     <Stack gap={6}>
       <Card>
         <Page
+          stackHeaderOnMobile
+          titleSize="display"
+          breadcrumb={<TextLink to="/gallery">上一级</TextLink>}
           title="页面骨架 Page"
           description="标题、一句说明、整页操作；手机上操作换到标题下方。"
           aside={<TextLink to="/gallery">返回上一级</TextLink>}
@@ -96,6 +107,66 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
         </Page>
       </Card>
 
+      <Card className="space-y-4">
+        <Heading level={3}>确认与筛选</Heading>
+        <Tabs
+          variant="filters"
+          label="录音分类示例"
+          value={mine}
+          onValueChange={setMine}
+          items={[
+            { value: 'all', label: '全部 4' },
+            { value: 'waiting', label: '待确认 2' },
+          ]}
+        />
+        <IdentityLink
+          to="/gallery"
+          label="林舟的档案示例"
+          onClick={() => toast('打开档案')}
+        >
+          <AvatarFrame size="sm">林</AvatarFrame>
+          <Text>林舟 · 4 段录音</Text>
+        </IdentityLink>
+        <Row gap={3} wrap>
+          <VoiceChoice
+            selected={mine === 'voice'}
+            onClick={() => setMine('voice')}
+            disabled={disabled}
+          >
+            <AvatarFrame size="sm">林</AvatarFrame>林舟 · 声音像 71%
+          </VoiceChoice>
+          <RouteButton to="/gallery">确认说话人</RouteButton>
+        </Row>
+        <AudioPlayer aria-label="试听示例" />
+        <FileDropSurface
+          fillPage={false}
+          onFiles={(files) => toast(`选了 ${files.length} 个文件`)}
+        >
+          <Text size="sm" tone="tertiary">
+            把文件拖到此区域
+          </Text>
+          <FileInput
+            label="文件选择示例"
+            onFiles={(files) => toast(`选了 ${files.length} 个文件`)}
+          />
+        </FileDropSurface>
+        <Stack as="ul" gap={0}>
+          <ListRow variant="divided" stackOnMobile title="分隔行" />
+          <ListRow variant="divided" title="分隔行" />
+          <ListRow variant="dashed" title="接下来的说话人" />
+        </Stack>
+        <Notice tone="success" title="说话人都确认好了">
+          相关的人会在后台重新整理记忆。
+        </Notice>
+        <DecisionBar>
+          <Button disabled={disabled}>确认是林舟</Button>
+          <Checkbox
+            label="声音清楚，用作这个人的声纹样本"
+            checked={sample}
+            onChange={(event) => setSample(event.target.checked)}
+          />
+        </DecisionBar>
+      </Card>
       <Grid columns={2} gap={6}>
         <Card className="space-y-5">
           <Heading level={3}>文字 Heading / Text / TextLink</Heading>
@@ -307,11 +378,13 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             网络中断，已上传的部分会保留。
           </Notice>
           <Grid columns={2} gap={3}>
-            {(['raised', 'outline', 'note', 'soft'] as const).map((variant) => (
-              <Card key={variant} variant={variant} padding="md">
-                <Text size="sm">{variant}</Text>
-              </Card>
-            ))}
+            {(['raised', 'outline', 'note', 'soft', 'plain'] as const).map(
+              (variant) => (
+                <Card key={variant} variant={variant} padding="md">
+                  <Text size="sm">{variant}</Text>
+                </Card>
+              ),
+            )}
           </Grid>
           <Row gap={3}>
             {(['sm', 'md', 'lg', 'xl'] as const).map((size) => (

@@ -15,33 +15,67 @@ import { NavLink } from 'react-router';
 import { useMotionPreset } from '../../design/motion';
 import { LayoutScope } from '../motion';
 import { cn } from '../../lib/utils';
+import { Chip } from './controls';
 
 export function Tabs({
   items,
   defaultValue,
   scrollable = false,
+  variant = 'tabs',
+  label = '内容分类',
+  value: controlledValue,
+  onValueChange,
 }: {
   items: {
     value: string;
     label: ReactNode;
-    content: ReactNode;
+    content?: ReactNode;
     disabled?: boolean;
   }[];
   defaultValue?: string;
   scrollable?: boolean;
+  /** filters: compact pressed pills controlling a list outside this component. */
+  variant?: 'tabs' | 'filters';
+  label?: string;
+  value?: string;
+  onValueChange?: (value: string) => void;
 }) {
   const [selected, setValue] = useState(defaultValue ?? items[0]?.value);
-  const value = items.some((item) => item.value === selected)
-    ? selected
+  const chosen = controlledValue ?? selected;
+  const value = items.some((item) => item.value === chosen)
+    ? chosen
     : (items.find((item) => item.value === defaultValue)?.value ??
       items[0]?.value);
   const { reduced, transition } = useMotionPreset('layout');
   const id = useId();
+  const change = (next: string) => {
+    setValue(next);
+    onValueChange?.(next);
+  };
+  if (variant === 'filters')
+    return (
+      <div
+        role="group"
+        aria-label={label}
+        className="flex flex-wrap gap-1 rounded-full bg-soft p-1"
+      >
+        {items.map((item) => (
+          <Chip
+            key={item.value}
+            pressed={value === item.value}
+            disabled={item.disabled}
+            onClick={() => change(item.value)}
+          >
+            {item.label}
+          </Chip>
+        ))}
+      </div>
+    );
   return (
     <LayoutScope>
-      <TabsPrimitive.Root value={value} onValueChange={setValue}>
+      <TabsPrimitive.Root value={value} onValueChange={change}>
         <TabsPrimitive.List
-          aria-label="内容分类"
+          aria-label={label}
           className={`mb-4 gap-1 rounded-full border border-border bg-soft p-1 ${
             scrollable ? 'flex w-full min-w-0 overflow-x-auto' : 'inline-flex'
           }`}

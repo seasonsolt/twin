@@ -112,8 +112,11 @@ it('opens the first pending recording from the banner, confirms a speaker, and a
     await screen.findByRole('button', { name: '有 1 段录音需要确认哪位是你' }),
   );
   const detail = await screen.findByRole('dialog', { name: '我的录音' });
+  // The dialog fades in; visibility settles once the animation has started.
+  await waitFor(() =>
+    expect(within(detail).getByText('请确认哪位是你')).toBeVisible(),
+  );
   expect(screen.getByText('待确认')).toBeVisible();
-  expect(await within(detail).findByText('请确认哪位是你')).toBeVisible();
   expect(within(detail).getByText('像你')).toBeVisible();
   await user.click(within(detail).getByRole('checkbox', { name: /S1/ }));
   await user.click(within(detail).getByRole('button', { name: '确认选择' }));

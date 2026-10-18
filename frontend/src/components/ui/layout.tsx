@@ -101,8 +101,21 @@ export function Row({
 export function Toolbar({
   gap = 3,
   align = 'center',
+  stackOnMobile = false,
   ...props
-}: Omit<BoxProps, 'grow'>) {
+}: Omit<BoxProps, 'grow'> & { stackOnMobile?: boolean }) {
+  if (stackOnMobile) {
+    const { as = 'div', ...rest } = props;
+    return box(
+      as,
+      rest,
+      cn(
+        'flex flex-wrap justify-between max-md:flex-col max-md:items-stretch',
+        gaps[gap],
+        aligns[align],
+      ),
+    );
+  }
   return <Row {...props} gap={gap} align={align} justify="between" wrap />;
 }
 
@@ -131,8 +144,14 @@ export function Page({
   actions,
   aside,
   gap = 6,
+  titleSize,
+  breadcrumb,
+  stackHeaderOnMobile = false,
   children,
 }: {
+  titleSize?: 'page' | 'display';
+  breadcrumb?: ReactNode;
+  stackHeaderOnMobile?: boolean;
   title?: ReactNode;
   description?: ReactNode;
   /** Buttons for the whole page, at the top right (under the title on phones). */
@@ -146,9 +165,19 @@ export function Page({
     <div className="page-content">
       <Stack gap={gap}>
         {(title || actions || aside) && (
-          <Toolbar as="header" gap={4} align="end">
+          <Toolbar
+            as="header"
+            gap={4}
+            align="end"
+            stackOnMobile={stackHeaderOnMobile}
+          >
             <Stack gap={1} grow>
-              {title && <Heading level={2}>{title}</Heading>}
+              {breadcrumb}
+              {title && (
+                <Heading level={2} size={titleSize}>
+                  {title}
+                </Heading>
+              )}
               {description && <Text tone="secondary">{description}</Text>}
             </Stack>
             {aside}

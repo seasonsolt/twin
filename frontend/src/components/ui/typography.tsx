@@ -1,4 +1,4 @@
-import type { ComponentProps, ElementType, ReactNode } from 'react';
+import type { ComponentProps, ElementType, ReactNode, Ref } from 'react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/utils';
 
@@ -69,6 +69,8 @@ export function Heading({
   align = 'start',
   truncate = false,
   id,
+  ref,
+  tabIndex,
   className,
   children,
 }: {
@@ -79,6 +81,8 @@ export function Heading({
   align?: 'start' | 'center';
   truncate?: boolean;
   id?: string;
+  ref?: Ref<HTMLHeadingElement>;
+  tabIndex?: number;
   /** Layout only (margins, flex). Size, colour and weight come from the props. */
   className?: string;
   children: ReactNode;
@@ -87,6 +91,8 @@ export function Heading({
   return (
     <Tag
       id={id}
+      ref={ref}
+      tabIndex={tabIndex}
       className={cn(
         'font-semibold',
         headingSizes[size ?? defaultHeading[level]],

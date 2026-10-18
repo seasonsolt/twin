@@ -112,7 +112,7 @@ const recordings = [
     segments: 312,
     created_at: '2026-10-15T08:00:00Z',
     people: ['林舟', '许清禾', '周石言'],
-    unsettled: 1,
+    unsettled: 2,
   },
   {
     id: 'r-review',
@@ -252,7 +252,7 @@ const weekly = {
       ],
       near: true,
     }),
-    speaker('S4', 300, { decision: 'unknown' }),
+    speaker('S4', 300),
   ],
   segments: [
     {

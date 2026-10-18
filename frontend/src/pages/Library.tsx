@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
   EmptyState,
-  FileDrop,
-  Heading,
+  FileDropSurface,
+  FileInput,
+  ActionMenu,
+  Card,
+  Meter,
+  Page,
+  Tabs,
+  RouteButton,
   ListRow,
   Notice,
   Skeleton,
@@ -15,7 +21,6 @@ import {
   useConfirm,
   type Tone,
 } from '../components/ui';
-import { StageHeader } from '../components/layout/StageHeader';
 import { api } from '../lib/api';
 import { UploadList } from '../features/library/UploadList';
 import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
@@ -62,7 +67,7 @@ export interface LibraryState {
   quota?: Quota;
 }
 const statusLabel: Record<Recording['status'], [string, Tone]> = {
-  queued: ['排队中', 'neutral'],
+  queued: ['排队', 'neutral'],
   transcribing: ['转写中', 'info'],
   ready: ['已转写', 'success'],
   failed: ['失败', 'danger'],
@@ -71,9 +76,7 @@ const statusLabel: Record<Recording['status'], [string, Tone]> = {
 function identityLabel(recording: Recording): [string, Tone] {
   if (recording.status !== 'ready') return statusLabel[recording.status];
   if (!recording.unsettled) return ['已认人', 'success'];
-  return recording.unsettled === recording.speakers
-    ? ['还没认人', 'warning']
-    : [`${recording.unsettled} 位待确认`, 'warning'];
+  return [`${recording.unsettled} 位待确认`, 'warning'];
 }
 const proofreadLabel: Record<Proofread, string> = {
   done: '已校对',
@@ -105,6 +108,8 @@ export function Library() {
   const [library, setLibrary] = useState<LibraryState | null>(null);
   const [error, setError] = useState('');
   const confirm = useConfirm();
+  const input = useRef<HTMLInputElement>(null);
+  const [filter, setFilter] = useState('all');
 
   const load = useCallback(async () => {
     try {
@@ -172,30 +177,50 @@ export function Library() {
   const room = capacity
     ? capacity.free_bytes - capacity.arriving_bytes - capacity.headroom_bytes
     : 0;
+  const recordings = library?.recordings ?? [];
+  const matches: Record<string, (recording: Recording) => boolean> = {
+    all: () => true,
+    waiting: (r) => r.status === 'ready' && r.unsettled > 0,
+    processing: (r) =>
+      r.status === 'queued' ||
+      r.status === 'transcribing' ||
+      r.proofread === 'waiting',
+    failed: (r) => r.status === 'failed',
+  };
+  const filtered = recordings.filter(matches[filter]);
   return (
-    <div className="library-page">
-      <StageHeader
-        variant="brand"
-        intro={
-          <p className="stage-caption">
-            全部会议录音：上传、转写进度和每段录音的说话人。
-          </p>
+    <FileDropSurface disabled={uploading} onFiles={(files) => void add(files)}>
+      <Page
+        stackHeaderOnMobile
+        title="录音库"
+        titleSize="display"
+        description="只有你的账号能看到。转写校验完成后删除原件，保留转写稿和试听用的音频。"
+        actions={
+          <>
+            {library && capacity && (
+              <Text size="xs" tone="tertiary">
+                排队 {library.pending} / {library.max_pending} · 还能放约{' '}
+                {gb(Math.max(0, room))}
+              </Text>
+            )}
+            <Button disabled={uploading} onClick={() => input.current?.click()}>
+              上传录音
+            </Button>
+          </>
         }
-      />
-      <div className="page-content space-y-6">
-        <Toolbar as="header" gap={4}>
-          <Heading level={2}>录音库</Heading>
-          <TextLink to="/team" size="sm">
-            返回团队
-          </TextLink>
-        </Toolbar>
-        <Text size="sm" tone="secondary">
-          只有你的账号能看到这里的录音。转写完成并校验后，原始文件会删除以节省空间，保留转写稿和试听用的音频。
-        </Text>
+      >
+        <FileInput
+          ref={input}
+          label="选择录音文件"
+          accept={MEDIA_ACCEPT}
+          multiple
+          disabled={uploading}
+          onFiles={(files) => void add(files)}
+        />
         {error && (
-          <p role="alert" className="text-danger">
+          <Text role="alert" tone="danger">
             {error}
-          </p>
+          </Text>
         )}
         {notice && (
           <Text role="status" size="sm" tone="secondary">
@@ -210,24 +235,26 @@ export function Library() {
             还没有配置能区分说话人的转写服务（asr-funasr），录音会先排队，配置后自动开始转写。
           </Notice>
         )}
-        <FileDrop
-          label="添加录音"
-          title="把会议录音拖到这里，或"
-          inputLabel="选择录音文件"
-          accept={MEDIA_ACCEPT}
-          disabled={uploading}
-          onFiles={(files) => void add(files)}
-          hint={
-            library &&
-            capacity && (
-              <>
-                排队 {library.pending} / {library.max_pending} 个 · 还可添加约{' '}
-                {gb(Math.max(0, room))}（保留 {gb(capacity.headroom_bytes)}{' '}
-                安全余量）
-              </>
-            )
-          }
-        />
+        <Toolbar>
+          <Tabs
+            variant="filters"
+            label="录音分类"
+            value={filter}
+            onValueChange={setFilter}
+            items={[
+              ['all', '全部'],
+              ['waiting', '待确认'],
+              ['processing', '处理中'],
+              ['failed', '失败'],
+            ].map(([value, label]) => ({
+              value,
+              label: `${label} ${recordings.filter(matches[value]).length}`,
+            }))}
+          />
+          <Text size="xs" tone="tertiary">
+            把录音拖到页面任意位置即可上传
+          </Text>
+        </Toolbar>
         <UploadList picks={unfinished} uploading={uploading} onStop={stop} />
         {!library ? (
           <Skeleton className="h-32" />
@@ -237,77 +264,112 @@ export function Library() {
             body="添加会议录音后，会自动转写并区分每位说话人。"
           />
         ) : (
-          <Stack as="ul" gap={3} aria-label="录音列表">
-            {library.recordings.map((recording) => {
-              const [label, tone] = identityLabel(recording);
-              return (
-                <ListRow
-                  key={recording.id}
-                  title={
-                    recording.status === 'ready' ? (
-                      <TextLink
-                        to={`/library/${encodeURIComponent(recording.id)}`}
-                        weight="medium"
-                        truncate
-                        title={recording.filename}
-                      >
-                        {recording.filename}
-                      </TextLink>
-                    ) : (
-                      <Text truncate title={recording.filename}>
-                        {recording.filename}
-                      </Text>
-                    )
-                  }
-                  meta={[
-                    minutes(recording.duration_s),
-                    recording.status === 'ready'
-                      ? `${recording.speakers} 位说话人`
-                      : '',
-                    recording.people.join('、'),
-                    proofreadLabel[recording.proofread ?? ''],
-                    recording.status === 'transcribing' && recording.duration_s
-                      ? `已转写 ${Math.round((recording.transcribed_s / recording.duration_s) * 100)}%`
-                      : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  trailing={
-                    <>
-                      <Badge tone={tone}>{label}</Badge>
-                      {recording.status === 'failed' && (
-                        <Button
-                          variant="secondary"
+          <Card>
+            {filtered.length === 0 ? (
+              <Text align="center" tone="secondary">
+                这一类里没有录音。
+              </Text>
+            ) : (
+              <Stack as="ul" gap={0} aria-label="录音列表">
+                {filtered.map((recording) => {
+                  const [label, tone] = identityLabel(recording);
+                  return (
+                    <ListRow
+                      variant="divided"
+                      stackOnMobile
+                      key={recording.id}
+                      title={
+                        recording.status === 'ready' ? (
+                          <TextLink
+                            to={`/library/${encodeURIComponent(recording.id)}`}
+                            weight="medium"
+                            truncate
+                            title={recording.filename}
+                          >
+                            {recording.filename}
+                          </TextLink>
+                        ) : (
+                          <Text truncate title={recording.filename}>
+                            {recording.filename}
+                          </Text>
+                        )
+                      }
+                      meta={[
+                        Number.isNaN(Date.parse(recording.created_at))
+                          ? ''
+                          : new Date(recording.created_at).toLocaleDateString(
+                              'zh-CN',
+                              { month: 'long', day: 'numeric' },
+                            ),
+                        minutes(recording.duration_s),
+                        recording.status === 'ready'
+                          ? `${recording.speakers} 位说话人`
+                          : '',
+                        recording.people.join('、'),
+                        proofreadLabel[recording.proofread ?? ''],
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      trailing={
+                        <>
+                          <Badge tone={tone}>{label}</Badge>
+                          {recording.status === 'failed' && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void retry(recording)}
+                            >
+                              重试
+                            </Button>
+                          )}
+                          {recording.status === 'ready' &&
+                            recording.unsettled > 0 && (
+                              <RouteButton
+                                size="sm"
+                                to={`/library/${encodeURIComponent(recording.id)}`}
+                              >
+                                确认说话人
+                              </RouteButton>
+                            )}
+                          <ActionMenu
+                            label={`更多：${recording.filename}`}
+                            items={[
+                              {
+                                label: '删除',
+                                disabled: recording.status === 'transcribing',
+                                onSelect: () => void remove(recording),
+                              },
+                            ]}
+                          />
+                        </>
+                      }
+                    >
+                      {recording.status === 'transcribing' && (
+                        <Meter
                           size="sm"
-                          onClick={() => void retry(recording)}
-                        >
-                          重试
-                        </Button>
+                          hideLabel
+                          label={`${recording.filename}转写进度`}
+                          value={
+                            recording.duration_s
+                              ? recording.transcribed_s
+                              : null
+                          }
+                          max={recording.duration_s ?? 100}
+                        />
                       )}
-                      {recording.status !== 'transcribing' && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`删除${recording.filename}`}
-                          onClick={() => void remove(recording)}
-                        >
-                          删除
-                        </Button>
+                      {recording.error && (
+                        <Text size="sm" tone="danger">
+                          {recording.error}
+                        </Text>
                       )}
-                    </>
-                  }
-                >
-                  {recording.error && (
-                    <Text size="sm" tone="danger">
-                      {recording.error}
-                    </Text>
-                  )}
-                </ListRow>
-              );
-            })}
-          </Stack>
+                    </ListRow>
+                  );
+                })}
+              </Stack>
+            )}
+          </Card>
         )}
-      </div>
-    </div>
+      </Page>
+    </FileDropSurface>
   );
 }

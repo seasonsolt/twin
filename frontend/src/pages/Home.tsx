@@ -148,7 +148,9 @@ export function Home() {
           <>
             <Toolbar as="header" gap={4} align="end">
               <Stack gap={1}>
-                <Heading level={2}>团队</Heading>
+                <Heading level={2} size="display">
+                  团队
+                </Heading>
                 <Text tone="secondary">
                   会议里出现过的人。上传新录音后，系统会自动认人，有拿不准的再请你确认。
                 </Text>

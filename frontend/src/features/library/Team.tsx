@@ -7,6 +7,10 @@ import {
 } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
+  ActionMenu,
+  IdentityLink,
+  Meter,
+  RouteButton,
   AvatarFrame,
   Badge,
   Button,
@@ -37,7 +41,7 @@ interface Waiting extends Speaker {
 }
 
 const minutes = (seconds: number) =>
-  `${Math.max(1, Math.round(seconds / 60))} 分钟`;
+  `${Math.max(0, Math.round(seconds / 60))} 分钟`;
 const recordingPath = (id: string) => `/library/${encodeURIComponent(id)}`;
 
 /** One thing for the owner to settle: what kind of task it is, what it is about, and how to settle it. */
@@ -109,13 +113,14 @@ function Unnamed({
         </Button>
       </Row>
       {person.recording_id && (
-        <TextLink
+        <RouteButton
           to={recordingPath(person.recording_id)}
           state={taskState}
+          variant="secondary"
           size="sm"
         >
-          试听并确认
-        </TextLink>
+          听原声
+        </RouteButton>
       )}
     </Task>
   );
@@ -216,6 +221,7 @@ export function Team({
   const [people, setPeople] = useState<Person[] | null>(null);
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [name, setName] = useState('');
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
@@ -370,6 +376,23 @@ export function Team({
       );
       await onReload?.();
     }, `failed-${recording.id}`);
+  const removeRecording = async (recording: Recording) => {
+    if (
+      !(await confirm({
+        title: `删除「${recording.filename}」？`,
+        body: '转写结果和试听文件会一起删除，不能恢复',
+        confirmLabel: '删除录音',
+        tone: 'danger',
+      }))
+    )
+      return;
+    await act(async () => {
+      await api(`/api/library/recordings/${encodeURIComponent(recording.id)}`, {
+        method: 'DELETE',
+      });
+      await onReload?.();
+    }, `failed-${recording.id}`);
+  };
   return (
     <>
       {error && (
@@ -381,6 +404,11 @@ export function Team({
         <Section
           title="需要你处理"
           badge={<Badge tone="warning">{tasks}</Badge>}
+          actions={
+            <Text size="xs" tone="tertiary">
+              处理完一项会自动跳到下一项
+            </Text>
+          }
           framed
         >
           <Grid ref={taskList} as="ul" columns={3} gap={3}>
@@ -401,13 +429,13 @@ export function Team({
                     ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
                     : `像${w.candidates[0].name}`}
                 </Text>
-                <TextLink
+                <RouteButton
                   to={recordingPath(w.recording_id)}
                   state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
                   size="sm"
                 >
                   试听并确认
-                </TextLink>
+                </RouteButton>
               </Task>
             ))}
             {unsorted.map((r) => (
@@ -419,13 +447,13 @@ export function Team({
                   <span className="break-all">{r.filename}</span> ·{' '}
                   {r.unsettled} 位说话人待确认
                 </Text>
-                <TextLink
+                <RouteButton
                   to={recordingPath(r.id)}
                   state={{ teamTask: `unsorted-${r.id}` }}
                   size="sm"
                 >
                   试听并确认
-                </TextLink>
+                </RouteButton>
               </Task>
             ))}
             {failed.map((r) => (
@@ -433,14 +461,24 @@ export function Team({
                 <Text weight="medium" breakAll>
                   {r.filename}
                 </Text>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void retry(r)}
-                >
-                  重试
-                </Button>
+                <Row gap={2}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void retry(r)}
+                  >
+                    重试
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void removeRecording(r)}
+                  >
+                    删除
+                  </Button>
+                </Row>
               </Task>
             ))}
           </Grid>
@@ -448,30 +486,44 @@ export function Team({
       )}
       <Section
         title="人物"
+        badge={
+          <Text size="sm" tone="secondary">
+            {named?.length ?? 0} 人
+          </Text>
+        }
         actions={
-          <Row
-            as="form"
-            gap={2}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (name.trim()) void add();
-            }}
-          >
+          <Row gap={2} wrap>
             <Input
-              aria-label="人物名字"
-              placeholder="手动添加人物"
-              maxLength={40}
-              className="w-48"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
+              aria-label="找人"
+              placeholder="找人"
+              className="w-36"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
             />
-            <Button
-              type="submit"
-              variant="secondary"
-              disabled={busy || !name.trim()}
+            <Row
+              as="form"
+              gap={2}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (name.trim()) void add();
+              }}
             >
-              添加
-            </Button>
+              <Input
+                aria-label="人物名字"
+                placeholder="手动添加人物"
+                maxLength={40}
+                className="w-48"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={busy || !name.trim()}
+              >
+                添加
+              </Button>
+            </Row>
           </Row>
         }
       >
@@ -481,92 +533,103 @@ export function Team({
           </Text>
         )}
         <Grid as="ul" columns={3}>
-          {named?.map((person) => (
-            <Card
-              as="li"
-              key={person.id}
-              variant="outline"
-              className="flex flex-col gap-4"
-            >
-              <Row gap={3}>
-                <AvatarFrame>
-                  <PersonFace
-                    person={person}
-                    twin={twins.find((t) => t.id === person.persona_id)}
-                  />
-                </AvatarFrame>
-                <Stack gap={0} grow>
-                  <Text size="lg" weight="semibold" truncate>
-                    {person.name}
-                  </Text>
-                  <Text size="sm" tone="secondary">
-                    {person.speakers
-                      ? `${person.speakers} 段录音 · ${minutes(person.seconds)}`
-                      : '还没有确认过的发言'}
-                  </Text>
-                </Stack>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  aria-label={`编辑${person.name}`}
-                  onClick={() => setEditing(person)}
+          {named
+            ?.filter((person) =>
+              person.name
+                .toLocaleLowerCase()
+                .includes(search.trim().toLocaleLowerCase()),
+            )
+            .map((person) => (
+              <Card
+                as="li"
+                key={person.id}
+                variant="outline"
+                className="flex flex-col gap-4"
+              >
+                <IdentityLink
+                  to={person.persona_id ? '/profile' : undefined}
+                  label={
+                    person.persona_id
+                      ? `${person.name}的档案`
+                      : `编辑${person.name}`
+                  }
+                  onClick={() =>
+                    person.persona_id
+                      ? void open(person.persona_id, '/profile')
+                      : setEditing(person)
+                  }
                 >
-                  编辑
-                </Button>
-              </Row>
-              <div>
-                {person.persona_id ? (
-                  person.updating ? (
-                    <Badge tone="warning">记忆更新中</Badge>
+                  <AvatarFrame>
+                    <PersonFace
+                      person={person}
+                      twin={twins.find((t) => t.id === person.persona_id)}
+                    />
+                  </AvatarFrame>
+                  <Stack gap={0} grow>
+                    <Text size="lg" weight="semibold" truncate>
+                      {person.name}
+                    </Text>
+                    <Text size="sm" tone="secondary">
+                      {person.speakers} 段录音 · {minutes(person.seconds)}
+                    </Text>
+                  </Stack>
+                </IdentityLink>
+                <div>
+                  {person.persona_id ? (
+                    person.updating ? (
+                      <Badge tone="warning">记忆更新中</Badge>
+                    ) : (
+                      <Badge tone="success">可以聊</Badge>
+                    )
                   ) : (
-                    <Badge tone="success">可以聊</Badge>
-                  )
-                ) : (
-                  <Badge tone="neutral">还没有分身</Badge>
-                )}
-              </div>
-              <div className="mt-auto flex flex-wrap gap-2">
-                {person.persona_id ? (
-                  <>
-                    <Button
-                      className="flex-1"
-                      disabled={person.updating}
-                      onClick={() => void open(person.persona_id!, '/chat')}
-                    >
-                      {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      aria-label={`${person.name}的档案`}
-                      onClick={() => void open(person.persona_id!, '/profile')}
-                    >
-                      档案
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <Button
-                      variant="secondary"
-                      className="flex-1"
-                      disabled={busy || !person.speakers}
-                      onClick={() => void createTwin(person)}
-                    >
-                      生成分身
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      aria-label={`删除${person.name}`}
-                      onClick={() => void remove(person)}
-                    >
-                      删除
-                    </Button>
-                  </>
-                )}
-              </div>
-            </Card>
-          ))}
+                    <Badge tone="neutral">还没有分身</Badge>
+                  )}
+                </div>
+                <div className="mt-auto flex flex-wrap gap-2">
+                  {person.persona_id ? (
+                    <>
+                      <Button
+                        className="flex-1"
+                        disabled={person.updating}
+                        onClick={() => void open(person.persona_id!, '/chat')}
+                      >
+                        {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        variant="secondary"
+                        className="flex-1"
+                        disabled={busy || !person.speakers}
+                        onClick={() => void createTwin(person)}
+                      >
+                        生成分身
+                      </Button>
+                    </>
+                  )}
+                  <ActionMenu
+                    label={`更多：${person.name}`}
+                    items={[
+                      {
+                        label: '编辑名字和性别',
+                        disabled: busy,
+                        onSelect: () => setEditing(person),
+                      },
+                      ...(!person.persona_id
+                        ? [
+                            {
+                              label: '删除',
+                              disabled: busy,
+                              onSelect: () => void remove(person),
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                </div>
+              </Card>
+            ))}
         </Grid>
       </Section>
       {pending > 0 && (
@@ -590,12 +653,20 @@ export function Team({
               </Text>
             ))}
             {arriving.map((r) => (
-              <Text as="li" key={r.id} size="sm" tone="secondary" breakAll>
-                {r.filename} · {r.status === 'queued' ? '排队转写' : '转写中'}
-                {r.status === 'transcribing' && r.duration_s
-                  ? ` ${Math.round(Math.min(100, (r.transcribed_s / r.duration_s) * 100))}%`
-                  : ''}
-              </Text>
+              <Stack as="li" key={r.id} gap={1}>
+                <Text size="sm" tone="secondary" breakAll>
+                  {r.filename} · {r.status === 'queued' ? '排队转写' : '转写中'}
+                </Text>
+                {r.status === 'transcribing' && (
+                  <Meter
+                    label={`${r.filename}转写进度`}
+                    size="sm"
+                    hideLabel
+                    value={r.duration_s ? r.transcribed_s : null}
+                    max={r.duration_s ?? 100}
+                  />
+                )}
+              </Stack>
             ))}
             {proofreading.map((r) => (
               <Text

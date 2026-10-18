@@ -112,9 +112,11 @@ it('shows the team, what needs settling and the way to upload more', async () =>
   ).toBeInTheDocument();
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
   const progress = screen.getByRole('region', { name: '正在处理' });
-  expect(
-    within(progress).getByText('月会.m4a · 转写中 50%'),
-  ).toBeInTheDocument();
+  expect(within(progress).getByRole('progressbar')).toHaveAttribute(
+    'aria-valuenow',
+    '300',
+  );
+  expect(within(progress).getByText('月会.m4a · 转写中')).toBeInTheDocument();
   expect(
     within(tasks).getByText('1', { selector: 'span' }),
   ).toBeInTheDocument();
@@ -238,4 +240,41 @@ it('renders neither queue when there are no actions or background work', async (
   await screen.findByRole('region', { name: '人物' });
   expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
+});
+
+it('deletes a failed recording only after confirmation and reloads the team', async () => {
+  state.recordings = [recording({ status: 'failed' })];
+  const originalFetch = fetch;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (
+        url === '/api/library/recordings/rec_1' &&
+        init?.method === 'DELETE'
+      ) {
+        state.recordings = [recording({ id: 'keep', filename: '保留.m4a' })];
+        return json({ deleted: true });
+      }
+      return originalFetch(url, init);
+    }),
+  );
+  show();
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  await userEvent.click(within(tasks).getByRole('button', { name: '删除' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: '删除「周会.m4a」？',
+  });
+  expect(
+    vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'DELETE'),
+  ).toBe(false);
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: '删除录音' }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
+  );
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/library/recordings/rec_1',
+    expect.objectContaining({ method: 'DELETE' }),
+  );
 });

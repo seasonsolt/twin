@@ -142,3 +142,42 @@ export function FileDrop({
     </section>
   );
 }
+
+/** A page-wide drop target; ordinary clicks keep their normal meaning. */
+export function FileDropSurface({
+  fillPage = true,
+  children,
+  disabled,
+  onFiles,
+}: {
+  fillPage?: boolean;
+  children: ReactNode;
+  disabled?: boolean;
+  onFiles: (files: File[]) => void;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <section
+      aria-label="拖放上传录音"
+      className={cn(
+        fillPage && 'min-h-dvh',
+        over && 'outline-2 outline-accent',
+      )}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (!disabled) setOver(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          setOver(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        if (!disabled) onFiles(Array.from(event.dataTransfer.files));
+      }}
+    >
+      {children}
+    </section>
+  );
+}

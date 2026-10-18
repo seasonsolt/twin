@@ -12,6 +12,8 @@ import { cn } from '../../lib/utils';
 import { Button, toneClasses, type Tone } from './controls';
 
 const cardVariants = {
+  /** Content inside an existing card, with padding but no second surface. */
+  plain: '',
   /** White card lifted off the canvas (the default). */
   raised: 'bg-surface shadow-card',
   /** White card with a hairline border, for blocks inside a page section. */
@@ -237,6 +239,7 @@ export function Table({
 }
 
 const noticeTones = {
+  success: 'border border-success/20 bg-success/5 text-primary',
   note: 'bg-note text-primary',
   info: 'border border-info/20 bg-info/5 text-primary',
   warning: 'border border-warning/25 bg-warning/5 text-primary',
@@ -280,6 +283,7 @@ export function Notice({
 export function ListRow({
   as: Tag = 'li',
   variant = 'card',
+  stackOnMobile = false,
   leading,
   title,
   meta,
@@ -288,8 +292,10 @@ export function ListRow({
   ...props
 }: {
   as?: 'li' | 'div' | 'article';
+  /** Put details above actions instead of squeezing the filename on phones. */
+  stackOnMobile?: boolean;
   /** card: white row on the canvas; outline: hairline border; plain: no box, for rows inside a card. */
-  variant?: 'card' | 'outline' | 'plain';
+  variant?: 'card' | 'outline' | 'plain' | 'divided' | 'dashed';
   leading?: ReactNode;
   title: ReactNode;
   meta?: ReactNode;
@@ -305,16 +311,31 @@ export function ListRow({
         variant === 'outline' &&
           'rounded-md border border-border bg-surface p-4',
         variant === 'plain' && 'py-3',
+        variant === 'divided' && 'border-b border-border py-3 last:border-b-0',
+        variant === 'dashed' &&
+          'rounded-md border border-dashed border-border p-3',
       )}
     >
       {leading && <div className="shrink-0">{leading}</div>}
-      <div className="min-w-0 flex-1 space-y-1">
+      <div
+        className={cn(
+          'min-w-0 flex-1 space-y-1',
+          stackOnMobile && 'max-md:basis-full',
+        )}
+      >
         <div className="min-w-0 font-medium">{title}</div>
         {meta && <div className="text-sm text-secondary">{meta}</div>}
         {children}
       </div>
       {trailing && (
-        <div className="flex flex-wrap items-center gap-2">{trailing}</div>
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-2',
+            stackOnMobile && 'max-md:w-full max-md:justify-end',
+          )}
+        >
+          {trailing}
+        </div>
       )}
     </Tag>
   );
@@ -589,7 +610,7 @@ export function ActionMenu({
   className?: string;
 }) {
   return (
-    <details className={className}>
+    <details className={cn('relative', className)}>
       <summary
         aria-label={label}
         className="grid size-11 cursor-pointer list-none place-items-center rounded-full text-secondary hover:bg-soft [&::-webkit-details-marker]:hidden"

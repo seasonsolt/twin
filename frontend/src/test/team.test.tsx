@@ -99,18 +99,18 @@ const showRecording = () =>
 
 it('lets the owner hear a speaker and confirm who it is, without picking for them', async () => {
   showRecording();
-  const card = (await screen.findByRole('heading', { name: 'S1' })).closest(
-    'li',
-  )!;
+  const card = (
+    await screen.findByRole('heading', { name: 'S1 是谁？' })
+  ).closest('section')!;
   const scope = within(card);
-  expect(scope.getAllByLabelText(/S1 试听/u)).toHaveLength(2);
-  expect(scope.getByText('张总 82%')).toBeInTheDocument();
+  expect(scope.getAllByLabelText(/S1 试听/u)).toHaveLength(1);
+  expect(scope.getByText('声音像 82%')).toBeInTheDocument();
   // A voice match is only a hint: nothing is chosen until the owner chooses.
   expect(scope.getByLabelText('这是谁')).toHaveValue('');
-  expect(scope.getByRole('button', { name: '确认' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '先选一个人' })).toBeDisabled();
   await userEvent.selectOptions(scope.getByLabelText('这是谁'), 'per_1');
-  await userEvent.click(scope.getByLabelText(/用作声纹样本/u));
-  await userEvent.click(scope.getByRole('button', { name: '确认' }));
+  await userEvent.click(screen.getByLabelText(/用作这个人的声纹样本/u));
+  await userEvent.click(screen.getByRole('button', { name: '确认是张总' }));
   await waitFor(() => expect(puts).toHaveLength(1));
   expect(puts[0]).toMatchObject({
     url: '/api/library/recordings/rec_1/speakers/S1',
@@ -126,24 +126,15 @@ it('lets the owner hear a speaker and confirm who it is, without picking for the
 
 it('refuses a decision on an outdated page and reloads it', async () => {
   showRecording();
-  const card = (await screen.findByRole('heading', { name: 'S1' })).closest(
-    'li',
-  )!;
+  await screen.findByRole('heading', { name: 'S1 是谁？' });
   revision = 4; // Changed elsewhere meanwhile.
-  await userEvent.click(
-    within(card).getByRole('button', { name: '几个人混在一起' }),
-  );
+  await userEvent.click(screen.getByRole('button', { name: '几个人混在一起' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('请刷新后再确认');
-  await userEvent.click(
-    within(
-      (await screen.findByRole('heading', { name: 'S1' })).closest('li')!,
-    ).getByRole('button', { name: '不是张总' }),
-  );
+  await userEvent.click(screen.getByRole('button', { name: '不在名单里' }));
   await waitFor(() => expect(puts).toHaveLength(2));
   expect(puts[1]).toMatchObject({
     revision: 4,
-    action: 'reject',
-    person_id: 'per_1',
+    action: 'unknown',
   });
 });
 
@@ -196,18 +187,16 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   expect(created).toHaveLength(1);
 });
 
-it('marks speakers recognised by voice and lets the owner say it is someone else', async () => {
+it('marks automatic matches and reopens them through the existing clear action', async () => {
   showRecording();
-  const card = (await screen.findByRole('heading', { name: 'S3' })).closest(
-    'li',
-  )!;
-  expect(within(card).getByText('按声音自动认出')).toBeInTheDocument();
-  await userEvent.click(within(card).getByRole('button', { name: '不是张总' }));
+  await screen.findByRole('heading', { name: 'S1 是谁？' });
+  const row = screen.getByRole('button', { name: '改 S3' }).closest('li')!;
+  expect(within(row).getByText('按声音自动认出')).toBeInTheDocument();
+  await userEvent.click(within(row).getByRole('button', { name: '改 S3' }));
   await waitFor(() => expect(puts).toHaveLength(1));
   expect(puts[0]).toMatchObject({
     url: '/api/library/recordings/rec_1/speakers/S3',
-    action: 'reject',
-    person_id: 'per_1',
+    action: 'clear',
   });
 });
 
@@ -247,9 +236,10 @@ it('lists new voices apart and names them before a twin can be made', async () =
   expect(
     within(fresh).queryByRole('button', { name: '生成分身' }),
   ).not.toBeInTheDocument();
-  expect(
-    within(fresh).getByRole('link', { name: '试听并确认' }),
-  ).toHaveAttribute('href', '/library/rec_9');
+  expect(within(fresh).getByRole('link', { name: '听原声' })).toHaveAttribute(
+    'href',
+    '/library/rec_9',
+  );
   await userEvent.type(within(fresh).getByLabelText('给未命名 1起名'), '李总');
   await userEvent.click(within(fresh).getByRole('button', { name: '起名' }));
   await waitFor(() => expect(patches).toEqual([{ name: '李总' }]));
@@ -313,7 +303,11 @@ it('edits a person name and gender and opens the profile of their twin', async (
   expect(
     within(row).getByRole('img', { name: '插画形象：石', hidden: true }),
   ).toBeInTheDocument();
-  await userEvent.click(within(row).getByRole('button', { name: '编辑张总' }));
+  await userEvent.click(within(row).getByLabelText('更多：张总'));
+  expect(within(row).queryByRole('button', { name: '删除' })).toBeNull();
+  await userEvent.click(
+    within(row).getByRole('button', { name: '编辑名字和性别' }),
+  );
   const dialog = await screen.findByRole('dialog', { name: '编辑「张总」' });
   await userEvent.clear(within(dialog).getByLabelText('名字'));
   await userEvent.type(within(dialog).getByLabelText('名字'), '张总监');
@@ -326,7 +320,7 @@ it('edits a person name and gender and opens the profile of their twin', async (
     await screen.findByText('张总监', { selector: 'p' }),
   ).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  await userEvent.click(screen.getByRole('button', { name: '张总监的档案' }));
+  await userEvent.click(screen.getByRole('link', { name: '张总监的档案' }));
   expect(await screen.findByText('档案页')).toBeInTheDocument();
   expect(switched).toEqual(['p-1']);
 });
@@ -427,11 +421,11 @@ it('returns from a speaker confirmation to focus the next pending team item', as
   await userEvent.click(
     within(waiting).getByRole('link', { name: '试听并确认' }),
   );
-  const card = (await screen.findByRole('heading', { name: 'S1' })).closest(
-    'li',
-  )!;
+  const card = (
+    await screen.findByRole('heading', { name: 'S1 是谁？' })
+  ).closest('section')!;
   await userEvent.selectOptions(within(card).getByLabelText('这是谁'), 'per_1');
-  await userEvent.click(within(card).getByRole('button', { name: '确认' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认是张总' }));
   await waitFor(() =>
     expect(screen.getByLabelText('给未命名 1起名')).toHaveFocus(),
   );
@@ -479,4 +473,39 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
     within(progress).getByRole('button', { name: /停止上传/u }),
   );
   expect(stop).toHaveBeenCalledOnce();
+});
+
+it('searches people locally, opens an untwinned header for editing, and keeps deletion in its menu', async () => {
+  const calls: string[] = [];
+  const originalFetch = fetch;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push(url);
+      if (url === '/api/library/review') return json({ items: [] });
+      return originalFetch(url, init);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await screen.findByRole('button', { name: '编辑张总' });
+  const beforeSearch = calls.length;
+  await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '李');
+  expect(screen.queryByRole('button', { name: '编辑张总' })).toBeNull();
+  expect(screen.getByRole('button', { name: '编辑李总' })).toBeInTheDocument();
+  expect(screen.getByText('2 人')).toBeInTheDocument();
+  expect(calls).toHaveLength(beforeSearch);
+  await userEvent.click(screen.getByRole('button', { name: '编辑李总' }));
+  expect(
+    await screen.findByRole('dialog', { name: '编辑「李总」' }),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '取消' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await userEvent.click(screen.getByLabelText('更多：李总'));
+  expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
 });

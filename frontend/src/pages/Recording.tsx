@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import {
+  AudioPlayer,
+  AvatarFrame,
+  Chip,
+  DecisionBar,
+  ListRow,
+  Meter,
+  Notice,
+  RouteButton,
+  Section,
+  Toolbar,
+  VoiceChoice,
   Badge,
   Button,
   Card,
@@ -16,9 +27,7 @@ import {
   Stack,
   Text,
   TextLink,
-  type Tone,
 } from '../components/ui';
-import { StageHeader } from '../components/layout/StageHeader';
 import { api, ApiError } from '../lib/api';
 import { withBase } from '../lib/base';
 import type { Recording as RecordingRow } from './Library';
@@ -69,12 +78,6 @@ interface Decision {
   sample?: boolean;
 }
 
-const decisionLabel: Record<Speaker['decision'], [string, Tone]> = {
-  none: ['待确认', 'warning'],
-  confirmed: ['已确认', 'success'],
-  unknown: ['不在名单里', 'neutral'],
-  mixed: ['几个人混在一起', 'neutral'],
-};
 const clock = (seconds: number) => {
   const s = Math.floor(seconds);
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -84,179 +87,248 @@ const span = (seconds: number) =>
     ? `${Math.round(seconds)} 秒`
     : `${Math.round(seconds / 60)} 分钟`;
 
+/** Mirrors media.claim.sample_windows so chip times and text describe the existing sample URLs. */
+export function sampleWindows(segments: Detail['segments'], speakerId: string) {
+  const others = segments.filter((s) => s.speaker !== speakerId);
+  let runs: [number, number][] = [];
+  for (const segment of segments
+    .filter((s) => s.speaker === speakerId)
+    .sort((a, b) => a.start - b.start)) {
+    const last = runs.at(-1);
+    if (
+      last &&
+      segment.start - last[1] < 0.6 &&
+      !others.some((s) => s.start < segment.start && s.end > last[1])
+    )
+      last[1] = Math.max(last[1], segment.end);
+    else runs.push([segment.start, segment.end]);
+  }
+  for (const other of others) {
+    if (other.end > other.start)
+      runs = runs
+        .flatMap(
+          ([start, end]) =>
+            [
+              [start, Math.min(end, other.start)],
+              [Math.max(start, other.end), end],
+            ] as [number, number][],
+        )
+        .filter(([start, end]) => end > start);
+  }
+  const windows: [number, number][] = [];
+  for (const [start, end] of runs.sort((a, b) => b[1] - b[0] - (a[1] - a[0]))) {
+    const count = end - start >= 5 ? 3 : 1;
+    for (let i = 0; i < count; i += 1) {
+      const offset =
+        end - start > 5 ? ((end - start - 5) * i) / Math.max(count - 1, 1) : 0;
+      windows.push([start + offset, Math.min(start + offset + 5, end)]);
+    }
+    if (windows.length >= 3) break;
+  }
+  return windows.slice(0, 3);
+}
+
 function SpeakerCard({
   recordingId,
   speaker,
   people,
-  lines,
+  segments,
   busy,
+  remaining,
   onDecide,
 }: {
   recordingId: string;
   speaker: Speaker;
   people: Person[];
-  lines: string[];
+  segments: Detail['segments'];
   busy: boolean;
+  remaining: number;
   onDecide: (decision: Decision) => void;
 }) {
   const id = useId();
-  // Never pre-selected: a match is only a hint until the owner picks the person.
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
+  // Voice matches remain suggestions until the owner chooses one.
   const [person, setPerson] = useState('');
   const [name, setName] = useState('');
   const [sample, setSample] = useState(false);
-  const owner = people.find((p) => p.id === speaker.person_id);
-  const [label, tone] = decisionLabel[speaker.decision];
+  const [clip, setClip] = useState(0);
   const choices = people.filter((p) => !speaker.rejected.includes(p.id));
-  const confirm = () =>
-    onDecide(
-      person === 'new'
-        ? { action: 'confirm', new_person: name.trim(), sample }
-        : { action: 'confirm', person_id: person, sample },
-    );
+  const candidates = speaker.candidates.filter(
+    (c) => !speaker.rejected.includes(c.person_id),
+  );
+  const selectedName =
+    person === 'new' ? name.trim() : choices.find((p) => p.id === person)?.name;
+  const windows = sampleWindows(segments, speaker.id);
+  const window = windows[clip];
+  const transcript = window
+    ? segments
+        .filter(
+          (s) =>
+            s.speaker === speaker.id &&
+            s.start < window[1] &&
+            s.end > window[0],
+        )
+        .map((s) => s.text)
+        .join(' ')
+    : '';
   return (
-    <Card as="li" padding="md" className="space-y-3">
-      <Row gap={3} wrap>
-        <Heading level={3} size="item">
-          {speaker.id}
-        </Heading>
-        <Text as="span" size="sm" tone="secondary">
-          说了 {span(speaker.seconds)}
-        </Text>
-        <Badge tone={tone}>
-          {speaker.decision === 'confirmed' && owner
-            ? `${label}：${owner.name}`
-            : label}
-        </Badge>
-        {speaker.auto && <Badge tone="info">按声音自动认出</Badge>}
-        {speaker.sample && <Badge tone="info">声纹样本</Badge>}
-        {speaker.auto && owner && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => onDecide({ action: 'reject', person_id: owner.id })}
-          >
-            不是{owner.name}
-          </Button>
-        )}
-      </Row>
-      <div className="grid gap-2 sm:grid-cols-3">
-        {Array.from({ length: speaker.samples }, (_, i) => (
-          <audio
-            key={i}
-            controls
-            preload="none"
-            aria-label={`${speaker.id} 试听 ${i + 1}`}
-            className="h-11 w-full"
-            src={withBase(
-              `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speaker.id)}/samples/${i}`,
-            )}
-          />
-        ))}
-      </div>
-      {lines.length > 0 && (
-        <Stack as="ul" gap={1}>
-          {lines.map((line, i) => (
-            <Text as="li" key={i} size="sm" tone="secondary">
-              {line}
+    <Card padding="none" aria-labelledby={`${id}-heading`}>
+      <Card as="div" variant="plain" padding="roomy" className="space-y-5">
+        <Toolbar>
+          <Row gap={3} wrap>
+            <Heading level={3} id={`${id}-heading`} ref={heading} tabIndex={-1}>
+              {speaker.id} 是谁？
+            </Heading>
+            <Text size="sm" tone="secondary">
+              说了 {span(speaker.seconds)}
             </Text>
-          ))}
-        </Stack>
-      )}
-      {speaker.candidates.length > 0 && (
-        <Row gap={2} wrap>
-          <Text as="span" size="sm">
-            声音像：
+          </Row>
+          <Text size="sm" tone="tertiary">
+            还剩 {remaining} 位
           </Text>
-          {speaker.candidates.map((c) => (
-            <span key={c.person_id} className="inline-flex items-center gap-1">
-              <Badge tone={speaker.near ? 'warning' : 'info'}>
-                {c.name} {Math.round(c.score * 100)}%
-              </Badge>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  onDecide({ action: 'reject', person_id: c.person_id })
-                }
-              >
-                不是{c.name}
-              </Button>
-            </span>
-          ))}
-          {speaker.near && (
-            <Text as="span" size="sm" tone="secondary">
-              两位很接近，请仔细听
+        </Toolbar>
+        <Card variant="soft" padding="md" className="space-y-3">
+          {speaker.samples > 0 ? (
+            <>
+              <AudioPlayer
+                aria-label={`${speaker.id} 试听`}
+                src={withBase(
+                  `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speaker.id)}/samples/${clip}`,
+                )}
+              />
+              <Row gap={2} wrap>
+                {Array.from({ length: speaker.samples }, (_, i) => (
+                  <Chip key={i} pressed={clip === i} onClick={() => setClip(i)}>
+                    片段 {i + 1}
+                    {windows[i] ? ` · ${clock(windows[i][0])}` : ''}
+                  </Chip>
+                ))}
+              </Row>
+              {transcript && (
+                <Text size="sm" tone="secondary">
+                  {transcript}
+                </Text>
+              )}
+            </>
+          ) : (
+            <Text size="sm" tone="secondary">
+              这位说话人没有可试听的片段，可参考完整转写稿。
             </Text>
           )}
+        </Card>
+        <Stack gap={3}>
+          <Text weight="medium">
+            {candidates.length > 1
+              ? '声音像这两位，选一个'
+              : candidates.length
+                ? '声音像这位，选一个人'
+                : '没认出这是谁，选一个人或写新名字'}
+          </Text>
+          {candidates.length > 1 &&
+            Number.isFinite(candidates[0].score) &&
+            Number.isFinite(candidates[1].score) &&
+            Math.abs(candidates[0].score - candidates[1].score) <= 0.25 && (
+              <Text size="sm" tone="warning">
+                两位很接近，多听一个片段再选。
+              </Text>
+            )}
+          {candidates.length > 0 && (
+            <Row gap={3} wrap>
+              {candidates.map((c) => (
+                <VoiceChoice
+                  key={c.person_id}
+                  selected={person === c.person_id}
+                  disabled={busy}
+                  onClick={() => setPerson(c.person_id)}
+                >
+                  <AvatarFrame size="md">{Array.from(c.name)[0]}</AvatarFrame>
+                  <Stack gap={0}>
+                    <Text as="span" weight="medium" tone="inherit">
+                      {c.name}
+                    </Text>
+                    <Text as="span" size="sm" tone="inherit">
+                      声音像 {Math.round(c.score * 100)}%
+                    </Text>
+                  </Stack>
+                </VoiceChoice>
+              ))}
+            </Row>
+          )}
+        </Stack>
+        <Row gap={3} wrap align="end">
+          <Field id={`${id}-who`} label="都不是：">
+            <Select
+              id={`${id}-who`}
+              aria-label="这是谁"
+              value={person}
+              disabled={busy}
+              onChange={(event) => setPerson(event.target.value)}
+            >
+              <option value="">请选择</option>
+              {choices.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+              <option value="new">新的人…</option>
+            </Select>
+          </Field>
+          {person === 'new' && (
+            <Input
+              aria-label="新人物的名字"
+              placeholder="名字"
+              maxLength={40}
+              value={name}
+              disabled={busy}
+              onChange={(event) => setName(event.target.value)}
+            />
+          )}
         </Row>
-      )}
-      <Row gap={3} align="end" wrap>
-        <Field id={`${id}-who`} label="这是谁">
-          <Select
-            id={`${id}-who`}
-            value={person}
-            onChange={(event) => setPerson(event.target.value)}
-          >
-            <option value="">请选择</option>
-            {choices.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-            <option value="new">新的人…</option>
-          </Select>
-        </Field>
-        {person === 'new' && (
-          <Input
-            aria-label="新人物的名字"
-            placeholder="名字"
-            maxLength={40}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        )}
+      </Card>
+      <DecisionBar
+        secondary={
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => onDecide({ action: 'unknown' })}
+            >
+              不在名单里
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => onDecide({ action: 'mixed' })}
+            >
+              几个人混在一起
+            </Button>
+          </>
+        }
+      >
+        <Button
+          disabled={busy || !selectedName}
+          onClick={() =>
+            onDecide(
+              person === 'new'
+                ? { action: 'confirm', new_person: name.trim(), sample }
+                : { action: 'confirm', person_id: person, sample },
+            )
+          }
+        >
+          {selectedName ? `确认是${selectedName}` : '先选一个人'}
+        </Button>
         <Checkbox
-          label="这段声音清楚，用作声纹样本"
+          label="声音清楚，用作这个人的声纹样本"
           checked={sample}
+          disabled={busy}
           onChange={(event) => setSample(event.target.checked)}
         />
-        <Button
-          disabled={busy || !person || (person === 'new' && !name.trim())}
-          onClick={confirm}
-        >
-          确认
-        </Button>
-      </Row>
-      <Row gap={2} wrap>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onClick={() => onDecide({ action: 'unknown' })}
-        >
-          不在名单里
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onClick={() => onDecide({ action: 'mixed' })}
-        >
-          几个人混在一起
-        </Button>
-        {(speaker.decision !== 'none' || speaker.rejected.length > 0) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => onDecide({ action: 'clear' })}
-          >
-            撤销
-          </Button>
-        )}
-      </Row>
+      </DecisionBar>
     </Card>
   );
 }
@@ -269,6 +341,7 @@ export function Recording() {
   const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reopened, setReopened] = useState<string | null>(null);
   const base = `/api/library/recordings/${encodeURIComponent(recordingId)}`;
   const load = useCallback(async () => {
     try {
@@ -299,6 +372,7 @@ export function Recording() {
           ...decision,
         },
       });
+      setReopened(decision.action === 'clear' ? speaker.id : null);
       if (
         location.state?.teamTask &&
         ['confirm', 'unknown', 'mixed'].includes(decision.action)
@@ -327,69 +401,168 @@ export function Recording() {
       ? (names.get(speaker.person_id) ?? speakerId)
       : speakerId;
   };
+  const undecided = detail?.speakers.filter((s) => s.decision === 'none') ?? [];
+  const decided = detail?.speakers.filter((s) => s.decision !== 'none') ?? [];
+  const current = undecided.find((s) => s.id === reopened) ?? undecided[0];
+  const remaining = undecided.filter((s) => s.id !== current?.id);
   return (
-    <div className="library-page">
-      <StageHeader
-        variant="brand"
-        intro={
-          <p className="stage-caption">
-            听一听每位说话人，确认是谁。只有确认过的发言才会进入这个人的分身。
-          </p>
-        }
-      />
-      <Page
-        title={detail?.filename ?? '录音'}
-        aside={
-          <TextLink to="/library" size="sm">
-            返回录音库
-          </TextLink>
-        }
-      >
-        {error && (
-          <Text role="alert" tone="danger">
-            {error}
-          </Text>
-        )}
-        {!detail ? (
-          <Skeleton className="h-32" />
-        ) : detail.status !== 'ready' ? (
-          <Text role="status" tone="secondary">
-            这段录音还没转写完。
-          </Text>
-        ) : (
-          <>
-            <Stack as="ul" gap={3} aria-label="说话人">
-              {detail.speakers.map((speaker) => (
-                <SpeakerCard
-                  // A new revision starts every card from nothing chosen.
-                  key={`${speaker.id}-${detail.revision}`}
-                  recordingId={detail.id}
-                  speaker={speaker}
-                  people={people}
-                  busy={busy}
-                  lines={detail.segments
-                    .filter((s) => s.speaker === speaker.id && s.text)
-                    .slice(0, 3)
-                    .map((s) => `[${clock(s.start)}] ${s.text}`)}
-                  onDecide={(decision) => void decide(speaker, decision)}
-                />
-              ))}
-            </Stack>
-            <Disclosure summary={`转写稿（${detail.segments.length} 段）`}>
-              <Stack as="ol" gap={1}>
-                {detail.segments.map((s, i) => (
-                  <Text as="li" key={i} size="sm">
-                    <Text as="span" size="inherit" tone="secondary">
-                      [{clock(s.start)}] {who(s.speaker)}：
-                    </Text>
-                    {s.text}
-                  </Text>
+    <Page
+      stackHeaderOnMobile
+      breadcrumb={
+        <TextLink to="/library" size="sm">
+          录音库
+        </TextLink>
+      }
+      title={detail?.filename ?? '录音'}
+      titleSize="display"
+      description={
+        detail
+          ? [
+              Number.isNaN(Date.parse(detail.created_at))
+                ? ''
+                : new Date(detail.created_at).toLocaleDateString('zh-CN', {
+                    month: 'long',
+                    day: 'numeric',
+                  }),
+              detail.duration_s == null ? '' : span(detail.duration_s),
+              `${detail.speakers.length} 位说话人`,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : undefined
+      }
+      actions={
+        detail && (
+          <Stack gap={2}>
+            <Text size="sm" tone="secondary">
+              已确认 {decided.length} / {detail.speakers.length} 位
+            </Text>
+            <Meter
+              label="说话人确认进度"
+              size="sm"
+              hideLabel
+              value={decided.length}
+              max={detail.speakers.length}
+            />
+          </Stack>
+        )
+      }
+    >
+      <Text size="xs" tone="tertiary">
+        只有确认过的发言才会进入这个人的分身。
+      </Text>
+      {error && (
+        <Text role="alert" tone="danger">
+          {error}
+        </Text>
+      )}
+      {!detail ? (
+        <Skeleton className="h-32" />
+      ) : detail.status !== 'ready' ? (
+        <Text role="status" tone="secondary">
+          这段录音还没转写完。
+        </Text>
+      ) : (
+        <>
+          {current ? (
+            <SpeakerCard
+              key={`${current.id}-${detail.revision}`}
+              recordingId={detail.id}
+              speaker={current}
+              people={people}
+              segments={detail.segments}
+              busy={busy}
+              remaining={undecided.length}
+              onDecide={(decision) => void decide(current, decision)}
+            />
+          ) : (
+            <Notice
+              tone="success"
+              title="这段录音的说话人都确认好了"
+              actions={<RouteButton to="/team">回团队处理下一项</RouteButton>}
+            >
+              相关的人会在后台重新整理记忆。
+            </Notice>
+          )}
+          {remaining.length > 0 && (
+            <Section title="接下来">
+              <Stack as="ul" gap={2}>
+                {remaining.map((s) => (
+                  <ListRow
+                    key={s.id}
+                    variant="dashed"
+                    title={
+                      <Text size="sm" tone="secondary">
+                        {s.id} · 说了 {span(s.seconds)} ·{' '}
+                        {s.candidates.length ? '有候选人' : '没认出来'}
+                      </Text>
+                    }
+                  />
                 ))}
               </Stack>
-            </Disclosure>
-          </>
-        )}
-      </Page>
-    </div>
+            </Section>
+          )}
+          {decided.length > 0 && (
+            <Section title={`已确认 ${decided.length} 位`}>
+              <Card>
+                <Stack as="ul" gap={0}>
+                  {decided.map((s) => (
+                    <ListRow
+                      key={s.id}
+                      variant="divided"
+                      leading={
+                        <AvatarFrame size="sm">
+                          {Array.from(names.get(s.person_id ?? '') ?? s.id)[0]}
+                        </AvatarFrame>
+                      }
+                      title={
+                        s.decision === 'confirmed'
+                          ? (names.get(s.person_id ?? '') ?? s.id)
+                          : s.decision === 'mixed'
+                            ? '几个人混在一起'
+                            : '不在名单里'
+                      }
+                      meta={`${s.id} · 说了 ${span(s.seconds)}`}
+                      trailing={
+                        <>
+                          <Badge>
+                            {s.decision !== 'confirmed'
+                              ? '不进任何分身'
+                              : s.auto
+                                ? '按声音自动认出'
+                                : '你确认的'}
+                          </Badge>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`改 ${s.id}`}
+                            disabled={busy}
+                            onClick={() => void decide(s, { action: 'clear' })}
+                          >
+                            改
+                          </Button>
+                        </>
+                      }
+                    />
+                  ))}
+                </Stack>
+              </Card>
+            </Section>
+          )}
+          <Disclosure summary={`完整转写稿（${detail.segments.length} 段）`}>
+            <Stack as="ol" gap={1}>
+              {detail.segments.map((s, i) => (
+                <Text as="li" key={i} size="sm">
+                  <Text as="span" size="inherit" tone="secondary">
+                    [{clock(s.start)}] {who(s.speaker)}：
+                  </Text>
+                  {s.text}
+                </Text>
+              ))}
+            </Stack>
+          </Disclosure>
+        </>
+      )}
+    </Page>
   );
 }

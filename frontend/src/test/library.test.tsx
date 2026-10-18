@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -80,7 +86,7 @@ it('uploads several recordings to the account library one after another', async 
   vi.stubGlobal('fetch', fetcher);
   show();
   expect(await screen.findByText('还没有录音')).toBeInTheDocument();
-  expect(screen.getByText(/还可添加约 30.0 GB/u)).toBeInTheDocument();
+  expect(screen.getByText(/还能放约 30.0 GB/u)).toBeInTheDocument();
   await userEvent
     .setup({ applyAccept: false })
     .upload(screen.getByLabelText('选择录音文件'), [
@@ -93,7 +99,7 @@ it('uploads several recordings to the account library one after another', async 
   await waitFor(() =>
     expect(
       within(screen.getByRole('list', { name: '录音列表' })).getAllByText(
-        '排队中',
+        '排队',
       ),
     ).toHaveLength(2),
   );
@@ -129,8 +135,9 @@ it('shows failures with a retry and asks before deleting', async () => {
     await screen.findByText('语音识别失败，请检查转写服务后重试'),
   ).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '重试' }));
-  expect(await screen.findByText('排队中')).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '删除周会.m4a' }));
+  expect(await screen.findByText('排队')).toBeInTheDocument();
+  await userEvent.click(screen.getByLabelText('更多：周会.m4a'));
+  await userEvent.click(screen.getByRole('button', { name: '删除' }));
   await userEvent.click(
     within(await screen.findByRole('dialog')).getByRole('button', {
       name: '删除录音',
@@ -153,7 +160,7 @@ it('says recordings wait when no diarizing transcription service is set up', asy
   expect(
     await screen.findByText(/还没有配置能区分说话人的转写服务/u),
   ).toBeInTheDocument();
-  expect(screen.getByText(/排队 1 \/ 20 个/u)).toBeInTheDocument();
+  expect(screen.getByText(/排队 1 \/ 20/u)).toBeInTheDocument();
 });
 
 it('tells for each transcribed recording whether its speakers are identified', async () => {
@@ -181,7 +188,7 @@ it('tells for each transcribed recording whether its speakers are identified', a
   show();
   const row = async (name: string) =>
     within((await screen.findByRole('link', { name })).closest('li')!);
-  expect((await row('周会.m4a')).getByText('还没认人')).toBeInTheDocument();
+  expect((await row('周会.m4a')).getByText('4 位待确认')).toBeInTheDocument();
   const partly = await row('月会.m4a');
   expect(partly.getByText('2 位待确认')).toBeInTheDocument();
   expect(partly.getByText(/张总、李总/u)).toBeInTheDocument();
@@ -217,4 +224,108 @@ it('says when the batch quota holds proofreading and twin updates back', async (
     within((await screen.findByRole('link', { name })).closest('li')!);
   expect((await row('周会.m4a')).getByText(/待校对/u)).toBeInTheDocument();
   expect((await row('月会.m4a')).getByText(/已校对/u)).toBeInTheDocument();
+});
+
+it('filters locally with counts, including proofreading in processing, and shows empty filter results', async () => {
+  state.recordings = [
+    recording({ id: 'a', filename: '待确认.m4a', unsettled: 2 }),
+    recording({ id: 'b', filename: '完成.m4a' }),
+    recording({ id: 'c', filename: '校对.m4a', proofread: 'waiting' }),
+    recording({ id: 'd', filename: '排队.m4a', status: 'queued' }),
+    recording({
+      id: 'e',
+      filename: '转写.m4a',
+      status: 'transcribing',
+      transcribed_s: 1500,
+    }),
+    recording({
+      id: 'f',
+      filename: '失败.m4a',
+      status: 'failed',
+      error: '识别失败',
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => json(state)),
+  );
+  show();
+  const group = await screen.findByRole('group', { name: '录音分类' });
+  await screen.findByRole('button', { name: '全部 6' });
+  const calls = vi.mocked(fetch).mock.calls.length;
+  expect(
+    within(group).getByRole('button', { name: '处理中 3' }),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    within(group).getByRole('button', { name: '待确认 1' }),
+  );
+  expect(screen.getByRole('list', { name: '录音列表' }).children).toHaveLength(
+    1,
+  );
+  expect(screen.getByRole('link', { name: '确认说话人' })).toHaveAttribute(
+    'href',
+    '/library/a',
+  );
+  expect(screen.queryByText('完成.m4a')).toBeNull();
+  await userEvent.click(
+    within(group).getByRole('button', { name: '处理中 3' }),
+  );
+  expect(screen.getByRole('list', { name: '录音列表' }).children).toHaveLength(
+    3,
+  );
+  expect(
+    screen.getByRole('progressbar', { name: '转写.m4a转写进度' }),
+  ).toHaveAttribute('aria-valuenow', '1500');
+  await userEvent.click(within(group).getByRole('button', { name: '失败 1' }));
+  expect(screen.getByText('识别失败')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls).toHaveLength(calls);
+});
+
+it('shows an empty category while retaining the upload action', async () => {
+  state.recordings = [recording({})];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => json(state)),
+  );
+  show();
+  await screen.findByRole('button', { name: '全部 1' });
+  await userEvent.click(screen.getByRole('button', { name: '失败 0' }));
+  expect(screen.getByText('这一类里没有录音。')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '上传录音' })).toBeEnabled();
+  expect(screen.queryByText('还没有录音')).toBeNull();
+});
+
+it('opens the file picker from the header and accepts files dropped on the page', async () => {
+  const order: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library') return json(state);
+      if (url === '/api/library/uploads') {
+        order.push(JSON.parse(String(init?.body)).filename);
+        return json({ id: 'drop', offset: 0 });
+      }
+      if (url.includes('?offset=0')) return json({ offset: 3 });
+      if (url.endsWith('/finish')) return json({ id: 'rec', new: true });
+      throw new Error(url);
+    }),
+  );
+  show();
+  await screen.findByText('还没有录音');
+  const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
+  await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
+  expect(click).toHaveBeenCalledOnce();
+  fireEvent.drop(screen.getByRole('region', { name: '拖放上传录音' }), {
+    dataTransfer: {
+      files: [new File(['abc'], '拖入.m4a', { type: 'audio/mp4' })],
+    },
+  });
+  await waitFor(() => expect(order).toEqual(['拖入.m4a']));
+  await waitFor(() =>
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/library/uploads/drop/finish',
+      expect.anything(),
+    ),
+  );
 });

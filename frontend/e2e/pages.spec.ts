@@ -16,7 +16,7 @@ const pages: {
   {
     name: 'recording',
     path: '/#/library/r-weekly',
-    ready: '我们先过一下上周的进展',
+    ready: 'S3 是谁？',
   },
   {
     name: 'chat',
@@ -79,3 +79,24 @@ for (const { name, path, ready, viewport, setup } of pages) {
     expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
   });
 }
+
+test('recording controls', async ({ page }) => {
+  const missing: string[] = [];
+  await mockApi(page, missing);
+  await page.goto('/#/library/r-weekly');
+  await expect(page.getByRole('heading', { name: 'S3 是谁？' })).toBeVisible();
+  await expect(page.locator('audio')).toHaveCount(1);
+  await page.getByRole('button', { name: /片段 2/u }).click();
+  await expect(page.locator('audio')).toHaveAttribute('src', /samples\/1$/u);
+  await page.getByRole('button', { name: /周石言.*声音像 71%/u }).click();
+  const confirm = page.getByRole('button', { name: '确认是周石言' });
+  await expect(confirm).toBeEnabled();
+  const select = page.getByLabel('这是谁');
+  await select.click();
+  await page.keyboard.press('Escape');
+  await select.selectOption('u-qinghe');
+  await expect(
+    page.getByRole('button', { name: '确认是许清禾' }),
+  ).toBeEnabled();
+  expect(missing).toEqual([]);
+});

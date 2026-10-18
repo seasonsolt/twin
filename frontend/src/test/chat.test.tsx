@@ -18,7 +18,7 @@ import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { conversationServer } from './conversationServer';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyBasis } from '../features/chat/ReplyDetails';
+import { ReplyBasis, ReplyDetails } from '../features/chat/ReplyDetails';
 import type { ChatReply } from '../features/chat/types';
 
 vi.mock('motion/react', async (original) => {
@@ -325,6 +325,52 @@ it('explains an abstaining reply without implying all source material is missing
   expect(screen.getByText('资料不足，需要问本人')).toBeVisible();
   // No evidence to show: no evidence line, and nothing claims every source is missing.
   expect(screen.queryByRole('button', { name: /^依据/ })).toBeNull();
+});
+
+it('labels nothing under an unchecked reply and keeps reasons in its details', async () => {
+  const unchecked: ChatReply = {
+    reply: '早上好，今天想聊什么？',
+    citations: [],
+    confidence: 0,
+    abstain: false,
+    abstain_reason: '',
+    retrieved_ids: [],
+    mode: 'general',
+    verified: false,
+    elapsed_ms: 800,
+    completed_at: '2026-10-18T08:23:00.000Z',
+  };
+  const { unmount } = render(
+    <>
+      <ReplyBasis reply={unchecked} />
+      <ReplyDetails reply={unchecked} />
+    </>,
+  );
+  // A greeting the model sent without metadata is not 资料不足, and not a general opinion either.
+  expect(screen.queryByRole('group', { name: '回答依据摘要' })).toBeNull();
+  await userEvent.setup().click(screen.getByText('处理详情'));
+  expect(screen.getByText('这条回答没有附带依据说明，无法核对')).toBeVisible();
+  unmount();
+
+  const abstained: ChatReply = {
+    ...unchecked,
+    abstain: true,
+    abstain_reason: '回复没有给出所问内容：老家在哪',
+    mode: 'abstain',
+    verified: true,
+  };
+  render(
+    <>
+      <ReplyBasis reply={abstained} />
+      <ReplyDetails reply={abstained} />
+    </>,
+  );
+  const basis = screen.getByRole('group', { name: '回答依据摘要' });
+  expect(within(basis).getByText('资料不足，需要问本人')).toBeVisible();
+  expect(basis).not.toHaveTextContent('老家在哪');
+  expect(
+    screen.getByText('没有作答的原因：回复没有给出所问内容：老家在哪'),
+  ).toBeInTheDocument();
 });
 
 it.each([false, true])(

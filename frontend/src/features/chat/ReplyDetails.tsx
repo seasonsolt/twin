@@ -35,10 +35,12 @@ export function replyMode(reply: ChatReply) {
 
 /**
  * The line under an answer: what kind of answer it is and what it rests on. A grounded answer without evidence to
- * show says only that it drew on the profile.
+ * show says only that it drew on the profile; an answer nothing could be checked against shows no line at all,
+ * and why an answer abstained is told in its details, not here.
  */
 export function ReplyBasis({ reply }: { reply: ChatReply }) {
   const cited = reply.cited ?? [];
+  if (reply.verified === false && !cited.length) return null;
   const mode = replyMode(reply);
   const grounded = (reply.mode ?? 'grounded') === 'grounded' && !reply.abstain;
   return (
@@ -47,11 +49,6 @@ export function ReplyBasis({ reply }: { reply: ChatReply }) {
         <Badge>结合档案资料</Badge>
       ) : (
         <Badge tone={mode.tone}>{mode.label}</Badge>
-      )}
-      {(reply.mode === 'abstain' || reply.abstain) && reply.abstain_reason && (
-        <Text as="span" size="xs" tone="secondary">
-          {reply.abstain_reason}
-        </Text>
       )}
       <Citations cited={cited} note={mode.note} />
     </Row>
@@ -117,6 +114,10 @@ export function ReplyDetails({ reply }: { reply: ChatReply }) {
         {fileCitations > 0 && <p>附件依据 {fileCitations} 条</p>}
         {profileCitations === 0 && fileCitations === 0 && (
           <p>未引用可展示的档案或附件依据</p>
+        )}
+        {reply.verified === false && <p>这条回答没有附带依据说明，无法核对</p>}
+        {reply.abstain && reply.abstain_reason && (
+          <p>没有作答的原因：{reply.abstain_reason}</p>
         )}
       </Text>
     </details>

@@ -156,6 +156,8 @@ class ChatReply(BaseModel):
     as_of: dt.date | None = None
     mode: Literal["grounded", "general", "inferred", "abstain"] = "grounded"
     quotes_removed: int = 0
+    # False when the model sent no valid metadata, so nothing about the reply's grounding could be checked.
+    verified: bool = True
 
     @model_validator(mode="before")
     @classmethod

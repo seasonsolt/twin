@@ -586,6 +586,7 @@ class PersonaChat:
         )
         effort = self.settings.effective_chat_llm.effort_twin
         stream = getattr(self.llm, "stream", None)
+        verified = True
         if stream is None:
             draft = await off_loop(
                 partial(self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort)
@@ -605,7 +606,8 @@ class PersonaChat:
             if delta := parser.finish():
                 yield delta
             draft = parser.draft()
-        yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist))
+            verified = parser.verified
+        yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist, verified=verified))
 
     @staticmethod
     def _attach_files(ctx: PersonaContext, attachments: Sequence[AttachmentPassage]) -> None:
@@ -660,6 +662,7 @@ class PersonaChat:
         as_of: dt.date | None,
         *,
         persist: bool,
+        verified: bool = True,
     ) -> ChatReply:
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         # Record ids belong in citations, not in the text the person reads; move any the reply wrote inline.
@@ -707,6 +710,7 @@ class PersonaChat:
             as_of=as_of,
             mode="abstain" if abstain else draft.mode,
             quotes_removed=quotes_removed,
+            verified=verified,
         )
         self.stale = not gate.current(self.store, self.memory)
         if persist and not self.stale:
@@ -741,6 +745,8 @@ class ChatStreamParser:
         self.text = ""
         self.metadata = ""
         self.in_metadata = False
+        # False once draft() found no valid metadata to check the reply against.
+        self.verified = True
         self.line_start = True
 
     def feed(self, chunk: str) -> str:
@@ -787,15 +793,10 @@ class ChatStreamParser:
             if not math.isfinite(data.confidence):
                 raise ValueError("confidence must be finite")
         except (ValueError, ValidationError):
-            # No second generation: keep every streamed word, claim no grounding without validated metadata.
-            return ChatDraft(
-                reply=self.text,
-                citations=[],
-                confidence=0,
-                mode="abstain",
-                abstain=True,
-                abstain_reason="模型元数据缺失或无效，未能验证回答依据",
-            )
+            # No second generation: keep every streamed word and claim no grounding. Short replies such as a
+            # greeting are where models most often drop the metadata, so this is not an abstention either.
+            self.verified = False
+            return ChatDraft(reply=self.text, citations=[], confidence=0, mode="general")
         return data
 
 

@@ -22,6 +22,8 @@ export interface ChatReply {
   as_of?: string | null;
   cited?: Citation[];
   mode?: 'grounded' | 'general' | 'inferred' | 'abstain';
+  /** False when the model sent no metadata to check the answer's grounding against, as with a short greeting. */
+  verified?: boolean;
   elapsed_ms?: number;
   completed_at?: string;
 }

@@ -64,7 +64,8 @@ def test_parser_conservative_fallback_keeps_text(body: str, visible: str) -> Non
     assert parser.feed(body) + parser.finish() == visible
     draft = parser.draft()
     assert draft.reply == visible
-    assert draft.abstain and draft.confidence == 0 and draft.citations == []
+    assert draft.mode == "general" and not draft.abstain and draft.confidence == 0 and draft.citations == []
+    assert not parser.verified
 
 
 @pytest.mark.parametrize(
@@ -401,14 +402,13 @@ def test_sse_invalid_metadata_keeps_text_and_logs_once(tmp_path: Path, body: str
         final = events[-1][1]
         assert events[-1][0] == "final"
         assert final["reply"].startswith("保留完整回复。") and final["citations"] == []
-        assert final["confidence"] == 0 and final["mode"] == "abstain" and final["abstain"]
-        assert final["abstain_reason"] == "模型元数据缺失或无效，未能验证回答依据"
+        # Unchecked, not abstained: a greeting without metadata must not read as 资料不足 or wait for the person.
+        assert final["confidence"] == 0 and final["mode"] == "general" and not final["abstain"]
+        assert final["abstain_reason"] == "" and final["verified"] is False
         with PersonaStore(settings.db_path) as store:
             assert store._db.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 1
-        # The abstained question waits for the person to answer it.
         queue = web.get("/api/persona/followups", headers={"X-Twin": "1"}).json()
-        assert queue["pending"] == 1 and queue["items"][0]["question"] == "问题"
-        assert queue["items"][0]["reason"] == final["abstain_reason"]
+        assert queue["pending"] == 0
 
 
 def test_sse_error_is_sanitized(tmp_path: Path) -> None:

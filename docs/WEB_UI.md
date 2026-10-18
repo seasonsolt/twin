@@ -235,7 +235,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 ## 流式聊天延迟检查
 
-`[chat_llm]`（未配置则 `[llm]`）的 `hedge_after_s` 默认 2.5 秒，0 禁用；首 token 未到时最多追加一个相同请求，先返回正文的胜出，另一个取消并关闭。OpenAI 兼容流式调用保留 extra_body，但不请求 JSON mode：正文之后是 `<<<META>>>` 独立行和元数据 JSON。无效元数据保留正文，返回无引用、零置信度的保守弃权；最终仍执行引用过滤、置信度上限、引号校验与原有聊天日志。核心画像不随检索问题改变，系统提示按同一分身的档案保持稳定。
+`[chat_llm]`（未配置则 `[llm]`）的 `hedge_after_s` 默认 2.5 秒，0 禁用；首 token 未到时最多追加一个相同请求，先返回正文的胜出，另一个取消并关闭。OpenAI 兼容流式调用保留 extra_body，但不请求 JSON mode：正文之后是 `<<<META>>>` 独立行和元数据 JSON。缺少或无效元数据时保留正文，返回无引用、零置信度、`mode=general` 且 `verified=false` 的回答：不算弃权、不进待回答，回答下方不显示类型标签，“处理详情”说明无法核对（短寒暄最常缺元数据）；弃权原因也只在“处理详情”里显示；最终仍执行引用过滤、置信度上限、引号校验与原有聊天日志。核心画像不随检索问题改变，系统提示按同一分身的档案保持稳定。
 
 运行 `uv run python scripts/chat_latency.py http://127.0.0.1:8765 --persona default`，打印五个问题的 first delta 与 final 秒数。启用登录时通过 `TWIN_SESSION` 环境变量提供会话 cookie；`--questions` 可传入五个自定义问题。脚本会产生普通聊天日志，不会验证真实回答质量；模型和网络延迟仍取决于部署。
 

@@ -7,6 +7,7 @@ import {
   type VRM,
   type VRMMeta,
 } from '@pixiv/three-vrm';
+import type { PresenceState } from '../../components/ui';
 import { useMotionPreset } from '../../design/motion';
 import { AvatarMotion } from './motion';
 import { visibleRenderLoop } from './renderLoop';
@@ -15,10 +16,14 @@ import { applyRelaxedPose, fitPortrait, portraitBounds } from './rig';
 export interface Avatar3DProps {
   url: string;
   mouth: number;
-  speaking: boolean;
+  /** What the twin is doing: the eyes, head and chest follow it. */
+  state?: PresenceState;
   onFallback(): void;
   onModelNameChange?(name: string | null): void;
+  /** Render one frame and stop, for small avatars in lists. */
   still?: boolean;
+  /** Fill the parent, such as the round chat stage, with the credit in a tooltip instead of under the model. */
+  fill?: boolean;
 }
 
 export function modelCredit(meta: VRMMeta) {
@@ -192,7 +197,7 @@ export default function Avatar3D(props: Avatar3DProps) {
             const pose = motion.step(
               delta,
               state.mouth,
-              state.speaking,
+              state.state ?? 'idle',
               state.reduced,
             );
             for (const expression of ['aa', 'oh', 'ih', 'blink'] as const) {
@@ -203,7 +208,7 @@ export default function Avatar3D(props: Avatar3DProps) {
             head.rotation.y += pose.yaw;
             if (chest && chestRest) {
               chest.rotation.copy(chestRest);
-              chest.rotation.x += pose.breath;
+              chest.rotation.x += pose.breath + pose.lean;
             }
             gaze.position
               .copy(camera.position)
@@ -235,13 +240,13 @@ export default function Avatar3D(props: Avatar3DProps) {
     credit?.license && /^https?:\/\//i.test(credit.license)
       ? credit.license
       : undefined;
-  if (props.still)
+  if (props.still || props.fill)
     return (
       <div
         ref={host}
         className="size-full"
         title={credit?.text}
-        aria-label="VRM 静态头像"
+        aria-label={props.still ? 'VRM 静态头像' : 'VRM 头像'}
       />
     );
   return (

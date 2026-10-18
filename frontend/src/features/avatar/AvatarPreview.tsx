@@ -10,6 +10,7 @@ import {
 import { Avatar, PortraitAvatar } from './Avatar';
 import type { Capabilities } from './types';
 import { personaUrl } from '../../lib/persona';
+import type { PresenceState } from '../../components/ui';
 
 const Avatar3D = lazy(() => import('./Avatar3D'));
 
@@ -33,11 +34,14 @@ export function AvatarPreview({
   capabilities,
   mouth = 0,
   speaking = false,
+  state,
   onModelNameChange,
 }: {
   capabilities: Capabilities;
   mouth?: number;
   speaking?: boolean;
+  /** The 3D model's state; defaults to speaking or idle. A portrait photo only follows speaking. */
+  state?: PresenceState;
   onModelNameChange?(name: string | null): void;
 }) {
   const url = capabilities.avatar_model?.url
@@ -81,7 +85,7 @@ export function AvatarPreview({
         <Avatar3D
           url={url}
           mouth={mouth}
-          speaking={speaking}
+          state={state ?? (speaking ? 'speaking' : 'idle')}
           onFallback={onFallback}
           onModelNameChange={onModelNameChange}
         />

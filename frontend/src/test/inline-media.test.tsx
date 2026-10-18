@@ -39,10 +39,19 @@ vi.mock('../design/motion', async (original) => ({
   }),
 }));
 vi.mock('../features/avatar/Avatar3D', () => ({
-  default: (props: { still?: boolean; onFallback(): void }) => (
+  default: (props: {
+    still?: boolean;
+    fill?: boolean;
+    state?: string;
+    mouth: number;
+    onFallback(): void;
+  }) => (
     <button
-      aria-label="VRM 静态头像"
+      aria-label={props.still ? 'VRM 静态头像' : 'VRM 头像'}
       data-still={props.still}
+      data-fill={props.fill}
+      data-state={props.state}
+      data-mouth={props.mouth}
       onClick={props.onFallback}
     >
       模型
@@ -640,6 +649,33 @@ it('prefers portrait, then a VRM still, then the illustrated preset', async () =
   view.rerender(<ChatAvatar name="张三" capabilities={null} />);
   expect(screen.getByRole('img', { name: '插画形象：栗' })).toBeVisible();
   expect(view.container.querySelector('.eyes')).not.toBeNull();
+});
+it('moves a live VRM with the stage state, but never a portrait photo', async () => {
+  const vrmOnly = { ...caps, avatar_image: null };
+  const view = render(
+    <ChatAvatar name="测试人" capabilities={vrmOnly} live="thinking" />,
+  );
+  const model = await screen.findByRole('button', { name: 'VRM 头像' });
+  expect(model).toHaveAttribute('data-fill', 'true');
+  expect(model).toHaveAttribute('data-state', 'thinking');
+  expect(model).not.toHaveAttribute('data-still');
+  view.rerender(
+    <ChatAvatar
+      name="测试人"
+      capabilities={vrmOnly}
+      live="speaking"
+      level={2}
+    />,
+  );
+  expect(screen.getByRole('button', { name: 'VRM 头像' })).toHaveAttribute(
+    'data-mouth',
+    '2',
+  );
+  view.rerender(
+    <ChatAvatar name="测试人" capabilities={caps} live="speaking" level={3} />,
+  );
+  expect(screen.getByRole('img', { name: '测试人的肖像' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: /VRM/ })).not.toBeInTheDocument();
 });
 function ReplyVideo({
   id,

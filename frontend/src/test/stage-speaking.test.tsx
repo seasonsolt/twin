@@ -13,6 +13,15 @@ vi.mock('../design/motion', async (original) => ({
   ...(await original<typeof import('../design/motion')>()),
   useMotionPreset: () => ({ reduced: preference.reduced }),
 }));
+vi.mock('../features/avatar/Avatar3D', () => ({
+  default: (props: { state?: string; fill?: boolean }) => (
+    <span
+      aria-label="VRM 头像"
+      data-state={props.state}
+      data-fill={props.fill}
+    />
+  ),
+}));
 vi.mock('../lib/useMobile', () => ({
   useMobile: () => preference.width < 768,
   useDesktop: () => preference.width >= 1200,
@@ -327,4 +336,38 @@ it('holds one still ring while the twin thinks, and speech takes over once it sp
     view.container.querySelector('[data-presence="speaking"]'),
   ).not.toBeNull();
   expect(view.container.querySelectorAll('.presence-ripple')).toHaveLength(2);
+});
+
+it('passes thinking and speaking to a live VRM on the stage', async () => {
+  const vrm = {
+    ...caps,
+    avatar_image: null,
+    avatar_model: { format: 'vrm' as const, url: '/api/media/avatar.vrm' },
+  };
+  const view = render(
+    <MemoryRouter>
+      <ChatStage {...props} capabilities={vrm} speaking={false} thinking />
+    </MemoryRouter>,
+  );
+  const model = await screen.findByLabelText('VRM 头像');
+  expect(model).toHaveAttribute('data-state', 'thinking');
+  expect(model).toHaveAttribute('data-fill', 'true');
+  view.rerender(
+    <MemoryRouter>
+      <ChatStage {...props} capabilities={vrm} thinking />
+    </MemoryRouter>,
+  );
+  expect(screen.getByLabelText('VRM 头像')).toHaveAttribute(
+    'data-state',
+    'speaking',
+  );
+  view.rerender(
+    <MemoryRouter>
+      <ChatStage {...props} capabilities={vrm} speaking={false} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByLabelText('VRM 头像')).toHaveAttribute(
+    'data-state',
+    'idle',
+  );
 });

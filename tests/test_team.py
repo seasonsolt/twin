@@ -510,8 +510,8 @@ def test_a_deleted_twin_is_not_synced(web: TestClient, monkeypatch: pytest.Monke
     libraries = web.app.state.libraries  # type: ignore[attr-defined]
     li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
     pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
-    until(lambda: open_twin(web, pid))
-    assert web.delete(f"/api/personas/{pid}", headers=HEADERS).status_code == 200
+    # Deleting answers 409 while any background job of the twin is still running, which can outlast memory_updating.
+    until(lambda: web.delete(f"/api/personas/{pid}", headers=HEADERS).status_code == 200)
     synced: list[str] = []
     monkeypatch.setattr(libraries, "sync", lambda owner, persona_id: synced.append(persona_id))
     with libraries.library("local").transaction() as db:

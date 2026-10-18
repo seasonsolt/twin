@@ -1,32 +1,28 @@
-import { useId, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { useId, useRef, useState } from 'react';
 import {
   Badge,
   Button,
   Card,
+  Dialog,
+  Stack,
   Text,
+  TextLink,
   Textarea,
   toast,
 } from '../../components/ui';
 import { cn } from '../../lib/utils';
-import { useMotionPreset } from '../../design/motion';
 import { api } from '../../lib/api';
 import { useCanManage } from '../../stores/personas';
 import type { Citation } from './types';
 
+/** A card's heading: where the words come from, with the place in a file. */
 function citationLabel(citation: Citation): string {
-  if (citation.kind === 'item') return citation.facet || '档案';
   if (citation.kind === 'file')
     return (
       [citation.file_name, citation.locator].filter(Boolean).join(' · ') ||
       '附件'
     );
-  const when = [citation.date, citation.channel].filter(Boolean).join(' · ');
-  if (citation.kind === 'ledger')
-    return [`账本 · ${citation.ledger_kind ?? '条目'}`, when]
-      .filter(Boolean)
-      .join(' · ');
-  return when || '原话';
+  return citationSource(citation);
 }
 
 /** A memory the answer drew on, which the person can correct or remove right where they saw it go wrong. */
@@ -168,53 +164,91 @@ export function CitationCard({
   );
 }
 
-export function Citations({ cited = [] }: { cited?: Citation[] }) {
+/** "10 月 15 日" for an ISO date this year, "2024 年 1 月 1 日" for another year; anything else as it came. */
+function day(date: string | null | undefined) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date ?? '');
+  if (!match) return date || '';
+  const [, year, month, dayOfMonth] = match.map(Number);
+  const year_ = year === new Date().getFullYear() ? '' : `${year} 年 `;
+  return `${year_}${month} 月 ${dayOfMonth} 日`;
+}
+
+/** Where the first piece of evidence comes from, in a few words: the meeting and the day, the file, the memory. */
+function citationSource(citation: Citation): string {
+  if (citation.kind === 'item') return citation.facet || '档案';
+  if (citation.kind === 'file') return citation.file_name || '附件';
+  const when = [citation.channel, day(citation.date)]
+    .filter(Boolean)
+    .join(' · ');
+  if (citation.kind === 'ledger')
+    return [`承诺账本 · ${citation.ledger_kind ?? '条目'}`, when]
+      .filter(Boolean)
+      .join(' · ');
+  return when || '原话';
+}
+
+/** The line under an answer saying what it rests on: "依据 · 产品周会 · 10 月 15 日 等 2 处". */
+export function citationSummary(cited: Citation[]) {
+  return `依据 · ${citationSource(cited[0])}${cited.length > 1 ? ` 等 ${cited.length} 处` : ''}`;
+}
+
+/**
+ * What an answer rests on, as one line under it; clicking it opens the original words in a layer at the right edge,
+ * where a memory that went wrong can be corrected. Closing it returns to the conversation where it was.
+ * ``note`` says beside the evidence what kind of answer it supports.
+ */
+export function Citations({
+  cited = [],
+  note,
+}: {
+  cited?: Citation[];
+  note?: string;
+}) {
   // Only the person behind the twin can change what it remembers; a visitor just sees the evidence.
   const editable = useCanManage();
   const [open, setOpen] = useState(false);
-  const id = useId();
-  const { reduced, transition, exit } = useMotionPreset('gentle');
+  const trigger = useRef<HTMLButtonElement>(null);
   if (!cited.length) return null;
   return (
-    <div className="contents">
-      <Button
-        variant="ghost"
+    <>
+      <TextLink
+        ref={trigger}
         size="sm"
-        className="citation-toggle min-h-11 px-1"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen(!open)}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
       >
-        <Badge className="border-primary text-primary">
-          依据 {cited.length}
-        </Badge>
-      </Button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            id={id}
-            initial={{ opacity: 0, ...(reduced ? {} : { height: 0 }) }}
-            animate={{ opacity: 1, ...(reduced ? {} : { height: 'auto' }) }}
-            exit={{
-              opacity: 0,
-              ...(reduced ? {} : { height: 0 }),
-              transition: exit,
-            }}
-            transition={transition}
-            className="order-last w-full overflow-hidden"
-          >
-            <ul aria-label="回答依据" className="space-y-2 py-2">
-              {cited.map((citation) => (
-                <CitationCard
-                  key={citation.id}
-                  citation={citation}
-                  editable={editable}
-                />
-              ))}
-            </ul>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+        {citationSummary(cited)}
+      </TextLink>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title="回答依据"
+        variant="side"
+        // Back to the line that opened it, so the conversation is where the reader left it.
+        onCloseAutoFocus={(event) => {
+          if (trigger.current?.isConnected) {
+            event.preventDefault();
+            trigger.current.focus();
+          }
+        }}
+      >
+        <Stack gap={3}>
+          {note && (
+            <Text size="sm" tone="secondary">
+              {note}
+            </Text>
+          )}
+          <Stack as="ul" gap={2} aria-label="回答依据">
+            {cited.map((citation) => (
+              <CitationCard
+                key={citation.id}
+                citation={citation}
+                editable={editable}
+              />
+            ))}
+          </Stack>
+        </Stack>
+      </Dialog>
+    </>
   );
 }

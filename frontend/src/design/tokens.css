@@ -997,7 +997,7 @@
 .reply-details summary::-webkit-details-marker {
   display: none;
 }
-.reply-details[open] summary > span:last-child svg {
+.reply-details[open] summary svg {
   transform: rotate(180deg);
 }
 .reply-details summary svg {

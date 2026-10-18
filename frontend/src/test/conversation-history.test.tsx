@@ -110,8 +110,11 @@ it('creates on first send, sends the id, starts fresh without deleting, and reop
   expect(
     screen.queryByRole('button', { name: '让本人说这句' }),
   ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '依据 1' }));
-  expect(await screen.findByText('保存的依据')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: /^依据 · / }));
+  const evidence = await screen.findByRole('dialog', { name: '回答依据' });
+  expect(within(evidence).getByText('保存的依据')).toBeVisible();
+  fireEvent.click(within(evidence).getByRole('button', { name: '关闭' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   fireEvent.click(screen.getByRole('button', { name: '新对话' }));
   expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeNull();
   expect(server.rows.size).toBe(1);

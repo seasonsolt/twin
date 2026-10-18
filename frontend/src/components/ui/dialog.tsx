@@ -48,8 +48,10 @@ export function Dialog({
   className?: string;
   exitTransition?: Transition;
   popover?: boolean;
-  /** center: a box in the middle of the screen. sheet: pinned to the bottom edge, full width (for phones). */
-  variant?: 'center' | 'sheet';
+  /** center: a box in the middle of the screen. sheet: pinned to the bottom edge, full width (for phones). side: a
+   * full-height layer at the right edge, for reading something beside the page (the evidence of an answer); closing
+   * it leaves the page where it was. */
+  variant?: 'center' | 'sheet' | 'side';
   /** For a popover placed next to its trigger: the position the page measured. Replaces the centring. */
   anchor?: DialogAnchor;
 }) {
@@ -67,7 +69,13 @@ export function Dialog({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={exit}
-                className="fixed inset-0 z-40 bg-black/25 backdrop-blur-sm"
+                // Beside a side layer the page stays readable: what it is read against is right there.
+                className={cn(
+                  'fixed inset-0 z-40',
+                  variant === 'side'
+                    ? 'bg-black/10'
+                    : 'bg-black/25 backdrop-blur-sm',
+                )}
               />
             </RadixDialog.Overlay>
           )}
@@ -85,11 +93,21 @@ export function Dialog({
               <motion.div
                 key="dialog"
                 style={anchor && { ...anchor, translate: 'none' }}
-                initial={{ opacity: 0, scale: reduced ? 1 : 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
+                initial={
+                  variant === 'side'
+                    ? { opacity: 0, x: reduced ? 0 : 24 }
+                    : { opacity: 0, scale: reduced ? 1 : 0.96 }
+                }
+                animate={
+                  variant === 'side'
+                    ? { opacity: 1, x: 0 }
+                    : { opacity: 1, scale: 1 }
+                }
                 exit={{
                   opacity: 0,
-                  scale: reduced ? 1 : 0.98,
+                  ...(variant === 'side'
+                    ? { x: reduced ? 0 : 16 }
+                    : { scale: reduced ? 1 : 0.98 }),
                   transition: exitTransition ?? exit,
                 }}
                 transition={transition}
@@ -97,7 +115,9 @@ export function Dialog({
                   'fixed z-50 max-h-[85dvh] overflow-y-auto border border-border bg-canvas text-primary shadow-elevation-3',
                   variant === 'sheet'
                     ? 'top-auto right-0 bottom-0 left-0 w-full rounded-t-lg p-4 pb-[max(16px,env(safe-area-inset-bottom))]'
-                    : 'top-1/2 left-1/2 w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 rounded-lg p-6',
+                    : variant === 'side'
+                      ? 'top-0 right-0 bottom-0 h-dvh max-h-dvh w-[min(440px,100%)] rounded-l-lg p-6 pb-[max(24px,env(safe-area-inset-bottom))]'
+                      : 'top-1/2 left-1/2 w-[min(440px,calc(100%_-_32px))] -translate-x-1/2 -translate-y-1/2 rounded-lg p-6',
                   className,
                 )}
               >

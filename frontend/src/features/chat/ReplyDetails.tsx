@@ -1,13 +1,62 @@
 import { ChevronDown } from 'lucide-react';
-import { Text } from '../../components/ui';
+import { Badge, Row, Text, type Tone } from '../../components/ui';
+import { Citations } from './Citations';
 import type { ChatReply } from './types';
 
-const modeLabels: Record<NonNullable<ChatReply['mode']>, string> = {
-  grounded: '结合档案资料',
-  general: '通用回答',
-  inferred: '基于档案推测',
-  abstain: '未形成确定结论',
+type Mode = NonNullable<ChatReply['mode']>;
+
+/** What kind of answer this is, said where it is read: the boundary of the answer, never a confidence score. */
+const modes: Record<Mode, { label: string; tone: Tone; note: string }> = {
+  grounded: {
+    label: '有本人资料支持',
+    tone: 'success',
+    note: '这条回答来自下面这些资料。',
+  },
+  inferred: {
+    label: '根据资料推测，不是本人原话',
+    tone: 'warning',
+    note: '本人没有直接说过这件事，回答是根据下面的资料推测的。',
+  },
+  general: {
+    label: '通用建议，不代表本人观点',
+    tone: 'neutral',
+    note: '资料里没有本人对这件事的看法，回答是通用建议，下面是参考过的资料。',
+  },
+  abstain: {
+    label: '资料不足，需要问本人',
+    tone: 'warning',
+    note: '资料不足以回答，下面是找到的相关内容。',
+  },
 };
+
+export function replyMode(reply: ChatReply) {
+  return modes[reply.mode ?? (reply.abstain ? 'abstain' : 'grounded')];
+}
+
+/**
+ * The line under an answer: what kind of answer it is and what it rests on. A grounded answer without evidence to
+ * show says only that it drew on the profile.
+ */
+export function ReplyBasis({ reply }: { reply: ChatReply }) {
+  const cited = reply.cited ?? [];
+  const mode = replyMode(reply);
+  const grounded = (reply.mode ?? 'grounded') === 'grounded' && !reply.abstain;
+  return (
+    <Row gap={2} wrap role="group" aria-label="回答依据摘要">
+      {grounded && !cited.length ? (
+        <Badge>结合档案资料</Badge>
+      ) : (
+        <Badge tone={mode.tone}>{mode.label}</Badge>
+      )}
+      {(reply.mode === 'abstain' || reply.abstain) && reply.abstain_reason && (
+        <Text as="span" size="xs" tone="secondary">
+          {reply.abstain_reason}
+        </Text>
+      )}
+      <Citations cited={cited} note={mode.note} />
+    </Row>
+  );
+}
 
 function formatElapsed(milliseconds: number) {
   if (milliseconds < 1000) return `${Math.round(milliseconds)} 毫秒`;
@@ -19,6 +68,7 @@ function formatElapsed(milliseconds: number) {
   return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
 }
 
+/** How the answer was made, for whoever wants to know: closed, and quieter than the answer and its evidence. */
 export function ReplyDetails({ reply }: { reply: ChatReply }) {
   const elapsed = reply.elapsed_ms;
   const completed = reply.completed_at ? new Date(reply.completed_at) : null;
@@ -48,16 +98,10 @@ export function ReplyDetails({ reply }: { reply: ChatReply }) {
       <Text
         as="summary"
         size="xs"
-        tone="secondary"
-        className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1"
+        tone="tertiary"
+        className="inline-flex min-h-11 items-center gap-1"
       >
-        <span>
-          生成用时 {formatElapsed(elapsed)} ·{' '}
-          <time dateTime={reply.completed_at}>{clock} 完成</time>
-        </span>
-        <span className="inline-flex items-center gap-1 text-primary">
-          处理摘要 <ChevronDown size={14} aria-hidden />
-        </span>
+        处理详情 <ChevronDown size={14} aria-hidden />
       </Text>
       <Text
         as="div"
@@ -65,10 +109,10 @@ export function ReplyDetails({ reply }: { reply: ChatReply }) {
         tone="secondary"
         className="reply-details-content space-y-1 border-l-2 border-accent/40 py-2 pl-3"
       >
-        <p>回答方式：{modeLabels[reply.mode ?? 'grounded']}</p>
-        {reply.mode === 'abstain' && (
-          <p>原因：{reply.abstain_reason || '模型未说明具体原因'}</p>
-        )}
+        <p>
+          生成用时 {formatElapsed(elapsed)} ·{' '}
+          <time dateTime={reply.completed_at}>{clock} 完成</time>
+        </p>
         {profileCitations > 0 && <p>记忆依据 {profileCitations} 条</p>}
         {fileCitations > 0 && <p>附件依据 {fileCitations} 条</p>}
         {profileCitations === 0 && fileCitations === 0 && (

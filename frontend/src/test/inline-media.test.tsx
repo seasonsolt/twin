@@ -266,7 +266,7 @@ it.each(['grounded', 'general', 'inferred', 'abstain'] as const)(
     expect(within(article).getByText('先听听').tagName).toBe('STRONG');
     expect(article).not.toHaveClass('text-secondary');
     expect(
-      within(article).getByRole('button', { name: '依据 1' }),
+      within(article).getByRole('button', { name: /^依据 · 价值观$/ }),
     ).toBeVisible();
     expect(article).toHaveClass('min-w-0');
     expect(article.querySelector('img, video')).toBeNull();
@@ -284,9 +284,9 @@ it.each(['grounded', 'general', 'inferred', 'abstain'] as const)(
     expect(
       screen.getByRole('button', { name: '让本人说这句' }),
     ).toHaveAttribute('data-generating', 'true');
-    expect(screen.getByRole('group', { name: '回复媒体' })).toHaveClass(
-      'min-w-0',
-    );
+    expect(
+      screen.getByRole('group', { name: '回复媒体' }).parentElement,
+    ).toHaveClass('min-w-0');
     fireEvent.click(screen.getByRole('button', { name: '让本人说这句' }));
     await waitFor(() => expect(count('/api/media/audio')).toBeGreaterThan(0));
     expect(view.container.querySelectorAll('audio')).toHaveLength(1);

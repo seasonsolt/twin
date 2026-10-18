@@ -18,7 +18,7 @@ import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { conversationServer } from './conversationServer';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyDetails } from '../features/chat/ReplyDetails';
+import { ReplyBasis } from '../features/chat/ReplyDetails';
 import type { ChatReply } from '../features/chat/types';
 
 vi.mock('motion/react', async (original) => {
@@ -270,6 +270,8 @@ it('shows reply generation time and expandable answer processing summary', async
     streamController.enqueue(
       encode('final', {
         ...reply,
+        mode: 'grounded',
+        abstain: false,
         elapsed_ms: 2350,
         completed_at: '2026-10-13T12:34:00.000Z',
         cited: [
@@ -288,20 +290,24 @@ it('shows reply generation time and expandable answer processing summary', async
   });
 
   const article = screen.getByRole('article', { name: '分身回复' });
-  expect(article).toHaveTextContent(/生成用时 2\.4 秒 · .* 完成/);
-  const summary = within(article).getByText('处理摘要');
+  // The kind of answer and its evidence are read with it; how it was made waits behind 处理详情.
+  expect(within(article).getByText('有本人资料支持')).toBeVisible();
+  expect(
+    within(article).getByRole('button', { name: /^依据 · 访谈 · .*等 2 处$/ }),
+  ).toBeVisible();
+  const summary = within(article).getByText('处理详情');
   const disclosure = summary.closest('details')!;
   expect(disclosure).not.toHaveAttribute('open');
   await userEvent.setup().click(summary);
   expect(disclosure).toHaveAttribute('open');
-  expect(disclosure).toHaveTextContent('回答方式：结合档案资料');
+  expect(disclosure).toHaveTextContent(/生成用时 2\.4 秒 · .* 完成/);
   expect(disclosure).toHaveTextContent('记忆依据 1 条');
   expect(disclosure).toHaveTextContent('附件依据 1 条');
 });
 
 it('explains an abstaining reply without implying all source material is missing', () => {
   render(
-    <ReplyDetails
+    <ReplyBasis
       reply={{
         reply: '我先说能确定的部分。',
         citations: [],
@@ -316,9 +322,9 @@ it('explains an abstaining reply without implying all source material is missing
     />,
   );
 
-  fireEvent.click(screen.getByText('处理摘要'));
-  expect(screen.getByText('回答方式：未形成确定结论')).toBeInTheDocument();
-  expect(screen.getByText('原因：模型未说明具体原因')).toBeInTheDocument();
+  expect(screen.getByText('资料不足，需要问本人')).toBeVisible();
+  // No evidence to show: no evidence line, and nothing claims every source is missing.
+  expect(screen.queryByRole('button', { name: /^依据/ })).toBeNull();
 });
 
 it.each([false, true])(
@@ -436,11 +442,10 @@ it('streams progressively, hides thinking on the first delta, then replaces text
     within(abstention).getByRole('button', { name: '让测试人说这句' }),
   ).toBeVisible();
   expect(
-    within(abstention).getByRole('button', { name: '依据 1' }),
+    within(abstention).getByRole('button', { name: /^依据 · 访谈/ }),
   ).toBeVisible();
-  expect(
-    screen.queryByText(/置信度|需要本人确认|通用回答/),
-  ).not.toBeInTheDocument();
+  expect(within(abstention).getByText('资料不足，需要问本人')).toBeVisible();
+  expect(screen.queryByText(/置信度|%/)).not.toBeInTheDocument();
   expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
   expect(document.querySelector('input[type="date"]')).toBeNull();
   expect(
@@ -483,7 +488,9 @@ it('replaces draft text with guarded final text, attaches citations and starts v
   });
   expect(screen.getByLabelText('分身回复')).toHaveTextContent('修正后的回复');
   expect(screen.queryByText('不正确的初稿')).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '依据 1' })).toBeInTheDocument();
+  expect(
+    screen.getByRole('button', { name: /^依据 · 访谈/ }),
+  ).toBeInTheDocument();
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy();
   expect(
@@ -491,7 +498,7 @@ it('replaces draft text with guarded final text, attaches citations and starts v
   ).toHaveLength(1);
 });
 
-it('marks an inferred reply with a neutral badge and no confidence', async () => {
+it("says an inferred reply is not the person's own words, with no confidence", async () => {
   sessionStorage.setItem(
     CHAT_KEY,
     JSON.stringify([
@@ -514,13 +521,11 @@ it('marks an inferred reply with a neutral badge and no confidence', async () =>
   expect(screen.getByLabelText('分身回复')).toHaveTextContent(
     '我没直接说过，但按我的习惯，大概会选 B。',
   );
-  expect(screen.getByText('推测 · 非本人表达')).toBeVisible();
-  expect(
-    screen.queryByText(/通用回答|置信度|需要本人确认/),
-  ).not.toBeInTheDocument();
+  expect(screen.getByText('根据资料推测，不是本人原话')).toBeVisible();
+  expect(screen.queryByText(/置信度|%/)).not.toBeInTheDocument();
 });
 
-it('renders general reply text without mode or confidence badges', async () => {
+it("says a general reply is not the person's view, with no confidence", async () => {
   sessionStorage.setItem(
     CHAT_KEY,
     JSON.stringify([
@@ -543,9 +548,8 @@ it('renders general reply text without mode or confidence badges', async () => {
   expect(screen.getByLabelText('分身回复')).toHaveTextContent(
     '这不是我本人的经验，一般来说先做预算。',
   );
-  expect(
-    screen.queryByText(/通用回答|置信度|需要本人确认/),
-  ).not.toBeInTheDocument();
+  expect(screen.getByText('通用建议，不代表本人观点')).toBeVisible();
+  expect(screen.queryByText(/置信度|%/)).not.toBeInTheDocument();
   expect(document.querySelector('time')).toBeNull();
   expect(
     await screen.findByRole('button', { name: '让测试人说这句' }),
@@ -887,28 +891,32 @@ it.each([true, false])(
     const bubble = article.querySelector('.twin-bubble')!;
     const row = screen.getByRole('group', { name: '回复媒体' });
     const play = await screen.findByRole('button', { name: '让测试人说这句' });
-    const citations = screen.getByRole('button', { name: '依据 1' });
+    const citations = screen.getByRole('button', { name: /^依据 · 访谈/ });
+    const basis = screen.getByRole('group', { name: '回答依据摘要' });
     expect(bubble.querySelector('button')).toBeNull();
-    expect(row.parentElement).toBe(article);
+    // Under the bubble, one line: what the answer rests on, then the voice at the end.
+    expect(row.parentElement?.parentElement).toBe(article);
+    expect(row.parentElement).toContainElement(basis);
     expect(row).toContainElement(play);
-    expect(row).toContainElement(citations);
-    expect(row).toHaveClass('flex', 'justify-end', 'items-center');
+    expect(basis).toContainElement(citations);
+    expect(row).toHaveClass('ml-auto', 'items-center');
     expect(play).toHaveClass('min-h-11', 'min-w-11');
-    expect(citations.querySelector('span')).toHaveClass(
-      'border',
-      'rounded-full',
-    );
     expect(bubble.querySelectorAll('p')).toHaveLength(2);
     // Top-aligned like ChatGPT: the thread starts at the top, not above the composer.
     const conversation = view.container.querySelector('.chat-conversation');
     expect(conversation).toHaveClass('flex', 'flex-col');
     expect(conversation).not.toHaveClass('justify-end');
     await userEvent.setup().click(citations);
-    expect(screen.getByRole('list', { name: '回答依据' })).toBeVisible();
+    expect(
+      within(screen.getByRole('dialog', { name: '回答依据' })).getByRole(
+        'list',
+        { name: '回答依据' },
+      ),
+    ).toBeVisible();
   },
 );
 
-it('citation disclosure expands and collapses using keyboard and shows every citation kind', async () => {
+it('opens the evidence in a side layer from the keyboard, shows every citation kind, and returns focus on close', async () => {
   render(
     <Citations
       cited={[
@@ -918,7 +926,7 @@ it('citation disclosure expands and collapses using keyboard and shows every cit
           id: 'le_1',
           kind: 'ledger',
           ledger_kind: '承诺',
-          date: '2026-10-12',
+          date: '2023-10-12',
           channel: '周一经营会',
           text: '我周五前给您一版新报价方案',
         },
@@ -933,27 +941,27 @@ it('citation disclosure expands and collapses using keyboard and shows every cit
     />,
   );
   const user = userEvent.setup();
-  const disclosure = screen.getByRole('button', { name: '依据 4' });
-  expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  const evidence = screen.getByRole('button', {
+    name: '依据 · 访谈 · 2024 年 1 月 1 日 等 4 处',
+  });
+  expect(evidence).toHaveAttribute('aria-haspopup', 'dialog');
   await user.tab();
+  expect(evidence).toHaveFocus();
   await user.keyboard('{Enter}');
-  expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-  expect(screen.getByRole('list', { name: '回答依据' })).toHaveAttribute(
-    'aria-label',
-    '回答依据',
-  );
-  await waitFor(() =>
-    expect(screen.getByText('2024-01-01 · 访谈')).toBeVisible(),
-  );
-  expect(screen.getByText('价值观')).toBeVisible();
+  const layer = await screen.findByRole('dialog', { name: '回答依据' });
+  expect(within(layer).getByRole('list', { name: '回答依据' })).toBeVisible();
+  expect(within(layer).getByText('访谈 · 2024 年 1 月 1 日')).toBeVisible();
+  expect(within(layer).getByText('价值观')).toBeVisible();
   expect(
-    screen.getByText('账本 · 承诺 · 2026-10-12 · 周一经营会'),
+    within(layer).getByText(
+      '承诺账本 · 承诺 · 周一经营会 · 2023 年 10 月 12 日',
+    ),
   ).toBeVisible();
-  expect(screen.getByText('合同.txt · 摘录 1')).toBeVisible();
-  expect(screen.getByText('我周五前给您一版新报价方案')).toBeVisible();
-  await user.keyboard(' ');
-  expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  expect(within(layer).getByText('合同.txt · 摘录 1')).toBeVisible();
+  expect(within(layer).getByText('我周五前给您一版新报价方案')).toBeVisible();
+  await user.keyboard('{Escape}');
   await waitFor(() =>
-    expect(screen.queryByRole('list')).not.toBeInTheDocument(),
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
   );
+  expect(evidence).toHaveFocus();
 });

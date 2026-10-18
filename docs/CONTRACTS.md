@@ -142,8 +142,10 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   judgements of specific other people never use it. Finalization requires at least one valid citation (otherwise the
   reply becomes `abstain` with confidence ≤ 0.3), caps confidence at `INFERRED_CONFIDENCE_CAP` (0.5, also enforced by
   `ChatReply`), and treats `answered=false` like a grounded miss. When the question fixes the output format (e.g. only
-  an option label) the text may be just that; the inference status then lives in `mode`. The frontend shows a neutral
-  `推测 · 非本人表达` badge, MCP/CLI append `（推测，非本人表达）` and WeCom a footer line; consumers that need the
+  an option label) the text may be just that; the inference status then lives in `mode`. The frontend states every reply's
+  mode in the line under it (`有本人资料支持` / `根据资料推测，不是本人原话` / `通用建议，不代表本人观点` /
+  `资料不足，需要问本人`, never a confidence figure) beside the evidence summary, whose side layer shows the original
+  words; MCP/CLI append `（推测，非本人表达）` and WeCom a footer line; consumers that need the
   owner's own view must not treat `inferred` as `grounded`.
 - `ChatDraft.asked` names the item the question wants and `answered` (default `true`) says whether the text supplies it.
   A `grounded` draft with `answered=false` is finalized as `abstain` (confidence capped at 0.3, reason defaults to the

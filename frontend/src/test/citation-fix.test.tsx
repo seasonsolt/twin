@@ -40,7 +40,7 @@ afterEach(() => {
 const open = async () => {
   const user = userEvent.setup();
   render(<Citations cited={cited} />);
-  await user.click(screen.getByRole('button', { name: '依据 2' }));
+  await user.click(screen.getByRole('button', { name: /^依据 · / }));
   return { user, list: screen.getByRole('list', { name: '回答依据' }) };
 };
 const sent = () =>

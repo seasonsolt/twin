@@ -39,6 +39,7 @@ import {
   Section,
   Select,
   SettingsDialog,
+  Dialog,
   Stack,
   Stat,
   StatusDot,
@@ -53,6 +54,7 @@ import {
 /** The page-level kit in the gallery: everything a page is built from, with no hand-written styles. */
 export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [gap, setGap] = useState<Gap>(3);
+  const [side, setSide] = useState(false);
   const [who, setWho] = useState('');
   const [sample, setSample] = useState(true);
   const [mine, setMine] = useState('all');
@@ -428,6 +430,29 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             打开设置弹窗
           </Button>
         </Row>
+        <Text size="sm" tone="secondary">
+          侧层 Dialog
+          variant=&quot;side&quot;：贴在右边、整屏高，用来在页面旁边读一样东西（回答的依据），关闭后页面还在原处。
+        </Text>
+        <Row gap={2}>
+          <Button
+            variant="secondary"
+            disabled={disabled}
+            onClick={() => setSide(true)}
+          >
+            打开侧层
+          </Button>
+        </Row>
+        <Dialog
+          open={side}
+          onOpenChange={setSide}
+          title="回答依据"
+          variant="side"
+        >
+          <Text size="sm">
+            产品周会 · 10 月 15 日：“先把上线日期定下来，再排人。”
+          </Text>
+        </Dialog>
         <SettingsDialog
           open={settings}
           onOpenChange={setSettings}

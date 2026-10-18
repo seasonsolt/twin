@@ -206,8 +206,11 @@ it('shows what a directly answered reply rests on, as chat does', async () => {
   await user.click(screen.getByRole('button', { name: '交代' }));
   const reply = await screen.findByRole('article', { name: '回复' });
   expect(within(reply).queryByText(/做了 \d+ 步/u)).toBeNull();
-  await user.click(within(reply).getByRole('button', { name: '依据 1' }));
-  const evidence = within(reply).getByRole('list', { name: '回答依据' });
+  await user.click(within(reply).getByRole('button', { name: /^依据 · / }));
+  // The evidence opens in a layer beside the reply, not inside it.
+  const evidence = within(
+    await screen.findByRole('dialog', { name: '回答依据' }),
+  ).getByRole('list', { name: '回答依据' });
   await waitFor(() =>
     expect(within(evidence).getByText('回款优先')).toBeVisible(),
   );

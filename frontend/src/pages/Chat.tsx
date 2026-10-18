@@ -3,7 +3,6 @@ import { useLocation } from 'react-router';
 import { ArrowUp, Paperclip, Play, X } from 'lucide-react';
 import { MessageList } from '../components/effects/MessageList';
 import {
-  Badge,
   Chip,
   EmptyState,
   FileInput,
@@ -17,9 +16,8 @@ import {
   Spacer,
   TypingIndicator,
 } from '../components/ui';
-import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyDetails } from '../features/chat/ReplyDetails';
+import { ReplyBasis, ReplyDetails } from '../features/chat/ReplyDetails';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
 import {
@@ -434,64 +432,62 @@ export function Chat() {
                                 }
                               />
                             </div>
-                            {turn.role === 'twin' && turn.reply && (
-                              <ReplyDetails reply={turn.reply} />
-                            )}
                             {turn.reply && (
                               <>
-                                <div
-                                  role="group"
-                                  aria-label="回复媒体"
-                                  className="reply-actions mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-2"
-                                >
-                                  {capabilities?.available && (
-                                    <PlainButton
-                                      shape="circle"
-                                      className="reply-play min-h-11 min-w-11"
-                                      aria-label={
-                                        (audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id && videoPlaying)
-                                          ? '正在说这句，点击暂停'
-                                          : `让${name}说这句`
-                                      }
-                                      aria-busy={
-                                        audio.id === turn.id && audio.loading
-                                      }
-                                      data-speaking={
-                                        (audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id && videoPlaying)
-                                      }
-                                      data-generating={
-                                        video.videos[turn.id]?.status ===
-                                        'generating'
-                                      }
-                                      onClick={() => toggleReply(turn)}
-                                    >
-                                      <span
-                                        className="reply-play-visual"
-                                        aria-hidden
+                                <div className="reply-actions mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                                  {turn.role === 'twin' && (
+                                    <ReplyBasis reply={turn.reply} />
+                                  )}
+                                  <div
+                                    role="group"
+                                    aria-label="回复媒体"
+                                    className="ml-auto flex items-center"
+                                  >
+                                    {capabilities?.available && (
+                                      <PlainButton
+                                        shape="circle"
+                                        className="reply-play min-h-11 min-w-11"
+                                        aria-label={
+                                          (audio.id === turn.id &&
+                                            audio.playing) ||
+                                          (videoId === turn.id && videoPlaying)
+                                            ? '正在说这句，点击暂停'
+                                            : `让${name}说这句`
+                                        }
+                                        aria-busy={
+                                          audio.id === turn.id && audio.loading
+                                        }
+                                        data-speaking={
+                                          (audio.id === turn.id &&
+                                            audio.playing) ||
+                                          (videoId === turn.id && videoPlaying)
+                                        }
+                                        data-generating={
+                                          video.videos[turn.id]?.status ===
+                                          'generating'
+                                        }
+                                        onClick={() => toggleReply(turn)}
                                       >
-                                        {(audio.id === turn.id &&
-                                          audio.playing) ||
-                                        (videoId === turn.id &&
-                                          videoPlaying) ? (
-                                          <span className="speaking-bars">
-                                            <i />
-                                            <i />
-                                            <i />
-                                          </span>
-                                        ) : (
-                                          <Play size={16} />
-                                        )}
-                                      </span>
-                                    </PlainButton>
-                                  )}
-                                  {turn.reply.mode === 'inferred' && (
-                                    <Badge>推测 · 非本人表达</Badge>
-                                  )}
-                                  <Citations cited={turn.reply.cited} />
+                                        <span
+                                          className="reply-play-visual"
+                                          aria-hidden
+                                        >
+                                          {(audio.id === turn.id &&
+                                            audio.playing) ||
+                                          (videoId === turn.id &&
+                                            videoPlaying) ? (
+                                            <span className="speaking-bars">
+                                              <i />
+                                              <i />
+                                              <i />
+                                            </span>
+                                          ) : (
+                                            <Play size={16} />
+                                          )}
+                                        </span>
+                                      </PlainButton>
+                                    )}
+                                  </div>
                                 </div>
                                 {capabilities?.available &&
                                   audio.id === turn.id && (
@@ -508,6 +504,9 @@ export function Chat() {
                                       {audio.errors[turn.id]}
                                     </Text>
                                   )}
+                                {turn.role === 'twin' && (
+                                  <ReplyDetails reply={turn.reply} />
+                                )}
                               </>
                             )}
                             {capabilities?.video?.available &&

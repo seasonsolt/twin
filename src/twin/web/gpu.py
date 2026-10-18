@@ -256,6 +256,13 @@ class GpuMonitor:
             return "向量接口返回了空向量"
         return None
 
+    def retarget(self, settings: Settings) -> None:
+        """After an administrator changed a service's address or model: check the services as configured now,
+        keeping the record of each one that did not change."""
+        with self._lock:
+            kept = {h.target: h for h in self.histories}
+            self.histories = [kept.get(target) or History(target) for target in targets(settings)]
+
     def _active(self) -> list[History]:
         return [h for h in self.histories if self.active(h.target.key)]
 

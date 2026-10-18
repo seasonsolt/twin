@@ -567,6 +567,33 @@ def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> 
     assert denied.status_code == 404 and denied.json() == {"detail": "分身不存在"}
 
 
+def test_sso_administrators_match_by_account_name(tmp_path: Path) -> None:
+    auth = Auth(
+        AuthSettings(
+            enabled=True,
+            provider="sso",
+            admin_emails=["ZhangXun@xjjk.com", "sso:7", "lisi"],
+            sso=SSOSettings(me_url="http://127.0.0.1:9/me", cookie="sso", login_url="/login"),
+        ),
+        tmp_path,
+    )
+    assert auth.identity("sso:1", "张", "zhangxun")["admin"]  # account name: the address before the @
+    assert auth.identity("sso:1", "张", "zhangxun@xjjk.com")["admin"]
+    assert auth.identity("sso:7")["admin"] and auth.identity("sso:2", None, "lisi")["admin"]
+    assert not auth.identity("sso:2", "张", "zhangxun2", "zhangxun@example.com")["admin"]
+    other = Auth(
+        AuthSettings(
+            enabled=True,
+            provider="sso",
+            admin_emails=["zhangxun@example.com"],
+            sso=SSOSettings(me_url="http://127.0.0.1:9/me", cookie="sso", login_url="/login"),
+        ),
+        tmp_path,
+    )
+    assert not other.identity("sso:1", None, "zhangxun")["admin"]  # only for an allowed domain
+    assert AuthSettings().admin_emails == ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"]
+
+
 def test_sso_login_service_down_means_signed_out(sso: tuple[TestClient, FakeLogin]) -> None:
     web, login = sso
     login.server.shutdown()

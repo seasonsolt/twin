@@ -42,6 +42,15 @@ class Backends:
         self._judges: list[Judge] | None = None
         self._work_model: Any = None
 
+    def reset(self) -> None:
+        """Forget every client, so the next call builds it from the settings and keys as they are now; a request
+        already holding a client finishes with it."""
+        with self._lock:
+            self._llm = self._chat_llm = None
+            self._embedder = None
+            self._judges = None
+            self._work_model = None
+
     def llm(self) -> LLM:
         with self._lock:
             if self._llm is None:

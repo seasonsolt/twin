@@ -34,6 +34,8 @@ import {
 import {
   failing,
   useSystem,
+  type AuditEntry,
+  type EditableModel,
   type ServiceCheck,
   type ServiceState,
   type SwitchName,
@@ -415,6 +417,132 @@ function ConfigRows({ rows }: { rows: [string, string][] }) {
   );
 }
 
+const failureText = (failure: unknown, fallback: string) =>
+  failure instanceof Error ? failure.message : fallback;
+
+function changedNote(model: EditableModel) {
+  return model.custom && model.changed_at
+    ? `${model.changed_by ?? '本机'} 于 ${clock(Date.parse(model.changed_at) / 1000)} 修改，代替 twin.toml 的设置。`
+    : '';
+}
+
+/** Points a model at another address or model name, used from the next request on. Hidden behind one button: the
+ * page is for reading the state, and changing it is the rare task. */
+function ModelEdit({ model, note }: { model: EditableModel; note?: string }) {
+  const put = useSystem((s) => s.put);
+  const [open, setOpen] = useState(false);
+  const [baseUrl, setBaseUrl] = useState(model.base_url ?? '');
+  const [name, setName] = useState(model.model ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setBaseUrl(model.base_url ?? '');
+    setName(model.model ?? '');
+  }, [model.base_url, model.model]);
+  if (model.locked)
+    return (
+      <Text size="xs" tone="tertiary">
+        {model.locked}
+      </Text>
+    );
+  const save = (json: object) => {
+    setBusy(true);
+    setError('');
+    put(`/api/admin/system/models/${model.name}`, json)
+      .then(() => setOpen(false))
+      .catch((failure: unknown) => setError(failureText(failure, '保存失败')))
+      .finally(() => setBusy(false));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    save({ base_url: baseUrl.trim() || null, model: name.trim() || null });
+  };
+  const id = `system-model-${model.name}`;
+  return (
+    <Stack gap={2}>
+      {changedNote(model) && (
+        <Text size="xs" tone="tertiary">
+          {changedNote(model)}
+        </Text>
+      )}
+      {open ? (
+        <form onSubmit={submit} aria-label={`修改 ${model.section}`}>
+          <Stack gap={4}>
+            <Field
+              id={`${id}-url`}
+              label="地址"
+              help="OpenAI 兼容地址，通常以 /v1 结尾；不要把密钥写进地址"
+            >
+              <Input
+                id={`${id}-url`}
+                inputMode="url"
+                spellCheck={false}
+                autoComplete="off"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </Field>
+            <Field id={`${id}-name`} label="模型名">
+              <Input
+                id={`${id}-name`}
+                spellCheck={false}
+                autoComplete="off"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </Field>
+            {note && (
+              <Notice tone="warning" title="换模型之后">
+                {note}
+              </Notice>
+            )}
+            <Row gap={2} wrap>
+              <Button type="submit" loading={busy}>
+                保存并立即生效
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setOpen(false);
+                  setError('');
+                  setBaseUrl(model.base_url ?? '');
+                  setName(model.model ?? '');
+                }}
+              >
+                取消
+              </Button>
+              {model.custom && (
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => save({})}
+                >
+                  恢复 twin.toml 的设置
+                </Button>
+              )}
+            </Row>
+          </Stack>
+        </form>
+      ) : (
+        <Row gap={2} wrap>
+          <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+            修改地址和模型
+          </Button>
+        </Row>
+      )}
+      {error && (
+        <Text role="alert" size="sm" tone="danger">
+          {error}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+const EMBED_NOTE =
+  '已有的检索向量会按新模型重新生成，完成前检索只按字面匹配；生成在后台进行，不影响聊天。';
+
 function ServicePane({
   name,
   state,
@@ -423,6 +551,7 @@ function ServicePane({
   state: SystemState;
 }) {
   const service = state.services.find((s) => s.key === name);
+  const embedModel = state.editable_models?.find((m) => m.name === 'embed');
   return (
     <Stack gap={6}>
       {name === 'tts' && (
@@ -440,6 +569,9 @@ function ServicePane({
         )}
       </Section>
       <ConfigRows rows={state.config[name]} />
+      {name === 'embed' && embedModel && (
+        <ModelEdit model={embedModel} note={EMBED_NOTE} />
+      )}
     </Stack>
   );
 }
@@ -537,7 +669,91 @@ function QuotaForm({ quota }: { quota: SystemState['quota'] }) {
   );
 }
 
+/** Replaces or removes one key. The field starts empty and the value is never shown again, here or anywhere. */
+function KeyForm({
+  env,
+  isSet,
+  file,
+  onDone,
+}: {
+  env: string;
+  isSet: boolean;
+  file: string;
+  onDone: () => void;
+}) {
+  const put = useSystem((s) => s.put);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const save = (json: object) => {
+    setBusy(true);
+    setError('');
+    put(`/api/admin/system/keys/${env}`, json)
+      .then(() => {
+        setValue('');
+        onDone();
+      })
+      .catch((failure: unknown) => setError(failureText(failure, '保存失败')))
+      .finally(() => setBusy(false));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (value.trim()) save({ value: value.trim() });
+  };
+  const id = `system-key-${env}`;
+  return (
+    <Card variant="outline" padding="md">
+      <form onSubmit={submit} aria-label={`设置 ${env}`}>
+        <Stack gap={4}>
+          <Field
+            id={id}
+            label={isSet ? `新的 ${env}` : env}
+            help={`保存后立即生效，写入服务器的 ${file}；之后这里也只显示“已设置”。`}
+            error={error || undefined}
+          >
+            <Input
+              id={id}
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              autoFocus
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          </Field>
+          <Row gap={2} wrap>
+            <Button type="submit" loading={busy} disabled={!value.trim()}>
+              保存
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={onDone}>
+              取消
+            </Button>
+            {isSet && (
+              <Button variant="danger" disabled={busy} onClick={() => save({})}>
+                移除这个密钥
+              </Button>
+            )}
+          </Row>
+        </Stack>
+      </form>
+    </Card>
+  );
+}
+
+function auditText(entry: AuditEntry) {
+  if (entry.action === 'key')
+    return `${entry.set ? '设置' : '移除'}了 ${entry.env ?? '密钥'}`;
+  if (entry.action === 'model' && entry.model && entry.address)
+    return `把 ${entry.section ?? '模型'} 改为 ${entry.address[1]} · ${entry.model[1] ?? '—'}`;
+  return '修改了系统设置';
+}
+
 function Tokens({ state }: { state: SystemState }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const editable = (section: string) =>
+    state.editable_models?.find((m) => m.section === section);
+  const file = state.env_file ?? '.env';
+  const editingKey = state.keys.find((key) => key.env === editing);
   return (
     <Stack gap={6}>
       <Section
@@ -551,38 +767,44 @@ function Tokens({ state }: { state: SystemState }) {
       <Section
         level={4}
         title="文字模型"
-        description="在 twin.toml 里修改，重启生效。"
+        description="改地址或模型名立即生效，所有分身一起；接口类型和其他参数在 twin.toml 里改。"
       >
         <Stack as="ul" gap={2}>
-          {state.models.map((model) => (
-            <Card as="li" key={model.section} variant="outline" padding="md">
-              <KeyValue
-                items={[
-                  ['用途', model.use],
-                  ['配置', model.section],
-                  ['接口', model.provider],
-                  ['模型', model.model],
-                  [
-                    '地址',
-                    <Row key="address" gap={2} wrap>
-                      {model.address}
-                      {model.external && <Badge tone="warning">外部</Badge>}
-                    </Row>,
-                  ],
-                ]}
-              />
-            </Card>
-          ))}
+          {state.models.map((model) => {
+            const edit = editable(model.section);
+            return (
+              <Card as="li" key={model.section} variant="outline" padding="md">
+                <Stack gap={3}>
+                  <KeyValue
+                    items={[
+                      ['用途', model.use],
+                      ['配置', model.section],
+                      ['接口', model.provider],
+                      ['模型', model.model],
+                      [
+                        '地址',
+                        <Row key="address" gap={2} wrap>
+                          {model.address}
+                          {model.external && <Badge tone="warning">外部</Badge>}
+                        </Row>,
+                      ],
+                    ]}
+                  />
+                  {edit && <ModelEdit model={edit} />}
+                </Stack>
+              </Card>
+            );
+          })}
         </Stack>
       </Section>
       <Section
         level={4}
         title="密钥"
-        description="密钥写在服务器的 .env 里，这里只显示是否已设置，不显示内容。"
+        description={`密钥写在服务器的 ${file} 里，这里只显示是否已设置，从不显示内容。`}
       >
         <Table
           caption="密钥"
-          headers={['环境变量', '用途', '状态']}
+          headers={['环境变量', '用途', '状态', '']}
           rows={state.keys.map((key) => [
             key.env,
             key.use,
@@ -595,9 +817,39 @@ function Tokens({ state }: { state: SystemState }) {
                 未设置
               </Badge>
             ),
+            <Button
+              key="edit"
+              variant="ghost"
+              size="sm"
+              aria-label={`${key.set ? '更换' : '设置'} ${key.env}`}
+              onClick={() => setEditing(key.env)}
+            >
+              {key.set ? '更换' : '设置'}
+            </Button>,
           ])}
         />
+        {editingKey && (
+          <KeyForm
+            key={editingKey.env}
+            env={editingKey.env}
+            isSet={editingKey.set}
+            file={file}
+            onDone={() => setEditing(null)}
+          />
+        )}
       </Section>
+      {state.audit && state.audit.length > 0 && (
+        <Section level={4} title="最近修改">
+          <Stack as="ul" gap={1}>
+            {state.audit.slice(0, 5).map((entry, index) => (
+              <Text as="li" key={index} size="xs" tone="secondary">
+                {clock(Date.parse(entry.at) / 1000)} {entry.by ?? '本机'}{' '}
+                {auditText(entry)}
+              </Text>
+            ))}
+          </Stack>
+        </Section>
+      )}
     </Stack>
   );
 }

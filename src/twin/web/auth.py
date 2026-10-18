@@ -131,11 +131,24 @@ class Auth:
         email = email.strip().lower()
         return email in self.settings.allowed_emails or email.rsplit("@", 1)[-1] in self.settings.allowed_domains
 
-    def identity(self, email: str | None, name: str | None = None) -> dict[str, Any]:
+    def is_admin(self, *names: str | None) -> bool:
+        """Whether any of these names an administrator. An SSO account name without a domain matches an
+        administrator's address in an allowed domain by its part before the @: account zhangxun is
+        zhangxun@xjjk.com."""
+        admins = set(self.settings.admin_emails)
+        for email in self.settings.admin_emails:
+            local, _, domain = email.partition("@")
+            if local and domain in self.settings.allowed_domains:
+                admins.add(local)
+        return any(name.strip().lower() in admins for name in names if name and name.strip())
+
+    def identity(self, email: str | None, name: str | None = None, *aliases: str | None) -> dict[str, Any]:
+        """``aliases``: other names the login service gives the same person (an SSO account name or address),
+        compared with the administrators."""
         return {
             "email": email,
             "name": name,
-            "admin": not self.settings.enabled or email in self.settings.admin_emails,
+            "admin": not self.settings.enabled or self.is_admin(email, *aliases),
             "auth_enabled": self.settings.enabled,
             "provider": self.settings.provider if self.settings.enabled else None,
         }
@@ -173,7 +186,8 @@ class Auth:
         identity = None
         if subject and payload.get("authenticated") is not False:
             name = str(payload.get("display_name") or payload.get("account") or "").strip() or None
-            identity = self.identity(f"sso:{subject}", name)
+            account, address = (str(payload.get(k) or "").strip() or None for k in ("account", "email"))
+            identity = self.identity(f"sso:{subject}", name, account, address)
             if subject not in self.sso_seen:
                 self.sso_seen.add(subject)
                 logger.info("SSO 登录：%s（账号 %s，twin 标识 sso:%s）", name, payload.get("account"), subject)
@@ -278,7 +292,7 @@ class Auth:
                 samesite="lax",
                 path=forwarded_prefix(request) + "/",
             )
-            return {"email": email, "admin": email in self.settings.admin_emails}
+            return {"email": email, "admin": self.is_admin(email)}
 
         @app.post("/api/auth/logout")
         def logout(request: Request, response: Response) -> dict[str, bool]:

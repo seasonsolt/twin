@@ -1,23 +1,11 @@
-import {
-  lazy,
-  startTransition,
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
-import {
-  Navigate,
-  useLocation,
-  useOutlet,
-  useSearchParams,
-} from 'react-router';
-import * as Popover from '@radix-ui/react-popover';
+import { lazy, startTransition, Suspense, useEffect, useState } from 'react';
+import { Navigate, useLocation, useOutlet } from 'react-router';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import {
   BookUser,
   Briefcase,
   ListChecks,
+  LogOut,
   MessageCircle,
   Mic,
   Settings2,
@@ -25,19 +13,12 @@ import {
 } from 'lucide-react';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { failing, startSystemPolling, useSystem } from '../../stores/system';
+import { SystemDialog, useOpenSystem } from '../../features/admin/SystemDialog';
 import {
-  SYSTEM_PARAM,
-  SystemDialog,
-  useOpenSystem,
-} from '../../features/admin/SystemDialog';
-import {
-  Button,
-  Card,
+  AccountMenu,
   Heading,
-  IconButton,
   NavPill,
   PlainButton,
-  RailButton,
   Skeleton,
   SkipLink,
   Text,
@@ -138,11 +119,6 @@ function TwinRail() {
     .sort((a, b) => rank(a) - rank(b))
     .slice(0, RAIL_SHORTCUTS);
   const hidden = others.length - shortcuts.length;
-  const identity = useAuth((state) => state.identity);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const accountButton = useRef<HTMLButtonElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   useEffect(() => {
     const load = () => void refresh().catch(() => {});
     load();
@@ -208,101 +184,70 @@ function TwinRail() {
       ].map(({ to, title, icon }) => (
         <NavPill key={to} to={to} icon={icon} label={title} />
       ))}
-      {identity?.admin && <SystemEntry />}
       <div className="my-3 border-t border-border" />
       <Navigation />
-      {identity?.auth_enabled && (
-        <div className="rail-account mt-auto pt-4 text-center">
-          <Popover.Root open={accountOpen} onOpenChange={setAccountOpen}>
-            <Popover.Trigger asChild>
-              <IconButton
-                ref={accountButton}
-                label="账户"
-                shape="circle"
-                size="lg"
-                className="rail-account-button mx-auto bg-primary text-canvas"
-              >
-                <Text as="span" size="lg" tone="inherit">
-                  {Array.from(
-                    accountLabel(identity).trim() || '?',
-                  )[0].toUpperCase()}
-                </Text>
-              </IconButton>
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content
-                side="right"
-                align="end"
-                sideOffset={12}
-                avoidCollisions
-                collisionPadding={12}
-                aria-label="账户"
-                onCloseAutoFocus={(event) => {
-                  event.preventDefault();
-                  accountButton.current?.focus();
-                }}
-                className="account-popover z-50"
-              >
-                <Card
-                  as="div"
-                  variant="outline"
-                  padding="sm"
-                  className="shadow-elevation-2"
-                >
-                  <Text size="xs" tone="secondary" className="mb-1">
-                    {accountLabel(identity)}
-                  </Text>
-                  {identity.provider !== 'sso' && (
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => {
-                        setBusy(true);
-                        setError('');
-                        void useAuth
-                          .getState()
-                          .logout()
-                          .catch((failure: unknown) =>
-                            setError(
-                              failure instanceof Error
-                                ? failure.message
-                                : '退出失败',
-                            ),
-                          )
-                          .finally(() => setBusy(false));
-                      }}
-                    >
-                      退出登录
-                    </Button>
-                  )}
-                  {error && (
-                    <p role="alert" className="break-words">
-                      {error}
-                    </p>
-                  )}
-                </Card>
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
-        </div>
-      )}
+      <RailAccount />
     </aside>
   );
 }
 
-/** The administrator's way into the system dialog; a red dot when a switched-on service is failing. */
-function SystemEntry() {
-  const open = useOpenSystem();
-  const [params] = useSearchParams();
+/** The account menu at the foot of the rail: who is signed in, the system settings for an administrator (a red dot
+ * when a switched-on service is failing), and signing out. Hidden when there is nothing to show. */
+function RailAccount() {
+  const identity = useAuth((state) => state.identity);
+  const openSystem = useOpenSystem();
   const down = useSystem((state) => failing(state.data).length);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!identity || (!identity.auth_enabled && !identity.admin)) return null;
+  const canSignOut = identity.auth_enabled && identity.provider !== 'sso';
   return (
-    <RailButton
-      icon={Settings2}
-      label="系统"
-      pressed={params.has(SYSTEM_PARAM)}
-      alert={down ? `${down} 项服务异常` : undefined}
-      onClick={() => open()}
-    />
+    <div className="rail-account mt-auto pt-4">
+      <AccountMenu
+        name={accountLabel(identity) || '本机'}
+        detail={identity.admin ? '管理员' : undefined}
+        error={error}
+        groups={[
+          identity.admin
+            ? [
+                {
+                  key: 'system',
+                  label: '系统设置',
+                  icon: Settings2,
+                  alert: down ? `${down} 项服务异常` : undefined,
+                  onSelect: () => openSystem(),
+                },
+              ]
+            : [],
+          canSignOut
+            ? [
+                {
+                  key: 'logout',
+                  label: '退出登录',
+                  icon: LogOut,
+                  danger: true,
+                  disabled: busy,
+                  onSelect: () => {
+                    setBusy(true);
+                    setError('');
+                    void useAuth
+                      .getState()
+                      .logout()
+                      .catch((failure: unknown) =>
+                        setError(
+                          failure instanceof Error
+                            ? failure.message
+                            : '退出失败',
+                        ),
+                      )
+                      .finally(() => setBusy(false));
+                  },
+                },
+              ]
+            : [],
+        ]}
+      />
+    </div>
   );
 }
 

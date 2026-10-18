@@ -112,7 +112,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # enabled = true
 # allowed_domains = ["xjjk.com"] # 只匹配 @ 后的完整域名，不匹配子域名
 # allowed_emails = ["seasonsolt@gmail.com"]
-# admin_emails = ["seasonsolt@gmail.com"]
+# admin_emails = ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"] # 也匹配 SSO 账号名 zhangxun；可写 sso:<subject>
 # session_days = 30
 # max_personas_per_member = 3   # 0 = 不限
 # [auth.smtp] # 465 使用 SSL，587 使用 STARTTLS；启用 auth 时必填
@@ -123,7 +123,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # from_name = "twin"
 # password_env = "TWIN_SMTP_PASSWORD" # 密码只在环境变量，绝不写入文件
 # 或借用同站另一个应用的登录（单点登录，不发邮件、不用 [auth.smtp]），见 deploy/daw/README.md：
-# provider = "sso"  # 写在 [auth] 里；能登录那个应用的人都能进入，管理员写 admin_emails = ["sso:<subject>"]
+# provider = "sso"  # 写在 [auth] 里；能登录那个应用的人都能进入，管理员按 SSO 账号名或 sso:<subject> 匹配 admin_emails
 # [auth.sso]
 # me_url = "http://127.0.0.1:8765/api/auth/me"  # 带着对方的会话 cookie 询问身份：200 已登录，401 未登录
 # cookie = "audio_studio_session"

@@ -38,7 +38,7 @@ CLI/MCP/评测继续使用配置数据库，不新增选择参数。
 
 Cloudflare Access 已移除，不读取任何 `Cf-Access-*` 身份头；应用本身是认证边界。保持服务只绑定 `127.0.0.1`，Cloudflare Tunnel 的 HTTPS 公网域名指向本机端口，并保留原 Host。用 `twin ui --allow-host twin.example.com` 接受自己的域名，不要将开发服务器或本机端口直接暴露到公网。
 
-1. 在 `twin.toml` 配置 `[auth] enabled = true`，填写 `allowed_domains`、`allowed_emails` 和 `admin_emails`（完整示例见 `twin.toml.example`）。域名仅匹配最后一个 `@` 后的完整部分，大小写不敏感；管理员邮箱也须在允许范围内。
+1. 在 `twin.toml` 配置 `[auth] enabled = true`，填写 `allowed_domains`、`allowed_emails` 和 `admin_emails`（完整示例见 `twin.toml.example`）。域名仅匹配最后一个 `@` 后的完整部分，大小写不敏感；管理员邮箱也须在允许范围内。不写 `admin_emails` 时默认管理员是 zhangxun@xjjk.com 和 qianjinwen@xjjk.com；用 SSO 登录时，允许域名里的地址也匹配 @ 前面的 SSO 账号名。
 2. 配置 `[auth.smtp]` 的 host、port（465 SSL / 587 STARTTLS）、username、from_address、from_name。`password_env = "TWIN_SMTP_PASSWORD"` 只写变量名；通过服务进程的环境安全传入密码，不存入配置或源码。启用登录但缺少 SMTP 配置/密码时启动失败。
 3. 重启服务应用配置变更。允许的用户收到 6 位验证码（10 分钟有效、5 次错误后失效）；未允许的邮箱加入等候名单，不发邮件。发送限额：每邮箱 60 秒一次、每小时 5 次，每客户端 IP 每小时 20 次（隧道使用 `CF-Connecting-IP`，否则使用连接地址）。内存限额按进程计算，部署使用单进程。
 

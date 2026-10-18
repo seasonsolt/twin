@@ -457,6 +457,8 @@ def register(
             with suppress(JobConflict):
                 jobs.submit("persona_build", "更新检索向量", reindex)
 
+    # Called after an administrator chose another embedding model in the system settings.
+    app.state.resume_index = resume_index
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

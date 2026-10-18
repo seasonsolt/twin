@@ -42,6 +42,32 @@ export interface SwitchState {
   changed_by: string | null;
 }
 
+export type ModelName = 'llm' | 'chat_llm' | 'embed';
+
+export interface EditableModel {
+  name: ModelName;
+  section: string;
+  use: string;
+  base_url: string | null;
+  model: string | null;
+  locked: string | null;
+  /** Changed here rather than taken from twin.toml. */
+  custom: boolean;
+  changed_at: string | null;
+  changed_by: string | null;
+}
+
+export interface AuditEntry {
+  at: string;
+  by: string | null;
+  action: 'model' | 'key' | string;
+  section?: string;
+  address?: [string, string];
+  model?: [string | null, string | null];
+  env?: string;
+  set?: boolean;
+}
+
 export interface SystemState {
   now: number;
   interval: number;
@@ -58,8 +84,14 @@ export interface SystemState {
     address: string;
     external: boolean;
   }[];
+  /** The models an administrator may point elsewhere; ``locked`` says why not when they cannot. */
+  editable_models?: EditableModel[];
   /** Key variables and whether each is set; never their values. */
   keys: { env: string; use: string; set: boolean }[];
+  /** The env file the keys are written to, by name. */
+  env_file?: string;
+  /** The latest changes made here, newest first; never a key's value. */
+  audit?: AuditEntry[];
   quota: {
     /** 0: no limit. */
     limit: number;

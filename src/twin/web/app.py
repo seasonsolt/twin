@@ -288,8 +288,8 @@ def create_app(
     and ``config.make_embedder(settings.embed)``; both are called lazily, once. ``synthesizer_factory`` defaults to
     ``config.make_synthesizer(settings.tts)`` and is also lazy, so speech failures do not affect other routes.
     ``work_model_factory`` defaults to work mode's LangChain model for the chat model settings.
-    Injected factories are offline test seams. All configured backends are used as configured;
-    restart the web server to apply configuration changes to cached backends.
+    Injected factories are offline test seams. A model address or key an administrator changes in the system
+    settings rebuilds the cached backends; other changes to twin.toml need a restart.
     ``allowed_hosts`` adds host names (besides localhost, 127.0.0.1 and [::1]) the server answers to, for
     ``twin ui --host <address>``."""
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
@@ -314,6 +314,18 @@ def create_app(
     app.state.system = system_settings
     monitor = gpu.GpuMonitor(settings, active=lambda key: key != "tts" or system_settings.enabled("tts"))
     app.state.gpu = monitor
+
+    def system_changed(what: str) -> None:
+        """A model's address or a key changed: build every client again; a new embedding model re-embeds each
+        twin's index (retrieval ranks by keywords meanwhile)."""
+        backends.reset()
+        monitor.retarget(settings)
+        if what == "embed":
+            for context in list(registry.apps.values()):
+                if resume := getattr(context.state, "resume_index", None):
+                    resume()
+
+    system_settings.listeners.append(system_changed)
     app.add_middleware(PersonaMiddleware, registry=registry)
     app.add_middleware(AuthMiddleware, auth=auth)
     app.add_middleware(
@@ -465,6 +477,7 @@ def create_app(
             avatar_factory=lambda: stored_avatar(resolved.db_path, resolved.avatar.preset),
             tts_off=lambda: system_settings.off("tts"),
             video_off=lambda: system_settings.off("video"),
+            generation=lambda: system_settings.generation,
         )
         return context
 

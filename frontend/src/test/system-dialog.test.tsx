@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import { Settings2 } from 'lucide-react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { RailButton } from '../components/ui';
+import { AccountMenu } from '../components/ui';
 import { SystemDialog } from '../features/admin/SystemDialog';
 import { useSystem, type SystemState } from '../stores/system';
 
@@ -92,10 +93,36 @@ beforeEach(() => {
         external: true,
       },
     ],
+    editable_models: [
+      {
+        name: 'llm',
+        section: '[llm]',
+        use: '整理记忆、校对转写',
+        base_url: 'https://llm.example.com/v1',
+        model: 'm-test',
+        locked: null,
+        custom: false,
+        changed_at: null,
+        changed_by: null,
+      },
+      {
+        name: 'embed',
+        section: '[embed]',
+        use: '检索向量',
+        base_url: 'http://127.0.0.1:18791/v1',
+        model: 'bge-m3',
+        locked: null,
+        custom: false,
+        changed_at: null,
+        changed_by: null,
+      },
+    ],
     keys: [
       { env: 'TWIN_LLM_KEY', use: '文字模型', set: true },
       { env: 'TWIN_TTS_KEY', use: '朗读服务', set: false },
     ],
+    env_file: '.env',
+    audit: [],
     quota: {
       limit: 1000,
       hours: 24,
@@ -123,6 +150,25 @@ beforeEach(() => {
                 enabled: (body as { enabled: boolean }).enabled,
               },
             },
+          };
+        const env = /\/keys\/(\w+)$/.exec(url)?.[1];
+        if (env)
+          state = {
+            ...state,
+            keys: state.keys.map((key) =>
+              key.env === env
+                ? { ...key, set: 'value' in (body as object) }
+                : key,
+            ),
+            audit: [
+              {
+                at: '2026-10-18T02:00:00+00:00',
+                by: 'zhangxun',
+                action: 'key',
+                env,
+                set: 'value' in (body as object),
+              },
+            ],
           };
         return json(state);
       }
@@ -209,16 +255,106 @@ it('names the keys without their values and saves the token quota', async () => 
   );
 });
 
-it('marks the rail entry when a service fails', () => {
+it('replaces a key in an empty password field and never shows its value', async () => {
+  const user = userEvent.setup();
+  show('tokens');
+  const keys = await screen.findByRole('table', { name: '密钥' });
+  await user.click(
+    within(keys).getByRole('button', { name: '设置 TWIN_TTS_KEY' }),
+  );
+  const form = screen.getByRole('form', { name: '设置 TWIN_TTS_KEY' });
+  const field = within(form).getByLabelText('TWIN_TTS_KEY');
+  expect(field).toHaveAttribute('type', 'password');
+  expect(field).toHaveValue('');
+  expect(within(form).getByRole('button', { name: '保存' })).toBeDisabled();
+  await user.type(field, 'sk-secret-test');
+  await user.click(within(form).getByRole('button', { name: '保存' }));
+  await vi.waitFor(() =>
+    expect(puts).toEqual([
+      {
+        url: '/api/admin/system/keys/TWIN_TTS_KEY',
+        body: { value: 'sk-secret-test' },
+      },
+    ]),
+  );
+  // The form closes, the table says it is set, and the value appears nowhere.
+  await vi.waitFor(() =>
+    expect(screen.queryByLabelText('TWIN_TTS_KEY')).toBeNull(),
+  );
+  expect(within(keys).getAllByText('已设置')).toHaveLength(2);
+  expect(document.body).not.toHaveTextContent('sk-secret-test');
+  expect(screen.getByText(/zhangxun 设置了 TWIN_TTS_KEY/)).toBeInTheDocument();
+
+  await user.click(
+    within(keys).getByRole('button', { name: '更换 TWIN_LLM_KEY' }),
+  );
+  await user.click(screen.getByRole('button', { name: '移除这个密钥' }));
+  await vi.waitFor(() =>
+    expect(puts.at(-1)).toEqual({
+      url: '/api/admin/system/keys/TWIN_LLM_KEY',
+      body: {},
+    }),
+  );
+});
+
+it('points a model elsewhere behind one button, and warns before changing the embedding model', async () => {
+  const user = userEvent.setup();
+  show('tokens');
+  await user.click(
+    await screen.findByRole('button', { name: '修改地址和模型' }),
+  );
+  const form = screen.getByRole('form', { name: '修改 [llm]' });
+  const name = within(form).getByLabelText('模型名');
+  expect(name).toHaveValue('m-test');
+  await user.clear(name);
+  await user.type(name, 'm-new');
+  await user.click(
+    within(form).getByRole('button', { name: '保存并立即生效' }),
+  );
+  await vi.waitFor(() =>
+    expect(puts).toEqual([
+      {
+        url: '/api/admin/system/models/llm',
+        body: { base_url: 'https://llm.example.com/v1', model: 'm-new' },
+      },
+    ]),
+  );
+  await user.click(screen.getByRole('button', { name: /向量服务/ }));
+  await user.click(
+    await screen.findByRole('button', { name: '修改地址和模型' }),
+  );
+  expect(screen.getByText(/重新生成/)).toBeInTheDocument();
+});
+
+it('keeps the system settings in the account menu and marks the account button when a service fails', async () => {
+  const user = userEvent.setup();
+  const open = vi.fn();
   render(
-    <RailButton
-      icon={Settings2}
-      label="系统"
-      alert="1 项服务异常"
-      onClick={() => {}}
+    <AccountMenu
+      name="张三"
+      detail="管理员"
+      groups={[
+        [
+          {
+            key: 'system',
+            label: '系统设置',
+            icon: Settings2,
+            alert: '1 项服务异常',
+            onSelect: open,
+          },
+        ],
+        [],
+      ]}
     />,
   );
-  expect(
-    screen.getByRole('button', { name: '系统（1 项服务异常）' }),
-  ).toBeInTheDocument();
+  const account = screen.getByRole('button', { name: '账户（1 项服务异常）' });
+  await user.click(account);
+  const menu = screen.getByRole('dialog', { name: '账户' });
+  expect(within(menu).getByText('张三')).toBeVisible();
+  expect(within(menu).getByText('管理员')).toBeVisible();
+  await user.click(
+    within(menu).getByRole('button', { name: '系统设置（1 项服务异常）' }),
+  );
+  expect(open).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('dialog', { name: '账户' })).toBeNull();
 });

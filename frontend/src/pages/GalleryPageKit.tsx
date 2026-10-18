@@ -1,6 +1,15 @@
 import { useState } from 'react';
-import { Activity, KeyRound, Mic, Plus, Sparkles } from 'lucide-react';
 import {
+  Activity,
+  KeyRound,
+  LogOut,
+  Mic,
+  Plus,
+  Settings2,
+  Sparkles,
+} from 'lucide-react';
+import {
+  AccountMenu,
   ActionMenu,
   AvatarFrame,
   Badge,
@@ -330,6 +339,30 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               items={[
                 { label: '重命名', onSelect: () => toast('重命名') },
                 { label: '删除', onSelect: () => toast('删除') },
+              ]}
+            />
+            <AccountMenu
+              name="周石言"
+              detail="管理员"
+              groups={[
+                [
+                  {
+                    key: 'system',
+                    label: '系统设置',
+                    icon: Settings2,
+                    alert: '1 项服务异常',
+                    onSelect: () => toast('打开系统设置'),
+                  },
+                ],
+                [
+                  {
+                    key: 'logout',
+                    label: '退出登录',
+                    icon: LogOut,
+                    danger: true,
+                    onSelect: () => toast('退出登录'),
+                  },
+                ],
               ]}
             />
           </Row>

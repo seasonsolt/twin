@@ -115,15 +115,18 @@ def register(
     avatar_factory: Callable[[], str] | None = None,
     tts_off: Callable[[], bool] = lambda: False,
     video_off: Callable[[], bool] = lambda: False,
+    generation: Callable[[], int] = lambda: 0,
 ) -> None:
     """Register under the application's existing security middleware with lazy speech. ``tts_off`` /
-    ``video_off`` say whether an administrator switched speech or video off; checked on every request."""
+    ``video_off`` say whether an administrator switched speech or video off; checked on every request.
+    ``generation`` changes when an administrator changes a key, and the speech client is built again."""
     app.add_middleware(PrivateAudioMiddleware)
     cache_dir = settings.db_path.parent / "media-cache"
     assets = AssetStore(settings.db_path)
     selected_avatar = avatar_factory or (lambda: settings.avatar.preset)
     synthesizer: SpeechSynthesizer | None = None
     selected_voice: str | None = None
+    built_generation = 0
     lock = threading.Lock()
     video_jobs = jobs or JobManager(1, lambda _: "视频生成失败，请检查 [video] 和 ffmpeg 配置")
     video = video_factory or (lambda: make_video_synthesizer(settings))
@@ -134,13 +137,13 @@ def register(
         return assets.path("portrait") is not None and assets.path("voice") is not None
 
     def speech() -> SpeechSynthesizer:
-        nonlocal synthesizer, selected_voice
+        nonlocal synthesizer, selected_voice, built_generation
         if tts_off():
             raise SpeechSwitchedOff
         with lock:
             try:
                 voice_id = assets.publish_voice(settings.tts.voice_dir) or settings.tts.voice
-                if synthesizer is None or voice_id != selected_voice:
+                if synthesizer is None or voice_id != selected_voice or generation() != built_generation:
                     if synthesizer_factory is None:
                         synthesizer = make_synthesizer(settings.tts.model_copy(update={"voice": voice_id}))
                     else:
@@ -149,7 +152,7 @@ def register(
                             synthesizer.voice = VoiceSpec(
                                 voice_id=voice_id, language=settings.tts.language, label="我的声音"
                             )
-                    selected_voice = voice_id
+                    selected_voice, built_generation = voice_id, generation()
             except (ValueError, OSError):
                 raise MediaUnavailable("语音配置无效") from None
             return synthesizer

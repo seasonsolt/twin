@@ -1,9 +1,11 @@
+import * as PopoverPrimitive from '@radix-ui/react-popover';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import * as SwitchPrimitive from '@radix-ui/react-switch';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { motion } from 'motion/react';
 import {
   useId,
+  useRef,
   useState,
   type ComponentType,
   type ReactElement,
@@ -191,47 +193,141 @@ export function NavPill({
   );
 }
 
-/**
- * A rail entry that opens something over the page (a dialog) instead of going to a route. It looks like a stacked
- * NavPill. `alert` puts a small red dot on the icon and adds its words to the accessible name: the one way the rail
- * asks for attention.
- */
-export function RailButton({
-  icon: Icon,
-  label,
-  onClick,
-  pressed = false,
-  alert,
-}: {
-  icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+export interface AccountMenuItem {
+  key: string;
   label: string;
-  onClick: () => void;
-  /** The thing it opens is open. */
-  pressed?: boolean;
+  icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  onSelect: () => void;
+  /** Something there needs the user: a red dot on the item and on the account button, and these words. */
   alert?: string;
+  danger?: boolean;
+  disabled?: boolean;
+}
+
+/**
+ * The account button at the foot of the rail and the menu it opens: who is signed in, then groups of items split by
+ * a line (settings first, signing out last). Settings live here rather than on the rail, so the rail stays about the
+ * work; an item that needs attention puts a red dot on the button.
+ */
+export function AccountMenu({
+  name,
+  detail,
+  groups,
+  error,
+}: {
+  name: string;
+  /** A second line under the name: the role or how they signed in. */
+  detail?: string;
+  groups: AccountMenuItem[][];
+  /** Why the last action failed, shown under the items. */
+  error?: string;
 }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={alert ? `${label}（${alert}）` : undefined}
-      aria-expanded={pressed}
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const filled = groups.filter((group) => group.length > 0);
+  const alert = filled.flat().find((item) => item.alert)?.alert;
+  const initial = Array.from(name.trim() || '?')[0].toUpperCase();
+  const avatar = (size: string) => (
+    <span
+      aria-hidden
       className={cn(
-        'rail-link relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-full text-xs text-primary focus-visible:outline-2 focus-visible:outline-accent',
-        pressed && 'bg-soft',
+        'grid shrink-0 place-items-center rounded-full bg-primary text-canvas',
+        size,
       )}
     >
-      <span className="relative">
-        <Icon aria-hidden className="size-5 shrink-0" />
-        {alert && (
-          <span
-            aria-hidden
-            className="absolute -top-0.5 -right-1 size-2 rounded-full bg-danger ring-2 ring-canvas"
-          />
-        )}
-      </span>
-      <span className="whitespace-nowrap">{label}</span>
-    </button>
+      {initial}
+    </span>
+  );
+  return (
+    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+      <PopoverPrimitive.Trigger asChild>
+        <button
+          ref={trigger}
+          type="button"
+          aria-label={alert ? `账户（${alert}）` : '账户'}
+          className="relative mx-auto grid size-11 place-items-center rounded-full text-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          {avatar('size-11')}
+          {alert && (
+            <span
+              aria-hidden
+              data-account-alert=""
+              className="absolute top-0 right-0 size-2.5 rounded-full bg-danger ring-2 ring-canvas"
+            />
+          )}
+        </button>
+      </PopoverPrimitive.Trigger>
+      <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Content
+          side="right"
+          align="end"
+          sideOffset={12}
+          avoidCollisions
+          collisionPadding={12}
+          aria-label="账户"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            trigger.current?.focus();
+          }}
+          className="account-popover z-50 w-[256px] rounded-lg border border-border bg-surface p-1.5 text-primary shadow-elevation-2"
+        >
+          <div className="flex items-center gap-3 px-2.5 py-2">
+            {avatar('size-9 text-base')}
+            <div className="min-w-0">
+              <p className="truncate font-medium">{name}</p>
+              {detail && <p className="text-sm text-secondary">{detail}</p>}
+            </div>
+          </div>
+          {filled.map((group, index) => (
+            <div
+              key={group[0].key}
+              className={cn(
+                'grid',
+                index === 0 ? 'mt-1' : 'mt-1 border-t border-border pt-1',
+              )}
+            >
+              {group.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={item.disabled}
+                  aria-label={
+                    item.alert ? `${item.label}（${item.alert}）` : undefined
+                  }
+                  onClick={() => {
+                    setOpen(false);
+                    item.onSelect();
+                  }}
+                  className={cn(
+                    'flex min-h-9 items-center gap-3 rounded-md px-2.5 text-left hover:bg-soft focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50',
+                    item.danger ? 'text-danger' : 'text-primary',
+                  )}
+                >
+                  {item.icon && (
+                    <item.icon aria-hidden className="size-4 shrink-0" />
+                  )}
+                  <span className="flex-1">{item.label}</span>
+                  {item.alert && (
+                    <span className="flex items-center gap-1.5 text-xs text-secondary">
+                      <span
+                        aria-hidden
+                        className="size-2 rounded-full bg-danger"
+                      />
+                      {item.alert}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ))}
+          {error && (
+            <p role="alert" className="px-2.5 py-1.5 text-sm text-danger">
+              {error}
+            </p>
+          )}
+        </PopoverPrimitive.Content>
+      </PopoverPrimitive.Portal>
+    </PopoverPrimitive.Root>
   );
 }
 

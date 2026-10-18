@@ -336,7 +336,9 @@ class AuthSettings(BaseModel):
     provider: Literal["email", "sso"] = "email"
     allowed_domains: list[str] = Field(default_factory=lambda: ["xjjk.com"])
     allowed_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
-    admin_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
+    # Addresses, SSO subjects (sso:<subject>) or SSO account names; an address in an allowed domain also matches the
+    # SSO account named by its part before the @.
+    admin_emails: list[str] = Field(default_factory=lambda: ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"])
     session_days: int = Field(default=30, gt=0)
     # 0: no limit (internal deployments).
     max_personas_per_member: int = Field(default=3, ge=0)

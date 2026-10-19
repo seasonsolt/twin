@@ -103,6 +103,7 @@ it('shows the team, what needs settling and the way to upload more', async () =>
       auto: false,
       gender: '',
       recording_id: 'rec_1',
+      speaker_id: 'S1',
     },
   ];
   show();
@@ -162,6 +163,7 @@ it('counts only actions while keeping queued work and memory organisation quiet'
       auto: true,
       gender: '',
       recording_id: 'rec_1',
+      speaker_id: 'S1',
     },
     {
       id: 'known',
@@ -174,6 +176,7 @@ it('counts only actions while keeping queued work and memory organisation quiet'
       auto: false,
       gender: '',
       recording_id: 'rec_1',
+      speaker_id: 'S1',
     },
   ];
   state.recordings = [
@@ -183,7 +186,9 @@ it('counts only actions while keeping queued work and memory organisation quiet'
   ];
   show();
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  expect(await within(tasks).findByText('新出现的声音')).toBeInTheDocument();
+  expect(
+    await within(tasks).findByRole('list', { name: '新出现的声音' }),
+  ).toBeInTheDocument();
   expect(
     within(tasks).getByText('2', { selector: 'span' }),
   ).toBeInTheDocument();

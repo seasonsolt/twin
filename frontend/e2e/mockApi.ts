@@ -173,6 +173,7 @@ const people = [
     auto: false,
     gender: 'male',
     recording_id: 'r-weekly',
+    speaker_id: 'S1',
   },
   {
     id: 'u-qinghe',
@@ -185,6 +186,7 @@ const people = [
     auto: false,
     gender: 'female',
     recording_id: 'r-weekly',
+    speaker_id: 'S2',
   },
   {
     id: 'u-shiyan',
@@ -197,6 +199,7 @@ const people = [
     auto: false,
     gender: '',
     recording_id: 'r-weekly',
+    speaker_id: 'S3',
   },
   {
     id: 'u-auto-1',
@@ -209,6 +212,7 @@ const people = [
     auto: true,
     gender: '',
     recording_id: 'r-weekly',
+    speaker_id: 'S4',
   },
 ];
 

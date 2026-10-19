@@ -63,6 +63,7 @@ export interface Person {
   auto: boolean;
   gender: Gender;
   recording_id: string | null;
+  speaker_id: string | null;
 }
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   transcript_id: string | null;

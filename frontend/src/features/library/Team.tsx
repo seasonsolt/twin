@@ -15,10 +15,12 @@ import {
   Badge,
   Button,
   Card,
+  ClipButton,
   Dialog,
   Field,
   Grid,
   Input,
+  ListRow,
   Radio,
   Row,
   Section,
@@ -30,6 +32,7 @@ import {
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
+import { withBase } from '../../lib/base';
 import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
@@ -69,60 +72,89 @@ function Task({
   );
 }
 
+/** A voice nobody has named yet, settled in its row: hear it, then say who it is (someone known, or a new
+ * name) or that nobody known speaks there. Enter confirms. */
 function Unnamed({
   person,
+  known,
   busy,
   onName,
-  taskState,
+  onResolve,
 }: {
   person: Person;
+  known: Person[];
   busy: boolean;
   onName: (name: string) => void;
-  taskState: { teamTask: string };
+  onResolve: (into: Person | null) => void;
 }) {
   const [name, setName] = useState('');
+  const typed = name.trim();
+  const match = known.find((p) => p.name === typed);
   return (
-    <Task kind="新出现的声音">
-      <Text weight="medium">
-        {person.name} · 在 {person.speakers} 段录音里出现
-      </Text>
+    <ListRow
+      variant="divided"
+      leading={
+        person.recording_id && person.speaker_id ? (
+          <ClipButton
+            label={`听${person.name}的声音`}
+            src={withBase(
+              `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+            )}
+          />
+        ) : undefined
+      }
+      title={person.name}
+      meta={
+        <>
+          说了 {minutes(person.seconds)} · {person.speakers} 段录音
+          {person.recording_id && (
+            <>
+              {' · '}
+              <TextLink
+                size="sm"
+                to={recordingPath(person.recording_id)}
+                state={{ teamTask: `person-${person.id}` }}
+              >
+                打开录音
+              </TextLink>
+            </>
+          )}
+        </>
+      }
+    >
       <Row
         as="form"
         gap={2}
-        wrap
         onSubmit={(event) => {
           event.preventDefault();
-          if (name.trim()) onName(name.trim());
+          if (!typed) return;
+          if (match) onResolve(match);
+          else onName(typed);
         }}
       >
         <Input
-          aria-label={`给${person.name}起名`}
+          aria-label={`${person.name}是谁`}
           placeholder="这是谁"
           maxLength={40}
           value={name}
-          className="min-w-0 flex-1"
+          suggestions={known.map((p) => p.name)}
+          className="min-w-0 flex-1 sm:w-56 sm:flex-none"
           onChange={(event) => setName(event.target.value)}
         />
+        <Button type="submit" size="sm" disabled={busy || !typed}>
+          {match ? `是${match.name}` : '确认'}
+        </Button>
         <Button
-          type="submit"
-          variant="secondary"
+          type="button"
+          variant="ghost"
           size="sm"
-          disabled={busy || !name.trim()}
+          disabled={busy}
+          onClick={() => onResolve(null)}
         >
-          起名
+          不认识
         </Button>
       </Row>
-      {person.recording_id && (
-        <RouteButton
-          to={recordingPath(person.recording_id)}
-          state={taskState}
-          variant="secondary"
-          size="sm"
-        >
-          听原声
-        </RouteButton>
-      )}
-    </Task>
+    </ListRow>
   );
 }
 
@@ -310,6 +342,15 @@ export function Team({
         }),
       `person-${person.id}`,
     );
+  const resolve = (person: Person, into: Person | null) =>
+    act(
+      () =>
+        api(`/api/library/people/${encodeURIComponent(person.id)}/resolve`, {
+          method: 'POST',
+          json: { into: into?.id ?? null },
+        }),
+      `person-${person.id}`,
+    );
   const edit = (person: Person, change: { name: string; gender: Gender }) =>
     act(async () => {
       await api(`/api/library/people/${encodeURIComponent(person.id)}`, {
@@ -358,9 +399,11 @@ export function Team({
   useEffect(() => {
     if (!focusPending || !people || busy) return;
     if (taskOrder.split('|').includes(focusPending)) return;
-    taskList.current
-      ?.querySelector<HTMLElement>('input, a, button:not(:disabled)')
-      ?.focus();
+    // The next voice's name field before any button, so naming several is type, Enter, type, Enter.
+    const next =
+      taskList.current?.querySelector<HTMLElement>('input:not(:disabled)') ??
+      taskList.current?.querySelector<HTMLElement>('a, button:not(:disabled)');
+    next?.focus();
     setFocusPending(null);
     if (location.state?.resolvedTeamTask)
       void navigate(location.pathname, { replace: true, state: null });
@@ -411,77 +454,88 @@ export function Team({
           }
           framed
         >
-          <Grid ref={taskList} as="ul" columns={3} gap={3}>
-            {unnamed.map((person) => (
-              <Unnamed
-                key={person.id}
-                person={person}
-                taskState={{ teamTask: `person-${person.id}` }}
-                busy={busy}
-                onName={(value) => void rename(person, value)}
-              />
-            ))}
-            {waiting.map((w) => (
-              <Task key={`${w.recording_id}-${w.id}`} kind="拿不准是谁">
-                <Text weight="medium">
-                  <span className="break-all">{w.filename}</span> · {w.id}{' '}
-                  {w.candidates.length > 1
-                    ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
-                    : `像${w.candidates[0].name}`}
-                </Text>
-                <RouteButton
-                  to={recordingPath(w.recording_id)}
-                  state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
-                  size="sm"
-                >
-                  试听并确认
-                </RouteButton>
-              </Task>
-            ))}
-            {unsorted.map((r) => (
-              <Task
-                key={`unsorted-${r.id}`}
-                kind={r.unsettled === r.speakers ? '还没认人' : '还有人没认'}
-              >
-                <Text weight="medium">
-                  <span className="break-all">{r.filename}</span> ·{' '}
-                  {r.unsettled} 位说话人待确认
-                </Text>
-                <RouteButton
-                  to={recordingPath(r.id)}
-                  state={{ teamTask: `unsorted-${r.id}` }}
-                  size="sm"
-                >
-                  试听并确认
-                </RouteButton>
-              </Task>
-            ))}
-            {failed.map((r) => (
-              <Task key={r.id} kind="转写失败" tone="danger">
-                <Text weight="medium" breakAll>
-                  {r.filename}
-                </Text>
-                <Row gap={2}>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void retry(r)}
+          <Stack ref={taskList} gap={3}>
+            {unnamed.length > 0 && (
+              <Stack as="ul" gap={0} aria-label="新出现的声音">
+                {unnamed.map((person) => (
+                  <Unnamed
+                    key={person.id}
+                    person={person}
+                    known={named ?? []}
+                    busy={busy}
+                    onName={(value) => void rename(person, value)}
+                    onResolve={(into) => void resolve(person, into)}
+                  />
+                ))}
+              </Stack>
+            )}
+            {tasks > unnamed.length && (
+              <Grid as="ul" columns={3} gap={3}>
+                {waiting.map((w) => (
+                  <Task key={`${w.recording_id}-${w.id}`} kind="拿不准是谁">
+                    <Text weight="medium">
+                      <span className="break-all">{w.filename}</span> · {w.id}{' '}
+                      {w.candidates.length > 1
+                        ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
+                        : `像${w.candidates[0].name}`}
+                    </Text>
+                    <RouteButton
+                      to={recordingPath(w.recording_id)}
+                      state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
+                      size="sm"
+                    >
+                      试听并确认
+                    </RouteButton>
+                  </Task>
+                ))}
+                {unsorted.map((r) => (
+                  <Task
+                    key={`unsorted-${r.id}`}
+                    kind={
+                      r.unsettled === r.speakers ? '还没认人' : '还有人没认'
+                    }
                   >
-                    重试
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void removeRecording(r)}
-                  >
-                    删除
-                  </Button>
-                </Row>
-              </Task>
-            ))}
-          </Grid>
+                    <Text weight="medium">
+                      <span className="break-all">{r.filename}</span> ·{' '}
+                      {r.unsettled} 位说话人待确认
+                    </Text>
+                    <RouteButton
+                      to={recordingPath(r.id)}
+                      state={{ teamTask: `unsorted-${r.id}` }}
+                      size="sm"
+                    >
+                      试听并确认
+                    </RouteButton>
+                  </Task>
+                ))}
+                {failed.map((r) => (
+                  <Task key={r.id} kind="转写失败" tone="danger">
+                    <Text weight="medium" breakAll>
+                      {r.filename}
+                    </Text>
+                    <Row gap={2}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void retry(r)}
+                      >
+                        重试
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void removeRecording(r)}
+                      >
+                        删除
+                      </Button>
+                    </Row>
+                  </Task>
+                ))}
+              </Grid>
+            )}
+          </Stack>
         </Section>
       )}
       <Section

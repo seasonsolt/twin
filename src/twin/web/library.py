@@ -71,6 +71,11 @@ class PersonPatch(BaseModel):
     gender: Gender | None = None
 
 
+class ResolveBody(BaseModel):
+    # The known person the unnamed voice is; ``None`` for nobody known.
+    into: str | None = None
+
+
 class DecisionBody(BaseModel):
     transcript_id: str
     revision: int
@@ -716,6 +721,20 @@ def register(
     @app.patch("/api/library/people/{person_id}")
     def patch_person(person_id: str, body: PersonPatch, request: Request) -> dict[str, Any]:
         return libraries.update(libraries.owner(request), person_id, body)
+
+    @app.post("/api/library/people/{person_id}/resolve")
+    def resolve_person(person_id: str, body: ResolveBody, request: Request) -> dict[str, bool]:
+        owner = libraries.owner(request)
+        try:
+            libraries.team(owner).resolve(person_id, body.into)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        if body.into:
+            # The voice samples they bring can settle speakers in other recordings.
+            libraries.team(owner).classify_all()
+        libraries.changed(owner)
+        libraries.proofread(owner)
+        return {"resolved": True}
 
     @app.delete("/api/library/people/{person_id}")
     def delete_person(person_id: str, request: Request) -> dict[str, bool]:

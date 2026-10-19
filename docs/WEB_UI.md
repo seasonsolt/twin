@@ -1,6 +1,6 @@
-# 本地个人分身网页：设计与接口契约
+# 团队分身网页：设计与接口契约
 
-`twin ui` 默认监听 `http://127.0.0.1:8765`，`/` 是唯一的 React 前端。页面使用 HashRouter，默认 `#/chat`，无需服务端应用路径回退。`/next`、`/next/` 仅作 308 重定向到 `/`，保留书签兼容；不再提供 `/static` 或 `/next/assets`。个人资料存于本机；配置远端模型或语音服务时，请确认数据使用权限。
+`twin ui` 默认监听 `http://127.0.0.1:8765`，`/` 是唯一的 React 前端。页面使用 HashRouter，无需服务端应用路径回退；`/` 对能管理分身的人（管理员、成员）进入 `#/team`，对只能聊天的访客进入 `#/chat`。`/next`、`/next/` 仅作 308 重定向到 `/`，保留书签兼容；不再提供 `/static` 或 `/next/assets`。会议录音和分身资料存于部署所在的机器；配置远端模型或语音服务时，请确认数据使用权限。
 
 ## 技术栈与目录
 
@@ -14,7 +14,7 @@ frontend/
 │   ├── lib/          # 同源 API、格式化与样式合并
 │   ├── stores/       # 状态与可见性轮询
 │   ├── features/     # chat/、avatar/、jobs/、sources/、profile/、questionnaire/、identity/
-│   ├── pages/        # 聊天、记忆、关于你；首次引导、可选问卷与开发画廊
+│   ├── pages/        # 团队、录音库、聊天、档案、认领页（Claimed）、会议里找自己（MemberVoice）、分身列表（Twins）、记忆、承诺账本、工作；首次引导、可选问卷与开发画廊
 │   ├── test/         # 行为、动效、可访问性、对比度及样式规则测试
 │   ├── App.tsx       # HashRouter 与按页 lazy 加载
 │   └── main.tsx      # React 入口
@@ -80,7 +80,7 @@ AppShell 桌面使用三层底色：`soft` 窗口底，直接放 68px 图标导�
 
 UI primitives 包含 Button、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Select、Checkbox、Radio、Slider、Chip、Badge、StatusDot、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider、Toast 和 Tooltip；页面级组件见下节。Radix 提供焦点约束、键盘操作与 ARIA；确认默认聚焦取消，关闭后恢复原入口。通知只用 polite live region，不抢焦点。
 
-twin 是个人工具，不添加免责声明。React 按文本渲染服务端内容，不执行用户 HTML，不输出个人文本日志。
+twin 不添加免责声明。React 按文本渲染服务端内容，不执行用户 HTML，不输出个人文本日志。
 
 ## 页面组件与样式护栏
 
@@ -146,13 +146,16 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 回复动画文本/数值使用完整的 visually hidden 文本，视觉动态层 `aria-hidden`，避免逐词逐帧播报。ThinkingLabel 只渲染一份可访问文字，避免重复的处理提示。`#/gallery` 提供所有 UI、Motion 与七个 wrapper 的可交互示例及重播入口，不填充虚构业务数据。
 
-## 邮箱登录与认证边界
+## 登录与认证边界
 
-本机默认 `[auth].enabled = false`，所有请求为管理员；公网部署启用 auth，使用应用内邮箱验证码登录，不依赖 Cloudflare Access，也不读取 `Cf-Access-*`。SMTP 设置、环境密码、隧道与 allowlist 部署步骤见 README。
+本机默认 `[auth].enabled = false`，所有请求为管理员；团队部署启用 auth，不依赖 Cloudflare Access，也不读取 `Cf-Access-*`。登录有两种，由 `[auth].provider` 选择：
 
-`AuthGate` 先读取 `/api/whoami`，`401 {code:"login_required"}` 显示“twin / 用邮箱登录”。邮箱输入 type=email、autocomplete=email，16px；获取验证码后显示 6 位 inputmode=numeric、autocomplete=one-time-code 输入，支持粘贴和前导零。“重新发送”按实际截止时间倒计时 60 秒，“换个邮箱”返回。未允许用户看到“已加入等候名单”、邮箱与“开放后会第一时间通知你”，不显示验证码输入。错误使用中文普通文本，沿用中性底色、白卡和单一强调色。
+- **企业 SSO（主路径，`provider = "sso"`）**：借用同站另一个应用的会话 cookie，twin 带着它请求 `me_url`，200 为已登录、401 为未登录并跳往 `login_url`。身份取其中的 account（工号）、display_name 和 email；目前 SSO 只给 account，暂不给邮箱。工号和邮箱（有则）都是认领分身的依据（`Personas.claim`）。没有自己的登录页，也不发邮件。
+- **邮箱验证码（备选，`provider = "email"`）**：应用内验证码登录，身份就是邮箱，下面的 `/api/auth/*` 只在这种模式下使用。SMTP 设置、环境密码、隧道与 allowlist 部署步骤见 [使用指南](GUIDE.md#团队部署与登录)。
 
-会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号邮箱和“退出登录”。身份恢复后先加载可见分身，再挂载页面；no_persona 显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。
+`AuthGate` 先读取 `/api/whoami`，`401 {code:"login_required"}`：SSO 模式跳到 `login_url`，邮箱模式显示“twin / 用邮箱登录”。邮箱输入 type=email、autocomplete=email，16px；获取验证码后显示 6 位 inputmode=numeric、autocomplete=one-time-code 输入，支持粘贴和前导零。“重新发送”按实际截止时间倒计时 60 秒，“换个邮箱”返回。未允许用户看到“已加入等候名单”、邮箱与“开放后会第一时间通知你”，不显示验证码输入。错误使用中文普通文本，沿用中性底色、白卡和单一强调色。
+
+会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号账号和“退出登录”。身份恢复后先加载可见分身，再挂载页面；no_persona 对带企业账号（邮箱或工号）的成员先进入“会议里找自己”（`MemberVoice`），可跳过，再显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。`/api/whoami` 另带 `address`（企业邮箱）和 `account`（工号）。
 
 | 方法/路径 | 契约 |
 | --- | --- |
@@ -172,10 +175,10 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 聊天 sessionStorage、视频结果/提交缓存、任务记录、问卷离页写队列和上传 localStorage 续传记录均按 ID 隔离；保留默认分身旧键，旧数据无需迁移。
 离页问卷写入和仍未返回的视频提交保留原分身归属；服务端已接受任务继续运行，返回该分身后恢复查看。
 
-“新建分身”询问名字，创建后自动切换并进入“你是谁 → 形象和声音 → 添加记忆 → 开始聊天”；
+“新建分身”询问名字，创建后自动切换并进入“你是谁 → 形象和声音 → 添加记忆 → 开始聊天”（管理员按邮箱或工号批量建、或由会议生成的分身不走这套引导）；
 新分身的 `onboarding_pending` 即使刷新也会继续显示引导，完成/跳过后清除。
 “管理”复用 PUT identity 重命名并保留介绍；删除二次确认，默认分身不显示删除，运行/排队任务或请求存在时服务器拒绝删除。
-列表恢复时若所存 ID 已被删除或不可访问则选择首个可见分身；管理员优先 default。成员没有分身时打开新建流程。只有默认分身可回退到 `[avatar].image_path` 和视频驱动内置素材；
+列表恢复时若所存 ID 已被删除或不可访问则选择首个可见分身；管理员优先 default。成员没有分身时：企业账号先进“会议里找自己”，其余直接打开新建流程。成员能看到自己建的、认领的和别人公开的分身；认领来的分身先显示认领页（见下节），点“没问题”之前不能进入其他页面。只有默认分身可回退到 `[avatar].image_path` 和视频驱动内置素材；
 其他分身需自己的肖像和声音才能生成真人视频，否则能力包含 `reason: "先在「关于你」上传形象和声音"`，语音使用 `[tts].voice`。
 
 ## 插画形象与图谱
@@ -194,13 +197,16 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 ## 页面
 
+左侧图标导航从上到下为团队、录音库、当前分身头像、聊天/工作/档案/承诺账本（后两者可被管理员在系统设置里关闭），访客只有聊天。
+
 | Hash 路由 | 功能 |
 | --- | --- |
-主导航恰好三个入口：聊天、记忆、关于你。
-
-| `#/team`（默认） | 团队：需要你处理与底部安静的正在处理分区，任务数、处理后自动聚焦下一项，新声音可听原声并起名，失败可重试或确认删除；人物支持按名字搜索，卡片头部打开分身档案（没有分身时编辑），底部保留聊天/生成分身与更多菜单（编辑名字和性别、允许时删除）；转写显示细进度条；没有录音时保留上传引导。访客默认进 `#/chat` |
+| `#/team`（管理员、成员的默认页） | 团队：需要你处理与底部安静的正在处理分区，任务数、处理后自动聚焦下一项，新声音可听原声并起名，失败可重试或确认删除；人物支持按名字搜索，卡片头部打开分身档案（没有分身时编辑），底部保留聊天/生成分身与更多菜单（编辑名字和性别、允许时删除）；人物列表标题栏有“按邮箱或工号建分身（N）”，为还没有分身的人一次填完企业邮箱或工号（可空着，以后补）并批量生成，已有分身、本人还没认领的可改填；同一个邮箱或工号只能用在一个分身上；每个分身标出“等 X 登录认领”“已认领”或“X 说不是 TA，换一个”；本人点“这不是我”退回的分身出现在“需要你处理”里，标为“分身被退回”，可“换个邮箱或工号”；转写显示细进度条；没有录音时保留上传引导。访客默认进 `#/chat` |
+| `#/twins` | 全部分身：“我的分身”（重命名、设为公开/私有、删除、新建）和“公开分身”（别人公开、可以聊天的）；回收站可恢复 7 天内删除的分身 |
+| `#/voice` | 会议里找自己（`MemberVoice`）：企业账号读一句话，听团队库里像自己的声音，每条只给一句话、会议标题和日期，回答“是我”或“不是”；确认后用这些发言建自己的分身，之后可再来补充。没有企业账号（邮箱或工号）时 404；没有分身的成员登录后会先到这里，可跳过 |
 | `#/library` | 录音库：普通标题与容量说明、上传按钮，整页拖放上传；全部/待确认/处理中/失败分类及数量，卡片内紧凑录音行含日期、时长、说话人、状态和转写进度；待确认直接进入认人，失败可重试，更多菜单确认删除；空库保留引导 |
 | `#/library/<录音 id>` | 一次确认一位说话人：单播放器与片段切换、声纹候选选择或新建人物，确认后聚焦下一位；手机底部固定确认与声纹样本控件；接下来与已确认列表分开，已确认可“改”重新处理；全部完成提示回团队，底部可展开完整转写稿；团队任务确认后返回团队 |
+| 认领页（`Claimed`，无路由） | 登录后有分身是给本人建的（邮箱或工号对上）或本人在会议里认出自己声音建的、本人还没点“没问题”时，代替整个界面显示：标“已归到你名下”，列出这个分身从会议整理出的你答应过的事（至多 3 条）和最有证据的 3 条画像，可点三个示例问题去试聊；底部勾选“同事能问我的分身”（默认勾上），点“没问题，开始用”记下 `approved_at` 并进入档案；点“这不是我”（只对别人建的分身，二次确认）把分身退回；自己在会议里认出声音建的则给“回去再听一遍”链接到 `/voice`。有多个待认领的分身时先处理第一个。点示例问题会跳到聊天试聊：顶栏出现“试聊中：你点“没问题”之前，同事问不到它。”横幅和“回去确认”按钮，只在聊天页显示，点“回去确认”回到认领页 |
 | `#/chat` | 多轮聊天、文件附件问答、依据、内联语音与真人视频；无日期输入或资料截止提示 |
 | `#/memories` | 写一段、上传文件/文件夹、自动记住、说话人确认、声音/形象候选采纳、文字预览和删除 |
 | `#/about` | 编辑名字与介绍、形象/音色、我了解到的你、还想多了解、外部服务 |
@@ -256,8 +262,13 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 | 方法/路径 | 契约 |
 | --- | --- |
-| `GET /api/personas` | `[{id,name,owner|null,avatar_url|null,avatar_preset,sources,created_at,is_default}]`，管理员看全部，成员仅看自己的；owner 为 null 的旧分身归管理员 |
-| `POST /api/personas` | `{name}`，201 返回新分身，owner 为当前邮箱（auth 关闭则 null）；成员达到 max_personas_per_member 时 409“最多可以建 3 个分身”；私有目录及 identity，registry 仅增加拥有者邮箱 |
+| `GET /api/personas` | `[{id,name,owner|null,avatar_url|null,avatar_preset,sources,created_at,is_default,public,can_manage,…}]`，管理员看全部，成员看自己建的、认领的和别人公开的；owner 为 null 的旧分身归管理员；调用时先按登录的邮箱或工号认领给 TA 建的分身。管理者另得 `claim`、`claimed`、`claim_rejected`；认领者另得 `mine`、`approved`、`made_by_other`、`from_meetings` |
+| `POST /api/personas` | `{name}`，201 返回新分身，owner 为当前账号（auth 关闭则 null）；成员达到 max_personas_per_member 时 409“最多可以建 3 个分身”；私有目录及 identity，registry 仅增加拥有者邮箱 |
+| `PATCH /api/personas/{id}` | `{public}` 设为公开/私有；由团队录音库生成的分身在本人认领并点“没问题”前设为公开返回 409 |
+| `PUT /api/personas/{id}/claim` | `{claim}` 给谁建的：企业邮箱或工号（不区分大小写，空值清除）；格式不对 400，已用在另一个分身 409，本人已认领 409；改填后清掉“退回”标记 |
+| `POST /api/personas/{id}/approve` | `{public}` 仅认领它的本人：记下 `approved_at` 并设置同事能不能问 |
+| `POST /api/personas/{id}/disown` | “这不是我”：仅认领它的本人，自己建的 409；分身退回建它的人，原 claim 记入 `claim_rejected`，`member`、`approved_at` 清除并设为私有 |
+| `GET /api/personas/trash`、`POST /api/personas/{id}/restore` | 自己能管理的已删分身（7 天内）/ 恢复 |
 | `DELETE /api/personas/{id}` | 删除该目录；默认分身 400，运行/排队任务或请求存在时 409 |
 | `POST /api/identity/onboarding-complete` | 完成当前分身的新建引导 |
 | `GET /api/status` | target_name、counts、llm/embed、egress（仅实际配置且外部，评委 kind=judge）；无数据库路径或密钥 |
@@ -291,7 +302,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `PUT /api/admin/system/models/{llm\|chat_llm\|embed}` | `{base_url?, model?}` 代替 twin.toml 的地址和模型名，空项沿用 twin.toml，两项都空时恢复；写入 `data/system.json`，立即重建模型客户端、所有分身一起生效；只有 OpenAI 兼容接口能改（否则或未配置 400），地址须 http(s)、不带账号密码和查询参数（400），其他名字 404。换向量模型后各分身在后台重新生成检索向量，完成前按关键词检索 |
 | `PUT /api/admin/system/keys/{env}` | `{value}` 设置、`{}` 移除；只接受 `keys` 里列出的变量名（否则 404），值不能含换行等控制字符（400）。写入服务器的 env 文件（`$TWIN_ENV_FILE`，否则 `./.env`，保持 0600，原子替换，保留其他行；权限不是 0600 时 409），同时更新运行中的进程并重建客户端；`TWIN_API_TOKEN` 由另一个进程 `twin api` 读取，重启它才生效。审计写入 `data/system-audit.jsonl`（0600），只记变量名和是否设置 |
 | `PUT /api/admin/system/quota` | `{batch_tokens?, batch_hours?}` 覆盖 `[library]` 的批次额度（0 为不限，小时 0–720），两项都空时恢复 twin.toml；立即生效，等额度的校对和重建在录音库下一次刷新时继续 |
-| `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}`；需要 `can_manage`，别的同事已建 409 |
+| `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），可带 `{claim}`（企业邮箱或工号，TA 登录即认领），幂等：`{persona_id,new}`；需要 `can_manage`，别的同事已建 409，claim 已用在别处 409 |
 | `POST /api/library/people/{id}/merge` / `.../apart` | 仅管理员：`{into}` 把这个人并入另一人（被并入方有自己的分身时 409）/ `{other}` 两人不是同一个人 |
 | `GET/PUT/DELETE /api/library/voice` 等 | 员工 1b：企业账号读一句话，在团队录音库里听推给自己的声音并确认“是我”，见 `web/voice.py` |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |

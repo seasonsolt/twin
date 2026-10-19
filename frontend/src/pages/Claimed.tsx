@@ -20,7 +20,7 @@ import { useStatus } from '../stores/status';
 
 /**
  * A twin someone else made for the signed-in person, waiting for them: they took it by signing in with the work
- * e-mail it was made for. It answers nobody else until they have looked at it and said it is all right; "这不是我"
+ * e-mail or employee number it was made for. It answers nobody else until they have looked at it and said it is all right; "这不是我"
  * gives it back to whoever made it.
  */
 export function Claimed({ persona }: { persona: Persona }) {
@@ -76,7 +76,7 @@ export function Claimed({ persona }: { persona: Persona }) {
               {persona.name}，你的分身已经建好了
             </Heading>
             <Text tone="secondary">
-              同事用你的企业邮箱为你建了分身，你用企业账号一登录就认领了。它已经从会议里认识了你。
+              同事按你的企业邮箱或工号为你建了分身，你用企业账号一登录就认领了。它已经从会议里认识了你。
             </Text>
           </Stack>
           <Card variant="outline">

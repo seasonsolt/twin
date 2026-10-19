@@ -692,11 +692,11 @@ def test_a_twin_from_meetings_is_made_for_a_work_address_and_stays_private(web: 
     body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}
     put = web.put(f"/api/library/recordings/{rec}/speakers/S2", json={**body, "new_person": "张总"}, headers=HEADERS)
     zhang = put.json()["person_id"]
-    bad = web.post(f"/api/library/people/{zhang}/persona", json={"email": "张总"}, headers=HEADERS)
+    bad = web.post(f"/api/library/people/{zhang}/persona", json={"claim": "张总"}, headers=HEADERS)
     assert bad.status_code == 400
-    twin = web.post(f"/api/library/people/{zhang}/persona", json={"email": "Zhang@Acme.cn"}, headers=HEADERS).json()
+    twin = web.post(f"/api/library/people/{zhang}/persona", json={"claim": "Zhang@Acme.cn"}, headers=HEADERS).json()
     [entry] = [p for p in web.get("/api/personas").json() if p["id"] == twin["persona_id"]]
-    assert entry["claim_email"] == "zhang@acme.cn" and entry["claimed"] is False
+    assert entry["claim"] == "zhang@acme.cn" and entry["claimed"] is False
     # Nobody but 张总, once signed in and having looked at it, lets colleagues ask it.
     public = web.patch(f"/api/personas/{twin['persona_id']}", json={"public": True}, headers=HEADERS)
     assert public.status_code == 409

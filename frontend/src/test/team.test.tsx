@@ -184,15 +184,15 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
-  // Made for 张总's work e-mail: they take it when they sign in with it.
+  // Made for 张总's work e-mail (or employee number): they take it when they sign in.
   const dialog = await screen.findByRole('dialog', { name: '为张总建分身' });
   await userEvent.type(
-    within(dialog).getByRole('textbox', { name: /企业邮箱/u }),
+    within(dialog).getByRole('textbox', { name: /企业邮箱或工号/u }),
     'zhang@acme.cn',
   );
   await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
   expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
-  expect(created).toEqual([{ email: 'zhang@acme.cn' }]);
+  expect(created).toEqual([{ claim: 'zhang@acme.cn' }]);
 });
 
 it('marks automatic matches and reopens them through the existing clear action', async () => {

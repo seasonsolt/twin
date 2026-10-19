@@ -27,10 +27,11 @@ export interface Persona {
   approved?: boolean;
   /** Someone else made it for the signed-in person. */
   made_by_other?: boolean;
-  /** For those who manage it: the work e-mail of the person it is made for, and whether they have taken it. */
-  claim_email?: string | null;
+  /** For those who manage it: the work e-mail or employee number of the person it is made for, and whether they
+   * have taken it. */
+  claim?: string | null;
   claimed?: boolean;
-  /** The address its person said was not theirs ("这不是我"). */
+  /** The e-mail or employee number its person said was not theirs ("这不是我"). */
   claim_rejected?: string;
 }
 

@@ -126,7 +126,7 @@ def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: 
         "is_default": True,
         "public": False,
         "can_manage": True,
-        "claim_email": None,
+        "claim": None,
         "claimed": False,
     }
     persona = create(web)

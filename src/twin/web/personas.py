@@ -45,12 +45,29 @@ class VisibilityBody(BaseModel):
 
 class ClaimBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    # The colleague's work e-mail; None or "" forgets it.
-    email: str | None = Field(default=None, max_length=254)
+    # The colleague's work e-mail or employee number; None or "" forgets it.
+    claim: str | None = Field(default=None, max_length=254)
 
 
-def claim_address(value: str | None) -> str | None:
-    return normalize_email(value) if value and value.strip() else None
+EMPLOYEE_NUMBER = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+
+
+def claim_key(value: str | None) -> str | None:
+    """Who a twin is made for, as the company sign-in names them: a work e-mail, or an employee number (the SSO
+    account, such as 77845). Compared without case."""
+    value = (value or "").strip().lower()
+    if not value:
+        return None
+    if "@" in value:
+        return normalize_email(value)
+    if EMPLOYEE_NUMBER.fullmatch(value) is None:
+        raise HTTPException(400, "请输入企业邮箱或工号")
+    return value
+
+
+def claim_keys(identity: dict[str, Any]) -> set[str]:
+    """The keys by which the signed-in person takes a twin made for them: their work e-mail and their account."""
+    return {key.strip().lower() for key in (identity.get("address"), identity.get("account")) if key and key.strip()}
 
 
 # Visitors of a public twin can only talk to it; its memories and settings stay with the owner.
@@ -217,7 +234,8 @@ class Personas:
         }
 
     def claim_view(self, entry: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
-        """Who the twin is made for. Those who manage it see the address and whether that person has taken it; the
+        """Who the twin is made for. Those who manage it see the e-mail or employee number and whether that person has
+        taken it; the
         person sees that it is theirs and whether they have said it is all right."""
         view: dict[str, Any] = {}
         if entry.get("member") and entry["member"] == identity["email"]:
@@ -225,21 +243,21 @@ class Personas:
             view["approved"] = bool(entry.get("approved_at"))
             view["made_by_other"] = entry.get("owner") != identity["email"]
         if self.accessible(entry, identity):
-            view["claim_email"] = entry.get("claim_email")
+            view["claim"] = entry.get("claim")
             view["claimed"] = bool(entry.get("member"))
             if entry.get("claim_rejected"):
                 view["claim_rejected"] = entry["claim_rejected"]
         return view
 
     def claim(self, identity: dict[str, Any]) -> None:
-        """Give the signed-in person the twins made for their work e-mail that nobody has taken yet (under
-        ``lock``). An enterprise sign-in fixes the address, so it alone says whose a twin is."""
-        address = identity.get("address")
-        if not address or not identity.get("email"):
+        """Give the signed-in person the twins made for their work e-mail or employee number that nobody has taken
+        yet (under ``lock``). The company sign-in fixes both, so they alone say whose a twin is."""
+        keys = claim_keys(identity)
+        if not keys or not identity.get("email"):
             return
         changed = False
         for entry in self.data["personas"]:
-            if entry.get("claim_email") == address and not entry.get("member") and not entry.get("deleted_at"):
+            if entry.get("claim") in keys and not entry.get("member") and not entry.get("deleted_at"):
                 entry["member"] = identity["email"]
                 entry["claimed_at"] = self.clock().isoformat()
                 changed = True
@@ -289,11 +307,11 @@ class Personas:
         return True
 
     def create(
-        self, name: str, identity: dict[str, Any], *, onboarding: bool = True, claim_email: str | None = None
+        self, name: str, identity: dict[str, Any], *, onboarding: bool = True, claim: str | None = None
     ) -> dict[str, Any]:
         """A new private twin owned by ``identity``, within the member limit (admins are not limited); returns its
-        registry entry. ``onboarding=False`` for a twin whose name and memory come from elsewhere; ``claim_email``:
-        the work e-mail of the person it is made for, who takes it on signing in."""
+        registry entry. ``onboarding=False`` for a twin whose name and memory come from elsewhere; ``claim``: the
+        work e-mail or employee number of the person it is made for, who takes it on signing in."""
         with self.lock:
             limit = self.settings.auth.max_personas_per_member
             if (
@@ -303,10 +321,8 @@ class Personas:
                 >= limit
             ):
                 raise HTTPException(409, f"最多可以建 {limit} 个分身")
-            if claim_email and any(
-                p.get("claim_email") == claim_email and not p.get("deleted_at") for p in self.data["personas"]
-            ):
-                raise HTTPException(409, "这个邮箱已经用在另一个分身上")
+            if claim and any(p.get("claim") == claim and not p.get("deleted_at") for p in self.data["personas"]):
+                raise HTTPException(409, "这个邮箱或工号已经用在另一个分身上")
             persona_id = "p-" + secrets.token_hex(5)
             directory = self.root / "personas" / persona_id
             private_directory(directory.parent)
@@ -317,8 +333,8 @@ class Personas:
                 if onboarding:
                     store.set_meta("onboarding_pending", "1")
             entry = {"id": persona_id, "owner": identity["email"], "created_at": dt.datetime.now(dt.UTC).isoformat()}
-            if claim_email:
-                entry["claim_email"] = claim_email
+            if claim:
+                entry["claim"] = claim
             self.data["personas"].append(entry)
             self.save()
             return entry
@@ -424,20 +440,19 @@ class Personas:
 
         @app.put("/api/personas/{persona_id}/claim")
         def set_claim(persona_id: str, body: ClaimBody, request: Request) -> dict[str, Any]:
-            """Say whose twin this is by their work e-mail: they take it when they sign in with it."""
-            address = claim_address(body.email)
+            """Say whose twin this is by their work e-mail or employee number: they take it when they sign in."""
+            key = claim_key(body.claim)
             with self.lock:
                 identity = request.scope["twin_identity"]
                 self.check_owner(persona_id, identity)
                 entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
                 if entry.get("member"):
                     raise HTTPException(409, "本人已经认领了这个分身")
-                if address and any(
-                    p is not entry and not p.get("deleted_at") and p.get("claim_email") == address
-                    for p in self.data["personas"]
+                if key and any(
+                    p is not entry and not p.get("deleted_at") and p.get("claim") == key for p in self.data["personas"]
                 ):
-                    raise HTTPException(409, "这个邮箱已经用在另一个分身上")
-                entry["claim_email"] = address
+                    raise HTTPException(409, "这个邮箱或工号已经用在另一个分身上")
+                entry["claim"] = key
                 entry.pop("claim_rejected", None)
                 self.save()
                 return self.view(entry, identity)
@@ -456,13 +471,13 @@ class Personas:
 
         @app.post("/api/personas/{persona_id}/disown")
         def disown(persona_id: str, request: Request) -> dict[str, bool]:
-            """ "这不是我": the twin goes back to whoever made it, who sees the address was wrong."""
+            """ "这不是我": the twin goes back to whoever made it, who sees the e-mail or employee number was wrong."""
             with self.lock:
                 identity = request.scope["twin_identity"]
                 entry = self.own(persona_id, identity)
                 if entry.get("owner") == identity["email"]:
                     raise HTTPException(409, "这是你自己建的分身")
-                entry["claim_rejected"] = entry.pop("claim_email", None) or identity.get("address") or ""
+                entry["claim_rejected"] = entry.pop("claim", None) or ""
                 for key in ("member", "claimed_at", "approved_at"):
                     entry.pop(key, None)
                 entry["public"] = False

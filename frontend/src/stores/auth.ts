@@ -8,6 +8,8 @@ export interface Identity {
   name?: string | null;
   /** The work e-mail of the account, by which a twin made for it is taken. */
   address?: string | null;
+  /** The name the company sign-in gives the account (an employee number), which takes a twin made for it too. */
+  account?: string | null;
   admin: boolean;
   auth_enabled: boolean;
   /** 'sso' means signing in and out belongs to another app on this site. */

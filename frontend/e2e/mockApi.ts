@@ -234,7 +234,7 @@ const speaker = (
   ...extra,
 });
 
-const weekly = {
+export const weekly = {
   ...recordings[0],
   transcript_id: 't-weekly',
   revision: 3,
@@ -735,6 +735,44 @@ const handlers: Record<string, Handler> = {
     },
   }),
   'GET /api/library/people': reply({ items: people }),
+  // 员工 1b: voices like theirs in colleagues' meetings, one already said to be theirs.
+  'GET /api/library/voice': reply({
+    available: true,
+    enrolled: true,
+    items: [
+      {
+        id: 'vc_1',
+        state: 'mine',
+        quote: '续费方案我周四前给到大家，先把老用户这块做透。',
+        title: '周一经营会',
+        date: '2026-10-12',
+        more: 3,
+        unsure: false,
+        sample_url: '/api/library/voice/items/vc_1/sample',
+      },
+      {
+        id: 'vo_2',
+        state: 'offered',
+        quote: '留存口径我来重算，周五前按活跃用户出一版。',
+        title: '产品周会',
+        date: '2026-10-15',
+        more: 1,
+        unsure: false,
+        sample_url: '/api/library/voice/items/vo_2/sample',
+      },
+      {
+        id: 'vo_3',
+        state: 'offered',
+        quote: '……我同意，先上灰度。',
+        title: '季度复盘',
+        date: '2026-09-28',
+        more: 0,
+        unsure: true,
+        sample_url: '/api/library/voice/items/vo_3/sample',
+      },
+    ],
+    persona_id: 'p-zhaoqing',
+  }),
   'GET /api/library/review': reply({
     items: [
       {

@@ -112,7 +112,7 @@ def test_upload_transcribes_once_keeps_voiceprints_and_drops_the_upload(client: 
     assert recording["status"] == "ready" and recording["speakers"] == 2 and recording["segments"] == 3
     assert "sha256" not in recording
 
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     stored = library.get(recording["id"])
     assert stored is not None
     transcript = library.transcript(stored)
@@ -122,7 +122,7 @@ def test_upload_transcribes_once_keeps_voiceprints_and_drops_the_upload(client: 
     assert [s.embedding for s in transcript.speakers] == [[1.0, 0.0], [0.0, 1.0]]
     folder = library.folder(recording["id"])
     assert sorted(p.name for p in folder.iterdir()) == ["playback.flac", f"transcript-{transcript.id}.json"]
-    assert not list((tmp_path / "library" / "local" / "uploads").glob("*.part"))
+    assert not list((tmp_path / "library" / "team" / "members" / "local" / "uploads").glob("*.part"))
 
     again = upload(client, wav_bytes(), "改了名字.wav")
     assert again.json()["new"] is False and again.json()["id"] == recording["id"]
@@ -135,7 +135,7 @@ def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp
     upload(client, wav_bytes())
     failed = settled(client)["recordings"][0]
     assert failed["status"] == "failed" and "private" not in failed["error"]
-    folder = tmp_path / "library" / "local" / "recordings" / failed["id"]
+    folder = tmp_path / "library" / "team" / "recordings" / failed["id"]
     assert [p.name for p in folder.iterdir()] == ["original.wav"]
     FakeTranscriber.fail = False
     assert client.post(f"/api/library/recordings/{failed['id']}/retry", headers=HEADERS).status_code == 202
@@ -146,7 +146,7 @@ def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp
 
 
 def test_interrupted_transcription_is_queued_again(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     part = tmp_path / "upload.part"
     part.write_bytes(wav_bytes())
     recording, new = library.add(part, "会议.wav")
@@ -163,7 +163,7 @@ def test_a_stop_right_after_publishing_leaves_a_ready_recording(
 ) -> None:
     """The recording is published before its upload is deleted: a stop in between never strands a queued recording
     whose upload is gone, and the next start deletes the leftover upload."""
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     part = tmp_path / "upload.part"
     part.write_bytes(wav_bytes())
     recording, _ = library.add(part, "会议.wav")
@@ -213,22 +213,28 @@ def test_library_is_not_scoped_to_a_twin(client: TestClient) -> None:
 def test_backups_hard_link_library_recordings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TWIN_HOME", str(tmp_path / "home"))
     data = tmp_path / "data"
-    folder = data / "library" / "local" / "recordings" / "rec_1"
+    folder = data / "library" / "team" / "recordings" / "rec_1"
     folder.mkdir(parents=True)
     for name in ("transcript-a.json", "playback.flac", "original.wav", "audio.wav", ".transcript-b.json.tmp"):
         (folder / name).write_bytes(b"x")
+    # An old library set aside when it was merged into the team's.
+    aside = data / "library" / ".legacy" / "abc" / "recordings" / "rec_2"
+    aside.mkdir(parents=True)
+    (aside / "playback.flac").write_bytes(b"z")
     (data / "notes").mkdir()
     (data / "notes" / "recordings").mkdir()
     (data / "notes" / "recordings" / "copy.txt").write_text("y")
     target = backup(TwinPaths.from_env(), data, tmp_path / "twin.toml")
-    copied = target / "data" / "library" / "local" / "recordings" / "rec_1"
+    copied = target / "data" / "library" / "team" / "recordings" / "rec_1"
     assert sorted(p.name for p in copied.iterdir()) == ["playback.flac", "transcript-a.json"]
     assert (copied / "playback.flac").stat().st_ino == (folder / "playback.flac").stat().st_ino
+    kept = target / "data" / "library" / ".legacy" / "abc" / "recordings" / "rec_2" / "playback.flac"
+    assert kept.stat().st_ino == (aside / "playback.flac").stat().st_ino
     other = target / "data" / "notes" / "recordings" / "copy.txt"
     assert other.stat().st_ino != (data / "notes" / "recordings" / "copy.txt").stat().st_ino
     # A restore copies: the restored recordings share no file with the backup.
     restored = tmp_path / "restored"
     restore(target, restored, tmp_path / "restored.toml", services_stopped=True)
-    back = restored / "library" / "local" / "recordings" / "rec_1"
+    back = restored / "library" / "team" / "recordings" / "rec_1"
     assert sorted(p.name for p in back.iterdir()) == ["playback.flac", "transcript-a.json"]
     assert (back / "playback.flac").stat().st_ino != (copied / "playback.flac").stat().st_ino

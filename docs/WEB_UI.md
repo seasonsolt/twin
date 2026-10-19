@@ -274,23 +274,26 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `PUT /api/uploads/{id}?offset=N` | octet-stream 流式追加，≤16 MiB；不匹配时 409 `{offset}`，成功 `{offset}`；中断或超限回滚本次分片 |
 | `GET /api/uploads/{id}` / `DELETE /api/uploads/{id}` | `{offset,size}` / 取消并删除分片；不存在 GET 返回中文 404 |
 | `POST /api/uploads/{id}/finish` | 完成后 SHA 去重、保留原件、排队 media_ingest；返回来源字段、new、job_id；可重复调用 |
-| `GET /api/library` | 当前账号的录音库（不属于某个分身，不看 `X-Twin-Persona`）：`{recordings,pending,max_pending,asr,capacity:{free_bytes,arriving_bytes,arriving,headroom_bytes}}`，每段录音另带 `people`（认出的人名）和 `unsettled`（还没定的说话人数），录音列表据此显示“已认人 / N 位待确认 / 还没认人”，`proofread` 为 `done`/`failed`/`waiting`/空（已校对 / 校对未完成用原文 / 待校对 / 无人确认不校对）；`quota:{limit,hours,used,exhausted,resets_at,waiting_proofread,waiting_twins}` 是批次额度，用完时页面提示暂停了什么，额度腾出后这次请求会补启暂停的校对和分身重建；团队页把有未定说话人、又不在“拿不准”队列里的录音列为“试听并确认”；同时补启排队中的转写 |
+| `GET /api/library` | 团队录音库里当前账号能看的录音（上传的、参会的，管理员看全部；不属于某个分身，不看 `X-Twin-Persona`），每段带 `can_edit`：`{recordings,pending,max_pending,asr,capacity:{free_bytes,arriving_bytes,arriving,headroom_bytes}}`，每段录音另带 `people`（认出的人名）和 `unsettled`（还没定的说话人数），录音列表据此显示“已认人 / N 位待确认 / 还没认人”，`proofread` 为 `done`/`failed`/`waiting`/空（已校对 / 校对未完成用原文 / 待校对 / 无人确认不校对）；`quota:{limit,hours,used,exhausted,resets_at,waiting_proofread,waiting_twins}` 是批次额度，用完时页面提示暂停了什么，额度腾出后这次请求会补启暂停的校对和分身重建；团队页把有未定说话人、又不在“拿不准”队列里的录音列为“试听并确认”；同时补启排队中的转写 |
 | `POST/GET/PUT/DELETE /api/library/uploads…` | 与 `/api/uploads` 相同的分片协议；创建时排队数（排队/转写中 + 未传完）达到 `[library].max_pending` 返回 409，传完后可用空间会低于 `headroom_gb` 返回 507 |
-| `POST /api/library/uploads/{id}/finish` | 按 SHA 去重为录音（`new`），依次转写（与分身录音共用一个转写名额）；转写稿与 FLAC 试听文件校验后删除原件 |
+| `POST /api/library/uploads/{id}/finish` | 按 SHA 去重为录音（`new`），依次转写（与分身录音共用一个转写名额）；转写稿与 FLAC 试听文件校验后删除原件。同事先传过同一段时只返回 `{id,filename,new:false,mine:false}`，录音仍归先传的人 |
 | `POST /api/library/recordings/{id}/retry` / `DELETE /api/library/recordings/{id}` | 失败且原件仍在时重新排队，否则 409 / 删除录音及其文件，转写中 409；删除会关闭用到它的团队分身直到重建 |
-| `GET /api/library/recordings/{id}` | 录音加 `transcript_id`、`revision`、`segments` 和 `speakers`（`decision`、`person_id`、`rejected`、`sample`、`auto`、`candidates`、`near`、`samples`） |
+| `GET /api/library/recordings/{id}` | 录音加 `transcript_id`、`revision`、`can_edit`、`mine`（归给当前账号的说话人）、`segments` 和 `speakers`（`decision`、`person_id`、`sample`、`auto`、`disputed`、`samples`；能改时另有 `rejected`、`candidates`、`near`）。看不到的录音 404，能看不能改的录音上做修改 403 |
+| `POST /api/library/recordings/{id}/speakers/{sid}/not-me` | 会上被确认的人说这段不是自己：归属清空、记为不是 TA、标 `disputed` 等上传者处理；不是归给自己的 409 |
 | `GET /api/library/recordings/{id}/speakers/{sid}/samples/{i}` | 该说话人第 i 段试听 WAV（0 起，个数见 `samples`） |
 | `PUT /api/library/recordings/{id}/speakers/{sid}` | `{transcript_id,revision,action:confirm\|unknown\|mixed\|reject\|clear,person_id?,new_person?,sample?}`，返回 `{revision,person_id}`；转写或修订号已变 409 |
-| `GET /api/library/review` | 未决定且有候选的说话人，最像的在前 |
-| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 人物列表（确认过的录音数、秒数、样本数、`persona_id`、`updating`、`auto` 未命名、`gender` 性别 male/female/空、`recording_id` 可试听的一段录音）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
+| `GET /api/library/review` | 当前账号能改的录音里，有人说“不是我”的在前，然后是未决定且有候选的说话人，最像的在前 |
+| `GET/POST /api/library/people`、`DELETE /api/library/people/{id}` | 团队人物名单（确认过的录音数、秒数、样本数、`persona_id` 仅当前账号能管理该分身时给出、`updating`、`auto` 未命名、`gender` 性别 male/female/空、`recording_id` 能看的一段录音、`can_manage`、`self_claimed`、`twin_elsewhere` 分身由别的同事管理、`similar` 仅管理员可见的可能同一人）/ `{name}` 新建，重名 409 / 删除人物及其归属和样本，已有分身 409 |
 | `PATCH /api/library/people/{id}` | `{name?, gender?}`：改名（未命名的人起名后不再是“未命名”），重名 409；同场的分身随之重建，已有分身同步改名。改性别不重建；已有分身时，若当前插画形象与性别不符，换成该性别的一款（生成分身时同样按性别选） |
-| `GET /api/admin/system?refresh=` | 仅管理员（否则 403）。GPU 机器上各服务的检查记录（`services`：`key/name/enabled/address/latest/since/checks/failures/availability/first_at/last_failure/buckets`，每分钟一次、保留一天；朗读服务关闭时不检查）、`switches.tts/video`（`configured/enabled/missing/changed_at/changed_by`）、`config`（各服务 twin.toml 的主机、端口和模型，不含路径、命令、密钥）、`models`（`[llm]`/`[chat_llm]`）、`editable_models`（`[llm]`/`[chat_llm]`/`[embed]` 的完整地址、模型名、`locked` 不能改的原因、`custom/changed_at/changed_by`）、`keys`（环境变量名、用途、`set`，从不含值）、`env_file`（密钥写入的文件名，不含路径）、`audit`（最近 20 条修改：谁、何时、改了什么，从不含密钥值）和 `quota`（当前账号用量加 `custom/default_limit/default_hours`）；`refresh=true` 立即检查一次（5 秒内不重复） |
+| `GET /api/admin/system?refresh=` | 仅管理员（否则 403）。GPU 机器上各服务的检查记录（`services`：`key/name/enabled/address/latest/since/checks/failures/availability/first_at/last_failure/buckets`，每分钟一次、保留一天；朗读服务关闭时不检查）、`switches.tts/video`（`configured/enabled/missing/changed_at/changed_by`）、`config`（各服务 twin.toml 的主机、端口和模型，不含路径、命令、密钥）、`models`（`[llm]`/`[chat_llm]`）、`editable_models`（`[llm]`/`[chat_llm]`/`[embed]` 的完整地址、模型名、`locked` 不能改的原因、`custom/changed_at/changed_by`）、`keys`（环境变量名、用途、`set`，从不含值）、`env_file`（密钥写入的文件名，不含路径）、`audit`（最近 20 条修改：谁、何时、改了什么，从不含密钥值）和 `quota`（团队录音库的用量加 `custom/default_limit/default_hours`）；`refresh=true` 立即检查一次（5 秒内不重复） |
 | `PUT /api/admin/system/switches/{tts\|video}` | `{enabled}`，立即生效并写入 `data/system.json`，返回同上；未配置 409，其他名字 404 |
 | `PUT /api/admin/system/features/{work\|ledger}` | `{enabled}`，对所有分身、所有成员立即生效，写入 `data/system.json` 并记审计；关闭后菜单不再出现，`/api/persona/work*`、`/api/persona/ledger*` 返回 403 `{detail:"管理员已关闭…", code:"feature_off"}`，已有任务和记录保留。聊天不能关闭（404）。`/api/whoami` 带 `features:{work,ledger}` 给前端决定菜单 |
 | `PUT /api/admin/system/models/{llm\|chat_llm\|embed}` | `{base_url?, model?}` 代替 twin.toml 的地址和模型名，空项沿用 twin.toml，两项都空时恢复；写入 `data/system.json`，立即重建模型客户端、所有分身一起生效；只有 OpenAI 兼容接口能改（否则或未配置 400），地址须 http(s)、不带账号密码和查询参数（400），其他名字 404。换向量模型后各分身在后台重新生成检索向量，完成前按关键词检索 |
 | `PUT /api/admin/system/keys/{env}` | `{value}` 设置、`{}` 移除；只接受 `keys` 里列出的变量名（否则 404），值不能含换行等控制字符（400）。写入服务器的 env 文件（`$TWIN_ENV_FILE`，否则 `./.env`，保持 0600，原子替换，保留其他行；权限不是 0600 时 409），同时更新运行中的进程并重建客户端；`TWIN_API_TOKEN` 由另一个进程 `twin api` 读取，重启它才生效。审计写入 `data/system-audit.jsonl`（0600），只记变量名和是否设置 |
 | `PUT /api/admin/system/quota` | `{batch_tokens?, batch_hours?}` 覆盖 `[library]` 的批次额度（0 为不限，小时 0–720），两项都空时恢复 twin.toml；立即生效，等额度的校对和重建在录音库下一次刷新时继续 |
-| `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}` |
+| `POST /api/library/people/{id}/persona` | 生成该人物的团队分身（会议记录模式），幂等：`{persona_id,new}`；需要 `can_manage`，别的同事已建 409 |
+| `POST /api/library/people/{id}/merge` / `.../apart` | 仅管理员：`{into}` 把这个人并入另一人（被并入方有自己的分身时 409）/ `{other}` 两人不是同一个人 |
+| `GET/PUT/DELETE /api/library/voice` 等 | 员工 1b：企业账号读一句话，在团队录音库里听推给自己的声音并确认“是我”，见 `web/voice.py` |
 | `POST /api/persona/sources/{id}/transcribe` | 重新转写原件，202 `{source_id,job_id}`；同来源已有任务则复用 |
 | `GET /api/persona/items?include_rejected=false` | 条目、细项/维度、证据场合数；`conflict=true` 只看证据矛盾的 |
 | `GET /api/persona/items/search?q=` | 按意思和关键词找条目（聊天的混合检索，向量不可用时只按关键词），最多 20 条，不含已删 |

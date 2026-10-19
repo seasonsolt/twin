@@ -1222,7 +1222,8 @@
   display: grid;
   gap: 12px;
 }
-.memory-status.status-needs_speaker {
+.memory-status.status-needs_speaker,
+.memory-status.status-needs_name {
   background: var(--note);
   color: var(--text-primary);
   border-color: transparent;

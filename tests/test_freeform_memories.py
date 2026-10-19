@@ -167,7 +167,7 @@ def test_upload_dates() -> None:
     assert all(e.date == dt.date(2024, 3, 1) for e in chat.expressions)
 
 
-def test_pdf_transcripts_keep_speakers_and_reject_sources_without_the_target(tmp_path: Path) -> None:
+def test_pdf_transcripts_keep_speakers_and_wait_when_the_target_is_not_found(tmp_path: Path) -> None:
     settings = Settings(target_name="林沐", target_aliases=["阿沐"], db_path=tmp_path / "twin.db")
     raw = "发⾔⼈ 1  00:00:00\n怎么看？\n林沐  00:00:02\n先做。\n发⾔⼈ 2  00:00:04\n好。"
     parsed = parse_upload("meeting.txt", raw.encode(), settings)
@@ -179,8 +179,9 @@ def test_pdf_transcripts_keep_speakers_and_reject_sources_without_the_target(tmp
     ]
     assert parsed.expressions[1].context == "发言人 1：怎么看？"
     without_target = "发⾔⼈ 1  00:00:00\n怎么看？\n发⾔⼈ 2  00:00:02\n先做。\n发⾔⼈ 1  00:00:04\n确定。"
-    with pytest.raises(ValueError, match="没有找到林沐的发言（稿里的说话人：发言人 1、发言人 2）"):
-        parse_upload("not-mine.txt", without_target.encode(), settings)
+    waiting = parse_upload("not-mine.txt", without_target.encode(), settings)
+    assert waiting.source.kind is SourceKind.INTERVIEW and waiting.source.media_status == "needs_name"
+    assert waiting.source.n_target == 0 and not any(e.is_target or e.context for e in waiting.expressions)
 
 
 @pytest.mark.parametrize(

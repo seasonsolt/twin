@@ -103,7 +103,9 @@ beforeEach(() => {
                   ? json(itemSummary([]))
                   : path === '/api/persona/coverage'
                     ? json({ facets: [], suggestions: [], kind_labels: {} })
-                    : json(useStatus.getState().data ?? status),
+                    : path === '/api/persona/aliases'
+                      ? json({ aliases: [], fixed: ['林沐'], not_me: 0 })
+                      : json(useStatus.getState().data ?? status),
     ),
   );
   vi.stubGlobal('fetch', fetcher);

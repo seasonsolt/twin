@@ -195,6 +195,7 @@ def test_sources_route_pages_with_summary_attention_and_filters(settings: Settin
         "total": 7,
         "duration_s": 120.0,
         "needs_speaker": 1,
+        "needs_name": 0,
         "remembered": 0,
         "nothing_found": 0,
         "failed": 0,

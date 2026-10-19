@@ -76,6 +76,8 @@ beforeEach(() => {
         egress: [],
       });
     if (path === '/api/media/capabilities') return json({ available: false });
+    if (path === '/api/persona/aliases')
+      return json({ aliases: ['林总'], fixed: ['林沐'], not_me: 0 });
     if (path === '/api/channels') return json({ wecom: null });
     if (path === '/api/me/assets')
       return json({
@@ -159,6 +161,9 @@ it('renders only the persona by default, keeps the header, and supports section 
   const dialog = await screen.findByRole('dialog', { name: '名字与介绍' });
   await waitFor(() => expect(dialog).toBeVisible());
   expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('朋友');
+  expect(
+    await within(dialog).findByRole('button', { name: '删除称呼 林总' }),
+  ).toBeVisible();
 });
 
 it.each(['overview', 'memories', 'assets'])(

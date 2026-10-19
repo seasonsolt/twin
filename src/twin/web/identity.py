@@ -14,6 +14,7 @@ from ..identity import Identity
 from ..media.schema import AVATAR_ALIASES, AVATAR_CHOICES, AVATAR_PRESETS
 from ..persona.sources import parse_note
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..persona.transcripts import settle
 
 
 class IdentityBody(BaseModel):
@@ -77,6 +78,8 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
         note = parse_note(body.about, named, "自我介绍") if body.about else None
         with PersonaStore(settings.db_path) as store:
             changed = store.set_identity(body.name, body.about, note)
+            # Transcripts are attributed by the name too: the new one may be in a waiting transcript, the old one gone.
+            changed = bool(settle(store, settings)) or changed
         if changed:
             queue_build()
         return get_identity(request)

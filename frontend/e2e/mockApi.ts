@@ -510,12 +510,82 @@ const memories = [
     duration_s: 1800,
     transcribed_s: 720,
   }),
+  memory('s-review', '2026-10-12 方案评审纪要.pdf', 'needs_name', {
+    detected_kind_label: '访谈',
+  }),
 ];
+
+// Text transcripts waiting for 林舟 to say which speaker is them: two names across files, one label-only file.
+const transcriptRoster = {
+  pending: 3,
+  names: [
+    {
+      name: '许清禾',
+      segments: 42,
+      chars: 3180,
+      files: 3,
+      samples: [
+        '留存口径我建议按自然周算，不然和上个季度的报表对不上，回头解释成本更高。',
+        '发布前那一周我们只修阻塞问题，新需求一律排到下个迭代。',
+      ],
+      likely: '说得最多',
+    },
+    {
+      name: '林舟老师',
+      segments: 27,
+      chars: 2210,
+      files: 2,
+      samples: [
+        '发布时间我倾向定在下周二，周一留给回归和灰度，出问题还有一天能回滚。',
+        '这个口径先按清禾说的来，季度报表我去和财务对一下。',
+        '不挪了，先把数据核对完。',
+      ],
+      likely: '和你的名字相近',
+    },
+    {
+      name: '周石言',
+      segments: 9,
+      chars: 520,
+      files: 1,
+      samples: ['灰度比例先放 5%，看两天崩溃率再说。'],
+      likely: null,
+    },
+  ],
+  names_total: 3,
+  files: [
+    {
+      source_id: 's-standup',
+      title: '2026-10-14 站会',
+      first_date: '2026-10-14',
+      speakers: [
+        {
+          label: '发言人1',
+          segments: 6,
+          chars: 310,
+          files: 1,
+          samples: ['今天先把登录页的埋点补上，下午和测试对一下用例。'],
+        },
+        {
+          label: '发言人2',
+          segments: 4,
+          chars: 180,
+          files: 1,
+          samples: ['我这边接口已经联调完了，等前端发版。'],
+        },
+      ],
+    },
+  ],
+  files_total: 1,
+  aliases: [],
+  fixed: ['林舟'],
+  not_me: 0,
+};
 
 const sourceSummary = {
   total: memories.length,
   duration_s: 5220,
   needs_speaker: 1,
+  needs_name: 3,
   busy: 1,
   remembered: 2,
   nothing_found: 0,
@@ -841,6 +911,12 @@ const handlers: Record<string, Handler> = {
       },
     ],
   }),
+  'GET /api/persona/transcripts/speakers': () => transcriptRoster,
+  'GET /api/persona/aliases': () => ({
+    aliases: ['林总'],
+    fixed: ['林舟'],
+    not_me: 2,
+  }),
   'GET /api/persona/sources': (url) =>
     url.searchParams.get('limit') === '0'
       ? { items: [], total: memories.length, summary: sourceSummary }
@@ -851,7 +927,7 @@ const handlers: Record<string, Handler> = {
           ...(url.searchParams.get('attention') === 'true'
             ? {
                 attention: memories.filter(
-                  (row) => row.status !== 'remembered',
+                  (row) => !['remembered', 'needs_name'].includes(row.status),
                 ),
               }
             : {}),

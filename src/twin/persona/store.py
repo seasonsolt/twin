@@ -14,6 +14,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,31 @@ def stored_identity(path: Path) -> tuple[str | None, str]:
         return None, ""
     with PersonaStore(path) as store:
         return store.get_meta("identity:name") or None, store.get_meta("identity:about") or ""
+
+
+# Names the person said are theirs in multi-person transcripts, and names they said are not: kept per persona, so the
+# next upload is attributed without asking again.
+ALIASES_KEY = "identity:aliases"
+NOT_ME_KEY = "identity:not_me"
+# ``speaker_claim:<source_id>``: the labels the person picked in one transcript (``[]``: none of them is the person).
+CLAIM_PREFIX = "speaker_claim:"
+
+
+@dataclass(frozen=True)
+class SpeakerNames:
+    """What the person said about the speakers of their transcripts."""
+
+    name: str | None = None
+    aliases: tuple[str, ...] = ()
+    not_me: frozenset[str] = frozenset()
+    claims: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+def stored_speaker_names(path: Path) -> SpeakerNames:
+    if not path.is_file():
+        return SpeakerNames()
+    with PersonaStore(path) as store:
+        return store.speaker_names()
 
 
 def stored_avatar(path: Path, configured: str = "chestnut") -> str:
@@ -390,6 +416,21 @@ class PersonaStore:
             )
         return existed is None
 
+    def reattribute_source(self, parsed: ParsedSource) -> None:
+        """Store a source again after who is the person in it changed: what was extracted from it and the
+        commitments read from it are forgotten (the ones the person reviewed stay), so the next build reads it anew."""
+        source_id = parsed.source.source_id
+        with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.put_source(parsed)
+            chunks = [r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE source_id = ?", (source_id,))]
+            db.executemany("DELETE FROM p_candidates WHERE chunk_id = ?", [(c,) for c in chunks])
+            db.execute("DELETE FROM p_chunks WHERE source_id = ?", (source_id,))
+            db.execute(
+                "DELETE FROM p_meta WHERE key IN (?, ?)", (f"source_error:{source_id}", f"ledger_done:{source_id}")
+            )
+            self._drop_ledger(db, source_id, reviewed=False)
+
     def list_sources(self, kind: SourceKind | None = None) -> list[Source]:
         with self._lock:
             rows = self._db.execute("SELECT json FROM p_sources ORDER BY first_date, source_id").fetchall()
@@ -447,8 +488,13 @@ class PersonaStore:
             if deleted:
                 self._sources_changed(db)
                 db.execute(
-                    "DELETE FROM p_meta WHERE key IN (?, ?, ?)",
-                    (f"source_pending:{source_id}", f"source_error:{source_id}", f"ledger_done:{source_id}"),
+                    "DELETE FROM p_meta WHERE key IN (?, ?, ?, ?)",
+                    (
+                        f"source_pending:{source_id}",
+                        f"source_error:{source_id}",
+                        f"ledger_done:{source_id}",
+                        f"{CLAIM_PREFIX}{source_id}",
+                    ),
                 )
                 self._drop_ledger(db, source_id, reviewed=True)
                 if source and source.media_sha and re.fullmatch(r"[0-9a-f]{64}", source.media_sha):
@@ -920,6 +966,27 @@ class PersonaStore:
                 "SELECT key, value FROM p_meta WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
             ).fetchall()
         return {key[len(prefix) :]: value for key, value in rows}
+
+    def speaker_names(self) -> SpeakerNames:
+        return SpeakerNames(
+            name=self.get_meta("identity:name") or None,
+            aliases=tuple(json.loads(self.get_meta(ALIASES_KEY) or "[]")),
+            not_me=frozenset(json.loads(self.get_meta(NOT_ME_KEY) or "[]")),
+            claims={sid: tuple(json.loads(value)) for sid, value in self.meta_with_prefix(CLAIM_PREFIX).items()},
+        )
+
+    def set_speaker_names(self, aliases: list[str], not_me: list[str]) -> None:
+        with self._tx() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (ALIASES_KEY, json.dumps(aliases, ensure_ascii=False))
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO p_meta VALUES (?, ?)",
+                (NOT_ME_KEY, json.dumps(sorted(not_me), ensure_ascii=False)),
+            )
+
+    def set_speaker_claim(self, source_id: str, labels: list[str]) -> None:
+        self.set_meta(CLAIM_PREFIX + source_id, json.dumps(labels, ensure_ascii=False))
 
     def kernel_built(self) -> KernelVersion | None:
         value = self.get_meta("kernel:built")

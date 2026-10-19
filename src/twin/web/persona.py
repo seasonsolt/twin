@@ -393,6 +393,9 @@ def register(
     from . import claims
 
     claims.register(app, settings, ingestion)
+    from . import transcripts
+
+    transcripts.register(app, settings, queue_build)
     from . import ledger
 
     ledger.register(app, settings, backends, jobs)
@@ -558,7 +561,7 @@ def register(
             return (
                 state in MEDIA_PENDING
                 or state == "processing"
-                or (source.candidates_pending and state not in {"failed", "needs_asr", "needs_speaker"})
+                or (source.candidates_pending and state not in {"failed", "needs_asr", "needs_speaker", "needs_name"})
             )
 
         def row(source: Source) -> dict[str, Any]:
@@ -583,6 +586,7 @@ def register(
                 "total": len(sources),
                 "duration_s": sum(s.duration_s or 0 for s in sources),
                 "needs_speaker": sum(statuses[s.source_id] == "needs_speaker" for s in sources),
+                "needs_name": sum(statuses[s.source_id] == "needs_name" for s in sources),
                 "remembered": sum(statuses[s.source_id] == "remembered" for s in sources),
                 "nothing_found": sum(statuses[s.source_id] == "nothing_found" for s in sources),
                 "failed": sum(statuses[s.source_id] == "failed" for s in sources),

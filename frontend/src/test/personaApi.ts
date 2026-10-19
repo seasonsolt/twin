@@ -43,6 +43,7 @@ export function sourcesPage(url: string, fixtures: readonly object[]) {
       ),
       needs_speaker: rows.filter((row) => row.status === 'needs_speaker')
         .length,
+      needs_name: rows.filter((row) => row.status === 'needs_name').length,
       remembered: rows.filter((row) => row.status === 'remembered').length,
       nothing_found: rows.filter((row) => row.status === 'nothing_found')
         .length,

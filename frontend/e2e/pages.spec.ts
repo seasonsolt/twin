@@ -134,6 +134,26 @@ for (const { name, path, ready, viewport, setup } of pages) {
   });
 }
 
+test('transcript claim', async ({ page }, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/profile?section=memories');
+  await page
+    .getByRole('button', { name: '有 3 份文字记录需要确认哪位是你' })
+    .click();
+  const dialog = page.getByRole('dialog', { name: '哪位是你' });
+  await expect(dialog.getByText('2026-10-14 站会')).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(
+    `transcript-claim-${info.project.name}.png`,
+  );
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
 test('recording controls', async ({ page }) => {
   const missing: string[] = [];
   await mockApi(page, missing);

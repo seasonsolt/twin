@@ -13,7 +13,9 @@ Parsers here are pure: text in, ``ParsedSource`` out. Formats:
 - chat: plain text with one message per ``<date time> <speaker>：<text>`` line (also ``[date time] speaker: text``),
   or WeChat-style blocks (a ``<speaker> <date time>`` header line, then the message lines); CSV or JSON with
   time / sender / content columns. Lines without a header continue the previous message.
-- interview: ``<speaker>：<text>`` lines (no times); the date comes from the file name or the caller.
+- interview: ``<speaker>：<text>`` lines (no times); the date comes from the file name or the caller. A transcript in
+  which no speaker is known to be the person is kept with ``media_status="needs_name"`` and every line counted as
+  someone else's, until the person says which name or label is theirs (``attribute``).
 - document: Markdown or plain text written by the person; one expression per paragraph.
 """
 
@@ -35,7 +37,7 @@ from ..config import Settings
 from ..util import date_from_name
 from .dimensions import FACET_BY_ID
 from .schema import Expression, ParsedSource, Source, SourceKind
-from .store import PersonaStore, stored_identity
+from .store import PersonaStore, SpeakerNames, stored_speaker_names
 from .text import MAX_FILE_BYTES, extract_text
 
 CONTEXT_MESSAGES = 3
@@ -121,6 +123,7 @@ class ExpressionView:
             settings.target_name,
             store.get_meta("identity:name") or settings.target_name,
             *settings.target_aliases,
+            *store.speaker_names().aliases,
         }
         others = {
             e.speaker
@@ -192,9 +195,10 @@ def _assemble(
     settings: Settings,
     channel: str,
     skipped: list[str],
+    source_id: str | None = None,
 ) -> ParsedSource:
     """Messages to expressions; a target message gets the other people's messages just before it as context."""
-    source_id = source_id_for(kind, origin, raw)
+    source_id = source_id or source_id_for(kind, origin, raw)
     expressions: list[Expression] = []
     recent: list[str] = []
     for i, msg in enumerate(m for m in messages if m.text.strip()):
@@ -257,6 +261,13 @@ _CLOCK_BEFORE = re.compile(
 )
 # Labels a transcription service gives speakers it could not name.
 _GENERIC_SPEAKER = re.compile(r"(?:发言人|说话人|讲话人|speaker|spk)\s*(?:\d+|[a-z])", re.IGNORECASE)
+
+
+def is_generic_speaker(speaker: str) -> bool:
+    """``发言人1``, ``Speaker A``: a label that names no one, so it never becomes one of the person's names."""
+    return bool(_GENERIC_SPEAKER.fullmatch(speaker))
+
+
 _CSV_TIME = ("time", "date", "datetime", "timestamp", "时间", "日期", "发送时间")
 _CSV_SENDER = ("sender", "from", "speaker", "name", "talker", "发送者", "发言人", "发送人", "昵称")
 _CSV_TEXT = ("content", "text", "message", "msg", "内容", "消息", "消息内容")
@@ -330,9 +341,54 @@ def _text_to_messages(
     return messages, skipped
 
 
-def _with_identity_alias(settings: Settings) -> Settings:
-    name = stored_identity(settings.db_path)[0]
-    return settings.model_copy(update={"target_aliases": [*settings.target_aliases, name]}) if name else settings
+def _with_identity_alias(settings: Settings, names: SpeakerNames | None = None) -> Settings:
+    """``settings`` that also know the person by the name they gave and the names they claimed in transcripts."""
+    names = names or stored_speaker_names(settings.db_path)
+    extra = [n for n in (names.name, *names.aliases) if n and not settings.is_target(n)]
+    return settings.model_copy(update={"target_aliases": [*settings.target_aliases, *extra]}) if extra else settings
+
+
+NEEDS_NAME = "needs_name"
+
+
+def is_transcript(source: Source) -> bool:
+    """A multi-person text transcript whose speakers can be attributed again: not a recording (its speakers are
+    claimed by voice), not the person's answer to a follow-up question, and with its real names still stored."""
+    return (
+        source.kind is SourceKind.INTERVIEW
+        and not source.media_sha
+        and source.text_state == "raw"
+        and not source.origin.startswith("followup:")
+    )
+
+
+def attribute(
+    source: Source, expressions: list[Expression], settings: Settings, names: SpeakerNames | None = None
+) -> ParsedSource:
+    """A transcript's lines attributed again with what the person said so far: their names and aliases everywhere,
+    plus the labels they picked in this transcript. Nothing found leaves the transcript waiting
+    (``media_status="needs_name"``) unless the person said none of its speakers is them: they picked nothing in it,
+    or every speaker has a name they said is not theirs."""
+    names = names or stored_speaker_names(settings.db_path)
+    settings = _with_identity_alias(settings, names)
+    claim = names.claims.get(source.source_id)
+    if claim:
+        settings = settings.model_copy(update={"target_aliases": [*settings.target_aliases, *claim]})
+    messages = [_Message(e.date, e.speaker, e.text) for e in sorted(expressions, key=lambda e: e.idx)]
+    parsed = _assemble(
+        source.kind, source.title, source.origin, "", messages, settings, source.title, [], source.source_id
+    )
+    speakers = {e.speaker for e in parsed.expressions}
+    decided = claim is not None or all(s in names.not_me for s in speakers)
+    waiting = not any(e.is_target for e in parsed.expressions) and not decided
+    parsed.source = source.model_copy(
+        update={
+            "n_expressions": len(parsed.expressions),
+            "n_target": sum(e.is_target for e in parsed.expressions),
+            "media_status": NEEDS_NAME if waiting else None,
+        }
+    )
+    return parsed
 
 
 def parse_chat(
@@ -360,21 +416,22 @@ def parse_chat(
 
 
 def parse_interview(path_name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
-    name = stored_identity(settings.db_path)[0] or settings.target_name
-    settings = _with_identity_alias(settings)
+    """A transcript of several people. When none of its speakers is known to be the person, it is kept waiting for
+    them to say which is (``attribute``) rather than refused, its lines all counted as someone else's meanwhile."""
+    names = stored_speaker_names(settings.db_path)
+    name = names.name or settings.target_name
     date = date or date_from_name(Path(path_name).stem)
     timed = sum(bool(_timed_turn(line)) for line in raw.splitlines()) >= MIN_TRANSCRIPT_HEADERS
     messages, skipped = _text_to_messages(raw, date, speaker_lines=True, timed=timed)
     for m in messages:
         m.date = m.date or date
-    if not any(settings.is_target(m.speaker) for m in messages):
-        seen = "、".join(list(dict.fromkeys(m.speaker for m in messages))[:8]) or "无"
-        raise ValueError(
-            f"{path_name}：这是多人对话记录，但没有找到{name}的发言（稿里的说话人：{seen}）。"
-            f"请把稿里你的称呼改成「{name}」，或加到 twin.toml 的 target_aliases，再重新导入"
-        )
+    if not messages:
+        raise ValueError(f"{path_name}：没有找到{name}或其他人的发言")
     title = Path(path_name).stem
-    return _assemble(SourceKind.INTERVIEW, title, path_name, raw, messages, settings, title, skipped)
+    parsed = _assemble(SourceKind.INTERVIEW, title, path_name, raw, messages, settings, title, skipped)
+    attributed = attribute(parsed.source, parsed.expressions, settings, names)
+    attributed.skipped_lines = parsed.skipped_lines
+    return attributed
 
 
 # ---------------------------------------------------------------- document

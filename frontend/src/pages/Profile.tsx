@@ -17,6 +17,7 @@ import { StageHeader } from '../components/layout/StageHeader';
 import { AvatarPreview } from '../features/avatar/AvatarPreview';
 import { AvatarPicker } from '../features/avatar/AvatarPicker';
 import { presetId, presets } from '../features/avatar/presets';
+import { AliasList } from '../features/identity/AliasList';
 import { IdentityForm } from '../features/identity/IdentityForm';
 import { useIdentity } from '../features/identity/useIdentity';
 import { SelfAssets } from '../features/assets/SelfAssets';
@@ -427,6 +428,7 @@ export function Profile() {
             }}
           />
         )}
+        {editing && <AliasList />}
       </Dialog>
     </TabsPrimitive.Root>
   );

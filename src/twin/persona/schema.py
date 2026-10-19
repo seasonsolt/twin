@@ -80,8 +80,10 @@ class Source(BaseModel):
     media_sha: str | None = None
     duration_s: float | None = None
     creation_time: str | None = None
+    # ``needs_name``: a text transcript waiting for the person to say which of its speakers is them (not media).
     media_status: (
-        Literal["queued", "extracting", "transcribing", "needs_asr", "needs_speaker", "ready", "failed"] | None
+        Literal["queued", "extracting", "transcribing", "needs_asr", "needs_speaker", "needs_name", "ready", "failed"]
+        | None
     ) = None
     voice_candidates: int = 0
     portrait_candidates: int = 0

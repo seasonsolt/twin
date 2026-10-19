@@ -47,6 +47,7 @@ import {
 import { usePersonas } from '../stores/personas';
 import { useAuth } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
+import { TranscriptClaim } from '../features/sources/TranscriptClaim';
 
 const accept =
   '.txt,.md,.pdf,.docx,.epub,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus';
@@ -65,7 +66,8 @@ export interface Memory {
     | 'extracting'
     | 'transcribing'
     | 'needs_asr'
-    | 'needs_speaker';
+    | 'needs_speaker'
+    | 'needs_name';
   remembered: number;
   kind?: string;
   duration_s?: number | null;
@@ -80,6 +82,7 @@ export interface SourceSummary {
   total: number;
   duration_s: number;
   needs_speaker: number;
+  needs_name?: number;
   busy: number;
   remembered: number;
   nothing_found: number;
@@ -298,6 +301,7 @@ export function Memories({
   const confirm = useConfirm();
   const mobile = useMobile();
   const [adding, setAdding] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<SourceSummary>(emptySummary);
@@ -880,6 +884,15 @@ export function Memories({
             有 {summary.needs_speaker} 段录音需要确认哪位是你
           </Button>
         )}
+        {(summary.needs_name ?? 0) > 0 && (
+          <Button
+            variant="secondary"
+            className="speaker-banner min-h-11 w-full text-left"
+            onClick={() => setClaiming(true)}
+          >
+            有 {summary.needs_name} 份文字记录需要确认哪位是你
+          </Button>
+        )}
         {(!mobile || embedded) && (
           <section
             ref={addPanel}
@@ -970,7 +983,8 @@ export function Memories({
                               memory.media_sha)) && (
                             <Check size={14} aria-hidden />
                           )}
-                          {memory.status === 'needs_speaker' ? (
+                          {memory.status === 'needs_speaker' ||
+                          memory.status === 'needs_name' ? (
                             '待确认'
                           ) : memory.status === 'needs_asr' ? (
                             '需要配置语音识别'
@@ -1150,6 +1164,14 @@ export function Memories({
             </Dialog>
           </>
         )}
+        <Dialog
+          open={claiming && active}
+          onOpenChange={setClaiming}
+          title="哪位是你"
+          body="确认后，这些文字记录会按你的选择重新整理；没确认之前，里面的话都不算你说的。"
+        >
+          <TranscriptClaim onChanged={() => void refresh()} />
+        </Dialog>
         <Dialog
           open={preview !== null && active}
           onOpenChange={(open) => {

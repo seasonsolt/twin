@@ -50,7 +50,7 @@ from .persona.profile import (
     stale_reason,
 )
 from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
-from .persona.sources import MEMORY_KIND_LABELS, parse_note, parse_source
+from .persona.sources import MEMORY_KIND_LABELS, NEEDS_NAME, parse_note, parse_source
 from .persona.store import NewerStoreError, PersonaStore
 from .persona.text import SUPPORTED_SUFFIXES
 from .usage import BudgetExceeded, UsageRecorder, active_recorder, call_stage, failure_directory, record_usage
@@ -917,6 +917,7 @@ def persona_import(
                 f"本人 {s.n_target} 条，{span}"
                 + (f"；未授权细项 {'、'.join(withheld)}" if withheld else "")
                 + (f"；无法识别的行 {len(parsed.skipped_lines)} 行" if parsed.skipped_lines else "")
+                + ("；没认出哪位说话人是你，请在网页的记忆页确认后再整理" if s.media_status == NEEDS_NAME else "")
             )
 
 

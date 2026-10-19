@@ -151,7 +151,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 本机默认 `[auth].enabled = false`，所有请求为管理员；团队部署启用 auth，不依赖 Cloudflare Access，也不读取 `Cf-Access-*`。登录方式由 `[auth].provider` 选择，`password_login = true` 再并列 twin 自己的账号密码：
 
-- **企业 SSO（主路径，`provider = "sso"`）**：借用同站另一个应用的会话 cookie，twin 带着它请求 `me_url`，200 为已登录、401 为未登录。身份取其中的 account（工号）、display_name 和 email；目前 SSO 只给 account，暂不给邮箱。工号和邮箱（有则）都是认领分身的依据（`Personas.claim`）。登录页上是“用享佳统一身份登录”按钮：表单 POST 到 `start_url`（那个应用的登录起点，它校验同站来源后跳往认证中心），没有 `start_url` 时链接到 `login_url`。两个地址都只能是本站路径。
+- **企业 SSO（主路径，`provider = "sso"`）**：借用同站另一个应用的会话 cookie，twin 带着它请求 `me_url`，200 为已登录、401 为未登录。身份取其中的 account（工号）、display_name 和 email；目前 SSO 只给 account，暂不给邮箱。工号和邮箱（有则）都是认领分身的依据（`Personas.claim`）。登录页上是“用享佳统一身份登录”按钮：表单 POST 到 `start_url`（那个应用的登录起点，它校验同站来源后跳往认证中心），没有 `start_url` 时链接到 `login_url`。两个地址都只能是本站路径。浏览器按 CSP `form-action` 检查表单的每一步跳转，所以 `start_url` 要和 `sign_in_origin`（认证中心的源）一起配置：twin 把它加进 `form-action`；缺了 `sign_in_origin` 时 `/api/auth/methods` 不给 `start_url`，按钮退回链接。
 - **twin 账号密码（`password_login = true`，或只用它时 `provider = "password"`）**：账号由 `twin account` 命令行管理，身份为 `user:<账号>`；同时带着 SSO cookie 和 twin 会话时以 SSO 为准。
 - **邮箱验证码（备选，`provider = "email"`）**：应用内验证码登录，身份就是邮箱。SMTP 设置、环境密码、隧道与 allowlist 部署步骤见 [使用指南](GUIDE.md#团队部署与登录)。
 

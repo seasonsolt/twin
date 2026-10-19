@@ -83,6 +83,7 @@ admin_emails = ["zhangxun@xjjk.com"]
 me_url = "http://127.0.0.1:8765/api/auth/me"   # 带着对方的会话 cookie 询问身份：200 已登录，401 未登录
 cookie = "audio_studio_session"
 start_url = "/auth/start?next=/twin/"          # 登录页“用享佳统一身份登录”按钮 POST 到这里，由那个应用跳转认证中心
+sign_in_origin = "https://center.example.com"  # 认证中心的源，加进 CSP form-action；不写时 start_url 不生效
 login_url = "/login?next=/twin/"               # 没有 start_url 时按钮改为链接到这个本站页面
 cache_seconds = 60
 ```

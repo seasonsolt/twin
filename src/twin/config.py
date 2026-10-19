@@ -347,11 +347,15 @@ class SSOSettings(BaseModel):
     the browser never hands twin an identity. twin's own sign-in page offers it as one button: a form posted to
     `start_url` (that app's endpoint that hands the browser to the company sign-in and back), or, without one, a
     link to `login_url`, that app's sign-in page. Signing out of twin also ends that app's session on this site.
+    `start_url` answers with a redirect to the company sign-in, which the browser follows only when twin's pages
+    allow forms to lead there: `sign_in_origin` names it (e.g. https://center.example.com), and without it the
+    button stays a link to `login_url`.
     """
 
     me_url: str = ""
     login_url: str = ""
     start_url: str = ""
+    sign_in_origin: str = ""
     cookie: str = ""
     cache_seconds: int = Field(default=60, ge=0, le=3600)
 
@@ -389,6 +393,8 @@ class AuthSettings(BaseModel):
             for key, value in (("login_url", sso.login_url), ("start_url", sso.start_url)):
                 if (value or key == "login_url") and (not value.startswith("/") or value.startswith("//")):
                     raise ValueError(f"[auth.sso] {key} 必须是本站路径，例如 /login?next=/twin/")
+            if sso.sign_in_origin and not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d{1,5})?", sso.sign_in_origin):
+                raise ValueError("[auth.sso] sign_in_origin 必须是认证中心的源，例如 https://center.example.com")
             return self
         if (
             self.enabled

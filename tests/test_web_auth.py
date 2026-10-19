@@ -732,7 +732,11 @@ def both(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Test
             password_login=True,
             admin_emails=["boss@xjjk.com"],
             sso=SSOSettings(
-                me_url=login.url, cookie="sso", login_url="/login?next=/twin/", start_url="/auth/start?next=/twin/"
+                me_url=login.url,
+                cookie="sso",
+                login_url="/login?next=/twin/",
+                start_url="/auth/start?next=/twin/",
+                sign_in_origin="https://center.example.com",
             ),
         ),
     )
@@ -760,6 +764,35 @@ def test_the_sign_in_page_learns_its_ways_while_signed_out(both: tuple[TestClien
         "email": False,
     }
     assert password_login(only_sso, "bob", "secret-123").status_code == 404
+
+
+def test_the_sso_button_posts_only_where_forms_may_follow_to_the_sign_in(
+    both: tuple[TestClient, FakeLogin], tmp_path: Path
+) -> None:
+    # Browsers check each redirect of a form post against form-action: start_url leads to the company sign-in.
+    web, login = both
+    assert (
+        "form-action 'self' https://center.example.com"
+        in web.get("/api/auth/methods").headers["content-security-policy"]
+    )
+    settings = Settings(
+        db_path=tmp_path / "no-origin" / "twin.db",
+        auth=AuthSettings(
+            enabled=True,
+            provider="sso",
+            sso=SSOSettings(me_url=login.url, cookie="sso", login_url="/login?next=/twin/", start_url="/auth/start"),
+        ),
+    )
+    with TestClient(create_app(settings), base_url="http://localhost") as client:
+        response = client.get("/api/auth/methods")
+    assert response.json()["sso"] == {"start_url": None, "login_url": "/login?next=/twin/"}
+    assert response.headers["content-security-policy"].endswith("form-action 'self'")
+    with pytest.raises(ValidationError, match="sign_in_origin"):
+        AuthSettings(
+            enabled=True,
+            provider="sso",
+            sso=SSOSettings(me_url=login.url, cookie="s", login_url="/login", sign_in_origin="https://a.example/x"),
+        )
 
 
 def test_own_accounts_sign_in_beside_sso(both: tuple[TestClient, FakeLogin]) -> None:

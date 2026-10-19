@@ -329,3 +329,43 @@ it('opens the file picker from the header and accepts files dropped on the page'
     ),
   );
 });
+
+it('shows a colleague’s meeting one was in without its controls, and says when a colleague uploaded a file first', async () => {
+  state.recordings = [
+    recording({
+      id: 'rec_2',
+      filename: '客户会.m4a',
+      unsettled: 2,
+      can_edit: false,
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library') return json(state);
+      if (url === '/api/library/uploads') return json({ id: 'u1', offset: 0 });
+      if (url.includes('?offset=0')) return json({ offset: 3 });
+      if (url.endsWith('/finish'))
+        return json({
+          id: 'rec_9',
+          filename: '周会.m4a',
+          new: false,
+          mine: false,
+        });
+      throw new Error(url);
+    }),
+  );
+  show();
+  const row = (await screen.findByText('客户会.m4a')).closest('li')!;
+  expect(within(row).getByText('你参加的')).toBeInTheDocument();
+  expect(within(row).queryByRole('button')).toBeNull();
+  expect(within(row).queryByRole('link', { name: '确认说话人' })).toBeNull();
+  await userEvent
+    .setup({ applyAccept: false })
+    .upload(screen.getByLabelText('选择录音文件'), [
+      new File(['abc'], '周会.m4a'),
+    ]);
+  expect(
+    await screen.findByText('「周会.m4a」已经有同事上传过，由 TA 整理'),
+  ).toBeInTheDocument();
+});

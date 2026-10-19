@@ -32,9 +32,17 @@ uv run twin --config ./twin.toml compute install asr-funasr --download-models
 
 命令以 `bash -lc` 执行，stdin 为 `{"audio": "<绝对 WAV 路径>", "language": "zh", "diarize": true}`；有本人参考声音时追加 `"reference": "<绝对 WAV 路径>"`；评测可再加 `"references": {"<名称>": "<绝对 WAV 路径>"}`（最多 32 份，asr-funasr 1.2.1 起），每个说话人另返回 `"similarities": {"<名称>": 0.71}`，一次转写比较多份声音。asr-funasr 1.3.0 起每个说话人另返回 `"embedding"`（单位声纹）；请求带 `"embed": true` 时只计算 `audio` 整段的声纹，返回 `{"ok": true, "embedding": [...]}`。stdout 可先输出日志，最后一行必须为 `{"ok": true, "segments": [{"start": 0.0, "end": 3.2, "text": "内容", "speaker": "S1"}], "speakers": [{"id": "S1", "seconds": 3.2, "similarity": 0.73}]}`，时间单位为秒，相似度是与参考声音的余弦相似度（0–1 或 null）。diarize/reference、segment.speaker 与 speakers 都是追加可选字段；旧驱动忽略新请求仍可用，没有 speaker 视为 S1。HTTP 后端不区分说话人，始终 S1。失败返回 `{"ok": false, "error": "..."}`。超时为 30 分钟加音频时长。后端错误不回显到网页，仅显示通用中文失败信息。密钥放环境变量，不写进命令字符串；命令后端默认本机，若命令实际调用外部服务可显式声明 `egress = "external"`。
 
-### 账号录音库
+### 团队录音库
 
-登录后的起始页是「团队」：会议里出现过的人和他们的分身、需要处理的事（新出现的声音、拿不准的说话人、转写中的录音）和“上传会议录音”；还没有录音时是上传引导，只能和某个分身聊天的访客直接进聊天。「录音库」是账号级的会议录音库，不属于任何一个分身：一段会议只转写一次，之后可以给会上的多位同事分别建分身。只有上传的账号能看到；登录关闭时只有一个本机库。数据在 `data/library/<账号键>/`，账号键是邮箱的哈希，路径里不出现邮箱：
+登录后的起始页是「团队」：会议里出现过的人和他们的分身、需要处理的事（新出现的声音、拿不准的说话人、有人说“不是我”的发言、可能是同一个人的两个人、转写中的录音）和“上传会议录音”；还没有录音时是上传引导，只能和某个分身聊天的访客直接进聊天。「录音库」是整个部署共用的团队录音库，不属于任何一个分身：一段会议只转写一次（同内容只算第一次上传的），之后可以给会上的多位同事分别建分身。每段录音记下上传者，按人分三档：
+
+- 上传者和管理员：看完整转写和试听，决定每位说话人是谁；登录关闭时本机访问者就是管理员。
+- 会上被确认的人：能看这场会的转写和试听，不能改归属；在标成自己的发言上点“不是我”，这段发言回到未定、以后不会再按声音归给 TA，并排在上传者“需要你处理”的最前面。上传者重新确认即为处理。
+- 其他人：看不到录音的任何内容，只能在员工 1b（`/api/library/voice`）里听到推给自己的那一句。
+
+人物是团队共用的名单，所有人都能在确认说话人时选到别人录音里的同事；但起名、合并未命名的声音、生成分身和删除只有“上传了 TA 所在录音的人”和管理员能做。排队上限 `max_pending` 按每人自己的上传计，批次额度是团队的。
+
+数据在 `data/library/team/`，成员各自的未传完上传和员工 1b 的声纹在 `members/<账号键>/`，账号键是账号的哈希，路径里不出现邮箱。早期版本每个账号一个库（`data/library/<账号键>/`）：启动时按最早的录音先后合并进团队库，一次完成。同内容的录音保留先上传的那份及其归属；录音文件用硬链接；同名的人只有当两边的分身属于同一个企业邮箱（或本人认领的是同一账号）时才合并，否则后来的改叫“张三（2）”，留给管理员在团队页“可能是同一个人”里合并或保持分开；合并前的分身重新指向团队库，并保持“记忆更新中”直到按团队库重建完成。原来的库原样移到 `data/library/.legacy/<账号键>/`（备份同样硬链接录音文件），回退旧版本时移回原处即可：
 
 - `library.db`：录音和状态（排队中 / 转写中 / 已转写 / 失败），重启后转写中的录音重新排队并自动继续；人物、说话人归属、声纹样本和每个团队分身的同步版本也在这里。
 - `recordings/<id>/transcript-<转写 id>.json`：全部分段（含空段，段号即后续引用的句子编号）与每位说话人的时长和声纹；`playback.flac`：16 kHz 单声道无损试听文件。两者写入临时文件、校验后才发布，之后不再修改；重新转写会生成新的转写 id。
@@ -92,7 +100,7 @@ stdout 最后一行：`{"ok": true, "candidates": [{"time": 2.5, "image": "<out_
 | `media.schema` | L0 数据契约（1） | 全部媒体契约：`PresentableAnswer`、`MediaScript`、`MediaManifest`、`SpeechRequest`、`SpeechResult`、`LipSyncTrack`、`AvatarSpec`；只依赖标准库、pydantic 和 `util` |
 | `media.tts` | L0 模型后端（2） | `SpeechSynthesizer` 协议、两个后端适配器（Cloudflare `melotts`、自托管 HTTP）、测试用的静音实现 |
 | `media.asr` | L0 模型后端（2） | 语音评测与音视频记忆共用的 `SpeechRecognizer` 协议、Cloudflare Whisper 与自托管 multipart 适配器 |
-| `media.ingest` / `media.claim` / `media.library` / `media.team` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、说话人决策、声音/形象候选、账号录音库存储与转写、人物与归属、声纹候选、团队分身来源 |
+| `media.ingest` / `media.claim` / `media.library` / `media.team` / `media.merge` / `media.voice` | 与 L4 同级（7） | 音频提取、长音频分片、命令/HTTP `Transcriber`、说话人决策、声音/形象候选、团队录音库存储与转写、旧个人库合并、员工 1b 的声纹比对、人物与归属、声纹候选、团队分身来源 |
 | `web.uploads` / `web.claims` / `web.library` | L5 接入（9） | 分片上传、原件保存、说话人确认/采纳、串行媒体任务与普通 persona 构建衔接、录音库路由与容量准入 |
 | `media.check` | 跨层评测（8） | 合成句集回听、字错率与合成墙钟秒/音频秒报告，不参与推理 |
 | `media.adapters` | 与 L4 同级（7） | 运行时输出到 `PresentableAnswer` 的适配器：`ChatReply` 适配器 |

@@ -28,7 +28,7 @@ from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
-from . import assets, gpu, library, media, persona, system
+from . import assets, gpu, library, media, persona, system, voice
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
@@ -153,7 +153,7 @@ class SecurityMiddleware:
             await JSONResponse({"detail": detail}, status_code=403)(scope, receive, send_hardened)
             return
         if scope["method"] == "PUT" and scope.get("path") in assets.UPLOAD_PATHS:
-            limit = assets.PORTRAIT_LIMIT if scope["path"] == "/api/me/portrait" else assets.VOICE_LIMIT
+            limit = assets.upload_limit(scope["path"])
             declared = headers.get("content-length", "")
             if declared.isdigit() and int(declared) > limit + 16384:
                 detail = "照片不能超过 15 MB" if scope["path"] == "/api/me/portrait" else "文件太大，请选择较小的文件"
@@ -487,6 +487,7 @@ def create_app(
     registry.make_app = persona_app
     registry.register(app)
     libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits)
+    voice.register(app, settings, libraries, registry)
     system.register(app, system_settings, monitor, libraries)
     previous_lifespan = app.router.lifespan_context
 

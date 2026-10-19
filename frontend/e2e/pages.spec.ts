@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi, NOW } from './mockApi';
+import { mockApi, NOW, weekly } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
@@ -17,6 +17,29 @@ const pages: {
     name: 'recording',
     path: '/#/library/r-weekly',
     ready: 'S3 是谁？',
+  },
+  {
+    // Someone identified in a colleague's meeting reads it, and may say a speaker given to them is not them.
+    name: 'recording-attendee',
+    path: '/#/library/r-weekly',
+    ready: '你参加了这场会',
+    setup: (page) =>
+      page.route('**/api/library/recordings/r-weekly', (route) =>
+        route.fulfill({
+          json: {
+            ...weekly,
+            can_edit: false,
+            mine: ['S2'],
+            // Whom the voices resemble is for the uploader only.
+            speakers: weekly.speakers.map((speaker) => ({
+              ...speaker,
+              candidates: undefined,
+              rejected: undefined,
+              near: undefined,
+            })),
+          },
+        }),
+      ),
   },
   {
     name: 'chat',
@@ -46,6 +69,36 @@ const pages: {
     name: 'memories',
     path: '/#/profile?section=memories',
     ready: '发布流程笔记.md',
+  },
+  {
+    // 员工 1b: signed in through the company login with no twin made for them.
+    name: 'member-voice',
+    path: '/#/chat',
+    ready: '留存口径我来重算',
+    setup: async (page) => {
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'sso:1001',
+            name: '赵晴',
+            address: 'zhaoqing@acme.cn',
+            admin: false,
+            auth_enabled: true,
+            provider: 'sso',
+          },
+        }),
+      );
+      await page.route('**/api/personas', (route) =>
+        route.fulfill({ json: [] }),
+      );
+      for (const path of ['**/api/identity', '**/api/status'])
+        await page.route(path, (route) =>
+          route.fulfill({
+            status: 409,
+            json: { detail: '先新建一个分身', code: 'no_persona' },
+          }),
+        );
+    },
   },
   {
     name: 'login',

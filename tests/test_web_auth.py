@@ -686,14 +686,16 @@ def test_sso_settings_are_validated(sso_settings: dict[str, str], message: str) 
         AuthSettings(enabled=True, provider="sso", sso=SSOSettings(**sso_settings))
 
 
-def test_recording_library_belongs_to_the_signed_in_account(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_recording_in_the_team_library_is_shown_to_its_uploader(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Whatever this machine has free, the upload is admitted (admission has its own tests).
     monkeypatch.setattr(
         "twin.web.library.shutil.disk_usage", lambda _: SimpleNamespace(total=10**12, used=0, free=10**12)
     )
     other = login(web, OTHER)
     member = login(web)
-    # No twin yet: the library is the account's, not a twin's.
+    # No twin yet: the library is the team's, not a twin's, and a recording is seen by whoever uploaded it.
     assert web.get("/api/library").json()["recordings"] == []
     created = web.post("/api/library/uploads", json={"filename": "周会.wav", "size": 4}, headers=CSRF).json()
     assert web.put(f"/api/library/uploads/{created['id']}?offset=0", content=b"RIFF", headers=CSRF).status_code == 200
@@ -702,7 +704,8 @@ def test_recording_library_belongs_to_the_signed_in_account(web: TestClient, mon
     web.cookies.set("twin_session", other)
     assert web.get("/api/library").json()["recordings"] == []
     assert web.get(f"/api/library/uploads/{created['id']}").status_code == 404
-    assert web.delete(f"/api/library/recordings/{recording['id']}", headers=CSRF).json() == {"deleted": True}
+    # A colleague neither in it nor its uploader cannot tell it is there.
+    assert web.delete(f"/api/library/recordings/{recording['id']}", headers=CSRF).status_code == 404
     web.cookies.set("twin_session", member)
     assert [r["id"] for r in web.get("/api/library").json()["recordings"]] == [recording["id"]]
     web.cookies.clear()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import posixpath
+import re
+import unicodedata
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
@@ -14,6 +16,13 @@ MAX_FILE_BYTES = 1024**3
 SUPPORTED_SUFFIXES = frozenset(
     {".pdf", ".docx", ".epub", ".html", ".htm", ".txt", ".md", ".csv", ".json", ".srt", ".vtt"}
 )
+# Kangxi radicals and CJK compatibility ideographs that PDF extraction emits for common characters (⼦ for 子);
+# only these are folded, so full-width punctuation keeps the person's own writing style.
+_COMPAT_IDEOGRAPHS = re.compile("[\u2f00-\u2fdf\uf900-\ufaff\U0002f800-\U0002fa1f]")
+
+
+def fold_compat_ideographs(text: str) -> str:
+    return _COMPAT_IDEOGRAPHS.sub(lambda m: unicodedata.normalize("NFKC", m[0]), text)
 
 
 class _HTMLText(HTMLParser):
@@ -90,7 +99,7 @@ def extract_text(name: str, data: bytes) -> str:
             raise ValueError("无法读取 PDF，请检查文件是否损坏或加密") from None
         if not text:
             raise ValueError("这个 PDF 没有可提取的文字（可能是扫描件）")
-        return text
+        return fold_compat_ideographs(text)
     if suffix == ".docx":
         from docx import Document
 

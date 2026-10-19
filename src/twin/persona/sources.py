@@ -26,6 +26,7 @@ import io
 import json
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -243,7 +244,19 @@ def _source(
 _SEP = r"\s*[：:]\s*"
 _CLOCK = r"\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?"
 _INLINE = re.compile(rf"^\s*\[?\s*{_DATE}{_TIME}\s*\]?\s+(?P<speaker>[^：:\s][^：:]{{0,30}}?){_SEP}(?P<text>.*)$")
-_HEADER = re.compile(rf"^\s*(?P<speaker>[^：:\s\d][^：:]{{0,30}}?)\s+(?:{_DATE}{_TIME}|{_CLOCK})\s*$")
+_HEADER = re.compile(rf"^\s*(?P<speaker>[^：:\s\d][^：:]{{0,30}}?)\s+{_DATE}{_TIME}\s*$")
+# Meeting transcripts (飞书妙记、通义听悟、腾讯会议 exports and PDFs of them) time each turn instead of dating it:
+# ``<speaker> <clock>`` or ``<speaker>(<clock>)`` on a line of its own before the words,
+# ``<speaker>(<clock>)：<words>``, or ``[<clock>] <speaker>：<words>``.
+_CLOCK_AFTER = re.compile(
+    rf"^\s*(?P<speaker>[^：:\s\d(（\[【][^：:()（）\[\]【】]{{0,30}}?)"
+    rf"(?:\s+{_CLOCK}|\s*[(（\[【]\s*{_CLOCK}\s*[)）\]】])\s*(?:[：:]\s*(?P<text>.*))?$"
+)
+_CLOCK_BEFORE = re.compile(
+    rf"^\s*[\[(（【]?\s*{_CLOCK}\s*[\])）】]?\s+(?P<speaker>[^：:\s\d\-–—>][^：:]{{0,30}}?){_SEP}(?P<text>.*)$"
+)
+# Labels a transcription service gives speakers it could not name.
+_GENERIC_SPEAKER = re.compile(r"(?:发言人|说话人|讲话人|speaker|spk)\s*(?:\d+|[a-z])", re.IGNORECASE)
 _CSV_TIME = ("time", "date", "datetime", "timestamp", "时间", "日期", "发送时间")
 _CSV_SENDER = ("sender", "from", "speaker", "name", "talker", "发送者", "发言人", "发送人", "昵称")
 _CSV_TEXT = ("content", "text", "message", "msg", "内容", "消息", "消息内容")
@@ -275,12 +288,27 @@ def _speaker(value: str) -> str:
     return unicodedata.normalize("NFKC", value.strip())
 
 
+def _timed_turn(line: str) -> tuple[str, str] | None:
+    """The speaker and words of a transcript line that starts a timed turn (the words may follow on later lines)."""
+    m = _CLOCK_AFTER.match(line) or _CLOCK_BEFORE.match(line)
+    return (_speaker(m["speaker"]), m["text"] or "") if m else None
+
+
+def _talking(speakers: list[str], settings: Settings) -> bool:
+    """Whether turn speakers are people talking rather than labelled lines in a text (an agenda's ``签到 09:00``, a
+    note's ``备注：``): the person or an unnamed 发言人 speaks, or a few names take turns again and again."""
+    if any(settings.is_target(s) or _GENERIC_SPEAKER.fullmatch(s) for s in speakers):
+        return True
+    counts = Counter(speakers)
+    return len(speakers) >= 4 and 2 <= len(counts) <= 0.6 * len(speakers)
+
+
 def _text_to_messages(
-    text: str, default_date: dt.date | None, speaker_lines: bool = False
+    text: str, default_date: dt.date | None, speaker_lines: bool = False, timed: bool = False
 ) -> tuple[list[_Message], list[str]]:
     """``speaker_lines``: every ``speaker：text`` line starts a message (transcripts without times); otherwise only
     timestamped lines do and other lines continue the previous message (chat exports, where a message may contain a
-    colon)."""
+    colon). ``timed``: a transcript whose turns carry clock times, where only those lines start a message."""
     messages: list[_Message] = []
     skipped: list[str] = []
     for line in text.splitlines():
@@ -289,9 +317,10 @@ def _text_to_messages(
         if m := _INLINE.match(line):
             messages.append(_Message(_date(m["y"], m["m"], m["d"]), _speaker(m["speaker"]), m["text"]))
         elif m := _HEADER.match(line):
-            when = _date(m["y"], m["m"], m["d"]) if m.group("y") is not None else default_date
-            messages.append(_Message(when, _speaker(m["speaker"]), ""))
-        elif (speaker_lines or not messages) and (m := _PLAIN.match(line)):
+            messages.append(_Message(_date(m["y"], m["m"], m["d"]), _speaker(m["speaker"]), ""))
+        elif speaker_lines and (turn := _timed_turn(line)):
+            messages.append(_Message(default_date, *turn))
+        elif ((speaker_lines and not timed) or not messages) and (m := _PLAIN.match(line)):
             messages.append(_Message(default_date, _speaker(m["speaker"]), m["text"]))
         elif messages:
             last = messages[-1]
@@ -331,13 +360,19 @@ def parse_chat(
 
 
 def parse_interview(path_name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
+    name = stored_identity(settings.db_path)[0] or settings.target_name
     settings = _with_identity_alias(settings)
     date = date or date_from_name(Path(path_name).stem)
-    messages, skipped = _text_to_messages(raw, date, speaker_lines=True)
+    timed = sum(bool(_timed_turn(line)) for line in raw.splitlines()) >= MIN_TRANSCRIPT_HEADERS
+    messages, skipped = _text_to_messages(raw, date, speaker_lines=True, timed=timed)
     for m in messages:
         m.date = m.date or date
     if not any(settings.is_target(m.speaker) for m in messages):
-        raise ValueError(f"{path_name}: no line spoken by {settings.target_name}")
+        seen = "、".join(list(dict.fromkeys(m.speaker for m in messages))[:8]) or "无"
+        raise ValueError(
+            f"{path_name}：这是多人对话记录，但没有找到{name}的发言（稿里的说话人：{seen}）。"
+            f"请把稿里你的称呼改成「{name}」，或加到 twin.toml 的 target_aliases，再重新导入"
+        )
     title = Path(path_name).stem
     return _assemble(SourceKind.INTERVIEW, title, path_name, raw, messages, settings, title, skipped)
 
@@ -531,11 +566,15 @@ def detect_kind(name: str, text: str, settings: Settings | None = None) -> Sourc
         return SourceKind.CHAT
     if lines and sum(bool(_INLINE.match(line) or _HEADER.match(line)) for line in lines) / len(lines) >= 0.6:
         return SourceKind.CHAT
-    timestamped = [_speaker(m["speaker"]) for line in lines if (m := _HEADER.match(line))]
-    if len(timestamped) >= MIN_TRANSCRIPT_HEADERS:
+    timed = [turn[0] for line in lines if (turn := _timed_turn(line))]
+    if len(timed) >= MIN_TRANSCRIPT_HEADERS and _talking(timed, settings):
         return SourceKind.INTERVIEW
     speakers = [_speaker(m["speaker"]) for line in lines if (m := _PLAIN.match(line))]
     if lines and len(speakers) / len(lines) >= 0.6 and any(settings.is_target(s) for s in speakers):
+        return SourceKind.INTERVIEW
+    # Turns that run over several lines: judge by turns, not lines, once the text opens with one (a title may come
+    # first).
+    if any(_PLAIN.match(line) for line in lines[:2]) and len(set(speakers)) >= 2 and _talking(speakers, settings):
         return SourceKind.INTERVIEW
     return SourceKind.DOCUMENT
 

@@ -24,7 +24,7 @@ from twin.llm import FakeLLM
 from twin.persona import text as text_module
 from twin.persona.chat import PersonaChat
 from twin.persona.schema import ChatTurn, SourceKind
-from twin.persona.sources import detect_kind, extract_text, parse_upload, pseudonym
+from twin.persona.sources import detect_kind, extract_text, parse_chat, parse_upload, pseudonym
 from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.jobs import JobManager, PersonaProcessing
@@ -129,6 +129,19 @@ def test_file_text_formats(monkeypatch: pytest.MonkeyPatch) -> None:
             "发⾔⼈ 1  00:00:00\n这个方案\n发⾔⼈ 2  00:00:02\n好。\n发⾔⼈ 1  00:00:04\n确定。",
             SourceKind.INTERVIEW,
         ),
+        ("t.txt", "林沐(00:00:03)：先做\n小明(00:00:20)：延后\n发言人1(00:01:02)：同意", SourceKind.INTERVIEW),
+        ("t.txt", "[00:00:03] 林沐：先做\n[00:00:20] 小明：延后\n[00:01:02] 发言人1：同意", SourceKind.INTERVIEW),
+        (
+            "t.txt",
+            "小明（00:00:03）\n先做\n小张（00:00:20）\n延后\n小明（00:01:02）\n好\n小张（00:01:09）\n行",
+            SourceKind.INTERVIEW,
+        ),
+        ("t.txt", "林沐：大家好\n第二行\n第三行\n小明：延后\n第二行\n第三行", SourceKind.INTERVIEW),
+        ("t.txt", "周会\n小明：先做\n补充\n小张：延后\n小明：好\n小张：行", SourceKind.INTERVIEW),
+        # The person's own texts that only look timed or labelled stay documents.
+        ("议程.md", "周会议程\n\n签到 09:00\n开场 09:30\n分享 10:00\n午餐 12:00", SourceKind.DOCUMENT),
+        ("日记.md", "早上起床 07:30\n想清楚了排期。\n晚饭 19:00\n聊了很多。\n睡觉 23:00", SourceKind.DOCUMENT),
+        ("周记.md", "我的周记\n今天整理了思路。\n备注：明天继续\n另外想到一点。\n备注：别忘了", SourceKind.DOCUMENT),
         ("a.md", "我的经历\n\n我喜欢读书。", SourceKind.DOCUMENT),
         ("a.txt", "小明：讨论\n小张：同意", SourceKind.DOCUMENT),
         ("a.txt", "2025-01-01 林沐：好\n续行\n更多续行", SourceKind.DOCUMENT),
@@ -154,8 +167,8 @@ def test_upload_dates() -> None:
     assert all(e.date == dt.date(2024, 3, 1) for e in chat.expressions)
 
 
-def test_pdf_transcripts_keep_speakers_and_reject_sources_without_the_target() -> None:
-    settings = Settings(target_name="林沐", target_aliases=["阿沐"])
+def test_pdf_transcripts_keep_speakers_and_reject_sources_without_the_target(tmp_path: Path) -> None:
+    settings = Settings(target_name="林沐", target_aliases=["阿沐"], db_path=tmp_path / "twin.db")
     raw = "发⾔⼈ 1  00:00:00\n怎么看？\n林沐  00:00:02\n先做。\n发⾔⼈ 2  00:00:04\n好。"
     parsed = parse_upload("meeting.txt", raw.encode(), settings)
     assert parsed.source.kind is SourceKind.INTERVIEW
@@ -166,8 +179,60 @@ def test_pdf_transcripts_keep_speakers_and_reject_sources_without_the_target() -
     ]
     assert parsed.expressions[1].context == "发言人 1：怎么看？"
     without_target = "发⾔⼈ 1  00:00:00\n怎么看？\n发⾔⼈ 2  00:00:02\n先做。\n发⾔⼈ 1  00:00:04\n确定。"
-    with pytest.raises(ValueError, match="no line spoken by 林沐"):
+    with pytest.raises(ValueError, match="没有找到林沐的发言（稿里的说话人：发言人 1、发言人 2）"):
         parse_upload("not-mine.txt", without_target.encode(), settings)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "林沐(00:00:03)：先做。\n小明(00:00:20)：延后？\n林沐(00:01:02)：不延。",
+        "[00:00:03] 林沐：先做。\n[00:00:20] 小明：延后？\n[00:01:02] 林沐：不延。",
+        "林沐 00:00:03\n先做。\n小明 00:00:20\n延后？\n林沐 00:01:02\n不延。",
+    ],
+)
+def test_timed_transcript_turns_are_attributed_by_speaker(raw: str, tmp_path: Path) -> None:
+    parsed = parse_upload("会议.txt", raw.encode(), Settings(target_name="林沐", db_path=tmp_path / "twin.db"))
+    assert parsed.source.kind is SourceKind.INTERVIEW
+    assert [(e.speaker, e.is_target, e.text) for e in parsed.expressions] == [
+        ("林沐", True, "先做。"),
+        ("小明", False, "延后？"),
+        ("林沐", True, "不延。"),
+    ]
+
+
+def test_timed_transcripts_keep_colon_lines_inside_a_turn(tmp_path: Path) -> None:
+    raw = "林沐 00:00:03\n注意：先做A\n再做B\n小明 00:00:20\n延后\n林沐 00:01:02\n好"
+    parsed = parse_upload("会议.txt", raw.encode(), Settings(target_name="林沐", db_path=tmp_path / "twin.db"))
+    assert [(e.speaker, e.text) for e in parsed.expressions] == [
+        ("林沐", "注意：先做A\n再做B"),
+        ("小明", "延后"),
+        ("林沐", "好"),
+    ]
+
+
+def test_chat_lines_with_a_clock_time_continue_the_message(tmp_path: Path) -> None:
+    raw = "2026-09-01 10:00 林沐：明天几点开会？\n明天 10:00\n小明 2026-09-01 10:05\n好的"
+    parsed = parse_chat("群.txt", raw, Settings(target_name="林沐", db_path=tmp_path / "twin.db"))
+    assert [(e.speaker, e.text) for e in parsed.expressions] == [
+        ("林沐", "明天几点开会？\n明天 10:00"),
+        ("小明", "好的"),
+    ]
+
+
+def test_pdf_text_folds_compatibility_ideographs_but_keeps_full_width_punctuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Page:
+        def extract_text(self) -> str:
+            return "狮⼦：我⼦⼥都在，好！"
+
+    class Reader:
+        def __init__(self, _: Any) -> None:
+            self.pages = [Page()]
+
+    monkeypatch.setattr("pypdf.PdfReader", Reader)
+    assert extract_text("m.pdf", b"%PDF") == "狮子：我子女都在，好！"
 
 
 def test_debounce_and_exactly_one_follow_up() -> None:

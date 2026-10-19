@@ -10,6 +10,8 @@ def _isolated_ops_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TWIN_HOME", str(tmp_path / "twin-home"))
     monkeypatch.setenv("TWIN_SERVICE_DIR", str(tmp_path / "services"))
     monkeypatch.delenv("TWIN_ENV_FILE", raising=False)
+    # A developer's own search key must not send test queries to the web.
+    monkeypatch.delenv("TWIN_SEARCH_KEY", raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -223,6 +223,28 @@ class VisionSettings(BaseModel):
     egress: Literal["local", "external"] | None = None
 
 
+class SearchSettings(BaseModel):
+    """Web search and page reading for work mode, through DeepSeek's ``/v1/tools/search`` and ``/v1/tools/fetch``.
+    The key is ``api_key_env``, or else the key of ``[chat_llm]`` / ``[llm]`` when it is served from the same
+    host, so a twin answering with DeepSeek searches without more configuration. No key: work runs without it."""
+
+    enabled: bool = True
+    base_url: str = "https://api.deepseek.com"
+    api_key_env: str = "TWIN_SEARCH_KEY"
+    count: int = Field(default=8, ge=1, le=50)
+    timeout: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+
+    @field_validator("base_url")
+    @classmethod
+    def _encrypted(cls, value: str) -> str:
+        """The key goes in every request: only over HTTPS, unless the service is on this machine."""
+        parsed = urlsplit(value.strip())
+        local = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+        if not parsed.hostname or (parsed.scheme != "https" and not (parsed.scheme == "http" and local)):
+            raise ValueError("[search] base_url 必须是 https 地址（本机服务可以用 http）")
+        return value.strip()
+
+
 EgressKind = Literal["llm", "embed", "tts", "asr", "video", "vision"]
 BackendSettings = LLMSettings | EmbedSettings | TTSSettings | ASRSettings | VideoSettings | VisionSettings
 
@@ -413,6 +435,7 @@ class Settings(BaseModel):
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)
+    search: SearchSettings = Field(default_factory=SearchSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     media: MediaSettings = Field(default_factory=MediaSettings)
     library: LibrarySettings = Field(default_factory=LibrarySettings)
@@ -490,6 +513,7 @@ def load_settings(path: Path | None = None) -> Settings:
         settings.embed.api_key_env,
         settings.tts.api_key_env,
         settings.asr.api_key_env,
+        settings.search.api_key_env,
         *[judge.api_key_env for judge in settings.judges],
     ]:
         key_from_env(key_env)

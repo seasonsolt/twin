@@ -374,7 +374,7 @@ export function AppShell() {
       <SkipLink target="main">跳至主内容</SkipLink>
       {!mobile && <TwinRail />}
       <div
-        className={`app-column flex min-w-0 flex-1 flex-col ${location.pathname === '/chat' ? 'chat-app-column' : ''}`}
+        className={`app-column flex min-w-0 flex-1 flex-col ${conversation ? 'chat-app-column' : ''}`}
       >
         {error && !twinLevel && (
           <div

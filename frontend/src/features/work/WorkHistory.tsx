@@ -1,6 +1,13 @@
-import { useState, type RefObject } from 'react';
-import { Trash2 } from 'lucide-react';
-import { Button, Dialog, IconButton, Input } from '../../components/ui';
+import { useState, type ReactNode, type RefObject } from 'react';
+import { PanelLeftClose, Search, SquarePen, Trash2 } from 'lucide-react';
+import {
+  Button,
+  ChatAction,
+  Dialog,
+  IconButton,
+  Input,
+  Row,
+} from '../../components/ui';
 import { dayGroup, relativeTime } from '../chat/ConversationHistory';
 import '../chat/history.css';
 import type { WorkSummary } from './types';
@@ -8,8 +15,8 @@ import type { WorkSummary } from './types';
 const groups = ['今天', '昨天', '更早'] as const;
 const clock = () => new Date();
 
-/** The tasks list of work mode, laid out like chat's conversation history: inline in the stage on a wide
- * screen, a sheet on a phone. */
+/** The tasks list of work mode, laid out like chat's conversation history: the left sheet on a wide screen
+ * (with the twin switcher on top), a dialog on a phone. */
 export function WorkHistory({
   tasks,
   error,
@@ -22,6 +29,7 @@ export function WorkHistory({
   onRetry,
   name,
   inline = false,
+  heading,
   returnFocus,
   now = clock,
 }: {
@@ -36,10 +44,13 @@ export function WorkHistory({
   onRetry(): void;
   name: string;
   inline?: boolean;
+  /** Above the list in the sheet: the twin switcher, as in chat. */
+  heading?: ReactNode;
   returnFocus?: RefObject<HTMLElement | null>;
   now?: () => Date;
 }) {
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(!inline);
   const currentTime = now();
   const search = query.trim().toLocaleLowerCase();
   const filtered = (tasks ?? []).filter((task) =>
@@ -47,26 +58,44 @@ export function WorkHistory({
   );
   const content = (
     <div className="history-content">
-      <Button
-        variant="ghost"
+      {inline && (
+        <Row gap={1}>
+          <div className="min-w-0 flex-1">{heading}</div>
+          <IconButton
+            label="搜索任务"
+            aria-expanded={searchOpen}
+            onClick={() => setSearchOpen(!searchOpen)}
+          >
+            <Search size={18} aria-hidden />
+          </IconButton>
+          <IconButton label="收起任务列表" onClick={() => onOpenChange(false)}>
+            <PanelLeftClose size={18} aria-hidden />
+          </IconButton>
+        </Row>
+      )}
+      <ChatAction
+        variant="row"
         className="history-new"
         aria-label="新任务"
         onClick={() => {
           setQuery('');
           onNew();
-          onOpenChange(false);
+          if (!inline) onOpenChange(false);
         }}
       >
-        ＋ 新任务
-      </Button>
-      <Input
-        type="search"
-        aria-label="搜索任务"
-        placeholder="搜索任务"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        className="history-search"
-      />
+        <SquarePen size={18} aria-hidden /> 新任务
+      </ChatAction>
+      {searchOpen && (
+        <Input
+          autoFocus={inline}
+          type="search"
+          aria-label="搜索任务"
+          placeholder="搜索任务"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="history-search"
+        />
+      )}
       {error && (
         <>
           <p role="alert" className="history-error">
@@ -119,7 +148,7 @@ export function WorkHistory({
                               }
                               onClick={() => {
                                 onOpen(task.task_id);
-                                onOpenChange(false);
+                                if (!inline) onOpenChange(false);
                               }}
                             >
                               <span className="history-title">
@@ -154,8 +183,10 @@ export function WorkHistory({
   );
   if (inline)
     return (
-      <section className="stage-history" aria-label={`交给${name}的事`}>
-        <h2 className="history-heading">交给{name}的事</h2>
+      <section
+        className="conversation-sheet-history"
+        aria-label={`交给${name}的事`}
+      >
         {content}
       </section>
     );

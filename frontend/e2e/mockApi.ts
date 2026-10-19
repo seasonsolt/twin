@@ -762,6 +762,24 @@ const handlers: Record<string, Handler> = {
     return { items: rows.slice(0, limit), total: rows.length };
   },
   'GET /api/persona/processing': reply({ state: 'idle' }),
+  'GET /api/persona/work': reply({
+    tasks: [
+      {
+        task_id: 'w_000000000001',
+        title: '按我的口吻写一份本周周报',
+        status: 'idle',
+        updated_at: '2026-10-17T01:20:00Z',
+        turns: 2,
+      },
+      {
+        task_id: 'w_000000000002',
+        title: '把最近会上答应别人的事整理成 Excel',
+        status: 'idle',
+        updated_at: '2026-10-15T08:00:00Z',
+        turns: 2,
+      },
+    ],
+  }),
   'GET /api/persona/followups': reply({
     pending: 1,
     items: [

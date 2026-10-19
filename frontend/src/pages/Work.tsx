@@ -2,27 +2,37 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router';
 import {
   ArrowUp,
+  ChevronDown,
   Download,
   FileSpreadsheet,
   FileText,
+  PanelLeft,
   Square,
+  SquarePen,
 } from 'lucide-react';
 import { PersonaFade } from '../components/motion/PersonaFade';
 import {
   Card,
+  ChatAction,
+  ChatIdentity,
+  ChatInput,
+  ChatSurface,
   Chip,
-  EmptyState,
+  Heading,
   IconButton,
   Notice,
+  ResizeHandle,
+  Row,
   Text,
-  Textarea,
   toast,
   useConfirm,
   Spacer,
   TypingIndicator,
 } from '../components/ui';
-import type { Capabilities } from '../features/avatar/types';
-import { ChatStage } from '../features/chat/ChatStage';
+import {
+  PersonaPortrait,
+  PersonaSwitcher,
+} from '../components/layout/PersonaSwitcher';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
 import {
@@ -40,12 +50,12 @@ import type {
 import { api } from '../lib/api';
 import { withBase } from '../lib/base';
 import { getPersonaId } from '../lib/persona';
-import { loadEssential, peekEssential } from '../lib/personaPrefetch';
-import { useDesktop } from '../lib/useMobile';
+import { useMediaQuery, useMobile } from '../lib/useMobile';
 import {
   usePersonaId,
   usePersonaState as useState,
 } from '../lib/usePersonaState';
+import { SHEET_WIDTH, useChatLayout } from '../stores/chatLayout';
 import { usePersonas } from '../stores/personas';
 import { useStatus } from '../stores/status';
 
@@ -56,7 +66,6 @@ const STARTERS = [
   '按我的口吻写一份本周周报',
   '列一下我还没回答的问题',
 ];
-const noop = () => undefined;
 
 export function fileUrl(taskId: string, path: string) {
   const encoded = path.split('/').map(encodeURIComponent).join('/');
@@ -166,17 +175,17 @@ export function Work() {
   const personaId = usePersonaId();
   const { pathname } = useLocation();
   const active = pathname === '/work';
-  const desktop = useDesktop();
+  const mobile = useMobile();
+  const wide = useMediaQuery('(min-width: 1280px)');
+  // The task list is chat's conversation sheet: the same width and the same open or closed choice.
+  const layout = useChatLayout();
+  const sheetOpen = !mobile && (layout.sheet ?? wide);
   const confirm = useConfirm();
   const status = useStatus((state) => state.data);
   const persona = usePersonas((state) =>
     state.items.find((item) => item.id === state.id),
   );
   const name = status?.target_name || persona?.name || '本人';
-  const [capabilities, setCapabilities] = useState<Capabilities | null>(
-    () =>
-      peekEssential<Capabilities>('/api/media/capabilities', personaId) ?? null,
-  );
   const [tasks, setTasks] = useState<WorkSummary[] | null>(null);
   const [current, setCurrent] = useState<string | null>(null);
   const [task, setTask] = useState<WorkTask | null>(null);
@@ -186,20 +195,6 @@ export function Work() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyTrigger = useRef<HTMLElement | null>(null);
   const { page, end, composer, composerHeight } = useComposerLayout(active);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void loadEssential<Capabilities>(
-      '/api/media/capabilities',
-      personaId,
-      controller.signal,
-    )
-      .then((data) => {
-        if (!controller.signal.aborted) setCapabilities(data);
-      })
-      .catch(() => {});
-    return () => controller.abort();
-  }, [personaId, setCapabilities]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -227,8 +222,8 @@ export function Work() {
   }, [loadTasks, personaId]);
 
   useEffect(() => {
-    if (desktop) setHistoryOpen(false);
-  }, [desktop, setHistoryOpen]);
+    if (!mobile) setHistoryOpen(false);
+  }, [mobile, setHistoryOpen]);
 
   useEffect(() => {
     if (current === null) {
@@ -343,181 +338,260 @@ export function Work() {
     setHistoryOpen(true);
     void loadTasks();
   };
+  const switcher = (
+    <PersonaSwitcher
+      label={`切换分身（当前：${name}）`}
+      className="flex min-w-0 items-center gap-2 py-1"
+      trigger={
+        <>
+          <ChatIdentity>
+            <PersonaPortrait persona={persona} />
+          </ChatIdentity>
+          <Text as="span" size="2xl" weight="bold" truncate>
+            {name}
+          </Text>
+          <ChevronDown size={16} aria-hidden />
+        </>
+      }
+    />
+  );
   const history = (
     <WorkHistory
       tasks={tasks}
       error={error}
       current={current}
       open={active && historyOpen}
-      onOpenChange={setHistoryOpen}
+      onOpenChange={(open) =>
+        mobile ? setHistoryOpen(open) : layout.setChoice('sheet', open)
+      }
       onOpen={setCurrent}
       onNew={() => setCurrent(null)}
       onDelete={(row) => void remove(row)}
       onRetry={() => void loadTasks()}
       name={name}
-      inline={desktop}
+      inline={!mobile}
+      heading={switcher}
       returnFocus={historyTrigger}
     />
   );
-  // The stage shows who is working; it does not speak or play video here.
-  const stageCapabilities = capabilities && {
-    ...capabilities,
-    available: false,
-    video: undefined,
-  };
   const files = new Map(task?.files.map((file) => [file.path, file]) ?? []);
+  const title = current === null ? '新任务' : (task?.title ?? '');
   return (
-    <div ref={page} className="chat-page" data-empty={current === null}>
-      <ChatStage
-        name={name}
-        capabilities={stageCapabilities}
-        videoPlaying={false}
-        voiceCaption=""
-        level={0}
-        speaking={false}
-        onToggle={noop}
-        onVideoPlaying={noop}
-        onVideoError={noop}
-        onClear={() => setCurrent(null)}
-        onHistory={openHistory}
-        history={desktop ? history : undefined}
-        newLabel="新任务"
-        historyLabel="任务记录"
-      />
-      {!desktop && history}
-      <div className="chat-thread">
-        <div className="chat-scroll">
-          <div className="chat-column-grid">
-            <PersonaFade>
-              <div className="chat-conversation flex flex-col space-y-4">
-                <div aria-live="polite" aria-relevant="additions text">
-                  {current === null && (
-                    <EmptyState
-                      title={`交给${name}一件事`}
-                      body="聊天是问答；这里交代要做的事，做完把 Word 或 Excel 文件交给你。做的过程中可以随时插话或叫停。"
-                    >
-                      <div
-                        className="starter-chips flex flex-wrap justify-center gap-3"
-                        aria-label="可以交代的事"
-                      >
-                        {STARTERS.map((starter) => (
-                          <Chip
-                            key={starter}
-                            onClick={() => {
-                              setDraft(starter);
-                              document.getElementById('work-input')?.focus();
-                            }}
+    <div
+      ref={page}
+      className="chat-page chat-redesign"
+      data-sheet={sheetOpen}
+      data-empty={current === null}
+    >
+      {sheetOpen && (
+        <ChatSurface variant="sheet" width={layout.sheetWidth}>
+          {history}
+          <ResizeHandle
+            label="调整任务列表宽度"
+            value={layout.sheetWidth ?? SHEET_WIDTH.default}
+            min={SHEET_WIDTH.min}
+            max={SHEET_WIDTH.max}
+            defaultValue={SHEET_WIDTH.default}
+            onChange={layout.setSheetWidth}
+          />
+        </ChatSurface>
+      )}
+      {mobile && history}
+      <ChatSurface
+        variant="panel"
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+      >
+        <header className="chat-topbar" aria-label={`${name}的工作`}>
+          {mobile ? (
+            <>
+              <IconButton label="任务列表" onClick={openHistory}>
+                <PanelLeft size={20} aria-hidden />
+              </IconButton>
+              <PersonaSwitcher
+                label={`切换分身（当前：${name}）`}
+                className="flex shrink-0 items-center"
+                trigger={
+                  <ChatIdentity size="mobile">
+                    <PersonaPortrait persona={persona} />
+                  </ChatIdentity>
+                }
+              />
+              <div className="min-w-0 flex-1">
+                <Heading size="section" truncate>
+                  {name}
+                </Heading>
+              </div>
+              <IconButton label="新任务" onClick={() => setCurrent(null)}>
+                <SquarePen size={20} aria-hidden />
+              </IconButton>
+            </>
+          ) : (
+            <>
+              {!sheetOpen && (
+                <IconButton
+                  label="展开任务列表"
+                  onClick={() => layout.setChoice('sheet', true)}
+                >
+                  <PanelLeft size={18} aria-hidden />
+                </IconButton>
+              )}
+              <Heading
+                level={1}
+                weight="medium"
+                size="item"
+                truncate
+                className="min-w-0 flex-1"
+              >
+                {!sheetOpen ? `${name} / ` : ''}
+                {title}
+              </Heading>
+            </>
+          )}
+        </header>
+        <div className="chat-body flex min-h-0 flex-1">
+          <div className="chat-thread">
+            <div className="chat-scroll">
+              <div className="chat-column-grid">
+                <PersonaFade>
+                  <div className="chat-conversation flex flex-col space-y-4">
+                    <div aria-live="polite" aria-relevant="additions text">
+                      {current === null && (
+                        <ChatSurface variant="empty">
+                          <ChatIdentity size="empty">
+                            <PersonaPortrait persona={persona} />
+                          </ChatIdentity>
+                          <Heading
+                            level={2}
+                            size="display"
+                            weight="bold"
+                            align="center"
                           >
-                            {starter}
-                          </Chip>
-                        ))}
-                      </div>
-                    </EmptyState>
-                  )}
-                  {current !== null && !task && (
-                    <Text role="status" size="sm" tone="secondary">
-                      正在加载任务…
-                    </Text>
-                  )}
-                  {task && (
-                    <div className="space-y-4">
-                      {task.turns.map((turn, index) => (
-                        <Turn
-                          key={index}
-                          taskId={task.task_id}
-                          turn={turn}
-                          pin={`${task.task_id}:${index}`}
-                          files={files}
-                        />
-                      ))}
-                      {running && (
-                        <div className="space-y-1 py-1">
-                          <TypingIndicator
-                            text={task.stopping ? '正在停下…' : '正在做…'}
-                          />
-                          {task.progress.length > 0 && (
-                            <Text
-                              as="ol"
-                              aria-label="进度"
-                              size="sm"
-                              tone="secondary"
-                              className="list-decimal space-y-0.5 pl-5"
-                            >
-                              {task.progress.map((line, index) => (
-                                <li key={index}>{line}</li>
-                              ))}
-                            </Text>
+                            交给{name}一件事
+                          </Heading>
+                          <Text tone="secondary" align="center">
+                            聊天是问答；这里交代要做的事，做完把 Word 或 Excel
+                            文件交给你。做的过程中可以随时插话或叫停。
+                          </Text>
+                          <Row gap={2} wrap justify="center">
+                            {STARTERS.map((starter) => (
+                              <Chip
+                                key={starter}
+                                onClick={() => {
+                                  setDraft(starter);
+                                  document
+                                    .getElementById('work-input')
+                                    ?.focus();
+                                }}
+                              >
+                                {starter}
+                              </Chip>
+                            ))}
+                          </Row>
+                        </ChatSurface>
+                      )}
+                      {current !== null && !task && (
+                        <Text role="status" size="sm" tone="secondary">
+                          正在加载任务…
+                        </Text>
+                      )}
+                      {task && (
+                        <div className="space-y-4">
+                          {task.turns.map((turn, index) => (
+                            <Turn
+                              key={index}
+                              taskId={task.task_id}
+                              turn={turn}
+                              pin={`${task.task_id}:${index}`}
+                              files={files}
+                            />
+                          ))}
+                          {running && (
+                            <div className="space-y-1 py-1">
+                              <TypingIndicator
+                                text={task.stopping ? '正在停下…' : '正在做…'}
+                              />
+                              {task.progress.length > 0 && (
+                                <Text
+                                  as="ol"
+                                  aria-label="进度"
+                                  size="sm"
+                                  tone="secondary"
+                                  className="list-decimal space-y-0.5 pl-5"
+                                >
+                                  {task.progress.map((line, index) => (
+                                    <li key={index}>{line}</li>
+                                  ))}
+                                </Text>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-                {task?.status === 'failed' && task.error && (
-                  <Notice tone="danger" role="alert">
-                    {task.error}
-                  </Notice>
-                )}
-                <div ref={end} />
-                {space > 0 && <Spacer height={space} />}
+                    {task?.status === 'failed' && task.error && (
+                      <Notice tone="danger" role="alert">
+                        {task.error}
+                      </Notice>
+                    )}
+                    <div ref={end} />
+                    {space > 0 && <Spacer height={space} />}
+                  </div>
+                </PersonaFade>
               </div>
-            </PersonaFade>
+            </div>
+            <form
+              ref={composer}
+              aria-label="交代的事"
+              className="chat-composer chat-column-grid"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void send();
+              }}
+            >
+              <ChatSurface variant="composer">
+                <ChatInput
+                  id="work-input"
+                  aria-label="要做的事"
+                  maxRows={5}
+                  maxLength={MAX_TEXT}
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onSend={() => void send()}
+                  placeholder={
+                    running
+                      ? '插一句，下一步就会看到'
+                      : current === null
+                        ? `交给${name}一件事…`
+                        : '接着说，或者让我改一改'
+                  }
+                />
+                <Row gap={1}>
+                  <div className="flex-1" />
+                  {running && (
+                    <IconButton
+                      shape="circle"
+                      label="停下"
+                      disabled={task.stopping}
+                      onClick={() => void stop()}
+                    >
+                      <Square className="size-4 fill-current" aria-hidden />
+                    </IconButton>
+                  )}
+                  <ChatAction
+                    type="submit"
+                    variant="send"
+                    aria-label={running ? '插话' : '交代'}
+                    loading={sending}
+                    disabled={!draft.trim()}
+                  >
+                    {!sending && <ArrowUp className="size-5" aria-hidden />}
+                  </ChatAction>
+                </Row>
+              </ChatSurface>
+            </form>
           </div>
         </div>
-        <form
-          ref={composer}
-          aria-label="交代的事"
-          className="chat-composer chat-column-grid fixed inset-x-0 z-20 border-t border-border bg-canvas/95 px-3 pt-2 backdrop-blur-xl"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
-          }}
-        >
-          <div className="composer-field mx-auto flex max-w-3xl items-end gap-1 bg-surface py-1 pr-1 pl-2">
-            <Textarea
-              id="work-input"
-              aria-label="要做的事"
-              rows={1}
-              maxRows={5}
-              maxLength={MAX_TEXT}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onSend={() => void send()}
-              className="min-h-11 border-0 bg-transparent px-2 py-2.5 shadow-none focus-visible:outline-none"
-              placeholder={
-                running
-                  ? '插一句，下一步就会看到'
-                  : current === null
-                    ? `交给${name}一件事…`
-                    : '接着说，或者让我改一改'
-              }
-            />
-            {running && (
-              <IconButton
-                shape="circle"
-                size="lg"
-                label="停下"
-                disabled={task.stopping}
-                onClick={() => void stop()}
-              >
-                <Square className="size-4 fill-current" aria-hidden />
-              </IconButton>
-            )}
-            <IconButton
-              type="submit"
-              variant="primary"
-              shape="circle"
-              size="lg"
-              label={running ? '插话' : '交代'}
-              className="send-button"
-              loading={sending}
-              disabled={!draft.trim()}
-            >
-              {!sending && <ArrowUp className="size-5" aria-hidden />}
-            </IconButton>
-          </div>
-        </form>
-      </div>
+      </ChatSurface>
     </div>
   );
 }

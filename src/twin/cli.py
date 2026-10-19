@@ -102,6 +102,14 @@ api_key_env = "TWIN_LLM_KEY"
 provider = "hashing"
 api_key_env = "TWIN_EMBED_KEY"
 
+# 工作模式的网页搜索和读网页，走 DeepSeek 的 /v1/tools/search 和 /v1/tools/fetch（网页由 DeepSeek 抓取）。
+# 默认开启：密钥用 TWIN_SEARCH_KEY；没设时，若 [chat_llm] 或 [llm] 也在 api.deepseek.com，就沿用它的密钥。
+# 两者都没有时工作模式不带搜索。搜索词和要读的链接会发给 DeepSeek，状态里列为外部服务。
+# [search]
+# enabled = true
+# api_key_env = "TWIN_SEARCH_KEY"
+# count = 8 # 每次搜索返回几条，1-50
+
 # 企业微信智能机器人在分身档案 → 接入 → 绑定，见 docs/GUIDE.md。
 
 # [api] # 对外服务：令牌值仅放环境变量，至少 32 个字符，见 docs/SERVICE.md。

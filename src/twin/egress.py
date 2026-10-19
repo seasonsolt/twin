@@ -16,6 +16,7 @@ from .config import (
     VisionSettings,
     egress_of,
 )
+from .websearch import search_host, search_key
 
 
 def configured_backends(settings: Settings) -> list[BackendSettings]:
@@ -71,4 +72,12 @@ def egress_status(settings: Settings, *, external_only: bool = False) -> list[di
                 "declared": info.declared,
             }
         )
+    # Work mode's web search, while it is on: the queries and links the agent looks up leave this machine.
+    if search_key(settings) is not None:
+        host = search_host(settings.search.base_url)
+        external = host not in {"localhost", "127.0.0.1", "::1"}
+        if not external_only or external:
+            rows.append(
+                {"kind": "search", "provider": "deepseek", "host": host, "external": external, "declared": False}
+            )
     return rows

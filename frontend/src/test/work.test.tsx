@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { ConfirmProvider, TooltipProvider, toast } from '../components/ui';
+import { useChatLayout } from '../stores/chatLayout';
 import { setPersonaId } from '../lib/persona';
 import { Work } from '../pages/Work';
 import { usePersonas, type Persona } from '../stores/personas';
@@ -92,8 +93,21 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetcher);
 });
 
+const media = (matching: string) =>
+  vi.mocked(window.matchMedia).mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === matching,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+
 afterEach(() => {
   setPersonaId('default');
+  media('');
+  useChatLayout.setState({ sheet: undefined });
 });
 
 const setup = () =>
@@ -251,12 +265,14 @@ it('deletes a task from the task list after confirming, and says why a task did 
     error: '这件事没做成，可以换个说法再试一次',
     progress: [],
   };
+  // On a phone the task list opens as a sheet from the top bar.
+  media('(max-width: 767px)');
   const user = userEvent.setup();
   setup();
   await user.type(await screen.findByLabelText('要做的事'), '写周报');
   await user.click(screen.getByRole('button', { name: '交代' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('没做成');
-  await user.click(screen.getByRole('button', { name: '任务记录' }));
+  await user.click(screen.getByRole('button', { name: '任务列表' }));
   const sheet = await screen.findByRole('dialog', { name: '任务记录' });
   expect(
     within(sheet).getByRole('button', { name: /^写周报/u }),
@@ -320,41 +336,35 @@ it('gives a visitor of a public twin chat and work, and nothing to manage', asyn
   }
 });
 
-it('puts the task list in the stage on a wide screen, where chat keeps its conversations', async () => {
-  vi.mocked(window.matchMedia).mockImplementation(
-    (query: string) =>
-      ({
-        matches: query === '(min-width: 1200px)',
-        media: query,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      }) as unknown as MediaQueryList,
-  );
-  try {
-    const user = userEvent.setup();
-    setup();
-    const list = await screen.findByRole('region', { name: '交给本人的事' });
-    expect(
-      screen.queryByRole('button', { name: '任务记录' }),
-    ).not.toBeInTheDocument();
-    await user.type(screen.getByLabelText('要做的事'), '写周报');
-    await user.click(screen.getByRole('button', { name: '交代' }));
-    expect(
-      await within(list).findByRole('button', { name: /^写周报/u }),
-    ).toHaveAttribute('aria-current', 'true');
-    await user.click(within(list).getByRole('button', { name: '新任务' }));
-    expect(
-      await screen.findByRole('heading', { name: '交给本人一件事' }),
-    ).toBeInTheDocument();
-  } finally {
-    vi.mocked(window.matchMedia).mockImplementation(
-      (query: string) =>
-        ({
-          matches: false,
-          media: query,
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-        }) as unknown as MediaQueryList,
-    );
-  }
+it('keeps the task list where chat keeps its conversations: open on a wide screen, folded away and back on a narrower one', async () => {
+  media('(min-width: 1280px)');
+  const user = userEvent.setup();
+  const view = setup();
+  const list = await screen.findByRole('region', { name: '交给本人的事' });
+  expect(
+    screen.queryByRole('button', { name: '展开任务列表' }),
+  ).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('要做的事'), '写周报');
+  await user.click(screen.getByRole('button', { name: '交代' }));
+  expect(
+    await within(list).findByRole('button', { name: /^写周报/u }),
+  ).toHaveAttribute('aria-current', 'true');
+  expect(
+    await screen.findByRole('heading', { level: 1, name: '写周报' }),
+  ).toBeInTheDocument();
+  await user.click(within(list).getByRole('button', { name: '新任务' }));
+  expect(
+    await screen.findByRole('heading', { name: '交给本人一件事' }),
+  ).toBeInTheDocument();
+  expect(list).toBeInTheDocument();
+  await user.click(within(list).getByRole('button', { name: '收起任务列表' }));
+  expect(screen.queryByRole('region', { name: '交给本人的事' })).toBeNull();
+  expect(useChatLayout.getState().sheet).toBe(false);
+  view.unmount();
+  media('');
+  setup();
+  await user.click(await screen.findByRole('button', { name: '展开任务列表' }));
+  expect(
+    await screen.findByRole('region', { name: '交给本人的事' }),
+  ).toBeInTheDocument();
 });

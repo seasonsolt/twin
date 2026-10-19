@@ -62,6 +62,7 @@ const backendNames: Record<string, string> = {
   video: '视频生成',
   vision: '形象提取',
   judge: '回答检查',
+  search: '网页搜索',
 };
 
 /** Where the twin's data leaves this machine, so the person can tell at a glance. */

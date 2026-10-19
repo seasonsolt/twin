@@ -55,6 +55,7 @@ LAYERS: dict[str, int] = {
     "llm": 2,
     "embed": 2,
     "config": 2,
+    "websearch": 2,
     "persona.store": 3,
     "persona.gate": 4,
     "persona.sources": 4,

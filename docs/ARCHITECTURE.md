@@ -30,7 +30,7 @@ flowchart TB
 
 | 层 | 代码层号（只用于 `tests/test_layers.py`） | 主要模块 |
 | --- | --- | --- |
-| L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` `persona.lexical` · `persona.schema/items/dimensions` `media.schema` · `llm` `embed` `config` `media.tts/asr` · `persona.store` |
+| L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` `persona.lexical` · `persona.schema/items/dimensions` `media.schema` · `llm` `embed` `config` `websearch` `media.tts/asr` · `persona.store` |
 | L1 | 4 | `persona.sources` `persona.questionnaire` `persona.quotes` |
 | L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） `persona.office`（Word/Excel 交付） |
 | L3 | 6 | `persona.chat` |
@@ -84,7 +84,7 @@ sequenceDiagram
 | 通用 | 与本人无关的知识和方法 | 0.5 |
 | 弃权 | 关于本人但资料里没有；替本人承诺；评价具体他人 | 0.3 |
 
-**工作模式**（`persona.work`，网页「工作」）和聊天分开：聊天是上面这条受控的问答路径，工作是一个 LangChain Deep Agents 循环，按步骤调用工具、交付文件，同样以本人第一人称说话。每一轮先用聊天模型判断一下：只是在问本人的看法、经历、做法（不用做出东西）的话，直接走聊天那条路回答，引用、原话、置信度照样核对，回复下面有依据，也照样转到待回答；要写、要整理、要改文件或拿不准时才交给智能体。智能体的提示词带着和聊天一样的核心画像和说话样本，回复对方时像本人发消息，只有交付文件才按文档的样子写。其余关于本人的内容只能来自 `recall`（就是聊天的检索，本人自己的任务带上承诺账本），`write_word` / `write_excel` 交付 Office 文件，Deep Agents 自带的文件工具只能在该任务的目录里读写（虚拟根目录，没有 shell）。本人和访客都能用；访客的任务看不到账本和待回答的问题，每人只看得到自己的任务。任务存在库旁边的 `work/<task_id>/`，每一轮作为后台任务运行；做的过程中可以插话（下一步就交给模型，快收尾时来的话也会在这一轮答复）或叫停（在下一步停下，已经写好的文件保留）。网页上工作页和聊天页是同一套布局：左边舞台和记录，中间对话，底部输入框。需要能调用工具的模型服务（openai_compat 或 anthropic），claude_cli 不支持。
+**工作模式**（`persona.work`，网页「工作」）和聊天分开：聊天是上面这条受控的问答路径，工作是一个 LangChain Deep Agents 循环，按步骤调用工具、交付文件，同样以本人第一人称说话。每一轮先用聊天模型判断一下：只是在问本人的看法、经历、做法（不用做出东西）的话，直接走聊天那条路回答，引用、原话、置信度照样核对，回复下面有依据，也照样转到待回答；要写、要整理、要改文件或拿不准时才交给智能体。智能体的提示词带着和聊天一样的核心画像和说话样本，回复对方时像本人发消息，只有交付文件才按文档的样子写。其余关于本人的内容只能来自 `recall`（就是聊天的检索，本人自己的任务带上承诺账本），`write_word` / `write_excel` 交付 Office 文件，`web_search` / `read_web_page` 查外面的事实（`websearch`，走 DeepSeek 的搜索和读网页接口，网页由 DeepSeek 抓取，链接不经本机网络；`[search]` 有密钥时才提供，没设 `TWIN_SEARCH_KEY` 时沿用同一地址（协议、主机、端口都相同）的聊天模型密钥，密钥只走 HTTPS；读网页只能打开本轮搜索结果和对方消息里的链接，网上内容标明只当资料，免得网页诱导智能体把记忆塞进链接带出去；没有搜索时提示词让它照实说查不了；关于本人的事仍只用 `recall`），Deep Agents 自带的文件工具只能在该任务的目录里读写（虚拟根目录，没有 shell）。本人和访客都能用；访客的任务看不到账本和待回答的问题，每人只看得到自己的任务。任务存在库旁边的 `work/<task_id>/`，每一轮作为后台任务运行；做的过程中可以插话（下一步就交给模型，快收尾时来的话也会在这一轮答复）或叫停（在下一步停下，已经写好的文件保留）。网页上工作页和聊天页是同一套布局：宽屏左边是可收起、可拖宽的任务列表，中间对话，底部输入框；手机上任务列表从顶栏打开。需要能调用工具的模型服务（openai_compat 或 anthropic），claude_cli 不支持。
 
 ## 5. 部署（参考）
 

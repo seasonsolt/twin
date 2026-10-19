@@ -28,6 +28,7 @@ const pages: {
       ),
   },
   { name: 'twins', path: '/#/twins', ready: '周石言' },
+  { name: 'work', path: '/#/work', ready: '按我的口吻写一份本周周报' },
   {
     name: 'system',
     path: '/#/team?system=monitor',

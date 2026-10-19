@@ -73,7 +73,7 @@ allow_hosts = ["twin.example.com"]
 
 改服务配置后重新执行 `install-services`，macOS 还需 `stop` 再 `start` 重新加载 plist（`restart` 仅 kickstart 已加载的配置）。删除服务配置项前先用旧配置停止该服务；P2 不会自动清理不再列出的旧单元。
 
-公网访问前必须配置 `[auth] enabled = true` 和 SMTP，域名加入 `allow_hosts`，详见 [使用指南](../../docs/GUIDE.md#公网部署与邮箱登录)。隧道直接执行配置的 cloudflared 命令；其凭据使用 cloudflared 自己的文件配置。
+公网访问前必须配置 `[auth] enabled = true`（企业 SSO，或邮箱验证码加 SMTP），域名加入 `allow_hosts`，详见 [使用指南](../../docs/GUIDE.md#团队部署与登录)。隧道直接执行配置的 cloudflared 命令；其凭据使用 cloudflared 自己的文件配置。
 
 ## 备份与恢复
 

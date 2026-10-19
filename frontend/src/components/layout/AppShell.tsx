@@ -23,7 +23,9 @@ import { failing, startSystemPolling, useSystem } from '../../stores/system';
 import { SystemDialog, useOpenSystem } from '../../features/admin/SystemDialog';
 import {
   AccountMenu,
-  EmptyState,
+  Card,
+  Heading,
+  Stack,
   NavPill,
   PlainButton,
   Row,
@@ -46,7 +48,7 @@ import {
 } from '../../stores/personas';
 import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
-import { NewTwin } from './NewTwin';
+import { NewTwin, NewTwinForm } from './NewTwin';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import { THEMES, useTheme } from '../../stores/theme';
@@ -457,19 +459,27 @@ export function AppShell() {
           ) : (
             <PageTransition route={location.pathname}>
               {missing ? (
-                <EmptyState
-                  title="先新建一个分身"
-                  body="还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。"
-                >
-                  <Row wrap gap={4} justify="center">
-                    <NewTwin initialOpen />
-                    {address && (
-                      <TextLink size="sm" onClick={() => setListened(false)}>
-                        其实开过会？回去再听一遍
-                      </TextLink>
-                    )}
-                  </Row>
-                </EmptyState>
+                // Nothing else here yet: the twin is made right on the page, with the navigation still around it.
+                <div className="mx-auto w-full max-w-md px-4 py-12">
+                  <Card as="section" aria-labelledby="no-twin-title">
+                    <Stack gap={4}>
+                      <Stack gap={2}>
+                        <Heading id="no-twin-title" level={1} size="title">
+                          先新建一个分身
+                        </Heading>
+                        <Text tone="secondary">
+                          还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。
+                        </Text>
+                      </Stack>
+                      <NewTwinForm prefill />
+                      {address && (
+                        <TextLink size="sm" onClick={() => setListened(false)}>
+                          其实开过会？回去再听一遍
+                        </TextLink>
+                      )}
+                    </Stack>
+                  </Card>
+                </div>
               ) : location.pathname === '/gallery' ? (
                 <>
                   <StageHeader />

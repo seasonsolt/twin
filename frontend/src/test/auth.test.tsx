@@ -247,15 +247,13 @@ it('routes no_persona to creation in the workspace, then opens the app for the n
   window.location.hash = '#/work';
   const user = userEvent.setup();
   render(<App />);
-  const dialog = await screen.findByRole('dialog', { name: '新建分身' });
-  // Made in place: the workspace stays behind the card, with the page saying why.
-  expect(dialog).not.toHaveClass('inset-0');
+  // Nothing else on the page yet: the form is right there, with the workspace navigation around it.
   expect(
-    screen.getByRole('heading', { name: '先新建一个分身', hidden: true }),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByRole('navigation', { name: '主导航', hidden: true }),
-  ).toBeInTheDocument();
+    await screen.findByRole('heading', { name: '先新建一个分身' }),
+  ).toBeVisible();
+  expect(screen.getByRole('form', { name: '新建分身' })).toBeVisible();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByRole('navigation', { name: '主导航' })).toBeVisible();
   await user.type(
     await screen.findByRole('textbox', { name: '分身名字' }),
     '我的分身',
@@ -533,7 +531,7 @@ it('gives a twin made for the wrong address back with 这不是我', async () =>
     }),
   );
   await waitFor(() => expect(disowned).toBe(true));
-  await screen.findByRole('dialog', { name: '新建分身' });
+  await screen.findByRole('form', { name: '新建分身' });
 });
 
 it('shows what the twin gathered and lets its person try it out in chat first', async () => {
@@ -633,7 +631,7 @@ it('looks for someone signed in with a work address in the meetings before an em
   await user.click(
     await screen.findByRole('button', { name: '没开过会，先建空分身' }),
   );
-  await screen.findByRole('dialog', { name: '新建分身' });
+  await screen.findByRole('form', { name: '新建分身' });
 });
 
 it('a twin of the voices someone recognised leads back to them instead of 这不是我', async () => {

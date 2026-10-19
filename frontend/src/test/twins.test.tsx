@@ -194,10 +194,10 @@ it('creates from the new-twin card and opens the created twin', async () => {
   mountTwins();
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: '新建分身' }));
-  // The twins page stays where it was behind the card.
-  expect(
-    screen.getByRole('heading', { name: '我的分身', hidden: true }),
-  ).toBeInTheDocument();
+  // Nothing to keep in view behind it: the tile turns into the form in place.
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByRole('heading', { name: '新建分身' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: '我的分身' })).toBeVisible();
   await user.type(screen.getByRole('textbox', { name: '分身名字' }), '新伙伴');
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
   expect(await screen.findByText(`聊天：${NEW}`)).toBeVisible();
@@ -309,7 +309,7 @@ it('collapses the rail to the current and two recent twins, opens the rest from 
   );
   await user.click(within(twins).getByRole('link', { name: '＋ 新建分身' }));
   expect(
-    await screen.findByRole('dialog', { name: '新建分身' }),
+    await screen.findByRole('form', { name: '新建分身' }),
   ).toBeInTheDocument();
 });
 

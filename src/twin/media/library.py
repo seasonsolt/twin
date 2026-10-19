@@ -1,8 +1,12 @@
-"""An account's recording library: each meeting is transcribed once, with every speaker's voiceprint, so twins of
-several people can later be built from the same recordings.
+"""The team's recording library: each meeting is transcribed once, with every speaker's voiceprint, so twins of
+several people can later be built from the same recordings. The meetings are the team's, whoever uploaded them;
+each recording remembers its uploader (``uploader``, an ``owner_key``), and ``web.library`` decides who may see or
+change what.
 
-``data/library/<owner_key>/`` holds ``library.db`` (the recordings and their status, which survives restarts),
-``uploads/`` (chunked uploads still arriving) and ``recordings/<id>/``. A recording folder only ever gains files:
+``data/library/team/`` holds ``library.db`` (the recordings and their status, which survives restarts),
+``members/<owner_key>/`` (each member's chunked uploads still arriving, and their own voice, ``media.voice``) and
+``recordings/<id>/``. Libraries of one account each, as earlier versions kept them, are merged into it once
+(``media.merge``). A recording folder only ever gains files:
 ``transcript-<transcript_id>.json``, ``playback.flac`` and, once someone in it is identified, the model's proofreading
 ``clean-<transcript_id>.json`` are written once under a temporary name and never changed, so backups hard-link them.
 The upload itself is deleted once the transcript and playback copy are verified; only its file name, size and
@@ -60,7 +64,9 @@ CREATE TABLE IF NOT EXISTS recordings (
     updated_at TEXT NOT NULL,
     revision INTEGER NOT NULL DEFAULT 0,
     -- The transcript the model was asked to proofread (once per transcript, whatever came of it).
-    proofread TEXT
+    proofread TEXT,
+    -- Who uploaded it (``owner_key`` of their account); NULL when nobody knows, which leaves it to administrators.
+    uploader TEXT
 );
 -- The people of this account's meetings; a person may exist before (or without) a twin.
 CREATE TABLE IF NOT EXISTS people (
@@ -71,7 +77,9 @@ CREATE TABLE IF NOT EXISTS people (
     -- Made automatically from a voice that matched nobody, and not named by the owner yet.
     auto INTEGER NOT NULL DEFAULT 0,
     -- 'male', 'female', or '' when the owner has not said.
-    gender TEXT NOT NULL DEFAULT ''
+    gender TEXT NOT NULL DEFAULT '',
+    -- The account (``owner_key``) of the person themselves, once they said a voice of theirs is them.
+    account TEXT
 );
 -- Voice samples a person was recognised by: the centroid of a speaker the owner confirmed and chose as a sample.
 CREATE TABLE IF NOT EXISTS voiceprints (
@@ -95,7 +103,21 @@ CREATE TABLE IF NOT EXISTS attributions (
     updated_at TEXT NOT NULL,
     -- Taken by voice alone (``Team.classify``), not by the owner.
     auto INTEGER NOT NULL DEFAULT 0,
+    -- The person it was given to said "不是我"; it waits for whoever decides about the recording.
+    disputed INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (recording_id, transcript_id, speaker_id)
+);
+-- Two people who may be one, for an administrator to merge or keep apart (``media.merge``).
+CREATE TABLE IF NOT EXISTS similar_people (
+    person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    other_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (person_id, other_id)
+);
+-- The libraries of one account each, as earlier versions kept them, already merged into this one (``media.merge``).
+CREATE TABLE IF NOT EXISTS merged_libraries (
+    key TEXT PRIMARY KEY,
+    merged_at TEXT NOT NULL
 );
 -- A twin may answer only while done == wanted: every change that affects its recordings raises wanted in the same
 -- transaction, and done follows once a complete build of exactly that state has succeeded.
@@ -135,6 +157,8 @@ class Recording(BaseModel):
     revision: int = 0
     # The transcript the model was asked to proofread, if any.
     proofread: str | None = None
+    # Who uploaded it (``owner_key``), if known.
+    uploader: str | None = None
 
 
 class Transcript(BaseModel):
@@ -170,6 +194,10 @@ def matches(transcript: Transcript, segments: list[Segment]) -> bool:
 
 class TranscriptionError(Exception):
     """A recording could not be transcribed; the message is shown to the owner as is."""
+
+
+# The folder of the team's library under ``data/library``.
+TEAM = "team"
 
 
 def owner_key(email: str | None) -> str:
@@ -208,6 +236,9 @@ class Library:
                 ("attributions", "auto", "INTEGER NOT NULL DEFAULT 0"),
                 ("people", "gender", "TEXT NOT NULL DEFAULT ''"),
                 ("recordings", "proofread", "TEXT"),
+                ("recordings", "uploader", "TEXT"),
+                ("people", "account", "TEXT"),
+                ("attributions", "disputed", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
@@ -253,11 +284,14 @@ class Library:
             rows = db.execute("SELECT * FROM recordings ORDER BY created_at DESC, id").fetchall()
         return [Recording.model_validate(dict(row)) for row in rows]
 
-    def pending(self) -> int:
+    def pending(self, uploader: str | None = None) -> int:
+        """Recordings still waiting for transcription; ``uploader``: only theirs."""
+        mine = " AND uploader = ?" if uploader is not None else ""
         with self._db() as db:
             return int(
                 db.execute(
-                    f"SELECT COUNT(*) FROM recordings WHERE status IN ({','.join('?' * len(PENDING))})", PENDING
+                    f"SELECT COUNT(*) FROM recordings WHERE status IN ({','.join('?' * len(PENDING))}){mine}",
+                    (*PENDING, *([uploader] if uploader is not None else [])),
                 ).fetchone()[0]
             )
 
@@ -278,9 +312,10 @@ class Library:
                 (*fields.values(), _now(), recording_id),
             )
 
-    def add(self, upload: Path, filename: str) -> tuple[Recording, bool]:
-        """File a finished upload as a queued recording; the same content uploaded again (under any name) is the
-        existing recording, and the upload is dropped. Returns the recording and whether it is new."""
+    def add(self, upload: Path, filename: str, uploader: str | None = None) -> tuple[Recording, bool]:
+        """File a finished upload as a queued recording; the same content uploaded again (under any name, by
+        anyone) is the existing recording, and the upload is dropped. Returns the recording and whether it is
+        new."""
         with upload.open("rb") as file:
             sha = hashlib.file_digest(file, "sha256").hexdigest()
         with self.lock:
@@ -308,6 +343,7 @@ class Library:
                 status="queued",
                 created_at=now,
                 updated_at=now,
+                uploader=uploader,
             )
             data = recording.model_dump()
             with self._db() as db:

@@ -468,13 +468,48 @@ export function Team({
       // The twin's name and illustration follow.
       if (person.persona_id) await refreshPersonas();
     });
+  // An administrator takes two people for one, keeping the one with a twin (or who spoke more).
+  const merge = (one: Person, other: Person) => {
+    const [kept, folded] =
+      other.persona_id || (!one.persona_id && other.speakers > one.speakers)
+        ? [other, one]
+        : [one, other];
+    return act(
+      () =>
+        api(`/api/library/people/${encodeURIComponent(folded.id)}/merge`, {
+          method: 'POST',
+          json: { into: kept.id },
+        }),
+      `similar-${one.id}-${other.id}`,
+    );
+  };
+  const apart = (one: Person, other: Person) =>
+    act(
+      () =>
+        api(`/api/library/people/${encodeURIComponent(one.id)}/apart`, {
+          method: 'POST',
+          json: { other: other.id },
+        }),
+      `similar-${one.id}-${other.id}`,
+    );
   const open = async (personaId: string, page: '/chat' | '/profile') => {
     await switchTo(personaId);
     void navigate(page);
   };
 
-  const unnamed = people?.filter((p) => p.auto) ?? [];
-  const named = people?.filter((p) => !p.auto);
+  // Only who the viewer may settle: voices in recordings they uploaded (or all, for an administrator).
+  const unnamed = people?.filter((p) => p.auto && p.can_manage !== false) ?? [];
+  // The team's roster holds everyone; this page shows the people the viewer looks after or can talk to.
+  const named = people?.filter(
+    (p) =>
+      !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
+  );
+  const byId = new Map((people ?? []).map((p) => [p.id, p]));
+  const similar = (people ?? []).flatMap((p) =>
+    (p.similar ?? [])
+      .filter((id) => p.id < id && byId.has(id))
+      .map((id) => [p, byId.get(id)!] as const),
+  );
   const arriving = recordings.filter(
     (r) => r.status === 'queued' || r.status === 'transcribing',
   );
@@ -492,6 +527,7 @@ export function Team({
   );
   const taskIds = [
     ...unnamed.map((p) => `person-${p.id}`),
+    ...similar.map(([a, b]) => `similar-${a.id}-${b.id}`),
     ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
     ...unsorted.map((r) => `unsorted-${r.id}`),
     ...failed.map((r) => `failed-${r.id}`),
@@ -575,13 +611,46 @@ export function Team({
             )}
             {tasks > unnamed.length && (
               <Grid as="ul" columns={3} gap={3}>
+                {similar.map(([a, b]) => (
+                  <Task key={`similar-${a.id}-${b.id}`} kind="可能是同一个人">
+                    <Text weight="medium">
+                      {a.name} 和 {b.name}
+                    </Text>
+                    <Text size="sm" tone="secondary">
+                      合并录音库时同名，没法确定是不是一个人
+                    </Text>
+                    <Row gap={2}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void merge(a, b)}
+                      >
+                        合并
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void apart(a, b)}
+                      >
+                        不是同一个人
+                      </Button>
+                    </Row>
+                  </Task>
+                ))}
                 {waiting.map((w) => (
-                  <Task key={`${w.recording_id}-${w.id}`} kind="拿不准是谁">
+                  <Task
+                    key={`${w.recording_id}-${w.id}`}
+                    kind={w.disputed ? '有人说不是自己' : '拿不准是谁'}
+                  >
                     <Text weight="medium">
                       <span className="break-all">{w.filename}</span> · {w.id}{' '}
-                      {w.candidates.length > 1
-                        ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
-                        : `像${w.candidates[0].name}`}
+                      {w.disputed
+                        ? '原来标成的人说这不是 TA'
+                        : w.candidates.length > 1
+                          ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
+                          : `像${w.candidates[0]?.name ?? '谁'}`}
                     </Text>
                     <RouteButton
                       to={recordingPath(w.recording_id)}
@@ -735,6 +804,8 @@ export function Team({
                 <div>
                   {person.self_claimed ? (
                     <Badge tone="success">本人已认领</Badge>
+                  ) : person.twin_elsewhere ? (
+                    <Badge tone="neutral">同事建了分身</Badge>
                   ) : person.persona_id ? (
                     person.updating ? (
                       <Badge tone="warning">记忆更新中</Badge>
@@ -753,6 +824,10 @@ export function Team({
                     <Text size="sm" tone="secondary">
                       TA 听出了自己的声音，分身归 TA 自己
                     </Text>
+                  ) : person.twin_elsewhere ? (
+                    <Text size="sm" tone="secondary">
+                      分身由建它的同事管理
+                    </Text>
                   ) : person.persona_id ? (
                     <>
                       <Button
@@ -763,7 +838,7 @@ export function Team({
                         {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
                       </Button>
                     </>
-                  ) : (
+                  ) : person.can_manage === false ? null : (
                     <>
                       <Button
                         variant="secondary"
@@ -775,36 +850,40 @@ export function Team({
                       </Button>
                     </>
                   )}
-                  <ActionMenu
-                    label={`更多：${person.name}`}
-                    items={[
-                      {
-                        label: '编辑名字和性别',
-                        disabled: busy,
-                        onSelect: () => setEditing(person),
-                      },
-                      ...(person.persona_id &&
-                      twins.find((t) => t.id === person.persona_id)?.claimed ===
-                        false
-                        ? [
-                            {
-                              label: '企业邮箱',
-                              disabled: busy,
-                              onSelect: () => setAddressing(person),
-                            },
-                          ]
-                        : []),
-                      ...(!person.persona_id && !person.self_claimed
-                        ? [
-                            {
-                              label: '删除',
-                              disabled: busy,
-                              onSelect: () => void remove(person),
-                            },
-                          ]
-                        : []),
-                    ]}
-                  />
+                  {person.can_manage !== false && (
+                    <ActionMenu
+                      label={`更多：${person.name}`}
+                      items={[
+                        {
+                          label: '编辑名字和性别',
+                          disabled: busy,
+                          onSelect: () => setEditing(person),
+                        },
+                        ...(person.persona_id &&
+                        twins.find((t) => t.id === person.persona_id)
+                          ?.claimed === false
+                          ? [
+                              {
+                                label: '企业邮箱',
+                                disabled: busy,
+                                onSelect: () => setAddressing(person),
+                              },
+                            ]
+                          : []),
+                        ...(!person.persona_id &&
+                        !person.self_claimed &&
+                        !person.twin_elsewhere
+                          ? [
+                              {
+                                label: '删除',
+                                disabled: busy,
+                                onSelect: () => void remove(person),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
+                  )}
                 </div>
               </Card>
             ))}

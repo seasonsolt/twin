@@ -234,7 +234,7 @@ const speaker = (
   ...extra,
 });
 
-const weekly = {
+export const weekly = {
   ...recordings[0],
   transcript_id: 't-weekly',
   revision: 3,
@@ -772,7 +772,6 @@ const handlers: Record<string, Handler> = {
       },
     ],
     persona_id: 'p-zhaoqing',
-    elsewhere: false,
   }),
   'GET /api/library/review': reply({
     items: [

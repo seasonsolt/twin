@@ -27,6 +27,7 @@ LAYERS: dict[str, int] = {
     "media.library": 7,
     "media.team": 7,
     "media.voice": 7,
+    "media.merge": 7,
     "media.clean": 8,
     "media.check": 8,
     "media.script": 7,

@@ -436,7 +436,6 @@ it('looks for someone signed in with a work address in the meetings before an em
           enrolled: false,
           items: [],
           persona_id: null,
-          elsewhere: false,
         })
       : base(path, init),
   );

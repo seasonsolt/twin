@@ -225,7 +225,7 @@ class Personas:
             view["approved"] = bool(entry.get("approved_at"))
             view["made_by_other"] = entry.get("owner") != identity["email"]
             # They recognised their own voice in a colleague's meetings (``web.voice``): made from those meetings.
-            view["from_meetings"] = bool(entry.get("library"))
+            view["from_meetings"] = bool(entry.get("by_voice"))
         if self.accessible(entry, identity):
             view["claim_email"] = entry.get("claim_email")
             view["claimed"] = bool(entry.get("member"))

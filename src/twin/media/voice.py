@@ -1,11 +1,11 @@
 """A colleague finding themselves in the meetings others uploaded, by their own voice.
 
-Someone signed in with a work e-mail records a sentence; its voiceprint is kept in ``voice.db`` beside their own
-library (the recording itself is not kept). It is compared with every speaker of the other libraries whom nobody
-has said who they are (``Team.open_voices``), and the closest are offered to them, each as one sentence they can
-hear. Only what the page was shown can be acted on: an offer is a row of their own ``voice.db`` with an id of its
-own, never a path into someone else's library. What they say of an offer is kept here too (``claims``): "是我"
-(written back to that library by ``web.voice``) or "不是", which is never offered again.
+Someone signed in with a work e-mail records a sentence; its voiceprint is kept in ``voice.db`` in their own corner
+of the team's library (the recording itself is not kept). It is compared with every speaker of the library whom
+nobody has said who they are (``Team.open_voices``), and the closest are offered to them, each as one sentence they
+can hear. Only what the page was shown can be acted on: an offer is a row of their own ``voice.db`` with an id of
+its own, never a path into a recording. What they say of an offer is kept here too (``claims``): "是我" (written to
+the library by ``web.voice``) or "不是", which is never offered again.
 """
 
 from __future__ import annotations

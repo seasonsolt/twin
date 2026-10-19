@@ -198,7 +198,7 @@ export async function uploadMedia(
   signal: AbortSignal,
   progress: (value: UploadProgress) => void,
   { base = '/api/uploads', scope }: { base?: string; scope?: string } = {},
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   if (file.size > 4 * 1024 ** 3) throw new Error('音视频文件最多 4 GB');
   const persona = scope ?? getPersonaId();
   let offset = 0;
@@ -265,9 +265,12 @@ export async function uploadMedia(
     offset = next;
     report();
   }
-  await send(`${base}/${saved.id}/finish`, { method: 'POST' });
+  const { data: filed } = await send(`${base}/${saved.id}/finish`, {
+    method: 'POST',
+  });
   save(
     savedUploads(persona).filter((upload) => upload.id !== saved.id),
     persona,
   );
+  return filed;
 }

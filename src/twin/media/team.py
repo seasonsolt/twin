@@ -1,8 +1,12 @@
-"""People in an account's recording library: who each speaker is, how a speaker is matched to a person, and the
+"""People in the team's recording library: who each speaker is, how a speaker is matched to a person, and the
 twin sources that follow from those decisions.
 
-The owner decides; matching proposes, and decides by itself only where the voice leaves no doubt (``classify``):
-a speaker whose voice is very close to one person's samples is taken to be that person, and a long voice matching
+Whoever decides about a recording (its uploader, or an administrator; ``web.library``) is "the owner" below. A
+person may only speak for themselves: say a voice is theirs (``web.voice``), or that a speaker given to them is not
+(``dispute``), which undoes it and leaves it for the owner to settle.
+
+The owner decides; matching proposes, and decides by itself only where the voice leaves no doubt (``classify``): a
+speaker whose voice is very close to one person's samples is taken to be that person, and a long voice matching
 nobody becomes a new unnamed person. Either is marked automatic and undone by any decision of the owner, after which
 that speaker is never classified again. A person is recognised by voice samples (the centroids of speakers the owner
 confirmed *and* chose as samples, and the voice an unnamed person was made from), and candidates are computed when
@@ -61,6 +65,8 @@ class Person(BaseModel):
     # Made from a voice that matched nobody, not named yet.
     auto: bool = False
     gender: Gender = ""
+    # The account (``owner_key``) of the person themselves, once they said a voice is theirs.
+    account: str | None = None
     speakers: int = 0
     seconds: float = 0
     samples: int = 0
@@ -97,6 +103,8 @@ class SpeakerView(BaseModel):
     sample: bool = False
     # The decision was taken by voice alone (``Team.classify``).
     auto: bool = False
+    # The person it was given to said it is not them; it waits for the owner (``dispute``).
+    disputed: bool = False
     candidates: list[Candidate] = []
     near: bool = False
 
@@ -285,6 +293,7 @@ class Team:
                 rejected=json.loads(row["rejected"]) if row else [],
                 sample=speaker.id in sampled,
                 auto=bool(row["auto"]) if row else False,
+                disputed=bool(row["disputed"]) if row else False,
             )
             if view.decision == "none" and speaker.embedding:
                 # A speaker's own samples would match it perfectly; they only exist once it is decided anyway.
@@ -528,14 +537,15 @@ class Team:
                 found[row["recording_id"]] = (names, settled + 1)
         return found
 
-    def review(self) -> list[dict[str, object]]:
-        """Undecided speakers whose voice matches someone, best match first: the owner's confirmation queue."""
+    def review(self, recordings: set[str] | None = None) -> list[dict[str, object]]:
+        """The owner's confirmation queue: speakers someone said are not them, then undecided speakers whose voice
+        matches someone, best match first. ``recordings``: only these."""
         queue: list[dict[str, object]] = []
         for recording in self.library.list():
-            if recording.status != "ready":
+            if recording.status != "ready" or (recordings is not None and recording.id not in recordings):
                 continue
             for speaker in self.speakers(recording):
-                if speaker.decision == "none" and speaker.candidates:
+                if speaker.decision == "none" and (speaker.candidates or speaker.disputed):
                     queue.append(
                         {
                             "recording_id": recording.id,
@@ -545,8 +555,110 @@ class Team:
                             **speaker.model_dump(),
                         }
                     )
-        queue.sort(key=lambda entry: -entry["candidates"][0]["score"])  # type: ignore[index]
+        queue.sort(
+            key=lambda entry: (
+                not entry["disputed"],
+                -(entry["candidates"][0]["score"] if entry["candidates"] else 0),  # type: ignore[index]
+            )
+        )
         return queue
+
+    def attendance(self) -> dict[str, set[str]]:
+        """Per recording, the people a speaker of its current transcript is confirmed as: who was there."""
+        found: dict[str, set[str]] = {}
+        with self.library.read() as db:
+            for recording_id, person_id in db.execute(
+                "SELECT a.recording_id, a.person_id FROM attributions a "
+                "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                "WHERE a.decision = 'confirmed'"
+            ):
+                found.setdefault(recording_id, set()).add(person_id)
+        return found
+
+    def dispute(self, recording_id: str, speaker_id: str, people: set[str]) -> str:
+        """One of ``people`` (all the same human) says the speaker given to them is not them: the speaker is
+        undone, never given to them again by voice, and marked for the owner to settle. Returns whom it was given
+        to; ``ValueError`` when it was not given to any of them."""
+        recording = self.library.get(recording_id)
+        if recording is None or recording.transcript_id is None:
+            raise ValueError("找不到这段录音的转写")
+        with self.library.read() as db:
+            row = db.execute(
+                "SELECT person_id FROM attributions WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
+                "AND decision = 'confirmed'",
+                (recording_id, recording.transcript_id, speaker_id),
+            ).fetchone()
+        if row is None or row[0] not in people:
+            raise ValueError("这段话没有记在你名下")
+        person_id = str(row[0])
+        try:
+            self.decide(recording_id, recording.transcript_id, recording.revision, speaker_id, "reject", person_id)
+        except Stale:
+            raise ValueError("这段录音刚被修改过，请刷新后再试") from None
+        with self.library.transaction() as db:
+            db.execute(
+                "UPDATE attributions SET disputed = 1 WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
+                (recording_id, recording.transcript_id, speaker_id),
+            )
+        return person_id
+
+    def set_account(self, person_id: str, account: str) -> None:
+        """Note that the person is the human signed in as ``account``."""
+        with self.library.transaction() as db:
+            db.execute("UPDATE people SET account = ? WHERE id = ?", (account, person_id))
+
+    def merge(self, person_id: str, into: str) -> None:
+        """Take ``person_id`` and ``into`` for one person, as an administrator heard them: every speaker and voice
+        sample of ``person_id`` becomes ``into``'s and ``person_id`` is forgotten. ``ValueError`` when either is
+        unknown, or ``person_id`` has a twin of its own (delete or keep it first)."""
+        with self.library.transaction() as db:
+            rows = {r["id"]: r for r in db.execute("SELECT * FROM people WHERE id IN (?, ?)", (person_id, into))}
+            if person_id == into or len(rows) != 2:
+                raise ValueError("找不到这个人")
+            if rows[person_id]["persona_id"]:
+                raise ValueError(f"「{rows[person_id]['name']}」已经有分身，请先删除分身再合并")
+            heard = [
+                r[0]
+                for r in db.execute(
+                    "SELECT DISTINCT recording_id FROM attributions WHERE person_id = ? AND decision = 'confirmed'",
+                    (person_id,),
+                )
+            ]
+            db.execute(
+                "UPDATE attributions SET person_id = ?, updated_at = ? WHERE person_id = ? AND decision = 'confirmed'",
+                (into, _now(), person_id),
+            )
+            db.execute("UPDATE voiceprints SET person_id = ? WHERE person_id = ?", (into, person_id))
+            if rows[person_id]["account"] and not rows[into]["account"]:
+                db.execute("UPDATE people SET account = ? WHERE id = ?", (rows[person_id]["account"], into))
+            if rows[person_id]["gender"] and not rows[into]["gender"]:
+                db.execute("UPDATE people SET gender = ? WHERE id = ?", (rows[person_id]["gender"], into))
+            for recording_id in heard:
+                self._reopen(db, recording_id, {into})
+                db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
+            # Everyone who spoke with them calls them by the kept name now.
+            self._bump(db, {into})
+            self._forget(db, person_id)
+
+    def similar(self) -> list[tuple[str, str]]:
+        """Pairs of people who may be one (``media.merge`` found them under the same name in two libraries)."""
+        with self.library.read() as db:
+            return [(str(r[0]), str(r[1])) for r in db.execute("SELECT person_id, other_id FROM similar_people")]
+
+    def add_similar(self, person_id: str, other_id: str) -> None:
+        with self.library.transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO similar_people (person_id, other_id, created_at) VALUES (?, ?, ?)",
+                (person_id, other_id, _now()),
+            )
+
+    def keep_apart(self, person_id: str, other_id: str) -> None:
+        """They are two people after all."""
+        with self.library.transaction() as db:
+            db.execute(
+                "DELETE FROM similar_people WHERE (person_id = ? AND other_id = ?) OR (person_id = ? AND other_id = ?)",
+                (person_id, other_id, other_id, person_id),
+            )
 
     def open_voices(self) -> list[OpenVoice]:
         """Speakers of current transcripts whom nobody has said who they are, with a voiceprint: undecided ones,

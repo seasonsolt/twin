@@ -31,7 +31,7 @@ from twin.web.jobs import PersonaProcessing
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
 
 CSRF = {"X-Twin": "1"}
-UPLOADER, MEMBER, OTHER, NO_ADDRESS = "cookie-w", "cookie-z", "cookie-o", "cookie-n"
+UPLOADER, MEMBER, OTHER, NO_ADDRESS, ADMIN = "cookie-w", "cookie-z", "cookie-o", "cookie-n", "cookie-a"
 ZHANG = [0.98, 0.2, 0.0]
 
 
@@ -50,6 +50,13 @@ class FakeVoice(CommandTranscriber):
 
 @pytest.fixture
 def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    yield from sso_app(tmp_path, monkeypatch)
+
+
+def sso_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """The app behind the company login, with 王五, 张三 and 赵六 at acme.cn, someone without a work address and
+    an administrator; switch between them with ``as_``."""
+
     def soon(delay: float, fn: Any) -> threading.Timer:
         timer = threading.Timer(0.01, fn)
         timer.daemon = True
@@ -66,6 +73,7 @@ def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]
         MEMBER: {"subject": "2002", "display_name": "张三", "account": "zhangsan"},
         OTHER: {"subject": "2003", "display_name": "赵六", "account": "zhaoliu"},
         NO_ADDRESS: {"subject": "2004", "display_name": "外包"},
+        ADMIN: {"subject": "9999", "display_name": "管理员", "account": "admin"},
     }
     settings = Settings(
         db_path=tmp_path / "twin.db",
@@ -90,12 +98,18 @@ def as_(web: TestClient, cookie: str) -> TestClient:
     return web
 
 
-def library_of(tmp_path: Path, subject: str) -> Library:
-    return Library(tmp_path / "library" / owner_key(f"sso:{subject}"))
+def team_library(tmp_path: Path) -> Library:
+    return Library(tmp_path / "library" / "team")
 
 
-def meeting(library: Library, name: str = "2026-10-12 周一经营会.m4a") -> str:
-    """张三 (S1) speaks long enough to become an unnamed person; 李总 (S2) is undecided; S3 says one word."""
+def uploaded(library: Library, recording_id: str, subject: str) -> str:
+    library.update(recording_id, uploader=owner_key(f"sso:{subject}"))
+    return recording_id
+
+
+def meeting(library: Library, name: str = "2026-10-12 周一经营会.m4a", by: str = "2001") -> str:
+    """王五 (2001) uploaded it. 张三 (S1) speaks long enough to become an unnamed person; 李总 (S2) is undecided;
+    S3 says one word."""
     rec = recording(
         library,
         name,
@@ -117,7 +131,7 @@ def meeting(library: Library, name: str = "2026-10-12 周一经营会.m4a") -> s
         check=True,
     )
     Team(library).classify(rec)
-    return rec
+    return uploaded(library, rec, by)
 
 
 def sentence(seconds: float = 6) -> bytes:
@@ -140,13 +154,13 @@ def open_twin(web: TestClient, persona_id: str) -> bool:
 
 
 def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(web: TestClient, tmp_path: Path) -> None:
-    library = library_of(tmp_path, "2001")
+    library = team_library(tmp_path)
     rec = meeting(library)
     [unnamed] = Team(library).people()
     assert unnamed.auto
 
     before = as_(web, MEMBER).get("/api/library/voice").json()
-    assert before == {"available": True, "enrolled": False, "items": [], "persona_id": None, "elsewhere": False}
+    assert before == {"available": True, "enrolled": False, "items": [], "persona_id": None}
     state = enroll(web)
     assert state["enrolled"] is True
     [offer] = state["items"]
@@ -160,13 +174,14 @@ def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(w
     assert sample.status_code == 200 and sample.headers["content-type"] == "audio/wav"
     for forged in (rec, f"{rec}/S2", "vo_0000000000000000"):
         assert web.get(f"/api/library/voice/items/{forged}/sample").status_code == 404
-    # The recording itself stays the uploader's alone.
+    # Until they say it is them, nothing of the recording is theirs to see.
     assert web.get(f"/api/library/recordings/{rec}").status_code == 404
-    assert not list((tmp_path / "library" / owner_key("sso:2002")).glob("*.wav"))
+    assert web.get("/api/library").json()["recordings"] == []
+    assert not list((tmp_path / "library" / "team" / "members" / owner_key("sso:2002")).glob("*.wav"))
 
     confirmed = web.post(f"/api/library/voice/offers/{offer['id']}", json={"verdict": "me"}, headers=CSRF).json()
     [mine] = confirmed["items"]
-    assert mine["state"] == "mine" and confirmed["elsewhere"] is False
+    assert mine["state"] == "mine"
     pid = confirmed["persona_id"]
     [twin] = web.get("/api/personas").json()
     assert twin["id"] == pid and twin["name"] == "张三"
@@ -182,6 +197,19 @@ def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(w
     with PersonaStore(tmp_path / "personas" / pid / "twin.db") as store:
         own = [e.text for e in store.list_expressions() if e.is_target]
     assert own == ["[00:00] 续费方案我周四前给到大家。", "[00:10] 先把老用户这块做透。"]
+
+    # Now one of the people of that meeting, 张三 may read and hear it, but deciding about it stays the uploader's.
+    detail = web.get(f"/api/library/recordings/{rec}").json()
+    assert detail["can_edit"] is False and detail["mine"] == ["S1"]
+    assert all("candidates" not in s for s in detail["speakers"])
+    assert [r["id"] for r in web.get("/api/library").json()["recordings"]] == [rec]
+    assert web.get(f"/api/library/recordings/{rec}/speakers/S1/samples/0").status_code == 200
+    put = web.put(
+        f"/api/library/recordings/{rec}/speakers/S2",
+        json={"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "unknown"},
+        headers=CSRF,
+    )
+    assert put.status_code == 403
 
     # The uploader sees who it is, but the twin is not theirs to open, rename or dress.
     look = twin["avatar_preset"]
@@ -207,7 +235,7 @@ def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(w
 
 
 def test_taking_back_clears_the_voice_and_it_is_not_offered_again(web: TestClient, tmp_path: Path) -> None:
-    library = library_of(tmp_path, "2001")
+    library = team_library(tmp_path)
     rec = meeting(library)
     as_(web, MEMBER)
     [offer] = enroll(web)["items"]
@@ -221,7 +249,7 @@ def test_taking_back_clears_the_voice_and_it_is_not_offered_again(web: TestClien
 
 
 def test_not_me_is_kept_to_oneself_and_the_same_meeting_is_offered_once(web: TestClient, tmp_path: Path) -> None:
-    first, second = library_of(tmp_path, "2001"), library_of(tmp_path, "2003")
+    first = second = team_library(tmp_path)
     meeting(first)
     # 赵六 uploaded another meeting where 张三's voice is less sure, and nobody has said who anyone is.
     rec = recording(
@@ -230,6 +258,7 @@ def test_not_me_is_kept_to_oneself_and_the_same_meeting_is_offered_once(web: Tes
         [Segment(start=0, end=8, text="我同意，先上灰度。", speaker="S1")],
         [Speaker(id="S1", seconds=8, embedding=[0.4, 0.6, 0.6])],
     )
+    uploaded(second, rec, "2003")
     as_(web, MEMBER)
     offers = enroll(web)["items"]
     assert [o["quote"] for o in offers] == ["续费方案我周四前给到大家。", "我同意，先上灰度。"]
@@ -244,7 +273,7 @@ def test_not_me_is_kept_to_oneself_and_the_same_meeting_is_offered_once(web: Tes
 
 
 def test_a_voice_the_uploader_settled_meanwhile_is_refused(web: TestClient, tmp_path: Path) -> None:
-    library = library_of(tmp_path, "2001")
+    library = team_library(tmp_path)
     rec = meeting(library)
     as_(web, MEMBER)
     [offer] = enroll(web)["items"]
@@ -260,7 +289,7 @@ def test_a_voice_the_uploader_settled_meanwhile_is_refused(web: TestClient, tmp_
 
 
 def test_without_a_work_address_or_a_voiceprint_there_is_nothing_to_find(web: TestClient, tmp_path: Path) -> None:
-    meeting(library_of(tmp_path, "2001"))
+    meeting(team_library(tmp_path))
     assert as_(web, NO_ADDRESS).get("/api/library/voice").status_code == 404
     as_(web, MEMBER)
     short = web.put("/api/library/voice", files={"file": ("voice.webm", sentence(2))}, headers=CSRF)

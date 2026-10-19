@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi, NOW } from './mockApi';
+import { mockApi, NOW, weekly } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
@@ -17,6 +17,29 @@ const pages: {
     name: 'recording',
     path: '/#/library/r-weekly',
     ready: 'S3 是谁？',
+  },
+  {
+    // Someone identified in a colleague's meeting reads it, and may say a speaker given to them is not them.
+    name: 'recording-attendee',
+    path: '/#/library/r-weekly',
+    ready: '你参加了这场会',
+    setup: (page) =>
+      page.route('**/api/library/recordings/r-weekly', (route) =>
+        route.fulfill({
+          json: {
+            ...weekly,
+            can_edit: false,
+            mine: ['S2'],
+            // Whom the voices resemble is for the uploader only.
+            speakers: weekly.speakers.map((speaker) => ({
+              ...speaker,
+              candidates: undefined,
+              rejected: undefined,
+              near: undefined,
+            })),
+          },
+        }),
+      ),
   },
   {
     name: 'chat',

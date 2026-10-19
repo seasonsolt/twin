@@ -17,10 +17,10 @@ from .paths import TwinPaths
 
 def _copy_tree(source: Path, target: Path, *, snapshot: bool, link: bool = False) -> None:
     """Copy ``source`` into ``target``; SQLite databases as consistent snapshots when ``snapshot``. When backing up
-    (``snapshot``), files of library recordings (``library/<owner>/recordings/``) are written once and never
-    changed, so they are hard-linked instead (copied when the target is on another file system): backups do not
-    hold the audio again each time. A restore copies everything, so the restored data shares nothing with the
-    backup."""
+    (``snapshot``), files of library recordings (``library/team/recordings/``, and of old libraries set aside) are
+    written once and never changed, so they are hard-linked instead (copied when the target is on another file
+    system): backups do not hold the audio again each time. A restore copies everything, so the restored data shares
+    nothing with the backup."""
     private_directory(target)
     target.chmod(0o700)
     for path in source.iterdir():
@@ -35,7 +35,10 @@ def _copy_tree(source: Path, target: Path, *, snapshot: bool, link: bool = False
             continue
         destination = target / path.name
         if path.is_dir():
-            recordings = snapshot and path.name == "recordings" and source.parent.name == "library"
+            # Also the old libraries set aside when they were merged into the team's (``library/.legacy/<owner>``).
+            recordings = (
+                snapshot and path.name == "recordings" and "library" in (source.parent.name, source.parent.parent.name)
+            )
             _copy_tree(path, destination, snapshot=snapshot, link=link or recordings)
         elif path.is_file():
             if snapshot and path.suffix == ".db":

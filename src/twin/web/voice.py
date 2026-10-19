@@ -2,15 +2,15 @@
 colleagues uploaded, and makes their twin from them (员工 1b).
 
 Only an account with a work e-mail may (an enterprise sign-in fixes it, so it says who someone is). They record a
-sentence, and are offered the voices of other libraries nobody has said who they are, closest first
+sentence, and are offered the voices of the team's library nobody has said who they are, closest first
 (``media.voice``). Of each they see one sentence and hear five seconds, with the meeting's title and date; never the
 recording, its transcript, its uploader or anyone else's words, and only voices offered to them can be heard or
-answered. "是我" is written back to the uploader's library as a decision with a voice sample, so their later
-meetings know them too; the twin made from it is the person's own (its owner and member), following that library
-(``library`` in its registry entry) without its uploader being able to open it, and answers colleagues only once
-they have looked at it and said it is all right (``Personas.approve``). A twin follows one library: voices
-confirmed in another are written back there but do not reach it. The uploader keeps the last word over their
-library, and the person can take back what they confirmed.
+answered. "是我" is written to the library as a decision with a voice sample, so later meetings know them too, and
+makes them one of the people identified there, who may read those meetings (``web.library``). The twin made from
+it is the person's own (its owner and member, ``by_voice`` in its registry entry) without the meetings' uploaders
+being able to open it, and answers colleagues only once they have looked at it and said it is all right
+(``Personas.approve``). Whoever uploaded a meeting keeps the last word over it, and the person can take back what
+they confirmed.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
 from ..media.ingest import CommandTranscriber, make_transcriber
-from ..media.library import owner_key
+from ..media.library import TEAM, owner_key
 from ..media.team import Stale, Team
 from ..media.voice import LIKELY, Claim, Offer, SelfVoice, offers
 from ..persona import gate
@@ -62,22 +62,15 @@ class MemberVoice:
 
     def store(self, identity: dict[str, Any]) -> SelfVoice:
         self.address(identity)
-        return SelfVoice(self.libraries.root / owner_key(identity["email"]))
+        return SelfVoice(self.libraries.member(owner_key(identity["email"])))
 
     def transcriber(self) -> CommandTranscriber | None:
         found = make_transcriber(self.settings.asr)
         return found if isinstance(found, CommandTranscriber) else None
 
-    def others(self, identity: dict[str, Any]) -> dict[str, Team]:
-        """Every library but the person's own (where they say who is who themselves)."""
-        own, root = owner_key(identity["email"]), self.libraries.root
-        if not root.is_dir():
-            return {}
-        return {
-            folder.name: self.libraries.team(folder.name)
-            for folder in sorted(root.iterdir())
-            if folder.name != own and (folder / "library.db").is_file()
-        }
+    def libraries_heard(self) -> dict[str, Team]:
+        """Where voices are offered from: the team's library."""
+        return {TEAM: self.libraries.team(TEAM)}
 
     # ------------------------------------------------------------ the page
 
@@ -86,7 +79,7 @@ class MemberVoice:
         store = self.store(identity)
         embedding = store.embedding()
         claims = store.claims()
-        found = offers(embedding, self.others(identity), claims) if embedding else []
+        found = offers(embedding, self.libraries_heard(), claims) if embedding else []
         store.set_offers(found)
         mine = [claim for claim in claims if claim.verdict == "me"]
         twin = self.twin(identity)
@@ -96,8 +89,6 @@ class MemberVoice:
             "items": [self.item(claim.id, claim.offer, "mine") for claim in mine]
             + [self.item(offer.id, offer, "offered") for offer in found],
             "persona_id": twin["id"] if twin else None,
-            # Some voices they confirmed are in a library their twin does not follow.
-            "elsewhere": any(twin is None or claim.offer.library != twin.get("library") for claim in mine),
         }
 
     @staticmethod
@@ -120,7 +111,7 @@ class MemberVoice:
                 (
                     dict(entry)
                     for entry in self.registry.data["personas"]
-                    if entry.get("library")
+                    if entry.get("by_voice")
                     and entry.get("member") == identity["email"]
                     and not entry.get("deleted_at")
                     and entry["id"] not in self.registry.removing
@@ -198,6 +189,7 @@ class MemberVoice:
             if made:
                 team.delete_person(person_id)
             raise HTTPException(409, "这段录音刚被修改过，请刷新后再确认") from None
+        team.set_account(person_id, owner_key(identity["email"]))
         store.add_claim(offer, "me", person_id)
         # Their voice sample can settle them in the library's other meetings.
         team.classify_all()
@@ -206,16 +198,21 @@ class MemberVoice:
         self.libraries.proofread(offer.library)
 
     def person(self, identity: dict[str, Any], key: str, team: Team, store: SelfVoice) -> tuple[str, bool]:
-        """Who the person is in library ``key``, and whether they were just added to it: the one they confirmed
-        voices as before, or whose twin they have taken, else a new person by the name they signed in with."""
+        """Who the person is in library ``key``, and whether they were just added to it: the one they said they
+        are, or whose twin they have taken, or they confirmed voices as before, else a new person by the name they
+        signed in with."""
         known = {person.id: person for person in team.people()}
-        for claim in store.claims():
-            if claim.verdict == "me" and claim.offer.library == key and claim.person_id in known:
-                return claim.person_id, False
+        account = owner_key(identity["email"])
+        for person in known.values():
+            if person.account == account:
+                return person.id, False
         for person in known.values():
             entry = self.registry.entry(person.persona_id) if person.persona_id else None
             if entry is not None and entry.get("member") == identity["email"]:
                 return person.id, False
+        for claim in store.claims():
+            if claim.verdict == "me" and claim.offer.library == key and claim.person_id in known:
+                return claim.person_id, False
         local = self.address(identity).split("@")[0]
         name = " ".join(str(identity.get("name") or local).split())[:20] or local
         for candidate in (name, f"{name}（{local}）"):
@@ -227,8 +224,9 @@ class MemberVoice:
 
     def attach(self, identity: dict[str, Any], key: str, team: Team, person_id: str) -> None:
         """Make the person's twin follow library ``key`` as ``person_id``: the twin already made of them there,
-        else a twin of theirs with nothing in it yet, else a new one. A twin follows one library, so nothing is
-        attached while they have a twin of meetings elsewhere or one with materials of its own."""
+        else a twin of theirs with nothing in it yet, else a new one. Nothing is attached while they have a twin of
+        meetings already (made for them by a colleague, perhaps as someone else of their name) or one with
+        materials of its own."""
         person = team.person(person_id)
         if person is None or (person.persona_id and self.registry.entry(person.persona_id) is not None):
             return
@@ -255,7 +253,7 @@ class MemberVoice:
                 entry = empty or self.registry.create(person.name, identity, onboarding=False)
             except HTTPException:
                 return  # At their limit of twins: the voices stay theirs in the library, outside any twin.
-            entry.update(member=email, claimed_at=dt.datetime.now(dt.UTC).isoformat(), library=key, public=False)
+            entry.update(member=email, claimed_at=dt.datetime.now(dt.UTC).isoformat(), by_voice=True, public=False)
             entry.pop("approved_at", None)
             self.registry.save()
             with PersonaStore(self.registry.settings_for(entry["id"]).db_path) as store:

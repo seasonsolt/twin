@@ -40,8 +40,6 @@ export interface VoiceState {
   enrolled: boolean;
   items: VoiceItem[];
   persona_id: string | null;
-  /** Some voices they confirmed are in a library their twin does not follow. */
-  elsewhere: boolean;
 }
 
 const day = (date: string | null) => {
@@ -272,11 +270,6 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
       <Text size="sm" tone="secondary">
         同一个人的几段声音合在一起，确认一次就够。点错了可以撤回。
       </Text>
-      {state.elsewhere && mine.length > 0 && (
-        <Text size="sm" tone="secondary">
-          有的会议在另一位同事的录音库里：已经告诉对方那是你，但暂时不进这个分身。
-        </Text>
-      )}
       {error && (
         <Text size="sm" tone="danger" role="alert">
           {error}

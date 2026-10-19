@@ -50,7 +50,6 @@ const empty: VoiceState = {
   enrolled: false,
   items: [],
   persona_id: null,
-  elsewhere: false,
 };
 let voice: VoiceState | null;
 let sent: [string, string, unknown][];

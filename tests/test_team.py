@@ -100,7 +100,7 @@ def wanted_done(library: Library, persona_id: str) -> tuple[int, int]:
 
 
 def test_samples_match_later_recordings_and_a_denial_or_change_takes_them_away(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first, second = meeting(library), meeting(library, "第二次.m4a", lead=[0.95, 0.05, 0.0])
     zhang, li = team.add_person("张总"), team.add_person("李总")
@@ -131,7 +131,7 @@ def test_samples_match_later_recordings_and_a_denial_or_change_takes_them_away(t
 
 
 def test_a_twin_reads_only_its_own_segments_and_mixed_speakers_are_nobody(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first = meeting(library)
     zhang, li = team.add_person("张总"), team.add_person("李总")
@@ -147,7 +147,7 @@ def test_a_twin_reads_only_its_own_segments_and_mixed_speakers_are_nobody(tmp_pa
 
 
 def test_the_same_words_moving_to_another_person_change_the_source(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     same = "我支持这个方案。"
     rec = recording(
@@ -175,7 +175,7 @@ def test_the_same_words_moving_to_another_person_change_the_source(tmp_path: Pat
 
 
 def test_deleting_a_recording_closes_the_twins_it_fed(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first, other = meeting(library), meeting(library, "无关.m4a")
     zhang = team.add_person("张总")
@@ -192,7 +192,7 @@ def test_deleting_a_recording_closes_the_twins_it_fed(tmp_path: Path) -> None:
 def test_listing_people_and_candidates_reads_each_transcript_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first = meeting(library)
     meeting(library, "第二次.m4a")
@@ -218,7 +218,7 @@ def voices(library: Library, name: str, *speakers: tuple[list[float], float]) ->
 
 
 def test_known_voices_are_taken_without_asking_and_new_long_voices_become_unnamed_people(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 120), ([0.0, 1.0, 0.0], 90), ([0.0, 0.0, 1.0], 10))
     assert team.classify(first)
@@ -266,7 +266,7 @@ def test_known_voices_are_taken_without_asking_and_new_long_voices_become_unname
 
 
 def test_an_unnamed_person_whose_voice_is_given_away_is_forgotten(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first = voices(library, "一.m4a", ([1.0, 0.0], 120), ([0.0, 1.0], 90))
     assert team.classify(first)
@@ -285,7 +285,7 @@ def test_an_unnamed_person_whose_voice_is_given_away_is_forgotten(tmp_path: Path
 
 
 def test_an_unnamed_voice_is_settled_as_someone_known_or_nobody(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 120), ([0.0, 1.0, 0.0], 90))
     assert team.classify(first)
@@ -319,7 +319,7 @@ def test_an_unnamed_voice_is_settled_as_someone_known_or_nobody(tmp_path: Path) 
 
 
 def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     first = voices(library, "一.m4a", ([1.0, 0.0], 15), ([0.0, 1.0], 15))
     second = voices(library, "二.m4a", ([0.98, 0.02], 40), ([0.0, 1.0], 61))
     settings = Settings(db_path=tmp_path / "twin.db")
@@ -356,7 +356,7 @@ def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -
 
 
 def linked_store(tmp_path: Path) -> tuple[Library, Path]:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     team = Team(library)
     zhang = team.add_person("张总")
     team.link(zhang.id, "p-zhang")
@@ -442,7 +442,7 @@ def open_twin(web: TestClient, persona_id: str) -> bool:
 
 
 def test_a_misattributed_fact_leaves_the_twin_and_reaches_the_right_one(web: TestClient, tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     rec = meeting(library)
     detail = web.get(f"/api/library/recordings/{rec}").json()
     assert [s["id"] for s in detail["speakers"]] == ["S1", "S2", "S3"] and len(detail["segments"]) == 5
@@ -582,7 +582,7 @@ def test_a_change_waiting_at_shutdown_is_carried_out_after_restart(
 ) -> None:
     monkeypatch.setattr(PersonaProcessing, "_timer", staticmethod(lambda delay, fn: threading.Timer(3600, fn)))
     settings = Settings(db_path=tmp_path / "twin.db")
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     rec = meeting(library)
     factory = {"llm_factory": lambda: FakeLLM(lambda *_: {"items": []}), "embedder_factory": HashingEmbedder}
     with TestClient(create_app(settings, **factory), base_url="http://localhost") as web:
@@ -660,7 +660,7 @@ def test_an_answer_streamed_while_the_memory_changes_is_marked_and_not_saved(
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
 def test_speakers_can_be_heard_at_several_moments(web: TestClient, tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     rec = meeting(library)
     subprocess.run(
         [
@@ -686,7 +686,7 @@ def test_speakers_can_be_heard_at_several_moments(web: TestClient, tmp_path: Pat
 
 
 def test_a_twin_from_meetings_is_made_for_a_work_address_and_stays_private(web: TestClient, tmp_path: Path) -> None:
-    library = Library(tmp_path / "library" / "local")
+    library = Library(tmp_path / "library" / "team")
     rec = meeting(library)
     detail = web.get(f"/api/library/recordings/{rec}").json()
     body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}

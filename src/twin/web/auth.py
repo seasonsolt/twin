@@ -1,4 +1,5 @@
-"""Email-code authentication and hashed, revocable cookie sessions."""
+"""Sign-in by e-mail code, by twin's own account and password, or by another app's single sign-on; hashed,
+revocable cookie sessions."""
 
 from __future__ import annotations
 
@@ -33,6 +34,12 @@ from ..config import AuthSettings, SMTPSettings
 from ..util import private_directory
 
 COOKIE = "twin_session"
+# Sessions of twin's own accounts are keyed ``user:<name>``; e-mail sessions by the address.
+USER = "user:"
+USERNAME = re.compile(r"[a-z0-9][a-z0-9._@-]{0,63}")
+MIN_PASSWORD = 8
+# Failed password sign-ins allowed per account in 15 minutes and per address in an hour.
+ACCOUNT_FAILURES, IP_FAILURES = 5, 30
 logger = logging.getLogger("twin.auth")
 
 
@@ -63,6 +70,22 @@ def work_address(value: str | None) -> str | None:
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def hash_password(password: str, salt: str) -> str:
+    return hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=2**14, r=8, p=1, dklen=32).hex()
+
+
+def normalize_username(value: str) -> str:
+    username = value.strip().lower()
+    if USERNAME.fullmatch(username) is None:
+        raise ValueError("账号只能用字母、数字和 . _ @ -，最长 64 个字符")
+    return username
+
+
+def check_password(password: str) -> None:
+    if not MIN_PASSWORD <= len(password) <= 256:
+        raise ValueError(f"密码需要 {MIN_PASSWORD}–256 个字符")
 
 
 def send_code(smtp: SMTPSettings, email: str, code: str) -> None:
@@ -98,6 +121,12 @@ class VerifyBody(EmailBody):
     code: str = Field(max_length=64)
 
 
+class PasswordBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=256)
+
+
 class Auth:
     def __init__(self, settings: AuthSettings, root: Path) -> None:
         self.settings = settings
@@ -105,15 +134,17 @@ class Auth:
         self.lock = threading.RLock()
         self.email_rates: dict[str, deque[float]] = {}
         self.ip_rates: dict[str, deque[float]] = {}
+        self.failures: dict[str, deque[float]] = {}
         self.sso = settings.enabled and settings.provider == "sso"
-        self.email = settings.enabled and not self.sso
+        self.email = settings.enabled and settings.provider == "email"
+        self.passwords = settings.enabled and (settings.provider == "password" or settings.password_login)
         self.sso_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
         self.sso_seen: set[str] = set()
         # More for /api/whoami beside the identity: which pages are switched on.
         self.extra: Callable[[], dict[str, Any]] = dict
-        if self.email:
-            if not os.environ.get(settings.smtp.password_env):
-                raise ValueError(f"[auth.smtp] 缺少密码环境变量 {settings.smtp.password_env}")
+        if self.email and not os.environ.get(settings.smtp.password_env):
+            raise ValueError(f"[auth.smtp] 缺少密码环境变量 {settings.smtp.password_env}")
+        if self.email or self.passwords:
             private_directory(root)
             fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
             os.close(fd)
@@ -125,6 +156,8 @@ class Auth:
                     "CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, email TEXT NOT NULL, "
                     "expires REAL NOT NULL);"
                     "CREATE TABLE IF NOT EXISTS waitlist (email TEXT PRIMARY KEY, created_at REAL NOT NULL);"
+                    "CREATE TABLE IF NOT EXISTS accounts (username TEXT PRIMARY KEY, name TEXT, email TEXT, "
+                    "salt TEXT NOT NULL, hash TEXT NOT NULL, created_at REAL NOT NULL);"
                 )
 
     @contextmanager
@@ -176,7 +209,9 @@ class Auth:
 
     def resolve(self, cookies: Mapping[str, str]) -> dict[str, Any] | None:
         if self.sso:
-            return self.sso_session(cookies.get(self.settings.sso.cookie))
+            identity = self.sso_session(cookies.get(self.settings.sso.cookie))
+            if identity or not self.passwords:
+                return identity
         return self.session(cookies.get(COOKIE))
 
     def sso_session(self, token: str | None) -> dict[str, Any] | None:
@@ -228,7 +263,95 @@ class Auth:
             return None
         with self.database() as db:
             row = db.execute("SELECT email FROM sessions WHERE hash = ?", (digest(token),)).fetchone()
-        return self.identity(row["email"], address=row["email"]) if row and self.allowed(row["email"]) else None
+            key = row["email"] if row else ""
+            if key.startswith(USER):
+                account = db.execute("SELECT * FROM accounts WHERE username = ?", (key[len(USER) :],)).fetchone()
+                return self.account_identity(account) if account and self.passwords else None
+        return self.identity(key, address=key) if key and self.email and self.allowed(key) else None
+
+    def account_identity(self, account: sqlite3.Row) -> dict[str, Any]:
+        """One of twin's own accounts. Only its e-mail, which an administrator gave it, can make it an administrator
+        or take a twin made for that address: a user name is not checked against the company's account names."""
+        address = work_address(account["email"])
+        return self.identity(
+            USER + account["username"], account["name"] or account["username"], address, address=address
+        )
+
+    def add_account(self, username: str, password: str, name: str | None = None, email: str | None = None) -> str:
+        username = normalize_username(username)
+        check_password(password)
+        if email and work_address(email) is None:
+            raise ValueError("请输入有效的邮箱地址")
+        salt = secrets.token_hex(16)
+        with self.database() as db:
+            if db.execute("SELECT 1 FROM accounts WHERE username = ?", (username,)).fetchone():
+                raise ValueError(f"账号 {username} 已存在")
+            db.execute(
+                "INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    username,
+                    (name or "").strip() or None,
+                    work_address(email),
+                    salt,
+                    hash_password(password, salt),
+                    time.time(),
+                ),
+            )
+        return username
+
+    def set_password(self, username: str, password: str) -> None:
+        """A new password signs the account out everywhere."""
+        username = normalize_username(username)
+        check_password(password)
+        salt = secrets.token_hex(16)
+        with self.database() as db:
+            changed = db.execute(
+                "UPDATE accounts SET salt = ?, hash = ? WHERE username = ?",
+                (salt, hash_password(password, salt), username),
+            ).rowcount
+            if not changed:
+                raise ValueError(f"没有账号 {username}")
+            db.execute("DELETE FROM sessions WHERE email = ?", (USER + username,))
+
+    def remove_account(self, username: str) -> None:
+        username = normalize_username(username)
+        with self.database() as db:
+            if not db.execute("DELETE FROM accounts WHERE username = ?", (username,)).rowcount:
+                raise ValueError(f"没有账号 {username}")
+            db.execute("DELETE FROM sessions WHERE email = ?", (USER + username,))
+
+    def accounts(self) -> list[dict[str, Any]]:
+        with self.database() as db:
+            return [
+                dict(row)
+                for row in db.execute("SELECT username, name, email, created_at FROM accounts ORDER BY username")
+            ]
+
+    def check_failures(self, keys: tuple[str, str]) -> None:
+        now = time.monotonic()
+        with self.lock:
+            for key, (limit, window) in zip(keys, ((ACCOUNT_FAILURES, 900), (IP_FAILURES, 3600)), strict=True):
+                times = self.failures.setdefault(key, deque())
+                while times and times[0] <= now - window:
+                    times.popleft()
+                if len(times) >= limit:
+                    raise HTTPException(429, "尝试次数过多，请稍后再试")
+
+    def record_failure(self, keys: tuple[str, str]) -> None:
+        with self.lock:
+            if len(self.failures) > 10000:
+                self.failures = {k: v for k, v in self.failures.items() if v}
+            for key in keys:
+                self.failures.setdefault(key, deque()).append(time.monotonic())
+
+    def methods(self) -> dict[str, Any]:
+        """The ways the sign-in page offers."""
+        sso = self.settings.sso
+        return {
+            "sso": {"start_url": sso.start_url or None, "login_url": sso.login_url} if self.sso else None,
+            "password": self.passwords,
+            "email": self.email,
+        }
 
     def rate_limit(self, email: str | None, ip: str) -> None:
         now = time.monotonic()
@@ -306,6 +429,10 @@ class Auth:
                     db.execute("DELETE FROM codes WHERE email = ? AND attempts >= 5", (email,))
             if not valid:
                 raise HTTPException(400, "验证码错误或已过期，请重新获取")
+            set_session_cookie(request, response, token)
+            return {"email": email, "admin": self.is_admin(email)}
+
+        def set_session_cookie(request: Request, response: Response, token: str) -> None:
             response.set_cookie(
                 COOKIE,
                 token,
@@ -315,11 +442,43 @@ class Auth:
                 samesite="lax",
                 path=forwarded_prefix(request) + "/",
             )
-            return {"email": email, "admin": self.is_admin(email)}
+
+        @app.get("/api/auth/methods")
+        def methods() -> dict[str, Any]:
+            return self.methods()
+
+        @app.post("/api/auth/password")
+        def password_login(body: PasswordBody, request: Request, response: Response) -> dict[str, Any]:
+            if not self.passwords:
+                raise HTTPException(404, "未启用账号密码登录")
+            username = body.username.strip().lower()
+            ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else "unknown")
+            keys = (f"account:{username}", f"ip:{ip}")
+            self.check_failures(keys)
+            token = secrets.token_hex(32)
+            with self.database() as db:
+                account = db.execute("SELECT * FROM accounts WHERE username = ?", (username,)).fetchone()
+                # Hash even for an unknown account, so the answer takes as long either way.
+                expected = account["hash"] if account else "0" * 64
+                valid = hmac.compare_digest(
+                    hash_password(body.password, account["salt"] if account else "00" * 16), expected
+                ) and bool(account)
+                if valid:
+                    db.execute(
+                        "INSERT INTO sessions VALUES (?, ?, ?)",
+                        (digest(token), USER + username, time.time() + self.settings.session_days * 86400),
+                    )
+            if not valid:
+                self.record_failure(keys)
+                raise HTTPException(400, "账号或密码不对")
+            set_session_cookie(request, response, token)
+            return self.account_identity(account)
 
         @app.post("/api/auth/logout")
         def logout(request: Request, response: Response) -> dict[str, bool]:
-            if self.email:
+            """Ends twin's own session and, under single sign-on, the other app's session on this site too, so the
+            next visit shows the sign-in page instead of signing straight back in."""
+            if self.email or self.passwords:
                 with self.database() as db:
                     db.execute("DELETE FROM sessions WHERE hash = ?", (digest(request.cookies.get(COOKIE, "")),))
             response.delete_cookie(
@@ -329,6 +488,12 @@ class Auth:
                 secure=secure_cookie(request),
                 samesite="lax",
             )
+            if self.sso:
+                cookie = self.settings.sso.cookie
+                if token := request.cookies.get(cookie):
+                    with self.lock:
+                        self.sso_cache.pop(digest(token), None)
+                response.delete_cookie(cookie, path="/", httponly=True, secure=secure_cookie(request), samesite="lax")
             return {"logged_out": True}
 
         @app.get("/api/whoami")

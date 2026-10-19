@@ -716,3 +716,167 @@ def test_persona_limit_zero_means_unlimited(web: TestClient) -> None:
     web.app.state.personas.settings.auth.max_personas_per_member = 0  # type: ignore[union-attr]
     login(web)
     assert len({create(web) for _ in range(5)}) == 5
+
+
+@pytest.fixture
+def both(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, FakeLogin]]:
+    """Single sign-on through another app on this site, and twin's own accounts beside it."""
+    monkeypatch.delenv("TWIN_SMTP_PASSWORD", raising=False)
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    login = FakeLogin()
+    settings = Settings(
+        db_path=tmp_path / "twin.db",
+        auth=AuthSettings(
+            enabled=True,
+            provider="sso",
+            password_login=True,
+            admin_emails=["boss@xjjk.com"],
+            sso=SSOSettings(
+                me_url=login.url, cookie="sso", login_url="/login?next=/twin/", start_url="/auth/start?next=/twin/"
+            ),
+        ),
+    )
+    with TestClient(create_app(settings, allowed_hosts=["twin.example.com"]), base_url="http://localhost") as client:
+        yield client, login
+    login.server.shutdown()
+    login.server.server_close()
+
+
+def password_login(web: TestClient, username: str, password: str) -> Any:
+    return web.post("/api/auth/password", json={"username": username, "password": password}, headers=CSRF)
+
+
+def test_the_sign_in_page_learns_its_ways_while_signed_out(both: tuple[TestClient, FakeLogin], sso: Any) -> None:
+    web, _ = both
+    assert web.get("/api/auth/methods").json() == {
+        "sso": {"start_url": "/auth/start?next=/twin/", "login_url": "/login?next=/twin/"},
+        "password": True,
+        "email": False,
+    }
+    only_sso, _ = sso
+    assert only_sso.get("/api/auth/methods").json() == {
+        "sso": {"start_url": None, "login_url": "/login?next=/twin/"},
+        "password": False,
+        "email": False,
+    }
+    assert password_login(only_sso, "bob", "secret-123").status_code == 404
+
+
+def test_own_accounts_sign_in_beside_sso(both: tuple[TestClient, FakeLogin]) -> None:
+    web, _ = both
+    auth(web).add_account(" Bob ", "secret-123", name="鲍勃")
+    assert password_login(web, "bob", "wrong-pass").status_code == 400
+    assert password_login(web, "nobody", "secret-123").json()["detail"] == "账号或密码不对"
+    signed_in = password_login(web, "BOB", "secret-123")
+    assert signed_in.status_code == 200 and signed_in.json()["email"] == "user:bob"
+    assert web.get("/api/whoami").json() == {
+        "email": "user:bob",
+        "name": "鲍勃",
+        "address": None,
+        "account": None,
+        "admin": False,
+        "auth_enabled": True,
+        "provider": "sso",
+        "features": {"work": True, "ledger": True},
+    }
+    own = create(web)
+    web.cookies.set("sso", "cookie-a")  # the company sign-in wins when both are present
+    assert web.get("/api/whoami").json()["email"] == "sso:1001"
+    assert web.get("/api/persona/state", headers={"X-Twin-Persona": own}).status_code == 404
+
+
+def test_an_accounts_email_not_its_name_makes_it_an_administrator(both: tuple[TestClient, FakeLogin]) -> None:
+    web, _ = both
+    auth(web).add_account("boss", "secret-123")  # the name alone matches boss@xjjk.com's account name: not trusted
+    password_login(web, "boss", "secret-123")
+    assert web.get("/api/whoami").json()["admin"] is False
+    auth(web).add_account("chief", "secret-123", email="Boss@xjjk.com")
+    password_login(web, "chief", "secret-123")
+    whoami = web.get("/api/whoami").json()
+    assert whoami["admin"] is True and whoami["address"] == "boss@xjjk.com"
+
+
+def test_signing_out_ends_twins_session_and_the_sso_session(both: tuple[TestClient, FakeLogin]) -> None:
+    web, login = both
+    auth(web).add_account("bob", "secret-123")
+    password_login(web, "bob", "secret-123")
+    token = web.cookies["twin_session"]
+    web.cookies.set("sso", "cookie-a")
+    assert web.get("/api/whoami").json()["email"] == "sso:1001"
+    out = web.post("/api/auth/logout", headers=CSRF)
+    assert out.status_code == 200
+    cleared = {c.split("=", 1)[0]: c for c in out.headers.get_list("set-cookie")}
+    assert set(cleared) == {"twin_session", "sso"}
+    assert "Max-Age=0" in cleared["sso"] and "Path=/" in cleared["sso"] and "HttpOnly" in cleared["sso"]
+    web.cookies.clear()  # what a browser does with those headers
+    web.cookies.set("twin_session", token)  # an old copy of twin's session no longer signs in
+    assert web.get("/api/whoami").status_code == 401
+    with sqlite3.connect(auth(web).path) as db:
+        assert db.execute("SELECT 1 FROM sessions WHERE hash = ?", (digest(token),)).fetchone() is None
+    calls = login.calls
+    web.cookies.set("sso", "cookie-a")  # the cached answer for that cookie was dropped too
+    assert web.get("/api/whoami").json()["email"] == "sso:1001" and login.calls == calls + 1
+
+
+def test_wrong_passwords_are_limited_per_account(both: tuple[TestClient, FakeLogin]) -> None:
+    web, _ = both
+    auth(web).add_account("bob", "secret-123")
+    for _ in range(5):
+        assert password_login(web, "bob", "wrong-pass").status_code == 400
+    assert password_login(web, "bob", "secret-123").status_code == 429
+    auth(web).add_account("amy", "secret-123")
+    assert password_login(web, "amy", "secret-123").status_code == 200
+
+
+def test_a_new_password_or_removal_signs_the_account_out(both: tuple[TestClient, FakeLogin]) -> None:
+    web, _ = both
+    accounts = auth(web)
+    accounts.add_account("bob", "secret-123")
+    password_login(web, "bob", "secret-123")
+    accounts.set_password("bob", "secret-456")
+    assert web.get("/api/whoami").status_code == 401
+    assert password_login(web, "bob", "secret-123").status_code == 400
+    assert password_login(web, "bob", "secret-456").status_code == 200
+    accounts.remove_account("bob")
+    assert web.get("/api/whoami").status_code == 401
+    assert accounts.accounts() == []
+    for bad in (lambda: accounts.add_account("a b", "secret-123"), lambda: accounts.add_account("ok", "short")):
+        with pytest.raises(ValueError):
+            bad()
+    with pytest.raises(ValueError, match="没有账号"):
+        accounts.set_password("ghost", "secret-123")
+
+
+def test_password_only_sign_in_needs_no_mail_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TWIN_SMTP_PASSWORD", raising=False)
+    auth = Auth(AuthSettings(enabled=True, provider="password"), tmp_path)
+    assert auth.methods() == {"sso": None, "password": True, "email": False}
+    with pytest.raises(ValidationError, match="start_url"):
+        AuthSettings(
+            enabled=True,
+            provider="sso",
+            sso=SSOSettings(me_url="http://127.0.0.1:9/me", cookie="s", login_url="/login", start_url="//evil.example"),
+        )
+
+
+def test_accounts_are_managed_from_the_command_line(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from twin.cli import app as cli
+
+    config = tmp_path / "twin.toml"
+    config.write_text(
+        f'db_path = "{tmp_path / "twin.db"}"\n[auth]\nenabled = true\nprovider = "password"\n', encoding="utf-8"
+    )
+    runner = CliRunner()
+    added = runner.invoke(
+        cli, ["--config", str(config), "account", "add", "Bob", "--name", "鲍勃"], input="secret-123\nsecret-123\n"
+    )
+    assert added.exit_code == 0, added.output
+    assert "已创建账号 bob" in added.output and "secret-123" not in added.output
+    listed = runner.invoke(cli, ["--config", str(config), "account", "list"])
+    assert "bob | 鲍勃 | —" in listed.output
+    assert runner.invoke(cli, ["--config", str(config), "account", "remove", "bob"]).exit_code == 0
+    config.write_text(f'db_path = "{tmp_path / "twin.db"}"\n', encoding="utf-8")
+    off = runner.invoke(cli, ["--config", str(config), "account", "list"])
+    assert off.exit_code != 0 and "password_login" in off.output

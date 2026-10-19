@@ -2,31 +2,35 @@
 
 :root {
   color-scheme: light;
-  --canvas: #f3f5f8;
-  --soft: #e5ebf4;
+  --canvas: #fff4ea;
+  --soft: #fbe9dd;
   --sun: #f5b83d;
-  --coral: #5b8def;
+  --coral: #f0785f;
   --note: #fde7b8;
   --font-persona: 'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', serif;
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --border: #dbe1ea;
-  --text-primary: #17202c;
-  --text-secondary: #4a5566;
-  --text-tertiary: #566173;
-  --accent: #1f5fbf;
-  --accent-ink: #1a53a8;
-  --accent-hover: #1a53a8;
-  --accent-pressed: #154385;
+  --border: #f2dfcf;
+  --text-primary: #2b1d16;
+  --text-secondary: #6b4a3a;
+  --text-tertiary: #795442;
+  --accent: #c9432c;
+  --accent-ink: #b33723;
+  --accent-hover: #b33723;
+  --accent-pressed: #982c1c;
   --on-accent: #ffffff;
+  /* The coloured stage behind a portrait or the sign-in: the accent, except where a theme sets a ground of its own. */
+  --stage-bg: var(--accent);
+  --stage-ink: #ffffff;
+  --stage-ring: rgb(255 255 255 / 0.45);
   --success: #2e7d5b;
   --warning: #8a570b;
   --danger: #b72e38;
   --info: #2463ae;
   --sidebar: rgb(255 255 255 / 0.6);
-  --elevation-1: 0 2px 6px rgb(23 32 44 / 0.04);
-  --elevation-2: 0 6px 20px rgb(23 32 44 / 0.08);
-  --elevation-3: 0 16px 48px rgb(23 32 44 / 0.12);
+  --elevation-1: 0 2px 6px rgb(41 38 34 / 0.04);
+  --elevation-2: 0 6px 20px rgb(41 38 34 / 0.08);
+  --elevation-3: 0 16px 48px rgb(41 38 34 / 0.12);
   --card-shadow: 0 2px 0 var(--border);
   --graph-backdrop: #1c121b;
   --graph-ink: #fff0df;
@@ -44,7 +48,56 @@
   --graph-d9: #df947f;
 }
 
-:root[data-theme='dark'] {
+/* Themes: 朱砂红 above is the default; <html data-theme> picks another (stores/theme.ts). */
+:root[data-theme='blue'] {
+  --canvas: #f3f5f8;
+  --soft: #e5ebf4;
+  --coral: #5b8def;
+  --border: #dbe1ea;
+  --text-primary: #17202c;
+  --text-secondary: #4a5566;
+  --text-tertiary: #566173;
+  --accent: #1f5fbf;
+  --accent-ink: #1a53a8;
+  --accent-hover: #1a53a8;
+  --accent-pressed: #154385;
+  --elevation-1: 0 2px 6px rgb(23 32 44 / 0.04);
+  --elevation-2: 0 6px 20px rgb(23 32 44 / 0.08);
+  --elevation-3: 0 16px 48px rgb(23 32 44 / 0.12);
+}
+
+:root[data-theme='ink'] {
+  color-scheme: dark;
+  --canvas: #16130f;
+  --soft: #2a2420;
+  --sun: #b0502f;
+  --coral: #8a3b2c;
+  --note: #3a2e1e;
+  --surface: #201c18;
+  --surface-raised: #2a2420;
+  --border: #3d352e;
+  --text-primary: #f5f0e9;
+  --text-secondary: #c4bcb1;
+  --text-tertiary: #a99f93;
+  --accent: #e0674f;
+  --accent-ink: #f08a74;
+  --accent-hover: #e87c66;
+  --accent-pressed: #d9634c;
+  --on-accent: #1a0e0a;
+  --stage-bg: #2a2420;
+  --stage-ink: #f5e6d6;
+  --stage-ring: rgb(245 230 214 / 0.25);
+  --success: #6cc49a;
+  --warning: #e6b45c;
+  --danger: #f2848a;
+  --info: #84aeea;
+  --sidebar: rgb(32 28 24 / 0.7);
+  --elevation-1: 0 2px 6px rgb(0 0 0 / 0.3);
+  --elevation-2: 0 6px 20px rgb(0 0 0 / 0.4);
+  --elevation-3: 0 16px 48px rgb(0 0 0 / 0.5);
+}
+
+:root:is([data-theme='dark'], [data-theme='ink']) {
   --graph-backdrop: #160f15;
   --graph-ink: #ffefdf;
   --graph-center: #ffe5b5;
@@ -627,12 +680,22 @@
   position: relative;
   flex-shrink: 0;
 }
+/* ThemePicker dots: each palette's own accent, the same in every theme. */
+.theme-swatch[data-swatch='red'] {
+  background: #c9432c;
+}
+.theme-swatch[data-swatch='blue'] {
+  background: #1f5fbf;
+}
+.theme-swatch[data-swatch='ink'] {
+  background: linear-gradient(135deg, #2a2420 50%, #e0674f 50%);
+}
 .stage-header {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--stage-bg);
+  color: var(--stage-ink);
   border-radius: 0 0 32px 32px;
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -643,8 +706,8 @@
   right: 0;
   z-index: 25;
   overflow: hidden;
-  background: var(--accent);
-  color: white;
+  background: var(--stage-bg);
+  color: var(--stage-ink);
   border-radius: 0 0 36px 36px;
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -660,8 +723,8 @@
   min-height: 44px;
   padding: 0 12px;
   border-radius: 999px;
-  color: white;
-  background: var(--accent);
+  color: var(--stage-ink);
+  background: var(--stage-bg);
 }
 .stage-new:hover,
 .stage-switch:hover {
@@ -729,7 +792,7 @@
   pointer-events: auto;
 }
 .stage-circle:focus-visible {
-  outline-color: white;
+  outline-color: var(--stage-ink);
 }
 .stage-portrait-content {
   display: flex;
@@ -1029,7 +1092,7 @@
 .reply-play[data-speaking='true'] .reply-play-visual {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 .speaking-bars {
   display: flex;
@@ -1452,7 +1515,6 @@
   .page-content :is(input:not([type='file']), textarea, select) {
     max-width: 640px;
   }
-  .auth-page > section,
   .entry-page > section,
   .stage-flow .flow-panel {
     width: calc(100% - 48px);
@@ -1465,7 +1527,6 @@
   .entry-page > section {
     padding: 24px;
   }
-  .auth-page > .stage-header,
   .entry-page > .stage-header,
   .stage-flow > .stage-header {
     margin: 0;
@@ -1693,7 +1754,6 @@
     align-items: start;
     gap: 32px;
   }
-  .auth-page,
   .entry-page,
   .onboarding-page .stage-flow {
     display: grid;
@@ -1701,7 +1761,6 @@
     align-items: center;
     min-height: 100dvh;
   }
-  .auth-page > .stage-header,
   .entry-page > .stage-header,
   .stage-flow > .stage-header,
   .create-twin-sheet .stage-header {
@@ -1714,7 +1773,6 @@
     justify-content: center;
     padding-bottom: 0;
   }
-  .auth-page > section,
   .entry-page > section,
   .stage-flow .flow-panel,
   .create-twin-sheet > div:last-child {
@@ -1722,38 +1780,34 @@
     margin: 32px auto;
     width: calc(100% - 64px);
   }
-  :is(.auth-page, .entry-page) .stage-brand-mark {
+  .entry-page .stage-brand-mark {
     width: 300px;
     height: 200px;
   }
-  :is(.auth-page, .entry-page) .stage-brand-mark span {
+  .entry-page .stage-brand-mark span {
     width: 200px;
     height: 200px;
   }
-  :is(.auth-page, .entry-page) .stage-brand-mark span + span {
+  .entry-page .stage-brand-mark span + span {
     left: 100px;
   }
-  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
-    .stage-person {
+  :is(.entry-page, .onboarding-page, .create-twin-sheet) .stage-person {
     padding-top: 0;
   }
   :is(.entry-page, .onboarding-page, .create-twin-sheet) .stage-portrait {
     width: 240px;
     height: 240px;
   }
-  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
-    .stage-name {
+  :is(.entry-page, .onboarding-page, .create-twin-sheet) .stage-name {
     font-size: 64px;
   }
-  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
-    .stage-sun {
+  :is(.entry-page, .onboarding-page, .create-twin-sheet) .stage-sun {
     width: 200px;
     height: 200px;
     top: 15%;
     left: -60px;
   }
-  :is(.auth-page, .entry-page, .onboarding-page, .create-twin-sheet)
-    .stage-coral {
+  :is(.entry-page, .onboarding-page, .create-twin-sheet) .stage-coral {
     width: 160px;
     height: 160px;
     top: 65%;
@@ -1825,5 +1879,209 @@
   }
   .rail-divider {
     border-top: 1px solid var(--border);
+  }
+}
+
+/* Sign-in: the stage with what twin is for, then the ways in. A band on a phone, half the screen on a desktop. */
+.auth-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+.auth-stage {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: calc(28px + env(safe-area-inset-top, 0px)) 20px 36px;
+  border-radius: 0 0 28px 28px;
+  background: var(--stage-bg);
+  color: var(--stage-ink);
+}
+.auth-sun,
+.auth-ring,
+.auth-dot {
+  position: absolute;
+  z-index: -1;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.auth-sun {
+  width: 200px;
+  height: 200px;
+  right: -70px;
+  top: -70px;
+  background: var(--sun);
+}
+.auth-ring {
+  width: 300px;
+  height: 300px;
+  right: -120px;
+  top: -120px;
+  border: 1.5px solid var(--stage-ring);
+}
+.auth-dot {
+  display: none;
+  width: 180px;
+  height: 180px;
+  left: -60px;
+  bottom: -70px;
+  background: var(--coral);
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 700;
+}
+.auth-mark {
+  position: relative;
+  width: 30px;
+  height: 20px;
+}
+.auth-mark span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--sun);
+}
+.auth-mark span + span {
+  left: 10px;
+  background: none;
+  border: 2px solid var(--stage-ink);
+}
+.auth-pitch {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 520px;
+}
+.auth-slogan {
+  margin: 0;
+  font-family: var(--font-persona);
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 1.25;
+}
+.auth-lede {
+  display: none;
+  margin: 0;
+  max-width: 440px;
+  font-size: 17px;
+  line-height: 1.75;
+  opacity: 0.92;
+}
+.auth-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.auth-path li {
+  position: relative;
+  padding: 4px 10px;
+  border: 1px solid var(--stage-ring);
+  border-radius: 999px;
+}
+.auth-path li + li::before {
+  content: '→';
+  position: absolute;
+  left: -19px;
+  opacity: 0.7;
+  color: var(--stage-ink);
+}
+.auth-path li:last-child {
+  border-color: var(--stage-ink);
+  background: var(--stage-ink);
+  color: var(--stage-bg);
+}
+.auth-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 32px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+}
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.auth-themes {
+  margin-top: auto;
+  align-self: center;
+}
+@media (min-width: 1200px) {
+  .auth-page {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  }
+  .auth-stage {
+    justify-content: space-between;
+    min-height: 100dvh;
+    padding: 56px 64px;
+    border-radius: 0;
+  }
+  .auth-sun {
+    width: 360px;
+    height: 360px;
+    right: -120px;
+    top: -110px;
+  }
+  .auth-ring {
+    width: 520px;
+    height: 520px;
+    right: -210px;
+    top: -190px;
+  }
+  .auth-dot {
+    display: block;
+  }
+  .auth-brand {
+    gap: 12px;
+    font-size: 26px;
+  }
+  .auth-slogan {
+    font-size: 64px;
+    line-height: 1.2;
+  }
+  .auth-lede {
+    display: block;
+  }
+  .auth-path {
+    font-size: 14px;
+  }
+  .auth-path li {
+    padding: 6px 14px;
+  }
+  .auth-panel {
+    justify-content: center;
+    max-width: 380px;
+    padding: 56px 0 24px;
+  }
+  .auth-themes {
+    margin-top: 12px;
   }
 }

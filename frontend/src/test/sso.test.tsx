@@ -1,9 +1,9 @@
-import { act, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AuthGate } from '../features/auth/AuthGate';
 import { useAuth } from '../stores/auth';
 
-// Separate file: the redirect happens once per page, so it needs a fresh module.
+// Separate file: a fresh module, so nothing from another test has started leaving the page.
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 let assign: ReturnType<typeof vi.fn>;
@@ -20,16 +20,25 @@ afterEach(() => {
   useAuth.setState({ identity: null });
 });
 
-it('hands a signed-out visitor to the single sign-on page instead of its own form', async () => {
-  const fetcher = vi.fn(async () =>
-    json(
-      {
-        detail: '请先登录',
-        code: 'login_required',
-        login_url: '/login?next=/twin/',
-      },
-      401,
-    ),
+it('shows its own sign-in page with the company sign-in instead of leaving for it', async () => {
+  const fetcher = vi.fn(async (path: string) =>
+    path === '/api/auth/methods'
+      ? json({
+          sso: {
+            start_url: '/auth/start?next=/twin/',
+            login_url: '/login?next=/twin/',
+          },
+          password: true,
+          email: false,
+        })
+      : json(
+          {
+            detail: '请先登录',
+            code: 'login_required',
+            login_url: '/login?next=/twin/',
+          },
+          401,
+        ),
   );
   vi.stubGlobal('fetch', fetcher);
   render(
@@ -37,12 +46,12 @@ it('hands a signed-out visitor to the single sign-on page instead of its own for
       <h1>应用</h1>
     </AuthGate>,
   );
-  await act(async () => {
-    await vi.waitFor(() =>
-      expect(assign).toHaveBeenCalledWith('/login?next=/twin/'),
-    );
-  });
-  expect(assign).toHaveBeenCalledTimes(1);
-  expect(screen.queryByRole('heading', { name: '用邮箱登录' })).toBeNull();
+  expect(
+    await screen.findByRole('heading', { name: '登录 twin' }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('button', { name: '用享佳统一身份登录' }).closest('form'),
+  ).toHaveAttribute('action', '/auth/start?next=/twin/');
+  expect(assign).not.toHaveBeenCalled();
   expect(screen.queryByRole('heading', { name: '应用' })).toBeNull();
 });

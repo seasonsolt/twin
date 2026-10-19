@@ -75,19 +75,36 @@ Cloudflare Access 已移除，不读取任何 `Cf-Access-*` 身份头；应用�
 [auth]
 enabled = true
 provider = "sso"
+password_login = true   # 另开 twin 自己的账号密码（twin account add 创建），和 SSO 并列在登录页上
 # 管理员按 SSO 账号名或 sso:<subject> 匹配；允许域名里的地址也匹配 @ 前面的账号名
 admin_emails = ["zhangxun@xjjk.com"]
 
 [auth.sso]
 me_url = "http://127.0.0.1:8765/api/auth/me"   # 带着对方的会话 cookie 询问身份：200 已登录，401 未登录
 cookie = "audio_studio_session"
-login_url = "/login?next=/twin/"               # 未登录时浏览器跳往的本站路径
+start_url = "/auth/start?next=/twin/"          # 登录页“用享佳统一身份登录”按钮 POST 到这里，由那个应用跳转认证中心
+login_url = "/login?next=/twin/"               # 没有 start_url 时按钮改为链接到这个本站页面
 cache_seconds = 60
 ```
+
+- twin 有自己的登录页：未登录时不再跳走，页面上先是“用享佳统一身份登录”，下面是 twin 账号密码（开了 `password_login` 时）。
+- 退出登录同时清掉 twin 的会话和那个应用在本站的会话 cookie，回到 twin 的登录页。认证中心本身没有登出接口，所以再点统一身份登录可能不用重新输入密码。
 
 - 能登录那个应用的人都能进入。twin 取 `me_url` 返回的 `account`（工号）、`display_name` 和 `email`；**目前 SSO 只给 account（工号），暂不给邮箱**，所以现在靠工号认领：管理员建分身时填工号，同事登录时 account 与 claim 对上就认领。SSO 以后带上邮箱，填邮箱也一样能对上。
 - 二者都是“企业账号”：认领、`/voice`（在会议里找自己）都要求登录身份带邮箱或工号。
 - 登录会话由那个应用管理，twin 不存 token；每次请求带着 cookie 询问 `me_url`，结果缓存 `cache_seconds` 秒。
+
+### twin 自己的账号密码
+
+`password_login = true` 时登录页多一组账号密码；只用账号密码、不接 SSO 也不发邮件时写 `provider = "password"`。账号由管理员在服务器上用命令行管理，密码只在终端输入，用 scrypt 加盐存进 `data/auth.db`：
+
+```bash
+twin account add zhangsan --name 张三 --email zhangsan@xjjk.com
+```
+
+- `twin account passwd <账号>` 重设密码，`twin account remove <账号>` 删除账号，二者都会让它已登录的地方退出；`twin account list` 列出账号。
+- 账号的身份是 `user:<账号>`。只有管理员填的 `--email` 用来比对管理员名单和认领分身；账号名本身不和 SSO 的账号名或工号比对，避免同名账号冒充。
+- 同一账号 15 分钟内输错 5 次、同一地址一小时内输错 30 次后暂停尝试。
 
 ### 邮箱验证码（备选）
 

@@ -58,6 +58,7 @@ from .util import RenameError, open_private, private_directory
 
 if TYPE_CHECKING:
     from .evals.persona_runtime import ProfileCache
+    from .web.auth import Auth
 
 DEFAULT_CONFIG = Path("twin.toml")
 CONFIG_TEMPLATE = """# 通用个人分身：身份 → 记忆资料 → 服务。密钥仅从环境变量读取。
@@ -784,6 +785,71 @@ def identity_show(ctx: typer.Context) -> None:
             f"{kind} | {row['provider']} | {row['host'] or '未知'} | "
             f"{'外部' if row['external'] else '本机'} | {'声明' if row['declared'] else '推断'}"
         )
+
+
+account_app = typer.Typer(
+    help="管理 twin 自己的登录账号（[auth] password_login = true 时可用）。", no_args_is_help=True
+)
+app.add_typer(account_app, name="account")
+
+
+def _accounts(ctx: typer.Context) -> Auth:
+    from .web.auth import Auth
+
+    settings = _settings(ctx)
+    with _errors():
+        auth = Auth(settings.auth, settings.db_path.parent)
+    if not auth.passwords:
+        raise _fail("未开启账号密码登录：在 twin.toml 的 [auth] 设 enabled = true 和 password_login = true")
+    return auth
+
+
+def _new_password() -> str:
+    return str(typer.prompt("密码（至少 8 个字符，输入不显示）", hide_input=True, confirmation_prompt="再输一次"))
+
+
+@account_app.command("add")
+def account_add(
+    ctx: typer.Context,
+    username: Annotated[str, typer.Argument(help="登录用的账号名")],
+    name: Annotated[str | None, typer.Option("--name", help="显示的名字")] = None,
+    email: Annotated[
+        str | None, typer.Option("--email", help="工作邮箱：与管理员名单比对，也用来认领为它创建的分身")
+    ] = None,
+) -> None:
+    """新建账号，密码在终端里输入。"""
+    auth = _accounts(ctx)
+    with _errors():
+        username = auth.add_account(username, _new_password(), name, email)
+    _say(f"已创建账号 {username}")
+
+
+@account_app.command("passwd")
+def account_passwd(ctx: typer.Context, username: Annotated[str, typer.Argument(help="账号名")]) -> None:
+    """重设密码；该账号已登录的地方都会退出。"""
+    auth = _accounts(ctx)
+    with _errors():
+        auth.set_password(username, _new_password())
+    _say(f"已重设 {username.strip().lower()} 的密码")
+
+
+@account_app.command("remove")
+def account_remove(ctx: typer.Context, username: Annotated[str, typer.Argument(help="账号名")]) -> None:
+    """删除账号并让它退出登录；它的分身不受影响。"""
+    auth = _accounts(ctx)
+    with _errors():
+        auth.remove_account(username)
+    _say(f"已删除账号 {username.strip().lower()}")
+
+
+@account_app.command("list")
+def account_list(ctx: typer.Context) -> None:
+    """列出账号。"""
+    rows = _accounts(ctx).accounts()
+    for row in rows:
+        _say(f"{row['username']} | {row['name'] or '—'} | {row['email'] or '—'}")
+    if not rows:
+        _say("还没有账号：用 twin account add <账号名> 创建")
 
 
 kernel_app = typer.Typer(help="查看和重建记忆内核。", no_args_is_help=True)

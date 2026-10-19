@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Button, Skeleton } from '../../components/ui';
-import { ApiError, redirectingToLogin } from '../../lib/api';
+import { ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
 import { usePersonas } from '../../stores/personas';
 import { Login } from './Login';
@@ -45,8 +45,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       window.removeEventListener('twin-persona-stale', stale);
     };
   }, []);
-  if (checking || (!identity && redirectingToLogin()))
-    return <Skeleton className="mx-auto mt-12 h-64 max-w-sm" />;
+  if (checking) return <Skeleton className="mx-auto mt-12 h-64 max-w-sm" />;
   if (error)
     return (
       <main className="p-6">

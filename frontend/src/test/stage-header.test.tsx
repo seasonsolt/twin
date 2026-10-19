@@ -253,14 +253,18 @@ it('keeps the onboarding portrait and live name on the band above four steps', a
 
 it('renders persona-free login and waitlist heroes even with a previous persona in memory', async () => {
   mount(<Login />, '/login');
-  const header = screen.getByRole('banner', { name: 'twin 的舞台' });
-  expect(within(header).getByRole('heading', { name: 'twin' })).toHaveClass(
-    'persona-name',
+  const header = screen.getByRole('banner', { name: 'twin' });
+  expect(within(header).getByText(/最懂你的，\s*是另一个你。/)).toHaveClass(
+    'auth-slogan',
   );
-  expect(header.querySelector('.stage-brand-mark')?.children).toHaveLength(2);
+  expect(
+    within(within(header).getByRole('list', { name: '从个人分身到超级组织' }))
+      .getAllByRole('listitem')
+      .map((item) => item.textContent),
+  ).toEqual(['个人分身', '超级个体', '超级组织']);
   expect(header.querySelector('img')).toBeNull();
   expect(screen.queryByText('小林')).not.toBeInTheDocument();
-  const email = screen.getByRole('textbox', { name: '邮箱' });
+  const email = await screen.findByRole('textbox', { name: '邮箱' });
   expect(email).toHaveClass('border-2', 'border-primary', 'text-md');
   fireEvent.change(email, { target: { value: 'wait@example.com' } });
   fireEvent.click(screen.getByRole('button', { name: '获取验证码' }));

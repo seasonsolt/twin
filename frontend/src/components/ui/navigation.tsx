@@ -268,6 +268,7 @@ export function AccountMenu({
   detail,
   groups,
   error,
+  theme,
 }: {
   name: string;
   /** A second line under the name: the role or how they signed in. */
@@ -275,6 +276,8 @@ export function AccountMenu({
   groups: AccountMenuItem[][];
   /** Why the last action failed, shown under the items. */
   error?: string;
+  /** A ThemePicker, on its own line under who is signed in. */
+  theme?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -332,12 +335,20 @@ export function AccountMenu({
               {detail && <p className="text-sm text-secondary">{detail}</p>}
             </div>
           </div>
+          {theme && (
+            <div className="mt-1 flex items-center justify-between gap-2 border-t border-border pt-1 pl-2.5">
+              <span className="text-sm text-secondary">主题</span>
+              {theme}
+            </div>
+          )}
           {filled.map((group, index) => (
             <div
               key={group[0].key}
               className={cn(
                 'grid',
-                index === 0 ? 'mt-1' : 'mt-1 border-t border-border pt-1',
+                index === 0 && !theme
+                  ? 'mt-1'
+                  : 'mt-1 border-t border-border pt-1',
               )}
             >
               {group.map((item) => (

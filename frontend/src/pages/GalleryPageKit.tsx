@@ -63,15 +63,19 @@ import {
   StepNumber,
   Text,
   TextLink,
+  ThemePicker,
   toast,
   Toolbar,
   ResizeHandle,
   type Gap,
 } from '../components/ui';
+import { THEMES, useTheme } from '../stores/theme';
 
 /** The page-level kit in the gallery: everything a page is built from, with no hand-written styles. */
 export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [gap, setGap] = useState<Gap>(3);
+  // The real palette: picking here recolours the whole gallery.
+  const { theme, setTheme } = useTheme();
   const [side, setSide] = useState(false);
   const [who, setWho] = useState('');
   const [sample, setSample] = useState(true);
@@ -560,9 +564,22 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
                 { label: '删除', onSelect: () => toast('删除') },
               ]}
             />
+            <ThemePicker
+              value={theme}
+              options={THEMES}
+              onChange={setTheme}
+              named
+            />
             <AccountMenu
               name="周石言"
               detail="管理员"
+              theme={
+                <ThemePicker
+                  value={theme}
+                  options={THEMES}
+                  onChange={setTheme}
+                />
+              }
               groups={[
                 [
                   {

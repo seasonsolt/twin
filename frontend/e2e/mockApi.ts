@@ -787,6 +787,7 @@ const system = {
 
 const handlers: Record<string, Handler> = {
   'GET /api/whoami': reply({ email: null, admin: true, auth_enabled: false }),
+  'GET /api/auth/methods': reply({ sso: null, password: false, email: true }),
   'GET /api/admin/system': reply(system),
   'GET /api/personas': reply(personas),
   'GET /api/status': reply(status),

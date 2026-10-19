@@ -25,24 +25,11 @@ const errors: Record<number, string> = {
   503: '服务暂时不可用',
 };
 
-let redirecting = false;
-/** True once the page is leaving for the single sign-on page, so it should not flash twin's own login form. */
-export const redirectingToLogin = () => redirecting;
-
 export function handleApiFailure(status: number, data: unknown) {
   if (!data || typeof data !== 'object') return;
-  if (status === 401 && 'code' in data && data.code === 'login_required') {
-    // Single sign-on: the server names a page on this site (never another origin) that signs people in.
-    const target =
-      'login_url' in data && typeof data.login_url === 'string'
-        ? data.login_url
-        : '';
-    if (target.startsWith('/') && !target.startsWith('//') && !redirecting) {
-      redirecting = true;
-      window.location.assign(target);
-    }
+  // twin's own sign-in page offers every way in, single sign-on included, so a 401 never leaves the page.
+  if (status === 401 && 'code' in data && data.code === 'login_required')
     window.dispatchEvent(new Event('twin-login-required'));
-  }
   if (status === 404 && 'detail' in data && data.detail === '分身不存在')
     window.dispatchEvent(new Event('twin-persona-stale'));
 }

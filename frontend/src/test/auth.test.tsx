@@ -33,11 +33,22 @@ const persona: Persona = {
   created_at: 'now',
   is_default: false,
 };
+const emailOnly = { sso: null, password: false, email: true };
+const companySignIn = {
+  sso: {
+    start_url: '/auth/start?next=/twin/',
+    login_url: '/login?next=/twin/',
+  },
+  password: true,
+  email: false,
+};
+let methods: Record<string, unknown>;
 let loggedIn: boolean;
 let whoami: Record<string, unknown>;
 let items: Persona[];
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  methods = emailOnly;
   loggedIn = false;
   whoami = member;
   items = [persona];
@@ -46,7 +57,15 @@ beforeEach(() => {
   useAuth.getState().clear();
   window.location.hash = '#/chat';
   fetcher = vi.fn(async (path: string, init: RequestInit) => {
+    if (path === '/api/auth/methods') return json(methods);
     if (path === '/api/auth/request') return json({ status: 'code_sent' });
+    if (path === '/api/auth/password') {
+      const body = JSON.parse(String(init.body));
+      if (body.password !== 'secret-123')
+        return json({ detail: '账号或密码不对' }, 400);
+      loggedIn = true;
+      return json(member);
+    }
     if (path === '/api/auth/verify') {
       loggedIn = true;
       return json(member);
@@ -150,11 +169,11 @@ it('logs in via email and a paste-friendly code without persisting credentials',
 });
 
 it('shows the waitlist without a code form or a way to try another email', async () => {
-  fetcher.mockResolvedValue(json({ status: 'waitlist' }));
+  fetcher.mockImplementation(async () => json({ status: 'waitlist' }));
   const user = userEvent.setup();
   render(<Login />);
   await user.type(
-    screen.getByRole('textbox', { name: '邮箱' }),
+    await screen.findByRole('textbox', { name: '邮箱' }),
     'wait@example.com',
   );
   await user.click(screen.getByRole('button', { name: '获取验证码' }));
@@ -168,9 +187,10 @@ it('shows the waitlist without a code form or a way to try another email', async
 });
 
 it('enables resend only after the 60-second countdown and restarts it', async () => {
-  vi.useFakeTimers();
   render(<Login />);
-  fireEvent.change(screen.getByRole('textbox', { name: '邮箱' }), {
+  const email = await screen.findByRole('textbox', { name: '邮箱' });
+  vi.useFakeTimers();
+  fireEvent.change(email, {
     target: { value: member.email },
   });
   await act(async () => {
@@ -280,7 +300,8 @@ it('shows the full signed-in email in the account popover and logs out', async (
   expect(loggedIn).toBe(false);
 });
 
-it('shows the single sign-on name and leaves signing out to that site', async () => {
+it("shows the single sign-on name and signs out back to twin's own sign-in page", async () => {
+  methods = companySignIn;
   loggedIn = true;
   whoami = {
     ...member,
@@ -296,7 +317,92 @@ it('shows the single sign-on name and leaves signing out to that site', async ()
   const menu = screen.getByRole('dialog', { name: '账户' });
   expect(within(menu).getByText('张三')).toBeVisible();
   expect(within(menu).queryByText('sso:u-1')).toBeNull();
-  expect(within(menu).queryByRole('button', { name: '退出登录' })).toBeNull();
+  await user.click(within(menu).getByRole('button', { name: '退出登录' }));
+  expect(
+    await screen.findByRole('heading', { name: '登录 twin' }),
+  ).toBeVisible();
+  expect(loggedIn).toBe(false);
+});
+
+it("offers the company sign-in as a form posted on this site, beside twin's own account", async () => {
+  methods = companySignIn;
+  render(<Login />);
+  const start = await screen.findByRole('button', {
+    name: '用享佳统一身份登录',
+  });
+  const form = start.closest('form')!;
+  expect(form).toHaveAttribute('method', 'post');
+  expect(form).toHaveAttribute('action', '/auth/start?next=/twin/');
+  expect(start).toHaveAttribute('type', 'submit');
+  expect(screen.getByText('或用 twin 账号登录')).toBeVisible();
+  expect(screen.getByRole('textbox', { name: '账号' })).toHaveAttribute(
+    'autocomplete',
+    'username',
+  );
+  expect(screen.queryByRole('textbox', { name: '邮箱' })).toBeNull();
+});
+
+it("links to the other app's sign-in page without a start address and never to another site", async () => {
+  methods = {
+    sso: { start_url: null, login_url: '/login?next=/twin/' },
+    password: false,
+    email: false,
+  };
+  const { unmount } = render(<Login />);
+  expect(
+    await screen.findByRole('link', { name: '用享佳统一身份登录' }),
+  ).toHaveAttribute('href', '/login?next=/twin/');
+  unmount();
+  methods = {
+    sso: {
+      start_url: '//evil.example/start',
+      login_url: 'https://evil.example/',
+    },
+    password: true,
+    email: false,
+  };
+  render(<Login />);
+  await screen.findByRole('textbox', { name: '账号' });
+  expect(
+    screen.queryByRole('button', { name: '用享佳统一身份登录' }),
+  ).toBeNull();
+  expect(screen.queryByRole('link', { name: '用享佳统一身份登录' })).toBeNull();
+});
+
+it("signs in with twin's own account and password", async () => {
+  methods = { sso: null, password: true, email: false };
+  const user = userEvent.setup();
+  render(
+    <AuthGate>
+      <h1>应用</h1>
+    </AuthGate>,
+  );
+  expect(
+    await screen.findByRole('heading', { name: '登录 twin' }),
+  ).toBeVisible();
+  const username = screen.getByRole('textbox', { name: '账号' });
+  expect(username).toHaveFocus();
+  const password = screen.getByLabelText('密码');
+  expect(password).toHaveAttribute('type', 'password');
+  expect(password).toHaveAttribute('autocomplete', 'current-password');
+  await user.type(username, ' bob ');
+  await user.type(password, 'wrong-pass');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('账号或密码不对');
+  await user.clear(password);
+  await user.type(password, 'secret-123');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  expect(await screen.findByRole('heading', { name: '应用' })).toBeVisible();
+  const sent = fetcher.mock.calls.filter(
+    ([path]) => path === '/api/auth/password',
+  );
+  expect(JSON.parse(sent[1][1].body)).toEqual({
+    username: 'bob',
+    password: 'secret-123',
+  });
+  expect(new Headers(sent[1][1].headers).get('X-Twin')).toBe('1');
+  expect(window.location.hash).toBe('#/team');
+  expect(JSON.stringify(localStorage)).not.toContain('secret-123');
 });
 
 it.each([0, 1, 2])(

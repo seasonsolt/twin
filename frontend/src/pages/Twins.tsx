@@ -19,6 +19,7 @@ import {
   TextLink,
   Toolbar,
   useConfirm,
+  ThemePicker,
 } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { PersonaPortrait } from '../components/layout/PersonaSwitcher';
@@ -30,6 +31,7 @@ import { useMobile } from '../lib/useMobile';
 import { accountLabel, useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import { THEMES, useTheme } from '../stores/theme';
 
 interface TrashedPersona {
   id: string;
@@ -57,6 +59,7 @@ export function Twins() {
   const { id, items, refresh, switchTo } = usePersonas();
   const identity = useAuth((state) => state.identity);
   const mobile = useMobile();
+  const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -299,6 +302,9 @@ export function Twins() {
           <TextLink to="/team" size="sm">
             团队
           </TextLink>
+          {mobile && (
+            <ThemePicker value={theme} options={THEMES} onChange={setTheme} />
+          )}
           {mobile && identity?.auth_enabled && (
             <div className="min-w-0">
               <Text
@@ -310,15 +316,13 @@ export function Twins() {
               >
                 {accountLabel(identity)}
               </Text>
-              {identity.provider !== 'sso' && (
-                <Button
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => void work(() => useAuth.getState().logout())}
-                >
-                  退出登录
-                </Button>
-              )}
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => void work(() => useAuth.getState().logout())}
+              >
+                退出登录
+              </Button>
             </div>
           )}
         </Toolbar>

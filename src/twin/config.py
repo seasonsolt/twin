@@ -344,18 +344,24 @@ class SSOSettings(BaseModel):
     """Single sign-on borrowed from another app on the same host (e.g. audio-studio's 认证中心 login).
 
     twin forwards that app's session cookie, server to server, to `me_url` and trusts the account it reports;
-    the browser never hands twin an identity. `login_url` is where a signed-out visitor is sent.
+    the browser never hands twin an identity. twin's own sign-in page offers it as one button: a form posted to
+    `start_url` (that app's endpoint that hands the browser to the company sign-in and back), or, without one, a
+    link to `login_url`, that app's sign-in page. Signing out of twin also ends that app's session on this site.
     """
 
     me_url: str = ""
     login_url: str = ""
+    start_url: str = ""
     cookie: str = ""
     cache_seconds: int = Field(default=60, ge=0, le=3600)
 
 
 class AuthSettings(BaseModel):
     enabled: bool = False
-    provider: Literal["email", "sso"] = "email"
+    provider: Literal["email", "sso", "password"] = "email"
+    # Accounts and passwords kept by twin itself (`twin account add`), besides the provider's sign-in; always on
+    # with provider = "password".
+    password_login: bool = False
     allowed_domains: list[str] = Field(default_factory=lambda: ["xjjk.com"])
     allowed_emails: list[str] = Field(default_factory=lambda: ["seasonsolt@gmail.com"])
     # Addresses, SSO subjects (sso:<subject>) or SSO account names; an address in an allowed domain also matches the
@@ -380,12 +386,17 @@ class AuthSettings(BaseModel):
                 raise ValueError("[auth.sso] me_url 必须是 http(s) 地址，例如 http://127.0.0.1:8765/api/auth/me")
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", sso.cookie):
                 raise ValueError("[auth.sso] cookie 必须是另一个应用的会话 cookie 名")
-            if not sso.login_url.startswith("/") or sso.login_url.startswith("//"):
-                raise ValueError("[auth.sso] login_url 必须是本站路径，例如 /login?next=/twin/")
+            for key, value in (("login_url", sso.login_url), ("start_url", sso.start_url)):
+                if (value or key == "login_url") and (not value.startswith("/") or value.startswith("//")):
+                    raise ValueError(f"[auth.sso] {key} 必须是本站路径，例如 /login?next=/twin/")
             return self
-        if self.enabled and not all(
-            value.strip()
-            for value in (self.smtp.host, self.smtp.username, self.smtp.from_address, self.smtp.password_env)
+        if (
+            self.enabled
+            and self.provider == "email"
+            and not all(
+                value.strip()
+                for value in (self.smtp.host, self.smtp.username, self.smtp.from_address, self.smtp.password_env)
+            )
         ):
             raise ValueError("[auth] enabled = true 必须配置 [auth.smtp] host、username、from_address、password_env")
         return self

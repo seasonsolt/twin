@@ -47,13 +47,17 @@ egress = "local"
 [auth]
 enabled = true
 provider = "sso"
+password_login = true  # twin 自己的账号密码，与统一身份并列；账号用 twin account add 创建
 admin_emails = ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"]  # 按 SSO 账号名匹配（zhangxun 或 zhangxun@xjjk.com）；也可写 journalctl -u twin “SSO 登录”行里的 sso:<subject>
 
 [auth.sso]
 me_url = "http://127.0.0.1:8765/api/auth/me"
 cookie = "audio_studio_session"
+start_url = "/auth/start?next=/twin/"  # 登录页的统一身份按钮直接交给 audio-studio 跳认证中心
 login_url = "/login?next=/twin/"
 ```
+
+在 daw 上创建 twin 账号（密码在终端输入）：`sudo -u ubuntu /data/twin/current/.venv/bin/twin --config /data/twin/twin.toml account add <账号> --name <名字>`。
 
 audio-studio 的 nginx server 块需要一次性加入 `include /etc/nginx/snippets/daw-apps/*.conf;`，twin 的
 `nginx-twin.conf` 由部署脚本放进该目录。

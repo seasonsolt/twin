@@ -3,6 +3,28 @@ import { mockApi, NOW, weekly } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
+/** Signed out, with the company sign-in and twin's own accounts offered. */
+async function signInWithSso(page: Page) {
+  await page.route('**/api/whoami', (route) =>
+    route.fulfill({
+      status: 401,
+      json: { detail: '请先登录', code: 'login_required' },
+    }),
+  );
+  await page.route('**/api/auth/methods', (route) =>
+    route.fulfill({
+      json: {
+        sso: {
+          start_url: '/auth/start?next=/twin/',
+          login_url: '/login?next=/twin/',
+        },
+        password: true,
+        email: false,
+      },
+    }),
+  );
+}
+
 const pages: {
   name: string;
   path: string;
@@ -111,6 +133,33 @@ const pages: {
           json: { detail: '请先登录', code: 'login_required' },
         }),
       ),
+  },
+  {
+    // The company sign-in, borrowed from another app on the site, with twin's own accounts below it.
+    name: 'login-sso',
+    path: '/#/chat',
+    ready: '用享佳统一身份登录',
+    setup: signInWithSso,
+  },
+  // The other palettes, as picked on the sign-in page and remembered in this browser.
+  ...(['blue', 'ink'] as const).map((theme) => ({
+    name: `login-${theme}`,
+    path: '/#/chat',
+    ready: '用享佳统一身份登录',
+    setup: async (page: Page) => {
+      await page.addInitScript(
+        (picked) => localStorage.setItem('twin:theme', picked),
+        theme,
+      );
+      await signInWithSso(page);
+    },
+  })),
+  {
+    name: 'team-ink',
+    path: '/#/team',
+    ready: '需要你处理',
+    setup: (page) =>
+      page.addInitScript(() => localStorage.setItem('twin:theme', 'ink')),
   },
 ];
 

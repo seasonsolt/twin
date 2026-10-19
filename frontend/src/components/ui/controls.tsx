@@ -351,6 +351,62 @@ export function Radio(props: ChoiceProps) {
   return <Choice {...props} type="radio" />;
 }
 
+/**
+ * The palettes the app can be shown in, as a row of colour dots (radio buttons, so arrow keys move between them).
+ * Each dot keeps its own colour whatever the current palette is; the chosen one is ringed and named beside the row.
+ */
+export function ThemePicker<T extends string>({
+  value,
+  options,
+  onChange,
+  label = '界面主题',
+  named = false,
+}: {
+  value: T;
+  options: readonly { id: T; label: string }[];
+  onChange: (value: T) => void;
+  label?: string;
+  /** Show the chosen palette's name after the dots. */
+  named?: boolean;
+}) {
+  const name = useId();
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="inline-flex items-center text-sm text-secondary"
+    >
+      {options.map((option) => (
+        <label
+          key={option.id}
+          title={option.label}
+          className="grid size-11 cursor-pointer place-items-center"
+        >
+          <input
+            type="radio"
+            name={name}
+            value={option.id}
+            checked={option.id === value}
+            onChange={() => onChange(option.id)}
+            aria-label={option.label}
+            className="peer sr-only"
+          />
+          <span
+            aria-hidden
+            data-swatch={option.id}
+            className="theme-swatch size-5 rounded-full border border-black/15 peer-checked:outline-2 peer-checked:outline-offset-2 peer-checked:outline-primary peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-4 peer-focus-visible:ring-offset-canvas"
+          />
+        </label>
+      ))}
+      {named && (
+        <span className="ml-1">
+          {options.find((option) => option.id === value)?.label}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** A pill that can be switched on and off (a filter), or just shown when it has no onClick. */
 export function Chip({
   pressed,

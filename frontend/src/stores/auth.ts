@@ -12,8 +12,8 @@ export interface Identity {
   account?: string | null;
   admin: boolean;
   auth_enabled: boolean;
-  /** 'sso' means signing in and out belongs to another app on this site. */
-  provider?: 'email' | 'sso' | null;
+  /** How the server signs people in; 'sso' borrows another app's sign-in on this site. */
+  provider?: 'email' | 'sso' | 'password' | null;
   /** Pages an administrator switched on or off for everyone; missing (an older server) means on. */
   features?: Partial<Record<Feature, boolean>>;
 }

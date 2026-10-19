@@ -222,17 +222,17 @@ it('uses a desktop memory grid with the sticky add panel and focuses it from the
   );
 });
 
-it('uses the shared split stage and bounded form card for desktop login', () => {
+it('splits desktop login into the brand stage and a bounded column of ways in', async () => {
   const view = mount(<Login />);
   const page = view.container.querySelector('.auth-page')!;
-  expect(page.querySelector(':scope > .stage-brand')).toBeInTheDocument();
-  expect(
-    page.querySelector(':scope > section input[type="email"]'),
-  ).toBeInTheDocument();
-  expect(desktopCss).toMatch(
-    /\.auth-page,[^{]*\{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/s,
+  expect(page.querySelector(':scope > .auth-stage')).toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      page.querySelector(':scope > .auth-panel input[type="email"]'),
+    ).toBeInTheDocument(),
   );
   expect(desktopCss).toMatch(
-    /\.auth-page > section,[^{]*\{[^}]*max-width: 480px/s,
+    /\.auth-page \{[^}]*grid-template-columns: minmax\(0, 7fr\) minmax\(0, 5fr\)/s,
   );
+  expect(desktopCss).toMatch(/\.auth-panel \{[^}]*max-width: 380px/s);
 });

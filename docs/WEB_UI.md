@@ -61,22 +61,23 @@ AppShell 桌面使用三层底色：`soft` 窗口底，直接放 68px 图标导�
 
 设计令牌集中在 `frontend/src/design/tokens.css`，经 Tailwind v4 `@theme inline` 接入。使用系统字体，不加载外部字体或资产。
 
-办公场景的冷灰底、单一蓝色强调；系统深色模式下也使用同一套浅色令牌。
+三套主题，默认朱砂红；不跟随系统深色模式。登录页底部和账户菜单（手机在“我的分身”页）可切换，选择只记在本浏览器（`localStorage` 的 `twin:theme`，读不到时用默认），由 `stores/theme.ts` 写到 `<html data-theme>`。命名主题只覆盖与默认不同的令牌。
 
-| 变量 | 值 |
-| --- | --- |
-| canvas / soft | `#F3F5F8` / `#E5EBF4` |
-| surface / surface-raised | `#FFFFFF` / `#FFFFFF` |
-| border | `#DBE1EA` |
-| text-primary | `#17202C` |
-| text-secondary / text-tertiary | `#4A5566` / `#566173` |
-| accent / hover / pressed | `#1F5FBF` / `#1A53A8` / `#154385` |
-| on-accent | `#FFFFFF` |
-| sun / note（提示卡片） | `#F5B83D` / `#FDE7B8` |
-| success / warning | `#2E7D5B` / `#8A570B` |
-| danger / info | `#B72E38` / `#2463AE` |
+| 变量 | 朱砂红（默认） | 海蓝（`blue`） | 墨夜（`ink`，深色） |
+| --- | --- | --- | --- |
+| canvas / soft | `#FFF4EA` / `#FBE9DD` | `#F3F5F8` / `#E5EBF4` | `#16130F` / `#2A2420` |
+| surface / surface-raised | `#FFFFFF` / `#FFFFFF` | 同默认 | `#201C18` / `#2A2420` |
+| border | `#F2DFCF` | `#DBE1EA` | `#3D352E` |
+| text-primary | `#2B1D16` | `#17202C` | `#F5F0E9` |
+| text-secondary / text-tertiary | `#6B4A3A` / `#795442` | `#4A5566` / `#566173` | `#C4BCB1` / `#A99F93` |
+| accent / hover / pressed | `#C9432C` / `#B33723` / `#982C1C` | `#1F5FBF` / `#1A53A8` / `#154385` | `#E0674F` / `#E87C66` / `#D9634C` |
+| on-accent | `#FFFFFF` | 同默认 | `#1A0E0A` |
+| stage-bg / stage-ink（舞台） | accent / `#FFFFFF` | accent / `#FFFFFF` | `#2A2420` / `#F5E6D6` |
+| sun / note（提示卡片） | `#F5B83D` / `#FDE7B8` | 同默认 | `#B0502F` / `#3A2E1E` |
+| success / warning | `#2E7D5B` / `#8A570B` | 同默认 | `#6CC49A` / `#E6B45C` |
+| danger / info | `#B72E38` / `#2463AE` | 同默认 | `#F2848A` / `#84AEEA` |
 
-文字、强调及状态色在三种表面上由单元测试检查 WCAG AA ≥ 4.5:1。圆角 8（控件）/12（列表行、提示）/16px（卡片、对话框）/full，字号 12/13/14/15/16/18/22/26px，正文 14px、行高 1.6；阴影和半透明侧栏也由令牌控制。状态色只表达状态。
+每套主题的文字、强调及状态色在三种表面上都由单元测试检查 WCAG AA ≥ 4.5:1。圆角 8（控件）/12（列表行、提示）/16px（卡片、对话框）/full，字号 12/13/14/15/16/18/22/26px，正文 14px、行高 1.6；阴影和半透明侧栏也由令牌控制。状态色只表达状态。
 
 UI primitives 包含 Button、IconButton、Card、Input、自动增高且 IME 安全的 Textarea、Field、Select、Checkbox、Radio、Slider、Chip、Badge、StatusDot、Meter、Skeleton、EmptyState、Table、Tabs、Switch、Dialog、ConfirmProvider、Toast 和 Tooltip；页面级组件见下节。Radix 提供焦点约束、键盘操作与 ARIA；确认默认聚焦取消，关闭后恢复原入口。通知只用 polite live region，不抢焦点。
 
@@ -93,7 +94,7 @@ twin 不添加免责声明。React 按文本渲染服务端内容，不执行用
 | 文字 | `Heading`（display 26 / page 22 / title 18 / section 16 / item 15px）、`Text`（xs 12 / sm 13 / md 14 / lg 16px，控件里的名字用 xl 18 / 2xl 22px；语义 tone）、`TextLink`（站内、外链或像链接的按钮） |
 | 容器 | `Card`（raised/outline/note/soft/danger，padding 档位）、`ListRow`、`Notice`、`Disclosure`、`MediaFrame`、`Clip`（给视频、3D 视图等单个子元素裁成卡片/行/圆形圆角）、`Dialog`（`variant="sheet"` 手机底部弹层；`anchor` 贴着触发按钮的浮层位置） |
 | 数据 | `Stat`、`KeyValue`、`Meter`（`max` 计数上限、`size="sm"` 细条）、`AudioLevel`、`AvatarFrame`（`size="fill"` 填满外框、`outlined`）、`Portrait`（人像照片，裁向脸部）、`StepNumber`、`Skeleton`（`panel` 大面板占位） |
-| 选择与文件 | `Select`（原生 select 统一样式）、`Checkbox`、`Radio`、`Slider`、`Chip`、`Input`（`size="lg"` 登录等单字段表单）、`FileDrop`（拖放区）、`FileInput`（由按钮打开的隐藏文件选择） |
+| 选择与文件 | `Select`（原生 select 统一样式）、`Checkbox`、`Radio`、`Slider`、`Chip`、`ThemePicker`（主题色点，单选）、`Input`（`size="lg"` 登录等单字段表单）、`FileDrop`（拖放区）、`FileInput`（由按钮打开的隐藏文件选择） |
 | 操作 | `Button`（`shape="pill"`）、`IconButton`（`shape="circle"`、`size="lg"`）、`LinkButton`（按钮样式的链接，如下载）、`ActionMenu`（“⋯”操作菜单） |
 | 应用外壳 | `NavPill`（侧栏和底部标签栏的药丸导航，可带滑动高亮）、`PlainButton`（只有圆角形状的按钮，用于头像、分身行等外壳自绘控件）、`SkipLink`、`Spacer`（按测量高度留白） |
 
@@ -105,7 +106,7 @@ twin 不添加免责声明。React 按文本渲染服务端内容，不执行用
 
 ## 截图对比
 
-`frontend/e2e/pages.spec.ts` 对团队、录音库、录音详情、聊天、分身列表、档案概览、记忆、登录 8 个页面，在 1280×800 桌面和 375×812 手机上整页截图，逐像素对比 `e2e/__screenshots__/` 里的基线。页面读的是构建产物（`e2e/serve.mjs` 提供 `src/twin/web/static`），所有 `/api` 由 `e2e/mockApi.ts` 返回虚构的固定数据；没有 mock 的请求或页面报错都会让测试失败。时间固定为 2026-10-17 10:00（Asia/Shanghai），减少动态效果并关闭动画和光标。
+`frontend/e2e/pages.spec.ts` 对团队、录音库、录音详情、聊天、分身列表、档案概览、记忆、登录等页面（登录另有海蓝、墨夜两张，团队另有墨夜一张），在 1280×800 桌面和 375×812 手机上整页截图，逐像素对比 `e2e/__screenshots__/` 里的基线。页面读的是构建产物（`e2e/serve.mjs` 提供 `src/twin/web/static`），所有 `/api` 由 `e2e/mockApi.ts` 返回虚构的固定数据；没有 mock 的请求或页面报错都会让测试失败。时间固定为 2026-10-17 10:00（Asia/Shanghai），减少动态效果并关闭动画和光标。
 
 ```sh
 ./scripts/screenshots.sh                      # 先构建，再在 mcr.microsoft.com/playwright:v1.63.0-noble 里对比
@@ -148,20 +149,23 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 ## 登录与认证边界
 
-本机默认 `[auth].enabled = false`，所有请求为管理员；团队部署启用 auth，不依赖 Cloudflare Access，也不读取 `Cf-Access-*`。登录有两种，由 `[auth].provider` 选择：
+本机默认 `[auth].enabled = false`，所有请求为管理员；团队部署启用 auth，不依赖 Cloudflare Access，也不读取 `Cf-Access-*`。登录方式由 `[auth].provider` 选择，`password_login = true` 再并列 twin 自己的账号密码：
 
-- **企业 SSO（主路径，`provider = "sso"`）**：借用同站另一个应用的会话 cookie，twin 带着它请求 `me_url`，200 为已登录、401 为未登录并跳往 `login_url`。身份取其中的 account（工号）、display_name 和 email；目前 SSO 只给 account，暂不给邮箱。工号和邮箱（有则）都是认领分身的依据（`Personas.claim`）。没有自己的登录页，也不发邮件。
-- **邮箱验证码（备选，`provider = "email"`）**：应用内验证码登录，身份就是邮箱，下面的 `/api/auth/*` 只在这种模式下使用。SMTP 设置、环境密码、隧道与 allowlist 部署步骤见 [使用指南](GUIDE.md#团队部署与登录)。
+- **企业 SSO（主路径，`provider = "sso"`）**：借用同站另一个应用的会话 cookie，twin 带着它请求 `me_url`，200 为已登录、401 为未登录。身份取其中的 account（工号）、display_name 和 email；目前 SSO 只给 account，暂不给邮箱。工号和邮箱（有则）都是认领分身的依据（`Personas.claim`）。登录页上是“用享佳统一身份登录”按钮：表单 POST 到 `start_url`（那个应用的登录起点，它校验同站来源后跳往认证中心），没有 `start_url` 时链接到 `login_url`。两个地址都只能是本站路径。
+- **twin 账号密码（`password_login = true`，或只用它时 `provider = "password"`）**：账号由 `twin account` 命令行管理，身份为 `user:<账号>`；同时带着 SSO cookie 和 twin 会话时以 SSO 为准。
+- **邮箱验证码（备选，`provider = "email"`）**：应用内验证码登录，身份就是邮箱。SMTP 设置、环境密码、隧道与 allowlist 部署步骤见 [使用指南](GUIDE.md#团队部署与登录)。
 
-`AuthGate` 先读取 `/api/whoami`，`401 {code:"login_required"}`：SSO 模式跳到 `login_url`，邮箱模式显示“twin / 用邮箱登录”。邮箱输入 type=email、autocomplete=email，16px；获取验证码后显示 6 位 inputmode=numeric、autocomplete=one-time-code 输入，支持粘贴和前导零。“重新发送”按实际截止时间倒计时 60 秒，“换个邮箱”返回。未允许用户看到“已加入等候名单”、邮箱与“开放后会第一时间通知你”，不显示验证码输入。错误使用中文普通文本，沿用中性底色、白卡和单一强调色。
+`AuthGate` 先读取 `/api/whoami`，`401 {code:"login_required"}` 时显示 twin 自己的登录页，不再跳往别的页面；登录页读 `/api/auth/methods` 决定显示哪些方式（读不到时按只有邮箱处理）。有统一身份或账号密码时标题为“登录 twin”，统一身份按钮在上为主操作，下面“或用 twin 账号登录”；只有邮箱时标题为“用邮箱登录”。账号输入 autocomplete=username，密码 type=password、autocomplete=current-password，登录成功进入团队页。邮箱输入 type=email、autocomplete=email，16px；获取验证码后显示 6 位 inputmode=numeric、autocomplete=one-time-code 输入，支持粘贴和前导零。“重新发送”按实际截止时间倒计时 60 秒，“换个邮箱”返回。未允许用户看到“已加入等候名单”、邮箱与“开放后会第一时间通知你”，不显示验证码输入。错误使用中文普通文本。登录页左侧（手机为顶部色带）是舞台：标语“最懂你的，是另一个你。”、一句说明（手机隐藏）和“个人分身 → 超级个体 → 超级组织”演进线；右侧是登录方式，底部是主题切换。
 
-会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号账号和“退出登录”。身份恢复后先加载可见分身，再挂载页面；no_persona 对带企业账号（邮箱或工号）的成员先进入“会议里找自己”（`MemberVoice`），可跳过，再显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。`/api/whoami` 另带 `address`（企业邮箱）和 `account`（工号）。
+会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号账号和“退出登录”，任何登录方式都显示；退出时 `/api/auth/logout` 同时清掉 twin 会话和 SSO 会话 cookie（`Path=/`），回到 twin 登录页。身份恢复后先加载可见分身，再挂载页面；no_persona 对带企业账号（邮箱或工号）的成员先进入“会议里找自己”（`MemberVoice`），可跳过，再显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。`/api/whoami` 另带 `address`（企业邮箱）和 `account`（工号）。
 
 | 方法/路径 | 契约 |
 | --- | --- |
 | `POST /api/auth/request` | `{email}` → `{status:"code_sent"}` 或 `{status:"waitlist"}`；邮件只含验证码，无链接 |
 | `POST /api/auth/verify` | `{email,code}` → `{email,admin}` 并设置 twin_session cookie；代码 10 分钟有效，5 次错误后销毁 |
-| `POST /api/auth/logout` | 删除服务端会话并清 cookie |
+| `GET /api/auth/methods` | 未登录也可读：`{sso:{start_url,login_url}|null, password, email}`，登录页据此显示方式 |
+| `POST /api/auth/password` | `{username,password}` → 身份并设置 twin_session cookie；错误统一为“账号或密码不对”，同一账号 15 分钟 5 次、同一地址一小时 30 次失败后 429 |
+| `POST /api/auth/logout` | 删除服务端会话并清 twin_session；SSO 下同时清那个应用的会话 cookie（`Path=/`） |
 | `GET /api/whoami` | `{email,admin,auth_enabled}`；启用登录且未登录返回 401 |
 | `GET /api/admin/waitlist` | 仅管理员，`[{email,created_at}]`（Unix 秒时间戳）；添加允许邮箱需改配置并重启 |
 

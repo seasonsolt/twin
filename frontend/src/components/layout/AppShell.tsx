@@ -31,6 +31,7 @@ import {
   SkipLink,
   Text,
   TextLink,
+  ThemePicker,
   Tooltip,
 } from '../ui';
 import { LayoutScope, PageTransition } from '../motion';
@@ -48,6 +49,7 @@ import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
+import { THEMES, useTheme } from '../../stores/theme';
 import type { IdentityData } from '../../features/identity/useIdentity';
 const Claimed = lazy(() =>
   import('../../pages/Claimed').then((module) => ({
@@ -236,22 +238,26 @@ function TwinRail() {
   );
 }
 
-/** The account menu at the foot of the rail: who is signed in, the system settings for an administrator (a red dot
- * when a switched-on service is failing), and signing out. Hidden when there is nothing to show. */
+/** The account menu at the foot of the rail: who is signed in, the palette, the system settings for an
+ * administrator (a red dot when a switched-on service is failing), and signing out. */
 function RailAccount() {
   const identity = useAuth((state) => state.identity);
   const openSystem = useOpenSystem();
   const down = useSystem((state) => failing(state.data).length);
+  const { theme, setTheme } = useTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  if (!identity || (!identity.auth_enabled && !identity.admin)) return null;
-  const canSignOut = identity.auth_enabled && identity.provider !== 'sso';
+  if (!identity) return null;
+  const canSignOut = identity.auth_enabled;
   return (
     <div className="rail-account mt-auto pt-4">
       <AccountMenu
         name={accountLabel(identity) || '本机'}
         detail={identity.admin ? '管理员' : undefined}
         error={error}
+        theme={
+          <ThemePicker value={theme} options={THEMES} onChange={setTheme} />
+        }
         groups={[
           identity.admin
             ? [

@@ -7,9 +7,14 @@ main:
         image: python:3.12-bookworm
         volumes:
           - /root/.cache/uv:copy-on-write
+          # ffmpeg and the CJK fonts take a minute or two to download each run; keep packages and lists cached
+          # (the image's docker-clean deletes packages after install, so the tools stage removes it first).
+          - /var/cache/apt/archives:copy-on-write
+          - /var/lib/apt/lists:copy-on-write
       stages:
         - name: tools
           script:
+            - rm -f /etc/apt/apt.conf.d/docker-clean
             - apt-get update
             - apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
             - pip install --no-cache-dir uv==0.13.0
@@ -22,7 +27,8 @@ main:
         - name: mypy
           script: uv run mypy
         - name: pytest
-          script: uv run pytest -q
+          # Each worker has its own temporary databases, so tests run in parallel as in release-stable.sh.
+          script: uv run pytest -q -n auto
 
     - name: frontend
       docker:
@@ -59,6 +65,10 @@ stable:
         image: python:3.12-bookworm
         volumes:
           - /root/.cache/uv:copy-on-write
+          # ffmpeg and the CJK fonts take a minute or two to download each run; keep packages and lists cached
+          # (the image's docker-clean deletes packages after install, so the tools stage removes it first).
+          - /var/cache/apt/archives:copy-on-write
+          - /var/lib/apt/lists:copy-on-write
       imports:
         - https://cnb.cool/xjjk/config/-/blob/main/env.dev.yml
       env:
@@ -67,6 +77,7 @@ stable:
       stages:
         - name: tools
           script:
+            - rm -f /etc/apt/apt.conf.d/docker-clean
             - apt-get update
             - apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
             - pip install --no-cache-dir uv==0.13.0
@@ -75,7 +86,7 @@ stable:
             - uv sync --frozen --python 3.12
             - uv run ruff check src tests deploy
             - uv run mypy
-            - uv run pytest -q
+            - uv run pytest -q -n auto
         - name: package
           # Only what runs on daw; the committed frontend build is under src/twin/web/static.
           script: >-

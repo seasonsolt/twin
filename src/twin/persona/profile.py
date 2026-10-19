@@ -22,7 +22,7 @@ import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextvars import copy_context
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Literal
 
@@ -78,9 +78,22 @@ def profile_stale(store: PersonaStore) -> bool:
 
 
 def pending_chunks(store: PersonaStore, settings: Settings) -> int:
+    """Chunks the next build sends to the model: new ones, and stored ones missing a facet now allowed."""
     allowed = consented_facets(store)
     sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
-    return sum(not store.has_chunk(chunk.chunk_id) for chunk in corpus_chunks(store, sources, allowed, settings))
+    done = store.chunk_facets()
+    return sum(bool(_missing(c, done, allowed)) for c in corpus_chunks(store, sources, allowed, settings))
+
+
+def _missing(chunk: Chunk, done: dict[str, frozenset[str] | None], allowed: frozenset[str]) -> frozenset[str]:
+    """The allowed facets ``chunk`` has not been extracted for: all of them for a new chunk, none for one stored under
+    its old id (``PersonaStore.adopt_legacy_chunks`` takes it over)."""
+    if chunk.chunk_id in done:
+        facets = done[chunk.chunk_id]
+        return frozenset() if facets is None else allowed - facets
+    if chunk.legacy_id in done and done[chunk.legacy_id] is None:
+        return frozenset()
+    return allowed
 
 
 @dataclass(frozen=True)
@@ -172,6 +185,8 @@ class Chunk:
     source: Source
     entries: tuple[Expression, ...]
     text: str
+    # The id before chunks were keyed without the facet set (``PersonaStore.adopt_legacy_chunks``).
+    legacy_id: str = ""
 
 
 def _clip(text: str, limit: int) -> str:
@@ -229,9 +244,19 @@ def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str
         if not current:
             return
         text = _render(current)
-        key = "\x1f".join([KERNEL.prompt, source.source_id, ",".join(sorted(allowed)), text])
-        chunk_id = "ch_" + hashlib.sha256(key.encode()).hexdigest()[:16]
-        chunks.append(Chunk(chunk_id, source, tuple(current), text))
+        # The facets a chunk was extracted for are recorded with it, not part of its id, so a facet new to the
+        # taxonomy or newly consented is extracted alone instead of the whole chunk again.
+        key = "\x1f".join([KERNEL.prompt, source.source_id, text])
+        legacy = "\x1f".join([KERNEL.prompt, source.source_id, ",".join(sorted(allowed)), text])
+        chunks.append(
+            Chunk(
+                "ck_" + hashlib.sha256(key.encode()).hexdigest()[:16],
+                source,
+                tuple(current),
+                text,
+                "ch_" + hashlib.sha256(legacy.encode()).hexdigest()[:16],
+            )
+        )
 
     for e in entries:
         length = len(render_entry(0, e))
@@ -731,11 +756,32 @@ class BuildReport:
         )
 
 
-def _merge_key(candidates: Sequence[PersonaCandidate]) -> str:
+def _merge_key(facet_id: str, candidates: Sequence[PersonaCandidate]) -> str:
+    """What a facet's merge depends on: the prompt, the facet's own definition and its candidates. A taxonomy change
+    re-merges only the facets it changed."""
+    facet = FACET_BY_ID[facet_id]
+    parts = [KERNEL.prompt, facet_id, facet.name, facet.description, *sorted(c.candidate_id for c in candidates)]
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
+
+
+def _legacy_merge_key(candidates: Sequence[PersonaCandidate]) -> str:
+    """The key before it named the facet's definition. A stored one that matches was merged under the running
+    taxonomy, so that facet is current and only its key is rewritten."""
     parts = [KERNEL.prompt, *sorted(c.candidate_id for c in candidates)]
     if KERNEL.taxonomy != "v1":
         parts.insert(1, KERNEL.taxonomy)
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
+
+
+def _merged(store: PersonaStore, facet_id: str, candidates: Sequence[PersonaCandidate]) -> bool:
+    stored = store.get_meta(f"merge:{facet_id}")
+    key = _merge_key(facet_id, candidates)
+    if stored == key:
+        return True
+    if stored is not None and stored == _legacy_merge_key(candidates):
+        store.set_meta(f"merge:{facet_id}", key)
+        return True
+    return False
 
 
 def build_profile(
@@ -771,8 +817,11 @@ def build_profile(
     report.sources = len(sources)
     chunks = corpus_chunks(store, sources, allowed, settings)
     report.chunks_total = len(chunks)
+    store.adopt_legacy_chunks({c.legacy_id: c.chunk_id for c in chunks}, allowed)
     report.chunks_dropped = store.drop_stale_chunks({c.chunk_id for c in chunks})
-    todo = [c for c in chunks if not store.has_chunk(c.chunk_id)]
+    store.restrict_chunk_facets(allowed)
+    done = store.chunk_facets()
+    todo = [(c, missing) for c in chunks if (missing := _missing(c, done, allowed))]
     pending = store.pending_versions([s.source_id for s in sources])
     totals: dict[str, int] = {}
     for chunk in chunks:
@@ -798,26 +847,39 @@ def _extract_and_merge(
     llm: LLM,
     settings: Settings,
     report: BuildReport,
-    todo: list[Chunk],
+    todo: list[tuple[Chunk, frozenset[str]]],
     allowed: frozenset[str],
     safe_progress: Progress,
     totals: dict[str, int],
 ) -> None:
-    def persist(chunk: Chunk, outcome: Extraction | Exception) -> None:
+    def extract(job: tuple[Chunk, frozenset[str]]) -> Extraction:
+        chunk, facets = job
+        if facets == allowed:
+            return extract_chunk(llm, chunk, facets, settings)
+        # Only the facets this chunk lacks; a distinct id keeps their candidate ids apart from the chunk's own.
+        salted = replace(chunk, chunk_id=f"{chunk.chunk_id}+{content_digest(sorted(facets))[:8]}")
+        found = extract_chunk(llm, salted, facets, settings)
+        return Extraction([c.model_copy(update={"chunk_id": chunk.chunk_id}) for c in found.candidates], found.stats)
+
+    def persist(job: tuple[Chunk, frozenset[str]], outcome: Extraction | Exception) -> None:
+        chunk, facets = job
         if isinstance(outcome, Exception):
             report.failures.append(f"extract {chunk.chunk_id}: {failure_summary(outcome)}")
             report.failed_sources.add(chunk.source.source_id)
+            return
+        if facets == allowed:
+            store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome.candidates, outcome.stats, facets)
         else:
-            store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome.candidates, outcome.stats)
-            report.chunks_extracted += 1
-            report.extraction += outcome.stats
+            store.add_chunk_facets(chunk.chunk_id, outcome.candidates, outcome.stats, facets)
+        report.chunks_extracted += 1
+        report.extraction += outcome.stats
 
     run_parallel(
-        lambda c: extract_chunk(llm, c, allowed, settings),
+        extract,
         todo,
         settings.max_workers,
         safe_progress,
-        label=lambda c: f"persona extract {c.chunk_id}",
+        label=lambda job: f"persona extract {job[0].chunk_id}",
         on_result=persist,
     )
     store.set_build_progress("merge", totals)
@@ -829,7 +891,7 @@ def _extract_and_merge(
     jobs = [
         (facet.facet_id, by_facet.get(facet.facet_id, []))
         for facet in FACETS
-        if store.get_meta(f"merge:{facet.facet_id}") != _merge_key(by_facet.get(facet.facet_id, []))
+        if not _merged(store, facet.facet_id, by_facet.get(facet.facet_id, []))
     ]
 
     # Every facet's batches share one pool of ``max_workers``, so the largest facet does not finish alone.
@@ -878,7 +940,7 @@ def _extract_and_merge(
         )
         if isinstance(outcome, MergeDegraded):
             return
-        store.set_meta(f"merge:{facet_id}", _merge_key(members))
+        store.set_meta(f"merge:{facet_id}", _merge_key(facet_id, members))
         # Merged and saved: the batches it did not use (candidates since changed or removed) are no longer needed.
         (caches.get(facet_id) or MergeCache(store, facet_id)).prune()
         report.facets_merged += 1

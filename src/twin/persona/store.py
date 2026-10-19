@@ -73,6 +73,9 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE p_chunks ADD COLUMN stats TEXT;",
     # 3: the commitment ledger (承诺账本).
     _LEDGER,
+    # 4: the facets a chunk was extracted for (JSON list), so a new facet is extracted alone; NULL for chunks
+    # extracted before it, whose id still contains the facet set (``adopt_legacy_chunks``).
+    "ALTER TABLE p_chunks ADD COLUMN facets TEXT;",
 )
 
 
@@ -127,6 +130,10 @@ def stored_avatar(path: Path, configured: str = "chestnut") -> str:
             value = store.get_meta("identity:avatar_preset")
     selected = AVATAR_ALIASES.get(value or configured, value or configured)
     return selected if selected in AVATAR_PRESETS else "chestnut"
+
+
+def _facet_list(facets: frozenset[str] | None) -> str | None:
+    return None if facets is None else json.dumps(sorted(facets))
 
 
 class PersonaStore:
@@ -199,7 +206,9 @@ class PersonaStore:
         """Move stored facet ids to the running taxonomy (``kernel.TAXONOMY_MIGRATIONS``) without any model call, so
         the profile keeps answering while the rebuild re-merges it. Items of a split facet stay in its first new facet;
         the others keep a copy of them with their reviews (``taxonomy:inherit:<facet>``) for ``replace_facet_items``.
-        A removed facet's items, reviews and candidates go. A store from a newer taxonomy is left untouched."""
+        A removed facet's items, reviews and candidates go. A split facet's candidates go too, and every chunk forgets
+        it was extracted for a split or removed facet, so the next build extracts the split's facets, and facets new to
+        the taxonomy, from each chunk alone. A store from a newer taxonomy is left untouched."""
         stored = self._taxonomy_of_rows()
         if stored == TAXONOMY_VERSION:
             if self.get_meta(TAXONOMY_META) is None:
@@ -233,25 +242,35 @@ class PersonaStore:
                     "DELETE FROM p_meta WHERE key = ? OR substr(key, 1, ?) = ?",
                     (f"merge:{old}", len(f"{MERGE_CACHE_PREFIX}{old}:"), f"{MERGE_CACHE_PREFIX}{old}:"),
                 )
+                if len(targets) != 1:
+                    db.executemany("DELETE FROM p_candidates WHERE candidate_id = ?", [(c,) for c in candidates[old]])
                 if not targets:
                     db.executemany("DELETE FROM p_reviews WHERE item_id = ?", [(i.item_id,) for i in items[old]])
                     db.executemany("DELETE FROM p_items WHERE item_id = ?", [(i.item_id,) for i in items[old]])
-                    db.executemany("DELETE FROM p_candidates WHERE candidate_id = ?", [(c,) for c in candidates[old]])
                     continue
                 first = targets[0]
                 move = "SET facet_id = ?, json = json_set(json, '$.facet_id', ?)"
                 db.executemany(
                     f"UPDATE p_items {move} WHERE item_id = ?", [(first, first, i.item_id) for i in items[old]]
                 )
-                db.executemany(
-                    f"UPDATE p_candidates {move} WHERE candidate_id = ?", [(first, first, c) for c in candidates[old]]
-                )
+                if len(targets) == 1:
+                    db.executemany(
+                        f"UPDATE p_candidates {move} WHERE candidate_id = ?",
+                        [(first, first, c) for c in candidates[old]],
+                    )
                 for other in targets[1:]:
                     inherit.setdefault(other, []).extend(
                         {"item": i.model_dump(mode="json"), "review": reviews[i.item_id].model_dump(mode="json")}
                         for i in items[old]
                         if i.item_id in reviews
                     )
+            for chunk_id, facets in db.execute(
+                "SELECT chunk_id, facets FROM p_chunks WHERE facets IS NOT NULL"
+            ).fetchall():
+                done = json.loads(facets)
+                moved = sorted({t for f in done for t in (plan.get(f, (f,)) if len(plan.get(f, (f,))) == 1 else ())})
+                if moved != sorted(done):
+                    db.execute("UPDATE p_chunks SET facets = ? WHERE chunk_id = ?", (json.dumps(moved), chunk_id))
             for facet_id, copies in inherit.items():
                 kept = json.loads(self.get_meta(f"{INHERIT_META}{facet_id}") or "[]")
                 db.execute(
@@ -590,20 +609,86 @@ class PersonaStore:
             return self._db.execute("SELECT 1 FROM p_chunks WHERE chunk_id = ?", (chunk_id,)).fetchone() is not None
 
     def put_chunk(
-        self, chunk_id: str, source_id: str, candidates: list[PersonaCandidate], stats: ExtractStats | None = None
+        self,
+        chunk_id: str,
+        source_id: str,
+        candidates: list[PersonaCandidate],
+        stats: ExtractStats | None = None,
+        facets: frozenset[str] | None = None,
     ) -> None:
-        """Record a processed chunk with its candidates (possibly none) and extraction counts, replacing an earlier
-        run of it."""
+        """Record a processed chunk with its candidates (possibly none), extraction counts and the facets it was
+        extracted for, replacing an earlier run of it."""
         with self._tx() as db:
             db.execute("DELETE FROM p_candidates WHERE chunk_id = ?", (chunk_id,))
             db.execute(
-                "INSERT OR REPLACE INTO p_chunks (chunk_id, source_id, stats) VALUES (?, ?, ?)",
-                (chunk_id, source_id, stats.model_dump_json() if stats else None),
+                "INSERT OR REPLACE INTO p_chunks (chunk_id, source_id, stats, facets) VALUES (?, ?, ?, ?)",
+                (chunk_id, source_id, stats.model_dump_json() if stats else None, _facet_list(facets)),
             )
             db.executemany(
                 "INSERT INTO p_candidates VALUES (?, ?, ?, ?)",
                 [(c.candidate_id, c.chunk_id, c.facet_id, c.model_dump_json()) for c in candidates],
             )
+
+    def add_chunk_facets(
+        self, chunk_id: str, candidates: list[PersonaCandidate], stats: ExtractStats, facets: frozenset[str]
+    ) -> None:
+        """Record an extraction of an already processed chunk for ``facets`` only (new to the taxonomy, or newly
+        consented): its candidates join the chunk's, and the counts add up."""
+        with self._tx() as db:
+            row = db.execute("SELECT stats, facets FROM p_chunks WHERE chunk_id = ?", (chunk_id,)).fetchone()
+            if row is None:
+                raise KeyError(chunk_id)
+            before = ExtractStats.model_validate_json(row[0]) if row[0] else ExtractStats()
+            done = frozenset(json.loads(row[1] or "[]")) | facets
+            db.execute(
+                "UPDATE p_chunks SET stats = ?, facets = ? WHERE chunk_id = ?",
+                ((before + stats).model_dump_json(), _facet_list(done), chunk_id),
+            )
+            db.executemany(
+                "INSERT OR REPLACE INTO p_candidates VALUES (?, ?, ?, ?)",
+                [(c.candidate_id, c.chunk_id, c.facet_id, c.model_dump_json()) for c in candidates],
+            )
+
+    def chunk_facets(self) -> dict[str, frozenset[str] | None]:
+        """Every stored chunk with the facets it was extracted for; None for a chunk from before that was recorded."""
+        with self._lock:
+            rows = self._db.execute("SELECT chunk_id, facets FROM p_chunks").fetchall()
+        return {chunk_id: None if facets is None else frozenset(json.loads(facets)) for chunk_id, facets in rows}
+
+    def adopt_legacy_chunks(self, legacy: dict[str, str], allowed: frozenset[str]) -> int:
+        """Give chunks stored under their old id (``legacy`` maps it to the current one) their current id, with the
+        facets the old id was cut for, so a twin upgrading does not extract its whole corpus again. Candidate ids stay,
+        so the items and their merges stay as well."""
+        moved = 0
+        with self._tx() as db:
+            unrecorded = {r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE facets IS NULL")}
+            for old, new in legacy.items():
+                if old not in unrecorded or db.execute("SELECT 1 FROM p_chunks WHERE chunk_id = ?", (new,)).fetchone():
+                    continue
+                moved += 1
+                db.execute(
+                    "UPDATE p_chunks SET chunk_id = ?, facets = ? WHERE chunk_id = ?", (new, _facet_list(allowed), old)
+                )
+                db.execute(
+                    "UPDATE p_candidates SET chunk_id = ?, json = json_set(json, '$.chunk_id', ?) WHERE chunk_id = ?",
+                    (new, new, old),
+                )
+        return moved
+
+    def restrict_chunk_facets(self, allowed: frozenset[str]) -> int:
+        """Forget what was extracted for facets outside ``allowed`` (consent withdrawn, or gone from the taxonomy), so
+        granting them again extracts them afresh. Returns the candidates forgotten."""
+        listed = sorted(allowed)
+        outside = f"facet_id NOT IN ({','.join('?' * len(listed))})" if listed else "1"
+        with self._tx() as db:
+            gone = db.execute(f"DELETE FROM p_candidates WHERE {outside}", listed).rowcount
+            for chunk_id, facets in db.execute(
+                "SELECT chunk_id, facets FROM p_chunks WHERE facets IS NOT NULL"
+            ).fetchall():
+                kept = frozenset(json.loads(facets)) & allowed
+                if len(kept) != len(json.loads(facets)):
+                    db.execute("UPDATE p_chunks SET facets = ? WHERE chunk_id = ?", (_facet_list(kept), chunk_id))
+        return gone
 
     def extraction_stats(self) -> dict[str, tuple[int, ExtractStats | None]]:
         """Per source: its chunks extracted, and their summed counts (None when none was counted, i.e. every chunk

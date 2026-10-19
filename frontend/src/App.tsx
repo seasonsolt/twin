@@ -41,6 +41,11 @@ const Recording = lazy(() =>
 const Home = lazy(() =>
   import('./pages/Home').then((module) => ({ default: module.Home })),
 );
+const MemberVoice = lazy(() =>
+  import('./pages/MemberVoice').then((module) => ({
+    default: module.MemberVoice,
+  })),
+);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
@@ -77,6 +82,7 @@ export function App() {
                     <Route path="team" element={<Home />} />
                     <Route path="twins" element={<Twins />} />
                     <Route path="library" element={<Library />} />
+                    <Route path="voice" element={<MemberVoice />} />
                     <Route
                       path="library/:recordingId"
                       element={<Recording />}

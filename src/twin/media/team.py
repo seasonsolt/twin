@@ -101,6 +101,17 @@ class SpeakerView(BaseModel):
     near: bool = False
 
 
+class OpenVoice(BaseModel):
+    """A speaker nobody has said who they are (``Team.open_voices``)."""
+
+    recording: Recording
+    speaker_id: str
+    seconds: float
+    embedding: list[float]
+    # The unnamed person the voice was taken for without asking, if any.
+    person_id: str | None = None
+
+
 def _now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
 
@@ -114,6 +125,11 @@ def _cosine(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
     return sum(x * y for x, y in zip(_unit(a), _unit(b), strict=True))
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    """How alike two voiceprints are, from -1 to 1 (0 for prints of different models)."""
+    return _cosine(a, b)
 
 
 class Team:
@@ -531,6 +547,44 @@ class Team:
                     )
         queue.sort(key=lambda entry: -entry["candidates"][0]["score"])  # type: ignore[index]
         return queue
+
+    def open_voices(self) -> list[OpenVoice]:
+        """Speakers of current transcripts whom nobody has said who they are, with a voiceprint: undecided ones,
+        and those taken by voice alone for an unnamed person who has no twin (``person_id``). What a colleague who
+        recorded their own voice may be offered to recognise themselves by (``web.voice``)."""
+        with self.library.read() as db:
+            rows = {
+                (row["recording_id"], row["speaker_id"]): row
+                for row in db.execute(
+                    "SELECT a.recording_id, a.speaker_id, a.decision, a.person_id, a.auto FROM attributions a "
+                    "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id"
+                )
+            }
+            unnamed = {row[0] for row in db.execute("SELECT id FROM people WHERE auto = 1 AND persona_id IS NULL")}
+        found = []
+        for recording in self.library.list():
+            if recording.status != "ready" or recording.transcript_id is None:
+                continue
+            for speaker in self.library.speakers(recording) or ():
+                if not speaker.embedding:
+                    continue
+                row = rows.get((recording.id, speaker.id))
+                if row is None or row["decision"] == "none":
+                    person_id = None
+                elif row["decision"] == "confirmed" and row["auto"] and row["person_id"] in unnamed:
+                    person_id = row["person_id"]
+                else:
+                    continue
+                found.append(
+                    OpenVoice(
+                        recording=recording,
+                        speaker_id=speaker.id,
+                        seconds=speaker.seconds,
+                        embedding=speaker.embedding,
+                        person_id=person_id,
+                    )
+                )
+        return found
 
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:
         return [

@@ -733,7 +733,9 @@ export function Team({
                   </Stack>
                 </IdentityLink>
                 <div>
-                  {person.persona_id ? (
+                  {person.self_claimed ? (
+                    <Badge tone="success">本人已认领</Badge>
+                  ) : person.persona_id ? (
                     person.updating ? (
                       <Badge tone="warning">记忆更新中</Badge>
                     ) : (
@@ -747,7 +749,11 @@ export function Team({
                   twin={twins.find((t) => t.id === person.persona_id)}
                 />
                 <div className="mt-auto flex flex-wrap gap-2">
-                  {person.persona_id ? (
+                  {person.self_claimed ? (
+                    <Text size="sm" tone="secondary">
+                      TA 听出了自己的声音，分身归 TA 自己
+                    </Text>
+                  ) : person.persona_id ? (
                     <>
                       <Button
                         className="flex-1"
@@ -788,7 +794,7 @@ export function Team({
                             },
                           ]
                         : []),
-                      ...(!person.persona_id
+                      ...(!person.persona_id && !person.self_claimed
                         ? [
                             {
                               label: '删除',

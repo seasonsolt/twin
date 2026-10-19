@@ -420,3 +420,43 @@ it('gives a twin made for the wrong address back with 这不是我', async () =>
   await waitFor(() => expect(disowned).toBe(true));
   await screen.findByRole('dialog', { name: '新建分身' });
 });
+
+it('looks for someone signed in with a work address in the meetings before an empty twin', async () => {
+  loggedIn = true;
+  whoami = { ...member, address: 'me@xjjk.com' };
+  items = [];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) =>
+    path === '/api/library/voice'
+      ? json({
+          available: true,
+          enrolled: false,
+          items: [],
+          persona_id: null,
+          elsewhere: false,
+        })
+      : base(path, init),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '会议里可能有你' });
+  await user.click(
+    await screen.findByRole('button', { name: '没开过会，先建空分身' }),
+  );
+  await screen.findByRole('dialog', { name: '新建分身' });
+});
+
+it('a twin of the voices someone recognised leads back to them instead of 这不是我', async () => {
+  loggedIn = true;
+  items = [{ ...persona, mine: true, from_meetings: true, approved: false }];
+  render(<App />);
+  await screen.findByRole('heading', { name: '我的分身，你的分身已经建好了' });
+  expect(screen.queryByRole('button', { name: '这不是我' })).toBeNull();
+  expect(screen.getByRole('link', { name: '回去再听一遍' })).toHaveAttribute(
+    'href',
+    '#/voice',
+  );
+});

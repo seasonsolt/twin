@@ -48,6 +48,36 @@ const pages: {
     ready: '发布流程笔记.md',
   },
   {
+    // 员工 1b: signed in through the company login with no twin made for them.
+    name: 'member-voice',
+    path: '/#/chat',
+    ready: '留存口径我来重算',
+    setup: async (page) => {
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'sso:1001',
+            name: '赵晴',
+            address: 'zhaoqing@acme.cn',
+            admin: false,
+            auth_enabled: true,
+            provider: 'sso',
+          },
+        }),
+      );
+      await page.route('**/api/personas', (route) =>
+        route.fulfill({ json: [] }),
+      );
+      for (const path of ['**/api/identity', '**/api/status'])
+        await page.route(path, (route) =>
+          route.fulfill({
+            status: 409,
+            json: { detail: '先新建一个分身', code: 'no_persona' },
+          }),
+        );
+    },
+  },
+  {
     name: 'login',
     path: '/#/chat',
     ready: '用邮箱登录',

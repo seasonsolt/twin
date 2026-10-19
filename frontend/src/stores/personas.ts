@@ -27,6 +27,8 @@ export interface Persona {
   approved?: boolean;
   /** Someone else made it for the signed-in person. */
   made_by_other?: boolean;
+  /** They made it by recognising their own voice in a colleague's meetings (only with ``mine``). */
+  from_meetings?: boolean;
   /** For those who manage it: the work e-mail of the person it is made for, and whether they have taken it. */
   claim_email?: string | null;
   claimed?: boolean;
@@ -34,9 +36,11 @@ export interface Persona {
   claim_rejected?: string;
 }
 
-/** A twin made for the signed-in person that they have not looked at yet. */
+/** A twin made for the signed-in person, or from meetings by their voice, that they have not looked at yet. */
 export const awaitsApproval = (persona: Persona | undefined) =>
-  !!persona?.mine && !!persona.made_by_other && !persona.approved;
+  !!persona?.mine &&
+  (!!persona.made_by_other || !!persona.from_meetings) &&
+  !persona.approved;
 let refreshVersion = 0;
 let switchVersion = 0;
 let prefetchController: AbortController | undefined;

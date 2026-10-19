@@ -569,3 +569,29 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
   await userEvent.click(screen.getByLabelText('更多：李总'));
   expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
 });
+
+it('shows a person who found themselves by voice as having their own twin', async () => {
+  people = [person({ self_claimed: true }), people[1]!];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const name = await screen.findByText('张总', { selector: 'p' });
+  const row = name.closest('li')!;
+  expect(within(row).getByText('本人已认领')).toBeInTheDocument();
+  expect(within(row).getByText(/分身归 TA 自己/u)).toBeInTheDocument();
+  expect(within(row).queryByRole('button', { name: '生成分身' })).toBeNull();
+  expect(within(row).queryByRole('link', { name: '张总的档案' })).toBeNull();
+});

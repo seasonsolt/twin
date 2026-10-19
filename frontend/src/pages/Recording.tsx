@@ -59,6 +59,8 @@ export interface Person {
   seconds: number;
   samples: number;
   updating: boolean;
+  // They found themselves here by voice: their twin is their own, not this library's owner's to open.
+  self_claimed?: boolean;
   // Made from a voice that matched nobody, not named yet.
   auto: boolean;
   gender: Gender;

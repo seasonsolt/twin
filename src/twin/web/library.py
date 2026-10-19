@@ -62,6 +62,12 @@ SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 WAKE_SECONDS = 60.0
 
 
+def library_of(entry: dict[str, Any]) -> str:
+    """The library a twin made from meetings follows: its owner's, or for a twin someone made by recognising their
+    own voice in a colleague's meetings (``web.voice``), that colleague's."""
+    return str(entry.get("library") or owner_key(entry.get("owner")))
+
+
 class PersonBody(BaseModel):
     name: str = Field(min_length=1, max_length=40)
 
@@ -264,7 +270,7 @@ class Libraries:
         entry = self.registry.entry(persona_id) if self.registry is not None else None
         if entry is None:
             return
-        owner = owner_key(entry.get("owner"))
+        owner = library_of(entry)
         team = self.team(owner)
         if team.wanted(persona_id) is not None and not team.built(persona_id, version):
             self.sync(owner, persona_id)
@@ -274,7 +280,7 @@ class Libraries:
         entry = self.registry.entry(persona_id) if self.registry is not None else None
         if entry is None:
             return
-        library = self.library(owner_key(entry.get("owner")))
+        library = self.library(library_of(entry))
         if Team(library).wanted(persona_id) is not None:
             library.spend("rebuild", tokens)
 
@@ -390,6 +396,8 @@ class Libraries:
             if person is None:
                 raise HTTPException(404, "找不到这个人")
             if person.persona_id and self.registry.entry(person.persona_id) is not None:
+                if not self.own_twin(person.persona_id):
+                    raise HTTPException(409, "这个人已经用自己的声音认领了分身")
                 return {"persona_id": person.persona_id, "new": False}
             entry = self.registry.create(person.name, identity, onboarding=False, claim_email=email)
             with PersonaStore(self.registry.settings_for(entry["id"]).db_path) as store:
@@ -433,7 +441,8 @@ class Libraries:
                     self.dress(persona_id, body.gender)
             if body.name is not None:
                 persona_id = team.rename(person_id, body.name)
-                if persona_id and self.registry is not None and self.registry.entry(persona_id) is not None:
+                if persona_id and self.own_twin(persona_id):
+                    assert self.registry is not None
                     with PersonaStore(self.registry.settings_for(persona_id).db_path) as store:
                         store.set_meta("identity:name", " ".join(body.name.split()))
                 self.changed(owner)
@@ -441,9 +450,15 @@ class Libraries:
             raise HTTPException(409 if "已经有" in str(e) else 400, str(e)) from None
         return {"updated": True}
 
+    def own_twin(self, persona_id: str) -> bool:
+        """Whether the library's owner speaks for the twin: it is live and not the person's own (``web.voice``),
+        whose name and look are theirs to choose."""
+        entry = self.registry.entry(persona_id) if self.registry is not None else None
+        return entry is not None and not entry.get("library")
+
     def dress(self, persona_id: str, gender: str) -> None:
         """Give the twin an illustration of the person's gender, unless the one it shows already is."""
-        if not gender or self.registry is None or self.registry.entry(persona_id) is None:
+        if not gender or self.registry is None or not self.own_twin(persona_id):
             return
         settings = self.registry.settings_for(persona_id)
         if AVATAR_GENDERS[stored_avatar(settings.db_path, settings.avatar.preset)] != gender:
@@ -704,12 +719,15 @@ def register(
         people = []
         for person in libraries.team(owner).people():
             live = person.persona_id is not None and registry is not None and registry.entry(person.persona_id)
+            # The person found themselves here by voice: the twin is theirs, not the library owner's to open.
+            theirs = bool(live and not libraries.own_twin(person.persona_id or ""))
             state = synced.get(person.persona_id or "")
             people.append(
                 {
                     **person.model_dump(),
-                    "persona_id": person.persona_id if live else None,
-                    "updating": bool(live and state and state[0] != state[1]),
+                    "persona_id": person.persona_id if live and not theirs else None,
+                    "updating": bool(live and not theirs and state and state[0] != state[1]),
+                    "self_claimed": theirs,
                 }
             )
         return {"items": people}

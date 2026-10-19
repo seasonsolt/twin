@@ -1,4 +1,11 @@
-import { lazy, startTransition, Suspense, useEffect, useState } from 'react';
+import {
+  lazy,
+  startTransition,
+  Suspense,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 import { Navigate, useLocation, useOutlet } from 'react-router';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import {
@@ -19,6 +26,7 @@ import {
   Heading,
   NavPill,
   PlainButton,
+  Row,
   Skeleton,
   SkipLink,
   Text,
@@ -43,6 +51,11 @@ import type { IdentityData } from '../../features/identity/useIdentity';
 const Claimed = lazy(() =>
   import('../../pages/Claimed').then((module) => ({
     default: module.Claimed,
+  })),
+);
+const MemberVoice = lazy(() =>
+  import('../../pages/MemberVoice').then((module) => ({
+    default: module.MemberVoice,
   })),
 );
 const Onboarding = lazy(() =>
@@ -294,7 +307,8 @@ export function AppShell() {
     location.pathname === '/twins' ||
     location.pathname === '/team' ||
     location.pathname === '/library' ||
-    location.pathname.startsWith('/library/');
+    location.pathname.startsWith('/library/') ||
+    location.pathname === '/voice';
   const canManage = useCanManage();
   const [onboarding, setOnboarding] = usePersonaState<IdentityData | null>(
     null,
@@ -303,6 +317,10 @@ export function AppShell() {
   const [noPersona, setNoPersona] = usePersonaState(false);
   useEffect(startStatusPolling, [personaId]);
   const admin = useAuth((state) => state.identity?.admin);
+  // Signed in through the company login: look for them in colleagues' meetings before an empty twin.
+  const address = useAuth((state) => state.identity?.address);
+  const [listened, setListened] = useState(false);
+  const skipVoice = useCallback(() => setListened(true), []);
   useEffect(() => (admin ? startSystemPolling() : undefined), [admin]);
   // A twin a colleague made for this person comes first: until they have looked at it, it answers nobody else.
   const waiting = usePersonas((state) => state.items.find(awaitsApproval));
@@ -360,6 +378,14 @@ export function AppShell() {
     !visitorRoutes.has(location.pathname.slice(1))
   )
     return <Navigate to="/chat" replace />;
+  if (noPersona && !twinLevel && address && !listened)
+    return (
+      <Suspense
+        fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
+      >
+        <MemberVoice onSkip={skipVoice} />
+      </Suspense>
+    );
   if (noPersona && !twinLevel)
     return (
       <main className="entry-page min-h-dvh">
@@ -371,9 +397,16 @@ export function AppShell() {
           <Text tone="secondary">
             还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。
           </Text>
-          <TextLink to="/twins" size="sm">
-            返回我的分身
-          </TextLink>
+          <Row wrap gap={4}>
+            <TextLink to="/twins" size="sm">
+              返回我的分身
+            </TextLink>
+            {address && (
+              <TextLink size="sm" onClick={() => setListened(false)}>
+                其实开过会？回去再听一遍
+              </TextLink>
+            )}
+          </Row>
           <NewTwin initialOpen />
         </section>
       </main>

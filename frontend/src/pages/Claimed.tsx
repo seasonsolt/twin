@@ -11,6 +11,7 @@ import {
   Row,
   Stack,
   Text,
+  TextLink,
   useConfirm,
 } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
@@ -20,8 +21,9 @@ import { useStatus } from '../stores/status';
 
 /**
  * A twin someone else made for the signed-in person, waiting for them: they took it by signing in with the work
- * e-mail it was made for. It answers nobody else until they have looked at it and said it is all right; "这不是我"
- * gives it back to whoever made it.
+ * e-mail it was made for, or made it themselves from the voices they recognised in colleagues' meetings
+ * (``MemberVoice``). It answers nobody else until they have looked at it and said it is all right; "这不是我" gives
+ * a twin made for them back to whoever made it, and a twin of their voices leads back to those voices.
  */
 export function Claimed({ persona }: { persona: Persona }) {
   const counts = useStatus((state) => state.data?.counts);
@@ -76,7 +78,9 @@ export function Claimed({ persona }: { persona: Persona }) {
               {persona.name}，你的分身已经建好了
             </Heading>
             <Text tone="secondary">
-              同事用你的企业邮箱为你建了分身，你用企业账号一登录就认领了。它已经从会议里认识了你。
+              {persona.made_by_other
+                ? '同事用你的企业邮箱为你建了分身，你用企业账号一登录就认领了。它已经从会议里认识了你。'
+                : '它从你认出自己声音的那些会议里认识你。看过觉得没问题，同事就能问它了。'}
             </Text>
           </Stack>
           <Card variant="outline">
@@ -108,9 +112,15 @@ export function Claimed({ persona }: { persona: Persona }) {
                 </Text>
               )}
               <Row justify="between" wrap gap={3}>
-                <PlainButton disabled={busy} onClick={() => void disown()}>
-                  这不是我
-                </PlainButton>
+                {persona.made_by_other ? (
+                  <PlainButton disabled={busy} onClick={() => void disown()}>
+                    这不是我
+                  </PlainButton>
+                ) : (
+                  <TextLink to="/voice" size="sm">
+                    回去再听一遍
+                  </TextLink>
+                )}
                 <Button loading={busy} onClick={() => void approve()}>
                   没问题，开始用
                 </Button>

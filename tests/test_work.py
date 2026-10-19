@@ -286,6 +286,13 @@ def test_a_question_is_answered_on_chats_path_without_the_agent(tmp_path: Path) 
     )
     assert made.content == "做完了。" and len(model._seen) == 1 and made.citations == []
 
+    # Asking for what is online goes to the agent, which can search, even as a follow-up the router would answer.
+    for text in ("结合互联网资料呢", "网上怎么说？", "查查最新的新闻"):
+        llm = answering()
+        online = run_turn(task, text, settings, model, llm, HashingEmbedder(), files, log.append, name="张总")
+        assert online.citations == [] and not any(name == "Route" for name, _, _ in llm.calls)
+    assert len(model._seen) == 4
+
 
 def test_files_stay_inside_the_task_directory(tmp_path: Path) -> None:
     settings = Settings(db_path=tmp_path / "twin.db")

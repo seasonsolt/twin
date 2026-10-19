@@ -569,3 +569,94 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
   await userEvent.click(screen.getByLabelText('更多：李总'));
   expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
 });
+
+it('makes twins for several colleagues by e-mail or employee number, and shows one handed back', async () => {
+  people = [
+    person({}),
+    person({ id: 'per_2', name: '李总', persona_id: 'p-li' }),
+    person({ id: 'per_3', name: '王总', persona_id: 'p-wang' }),
+  ];
+  usePersonas.setState({
+    items: [
+      {
+        id: 'p-li',
+        name: '李总',
+        avatar_url: null,
+        sources: 1,
+        created_at: 'x',
+        is_default: false,
+        claim: null,
+        claimed: false,
+      },
+      {
+        id: 'p-wang',
+        name: '王总',
+        avatar_url: null,
+        sources: 1,
+        created_at: 'x',
+        is_default: false,
+        claim: null,
+        claimed: false,
+        claim_rejected: 'wang@acme.cn',
+      },
+    ],
+  });
+  const sent: [string, string | undefined, unknown][] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/personas') return json(usePersonas.getState().items);
+      sent.push([url, init?.method, JSON.parse(String(init?.body))]);
+      if (url === '/api/personas/p-li/claim')
+        return json({ detail: '这个邮箱或工号已经用在另一个分身上' }, 409);
+      return json({ persona_id: 'p-zhang', new: true });
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  expect(
+    within(tasks).getByText('王总：wang@acme.cn 说这不是 TA'),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole('button', { name: '按邮箱或工号建分身（3）' }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: '为同事建分身' });
+  expect(
+    within(dialog).getByText('wang@acme.cn 说不是 TA，换一个'),
+  ).toBeInTheDocument();
+  await userEvent.type(
+    within(dialog).getByRole('textbox', { name: '张总 · 1 段录音' }),
+    'zhang@acme.cn',
+  );
+  await userEvent.type(
+    within(dialog).getByRole('textbox', { name: '李总 · 1 段录音' }),
+    '77845',
+  );
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: '为 2 位同事建分身' }),
+  );
+  await waitFor(() =>
+    expect(sent).toEqual([
+      ['/api/library/people/per_1/persona', 'POST', { claim: 'zhang@acme.cn' }],
+      ['/api/personas/p-li/claim', 'PUT', { claim: '77845' }],
+    ]),
+  );
+  // The one that did not go through stays, with why; the rest leave the list.
+  expect(
+    await within(dialog).findByText('这个邮箱或工号已经用在另一个分身上'),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).getByRole('textbox', { name: '李总 · 1 段录音' }),
+  ).toHaveValue('77845');
+  expect(
+    within(dialog).getByRole('textbox', { name: '张总 · 1 段录音' }),
+  ).toHaveValue('');
+});

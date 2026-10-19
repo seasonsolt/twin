@@ -1,4 +1,5 @@
 import {
+  useId,
   useLayoutEffect,
   useRef,
   type ComponentProps,
@@ -156,23 +157,37 @@ export function IconButton({
 
 export function Input({
   size = 'md',
+  suggestions,
   className,
   ...props
-}: Omit<ComponentProps<'input'>, 'size'> & {
+}: Omit<ComponentProps<'input'>, 'size' | 'list'> & {
   /** lg: the one prominent field of a short form (sign-in), 48px with a heavy border. */
   size?: 'md' | 'lg';
+  /** Values offered as the owner types (such as people's names); anything else can still be typed. */
+  suggestions?: string[];
 }) {
+  const listId = useId();
   return (
-    <input
-      {...props}
-      className={cn(
-        'w-full rounded-sm bg-surface px-3 text-primary placeholder:text-tertiary disabled:opacity-50',
-        size === 'lg'
-          ? 'min-h-12 border-2 border-primary text-md'
-          : 'min-h-9 border border-tertiary/60 hover:border-tertiary',
-        className,
+    <>
+      <input
+        {...props}
+        list={suggestions?.length ? listId : undefined}
+        className={cn(
+          'w-full rounded-sm bg-surface px-3 text-primary placeholder:text-tertiary disabled:opacity-50',
+          size === 'lg'
+            ? 'min-h-12 border-2 border-primary text-md'
+            : 'min-h-9 border border-tertiary/60 hover:border-tertiary',
+          className,
+        )}
+      />
+      {!!suggestions?.length && (
+        <datalist id={listId}>
+          {suggestions.map((value) => (
+            <option key={value} value={value} />
+          ))}
+        </datalist>
       )}
-    />
+    </>
   );
 }
 

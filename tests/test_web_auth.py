@@ -264,6 +264,8 @@ def test_logout_expiration_csrf_and_static(web: TestClient) -> None:
     assert web.get("/api/whoami").json() == {
         "email": MEMBER,
         "name": None,
+        "address": MEMBER,
+        "account": None,
         "admin": False,
         "auth_enabled": True,
         "provider": "email",
@@ -342,6 +344,8 @@ def test_auth_disabled_and_config_errors(tmp_path: Path, monkeypatch: pytest.Mon
         assert web.get("/api/whoami").json() == {
             "email": None,
             "name": None,
+            "address": None,
+            "account": None,
             "admin": True,
             "auth_enabled": False,
             "provider": None,
@@ -550,6 +554,8 @@ def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> 
     assert web.get("/api/whoami").json() == {
         "email": "sso:1001",
         "name": "张三",
+        "address": None,
+        "account": "zhangsan",
         "admin": False,
         "auth_enabled": True,
         "provider": "sso",
@@ -568,6 +574,63 @@ def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> 
     login.sessions["cookie-c"] = {"authenticated": True, "subject": "1003", "display_name": "王五"}
     denied = web.get("/api/persona/state", headers={"X-Twin-Persona": own})
     assert denied.status_code == 404 and denied.json() == {"detail": "分身不存在"}
+
+
+def test_a_twin_made_for_a_work_address_is_taken_on_signing_in(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    login.sessions["cookie-a"]["email"] = "ZhangSan@acme.cn"
+    web.cookies.set("sso", "cookie-b")  # the administrator makes 张三's twin
+    persona = create(web)
+    made = web.put(f"/api/personas/{persona}/claim", json={"claim": " zhangsan@ACME.cn "}, headers=CSRF)
+    assert made.status_code == 200 and made.json()["claim"] == "zhangsan@acme.cn"
+    assert made.json()["claimed"] is False and "mine" not in made.json()
+    other = create(web)
+    taken = web.put(f"/api/personas/{other}/claim", json={"claim": "zhangsan@acme.cn"}, headers=CSRF)
+    assert taken.status_code == 409
+    for wrong in ("not an address", "a@b", "工号"):
+        assert web.put(f"/api/personas/{other}/claim", json={"claim": wrong}, headers=CSRF).status_code == 400
+
+    login.sessions["cookie-c"] = {"authenticated": True, "subject": "1003", "display_name": "王五"}
+    web.cookies.set("sso", "cookie-c")  # someone else neither sees nor takes it
+    assert web.get("/api/whoami").json()["address"] is None
+    assert web.get("/api/personas").json() == []
+    assert web.post(f"/api/personas/{persona}/approve", json={"public": True}, headers=CSRF).status_code == 404
+
+    web.cookies.set("sso", "cookie-a")
+    assert web.get("/api/whoami").json()["address"] == "zhangsan@acme.cn"
+    [mine] = web.get("/api/personas").json()
+    assert mine["id"] == persona and mine["can_manage"] is True
+    assert mine["mine"] is True and mine["approved"] is False and mine["made_by_other"] is True
+    assert mine["public"] is False  # it answers nobody else before 张三 says it is all right
+    approved = web.post(f"/api/personas/{persona}/approve", json={"public": True}, headers=CSRF)
+    assert approved.status_code == 200 and approved.json()["approved"] is True and approved.json()["public"] is True
+    assert web.put(f"/api/personas/{persona}/claim", json={"claim": None}, headers=CSRF).status_code == 409
+
+    web.cookies.set("sso", "cookie-c")  # now a colleague can ask it
+    assert [p["id"] for p in web.get("/api/personas").json()] == [persona]
+
+    web.cookies.set("sso", "cookie-a")  # "这不是我": back to the administrator, who sees the address was wrong
+    assert web.post(f"/api/personas/{persona}/disown", headers=CSRF).json() == {"disowned": True}
+    assert web.get("/api/personas").json() == []
+    web.cookies.set("sso", "cookie-b")
+    back = next(p for p in web.get("/api/personas").json() if p["id"] == persona)
+    assert back["claim"] is None and back["claim_rejected"] == "zhangsan@acme.cn"
+    assert back["claimed"] is False and back["public"] is False
+
+
+def test_a_twin_made_for_an_employee_number_is_taken_by_that_sso_account(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    login.sessions["cookie-d"] = {"authenticated": True, "subject": "19538", "display_name": "钱七", "account": "77845"}
+    web.cookies.set("sso", "cookie-b")
+    persona = create(web)
+    assert web.put(f"/api/personas/{persona}/claim", json={"claim": "77845"}, headers=CSRF).json()["claim"] == "77845"
+    web.cookies.set("sso", "cookie-a")  # another account takes nothing
+    assert all(p["id"] != persona for p in web.get("/api/personas").json())
+    web.cookies.set("sso", "cookie-d")
+    whoami = web.get("/api/whoami").json()
+    assert whoami["account"] == "77845" and whoami["address"] is None
+    [mine] = web.get("/api/personas").json()
+    assert mine["id"] == persona and mine["mine"] is True and mine["approved"] is False
 
 
 def test_sso_administrators_match_by_account_name(tmp_path: Path) -> None:

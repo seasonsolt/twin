@@ -18,6 +18,7 @@ import {
   ChatInput,
   ChatIdentity,
   AudioPlayer,
+  ClipButton,
   DecisionBar,
   FileDropSurface,
   FileInput,
@@ -526,6 +527,25 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           <Field id="gallery-lg-input" label="突出的输入框 Input size=lg">
             <Input id="gallery-lg-input" size="lg" placeholder="邮箱" />
           </Field>
+          <Field
+            id="gallery-suggest-input"
+            label="带候选的输入框 Input suggestions"
+          >
+            <Input
+              id="gallery-suggest-input"
+              placeholder="这是谁"
+              suggestions={['林舟', '许清禾', '周石言']}
+            />
+          </Field>
+          <Row gap={3}>
+            <ClipButton
+              label="试听片段 ClipButton"
+              src="/api/library/recordings/demo/speakers/S1/samples/0"
+            />
+            <Text size="sm" tone="secondary">
+              就地试听一小段声音 ClipButton
+            </Text>
+          </Row>
           <Row gap={2} wrap>
             <LinkButton href="#/gallery" variant="secondary" shape="pill">
               链接按钮 LinkButton

@@ -1,7 +1,7 @@
-import type { ComponentProps, ReactNode } from 'react';
+import { useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ChevronRight } from 'lucide-react';
-import { Button } from './controls';
+import { ChevronRight, Pause, Play } from 'lucide-react';
+import { Button, IconButton } from './controls';
 import { cn } from '../../lib/utils';
 
 /** Route navigation with the same appearance as an action button. */
@@ -95,6 +95,43 @@ export function AudioPlayer(
   props: Pick<ComponentProps<'audio'>, 'src' | 'aria-label'>,
 ) {
   return <audio {...props} controls preload="none" className="h-11 w-full" />;
+}
+
+/** A round play/pause button for a short clip, heard where it is listed without a player taking up a row. */
+export function ClipButton({ src, label }: { src: string; label: string }) {
+  const audio = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  return (
+    <>
+      <IconButton
+        label={playing ? `暂停${label}` : label}
+        shape="circle"
+        size="lg"
+        variant="secondary"
+        aria-pressed={playing}
+        onClick={() => {
+          const element = audio.current;
+          if (!element) return;
+          if (playing) element.pause();
+          else void element.play().catch(() => setPlaying(false));
+        }}
+      >
+        {playing ? (
+          <Pause aria-hidden className="size-4" />
+        ) : (
+          <Play aria-hidden className="size-4" />
+        )}
+      </IconButton>
+      <audio
+        ref={audio}
+        src={src}
+        preload="none"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
+    </>
+  );
 }
 
 /** A large selectable voice match; choosing it does not submit the decision. */

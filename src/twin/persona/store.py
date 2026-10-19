@@ -23,7 +23,15 @@ from ..embed import Matrix
 from ..media.schema import AVATAR_ALIASES, AVATAR_PRESETS
 from ..util import prepare_private_file
 from .items import ExtractStats, PersonaCandidate, PersonaItem, PReview, apply_review, carry_reviews
-from .kernel import KERNEL, KernelVersion, kernel_json
+from .kernel import (
+    KERNEL,
+    LEGACY_KERNEL,
+    TAXONOMY_FACET_IDS,
+    TAXONOMY_VERSION,
+    KernelVersion,
+    kernel_json,
+    taxonomy_plan,
+)
 from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
 
 _SCHEMA = """
@@ -65,10 +73,19 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE p_chunks ADD COLUMN stats TEXT;",
     # 3: the commitment ledger (承诺账本).
     _LEDGER,
+    # 4: the facets a chunk was extracted for (JSON list), so a new facet is extracted alone; NULL for chunks
+    # extracted before it, whose id still contains the facet set (``adopt_legacy_chunks``).
+    "ALTER TABLE p_chunks ADD COLUMN facets TEXT;",
 )
 
 
 SNAPSHOT_DIR = "kernel-snapshots"
+# The taxonomy the stored facet ids belong to (``_migrate_taxonomy``).
+TAXONOMY_META = "taxonomy:facets"
+# Reviewed items a facet inherits from a split, consumed when the facet is next re-merged.
+INHERIT_META = "taxonomy:inherit:"
+# A facet's merged batches (``profile.MergeCache``).
+MERGE_CACHE_PREFIX = "merge_batch:"
 SNAPSHOT_KEEP = 3
 
 
@@ -115,6 +132,10 @@ def stored_avatar(path: Path, configured: str = "chestnut") -> str:
     return selected if selected in AVATAR_PRESETS else "chestnut"
 
 
+def _facet_list(facets: frozenset[str] | None) -> str | None:
+    return None if facets is None else json.dumps(sorted(facets))
+
+
 class PersonaStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -130,34 +151,133 @@ class PersonaStore:
                     f"数据库由更新版本的 twin 写入（schema {version}），"
                     f"当前版本只支持到 {len(_MIGRATIONS)}，请升级或从备份恢复"
                 )
-            if version == len(_MIGRATIONS):
-                self._db.execute("PRAGMA journal_mode=WAL")
-                return
-            if self._db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone():
-                self.snapshot(f"schema{version}")
-            self._db.execute("BEGIN IMMEDIATE")
-            version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
-            if version > len(_MIGRATIONS):
-                raise NewerStoreError(
-                    f"数据库由更新版本的 twin 写入（schema {version}），"
-                    f"当前版本只支持到 {len(_MIGRATIONS)}，请升级或从备份恢复"
-                )
-            for number, migration in enumerate(_MIGRATIONS[version:], version + 1):
-                statement = ""
-                for char in migration:
-                    statement += char
-                    if char == ";" and sqlite3.complete_statement(statement):
-                        self._db.execute(statement)
-                        statement = ""
-                if statement.strip():
-                    self._db.execute(statement)
-                self._db.execute(f"PRAGMA user_version = {number}")
-            self._db.commit()
+            if version < len(_MIGRATIONS):
+                self._migrate(version)
             self._db.execute("PRAGMA journal_mode=WAL")
+            self._create_known_views()
+            self._migrate_taxonomy()
         except Exception:
             self._db.rollback()
             self._db.close()
             raise
+
+    def _migrate(self, version: int) -> None:
+        if self._db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone():
+            self.snapshot(f"schema{version}")
+        self._db.execute("BEGIN IMMEDIATE")
+        version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+        if version > len(_MIGRATIONS):
+            raise NewerStoreError(
+                f"数据库由更新版本的 twin 写入（schema {version}），"
+                f"当前版本只支持到 {len(_MIGRATIONS)}，请升级或从备份恢复"
+            )
+        for number, migration in enumerate(_MIGRATIONS[version:], version + 1):
+            statement = ""
+            for char in migration:
+                statement += char
+                if char == ";" and sqlite3.complete_statement(statement):
+                    self._db.execute(statement)
+                    statement = ""
+            if statement.strip():
+                self._db.execute(statement)
+            self._db.execute(f"PRAGMA user_version = {number}")
+        self._db.commit()
+
+    def _create_known_views(self) -> None:
+        """Items and candidates are read through views that leave out facet ids the running taxonomy does not know
+        (a store last written by a newer twin), so no reader meets an unknown facet."""
+        known = TAXONOMY_FACET_IDS[TAXONOMY_VERSION]
+        assert all(re.fullmatch(r"\d+\.\d+", f) for f in known)
+        listed = ",".join(f"'{f}'" for f in known)
+        for view, table in (("known_items", "p_items"), ("known_candidates", "p_candidates")):
+            self._db.execute(
+                f"CREATE TEMP VIEW IF NOT EXISTS {view} AS SELECT * FROM {table} WHERE facet_id IN ({listed})"
+            )
+
+    def _taxonomy_of_rows(self) -> str:
+        """The taxonomy the stored facet ids belong to. Stores from before it was recorded hold the ids of the taxonomy
+        they were last built with; an empty store takes the running one."""
+        if stored := self.get_meta(TAXONOMY_META):
+            return stored
+        has_rows = self._db.execute("SELECT 1 FROM p_items UNION ALL SELECT 1 FROM p_candidates LIMIT 1").fetchone()
+        return (self.kernel_built() or LEGACY_KERNEL).taxonomy if has_rows else TAXONOMY_VERSION
+
+    def _migrate_taxonomy(self) -> None:
+        """Move stored facet ids to the running taxonomy (``kernel.TAXONOMY_MIGRATIONS``) without any model call, so
+        the profile keeps answering while the rebuild re-merges it. Items of a split facet stay in its first new facet;
+        the others keep a copy of them with their reviews (``taxonomy:inherit:<facet>``) for ``replace_facet_items``.
+        A removed facet's items, reviews and candidates go. A split facet's candidates go too, and every chunk forgets
+        it was extracted for a split or removed facet, so the next build extracts the split's facets, and facets new to
+        the taxonomy, from each chunk alone. A store from a newer taxonomy is left untouched."""
+        stored = self._taxonomy_of_rows()
+        if stored == TAXONOMY_VERSION:
+            if self.get_meta(TAXONOMY_META) is None:
+                self.set_meta(TAXONOMY_META, TAXONOMY_VERSION)
+            return
+        plan = taxonomy_plan(stored, TAXONOMY_VERSION)
+        if plan is None:
+            return
+        if plan and self.has_extractions():
+            self.snapshot(f"taxonomy-{stored}")
+        with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if self._taxonomy_of_rows() != stored:  # another connection moved it meanwhile
+                return
+            reviews = self.reviews()
+            # Read every moving row before writing any, so ids that trade places do not move twice.
+            items = {
+                old: [
+                    PersonaItem.model_validate_json(r[0])
+                    for r in db.execute("SELECT json FROM p_items WHERE facet_id = ?", (old,)).fetchall()
+                ]
+                for old in plan
+            }
+            candidates = {
+                old: [r[0] for r in db.execute("SELECT candidate_id FROM p_candidates WHERE facet_id = ?", (old,))]
+                for old in plan
+            }
+            inherit: dict[str, list[dict[str, Any]]] = {}
+            for old, targets in plan.items():
+                db.execute(
+                    "DELETE FROM p_meta WHERE key = ? OR substr(key, 1, ?) = ?",
+                    (f"merge:{old}", len(f"{MERGE_CACHE_PREFIX}{old}:"), f"{MERGE_CACHE_PREFIX}{old}:"),
+                )
+                if len(targets) != 1:
+                    db.executemany("DELETE FROM p_candidates WHERE candidate_id = ?", [(c,) for c in candidates[old]])
+                if not targets:
+                    db.executemany("DELETE FROM p_reviews WHERE item_id = ?", [(i.item_id,) for i in items[old]])
+                    db.executemany("DELETE FROM p_items WHERE item_id = ?", [(i.item_id,) for i in items[old]])
+                    continue
+                first = targets[0]
+                move = "SET facet_id = ?, json = json_set(json, '$.facet_id', ?)"
+                db.executemany(
+                    f"UPDATE p_items {move} WHERE item_id = ?", [(first, first, i.item_id) for i in items[old]]
+                )
+                if len(targets) == 1:
+                    db.executemany(
+                        f"UPDATE p_candidates {move} WHERE candidate_id = ?",
+                        [(first, first, c) for c in candidates[old]],
+                    )
+                for other in targets[1:]:
+                    inherit.setdefault(other, []).extend(
+                        {"item": i.model_dump(mode="json"), "review": reviews[i.item_id].model_dump(mode="json")}
+                        for i in items[old]
+                        if i.item_id in reviews
+                    )
+            for chunk_id, facets in db.execute(
+                "SELECT chunk_id, facets FROM p_chunks WHERE facets IS NOT NULL"
+            ).fetchall():
+                done = json.loads(facets)
+                moved = sorted({t for f in done for t in (plan.get(f, (f,)) if len(plan.get(f, (f,))) == 1 else ())})
+                if moved != sorted(done):
+                    db.execute("UPDATE p_chunks SET facets = ? WHERE chunk_id = ?", (json.dumps(moved), chunk_id))
+            for facet_id, copies in inherit.items():
+                kept = json.loads(self.get_meta(f"{INHERIT_META}{facet_id}") or "[]")
+                db.execute(
+                    "INSERT OR REPLACE INTO p_meta VALUES (?, ?)",
+                    (f"{INHERIT_META}{facet_id}", json.dumps([*kept, *copies], ensure_ascii=False)),
+                )
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (TAXONOMY_META, TAXONOMY_VERSION))
 
     def snapshot(self, label: str) -> Path | None:
         """Copy the store into `kernel-snapshots/` (0600) before a migration or kernel rebuild; keep the newest few."""
@@ -489,20 +609,86 @@ class PersonaStore:
             return self._db.execute("SELECT 1 FROM p_chunks WHERE chunk_id = ?", (chunk_id,)).fetchone() is not None
 
     def put_chunk(
-        self, chunk_id: str, source_id: str, candidates: list[PersonaCandidate], stats: ExtractStats | None = None
+        self,
+        chunk_id: str,
+        source_id: str,
+        candidates: list[PersonaCandidate],
+        stats: ExtractStats | None = None,
+        facets: frozenset[str] | None = None,
     ) -> None:
-        """Record a processed chunk with its candidates (possibly none) and extraction counts, replacing an earlier
-        run of it."""
+        """Record a processed chunk with its candidates (possibly none), extraction counts and the facets it was
+        extracted for, replacing an earlier run of it."""
         with self._tx() as db:
             db.execute("DELETE FROM p_candidates WHERE chunk_id = ?", (chunk_id,))
             db.execute(
-                "INSERT OR REPLACE INTO p_chunks (chunk_id, source_id, stats) VALUES (?, ?, ?)",
-                (chunk_id, source_id, stats.model_dump_json() if stats else None),
+                "INSERT OR REPLACE INTO p_chunks (chunk_id, source_id, stats, facets) VALUES (?, ?, ?, ?)",
+                (chunk_id, source_id, stats.model_dump_json() if stats else None, _facet_list(facets)),
             )
             db.executemany(
                 "INSERT INTO p_candidates VALUES (?, ?, ?, ?)",
                 [(c.candidate_id, c.chunk_id, c.facet_id, c.model_dump_json()) for c in candidates],
             )
+
+    def add_chunk_facets(
+        self, chunk_id: str, candidates: list[PersonaCandidate], stats: ExtractStats, facets: frozenset[str]
+    ) -> None:
+        """Record an extraction of an already processed chunk for ``facets`` only (new to the taxonomy, or newly
+        consented): its candidates join the chunk's, and the counts add up."""
+        with self._tx() as db:
+            row = db.execute("SELECT stats, facets FROM p_chunks WHERE chunk_id = ?", (chunk_id,)).fetchone()
+            if row is None:
+                raise KeyError(chunk_id)
+            before = ExtractStats.model_validate_json(row[0]) if row[0] else ExtractStats()
+            done = frozenset(json.loads(row[1] or "[]")) | facets
+            db.execute(
+                "UPDATE p_chunks SET stats = ?, facets = ? WHERE chunk_id = ?",
+                ((before + stats).model_dump_json(), _facet_list(done), chunk_id),
+            )
+            db.executemany(
+                "INSERT OR REPLACE INTO p_candidates VALUES (?, ?, ?, ?)",
+                [(c.candidate_id, c.chunk_id, c.facet_id, c.model_dump_json()) for c in candidates],
+            )
+
+    def chunk_facets(self) -> dict[str, frozenset[str] | None]:
+        """Every stored chunk with the facets it was extracted for; None for a chunk from before that was recorded."""
+        with self._lock:
+            rows = self._db.execute("SELECT chunk_id, facets FROM p_chunks").fetchall()
+        return {chunk_id: None if facets is None else frozenset(json.loads(facets)) for chunk_id, facets in rows}
+
+    def adopt_legacy_chunks(self, legacy: dict[str, str], allowed: frozenset[str]) -> int:
+        """Give chunks stored under their old id (``legacy`` maps it to the current one) their current id, with the
+        facets the old id was cut for, so a twin upgrading does not extract its whole corpus again. Candidate ids stay,
+        so the items and their merges stay as well."""
+        moved = 0
+        with self._tx() as db:
+            unrecorded = {r[0] for r in db.execute("SELECT chunk_id FROM p_chunks WHERE facets IS NULL")}
+            for old, new in legacy.items():
+                if old not in unrecorded or db.execute("SELECT 1 FROM p_chunks WHERE chunk_id = ?", (new,)).fetchone():
+                    continue
+                moved += 1
+                db.execute(
+                    "UPDATE p_chunks SET chunk_id = ?, facets = ? WHERE chunk_id = ?", (new, _facet_list(allowed), old)
+                )
+                db.execute(
+                    "UPDATE p_candidates SET chunk_id = ?, json = json_set(json, '$.chunk_id', ?) WHERE chunk_id = ?",
+                    (new, new, old),
+                )
+        return moved
+
+    def restrict_chunk_facets(self, allowed: frozenset[str]) -> int:
+        """Forget what was extracted for facets outside ``allowed`` (consent withdrawn, or gone from the taxonomy), so
+        granting them again extracts them afresh. Returns the candidates forgotten."""
+        listed = sorted(allowed)
+        outside = f"facet_id NOT IN ({','.join('?' * len(listed))})" if listed else "1"
+        with self._tx() as db:
+            gone = db.execute(f"DELETE FROM p_candidates WHERE {outside}", listed).rowcount
+            for chunk_id, facets in db.execute(
+                "SELECT chunk_id, facets FROM p_chunks WHERE facets IS NOT NULL"
+            ).fetchall():
+                kept = frozenset(json.loads(facets)) & allowed
+                if len(kept) != len(json.loads(facets)):
+                    db.execute("UPDATE p_chunks SET facets = ? WHERE chunk_id = ?", (_facet_list(kept), chunk_id))
+        return gone
 
     def extraction_stats(self) -> dict[str, tuple[int, ExtractStats | None]]:
         """Per source: its chunks extracted, and their summed counts (None when none was counted, i.e. every chunk
@@ -527,7 +713,9 @@ class PersonaStore:
         return len(stale)
 
     def list_candidates(self, facet_id: str | None = None) -> list[PersonaCandidate]:
-        sql = "SELECT json FROM p_candidates" + (" WHERE facet_id = ?" if facet_id else "") + " ORDER BY candidate_id"
+        sql = (
+            "SELECT json FROM known_candidates" + (" WHERE facet_id = ?" if facet_id else "") + " ORDER BY candidate_id"
+        )
         with self._lock:
             rows = self._db.execute(sql, (facet_id,) if facet_id else ()).fetchall()
         return [PersonaCandidate.model_validate_json(r[0]) for r in rows]
@@ -536,10 +724,18 @@ class PersonaStore:
 
     def replace_facet_items(self, facet_id: str, items: list[PersonaItem]) -> None:
         """Replace a facet's items, carrying the person's reviews over to the items that continue the reviewed ones
-        (see ``carry_reviews``); reviews of items that disappear are dropped."""
+        (see ``carry_reviews``); reviews of items that disappear are dropped. Items the facet inherits from a split
+        facet (``_migrate_taxonomy``) pass their reviews on the same way, once."""
         old = self.list_items(facet_id, raw=True)
-        carried = carry_reviews(old, items, self.reviews())
+        inherited = json.loads(self.get_meta(f"{INHERIT_META}{facet_id}") or "[]")
+        reviews = {
+            **{c["item"]["item_id"]: PReview.model_validate(c["review"]) for c in inherited},
+            **self.reviews(),
+        }
+        heirs = [*old, *(PersonaItem.model_validate(c["item"]) for c in inherited)]
+        carried = carry_reviews(heirs, items, reviews)
         with self._tx() as db:
+            db.execute("DELETE FROM p_meta WHERE key = ?", (f"{INHERIT_META}{facet_id}",))
             db.executemany("DELETE FROM p_reviews WHERE item_id = ?", [(o.item_id,) for o in old])
             db.executemany(
                 "INSERT OR REPLACE INTO p_reviews VALUES (?, ?)", [(i, r.model_dump_json()) for i, r in carried.items()]
@@ -555,7 +751,9 @@ class PersonaStore:
     ) -> list[PersonaItem]:
         """Items with the person's reviews applied (rejected ones left out unless asked for); ``raw`` returns them as
         extracted, without reviews."""
-        sql = "SELECT json FROM p_items" + (" WHERE facet_id = ?" if facet_id else "") + " ORDER BY facet_id, item_id"
+        sql = (
+            "SELECT json FROM known_items" + (" WHERE facet_id = ?" if facet_id else "") + " ORDER BY facet_id, item_id"
+        )
         with self._lock:
             rows = self._db.execute(sql, (facet_id,) if facet_id else ()).fetchall()
         items = [PersonaItem.model_validate_json(r[0]) for r in rows]
@@ -612,7 +810,7 @@ class PersonaStore:
             clauses.append("COALESCE(json_extract(i.json, '$.conflict'), '') != ''")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
-        base = f"FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id{where}"
+        base = f"FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id{where}"
         with self._lock:
             total = int(self._db.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0])
             rows = self._db.execute(
@@ -630,7 +828,7 @@ class PersonaStore:
         with self._lock:
             rows = self._db.execute(
                 f"SELECT i.facet_id, COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}'), "
-                "COUNT(*) FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id GROUP BY 1, 2"
+                "COUNT(*) FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id GROUP BY 1, 2"
             ).fetchall()
         return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
 
@@ -638,7 +836,7 @@ class PersonaStore:
         """Whether any item is left after rejections."""
         with self._lock:
             row = self._db.execute(
-                "SELECT 1 FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+                "SELECT 1 FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
                 "WHERE COALESCE(json_extract(r.json, '$.status'), '') != ? LIMIT 1",
                 (ReviewStatus.REJECTED.value,),
             ).fetchone()
@@ -654,7 +852,7 @@ class PersonaStore:
             return {}
         with self._lock:
             rows = self._db.execute(
-                f"SELECT i.item_id, i.json, r.json FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+                f"SELECT i.item_id, i.json, r.json FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
                 f"WHERE i.item_id IN ({','.join('?' * len(item_ids))})",
                 item_ids,
             ).fetchall()
@@ -671,7 +869,7 @@ class PersonaStore:
         with self._lock:
             rows = self._db.execute(
                 "SELECT i.item_id, i.facet_id, json_extract(e.value, '$.expression_id') "
-                "FROM p_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id, json_each(i.json, '$.evidence') e "
+                "FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id, json_each(i.json, '$.evidence') e "
                 "WHERE COALESCE(json_extract(r.json, '$.status'), '') != ?",
                 (ReviewStatus.REJECTED.value,),
             ).fetchall()
@@ -679,7 +877,7 @@ class PersonaStore:
 
     def get_item(self, item_id: str, *, raw: bool = False) -> PersonaItem | None:
         with self._lock:
-            row = self._db.execute("SELECT json FROM p_items WHERE item_id = ?", (item_id,)).fetchone()
+            row = self._db.execute("SELECT json FROM known_items WHERE item_id = ?", (item_id,)).fetchone()
         if row is None:
             return None
         item = PersonaItem.model_validate_json(row[0])
@@ -695,7 +893,7 @@ class PersonaStore:
     def set_review(self, item_id: str, review: PReview | None) -> None:
         """Record the person's review of an item, or clear it (back to unreviewed) with None."""
         with self._tx() as db:
-            if db.execute("SELECT 1 FROM p_items WHERE item_id = ?", (item_id,)).fetchone() is None:
+            if db.execute("SELECT 1 FROM known_items WHERE item_id = ?", (item_id,)).fetchone() is None:
                 raise KeyError(item_id)
             if review is None:
                 db.execute("DELETE FROM p_reviews WHERE item_id = ?", (item_id,))

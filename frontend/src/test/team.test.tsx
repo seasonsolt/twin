@@ -37,6 +37,7 @@ const person = (change: Partial<Person>): Person => ({
   auto: false,
   gender: '',
   recording_id: 'rec_1',
+  speaker_id: 'S1',
   ...change,
 });
 let revision: number;
@@ -139,7 +140,7 @@ it('refuses a decision on an outdated page and reloads it', async () => {
 });
 
 it('creates a twin for a confirmed person and shows when its memory is updating', async () => {
-  const created: string[] = [];
+  const created: unknown[] = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -160,7 +161,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
         url === '/api/library/people/per_1/persona' &&
         init?.method === 'POST'
       ) {
-        created.push(url);
+        created.push(JSON.parse(String(init.body)));
         people = [person({ persona_id: 'p-1', updating: true }), people[1]];
         return json({ persona_id: 'p-1', new: true });
       }
@@ -183,8 +184,15 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
+  // Made for 张总's work e-mail (or employee number): they take it when they sign in.
+  const dialog = await screen.findByRole('dialog', { name: '为张总建分身' });
+  await userEvent.type(
+    within(dialog).getByRole('textbox', { name: /企业邮箱或工号/u }),
+    'zhang@acme.cn',
+  );
+  await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
   expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
-  expect(created).toHaveLength(1);
+  expect(created).toEqual([{ claim: 'zhang@acme.cn' }]);
 });
 
 it('marks automatic matches and reopens them through the existing clear action', async () => {
@@ -236,12 +244,20 @@ it('lists new voices apart and names them before a twin can be made', async () =
   expect(
     within(fresh).queryByRole('button', { name: '生成分身' }),
   ).not.toBeInTheDocument();
-  expect(within(fresh).getByRole('link', { name: '听原声' })).toHaveAttribute(
+  // The voice is heard in its row; the recording is one link away for the whole transcript.
+  expect(
+    within(fresh).getByRole('button', { name: '听未命名 1的声音' }),
+  ).toBeInTheDocument();
+  expect(fresh.querySelector('audio')).toHaveAttribute(
+    'src',
+    '/api/library/recordings/rec_9/speakers/S1/samples/0',
+  );
+  expect(within(fresh).getByRole('link', { name: '打开录音' })).toHaveAttribute(
     'href',
     '/library/rec_9',
   );
-  await userEvent.type(within(fresh).getByLabelText('给未命名 1起名'), '李总');
-  await userEvent.click(within(fresh).getByRole('button', { name: '起名' }));
+  await userEvent.type(within(fresh).getByLabelText('未命名 1是谁'), '李总');
+  await userEvent.click(within(fresh).getByRole('button', { name: '确认' }));
   await waitFor(() => expect(patches).toEqual([{ name: '李总' }]));
   // Named, they can have twins like anyone else.
   expect(
@@ -354,22 +370,66 @@ it('moves focus to the next voice after naming one, then hides the empty queue',
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const first = await screen.findByLabelText('给未命名 1起名');
-  await userEvent.type(first, '张总');
-  await userEvent.click(
-    within(first.closest('li')!).getByRole('button', { name: '起名' }),
-  );
-  const next = screen.getByLabelText('给未命名 2起名');
+  // Naming several is type, Enter, type, Enter.
+  const first = await screen.findByLabelText('未命名 1是谁');
+  await userEvent.type(first, '张总{Enter}');
+  const next = screen.getByLabelText('未命名 2是谁');
   await waitFor(() => expect(next).toHaveFocus());
-  await userEvent.type(next, '李总');
-  await userEvent.click(
-    within(next.closest('li')!).getByRole('button', { name: '起名' }),
-  );
+  await userEvent.type(next, '李总{Enter}');
   await waitFor(() =>
     expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
   );
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
   expect(screen.getAllByRole('region')[0]).toHaveAccessibleName('人物');
+});
+
+it('settles a new voice as someone already known, or as nobody known, from its row', async () => {
+  const resolved: unknown[] = [];
+  people = [
+    person({}),
+    person({ id: 'first', name: '未命名 1', auto: true }),
+    person({ id: 'second', name: '未命名 2', auto: true }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      const id = /people\/([^/]+)\/resolve$/u.exec(url)?.[1];
+      if (id && init?.method === 'POST') {
+        resolved.push({ id, ...JSON.parse(String(init.body)) });
+        people = people.filter((p) => p.id !== id);
+        return json({ resolved: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const first = await screen.findByLabelText('未命名 1是谁');
+  // Known people are offered as the owner types, and the button says what confirming does.
+  const offered = document.getElementById(first.getAttribute('list')!)!;
+  expect(
+    Array.from(offered.querySelectorAll('option')).map((o) => o.value),
+  ).toEqual(['张总']);
+  await userEvent.type(first, '张总');
+  await userEvent.click(screen.getByRole('button', { name: '是张总' }));
+  await waitFor(() =>
+    expect(resolved).toEqual([{ id: 'first', into: 'per_1' }]),
+  );
+  const next = screen.getByLabelText('未命名 2是谁');
+  await waitFor(() => expect(next).toHaveFocus());
+  await userEvent.click(screen.getByRole('button', { name: '不认识' }));
+  await waitFor(() => expect(resolved).toHaveLength(2));
+  expect(resolved[1]).toEqual({ id: 'second', into: null });
+  await waitFor(() =>
+    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
+  );
 });
 
 it('returns from a speaker confirmation to focus the next pending team item', async () => {
@@ -427,7 +487,7 @@ it('returns from a speaker confirmation to focus the next pending team item', as
   await userEvent.selectOptions(within(card).getByLabelText('这是谁'), 'per_1');
   await userEvent.click(screen.getByRole('button', { name: '确认是张总' }));
   await waitFor(() =>
-    expect(screen.getByLabelText('给未命名 1起名')).toHaveFocus(),
+    expect(screen.getByLabelText('未命名 1是谁')).toHaveFocus(),
   );
   expect(screen.queryByText('拿不准是谁')).toBeNull();
 });
@@ -508,4 +568,95 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await userEvent.click(screen.getByLabelText('更多：李总'));
   expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
+});
+
+it('makes twins for several colleagues by e-mail or employee number, and shows one handed back', async () => {
+  people = [
+    person({}),
+    person({ id: 'per_2', name: '李总', persona_id: 'p-li' }),
+    person({ id: 'per_3', name: '王总', persona_id: 'p-wang' }),
+  ];
+  usePersonas.setState({
+    items: [
+      {
+        id: 'p-li',
+        name: '李总',
+        avatar_url: null,
+        sources: 1,
+        created_at: 'x',
+        is_default: false,
+        claim: null,
+        claimed: false,
+      },
+      {
+        id: 'p-wang',
+        name: '王总',
+        avatar_url: null,
+        sources: 1,
+        created_at: 'x',
+        is_default: false,
+        claim: null,
+        claimed: false,
+        claim_rejected: 'wang@acme.cn',
+      },
+    ],
+  });
+  const sent: [string, string | undefined, unknown][] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/personas') return json(usePersonas.getState().items);
+      sent.push([url, init?.method, JSON.parse(String(init?.body))]);
+      if (url === '/api/personas/p-li/claim')
+        return json({ detail: '这个邮箱或工号已经用在另一个分身上' }, 409);
+      return json({ persona_id: 'p-zhang', new: true });
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  expect(
+    within(tasks).getByText('王总：wang@acme.cn 说这不是 TA'),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole('button', { name: '按邮箱或工号建分身（3）' }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: '为同事建分身' });
+  expect(
+    within(dialog).getByText('wang@acme.cn 说不是 TA，换一个'),
+  ).toBeInTheDocument();
+  await userEvent.type(
+    within(dialog).getByRole('textbox', { name: '张总 · 1 段录音' }),
+    'zhang@acme.cn',
+  );
+  await userEvent.type(
+    within(dialog).getByRole('textbox', { name: '李总 · 1 段录音' }),
+    '77845',
+  );
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: '为 2 位同事建分身' }),
+  );
+  await waitFor(() =>
+    expect(sent).toEqual([
+      ['/api/library/people/per_1/persona', 'POST', { claim: 'zhang@acme.cn' }],
+      ['/api/personas/p-li/claim', 'PUT', { claim: '77845' }],
+    ]),
+  );
+  // The one that did not go through stays, with why; the rest leave the list.
+  expect(
+    await within(dialog).findByText('这个邮箱或工号已经用在另一个分身上'),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).getByRole('textbox', { name: '李总 · 1 段录音' }),
+  ).toHaveValue('77845');
+  expect(
+    within(dialog).getByRole('textbox', { name: '张总 · 1 段录音' }),
+  ).toHaveValue('');
 });

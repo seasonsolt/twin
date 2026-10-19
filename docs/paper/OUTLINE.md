@@ -69,8 +69,15 @@ components does not change that.
 - **Profile-in-prompt twins.** Distilly (one-shot persona and skill document, no retrieval).
 - **Agent memory.** mem0, Letta/MemGPT, Graphiti/Zep (temporal KG), MemOS, Cognee, MIRIX.
   Benchmarks LoCoMo, LongMemEval measure recall of conversations, not fidelity to a person.
+- **Persona taxonomies.** Role-play attribute and evaluation schemes (CharacterGLM, PeaCoK, the
+  RPA evaluation survey, Chen et al. 2024), user-profile schemas (DeepPersona, MemoryOS user
+  traits, PersonaMem-v2, LongMemEval's attribute ontology) and interview protocols (American
+  Voices Project, Life Story Interview) already cover most of twin's dimensions
+  ([TAXONOMY_RESEARCH.md](TAXONOMY_RESEARCH.md), [REFERENCES.md § F](REFERENCES.md)). Position
+  the taxonomy as a reorganisation for memory, not a new construct.
 - **Faithfulness and attribution.** RAG attribution, citation evaluation, selective prediction
-  and abstention in QA.
+  and abstention in QA. Closest to evidence-bound persona memory: GopherCite's verified quotes,
+  Agent Zero Memory's provenance lock, and TANGLE on keeping irreducible conflicts (2026).
 - **Machine unlearning.** Why deletion from fine-tuned weights is hard; contrast with
   deletion by recomputation.
 - **Digital humans.** Duix/HeyGem, LiveTalking, Fay: appearance and voice without
@@ -122,13 +129,36 @@ Figure 1: pipeline from sources to expressions, candidates, persona items and in
 - Audio/video: transcription, diarization, identifying the subject's voice.
 
 ### 4.2 Layer 2: persona items
-- Taxonomy: 9 dimensions, 39 facets ([PERSONA_DIMENSIONS.md](../PERSONA_DIMENSIONS.md)).
-  Justify the taxonomy briefly (identity, values, decision style, thinking, expertise, speech,
-  relationships, current focus, life; life facets gated on consent).
+- Taxonomy: 9 dimensions, 39 facets ([PERSONA_DIMENSIONS.md](../PERSONA_DIMENSIONS.md)):
+  identity, values, decisions, thinking, expertise, speech, relationships, current focus, life.
+  Since taxonomy v2, life facets are extracted without a consent step; the gate remains in code.
+- Grounding (papers and facet mapping in [REFERENCES.md § E](REFERENCES.md)). Say plainly that
+  the taxonomy is a design choice, mapped to the literature after the fact:
+  - Frame: McAdams' three levels of knowing a person (1995; McAdams and Pals 2006). D1's
+    recurring stories are level 3 (narrative identity); D2–D4 and D7 are level 2 (characteristic
+    adaptations); D8 follows personal projects and strivings (Little 1983; Emmons 1986).
+  - Seven of nine dimensions map to an established construct: values (Schwartz 1992); risk and
+    time preference (Kahneman and Tversky 1979; Frederick et al. 2002); decision style (Scott and
+    Bruce 1995); intolerance of uncertainty (Freeston et al. 1994); linguistic style, audience
+    design and register (Pennebaker and King 1999; Bell 1984; Biber 1988); interpersonal
+    circumplex, conflict style and coping (Wiggins 1979; Rahim 1983; Lazarus and Folkman 1984).
+    The match is per facet and partial: 1.1, 1.4, 2.2–2.4, 3.4–3.5 and 4.3 have no counterpart,
+    and need for cognition (Cacioppo and Petty 1982) touches 4.1–4.2 only tangentially.
+  - Why it differs from a trait inventory: a twin must answer and speak as the person, so it
+    needs what they value, how they decide and how they talk (levels 2–3), each tied to quotes.
+    Level-1 traits (Big Five) are not stored as items; the survey eval scores them with
+    Mini-IPIP ([SURVEY.md](../SURVEY.md)), not yet an experiment in this paper.
+  - Not grounded in personality research: D5 (expertise) and D9 (life and preferences), which
+    follow personalization practice (PersonaMem, LaMP).
+  - Do not claim the taxonomy is novel or that it helps: close prior work exists
+    ([TAXONOMY_RESEARCH.md](TAXONOMY_RESEARCH.md)) and no ablation has been run
+    ([TAXONOMY_ABLATION.md](TAXONOMY_ABLATION.md), planned as an exploratory ablation in 7.5).
 - Extraction in 6000-character segments: each candidate must cite 1–3 spans that pass
   verbatim verification, otherwise it is dropped.
 - Per-facet merge: synonyms merged, **behavioural evidence outranks self-report**,
-  contradictions kept and flagged as conflicts rather than resolved for the person.
+  contradictions kept and flagged as conflicts rather than resolved for the person. SOKA
+  (Vazire 2010) is only an analogy here (it compares self- and other-ratings, not actions with
+  statements); by analogy the rule fits observable behaviour better than inner states.
 - Support counted as distinct (source × date) pairs.
 - Owner review: confirm, edit or reject each item; decisions survive re-merges.
 
@@ -239,6 +269,9 @@ that is still the central claim and should be reported as such.
 - Without quote guard (unverified quote rate rises; facts unchanged?).
 - Without confidence caps (calibration: ECE or AURC on fact + unanswerable).
 - Few-shot style examples (already observed: style fell to 3.8 **[have]**).
+- Taxonomy: 9 dimensions vs 3 coarse classes vs none vs a psychometric taxonomy (BFI-2 facets +
+  Schwartz values), same material and answerer ([TAXONOMY_ABLATION.md](TAXONOMY_ABLATION.md)).
+  Expected to be null on LongMemEval and PersonaMem-v2; report it either way.
 
 ### 7.6 Human evaluation **[todo]**
 - Style judged by people who know each subject: blind A/B between systems, plus
@@ -271,7 +304,9 @@ that is still the central claim and should be reported as such.
   one answerer. All addressed in section 7 or stated plainly if not.
 - Depends on external LLMs for extraction; extraction errors that pass verbatim verification
   can still misinterpret a quote.
-- The taxonomy is the authors' design; no validation against psychometric instruments.
+- The taxonomy is the authors' design, mapped to the literature after the fact (section 4.2);
+  facets were not derived from or validated against psychometric instruments, and no ablation
+  shows which dimensions improve answers.
 - Chinese-language material dominates; cross-language results unknown.
 
 ## 10. Ethics

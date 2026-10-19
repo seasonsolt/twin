@@ -19,6 +19,7 @@ import {
   Heading,
   NavPill,
   PlainButton,
+  Row,
   Skeleton,
   SkipLink,
   Text,
@@ -28,13 +29,24 @@ import {
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
-import { useCanManage, usePersonas, type Persona } from '../../stores/personas';
+import {
+  awaitsApproval,
+  useCanManage,
+  usePersonas,
+  useTrial,
+  type Persona,
+} from '../../stores/personas';
 import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import type { IdentityData } from '../../features/identity/useIdentity';
+const Claimed = lazy(() =>
+  import('../../pages/Claimed').then((module) => ({
+    default: module.Claimed,
+  })),
+);
 const Onboarding = lazy(() =>
   import('../../pages/Onboarding').then((module) => ({
     default: module.Onboarding,
@@ -294,6 +306,16 @@ export function AppShell() {
   useEffect(startStatusPolling, [personaId]);
   const admin = useAuth((state) => state.identity?.admin);
   useEffect(() => (admin ? startSystemPolling() : undefined), [admin]);
+  // A twin a colleague made for this person comes first: until they have looked at it, it answers nobody else.
+  const waiting = usePersonas((state) => state.items.find(awaitsApproval));
+  const trial = useTrial();
+  // Trying it out in chat first: the page asking for the go-ahead steps aside there, and only there.
+  const trying =
+    !!waiting && trial.id === waiting.id && location.pathname === '/chat';
+  useEffect(() => {
+    if (waiting && waiting.id !== personaId)
+      void usePersonas.getState().switchTo(waiting.id);
+  }, [waiting, personaId]);
   useEffect(() => {
     if (twinLevel) return;
     const controller = new AbortController();
@@ -330,6 +352,14 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, [twinLevel, personaId, setOnboarding, setNoPersona]);
+  if (waiting && !trying && location.pathname !== '/gallery')
+    return (
+      <Suspense
+        fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
+      >
+        <Claimed persona={waiting} />
+      </Suspense>
+    );
   if (
     !canManage &&
     !twinLevel &&
@@ -344,6 +374,9 @@ export function AppShell() {
           <Heading level={2} size="title">
             先新建一个分身
           </Heading>
+          <Text tone="secondary">
+            还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。
+          </Text>
           <TextLink to="/twins" size="sm">
             返回我的分身
           </TextLink>
@@ -384,6 +417,16 @@ export function AppShell() {
             <Text size="sm" tone="danger">
               {error}
             </Text>
+          </div>
+        )}
+        {trying && (
+          <div className="border-b border-info/20 bg-info/5 px-5 py-2">
+            <Row justify="between" wrap gap={3}>
+              <Text size="sm">试聊中：你点“没问题”之前，同事问不到它。</Text>
+              <PlainButton onClick={() => trial.set(null)}>
+                回去确认
+              </PlainButton>
+            </Row>
           </div>
         )}
         <main

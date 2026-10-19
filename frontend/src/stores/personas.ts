@@ -21,7 +21,29 @@ export interface Persona {
   public?: boolean;
   can_manage?: boolean;
   owner?: string | null;
+  /** The twin was taken by the signed-in person (made for their work e-mail, or by them). */
+  mine?: boolean;
+  /** Its person said it may answer (only with ``mine``). */
+  approved?: boolean;
+  /** Someone else made it for the signed-in person. */
+  made_by_other?: boolean;
+  /** For those who manage it: the work e-mail or employee number of the person it is made for, and whether they
+   * have taken it. */
+  claim?: string | null;
+  claimed?: boolean;
+  /** The e-mail or employee number its person said was not theirs ("这不是我"). */
+  claim_rejected?: string;
 }
+
+/** The twin its person is trying out in chat before saying it is all right (only there, and only for them). */
+export const useTrial = create<{
+  id: string | null;
+  set: (id: string | null) => void;
+}>((set) => ({ id: null, set: (id) => set({ id }) }));
+
+/** A twin made for the signed-in person that they have not looked at yet. */
+export const awaitsApproval = (persona: Persona | undefined) =>
+  !!persona?.mine && !!persona.made_by_other && !persona.approved;
 let refreshVersion = 0;
 let switchVersion = 0;
 let prefetchController: AbortController | undefined;

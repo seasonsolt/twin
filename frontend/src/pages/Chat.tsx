@@ -76,9 +76,15 @@ const MAX_CHAT_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 export function Chat() {
   const personaId = usePersonaId();
-  const { pathname } = useLocation();
+  const { pathname, state, key } = useLocation();
   const active = pathname === '/chat';
   const chat = useConversation(active);
+  // A question picked elsewhere (such as trying out a twin before saying it is all right) waits in the composer.
+  const ask = (state as { ask?: unknown } | null)?.ask;
+  const { setDraft } = chat;
+  useEffect(() => {
+    if (typeof ask === 'string') setDraft(ask);
+  }, [ask, key, setDraft]);
   const mobile = useMobile();
   const wide = useMediaQuery('(min-width: 1280px)');
   const layout = useChatLayout();

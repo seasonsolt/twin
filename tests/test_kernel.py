@@ -178,17 +178,64 @@ def test_newer_web_and_cli_startup(tmp_path: Path) -> None:
     assert "schema 99" in result.output
 
 
-def test_taxonomy_merges_without_extracting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = Settings(db_path=tmp_path / "twin.db")
-    llm = FakeLLM(lambda *_: {"items": []})
+def _two_facet_handler(system: str, user: str, schema: type) -> dict[str, object]:
+    import re
+
+    if schema is profile.ExtractDraft:
+        found = re.findall(r"\[(\d+)\][^\n]*\n本人：([^\n]*)", user)
+        return {
+            "items": [
+                {
+                    "facet_id": "2.1" if "回款" in text else "4.2",
+                    "statement": text,
+                    "quotes": [{"n": int(n), "quote": text}],
+                }
+                for n, text in found
+            ]
+        }
+    listed = re.findall(r"\[(pc_[0-9a-f]+)\][^：]*：(.*)", user)
+    return {"items": [{"statement": s, "candidate_ids": [i]} for i, s in listed]}
+
+
+def test_taxonomy_change_merges_only_the_facets_it_redefines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db", target_name="本人")
     with PersonaStore(settings.db_path) as store:
-        store.put_source(parse_note("我喜欢写程序", settings))
-        profile.build_profile(store, llm, settings)
+        store.put_source(parse_note("我做事先看回款。\n\n我每周跑步三次。", settings))
+        profile.build_profile(store, FakeLLM(_two_facet_handler), settings)
+        before = {i.item_id for i in store.list_items()}
+        assert len(before) == 2
+
+        # A new taxonomy version whose facets read the same: nothing to extract or merge.
         monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, taxonomy="next"))
         assert profile.pending_chunks(store, settings) == 0
+        llm = FakeLLM(_two_facet_handler)
         report = profile.build_profile(store, llm, settings)
-        assert report.chunks_extracted == 0 and report.facets_merged > 0
-        assert len(llm.calls) == 1
+        assert (report.chunks_extracted, report.facets_merged, len(llm.calls)) == (0, 0, 0)
+
+        # Redefining one facet re-merges that facet alone.
+        facet = profile.FACET_BY_ID["2.1"]
+        monkeypatch.setitem(profile.FACET_BY_ID, "2.1", replace(facet, description=facet.description + "（改写）"))
+        llm = FakeLLM(_two_facet_handler)
+        report = profile.build_profile(store, llm, settings)
+        assert (report.chunks_extracted, report.facets_merged) == (0, 1)
+        assert {i.item_id for i in store.list_items()} == before
+
+
+def test_merge_key_from_before_facet_definitions_is_taken_over(tmp_path: Path) -> None:
+    """A twin upgrading to keys that name the facet definition does not merge again: a stored key of the old formula
+    was merged under the running taxonomy, so it is rewritten instead."""
+    settings = Settings(db_path=tmp_path / "twin.db", target_name="本人")
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_note("我做事先看回款。\n\n我每周跑步三次。", settings))
+        profile.build_profile(store, FakeLLM(_two_facet_handler), settings)
+        for facet in profile.FACETS:
+            members = store.list_candidates(facet.facet_id)
+            store.set_meta(f"merge:{facet.facet_id}", profile._legacy_merge_key(members))
+        llm = FakeLLM(_two_facet_handler)
+        report = profile.build_profile(store, llm, settings)
+        assert (report.facets_merged, len(llm.calls)) == (0, 0)
+        members = store.list_candidates("2.1")
+        assert store.get_meta("merge:2.1") == profile._merge_key("2.1", members)
 
 
 def test_merge_key_v1_keeps_legacy_formula(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,10 +246,10 @@ def test_merge_key_v1_keeps_legacy_formula(monkeypatch: pytest.MonkeyPatch) -> N
     ids = [c.candidate_id for c in candidates]
     monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, taxonomy="v1"))
     expected = hashlib.sha256("\x1f".join([PROMPT_VERSION, *sorted(ids)]).encode()).hexdigest()
-    assert profile._merge_key(candidates) == expected
+    assert profile._legacy_merge_key(candidates) == expected
     monkeypatch.setattr(profile, "KERNEL", replace(KERNEL, taxonomy="v2"))
     assert (
-        profile._merge_key(candidates)
+        profile._legacy_merge_key(candidates)
         == hashlib.sha256("\x1f".join([PROMPT_VERSION, "v2", *sorted(ids)]).encode()).hexdigest()
     )
 

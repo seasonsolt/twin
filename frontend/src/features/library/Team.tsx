@@ -15,10 +15,12 @@ import {
   Badge,
   Button,
   Card,
+  ClipButton,
   Dialog,
   Field,
   Grid,
   Input,
+  ListRow,
   Radio,
   Row,
   Section,
@@ -30,6 +32,7 @@ import {
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
+import { withBase } from '../../lib/base';
 import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
@@ -69,60 +72,89 @@ function Task({
   );
 }
 
+/** A voice nobody has named yet, settled in its row: hear it, then say who it is (someone known, or a new
+ * name) or that nobody known speaks there. Enter confirms. */
 function Unnamed({
   person,
+  known,
   busy,
   onName,
-  taskState,
+  onResolve,
 }: {
   person: Person;
+  known: Person[];
   busy: boolean;
   onName: (name: string) => void;
-  taskState: { teamTask: string };
+  onResolve: (into: Person | null) => void;
 }) {
   const [name, setName] = useState('');
+  const typed = name.trim();
+  const match = known.find((p) => p.name === typed);
   return (
-    <Task kind="新出现的声音">
-      <Text weight="medium">
-        {person.name} · 在 {person.speakers} 段录音里出现
-      </Text>
+    <ListRow
+      variant="divided"
+      leading={
+        person.recording_id && person.speaker_id ? (
+          <ClipButton
+            label={`听${person.name}的声音`}
+            src={withBase(
+              `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+            )}
+          />
+        ) : undefined
+      }
+      title={person.name}
+      meta={
+        <>
+          说了 {minutes(person.seconds)} · {person.speakers} 段录音
+          {person.recording_id && (
+            <>
+              {' · '}
+              <TextLink
+                size="sm"
+                to={recordingPath(person.recording_id)}
+                state={{ teamTask: `person-${person.id}` }}
+              >
+                打开录音
+              </TextLink>
+            </>
+          )}
+        </>
+      }
+    >
       <Row
         as="form"
         gap={2}
-        wrap
         onSubmit={(event) => {
           event.preventDefault();
-          if (name.trim()) onName(name.trim());
+          if (!typed) return;
+          if (match) onResolve(match);
+          else onName(typed);
         }}
       >
         <Input
-          aria-label={`给${person.name}起名`}
+          aria-label={`${person.name}是谁`}
           placeholder="这是谁"
           maxLength={40}
           value={name}
-          className="min-w-0 flex-1"
+          suggestions={known.map((p) => p.name)}
+          className="min-w-0 flex-1 sm:w-56 sm:flex-none"
           onChange={(event) => setName(event.target.value)}
         />
+        <Button type="submit" size="sm" disabled={busy || !typed}>
+          {match ? `是${match.name}` : '确认'}
+        </Button>
         <Button
-          type="submit"
-          variant="secondary"
+          type="button"
+          variant="ghost"
           size="sm"
-          disabled={busy || !name.trim()}
+          disabled={busy}
+          onClick={() => onResolve(null)}
         >
-          起名
+          不认识
         </Button>
       </Row>
-      {person.recording_id && (
-        <RouteButton
-          to={recordingPath(person.recording_id)}
-          state={taskState}
-          variant="secondary"
-          size="sm"
-        >
-          听原声
-        </RouteButton>
-      )}
-    </Task>
+    </ListRow>
   );
 }
 
@@ -203,6 +235,233 @@ function EditPerson({
   );
 }
 
+/**
+ * The work e-mail or employee number of the person a twin is made for: when they sign in with the company account
+ * it names, the twin becomes theirs. Asked when the twin is made, and changeable until they have taken it.
+ */
+function WorkClaim({
+  person,
+  twin,
+  busy,
+  onClose,
+  onSave,
+}: {
+  person: Person | null;
+  twin?: Persona;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (claim: string) => void;
+}) {
+  const [claim, setClaim] = useState('');
+  useEffect(() => {
+    if (person) setClaim(twin?.claim ?? '');
+  }, [person, twin]);
+  const making = !twin;
+  return (
+    <Dialog
+      open={!!person}
+      onOpenChange={(open) => !open && onClose()}
+      title={
+        making
+          ? `为${person?.name ?? ''}建分身`
+          : `${person?.name ?? ''}的企业邮箱或工号`
+      }
+      body="填 TA 企业账号的邮箱或工号。TA 一登录，分身就归到 TA 名下；TA 看过并点“没问题”之前，分身不对同事回答。"
+    >
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(claim.trim());
+        }}
+      >
+        <Field
+          id="work-claim"
+          label={
+            making ? '企业邮箱或工号（不知道可以先空着）' : '企业邮箱或工号'
+          }
+          help={
+            twin?.claim_rejected
+              ? `${twin.claim_rejected} 的主人说这不是 TA，换一个吧`
+              : '填错了也不要紧：对方登录后点“这不是我”，分身会退回给你。'
+          }
+        >
+          <Input
+            id="work-claim"
+            autoComplete="off"
+            maxLength={254}
+            placeholder="name@company.com 或 77845"
+            value={claim}
+            onChange={(event) => setClaim(event.target.value)}
+          />
+        </Field>
+        <Row gap={2} justify="end">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            type="submit"
+            disabled={busy || (!making && !claim.trim() && !twin?.claim)}
+          >
+            {making ? '建好' : '保存'}
+          </Button>
+        </Row>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Who a twin can still be made for, or whose twin waits for an e-mail or employee number: neither taken nor
+ * pointed at anyone yet. */
+const unaddressed = (person: Person, twin?: Persona) =>
+  !person.auto &&
+  person.speakers > 0 &&
+  (person.persona_id ? !!twin && twin.claimed === false && !twin.claim : true);
+
+/**
+ * Twins for several colleagues at once: everyone heard in the meetings who has no twin yet, or whose twin nobody
+ * can take yet, each with a field for their work e-mail or employee number. Rows left empty stay as they are.
+ */
+function BatchClaim({
+  open,
+  people,
+  twins,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  people: Person[];
+  twins: Persona[];
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const [claims, setClaims] = useState<Record<string, string>>({});
+  const [failures, setFailures] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setClaims({});
+      setFailures({});
+    }
+  }, [open]);
+  const filled = people.filter((person) => claims[person.id]?.trim());
+  const save = async () => {
+    setBusy(true);
+    const failed: Record<string, string> = {};
+    for (const person of filled) {
+      const claim = claims[person.id].trim();
+      try {
+        if (person.persona_id)
+          await api(
+            `/api/personas/${encodeURIComponent(person.persona_id)}/claim`,
+            { method: 'PUT', json: { claim } },
+          );
+        else
+          await api(
+            `/api/library/people/${encodeURIComponent(person.id)}/persona`,
+            { method: 'POST', json: { claim } },
+          );
+      } catch (failure) {
+        failed[person.id] =
+          failure instanceof Error ? failure.message : '没能保存';
+      }
+    }
+    await onDone();
+    setBusy(false);
+    setFailures(failed);
+    // What went through leaves the list; what did not stays, with why.
+    setClaims((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([id]) => id in failed),
+      ),
+    );
+    if (!Object.keys(failed).length) onClose();
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(value) => !value && onClose()}
+      title="为同事建分身"
+      body="填同事企业账号的邮箱或工号。系统先用会议为 TA 建好分身，TA 用企业账号一登录就归到自己名下；TA 看过并点“没问题”之前，分身不对同事回答。"
+    >
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (filled.length) void save();
+        }}
+      >
+        <Stack as="ul" gap={3}>
+          {people.map((person) => {
+            const twin = twins.find((t) => t.id === person.persona_id);
+            const id = `batch-claim-${person.id}`;
+            return (
+              <li key={person.id}>
+                <Field
+                  id={id}
+                  label={`${person.name} · ${person.speakers} 段录音`}
+                  help={
+                    twin?.claim_rejected
+                      ? `${twin.claim_rejected} 说不是 TA，换一个`
+                      : undefined
+                  }
+                  error={failures[person.id]}
+                >
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    maxLength={254}
+                    placeholder="邮箱或工号，不知道就空着"
+                    value={claims[person.id] ?? ''}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setClaims((current) => ({
+                        ...current,
+                        [person.id]: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+              </li>
+            );
+          })}
+        </Stack>
+        <Text size="sm" tone="secondary">
+          不知道的先空着，以后在这里补。填错了也不要紧：对方登录后点“这不是我”，分身会退回给你。
+        </Text>
+        <Row gap={2} justify="end">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" loading={busy} disabled={!filled.length}>
+            {filled.length
+              ? `为 ${filled.length} 位同事建分身`
+              : '为同事建分身'}
+          </Button>
+        </Row>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Whose a twin made from the meetings is: waiting for its person to sign in, or theirs. */
+function ClaimLine({ twin }: { twin?: Persona }) {
+  const [label, tone]: [string, TextTone] | [null, null] = twin?.claimed
+    ? ['本人已认领', 'success']
+    : twin?.claim_rejected
+      ? [`${twin.claim_rejected} 说不是 TA，换一个`, 'danger']
+      : twin?.claim
+        ? [`等 ${twin.claim} 登录认领`, 'secondary']
+        : [null, null];
+  return (
+    label && (
+      <Text size="sm" tone={tone} breakAll>
+        {label}
+      </Text>
+    )
+  );
+}
+
 /** What the owner has to settle, quiet background progress, and everyone found in
  * the recordings, each with their twin. */
 export function Team({
@@ -225,6 +484,8 @@ export function Team({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
+  const [addressing, setAddressing] = useState<Person | null>(null);
+  const [batching, setBatching] = useState(false);
   const taskList = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const [focusPending, setFocusPending] = useState<string | null>(
@@ -278,13 +539,23 @@ export function Team({
       });
       setName('');
     });
-  const createTwin = (person: Person) =>
+  const saveClaim = (person: Person, claim: string) =>
     act(async () => {
-      await api(
-        `/api/library/people/${encodeURIComponent(person.id)}/persona`,
-        { method: 'POST' },
-      );
+      if (person.persona_id)
+        await api(
+          `/api/personas/${encodeURIComponent(person.persona_id)}/claim`,
+          {
+            method: 'PUT',
+            json: { claim: claim || null },
+          },
+        );
+      else
+        await api(
+          `/api/library/people/${encodeURIComponent(person.id)}/persona`,
+          { method: 'POST', json: { claim: claim || null } },
+        );
       await refreshPersonas();
+      setAddressing(null);
     });
   const remove = async (person: Person) => {
     if (
@@ -307,6 +578,15 @@ export function Team({
         api(`/api/library/people/${encodeURIComponent(person.id)}`, {
           method: 'PATCH',
           json: { name: value },
+        }),
+      `person-${person.id}`,
+    );
+  const resolve = (person: Person, into: Person | null) =>
+    act(
+      () =>
+        api(`/api/library/people/${encodeURIComponent(person.id)}/resolve`, {
+          method: 'POST',
+          json: { into: into?.id ?? null },
         }),
       `person-${person.id}`,
     );
@@ -335,6 +615,11 @@ export function Team({
   );
   const failed = recordings.filter((r) => r.status === 'failed');
   const organising = people?.filter((p) => p.updating) ?? [];
+  const twinOf = (person: Person) =>
+    twins.find((t) => t.id === person.persona_id);
+  // A colleague said a twin made for them is not theirs: it is back with the owner, to point at the right person.
+  const disowned = named?.filter((p) => twinOf(p)?.claim_rejected) ?? [];
+  const toAddress = named?.filter((p) => unaddressed(p, twinOf(p))) ?? [];
   const proofreading = recordings.filter(
     (r) => r.status === 'ready' && r.proofread === 'waiting',
   );
@@ -350,6 +635,7 @@ export function Team({
     ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
     ...unsorted.map((r) => `unsorted-${r.id}`),
     ...failed.map((r) => `failed-${r.id}`),
+    ...disowned.map((p) => `disowned-${p.id}`),
   ];
   const tasks = taskIds.length;
   const pending =
@@ -358,9 +644,11 @@ export function Team({
   useEffect(() => {
     if (!focusPending || !people || busy) return;
     if (taskOrder.split('|').includes(focusPending)) return;
-    taskList.current
-      ?.querySelector<HTMLElement>('input, a, button:not(:disabled)')
-      ?.focus();
+    // The next voice's name field before any button, so naming several is type, Enter, type, Enter.
+    const next =
+      taskList.current?.querySelector<HTMLElement>('input:not(:disabled)') ??
+      taskList.current?.querySelector<HTMLElement>('a, button:not(:disabled)');
+    next?.focus();
     setFocusPending(null);
     if (location.state?.resolvedTeamTask)
       void navigate(location.pathname, { replace: true, state: null });
@@ -411,77 +699,107 @@ export function Team({
           }
           framed
         >
-          <Grid ref={taskList} as="ul" columns={3} gap={3}>
-            {unnamed.map((person) => (
-              <Unnamed
-                key={person.id}
-                person={person}
-                taskState={{ teamTask: `person-${person.id}` }}
-                busy={busy}
-                onName={(value) => void rename(person, value)}
-              />
-            ))}
-            {waiting.map((w) => (
-              <Task key={`${w.recording_id}-${w.id}`} kind="拿不准是谁">
-                <Text weight="medium">
-                  <span className="break-all">{w.filename}</span> · {w.id}{' '}
-                  {w.candidates.length > 1
-                    ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
-                    : `像${w.candidates[0].name}`}
-                </Text>
-                <RouteButton
-                  to={recordingPath(w.recording_id)}
-                  state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
-                  size="sm"
-                >
-                  试听并确认
-                </RouteButton>
-              </Task>
-            ))}
-            {unsorted.map((r) => (
-              <Task
-                key={`unsorted-${r.id}`}
-                kind={r.unsettled === r.speakers ? '还没认人' : '还有人没认'}
-              >
-                <Text weight="medium">
-                  <span className="break-all">{r.filename}</span> ·{' '}
-                  {r.unsettled} 位说话人待确认
-                </Text>
-                <RouteButton
-                  to={recordingPath(r.id)}
-                  state={{ teamTask: `unsorted-${r.id}` }}
-                  size="sm"
-                >
-                  试听并确认
-                </RouteButton>
-              </Task>
-            ))}
-            {failed.map((r) => (
-              <Task key={r.id} kind="转写失败" tone="danger">
-                <Text weight="medium" breakAll>
-                  {r.filename}
-                </Text>
-                <Row gap={2}>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void retry(r)}
+          <Stack ref={taskList} gap={3}>
+            {unnamed.length > 0 && (
+              <Stack as="ul" gap={0} aria-label="新出现的声音">
+                {unnamed.map((person) => (
+                  <Unnamed
+                    key={person.id}
+                    person={person}
+                    known={named ?? []}
+                    busy={busy}
+                    onName={(value) => void rename(person, value)}
+                    onResolve={(into) => void resolve(person, into)}
+                  />
+                ))}
+              </Stack>
+            )}
+            {tasks > unnamed.length && (
+              <Grid as="ul" columns={3} gap={3}>
+                {waiting.map((w) => (
+                  <Task key={`${w.recording_id}-${w.id}`} kind="拿不准是谁">
+                    <Text weight="medium">
+                      <span className="break-all">{w.filename}</span> · {w.id}{' '}
+                      {w.candidates.length > 1
+                        ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
+                        : `像${w.candidates[0].name}`}
+                    </Text>
+                    <RouteButton
+                      to={recordingPath(w.recording_id)}
+                      state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
+                      size="sm"
+                    >
+                      试听并确认
+                    </RouteButton>
+                  </Task>
+                ))}
+                {unsorted.map((r) => (
+                  <Task
+                    key={`unsorted-${r.id}`}
+                    kind={
+                      r.unsettled === r.speakers ? '还没认人' : '还有人没认'
+                    }
                   >
-                    重试
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void removeRecording(r)}
+                    <Text weight="medium">
+                      <span className="break-all">{r.filename}</span> ·{' '}
+                      {r.unsettled} 位说话人待确认
+                    </Text>
+                    <RouteButton
+                      to={recordingPath(r.id)}
+                      state={{ teamTask: `unsorted-${r.id}` }}
+                      size="sm"
+                    >
+                      试听并确认
+                    </RouteButton>
+                  </Task>
+                ))}
+                {disowned.map((p) => (
+                  <Task
+                    key={`disowned-${p.id}`}
+                    kind="分身被退回"
+                    tone="danger"
                   >
-                    删除
-                  </Button>
-                </Row>
-              </Task>
-            ))}
-          </Grid>
+                    <Text weight="medium" breakAll>
+                      {p.name}：{twinOf(p)?.claim_rejected} 说这不是 TA
+                    </Text>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setAddressing(p)}
+                    >
+                      换个邮箱或工号
+                    </Button>
+                  </Task>
+                ))}
+                {failed.map((r) => (
+                  <Task key={r.id} kind="转写失败" tone="danger">
+                    <Text weight="medium" breakAll>
+                      {r.filename}
+                    </Text>
+                    <Row gap={2}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void retry(r)}
+                      >
+                        重试
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void removeRecording(r)}
+                      >
+                        删除
+                      </Button>
+                    </Row>
+                  </Task>
+                ))}
+              </Grid>
+            )}
+          </Stack>
         </Section>
       )}
       <Section
@@ -493,6 +811,11 @@ export function Team({
         }
         actions={
           <Row gap={2} wrap>
+            {toAddress.length > 0 && (
+              <Button variant="secondary" onClick={() => setBatching(true)}>
+                按邮箱或工号建分身（{toAddress.length}）
+              </Button>
+            )}
             <Input
               aria-label="找人"
               placeholder="找人"
@@ -585,6 +908,9 @@ export function Team({
                     <Badge tone="neutral">还没有分身</Badge>
                   )}
                 </div>
+                <ClaimLine
+                  twin={twins.find((t) => t.id === person.persona_id)}
+                />
                 <div className="mt-auto flex flex-wrap gap-2">
                   {person.persona_id ? (
                     <>
@@ -602,7 +928,7 @@ export function Team({
                         variant="secondary"
                         className="flex-1"
                         disabled={busy || !person.speakers}
-                        onClick={() => void createTwin(person)}
+                        onClick={() => setAddressing(person)}
                       >
                         生成分身
                       </Button>
@@ -616,6 +942,17 @@ export function Team({
                         disabled: busy,
                         onSelect: () => setEditing(person),
                       },
+                      ...(person.persona_id &&
+                      twins.find((t) => t.id === person.persona_id)?.claimed ===
+                        false
+                        ? [
+                            {
+                              label: '企业邮箱或工号',
+                              disabled: busy,
+                              onSelect: () => setAddressing(person),
+                            },
+                          ]
+                        : []),
                       ...(!person.persona_id
                         ? [
                             {
@@ -692,6 +1029,23 @@ export function Team({
           )}
         </Section>
       )}
+      <BatchClaim
+        open={batching}
+        people={toAddress}
+        twins={twins}
+        onClose={() => setBatching(false)}
+        onDone={async () => {
+          await refreshPersonas();
+          await load();
+        }}
+      />
+      <WorkClaim
+        person={addressing}
+        twin={twins.find((t) => t.id === addressing?.persona_id)}
+        busy={busy}
+        onClose={() => setAddressing(null)}
+        onSave={(claim) => addressing && void saveClaim(addressing, claim)}
+      />
       <EditPerson
         person={editing}
         busy={busy}

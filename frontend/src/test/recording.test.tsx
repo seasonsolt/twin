@@ -26,6 +26,7 @@ const people: Person[] = ['林舟', '许清禾'].map((name, i) => ({
   auto: false,
   gender: '',
   recording_id: 'r',
+  speaker_id: 'S1',
 }));
 const segments = [
   { start: 26, end: 29, speaker: 'S1', text: '先看进展。' },

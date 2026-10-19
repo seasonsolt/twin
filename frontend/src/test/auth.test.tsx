@@ -339,3 +339,157 @@ it('clears a stale persona and selects the first owned twin rather than default'
   });
   await waitFor(() => expect(getPersonaId()).toBe('p-next'));
 });
+
+it('opens on a twin made for this person until they say it is all right', async () => {
+  loggedIn = true;
+  const made: Persona = {
+    ...persona,
+    owner: 'admin@xjjk.com',
+    name: '赵晴',
+    sources: 2,
+    mine: true,
+    made_by_other: true,
+    approved: false,
+  };
+  items = [made];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  const sent: [string, unknown][] = [];
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path.endsWith('/approve') || path.endsWith('/disown')) {
+      sent.push([path, init.body ? JSON.parse(String(init.body)) : null]);
+      items = path.endsWith('/approve')
+        ? [{ ...made, approved: true, public: false }]
+        : [];
+      return json(path.endsWith('/approve') ? items[0] : { disowned: true });
+    }
+    if (path.startsWith('/api/') && !path.startsWith('/api/personas'))
+      try {
+        return await base(path, init);
+      } catch {
+        return json({});
+      }
+    return base(path, init);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+  expect(screen.queryByRole('navigation')).toBeNull();
+  await user.click(screen.getByRole('checkbox', { name: '同事能问我的分身' }));
+  await user.click(screen.getByRole('button', { name: '没问题，开始用' }));
+  await waitFor(() =>
+    expect(sent).toEqual([
+      ['/api/personas/p-first/approve', { public: false }],
+    ]),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('heading', { name: '赵晴，你的分身已经建好了' }),
+    ).toBeNull(),
+  );
+});
+
+it('gives a twin made for the wrong address back with 这不是我', async () => {
+  loggedIn = true;
+  items = [{ ...persona, mine: true, made_by_other: true, approved: false }];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  let disowned = false;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === '/api/personas/p-first/disown') {
+      disowned = true;
+      items = [];
+      return json({ disowned: true });
+    }
+    return base(path, init);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: '这不是我' }));
+  await user.click(
+    within(
+      await screen.findByRole('dialog', { name: '这不是你的分身？' }),
+    ).getByRole('button', {
+      name: '这不是我',
+    }),
+  );
+  await waitFor(() => expect(disowned).toBe(true));
+  await screen.findByRole('dialog', { name: '新建分身' });
+});
+
+it('shows what the twin gathered and lets its person try it out in chat first', async () => {
+  loggedIn = true;
+  items = [
+    {
+      ...persona,
+      name: '赵晴',
+      owner: 'admin@xjjk.com',
+      mine: true,
+      made_by_other: true,
+      approved: false,
+    },
+  ];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === '/api/persona/ledger')
+      return json({
+        entries: [
+          {
+            entry_id: 'l1',
+            kind: 'commitment',
+            owner: '赵晴',
+            what: '周五前重算留存口径',
+            meeting_title: '产品周会',
+            meeting_date: '2026-10-15',
+          },
+          {
+            entry_id: 'l2',
+            kind: 'commitment',
+            owner: '王一鸣',
+            what: '别人的事',
+          },
+        ],
+      });
+    if (path.startsWith('/api/conversations')) return json([]);
+    if (path.startsWith('/api/persona/items?'))
+      return json({
+        items: [
+          {
+            item_id: 'i1',
+            statement: '看数据先问口径',
+            evidence: [{}, {}],
+          },
+        ],
+        total: 1,
+      });
+    try {
+      return await base(path, init);
+    } catch {
+      return json({});
+    }
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  expect(await screen.findByText('周五前重算留存口径')).toBeInTheDocument();
+  expect(screen.queryByText('别人的事')).toBeNull();
+  expect(screen.getByText('看数据先问口径')).toBeInTheDocument();
+  expect(screen.getByText('2 处原话支持')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '这周还欠谁什么？' }));
+  expect(
+    await screen.findByText('试聊中：你点“没问题”之前，同事问不到它。'),
+  ).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue(
+      '这周还欠谁什么？',
+    ),
+  );
+  await user.click(screen.getByRole('button', { name: '回去确认' }));
+  await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+});

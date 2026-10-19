@@ -126,6 +126,8 @@ def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: 
         "is_default": True,
         "public": False,
         "can_manage": True,
+        "claim": None,
+        "claimed": False,
     }
     persona = create(web)
     assert re.fullmatch(r"p-[0-9a-f]{10}", persona)

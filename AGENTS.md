@@ -29,7 +29,7 @@
 ## 打磨记忆内核与发布
 
 - 同事运行 `stable` 分支；内核在 `main` 上迭代，确认后运行 `./scripts/release-stable.sh` 发布（检查通过后只快进 `stable`）。
-- 修改抽取/合并提示词、输出结构（`persona/profile.py`）或维度分类（`persona/dimensions.py`）时，必须同时提升 `persona/kernel.py` 的 `PROMPT_VERSION` / `TAXONOMY_VERSION` 并记录新指纹，否则 `tests/test_kernel.py` 失败；不提升版本，同事已有的记忆不会按新内核重新整理。
+- 修改抽取/合并提示词、输出结构（`persona/profile.py`）或维度分类（`persona/dimensions.py`）时，必须同时提升 `persona/kernel.py` 的 `PROMPT_VERSION` / `TAXONOMY_VERSION` 并记录新指纹，否则 `tests/test_kernel.py` 失败；不提升版本，同事已有的记忆不会按新内核重新整理。细项编号有增删、拆分或改号时，还要在 `persona/kernel.py` 的 `TAXONOMY_FACET_IDS` 加上新版本，并在 `TAXONOMY_MIGRATIONS` 写明每个旧编号的去向，否则 `tests/test_taxonomy_upgrade.py` 失败。打开数据库时按声明迁移已有条目和审核记录，不调用模型，档案和聊天不中断；拆出的细项在重新整理时继承审核记录。直接删掉的细项会连审核记录一起删除，内容挪到别处时要写明去向。
 - 数据库结构变化只能在 `persona/store.py` 的 `_MIGRATIONS` 末尾追加；迁移和新内核整理前会自动快照，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
 
 ## 设计第一原则

@@ -19,6 +19,7 @@ import {
   Heading,
   NavPill,
   PlainButton,
+  Row,
   Skeleton,
   SkipLink,
   Text,
@@ -32,6 +33,7 @@ import {
   awaitsApproval,
   useCanManage,
   usePersonas,
+  useTrial,
   type Persona,
 } from '../../stores/personas';
 import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
@@ -306,6 +308,10 @@ export function AppShell() {
   useEffect(() => (admin ? startSystemPolling() : undefined), [admin]);
   // A twin a colleague made for this person comes first: until they have looked at it, it answers nobody else.
   const waiting = usePersonas((state) => state.items.find(awaitsApproval));
+  const trial = useTrial();
+  // Trying it out in chat first: the page asking for the go-ahead steps aside there, and only there.
+  const trying =
+    !!waiting && trial.id === waiting.id && location.pathname === '/chat';
   useEffect(() => {
     if (waiting && waiting.id !== personaId)
       void usePersonas.getState().switchTo(waiting.id);
@@ -346,7 +352,7 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, [twinLevel, personaId, setOnboarding, setNoPersona]);
-  if (waiting && location.pathname !== '/gallery')
+  if (waiting && !trying && location.pathname !== '/gallery')
     return (
       <Suspense
         fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
@@ -411,6 +417,16 @@ export function AppShell() {
             <Text size="sm" tone="danger">
               {error}
             </Text>
+          </div>
+        )}
+        {trying && (
+          <div className="border-b border-info/20 bg-info/5 px-5 py-2">
+            <Row justify="between" wrap gap={3}>
+              <Text size="sm">试聊中：你点“没问题”之前，同事问不到它。</Text>
+              <PlainButton onClick={() => trial.set(null)}>
+                回去确认
+              </PlainButton>
+            </Row>
           </div>
         )}
         <main

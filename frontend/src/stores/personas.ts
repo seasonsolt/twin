@@ -35,6 +35,12 @@ export interface Persona {
   claim_rejected?: string;
 }
 
+/** The twin its person is trying out in chat before saying it is all right (only there, and only for them). */
+export const useTrial = create<{
+  id: string | null;
+  set: (id: string | null) => void;
+}>((set) => ({ id: null, set: (id) => set({ id }) }));
+
 /** A twin made for the signed-in person that they have not looked at yet. */
 export const awaitsApproval = (persona: Persona | undefined) =>
   !!persona?.mine && !!persona.made_by_other && !persona.approved;

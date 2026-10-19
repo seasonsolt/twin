@@ -420,3 +420,76 @@ it('gives a twin made for the wrong address back with 这不是我', async () =>
   await waitFor(() => expect(disowned).toBe(true));
   await screen.findByRole('dialog', { name: '新建分身' });
 });
+
+it('shows what the twin gathered and lets its person try it out in chat first', async () => {
+  loggedIn = true;
+  items = [
+    {
+      ...persona,
+      name: '赵晴',
+      owner: 'admin@xjjk.com',
+      mine: true,
+      made_by_other: true,
+      approved: false,
+    },
+  ];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === '/api/persona/ledger')
+      return json({
+        entries: [
+          {
+            entry_id: 'l1',
+            kind: 'commitment',
+            owner: '赵晴',
+            what: '周五前重算留存口径',
+            meeting_title: '产品周会',
+            meeting_date: '2026-10-15',
+          },
+          {
+            entry_id: 'l2',
+            kind: 'commitment',
+            owner: '王一鸣',
+            what: '别人的事',
+          },
+        ],
+      });
+    if (path.startsWith('/api/conversations')) return json([]);
+    if (path.startsWith('/api/persona/items?'))
+      return json({
+        items: [
+          {
+            item_id: 'i1',
+            statement: '看数据先问口径',
+            evidence: [{}, {}],
+          },
+        ],
+        total: 1,
+      });
+    try {
+      return await base(path, init);
+    } catch {
+      return json({});
+    }
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  expect(await screen.findByText('周五前重算留存口径')).toBeInTheDocument();
+  expect(screen.queryByText('别人的事')).toBeNull();
+  expect(screen.getByText('看数据先问口径')).toBeInTheDocument();
+  expect(screen.getByText('2 处原话支持')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '这周还欠谁什么？' }));
+  expect(
+    await screen.findByText('试聊中：你点“没问题”之前，同事问不到它。'),
+  ).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue(
+      '这周还欠谁什么？',
+    ),
+  );
+  await user.click(screen.getByRole('button', { name: '回去确认' }));
+  await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+});

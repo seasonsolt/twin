@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -240,8 +241,9 @@ def _source(
 # ---------------------------------------------------------------- chat
 
 _SEP = r"\s*[：:]\s*"
+_CLOCK = r"\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?"
 _INLINE = re.compile(rf"^\s*\[?\s*{_DATE}{_TIME}\s*\]?\s+(?P<speaker>[^：:\s][^：:]{{0,30}}?){_SEP}(?P<text>.*)$")
-_HEADER = re.compile(rf"^\s*(?P<speaker>[^：:\s\d][^：:]{{0,30}}?)\s+{_DATE}{_TIME}\s*$")
+_HEADER = re.compile(rf"^\s*(?P<speaker>[^：:\s\d][^：:]{{0,30}}?)\s+(?:{_DATE}{_TIME}|{_CLOCK})\s*$")
 _CSV_TIME = ("time", "date", "datetime", "timestamp", "时间", "日期", "发送时间")
 _CSV_SENDER = ("sender", "from", "speaker", "name", "talker", "发送者", "发言人", "发送人", "昵称")
 _CSV_TEXT = ("content", "text", "message", "msg", "内容", "消息", "消息内容")
@@ -265,6 +267,12 @@ def _rows_to_messages(rows: list[dict[str, str]]) -> tuple[list[_Message], list[
 
 
 _PLAIN = re.compile(rf"^\s*(?P<speaker>[^：:\s][^：:]{{0,30}}?){_SEP}(?P<text>.+)$")
+MIN_TRANSCRIPT_HEADERS = 3
+
+
+def _speaker(value: str) -> str:
+    # PDF extraction can turn common CJK characters such as 子 into compatibility forms.
+    return unicodedata.normalize("NFKC", value.strip())
 
 
 def _text_to_messages(
@@ -279,11 +287,12 @@ def _text_to_messages(
         if not line.strip():
             continue
         if m := _INLINE.match(line):
-            messages.append(_Message(_date(m["y"], m["m"], m["d"]), m["speaker"].strip(), m["text"]))
+            messages.append(_Message(_date(m["y"], m["m"], m["d"]), _speaker(m["speaker"]), m["text"]))
         elif m := _HEADER.match(line):
-            messages.append(_Message(_date(m["y"], m["m"], m["d"]), m["speaker"].strip(), ""))
+            when = _date(m["y"], m["m"], m["d"]) if m.group("y") is not None else default_date
+            messages.append(_Message(when, _speaker(m["speaker"]), ""))
         elif (speaker_lines or not messages) and (m := _PLAIN.match(line)):
-            messages.append(_Message(default_date, m["speaker"].strip(), m["text"]))
+            messages.append(_Message(default_date, _speaker(m["speaker"]), m["text"]))
         elif messages:
             last = messages[-1]
             last.text = f"{last.text}\n{line.strip()}" if last.text else line.strip()
@@ -522,7 +531,10 @@ def detect_kind(name: str, text: str, settings: Settings | None = None) -> Sourc
         return SourceKind.CHAT
     if lines and sum(bool(_INLINE.match(line) or _HEADER.match(line)) for line in lines) / len(lines) >= 0.6:
         return SourceKind.CHAT
-    speakers = [m["speaker"].strip() for line in lines if (m := _PLAIN.match(line))]
+    timestamped = [_speaker(m["speaker"]) for line in lines if (m := _HEADER.match(line))]
+    if len(timestamped) >= MIN_TRANSCRIPT_HEADERS:
+        return SourceKind.INTERVIEW
+    speakers = [_speaker(m["speaker"]) for line in lines if (m := _PLAIN.match(line))]
     if lines and len(speakers) / len(lines) >= 0.6 and any(settings.is_target(s) for s in speakers):
         return SourceKind.INTERVIEW
     return SourceKind.DOCUMENT

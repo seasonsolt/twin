@@ -20,7 +20,7 @@ if [[ "${TWIN_SCREENSHOTS_NO_BUILD:-}" != 1 ]]; then
 fi
 tty=()
 if [[ -t 1 ]]; then tty=(-t); fi
-exec docker run --rm "${tty[@]}" --ipc=host --init \
+exec docker run --rm ${tty[@]+"${tty[@]}"} --ipc=host --init \
     --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" \
     -v "$repo_root:/repo" -w /repo/frontend \
     "$image" node node_modules/@playwright/test/cli.js test "$@"

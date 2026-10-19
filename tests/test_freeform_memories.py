@@ -119,6 +119,16 @@ def test_file_text_formats(monkeypatch: pytest.MonkeyPatch) -> None:
         ("a.txt", "访谈者：你喜欢什么？\n阿沐：读书", SourceKind.INTERVIEW),
         ("meeting.srt", "1\n00:00:01 --> 00:00:02\n小明：讨论议题", SourceKind.DOCUMENT),
         ("biography.md", "林沐生于某地，他喜欢散步。", SourceKind.DOCUMENT),
+        (
+            "meeting.pdf",
+            "发⾔⼈ 1  00:00:00\n这个方案\n狮⼦  00:00:02\n我来决定。\n发⾔⼈ 2  00:00:04\n好。",
+            SourceKind.INTERVIEW,
+        ),
+        (
+            "not-mine.pdf",
+            "发⾔⼈ 1  00:00:00\n这个方案\n发⾔⼈ 2  00:00:02\n好。\n发⾔⼈ 1  00:00:04\n确定。",
+            SourceKind.INTERVIEW,
+        ),
         ("a.md", "我的经历\n\n我喜欢读书。", SourceKind.DOCUMENT),
         ("a.txt", "小明：讨论\n小张：同意", SourceKind.DOCUMENT),
         ("a.txt", "2025-01-01 林沐：好\n续行\n更多续行", SourceKind.DOCUMENT),
@@ -142,6 +152,22 @@ def test_upload_dates() -> None:
         settings,
     )
     assert all(e.date == dt.date(2024, 3, 1) for e in chat.expressions)
+
+
+def test_pdf_transcripts_keep_speakers_and_reject_sources_without_the_target() -> None:
+    settings = Settings(target_name="林沐", target_aliases=["阿沐"])
+    raw = "发⾔⼈ 1  00:00:00\n怎么看？\n林沐  00:00:02\n先做。\n发⾔⼈ 2  00:00:04\n好。"
+    parsed = parse_upload("meeting.txt", raw.encode(), settings)
+    assert parsed.source.kind is SourceKind.INTERVIEW
+    assert [(e.speaker, e.is_target, e.text) for e in parsed.expressions] == [
+        ("发言人 1", False, "怎么看？"),
+        ("林沐", True, "先做。"),
+        ("发言人 2", False, "好。"),
+    ]
+    assert parsed.expressions[1].context == "发言人 1：怎么看？"
+    without_target = "发⾔⼈ 1  00:00:00\n怎么看？\n发⾔⼈ 2  00:00:02\n先做。\n发⾔⼈ 1  00:00:04\n确定。"
+    with pytest.raises(ValueError, match="no line spoken by 林沐"):
+        parse_upload("not-mine.txt", without_target.encode(), settings)
 
 
 def test_debounce_and_exactly_one_follow_up() -> None:

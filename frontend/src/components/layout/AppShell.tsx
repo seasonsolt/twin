@@ -28,13 +28,23 @@ import {
 import { LayoutScope, PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
-import { useCanManage, usePersonas, type Persona } from '../../stores/personas';
+import {
+  awaitsApproval,
+  useCanManage,
+  usePersonas,
+  type Persona,
+} from '../../stores/personas';
 import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
 import { NewTwin } from './NewTwin';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import type { IdentityData } from '../../features/identity/useIdentity';
+const Claimed = lazy(() =>
+  import('../../pages/Claimed').then((module) => ({
+    default: module.Claimed,
+  })),
+);
 const Onboarding = lazy(() =>
   import('../../pages/Onboarding').then((module) => ({
     default: module.Onboarding,
@@ -294,6 +304,12 @@ export function AppShell() {
   useEffect(startStatusPolling, [personaId]);
   const admin = useAuth((state) => state.identity?.admin);
   useEffect(() => (admin ? startSystemPolling() : undefined), [admin]);
+  // A twin a colleague made for this person comes first: until they have looked at it, it answers nobody else.
+  const waiting = usePersonas((state) => state.items.find(awaitsApproval));
+  useEffect(() => {
+    if (waiting && waiting.id !== personaId)
+      void usePersonas.getState().switchTo(waiting.id);
+  }, [waiting, personaId]);
   useEffect(() => {
     if (twinLevel) return;
     const controller = new AbortController();
@@ -330,6 +346,14 @@ export function AppShell() {
       });
     return () => controller.abort();
   }, [twinLevel, personaId, setOnboarding, setNoPersona]);
+  if (waiting && location.pathname !== '/gallery')
+    return (
+      <Suspense
+        fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
+      >
+        <Claimed persona={waiting} />
+      </Suspense>
+    );
   if (
     !canManage &&
     !twinLevel &&
@@ -344,6 +368,9 @@ export function AppShell() {
           <Heading level={2} size="title">
             先新建一个分身
           </Heading>
+          <Text tone="secondary">
+            还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。
+          </Text>
           <TextLink to="/twins" size="sm">
             返回我的分身
           </TextLink>

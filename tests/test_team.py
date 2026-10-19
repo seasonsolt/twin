@@ -284,6 +284,40 @@ def test_an_unnamed_person_whose_voice_is_given_away_is_forgotten(tmp_path: Path
     assert not team.prune()  # A named person stays even with nothing heard.
 
 
+def test_an_unnamed_voice_is_settled_as_someone_known_or_nobody(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "local")
+    team = Team(library)
+    first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 120), ([0.0, 1.0, 0.0], 90))
+    assert team.classify(first)
+    unnamed = {p.name: p for p in team.people()}
+    assert (unnamed["未命名 1"].recording_id, unnamed["未命名 1"].speaker_id) == (first, "S1")
+    zhang = team.add_person("张总")
+    team.link(zhang.id, "p-zhang")
+    _, before = revision(library, first)
+    with pytest.raises(ValueError, match="还没起名"):
+        team.resolve(zhang.id, None)
+    with pytest.raises(ValueError, match="找不到"):
+        team.resolve(unnamed["未命名 1"].id, "per_nobody")
+
+    # Heard as 张总: the speaker is the owner's decision, and the voice becomes 张总's sample.
+    team.resolve(unnamed["未命名 1"].id, zhang.id)
+    view = {s.id: s for s in team.speakers(library.get(first))}  # type: ignore[arg-type]
+    assert (view["S1"].decision, view["S1"].person_id, view["S1"].auto) == ("confirmed", zhang.id, False)
+    assert revision(library, first)[1] == before + 1
+    assert wanted_done(library, "p-zhang")[0] == 2  # Linked at 1; 张总 now speaks there.
+    later = voices(library, "二.m4a", ([0.98, 0.02, 0.0], 100))
+    assert team.classify(later)
+    assert team.speakers(library.get(later))[0].person_id == zhang.id  # type: ignore[arg-type]
+
+    # Nobody known: the speaker is settled as such, and nobody is left to name.
+    team.resolve(unnamed["未命名 2"].id, None)
+    view = {s.id: s for s in team.speakers(library.get(first))}  # type: ignore[arg-type]
+    assert (view["S2"].decision, view["S2"].person_id) == ("unknown", None)
+    assert [p.name for p in team.people()] == ["张总"]
+    assert team.identities()[first] == (["张总"], 2)
+    assert not team.classify(first)
+
+
 def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "local")
     first = voices(library, "一.m4a", ([1.0, 0.0], 15), ([0.0, 1.0], 15))
@@ -309,6 +343,8 @@ def test_a_new_sample_and_a_restart_classify_the_whole_library(tmp_path: Path) -
         assert renamed.status_code == 200
         taken = web.patch(f"/api/library/people/{unnamed['id']}", json={"name": "张总"}, headers=HEADERS)
         assert taken.status_code == 409
+        other = web.post(f"/api/library/people/{unnamed['id']}/resolve", json={"into": zhang}, headers=HEADERS)
+        assert other.status_code == 409  # Named by now.
         names = {p["name"]: p["auto"] for p in web.get("/api/library/people").json()["items"]}
         assert names == {"张总": False, "李总": False}
         rows = {r["id"]: r for r in web.get("/api/library").json()["recordings"]}
@@ -647,3 +683,20 @@ def test_speakers_can_be_heard_at_several_moments(web: TestClient, tmp_path: Pat
     assert sample.status_code == 200 and sample.headers["content-type"] == "audio/wav"
     assert web.get(f"/api/library/recordings/{rec}/speakers/S9/samples/0").status_code == 404
     assert not list(library.folder(rec).glob("*.wav"))
+
+
+def test_a_twin_from_meetings_is_made_for_a_work_address_and_stays_private(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "local")
+    rec = meeting(library)
+    detail = web.get(f"/api/library/recordings/{rec}").json()
+    body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}
+    put = web.put(f"/api/library/recordings/{rec}/speakers/S2", json={**body, "new_person": "张总"}, headers=HEADERS)
+    zhang = put.json()["person_id"]
+    bad = web.post(f"/api/library/people/{zhang}/persona", json={"email": "张总"}, headers=HEADERS)
+    assert bad.status_code == 400
+    twin = web.post(f"/api/library/people/{zhang}/persona", json={"email": "Zhang@Acme.cn"}, headers=HEADERS).json()
+    [entry] = [p for p in web.get("/api/personas").json() if p["id"] == twin["persona_id"]]
+    assert entry["claim_email"] == "zhang@acme.cn" and entry["claimed"] is False
+    # Nobody but 张总, once signed in and having looked at it, lets colleagues ask it.
+    public = web.patch(f"/api/personas/{twin['persona_id']}", json={"public": True}, headers=HEADERS)
+    assert public.status_code == 409

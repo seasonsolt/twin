@@ -15,6 +15,7 @@ import {
 import { StageHeader } from './StageHeader';
 import { api } from '../../lib/api';
 import { usePersonas, type Persona } from '../../stores/personas';
+import { useAuth } from '../../stores/auth';
 
 export function NewTwin({
   initialOpen = false,
@@ -32,7 +33,14 @@ export function NewTwin({
   const navigate = useNavigate();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(initialOpen);
-  const [draft, setDraft] = useState('');
+  // Someone's first twin is most likely of themselves: start from the name their company account gives.
+  const [draft, setDraft] = useState(() =>
+    initialOpen
+      ? Array.from(useAuth.getState().identity?.name ?? '')
+          .slice(0, 20)
+          .join('')
+      : '',
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const nameId = useId();

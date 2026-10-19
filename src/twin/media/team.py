@@ -64,8 +64,9 @@ class Person(BaseModel):
     speakers: int = 0
     seconds: float = 0
     samples: int = 0
-    # A recording the person speaks in, to hear them.
+    # A recording the person speaks in, and their speaker there, to hear them.
     recording_id: str | None = None
+    speaker_id: str | None = None
 
 
 class Candidate(BaseModel):
@@ -135,7 +136,7 @@ class Team:
         seconds: dict[str, float] = {}
         counts: dict[str, int] = {}
         heard: dict[str, tuple[Speaker, ...]] = {}
-        heard_in: dict[str, str] = {}
+        heard_in: dict[str, tuple[str, str]] = {}
         for person_id, recording_id, _, speaker_id in confirmed:
             if recording_id not in heard:
                 recording = self.library.get(recording_id)
@@ -143,9 +144,9 @@ class Team:
             speaker = next((s for s in heard[recording_id] if s.id == speaker_id), None)
             counts[person_id] = counts.get(person_id, 0) + 1
             seconds[person_id] = seconds.get(person_id, 0) + (speaker.seconds if speaker else 0)
-            heard_in.setdefault(person_id, recording_id)
+            heard_in.setdefault(person_id, (recording_id, speaker_id))
         for person in people:
-            person.recording_id = heard_in.get(person.id)
+            person.recording_id, person.speaker_id = heard_in.get(person.id, (None, None))
             person.samples = samples.get(person.id, 0)
             person.speakers = counts.get(person.id, 0)
             person.seconds = round(seconds.get(person.id, 0), 1)
@@ -379,6 +380,43 @@ class Team:
             }
             self._bump(db, together | {person_id})
             return str(row[0]) if row[0] else None
+
+    def resolve(self, person_id: str, into: str | None) -> None:
+        """Settle an unnamed person as the owner heard them: someone already known (``into``), whose voice samples
+        they bring along, or nobody known (``None``). Their speakers count as the owner's decisions, and the unnamed
+        person is forgotten. ``ValueError`` for a named or unknown person, or an unknown ``into``."""
+        with self.library.transaction() as db:
+            row = db.execute("SELECT auto FROM people WHERE id = ?", (person_id,)).fetchone()
+            if row is None or not row["auto"]:
+                raise ValueError("只能处理还没起名的声音")
+            if into is not None and (
+                into == person_id or not db.execute("SELECT 1 FROM people WHERE id = ?", (into,)).fetchone()
+            ):
+                raise ValueError("找不到这个人")
+            heard = [
+                r[0]
+                for r in db.execute(
+                    "SELECT DISTINCT recording_id FROM attributions WHERE person_id = ? AND decision = 'confirmed'",
+                    (person_id,),
+                )
+            ]
+            if into is not None:
+                db.execute(
+                    "UPDATE attributions SET person_id = ?, auto = 0, updated_at = ? "
+                    "WHERE person_id = ? AND decision = 'confirmed'",
+                    (into, _now(), person_id),
+                )
+                db.execute("UPDATE voiceprints SET person_id = ? WHERE person_id = ?", (into, person_id))
+            else:
+                db.execute(
+                    "UPDATE attributions SET decision = 'unknown', person_id = NULL, auto = 0, updated_at = ? "
+                    "WHERE person_id = ? AND decision = 'confirmed'",
+                    (_now(), person_id),
+                )
+            for recording_id in heard:
+                self._reopen(db, recording_id, {into} if into else set())
+                db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
+            self._forget(db, person_id)
 
     def classify(self, recording_id: str) -> bool:
         """Decide the recording's untouched speakers where the voice leaves no doubt: very close to one person's

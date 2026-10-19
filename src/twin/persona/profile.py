@@ -38,7 +38,7 @@ from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
 from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
-from .store import PersonaStore
+from .store import MERGE_CACHE_PREFIX, PersonaStore
 
 CHUNK_CHARS = 6000
 ENTRY_CHARS = 1500
@@ -49,7 +49,6 @@ MAX_MERGE_CANDIDATES = 80
 # positions, so adding or removing a candidate changes only its own batch (rarely a few after it) and the others
 # merge from the cache. A facet of up to MAX_MERGE_CANDIDATES candidates stays one batch.
 MERGE_CUT_WINDOW = 14
-MERGE_CACHE_PREFIX = "merge_batch:"
 MAX_QUOTES = 3
 STYLE_DIMENSION = "D6"
 

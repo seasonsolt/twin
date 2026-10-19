@@ -189,9 +189,10 @@ arXiv:2309.02427), Zep (Rasmussen et al., arXiv:2501.13956; [PDF] §2), Mem0 (se
 - DeLucia et al., *Using Natural Language Inference to Improve Persona Extraction from Dialogue in a
   New Domain*, arXiv:2401.06742, 2024. [abstract].
 - Yang (Lu), Xu, Li, Yang, Huang, *When Personal Memory Has No Single Answer: Evaluating LLM Agents
-  under Irreducible Conflict* (TANGLE), arXiv:2608.13921, 2026. [abstract]; that "source
-  contradiction" covers self-report vs inferred behaviour is from a fetched §3.2, not the abstract.
-  Closest work to "behaviour outranks self-report, keep the conflict".
+  under Irreducible Conflict* (TANGLE), arXiv:2608.13921, 2026. [HTML] body, [PDF] appendices A, B, K
+  (see [CONFLICT_EVAL.md § 2.1](CONFLICT_EVAL.md)). Keeps irreducible conflicts instead of forcing
+  one answer, so "keep the contradiction" is not ours to claim. Its source contradictions are all
+  record-type facts; it does not test said-versus-done and has no gold answer.
 - Peng, Gui, Brucks, Merlau et al., *Digital Twins as Funhouse Mirrors*, arXiv:2509.19088, 2025.
   [abstract]. Motivation for abstaining instead of filling gaps with stereotypes.
 - Behaviour versus self-report, details checked against Crossref (not read):

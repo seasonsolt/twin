@@ -80,6 +80,11 @@
    `PROMPT_VERSION`，否则 `tests/test_kernel.py` 失败。消融分支统一用带前缀的版本名，例如
    `TAXONOMY_VERSION = "abl-t3"`、`PROMPT_VERSION = "persona-v6-abl-t3"`，并在 `PROMPT_FINGERPRINTS`、
    `TAXONOMY_FINGERPRINTS` 里登记新指纹。前缀 `abl-` 保证不会和正式版本撞名。
+   细项编号变了，还要在 `TAXONOMY_FACET_IDS` 末尾加上新版本的全部编号，并在 `TAXONOMY_MIGRATIONS` 写明每个旧编号的
+   去向，否则 `tests/test_taxonomy_upgrade.py` 失败。各组的写法：T3 把原 D1、D8、D9 的细项映射到"经历与生活"，
+   D2–D5、D7 映射到"看法与做法"，D6 映射到"说话方式"；T0、T0c 全部映射到唯一的细项；TP 没有对应关系，把旧编号都
+   映射到空元组（删除）。打开已有数据库时会按这张表迁移条目，重新整理只补抽、重合并变了的细项；但评测每次都从空库
+   建档（`--profile-cache` 按建档源码指纹分开），这条迁移路径不影响消融结果，写它只是为了让测试通过、分支能跑。
 6. 建议在 `main` 上补一处保护（属于发布脚本，不属于内核，可以在第二阶段做）：`scripts/release-stable.sh`
    拒绝发布 `PROMPT_VERSION` 或 `TAXONOMY_VERSION` 以 `abl-` 开头的提交。
 

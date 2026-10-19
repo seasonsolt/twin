@@ -23,7 +23,7 @@ import { failing, startSystemPolling, useSystem } from '../../stores/system';
 import { SystemDialog, useOpenSystem } from '../../features/admin/SystemDialog';
 import {
   AccountMenu,
-  Heading,
+  EmptyState,
   NavPill,
   PlainButton,
   Row,
@@ -399,32 +399,10 @@ export function AppShell() {
         <MemberVoice onSkip={skipVoice} />
       </Suspense>
     );
-  if (noPersona && !twinLevel)
-    return (
-      <main className="entry-page min-h-dvh">
-        <StageHeader variant="brand" />
-        <section className="mx-auto max-w-sm space-y-6 px-4 py-8">
-          <Heading level={2} size="title">
-            先新建一个分身
-          </Heading>
-          <Text tone="secondary">
-            还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。
-          </Text>
-          <Row wrap gap={4}>
-            <TextLink to="/twins" size="sm">
-              返回我的分身
-            </TextLink>
-            {address && (
-              <TextLink size="sm" onClick={() => setListened(false)}>
-                其实开过会？回去再听一遍
-              </TextLink>
-            )}
-          </Row>
-          <NewTwin initialOpen />
-        </section>
-      </main>
-    );
-  if (!twinLevel && location.pathname !== '/gallery') {
+  // No twin yet on a page about one (chat, work, profile): say so in the page and open the new-twin card right there,
+  // in the workspace, rather than leaving it for a page of its own.
+  const missing = noPersona && !twinLevel;
+  if (!missing && !twinLevel && location.pathname !== '/gallery') {
     if (!checked) return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
     if (onboarding)
       return (
@@ -449,7 +427,7 @@ export function AppShell() {
       <div
         className={`app-column flex min-w-0 flex-1 flex-col ${conversation ? 'chat-app-column' : ''}`}
       >
-        {error && !twinLevel && (
+        {error && !twinLevel && !missing && (
           <div
             role="alert"
             className="border-b border-danger/20 bg-danger/5 px-5 py-2"
@@ -474,11 +452,25 @@ export function AppShell() {
           tabIndex={-1}
           className={`app-main mx-auto w-full flex-1 outline-none ${conversation ? 'chat-main' : 'max-w-6xl content-main'}`}
         >
-          {conversation ? (
+          {conversation && !missing ? (
             outlet
           ) : (
             <PageTransition route={location.pathname}>
-              {location.pathname === '/gallery' ? (
+              {missing ? (
+                <EmptyState
+                  title="先新建一个分身"
+                  body="还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。"
+                >
+                  <Row wrap gap={4} justify="center">
+                    <NewTwin initialOpen />
+                    {address && (
+                      <TextLink size="sm" onClick={() => setListened(false)}>
+                        其实开过会？回去再听一遍
+                      </TextLink>
+                    )}
+                  </Row>
+                </EmptyState>
+              ) : location.pathname === '/gallery' ? (
                 <>
                   <StageHeader />
                   <div className="page-content">{outlet}</div>

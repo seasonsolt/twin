@@ -194,10 +194,10 @@ it('creates from the new-twin card and opens the created twin', async () => {
   mountTwins();
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: '新建分身' }));
-  expect(screen.getByRole('link', { name: '返回我的分身' })).toHaveAttribute(
-    'href',
-    '/twins',
-  );
+  // The twins page stays where it was behind the card.
+  expect(
+    screen.getByRole('heading', { name: '我的分身', hidden: true }),
+  ).toBeInTheDocument();
   await user.type(screen.getByRole('textbox', { name: '分身名字' }), '新伙伴');
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
   expect(await screen.findByText(`聊天：${NEW}`)).toBeVisible();

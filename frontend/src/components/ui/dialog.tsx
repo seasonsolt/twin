@@ -35,6 +35,7 @@ export function Dialog({
   popover = false,
   variant = 'center',
   anchor,
+  inPlace = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -58,6 +59,8 @@ export function Dialog({
   variant?: 'center' | 'sheet' | 'fullscreen' | 'drawer' | 'side';
   /** For a popover placed next to its trigger: the position the page measured. Replaces the centring. */
   anchor?: DialogAnchor;
+  /** A short task done on the page itself: the page behind is only dimmed, not blurred, so it stays in view. */
+  inPlace?: boolean;
 }) {
   const { reduced, transition, exit: fade } = useMotionPreset('gentle');
   const exit = { ...fade, duration: exitDurations.dialog };
@@ -76,7 +79,7 @@ export function Dialog({
                 // Beside a side layer the page stays readable: what it is read against is right there.
                 className={cn(
                   'fixed inset-0 z-40',
-                  variant === 'side'
+                  variant === 'side' || inPlace
                     ? 'bg-black/10'
                     : 'bg-black/25 backdrop-blur-sm',
                 )}

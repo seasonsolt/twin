@@ -123,6 +123,35 @@ const pages: {
     },
   },
   {
+    // A twin account with no twin yet, opening 工作: the workspace stays, with the new-twin card over it.
+    name: 'work-no-twin',
+    path: '/#/work',
+    ready: '创建并开始',
+    setup: async (page) => {
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'user:onboard1',
+            name: '测试新人1',
+            admin: false,
+            auth_enabled: true,
+            provider: 'sso',
+          },
+        }),
+      );
+      await page.route('**/api/personas', (route) =>
+        route.fulfill({ json: [] }),
+      );
+      for (const path of ['**/api/identity', '**/api/status'])
+        await page.route(path, (route) =>
+          route.fulfill({
+            status: 409,
+            json: { detail: '先新建一个分身', code: 'no_persona' },
+          }),
+        );
+    },
+  },
+  {
     name: 'login',
     path: '/#/chat',
     ready: '用邮箱登录',
@@ -154,6 +183,12 @@ const pages: {
       await signInWithSso(page);
     },
   })),
+  {
+    // A new twin, opened from the twins page or a member's first sign-in.
+    name: 'twins-create',
+    path: '/#/twins?create=1',
+    ready: '创建并开始',
+  },
   {
     name: 'team-ink',
     path: '/#/team',

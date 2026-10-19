@@ -9,7 +9,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
-import { NewTwin } from '../components/layout/NewTwin';
 import { Profile } from '../pages/Profile';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
@@ -221,23 +220,6 @@ it.each([true, false])(
     }
   },
 );
-
-it('shows a live future-twin preview and four pills when creating', async () => {
-  mount(<NewTwin />, '/chat');
-  fireEvent.click(screen.getByRole('button', { name: '新建分身' }));
-  const sheet = screen.getByRole('dialog', { name: '新建分身' });
-  fireEvent.change(within(sheet).getByRole('textbox', { name: '分身名字' }), {
-    target: { value: '阿宁' },
-  });
-  const header = within(sheet).getByRole('banner', { name: '阿宁的舞台' });
-  expect(header.querySelector('img')).toBeNull();
-  expect(
-    within(header).getByRole('img', { name: '阿宁的头像' }),
-  ).toHaveTextContent('阿');
-  expect(
-    within(header).getByRole('img', { name: '第 1 步，共 4 步' }).children,
-  ).toHaveLength(4);
-});
 
 it('keeps the onboarding portrait and live name on the band above four steps', async () => {
   mount(<Onboarding identity={identity} onDone={vi.fn()} />, '/chat');

@@ -241,12 +241,21 @@ it('returns to login on a mid-session 401 and clears the previous persona state'
   expect(getPersonaId()).toBe('');
 });
 
-it('routes no_persona to creation, then opens the app for the new twin', async () => {
+it('routes no_persona to creation in the workspace, then opens the app for the new twin', async () => {
   loggedIn = true;
   items = [];
+  window.location.hash = '#/work';
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole('dialog', { name: '新建分身' });
+  const dialog = await screen.findByRole('dialog', { name: '新建分身' });
+  // Made in place: the workspace stays behind the card, with the page saying why.
+  expect(dialog).not.toHaveClass('inset-0');
+  expect(
+    screen.getByRole('heading', { name: '先新建一个分身', hidden: true }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole('navigation', { name: '主导航', hidden: true }),
+  ).toBeInTheDocument();
   await user.type(
     await screen.findByRole('textbox', { name: '分身名字' }),
     '我的分身',

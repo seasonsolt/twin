@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus } from 'lucide-react';
 import {
@@ -8,11 +8,12 @@ import {
   Field,
   IconButton,
   Input,
+  Row,
   Stack,
   Text,
-  TextLink,
+  type DialogAnchor,
 } from '../ui';
-import { StageHeader } from './StageHeader';
+import { useMobile } from '../../lib/useMobile';
 import { api } from '../../lib/api';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useAuth } from '../../stores/auth';
@@ -44,6 +45,33 @@ export function NewTwin({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const nameId = useId();
+  const mobile = useMobile();
+  const [anchor, setAnchor] = useState<DialogAnchor>();
+  // Beside the rail's plus: to its right, level with it, so the card comes out of what was clicked.
+  useEffect(() => {
+    if (mobile || !open || variant !== 'rail') {
+      setAnchor(undefined);
+      return;
+    }
+    const place = () => {
+      const rect = trigger.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(360, window.innerWidth - rect.right - 32);
+      setAnchor(
+        rect.top > window.innerHeight / 2
+          ? {
+              left: rect.right + 16,
+              top: 'auto',
+              bottom: Math.max(16, window.innerHeight - rect.bottom),
+              width,
+            }
+          : { left: rect.right + 16, top: rect.top, width },
+      );
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [mobile, open, variant]);
   const changeOpen = (value: boolean) => {
     setOpen(value);
     onOpenChange?.(value);
@@ -109,58 +137,68 @@ export function NewTwin({
           {children}
         </Button>
       )}
+      {/* Made where the person already is: a card beside the rail's plus, in the middle of the page otherwise, from
+          the bottom edge on a phone. The work behind stays in view and is there again when it closes. */}
       <Dialog
         open={open}
         onOpenChange={changeOpen}
         title="新建分身"
-        body="每个分身都有独立的记忆、形象、声音和聊天。"
-        variant="fullscreen"
-        className="create-twin-sheet"
+        variant={mobile ? 'sheet' : 'center'}
+        anchor={mobile ? undefined : anchor}
+        className="new-twin"
+        inPlace
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           trigger.current?.focus();
         }}
       >
-        <StageHeader
-          variant="future"
-          name={draft.trim() || '新分身'}
-          intro={<p className="stage-caption">给未来的分身一个名字</p>}
-        />
-        <div className="space-y-3">
-          <TextLink to="/twins" size="sm" onClick={() => changeOpen(false)}>
-            返回我的分身
-          </TextLink>
+        <Stack gap={4}>
           <Stack
             as="form"
             gap={3}
-            align="start"
             onSubmit={(event) => {
               event.preventDefault();
               void submit();
             }}
           >
-            <div className="w-full">
-              <Field id={nameId} label="分身名字">
-                <Input
-                  id={nameId}
-                  autoFocus
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  maxLength={20}
-                  required
-                />
-              </Field>
-            </div>
-            <Button type="submit" loading={busy} disabled={!draft.trim()}>
+            <Field id={nameId} label="分身名字">
+              <Row gap={3}>
+                <span aria-hidden className="new-twin-initial">
+                  {Array.from(draft.trim() || '新')[0]}
+                </span>
+                <Row grow>
+                  <Input
+                    id={nameId}
+                    autoFocus
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    maxLength={20}
+                    placeholder="比如你的名字"
+                    required
+                    size="lg"
+                  />
+                </Row>
+              </Row>
+            </Field>
+            <Button
+              type="submit"
+              size="lg"
+              className="min-h-12 w-full"
+              loading={busy}
+              disabled={!draft.trim()}
+            >
               创建并开始
             </Button>
+            {error && (
+              <Text role="alert" size="sm" tone="danger">
+                {error}
+              </Text>
+            )}
           </Stack>
-          {error && (
-            <Text role="alert" tone="danger">
-              {error}
-            </Text>
-          )}
-        </div>
+          <Text size="sm" tone="secondary">
+            每个分身有独立的记忆和聊天。创建后添加录音或资料，勾出哪位是你，就能开始聊。
+          </Text>
+        </Stack>
       </Dialog>
     </>
   );

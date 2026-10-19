@@ -48,7 +48,7 @@ from ..persona.sources import parse_media
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
-from .personas import Personas
+from .personas import ClaimBody, Personas, claim_address
 from .uploads import UploadBody, Uploads, upload_routes
 
 logger = logging.getLogger(__name__)
@@ -377,9 +377,12 @@ class Libraries:
             return "failed"
         return "waiting" if recording.id in waiting else ""
 
-    def create_twin(self, owner: str, person_id: str, identity: dict[str, Any]) -> dict[str, Any]:
+    def create_twin(
+        self, owner: str, person_id: str, identity: dict[str, Any], email: str | None = None
+    ) -> dict[str, Any]:
         """The person's twin, created on first call: private, owned by the account, answering as a meeting record
-        once its first build completes."""
+        once its first build completes. ``email``: the person's work e-mail, by which they take the twin when they
+        sign in."""
         assert self.registry is not None
         team = self.team(owner)
         with self.lock:
@@ -388,7 +391,7 @@ class Libraries:
                 raise HTTPException(404, "找不到这个人")
             if person.persona_id and self.registry.entry(person.persona_id) is not None:
                 return {"persona_id": person.persona_id, "new": False}
-            entry = self.registry.create(person.name, identity, onboarding=False)
+            entry = self.registry.create(person.name, identity, onboarding=False, claim_email=email)
             with PersonaStore(self.registry.settings_for(entry["id"]).db_path) as store:
                 gate.link(store, self.library(owner).db_path, entry["id"])
             team.link(person_id, entry["id"])
@@ -745,10 +748,11 @@ def register(
         return {"deleted": True}
 
     @app.post("/api/library/people/{person_id}/persona")
-    def post_twin(person_id: str, request: Request) -> dict[str, Any]:
+    def post_twin(person_id: str, request: Request, body: ClaimBody | None = None) -> dict[str, Any]:
         if registry is None:
             raise HTTPException(503, "无法创建分身")
         owner = libraries.owner(request)
-        return libraries.create_twin(owner, person_id, request.scope["twin_identity"])
+        email = claim_address(body.email if body else None)
+        return libraries.create_twin(owner, person_id, request.scope["twin_identity"], email)
 
     return libraries

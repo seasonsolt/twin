@@ -6,6 +6,8 @@ export interface Identity {
   email: string | null;
   /** Display name from single sign-on; email login has none. */
   name?: string | null;
+  /** The work e-mail of the account, by which a twin made for it is taken. */
+  address?: string | null;
   admin: boolean;
   auth_enabled: boolean;
   /** 'sso' means signing in and out belongs to another app on this site. */

@@ -140,7 +140,7 @@ it('refuses a decision on an outdated page and reloads it', async () => {
 });
 
 it('creates a twin for a confirmed person and shows when its memory is updating', async () => {
-  const created: string[] = [];
+  const created: unknown[] = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -161,7 +161,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
         url === '/api/library/people/per_1/persona' &&
         init?.method === 'POST'
       ) {
-        created.push(url);
+        created.push(JSON.parse(String(init.body)));
         people = [person({ persona_id: 'p-1', updating: true }), people[1]];
         return json({ persona_id: 'p-1', new: true });
       }
@@ -184,8 +184,15 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
+  // Made for 张总's work e-mail: they take it when they sign in with it.
+  const dialog = await screen.findByRole('dialog', { name: '为张总建分身' });
+  await userEvent.type(
+    within(dialog).getByRole('textbox', { name: /企业邮箱/u }),
+    'zhang@acme.cn',
+  );
+  await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
   expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
-  expect(created).toHaveLength(1);
+  expect(created).toEqual([{ email: 'zhang@acme.cn' }]);
 });
 
 it('marks automatic matches and reopens them through the existing clear action', async () => {

@@ -235,6 +235,99 @@ function EditPerson({
   );
 }
 
+/**
+ * The work e-mail of the person a twin is made for: when they sign in with their company account under that address,
+ * the twin becomes theirs. Asked when the twin is made, and changeable until they have taken it.
+ */
+function WorkEmail({
+  person,
+  twin,
+  busy,
+  onClose,
+  onSave,
+}: {
+  person: Person | null;
+  twin?: Persona;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (email: string) => void;
+}) {
+  const [email, setEmail] = useState('');
+  useEffect(() => {
+    if (person) setEmail(twin?.claim_email ?? '');
+  }, [person, twin]);
+  const making = !twin;
+  return (
+    <Dialog
+      open={!!person}
+      onOpenChange={(open) => !open && onClose()}
+      title={
+        making
+          ? `为${person?.name ?? ''}建分身`
+          : `${person?.name ?? ''}的企业邮箱`
+      }
+      body="填 TA 企业账号登录用的邮箱。TA 一登录，分身就归到 TA 名下；TA 看过并点“没问题”之前，分身不对同事回答。"
+    >
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(email.trim());
+        }}
+      >
+        <Field
+          id="work-email"
+          label={making ? '企业邮箱（不知道可以先空着）' : '企业邮箱'}
+          help={
+            twin?.claim_rejected
+              ? `${twin.claim_rejected} 的主人说这不是 TA，换一个邮箱吧`
+              : '填错了也不要紧：对方登录后点“这不是我”，分身会退回给你。'
+          }
+        >
+          <Input
+            id="work-email"
+            type="email"
+            autoComplete="off"
+            maxLength={254}
+            placeholder="name@company.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </Field>
+        <Row gap={2} justify="end">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            type="submit"
+            disabled={busy || (!making && !email.trim() && !twin?.claim_email)}
+          >
+            {making ? '建好' : '保存'}
+          </Button>
+        </Row>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Whose a twin made from the meetings is: waiting for its person to sign in, or theirs. */
+function ClaimLine({ twin }: { twin?: Persona }) {
+  const [label, tone]: [string, TextTone] | [null, null] = twin?.claimed
+    ? ['本人已认领', 'success']
+    : twin?.claim_rejected
+      ? [`${twin.claim_rejected} 说不是 TA，换个邮箱`, 'danger']
+      : twin?.claim_email
+        ? [`等 ${twin.claim_email} 登录认领`, 'secondary']
+        : [null, null];
+  return (
+    label && (
+      <Text size="sm" tone={tone} breakAll>
+        {label}
+      </Text>
+    )
+  );
+}
+
 /** What the owner has to settle, quiet background progress, and everyone found in
  * the recordings, each with their twin. */
 export function Team({
@@ -257,6 +350,7 @@ export function Team({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
+  const [addressing, setAddressing] = useState<Person | null>(null);
   const taskList = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const [focusPending, setFocusPending] = useState<string | null>(
@@ -310,13 +404,23 @@ export function Team({
       });
       setName('');
     });
-  const createTwin = (person: Person) =>
+  const saveEmail = (person: Person, email: string) =>
     act(async () => {
-      await api(
-        `/api/library/people/${encodeURIComponent(person.id)}/persona`,
-        { method: 'POST' },
-      );
+      if (person.persona_id)
+        await api(
+          `/api/personas/${encodeURIComponent(person.persona_id)}/claim`,
+          {
+            method: 'PUT',
+            json: { email: email || null },
+          },
+        );
+      else
+        await api(
+          `/api/library/people/${encodeURIComponent(person.id)}/persona`,
+          { method: 'POST', json: { email: email || null } },
+        );
       await refreshPersonas();
+      setAddressing(null);
     });
   const remove = async (person: Person) => {
     if (
@@ -639,6 +743,9 @@ export function Team({
                     <Badge tone="neutral">还没有分身</Badge>
                   )}
                 </div>
+                <ClaimLine
+                  twin={twins.find((t) => t.id === person.persona_id)}
+                />
                 <div className="mt-auto flex flex-wrap gap-2">
                   {person.persona_id ? (
                     <>
@@ -656,7 +763,7 @@ export function Team({
                         variant="secondary"
                         className="flex-1"
                         disabled={busy || !person.speakers}
-                        onClick={() => void createTwin(person)}
+                        onClick={() => setAddressing(person)}
                       >
                         生成分身
                       </Button>
@@ -670,6 +777,17 @@ export function Team({
                         disabled: busy,
                         onSelect: () => setEditing(person),
                       },
+                      ...(person.persona_id &&
+                      twins.find((t) => t.id === person.persona_id)?.claimed ===
+                        false
+                        ? [
+                            {
+                              label: '企业邮箱',
+                              disabled: busy,
+                              onSelect: () => setAddressing(person),
+                            },
+                          ]
+                        : []),
                       ...(!person.persona_id
                         ? [
                             {
@@ -746,6 +864,13 @@ export function Team({
           )}
         </Section>
       )}
+      <WorkEmail
+        person={addressing}
+        twin={twins.find((t) => t.id === addressing?.persona_id)}
+        busy={busy}
+        onClose={() => setAddressing(null)}
+        onSave={(email) => addressing && void saveEmail(addressing, email)}
+      />
       <EditPerson
         person={editing}
         busy={busy}

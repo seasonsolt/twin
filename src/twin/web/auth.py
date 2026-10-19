@@ -144,12 +144,16 @@ class Auth:
                 admins.add(local)
         return any(name.strip().lower() in admins for name in names if name and name.strip())
 
-    def identity(self, email: str | None, name: str | None = None, *aliases: str | None) -> dict[str, Any]:
+    def identity(
+        self, email: str | None, name: str | None = None, *aliases: str | None, address: str | None = None
+    ) -> dict[str, Any]:
         """``aliases``: other names the login service gives the same person (an SSO account name or address),
-        compared with the administrators."""
+        compared with the administrators. ``address``: the person's work e-mail, by which a twin an administrator
+        made for them becomes theirs (``email`` is the account's key, which for SSO is not an address)."""
         return {
             "email": email,
             "name": name,
+            "address": address,
             "admin": not self.settings.enabled or self.is_admin(email, *aliases),
             "auth_enabled": self.settings.enabled,
             "provider": self.settings.provider if self.settings.enabled else None,
@@ -189,7 +193,9 @@ class Auth:
         if subject and payload.get("authenticated") is not False:
             name = str(payload.get("display_name") or payload.get("account") or "").strip() or None
             account, address = (str(payload.get(k) or "").strip() or None for k in ("account", "email"))
-            identity = self.identity(f"sso:{subject}", name, account, address)
+            identity = self.identity(
+                f"sso:{subject}", name, account, address, address=self.work_address(account, address)
+            )
             if subject not in self.sso_seen:
                 self.sso_seen.add(subject)
                 logger.info("SSO 登录：%s（账号 %s，twin 标识 sso:%s）", name, payload.get("account"), subject)
@@ -200,6 +206,22 @@ class Auth:
             self.sso_cache[key] = (now + ttl, identity)
         return identity
 
+    def work_address(self, account: str | None, address: str | None) -> str | None:
+        """The work e-mail of an SSO account: the one the login service gives, else the account name in the first
+        allowed domain (account zhangxun is zhangxun@xjjk.com, as for administrators)."""
+        for candidate in (
+            address,
+            f"{account}@{self.settings.allowed_domains[0]}"
+            if account and "@" not in account and self.settings.allowed_domains
+            else None,
+        ):
+            if candidate:
+                try:
+                    return normalize_email(candidate)
+                except HTTPException:
+                    pass
+        return None
+
     def session(self, token: str | None) -> dict[str, Any] | None:
         if not self.settings.enabled:
             return self.identity(None)
@@ -207,7 +229,7 @@ class Auth:
             return None
         with self.database() as db:
             row = db.execute("SELECT email FROM sessions WHERE hash = ?", (digest(token),)).fetchone()
-        return self.identity(row["email"]) if row and self.allowed(row["email"]) else None
+        return self.identity(row["email"], address=row["email"]) if row and self.allowed(row["email"]) else None
 
     def rate_limit(self, email: str | None, ip: str) -> None:
         now = time.monotonic()

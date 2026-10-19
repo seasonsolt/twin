@@ -27,6 +27,7 @@ from ..media.schema import default_avatar
 from ..persona import gate
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..util import private_directory
+from .auth import normalize_email
 from .jobs import JobManager
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,16 @@ class NameBody(BaseModel):
 class VisibilityBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     public: bool
+
+
+class ClaimBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # The colleague's work e-mail; None or "" forgets it.
+    email: str | None = Field(default=None, max_length=254)
+
+
+def claim_address(value: str | None) -> str | None:
+    return normalize_email(value) if value and value.strip() else None
 
 
 # Visitors of a public twin can only talk to it; its memories and settings stay with the owner.
@@ -202,10 +213,55 @@ class Personas:
             "is_default": persona_id == default,
             "public": bool(entry.get("public")),
             "can_manage": self.accessible(entry, identity),
+            **self.claim_view(entry, identity),
         }
 
+    def claim_view(self, entry: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+        """Who the twin is made for. Those who manage it see the address and whether that person has taken it; the
+        person sees that it is theirs and whether they have said it is all right."""
+        view: dict[str, Any] = {}
+        if entry.get("member") and entry["member"] == identity["email"]:
+            view["mine"] = True
+            view["approved"] = bool(entry.get("approved_at"))
+            view["made_by_other"] = entry.get("owner") != identity["email"]
+        if self.accessible(entry, identity):
+            view["claim_email"] = entry.get("claim_email")
+            view["claimed"] = bool(entry.get("member"))
+            if entry.get("claim_rejected"):
+                view["claim_rejected"] = entry["claim_rejected"]
+        return view
+
+    def claim(self, identity: dict[str, Any]) -> None:
+        """Give the signed-in person the twins made for their work e-mail that nobody has taken yet (under
+        ``lock``). An enterprise sign-in fixes the address, so it alone says whose a twin is."""
+        address = identity.get("address")
+        if not address or not identity.get("email"):
+            return
+        changed = False
+        for entry in self.data["personas"]:
+            if entry.get("claim_email") == address and not entry.get("member") and not entry.get("deleted_at"):
+                entry["member"] = identity["email"]
+                entry["claimed_at"] = self.clock().isoformat()
+                changed = True
+        if changed:
+            self.save()
+
     def accessible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
-        return bool(identity["admin"] or (entry.get("owner") and entry["owner"] == identity["email"]))
+        """Administrators, whoever made the twin, and the person it was made for and who has taken it."""
+        email = identity["email"]
+        return bool(identity["admin"] or (email and email in (entry.get("owner"), entry.get("member"))))
+
+    def own(self, persona_id: str, identity: dict[str, Any]) -> dict[str, Any]:
+        """The live twin taken by the signed-in person, made for them by someone else or not."""
+        entry = self.entry(persona_id)
+        if (
+            entry is None
+            or persona_id in self.removing
+            or not entry.get("member")
+            or entry["member"] != identity["email"]
+        ):
+            raise HTTPException(404, "分身不存在")
+        return entry
 
     def visible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
         return (
@@ -232,9 +288,12 @@ class Personas:
             raise HTTPException(403, "这是别人的公开分身，只能聊天")
         return True
 
-    def create(self, name: str, identity: dict[str, Any], *, onboarding: bool = True) -> dict[str, Any]:
+    def create(
+        self, name: str, identity: dict[str, Any], *, onboarding: bool = True, claim_email: str | None = None
+    ) -> dict[str, Any]:
         """A new private twin owned by ``identity``, within the member limit (admins are not limited); returns its
-        registry entry. ``onboarding=False`` for a twin whose name and memory come from elsewhere."""
+        registry entry. ``onboarding=False`` for a twin whose name and memory come from elsewhere; ``claim_email``:
+        the work e-mail of the person it is made for, who takes it on signing in."""
         with self.lock:
             limit = self.settings.auth.max_personas_per_member
             if (
@@ -244,6 +303,10 @@ class Personas:
                 >= limit
             ):
                 raise HTTPException(409, f"最多可以建 {limit} 个分身")
+            if claim_email and any(
+                p.get("claim_email") == claim_email and not p.get("deleted_at") for p in self.data["personas"]
+            ):
+                raise HTTPException(409, "这个邮箱已经用在另一个分身上")
             persona_id = "p-" + secrets.token_hex(5)
             directory = self.root / "personas" / persona_id
             private_directory(directory.parent)
@@ -254,6 +317,8 @@ class Personas:
                 if onboarding:
                     store.set_meta("onboarding_pending", "1")
             entry = {"id": persona_id, "owner": identity["email"], "created_at": dt.datetime.now(dt.UTC).isoformat()}
+            if claim_email:
+                entry["claim_email"] = claim_email
             self.data["personas"].append(entry)
             self.save()
             return entry
@@ -272,6 +337,7 @@ class Personas:
             # its files are read: opening the database of one moved to the trash meanwhile would create it again.
             with self.lock:
                 expired = self.purge_trash()
+                self.claim(identity)
                 listed = [
                     (dict(entry), self._settings(entry["id"], read_name=False))
                     for entry in self.data["personas"]
@@ -343,13 +409,65 @@ class Personas:
             with self.lock:
                 identity = request.scope["twin_identity"]
                 self.check_owner(persona_id, identity)
-                if body.public and gate.linked(self.settings_for(persona_id).db_path):
-                    # Made from colleagues' meetings: it speaks for someone who did not choose to be public.
-                    raise HTTPException(409, "由录音库生成的分身只能私有")
                 entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
+                if (
+                    body.public
+                    and not (entry.get("member") == identity["email"] and entry.get("approved_at"))
+                    and gate.linked(self.settings_for(persona_id).db_path)
+                ):
+                    # Made from colleagues' meetings: it speaks for someone who did not choose to be public, until
+                    # that person takes it and says it is all right.
+                    raise HTTPException(409, "由录音库生成的分身只能私有，本人认领并确认后才能让同事问")
                 entry["public"] = body.public
                 self.save()
                 return self.view(entry, identity)
+
+        @app.put("/api/personas/{persona_id}/claim")
+        def set_claim(persona_id: str, body: ClaimBody, request: Request) -> dict[str, Any]:
+            """Say whose twin this is by their work e-mail: they take it when they sign in with it."""
+            address = claim_address(body.email)
+            with self.lock:
+                identity = request.scope["twin_identity"]
+                self.check_owner(persona_id, identity)
+                entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
+                if entry.get("member"):
+                    raise HTTPException(409, "本人已经认领了这个分身")
+                if address and any(
+                    p is not entry and not p.get("deleted_at") and p.get("claim_email") == address
+                    for p in self.data["personas"]
+                ):
+                    raise HTTPException(409, "这个邮箱已经用在另一个分身上")
+                entry["claim_email"] = address
+                entry.pop("claim_rejected", None)
+                self.save()
+                return self.view(entry, identity)
+
+        @app.post("/api/personas/{persona_id}/approve")
+        def approve(persona_id: str, body: VisibilityBody, request: Request) -> dict[str, Any]:
+            """The person a twin was made for has looked at it and says it may answer; ``public``: colleagues may
+            ask it too."""
+            with self.lock:
+                identity = request.scope["twin_identity"]
+                entry = self.own(persona_id, identity)
+                entry["approved_at"] = entry.get("approved_at") or self.clock().isoformat()
+                entry["public"] = body.public
+                self.save()
+                return self.view(entry, identity)
+
+        @app.post("/api/personas/{persona_id}/disown")
+        def disown(persona_id: str, request: Request) -> dict[str, bool]:
+            """ "这不是我": the twin goes back to whoever made it, who sees the address was wrong."""
+            with self.lock:
+                identity = request.scope["twin_identity"]
+                entry = self.own(persona_id, identity)
+                if entry.get("owner") == identity["email"]:
+                    raise HTTPException(409, "这是你自己建的分身")
+                entry["claim_rejected"] = entry.pop("claim_email", None) or identity.get("address") or ""
+                for key in ("member", "claimed_at", "approved_at"):
+                    entry.pop(key, None)
+                entry["public"] = False
+                self.save()
+                return {"disowned": True}
 
         @app.delete("/api/personas/{persona_id}")
         def delete_persona(persona_id: str, request: Request) -> dict[str, bool]:
@@ -443,6 +561,7 @@ class PersonaMiddleware:
             if persona_id is not None:
                 scope["twin_visitor"] = registry.check_access(persona_id, identity, str(scope["method"]), path)
             else:
+                registry.claim(identity)
                 persona_id = (
                     registry.data["default"]
                     if identity["admin"]

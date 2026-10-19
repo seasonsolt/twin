@@ -660,3 +660,83 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     within(dialog).getByRole('textbox', { name: '张总 · 1 段录音' }),
   ).toHaveValue('');
 });
+
+it('shows a person who found themselves by voice as having their own twin', async () => {
+  people = [person({ self_claimed: true }), people[1]!];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const name = await screen.findByText('张总', { selector: 'p' });
+  const row = name.closest('li')!;
+  expect(within(row).getByText('本人已认领')).toBeInTheDocument();
+  expect(within(row).getByText(/分身归 TA 自己/u)).toBeInTheDocument();
+  expect(within(row).queryByRole('button', { name: '生成分身' })).toBeNull();
+  expect(within(row).queryByRole('link', { name: '张总的档案' })).toBeNull();
+});
+
+it('puts what someone said is not them first, and lets an administrator merge two people of one name', async () => {
+  const user = userEvent.setup();
+  people = [
+    person({ similar: ['per_2'] }),
+    person({ id: 'per_2', name: '张总（2）', speakers: 3, similar: ['per_1'] }),
+    // Someone the viewer does not look after: on the roster for picking, not on this page.
+    person({ id: 'per_3', name: '王五', can_manage: false }),
+  ];
+  const posts: [string, unknown][] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({
+          items: [
+            {
+              ...speaker({ id: 'S4', disputed: true }),
+              recording_id: 'rec_1',
+              filename: '周会.m4a',
+            },
+          ],
+        });
+      if (url === '/api/personas') return json([]);
+      if (init?.method === 'POST') {
+        posts.push([url, JSON.parse(String(init.body))]);
+        people = [person({}), people[1]!];
+        return json({ merged: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const disputed = (await screen.findByText('有人说不是自己')).closest('li')!;
+  expect(disputed).toHaveTextContent('周会.m4a · S4 原来标成的人说这不是 TA');
+  expect(screen.queryByText('王五', { selector: 'p' })).toBeNull();
+  const hint = screen.getByText('可能是同一个人').closest('li')!;
+  expect(hint).toHaveTextContent('张总 和 张总（2）');
+  // The one who spoke more is kept.
+  await user.click(within(hint).getByRole('button', { name: '合并' }));
+  await waitFor(() =>
+    expect(posts).toEqual([
+      ['/api/library/people/per_1/merge', { into: 'per_2' }],
+    ]),
+  );
+  await waitFor(() => expect(screen.queryByText('可能是同一个人')).toBeNull());
+});

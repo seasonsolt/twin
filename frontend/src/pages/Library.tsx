@@ -42,6 +42,8 @@ export interface Recording {
   unsettled: number;
   // Whether the model proofread the transcript: done, gave nothing, still to come, or not due (no one identified).
   proofread?: Proofread;
+  // Whether the viewer decides about it (they uploaded it, or administer); otherwise they were in it and may read it.
+  can_edit?: boolean;
 }
 export type Proofread = 'done' | 'failed' | 'waiting' | '';
 export interface Quota {
@@ -74,6 +76,7 @@ const statusLabel: Record<Recording['status'], [string, Tone]> = {
 };
 /** A transcribed recording is described by how far its speakers are identified. */
 function identityLabel(recording: Recording): [string, Tone] {
+  if (recording.can_edit === false) return ['你参加的', 'neutral'];
   if (recording.status !== 'ready') return statusLabel[recording.status];
   if (!recording.unsettled) return ['已认人', 'success'];
   return [`${recording.unsettled} 位待确认`, 'warning'];
@@ -180,7 +183,8 @@ export function Library() {
   const recordings = library?.recordings ?? [];
   const matches: Record<string, (recording: Recording) => boolean> = {
     all: () => true,
-    waiting: (r) => r.status === 'ready' && r.unsettled > 0,
+    waiting: (r) =>
+      r.status === 'ready' && r.unsettled > 0 && r.can_edit !== false,
     processing: (r) =>
       r.status === 'queued' ||
       r.status === 'transcribing' ||
@@ -194,7 +198,7 @@ export function Library() {
         stackHeaderOnMobile
         title="录音库"
         titleSize="display"
-        description="只有你的账号能看到。转写校验完成后删除原件，保留转写稿和试听用的音频。"
+        description="团队共用：你上传的由你整理，你参加的会议你也能查看。转写校验完成后删除原件，保留转写稿和试听用的音频。"
         actions={
           <>
             {library && capacity && (
@@ -313,17 +317,19 @@ export function Library() {
                       trailing={
                         <>
                           <Badge tone={tone}>{label}</Badge>
-                          {recording.status === 'failed' && (
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => void retry(recording)}
-                            >
-                              重试
-                            </Button>
-                          )}
+                          {recording.status === 'failed' &&
+                            recording.can_edit !== false && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void retry(recording)}
+                              >
+                                重试
+                              </Button>
+                            )}
                           {recording.status === 'ready' &&
-                            recording.unsettled > 0 && (
+                            recording.unsettled > 0 &&
+                            recording.can_edit !== false && (
                               <RouteButton
                                 size="sm"
                                 to={`/library/${encodeURIComponent(recording.id)}`}
@@ -331,16 +337,18 @@ export function Library() {
                                 确认说话人
                               </RouteButton>
                             )}
-                          <ActionMenu
-                            label={`更多：${recording.filename}`}
-                            items={[
-                              {
-                                label: '删除',
-                                disabled: recording.status === 'transcribing',
-                                onSelect: () => void remove(recording),
-                              },
-                            ]}
-                          />
+                          {recording.can_edit !== false && (
+                            <ActionMenu
+                              label={`更多：${recording.filename}`}
+                              items={[
+                                {
+                                  label: '删除',
+                                  disabled: recording.status === 'transcribing',
+                                  onSelect: () => void remove(recording),
+                                },
+                              ]}
+                            />
+                          )}
                         </>
                       }
                     >

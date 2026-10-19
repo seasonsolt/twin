@@ -15,7 +15,7 @@ export interface Pick {
 const LIBRARY_UPLOADS = { base: '/api/library/uploads', scope: 'library' };
 export const MEDIA_ACCEPT = 'audio/*,video/*,.mkv,.caf,.amr,.opus,.m4a';
 
-/** Uploading recordings to the account's library, one file at a time; ``changed`` runs after each file. */
+/** Uploading recordings to the team's library, one file at a time; ``changed`` runs after each file. */
 export function useUploads(changed: () => void) {
   const [picks, setPicks] = useState<Pick[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -38,15 +38,18 @@ export function useUploads(changed: () => void) {
         current.map((p) => (p.file === pick.file ? { ...p, ...change } : p)),
       );
     // One file at a time: the server admits each against free space and the queue limit.
+    const theirs: string[] = [];
     for (const pick of queue) {
       if (abort.signal.aborted) break;
       try {
-        await uploadMedia(
+        const filed = await uploadMedia(
           pick.file,
           abort.signal,
           (progress) => update(pick, { progress }),
           LIBRARY_UPLOADS,
         );
+        // The same meeting a colleague uploaded first stays theirs to sort out.
+        if (filed.mine === false) theirs.push(pick.file.name);
         update(pick, { done: true });
       } catch (failure) {
         if (failure instanceof DOMException && failure.name === 'AbortError')
@@ -57,6 +60,10 @@ export function useUploads(changed: () => void) {
       }
       changed();
     }
+    if (theirs.length)
+      setNotice(
+        `${theirs.map((name) => `「${name}」`).join('')}已经有同事上传过，由 TA 整理`,
+      );
     setUploading(false);
   };
 

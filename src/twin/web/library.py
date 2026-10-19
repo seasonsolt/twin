@@ -1,6 +1,9 @@
-"""``/api/library``: the signed-in account's recording library, outside any one twin.
+"""``/api/library``: the team's recording library, outside any one twin.
 
-Only the account that uploaded a recording can see it. Recordings are transcribed one after another in the shared
+The meetings are the team's, but not everyone sees every one. Whoever uploaded a recording, and administrators,
+see all of it and decide who speaks there; the people identified in it (``Viewer``) can read and hear it, and say
+that a speaker given to them is not them; everyone else sees nothing of it, and may only hear the one sentence of a
+voice like theirs they are offered (``web.voice``). Recordings are transcribed one after another in the shared
 media slot (so a library batch and a twin's own recordings take turns on the transcription service); the queue
 lives in ``library.db``, so a restart picks up where it stopped.
 
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import json
 import logging
 import math
 import shutil
@@ -27,7 +31,8 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any, Literal, NamedTuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -36,10 +41,11 @@ from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
 from ..llm import LLM
+from ..media import merge
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.clean import BATCH, clean_segments
 from ..media.ingest import CommandTranscriber, make_transcriber
-from ..media.library import Cleaned, Library, Recording, TranscriptionError, owner_key
+from ..media.library import TEAM, Cleaned, Library, Recording, TranscriptionError, owner_key
 from ..media.schema import AVATAR_GENDERS, default_avatar
 from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
 from ..persona import gate
@@ -62,6 +68,21 @@ SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 WAKE_SECONDS = 60.0
 
 
+class Viewer(NamedTuple):
+    """Who is asking: their account (``owner_key``, what recordings remember as their uploader), the account's
+    key in the registry, and whether they administer the deployment (everyone does without login)."""
+
+    key: str
+    email: str | None
+    admin: bool
+
+
+class Access(NamedTuple):
+    """What a viewer may do with a recording: hear and read it (any recording in the map), and decide about it."""
+
+    edit: bool
+
+
 class PersonBody(BaseModel):
     name: str = Field(min_length=1, max_length=40)
 
@@ -69,6 +90,15 @@ class PersonBody(BaseModel):
 class PersonPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=40)
     gender: Gender | None = None
+
+
+class MergeBody(BaseModel):
+    # The person to keep; the other is folded into them.
+    into: str
+
+
+class ApartBody(BaseModel):
+    other: str
 
 
 class ResolveBody(BaseModel):
@@ -114,7 +144,8 @@ class Libraries:
         self._waker: threading.Thread | None = None
 
     def owner(self, request: Request) -> str:
-        return owner_key(request.scope["twin_identity"]["email"])
+        """The library a request works in: the team's (the one library of a deployment)."""
+        return TEAM
 
     def library(self, owner: str) -> Library:
         with self.lock:
@@ -122,23 +153,137 @@ class Libraries:
                 self.opened[owner] = Library(self.root / owner)
             return self.opened[owner]
 
-    def uploads(self, owner: str) -> Uploads:
-        return Uploads(self.library(owner).root)
+    def member(self, key: str) -> Path:
+        """A member's own corner of the team's library: their uploads still arriving and their voice."""
+        return self.library(TEAM).root / "members" / key
+
+    def uploads(self, viewer: Viewer) -> Uploads:
+        return Uploads(self.member(viewer.key))
+
+    # ------------------------------------------------------------ who may see what
+
+    @staticmethod
+    def viewer(request: Request) -> Viewer:
+        identity = request.scope["twin_identity"]
+        return Viewer(owner_key(identity["email"]), identity["email"], bool(identity.get("admin")))
+
+    def people_of(self, viewer: Viewer) -> set[str]:
+        """The people in the library who are the viewer: whom they said a voice of theirs is (``web.voice``), and
+        those whose twin they took as theirs."""
+        team = self.team(TEAM)
+        found = {person.id for person in team.people() if person.account == viewer.key}
+        if self.registry is not None and viewer.email:
+            for persona_id, person_id, _, _ in team.synced():
+                entry = self.registry.entry(persona_id)
+                if entry is not None and entry.get("member") == viewer.email:
+                    found.add(person_id)
+        return found
+
+    def access(self, viewer: Viewer) -> dict[str, Access]:
+        """The recordings the viewer may see: those they uploaded (or all, for an administrator), which they also
+        decide about, and those they were identified in."""
+        library = self.library(TEAM)
+        recordings = library.list()
+        if viewer.admin:
+            return {r.id: Access(True) for r in recordings}
+        attended = self.team(TEAM).attendance()
+        mine = self.people_of(viewer)
+        found = {}
+        for recording in recordings:
+            if recording.uploader == viewer.key:
+                found[recording.id] = Access(True)
+            elif attended.get(recording.id, set()) & mine:
+                found[recording.id] = Access(False)
+        return found
+
+    def allowed(self, viewer: Viewer, recording_id: str, edit: bool = False) -> Access:
+        """What the viewer may do with the recording; 404 when they may not see it (as if it were not there), 403
+        when they may see but not decide."""
+        access = self.access(viewer).get(recording_id)
+        if access is None:
+            raise HTTPException(404, "找不到这段录音")
+        if edit and not access.edit:
+            raise HTTPException(403, "这段录音由上传的同事或管理员整理，你可以在自己的发言上点「不是我」")
+        return access
+
+    def managed(self, viewer: Viewer) -> set[str] | None:
+        """The people the viewer may name, merge into others or make twins of: those identified in a recording
+        they decide about, and those identified nowhere yet; ``None`` for everyone (an administrator)."""
+        if viewer.admin:
+            return None
+        team = self.team(TEAM)
+        editable = {rid for rid, access in self.access(viewer).items() if access.edit}
+        attended = team.attendance()
+        heard = set().union(*attended.values()) if attended else set()
+        found = {person.id for person in team.people() if person.id not in heard}
+        for recording_id in editable:
+            found |= attended.get(recording_id, set())
+        return found
+
+    def manage(self, viewer: Viewer, person_id: str) -> None:
+        managed = self.managed(viewer)
+        if managed is not None and person_id not in managed:
+            raise HTTPException(403, "只有上传了 TA 所在录音的同事或管理员可以整理这个人")
 
     def resume(self) -> None:
-        """At start-up: recordings cut off by the last shutdown are queued again, every queue starts, and twins
-        still waiting for a change are brought in line."""
+        """At start-up: libraries of one account each are merged into the team's (once), recordings cut off by the
+        last shutdown are queued again, every queue starts, and twins still waiting for a change are brought in
+        line."""
         if not self.root.is_dir():
             return
+        if merge.legacy(self.root):
+            try:
+                merge.merge_all(self.root, self.same_person)
+            except Exception:
+                # What was not merged stays where it was, whole; the next start tries again.
+                logger.exception("recording libraries could not be merged into the team's")
+            with self.lock:
+                self.opened.clear()
+        self.relink()
         owners = []
         for folder in sorted(self.root.iterdir()):
-            if not (folder / "library.db").is_file():
+            if folder.name.startswith(".") or not (folder / "library.db").is_file():
                 continue
             if self.library(folder.name).resume():
                 self.kick(folder.name)
             owners.append(folder.name)
         # Reading every transcript of years of meetings must not hold up start-up.
         threading.Thread(target=self._settle, args=(owners,), name="library-settle", daemon=True).start()
+
+    def same_person(self, old: Any, kept: Any) -> bool:
+        """Whether two people of one name from two libraries are one: they said a voice of theirs is them from
+        the same account, or their twins were made for, or taken by, the same colleague."""
+
+        def marks(row: Any) -> set[tuple[str, str]]:
+            found = {("account", str(row["account"]))} if row["account"] else set()
+            entry = self.registry.entry(row["persona_id"]) if row["persona_id"] and self.registry else None
+            for field in ("member", "claim"):
+                if entry is not None and entry.get(field):
+                    found.add((field, str(entry[field]).lower()))
+            return found
+
+        return bool(marks(old) & marks(kept))
+
+    def relink(self) -> None:
+        """Make every twin made from the team's library follow it (twins made before the merge followed their
+        maker's own library)."""
+        if self.registry is None:
+            return
+        library = self.library(TEAM)
+        for persona_id, _, _, _ in Team(library).synced():
+            if self.registry.entry(persona_id) is None:
+                continue
+            db_path = self.registry.settings_for(persona_id).db_path
+            if not db_path.is_file():
+                continue
+            with PersonaStore(db_path) as store:
+                try:
+                    current = json.loads(store.get_meta(gate.LINK) or "{}")
+                    followed = (db_path.resolve().parent / current["db"]).resolve()
+                except (ValueError, KeyError, TypeError):
+                    followed = None
+                if followed != library.db_path.resolve():
+                    gate.link(store, library.db_path, persona_id)
 
     def start(self) -> None:
         """Wake every library every ``WAKE_SECONDS`` in the background (see ``wake``)."""
@@ -264,7 +409,7 @@ class Libraries:
         entry = self.registry.entry(persona_id) if self.registry is not None else None
         if entry is None:
             return
-        owner = owner_key(entry.get("owner"))
+        owner = TEAM
         team = self.team(owner)
         if team.wanted(persona_id) is not None and not team.built(persona_id, version):
             self.sync(owner, persona_id)
@@ -274,7 +419,7 @@ class Libraries:
         entry = self.registry.entry(persona_id) if self.registry is not None else None
         if entry is None:
             return
-        library = self.library(owner_key(entry.get("owner")))
+        library = self.library(TEAM)
         if Team(library).wanted(persona_id) is not None:
             library.spend("rebuild", tokens)
 
@@ -389,7 +534,12 @@ class Libraries:
             person = team.person(person_id)
             if person is None:
                 raise HTTPException(404, "找不到这个人")
-            if person.persona_id and self.registry.entry(person.persona_id) is not None:
+            existing = self.registry.entry(person.persona_id) if person.persona_id else None
+            if existing is not None:
+                if existing.get("by_voice"):
+                    raise HTTPException(409, "这个人已经用自己的声音认领了分身")
+                if not self.registry.accessible(existing, identity):
+                    raise HTTPException(409, "已经有同事为 TA 建了分身")
                 return {"persona_id": person.persona_id, "new": False}
             entry = self.registry.create(person.name, identity, onboarding=False, claim=claim)
             with PersonaStore(self.registry.settings_for(entry["id"]).db_path) as store:
@@ -433,7 +583,8 @@ class Libraries:
                     self.dress(persona_id, body.gender)
             if body.name is not None:
                 persona_id = team.rename(person_id, body.name)
-                if persona_id and self.registry is not None and self.registry.entry(persona_id) is not None:
+                if persona_id and self.own_twin(persona_id):
+                    assert self.registry is not None
                     with PersonaStore(self.registry.settings_for(persona_id).db_path) as store:
                         store.set_meta("identity:name", " ".join(body.name.split()))
                 self.changed(owner)
@@ -441,16 +592,26 @@ class Libraries:
             raise HTTPException(409 if "已经有" in str(e) else 400, str(e)) from None
         return {"updated": True}
 
+    def own_twin(self, persona_id: str) -> bool:
+        """Whether those who keep the library speak for the twin: it is live and not one the person made of
+        themselves (``web.voice``), whose name and look are theirs to choose."""
+        entry = self.registry.entry(persona_id) if self.registry is not None else None
+        return entry is not None and not entry.get("by_voice")
+
     def dress(self, persona_id: str, gender: str) -> None:
         """Give the twin an illustration of the person's gender, unless the one it shows already is."""
-        if not gender or self.registry is None or self.registry.entry(persona_id) is None:
+        if not gender or self.registry is None or not self.own_twin(persona_id):
             return
         settings = self.registry.settings_for(persona_id)
         if AVATAR_GENDERS[stored_avatar(settings.db_path, settings.avatar.preset)] != gender:
             with PersonaStore(settings.db_path) as store:
                 store.set_meta("identity:avatar_preset", default_avatar(persona_id, gender))
 
-    def detail(self, owner: str, recording_id: str) -> dict[str, Any]:
+    def detail(self, owner: str, recording_id: str, viewer: Viewer) -> dict[str, Any]:
+        """The recording with its transcript and speakers. ``can_edit``: the viewer decides about it; otherwise
+        they see the decisions without the voices they were matched with, and ``mine`` says which speakers are
+        given to them (they may say those are not)."""
+        access = self.allowed(viewer, recording_id)
         library = self.library(owner)
         recording = library.get(recording_id)
         if recording is None:
@@ -458,12 +619,19 @@ class Libraries:
         transcript = library.cleaned(recording)
         analysis = Analysis(segments=transcript.segments, speakers=transcript.speakers) if transcript else None
         waiting = {r.id for r in library.unproofread()}
+        speakers = self.team(owner).speakers(recording)
+        people = self.people_of(viewer)
         return {
             **view(recording),
             "proofread": self.proofread_state(library, recording, waiting),
+            "can_edit": access.edit,
+            "mine": [s.id for s in speakers if s.decision == "confirmed" and s.person_id in people],
             "speakers": [
-                {**s.model_dump(), "samples": len(sample_windows(analysis, s.id)) if analysis else 0}
-                for s in self.team(owner).speakers(recording)
+                {
+                    **s.model_dump(exclude=set() if access.edit else {"candidates", "rejected", "near"}),
+                    "samples": len(sample_windows(analysis, s.id)) if analysis else 0,
+                }
+                for s in speakers
             ],
             "segments": [
                 {"start": s.start, "end": s.end, "text": s.text, "speaker": s.speaker}
@@ -471,9 +639,14 @@ class Libraries:
             ],
         }
 
-    def sample(self, owner: str, recording_id: str, speaker_id: str, index: int) -> FileResponse:
+    def sample(
+        self, owner: str, recording_id: str, speaker_id: str, index: int, viewer: Viewer | None = None
+    ) -> FileResponse:
         """A five-second WAV of the speaker (up to three, at different moments), cut from the playback copy and
-        kept in the library's media cache, which backups skip."""
+        kept in the library's media cache, which backups skip. ``viewer``: only if they may see the recording
+        (``web.voice`` checks its own way)."""
+        if viewer is not None:
+            self.allowed(viewer, recording_id)
         library = self.library(owner)
         recording = library.get(recording_id)
         transcript = library.transcript(recording) if recording else None
@@ -540,10 +713,10 @@ class Libraries:
     def capacity(self) -> dict[str, int]:
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         arriving = count = 0
-        for folder in self.root.iterdir():
-            if (folder / "library.db").is_file():
-                n, remaining = Uploads(folder).arriving()
-                count, arriving = count + n, arriving + remaining
+        members = self.root / TEAM / "members"
+        for folder in members.iterdir() if members.is_dir() else ():
+            n, remaining = Uploads(folder).arriving()
+            count, arriving = count + n, arriving + remaining
         return {
             "free_bytes": shutil.disk_usage(self.root).free,
             "arriving_bytes": arriving,
@@ -551,12 +724,12 @@ class Libraries:
             "headroom_bytes": int(self.settings.library.headroom_gb * GIB),
         }
 
-    def admit(self, owner: str, body: UploadBody) -> None:
+    def admit(self, viewer: Viewer, body: UploadBody) -> None:
         """Refuse an upload that would leave less than the headroom free once every upload still arriving is in,
-        or that would queue more than ``max_pending`` recordings. Transcription works on one recording at a time,
-        so its temporary audio fits in the headroom."""
-        library = self.library(owner)
-        waiting = library.pending() + self.uploads(owner).arriving()[0]
+        or that would queue more than ``max_pending`` of the member's recordings. Transcription works on one
+        recording at a time, so its temporary audio fits in the headroom."""
+        library = self.library(TEAM)
+        waiting = library.pending(viewer.key) + self.uploads(viewer).arriving()[0]
         limit = self.settings.library.max_pending
         if waiting >= limit:
             raise HTTPException(409, f"最多同时排队 {limit} 个文件，请等前面的转写完成后再添加")
@@ -569,8 +742,11 @@ class Libraries:
                 "请联系管理员扩容",
             )
 
-    def finish(self, owner: str, upload_id: str) -> dict[str, Any]:
-        uploads = self.uploads(owner)
+    def finish(self, viewer: Viewer, upload_id: str) -> dict[str, Any]:
+        """File a finished upload. The same meeting uploaded before by someone else stays theirs to decide about
+        (``mine`` is false)."""
+        owner = TEAM
+        uploads = self.uploads(viewer)
         info = uploads.load(upload_id)
         if info["offset"] != info["size"]:
             raise HTTPException(400, "文件尚未上传完成")
@@ -579,19 +755,28 @@ class Libraries:
             existing = library.get(info["recording_id"])
             if existing is None:
                 raise HTTPException(404, "这段录音已删除，请重新上传")
-            return {**view(existing), "new": False}
+            return self.filed(viewer, existing, False)
         _, part = uploads.paths(upload_id)
-        recording, new = library.add(part, info["filename"])
+        recording, new = library.add(part, info["filename"], uploader=viewer.key)
         info["recording_id"] = recording.id
         uploads.save(upload_id, info)
         self.kick(owner)
-        return {**view(library.get(recording.id) or recording), "new": new}
+        return self.filed(viewer, library.get(recording.id) or recording, new)
 
-    def status(self, owner: str) -> dict[str, Any]:
+    def filed(self, viewer: Viewer, recording: Recording, new: bool) -> dict[str, Any]:
+        if viewer.admin or recording.uploader == viewer.key:
+            return {**view(recording), "new": new, "mine": True}
+        # A colleague's: the uploader learns no more of it than that it is there.
+        return {"id": recording.id, "filename": recording.filename, "new": False, "mine": False}
+
+    def status(self, owner: str, viewer: Viewer) -> dict[str, Any]:
+        """The recordings the viewer may see, with what is still waiting (``max_pending`` limits each member's own
+        uploads)."""
         self.wake(owner)
         quota = self.quota(owner)
         library = self.library(owner)
-        recordings = library.list()
+        access = self.access(viewer)
+        recordings = [r for r in library.list() if r.id in access]
         identities = self.team(owner).identities()
         waiting = {r.id for r in library.unproofread()}
         with self.lock:
@@ -604,6 +789,7 @@ class Libraries:
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
                     "proofread": self.proofread_state(library, r, waiting),
+                    "can_edit": access[r.id].edit,
                 }
                 for r in recordings
             ],
@@ -654,19 +840,20 @@ def register(
 
     @app.get("/api/library")
     def get_library(request: Request) -> dict[str, Any]:
-        return libraries.status(libraries.owner(request))
+        return libraries.status(libraries.owner(request), libraries.viewer(request))
 
     upload_routes(
         app,
         "/api/library/uploads",
-        lambda request: libraries.uploads(libraries.owner(request)),
-        lambda request, upload_id: libraries.finish(libraries.owner(request), upload_id),
-        admit=lambda request, uploads, body: libraries.admit(libraries.owner(request), body),
+        lambda request: libraries.uploads(libraries.viewer(request)),
+        lambda request, upload_id: libraries.finish(libraries.viewer(request), upload_id),
+        admit=lambda request, uploads, body: libraries.admit(libraries.viewer(request), body),
     )
 
     @app.post("/api/library/recordings/{recording_id}/retry", status_code=202)
     def retry(recording_id: str, request: Request) -> dict[str, Any]:
         owner = libraries.owner(request)
+        libraries.allowed(libraries.viewer(request), recording_id, edit=True)
         recording = libraries.library(owner).retry(recording_id)
         if recording is None:
             raise HTTPException(409, "只有转写失败、原始文件还在的录音可以重试")
@@ -676,6 +863,7 @@ def register(
     @app.delete("/api/library/recordings/{recording_id}")
     async def delete(recording_id: str, request: Request) -> dict[str, bool]:
         owner = libraries.owner(request)
+        await run_in_threadpool(libraries.allowed, libraries.viewer(request), recording_id, True)
         if not await run_in_threadpool(libraries.library(owner).delete, recording_id):
             raise HTTPException(409, "这段录音正在转写，请稍后再删除")
         libraries.changed(owner)
@@ -683,33 +871,72 @@ def register(
 
     @app.get("/api/library/recordings/{recording_id}")
     def get_recording(recording_id: str, request: Request) -> dict[str, Any]:
-        return libraries.detail(libraries.owner(request), recording_id)
+        return libraries.detail(libraries.owner(request), recording_id, libraries.viewer(request))
 
     @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/samples/{index}")
     def get_sample(recording_id: str, speaker_id: str, index: int, request: Request) -> FileResponse:
-        return libraries.sample(libraries.owner(request), recording_id, speaker_id, index)
+        return libraries.sample(libraries.owner(request), recording_id, speaker_id, index, libraries.viewer(request))
 
     @app.put("/api/library/recordings/{recording_id}/speakers/{speaker_id}")
     def put_speaker(recording_id: str, speaker_id: str, body: DecisionBody, request: Request) -> dict[str, Any]:
+        # Whoever decides about the recording may give a speaker to anyone in the team.
+        libraries.allowed(libraries.viewer(request), recording_id, edit=True)
         return libraries.decide(libraries.owner(request), recording_id, speaker_id, body)
+
+    @app.post("/api/library/recordings/{recording_id}/speakers/{speaker_id}/not-me")
+    def not_me(recording_id: str, speaker_id: str, request: Request) -> dict[str, bool]:
+        """Someone identified in the recording says a speaker given to them is not them: it is undone and waits
+        for whoever decides about the recording, at the top of their queue."""
+        owner = libraries.owner(request)
+        viewer = libraries.viewer(request)
+        libraries.allowed(viewer, recording_id)
+        try:
+            libraries.team(owner).dispute(recording_id, speaker_id, libraries.people_of(viewer))
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        libraries.changed(owner)
+        return {"disputed": True}
 
     @app.get("/api/library/review")
     def get_review(request: Request) -> dict[str, Any]:
-        return {"items": libraries.team(libraries.owner(request)).review()}
+        editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
+        return {"items": libraries.team(libraries.owner(request)).review(editable)}
 
     @app.get("/api/library/people")
     def get_people(request: Request) -> dict[str, Any]:
+        """Everyone in the team's meetings, so whoever names a speaker can pick a colleague named elsewhere; where
+        they speak only for recordings the viewer may see, and their twin only for those who manage it."""
         owner = libraries.owner(request)
-        synced = {persona_id: (wanted, done) for persona_id, _, wanted, done in libraries.team(owner).synced()}
+        viewer = libraries.viewer(request)
+        identity = request.scope["twin_identity"]
+        team = libraries.team(owner)
+        synced = {persona_id: (wanted, done) for persona_id, _, wanted, done in team.synced()}
+        visible = libraries.access(viewer)
+        managed = libraries.managed(viewer)
+        similar = team.similar()
         people = []
-        for person in libraries.team(owner).people():
-            live = person.persona_id is not None and registry is not None and registry.entry(person.persona_id)
+        for person in team.people():
+            entry = registry.entry(person.persona_id) if person.persona_id and registry is not None else None
+            # The person found themselves here by voice: the twin is theirs, not the library's to open.
+            theirs = bool(entry and entry.get("by_voice"))
+            opens = bool(entry and not theirs and registry is not None and registry.accessible(entry, identity))
             state = synced.get(person.persona_id or "")
+            heard = person.recording_id in visible
             people.append(
                 {
-                    **person.model_dump(),
-                    "persona_id": person.persona_id if live else None,
-                    "updating": bool(live and state and state[0] != state[1]),
+                    **person.model_dump(exclude={"account"}),
+                    "recording_id": person.recording_id if heard else None,
+                    "speaker_id": person.speaker_id if heard else None,
+                    "persona_id": person.persona_id if opens else None,
+                    "updating": bool(opens and state and state[0] != state[1]),
+                    "self_claimed": theirs,
+                    # A twin someone else keeps: not the viewer's to make again or delete.
+                    "twin_elsewhere": bool(entry and not theirs and not opens),
+                    "can_manage": managed is None or person.id in managed,
+                    # Administrators settle who may be the same person.
+                    "similar": [b if a == person.id else a for a, b in similar if person.id in (a, b)]
+                    if viewer.admin
+                    else [],
                 }
             )
         return {"items": people}
@@ -717,17 +944,20 @@ def register(
     @app.post("/api/library/people", status_code=201)
     def post_person(body: PersonBody, request: Request) -> dict[str, Any]:
         try:
-            return libraries.team(libraries.owner(request)).add_person(body.name).model_dump()
+            person = libraries.team(libraries.owner(request)).add_person(body.name)
         except ValueError as e:
             raise HTTPException(409, str(e)) from None
+        return person.model_dump(exclude={"account"})
 
     @app.patch("/api/library/people/{person_id}")
     def patch_person(person_id: str, body: PersonPatch, request: Request) -> dict[str, Any]:
+        libraries.manage(libraries.viewer(request), person_id)
         return libraries.update(libraries.owner(request), person_id, body)
 
     @app.post("/api/library/people/{person_id}/resolve")
     def resolve_person(person_id: str, body: ResolveBody, request: Request) -> dict[str, bool]:
         owner = libraries.owner(request)
+        libraries.manage(libraries.viewer(request), person_id)
         try:
             libraries.team(owner).resolve(person_id, body.into)
         except ValueError as e:
@@ -739,9 +969,32 @@ def register(
         libraries.proofread(owner)
         return {"resolved": True}
 
+    @app.post("/api/library/people/{person_id}/merge")
+    def merge_person(person_id: str, body: MergeBody, request: Request) -> dict[str, bool]:
+        """An administrator takes two people for one (``Team.merge``)."""
+        owner = libraries.owner(request)
+        if not libraries.viewer(request).admin:
+            raise HTTPException(403, "只有管理员可以合并两个人")
+        try:
+            libraries.team(owner).merge(person_id, body.into)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        libraries.team(owner).classify_all()
+        libraries.changed(owner)
+        return {"merged": True}
+
+    @app.post("/api/library/people/{person_id}/apart")
+    def keep_apart(person_id: str, body: ApartBody, request: Request) -> dict[str, bool]:
+        """An administrator says two people who may be one are two."""
+        if not libraries.viewer(request).admin:
+            raise HTTPException(403, "只有管理员可以处理")
+        libraries.team(libraries.owner(request)).keep_apart(person_id, body.other)
+        return {"apart": True}
+
     @app.delete("/api/library/people/{person_id}")
     def delete_person(person_id: str, request: Request) -> dict[str, bool]:
         owner = libraries.owner(request)
+        libraries.manage(libraries.viewer(request), person_id)
         if not libraries.team(owner).delete_person(person_id):
             raise HTTPException(409, "这个人已经有分身，请先删除分身")
         libraries.changed(owner)
@@ -752,6 +1005,7 @@ def register(
         if registry is None:
             raise HTTPException(503, "无法创建分身")
         owner = libraries.owner(request)
+        libraries.manage(libraries.viewer(request), person_id)
         claim = claim_key(body.claim if body else None)
         return libraries.create_twin(owner, person_id, request.scope["twin_identity"], claim)
 

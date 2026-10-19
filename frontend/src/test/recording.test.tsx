@@ -216,3 +216,55 @@ it('derives the existing five-second windows after merging speech and removing o
     [10, 15],
   ]);
 });
+
+it('lets someone in a colleague’s meeting read it and say a speaker given to them is not them', async () => {
+  const user = userEvent.setup();
+  let gone = false;
+  const posted: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/recordings/r') {
+        if (gone) return json({ detail: '找不到这段录音' }, 404);
+        return json({
+          id: 'r',
+          filename: '周会.m4a',
+          created_at: '2026-10-15T08:00:00Z',
+          duration_s: 600,
+          status: 'ready',
+          transcript_id: 't',
+          revision: 2,
+          can_edit: false,
+          mine: ['S2'],
+          // Whom the voices resemble is not sent to someone who only reads it.
+          speakers: speakers.map(({ id, seconds, samples }, i) => ({
+            id,
+            seconds,
+            samples,
+            decision: 'confirmed',
+            person_id: `p${i}`,
+            sample: false,
+            auto: false,
+          })),
+          segments,
+        });
+      }
+      if (init?.method === 'POST') {
+        posted.push(url);
+        gone = true;
+        return json({ disputed: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  show();
+  await screen.findByText(/你参加了这场会/u);
+  expect(screen.queryByRole('region', { name: /是谁？/u })).toBeNull();
+  const list = screen.getByRole('region', { name: '说话人' });
+  expect(within(list).getByText('林舟')).toBeInTheDocument();
+  expect(within(list).getAllByRole('button')).toHaveLength(1);
+  await user.click(within(list).getByRole('button', { name: 'S2 不是我' }));
+  await screen.findByText('已经告诉上传的同事');
+  expect(posted).toEqual(['/api/library/recordings/r/speakers/S2/not-me']);
+});

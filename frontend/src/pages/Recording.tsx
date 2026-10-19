@@ -46,6 +46,8 @@ export interface Speaker {
   sample: boolean;
   // Taken by voice alone, without the owner.
   auto: boolean;
+  // The person it was given to said it is not them; it waits for whoever decides about the recording.
+  disputed?: boolean;
   candidates: Candidate[];
   near: boolean;
   samples: number;
@@ -59,6 +61,14 @@ export interface Person {
   seconds: number;
   samples: number;
   updating: boolean;
+  // They found themselves here by voice: their twin is their own, not the library's to open.
+  self_claimed?: boolean;
+  // Whether the viewer may name them, make their twin or delete them (they uploaded a recording they are in).
+  can_manage?: boolean;
+  // A colleague keeps a twin of them, which the viewer cannot open.
+  twin_elsewhere?: boolean;
+  // People who may be the same person (shown to administrators).
+  similar?: string[];
   // Made from a voice that matched nobody, not named yet.
   auto: boolean;
   gender: Gender;
@@ -68,6 +78,9 @@ export interface Person {
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   transcript_id: string | null;
   revision: number;
+  // The viewer was identified in it and only reads it; ``mine`` are the speakers given to them.
+  can_edit?: boolean;
+  mine?: string[];
   speakers: Speaker[];
   segments: { start: number; end: number; text: string; speaker: string }[];
 }
@@ -191,6 +204,11 @@ function SpeakerCard({
             还剩 {remaining} 位
           </Text>
         </Toolbar>
+        {speaker.disputed && (
+          <Text size="sm" tone="warning">
+            原来标成的人说这不是 TA，请重新听一下是谁。
+          </Text>
+        )}
         <Card variant="soft" padding="md" className="space-y-3">
           {speaker.samples > 0 ? (
             <>
@@ -343,6 +361,8 @@ export function Recording() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [reopened, setReopened] = useState<string | null>(null);
+  // They said the only speaker given to them is not them: the recording is no longer theirs to see.
+  const [left, setLeft] = useState(false);
   const base = `/api/library/recordings/${encodeURIComponent(recordingId)}`;
   const load = useCallback(async () => {
     try {
@@ -350,7 +370,16 @@ export function Recording() {
         api<Detail>(base),
         api<{ items: Person[] }>('/api/library/people'),
       ]);
-      setDetail(value);
+      // Someone who only reads it is not shown whom the voices resemble.
+      setDetail({
+        ...value,
+        speakers: value.speakers.map((s) => ({
+          ...s,
+          candidates: s.candidates ?? [],
+          rejected: s.rejected ?? [],
+          near: s.near ?? false,
+        })),
+      });
       setPeople(folks.items);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载录音');
@@ -395,6 +424,27 @@ export function Recording() {
     setBusy(false);
   };
 
+  const notMe = async (speaker: Speaker) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api(`${base}/speakers/${encodeURIComponent(speaker.id)}/not-me`, {
+        method: 'POST',
+      });
+      try {
+        await api(base);
+        await load();
+      } catch (failure) {
+        if (failure instanceof ApiError && failure.status === 404)
+          setLeft(true);
+        else throw failure;
+      }
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '保存失败');
+    }
+    setBusy(false);
+  };
+
   const names = new Map(people.map((p) => [p.id, p.name]));
   const who = (speakerId: string) => {
     const speaker = detail?.speakers.find((s) => s.id === speakerId);
@@ -402,6 +452,20 @@ export function Recording() {
       ? (names.get(speaker.person_id) ?? speakerId)
       : speakerId;
   };
+  const transcript = detail && (
+    <Disclosure summary={`完整转写稿（${detail.segments.length} 段）`}>
+      <Stack as="ol" gap={1}>
+        {detail.segments.map((s, i) => (
+          <Text as="li" key={i} size="sm">
+            <Text as="span" size="inherit" tone="secondary">
+              [{clock(s.start)}] {who(s.speaker)}：
+            </Text>
+            {s.text}
+          </Text>
+        ))}
+      </Stack>
+    </Disclosure>
+  );
   const undecided = detail?.speakers.filter((s) => s.decision === 'none') ?? [];
   const decided = detail?.speakers.filter((s) => s.decision !== 'none') ?? [];
   const current = undecided.find((s) => s.id === reopened) ?? undecided[0];
@@ -457,12 +521,73 @@ export function Recording() {
           {error}
         </Text>
       )}
-      {!detail ? (
+      {left ? (
+        <Notice
+          tone="success"
+          title="已经告诉上传的同事"
+          actions={<RouteButton to="/library">回录音库</RouteButton>}
+        >
+          这段发言不再算你的，你的分身也不会用它。上传的同事会重新确认是谁。
+        </Notice>
+      ) : !detail ? (
         <Skeleton className="h-32" />
       ) : detail.status !== 'ready' ? (
         <Text role="status" tone="secondary">
           这段录音还没转写完。
         </Text>
+      ) : detail.can_edit === false ? (
+        <>
+          <Text size="sm" tone="secondary">
+            这段录音由上传的同事整理，你参加了这场会，可以查看。标成你的发言如果不是你，点「不是我」。
+          </Text>
+          <Section title="说话人">
+            <Card>
+              <Stack as="ul" gap={0}>
+                {detail.speakers.map((s) => {
+                  const mine = detail.mine?.includes(s.id) ?? false;
+                  return (
+                    <ListRow
+                      key={s.id}
+                      variant="divided"
+                      leading={
+                        <AvatarFrame size="sm">
+                          {Array.from(names.get(s.person_id ?? '') ?? s.id)[0]}
+                        </AvatarFrame>
+                      }
+                      title={
+                        s.decision === 'confirmed'
+                          ? (names.get(s.person_id ?? '') ?? s.id)
+                          : s.decision === 'mixed'
+                            ? '几个人混在一起'
+                            : s.decision === 'unknown'
+                              ? '不在名单里'
+                              : '还没确认'
+                      }
+                      meta={`${s.id} · 说了 ${span(s.seconds)}`}
+                      trailing={
+                        mine ? (
+                          <>
+                            <Badge tone="success">你</Badge>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              aria-label={`${s.id} 不是我`}
+                              disabled={busy}
+                              onClick={() => void notMe(s)}
+                            >
+                              不是我
+                            </Button>
+                          </>
+                        ) : undefined
+                      }
+                    />
+                  );
+                })}
+              </Stack>
+            </Card>
+          </Section>
+          {transcript}
+        </>
       ) : (
         <>
           {current ? (
@@ -550,18 +675,7 @@ export function Recording() {
               </Card>
             </Section>
           )}
-          <Disclosure summary={`完整转写稿（${detail.segments.length} 段）`}>
-            <Stack as="ol" gap={1}>
-              {detail.segments.map((s, i) => (
-                <Text as="li" key={i} size="sm">
-                  <Text as="span" size="inherit" tone="secondary">
-                    [{clock(s.start)}] {who(s.speaker)}：
-                  </Text>
-                  {s.text}
-                </Text>
-              ))}
-            </Stack>
-          </Disclosure>
+          {transcript}
         </>
       )}
     </Page>

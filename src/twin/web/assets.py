@@ -26,7 +26,21 @@ register_heif_opener()
 
 PORTRAIT_LIMIT = 15 * 1024 * 1024
 VOICE_LIMIT = 95_000_000
-UPLOAD_PATHS = frozenset({"/api/me/portrait", "/api/me/voice"})
+# A sentence read aloud to find oneself in colleagues' meetings (``web.voice``).
+VOICEPRINT_LIMIT = 10 * 1024 * 1024
+# Each upload route and the name of its size limit, read when a request arrives.
+_UPLOAD_LIMITS = {
+    "/api/me/portrait": "PORTRAIT_LIMIT",
+    "/api/me/voice": "VOICE_LIMIT",
+    "/api/library/voice": "VOICEPRINT_LIMIT",
+}
+UPLOAD_PATHS = frozenset(_UPLOAD_LIMITS)
+
+
+def upload_limit(path: str) -> int:
+    return int(globals()[_UPLOAD_LIMITS[path]])
+
+
 VOICE_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".mp4", ".mov", ".caf"}
 
 

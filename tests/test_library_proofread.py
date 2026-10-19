@@ -200,7 +200,7 @@ def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: Model) -> Iterat
 
 
 def library_of(tmp_path: Path) -> Library:
-    return Library(tmp_path / "library" / "local")
+    return Library(tmp_path / "library" / "team")
 
 
 def limit(web: TestClient, tokens: int) -> None:

@@ -12,6 +12,7 @@ import {
   Row,
   Stack,
   Text,
+  TextLink,
   useConfirm,
 } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
@@ -59,8 +60,10 @@ function useGathered(persona: Persona) {
 
 /**
  * A twin someone else made for the signed-in person, waiting for them: they took it by signing in with the work
- * e-mail or employee number it was made for. They see what it gathered and can try it out in chat; it answers
- * nobody else until they say it is all right, and "这不是我" gives it back to whoever made it.
+ * e-mail or employee number it was made for, or made it themselves from the voices they recognised in colleagues'
+ * meetings (``MemberVoice``). They see what it gathered and can try it out in chat; it answers nobody else until they
+ * say it is all right. "这不是我" gives a twin made for them back to whoever made it, and a twin of their voices leads
+ * back to those voices.
  */
 export function Claimed({ persona }: { persona: Persona }) {
   const { commitments, items } = useGathered(persona);
@@ -121,8 +124,9 @@ export function Claimed({ persona }: { persona: Persona }) {
               {persona.name}，你的分身已经建好了
             </Heading>
             <Text tone="secondary">
-              同事按你的企业邮箱或工号为你建了分身，你用企业账号一登录就认领了。下面是它从{' '}
-              {persona.sources} 段会议里整理出的你，还在继续整理。
+              {persona.made_by_other
+                ? `同事按你的企业邮箱或工号为你建了分身，你用企业账号一登录就认领了。下面是它从 ${persona.sources} 段会议里整理出的你，还在继续整理。`
+                : `它从你认出自己声音的 ${persona.sources} 段会议里认识你，还在继续整理。看过觉得没问题，同事就能问它了。`}
             </Text>
           </Stack>
           <Grid columns={2} gap={4}>
@@ -213,9 +217,15 @@ export function Claimed({ persona }: { persona: Persona }) {
                 </Text>
               )}
               <Row justify="between" wrap gap={3}>
-                <PlainButton disabled={busy} onClick={() => void disown()}>
-                  这不是我
-                </PlainButton>
+                {persona.made_by_other ? (
+                  <PlainButton disabled={busy} onClick={() => void disown()}>
+                    这不是我
+                  </PlainButton>
+                ) : (
+                  <TextLink to="/voice" size="sm">
+                    回去再听一遍
+                  </TextLink>
+                )}
                 <Button loading={busy} onClick={() => void approve()}>
                   没问题，开始用
                 </Button>

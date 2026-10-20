@@ -141,6 +141,31 @@ class CommandTranscriber:
         ):
             return None
 
+    def embed_spans(self, audio: Path, spans: list[list[tuple[float, float]]]) -> list[list[float] | None] | None:
+        """One voiceprint per clip of ``audio``, each clip its (start, end) parts in seconds joined, in one request
+        (asr-funasr 1.3.2+); a clip too short to embed has None. None when the command answers the old way, with
+        the whole recording's voiceprint. ``RuntimeError`` when it fails."""
+        request = {
+            "audio": str(audio.resolve()),
+            "language": self.language,
+            "embed": True,
+            "spans": [[[round(b, 3), round(e, 3)] for b, e in parts] for parts in spans],
+        }
+        try:
+            payload = json.loads(
+                self._run(json.dumps(request), len(spans), lambda done, total: None).strip().splitlines()[-1]
+            )
+            if payload.get("ok") is not True:
+                raise ValueError()
+            if "embeddings" not in payload:
+                return None
+            found = payload["embeddings"]
+            if not isinstance(found, list) or len(found) != len(spans):
+                raise ValueError()
+            return [None if value is None else _EMBEDDING.validate_python(value) for value in found]
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
+            raise RuntimeError("转写服务没能计算声纹，请检查语音识别配置后重试") from None
+
     def _run(self, request: str, duration: float, progress: Progress) -> str:
         """Run the command; `@@twin-progress <0..1>` lines on stderr become progress in this (the job's) thread."""
         process = subprocess.Popen(

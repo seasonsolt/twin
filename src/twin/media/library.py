@@ -140,6 +140,41 @@ CREATE TABLE IF NOT EXISTS personas_sync (
     wanted INTEGER NOT NULL DEFAULT 1,
     done INTEGER NOT NULL DEFAULT 0
 );
+-- A confirmed speaker heard again piece by piece (``media.review``): the voiceprint of each stretch of their speech,
+-- computed once per transcript. ``error`` is set, with no units, when the transcription service could not do it.
+CREATE TABLE IF NOT EXISTS reviewed (
+    recording_id TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, transcript_id, speaker_id)
+);
+CREATE TABLE IF NOT EXISTS review_units (
+    recording_id TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    unit INTEGER NOT NULL,
+    -- The transcript segments it joins, as a JSON list of indices, and their (start, end) times.
+    segments TEXT NOT NULL,
+    parts TEXT NOT NULL,
+    -- float32 voiceprint; NULL when too short to compute.
+    embedding BLOB,
+    PRIMARY KEY (recording_id, transcript_id, speaker_id, unit)
+);
+-- The owner's decisions about single segments of a confirmed speaker (``media.review``): not ``from_person`` after
+-- all ('exclude'), someone else's ('move', to ``to_person``), or theirs indeed ('keep'). They hold while the
+-- segment's speaker is still confirmed as ``from_person``.
+CREATE TABLE IF NOT EXISTS segment_fixes (
+    recording_id TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    segment INTEGER NOT NULL,
+    from_person TEXT NOT NULL,
+    action TEXT NOT NULL,
+    to_person TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, transcript_id, segment)
+);
 -- Model tokens the library spent (proofreading, and builds of its twins), for the batch quota.
 CREATE TABLE IF NOT EXISTS spending (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -474,10 +509,13 @@ class Library:
             with self.transaction() as db:
                 db.execute(
                     "UPDATE personas_sync SET wanted = wanted + 1 WHERE person_id IN "
-                    "(SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed')",
-                    (recording_id,),
+                    "(SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed' "
+                    "UNION SELECT to_person FROM segment_fixes WHERE recording_id = ? AND action = 'move')",
+                    (recording_id, recording_id),
                 )
                 db.execute("DELETE FROM attributions WHERE recording_id = ?", (recording_id,))
+                for table in ("reviewed", "review_units", "segment_fixes"):
+                    db.execute(f"DELETE FROM {table} WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM voiceprints WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM recordings WHERE id = ?", (recording_id,))
             shutil.rmtree(self.folder(recording_id), ignore_errors=True)

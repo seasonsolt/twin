@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.1", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.2", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -111,7 +111,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.3.1" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.3.2" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -404,10 +404,10 @@ def test_script_hotwords_and_upload(script, tmp_path):
             script.parse_hotwords(bad)
     header = json.dumps({"diarize": True, "hotwords": ["魔搭"], "audio_bytes": 3, "audio_suffix": ".WAV"}).encode()
     body = header + b"\nabc"
-    audio, language, diarize, reference, hotwords, references, threshold = script.read_upload(
+    audio, language, diarize, reference, hotwords, references, threshold, spans = script.read_upload(
         io.BytesIO(body), len(body), tmp_path
     )
-    assert threshold == script.CLUSTER_THRESHOLD
+    assert threshold == script.CLUSTER_THRESHOLD and spans is None
     assert (audio.name, audio.read_bytes(), language, diarize, reference, hotwords, references) == (
         "audio.wav",
         b"abc",
@@ -421,7 +421,7 @@ def test_script_hotwords_and_upload(script, tmp_path):
     header = json.dumps({"audio_bytes": 3, "reference_bytes": 1, "references": voices, "cluster_threshold": 0.65})
     body = header.encode() + b"\nabcRAAB"
     (tmp_path / "multi").mkdir()
-    *_, reference, _, references, threshold = script.read_upload(io.BytesIO(body), len(body), tmp_path / "multi")
+    *_, reference, _, references, threshold, _ = script.read_upload(io.BytesIO(body), len(body), tmp_path / "multi")
     assert threshold == 0.65
     assert reference.read_bytes() == b"R"
     assert {name: path.read_bytes() for name, path in references.items()} == {"A": b"AA", "B": b"B"}
@@ -434,6 +434,7 @@ def test_script_hotwords_and_upload(script, tmp_path):
         ({"audio_bytes": 3, "references": [{"name": "A", "bytes": 0}]}, b"abc", None),
         ({"audio_bytes": 3, "references": [{"name": "A", "bytes": 1}, {"name": "A", "bytes": 1}]}, b"abcxy", None),
         ({"audio_bytes": 3, "references": "A"}, b"abc", None),
+        ({"audio_bytes": 3, "spans": [[[2, 1]]]}, b"abc", None),
     ):
         raw = json.dumps(meta).encode() + b"\n" + data
         with pytest.raises(ValueError):
@@ -467,8 +468,10 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
                 raise RuntimeError("显存不足")
             return {"ok": True, "segments": [{"start": 0.0, "end": 1.0, "text": "你好", "speaker": "S1"}]}
 
-        def embedding(self, audio):
+        def embedding(self, audio, spans=None):
             self.embedded = audio.read_bytes()
+            if spans is not None:
+                return {"ok": True, "embeddings": [[float(len(parts))] for parts in spans]}
             return {"ok": True, "embedding": [0.6, 0.8]}
 
     engine = FakeEngine()
@@ -496,11 +499,16 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         calls = len(engine.calls)
         assert remote.transcribe(url, {"audio": str(reference), "embed": True}) == {"ok": True, "embedding": [0.6, 0.8]}
         assert engine.embedded == b"ref" and len(engine.calls) == calls
+        spans = [[[0, 1.5]], [[2, 3], [4.5, 6]]]
+        assert remote.transcribe(url, {"audio": str(reference), "embed": True, "spans": spans}) == {
+            "ok": True,
+            "embeddings": [[1.0], [2.0]],
+        }
         assert "@@twin-progress 0.5000" in capfd.readouterr().err
         audio.write_bytes(b"boom")
         assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
         with urllib.request.urlopen(url + "/health") as response:
-            assert json.loads(response.read()) == {"ok": True, "version": "1.3.1", "device": "cuda", "busy": False}
+            assert json.loads(response.read()) == {"ok": True, "version": "1.3.2", "device": "cuda", "busy": False}
         bad = b'{"audio_bytes": 1, "hotwords": "x"}\nA'
         with pytest.raises(urllib.error.HTTPError) as rejected:
             urllib.request.urlopen(urllib.request.Request(url + "/transcribe", data=bad, method="POST"))
@@ -576,3 +584,11 @@ def test_embed_request_skips_transcription(script, monkeypatch, tmp_path):
     voice.write_bytes(b"x")
     request = script.parse_request({"audio": str(voice), "embed": True})
     assert script.run(request, embed=True) == {"ok": True, "embedding": [0.123457, 1.0]}
+
+
+def test_embed_spans_are_checked(script):
+    assert script.parse_spans({}) is None
+    assert script.parse_spans({"spans": [[[0, 1.5]], [[2, 3], [4.5, 6]]]}) == [[(0.0, 1.5)], [(2.0, 3.0), (4.5, 6.0)]]
+    for bad in ("x", [[]], [[[1, 1]]], [[[0, True]]], [[[0, float("inf")]]], [[[0]]], [[[0, 1]] * 65]):
+        with pytest.raises(ValueError, match="spans"):
+            script.parse_spans({"spans": bad})

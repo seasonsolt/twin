@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from ..util import date_from_name
 from .cues import Cue
-from .ingest import Speaker, timestamp
+from .ingest import Segment, Speaker, timestamp
 from .library import Library, Recording, Transcript
 
 Action = Literal["confirm", "unknown", "mixed", "reject", "clear"]
@@ -226,6 +226,24 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(_unit(a), _unit(b), strict=True))
 
 
+def segment_owners(
+    transcript: Transcript,
+    speakers: Mapping[str, tuple[str, str | None]],
+    fixes: Mapping[int, tuple[str, str, str | None]],
+) -> list[str | None]:
+    """Whose each segment is: its speaker's confirmed person, unless the owner left the segment out of that person
+    (``exclude``: nobody's) or gave it to someone else (``move``) while the speaker was theirs (``media.review``)."""
+    owners: list[str | None] = []
+    for i, segment in enumerate(transcript.segments):
+        decision, owner = speakers.get(segment.speaker, ("none", None))
+        owner = owner if decision == "confirmed" else None
+        fix = fixes.get(i)
+        if owner and fix and fix[0] == owner and fix[1] in {"exclude", "move"}:
+            owner = fix[2] if fix[1] == "move" else None
+        owners.append(owner)
+    return owners
+
+
 def cosine(a: list[float], b: list[float]) -> float:
     """How alike two voiceprints are, from -1 to 1 (0 for prints of different models)."""
     return _cosine(a, b)
@@ -316,10 +334,13 @@ class Team:
     @staticmethod
     def _forget(db: sqlite3.Connection, person_id: str) -> None:
         touched = db.execute(
-            "SELECT DISTINCT recording_id FROM attributions WHERE person_id = ?", (person_id,)
+            "SELECT DISTINCT recording_id FROM attributions WHERE person_id = ? UNION SELECT recording_id FROM "
+            "segment_fixes WHERE from_person = ? OR to_person = ?",
+            (person_id, person_id, person_id),
         ).fetchall()
         for (recording_id,) in touched:
             Team._reopen(db, recording_id, {person_id})
+        db.execute("DELETE FROM segment_fixes WHERE from_person = ? OR to_person = ?", (person_id, person_id))
         db.execute(
             "UPDATE attributions SET decision = 'none', person_id = NULL, updated_at = ? WHERE person_id = ?",
             (_now(), person_id),
@@ -986,6 +1007,19 @@ class Team:
                 (into, _now(), person_id),
             )
             db.execute("UPDATE voiceprints SET person_id = ? WHERE person_id = ?", (into, person_id))
+            # Segments given from one of them to the other were theirs all along.
+            db.execute(
+                "DELETE FROM segment_fixes WHERE action = 'move' AND ((from_person = ? AND to_person = ?) OR "
+                "(from_person = ? AND to_person = ?))",
+                (person_id, into, into, person_id),
+            )
+            db.execute("UPDATE segment_fixes SET from_person = ? WHERE from_person = ?", (into, person_id))
+            db.execute("UPDATE segment_fixes SET to_person = ? WHERE to_person = ?", (into, person_id))
+            heard += [
+                r[0]
+                for r in db.execute("SELECT DISTINCT recording_id FROM segment_fixes WHERE to_person = ?", (into,))
+                if r[0] not in heard
+            ]
             if rows[person_id]["account"] and not rows[into]["account"]:
                 db.execute("UPDATE people SET account = ? WHERE id = ?", (rows[person_id]["account"], into))
             if rows[person_id]["gender"] and not rows[into]["gender"]:
@@ -1178,13 +1212,16 @@ class Team:
 
     @staticmethod
     def _reopen(db: sqlite3.Connection, recording_id: str, people: set[str]) -> None:
-        """Close the twins of everyone who speaks in the recording (their sources name the others too) and of
-        ``people``, whose speakers there just changed."""
+        """Close the twins of everyone who speaks in the recording (their sources name the others too), including
+        those given segments there (``media.review``), and of ``people``, whose speakers there just changed."""
         speaking = {
             row[0]
             for row in db.execute(
-                "SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed'", (recording_id,)
+                "SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed' "
+                "UNION SELECT to_person FROM segment_fixes WHERE recording_id = ? AND action = 'move'",
+                (recording_id, recording_id),
             )
+            if row[0]
         }
         Team._bump(db, speaking | people)
 
@@ -1247,22 +1284,32 @@ class Team:
         return bool(changed)
 
     def sources(self, person_id: str, name: str) -> list[TwinSource]:
-        """The twin sources of a person: one per recording where some speaker is confirmed as them, with every
-        segment in transcript order (empty ones keep their number) so evidence cites (transcript, segment). The id
-        changes with the transcript and with the set of the person's own segments, so a decision that moves one
-        sentence from them to someone else drops every chunk and candidate built from the old set."""
+        """The twin sources of a person: one per recording where some speaker is confirmed as them, or a segment
+        was given to them (``media.review``), with every segment in transcript order (empty ones keep their number)
+        so evidence cites (transcript, segment). The id changes with the transcript and with the set of the person's
+        own segments, so a decision that moves one sentence from them to someone else drops every chunk and
+        candidate built from the old set."""
         with self.library.read() as db:
             names = dict(db.execute("SELECT id, name FROM people").fetchall())
             rows = db.execute(
                 "SELECT a.recording_id, a.transcript_id, a.speaker_id, a.decision, a.person_id FROM attributions a "
                 "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
                 "WHERE a.recording_id IN (SELECT recording_id FROM attributions WHERE person_id = ? "
-                "AND decision = 'confirmed')",
-                (person_id,),
+                "AND decision = 'confirmed' UNION SELECT recording_id FROM segment_fixes WHERE to_person = ? "
+                "AND action = 'move')",
+                (person_id, person_id),
+            ).fetchall()
+            fixed = db.execute(
+                "SELECT f.recording_id, f.segment, f.from_person, f.action, f.to_person FROM segment_fixes f "
+                "JOIN recordings r ON r.id = f.recording_id AND r.transcript_id = f.transcript_id "
+                "WHERE f.action != 'keep'"
             ).fetchall()
         decided: dict[str, dict[str, tuple[str, str | None]]] = {}
         for recording_id, _, speaker_id, decision, owner in rows:
             decided.setdefault(recording_id, {})[speaker_id] = (decision, owner)
+        fixes: dict[str, dict[int, tuple[str, str, str | None]]] = {}
+        for recording_id, segment, before, action, after in fixed:
+            fixes.setdefault(recording_id, {})[segment] = (before, action, after)
         parsed = []
         for recording_id, speakers in sorted(decided.items()):
             recording = self.library.get(recording_id)
@@ -1270,7 +1317,10 @@ class Team:
             transcript = self.library.cleaned(recording) if recording else None
             if recording is None or transcript is None:
                 continue
-            parsed.append(self._source(recording, transcript, speakers, person_id, name, names))
+            owners = segment_owners(transcript, speakers, fixes.get(recording_id, {}))
+            if person_id not in owners:
+                continue
+            parsed.append(self._source(recording, transcript, speakers, person_id, name, names, owners))
         return parsed
 
     @staticmethod
@@ -1281,6 +1331,7 @@ class Team:
         person_id: str,
         name: str,
         names: dict[str, str],
+        owners: list[str | None],
     ) -> TwinSource:
         own = {sid for sid, (decision, owner) in speakers.items() if decision == "confirmed" and owner == person_id}
         others: dict[str, str] = {}
@@ -1292,15 +1343,26 @@ class Team:
                 others[speaker.id] = names[owner]
             else:
                 others[speaker.id] = f"其他人{sum(1 for v in others.values() if v.startswith('其他人')) + 1}"
+
+        def who(i: int, segment: Segment) -> str:
+            owner = owners[i]
+            if owner == person_id:
+                return name
+            decision, confirmed = speakers.get(segment.speaker, ("none", None))
+            if owner != (confirmed if decision == "confirmed" else None):
+                # Left out of, or given away from, the speaker's person (``media.review``).
+                return names.get(owner, "其他人") if owner else "其他人"
+            return others.get(segment.speaker, "其他人")
+
         lines = [
             (
-                name if segment.speaker in own else others.get(segment.speaker, "其他人"),
+                who(i, segment),
                 f"[{timestamp(segment.start)}] {' '.join(segment.text.split())}" if segment.text.strip() else "",
-                segment.speaker in own,
+                owners[i] == person_id,
             )
-            for segment in transcript.segments
+            for i, segment in enumerate(transcript.segments)
         ]
-        mine = ",".join(str(i) for i, segment in enumerate(transcript.segments) if segment.speaker in own)
+        mine = ",".join(str(i) for i, owner in enumerate(owners) if owner == person_id)
         digest = hashlib.sha256(f"{transcript.id}|{mine}".encode()).hexdigest()[:12]
         date = recording.creation_time or (found.isoformat() if (found := date_from_name(recording.filename)) else None)
         return TwinSource(

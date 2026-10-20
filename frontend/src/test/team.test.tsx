@@ -162,7 +162,9 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
                 },
               ],
               seconds: 30,
-              candidates: [{ person_id: 'per_1', name: '张总', score: 0.8, sure: true }],
+              candidates: [
+                { person_id: 'per_1', name: '张总', score: 0.8, sure: true },
+              ],
               near: false,
             },
           ],
@@ -949,4 +951,63 @@ it('asks about recordings only as the server lists them, so an older list never 
   await screen.findByRole('region', { name: '人物' });
   expect(screen.queryByText('还有人没认')).toBeNull();
   expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+});
+
+it('asks about whoever speaks longest first, and measures progress by speech settled', async () => {
+  people = [
+    person({}),
+    person({
+      id: 'per_9',
+      name: '未命名 1',
+      auto: true,
+      recording_id: 'rec_9',
+      seconds: 60,
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({
+          items: [],
+          voices: [
+            {
+              id: 'voice_1',
+              members: [
+                {
+                  recording_id: 'rec_1',
+                  filename: '周会.m4a',
+                  transcript_id: 't1',
+                  speaker_id: 'S2',
+                  seconds: 600,
+                },
+              ],
+              seconds: 600,
+              candidates: [],
+              near: false,
+            },
+          ],
+          fragments: [],
+          unsorted: [],
+          heard: { settled: 900, total: 3600 },
+        });
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const list = await screen.findByRole('list', { name: '新出现的声音' });
+  const [first, second] = within(list).getAllByRole('listitem');
+  expect(first).toHaveTextContent('没听过的声音');
+  expect(second).toHaveTextContent('未命名 1');
+  expect(
+    screen.getByRole('progressbar', { name: '会议里的发言，已经知道是谁说的' }),
+  ).toHaveAttribute('aria-valuenow', '900');
 });

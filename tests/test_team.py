@@ -853,6 +853,7 @@ def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Pat
     second = voices(library, "二.m4a", ([0.95, 0.05, 0.0], 20))
     listed = web.get("/api/library/review").json()
     assert listed["unsorted"] == []  # Every speaker has a voiceprint.
+    assert listed["heard"] == {"settled": 0, "total": 53}  # Progress is how much speech is settled.
     assert listed["items"] == [] and [(m["recording_id"], m["speaker_id"]) for m in listed["fragments"]] == [
         (first, "S2")
     ]
@@ -871,4 +872,5 @@ def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Pat
     )
     assert again.status_code == 409
     assert [p["name"] for p in web.get("/api/library/people").json()["items"]] == ["张总"]
-    assert web.get("/api/library/review").json()["voices"] == []
+    listed = web.get("/api/library/review").json()
+    assert listed["voices"] == [] and listed["heard"] == {"settled": 50, "total": 53}

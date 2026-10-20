@@ -747,6 +747,29 @@ class Team:
                 found.append((recording, silent))
         return found
 
+    def heard(self, recordings: set[str] | None = None) -> tuple[float, float]:
+        """How long people speak in the transcribed recordings, and how much of it is settled (someone, nobody known,
+        or several people; not a speaker someone disputed): the owner's progress, measured by what a twin can learn
+        from rather than by how many questions are left. ``recordings``: only these."""
+        with self.library.read() as db:
+            settled = {
+                (row[0], row[1])
+                for row in db.execute(
+                    "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r "
+                    "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                    "WHERE a.decision != 'none' AND a.disputed = 0"
+                )
+            }
+        total = done = 0.0
+        for recording in self.library.list():
+            if recording.status != "ready" or (recordings is not None and recording.id not in recordings):
+                continue
+            for speaker in self.library.speakers(recording) or ():
+                total += speaker.seconds
+                if (recording.id, speaker.id) in settled:
+                    done += speaker.seconds
+        return round(done, 1), round(total, 1)
+
     def decide_voice(
         self,
         members: list[tuple[str, str, str]],

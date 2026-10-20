@@ -920,6 +920,7 @@ const handlers: Record<string, Handler> = {
       },
     ],
     unsorted: [],
+    heard: { settled: 7920, total: 12600 },
   }),
   'GET /api/library/recordings/r-weekly': reply(weekly),
   'POST /api/library/recordings/r-broken/retry': reply({

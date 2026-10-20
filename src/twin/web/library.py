@@ -965,12 +965,15 @@ def register(
         """What the viewer settles about the recordings they decide about: speakers someone said are not them
         (``items``), undecided speakers grouped by voice across recordings so each colleague is asked about once
         (``voices``), the short voices like nobody, to set aside together (``fragments``), and recordings whose
-        speakers have no voiceprint to group by, settled one by one (``unsorted``). All from one reading, so the
-        page never infers a task from an older list of recordings."""
+        speakers have no voiceprint to group by, settled one by one (``unsorted``), with how much of their speech
+        is settled (``heard``). All from one reading, so the page never infers a task from an older list of
+        recordings."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
         team = libraries.team(libraries.owner(request))
         voices, fragments = team.voices(editable)
+        settled, total = team.heard(editable)
         return {
+            "heard": {"settled": settled, "total": total},
             "items": [entry for entry in team.review(editable) if entry["disputed"]],
             "voices": [voice.model_dump() for voice in voices],
             "fragments": [member.model_dump() for voice in fragments for member in voice.members],

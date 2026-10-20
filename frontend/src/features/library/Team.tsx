@@ -74,6 +74,8 @@ interface Review {
   voices: Voice[];
   fragments: VoiceMember[];
   unsorted: Unsorted[];
+  // How long people speak in these recordings, and how much of it is settled.
+  heard?: { settled: number; total: number };
 }
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */
@@ -665,6 +667,7 @@ export function Team({
   const [voices, setVoices] = useState<Voice[]>([]);
   const [fragments, setFragments] = useState<VoiceMember[]>([]);
   const [unsorted, setUnsorted] = useState<Unsorted[]>([]);
+  const [heard, setHeard] = useState<Review['heard']>();
   const [name, setName] = useState('');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
@@ -694,6 +697,7 @@ export function Team({
       setVoices(queue.voices);
       setFragments(queue.fragments);
       setUnsorted(queue.unsorted);
+      setHeard(queue.heard);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载人物');
     }
@@ -871,9 +875,21 @@ export function Team({
     (r) => r.status === 'ready' && r.proofread === 'waiting',
   );
   const fragmentRecordings = new Set(fragments.map((m) => m.recording_id)).size;
+  // Whoever speaks longest first, a new person or a voice alike: settling them teaches a twin the most.
+  const voiced = [
+    ...unnamed.map((person) => ({
+      id: `person-${person.id}`,
+      seconds: person.seconds,
+      person,
+    })),
+    ...voices.map((voice) => ({
+      id: `voice-${voice.id}`,
+      seconds: voice.seconds,
+      voice,
+    })),
+  ].sort((a, b) => b.seconds - a.seconds);
   const taskIds = [
-    ...unnamed.map((p) => `person-${p.id}`),
-    ...voices.map((v) => `voice-${v.id}`),
+    ...voiced.map((v) => v.id),
     ...(fragments.length ? ['fragments'] : []),
     ...similar.map(([a, b]) => `similar-${a.id}-${b.id}`),
     ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
@@ -944,33 +960,42 @@ export function Team({
           framed
         >
           <Stack ref={taskList} gap={3}>
-            {unnamed.length + voices.length > 0 && (
+            {heard && heard.total > 0 && (
+              <Meter
+                size="sm"
+                value={heard.settled}
+                max={heard.total}
+                label="会议里的发言，已经知道是谁说的"
+              />
+            )}
+            {voiced.length > 0 && (
               <Stack as="ul" gap={0} aria-label="新出现的声音">
-                {unnamed.map((person) => (
-                  <Unnamed
-                    key={person.id}
-                    person={person}
-                    known={named ?? []}
-                    busy={busy}
-                    onName={(value) => void rename(person, value)}
-                    onResolve={(into) => void resolve(person, into)}
-                  />
-                ))}
-                {voices.map((voice) => (
-                  <VoiceRow
-                    key={voice.id}
-                    voice={voice}
-                    known={(people ?? []).filter((p) => !p.auto)}
-                    busy={busy}
-                    onDecide={(decision) =>
-                      void decideVoice(
-                        voice.members,
-                        decision,
-                        `voice-${voice.id}`,
-                      )
-                    }
-                  />
-                ))}
+                {voiced.map((entry) =>
+                  'person' in entry ? (
+                    <Unnamed
+                      key={entry.id}
+                      person={entry.person}
+                      known={named ?? []}
+                      busy={busy}
+                      onName={(value) => void rename(entry.person, value)}
+                      onResolve={(into) => void resolve(entry.person, into)}
+                    />
+                  ) : (
+                    <VoiceRow
+                      key={entry.id}
+                      voice={entry.voice}
+                      known={(people ?? []).filter((p) => !p.auto)}
+                      busy={busy}
+                      onDecide={(decision) =>
+                        void decideVoice(
+                          entry.voice.members,
+                          decision,
+                          entry.id,
+                        )
+                      }
+                    />
+                  ),
+                )}
               </Stack>
             )}
             {tasks > unnamed.length + voices.length && (

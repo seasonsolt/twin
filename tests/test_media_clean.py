@@ -28,7 +28,7 @@ def _llm(edits: dict[int, list[dict[str, Any]]], calls: list[list[int]] | None =
         request = json.loads(user)
         if calls is not None:
             calls.append(request["editable_ids"])
-        assert [row["id"] for row in request["meeting"]] == list(range(len(SEGMENTS)))  # whole meeting as context
+        assert [row["id"] for row in request["meeting"]] == list(range(len(SEGMENTS)))  # a short meeting is all context
         return {"edits": edits.get(request["editable_ids"][0], [])}
 
     return FakeLLM(handler)
@@ -71,3 +71,33 @@ def test_a_failed_batch_keeps_its_text_and_others_still_apply(monkeypatch: pytes
     assert result.segments[:2] == SEGMENTS[:2] and result.segments[2].text == "第一个概念是限界上下文。"
     assert (result.changed, result.failed_batches) == (1, 1)
     assert progress == [(1, 2), (2, 2)]
+
+
+def test_each_batch_sees_a_bounded_neighbourhood_however_long_the_meeting() -> None:
+    """Proofreading costs tokens in proportion to a meeting's length: no batch's request grows with the meeting."""
+
+    def requests(count: int) -> list[dict[str, Any]]:
+        sent: list[dict[str, Any]] = []
+
+        def handler(system: str, user: str, schema: type) -> dict[str, Any]:
+            sent.append({**json.loads(user), "length": len(user)})
+            return {"edits": []}
+
+        segments = [Segment(start=i, end=i + 1, text="这一段讲领域驱动设计。", speaker="S1") for i in range(count)]
+        clean_segments(FakeLLM(handler), segments)
+        return sorted(sent, key=lambda request: request["editable_ids"][0])
+
+    short, long = requests(4 * clean.BATCH), requests(40 * clean.BATCH)
+    assert len(long) == 40
+    limit = clean.BATCH + 2 * clean.CONTEXT
+    for request in long:
+        editable, shown = request["editable_ids"], [row["id"] for row in request["meeting"]]
+        # Its own segments with up to CONTEXT neighbours on either side, numbered as in the whole meeting.
+        assert shown == list(
+            range(max(0, editable[0] - clean.CONTEXT), min(len(long) * clean.BATCH, editable[-1] + clean.CONTEXT + 1))
+        )
+        assert len(shown) <= limit
+    # Same per-batch size, short meeting or long (longer ids aside), so ten times the meeting costs about ten times
+    # as much; with the whole meeting in every batch it would cost a hundred times.
+    assert max(r["length"] for r in long) < 1.1 * max(r["length"] for r in short)
+    assert sum(r["length"] for r in long) < 12 * sum(r["length"] for r in short)

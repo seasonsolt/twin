@@ -162,9 +162,15 @@ def prepare(args: argparse.Namespace) -> None:
         sid, start = task
         segs = sessions[sid]
         end = min(start + args.batch, len(segs))
+        # --context 0 shows the whole meeting, as the first L4 runs did; otherwise only that many segments around.
+        shown = (
+            range(0, len(segs))
+            if not args.context
+            else range(max(0, start - args.context), min(len(segs), end + args.context))
+        )
         user = json.dumps(
             {
-                "meeting": [{"id": i, "speaker": s["speaker"], "text": s["text"]} for i, s in enumerate(segs)],
+                "meeting": [{"id": i, "speaker": segs[i]["speaker"], "text": segs[i]["text"]} for i in shown],
                 "editable_ids": list(range(start, end)),
             },
             ensure_ascii=False,
@@ -196,6 +202,7 @@ def prepare(args: argparse.Namespace) -> None:
                 "model": config["model"],
                 "effort": args.effort,
                 "batch": args.batch,
+                "context": args.context,
                 "guard": args.guard,
                 "prompt_hash": cache_key(prompt=prompt),
                 "base_hash": cache_key(rows=rows),
@@ -222,6 +229,7 @@ def main() -> None:
         prep.add_argument("--" + name, type=Path, required=True)
     prep.add_argument("--prompt", type=Path, default=Path(__file__).with_name("llm_clean_prompt.txt"))
     prep.add_argument("--batch", type=int, default=80)
+    prep.add_argument("--context", type=int, default=20)
     prep.add_argument("--workers", type=int, choices=(1, 2), default=2)
     prep.add_argument("--effort", choices=("low", "medium", "high"), default="low")
     prep.add_argument("--guard", type=float, default=0.25)
@@ -230,8 +238,8 @@ def main() -> None:
     if args.action == "replay":
         print(json.dumps(replay(args.cache, json.load(sys.stdin)), ensure_ascii=False))
     else:
-        if args.batch < 1 or not 0 <= args.guard <= 1:
-            parser.error("batch must be positive and guard between 0 and 1")
+        if args.batch < 1 or args.context < 0 or not 0 <= args.guard <= 1:
+            parser.error("batch must be positive, context not negative and guard between 0 and 1")
         prepare(args)
 
 

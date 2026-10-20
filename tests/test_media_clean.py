@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 import pytest
@@ -101,3 +102,23 @@ def test_each_batch_sees_a_bounded_neighbourhood_however_long_the_meeting() -> N
     # as much; with the whole meeting in every batch it would cost a hundred times.
     assert max(r["length"] for r in long) < 1.1 * max(r["length"] for r in short)
     assert sum(r["length"] for r in long) < 12 * sum(r["length"] for r in short)
+
+
+def test_batches_are_asked_several_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each batch waits on the model; a long meeting asks ``PARALLEL`` of them at once, and never more."""
+    monkeypatch.setattr(clean, "BATCH", 1)
+    meeting = [Segment(start=i, end=i + 1, text=f"第{i}句。", speaker="S1") for i in range(clean.PARALLEL * 2)]
+    lock, waiting, most = threading.Lock(), [0], [0]
+    together = threading.Barrier(clean.PARALLEL, timeout=10)
+
+    def handler(system: str, user: str, schema: type) -> dict[str, Any]:
+        with lock:
+            waiting[0] += 1
+            most[0] = max(most[0], waiting[0])
+        together.wait()  # Times out unless PARALLEL batches are waiting at the same moment.
+        with lock:
+            waiting[0] -= 1
+        return {"edits": []}
+
+    result = clean_segments(FakeLLM(handler), meeting)
+    assert result.failed_batches == 0 and most[0] == clean.PARALLEL

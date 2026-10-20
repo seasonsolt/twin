@@ -34,6 +34,9 @@ BATCH = 80
 # Segments on either side of a batch that it sees, read-only, as context. A batch never sees the whole meeting, so
 # a recording's proofreading costs tokens in proportion to its length rather than to its length squared.
 CONTEXT = 20
+# Batches asked at once. Each waits most of a minute on the model, so a long meeting is proofread this many times
+# faster; more risks the gateway's rate limit, and a batch it refuses only keeps its original text.
+PARALLEL = 16
 # An edit changing more than this share of a segment's characters (punctuation ignored) is a rewrite, not a fix.
 GUARD = 0.25
 
@@ -101,7 +104,7 @@ def clean_segments(
 
     # Each batch runs in the caller's context, so its calls are counted where the caller collects them.
     contexts = [copy_context() for _ in batches]
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         answers = pool.map(lambda context, allowed: context.run(ask, allowed), contexts, batches)
         for done, (allowed, edits) in enumerate(zip(batches, answers, strict=True), 1):
             if edits is None:

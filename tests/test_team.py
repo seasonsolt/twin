@@ -264,7 +264,11 @@ def test_known_voices_are_taken_without_asking_and_new_long_voices_become_unname
     view = {s.id: s for s in team.speakers(library.get(second))}  # type: ignore[arg-type]
     people = {p.name: p for p in team.people()}
     assert (view["S1"].person_id, view["S2"].person_id) == (lead, people["未命名 2"].id)
-    assert view["S3"].decision == view["S4"].decision == "none" and view["S3"].candidates
+    assert view["S3"].decision == view["S4"].decision == "none"
+    # Both people S3 sounds like already speak here as S1 and S2, so it is someone else: nobody is suggested.
+    assert not view["S3"].candidates
+    # S4 is as alike to S1 as a split half: 张总 again, the answer by default.
+    assert [(c.person_id, c.split, c.sure) for c in view["S4"].candidates] == [(lead, True, True)]
     assert people["张总"].samples == 1 and not people["张总"].auto  # A match adds no sample.
     assert people["未命名 2"].auto and people["未命名 2"].speakers == 2 and people["未命名 2"].recording_id
     assert wanted_done(library, "p-zhang") == (2, 1)  # 张总's twin follows the new recording.
@@ -395,20 +399,21 @@ def test_a_voice_heard_in_many_recordings_is_settled_once(tmp_path: Path) -> Non
         "二.m4a",
         ([0.95, 0.05, 0.0], 25),
         ([0.05, 0.95, 0.0], 20),
-        ([0.9, 0.1, 0.0], 10),  # Like S1 of this recording too, but diarization told them apart.
+        ([0.9, 0.1, 0.0], 10),  # As alike to S1 as a split half: one person diarization split in two.
+        ([0.5, 0.5, 0.707], 4),  # Somewhat like S1 and S2, but told apart from both here.
     )
     three = voices(library, "三.m4a", ([1.0, 0.1, 0.0], 12))
 
     found, fragments = team.voices()
     assert [[(m.recording_id, m.speaker_id) for m in v.members] for v in found] == [
-        [(one, "S1"), (two, "S1"), (three, "S1")],
+        [(one, "S1"), (two, "S1"), (three, "S1"), (two, "S3")],
         [(one, "S2"), (two, "S2")],
     ]
-    assert [v.seconds for v in found] == [77, 50] and not found[0].candidates
+    assert [v.seconds for v in found] == [87, 50] and not found[0].candidates
     assert sorted((m.recording_id, m.speaker_id) for v in fragments for m in v.members) == sorted(
-        [(one, "S3"), (two, "S3")]
+        [(one, "S3"), (two, "S4")]
     )
-    assert [[m.speaker_id for m in v.members] for v in team.voices({two})[0]] == [["S1"], ["S2"]]
+    assert [[m.speaker_id for m in v.members] for v in team.voices({two})[0]] == [["S1", "S3"], ["S2"]]
 
     # Settled as a whole: every meeting is 张总's now, and the longest speaker is his voice sample.
     zhang = team.add_person("张总")
@@ -416,12 +421,10 @@ def test_a_voice_heard_in_many_recordings_is_settled_once(tmp_path: Path) -> Non
     before = {rid: revision(library, rid)[1] for rid in (one, two, three)}
     team.decide_voice(members, "confirm", zhang.id)
     person = team.person(zhang.id)
-    assert person and (person.speakers, person.samples, person.seconds) == (3, 1, 77)
+    assert person and (person.speakers, person.samples, person.seconds) == (4, 1, 87)
     assert all(revision(library, rid)[1] == before[rid] + 1 for rid in (one, two, three))
-    # The short speaker diarization split from him is like his sample now: asked about, no longer a fragment.
     after, _ = team.voices()
-    assert [[m.speaker_id for m in v.members] for v in after] == [["S2", "S2"], ["S3"]]
-    assert [c.name for c in after[1].candidates] == ["张总"]
+    assert [[m.speaker_id for m in v.members] for v in after] == [["S2", "S2"]]
 
     # A page showing an old grouping is refused as a whole.
     with pytest.raises(Stale):
@@ -435,6 +438,28 @@ def test_a_voice_heard_in_many_recordings_is_settled_once(tmp_path: Path) -> Non
     assert team.identities()[one] == (["张总"], 2) and team.voices()[1] == []
     with pytest.raises(ValueError, match="需要指定"):
         team.decide_voice([(two, revision(library, two)[0], "S2")], "confirm")
+
+
+def test_only_a_close_voice_is_suggested_and_only_a_very_close_one_is_the_default(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    wang = team.add_person("王宁")
+    sample = voices(library, "样本.m4a", ([1.0, 0.0, 0.0], 60))
+    decide(team, sample, "S1", "confirm", wang.id, sample=True)
+
+    # Short speakers (no automatic decision) at 0.5, 0.7 and 0.8 to 王宁's sample.
+    far = voices(library, "一.m4a", ([0.5, 0.866, 0.0], 10))
+    close = voices(library, "二.m4a", ([0.7, 0.714, 0.0], 10))
+    closer = voices(library, "三.m4a", ([0.8, 0.6, 0.0], 10))
+
+    def suggested(recording_id: str) -> list[tuple[str, bool]]:
+        speaker = team.speakers(library.get(recording_id))[0]  # type: ignore[arg-type]
+        return [(c.name, c.sure) for c in speaker.candidates]
+
+    # The nearest known voice is merely the nearest: not offered. Like enough to offer, but not to answer by
+    # Enter. Close enough to be the answer.
+    assert (suggested(far), suggested(close), suggested(closer)) == ([], [("王宁", False)], [("王宁", True)])
+    assert [(v.candidates[0].name, v.candidates[0].sure) for v in team.voices({close})[0]] == [("王宁", False)]
 
 
 def test_a_voice_never_chains_colleagues_who_sound_alike(tmp_path: Path) -> None:

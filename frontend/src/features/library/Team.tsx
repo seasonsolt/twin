@@ -233,16 +233,19 @@ function VoiceRow({
   const match = known.find((p) => p.name === typed);
   const [loudest] = voice.members;
   const [likely, other] = voice.candidates;
+  const offered = (voice.near && other ? [likely, other] : [likely]).filter(
+    Boolean,
+  );
   // Who it may be, to hear next to it before saying so.
-  const compared = (voice.near && other ? [likely, other] : [likely])
-    .filter(Boolean)
-    .map((c) => known.find((p) => p.id === c.person_id));
+  const compared = offered.map((c) => known.find((p) => p.id === c.person_id));
+  // Only a voice very close to one person is answered by Enter; a nearer guess is a choice to make on purpose.
+  const sure = Boolean(likely?.sure) && !voice.near;
   const recordings = new Set(voice.members.map((m) => m.recording_id)).size;
   const title = !likely
     ? '没听过的声音'
-    : voice.near && other
-      ? `像${likely.name}，也像${other.name}`
-      : `像${likely.name}`;
+    : sure
+      ? `像${likely.name}`
+      : `可能是${offered.map((c) => c.name).join('或')}`;
   return (
     <ListRow
       variant="divided"
@@ -272,6 +275,12 @@ function VoiceRow({
           {compared.map((person) => (
             <PersonClip key={person?.id} person={person} />
           ))}
+          {likely?.split && (
+            <>
+              <br />
+              这段录音里已经有{likely.name}，可能是同一个人被分成了两位
+            </>
+          )}
         </>
       }
       trailing={
@@ -282,32 +291,41 @@ function VoiceRow({
             event.preventDefault();
             if (match) onDecide({ action: 'confirm', person_id: match.id });
             else if (typed) onDecide({ action: 'confirm', new_person: typed });
-            else if (likely)
+            else if (sure)
               onDecide({ action: 'confirm', person_id: likely.person_id });
           }}
         >
           <Input
             aria-label={`${title}，是谁`}
-            placeholder={likely ? '写别人' : '这是谁'}
+            placeholder={sure ? '写别人' : '这是谁'}
             maxLength={40}
             value={name}
             suggestions={known.map((p) => p.name)}
             className="min-w-0 flex-1 sm:w-56 sm:flex-none"
             onChange={(event) => setName(event.target.value)}
           />
-          <Button
-            type="submit"
-            size="sm"
-            disabled={busy || (!typed && !likely)}
-          >
+          <Button type="submit" size="sm" disabled={busy || (!typed && !sure)}>
             {match
               ? `是${match.name}`
-              : typed
-                ? '确认'
-                : likely
-                  ? `是${likely.name}`
-                  : '确认'}
+              : !typed && sure
+                ? `是${likely.name}`
+                : '确认'}
           </Button>
+          {!sure &&
+            offered.map((c) => (
+              <Button
+                key={c.person_id}
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  onDecide({ action: 'confirm', person_id: c.person_id })
+                }
+              >
+                是{c.name}
+              </Button>
+            ))}
           <Button
             type="button"
             variant="ghost"

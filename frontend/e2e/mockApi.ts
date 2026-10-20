@@ -252,7 +252,7 @@ export const weekly = {
     speaker('S3', 640, {
       candidates: [
         { person_id: 'u-shiyan', name: '周石言', score: 0.71 },
-        { person_id: 'u-qinghe', name: '许清禾', score: 0.52 },
+        { person_id: 'u-qinghe', name: '许清禾', score: 0.62 },
       ],
       near: true,
     }),

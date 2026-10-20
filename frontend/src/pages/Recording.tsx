@@ -36,6 +36,10 @@ export interface Candidate {
   person_id: string;
   name: string;
   score: number;
+  // Close enough to be the answer by default.
+  sure?: boolean;
+  // Already speaking in this recording, and this alike: one person diarization split in two.
+  split?: boolean;
 }
 export interface Speaker {
   id: string;
@@ -277,7 +281,9 @@ function SpeakerCard({
                       {c.name}
                     </Text>
                     <Text as="span" size="sm" tone="inherit">
-                      声音像 {Math.round(c.score * 100)}%
+                      {c.split
+                        ? `这段里已有${c.name}，可能被拆成了两位`
+                        : `声音像 ${Math.round(c.score * 100)}%`}
                     </Text>
                   </Stack>
                 </VoiceChoice>

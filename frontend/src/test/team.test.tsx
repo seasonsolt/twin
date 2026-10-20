@@ -162,7 +162,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
                 },
               ],
               seconds: 30,
-              candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+              candidates: [{ person_id: 'per_1', name: '张总', score: 0.8, sure: true }],
               near: false,
             },
           ],
@@ -813,8 +813,10 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     </MemoryRouter>,
   );
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  const row = within(tasks).getByText('像张总').closest('li')!;
+  // Like 张总, but not so alike that Enter answers it: confirming him is a click of its own.
+  const row = within(tasks).getByText('可能是张总').closest('li')!;
   expect(row).toHaveTextContent('2 段录音 · 共说了 8 分钟');
+  expect(within(row).getByRole('button', { name: '确认' })).toBeDisabled();
   await user.click(within(row).getByRole('button', { name: '是张总' }));
   await waitFor(() =>
     expect(posts).toEqual([
@@ -828,7 +830,7 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
       },
     ]),
   );
-  await waitFor(() => expect(screen.queryByText('像张总')).toBeNull());
+  await waitFor(() => expect(screen.queryByText('可能是张总')).toBeNull());
   const scraps = screen.getByText('零碎的声音').closest('li')!;
   expect(scraps).toHaveTextContent('2 段录音里有 2 段很短的声音，共 7 秒');
   await user.click(within(scraps).getByRole('button', { name: '都放一边' }));
@@ -896,7 +898,7 @@ it('opens a voice at its own speaker, next to the samples of who it may be', asy
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const row = (await screen.findByText('像张总，也像李总')).closest('li')!;
+  const row = (await screen.findByText('可能是张总或李总')).closest('li')!;
   // Both people it may be can be heard by the voice they were confirmed with.
   expect(
     within(row).getByRole('button', { name: '听张总确认过的声音' }),

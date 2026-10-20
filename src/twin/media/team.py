@@ -23,7 +23,7 @@ import json
 import math
 import sqlite3
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -39,6 +39,16 @@ Decision = Literal["none", "confirmed", "unknown", "mixed"]
 # A speaker is offered for review from this similarity to someone's voice samples: in AliMeeting calibration of the
 # single-person claim, people absent from a meeting never passed 0.44. The pilot recalibrates it.
 SHOW = 0.45
+# Someone is suggested for a speaker only from this similarity. Below it the nearest known voice was nearly never the
+# speaker on the pilot library (42 meetings of 20 people, 17 of them known): most of a large meeting's speakers are not
+# known yet, and the closest of the known is merely the closest. ``SHOW`` still decides whether a voice matches nobody.
+SUGGEST = 0.6
+# From here a suggestion is what the owner answers by pressing Enter: on the pilot library every confirmed speaker this
+# close to someone's samples was that person.
+SURE = 0.75
+# Two speakers of one recording this alike are one person the diarization split in two: split halves on the pilot
+# library were 0.73-0.85 alike, different people of one meeting never this alike.
+SPLIT = 0.75
 # Candidates closer than this are shown together as "close, tell them apart".
 NEAR = 0.05
 # A speaker is taken to be someone without asking only this close to the person's samples, this much closer than to
@@ -88,6 +98,10 @@ class Candidate(BaseModel):
     person_id: str
     name: str
     score: float
+    # Close enough to be the answer by default (``SURE``).
+    sure: bool = False
+    # Already speaking in the same recording, and this alike to them there: diarization split one person (``SPLIT``).
+    split: bool = False
 
 
 class TwinSource(BaseModel):
@@ -146,6 +160,9 @@ class _Group:
     vectors: list[list[float]]
     rejected: set[str]
     likely: str | None
+    # People already confirmed in a member's recording: not who this voice is, unless it is their split half.
+    present: set[str]
+    split: Candidate | None
 
 
 class OpenVoice(BaseModel):
@@ -330,6 +347,8 @@ class Team:
                 )
             }
             prints = self._prints(db)
+            names = dict(db.execute("SELECT id, name FROM people").fetchall())
+        here = self._here(speakers, rows, names)
         views = []
         for speaker in speakers:
             row = rows.get(speaker.id)
@@ -345,7 +364,7 @@ class Team:
             )
             if view.decision == "none" and speaker.embedding:
                 # A speaker's own samples would match it perfectly; they only exist once it is decided anyway.
-                view.candidates = self._match(speaker.embedding, prints, set(view.rejected))
+                view.candidates = self._suggest(speaker.embedding, prints, set(view.rejected), here)
                 view.near = len(view.candidates) > 1 and view.candidates[0].score - view.candidates[1].score < NEAR
             views.append(view)
         return views
@@ -517,7 +536,7 @@ class Team:
             for speaker in sorted(speakers, key=lambda s: -s.seconds):
                 if speaker.id in touched or not speaker.embedding:
                     continue
-                candidates = self._match(speaker.embedding, prints, set())
+                candidates = self._match(speaker.embedding, prints, set(), floor=SHOW)
                 if candidates:
                     best, runner = candidates[0], candidates[1].score if len(candidates) > 1 else 0.0
                     if best.score < AUTO or best.score - runner < AUTO_MARGIN or speaker.seconds < AUTO_MIN_SECONDS:
@@ -615,8 +634,9 @@ class Team:
         """The undecided speakers of transcribed recordings, grouped by voice across recordings so a colleague heard
         in many meetings is asked about once: (voices, fragments). Longest speakers seed the groups, their
         voiceprints being the steadiest; each later one joins the voice whose least similar speaker is still at
-        least ``GROUP`` alike, never one already speaking in its recording (diarization told them apart there) or
-        one whose speakers sound most like someone else than it does. Fragments are
+        least ``GROUP`` alike, never one already speaking in its recording unless as alike as a split half
+        (``SPLIT``: diarization told them apart there otherwise), one whose speakers sound most like someone else
+        than it does, or one sounding like someone already confirmed in its recording. Fragments are
         voices heard less than ``FRAGMENT_SECONDS`` and like nobody, which the owner can only set aside. Speakers
         someone disputed wait apart (``review``); those without a voiceprint wait in their recording.
         ``recordings``: only these."""
@@ -624,19 +644,24 @@ class Team:
             rows = {
                 (row["recording_id"], row["speaker_id"]): row
                 for row in db.execute(
-                    "SELECT a.recording_id, a.speaker_id, a.decision, a.rejected, a.disputed FROM attributions a "
-                    "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id"
+                    "SELECT a.recording_id, a.speaker_id, a.decision, a.person_id, a.rejected, a.disputed "
+                    "FROM attributions a JOIN recordings r ON r.id = a.recording_id "
+                    "AND r.transcript_id = a.transcript_id"
                 )
             }
             prints = self._prints(db)
-        # (member, unit voiceprint, people it was denied to be, the person it sounds most like)
-        found: list[tuple[VoiceMember, list[float], set[str], str | None]] = []
+            names = dict(db.execute("SELECT id, name FROM people").fetchall())
+        # (member, unit voiceprint, people it was denied to be, who it sounds most like, people confirmed beside it)
+        found: list[tuple[VoiceMember, list[float], set[str], Candidate | None, set[str]]] = []
         for recording in self.library.list():
             if recording.status != "ready" or recording.transcript_id is None:
                 continue
             if recordings is not None and recording.id not in recordings:
                 continue
-            for speaker in self.library.speakers(recording) or ():
+            spoken = self.library.speakers(recording) or ()
+            here = self._here(spoken, {s.id: r for s in spoken if (r := rows.get((recording.id, s.id)))}, names)
+            present = {person_id for person_id, _, _ in here}
+            for speaker in spoken:
                 row = rows.get((recording.id, speaker.id))
                 if not speaker.embedding or (row is not None and (row["decision"] != "none" or row["disputed"])):
                     continue
@@ -648,36 +673,43 @@ class Team:
                     seconds=round(speaker.seconds, 1),
                 )
                 rejected = set(json.loads(row["rejected"])) if row else set()
-                matched = self._match(speaker.embedding, prints, rejected)
-                found.append((member, _unit(speaker.embedding), rejected, matched[0].person_id if matched else None))
+                matched = self._suggest(speaker.embedding, prints, rejected, here)
+                found.append((member, _unit(speaker.embedding), rejected, matched[0] if matched else None, present))
         groups: list[_Group] = []
-        for member, vector, rejected, likely in sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id)):
+        for member, vector, rejected, lead, present in sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id)):
+            likely = lead.person_id if lead else None
+            split = lead if lead and lead.split else None
             best, best_score = None, GROUP
             for group in groups:
                 if likely and group.likely and likely != group.likely:
                     continue
-                if any(m.recording_id == member.recording_id for m in group.members):
+                if (group.likely in present and not split) or (likely in group.present and not group.split):
                     continue
                 score = min(sum(a * b for a, b in zip(vector, other, strict=True)) for other in group.vectors)
+                if score < SPLIT and any(m.recording_id == member.recording_id for m in group.members):
+                    continue
                 if score >= best_score:
                     best, best_score = group, score
             if best is None:
-                groups.append(_Group([member], [vector], set(rejected), likely))
+                groups.append(_Group([member], [vector], set(rejected), likely, set(present), split))
             else:
                 best.members.append(member)
                 best.vectors.append(vector)
                 best.rejected.update(rejected)
                 best.likely = best.likely or likely
+                best.present.update(present)
+                best.split = best.split or split
         voices: list[Voice] = []
         fragments: list[Voice] = []
         for group in groups:
             members = group.members
             key = "|".join(sorted(f"{m.recording_id}:{m.transcript_id}:{m.speaker_id}" for m in members))
             centroid = [sum(values) for values in zip(*group.vectors, strict=True)]
+            matched = self._match(centroid, [p for p in prints if p[0] not in group.present], group.rejected)
+            if group.split and group.split.person_id not in {c.person_id for c in matched}:
+                matched = [group.split, *matched][:2]
             # The person its speakers sound most like leads, as each of them would show it.
-            candidates = sorted(
-                self._match(centroid, prints, group.rejected), key=lambda c: c.person_id != group.likely
-            )
+            candidates = sorted(matched, key=lambda c: c.person_id != group.likely)
             voice = Voice(
                 id="voice_" + hashlib.sha256(key.encode()).hexdigest()[:12],
                 members=members,
@@ -904,6 +936,19 @@ class Team:
                 )
         return found
 
+    @staticmethod
+    def _here(
+        speakers: Iterable[Speaker], rows: Mapping[str, sqlite3.Row], names: Mapping[str, str]
+    ) -> list[tuple[str, str, list[float]]]:
+        """The people confirmed in a recording, from its speakers and their attribution rows by speaker: each one's
+        person, name and voiceprint there (``_suggest``)."""
+        found = []
+        for speaker in speakers:
+            row = rows.get(speaker.id)
+            if speaker.embedding and row is not None and row["decision"] == "confirmed" and row["person_id"]:
+                found.append((str(row["person_id"]), names.get(row["person_id"], ""), speaker.embedding))
+        return found
+
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:
         return [
             (row["person_id"], row["name"], json.loads(row["embedding"]))
@@ -915,19 +960,41 @@ class Team:
 
     @staticmethod
     def _match(
-        embedding: list[float], prints: Iterable[tuple[str, str, list[float]]], rejected: set[str]
+        embedding: list[float],
+        prints: Iterable[tuple[str, str, list[float]]],
+        rejected: set[str],
+        floor: float = SUGGEST,
     ) -> list[Candidate]:
         """People with active samples the speaker was not denied to be, by their best-matching sample, from
-        ``SHOW``; at most the top two."""
+        ``floor``; at most the top two."""
         best: dict[str, Candidate] = {}
         for person_id, name, vector in prints:
             if person_id in rejected:
                 continue
             score = round(_cosine(embedding, vector), 3)
             if person_id not in best or score > best[person_id].score:
-                best[person_id] = Candidate(person_id=person_id, name=name, score=score)
-        ranked = sorted((c for c in best.values() if c.score >= SHOW), key=lambda c: -c.score)
+                best[person_id] = Candidate(person_id=person_id, name=name, score=score, sure=score >= SURE)
+        ranked = sorted((c for c in best.values() if c.score >= floor), key=lambda c: -c.score)
         return ranked[:2]
+
+    @staticmethod
+    def _suggest(
+        embedding: list[float],
+        prints: list[tuple[str, str, list[float]]],
+        rejected: set[str],
+        here: list[tuple[str, str, list[float]]],
+    ) -> list[Candidate]:
+        """Who an undecided speaker may be (``_match``), leaving out the people already confirmed in its recording
+        (``here``: each one's person, name and voiceprint there): diarization tells a meeting's people apart, so a
+        voice merely like one of them is someone else, unless it is as alike as a split half of theirs (``SPLIT``)."""
+        present = {person_id for person_id, _, _ in here}
+        found = {c.person_id: c for c in Team._match(embedding, [p for p in prints if p[0] not in present], rejected)}
+        for person_id, name, vector in here:
+            score = round(_cosine(embedding, vector), 3)
+            if person_id in rejected or score < SPLIT or (person_id in found and found[person_id].score >= score):
+                continue
+            found[person_id] = Candidate(person_id=person_id, name=name, score=score, sure=True, split=True)
+        return sorted(found.values(), key=lambda c: -c.score)[:2]
 
     @staticmethod
     def _reopen(db: sqlite3.Connection, recording_id: str, people: set[str]) -> None:

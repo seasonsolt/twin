@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.0", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.1", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -111,7 +111,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.3.0" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.3.1" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -361,6 +361,22 @@ def test_script_pure_functions(script, tmp_path, capsys):
     assert "funasr" not in sys.modules and "torch" not in sys.modules
 
 
+def test_script_absorbs_small_clusters_only_into_a_clear_match(script):
+    import numpy as np
+
+    a, b, c = np.eye(192)[:3]
+    tilted = 0.35 * a + np.sqrt(1 - 0.35**2) * c
+    between = (a + b) / np.sqrt(2)
+    rows = [a] * 10 + [b] * 10 + [a] * 4 + [c] * 4 + [between] + [tilted]
+    found = np.array([0] * 10 + [1] * 10 + [2] * 4 + [3] * 4 + [4] + [5])
+    result = script.absorb(found, np.stack(rows), {0, 1})
+    # Same voice joins; another voice and a voice as close to both stay apart; one window gets the 0.2 allowance.
+    assert result.tolist() == [0] * 10 + [1] * 10 + [0] * 4 + [3] * 4 + [4] + [0]
+    assert found.tolist()[-1] == 5
+    assert script.absorb(found, np.stack(rows), {0}).tolist()[20:] == [0] * 4 + [3] * 4 + [0, 0]
+    assert script.absorb(found, np.stack(rows), set(range(6))).tolist() == found.tolist()
+
+
 def test_script_missing_models_is_json_without_dependencies(tmp_path):
     result = subprocess.run(
         [sys.executable, str(compute.PACK_ROOT / "asr-funasr/run.py"), "--check"],
@@ -484,7 +500,7 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         audio.write_bytes(b"boom")
         assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
         with urllib.request.urlopen(url + "/health") as response:
-            assert json.loads(response.read()) == {"ok": True, "version": "1.3.0", "device": "cuda", "busy": False}
+            assert json.loads(response.read()) == {"ok": True, "version": "1.3.1", "device": "cuda", "busy": False}
         bad = b'{"audio_bytes": 1, "hotwords": "x"}\nA'
         with pytest.raises(urllib.error.HTTPError) as rejected:
             urllib.request.urlopen(urllib.request.Request(url + "/transcribe", data=bad, method="POST"))

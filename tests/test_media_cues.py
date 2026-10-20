@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,11 +27,12 @@ MEETING = [
 
 
 def answering(*answers: Any) -> FakeLLM:
-    """A model answering each request with the next of ``answers`` (an exception is raised)."""
-    queue = list(answers)
+    """A model answering the meeting's n-th window with the n-th of ``answers`` (an exception is raised), whatever
+    order the windows, asked together, arrive in."""
 
     def answer(system: str, user: str, schema: type[BaseModel]) -> Any:
-        found = queue.pop(0)
+        first = int(json.loads(user)["meeting"].split("|", 1)[0])
+        found = answers[[w.start for w in cues._windows(len(MEETING))].index(first)]
         if isinstance(found, Exception):
             raise found
         return found
@@ -146,3 +148,17 @@ def test_names_are_filed_once_for_the_current_transcript(tmp_path: Path) -> None
     assert [r.id for r in library.unnamed()] == [rec]
     library.asked_names(rec, current.transcript_id)
     assert library.unnamed() == ()
+
+
+def test_the_windows_of_a_long_meeting_are_asked_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each window waits minutes on the model; a long meeting asks them at once, as proofreading does."""
+    monkeypatch.setattr(cues, "WINDOW", 2)
+    monkeypatch.setattr(cues, "OVERLAP", 1)
+    windows = len(cues._windows(len(MEETING)))
+    together = threading.Barrier(windows, timeout=10)
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> Any:
+        together.wait()  # Times out unless every window is waiting on the model at the same moment.
+        return {"speakers": []}
+
+    assert windows > 1 and name_speakers(FakeLLM(answer), MEETING, []) == ([], 0)

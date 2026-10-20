@@ -34,6 +34,7 @@ import {
 import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
 import { basePath, withBase } from '../../lib/base';
+import { usePolling } from '../../lib/usePolling';
 import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
@@ -780,11 +781,8 @@ export function Team({
     void load();
   }, [load, version]);
   const updating = !!people?.some((p) => p.updating);
-  useEffect(() => {
-    if (!updating) return;
-    const timer = setInterval(() => void load(), 3000);
-    return () => clearInterval(timer);
-  }, [updating, load]);
+  // A twin's memory takes minutes to rebuild: every few seconds would only load the server, many pages at once.
+  usePolling(load, updating ? 15000 : 0);
 
   const act = async (work: () => Promise<unknown>, task?: string) => {
     setBusy(true);

@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 from pydantic import BaseModel
 
@@ -34,6 +36,8 @@ PROMPT = (
 # Segments per request; a longer meeting is read in overlapping windows.
 WINDOW = 1200
 OVERLAP = 100
+# Windows asked at once: each waits minutes on the model; as many as proofreading's batches (``clean.PARALLEL``).
+PARALLEL = 16
 
 
 class Cue(BaseModel):
@@ -100,15 +104,26 @@ def name_speakers(llm: LLM, segments: list[Segment], roster: list[str]) -> tuple
     speakers = {segment.speaker for segment in segments}
     found: dict[str, list[Cue]] = defaultdict(list)
     failed = 0
-    for window in _windows(len(segments)):
+
+    def ask(window: range) -> Cues | None:
         meeting = "\n".join(f"{i}|{segments[i].speaker}|{segments[i].text}" for i in window)
         user = json.dumps({"roster": roster, "meeting": meeting}, ensure_ascii=False)
         try:
             with default_stage("speaker.cues"):
-                answer = llm.structured(system=PROMPT, user=user, schema=Cues, effort="low", reasoning_effort="low")
+                return llm.structured(system=PROMPT, user=user, schema=Cues, effort="low", reasoning_effort="low")
         except Exception as e:
             # The exception text can quote the transcript; log only its type.
             logger.warning("naming speakers failed: %s", type(e).__name__)
+            return None
+
+    # A window of a long meeting waits minutes on the model: they are asked together, as proofreading's batches are,
+    # each in the caller's context so its calls are counted there, and read in the meeting's order.
+    windows = _windows(len(segments))
+    contexts = [copy_context() for _ in windows]
+    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+        answers = list(pool.map(lambda context, window: context.run(ask, window), contexts, windows))
+    for window, answer in zip(windows, answers, strict=True):
+        if answer is None:
             failed += 1
             continue
         seen: set[str] = set()

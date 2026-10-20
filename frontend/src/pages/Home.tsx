@@ -17,6 +17,7 @@ import {
   Toolbar,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { usePolling } from '../lib/usePolling';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
@@ -62,11 +63,7 @@ export function Home() {
         ? 60000
         : 15000
       : 0;
-  useEffect(() => {
-    if (!interval) return;
-    const timer = setInterval(() => void load(), interval);
-    return () => clearInterval(timer);
-  }, [interval, load]);
+  usePolling(load, interval);
 
   const picker = (
     <FileInput

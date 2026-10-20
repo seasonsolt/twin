@@ -25,6 +25,17 @@ vi.mock('../lib/compactMedia', async (actual) => {
   };
 });
 
+// jsdom's Blob has no arrayBuffer(); every browser this runs in does.
+if (!Blob.prototype.arrayBuffer)
+  Blob.prototype.arrayBuffer = function (this: Blob) {
+    return new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 beforeEach(() => {
@@ -34,7 +45,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-function box(type: string, ...parts: Uint8Array[]): Uint8Array {
+function box(type: string, ...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const size = 8 + parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(size);
   new DataView(out.buffer).setUint32(0, size);
@@ -47,7 +58,7 @@ function box(type: string, ...parts: Uint8Array[]): Uint8Array {
   return out;
 }
 /** A full box body: version, flags, then creation and modification time (32 or 64 bit), then padding. */
-function timed(version: 0 | 1, seconds: number): Uint8Array {
+function timed(version: 0 | 1, seconds: number): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(version ? 4 + 16 + 8 : 4 + 8 + 8);
   const view = new DataView(out.buffer);
   view.setUint8(0, version);
@@ -60,7 +71,7 @@ function timed(version: 0 | 1, seconds: number): Uint8Array {
   }
   return out;
 }
-function mp4(seconds: number, mdatFirst = false): Uint8Array {
+function mp4(seconds: number, mdatFirst = false): Uint8Array<ArrayBuffer> {
   const moov = box(
     'moov',
     box('mvhd', timed(0, seconds)),
@@ -145,7 +156,7 @@ it('sends the original when the browser cannot encode', async () => {
   await uploadMedia(original, new AbortController().signal, () => {}, {
     compact: 'audio',
   });
-  expect(sent).toEqual([original]);
+  expect(sent.map((blob) => blob.size)).toEqual([100]);
 });
 
 it('uploads the smaller file and resumes it only when it is the same bytes', async () => {

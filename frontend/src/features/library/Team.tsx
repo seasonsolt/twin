@@ -933,10 +933,14 @@ export function Team({
   // Only who the viewer may settle: voices in recordings they uploaded (or all, for an administrator).
   const unnamed = people?.filter((p) => p.auto && p.can_manage !== false) ?? [];
   // The team's roster holds everyone; this page shows the people the viewer looks after or can talk to.
-  const named = people?.filter(
-    (p) =>
-      !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
-  );
+  // Whoever was heard longest first: the people with the most recorded speech make the fullest twins. Equal
+  // ones keep the server's order by name.
+  const named = people
+    ?.filter(
+      (p) =>
+        !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
+    )
+    .sort((a, b) => b.seconds - a.seconds);
   const byId = new Map((people ?? []).map((p) => [p.id, p]));
   const similar = (people ?? []).flatMap((p) =>
     (p.similar ?? [])

@@ -1148,7 +1148,13 @@ def register(
     def delete_person(person_id: str, request: Request) -> dict[str, bool]:
         owner = libraries.owner(request)
         libraries.manage(libraries.viewer(request), person_id)
-        if not libraries.team(owner).delete_person(person_id):
+        team = libraries.team(owner)
+        person = team.person(person_id)
+        # A deleted twin (in the trash) keeps its person only to come back to them if restored; deleting the
+        # person lets it go, as the page offers once the twin is gone.
+        if person and person.persona_id and libraries.registry and libraries.registry.entry(person.persona_id) is None:
+            team.unlink(person.persona_id)
+        if not team.delete_person(person_id):
             raise HTTPException(409, "这个人已经有分身，请先删除分身")
         libraries.changed(owner)
         return {"deleted": True}

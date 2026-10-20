@@ -1270,3 +1270,33 @@ it('opens the speaker a team task points at, even one already given to someone a
   expect(screen.getByText('已确认 2 / 3 位')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '改 S3' })).toBeNull();
 });
+
+it('lists people heard longest first', async () => {
+  people = [
+    person({ id: 'per_a', name: '短的', seconds: 60 }),
+    person({ id: 'per_b', name: '长的', seconds: 3600 }),
+    person({ id: 'per_c', name: '中的', seconds: 600 }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await screen.findByText('长的', { selector: 'p' });
+  expect(
+    screen
+      .getAllByText(/^(短的|长的|中的)$/u, { selector: 'p' })
+      .map((p) => p.textContent),
+  ).toEqual(['长的', '中的', '短的']);
+});

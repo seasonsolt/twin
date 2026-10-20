@@ -296,3 +296,16 @@ def test_twins_of_old_libraries_follow_the_teams_and_are_rebuilt(web: TestClient
     until(lambda: open_twin(web, entry["id"]))
     with PersonaStore(db_path) as store:
         assert [e.text for e in store.list_expressions() if e.is_target] == ["[00:00] 周会.m4a：我先说。"]
+
+
+def test_a_person_whose_twin_was_deleted_can_be_deleted(web: TestClient, tmp_path: Path) -> None:
+    library = team_of(tmp_path)
+    _, zhang = zhang_was_there(library)
+    as_(web, ADMIN)
+    persona = web.post(f"/api/library/people/{zhang}/persona", headers=CSRF).json()["persona_id"]
+    assert web.delete(f"/api/library/people/{zhang}", headers=CSRF).status_code == 409
+    until(lambda: web.delete(f"/api/personas/{persona}", headers=CSRF).status_code == 200)
+    [person] = [p for p in web.get("/api/library/people").json()["items"] if p["id"] == zhang]
+    assert person["persona_id"] is None
+    assert web.delete(f"/api/library/people/{zhang}", headers=CSRF).json() == {"deleted": True}
+    assert zhang not in {p["id"] for p in web.get("/api/library/people").json()["items"]}

@@ -49,6 +49,7 @@ from ..media.clean import BATCH, clean_segments
 from ..media.cues import Named, name_speakers
 from ..media.ingest import CommandTranscriber, make_transcriber
 from ..media.library import TEAM, Cleaned, Library, Recording, TranscriptionError, owner_key
+from ..media.review import Reviews, cut_parts
 from ..media.schema import AVATAR_GENDERS, default_avatar
 from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
 from ..persona import gate
@@ -119,6 +120,18 @@ class DecisionBody(BaseModel):
     new_person: str | None = Field(default=None, max_length=40)
     # Also keep this speaker's voice as one of the person's samples.
     sample: bool = False
+
+
+class UnitsBody(BaseModel):
+    """The owner's decision about stretches of a confirmed speaker (``media.review``)."""
+
+    transcript_id: str
+    revision: int
+    units: list[int] = Field(min_length=1, max_length=5000)
+    action: Literal["exclude", "move", "keep", "clear"]
+    # Whose they are, for ``move``; or a new person of this name.
+    person_id: str | None = None
+    new_person: str | None = Field(default=None, max_length=40)
 
 
 class VoiceMemberRef(BaseModel):
@@ -789,22 +802,106 @@ class Libraries:
         return FileResponse(target, media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
 
     def kick(self, owner: str) -> None:
-        """Start transcribing the owner's next queued recording unless one is already running. Without a diarizing
-        transcription service, or with the job queue full, recordings stay queued; the next status poll tries
-        again. Proofreading waiting for its turn starts too."""
+        """Start transcribing the owner's next queued recording unless one is already running; with none queued,
+        hear the confirmed speakers of the next recording again (``media.review``), in the same slot of the
+        transcription service. Without a diarizing transcription service, or with the job queue full, recordings
+        stay queued; the next status poll tries again. Proofreading waiting for its turn starts too."""
         self.proofread(owner)
         with self.lock:
             job = self.running.get(owner)
             # Stopping: what is waiting starts after the restart, not while the service goes down.
             if (job is not None and job.active) or self._stop.is_set():
                 return
-            recording = self.library(owner).next_queued()
-            if recording is None or not isinstance(make_transcriber(self.settings.asr), CommandTranscriber):
+            if not isinstance(make_transcriber(self.settings.asr), CommandTranscriber):
                 return
+            library = self.library(owner)
+            recording = library.next_queued()
+            if recording is not None:
+                title, run = recording.filename, self.run
+            else:
+                waiting = Reviews(library).waiting()
+                if not waiting:
+                    return
+                recording = waiting[0]
+                title, run = f"复核说话人 {recording.filename}", self.run_review
+            target = recording.id
             with contextlib.suppress(TooManyJobs):
                 self.running[owner] = self.jobs.scoped(f"library:{owner}").submit(
-                    "media_ingest", recording.filename, lambda log: self.run(owner, recording.id, log)
+                    "media_ingest", title, lambda log: run(owner, target, log)
                 )
+
+    def run_review(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Hear the recording's confirmed speakers again, stretch by stretch; a failure is noted and tried again
+        later (``media.review.RETRY``), so the next recording's turn comes."""
+        try:
+            transcriber = make_transcriber(self.settings.asr)
+            if not isinstance(transcriber, CommandTranscriber):
+                return {"skipped": True}
+            log("[1/1] 逐段计算已确认说话人的声纹")
+            try:
+                heard = Reviews(self.library(owner)).run(recording_id, transcriber)
+            except (RuntimeError, OSError, ValueError) as exc:
+                raise JobError(f"复核没有完成：{exc}") from None
+            log(f"完成：复核了 {heard} 位说话人")
+            return {"recording_id": recording_id, "speakers": heard}
+        finally:
+            with self.lock:
+                self.running.pop(owner, None)
+            self.kick(owner)
+
+    def units(self, owner: str, recording_id: str, speaker_id: str) -> dict[str, Any]:
+        """A confirmed speaker's stretches with whom each sounds like (``media.review``)."""
+        library = self.library(owner)
+        recording = library.get(recording_id)
+        review = Reviews(library).speaker(recording, speaker_id) if recording else None
+        if review is None:
+            raise HTTPException(404, "这个说话人还没有确认是谁")
+        return review.model_dump()
+
+    def fix(self, owner: str, recording_id: str, speaker_id: str, body: UnitsBody) -> dict[str, Any]:
+        team = self.team(owner)
+        person_id = body.person_id
+        if body.action == "move" and body.new_person:
+            try:
+                person_id = team.add_person(body.new_person).id
+            except ValueError as e:
+                raise HTTPException(409, str(e)) from None
+        try:
+            revision = Reviews(self.library(owner)).fix(
+                recording_id, body.transcript_id, body.revision, speaker_id, body.units, body.action, person_id
+            )
+        except Stale:
+            if body.action == "move" and body.new_person and person_id:
+                team.delete_person(person_id)  # Made for this decision only.
+            raise HTTPException(409, "这段录音刚被修改过，请刷新后再操作") from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        self.changed(owner)
+        return {"revision": revision, "person_id": person_id}
+
+    def unit_clip(self, owner: str, recording_id: str, speaker_id: str, index: int) -> FileResponse:
+        """One stretch of a confirmed speaker as WAV, its segments one after another, kept in the media cache."""
+        library = self.library(owner)
+        recording = library.get(recording_id)
+        review = Reviews(library).speaker(recording, speaker_id, text=False) if recording else None
+        unit = next((u for u in review.units if u.index == index), None) if review else None
+        if recording is None or unit is None:
+            raise HTTPException(404, "没有这个片段")
+        transcript = library.transcript(recording)
+        if transcript is None:
+            raise HTTPException(404, "找不到这段录音")
+        parts = [(transcript.segments[i].start, transcript.segments[i].end) for i in unit.segments]
+        cache = library.root / "media-cache" / recording.id
+        target = cache / f"{transcript.id}-{speaker_id}-unit-{'-'.join(map(str, unit.segments))}.wav"
+        if not target.is_file():
+            cache.mkdir(parents=True, mode=0o700, exist_ok=True)
+            temporary = target.with_name(f".{uuid.uuid4().hex}.tmp.wav")
+            try:
+                cut_parts(library.folder(recording.id) / "playback.flac", temporary, parts)
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return FileResponse(target, media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
 
     def run(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
         library = self.library(owner)
@@ -1004,6 +1101,21 @@ def register(
         libraries.allowed(libraries.viewer(request), recording_id, edit=True)
         return libraries.decide(libraries.owner(request), recording_id, speaker_id, body)
 
+    @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/units")
+    def get_units(recording_id: str, speaker_id: str, request: Request) -> dict[str, Any]:
+        libraries.allowed(libraries.viewer(request), recording_id, edit=True)
+        return libraries.units(libraries.owner(request), recording_id, speaker_id)
+
+    @app.put("/api/library/recordings/{recording_id}/speakers/{speaker_id}/units")
+    def put_units(recording_id: str, speaker_id: str, body: UnitsBody, request: Request) -> dict[str, Any]:
+        libraries.allowed(libraries.viewer(request), recording_id, edit=True)
+        return libraries.fix(libraries.owner(request), recording_id, speaker_id, body)
+
+    @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/units/{index}/clip")
+    def get_unit_clip(recording_id: str, speaker_id: str, index: int, request: Request) -> FileResponse:
+        libraries.allowed(libraries.viewer(request), recording_id, edit=True)
+        return libraries.unit_clip(libraries.owner(request), recording_id, speaker_id, index)
+
     @app.post("/api/library/recordings/{recording_id}/speakers/{speaker_id}/not-me")
     def not_me(recording_id: str, speaker_id: str, request: Request) -> dict[str, bool]:
         """Someone identified in the recording says a speaker given to them is not them: it is undone and waits
@@ -1029,6 +1141,7 @@ def register(
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
         team = libraries.team(libraries.owner(request))
         voices, fragments = team.voices(editable)
+        suspects = Reviews(team.library).suspects(editable)
         settled, total = team.heard(editable)
         return {
             "heard": {"settled": settled, "total": total},
@@ -1049,6 +1162,8 @@ def register(
                 {"recording_id": r.id, "filename": r.filename, "speakers": n, "total": r.speakers}
                 for r, n in team.unvoiced(editable)
             ],
+            # Confirmed speakers some of whose speech sounds like someone else (``media.review``).
+            "suspects": [review.model_dump() for review in suspects],
         }
 
     @app.post("/api/library/voices")

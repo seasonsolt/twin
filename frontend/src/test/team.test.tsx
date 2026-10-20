@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, ToastViewport } from '../components/ui';
+import type { ReviewUnit, UnitFix } from '../features/library/MixedSpeaker';
 import { Team } from '../features/library/Team';
 import { Recording, type Person, type Speaker } from '../pages/Recording';
 import type { Recording as LibraryRecording } from '../pages/Library';
@@ -1448,5 +1449,153 @@ it('shows the first five new voices, asks for five more, and retries every faile
       '/api/library/recordings/a/retry',
       '/api/library/recordings/b/retry',
     ]),
+  );
+});
+
+it('hears a confirmed voice again piece by piece, and gives what sounds like someone else to them', async () => {
+  const user = userEvent.setup();
+  const unit = (index: number, change: Partial<ReviewUnit>): ReviewUnit => ({
+    index,
+    segments: [index],
+    start: index * 60,
+    end: index * 60 + 5,
+    seconds: 5,
+    text: `第${index}段`,
+    verdict: '',
+    own: 0.7,
+    other: 0.3,
+    like: 'per_2',
+    like_name: '李总',
+    fix: null,
+    to_person: null,
+    to_name: null,
+    ...change,
+  });
+  let units: ReviewUnit[] = [
+    unit(0, {}),
+    unit(1, { verdict: 'other', own: 0.2, other: 0.6, text: '研发不能砍。' }),
+    unit(2, { verdict: 'other', own: 0.25, other: 0.5 }),
+    unit(3, {
+      verdict: 'stranger',
+      own: 0.1,
+      other: 0.1,
+      like: null,
+      like_name: null,
+    }),
+  ];
+  const summary = () => ({
+    recording_id: 'rec_1',
+    filename: '周会.m4a',
+    transcript_id: 't1',
+    revision,
+    speaker_id: 'S8',
+    person_id: 'per_1',
+    name: '张总',
+    status: 'ready',
+    seconds: 20,
+    suspect_seconds: 15,
+    open_seconds: 5 * units.filter((u) => u.verdict && !u.fix).length,
+    suspects: 3,
+    open: units.filter((u) => u.verdict && !u.fix).length,
+    share: 0.75,
+    likely: 'per_2',
+    likely_name: '李总',
+    units: [],
+  });
+  const puts: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({
+          items: [],
+          voices: [],
+          fragments: [],
+          unsorted: [],
+          suspects: summary().open ? [summary()] : [],
+        });
+      if (url === '/api/library/recordings/rec_1/speakers/S8/units') {
+        if (init?.method === 'PUT') {
+          const body = JSON.parse(String(init.body)) as {
+            units: number[];
+            action: string;
+            person_id?: string;
+          };
+          puts.push(body);
+          revision += 1;
+          units = units.map((u) =>
+            body.units.includes(u.index)
+              ? {
+                  ...u,
+                  fix:
+                    body.action === 'clear' ? null : (body.action as UnitFix),
+                  to_person: body.person_id ?? null,
+                  to_name: body.person_id ? '李总' : null,
+                }
+              : u,
+          );
+          return json({ revision });
+        }
+        return json({ ...summary(), units });
+      }
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo&cat=mixed']}>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: /混进了别人的话/u });
+  expect(tasks).toHaveTextContent(
+    '3 段（15 秒）听起来不像张总，占这个声音的 75%',
+  );
+  expect(tasks).toHaveTextContent('多数像李总');
+  await user.click(within(tasks).getByRole('button', { name: '逐段试听' }));
+  const side = await screen.findByRole('dialog', { name: '周会.m4a · S8' });
+  const pieces = await within(side).findByRole('list', { name: '疑似片段' });
+  expect(within(pieces).getAllByRole('listitem')).toHaveLength(3);
+  const first = within(pieces).getByText('研发不能砍。').closest('li')!;
+  expect(first).toHaveTextContent('1:00 · 5 秒 · 更像李总研发不能砍。');
+  expect(
+    within(first).getByRole('button', { name: '听 1:00 这段' }),
+  ).toBeInTheDocument();
+  await user.click(
+    within(side).getByRole('button', { name: '2 段像李总：都改给李总' }),
+  );
+  await waitFor(() =>
+    expect(puts).toEqual([
+      {
+        transcript_id: 't1',
+        revision: 3,
+        units: [1, 2],
+        action: 'move',
+        person_id: 'per_2',
+      },
+    ]),
+  );
+  expect(await within(side).findAllByText(/已改给李总/u)).toHaveLength(2);
+  const stranger = within(pieces).getByText('第3段').closest('li')!;
+  expect(stranger).toHaveTextContent('不像团队里的任何人');
+  await user.click(within(stranger).getByRole('button', { name: '不是张总' }));
+  await waitFor(() =>
+    expect(puts[1]).toEqual({
+      transcript_id: 't1',
+      revision: 4,
+      units: [3],
+      action: 'exclude',
+    }),
+  );
+  // Settled in full: the task leaves the team page; an undo is still a click away beside it.
+  await waitFor(() =>
+    expect(screen.queryByText(/听起来不像张总，占/u)).toBeNull(),
+  );
+  await user.click(within(stranger).getByRole('button', { name: '撤销' }));
+  await waitFor(() =>
+    expect(puts[2]).toMatchObject({ units: [3], action: 'clear' }),
   );
 });

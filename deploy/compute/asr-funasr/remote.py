@@ -64,6 +64,8 @@ def build_request(payload, hotwords):
         files += [path for _, path in voices]
     if "cluster_threshold" in payload:
         meta["cluster_threshold"] = payload["cluster_threshold"]
+    if isinstance(payload.get("spans"), list):
+        meta["spans"] = payload["spans"]
     if isinstance(payload.get("hotwords"), list):
         meta["hotwords"] = payload["hotwords"]
     elif hotwords:

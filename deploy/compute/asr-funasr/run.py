@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """离线会议转写命令；只在执行请求时导入模型依赖。`--serve` 常驻一个本机 HTTP 服务供 remote.py 调用。
 
-请求带 `"embed": true` 时只计算整段音频的声纹（用于本人声音），不转写。"""
+请求带 `"embed": true` 时只计算整段音频的声纹（用于本人声音），不转写；
+再带 `"spans"` 时按段各算一个声纹（用于复核已确认的说话人）。"""
 
 import argparse
 import contextlib
@@ -20,6 +21,10 @@ from pathlib import Path
 MANIFEST = Path(__file__).with_name("pack.toml")
 MAX_HOTWORDS = 200
 MAX_REFERENCES = 32
+# Embedding by spans: at most this many clips per request, each of at most this many (start, end) parts in seconds.
+MAX_SPANS = 20000
+MAX_SPAN_PARTS = 64
+MAX_HEADER = 4 << 20
 # Cosine distance at which agglomerative clustering stops merging speaker windows; a larger value merges more.
 # 0.65 from the AliMeeting sweep in docs/ASR_EVAL.md: 0.55 split each person into several speakers, 0.75 merged people.
 CLUSTER_THRESHOLD = 0.65
@@ -67,6 +72,31 @@ def parse_references(payload):
             raise ValueError("references 的名称和路径必须是字符串")
         if Path(path).is_absolute() and Path(path).is_file():
             result[name] = Path(path)
+    return result
+
+
+def parse_spans(payload):
+    """Optional clips to embed one by one: [[[start, end], ...], ...] in seconds; a clip's parts are joined."""
+    value = payload.get("spans")
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > MAX_SPANS:
+        raise ValueError(f"spans 必须是最多 {MAX_SPANS} 项的列表")
+    result = []
+    for clip in value:
+        if not isinstance(clip, list) or not 0 < len(clip) <= MAX_SPAN_PARTS:
+            raise ValueError(f"spans 的每一项必须是 1–{MAX_SPAN_PARTS} 段 [开始, 结束]")
+        parts = []
+        for part in clip:
+            if (
+                not isinstance(part, list)
+                or len(part) != 2
+                or not all(isinstance(x, int | float) and not isinstance(x, bool) and math.isfinite(x) for x in part)
+                or not 0 <= part[0] < part[1]
+            ):
+                raise ValueError("spans 的每段必须是 [开始, 结束]（秒，开始小于结束）")
+            parts.append((float(part[0]), float(part[1])))
+        result.append(parts)
     return result
 
 
@@ -213,8 +243,20 @@ class Engine:
 
         return self.embed(librosa.load(str(path), sr=16000, mono=True)[0])
 
-    def embedding(self, audio):
-        return {"ok": True, "embedding": vector(self.voice(audio))}
+    def embedding(self, audio, spans=None):
+        if spans is None:
+            return {"ok": True, "embedding": vector(self.voice(audio))}
+        import librosa
+
+        np = self.np
+        wav = librosa.load(str(audio), sr=16000, mono=True)[0]
+        found = []
+        with self.torch.no_grad():
+            for parts in spans:
+                clip = np.concatenate([wav[int(b * 16000) : int(e * 16000)] for b, e in parts])
+                # A clip past the end of the audio, or too short for CAM++ to look at, has no voiceprint.
+                found.append(vector(self.embed(clip)) if len(clip) >= 1600 else None)
+        return {"ok": True, "embeddings": found}
 
     def embed_all(self, clips, done):
         # Equal-length groups avoid zero padding, so batched embeddings match single-clip ones. Small groups stay
@@ -342,20 +384,22 @@ class Engine:
         return {"ok": True, "segments": segments, **({"speakers": speakers} if diarize else {})}
 
 
-def run(request=None, *, device="auto", check=False, embed=False):
+def run(request=None, *, device="auto", check=False, embed=False, spans=None):
     engine = Engine(device)
     if check:
         return engine.check()
     audio, _language, diarize, reference, hotwords, references, cluster_threshold = request
     if embed:
-        return engine.embedding(audio)
+        return engine.embedding(audio) if spans is None else engine.embedding(audio, spans)
     return engine.transcribe(audio, diarize, reference, hotwords, report, references, cluster_threshold)
 
 
 def read_upload(stream, length, directory):
-    """Body: one JSON line {language, diarize, hotwords, audio_bytes/suffix, reference_bytes/suffix,
-    references: [{name, bytes, suffix}]}, then the files in that order."""
-    header = stream.readline(65536)
+    """Body: one JSON line {language, diarize, hotwords, spans, audio_bytes/suffix, reference_bytes/suffix,
+    references: [{name, bytes, suffix}]}, then the files in that order. Returns ``parse_request``'s values and the
+    spans to embed (``parse_spans``)."""
+    # Spans to embed make the header long: a two-hour meeting has a few thousand.
+    header = stream.readline(MAX_HEADER)
     if not header.endswith(b"\n"):
         raise ValueError("请求无效")
     meta = json.loads(header)
@@ -403,7 +447,7 @@ def read_upload(stream, length, directory):
         request["hotwords"] = meta["hotwords"]
     if "cluster_threshold" in meta:
         request["cluster_threshold"] = meta["cluster_threshold"]
-    return parse_request(request)
+    return (*parse_request(request), parse_spans(meta))
 
 
 def make_server(engine, host, port, *, max_bytes=4 << 30):
@@ -440,7 +484,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
             directory = tempfile.mkdtemp(prefix="twin-asr-")
             try:
                 try:
-                    audio, _language, diarize, reference, hotwords, references, threshold = read_upload(
+                    audio, _language, diarize, reference, hotwords, references, threshold, spans = read_upload(
                         self.rfile, length, directory
                     )
                 except (ValueError, UnicodeDecodeError) as error:
@@ -457,7 +501,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                 with busy:
                     try:
                         if self.path == "/embed":
-                            result = engine.embedding(audio)
+                            result = engine.embedding(audio) if spans is None else engine.embedding(audio, spans)
                         else:
                             result = engine.transcribe(
                                 audio,
@@ -512,13 +556,14 @@ def main():
             payload.setdefault("cluster_threshold", args.cluster_threshold)
         request = None if payload is None else parse_request(payload)
         embed = isinstance(payload, dict) and payload.get("embed") is True
+        spans = parse_spans(payload) if embed else None
         # Redirect native library writes as well as Python prints throughout imports/inference.
         sys.stdout.flush()
         saved = os.dup(1)
         try:
             os.dup2(2, 1)
             with contextlib.redirect_stdout(sys.stderr):
-                payload = run(request, device=args.device, check=args.check, embed=embed)
+                payload = run(request, device=args.device, check=args.check, embed=embed, spans=spans)
         finally:
             os.dup2(saved, 1)
             os.close(saved)

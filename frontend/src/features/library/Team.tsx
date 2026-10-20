@@ -45,6 +45,7 @@ import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
 import type { Pick } from './useUploads';
+import { MixedSpeaker, type SuspectSpeaker } from './MixedSpeaker';
 
 interface Waiting extends Speaker {
   recording_id: string;
@@ -95,6 +96,8 @@ interface Review {
   voices: Voice[];
   fragments: Fragment[];
   unsorted: Unsorted[];
+  // Confirmed speakers some of whose speech sounds like someone else (``media.review``).
+  suspects?: SuspectSpeaker[];
   // How long people speak in these recordings, and how much of it is settled.
   heard?: { settled: number; total: number };
 }
@@ -109,6 +112,7 @@ type VoiceDecision =
 /** The kinds of thing waiting for the owner, in the order they are listed. */
 type Category =
   | 'voice'
+  | 'mixed'
   | 'unsorted'
   | 'failed'
   | 'similar'
@@ -122,6 +126,7 @@ const categoryOf = (task: string): Category | undefined =>
     [
       ['person-', 'voice'],
       ['voice-', 'voice'],
+      ['mixed-', 'mixed'],
       ['unsorted-', 'unsorted'],
       ['failed-', 'failed'],
       ['similar-', 'similar'],
@@ -142,6 +147,12 @@ const CATEGORIES: {
     label: '新出现的声音',
     tone: 'warning',
     help: '说得最多的在前；处理完一项会自动跳到下一项',
+  },
+  {
+    id: 'mixed',
+    label: '混进了别人的话',
+    tone: 'warning',
+    help: '已确认的声音里有些片段听起来不像这个人；试听后排除，或改给对的人',
   },
   {
     id: 'unsorted',
@@ -1011,6 +1022,8 @@ export function Team({
   const [voices, setVoices] = useState<Voice[]>([]);
   const [fragments, setFragments] = useState<Fragment[]>([]);
   const [unsorted, setUnsorted] = useState<Unsorted[]>([]);
+  const [suspects, setSuspects] = useState<SuspectSpeaker[]>([]);
+  const [reviewing, setReviewing] = useState<SuspectSpeaker | null>(null);
   const [heard, setHeard] = useState<Review['heard']>();
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
@@ -1045,6 +1058,7 @@ export function Team({
       setVoices(queue.voices);
       setFragments(queue.fragments);
       setUnsorted(queue.unsorted);
+      setSuspects(queue.suspects ?? []);
       setHeard(queue.heard);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载人物');
@@ -1282,6 +1296,7 @@ export function Team({
   const laterVoices = mainVoices.slice(voicesShown);
   const taskIds = [
     ...voiced.map((v) => v.id),
+    ...suspects.map((m) => `mixed-${m.recording_id}-${m.speaker_id}`),
     ...(fragments.length ? ['fragments'] : []),
     ...similar.map(([a, b]) => `similar-${a.id}-${b.id}`),
     ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
@@ -1292,6 +1307,7 @@ export function Team({
   const tasks = taskIds.length;
   const counts: Record<Category, number> = {
     voice: voiced.length,
+    mixed: suspects.length,
     unsorted: unsorted.length,
     failed: failed.length,
     similar: similar.length,
@@ -1487,6 +1503,34 @@ export function Team({
           </Button>
         </Row>
       </>
+    );
+  } else if (category?.id === 'mixed') {
+    body = (
+      <Stack as="ul" gap={0}>
+        {suspects.map((m) => (
+          <TaskRow
+            key={`mixed-${m.recording_id}-${m.speaker_id}`}
+            leading={attention('warning')}
+            title={`${m.name} · ${m.filename} · ${m.speaker_id}`}
+            meta={`${m.open} 段（${span(m.open_seconds)}）听起来不像${m.name}，占这个声音的 ${Math.round(m.share * 100)}%`}
+            hint={
+              m.likely_name
+                ? `多数像${m.likely_name}`
+                : '多数不像团队里的任何人'
+            }
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() => setReviewing(m)}
+              >
+                逐段试听
+              </Button>
+            }
+          />
+        ))}
+      </Stack>
     );
   } else if (category?.id === 'unsorted') {
     body = (
@@ -1950,6 +1994,11 @@ export function Team({
         busy={busy}
         onClose={() => setEditing(null)}
         onSave={(change) => editing && void edit(editing, change)}
+      />
+      <MixedSpeaker
+        suspect={reviewing}
+        onClose={() => setReviewing(null)}
+        onChanged={load}
       />
     </>
   );

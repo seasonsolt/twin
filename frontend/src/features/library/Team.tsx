@@ -103,7 +103,9 @@ const minutes = (seconds: number) =>
   `${Math.max(0, Math.round(seconds / 60))} 分钟`;
 const span = (seconds: number) =>
   seconds < 60 ? `${Math.round(seconds)} 秒` : minutes(seconds);
-const recordingPath = (id: string) => `/library/${encodeURIComponent(id)}`;
+// The speaker to hear is in the address, so a recording opened in a new tab opens on the voice heard here too.
+const recordingPath = (id: string, speaker?: string | null) =>
+  `/library/${encodeURIComponent(id)}${speaker ? `?speaker=${encodeURIComponent(speaker)}` : ''}`;
 
 /** One thing for the owner to settle: what kind of task it is, what it is about, and how to settle it. */
 function Task({
@@ -170,11 +172,8 @@ function Unnamed({
               {' · '}
               <TextLink
                 size="sm"
-                to={recordingPath(person.recording_id)}
-                state={{
-                  teamTask: `person-${person.id}`,
-                  speaker: person.speaker_id,
-                }}
+                to={recordingPath(person.recording_id, person.speaker_id)}
+                state={{ teamTask: `person-${person.id}` }}
               >
                 打开录音
               </TextLink>
@@ -299,11 +298,8 @@ function VoiceRow({
           {' · '}
           <TextLink
             size="sm"
-            to={recordingPath(current.recording_id)}
-            state={{
-              teamTask: `voice-${voice.id}`,
-              speaker: current.speaker_id,
-            }}
+            to={recordingPath(current.recording_id, current.speaker_id)}
+            state={{ teamTask: `voice-${voice.id}` }}
           >
             打开录音
           </TextLink>
@@ -1219,10 +1215,9 @@ export function Team({
                       原来标成的人说这不是 TA
                     </Text>
                     <RouteButton
-                      to={recordingPath(w.recording_id)}
+                      to={recordingPath(w.recording_id, w.id)}
                       state={{
                         teamTask: `speaker-${w.recording_id}-${w.id}`,
-                        speaker: w.id,
                       }}
                       size="sm"
                     >

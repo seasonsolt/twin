@@ -194,7 +194,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   expect(await within(tasks).findByText('像张总')).toBeInTheDocument();
   expect(within(tasks).getByRole('link', { name: '打开录音' })).toHaveAttribute(
     'href',
-    '/library/rec_9',
+    '/library/rec_9?speaker=S1',
   );
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
@@ -270,7 +270,7 @@ it('lists new voices apart and names them before a twin can be made', async () =
   );
   expect(within(fresh).getByRole('link', { name: '打开录音' })).toHaveAttribute(
     'href',
-    '/library/rec_9',
+    '/library/rec_9?speaker=S1',
   );
   await userEvent.type(within(fresh).getByLabelText('未命名 1是谁'), '李总');
   await userEvent.click(within(fresh).getByRole('button', { name: '确认' }));
@@ -833,7 +833,7 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
   ).toBeInTheDocument();
   expect(within(row).getByRole('link', { name: '打开录音' })).toHaveAttribute(
     'href',
-    '/library/rec_2',
+    '/library/rec_2?speaker=S3',
   );
   await user.click(within(row).getByRole('button', { name: '是张总' }));
   await waitFor(() =>
@@ -1247,16 +1247,10 @@ it('settles a voice of several people and gives short voices to whom they sound 
   });
 });
 
-it('opens the speaker a team task points at, even one already given to someone automatically', async () => {
+it('opens the speaker a link points at, even one already given to someone automatically', async () => {
+  // In the address, not only the page's history: a recording opened in a new tab opens on the same voice.
   render(
-    <MemoryRouter
-      initialEntries={[
-        {
-          pathname: '/library/rec_1',
-          state: { teamTask: 'person-per_1', speaker: 'S3' },
-        },
-      ]}
-    >
+    <MemoryRouter initialEntries={['/library/rec_1?speaker=S3']}>
       <Routes>
         <Route path="/library/:recordingId" element={<Recording />} />
       </Routes>

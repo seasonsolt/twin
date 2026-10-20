@@ -37,7 +37,16 @@ from pydantic import BaseModel, Field
 
 from ..util import prepare_private_file, private_directory
 from .cues import Cue, Named, said
-from .ingest import VIDEO_EXTENSIONS, CommandTranscriber, Progress, Segment, Speaker, extract_audio
+from .ingest import (
+    VIDEO_EXTENSIONS,
+    CommandTranscriber,
+    Interrupted,
+    Progress,
+    Segment,
+    Speaker,
+    extract_audio,
+    stopped,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +209,19 @@ def matches(transcript: Transcript, segments: list[Segment]) -> bool:
 
 class TranscriptionError(Exception):
     """A recording could not be transcribed; the message is shown to the owner as is."""
+
+
+class TranscriptionInterrupted(TranscriptionError):
+    """Transcription was cut off by the service stopping: the recording is queued again, not failed."""
+
+
+def _interrupted(exc: BaseException | None) -> bool:
+    """Whether a stop signal ended a command somewhere behind the error."""
+    while exc is not None:
+        if isinstance(exc, Interrupted) or (isinstance(exc, subprocess.CalledProcessError) and stopped(exc.returncode)):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 # The folder of the team's library under ``data/library``.
@@ -606,7 +628,7 @@ class Library:
     def transcribe(self, recording_id: str, transcriber: CommandTranscriber, progress: Progress) -> Recording:
         """Transcribe a queued recording with every speaker's voiceprint, keep a FLAC playback copy, then delete
         the upload. On failure the upload stays, the recording is marked failed and ``TranscriptionError`` says
-        why."""
+        why; cut off by the service stopping, it is queued again (``TranscriptionInterrupted``)."""
         with self.lock:
             recording = self.get(recording_id)
             if recording is None or recording.status != "queued":
@@ -654,6 +676,10 @@ class Library:
             )
         except BaseException as exc:
             audio.unlink(missing_ok=True)
+            if _interrupted(exc):
+                # Cut off by a stop: waiting again, as ``resume`` also leaves it at start-up, never shown as failed.
+                self.update(recording_id, status="queued", error="", transcribed_s=0)
+                raise TranscriptionInterrupted("转写被中断，会重新开始") from exc
             message = str(exc) if isinstance(exc, TranscriptionError) else "转写失败，请稍后重试"
             self.update(recording_id, status="failed", error=message, transcribed_s=0)
             if isinstance(exc, TranscriptionError):

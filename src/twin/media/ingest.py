@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -68,6 +69,20 @@ class Transcriber(Protocol):
 PROGRESS_LINE = re.compile(r"@@twin-progress ([0-9.]+)\s*$")
 
 
+# What stopping the service sends (systemd signals the whole group, the transcription command included): a command
+# ended by one was cut off, not failed. As its own exit status, or through the shell that ran it (128 + the signal).
+STOP_SIGNALS = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+
+
+def stopped(returncode: int | None) -> bool:
+    """Whether a command's exit status says a stop signal ended it."""
+    return returncode is not None and (-returncode in STOP_SIGNALS or returncode - 128 in STOP_SIGNALS)
+
+
+class Interrupted(Exception):
+    """A command was ended by a stop signal: its work is to be done again, not reported as failed."""
+
+
 class CommandTranscriber:
     diarizes = True
 
@@ -114,7 +129,16 @@ class CommandTranscriber:
             stdout = self._run(json.dumps(request), 60, lambda done, total: None)
             payload = json.loads(stdout.strip().splitlines()[-1])
             return _EMBEDDING.validate_python(payload["embedding"]) if payload.get("ok") is True else None
-        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, KeyError, AttributeError):
+        except (
+            subprocess.SubprocessError,
+            OSError,
+            ValueError,
+            TypeError,
+            IndexError,
+            KeyError,
+            AttributeError,
+            Interrupted,
+        ):
             return None
 
     def _run(self, request: str, duration: float, progress: Progress) -> str:
@@ -162,6 +186,8 @@ class CommandTranscriber:
             time.sleep(0.5)
         for reader in readers:
             reader.join()
+        if stopped(process.returncode):
+            raise Interrupted(self.command)
         if process.returncode:
             raise subprocess.CalledProcessError(process.returncode, self.command)
         return "".join(output)

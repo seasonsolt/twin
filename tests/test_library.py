@@ -18,7 +18,7 @@ from twin.config import ASRSettings, LibrarySettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import CommandTranscriber, Progress, Segment, Speaker
-from twin.media.library import Library, owner_key
+from twin.media.library import Library, TranscriptionError, TranscriptionInterrupted, owner_key
 from twin.ops.backup import backup, restore
 from twin.ops.paths import TwinPaths
 from twin.web import create_app
@@ -155,6 +155,36 @@ def test_interrupted_transcription_is_queued_again(tmp_path: Path) -> None:
     assert library.resume() == 1
     resumed = library.get(recording.id)
     assert resumed and resumed.status == "queued" and resumed.transcribed_s == 0
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    ("command", "status"),
+    [
+        # Stopping the service signals the whole group: the shell running the command, or the command under it.
+        ("kill -TERM $$", "queued"),
+        ("bash -c 'kill -TERM $$'", "queued"),
+        ("bash -c 'kill -HUP $$'", "queued"),
+        # Anything else is the transcription failing.
+        ("exit 1", "failed"),
+        ("bash -c 'kill -KILL $$'", "failed"),
+    ],
+)
+def test_a_transcription_cut_off_by_a_stop_waits_again_instead_of_failing(
+    tmp_path: Path, command: str, status: str
+) -> None:
+    library = Library(tmp_path / "library" / "team")
+    part = tmp_path / "upload.part"
+    part.write_bytes(wav_bytes())
+    recording, _ = library.add(part, "会议.wav")
+    with pytest.raises(TranscriptionError) as raised:
+        library.transcribe(recording.id, CommandTranscriber(command), lambda done, total: None)
+    assert isinstance(raised.value, TranscriptionInterrupted) == (status == "queued")
+    after = library.get(recording.id)
+    assert after is not None and after.status == status and after.transcribed_s == 0
+    assert after.error == ("" if status == "queued" else "语音识别失败，请检查转写服务后重试")
+    # The upload stays, to be transcribed again.
+    assert [p.name for p in library.folder(recording.id).iterdir()] == ["original.wav"]
 
 
 @needs_ffmpeg

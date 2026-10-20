@@ -793,7 +793,8 @@ class Libraries:
         self.proofread(owner)
         with self.lock:
             job = self.running.get(owner)
-            if job is not None and job.active:
+            # Stopping: what is waiting starts after the restart, not while the service goes down.
+            if (job is not None and job.active) or self._stop.is_set():
                 return
             recording = self.library(owner).next_queued()
             if recording is None or not isinstance(make_transcriber(self.settings.asr), CommandTranscriber):

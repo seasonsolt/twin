@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import {
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router';
 import {
   AudioPlayer,
   AvatarFrame,
@@ -421,10 +426,12 @@ export function Recording() {
   const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  // The speaker to settle first: one just reopened, or the one a team task points at.
-  const [reopened, setReopened] = useState<string | null>(
-    location.state?.speaker ?? null,
-  );
+  // The speaker to settle first: one just reopened, or the one a link points at (in the address, so a recording
+  // opened in a new tab opens on the same voice).
+  const [params] = useSearchParams();
+  const linked: string | null =
+    params.get('speaker') ?? location.state?.speaker ?? null;
+  const [reopened, setReopened] = useState<string | null>(linked);
   // They said the only speaker given to them is not them: the recording is no longer theirs to see.
   const [left, setLeft] = useState(false);
   const base = `/api/library/recordings/${encodeURIComponent(recordingId)}`;
@@ -532,13 +539,13 @@ export function Recording() {
   );
   const undecided = detail?.speakers.filter((s) => s.decision === 'none') ?? [];
   const settled = (detail?.speakers.length ?? 0) - undecided.length;
-  // A team task may point at a speaker already given to someone automatically (an unnamed voice): it is heard
-  // and settled here like any other, not left in the list below while another speaker's card asks instead.
+  // A link may point at a speaker already given to someone automatically (an unnamed voice): it is heard and
+  // settled here like any other, not left in the list below while another speaker's card asks instead.
   const pointed = detail?.speakers.find(
     (s) =>
       s.id === reopened &&
       (s.decision === 'none' ||
-        (Boolean(location.state?.teamTask) && s.decision === 'confirmed')),
+        (s.id === linked && s.decision === 'confirmed')),
   );
   const current = pointed ?? undecided[0];
   const remaining = undecided.filter((s) => s.id !== current?.id);

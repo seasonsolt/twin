@@ -457,9 +457,11 @@ def test_rate_limit_reserves_final(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_answer_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     closed = []
+    started = []
 
     async def stream(self: PersonaChat, messages: Sequence[ChatTurn]) -> AsyncIterator[str | ChatReply]:
         try:
+            started.append(True)
             yield "草稿"
             await asyncio.sleep(10)
         finally:
@@ -468,10 +470,11 @@ def test_answer_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(PersonaChat, "stream_reply", stream)
 
     async def check() -> None:
-        async with running(tmp_path, monkeypatch, answer_timeout=0.03) as (_, peer):
+        # Long enough for the stream to start on a loaded machine, so the deadline cancels the stream itself.
+        async with running(tmp_path, monkeypatch, answer_timeout=1) as (_, peer):
             await peer.send(message())
             frames = await peer.receive("aibot_respond_msg")
-            assert frames[-1][1]["body"]["stream"]["content"] == APOLOGY
+            assert started and frames[-1][1]["body"]["stream"]["content"] == APOLOGY
             # The apology goes out before the cancelled answer is waited for, so its stream may close just after.
             async with asyncio.timeout(2):
                 while not closed:

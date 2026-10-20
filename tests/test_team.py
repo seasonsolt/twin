@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
 import shutil
@@ -23,7 +24,7 @@ from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import Segment, Speaker
-from twin.media.library import Library, Transcript
+from twin.media.library import Library, Recording, Transcript
 from twin.media.schema import AVATAR_GENDERS
 from twin.media.team import Stale, Team
 from twin.persona import gate
@@ -39,26 +40,39 @@ HEADERS = {"X-Twin": "1"}
 
 
 def recording(library: Library, name: str, segments: list[Segment], speakers: list[Speaker]) -> str:
-    """A transcribed recording, as the transcription job leaves it."""
-    part = library.root / f"{uuid.uuid4().hex}.part"
-    part.write_bytes(uuid.uuid4().bytes)
-    added, _ = library.add(part, name)
+    """A transcribed recording, as the transcription job leaves it. Filed ready in one insert, after its transcript:
+    a running app wakes every queued recording to transcribe it, and one queued here for a moment without an upload
+    failed under it, sometimes after this had marked it ready, so it was never proofread."""
+    recording_id = f"rec_{uuid.uuid4().hex[:20]}"
     transcript = Transcript(
         id=uuid.uuid4().hex[:12],
-        recording_id=added.id,
+        recording_id=recording_id,
         created_at="2026-10-17T00:00:00+00:00",
         duration_s=segments[-1].end,
         segments=segments,
         speakers=speakers,
     )
-    folder = library.folder(added.id)
-    for original in folder.glob("original.*"):
-        original.unlink()
+    folder = library.folder(recording_id)
+    folder.mkdir(parents=True, mode=0o700)
     Library._write_transcript(folder, transcript)
-    library.update(
-        added.id, status="ready", transcript_id=transcript.id, segments=len(segments), speakers=len(speakers)
-    )
-    return added.id
+    row = Recording(
+        id=recording_id,
+        sha256=uuid.uuid4().hex,
+        filename=name,
+        size=16,
+        kind="audio",
+        status="ready",
+        transcript_id=transcript.id,
+        segments=len(segments),
+        speakers=len(speakers),
+        created_at=(now := dt.datetime.now(dt.UTC).isoformat()),
+        updated_at=now,
+    ).model_dump()
+    with library.transaction() as db:
+        db.execute(
+            f"INSERT INTO recordings ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", tuple(row.values())
+        )
+    return recording_id
 
 
 def meeting(library: Library, name: str = "2026-03-02 周会.m4a", lead: list[float] | None = None) -> str:

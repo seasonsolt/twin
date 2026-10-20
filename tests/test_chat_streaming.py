@@ -86,8 +86,10 @@ def test_parser_reads_metadata_on_the_marker_line_in_a_code_block_or_among_words
 @pytest.mark.parametrize(
     "delays,hedge,expected,calls",
     [
-        ([0.1, 0.001], 0.02, "1", 2),
-        ([0.025, 0.1], 0.02, "0", 2),
+        # The slow request is a second behind, not a tenth: on a loaded machine the hedge can start that much late.
+        # The loser is closed, not awaited, so the test does not take the second.
+        ([1.0, 0.001], 0.02, "1", 2),
+        ([0.025, 1.0], 0.02, "0", 2),
         ([0.001], 0.02, "0", 1),
         ([0.03], 0, "0", 1),
     ],

@@ -295,9 +295,13 @@ def test_web_sources_state_and_build_result_are_additive(settings: Settings) -> 
         [source] = client.get("/api/persona/sources").json()["items"]
         assert source["items_supported"] == 1 and source["facets"][0]["facet_id"] == "2.1"
         assert source["build_status"] == "remembered"
-        assert not client.get("/api/persona/state").json()["stale"]
+        state = client.get("/api/persona/state").json()
+        assert not state["stale"]
         assert client.delete(f"/api/persona/sources/{source['source_id']}", headers=HEADERS).status_code == 200
-        assert client.get("/api/persona/state").json()["stale"]
+        # The deletion is a change since that build. Deleting queues a rebuild, which may already have caught up, so
+        # the change is checked, not that the state still reads stale.
+        after = client.get("/api/persona/state").json()
+        assert dt.datetime.fromisoformat(after["sources_changed_at"]) > dt.datetime.fromisoformat(state["built_at"])
         rebuild = client.post("/api/persona/build", headers=HEADERS)
         assert rebuild.status_code == 202  # rebuild after deleting the last source is still allowed
         job_id = rebuild.json()["job_id"]

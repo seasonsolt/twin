@@ -342,6 +342,10 @@ def test_retention() -> None:
         folder = paths.backups / f"daily-{index:02d}"
         folder.mkdir()
         (folder / "snapshot.json").write_text(json.dumps({"reason": "daily", "created_at": now.isoformat()}))
+    for index in range(12):
+        folder = paths.backups / f"deploy-{index:02d}"
+        folder.mkdir()
+        (folder / "snapshot.json").write_text(json.dumps({"reason": "deploy", "created_at": now.isoformat()}))
     for name, age in [("pre-upgrade-old", 31), ("pre-upgrade-new", 29), ("migrate", 100)]:
         folder = paths.backups / name
         folder.mkdir()
@@ -350,9 +354,32 @@ def test_retention() -> None:
         )
     prune(paths.backups, now)
     assert len(list(paths.backups.glob("daily-*"))) == 7
+    assert sorted(path.name for path in paths.backups.glob("deploy-*")) == [f"deploy-{i:02d}" for i in range(2, 12)]
     assert not (paths.backups / "pre-upgrade-old").exists()
     assert (paths.backups / "pre-upgrade-new").exists()
     assert (paths.backups / "migrate").exists()
+
+
+def test_backup_links_persona_media_and_restore_copies_it() -> None:
+    paths, _ = configured()
+    names = ("original.mp4", "audio.wav", "rev-sample-0-0.wav", "voice-1.wav", "portrait-1.png", "analysis.json")
+    for folder in (paths.data / "media-sources/abc", paths.data / "personas/p-example/media-sources/def"):
+        folder.mkdir(parents=True)
+        for name in names:
+            (folder / name).write_text(name)
+            (folder / name).chmod(0o600)
+    target = backup(paths, paths.data, paths.config)
+    for relative in ("media-sources/abc", "personas/p-example/media-sources/def"):
+        for name in names:
+            live, kept = paths.data / relative / name, target / "data" / relative / name
+            assert kept.read_text() == name
+            # Only analysis.json is rewritten after it is first written, so it alone is copied.
+            assert os.path.samefile(live, kept) is (name != "analysis.json")
+    restore(target, paths.data, paths.config, services_stopped=True)
+    restored = paths.data / "media-sources/abc/original.mp4"
+    assert restored.read_text() == "original.mp4"
+    assert not os.path.samefile(restored, target / "data/media-sources/abc/original.mp4")
+    assert restored.stat().st_nlink == 1
 
 
 def test_restore_rejects_links_and_bad_database() -> None:

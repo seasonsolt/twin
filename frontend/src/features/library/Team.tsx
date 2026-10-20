@@ -62,6 +62,12 @@ interface Voice {
   near: boolean;
   // Sounds like a voice the owner already said is nobody they know.
   stranger?: boolean;
+  // What the meeting calls the speakers, and what was said that names them.
+  called?: string | null;
+  quote?: string;
+  // The leading candidate, surely the one, already heard this long; enough for a twin, so the voice waits behind.
+  had?: number;
+  enough?: boolean;
 }
 
 /** A recording whose undecided speakers have no voiceprint to group by: settled in the recording itself. */
@@ -249,13 +255,22 @@ function VoiceRow({
   // Only a voice very close to one person is answered by Enter; a nearer guess is a choice to make on purpose.
   const sure = Boolean(likely?.sure) && !voice.near;
   const recordings = new Set(voice.members.map((m) => m.recording_id)).size;
-  const title = !likely
-    ? voice.stranger
-      ? '你标过不认识的声音'
-      : '没听过的声音'
-    : sure
-      ? `像${likely.name}`
-      : `可能是${offered.map((c) => c.name).join('或')}`;
+  // A name the meeting calls them that nobody in the team has yet: added as a new person in one click.
+  const newName =
+    voice.called && !voice.candidates.some((c) => c.called) ? voice.called : '';
+  const title = likely?.called
+    ? sure
+      ? `会上叫作${likely.name}，声音也像`
+      : `会上被叫作${likely.name}`
+    : newName
+      ? `会上被叫作${newName}`
+      : !likely
+        ? voice.stranger
+          ? '你标过不认识的声音'
+          : '没听过的声音'
+        : sure
+          ? `像${likely.name}`
+          : `可能是${offered.map((c) => c.name).join('或')}`;
   return (
     <ListRow
       variant="divided"
@@ -303,6 +318,17 @@ function VoiceRow({
               这段录音里已经有{likely.name}，可能是同一个人被分成了两位
             </>
           )}
+          {voice.called && voice.quote && (
+            <>
+              <br />「{voice.quote}」
+            </>
+          )}
+          {voice.enough && likely && (
+            <>
+              <br />
+              {`${likely.name}已经有 ${minutes(voice.had ?? 0)}发言，够建分身了，可以先处理别的`}
+            </>
+          )}
         </>
       }
       trailing={
@@ -333,6 +359,19 @@ function VoiceRow({
                 ? `是${likely.name}`
                 : '确认'}
           </Button>
+          {newName && !typed && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                onDecide({ action: 'confirm', new_person: newName })
+              }
+            >
+              是{newName}
+            </Button>
+          )}
           {!sure &&
             offered.map((c) => (
               <Button
@@ -904,14 +943,19 @@ export function Team({
     ...unnamed.map((person) => ({
       id: `person-${person.id}`,
       seconds: person.seconds,
+      enough: false,
       person,
     })),
     ...voices.map((voice) => ({
       id: `voice-${voice.id}`,
       seconds: voice.seconds,
+      enough: Boolean(voice.enough),
       voice,
     })),
-  ].sort((a, b) => b.seconds - a.seconds);
+  ].sort(
+    // Whoever a twin still lacks first, then the longest.
+    (a, b) => Number(a.enough) - Number(b.enough) || b.seconds - a.seconds,
+  );
   const taskIds = [
     ...voiced.map((v) => v.id),
     ...(fragments.length ? ['fragments'] : []),
@@ -1280,6 +1324,9 @@ export function Team({
                     </Text>
                     <Text size="sm" tone="secondary">
                       {person.speakers} 段录音 · {minutes(person.seconds)}
+                      {person.seconds > 0 && (person.lacking ?? 0) >= 60
+                        ? ` · 素材还差约 ${minutes(person.lacking ?? 0)}`
+                        : ''}
                     </Text>
                   </Stack>
                 </IdentityLink>

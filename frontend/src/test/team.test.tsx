@@ -1056,3 +1056,98 @@ it('asks about whoever speaks longest first, and measures progress by speech set
   await userEvent.click(screen.getByRole('button', { name: '复制邀请' }));
   expect(copy).toHaveBeenCalledWith(expect.stringMatching(/\/#\/voice$/u));
 });
+
+it('offers the name a meeting calls a voice, and asks about whoever a twin still lacks first', async () => {
+  const user = userEvent.setup();
+  people = [person({})];
+  const member = (
+    recording_id: string,
+    speaker_id: string,
+    seconds: number,
+  ) => ({
+    recording_id,
+    filename: `${recording_id}.m4a`,
+    transcript_id: `t-${recording_id}`,
+    speaker_id,
+    seconds,
+  });
+  let voices = [
+    {
+      id: 'voice_new',
+      members: [member('rec_1', 'S3', 120)],
+      seconds: 120,
+      candidates: [],
+      near: false,
+      called: '宋明',
+      quote: '那宋明你跟老夏解释一下',
+    },
+    {
+      id: 'voice_enough',
+      members: [member('rec_1', 'S2', 900)],
+      seconds: 900,
+      candidates: [
+        { person_id: 'per_1', name: '张总', score: 0.9, sure: true },
+      ],
+      near: false,
+      had: 2400,
+      enough: true,
+    },
+    {
+      id: 'voice_called',
+      members: [member('rec_1', 'S4', 60)],
+      seconds: 60,
+      candidates: [
+        { person_id: 'per_1', name: '张总', score: 0.3, called: true },
+      ],
+      near: false,
+      called: '张总',
+      quote: '张总说两句',
+    },
+  ];
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices, fragments: [], unsorted: [] });
+      if (url === '/api/library/voices' && init?.method === 'POST') {
+        posts.push(JSON.parse(String(init.body)));
+        voices = voices.filter((v) => v.id !== 'voice_new');
+        return json({ person_id: 'per_2', recognised: 0 });
+      }
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const list = await screen.findByRole('list', { name: '新出现的声音' });
+  const [first, second, third] = within(list).getAllByRole('listitem');
+  // Someone the meeting names but the team does not know yet: added in one click.
+  expect(first).toHaveTextContent('会上被叫作宋明');
+  expect(first).toHaveTextContent('「那宋明你跟老夏解释一下」');
+  // A name with a voice that does not agree is no default.
+  expect(second).toHaveTextContent('会上被叫作张总');
+  expect(within(second).getByRole('button', { name: '确认' })).toBeDisabled();
+  // Surely 张总, who has enough to learn from already: last, whatever its length.
+  expect(third).toHaveTextContent('像张总');
+  expect(third).toHaveTextContent('张总已经有 40 分钟发言，够建分身了');
+  await user.click(within(first).getByRole('button', { name: '是宋明' }));
+  await waitFor(() =>
+    expect(posts).toEqual([
+      {
+        members: [
+          { recording_id: 'rec_1', transcript_id: 't-rec_1', speaker_id: 'S3' },
+        ],
+        action: 'confirm',
+        new_person: '宋明',
+      },
+    ]),
+  );
+});

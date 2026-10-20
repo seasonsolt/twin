@@ -8,7 +8,8 @@ change what.
 ``recordings/<id>/``. Libraries of one account each, as earlier versions kept them, are merged into it once
 (``media.merge``). A recording folder only ever gains files:
 ``transcript-<transcript_id>.json``, ``playback.flac`` and, once someone in it is identified, the model's proofreading
-``clean-<transcript_id>.json`` are written once under a temporary name and never changed, so backups hard-link them.
+``clean-<transcript_id>.json``, and the names the meeting calls its speakers by, ``names-<transcript_id>.json``, are
+written once under a temporary name and never changed, so backups hard-link them.
 The upload itself is deleted once the transcript and playback copy are verified; only its file name, size and
 sha256 are kept.
 """
@@ -35,6 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..util import prepare_private_file, private_directory
+from .cues import Cue, Named
 from .ingest import VIDEO_EXTENSIONS, CommandTranscriber, Progress, Segment, Speaker, extract_audio
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,8 @@ CREATE TABLE IF NOT EXISTS recordings (
     revision INTEGER NOT NULL DEFAULT 0,
     -- The transcript the model was asked to proofread (once per transcript, whatever came of it).
     proofread TEXT,
+    -- The transcript the model was asked to name the speakers of (once per transcript, whatever came of it).
+    named TEXT,
     -- Who uploaded it (``owner_key`` of their account); NULL when nobody knows, which leaves it to administrators.
     uploader TEXT
 );
@@ -157,6 +161,8 @@ class Recording(BaseModel):
     revision: int = 0
     # The transcript the model was asked to proofread, if any.
     proofread: str | None = None
+    # The transcript the model was asked to name the speakers of, if any.
+    named: str | None = None
     # Who uploaded it (``owner_key``), if known.
     uploader: str | None = None
 
@@ -213,7 +219,31 @@ def _now() -> str:
 
 
 _SPEAKERS: dict[str, tuple[Speaker, ...]] = {}
+_NAMES: dict[str, dict[str, Cue]] = {}
 _SPEAKERS_LOCK = threading.Lock()
+
+
+def _file_once(path: Path, content: BaseModel, unverified: str) -> bool:
+    """Write ``content`` to ``path`` unless a file is there: under a temporary name, verified, then linked into place,
+    so an existing file (which backups may hard-link) is never rewritten. False when one was there already."""
+    if path.exists():
+        return False
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(content.model_dump(mode="json"), stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if type(content).model_validate_json(temporary.read_text()) != content:
+            raise ValueError(unverified)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class Library:
@@ -239,6 +269,7 @@ class Library:
                 ("recordings", "uploader", "TEXT"),
                 ("people", "account", "TEXT"),
                 ("attributions", "disputed", "INTEGER NOT NULL DEFAULT 0"),
+                ("recordings", "named", "TEXT"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
@@ -488,33 +519,71 @@ class Library:
         return tuple(Recording.model_validate(dict(row)) for row in rows)
 
     def write_cleaned(self, recording: Recording, clean: Cleaned) -> bool:
-        """File the proofreading of the recording's transcript, if none is filed yet: written under a temporary
-        name and linked into place, so an existing file (which backups may hard-link) is never rewritten. False when
-        one was there already."""
+        """File the proofreading of the recording's transcript, if none is filed yet. False when one was there
+        already."""
         transcript = self.transcript(recording)
         path = self.clean_path(recording)
         if transcript is None or path is None or clean.transcript_id != transcript.id:
             raise ValueError("校对结果与转写不对应")
         if not matches(transcript, clean.segments):
             raise ValueError("校对结果与转写的段落不对应")
-        if path.exists():
-            return False
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(clean.model_dump(mode="json"), stream, ensure_ascii=False)
-                stream.flush()
-                os.fsync(stream.fileno())
-            if Cleaned.model_validate_json(temporary.read_text()) != clean:
-                raise ValueError("校对结果写入校验失败")
+        return _file_once(path, clean, "校对结果写入校验失败")
+
+    def names_path(self, recording: Recording) -> Path | None:
+        if not recording.transcript_id:
+            return None
+        return self.folder(recording.id) / f"names-{recording.transcript_id}.json"
+
+    def names(self, recording: Recording) -> dict[str, Cue]:
+        """What the meeting calls each of its speakers, by speaker; empty until the model was asked. Filed names
+        never change, so each file is read once per process."""
+        path = self.names_path(recording)
+        if path is None:
+            return {}
+        key = str(path)
+        with _SPEAKERS_LOCK:
+            found = _NAMES.get(key)
+        if found is None:
+            if not path.is_file():
+                return {}
             try:
-                os.link(temporary, path)
-            except FileExistsError:
-                return False
-            return True
-        finally:
-            temporary.unlink(missing_ok=True)
+                named = Named.model_validate_json(path.read_text())
+            except (OSError, ValueError):
+                logger.warning("speaker names of %s are unreadable", recording.id)
+                return {}
+            current = named.transcript_id == recording.transcript_id
+            found = {cue.speaker: cue for cue in named.speakers} if current else {}
+            with _SPEAKERS_LOCK:
+                _NAMES[key] = found
+        return found
+
+    def unnamed(self) -> tuple[Recording, ...]:
+        """Transcribed recordings whose speakers the model was not asked to name yet, oldest first."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT * FROM recordings WHERE status = 'ready' AND transcript_id IS NOT NULL "
+                "AND named IS NOT transcript_id ORDER BY created_at, id"
+            ).fetchall()
+        return tuple(Recording.model_validate(dict(row)) for row in rows)
+
+    def write_names(self, recording: Recording, named: Named) -> bool:
+        """File the names the meeting calls its speakers by, if none are filed yet. False when they were there
+        already."""
+        speakers = self.speakers(recording)
+        path = self.names_path(recording)
+        if speakers is None or path is None or named.transcript_id != recording.transcript_id:
+            raise ValueError("说话人称呼与转写不对应")
+        if not {cue.speaker for cue in named.speakers} <= {speaker.id for speaker in speakers}:
+            raise ValueError("说话人称呼里有转写没有的说话人")
+        return _file_once(path, named, "说话人称呼写入校验失败")
+
+    def asked_names(self, recording_id: str, transcript_id: str) -> None:
+        """Note that the model was asked to name the speakers of this transcript, whatever came of it."""
+        with self._db() as db:
+            db.execute(
+                "UPDATE recordings SET named = ? WHERE id = ? AND transcript_id = ?",
+                (transcript_id, recording_id, transcript_id),
+            )
 
     def spend(self, kind: str, tokens: int) -> None:
         if tokens > 0:

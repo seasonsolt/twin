@@ -30,6 +30,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ..util import date_from_name
+from .cues import Cue
 from .ingest import Speaker, timestamp
 from .library import Library, Recording, Transcript
 
@@ -76,6 +77,10 @@ FRAGMENT_SECONDS = 15.0
 # meeting's other voices, then that room's next meetings, drifted to whoever was settled most.
 VOICE_SAMPLES = 3
 SAMPLE_MIN_SECONDS = 60.0
+# A person heard this long already has what a twin learns from; voices surely theirs wait behind the others. On the
+# pilot library a third of the undecided speech was surely or likely someone already past it. A guess until twins built
+# from more or less speech are compared.
+ENOUGH_SECONDS = 1800.0
 # Twin sources made from the library; the rest of the id names the recording and the person's own segments.
 SOURCE_PREFIX = "src_lib_"
 
@@ -96,6 +101,8 @@ class Person(BaseModel):
     account: str | None = None
     speakers: int = 0
     seconds: float = 0
+    # How much longer they would have to be heard to have what a twin learns from (``ENOUGH_SECONDS``).
+    lacking: float = 0
     samples: int = 0
     # A recording the person speaks in, and their speaker there, to hear them: one of their voice samples when they
     # have one, the voice others are matched against.
@@ -111,6 +118,8 @@ class Candidate(BaseModel):
     sure: bool = False
     # Already speaking in the same recording, and this alike to them there: diarization split one person (``SPLIT``).
     split: bool = False
+    # The meeting calls the speaker by this person's name (``media.cues``).
+    called: bool = False
 
 
 class TwinSource(BaseModel):
@@ -139,6 +148,9 @@ class SpeakerView(BaseModel):
     disputed: bool = False
     candidates: list[Candidate] = []
     near: bool = False
+    # What the meeting calls the speaker, while undecided, and what was said that names them.
+    called: str | None = None
+    quote: str = ""
 
 
 class VoiceMember(BaseModel):
@@ -161,6 +173,13 @@ class Voice(BaseModel):
     near: bool = False
     # A member sounds like a voice the owner already said is nobody they know.
     stranger: bool = False
+    # What the meeting calls its speakers, and what was said that names them.
+    called: str | None = None
+    quote: str = ""
+    # How long the leading candidate is heard already, when they are surely the one; past ``ENOUGH_SECONDS`` the
+    # voice waits behind the others.
+    had: float = 0
+    enough: bool = False
 
 
 @dataclass
@@ -175,6 +194,8 @@ class _Group:
     present: set[str]
     split: Candidate | None
     stranger: bool
+    # What the meeting calls its members, longest member first.
+    cues: list[Cue]
 
 
 class OpenVoice(BaseModel):
@@ -254,6 +275,7 @@ class Team:
             person.samples = samples.get(person.id, 0)
             person.speakers = counts.get(person.id, 0)
             person.seconds = round(seconds.get(person.id, 0), 1)
+            person.lacking = round(max(0.0, ENOUGH_SECONDS - person.seconds), 1)
         return people
 
     def person(self, person_id: str) -> Person | None:
@@ -364,6 +386,8 @@ class Team:
             prints = self._prints(db)
             names = dict(db.execute("SELECT id, name FROM people").fetchall())
         here = self._here(speakers, rows, names)
+        present = {person_id for person_id, _, _ in here}
+        called = self.library.names(recording)
         views = []
         for speaker in speakers:
             row = rows.get(speaker.id)
@@ -380,6 +404,12 @@ class Team:
             if view.decision == "none" and speaker.embedding:
                 # A speaker's own samples would match it perfectly; they only exist once it is decided anyway.
                 view.candidates = self._suggest(speaker.embedding, prints, set(view.rejected), here)
+            if view.decision == "none":
+                cue = called.get(speaker.id)
+                view.candidates, view.called = self._called(
+                    view.candidates, cue, speaker.embedding or [], prints, names, present | set(view.rejected)
+                )
+                view.quote = cue.quote if view.called and cue else ""
                 view.near = len(view.candidates) > 1 and view.candidates[0].score - view.candidates[1].score < NEAR
             views.append(view)
         return views
@@ -670,8 +700,10 @@ class Team:
             names = dict(db.execute("SELECT id, name FROM people").fetchall())
             strangers = self._strangers(db)
         # (member, unit voiceprint, people it was denied to be, who it sounds most like, people confirmed beside it,
-        # whether it sounds like a voice the owner could not name)
-        found: list[tuple[VoiceMember, list[float], set[str], Candidate | None, set[str], bool]] = []
+        # whether it sounds like a voice the owner could not name, what the meeting calls it)
+        found: list[tuple[VoiceMember, list[float], set[str], Candidate | None, set[str], bool, Cue | None]] = []
+        # How long each person is heard in all confirmed speakers, whichever recordings are asked about.
+        had = {person.id: person.seconds for person in self.people()}
         for recording in self.library.list():
             if recording.status != "ready" or recording.transcript_id is None:
                 continue
@@ -680,6 +712,7 @@ class Team:
             spoken = self.library.speakers(recording) or ()
             here = self._here(spoken, {s.id: r for s in spoken if (r := rows.get((recording.id, s.id)))}, names)
             present = {person_id for person_id, _, _ in here}
+            naming = self.library.names(recording)
             for speaker in spoken:
                 row = rows.get((recording.id, speaker.id))
                 if not speaker.embedding or (row is not None and (row["decision"] != "none" or row["disputed"])):
@@ -698,15 +731,18 @@ class Team:
                 )
                 stranger = self._stranger(speaker.embedding, strangers, known)
                 lead = matched[0] if matched else None
-                found.append((member, _unit(speaker.embedding), rejected, lead, present, stranger))
+                cue = naming.get(speaker.id)
+                found.append((member, _unit(speaker.embedding), rejected, lead, present, stranger, cue))
         groups: list[_Group] = []
         ordered = sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id))
-        for member, vector, rejected, lead, present, stranger in ordered:
+        for member, vector, rejected, lead, present, stranger, cue in ordered:
             likely = lead.person_id if lead else None
             split = lead if lead and lead.split else None
             best, best_score = None, GROUP
             for group in groups:
                 if likely and group.likely and likely != group.likely:
+                    continue
+                if cue and group.cues and cue.name != group.cues[0].name:
                     continue
                 if (group.likely in present and not split) or (likely in group.present and not group.split):
                     continue
@@ -716,7 +752,8 @@ class Team:
                 if score >= best_score:
                     best, best_score = group, score
             if best is None:
-                groups.append(_Group([member], [vector], set(rejected), likely, set(present), split, stranger))
+                cues = [cue] if cue else []
+                groups.append(_Group([member], [vector], set(rejected), likely, set(present), split, stranger, cues))
             else:
                 best.members.append(member)
                 best.vectors.append(vector)
@@ -725,6 +762,8 @@ class Team:
                 best.present.update(present)
                 best.split = best.split or split
                 best.stranger = best.stranger or stranger
+                if cue:
+                    best.cues.append(cue)
         voices: list[Voice] = []
         fragments: list[Voice] = []
         for group in groups:
@@ -736,16 +775,25 @@ class Team:
                 matched = [group.split, *matched][:2]
             # The person its speakers sound most like leads, as each of them would show it.
             candidates = sorted(matched, key=lambda c: c.person_id != group.likely)
+            cue = group.cues[0].model_copy(update={"sure": any(c.sure for c in group.cues)}) if group.cues else None
+            candidates, called = self._called(candidates, cue, centroid, prints, names, group.present | group.rejected)
+            near = len(candidates) > 1 and candidates[0].score - candidates[1].score < NEAR
+            lead = candidates[0] if candidates and candidates[0].sure and not near else None
             voice = Voice(
                 id="voice_" + hashlib.sha256(key.encode()).hexdigest()[:12],
                 members=members,
                 seconds=round(sum(m.seconds for m in members), 1),
                 candidates=candidates,
-                near=len(candidates) > 1 and candidates[0].score - candidates[1].score < NEAR,
+                near=near,
                 stranger=group.stranger,
+                called=called,
+                quote=cue.quote if called and cue else "",
+                had=round(had.get(lead.person_id, 0.0), 1) if lead else 0,
+                enough=lead is not None and had.get(lead.person_id, 0.0) >= ENOUGH_SECONDS,
             )
-            (fragments if voice.seconds < FRAGMENT_SECONDS and not candidates else voices).append(voice)
-        voices.sort(key=lambda v: (-v.seconds, v.id))
+            (fragments if voice.seconds < FRAGMENT_SECONDS and not candidates and not called else voices).append(voice)
+        # Whoever a twin still lacks first, then the longest.
+        voices.sort(key=lambda v: (v.enough, -v.seconds, v.id))
         return voices, fragments
 
     def unvoiced(self, recordings: set[str] | None = None) -> list[tuple[Recording, int]]:
@@ -1091,6 +1139,36 @@ class Team:
                 continue
             found[person_id] = Candidate(person_id=person_id, name=name, score=score, sure=True, split=True)
         return sorted(found.values(), key=lambda c: -c.score)[:2]
+
+    @staticmethod
+    def _called(
+        candidates: list[Candidate],
+        cue: Cue | None,
+        embedding: list[float],
+        prints: list[tuple[str, str, list[float]]],
+        names: Mapping[str, str],
+        excluded: set[str],
+    ) -> tuple[list[Candidate], str | None]:
+        """Candidates with what the meeting calls the speaker (``cue``), and that name when it is a cue to show. A
+        named person in the team leads the candidates, marked ``called``; they are the answer by default only when
+        the voice agrees (a candidate already) or was sure by itself, and a voice sure of someone else is no longer
+        sure. A name nobody in the team has is shown as is, for the owner to add them. A person ``excluded`` (already
+        confirmed elsewhere in the meeting, or denied) leaves no cue."""
+        if cue is None:
+            return candidates, None
+        person_id = next((pid for pid, name in names.items() if name == cue.name), None)
+        if person_id is None:
+            return candidates, cue.name
+        found = next((c for c in candidates if c.person_id == person_id), None)
+        if person_id in excluded and found is None:
+            return candidates, None
+        if found is None:
+            score = max((round(_cosine(embedding, v), 3) for pid, _, v in prints if pid == person_id), default=0.0)
+            found = Candidate(person_id=person_id, name=cue.name, score=score)
+        else:
+            found = found.model_copy(update={"sure": found.sure or cue.sure})
+        others = [c.model_copy(update={"sure": False}) for c in candidates if c.person_id != person_id]
+        return [found.model_copy(update={"called": True}), *others][:2], cue.name
 
     @staticmethod
     def _reopen(db: sqlite3.Connection, recording_id: str, people: set[str]) -> None:

@@ -12,10 +12,12 @@ in line with it by ``sync``: its recording sources are rewritten from the librar
 ordinary build follows; the twin answers again only once a build of exactly that state has succeeded
 (``persona.gate``).
 
-Once someone in a recording is identified, its transcript is proofread by the language model, once, in the same
-media slot; the corrected words then replace the recognized ones in every twin it feeds, which are rebuilt. What
-the library spends on the model (proofreading, and the builds of its twins) counts against a batch quota
-(``LibrarySettings.batch_tokens`` per ``batch_hours``); once it is spent, proofreading and rebuilds wait, and the
+Every transcript is first read by the language model for the names its meeting calls the speakers by
+(``media.cues``), once, as suggestions for the owner. Once someone in a recording is identified, its transcript is
+proofread by the language model, once, in the same media slot; the corrected words then replace the recognized ones
+in every twin it feeds, which are rebuilt. What the library spends on the model (naming, proofreading, and the builds
+of its twins) counts against a batch quota (``LibrarySettings.batch_tokens`` per ``batch_hours``); once it is spent,
+naming, proofreading and rebuilds wait, and the
 library's status says so.
 """
 
@@ -44,6 +46,7 @@ from ..llm import LLM
 from ..media import merge
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.clean import BATCH, clean_segments
+from ..media.cues import Named, name_speakers
 from ..media.ingest import CommandTranscriber, make_transcriber
 from ..media.library import TEAM, Cleaned, Library, Recording, TranscriptionError, owner_key
 from ..media.schema import AVATAR_GENDERS, default_avatar
@@ -483,7 +486,8 @@ class Libraries:
             job = self.proofreading.get(owner)
             if job is not None and job.active:
                 return
-            waiting = self.library(owner).unproofread()
+            unnamed = self.library(owner).unnamed()
+            waiting = unnamed or self.library(owner).unproofread()
             if not waiting or self.quota(owner)["exhausted"]:
                 return
             try:
@@ -491,12 +495,61 @@ class Libraries:
             except Exception:
                 return
             recording = waiting[0]
+            if unnamed:
+                title, run = f"辨认说话人 {recording.filename}", self.run_naming
+            else:
+                title, run = f"校对 {recording.filename}", self.run_proofread
             with contextlib.suppress(TooManyJobs):
                 self.proofreading[owner] = self.jobs.scoped(f"library:{owner}").submit(
-                    "media_ingest",
-                    f"校对 {recording.filename}",
-                    lambda log: self.run_proofread(owner, recording.id, log),
+                    "media_ingest", title, lambda log: run(owner, recording.id, log)
                 )
+
+    def run_naming(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Ask the model, once per transcript, what the meeting calls its speakers, filing the names next to it as
+        suggestions for the owner. A model that fails on every window files nothing; the recording is not asked
+        again either way."""
+        library = self.library(owner)
+        try:
+            recording = library.get(recording_id)
+            if recording is None or recording.transcript_id is None or recording.named == recording.transcript_id:
+                return {"skipped": True}
+            transcript = library.cleaned(recording)
+            if transcript is None:
+                library.asked_names(recording_id, recording.transcript_id)
+                return {"skipped": True}
+            if self.quota(owner)["exhausted"]:
+                log("录音库本批次的大模型额度已用完，辨认说话人暂停")
+                return {"paused": True}
+            assert self.llm is not None
+            llm = self.llm()
+            roster = [person.name for person in self.team(owner).people() if not person.auto]
+            log("[1/1] 从会议内容辨认说话人")
+            rows: list[CallRow] = []
+            try:
+                with collect_calls() as rows:
+                    cues, failed = name_speakers(llm, transcript.segments, roster)
+            finally:
+                library.spend("naming", model_tokens(rows))
+            if failed and not cues:
+                log("辨认说话人失败，不影响按声音确认")
+            else:
+                named = Named(
+                    transcript_id=transcript.id,
+                    created_at=dt.datetime.now(dt.UTC).isoformat(),
+                    speakers=cues,
+                    failed_windows=failed,
+                )
+                try:
+                    library.write_names(recording, named)
+                except (OSError, ValueError):
+                    logger.warning("speaker names of %s could not be filed", recording_id, exc_info=True)
+                log(f"辨认完成：会上叫到了 {len(cues)} 位说话人的名字")
+            library.asked_names(recording_id, transcript.id)
+            return {"recording_id": recording_id, "named": len(cues)}
+        finally:
+            with self.lock:
+                self.proofreading.pop(owner, None)
+            self.proofread(owner)
 
     def run_proofread(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
         """Proofread one recording's transcript once, filing the corrections next to it; when words changed, the

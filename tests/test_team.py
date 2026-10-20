@@ -23,6 +23,7 @@ from twin.api import create_api
 from twin.config import Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
+from twin.media.cues import Cue, Named
 from twin.media.ingest import Segment, Speaker
 from twin.media.library import Library, Recording, Transcript
 from twin.media.schema import AVATAR_GENDERS
@@ -542,6 +543,81 @@ def test_a_voice_the_owner_could_not_name_comes_back_as_such(tmp_path: Path) -> 
     assert [(m.recording_id, m.speaker_id) for m in again.members] == [(second, "S1")] and again.stranger
     # The colleague may still recognise their own voice in either meeting.
     assert {(v.recording.id, v.speaker_id) for v in team.open_voices()} >= {(first, "S1"), (second, "S1")}
+
+
+def name(library: Library, recording_id: str, *cues: tuple[str, str, bool]) -> None:
+    """File what the meeting calls speakers: (speaker, name, whether the name was said plainly)."""
+    found = library.get(recording_id)
+    assert found and found.transcript_id
+    library.write_names(
+        found,
+        Named(
+            transcript_id=found.transcript_id,
+            created_at="2026-10-20T00:00:00+00:00",
+            speakers=[Cue(speaker=s, name=n, evidence=[0], sure=sure, quote=f"请{n}讲一下。") for s, n, sure in cues],
+        ),
+    )
+
+
+def test_what_a_meeting_calls_a_speaker_is_offered_beside_their_voice(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    wang, ai = team.add_person("王宁"), team.add_person("艾总")
+    sample = voices(library, "样本.m4a", ([1.0, 0.0, 0.0], 60))
+    decide(team, sample, "S1", "confirm", wang.id, sample=True)
+    week = voices(
+        library,
+        "周会.m4a",
+        ([0.0, 0.0, 1.0], 90),  # The chair: nobody calls them by name.
+        ([0.8, 0.6, 0.0], 50),  # Called 王宁, and sounds like her.
+        ([0.0, 1.0, 0.0], 40),  # Called 宋明, whom the team does not know yet.
+        ([0.7, 0.714, 0.0], 30),  # Called 艾总 (no voice sample), though sounding somewhat like 王宁.
+    )
+    name(library, week, ("S2", "王宁", True), ("S3", "宋明", True), ("S4", "艾总", True))
+
+    found = {v.members[0].speaker_id: v for v in team.voices()[0]}
+    # One meeting's 王宁 and 艾总 are told apart by their names, though their voices are split-half alike.
+    assert sorted(found) == ["S1", "S2", "S3", "S4"]
+    s2, s3, s4 = found["S2"], found["S3"], found["S4"]
+    assert [(c.name, c.called, c.sure) for c in s2.candidates] == [("王宁", True, True)]
+    assert (s2.called, s2.quote) == ("王宁", "请王宁讲一下。")
+    assert (s3.candidates, s3.called) == ([], "宋明")
+    # The name leads, but a voice sounding like someone else is no default for either.
+    assert [(c.name, c.called, c.sure) for c in s4.candidates] == [("艾总", True, False), ("王宁", False, False)]
+    assert found["S1"].called is None and found["S1"].quote == ""
+
+    # The recording page offers the same.
+    view = {s.id: s for s in team.speakers(library.get(week))}  # type: ignore[arg-type]
+    assert [(c.name, c.called) for c in view["S4"].candidates] == [("艾总", True), ("王宁", False)]
+    assert (view["S3"].called, view["S3"].quote) == ("宋明", "请宋明讲一下。")
+
+    # Once 王宁 is settled here, the meeting calling another speaker by her name is not offered.
+    decide(team, week, "S2", "confirm", wang.id)
+    name_again = voices(library, "周会二.m4a", ([0.0, 0.0, 1.0], 20), ([0.0, 1.0, 0.0], 20))
+    decide(team, name_again, "S1", "confirm", ai.id)
+    name(library, name_again, ("S2", "艾总", True))
+    [other] = [v for v in team.voices({name_again})[0] if v.members[0].speaker_id == "S2"]
+    assert (other.candidates, other.called) == ([], None)
+
+
+def test_voices_of_someone_heard_enough_wait_behind_the_rest(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    wang, ai = team.add_person("王宁"), team.add_person("艾总")
+    sample = voices(library, "样本.m4a", ([1.0, 0.0, 0.0], 1800), ([0.0, 1.0, 0.0], 600))
+    decide(team, sample, "S1", "confirm", wang.id, sample=True)
+    decide(team, sample, "S2", "confirm", ai.id, sample=True)
+    later = voices(
+        library,
+        "周会.m4a",
+        ([0.95, 0.05, 0.0], 100),  # Surely 王宁, already heard half an hour.
+        ([0.05, 0.95, 0.0], 60),  # Surely 艾总, heard ten minutes.
+        ([0.0, 0.0, 1.0], 30),  # Nobody known.
+    )
+    order = [(v.members[0].speaker_id, v.enough, v.had) for v in team.voices({later})[0]]
+    assert order == [("S2", False, 600), ("S3", False, 0), ("S1", True, 1800)]
+    lacking = {p.name: p.lacking for p in team.people()}
+    assert lacking == {"王宁": 0, "艾总": 1200}
 
 
 def test_a_voice_never_chains_colleagues_who_sound_alike(tmp_path: Path) -> None:

@@ -40,6 +40,8 @@ export interface Candidate {
   sure?: boolean;
   // Already speaking in this recording, and this alike: one person diarization split in two.
   split?: boolean;
+  // The meeting calls the speaker by this person's name.
+  called?: boolean;
 }
 export interface Speaker {
   id: string;
@@ -55,6 +57,9 @@ export interface Speaker {
   candidates: Candidate[];
   near: boolean;
   samples: number;
+  // What the meeting calls the speaker, and what was said that names them.
+  called?: string | null;
+  quote?: string;
 }
 export type Gender = '' | 'male' | 'female';
 export interface Person {
@@ -63,6 +68,8 @@ export interface Person {
   persona_id: string | null;
   speakers: number;
   seconds: number;
+  // How much longer they would have to be heard to have what a twin learns from.
+  lacking?: number;
   samples: number;
   updating: boolean;
   // They found themselves here by voice: their twin is their own, not the library's to open.
@@ -185,6 +192,9 @@ function SpeakerCard({
   const candidates = speaker.candidates.filter(
     (c) => !speaker.rejected.includes(c.person_id),
   );
+  // A name the meeting calls the speaker that nobody in the team has yet.
+  const newName =
+    speaker.called && !candidates.some((c) => c.called) ? speaker.called : '';
   const selectedName =
     person === 'new' ? name.trim() : choices.find((p) => p.id === person)?.name;
   const windows = sampleWindows(segments, speaker.id);
@@ -252,11 +262,13 @@ function SpeakerCard({
         </Card>
         <Stack gap={3}>
           <Text weight="medium">
-            {candidates.length > 1
-              ? '声音像这两位，选一个'
-              : candidates.length
-                ? '声音像这位，选一个人'
-                : '没认出这是谁，选一个人或写新名字'}
+            {candidates.some((c) => c.called) || newName
+              ? '会上叫到了名字，听一下再选'
+              : candidates.length > 1
+                ? '声音像这两位，选一个'
+                : candidates.length
+                  ? '声音像这位，选一个人'
+                  : '没认出这是谁，选一个人或写新名字'}
           </Text>
           {candidates.length > 1 &&
             Number.isFinite(candidates[0].score) &&
@@ -266,8 +278,33 @@ function SpeakerCard({
                 两位很接近，多听一个片段再选。
               </Text>
             )}
-          {candidates.length > 0 && (
+          {speaker.called && speaker.quote && (
+            <Text size="sm" tone="secondary">
+              会上被叫作{speaker.called}：「{speaker.quote}」
+            </Text>
+          )}
+          {(candidates.length > 0 || newName) && (
             <Row gap={3} wrap>
+              {newName && (
+                <VoiceChoice
+                  selected={person === 'new' && name.trim() === newName}
+                  disabled={busy}
+                  onClick={() => {
+                    setPerson('new');
+                    setName(newName);
+                  }}
+                >
+                  <AvatarFrame size="md">{Array.from(newName)[0]}</AvatarFrame>
+                  <Stack gap={0}>
+                    <Text as="span" weight="medium" tone="inherit">
+                      {newName}
+                    </Text>
+                    <Text as="span" size="sm" tone="inherit">
+                      会上这样叫，新加到团队
+                    </Text>
+                  </Stack>
+                </VoiceChoice>
+              )}
               {candidates.map((c) => (
                 <VoiceChoice
                   key={c.person_id}
@@ -283,7 +320,9 @@ function SpeakerCard({
                     <Text as="span" size="sm" tone="inherit">
                       {c.split
                         ? `这段里已有${c.name}，可能被拆成了两位`
-                        : `声音像 ${Math.round(c.score * 100)}%`}
+                        : c.called
+                          ? `会上被叫作${c.name}`
+                          : `声音像 ${Math.round(c.score * 100)}%`}
                     </Text>
                   </Stack>
                 </VoiceChoice>

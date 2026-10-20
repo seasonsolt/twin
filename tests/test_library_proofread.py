@@ -18,6 +18,7 @@ from twin.config import ASRSettings, LibrarySettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.clean import Edits
+from twin.media.cues import Cues
 from twin.media.library import Cleaned, Library
 from twin.media.team import Team
 from twin.persona.store import PersonaStore
@@ -148,15 +149,20 @@ def test_model_tokens_leave_embeddings_out_and_count_unreported_usage_by_charact
 
 
 class Model(FakeLLM):
-    """Corrects the misheard sentence when asked to proofread, extracts nothing otherwise, and reports one token
-    per character sent, like a provider that does not report usage."""
+    """Corrects the misheard sentence when asked to proofread, hears S2 called 张总 when asked for names, extracts
+    nothing otherwise, and reports one token per character sent, like a provider that does not report usage."""
 
     def __init__(self) -> None:
         super().__init__(self.answer)
         self.proofreads = 0
+        self.namings = 0
         self.lock = threading.Lock()
 
     def answer(self, system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is Cues:
+            with self.lock:
+                self.namings += 1
+            return {"speakers": [{"speaker": "S2", "name": "张总", "evidence": [0], "sure": False}]}
         if schema is not Edits:
             return {"items": []}
         with self.lock:
@@ -251,6 +257,7 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
     assert recording is not None
     assert sorted(p.name for p in library.folder(rec).iterdir()) == [
         f"clean-{recording.transcript_id}.json",
+        f"names-{recording.transcript_id}.json",
         f"transcript-{recording.transcript_id}.json",
     ]
     # The transcript itself is as recognized; only the proofreading next to it has the correction.
@@ -262,7 +269,7 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
     web.get("/api/library")
     assert model.proofreads == 1
     spent = spending(library)
-    assert spent["proofread"] > 0 and spent["rebuild"] > 0
+    assert spent["proofread"] > 0 and spent["rebuild"] > 0 and spent["naming"] > 0
     assert web.get("/api/library").json()["quota"]["used"] == sum(spent.values())
 
 
@@ -354,3 +361,44 @@ def test_a_model_failing_on_every_batch_leaves_the_words_as_heard(web: TestClien
     assert [line for _, line, own in Team(library).sources(zhang, "张总")[0].lines if own and line] == [
         f"[00:06] {HEARD}"
     ]
+
+
+def named(web: TestClient, library: Library, rec: str) -> bool:
+    """Whether the meeting was read for names; looking at the library is what starts the reading."""
+    web.get("/api/library")
+    found = library.get(rec)
+    return found is not None and found.named is not None
+
+
+def test_every_meeting_is_read_once_for_what_it_calls_its_speakers(
+    web: TestClient, tmp_path: Path, model: Model
+) -> None:
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    until(lambda: named(web, library, rec))
+    recording = library.get(rec)
+    assert recording is not None and recording.named == recording.transcript_id
+    # Nobody is identified yet, so nothing is proofread; the name is a suggestion, not a decision.
+    assert model.namings == 1 and model.proofreads == 0
+    voices = {v["members"][0]["speaker_id"]: v for v in web.get("/api/library/review").json()["voices"]}
+    assert voices["S2"]["called"] == "张总" and voices["S2"]["quote"] == "先看预算。"
+    # Too short to ask about otherwise: a name keeps it out of the fragments set aside together.
+    assert list(voices) == ["S2"]
+    assert Team(library).identities() == {}
+    # Taking the name adds them; the meeting is not asked again.
+    confirm(web, rec, "S2", new_person="张总")
+    until(lambda: recording_state(web, rec) == "done")
+    assert model.namings == 1
+
+
+def test_naming_waits_for_the_quota(web: TestClient, tmp_path: Path, model: Model) -> None:
+    library = library_of(tmp_path)
+    limit(web, 1000)
+    library.spend("proofread", 1000)
+    rec = misheard(library)
+    web.get("/api/library")
+    assert model.namings == 0 and library.get(rec).named is None  # type: ignore[union-attr]
+    limit(web, 0)
+    web.get("/api/library")
+    until(lambda: named(web, library, rec))
+    assert model.namings == 1

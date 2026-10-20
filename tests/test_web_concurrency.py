@@ -6,7 +6,6 @@ import asyncio
 import json
 import sqlite3
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -176,12 +175,12 @@ def test_sqlite_acceptance_does_not_block_a_stream_finishing_or_other_requests(
                 monkeypatch.setattr(persona, "append_user", accepting)
                 chat = asyncio.create_task(client.post("/api/persona/chat", json={**BODY, "conversation_id": cid}))
                 assert await asyncio.to_thread(entered.wait, 3)
-                before = time.monotonic()
                 finish.set()
-                response = await asyncio.wait_for(streaming, 1)
+                response = await asyncio.wait_for(streaming, 3)
                 assert response.status_code == 200
                 assert (await client.get("/api/whoami")).status_code == 200
-                assert time.monotonic() - before < 1
+                # Both answered while the writer still held the lock: the emergency rollback had not run.
+                assert not emergency.finished.is_set()
                 assert not chat.done()
             finally:
                 emergency.cancel()

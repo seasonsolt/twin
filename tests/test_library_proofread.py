@@ -241,6 +241,9 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
     pid = web.post(f"/api/library/people/{zhang}/persona", headers=HEADERS).json()["persona_id"]
     until(lambda: recording_state(web, rec) == "done")
     until(lambda: open_twin(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
+    # A build's spending is recorded just after the twin opens.
+    until(lambda: "rebuild" in spending(library))
+    built = spending(library)["rebuild"]
     assert model.proofreads == 1
     detail = web.get(f"/api/library/recordings/{rec}").json()
     assert detail["proofread"] == "done" and detail["segments"][2]["text"] == MEANT
@@ -255,7 +258,7 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
 
     # Another decision about the same recording does not proofread it again.
     confirm(web, rec, "S1", new_person="李总")
-    until(lambda: open_twin(web, pid))
+    until(lambda: open_twin(web, pid) and spending(library)["rebuild"] > built)
     web.get("/api/library")
     assert model.proofreads == 1
     spent = spending(library)

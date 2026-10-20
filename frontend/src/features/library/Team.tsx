@@ -33,7 +33,7 @@ import {
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
-import { withBase } from '../../lib/base';
+import { basePath, withBase } from '../../lib/base';
 import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
@@ -1017,6 +1017,28 @@ export function Team({
                   ),
                 )}
               </Stack>
+            )}
+            {voiced.length > 0 && (
+              <Row gap={2} wrap>
+                <Text size="sm" tone="secondary">
+                  认不出的人，可以请本人来认：登录后录一句话，系统会找出哪些是
+                  TA 说的
+                </Text>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const invite = `我们在用会议录音整理每个人的发言，为你建分身。打开这个链接，登录后录一句话，就能认出哪些是你说的：${window.location.origin}${basePath()}/#/voice`;
+                    void navigator.clipboard.writeText(invite).then(
+                      () => toast('邀请已复制，可以发给同事', 'success'),
+                      () => toast(invite, 'info', 15000),
+                    );
+                  }}
+                >
+                  复制邀请
+                </Button>
+              </Row>
             )}
             {tasks > unnamed.length + voices.length && (
               <Grid as="ul" columns={3} gap={3}>

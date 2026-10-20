@@ -1030,4 +1030,8 @@ it('asks about whoever speaks longest first, and measures progress by speech set
   expect(
     screen.getByRole('progressbar', { name: '会议里的发言，已经知道是谁说的' }),
   ).toHaveAttribute('aria-valuenow', '900');
+  // Whom the owner cannot name, the colleague can: an invitation to recognise their own voice.
+  const copy = vi.spyOn(navigator.clipboard, 'writeText');
+  await userEvent.click(screen.getByRole('button', { name: '复制邀请' }));
+  expect(copy).toHaveBeenCalledWith(expect.stringMatching(/\/#\/voice$/u));
 });

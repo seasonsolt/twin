@@ -2116,6 +2116,38 @@ def eval_asr_session_command(
     _say(f"成绩单已写入 {out / 'scorecard.md'}。")
 
 
+@app.command("eval-asr-library")
+def eval_asr_library_command(
+    sessions: Annotated[
+        Path, typer.Option("--sessions", help="整场清单 JSONL：id/audio/duration/reference/references")
+    ],
+    engines: Annotated[Path, typer.Option("--engines", help="引擎 TOML：name/command")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的输出目录")],
+    cache: Annotated[Path | None, typer.Option("--cache", help="转写与声纹缓存，默认清单旁的 library-cache/")] = None,
+    overrides: Annotated[
+        list[str] | None, typer.Option("--set", help="试一个阈值而不改代码，如 team.AUTO=0.6；可重复")
+    ] = None,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """团队录音库流程评测：用生产的录音库转写、自动归属和逐段复核流程跑整场会议，按参考标注评分。"""
+    from .evals.asr_library import load_session_engines, parse_overrides, run_library_benchmark
+    from .evals.personal import ensure_output_directory
+
+    with _errors():
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        cache_dir = cache if cache is not None else sessions.parent / "library-cache"
+        ensure_output_directory(cache_dir, allow_in_repo=allow_in_repo)
+        card = run_library_benchmark(
+            sessions,
+            load_session_engines(engines),
+            out,
+            cache_dir=cache_dir,
+            progress=lambda engine, what: _say(f"{engine}: {what}"),
+            overrides=parse_overrides(overrides or []),
+        )
+    _say(f"已评估 {card['sessions']} 场；成绩单：{out / 'scorecard.md'}")
+
+
 @app.command("eval-compare")
 def personal_eval_compare_command(
     ctx: typer.Context,

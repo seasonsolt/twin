@@ -238,6 +238,15 @@ def majority_speaker(reference: Sequence[Utterance], hypothesis: Sequence[Uttera
     return best if best is not None and shared[best] > 0 else None
 
 
+def spoken_by(reference: Sequence[Utterance], parts: Sequence[tuple[float, float]], target: str) -> tuple[float, float]:
+    """Seconds inside ``parts`` where ``target`` speaks, and where only others do (silence is left out)."""
+    count = _frame_count(reference, [])
+    inside = _frames(parts, count)
+    own = _frames([(u.start, u.end) for u in reference if u.speaker == target], count)
+    others = _frames([(u.start, u.end) for u in reference if u.speaker != target], count) & ~own
+    return float((inside & own).sum() * FRAME), float((inside & others).sum() * FRAME)
+
+
 def claim_outcome(
     reference: Sequence[Utterance], hypothesis: Sequence[Utterance], claimed: Sequence[str], target: str
 ) -> str:

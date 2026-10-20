@@ -97,31 +97,56 @@ export function AudioPlayer(
   return <audio {...props} controls preload="none" className="h-11 w-full" />;
 }
 
-/** A round play/pause button for a short clip, heard where it is listed without a player taking up a row. */
-export function ClipButton({ src, label }: { src: string; label: string }) {
+/** A round play/pause button for a short clip, heard where it is listed without a player taking up a row. With a
+ * ``caption`` it is a small text button instead, for a clip heard beside the main one (a reference to compare with). */
+export function ClipButton({
+  src,
+  label,
+  caption,
+}: {
+  src: string;
+  label: string;
+  caption?: string;
+}) {
   const audio = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
+  const toggle = () => {
+    const element = audio.current;
+    if (!element) return;
+    if (playing) element.pause();
+    else void element.play().catch(() => setPlaying(false));
+  };
+  const icon = playing ? (
+    <Pause aria-hidden className="size-4" />
+  ) : (
+    <Play aria-hidden className="size-4" />
+  );
   return (
     <>
-      <IconButton
-        label={playing ? `暂停${label}` : label}
-        shape="circle"
-        size="lg"
-        variant="secondary"
-        aria-pressed={playing}
-        onClick={() => {
-          const element = audio.current;
-          if (!element) return;
-          if (playing) element.pause();
-          else void element.play().catch(() => setPlaying(false));
-        }}
-      >
-        {playing ? (
-          <Pause aria-hidden className="size-4" />
-        ) : (
-          <Play aria-hidden className="size-4" />
-        )}
-      </IconButton>
+      {caption ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={playing ? `暂停${label}` : label}
+          aria-pressed={playing}
+          onClick={toggle}
+        >
+          {icon}
+          {caption}
+        </Button>
+      ) : (
+        <IconButton
+          label={playing ? `暂停${label}` : label}
+          shape="circle"
+          size="lg"
+          variant="secondary"
+          aria-pressed={playing}
+          onClick={toggle}
+        >
+          {icon}
+        </IconButton>
+      )}
       <audio
         ref={audio}
         src={src}

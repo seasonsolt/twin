@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { Team } from '../features/library/Team';
 import { Recording, type Person, type Speaker } from '../pages/Recording';
+import type { Recording as LibraryRecording } from '../pages/Library';
 import { usePersonas } from '../stores/personas';
 
 vi.mock('motion/react', async (original) => ({
@@ -166,6 +167,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
             },
           ],
           fragments: [],
+          unsorted: [],
         });
       if (
         url === '/api/library/people/per_1/persona' &&
@@ -235,7 +237,7 @@ it('lists new voices apart and names them before a twin can be made', async () =
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_9' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
         people = [person({}), person({ id: 'per_9', name: '李总' })];
@@ -304,7 +306,7 @@ it('edits a person name and gender and opens the profile of their twin', async (
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_1' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
         people = [
@@ -364,7 +366,7 @@ it('moves focus to the next voice after naming one, then hides the empty queue',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (init?.method === 'PATCH') {
         const id = url.split('/').at(-1);
         people = people.map((p) =>
@@ -409,7 +411,7 @@ it('settles a new voice as someone already known, or as nobody known, from its r
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       const id = /people\/([^/]+)\/resolve$/u.exec(url)?.[1];
       if (id && init?.method === 'POST') {
         resolved.push({ id, ...JSON.parse(String(init.body)) });
@@ -466,6 +468,7 @@ it('returns from a speaker confirmation to focus the next pending team item', as
               ],
           voices: [],
           fragments: [],
+          unsorted: [],
         });
       if (url === '/api/library/people')
         return json({
@@ -512,7 +515,7 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: [] });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);
     }),
   );
@@ -557,7 +560,7 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push(url);
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       return originalFetch(url, init);
     }),
   );
@@ -622,7 +625,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json(usePersonas.getState().items);
       sent.push([url, init?.method, JSON.parse(String(init?.body))]);
       if (url === '/api/personas/p-li/claim')
@@ -684,7 +687,7 @@ it('shows a person who found themselves by voice as having their own twin', asyn
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json([]);
       throw new Error(url);
     }),
@@ -728,6 +731,7 @@ it('puts what someone said is not them first, and lets an administrator merge tw
           ],
           voices: [],
           fragments: [],
+          unsorted: [],
         });
       if (url === '/api/personas') return json([]);
       if (init?.method === 'POST') {
@@ -789,7 +793,7 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices, fragments });
+        return json({ items: [], voices, fragments, unsorted: [] });
       if (url === '/api/library/voices' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as { action: string };
         posts.push(body);
@@ -832,4 +836,115 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
   );
   expect(posts[1]).toMatchObject({ action: 'unknown' });
+});
+
+it('opens a voice at its own speaker, next to the samples of who it may be', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({
+          items: [],
+          voices: [
+            {
+              id: 'voice_1',
+              members: [
+                {
+                  recording_id: 'rec_1',
+                  filename: '周会.m4a',
+                  transcript_id: 't1',
+                  speaker_id: 'S2',
+                  seconds: 300,
+                },
+              ],
+              seconds: 300,
+              candidates: [
+                { person_id: 'per_1', name: '张总', score: 0.7 },
+                { person_id: 'per_2', name: '李总', score: 0.68 },
+              ],
+              near: true,
+            },
+          ],
+          fragments: [],
+          unsorted: [],
+        });
+      if (url === '/api/library/recordings/rec_1')
+        return json({
+          id: 'rec_1',
+          filename: '周会.m4a',
+          status: 'ready',
+          transcript_id: 't1',
+          revision,
+          speakers: [speaker({}), speaker({ id: 'S2' })],
+          segments: [
+            { start: 0, end: 4, text: '先看预算。', speaker: 'S1' },
+            { start: 4, end: 9, text: '我反对压缩研发。', speaker: 'S2' },
+          ],
+        });
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/team']}>
+      <ConfirmProvider>
+        <Routes>
+          <Route path="/team" element={<Team version={0} recordings={[]} />} />
+          <Route path="/library/:recordingId" element={<Recording />} />
+        </Routes>
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const row = (await screen.findByText('像张总，也像李总')).closest('li')!;
+  // Both people it may be can be heard by the voice they were confirmed with.
+  expect(
+    within(row).getByRole('button', { name: '听张总确认过的声音' }),
+  ).toBeInTheDocument();
+  expect(
+    within(row).getByRole('button', { name: '听李总确认过的声音' }),
+  ).toBeInTheDocument();
+  const people_ = screen.getByRole('region', { name: '人物' });
+  expect(
+    within(people_).getAllByRole('button', { name: /确认过的声音/u }),
+  ).toHaveLength(2);
+  // The recording opens at the voice's own speaker, not at its first undecided one.
+  await userEvent.click(within(row).getByRole('link', { name: '打开录音' }));
+  expect(
+    await screen.findByRole('heading', { name: 'S2 是谁？' }),
+  ).toBeInTheDocument();
+});
+
+it('asks about recordings only as the server lists them, so an older list never flashes', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team
+          version={0}
+          recordings={[
+            {
+              id: 'rec_1',
+              filename: '周会.m4a',
+              status: 'ready',
+              unsettled: 4,
+              speakers: 11,
+            } as LibraryRecording,
+          ]}
+        />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await screen.findByRole('region', { name: '人物' });
+  expect(screen.queryByText('还有人没认')).toBeNull();
+  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
 });

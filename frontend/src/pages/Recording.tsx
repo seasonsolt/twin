@@ -368,7 +368,10 @@ export function Recording() {
   const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [reopened, setReopened] = useState<string | null>(null);
+  // The speaker to settle first: one just reopened, or the one a team task points at.
+  const [reopened, setReopened] = useState<string | null>(
+    location.state?.speaker ?? null,
+  );
   // They said the only speaker given to them is not them: the recording is no longer theirs to see.
   const [left, setLeft] = useState(false);
   const base = `/api/library/recordings/${encodeURIComponent(recordingId)}`;

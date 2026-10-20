@@ -78,7 +78,8 @@ class Person(BaseModel):
     speakers: int = 0
     seconds: float = 0
     samples: int = 0
-    # A recording the person speaks in, and their speaker there, to hear them.
+    # A recording the person speaks in, and their speaker there, to hear them: one of their voice samples when they
+    # have one, the voice others are matched against.
     recording_id: str | None = None
     speaker_id: str | None = None
 
@@ -190,6 +191,11 @@ class Team:
             samples = dict(
                 db.execute("SELECT person_id, COUNT(*) FROM voiceprints WHERE active = 1 GROUP BY person_id").fetchall()
             )
+            sampled = db.execute(
+                "SELECT v.person_id, v.recording_id, v.speaker_id FROM voiceprints v "
+                "JOIN recordings r ON r.id = v.recording_id AND r.transcript_id = v.transcript_id "
+                "WHERE v.active = 1 ORDER BY v.rowid"
+            ).fetchall()
             confirmed = db.execute(
                 "SELECT a.person_id, a.recording_id, a.transcript_id, a.speaker_id FROM attributions a "
                 "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
@@ -207,8 +213,12 @@ class Team:
             counts[person_id] = counts.get(person_id, 0) + 1
             seconds[person_id] = seconds.get(person_id, 0) + (speaker.seconds if speaker else 0)
             heard_in.setdefault(person_id, (recording_id, speaker_id))
+        sample_in: dict[str, tuple[str, str]] = {}
+        for person_id, recording_id, speaker_id in sampled:
+            sample_in.setdefault(person_id, (recording_id, speaker_id))
         for person in people:
-            person.recording_id, person.speaker_id = heard_in.get(person.id, (None, None))
+            voice = sample_in.get(person.id) or heard_in.get(person.id)
+            person.recording_id, person.speaker_id = voice if voice else (None, None)
             person.samples = samples.get(person.id, 0)
             person.speakers = counts.get(person.id, 0)
             person.seconds = round(seconds.get(person.id, 0), 1)
@@ -678,6 +688,32 @@ class Team:
             (fragments if voice.seconds < FRAGMENT_SECONDS and not candidates else voices).append(voice)
         voices.sort(key=lambda v: (-v.seconds, v.id))
         return voices, fragments
+
+    def unvoiced(self, recordings: set[str] | None = None) -> list[tuple[Recording, int]]:
+        """Transcribed recordings with undecided speakers who have no voiceprint, so no voice can hold them: each with
+        how many, to be settled in the recording itself. Disputed ones wait apart (``review``). ``recordings``: only
+        these."""
+        with self.library.read() as db:
+            settled = {
+                (row[0], row[1])
+                for row in db.execute(
+                    "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r "
+                    "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                    "WHERE a.decision != 'none' OR a.disputed = 1"
+                )
+            }
+        found = []
+        for recording in self.library.list():
+            if recording.status != "ready" or (recordings is not None and recording.id not in recordings):
+                continue
+            silent = sum(
+                1
+                for speaker in self.library.speakers(recording) or ()
+                if not speaker.embedding and (recording.id, speaker.id) not in settled
+            )
+            if silent:
+                found.append((recording, silent))
+        return found
 
     def decide_voice(
         self,

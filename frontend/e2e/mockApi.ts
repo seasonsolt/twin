@@ -879,6 +879,7 @@ const handlers: Record<string, Handler> = {
         seconds: 6,
       },
     ],
+    unsorted: [],
   }),
   'GET /api/library/recordings/r-weekly': reply(weekly),
   'POST /api/library/recordings/r-broken/retry': reply({

@@ -448,6 +448,35 @@ def test_a_voice_never_chains_colleagues_who_sound_alike(tmp_path: Path) -> None
     assert led == {one: "王宁", other: "艾总"}
 
 
+def test_a_person_is_heard_by_their_voice_sample(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    first, second = meeting(library), meeting(library, "第二次.m4a")
+    zhang = team.add_person("张总")
+    decide(team, first, "S1", "confirm", zhang.id)
+    person = team.person(zhang.id)
+    assert person and (person.recording_id, person.speaker_id) == (first, "S1")  # Only a meeting so far.
+    decide(team, second, "S2", "confirm", zhang.id, sample=True)
+    person = team.person(zhang.id)
+    assert person and (person.recording_id, person.speaker_id) == (second, "S2")  # The voice others match.
+
+
+def test_speakers_without_a_voiceprint_are_settled_in_their_recording(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    rec = recording(
+        library,
+        "无声纹.m4a",
+        [Segment(start=0, end=4, text="先看预算。", speaker="S1"), Segment(start=4, end=8, text="好。", speaker="S2")],
+        [Speaker(id="S1", seconds=4, embedding=[1.0, 0.0, 0.0]), Speaker(id="S2", seconds=4)],
+    )
+    meeting(library)  # Every speaker has a voiceprint: in voices, not here.
+    assert [(r.id, n) for r, n in team.unvoiced()] == [(rec, 1)]
+    assert team.unvoiced({"rec_other"}) == []
+    decide(team, rec, "S2", "unknown")
+    assert team.unvoiced() == []
+
+
 def test_every_way_of_asking_is_refused_until_the_build_is_complete(tmp_path: Path) -> None:
     library, db = linked_store(tmp_path)
     settings = Settings(db_path=db)
@@ -784,6 +813,7 @@ def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Pat
     first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30), ([0.0, 1.0, 0.0], 3))
     second = voices(library, "二.m4a", ([0.95, 0.05, 0.0], 20))
     listed = web.get("/api/library/review").json()
+    assert listed["unsorted"] == []  # Every speaker has a voiceprint.
     assert listed["items"] == [] and [(m["recording_id"], m["speaker_id"]) for m in listed["fragments"]] == [
         (first, "S2")
     ]

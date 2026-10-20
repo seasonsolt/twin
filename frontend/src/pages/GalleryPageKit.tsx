@@ -549,6 +549,11 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             <Text size="sm" tone="secondary">
               就地试听一小段声音 ClipButton
             </Text>
+            <ClipButton
+              label="对照试听 ClipButton caption"
+              caption="听林舟"
+              src="/api/library/recordings/demo/speakers/S2/samples/0"
+            />
           </Row>
           <Row gap={2} wrap>
             <LinkButton href="#/gallery" variant="secondary" shape="pill">

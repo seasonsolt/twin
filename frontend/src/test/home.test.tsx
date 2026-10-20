@@ -32,7 +32,9 @@ const recording = (change: Partial<Recording>): Recording => ({
 });
 let state: LibraryState;
 let people: Person[];
+let unsorted: unknown[];
 beforeEach(() => {
+  unsorted = [];
   state = {
     recordings: [],
     pending: 0,
@@ -53,7 +55,7 @@ beforeEach(() => {
       if (url === '/api/library') return json(state);
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
-        return json({ items: [], voices: [], fragments: [] });
+        return json({ items: [], voices: [], fragments: [], unsorted });
       throw new Error(url);
     }),
   );
@@ -92,6 +94,10 @@ it('shows the team, what needs settling and the way to upload more', async () =>
       transcribed_s: 300,
     }),
   ];
+  // A speaker without a voiceprint is in no voice: the server lists its recording.
+  unsorted = [
+    { recording_id: 'rec_1', filename: '周会.m4a', speakers: 1, total: 3 },
+  ];
   people = [
     {
       id: 'per_1',
@@ -123,7 +129,7 @@ it('shows the team, what needs settling and the way to upload more', async () =>
     within(tasks).getByText('1', { selector: 'span' }),
   ).toBeInTheDocument();
   expect(within(tasks).queryByText(/月会/u)).toBeNull();
-  // A speaker nobody resembles still asks for the owner, through its recording.
+  // A speaker no voice holds still asks for the owner, through its recording.
   expect(within(tasks).getByText('还有人没认')).toBeInTheDocument();
   expect(
     within(tasks).getByRole('link', { name: '试听并确认' }),

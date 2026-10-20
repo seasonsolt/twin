@@ -61,10 +61,19 @@ interface Voice {
   near: boolean;
 }
 
+/** A recording whose undecided speakers have no voiceprint to group by: settled in the recording itself. */
+interface Unsorted {
+  recording_id: string;
+  filename: string;
+  speakers: number;
+  total: number;
+}
+
 interface Review {
   items: Waiting[];
   voices: Voice[];
   fragments: VoiceMember[];
+  unsorted: Unsorted[];
 }
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */
@@ -190,6 +199,21 @@ function Unnamed({
   );
 }
 
+/** The voice a person is recognised by (one of their voice samples, or a meeting they were confirmed in), as a
+ * small reference beside what is being looked at. */
+function PersonClip({ person }: { person?: Person }) {
+  if (!person?.recording_id || !person.speaker_id) return null;
+  return (
+    <ClipButton
+      label={`听${person.name}确认过的声音`}
+      caption={`听${person.name}`}
+      src={withBase(
+        `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+      )}
+    />
+  );
+}
+
 /** A voice heard in several recordings, settled once for all of them: hear it, then say who it is (the person it
  * sounds like, someone else known, or a new name) or that nobody known speaks there. Enter confirms. */
 function VoiceRow({
@@ -208,6 +232,10 @@ function VoiceRow({
   const match = known.find((p) => p.name === typed);
   const [loudest] = voice.members;
   const [likely, other] = voice.candidates;
+  // Who it may be, to hear next to it before saying so.
+  const compared = (voice.near && other ? [likely, other] : [likely])
+    .filter(Boolean)
+    .map((c) => known.find((p) => p.id === c.person_id));
   const recordings = new Set(voice.members.map((m) => m.recording_id)).size;
   const title = !likely
     ? '没听过的声音'
@@ -233,10 +261,16 @@ function VoiceRow({
           <TextLink
             size="sm"
             to={recordingPath(loudest.recording_id)}
-            state={{ teamTask: `voice-${voice.id}` }}
+            state={{
+              teamTask: `voice-${voice.id}`,
+              speaker: loudest.speaker_id,
+            }}
           >
             打开录音
           </TextLink>
+          {compared.map((person) => (
+            <PersonClip key={person?.id} person={person} />
+          ))}
         </>
       }
     >
@@ -606,6 +640,7 @@ export function Team({
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [fragments, setFragments] = useState<VoiceMember[]>([]);
+  const [unsorted, setUnsorted] = useState<Unsorted[]>([]);
   const [name, setName] = useState('');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
@@ -634,6 +669,7 @@ export function Team({
       setWaiting(queue.items);
       setVoices(queue.voices);
       setFragments(queue.fragments);
+      setUnsorted(queue.unsorted);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载人物');
     }
@@ -810,15 +846,6 @@ export function Team({
   const proofreading = recordings.filter(
     (r) => r.status === 'ready' && r.proofread === 'waiting',
   );
-  // Speakers without a voiceprint are in no voice; their recording still asks.
-  const asked = new Set([
-    ...waiting.map((w) => w.recording_id),
-    ...voices.flatMap((v) => v.members.map((m) => m.recording_id)),
-    ...fragments.map((m) => m.recording_id),
-  ]);
-  const unsorted = recordings.filter(
-    (r) => r.status === 'ready' && r.unsettled > 0 && !asked.has(r.id),
-  );
   const fragmentRecordings = new Set(fragments.map((m) => m.recording_id)).size;
   const taskIds = [
     ...unnamed.map((p) => `person-${p.id}`),
@@ -826,7 +853,7 @@ export function Team({
     ...(fragments.length ? ['fragments'] : []),
     ...similar.map(([a, b]) => `similar-${a.id}-${b.id}`),
     ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
-    ...unsorted.map((r) => `unsorted-${r.id}`),
+    ...unsorted.map((u) => `unsorted-${u.recording_id}`),
     ...failed.map((r) => `failed-${r.id}`),
     ...disowned.map((p) => `disowned-${p.id}`),
   ];
@@ -989,27 +1016,28 @@ export function Team({
                     </Text>
                     <RouteButton
                       to={recordingPath(w.recording_id)}
-                      state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
+                      state={{
+                        teamTask: `speaker-${w.recording_id}-${w.id}`,
+                        speaker: w.id,
+                      }}
                       size="sm"
                     >
                       试听并确认
                     </RouteButton>
                   </Task>
                 ))}
-                {unsorted.map((r) => (
+                {unsorted.map((u) => (
                   <Task
-                    key={`unsorted-${r.id}`}
-                    kind={
-                      r.unsettled === r.speakers ? '还没认人' : '还有人没认'
-                    }
+                    key={`unsorted-${u.recording_id}`}
+                    kind={u.speakers === u.total ? '还没认人' : '还有人没认'}
                   >
                     <Text weight="medium">
-                      <span className="break-all">{r.filename}</span> ·{' '}
-                      {r.unsettled} 位说话人待确认
+                      <span className="break-all">{u.filename}</span> ·{' '}
+                      {u.speakers} 位说话人待确认
                     </Text>
                     <RouteButton
-                      to={recordingPath(r.id)}
-                      state={{ teamTask: `unsorted-${r.id}` }}
+                      to={recordingPath(u.recording_id)}
+                      state={{ teamTask: `unsorted-${u.recording_id}` }}
                       size="sm"
                     >
                       试听并确认
@@ -1160,7 +1188,7 @@ export function Team({
                     </Text>
                   </Stack>
                 </IdentityLink>
-                <div>
+                <Row gap={2} justify="between">
                   {person.self_claimed ? (
                     <Badge tone="success">本人已认领</Badge>
                   ) : person.twin_elsewhere ? (
@@ -1174,7 +1202,8 @@ export function Team({
                   ) : (
                     <Badge tone="neutral">还没有分身</Badge>
                   )}
-                </div>
+                  <PersonClip person={person} />
+                </Row>
                 <ClaimLine
                   twin={twins.find((t) => t.id === person.persona_id)}
                 />

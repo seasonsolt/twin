@@ -39,6 +39,7 @@ import {
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
+import { byName } from '../../lib/names';
 import { basePath, withBase } from '../../lib/base';
 import { usePolling } from '../../lib/usePolling';
 import { usePersonas, type Persona } from '../../stores/personas';
@@ -242,7 +243,7 @@ function Ask({
         placeholder="这是谁"
         maxLength={40}
         value={value}
-        suggestions={known.map((p) => p.name)}
+        suggestions={known.map((p) => p.name).sort(byName)}
         className="min-w-0 flex-1"
         onChange={(event) => onChange(event.target.value)}
       />

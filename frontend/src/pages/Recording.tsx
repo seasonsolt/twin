@@ -34,6 +34,7 @@ import {
   TextLink,
 } from '../components/ui';
 import { api, ApiError } from '../lib/api';
+import { sortByName } from '../lib/names';
 import { withBase } from '../lib/base';
 import type { Recording as RecordingRow } from './Library';
 
@@ -193,7 +194,10 @@ function SpeakerCard({
   const [name, setName] = useState('');
   const [sample, setSample] = useState(false);
   const [clip, setClip] = useState(0);
-  const choices = people.filter((p) => !speaker.rejected.includes(p.id));
+  const choices = sortByName(
+    people.filter((p) => !speaker.rejected.includes(p.id)),
+    (p) => p.name,
+  );
   const candidates = speaker.candidates.filter(
     (c) => !speaker.rejected.includes(c.person_id),
   );

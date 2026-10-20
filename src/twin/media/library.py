@@ -36,7 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..util import prepare_private_file, private_directory
-from .cues import Cue, Named
+from .cues import Cue, Named, said
 from .ingest import VIDEO_EXTENSIONS, CommandTranscriber, Progress, Segment, Speaker, extract_audio
 
 logger = logging.getLogger(__name__)
@@ -552,7 +552,9 @@ class Library:
                 logger.warning("speaker names of %s are unreadable", recording.id)
                 return {}
             current = named.transcript_id == recording.transcript_id
-            found = {cue.speaker: cue for cue in named.speakers} if current else {}
+            # Names filed before ``said`` was required are held to it here: their quote is what named them.
+            kept = [cue for cue in named.speakers if said(cue.name, cue.quote)]
+            found = {cue.speaker: cue for cue in kept} if current else {}
             with _SPEAKERS_LOCK:
                 _NAMES[key] = found
         return found

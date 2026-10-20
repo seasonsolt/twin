@@ -522,7 +522,8 @@ class Libraries:
                 return {"paused": True}
             assert self.llm is not None
             llm = self.llm()
-            roster = [person.name for person in self.team(owner).people() if not person.auto]
+            # Only people heard in meetings: others (a test twin, a colleague never recorded) are no one to call on.
+            roster = [person.name for person in self.team(owner).people() if not person.auto and person.speakers]
             log("[1/1] 从会议内容辨认说话人")
             rows: list[CallRow] = []
             try:

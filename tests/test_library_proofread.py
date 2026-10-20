@@ -31,11 +31,14 @@ HEADERS = {"X-Twin": "1"}
 HEARD, MEANT = "我反对牙缩研发。", "我反对压缩研发。"
 
 
-def misheard(library: Library) -> str:
+def misheard(library: Library, called: bool = False) -> str:
+    """A meeting with one misheard sentence; ``called``: the chair calls on 张总 first."""
     recording_id = meeting(library)
     transcript = library.transcript(library.get(recording_id))  # type: ignore[arg-type]
     assert transcript is not None
     segments = [s.model_copy(update={"text": HEARD}) if s.text == MEANT else s for s in transcript.segments]
+    if called:
+        segments[0] = segments[0].model_copy(update={"text": "张总，先看预算。"})
     path = library.folder(recording_id) / f"transcript-{transcript.id}.json"
     path.write_text(json.dumps(transcript.model_copy(update={"segments": segments}).model_dump(mode="json")))
     return recording_id
@@ -156,13 +159,17 @@ class Model(FakeLLM):
         super().__init__(self.answer)
         self.proofreads = 0
         self.namings = 0
+        self.rosters: list[list[str]] = []
         self.lock = threading.Lock()
 
     def answer(self, system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
         if schema is Cues:
+            sent = json.loads(user)
             with self.lock:
                 self.namings += 1
-            return {"speakers": [{"speaker": "S2", "name": "张总", "evidence": [0], "sure": False}]}
+                self.rosters.append(sent["roster"])
+            said = [int(line.split("|")[0]) for line in sent["meeting"].splitlines() if "张总" in line]
+            return {"speakers": [{"speaker": "S2", "name": "张总", "evidence": said, "sure": False}] if said else []}
         if schema is not Edits:
             return {"items": []}
         with self.lock:
@@ -374,14 +381,17 @@ def test_every_meeting_is_read_once_for_what_it_calls_its_speakers(
     web: TestClient, tmp_path: Path, model: Model
 ) -> None:
     library = library_of(tmp_path)
-    rec = misheard(library)
+    rec = misheard(library, called=True)
+    # A test twin, never heard in a meeting, is nobody the meeting could call on.
+    Team(library).add_person("测试分身")
     until(lambda: named(web, library, rec))
+    assert model.rosters == [[]]
     recording = library.get(rec)
     assert recording is not None and recording.named == recording.transcript_id
     # Nobody is identified yet, so nothing is proofread; the name is a suggestion, not a decision.
     assert model.namings == 1 and model.proofreads == 0
     voices = {v["members"][0]["speaker_id"]: v for v in web.get("/api/library/review").json()["voices"]}
-    assert voices["S2"]["called"] == "张总" and voices["S2"]["quote"] == "先看预算。"
+    assert voices["S2"]["called"] == "张总" and voices["S2"]["quote"] == "张总，先看预算。"
     # Too short to ask about otherwise: a name keeps it out of the fragments set aside together.
     assert list(voices) == ["S2"]
     assert Team(library).identities() == {}

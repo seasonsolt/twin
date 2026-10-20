@@ -60,16 +60,16 @@ class Named(BaseModel):
 
 # A quote longer than this is cut around the name.
 QUOTE_CHARS = 60
-# Forms of address around a name: the name itself must be in what was said for a cue to be sure.
+# Forms of address around a name; the rest of it must have been said.
 TITLES = "总老师哥姐小阿"
 
 
-def _said(name: str, evidence: list[int], segments: list[Segment]) -> bool:
-    """Whether the name (titles aside, any of its characters) is in the evidence: a cue from a misrecognized word
-    that only sounds like a name is a guess."""
+def said(name: str, text: str) -> bool:
+    """Whether every character of the name, titles aside, is in what was said: a name the model matched to someone
+    sharing only a surname, or took from the roster with nothing said, is not a cue. On the pilot library such cues
+    named test accounts and the wrong colleague."""
     core = [char for char in name if char.isalnum() and char not in TITLES] or list(name)
-    said = "".join(segments[i].text for i in evidence)
-    return any(char in said for char in core)
+    return all(char in text for char in core)
 
 
 def _quote(name: str, evidence: list[int], segments: list[Segment]) -> str:
@@ -77,10 +77,8 @@ def _quote(name: str, evidence: list[int], segments: list[Segment]) -> str:
     if not evidence:
         return ""
     core = [char for char in name if char.isalnum() and char not in TITLES] or list(name)
-    text = next(
-        (segments[i].text for i in evidence if any(char in segments[i].text for char in core)),
-        segments[evidence[0]].text,
-    ).strip()
+    saying = (segments[i].text for i in evidence if said(name, segments[i].text))
+    text = next(saying, segments[evidence[0]].text).strip()
     if len(text) <= QUOTE_CHARS:
         return text
     at = min((text.find(char) for char in core if char in text), default=0)
@@ -97,8 +95,8 @@ def _windows(count: int) -> list[range]:
 
 def name_speakers(llm: LLM, segments: list[Segment], roster: list[str]) -> tuple[list[Cue], int]:
     """At most one name per speaker, as the roster spells it when it is someone known, and how many windows of the
-    meeting failed. A speaker named differently in two windows gets no name; one named in several windows is sure
-    when any window was, and only if the name is in its evidence."""
+    meeting failed. Only a name said in one segment of its evidence counts (``said``); a speaker named differently in
+    two windows gets no name; one named in several windows is sure when any window was."""
     speakers = {segment.speaker for segment in segments}
     found: dict[str, list[Cue]] = defaultdict(list)
     failed = 0
@@ -120,8 +118,9 @@ def name_speakers(llm: LLM, segments: list[Segment], roster: list[str]) -> tuple
                 continue
             seen.add(cue.speaker)
             evidence = [i for i in cue.evidence if i in window][:5]
-            sure = cue.sure and _said(name, evidence, segments)
-            found[cue.speaker].append(Cue(speaker=cue.speaker, name=name, evidence=evidence, sure=sure))
+            if not any(said(name, segments[i].text) for i in evidence):
+                continue
+            found[cue.speaker].append(Cue(speaker=cue.speaker, name=name, evidence=evidence, sure=cue.sure))
     cues = []
     for speaker, claims in found.items():
         names = Counter(claim.name for claim in claims)

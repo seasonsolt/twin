@@ -38,31 +38,37 @@ def answering(*answers: Any) -> FakeLLM:
     return FakeLLM(answer)
 
 
-def test_a_name_is_sure_only_when_it_was_said(tmp_path: Path) -> None:
+def test_only_a_name_said_in_the_meeting_is_a_cue(tmp_path: Path) -> None:
     llm = answering(
         {
             "speakers": [
                 {"speaker": "S2", "name": "宋明", "evidence": [0, 1], "sure": True},
-                {"speaker": "S3", "name": "王宁", "evidence": [2], "sure": True},
+                {"speaker": "S3", "name": "王宁", "evidence": [2], "sure": False},
+                # A word that only sounds like a name, and a roster name nobody said: both dropped.
                 {"speaker": "S4", "name": "淑敏", "evidence": [3], "sure": True},
+                {"speaker": "S1", "name": "zhangxun", "evidence": [1], "sure": False},
                 # Not a speaker of this meeting, and a second answer for S2: both dropped.
                 {"speaker": "S9", "name": "张总", "evidence": [0], "sure": True},
                 {"speaker": "S2", "name": "老夏", "evidence": [0], "sure": True},
-                {"speaker": "S1", "name": " ", "evidence": [0], "sure": False},
             ]
         }
     )
-    found, failed = name_speakers(llm, MEETING, ["王宁", "艾总"])
+    found, failed = name_speakers(llm, MEETING, ["王宁", "艾总", "zhangxun"])
     assert failed == 0
     assert [(c.speaker, c.name, c.sure, c.quote) for c in found] == [
         ("S2", "宋明", True, "那宋明你跟老夏解释一下。"),
-        ("S3", "王宁", True, "我是王宁，我补充一下。"),
-        ("S4", "淑敏", False, "梳理一下复购的排期。"),
+        ("S3", "王宁", False, "我是王宁，我补充一下。"),
     ]
+    # Titles aside, every character of the name was said: a colleague sharing only a surname is not called.
+    assert cues.said("夏总", "老夏你说") and cues.said("郭老师", "郭老师这边的")
+    assert not cues.said("梁圣", "有请博丽佳梁修成为我们带来规划")
     # The model reads the roster and the numbered meeting, never anything else.
     [(_, _, user)] = llm.calls
     sent = json.loads(user)
-    assert sent["roster"] == ["王宁", "艾总"] and sent["meeting"].splitlines()[0] == "0|S1|那宋明你跟老夏解释一下。"
+    assert (
+        sent["roster"] == ["王宁", "艾总", "zhangxun"]
+        and sent["meeting"].splitlines()[0] == "0|S1|那宋明你跟老夏解释一下。"
+    )
 
 
 def test_a_long_meeting_is_read_in_windows_and_contradictions_name_nobody(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,11 +84,8 @@ def test_a_long_meeting_is_read_in_windows_and_contradictions_name_nobody(monkey
         },
     )
     found, failed = name_speakers(llm, MEETING, [])
-    # Evidence outside a window is not the window's to give; a name said in one window is sure.
-    assert [(c.speaker, c.name, c.evidence, c.sure) for c in found] == [
-        ("S2", "宋明", [0, 1, 2], True),
-        ("S3", "王宁", [], False),
-    ]
+    # Evidence outside a window is not the window's to give, and a window that does not say the name gives none.
+    assert [(c.speaker, c.name, c.evidence, c.sure) for c in found] == [("S2", "宋明", [0, 1], True)]
     assert failed == 0 and len(llm.calls) == 2
 
     llm = answering(
@@ -119,9 +122,23 @@ def test_names_are_filed_once_for_the_current_transcript(tmp_path: Path) -> None
         library.write_names(current, named.model_copy(update={"speakers": [Cue(speaker="S9", name="张总")]}))
     with pytest.raises(ValueError):
         library.write_names(current, named.model_copy(update={"transcript_id": "another"}))
-    assert library.write_names(current, named) is True
+    assert (
+        library.write_names(
+            current,
+            named.model_copy(
+                update={
+                    "speakers": [
+                        *named.speakers,
+                        Cue(speaker="S3", name="zhangxun", evidence=[1], quote="各位领导介绍一下工作总结。"),
+                    ]
+                }
+            ),
+        )
+        is True
+    )
     assert library.write_names(current, named.model_copy(update={"speakers": []})) is False
-    assert library.names(current)["S2"].name == "宋明"
+    # A name filed without being in its quote (as before ``said`` was required) is left out when read.
+    assert {s: c.name for s, c in library.names(current).items()} == {"S2": "宋明"}
     assert [p.name for p in library.folder(rec).iterdir() if p.name.startswith(".")] == []
 
     # Asked once per transcript, whatever came of it.

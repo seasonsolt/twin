@@ -823,6 +823,18 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
   const row = within(tasks).getByText('可能是张总').closest('li')!;
   expect(row).toHaveTextContent('2 段录音 · 共说了 8 分钟');
   expect(within(row).getByRole('button', { name: '确认' })).toBeDisabled();
+  // Heard in each meeting in turn, to be sure it is one person throughout.
+  expect(
+    within(row).getByRole('button', { name: '听这个声音（rec_1.m4a）' }),
+  ).toBeInTheDocument();
+  await user.click(within(row).getByRole('button', { name: /^换一段录音听/u }));
+  expect(
+    within(row).getByRole('button', { name: '听这个声音（rec_2.m4a）' }),
+  ).toBeInTheDocument();
+  expect(within(row).getByRole('link', { name: '打开录音' })).toHaveAttribute(
+    'href',
+    '/library/rec_2',
+  );
   await user.click(within(row).getByRole('button', { name: '是张总' }));
   await waitFor(() =>
     expect(posts).toEqual([

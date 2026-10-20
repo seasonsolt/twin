@@ -234,7 +234,10 @@ function VoiceRow({
   const [name, setName] = useState('');
   const typed = name.trim();
   const match = known.find((p) => p.name === typed);
-  const [loudest] = voice.members;
+  // Heard one recording at a time: a voice grouped from several meetings is checked across them, not by its
+  // loudest member alone.
+  const [heard, setHeard] = useState(0);
+  const current = voice.members[heard % voice.members.length];
   const [likely, other] = voice.candidates;
   const offered = (voice.near && other ? [likely, other] : [likely]).filter(
     Boolean,
@@ -254,9 +257,10 @@ function VoiceRow({
       variant="divided"
       leading={
         <ClipButton
-          label={`听这个声音（${loudest.filename}）`}
+          key={`${current.recording_id}/${current.speaker_id}`}
+          label={`听这个声音（${current.filename}）`}
           src={withBase(
-            `/api/library/recordings/${encodeURIComponent(loudest.recording_id)}/speakers/${encodeURIComponent(loudest.speaker_id)}/samples/0`,
+            `/api/library/recordings/${encodeURIComponent(current.recording_id)}/speakers/${encodeURIComponent(current.speaker_id)}/samples/0`,
           )}
         />
       }
@@ -267,14 +271,25 @@ function VoiceRow({
           {' · '}
           <TextLink
             size="sm"
-            to={recordingPath(loudest.recording_id)}
+            to={recordingPath(current.recording_id)}
             state={{
               teamTask: `voice-${voice.id}`,
-              speaker: loudest.speaker_id,
+              speaker: current.speaker_id,
             }}
           >
             打开录音
           </TextLink>
+          {voice.members.length > 1 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={`换一段录音听（现在是第 ${(heard % voice.members.length) + 1} 段，共 ${voice.members.length} 段）`}
+              onClick={() => setHeard((n) => n + 1)}
+            >
+              换一段 {(heard % voice.members.length) + 1}/{voice.members.length}
+            </Button>
+          )}
           {compared.map((person) => (
             <PersonClip key={person?.id} person={person} />
           ))}

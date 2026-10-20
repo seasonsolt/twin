@@ -448,10 +448,10 @@ def test_only_a_close_voice_is_suggested_and_only_a_very_close_one_is_the_defaul
     sample = voices(library, "样本.m4a", ([1.0, 0.0, 0.0], 60))
     decide(team, sample, "S1", "confirm", wang.id, sample=True)
 
-    # Short speakers (no automatic decision) at 0.5, 0.7 and 0.8 to 王宁's sample.
-    far = voices(library, "一.m4a", ([0.5, 0.866, 0.0], 10))
-    close = voices(library, "二.m4a", ([0.7, 0.714, 0.0], 10))
-    closer = voices(library, "三.m4a", ([0.8, 0.6, 0.0], 10))
+    # Speakers too short to decide automatically, long enough to be asked about alone: 0.5, 0.7, 0.8 to 王宁's sample.
+    far = voices(library, "一.m4a", ([0.5, 0.866, 0.0], 18))
+    close = voices(library, "二.m4a", ([0.7, 0.714, 0.0], 18))
+    closer = voices(library, "三.m4a", ([0.8, 0.6, 0.0], 18))
 
     def suggested(recording_id: str) -> list[tuple[str, bool]]:
         speaker = team.speakers(library.get(recording_id))[0]  # type: ignore[arg-type]
@@ -485,7 +485,7 @@ def test_one_meeting_gives_a_person_one_voice_sample_so_its_room_does_not_lean_t
 
     # In the next meeting of that room, 李明 (0.62 to his sample) sounds 0.75 like the second voice of the first
     # meeting, 0.40 like 张总 there: still suggested as 李明, not taken for whoever was settled most in the room.
-    second = voices(library, "周会二.m4a", ([0.0, 0.62, 0.45, 0.65], 10))
+    second = voices(library, "周会二.m4a", ([0.0, 0.62, 0.45, 0.65], 18))
     [voice] = team.voices({second})[0]
     assert [(c.name, c.score) for c in voice.candidates] == [("李明", 0.617)]
 
@@ -543,6 +543,65 @@ def test_a_voice_the_owner_could_not_name_comes_back_as_such(tmp_path: Path) -> 
     assert [(m.recording_id, m.speaker_id) for m in again.members] == [(second, "S1")] and again.stranger
     # The colleague may still recognise their own voice in either meeting.
     assert {(v.recording.id, v.speaker_id) for v in team.open_voices()} >= {(first, "S1"), (second, "S1")}
+
+
+def test_confirming_a_voice_never_leaves_more_questions_than_before(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    voices(library, "一.m4a", ([1.0, 0.0, 0.0, 0.0], 40))
+    voices(library, "二.m4a", ([0.8, 0.6, 0.0, 0.0], 30))
+    # Short voices of three other meetings: somewhat like the first speaker, unlike the second and each other.
+    short = [
+        voices(library, f"{n}.m4a", (vector, 5))
+        for n, vector in (
+            ("三", [0.65, -0.76, 0.0, 0.0]),
+            ("四", [0.65, 0.0, -0.76, 0.0]),
+            ("五", [0.65, 0.0, 0.0, -0.76]),
+        )
+    ]
+
+    def asked() -> int:
+        found, fragments = team.voices()
+        return len(found) + (1 if fragments else 0)
+
+    assert asked() == 2
+    [voice] = team.voices()[0]
+    zhang = team.add_person("张总")
+    team.decide_voice([(m.recording_id, m.transcript_id, m.speaker_id) for m in voice.members], "confirm", zhang.id)
+    # The short voices now sound like 张总, and still wait together, to be given to him in one click.
+    found, fragments = team.voices()
+    assert asked() == 1 and found == []
+    assert sorted(m.recording_id for f in fragments for m in f.members) == sorted(short)
+    assert all(f.candidates[0].person_id == zhang.id for f in fragments)
+    members = [(m.recording_id, m.transcript_id, m.speaker_id) for f in fragments for m in f.members]
+    team.decide_voice(members, "confirm", zhang.id, sample=False)
+    person = team.person(zhang.id)
+    assert asked() == 0 and person and (person.speakers, person.samples) == (5, 1)
+
+
+def test_a_voice_can_be_several_people_mixed_together(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    one = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 40))
+    [voice] = team.voices()[0]
+    team.decide_voice([(m.recording_id, m.transcript_id, m.speaker_id) for m in voice.members], "mixed")
+    assert team.voices() == ([], [])
+    [speaker] = team.speakers(library.get(one))  # type: ignore[arg-type]
+    assert speaker.decision == "mixed" and team.people() == []
+    # Not a voice the owner could not name: nothing like it is asked about as such.
+    voices(library, "二.m4a", ([1.0, 0.05, 0.0], 40))
+    [again] = team.voices()[0]
+    assert not again.stranger
+
+
+def test_voices_like_one_the_owner_could_not_name_wait_last(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    voices(library, "一.m4a", ([0.0, 1.0, 0.0], 40))
+    [voice] = team.voices()[0]
+    team.decide_voice([(m.recording_id, m.transcript_id, m.speaker_id) for m in voice.members], "unknown")
+    voices(library, "二.m4a", ([0.05, 1.0, 0.0], 50), ([1.0, 0.0, 0.0], 30))
+    assert [(v.seconds, v.stranger) for v in team.voices()[0]] == [(30, False), (50, True)]
 
 
 def name(library: Library, recording_id: str, *cues: tuple[str, str, bool]) -> None:

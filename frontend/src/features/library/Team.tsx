@@ -53,6 +53,11 @@ interface VoiceMember {
   seconds: number;
 }
 
+/** A fragment, with the person its voice sounds like, if anyone. */
+interface Fragment extends VoiceMember {
+  like?: { person_id: string; name: string } | null;
+}
+
 /** Undecided speakers of several recordings who sound like one person, longest first (``Team.voices``). */
 interface Voice {
   id: string;
@@ -81,7 +86,7 @@ interface Unsorted {
 interface Review {
   items: Waiting[];
   voices: Voice[];
-  fragments: VoiceMember[];
+  fragments: Fragment[];
   unsorted: Unsorted[];
   // How long people speak in these recordings, and how much of it is settled.
   heard?: { settled: number; total: number };
@@ -89,9 +94,10 @@ interface Review {
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */
 type VoiceDecision =
-  | { action: 'confirm'; person_id: string }
+  | { action: 'confirm'; person_id: string; sample?: false }
   | { action: 'confirm'; new_person: string }
-  | { action: 'unknown' };
+  | { action: 'unknown' }
+  | { action: 'mixed' };
 
 const minutes = (seconds: number) =>
   `${Math.max(0, Math.round(seconds / 60))} 分钟`;
@@ -165,7 +171,10 @@ function Unnamed({
               <TextLink
                 size="sm"
                 to={recordingPath(person.recording_id)}
-                state={{ teamTask: `person-${person.id}` }}
+                state={{
+                  teamTask: `person-${person.id}`,
+                  speaker: person.speaker_id,
+                }}
               >
                 打开录音
               </TextLink>
@@ -335,6 +344,7 @@ function VoiceRow({
         <Row
           as="form"
           gap={2}
+          wrap
           onSubmit={(event) => {
             event.preventDefault();
             if (match) onDecide({ action: 'confirm', person_id: match.id });
@@ -349,7 +359,7 @@ function VoiceRow({
             maxLength={40}
             value={name}
             suggestions={known.map((p) => p.name)}
-            className="min-w-0 flex-1 sm:w-56 sm:flex-none"
+            className="min-w-0 basis-full sm:w-56 sm:basis-auto"
             onChange={(event) => setName(event.target.value)}
           />
           <Button type="submit" size="sm" disabled={busy || (!typed && !sure)}>
@@ -395,6 +405,15 @@ function VoiceRow({
             onClick={() => onDecide({ action: 'unknown' })}
           >
             {voice.stranger ? '仍不认识' : '不认识'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => onDecide({ action: 'mixed' })}
+          >
+            几个人混在一起
           </Button>
         </Row>
       }
@@ -724,7 +743,7 @@ export function Team({
   const [people, setPeople] = useState<Person[] | null>(null);
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [fragments, setFragments] = useState<VoiceMember[]>([]);
+  const [fragments, setFragments] = useState<Fragment[]>([]);
   const [unsorted, setUnsorted] = useState<Unsorted[]>([]);
   const [heard, setHeard] = useState<Review['heard']>();
   const [name, setName] = useState('');
@@ -938,6 +957,22 @@ export function Team({
     (r) => r.status === 'ready' && r.proofread === 'waiting',
   );
   const fragmentRecordings = new Set(fragments.map((m) => m.recording_id)).size;
+  // Fragments by the person they sound like, most first: given to them in one click, without becoming voice samples.
+  const fragmentsLike = [
+    ...fragments
+      .reduce((found, m) => {
+        if (m.like) {
+          const group = found.get(m.like.person_id) ?? {
+            person: m.like,
+            members: [] as Fragment[],
+          };
+          group.members.push(m);
+          found.set(m.like.person_id, group);
+        }
+        return found;
+      }, new Map<string, { person: { person_id: string; name: string }; members: Fragment[] }>())
+      .values(),
+  ].sort((a, b) => b.members.length - a.members.length);
   // Whoever speaks longest first, a new person or a voice alike: settling them teaches a twin the most.
   const voiced = [
     ...unnamed.map((person) => ({
@@ -950,11 +985,16 @@ export function Team({
       id: `voice-${voice.id}`,
       seconds: voice.seconds,
       enough: Boolean(voice.enough),
+      stranger: Boolean(voice.stranger),
       voice,
     })),
   ].sort(
-    // Whoever a twin still lacks first, then the longest.
-    (a, b) => Number(a.enough) - Number(b.enough) || b.seconds - a.seconds,
+    // Whoever a twin still lacks first, then the longest; voices like one already marked 不认识 wait last.
+    (a, b) =>
+      Number('stranger' in a && a.stranger) -
+        Number('stranger' in b && b.stranger) ||
+      Number(a.enough) - Number(b.enough) ||
+      b.seconds - a.seconds,
   );
   const taskIds = [
     ...voiced.map((v) => v.id),
@@ -1096,12 +1136,33 @@ export function Team({
                       {fragmentRecordings} 段录音里有 {fragments.length}{' '}
                       段很短的声音，共{' '}
                       {span(fragments.reduce((sum, m) => sum + m.seconds, 0))}
-                      ，不像任何人
+                      {fragmentsLike.length === 0 && '，不像任何人'}
                     </Text>
                     <Text size="sm" tone="secondary">
                       多是插话或附和，放一边不影响分身
                     </Text>
-                    <Row gap={2}>
+                    <Row gap={2} wrap>
+                      {fragmentsLike.slice(0, 3).map(({ person, members }) => (
+                        <Button
+                          key={person.person_id}
+                          variant="secondary"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            void decideVoice(
+                              members,
+                              {
+                                action: 'confirm',
+                                person_id: person.person_id,
+                                sample: false,
+                              },
+                              'fragments',
+                            )
+                          }
+                        >
+                          {members.length} 段像{person.name}：都是{person.name}
+                        </Button>
+                      ))}
                       <Button
                         variant="secondary"
                         size="sm"

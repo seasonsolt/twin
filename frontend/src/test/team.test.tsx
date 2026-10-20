@@ -1151,3 +1151,122 @@ it('offers the name a meeting calls a voice, and asks about whoever a twin still
     ]),
   );
 });
+
+it('settles a voice of several people and gives short voices to whom they sound like, strangers last', async () => {
+  const posts: Record<string, unknown>[] = [];
+  const member = (
+    recording_id: string,
+    speaker_id: string,
+    seconds: number,
+  ) => ({
+    recording_id,
+    filename: `${recording_id}.m4a`,
+    transcript_id: `t-${recording_id}`,
+    speaker_id,
+    seconds,
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({
+          items: [],
+          voices: [
+            {
+              id: 'voice_stranger',
+              members: [member('rec_7', 'S1', 50)],
+              seconds: 50,
+              candidates: [],
+              near: false,
+              stranger: true,
+            },
+            {
+              id: 'voice_new',
+              members: [member('rec_8', 'S2', 30)],
+              seconds: 30,
+              candidates: [],
+              near: false,
+            },
+          ],
+          fragments: [
+            {
+              ...member('rec_8', 'S5', 6),
+              like: { person_id: 'per_1', name: '张总' },
+            },
+            {
+              ...member('rec_9', 'S4', 4),
+              like: { person_id: 'per_1', name: '张总' },
+            },
+            { ...member('rec_9', 'S6', 3), like: null },
+          ],
+          unsorted: [],
+        });
+      if (url === '/api/library/voices' && init?.method === 'POST') {
+        posts.push(JSON.parse(String(init.body)));
+        return json({});
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  // A voice like one the owner could not name waits behind a voice nobody has heard yet.
+  const titles = within(tasks)
+    .getAllByText(/^(没听过的声音|你标过不认识的声音)$/u)
+    .map((t) => t.textContent);
+  expect(titles).toEqual(['没听过的声音', '你标过不认识的声音']);
+  const [first] = within(tasks).getAllByRole('button', {
+    name: '几个人混在一起',
+  });
+  await userEvent.click(first);
+  await waitFor(() => expect(posts).toHaveLength(1));
+  expect(posts[0]).toMatchObject({
+    action: 'mixed',
+    members: [{ recording_id: 'rec_8', speaker_id: 'S2' }],
+  });
+  // Short voices like 张总 are given in one click, without taking them as 张总's voice samples.
+  await userEvent.click(
+    within(tasks).getByRole('button', { name: '2 段像张总：都是张总' }),
+  );
+  await waitFor(() => expect(posts).toHaveLength(2));
+  expect(posts[1]).toEqual({
+    action: 'confirm',
+    person_id: 'per_1',
+    sample: false,
+    members: [
+      { recording_id: 'rec_8', transcript_id: 't-rec_8', speaker_id: 'S5' },
+      { recording_id: 'rec_9', transcript_id: 't-rec_9', speaker_id: 'S4' },
+    ],
+  });
+});
+
+it('opens the speaker a team task points at, even one already given to someone automatically', async () => {
+  render(
+    <MemoryRouter
+      initialEntries={[
+        {
+          pathname: '/library/rec_1',
+          state: { teamTask: 'person-per_1', speaker: 'S3' },
+        },
+      ]}
+    >
+      <Routes>
+        <Route path="/library/:recordingId" element={<Recording />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  expect(
+    await screen.findByRole('heading', { name: 'S3 是谁？' }),
+  ).toBeInTheDocument();
+  expect(screen.getByText('现在算作张总，听一下是谁。')).toBeInTheDocument();
+  // Still counted as settled while it is heard again.
+  expect(screen.getByText('已确认 2 / 3 位')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '改 S3' })).toBeNull();
+});

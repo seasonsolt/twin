@@ -168,6 +168,7 @@ function SpeakerCard({
   segments,
   busy,
   remaining,
+  now,
   onDecide,
 }: {
   recordingId: string;
@@ -176,6 +177,8 @@ function SpeakerCard({
   segments: Detail['segments'];
   busy: boolean;
   remaining: number;
+  /** Whom the speaker is given to already, when a team task opens one settled automatically. */
+  now?: string;
   onDecide: (decision: Decision) => void;
 }) {
   const id = useId();
@@ -226,6 +229,11 @@ function SpeakerCard({
             还剩 {remaining} 位
           </Text>
         </Toolbar>
+        {now && (
+          <Text size="sm" tone="secondary">
+            现在算作{now}，听一下是谁。
+          </Text>
+        )}
         {speaker.disputed && (
           <Text size="sm" tone="warning">
             原来标成的人说这不是 TA，请重新听一下是谁。
@@ -523,9 +531,21 @@ export function Recording() {
     </Disclosure>
   );
   const undecided = detail?.speakers.filter((s) => s.decision === 'none') ?? [];
-  const decided = detail?.speakers.filter((s) => s.decision !== 'none') ?? [];
-  const current = undecided.find((s) => s.id === reopened) ?? undecided[0];
+  const settled = (detail?.speakers.length ?? 0) - undecided.length;
+  // A team task may point at a speaker already given to someone automatically (an unnamed voice): it is heard
+  // and settled here like any other, not left in the list below while another speaker's card asks instead.
+  const pointed = detail?.speakers.find(
+    (s) =>
+      s.id === reopened &&
+      (s.decision === 'none' ||
+        (Boolean(location.state?.teamTask) && s.decision === 'confirmed')),
+  );
+  const current = pointed ?? undecided[0];
   const remaining = undecided.filter((s) => s.id !== current?.id);
+  const decided =
+    detail?.speakers.filter(
+      (s) => s.decision !== 'none' && s.id !== current?.id,
+    ) ?? [];
   return (
     <Page
       stackHeaderOnMobile
@@ -556,13 +576,13 @@ export function Recording() {
         detail && (
           <Stack gap={2}>
             <Text size="sm" tone="secondary">
-              已确认 {decided.length} / {detail.speakers.length} 位
+              已确认 {settled} / {detail.speakers.length} 位
             </Text>
             <Meter
               label="说话人确认进度"
               size="sm"
               hideLabel
-              value={decided.length}
+              value={settled}
               max={detail.speakers.length}
             />
           </Stack>
@@ -654,7 +674,12 @@ export function Recording() {
               people={people}
               segments={detail.segments}
               busy={busy}
-              remaining={undecided.length}
+              remaining={remaining.length + 1}
+              now={
+                current.decision === 'confirmed'
+                  ? names.get(current.person_id ?? '')
+                  : undefined
+              }
               onDecide={(decision) => void decide(current, decision)}
             />
           ) : (

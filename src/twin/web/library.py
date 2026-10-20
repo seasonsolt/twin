@@ -131,10 +131,12 @@ class VoiceBody(BaseModel):
     """Who a voice heard across recordings is (``Team.decide_voice``): the speakers as the page grouped them."""
 
     members: list[VoiceMemberRef] = Field(min_length=1, max_length=2000)
-    action: Literal["confirm", "unknown"]
+    action: Literal["confirm", "unknown", "mixed"]
     person_id: str | None = None
     # Confirm as a new person of this name instead of ``person_id``.
     new_person: str | None = Field(default=None, max_length=40)
+    # Keep the longest speakers as the person's voice samples; off for fragments, too short to recognise anyone by.
+    sample: bool = True
 
 
 class Libraries:
@@ -677,7 +679,7 @@ class Libraries:
                 raise HTTPException(409, str(e)) from None
         members = [(m.recording_id, m.transcript_id, m.speaker_id) for m in body.members]
         try:
-            team.decide_voice(members, body.action, person_id)
+            team.decide_voice(members, body.action, person_id, sample=body.sample)
         except Stale:
             if body.action == "confirm" and body.new_person and person_id:
                 team.delete_person(person_id)  # Made for this decision only.
@@ -1029,7 +1031,17 @@ def register(
             "heard": {"settled": settled, "total": total},
             "items": [entry for entry in team.review(editable) if entry["disputed"]],
             "voices": [voice.model_dump() for voice in voices],
-            "fragments": [member.model_dump() for voice in fragments for member in voice.members],
+            # Each with whom its voice sounds like, so fragments like one person are given to them in one click.
+            "fragments": [
+                {
+                    **member.model_dump(),
+                    "like": {"person_id": voice.candidates[0].person_id, "name": voice.candidates[0].name}
+                    if voice.candidates
+                    else None,
+                }
+                for voice in fragments
+                for member in voice.members
+            ],
             "unsorted": [
                 {"recording_id": r.id, "filename": r.filename, "speakers": n, "total": r.speakers}
                 for r, n in team.unvoiced(editable)

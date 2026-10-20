@@ -917,6 +917,7 @@ const handlers: Record<string, Handler> = {
         transcript_id: weekly.transcript_id,
         speaker_id: 'S4',
         seconds: 6,
+        like: null,
       },
     ],
     unsorted: [],

@@ -66,7 +66,9 @@ UNNAMED = "未命名"
 # group is confirmed as a whole, and a wrong one would give someone else's words to a twin. Matching a centroid
 # instead let similar colleagues chain into one voice on the pilot library (27 meetings, four people).
 GROUP = 0.6
-# A voice heard this little in all, and like nobody, is a fragment: offered together with the others, to set aside.
+# A voice heard this little in all is a fragment: offered together with the others, to set aside or to give in one
+# click to the person it sounds like. Like someone or not: when a fragment that came to sound like the person just
+# confirmed was asked about on its own, confirming one voice could leave more questions than before.
 FRAGMENT_SECONDS = 15.0
 # A voice settled as someone gives them up to this many voice samples, from different recordings: one sample of a
 # person heard through varying rooms and microphones recognised none of the waiting speakers on the pilot library,
@@ -684,7 +686,7 @@ class Team:
         least ``GROUP`` alike, never one already speaking in its recording unless as alike as a split half
         (``SPLIT``: diarization told them apart there otherwise), one whose speakers sound most like someone else
         than it does, or one sounding like someone already confirmed in its recording. Fragments are
-        voices heard less than ``FRAGMENT_SECONDS`` and like nobody, which the owner can only set aside. Speakers
+        voices heard less than ``FRAGMENT_SECONDS`` that nobody in the meeting calls by name, settled together. Speakers
         someone disputed wait apart (``review``); those without a voiceprint wait in their recording.
         ``recordings``: only these."""
         with self.library.read() as db:
@@ -791,9 +793,10 @@ class Team:
                 had=round(had.get(lead.person_id, 0.0), 1) if lead else 0,
                 enough=lead is not None and had.get(lead.person_id, 0.0) >= ENOUGH_SECONDS,
             )
-            (fragments if voice.seconds < FRAGMENT_SECONDS and not candidates and not called else voices).append(voice)
-        # Whoever a twin still lacks first, then the longest.
-        voices.sort(key=lambda v: (v.enough, -v.seconds, v.id))
+            (fragments if voice.seconds < FRAGMENT_SECONDS and not called else voices).append(voice)
+        # Whoever a twin still lacks first, then the longest; voices like one the owner already said they do not
+        # know wait last, the least likely to teach a twin anything.
+        voices.sort(key=lambda v: (v.stranger, v.enough, -v.seconds, v.id))
         return voices, fragments
 
     def unvoiced(self, recordings: set[str] | None = None) -> list[tuple[Recording, int]]:
@@ -848,12 +851,15 @@ class Team:
     def decide_voice(
         self,
         members: list[tuple[str, str, str]],
-        action: Literal["confirm", "unknown"],
+        action: Literal["confirm", "unknown", "mixed"],
         person_id: str | None = None,
+        *,
+        sample: bool = True,
     ) -> None:
         """Settle every (recording, transcript, speaker) of a voice at once: as ``person_id``, keeping up to
         ``VOICE_SAMPLES`` of them from different recordings (the longest, then others at least
-        ``SAMPLE_MIN_SECONDS``) as their voice samples so other recordings are recognised, or as nobody known.
+        ``SAMPLE_MIN_SECONDS``) as their voice samples so other recordings are recognised, as nobody known, or as
+        several people mixed together. ``sample=False`` keeps none (fragments, too short to recognise anyone by).
         ``Stale`` when any of them has another transcript now or was decided meanwhile (the page shows an old
         grouping); ``ValueError`` for an unknown speaker or person."""
         if action == "confirm" and not person_id:
@@ -869,7 +875,7 @@ class Team:
         if not heard:
             raise ValueError("没有要确认的声音")
         owner = person_id if action == "confirm" else None
-        decision: Decision = "confirmed" if action == "confirm" else "unknown"
+        decision: Decision = "confirmed" if action == "confirm" else action
         with self.library.transaction() as db:
             if owner and not db.execute("SELECT 1 FROM people WHERE id = ?", (owner,)).fetchone():
                 raise ValueError("找不到这个人")
@@ -897,7 +903,7 @@ class Team:
                 )
             }
             for recording_id, transcript_id, speaker in sorted(heard, key=lambda h: -h[2].seconds):
-                if not owner or len(sampled) >= VOICE_SAMPLES:
+                if not owner or not sample or len(sampled) >= VOICE_SAMPLES:
                     break
                 if not speaker.embedding or recording_id in sampled or recording_id in given:
                     continue

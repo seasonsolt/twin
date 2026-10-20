@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from test_team import recording, until
 from test_web_auth import FakeLogin
 
-from twin.config import ASRSettings, AuthSettings, Settings, SSOSettings
+from twin.config import ASRSettings, AuthSettings, LibrarySettings, Settings, SSOSettings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import CommandTranscriber, Segment, Speaker
@@ -78,6 +78,8 @@ def sso_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestCli
     settings = Settings(
         db_path=tmp_path / "twin.db",
         asr=ASRSettings(provider="command", command="unused"),
+        # Uploads are admitted whatever the machine running the tests has free.
+        library=LibrarySettings(headroom_gb=0),
         auth=AuthSettings(
             enabled=True,
             provider="sso",

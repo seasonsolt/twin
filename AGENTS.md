@@ -47,6 +47,7 @@
 - **只用 `src/components/ui` 的组件**拼页面：骨架 `Page`/`Section`，布局 `Stack`/`Row`/`Toolbar`/`Grid`（间距只取 gap 档位），文字 `Heading`/`Text`/`TextLink`，容器 `Card`/`ListRow`/`Notice`，控件 `Button`/`Input`/`Select`/`Checkbox`/`Radio`/`FileDrop` 等。外观用组件参数（`tone`、`size`、`variant`、`gap`）表达，className 只放布局。
 - **缺组件时先在 `components/ui` 里加**（语义参数、不开放外观 className），在 `pages/GalleryPageKit.tsx`（`#/gallery`）里展示，再在页面里用。
 - **不写任意样式**：页面和功能代码里不手写 `button/input/select/textarea`，不写 `style`、任意值 `xx-[..]`、十六进制颜色、字号类、圆角类，也不能用 `eslint-disable`。`pnpm -C frontend lint` 会报错并说明该用哪个组件；豁免目录和原因写在 `frontend/eslint.config.js`。尺度（字号、圆角、间距、颜色）在 `design/tokens.css` 的 `@theme` 里锁定，超出档位的类不会生成。
+- **手机端暂不单独设计**：现阶段界面只按桌面端设计和验收，不为手机端单独做展示、布局或跳转上的设计调整。手机端截图基线随改动一起更新，只确认没有坏掉（内容溢出、控件不可用）。
 - **改界面后跑截图对比** `./scripts/screenshots.sh`（需要 Docker；`check.py --full` 和 CI 也会跑）。失败时差异图在 `frontend/e2e/.results/`。只有**有意**改变外观时才更新基线：`./scripts/screenshots.sh --update-snapshots`，逐张看过新图、确认只变了想变的地方，再和代码一起提交。页面新请求了接口时，在 `frontend/e2e/mockApi.ts` 补上固定数据。
 
 ## 开发约定

@@ -361,6 +361,54 @@ it('edits a person name and gender and opens the profile of their twin', async (
   expect(switched).toEqual(['p-1']);
 });
 
+it('stays where the owner is working after settling a voice, instead of jumping to the top', async () => {
+  people = ['1', '2', '3'].map((n) =>
+    person({ id: `p${n}`, name: `未命名 ${n}`, auto: true }),
+  );
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      if (init?.method === 'PATCH') {
+        const id = url.split('/').at(-1);
+        people = people.map((p) =>
+          p.id === id
+            ? { ...p, auto: false, name: JSON.parse(String(init.body)).name }
+            : p,
+        );
+        return json({ renamed: true });
+      }
+      throw new Error(url);
+    }),
+  );
+  // jsdom lays nothing out: each row sits a hundred pixels below the one before it.
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+    function (this: HTMLElement) {
+      const rows = Array.from(document.querySelectorAll('li'));
+      return { top: rows.indexOf(this as HTMLLIElement) * 100 } as DOMRect;
+    },
+  );
+  const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo']}>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await userEvent.type(
+    await screen.findByLabelText('未命名 2是谁'),
+    '张总{Enter}',
+  );
+  // The next voice slid into the settled one's place; the first one, above, keeps its place too.
+  await waitFor(() =>
+    expect(screen.getByLabelText('未命名 3是谁')).toHaveFocus(),
+  );
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+});
+
 it('moves focus to the next voice after naming one, then hides the empty queue', async () => {
   people = [
     person({ id: 'first', name: '未命名 1', auto: true }),

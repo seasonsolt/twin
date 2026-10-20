@@ -1057,9 +1057,19 @@ export function Team({
   // A twin's memory takes minutes to rebuild: every few seconds would only load the server, many pages at once.
   usePolling(load, updating ? 15000 : 0);
 
+  // Where on screen the row being settled was: the next task, sliding into its place, is taken up there.
+  const settledAt = useRef<number | null>(null);
   const act = async (work: () => Promise<unknown>, task?: string) => {
     setBusy(true);
     setError('');
+    const row =
+      task && document.activeElement instanceof HTMLElement
+        ? document.activeElement.closest('li')
+        : null;
+    settledAt.current =
+      row && taskList.current?.contains(row)
+        ? row.getBoundingClientRect().top
+        : null;
     try {
       await work();
       if (task) setFocusPending(task);
@@ -1327,11 +1337,25 @@ export function Team({
   useEffect(() => {
     if (!focusPending || !people || busy) return;
     if (taskOrder.split('|').includes(focusPending)) return;
-    // The next voice's name field before any button, so naming several is type, Enter, type, Enter.
-    const next =
-      taskList.current?.querySelector<HTMLElement>('input:not(:disabled)') ??
-      taskList.current?.querySelector<HTMLElement>('a, button:not(:disabled)');
-    next?.focus();
+    // The next voice's name field before any button, so naming several is type, Enter, type, Enter: the one now
+    // where the settled row was, so the page stays where the owner is working instead of jumping to the top.
+    const top = settledAt.current;
+    const at = (selector: string) => {
+      const found = Array.from(
+        taskList.current?.querySelectorAll<HTMLElement>(selector) ?? [],
+      );
+      return (
+        (top === null
+          ? undefined
+          : found.find(
+              (el) =>
+                (el.closest('li') ?? el).getBoundingClientRect().top >= top - 1,
+            )) ?? found[0]
+      );
+    };
+    const next = at('input:not(:disabled)') ?? at('a, button:not(:disabled)');
+    next?.focus({ preventScroll: true });
+    settledAt.current = null;
     setFocusPending(null);
     if (location.state?.resolvedTeamTask)
       void navigate(`${location.pathname}${location.search}`, {

@@ -250,8 +250,8 @@ def test_voice_window_merging_overlap_length_and_samples(tmp_path: Path) -> None
     assert len(windows) == 3 and windows[0][1] - windows[0][0] == pytest.approx(20)
     assert all(8 - 1e-9 <= end - start <= 20 + 1e-9 for start, end in windows)
     assert all(not (start < 12 and end > 10) for start, end in windows)
-    assert len(sample_windows(analysis, "S1")) == 3
-    assert all(end - start == 10 for start, end in sample_windows(analysis, "S1"))
+    # One moment from each of the three longest runs, not three from the longest: different moments of the meeting.
+    assert sample_windows(analysis, "S1") == [(20, 30), (0, 10), (60, 68)]
     audio = tmp_path / "short.wav"
     audio.write_bytes(tone(4))
     assert voice_windows(analysis, audio) == []
@@ -426,10 +426,13 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert row["status"] == "needs_speaker" and row["n_target"] == 0
         # The extracted audio is gone once transcribed; the listening samples were cut before it went.
         folder = tmp_path / "media-sources" / row["media_sha"]
-        assert not (folder / "audio.wav").exists() and len(list(folder.glob("sample-*.wav"))) >= 3
+        assert not (folder / "audio.wav").exists() and sorted(p.name for p in folder.glob("sample-*.wav")) == [
+            "sample-0-10000.wav",  # Each speaker's one run of twelve seconds gives one moment.
+            "sample-12000-22000.wav",
+        ]
         initial = client.get(base + "/speakers").json()
         assert not initial["confirmed"] and len(initial["speakers"]) == 2
-        assert len(initial["speakers"][0]["samples"]) == 3
+        assert len(initial["speakers"][0]["samples"]) == 1  # one run of twelve seconds: one moment
         assert [s["quote"] for s in initial["speakers"]] == ["我喜欢读书。", "我喜欢散步。"]
         sample = initial["speakers"][0]["samples"][0]
         assert client.get(sample + "&persona=default").headers["content-type"] == "audio/wav"

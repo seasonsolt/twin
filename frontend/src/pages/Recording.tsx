@@ -148,21 +148,18 @@ export function sampleWindows(segments: Detail['segments'], speakerId: string) {
         )
         .filter(([start, end]) => end > start);
   }
-  const windows: [number, number][] = [];
-  for (const [start, end] of runs.sort((a, b) => b[1] - b[0] - (a[1] - a[0]))) {
-    const count = end - start >= SAMPLE_SECONDS ? 3 : 1;
-    for (let i = 0; i < count; i += 1) {
-      const offset =
-        end - start > SAMPLE_SECONDS
-          ? ((end - start - SAMPLE_SECONDS) * i) / Math.max(count - 1, 1)
-          : 0;
+  // The start of each of the three longest runs, so the moments differ; whole further windows of them if fewer.
+  const longest = runs.sort((a, b) => b[1] - b[0] - (a[1] - a[0])).slice(0, 3);
+  const windows: [number, number][] = longest.map(([start, end]) => [
+    start,
+    Math.min(start + SAMPLE_SECONDS, end),
+  ]);
+  for (const [start, end] of longest)
+    for (let i = 1; i < Math.floor((end - start) / SAMPLE_SECONDS); i += 1)
       windows.push([
-        start + offset,
-        Math.min(start + offset + SAMPLE_SECONDS, end),
+        start + i * SAMPLE_SECONDS,
+        start + (i + 1) * SAMPLE_SECONDS,
       ]);
-    }
-    if (windows.length >= 3) break;
-  }
   return windows.slice(0, 3);
 }
 

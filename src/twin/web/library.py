@@ -774,7 +774,9 @@ class Libraries:
         if not 0 <= index < len(windows):
             raise HTTPException(404, "没有这段试听")
         cache = library.root / "media-cache" / recording.id
-        target = cache / f"{transcript.id}-{speaker_id}-{index}.wav"
+        # Named by its times, not its place in the list: choosing the moments differently never plays an old cut.
+        start, end = windows[index]
+        target = cache / f"{transcript.id}-{speaker_id}-{round(start * 1000)}-{round(end * 1000)}.wav"
         if not target.is_file():
             cache.mkdir(parents=True, mode=0o700, exist_ok=True)
             # ffmpeg picks the format from the suffix; a name of its own keeps two plays from sharing one file.

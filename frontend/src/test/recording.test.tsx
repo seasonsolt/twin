@@ -220,6 +220,24 @@ it('derives the existing ten-second windows after merging speech and removing ov
     [0, 10],
     [10, 20],
     [20, 30],
+  ]); // Three moments of one run a few seconds over ten would be nearly the same sound: the longest runs give one each.
+  expect(
+    sampleWindows([{ start: 0, end: 14.1, speaker: 'S1', text: '' }], 'S1'),
+  ).toEqual([[0, 10]]);
+  expect(
+    sampleWindows(
+      [
+        { start: 0, end: 14.1, speaker: 'S1', text: '' },
+        { start: 20, end: 33.6, speaker: 'S1', text: '' },
+        { start: 40, end: 51.5, speaker: 'S1', text: '' },
+        { start: 60, end: 69.6, speaker: 'S1', text: '' },
+      ],
+      'S1',
+    ),
+  ).toEqual([
+    [0, 10],
+    [20, 30],
+    [40, 50],
   ]);
 });
 

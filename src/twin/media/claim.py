@@ -291,16 +291,15 @@ SAMPLE_SECONDS = 10.0
 
 
 def sample_windows(analysis: Analysis, speaker: str) -> list[tuple[float, float]]:
-    """Up to three moments to hear the speaker at, each at most ``SAMPLE_SECONDS`` long, from their longest runs."""
+    """Up to three moments to hear the speaker at, each at most ``SAMPLE_SECONDS`` long and none overlapping another:
+    the start of each of their three longest runs, so they are different moments of the meeting and a speaker who is
+    really several people sounds like it. With fewer runs, whole further windows of the longest runs make up three.
+    Three windows taken from one run of a few more than ten seconds would be nearly the same sound."""
     runs = sorted(intervals(analysis, speaker), key=lambda p: p[1] - p[0], reverse=True)
-    windows = []
-    for start, end in runs:
-        count = 3 if end - start >= SAMPLE_SECONDS else 1
-        for i in range(count):
-            offset = (end - start - SAMPLE_SECONDS) * i / max(count - 1, 1) if end - start > SAMPLE_SECONDS else 0
-            windows.append((start + offset, min(start + offset + SAMPLE_SECONDS, end)))
-        if len(windows) >= 3:
-            break
+    windows = [(start, min(start + SAMPLE_SECONDS, end)) for start, end in runs[:3]]
+    for start, end in runs[:3]:
+        for i in range(1, int((end - start) // SAMPLE_SECONDS)):
+            windows.append((start + i * SAMPLE_SECONDS, start + (i + 1) * SAMPLE_SECONDS))
     return windows[:3]
 
 

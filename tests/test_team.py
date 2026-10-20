@@ -462,6 +462,31 @@ def test_only_a_close_voice_is_suggested_and_only_a_very_close_one_is_the_defaul
     assert [(v.candidates[0].name, v.candidates[0].sure) for v in team.voices({close})[0]] == [("王宁", False)]
 
 
+def test_a_settled_voice_gives_its_person_samples_from_several_recordings(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+
+    def angle(degrees: float) -> list[float]:
+        return [math.cos(math.radians(degrees)), math.sin(math.radians(degrees)), 0.0]
+
+    # One colleague through four rooms and microphones, and later in a fifth sounding like the second room only.
+    heard = [
+        voices(library, f"{n}.m4a", (angle(a), seconds))
+        for n, a, seconds in ((1, 0, 300), (2, 30, 200), (3, 35, 100), (4, 10, 30))
+    ]
+    later = voices(library, "5.m4a", (angle(60), 40))
+    [voice] = [v for v in team.voices()[0] if len(v.members) > 1]
+    assert [m.recording_id for m in voice.members] == heard
+    wang = team.add_person("王宁")
+    team.decide_voice([(m.recording_id, m.transcript_id, m.speaker_id) for m in voice.members], "confirm", wang.id)
+    # The three longest from different recordings, not the short fourth.
+    person = team.person(wang.id)
+    assert person and (person.speakers, person.samples) == (4, 3)
+    # 0.5 alike to the longest, 0.87 to the second: recognised by the second sample alone.
+    assert team.classify_all() == 1
+    assert next(s for s in team.speakers(library.get(later)) if s.id == "S1").person_id == wang.id  # type: ignore[arg-type]
+
+
 def test_a_voice_never_chains_colleagues_who_sound_alike(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     team = Team(library)
@@ -866,6 +891,7 @@ def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Pat
     assert post.status_code == 200
     [zhang] = [p for p in web.get("/api/library/people").json()["items"] if p["name"] == "张总"]
     assert (zhang["id"], zhang["speakers"], zhang["samples"]) == (post.json()["person_id"], 2, 1)
+    assert post.json()["recognised"] == 0  # Nobody else to recognise by the new sample.
     # The same grouping again is out of date, and the person made for it is not left behind.
     again = web.post(
         "/api/library/voices", json={"members": members, "action": "confirm", "new_person": "李总"}, headers=HEADERS

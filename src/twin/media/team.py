@@ -67,6 +67,11 @@ UNNAMED = "未命名"
 GROUP = 0.6
 # A voice heard this little in all, and like nobody, is a fragment: offered together with the others, to set aside.
 FRAGMENT_SECONDS = 15.0
+# A voice settled as someone gives them up to this many voice samples, from different recordings: one sample of a
+# person heard through varying rooms and microphones recognised none of the waiting speakers on the pilot library,
+# a few per person recognised a fifth of the speech, all of it right. Besides the longest, only speakers this long.
+VOICE_SAMPLES = 3
+SAMPLE_MIN_SECONDS = 60.0
 # Twin sources made from the library; the rest of the id names the recording and the person's own segments.
 SOURCE_PREFIX = "src_lib_"
 
@@ -510,19 +515,19 @@ class Team:
                 db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             self._forget(db, person_id)
 
-    def classify(self, recording_id: str) -> bool:
+    def classify(self, recording_id: str) -> int:
         """Decide the recording's untouched speakers where the voice leaves no doubt: very close to one person's
         samples (``AUTO``), or, for a long voice matching nobody, a new unnamed person kept by that voice. Returns
-        whether anything was decided. A speaker the owner has acted on is never classified, and a match adds no
+        how many speakers were decided. A speaker the owner has acted on is never classified, and a match adds no
         voice sample, so mistakes do not spread."""
         recording = self.library.get(recording_id)
         if recording is None or recording.status != "ready" or recording.transcript_id is None:
-            return False
+            return 0
         speakers = self.library.speakers(recording) or ()
         with self.library.transaction() as db:
             current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
             if current is None or current[0] != recording.transcript_id:
-                return False
+                return 0
             touched = {
                 row[0]
                 for row in db.execute(
@@ -532,6 +537,7 @@ class Team:
             }
             prints = self._prints(db)
             decided: set[str] = set()
+            count = 0
             # Longest first: their voiceprints are the steadiest, and a new person is made from the clearest voice.
             for speaker in sorted(speakers, key=lambda s: -s.seconds):
                 if speaker.id in touched or not speaker.embedding:
@@ -566,18 +572,17 @@ class Team:
                     (recording_id, recording.transcript_id, speaker.id, person_id, _now()),
                 )
                 decided.add(person_id)
+                count += 1
             if not decided:
-                return False
+                return 0
             self._reopen(db, recording_id, decided)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
-            return True
+            return count
 
-    def classify_all(self) -> bool:
-        """``classify`` every transcribed recording, as after someone's voice samples changed."""
-        changed = False
-        for recording in self.library.list():
-            changed = self.classify(recording.id) or changed
-        return changed
+    def classify_all(self) -> int:
+        """``classify`` every transcribed recording, as after someone's voice samples changed; how many speakers
+        were decided."""
+        return sum(self.classify(recording.id) for recording in self.library.list())
 
     @staticmethod
     def _unnamed(db: sqlite3.Connection) -> str:
@@ -776,10 +781,11 @@ class Team:
         action: Literal["confirm", "unknown"],
         person_id: str | None = None,
     ) -> None:
-        """Settle every (recording, transcript, speaker) of a voice at once: as ``person_id``, keeping the longest
-        one as their voice sample so later recordings are recognised, or as nobody known. ``Stale`` when any of
-        them has another transcript now or was decided meanwhile (the page shows an old grouping); ``ValueError``
-        for an unknown speaker or person."""
+        """Settle every (recording, transcript, speaker) of a voice at once: as ``person_id``, keeping up to
+        ``VOICE_SAMPLES`` of them from different recordings (the longest, then others at least
+        ``SAMPLE_MIN_SECONDS``) as their voice samples so other recordings are recognised, or as nobody known.
+        ``Stale`` when any of them has another transcript now or was decided meanwhile (the page shows an old
+        grouping); ``ValueError`` for an unknown speaker or person."""
         if action == "confirm" and not person_id:
             raise ValueError("需要指定是谁")
         heard: list[tuple[str, str, Speaker]] = []
@@ -812,12 +818,19 @@ class Team:
                     "person_id, rejected, updated_at, auto) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
                     (recording_id, transcript_id, speaker.id, decision, owner, json.dumps(rejected), _now()),
                 )
-            longest = max(heard, key=lambda h: h[2].seconds)
-            if owner and longest[2].embedding:
+            sampled: set[str] = set()
+            for recording_id, transcript_id, speaker in sorted(heard, key=lambda h: -h[2].seconds):
+                if not owner or len(sampled) >= VOICE_SAMPLES:
+                    break
+                if not speaker.embedding or recording_id in sampled:
+                    continue
+                if sampled and speaker.seconds < SAMPLE_MIN_SECONDS:
+                    break
+                sampled.add(recording_id)
                 db.execute(
                     "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
                     "active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-                    (owner, longest[0], longest[1], longest[2].id, json.dumps(longest[2].embedding), _now()),
+                    (owner, recording_id, transcript_id, speaker.id, json.dumps(speaker.embedding), _now()),
                 )
             for recording_id in sorted({h[0] for h in heard}):
                 if owner:

@@ -630,12 +630,11 @@ class Libraries:
             raise HTTPException(409, "这些录音刚被修改过，请刷新后再确认") from None
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
-        if body.action == "confirm":
-            # The new voice sample can settle speakers in every other recording.
-            team.classify_all()
+        # The new voice samples can settle speakers in every other recording: the owner hears how many.
+        recognised = team.classify_all() if body.action == "confirm" else 0
         self.changed(owner)
         self.proofread(owner)
-        return {"person_id": person_id}
+        return {"person_id": person_id, "recognised": recognised}
 
     def update(self, owner: str, person_id: str, body: PersonPatch) -> dict[str, Any]:
         team = self.team(owner)

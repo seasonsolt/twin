@@ -16,6 +16,7 @@ import {
   Button,
   Card,
   ClipButton,
+  toast,
   Dialog,
   Field,
   Grid,
@@ -826,9 +827,10 @@ export function Team({
     decision: VoiceDecision,
     task: string,
   ) =>
-    act(
-      () =>
-        api('/api/library/voices', {
+    act(async () => {
+      const { recognised } = await api<{ recognised?: number }>(
+        '/api/library/voices',
+        {
           method: 'POST',
           json: {
             members: members.map(
@@ -840,9 +842,12 @@ export function Team({
             ),
             ...decision,
           },
-        }),
-      task,
-    );
+        },
+      );
+      // What the new voice samples settled elsewhere: an answer that saves the next questions.
+      if (recognised)
+        toast(`又按声音认出了 ${recognised} 位说话人，不用再问`, 'success');
+    }, task);
   const open = async (personaId: string, page: '/chat' | '/profile') => {
     await switchTo(personaId);
     void navigate(page);

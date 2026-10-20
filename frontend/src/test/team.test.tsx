@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider } from '../components/ui';
+import { ConfirmProvider, ToastViewport } from '../components/ui';
 import { Team } from '../features/library/Team';
 import { Recording, type Person, type Speaker } from '../pages/Recording';
 import type { Recording as LibraryRecording } from '../pages/Library';
@@ -801,7 +801,10 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
         posts.push(body);
         if (body.action === 'confirm') voices = [];
         else fragments = [];
-        return json({ person_id: 'per_1' });
+        return json({
+          person_id: 'per_1',
+          recognised: body.action === 'confirm' ? 3 : 0,
+        });
       }
       if (url === '/api/personas') return json([]);
       throw new Error(url);
@@ -811,6 +814,7 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     <MemoryRouter>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
+        <ToastViewport />
       </ConfirmProvider>
     </MemoryRouter>,
   );
@@ -833,6 +837,10 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     ]),
   );
   await waitFor(() => expect(screen.queryByText('可能是张总')).toBeNull());
+  // The new voice samples recognised 张总 elsewhere: the owner hears it saved them questions.
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    '又按声音认出了 3 位说话人，不用再问',
+  );
   const scraps = screen.getByText('零碎的声音').closest('li')!;
   expect(scraps).toHaveTextContent('2 段录音里有 2 段很短的声音，共 7 秒');
   await user.click(within(scraps).getByRole('button', { name: '都放一边' }));

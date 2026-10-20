@@ -498,8 +498,14 @@ def test_audio_decodes_again_from_the_original(tmp_path: Path) -> None:
         assert wav == tmp_path / "audio.wav"
 
 
-def test_failed_originals_expire_but_recent_and_ready_ones_stay(tmp_path: Path) -> None:
+def test_failed_originals_expire_but_recent_and_ready_ones_stay(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from twin.config import LibrarySettings
     from twin.media.library import Library
+
+    # Nothing is deleted unless an administrator asks for it: a failure may be the transcription service being down.
+    assert LibrarySettings().failed_keep_days == 0
 
     library = Library(tmp_path)
     ids = []
@@ -516,7 +522,9 @@ def test_failed_originals_expire_but_recent_and_ready_ones_stay(tmp_path: Path) 
         db.execute("UPDATE recordings SET updated_at = ?, status = 'ready' WHERE id = ?", (long_ago, ready))
     library.update(recent, status="failed", error="y")
     assert library.expire_failed(0) == 0
-    assert library.expire_failed(30) == 1
+    with caplog.at_level("WARNING", logger="twin.media.library"):
+        assert library.expire_failed(30) == 1
+    assert [r.getMessage() for r in caplog.records if old in r.getMessage() and "0.wav" in r.getMessage()]
     assert library._original(old) is None and library._original(recent) and library._original(ready)
     assert "30 天" in (library.get(old) or library.list()[0]).error
     assert library.retry(old) is None and library.retry(recent) is not None
@@ -527,7 +535,8 @@ def test_start_up_drops_kept_audio_and_abandoned_uploads(tmp_path: Path) -> None
     settings = Settings(db_path=tmp_path / "twin.db")
     folder = tmp_path / "media-sources" / ("a" * 64)
     folder.mkdir(parents=True)
-    for name in ("original.wav", "audio.wav", "audio.flac", ".audio-1.wav", "analysis.json"):
+    legacy_sample = "b" * 32 + "-sample-0-1.wav"
+    for name in ("original.wav", "audio.wav", "audio.flac", ".audio-1.wav", "analysis.json", legacy_sample):
         (folder / name).write_bytes(b"x")
     uploads = Uploads(tmp_path)
     abandoned = uploads.create(UploadBody(filename="a.mp4", size=5))["id"]

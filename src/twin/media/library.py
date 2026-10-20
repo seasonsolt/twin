@@ -383,7 +383,8 @@ class Library:
 
     def expire_failed(self, days: int) -> int:
         """Delete the original of every recording that has been failed for ``days`` days (0: never), which a retry
-        would need; the recording stays, saying why it cannot be retried. Returns how many originals went."""
+        would need; the recording stays, saying why it cannot be retried, and each deletion is logged. Only an
+        administrator's ``[library] failed_keep_days`` turns this on. Returns how many originals went."""
         if days <= 0:
             return 0
         cutoff = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).isoformat()
@@ -395,6 +396,14 @@ class Library:
                 original = self._original(recording.id)
                 if original is None:
                     continue
+                logger.warning(
+                    "deleting the original of %s (%s, %d bytes), failed since %s: %s",
+                    recording.id,
+                    recording.filename,
+                    recording.size,
+                    recording.updated_at,
+                    recording.error,
+                )
                 original.unlink(missing_ok=True)
                 self.update(recording.id, error=f"转写失败后超过 {days} 天，原始文件已清理，请重新上传")
                 removed += 1

@@ -317,24 +317,36 @@ def decode(original: Path, audio: Path) -> None:
     )
 
 
+_SOUND_LOCKS: dict[str, threading.RLock] = {}
+_SOUND_LOCKS_GUARD = threading.Lock()
+
+
+def sound_lock(folder: Path) -> threading.RLock:
+    """One lock per source folder, held while its sound is read or its ``audio.wav`` removed: a slow decode of one
+    recording holds up only that recording, and two requests never decode the same original at once."""
+    with _SOUND_LOCKS_GUARD:
+        return _SOUND_LOCKS.setdefault(str(folder), threading.RLock())
+
+
 @contextmanager
 def readable_wav(folder: Path) -> Iterator[Path]:
     """A source's sound as wav: ``audio.wav`` while its transcription is under way, else decoded again from the
     original into a temporary file that is deleted afterwards. The same original always decodes to the same
-    samples, so nothing derived from it needs to be kept."""
-    wav = folder / "audio.wav"
-    if wav.is_file():
-        yield wav
-        return
-    original = next(folder.glob("original.*"), None)
-    if original is None:
-        raise FileNotFoundError("原始文件已不在")
-    temporary = folder / f".audio-{uuid.uuid4().hex}.wav"
-    try:
-        decode(original, temporary)
-        yield temporary
-    finally:
-        temporary.unlink(missing_ok=True)
+    samples, so nothing derived from it needs to be kept. Holds the folder's ``sound_lock`` throughout."""
+    with sound_lock(folder):
+        wav = folder / "audio.wav"
+        if wav.is_file():
+            yield wav
+            return
+        original = next(folder.glob("original.*"), None)
+        if original is None:
+            raise FileNotFoundError("原始文件已不在")
+        temporary = folder / f".audio-{uuid.uuid4().hex}.wav"
+        try:
+            decode(original, temporary)
+            yield temporary
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def timestamp(seconds: float) -> str:

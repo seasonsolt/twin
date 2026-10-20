@@ -24,7 +24,15 @@ from starlette.concurrency import run_in_threadpool
 from ..assets import AssetStore
 from ..config import Settings
 from ..llm import LLM
-from ..media.claim import Analysis, analyse, cut_samples, rescore, vision_candidates, voice_candidates
+from ..media.claim import (
+    Analysis,
+    analyse,
+    cut_samples,
+    missing_samples,
+    rescore,
+    vision_candidates,
+    voice_candidates,
+)
 from ..media.clean import clean_segments
 from ..media.ingest import (
     MEDIA_EXTENSIONS,
@@ -33,6 +41,8 @@ from ..media.ingest import (
     Segment,
     extract_audio,
     make_transcriber,
+    readable_wav,
+    sound_lock,
 )
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
@@ -340,7 +350,9 @@ class MediaIngestion:
             return
         folder = self.settings.db_path.parent / "media-sources" / source.media_sha
         audio = folder / "audio.wav"
-        with self.lock:
+        # The recording's own lock, not ``self.lock``: cutting must not hold up the twin's other work, and a
+        # listening sample being cut from ``audio.wav`` right now finishes before the file goes.
+        with sound_lock(folder):
             if (folder / "analysis.json").is_file() and audio.is_file():
                 with suppress(Exception):
                     cut_samples(Analysis.load(folder), folder, audio)
@@ -348,14 +360,25 @@ class MediaIngestion:
 
     def sweep(self) -> None:
         """At start-up, before interrupted work resumes: abandoned uploads go, and so does audio that earlier
-        versions kept next to each original."""
+        versions kept next to each original. A recording still waiting for its speaker to be chosen has its
+        listening samples cut from that audio first, so nobody waits for its original to be decoded again; samples
+        named by an old revision are dropped (they are now named by their times)."""
         with suppress(OSError):
             Uploads(self.settings.db_path.parent).sweep()
         root = self.settings.db_path.parent / "media-sources"
         for folder in sorted(root.iterdir()) if root.is_dir() else ():
             if not folder.is_dir() or folder.is_symlink():
                 continue
-            with self.lock:
+            with sound_lock(folder):
+                audio = folder / "audio.wav"
+                if audio.is_file() and (folder / "analysis.json").is_file():
+                    with suppress(Exception):
+                        analysis = Analysis.load(folder)
+                        if not analysis.confirmed:
+                            cut_samples(analysis, folder, audio)
+                for legacy in folder.glob("*-sample-*.wav"):
+                    if re.fullmatch(r"[0-9a-f]{32}-sample-\d+-\d+\.wav", legacy.name):
+                        legacy.unlink(missing_ok=True)
                 for name in ("audio.wav", "audio.flac", ".audio.flac.tmp"):
                     (folder / name).unlink(missing_ok=True)
                 for temporary in folder.glob(".audio-*.wav"):
@@ -444,7 +467,15 @@ class MediaIngestion:
         if analysis.claimed:
             log("[5/6] 提取声音候选")
         try:
-            analysis.voices = voice_candidates(analysis, folder)
+            # One decode of the original serves the voice candidates and any listening sample still missing; with
+            # nobody claimed there is nothing to cut, and nothing is decoded.
+            analysis.voices = []
+            if analysis.claimed:
+                with readable_wav(folder) as audio:
+                    analysis.voices = voice_candidates(analysis, folder, audio)
+                    if missing_samples(analysis, folder):
+                        with suppress(Exception):
+                            cut_samples(analysis, folder, audio)
         except Exception:
             analysis.candidate_error = "声音候选提取失败，可重新确认说话人后重试"
         if source.kind == SourceKind.VIDEO and analysis.claimed and self.settings.vision.command:

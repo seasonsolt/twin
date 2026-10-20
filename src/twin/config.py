@@ -127,14 +127,15 @@ class LibrarySettings(BaseModel):
     arriving, and at most ``max_pending`` recordings wait to be transcribed at once. The language-model tokens a
     library spends (proofreading its transcripts, and rebuilding its twins) are limited to ``batch_tokens`` in any
     ``batch_hours``; once spent, proofreading and rebuilds wait until the window frees up. 0 means no limit.
-    The original of a recording whose transcription failed is kept ``failed_keep_days`` days for a retry, then
-    deleted; 0 keeps it for good."""
+    The original of a recording whose transcription failed is kept for a retry; with ``failed_keep_days`` set, it is
+    deleted that many days after the failure. 0 (the default) keeps it for good: a failure may be the transcription
+    service being down, and a deleted original cannot be had back."""
 
     headroom_gb: float = Field(default=20, ge=0)
     max_pending: int = Field(default=20, gt=0)
     batch_tokens: int = Field(default=20_000_000, ge=0)
     batch_hours: float = Field(default=24, gt=0)
-    failed_keep_days: int = Field(default=30, ge=0)
+    failed_keep_days: int = Field(default=0, ge=0)
 
 
 class AvatarSettings(BaseModel):

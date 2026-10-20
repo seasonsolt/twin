@@ -5,6 +5,7 @@ import json
 import math
 import shlex
 import struct
+import threading
 import time
 import wave
 from pathlib import Path
@@ -19,6 +20,7 @@ from twin.config import ASRSettings, Settings, VisionSettings
 from twin.egress import egress_status
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
+from twin.media import ingest
 from twin.media.claim import (
     Analysis,
     analyse,
@@ -34,6 +36,7 @@ from twin.persona.schema import Source, SourceKind
 from twin.persona.sources import parse_media
 from twin.persona.store import PersonaStore
 from twin.web import create_app
+from twin.web.uploads import MediaIngestion
 
 
 def tone(seconds: int = 24) -> bytes:
@@ -389,6 +392,14 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
             return segments()
 
     monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: Transcriber())
+    decodes: list[Path] = []
+    real_decode = ingest.decode
+
+    def counted(original: Path, audio: Path) -> None:
+        decodes.append(audio)
+        real_decode(original, audio)
+
+    monkeypatch.setattr("twin.media.ingest.decode", counted)
     app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {}), embedder_factory=HashingEmbedder)
     with TestClient(app, base_url="http://localhost") as client:
         data = tone()
@@ -400,7 +411,7 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert row["status"] == "needs_speaker" and row["n_target"] == 0
         # The extracted audio is gone once transcribed; the listening samples were cut before it went.
         folder = tmp_path / "media-sources" / row["media_sha"]
-        assert not (folder / "audio.wav").exists() and len(list(folder.glob("*-sample-*.wav"))) >= 3
+        assert not (folder / "audio.wav").exists() and len(list(folder.glob("sample-*.wav"))) >= 3
         initial = client.get(base + "/speakers").json()
         assert not initial["confirmed"] and len(initial["speakers"]) == 2
         assert len(initial["speakers"][0]["samples"]) == 3
@@ -417,6 +428,10 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert len(claim["voices"]) == len(claim["portraits"]) == 1 and not claim["pending"]
         # Voice candidates were cut from the original decoded again, which leaves nothing behind.
         assert not (folder / "audio.wav").exists() and not list(folder.glob(".audio-*"))
+        # Choosing made a new revision, yet its listening samples are the ones already cut: nothing is decoded.
+        before = len(decodes)
+        assert client.get(claim["speakers"][1]["samples"][0] + "&persona=default").status_code == 200
+        assert len(decodes) == before
         text = client.get(base + "/text").text
         assert "本人：[00:00] 我喜欢读书" in text and "其他人1：[00:12] 我喜欢散步" in text
         row = client.get("/api/persona/sources").json()["items"][0]
@@ -571,3 +586,69 @@ def test_saving_a_voice_rescores_recordings_without_transcribing_again(tmp_path:
             source = store.get_source(first["source_id"])
             assert source and source.media_status == "ready" and source.n_target == 1
     assert calls.read_text().split() == ["transcribe", "transcribe", "embed"]
+
+
+def test_a_sample_decoded_again_holds_up_only_its_recording(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Transcriber:
+        diarizes = True
+
+        def transcribe(self, audio: Path, duration: float, progress: Any) -> list[Segment]:
+            return segments()
+
+    monkeypatch.setattr("twin.web.uploads.make_transcriber", lambda _: Transcriber())
+    settings = Settings(db_path=tmp_path / "twin.db")
+    app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {}), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://localhost") as client:
+        sid = upload(client, tone())["source_id"]
+        base = f"/api/persona/sources/{sid}"
+        folder = next((tmp_path / "media-sources").iterdir())
+        # As for a recording transcribed before samples were cut ahead: the original must be decoded again.
+        for sample in folder.glob("sample-*.wav"):
+            sample.unlink()
+        started, release = threading.Event(), threading.Event()
+        decodes: list[Path] = []
+        real_decode = ingest.decode
+
+        def slow(original: Path, audio: Path) -> None:
+            decodes.append(audio)
+            started.set()
+            assert release.wait(10)
+            real_decode(original, audio)
+
+        monkeypatch.setattr("twin.media.ingest.decode", slow)
+        urls = [url for speaker in client.get(base + "/speakers").json()["speakers"] for url in speaker["samples"]]
+        statuses: list[int] = []
+
+        def listen(url: str) -> None:
+            statuses.append(client.get(url + "&persona=default").status_code)
+
+        listeners = [threading.Thread(target=listen, args=(url,)) for url in (urls[0], urls[-1])]
+        for listener in listeners:
+            listener.start()
+        assert started.wait(5)
+        # The twin's other work, which takes the ingestion lock, goes on while the original decodes.
+        assert client.get(base + "/speakers").status_code == 200
+        release.set()
+        for listener in listeners:
+            listener.join(10)
+        # Both listeners were served by the one decode.
+        assert statuses == [200, 200] and len(decodes) == 1
+        assert not list(folder.glob(".audio-*")) and not list(folder.glob(".sample-*"))
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_start_up_cuts_samples_before_dropping_kept_audio(tmp_path: Path, confirmed: bool) -> None:
+    folder = tmp_path / "media-sources" / ("a" * 64)
+    folder.mkdir(parents=True)
+    (folder / "original.wav").write_bytes(tone())
+    (folder / "audio.wav").write_bytes(tone())
+    analysis = analyse(segments(), [], False)
+    analysis.confirmed = confirmed
+    analysis.save(folder)
+    MediaIngestion(Settings(db_path=tmp_path / "twin.db"), None, lambda: None, lambda: None).sweep()  # type: ignore[arg-type]
+    assert not (folder / "audio.wav").exists()
+    windows = [w for speaker in analysis.speakers for w in sample_windows(analysis, speaker.id)]
+    cut = sorted(p.name for p in folder.glob("sample-*.wav"))
+    # Who is who still waits to be chosen: its samples are cut while the audio is there. A confirmed recording
+    # leaves start-up quick and decodes again only if someone listens.
+    assert len(cut) == (0 if confirmed else len(windows)) and (confirmed or len(cut) >= 2)

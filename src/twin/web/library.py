@@ -773,7 +773,7 @@ class Libraries:
     def sample(
         self, owner: str, recording_id: str, speaker_id: str, index: int, viewer: Viewer | None = None
     ) -> FileResponse:
-        """A five-second WAV of the speaker (up to three, at different moments), cut from the playback copy and
+        """A short WAV of the speaker (up to three, at different moments), cut from the playback copy and
         kept in the library's media cache, which backups skip. ``viewer``: only if they may see the recording
         (``web.voice`` checks its own way)."""
         if viewer is not None:

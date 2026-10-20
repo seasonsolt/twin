@@ -153,7 +153,7 @@ def test_multiple_claims_lines_intervals_and_voice_windows() -> None:
     ]
     assert intervals(analysis) == [(0, 10), (14, 26)]
     assert voice_windows(analysis) == [(14.2, 25.8), (0.2, 9.8)]
-    assert all(end <= 10 for _, end in sample_windows(analysis, "S1"))
+    assert all(end - start <= 20 for start, end in sample_windows(analysis, "S1"))
 
 
 def test_command_diarization_contract(tmp_path: Path) -> None:
@@ -251,7 +251,12 @@ def test_voice_window_merging_overlap_length_and_samples(tmp_path: Path) -> None
     assert all(8 - 1e-9 <= end - start <= 20 + 1e-9 for start, end in windows)
     assert all(not (start < 12 and end > 10) for start, end in windows)
     # One moment from each of the three longest runs, not three from the longest: different moments of the meeting.
-    assert sample_windows(analysis, "S1") == [(20, 30), (0, 10), (60, 68)]
+    assert sample_windows(analysis, "S1") == [(20, 40), (0, 10), (60, 68)]
+    # One long talk made of sentences with short pauses is one stretch: three windows spread through it, several
+    # sentences each, not three neighbouring sentences.
+    talk = analyse([Segment(start=i * 11, end=i * 11 + 10, text=str(i)) for i in range(18)], [], False)
+    talk.claimed = ["S1"]
+    assert sample_windows(talk, "S1") == [(0, 20), (88.5, 108.5), (177, 197)]
     audio = tmp_path / "short.wav"
     audio.write_bytes(tone(4))
     assert voice_windows(analysis, audio) == []
@@ -427,8 +432,8 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         # The extracted audio is gone once transcribed; the listening samples were cut before it went.
         folder = tmp_path / "media-sources" / row["media_sha"]
         assert not (folder / "audio.wav").exists() and sorted(p.name for p in folder.glob("sample-*.wav")) == [
-            "sample-0-10000.wav",  # Each speaker's one run of twelve seconds gives one moment.
-            "sample-12000-22000.wav",
+            "sample-0-12000.wav",  # Each speaker's one run of twelve seconds gives one moment.
+            "sample-12000-24000.wav",
         ]
         initial = client.get(base + "/speakers").json()
         assert not initial["confirmed"] and len(initial["speakers"]) == 2

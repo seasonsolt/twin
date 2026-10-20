@@ -286,21 +286,42 @@ def cut_samples(analysis: Analysis, folder: Path, audio: Path) -> None:
                 temporary.unlink(missing_ok=True)
 
 
-# How long one moment to hear a speaker at lasts: long enough to tell a voice by.
-SAMPLE_SECONDS = 10.0
+# How long one moment to hear a speaker at lasts: long enough to hold several sentences, not one.
+SAMPLE_SECONDS = 20.0
+# Pauses this short between a speaker's sentences, with nobody else speaking, still belong to one moment.
+SAMPLE_GAP_SECONDS = 3.0
 
 
 def sample_windows(analysis: Analysis, speaker: str) -> list[tuple[float, float]]:
-    """Up to three moments to hear the speaker at, each at most ``SAMPLE_SECONDS`` long and none overlapping another:
-    the start of each of their three longest runs, so they are different moments of the meeting and a speaker who is
-    really several people sounds like it. With fewer runs, whole further windows of the longest runs make up three.
-    Three windows taken from one run of a few more than ten seconds would be nearly the same sound."""
-    runs = sorted(intervals(analysis, speaker), key=lambda p: p[1] - p[0], reverse=True)
-    windows = [(start, min(start + SAMPLE_SECONDS, end)) for start, end in runs[:3]]
-    for start, end in runs[:3]:
-        for i in range(1, int((end - start) // SAMPLE_SECONDS)):
-            windows.append((start + i * SAMPLE_SECONDS, start + (i + 1) * SAMPLE_SECONDS))
-    return windows[:3]
+    """Up to three moments to hear the speaker at, each at most ``SAMPLE_SECONDS`` long and none overlapping another.
+    Sentences with only a short pause between them (and nobody else speaking) form one stretch, so a moment holds
+    several sentences rather than one. Each of the three longest stretches gives one moment, so they are different
+    parts of the meeting and a speaker who is really several people sounds like it. With fewer stretches, the longest
+    ones are spread over with further windows spaced evenly through them, not taken one right after another."""
+    others = [(s.start, s.end) for s in analysis.segments if s.speaker != speaker]
+    stretches: list[tuple[float, float]] = []
+    for start, end in intervals(analysis, speaker):
+        last = stretches[-1] if stretches else None
+        if last and start - last[1] < SAMPLE_GAP_SECONDS and not any(a < start and b > last[1] for a, b in others):
+            stretches[-1] = last[0], end
+        else:
+            stretches.append((start, end))
+    stretches = sorted(stretches, key=lambda p: p[1] - p[0], reverse=True)[:3]
+    counts = [1] * len(stretches)
+    while sum(counts) < 3 and stretches:
+        # Give the next window to the stretch with the most room per window, if a whole window still fits.
+        room = [(end - start) / (n + 1) for (start, end), n in zip(stretches, counts, strict=True)]
+        best = max(range(len(room)), key=room.__getitem__)
+        if room[best] < SAMPLE_SECONDS:
+            break
+        counts[best] += 1
+    windows: list[tuple[float, float]] = []
+    for (start, end), n in zip(stretches, counts, strict=True):
+        for i in range(n):
+            offset = (end - start - SAMPLE_SECONDS) * i / (n - 1) if n > 1 else 0
+            begin = start + offset
+            windows.append((begin, min(begin + SAMPLE_SECONDS, end)))
+    return windows
 
 
 def vision_candidates(analysis: Analysis, video: Path, folder: Path, settings: VisionSettings) -> list[Candidate]:

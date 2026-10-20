@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from ..assets import AssetStore
 from ..config import Settings
 from ..llm import LLM
-from ..media.claim import Analysis, analyse, rescore, vision_candidates, voice_candidates
+from ..media.claim import Analysis, analyse, cut_samples, rescore, vision_candidates, voice_candidates
 from ..media.clean import clean_segments
 from ..media.ingest import (
     MEDIA_EXTENSIONS,
@@ -43,6 +43,15 @@ from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 CHUNK_SIZE = 8 * 1024 * 1024
 MAX_CHUNK_SIZE = 16 * 1024 * 1024
 MAX_MEDIA_SIZE = 4 * 1024**3
+# Network packets are gathered up to this size before one write, instead of one file open and thread hop each.
+WRITE_BUFFER = 1024 * 1024
+
+# SHA-256 of each upload's bytes so far, kept while the bytes arrive in order so ``finish`` need not read a
+# multi-GB file again. Keyed by the ``.part`` path; the value is (hash object, bytes it has seen). Lost on a
+# restart or after any gap, in which case ``Uploads.digest`` hashes the file once.
+_running: dict[str, tuple[Any, int]] = {}
+_running_lock = threading.Lock()
+MAX_RUNNING = 64
 
 
 class UploadBody(BaseModel):
@@ -139,6 +148,19 @@ class Uploads:
             if re.fullmatch(r"[0-9a-f]{32}", metadata.stem) and self._stale(metadata)
         ]
 
+    def sweep(self) -> int:
+        """Remove what was left behind: uploads untouched for a day, and ``.part`` files whose record is gone
+        (a stop between creating the two). Returns how many files went."""
+        removed = 0
+        for upload_id in self.stale():
+            self.expire(upload_id)
+            removed += 1
+        for part in self.root.glob("*.part") if self.root.is_dir() else ():
+            if self._stale(part) and not part.with_suffix(".json").exists():
+                part.unlink(missing_ok=True)
+                removed += 1
+        return removed
+
     def expire(self, upload_id: str) -> None:
         metadata, _ = self.paths(upload_id)
         if self._stale(metadata):
@@ -153,19 +175,54 @@ class Uploads:
 
     def cancel(self, upload_id: str) -> None:
         metadata, part = self.paths(upload_id)
+        self.forget(upload_id)
         metadata.unlink(missing_ok=True)
         part.unlink(missing_ok=True)
 
-    def append(self, upload_id: str, chunk: bytes) -> None:
+    def append(self, upload_id: str, chunk: bytes, offset: int | None = None) -> None:
+        """Add ``chunk`` at the end of the upload. ``offset`` (where the chunk starts) lets the running hash follow."""
         metadata, part = self.paths(upload_id)
         with part.open("ab") as file:
             file.write(chunk)
         os.utime(metadata, None)
+        if offset is None:
+            return
+        key = str(part)
+        with _running_lock:
+            state = _running.pop(key, None)
+        if offset == 0:
+            state = (hashlib.sha256(), 0)
+        if state is not None and state[1] == offset:
+            state[0].update(chunk)
+            with _running_lock:
+                _running[key] = (state[0], offset + len(chunk))
+                if len(_running) > MAX_RUNNING:
+                    # Uploads whose files are gone (a deleted persona's folder) would otherwise stay forever.
+                    for gone in [path for path in _running if not os.path.exists(path)]:
+                        del _running[gone]
 
     def truncate(self, upload_id: str, offset: int) -> None:
         _, part = self.paths(upload_id)
+        with _running_lock:
+            _running.pop(str(part), None)
         with part.open("r+b") as file:
             file.truncate(offset)
+
+    def digest(self, upload_id: str) -> str:
+        """SHA-256 of the complete upload: the running hash when the bytes arrived in one go, else read once."""
+        _, part = self.paths(upload_id)
+        with _running_lock:
+            state = _running.pop(str(part), None)
+        size = part.stat().st_size
+        if state is not None and state[1] == size:
+            return str(state[0].hexdigest())
+        with part.open("rb") as file:
+            return hashlib.file_digest(file, "sha256").hexdigest()
+
+    def forget(self, upload_id: str) -> None:
+        _, part = self.paths(upload_id)
+        with _running_lock:
+            _running.pop(str(part), None)
 
 
 class MediaIngestion:
@@ -271,6 +328,38 @@ class MediaIngestion:
         except Exception:
             self.update(source_id, job_id, media_status="failed")
             raise JobError("音视频转写失败，请检查 ffmpeg 和语音识别配置后重试") from None
+        finally:
+            self.release(source_id)
+
+    def release(self, source_id: str) -> None:
+        """Delete the audio extracted for transcription once the job is over: it decodes again from the original
+        whenever needed. Listening samples are cut first, so choosing who is who stays quick."""
+        with self.lock, PersonaStore(self.settings.db_path) as store:
+            source = store.get_source(source_id)
+        if source is None or not source.media_sha:
+            return
+        folder = self.settings.db_path.parent / "media-sources" / source.media_sha
+        audio = folder / "audio.wav"
+        with self.lock:
+            if (folder / "analysis.json").is_file() and audio.is_file():
+                with suppress(Exception):
+                    cut_samples(Analysis.load(folder), folder, audio)
+            audio.unlink(missing_ok=True)
+
+    def sweep(self) -> None:
+        """At start-up, before interrupted work resumes: abandoned uploads go, and so does audio that earlier
+        versions kept next to each original."""
+        with suppress(OSError):
+            Uploads(self.settings.db_path.parent).sweep()
+        root = self.settings.db_path.parent / "media-sources"
+        for folder in sorted(root.iterdir()) if root.is_dir() else ():
+            if not folder.is_dir() or folder.is_symlink():
+                continue
+            with self.lock:
+                for name in ("audio.wav", "audio.flac", ".audio.flac.tmp"):
+                    (folder / name).unlink(missing_ok=True)
+                for temporary in folder.glob(".audio-*.wav"):
+                    temporary.unlink(missing_ok=True)
 
     def rescore(self) -> Job | None:
         """Queue a fresh speaker decision for every recording after the reference voice changed; nothing is
@@ -392,8 +481,7 @@ class MediaIngestion:
                     }
             raise HTTPException(404, "这条记忆已删除，请重新上传")
         _, part = uploads.paths(upload_id)
-        with part.open("rb") as file:
-            sha = hashlib.file_digest(file, "sha256").hexdigest()
+        sha = uploads.digest(upload_id)
         source_id = "src_media_" + sha
         with self.lock, PersonaStore(self.settings.db_path) as store:
             source = store.get_source(source_id)
@@ -493,13 +581,21 @@ def upload_routes(
             declared = request.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > min(MAX_CHUNK_SIZE, info["size"] - offset):
                 raise HTTPException(413, "分片最多 16 MB，且不能超过文件大小")
-            received = 0
+            received = written = 0
+            pending: list[bytes] = []
+            buffered = 0
             try:
                 async for chunk in request.stream():
                     received += len(chunk)
                     if received > MAX_CHUNK_SIZE or offset + received > info["size"]:
                         raise HTTPException(413, "分片最多 16 MB，且不能超过文件大小")
-                    await run_in_threadpool(uploads.append, upload_id, chunk)
+                    pending.append(chunk)
+                    buffered += len(chunk)
+                    if buffered >= WRITE_BUFFER:
+                        await run_in_threadpool(uploads.append, upload_id, b"".join(pending), offset + written)
+                        written, pending, buffered = received, [], 0
+                if pending:
+                    await run_in_threadpool(uploads.append, upload_id, b"".join(pending), offset + written)
             except BaseException:
                 await run_in_threadpool(uploads.truncate, upload_id, offset)
                 raise

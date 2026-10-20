@@ -119,6 +119,8 @@ api_key_env = "TWIN_EMBED_KEY"
 # max_pending = 20
 # batch_tokens = 20000000
 # batch_hours = 24
+# 转写失败的录音保留原文件多少天供重试，超过后删除原文件（录音需重新上传）；0 表示一直保留。
+# failed_keep_days = 30
 
 # 视频形象候选（可选）：stdin video/intervals/out_dir/max_candidates；stdout ok/candidates。
 # 仅返回 out_dir 内的普通图片，详情与可选 face_box 见 docs/MEDIA.md。

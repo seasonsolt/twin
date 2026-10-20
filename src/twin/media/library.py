@@ -312,12 +312,15 @@ class Library:
                 (*fields.values(), _now(), recording_id),
             )
 
-    def add(self, upload: Path, filename: str, uploader: str | None = None) -> tuple[Recording, bool]:
+    def add(
+        self, upload: Path, filename: str, uploader: str | None = None, sha: str | None = None
+    ) -> tuple[Recording, bool]:
         """File a finished upload as a queued recording; the same content uploaded again (under any name, by
-        anyone) is the existing recording, and the upload is dropped. Returns the recording and whether it is
-        new."""
-        with upload.open("rb") as file:
-            sha = hashlib.file_digest(file, "sha256").hexdigest()
+        anyone) is the existing recording, and the upload is dropped. ``sha`` is the upload's SHA-256 when the
+        caller already has it. Returns the recording and whether it is new."""
+        if sha is None:
+            with upload.open("rb") as file:
+                sha = hashlib.file_digest(file, "sha256").hexdigest()
         with self.lock:
             with self._db() as db:
                 row = db.execute("SELECT * FROM recordings WHERE sha256 = ?", (sha,)).fetchone()
@@ -377,6 +380,25 @@ class Library:
                 return None
             self.update(recording_id, status="queued", error="", transcribed_s=0)
             return self.get(recording_id)
+
+    def expire_failed(self, days: int) -> int:
+        """Delete the original of every recording that has been failed for ``days`` days (0: never), which a retry
+        would need; the recording stays, saying why it cannot be retried. Returns how many originals went."""
+        if days <= 0:
+            return 0
+        cutoff = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).isoformat()
+        removed = 0
+        with self.lock:
+            for recording in self.list():
+                if recording.status != "failed" or recording.updated_at >= cutoff:
+                    continue
+                original = self._original(recording.id)
+                if original is None:
+                    continue
+                original.unlink(missing_ok=True)
+                self.update(recording.id, error=f"转写失败后超过 {days} 天，原始文件已清理，请重新上传")
+                removed += 1
+        return removed
 
     def delete(self, recording_id: str) -> bool:
         """Remove a recording that is not being transcribed, with the decisions and voice samples taken from it;

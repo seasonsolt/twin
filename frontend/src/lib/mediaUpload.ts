@@ -1,5 +1,6 @@
 import { withBase } from './base';
 import { ApiError, handleApiFailure } from './api';
+import { compactable, compactMedia, type Compaction } from './compactMedia';
 import { getPersonaId, personaKey } from './persona';
 
 const CHUNK_SIZE = 8 * 1024 * 1024;
@@ -72,12 +73,16 @@ interface SavedUpload {
   name: string;
   size: number;
   lastModified: number;
+  // SHA-256 of a file made smaller in the browser: made again on resume, it must be the same bytes.
+  sha?: string;
 }
 export interface UploadProgress {
   name: string;
   offset: number;
   size: number;
   paused: boolean;
+  /** Set (0..1) while the file is being made smaller in the browser, before any byte is sent. */
+  preparing?: number;
 }
 function savedUploads(persona: string): SavedUpload[] {
   try {
@@ -99,12 +104,27 @@ function save(uploads: SavedUpload[], persona: string) {
     // Uploading still works when Safari's storage is unavailable.
   }
 }
-function matches(upload: SavedUpload, file: File) {
+function matches(upload: SavedUpload, file: File, sha?: string) {
   return (
     upload.name === file.name &&
     upload.size === file.size &&
-    upload.lastModified === file.lastModified
+    upload.lastModified === file.lastModified &&
+    upload.sha === sha
   );
+}
+async function digest(file: File): Promise<string | undefined> {
+  try {
+    const hash = await crypto.subtle.digest(
+      'SHA-256',
+      await file.arrayBuffer(),
+    );
+    return Array.from(new Uint8Array(hash), (byte) =>
+      byte.toString(16).padStart(2, '0'),
+    ).join('');
+  } catch {
+    // No WebCrypto (an insecure origin): such an upload is not resumed.
+    return undefined;
+  }
 }
 function abort(signal: AbortSignal) {
   signal.throwIfAborted();
@@ -192,21 +212,43 @@ function offsetOf(data: Record<string, unknown>, size: number): number {
 
 /** Upload a recording in resumable chunks. By default it becomes a memory of the current twin; with
  * `{ base: '/api/library/uploads', scope: 'library' }` it goes to the account's recording library instead
- * (`scope` keeps the resume records of the two apart). */
+ * (`scope` keeps the resume records of the two apart). `compact` first makes material for memories smaller in the
+ * browser (see `compactMedia`); leave it out for anything whose sound must stay as recorded. */
 export async function uploadMedia(
-  file: File,
+  original: File,
   signal: AbortSignal,
   progress: (value: UploadProgress) => void,
-  { base = '/api/uploads', scope }: { base?: string; scope?: string } = {},
+  {
+    base = '/api/uploads',
+    scope,
+    compact,
+  }: { base?: string; scope?: string; compact?: Compaction } = {},
 ): Promise<Record<string, unknown>> {
+  let file = original;
+  let sha: string | undefined;
+  if (compact && compactable(original, compact)) {
+    const preparing = (done: number) =>
+      progress({
+        name: original.name,
+        offset: 0,
+        size: original.size,
+        paused: false,
+        preparing: done,
+      });
+    preparing(0);
+    file = await compactMedia(original, compact, signal, preparing);
+    if (file !== original) sha = await digest(file);
+  }
   if (file.size > 4 * 1024 ** 3) throw new Error('音视频文件最多 4 GB');
   const persona = scope ?? getPersonaId();
   let offset = 0;
   const report = (paused = false) =>
-    progress({ name: file.name, offset, size: file.size, paused });
+    progress({ name: original.name, offset, size: file.size, paused });
   const send = (path: string, options: RequestInit = {}) =>
     request(path, options, signal, report, persona);
-  let saved = savedUploads(persona).find((upload) => matches(upload, file));
+  let saved = savedUploads(persona).find((upload) =>
+    matches(upload, file, sha),
+  );
   report();
   if (saved) {
     try {
@@ -215,7 +257,7 @@ export async function uploadMedia(
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
       save(
-        savedUploads(persona).filter((upload) => !matches(upload, file)),
+        savedUploads(persona).filter((upload) => !matches(upload, file, sha)),
         persona,
       );
       saved = undefined;
@@ -236,14 +278,19 @@ export async function uploadMedia(
       name: file.name,
       size: file.size,
       lastModified: file.lastModified,
+      sha,
     };
-    save(
-      [
-        ...savedUploads(persona).filter((upload) => !matches(upload, file)),
-        saved,
-      ],
-      persona,
-    );
+    // A made-smaller file without its hash cannot be checked on resume, so it is not remembered.
+    if (file === original || sha)
+      save(
+        [
+          ...savedUploads(persona).filter(
+            (upload) => !matches(upload, file, sha),
+          ),
+          saved,
+        ],
+        persona,
+      );
   }
   report();
   let conflicts = 0;

@@ -398,6 +398,9 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert not builds
         row = client.get("/api/persona/sources").json()["items"][0]
         assert row["status"] == "needs_speaker" and row["n_target"] == 0
+        # The extracted audio is gone once transcribed; the listening samples were cut before it went.
+        folder = tmp_path / "media-sources" / row["media_sha"]
+        assert not (folder / "audio.wav").exists() and len(list(folder.glob("*-sample-*.wav"))) >= 3
         initial = client.get(base + "/speakers").json()
         assert not initial["confirmed"] and len(initial["speakers"]) == 2
         assert len(initial["speakers"][0]["samples"]) == 3
@@ -412,6 +415,8 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         assert claim["claimed"] == ["S1"] and claim["diarized"]
         assert claim["confirmed"] and claim["speaker"] == "S1" and not claim["automatic"]
         assert len(claim["voices"]) == len(claim["portraits"]) == 1 and not claim["pending"]
+        # Voice candidates were cut from the original decoded again, which leaves nothing behind.
+        assert not (folder / "audio.wav").exists() and not list(folder.glob(".audio-*"))
         text = client.get(base + "/text").text
         assert "本人：[00:00] 我喜欢读书" in text and "其他人1：[00:12] 我喜欢散步" in text
         row = client.get("/api/persona/sources").json()["items"][0]

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 
 from ..assets import AssetStore
 from ..config import VisionSettings
-from .ingest import Segment, Speaker, timestamp
+from .ingest import Segment, Speaker, readable_wav, timestamp
 
 
 class Candidate(BaseModel):
@@ -246,11 +246,26 @@ def cut(audio: Path, output: Path, start: float, end: float) -> None:
 
 def voice_candidates(analysis: Analysis, folder: Path) -> list[Candidate]:
     candidates = []
-    for i, (start, end) in enumerate(voice_windows(analysis, folder / "audio.wav")):
-        cid = f"{analysis.revision}-voice-{i}"
-        cut(folder / "audio.wav", folder / f"{cid}.wav", start, end)
-        candidates.append(Candidate(id=cid, file=f"{cid}.wav", start=start, end=end))
+    with readable_wav(folder) as audio:
+        for i, (start, end) in enumerate(voice_windows(analysis, audio)):
+            cid = f"{analysis.revision}-voice-{i}"
+            cut(audio, folder / f"{cid}.wav", start, end)
+            candidates.append(Candidate(id=cid, file=f"{cid}.wav", start=start, end=end))
     return candidates
+
+
+def sample_path(folder: Path, analysis: Analysis, position: int, index: int) -> Path:
+    return folder / f"{analysis.revision}-sample-{position}-{index}.wav"
+
+
+def cut_samples(analysis: Analysis, folder: Path, audio: Path) -> None:
+    """Cut every speaker's listening samples now, while ``audio`` is at hand, so choosing who is who does not wait
+    for the original to be decoded again."""
+    for position, speaker in enumerate(analysis.speakers):
+        for index, window in enumerate(sample_windows(analysis, speaker.id)):
+            path = sample_path(folder, analysis, position, index)
+            if not path.is_file():
+                cut(audio, path, *window)
 
 
 def sample_windows(analysis: Analysis, speaker: str) -> list[tuple[float, float]]:

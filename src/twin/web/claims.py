@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..assets import AssetStore
 from ..config import Settings
-from ..media.claim import Analysis, Candidate, cut, face_crop, sample_windows
+from ..media.claim import Analysis, Candidate, cut_samples, face_crop, sample_path, sample_windows
+from ..media.ingest import readable_wav
 from ..persona.store import PersonaStore
 from .assets import portrait, voice
 from .jobs import Job
@@ -144,9 +145,11 @@ def register(app: FastAPI, settings: Settings, ingestion: MediaIngestion) -> Non
             windows = sample_windows(analysis, analysis.speakers[position].id)
             if index >= len(windows):
                 raise HTTPException(404, "找不到这段试听")
-            path = folder / f"{analysis.revision}-sample-{position}-{index}.wav"
+            path = sample_path(folder, analysis, position, index)
             if not path.is_file():
-                cut(folder / "audio.wav", path, *windows[index])
+                # One decode of the original serves every sample of this revision.
+                with readable_wav(folder) as audio:
+                    cut_samples(analysis, folder, audio)
             return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/persona/sources/{source_id}/candidates/{kind}/{candidate_id}")

@@ -12,7 +12,12 @@ export interface Pick {
   done?: boolean;
 }
 
-const LIBRARY_UPLOADS = { base: '/api/library/uploads', scope: 'library' };
+// Library recordings only feed memories: their sound may be made smaller before it is sent.
+const LIBRARY_UPLOADS = {
+  base: '/api/library/uploads',
+  scope: 'library',
+  compact: 'audio-and-video',
+} as const;
 export const MEDIA_ACCEPT = 'audio/*,video/*,.mkv,.caf,.amr,.opus,.m4a';
 
 /** Uploading recordings to the team's library, one file at a time; ``changed`` runs after each file. */

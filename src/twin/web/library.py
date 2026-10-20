@@ -66,6 +66,7 @@ SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 # How often every library is woken without anyone looking: twins held for the quota are rebuilt and proofreading
 # goes on once the quota frees up, even if nobody opens the library page.
 WAKE_SECONDS = 60.0
+SWEEP_SECONDS = 3600.0
 
 
 class Viewer(NamedTuple):
@@ -299,8 +300,30 @@ class Libraries:
             self._waker.join(5)
             self._waker = None
 
+    def sweep(self) -> int:
+        """Give back disk nobody is using: every member's abandoned uploads (which otherwise count as arriving
+        bytes and hold disk back from everyone until that member uploads again), and the originals of recordings
+        that failed long ago. Returns how many files went."""
+        removed = 0
+        members = self.root / TEAM / "members"
+        for folder in sorted(members.iterdir()) if members.is_dir() else ():
+            try:
+                removed += Uploads(folder).sweep()
+            except OSError:
+                logger.exception("uploads of %s could not be swept", folder.name)
+        if (self.root / TEAM / "library.db").is_file():
+            removed += self.library(TEAM).expire_failed(self.settings.library.failed_keep_days)
+        return removed
+
     def _wake_all(self) -> None:
+        swept = -SWEEP_SECONDS
         while not self._stop.wait(WAKE_SECONDS):
+            if time.monotonic() - swept >= SWEEP_SECONDS:
+                swept = time.monotonic()
+                try:
+                    self.sweep()
+                except Exception:
+                    logger.exception("unused files could not be swept")
             with self.lock:
                 owners = sorted(self.opened)
             for owner in owners:
@@ -757,7 +780,7 @@ class Libraries:
                 raise HTTPException(404, "这段录音已删除，请重新上传")
             return self.filed(viewer, existing, False)
         _, part = uploads.paths(upload_id)
-        recording, new = library.add(part, info["filename"], uploader=viewer.key)
+        recording, new = library.add(part, info["filename"], uploader=viewer.key, sha=uploads.digest(upload_id))
         info["recording_id"] = recording.id
         uploads.save(upload_id, info)
         self.kick(owner)

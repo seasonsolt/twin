@@ -101,6 +101,9 @@ const span = (seconds: number) =>
     ? `${Math.round(seconds)} 秒`
     : `${Math.round(seconds / 60)} 分钟`;
 
+/** media.claim.SAMPLE_SECONDS: how long one moment to hear a speaker at lasts. */
+const SAMPLE_SECONDS = 10;
+
 /** Mirrors media.claim.sample_windows so chip times and text describe the existing sample URLs. */
 export function sampleWindows(segments: Detail['segments'], speakerId: string) {
   const others = segments.filter((s) => s.speaker !== speakerId);
@@ -131,11 +134,16 @@ export function sampleWindows(segments: Detail['segments'], speakerId: string) {
   }
   const windows: [number, number][] = [];
   for (const [start, end] of runs.sort((a, b) => b[1] - b[0] - (a[1] - a[0]))) {
-    const count = end - start >= 5 ? 3 : 1;
+    const count = end - start >= SAMPLE_SECONDS ? 3 : 1;
     for (let i = 0; i < count; i += 1) {
       const offset =
-        end - start > 5 ? ((end - start - 5) * i) / Math.max(count - 1, 1) : 0;
-      windows.push([start + offset, Math.min(start + offset + 5, end)]);
+        end - start > SAMPLE_SECONDS
+          ? ((end - start - SAMPLE_SECONDS) * i) / Math.max(count - 1, 1)
+          : 0;
+      windows.push([
+        start + offset,
+        Math.min(start + offset + SAMPLE_SECONDS, end),
+      ]);
     }
     if (windows.length >= 3) break;
   }

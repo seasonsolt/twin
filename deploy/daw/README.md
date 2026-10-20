@@ -54,6 +54,7 @@ admin_emails = ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"]  # 按 SSO 账号名
 me_url = "http://127.0.0.1:8765/api/auth/me"
 cookie = "audio_studio_session"
 start_url = "/auth/start?next=/twin/"  # 登录页的统一身份按钮直接交给 audio-studio 跳认证中心
+sign_in_origin = "https://center.njxjjt.com"  # 认证中心的源：浏览器只在 twin 的 CSP form-action 放行它时才跟随跳转；不写则按钮退回链接到 login_url
 login_url = "/login?next=/twin/"
 ```
 

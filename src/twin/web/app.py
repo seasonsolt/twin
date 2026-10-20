@@ -62,6 +62,17 @@ _SECURITY_HEADERS = {
     ),
 }
 
+
+def security_headers(form_action: str = "") -> dict[str, str]:
+    """The hardening headers, letting forms also lead to ``form_action`` (an origin), if given."""
+    if not form_action:
+        return _SECURITY_HEADERS
+    policy = _SECURITY_HEADERS["Content-Security-Policy"].replace(
+        "form-action 'self'", f"form-action 'self' {form_action}"
+    )
+    return {**_SECURITY_HEADERS, "Content-Security-Policy": policy}
+
+
 _PLACEHOLDER_PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>twin</title></head>
 <body><h1>twin 本地服务已启动</h1>
@@ -114,9 +125,10 @@ class SecurityMiddleware:
     (cross-site request forgery), request bodies over ``MAX_JSON_BYTES`` (except uploads) and every websocket or other
     non-HTTP connection, and adds hardening headers to every response, including the 500 of an unhandled error."""
 
-    def __init__(self, app: ASGIApp, allowed_hosts: frozenset[str]) -> None:
+    def __init__(self, app: ASGIApp, allowed_hosts: frozenset[str], form_action: str = "") -> None:
         self.app = app
         self.allowed_hosts = allowed_hosts
+        self.headers = security_headers(form_action)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -133,7 +145,7 @@ class SecurityMiddleware:
             if message["type"] == "http.response.start":
                 started = True
                 response_headers = MutableHeaders(scope=message)
-                for name, value in _SECURITY_HEADERS.items():
+                for name, value in self.headers.items():
                     response_headers.setdefault(name, value)
                 if response_headers.get("content-type", "").startswith("text/event-stream"):
                     response_headers["Cache-Control"] = "no-cache"
@@ -332,7 +344,9 @@ def create_app(
     app.add_middleware(system.FeatureGate, system=system_settings)
     app.add_middleware(AuthMiddleware, auth=auth)
     app.add_middleware(
-        SecurityMiddleware, allowed_hosts=LOOPBACK_HOSTS | {_allowed_form(h) for h in allowed_hosts if h.strip()}
+        SecurityMiddleware,
+        allowed_hosts=LOOPBACK_HOSTS | {_allowed_form(h) for h in allowed_hosts if h.strip()},
+        form_action=auth.form_action,
     )
 
     app.add_middleware(media.PrivateAudioMiddleware)

@@ -43,8 +43,40 @@ interface Waiting extends Speaker {
   filename: string;
 }
 
+/** One undecided speaker of a voice heard across recordings. */
+interface VoiceMember {
+  recording_id: string;
+  filename: string;
+  transcript_id: string;
+  speaker_id: string;
+  seconds: number;
+}
+
+/** Undecided speakers of several recordings who sound like one person, longest first (``Team.voices``). */
+interface Voice {
+  id: string;
+  members: VoiceMember[];
+  seconds: number;
+  candidates: Speaker['candidates'];
+  near: boolean;
+}
+
+interface Review {
+  items: Waiting[];
+  voices: Voice[];
+  fragments: VoiceMember[];
+}
+
+/** What settling a voice tells the server: who it is, or that nobody known speaks there. */
+type VoiceDecision =
+  | { action: 'confirm'; person_id: string }
+  | { action: 'confirm'; new_person: string }
+  | { action: 'unknown' };
+
 const minutes = (seconds: number) =>
   `${Math.max(0, Math.round(seconds / 60))} 分钟`;
+const span = (seconds: number) =>
+  seconds < 60 ? `${Math.round(seconds)} 秒` : minutes(seconds);
 const recordingPath = (id: string) => `/library/${encodeURIComponent(id)}`;
 
 /** One thing for the owner to settle: what kind of task it is, what it is about, and how to settle it. */
@@ -150,6 +182,99 @@ function Unnamed({
           size="sm"
           disabled={busy}
           onClick={() => onResolve(null)}
+        >
+          不认识
+        </Button>
+      </Row>
+    </ListRow>
+  );
+}
+
+/** A voice heard in several recordings, settled once for all of them: hear it, then say who it is (the person it
+ * sounds like, someone else known, or a new name) or that nobody known speaks there. Enter confirms. */
+function VoiceRow({
+  voice,
+  known,
+  busy,
+  onDecide,
+}: {
+  voice: Voice;
+  known: Person[];
+  busy: boolean;
+  onDecide: (decision: VoiceDecision) => void;
+}) {
+  const [name, setName] = useState('');
+  const typed = name.trim();
+  const match = known.find((p) => p.name === typed);
+  const [loudest] = voice.members;
+  const [likely, other] = voice.candidates;
+  const recordings = new Set(voice.members.map((m) => m.recording_id)).size;
+  const title = !likely
+    ? '没听过的声音'
+    : voice.near && other
+      ? `像${likely.name}，也像${other.name}`
+      : `像${likely.name}`;
+  return (
+    <ListRow
+      variant="divided"
+      leading={
+        <ClipButton
+          label={`听这个声音（${loudest.filename}）`}
+          src={withBase(
+            `/api/library/recordings/${encodeURIComponent(loudest.recording_id)}/speakers/${encodeURIComponent(loudest.speaker_id)}/samples/0`,
+          )}
+        />
+      }
+      title={title}
+      meta={
+        <>
+          {recordings} 段录音 · 共说了 {span(voice.seconds)}
+          {' · '}
+          <TextLink
+            size="sm"
+            to={recordingPath(loudest.recording_id)}
+            state={{ teamTask: `voice-${voice.id}` }}
+          >
+            打开录音
+          </TextLink>
+        </>
+      }
+    >
+      <Row
+        as="form"
+        gap={2}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (match) onDecide({ action: 'confirm', person_id: match.id });
+          else if (typed) onDecide({ action: 'confirm', new_person: typed });
+          else if (likely)
+            onDecide({ action: 'confirm', person_id: likely.person_id });
+        }}
+      >
+        <Input
+          aria-label={`${title}，是谁`}
+          placeholder={likely ? '写别人' : '这是谁'}
+          maxLength={40}
+          value={name}
+          suggestions={known.map((p) => p.name)}
+          className="min-w-0 flex-1 sm:w-56 sm:flex-none"
+          onChange={(event) => setName(event.target.value)}
+        />
+        <Button type="submit" size="sm" disabled={busy || (!typed && !likely)}>
+          {match
+            ? `是${match.name}`
+            : typed
+              ? '确认'
+              : likely
+                ? `是${likely.name}`
+                : '确认'}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => onDecide({ action: 'unknown' })}
         >
           不认识
         </Button>
@@ -479,6 +604,8 @@ export function Team({
 }) {
   const [people, setPeople] = useState<Person[] | null>(null);
   const [waiting, setWaiting] = useState<Waiting[]>([]);
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [fragments, setFragments] = useState<VoiceMember[]>([]);
   const [name, setName] = useState('');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
@@ -501,10 +628,12 @@ export function Team({
     try {
       const [folks, queue] = await Promise.all([
         api<{ items: Person[] }>('/api/library/people'),
-        api<{ items: Waiting[] }>('/api/library/review'),
+        api<Review>('/api/library/review'),
       ]);
       setPeople(folks.items);
       setWaiting(queue.items);
+      setVoices(queue.voices);
+      setFragments(queue.fragments);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载人物');
     }
@@ -627,6 +756,29 @@ export function Team({
         }),
       `similar-${one.id}-${other.id}`,
     );
+  // Every recording the voice was heard in is settled at once.
+  const decideVoice = (
+    members: VoiceMember[],
+    decision: VoiceDecision,
+    task: string,
+  ) =>
+    act(
+      () =>
+        api('/api/library/voices', {
+          method: 'POST',
+          json: {
+            members: members.map(
+              ({ recording_id, transcript_id, speaker_id }) => ({
+                recording_id,
+                transcript_id,
+                speaker_id,
+              }),
+            ),
+            ...decision,
+          },
+        }),
+      task,
+    );
   const open = async (personaId: string, page: '/chat' | '/profile') => {
     await switchTo(personaId);
     void navigate(page);
@@ -658,15 +810,20 @@ export function Team({
   const proofreading = recordings.filter(
     (r) => r.status === 'ready' && r.proofread === 'waiting',
   );
-  // Speakers nobody's voice resembles (often short) are not in the review queue; their recording still asks.
+  // Speakers without a voiceprint are in no voice; their recording still asks.
+  const asked = new Set([
+    ...waiting.map((w) => w.recording_id),
+    ...voices.flatMap((v) => v.members.map((m) => m.recording_id)),
+    ...fragments.map((m) => m.recording_id),
+  ]);
   const unsorted = recordings.filter(
-    (r) =>
-      r.status === 'ready' &&
-      r.unsettled > 0 &&
-      !waiting.some((w) => w.recording_id === r.id),
+    (r) => r.status === 'ready' && r.unsettled > 0 && !asked.has(r.id),
   );
+  const fragmentRecordings = new Set(fragments.map((m) => m.recording_id)).size;
   const taskIds = [
     ...unnamed.map((p) => `person-${p.id}`),
+    ...voices.map((v) => `voice-${v.id}`),
+    ...(fragments.length ? ['fragments'] : []),
     ...similar.map(([a, b]) => `similar-${a.id}-${b.id}`),
     ...waiting.map((w) => `speaker-${w.recording_id}-${w.id}`),
     ...unsorted.map((r) => `unsorted-${r.id}`),
@@ -736,7 +893,7 @@ export function Team({
           framed
         >
           <Stack ref={taskList} gap={3}>
-            {unnamed.length > 0 && (
+            {unnamed.length + voices.length > 0 && (
               <Stack as="ul" gap={0} aria-label="新出现的声音">
                 {unnamed.map((person) => (
                   <Unnamed
@@ -748,10 +905,54 @@ export function Team({
                     onResolve={(into) => void resolve(person, into)}
                   />
                 ))}
+                {voices.map((voice) => (
+                  <VoiceRow
+                    key={voice.id}
+                    voice={voice}
+                    known={(people ?? []).filter((p) => !p.auto)}
+                    busy={busy}
+                    onDecide={(decision) =>
+                      void decideVoice(
+                        voice.members,
+                        decision,
+                        `voice-${voice.id}`,
+                      )
+                    }
+                  />
+                ))}
               </Stack>
             )}
-            {tasks > unnamed.length && (
+            {tasks > unnamed.length + voices.length && (
               <Grid as="ul" columns={3} gap={3}>
+                {fragments.length > 0 && (
+                  <Task key="fragments" kind="零碎的声音">
+                    <Text weight="medium">
+                      {fragmentRecordings} 段录音里有 {fragments.length}{' '}
+                      段很短的声音，共{' '}
+                      {span(fragments.reduce((sum, m) => sum + m.seconds, 0))}
+                      ，不像任何人
+                    </Text>
+                    <Text size="sm" tone="secondary">
+                      多是插话或附和，放一边不影响分身
+                    </Text>
+                    <Row gap={2}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          void decideVoice(
+                            fragments,
+                            { action: 'unknown' },
+                            'fragments',
+                          )
+                        }
+                      >
+                        都放一边
+                      </Button>
+                    </Row>
+                  </Task>
+                )}
                 {similar.map(([a, b]) => (
                   <Task key={`similar-${a.id}-${b.id}`} kind="可能是同一个人">
                     <Text weight="medium">
@@ -781,17 +982,10 @@ export function Team({
                   </Task>
                 ))}
                 {waiting.map((w) => (
-                  <Task
-                    key={`${w.recording_id}-${w.id}`}
-                    kind={w.disputed ? '有人说不是自己' : '拿不准是谁'}
-                  >
+                  <Task key={`${w.recording_id}-${w.id}`} kind="有人说不是自己">
                     <Text weight="medium">
                       <span className="break-all">{w.filename}</span> · {w.id}{' '}
-                      {w.disputed
-                        ? '原来标成的人说这不是 TA'
-                        : w.candidates.length > 1
-                          ? `像${w.candidates[0].name}，也像${w.candidates[1].name}`
-                          : `像${w.candidates[0]?.name ?? '谁'}`}
+                      原来标成的人说这不是 TA
                     </Text>
                     <RouteButton
                       to={recordingPath(w.recording_id)}

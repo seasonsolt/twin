@@ -147,15 +147,25 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
         return json({
-          items: [
+          items: [],
+          voices: [
             {
-              ...speaker({
-                candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
-              }),
-              recording_id: 'rec_9',
-              filename: '月会.m4a',
+              id: 'voice_1',
+              members: [
+                {
+                  recording_id: 'rec_9',
+                  filename: '月会.m4a',
+                  transcript_id: 't9',
+                  speaker_id: 'S1',
+                  seconds: 30,
+                },
+              ],
+              seconds: 30,
+              candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+              near: false,
             },
           ],
+          fragments: [],
         });
       if (
         url === '/api/library/people/per_1/persona' &&
@@ -177,10 +187,11 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     </MemoryRouter>,
   );
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  expect(await within(tasks).findByText(/S1 像张总/u)).toBeInTheDocument();
-  expect(
-    within(tasks).getByRole('link', { name: '试听并确认' }),
-  ).toHaveAttribute('href', '/library/rec_9');
+  expect(await within(tasks).findByText('像张总')).toBeInTheDocument();
+  expect(within(tasks).getByRole('link', { name: '打开录音' })).toHaveAttribute(
+    'href',
+    '/library/rec_9',
+  );
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
@@ -223,7 +234,8 @@ it('lists new voices apart and names them before a twin can be made', async () =
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       if (url === '/api/library/people/per_9' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
         people = [person({}), person({ id: 'per_9', name: '李总' })];
@@ -291,7 +303,8 @@ it('edits a person name and gender and opens the profile of their twin', async (
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       if (url === '/api/library/people/per_1' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
         people = [
@@ -350,7 +363,8 @@ it('moves focus to the next voice after naming one, then hides the empty queue',
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       if (init?.method === 'PATCH') {
         const id = url.split('/').at(-1);
         people = people.map((p) =>
@@ -394,7 +408,8 @@ it('settles a new voice as someone already known, or as nobody known, from its r
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       const id = /people\/([^/]+)\/resolve$/u.exec(url)?.[1];
       if (id && init?.method === 'POST') {
         resolved.push({ id, ...JSON.parse(String(init.body)) });
@@ -444,15 +459,13 @@ it('returns from a speaker confirmation to focus the next pending team item', as
             ? []
             : [
                 {
-                  ...speaker({
-                    candidates: [
-                      { person_id: 'per_1', name: '张总', score: 0.7 },
-                    ],
-                  }),
+                  ...speaker({ disputed: true }),
                   recording_id: 'rec_1',
                   filename: '周会.m4a',
                 },
               ],
+          voices: [],
+          fragments: [],
         });
       if (url === '/api/library/people')
         return json({
@@ -477,7 +490,7 @@ it('returns from a speaker confirmation to focus the next pending team item', as
     </MemoryRouter>,
   );
   const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  const waiting = within(tasks).getByText('拿不准是谁').closest('li')!;
+  const waiting = within(tasks).getByText('有人说不是自己').closest('li')!;
   await userEvent.click(
     within(waiting).getByRole('link', { name: '试听并确认' }),
   );
@@ -498,7 +511,8 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: [] });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       throw new Error(url);
     }),
   );
@@ -542,7 +556,8 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push(url);
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       return originalFetch(url, init);
     }),
   );
@@ -606,7 +621,8 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       if (url === '/api/personas') return json(usePersonas.getState().items);
       sent.push([url, init?.method, JSON.parse(String(init?.body))]);
       if (url === '/api/personas/p-li/claim')
@@ -667,7 +683,8 @@ it('shows a person who found themselves by voice as having their own twin', asyn
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       if (url === '/api/personas') return json([]);
       throw new Error(url);
     }),
@@ -709,6 +726,8 @@ it('puts what someone said is not them first, and lets an administrator merge tw
               filename: '周会.m4a',
             },
           ],
+          voices: [],
+          fragments: [],
         });
       if (url === '/api/personas') return json([]);
       if (init?.method === 'POST') {
@@ -739,4 +758,78 @@ it('puts what someone said is not them first, and lets an administrator merge tw
     ]),
   );
   await waitFor(() => expect(screen.queryByText('可能是同一个人')).toBeNull());
+});
+
+it('settles a voice heard in several meetings once, and sets the fragments aside together', async () => {
+  const user = userEvent.setup();
+  const member = (
+    recording_id: string,
+    speaker_id: string,
+    seconds: number,
+  ) => ({
+    recording_id,
+    filename: `${recording_id}.m4a`,
+    transcript_id: `t-${recording_id}`,
+    speaker_id,
+    seconds,
+  });
+  let voices = [
+    {
+      id: 'voice_1',
+      members: [member('rec_1', 'S1', 300), member('rec_2', 'S3', 200)],
+      seconds: 500,
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+      near: false,
+    },
+  ];
+  let fragments = [member('rec_1', 'S5', 3), member('rec_3', 'S2', 4)];
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices, fragments });
+      if (url === '/api/library/voices' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { action: string };
+        posts.push(body);
+        if (body.action === 'confirm') voices = [];
+        else fragments = [];
+        return json({ person_id: 'per_1' });
+      }
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  const row = within(tasks).getByText('像张总').closest('li')!;
+  expect(row).toHaveTextContent('2 段录音 · 共说了 8 分钟');
+  await user.click(within(row).getByRole('button', { name: '是张总' }));
+  await waitFor(() =>
+    expect(posts).toEqual([
+      {
+        members: [
+          { recording_id: 'rec_1', transcript_id: 't-rec_1', speaker_id: 'S1' },
+          { recording_id: 'rec_2', transcript_id: 't-rec_2', speaker_id: 'S3' },
+        ],
+        action: 'confirm',
+        person_id: 'per_1',
+      },
+    ]),
+  );
+  await waitFor(() => expect(screen.queryByText('像张总')).toBeNull());
+  const scraps = screen.getByText('零碎的声音').closest('li')!;
+  expect(scraps).toHaveTextContent('2 段录音里有 2 段很短的声音，共 7 秒');
+  await user.click(within(scraps).getByRole('button', { name: '都放一边' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
+  );
+  expect(posts[1]).toMatchObject({ action: 'unknown' });
 });

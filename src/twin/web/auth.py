@@ -344,11 +344,24 @@ class Auth:
             for key in keys:
                 self.failures.setdefault(key, deque()).append(time.monotonic())
 
+    @property
+    def form_action(self) -> str:
+        """Where forms on twin's pages may lead besides twin itself: the company sign-in, which the SSO button's
+        post to start_url is redirected to (browsers check every step of a form's redirects)."""
+        sso = self.settings.sso
+        return sso.sign_in_origin if self.sso and sso.start_url else ""
+
     def methods(self) -> dict[str, Any]:
         """The ways the sign-in page offers."""
         sso = self.settings.sso
         return {
-            "sso": {"start_url": sso.start_url or None, "login_url": sso.login_url} if self.sso else None,
+            # Posting to start_url only works where the page may send forms on to the sign-in (see form_action).
+            "sso": {
+                "start_url": sso.start_url if sso.start_url and sso.sign_in_origin else None,
+                "login_url": sso.login_url,
+            }
+            if self.sso
+            else None,
             "password": self.passwords,
             "email": self.email,
         }

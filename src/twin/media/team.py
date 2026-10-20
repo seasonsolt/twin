@@ -49,6 +49,12 @@ AUTO_MIN_SECONDS = 20.0
 # A voice matching nobody becomes a new unnamed person after speaking this long; shorter ones wait for the owner.
 NEW_MIN_SECONDS = 60.0
 UNNAMED = "未命名"
+# Undecided speakers of different recordings are offered as one voice from this similarity to the voice's centroid,
+# so the owner settles a colleague once instead of once per meeting (``Team.voices``). Above ``SHOW``: a group is
+# confirmed as a whole, and a wrong one would give someone else's words to a twin.
+GROUP = 0.6
+# A voice heard this little in all, and like nobody, is a fragment: offered together with the others, to set aside.
+FRAGMENT_SECONDS = 15.0
 # Twin sources made from the library; the rest of the id names the recording and the person's own segments.
 SOURCE_PREFIX = "src_lib_"
 
@@ -105,6 +111,26 @@ class SpeakerView(BaseModel):
     auto: bool = False
     # The person it was given to said it is not them; it waits for the owner (``dispute``).
     disputed: bool = False
+    candidates: list[Candidate] = []
+    near: bool = False
+
+
+class VoiceMember(BaseModel):
+    """One undecided speaker of a voice heard across recordings."""
+
+    recording_id: str
+    filename: str
+    transcript_id: str
+    speaker_id: str
+    seconds: float
+
+
+class Voice(BaseModel):
+    """Undecided speakers of several recordings who sound like one person (``Team.voices``), longest first."""
+
+    id: str
+    members: list[VoiceMember]
+    seconds: float
     candidates: list[Candidate] = []
     near: bool = False
 
@@ -562,6 +588,126 @@ class Team:
             )
         )
         return queue
+
+    def voices(self, recordings: set[str] | None = None) -> tuple[list[Voice], list[Voice]]:
+        """The undecided speakers of transcribed recordings, grouped by voice across recordings so a colleague heard
+        in many meetings is asked about once: (voices, fragments). Longest speakers seed the groups, their
+        voiceprints being the steadiest; each later one joins the voice whose centroid it is closest to from
+        ``GROUP``, never one already speaking in its recording (diarization told them apart there). Fragments are
+        voices heard less than ``FRAGMENT_SECONDS`` and like nobody, which the owner can only set aside. Speakers
+        someone disputed wait apart (``review``); those without a voiceprint wait in their recording.
+        ``recordings``: only these."""
+        with self.library.read() as db:
+            rows = {
+                (row["recording_id"], row["speaker_id"]): row
+                for row in db.execute(
+                    "SELECT a.recording_id, a.speaker_id, a.decision, a.rejected, a.disputed FROM attributions a "
+                    "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id"
+                )
+            }
+            prints = self._prints(db)
+        found: list[tuple[VoiceMember, list[float], set[str]]] = []
+        for recording in self.library.list():
+            if recording.status != "ready" or recording.transcript_id is None:
+                continue
+            if recordings is not None and recording.id not in recordings:
+                continue
+            for speaker in self.library.speakers(recording) or ():
+                row = rows.get((recording.id, speaker.id))
+                if not speaker.embedding or (row is not None and (row["decision"] != "none" or row["disputed"])):
+                    continue
+                member = VoiceMember(
+                    recording_id=recording.id,
+                    filename=recording.filename,
+                    transcript_id=recording.transcript_id,
+                    speaker_id=speaker.id,
+                    seconds=round(speaker.seconds, 1),
+                )
+                found.append((member, _unit(speaker.embedding), set(json.loads(row["rejected"])) if row else set()))
+        groups: list[tuple[list[VoiceMember], list[float], set[str]]] = []
+        for member, vector, rejected in sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id)):
+            best, best_score = None, GROUP
+            for group in groups:
+                if any(m.recording_id == member.recording_id for m in group[0]):
+                    continue
+                score = _cosine(vector, group[1])
+                if score >= best_score:
+                    best, best_score = group, score
+            if best is None:
+                groups.append(([member], list(vector), set(rejected)))
+            else:
+                best[0].append(member)
+                best[1][:] = [a + b for a, b in zip(best[1], vector, strict=True)]
+                best[2].update(rejected)
+        voices: list[Voice] = []
+        fragments: list[Voice] = []
+        for members, centroid, rejected in groups:
+            key = "|".join(sorted(f"{m.recording_id}:{m.transcript_id}:{m.speaker_id}" for m in members))
+            candidates = self._match(centroid, prints, rejected)
+            voice = Voice(
+                id="voice_" + hashlib.sha256(key.encode()).hexdigest()[:12],
+                members=members,
+                seconds=round(sum(m.seconds for m in members), 1),
+                candidates=candidates,
+                near=len(candidates) > 1 and candidates[0].score - candidates[1].score < NEAR,
+            )
+            (fragments if voice.seconds < FRAGMENT_SECONDS and not candidates else voices).append(voice)
+        voices.sort(key=lambda v: (-v.seconds, v.id))
+        return voices, fragments
+
+    def decide_voice(
+        self,
+        members: list[tuple[str, str, str]],
+        action: Literal["confirm", "unknown"],
+        person_id: str | None = None,
+    ) -> None:
+        """Settle every (recording, transcript, speaker) of a voice at once: as ``person_id``, keeping the longest
+        one as their voice sample so later recordings are recognised, or as nobody known. ``Stale`` when any of
+        them has another transcript now or was decided meanwhile (the page shows an old grouping); ``ValueError``
+        for an unknown speaker or person."""
+        if action == "confirm" and not person_id:
+            raise ValueError("需要指定是谁")
+        heard: list[tuple[str, str, Speaker]] = []
+        for recording_id, transcript_id, speaker_id in dict.fromkeys(members):
+            recording = self.library.get(recording_id)
+            spoken = (self.library.speakers(recording) if recording else None) or ()
+            speaker = next((s for s in spoken if s.id == speaker_id), None)
+            if speaker is None:
+                raise ValueError("这段录音里没有这个说话人")
+            heard.append((recording_id, transcript_id, speaker))
+        if not heard:
+            raise ValueError("没有要确认的声音")
+        owner = person_id if action == "confirm" else None
+        decision: Decision = "confirmed" if action == "confirm" else "unknown"
+        with self.library.transaction() as db:
+            if owner and not db.execute("SELECT 1 FROM people WHERE id = ?", (owner,)).fetchone():
+                raise ValueError("找不到这个人")
+            for recording_id, transcript_id, speaker in heard:
+                current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
+                row = db.execute(
+                    "SELECT decision, rejected FROM attributions WHERE recording_id = ? AND transcript_id = ? "
+                    "AND speaker_id = ?",
+                    (recording_id, transcript_id, speaker.id),
+                ).fetchone()
+                if current is None or current[0] != transcript_id or (row is not None and row[0] != "none"):
+                    raise Stale()
+                rejected = [p for p in json.loads(row[1]) if p != owner] if row else []
+                db.execute(
+                    "INSERT OR REPLACE INTO attributions (recording_id, transcript_id, speaker_id, decision, "
+                    "person_id, rejected, updated_at, auto) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+                    (recording_id, transcript_id, speaker.id, decision, owner, json.dumps(rejected), _now()),
+                )
+            longest = max(heard, key=lambda h: h[2].seconds)
+            if owner and longest[2].embedding:
+                db.execute(
+                    "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
+                    "active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                    (owner, longest[0], longest[1], longest[2].id, json.dumps(longest[2].embedding), _now()),
+                )
+            for recording_id in sorted({h[0] for h in heard}):
+                if owner:
+                    self._reopen(db, recording_id, {owner})
+                db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
 
     def attendance(self) -> dict[str, set[str]]:
         """Per recording, the people a speaker of its current transcript is confirmed as: who was there."""

@@ -487,6 +487,24 @@ def test_a_settled_voice_gives_its_person_samples_from_several_recordings(tmp_pa
     assert next(s for s in team.speakers(library.get(later)) if s.id == "S1").person_id == wang.id  # type: ignore[arg-type]
 
 
+def test_a_voice_the_owner_could_not_name_is_not_asked_about_again(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    first = voices(library, "一.m4a", ([0.0, 1.0, 0.0], 40))
+    [voice] = team.voices()[0]
+    team.decide_voice([(m.recording_id, m.transcript_id, m.speaker_id) for m in voice.members], "unknown")
+
+    # The same colleague in the next meeting, long enough to become "未命名 1" otherwise, and someone else.
+    second = voices(library, "二.m4a", ([0.05, 1.0, 0.0], 90), ([1.0, 0.0, 0.0], 90))
+    assert team.classify(second) == 2
+    view = {s.id: s for s in team.speakers(library.get(second))}  # type: ignore[arg-type]
+    assert (view["S1"].decision, view["S1"].auto) == ("unknown", True)
+    assert [p.name for p in team.people()] == ["未命名 1"] and view["S2"].decision == "confirmed"
+    assert team.voices()[0] == []
+    # The colleague may still recognise their own voice there.
+    assert {(v.recording.id, v.speaker_id) for v in team.open_voices()} >= {(first, "S1"), (second, "S1")}
+
+
 def test_a_voice_never_chains_colleagues_who_sound_alike(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     team = Team(library)

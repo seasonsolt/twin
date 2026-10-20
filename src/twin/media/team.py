@@ -517,9 +517,10 @@ class Team:
 
     def classify(self, recording_id: str) -> int:
         """Decide the recording's untouched speakers where the voice leaves no doubt: very close to one person's
-        samples (``AUTO``), or, for a long voice matching nobody, a new unnamed person kept by that voice. Returns
-        how many speakers were decided. A speaker the owner has acted on is never classified, and a match adds no
-        voice sample, so mistakes do not spread."""
+        samples (``AUTO``); as close to a voice the owner said is nobody they know, and closer to it than to anyone
+        (a colleague the owner cannot name comes to meeting after meeting: asked about once); or, for a long voice
+        matching nobody, a new unnamed person kept by that voice. Returns how many speakers were decided. A speaker
+        the owner has acted on is never classified, and a match adds no voice sample, so mistakes do not spread."""
         recording = self.library.get(recording_id)
         if recording is None or recording.status != "ready" or recording.transcript_id is None:
             return 0
@@ -536,6 +537,7 @@ class Team:
                 )
             }
             prints = self._prints(db)
+            strangers = self._strangers(db)
             decided: set[str] = set()
             count = 0
             # Longest first: their voiceprints are the steadiest, and a new person is made from the clearest voice.
@@ -543,6 +545,16 @@ class Team:
                 if speaker.id in touched or not speaker.embedding:
                     continue
                 candidates = self._match(speaker.embedding, prints, set(), floor=SHOW)
+                best_score = candidates[0].score if candidates else 0.0
+                stranger = max((_cosine(speaker.embedding, v) for v in strangers), default=0.0)
+                if speaker.seconds >= AUTO_MIN_SECONDS and stranger >= AUTO and stranger - best_score >= AUTO_MARGIN:
+                    db.execute(
+                        "INSERT INTO attributions (recording_id, transcript_id, speaker_id, decision, person_id, "
+                        "rejected, updated_at, auto) VALUES (?, ?, ?, 'unknown', NULL, '[]', ?, 1)",
+                        (recording_id, recording.transcript_id, speaker.id, _now()),
+                    )
+                    count += 1
+                    continue
                 if candidates:
                     best, runner = candidates[0], candidates[1].score if len(candidates) > 1 else 0.0
                     if best.score < AUTO or best.score - runner < AUTO_MARGIN or speaker.seconds < AUTO_MIN_SECONDS:
@@ -573,7 +585,7 @@ class Team:
                 )
                 decided.add(person_id)
                 count += 1
-            if not decided:
+            if not count:
                 return 0
             self._reopen(db, recording_id, decided)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
@@ -936,7 +948,8 @@ class Team:
 
     def open_voices(self) -> list[OpenVoice]:
         """Speakers of current transcripts whom nobody has said who they are, with a voiceprint: undecided ones,
-        and those taken by voice alone for an unnamed person who has no twin (``person_id``). What a colleague who
+        those the owner could not name, and those taken by voice alone for an unnamed person who has no twin
+        (``person_id``). What a colleague who
         recorded their own voice may be offered to recognise themselves by (``web.voice``)."""
         with self.library.read() as db:
             rows = {
@@ -955,7 +968,8 @@ class Team:
                 if not speaker.embedding:
                     continue
                 row = rows.get((recording.id, speaker.id))
-                if row is None or row["decision"] == "none":
+                # A voice the owner could not name is still the colleague's own to recognise.
+                if row is None or row["decision"] in {"none", "unknown"}:
                     person_id = None
                 elif row["decision"] == "confirmed" and row["auto"] and row["person_id"] in unnamed:
                     person_id = row["person_id"]
@@ -983,6 +997,22 @@ class Team:
             row = rows.get(speaker.id)
             if speaker.embedding and row is not None and row["decision"] == "confirmed" and row["person_id"]:
                 found.append((str(row["person_id"]), names.get(row["person_id"], ""), speaker.embedding))
+        return found
+
+    def _strangers(self, db: sqlite3.Connection) -> list[list[float]]:
+        """The voiceprints of speakers the owner said are nobody they know, in current transcripts."""
+        found = []
+        rows = db.execute(
+            "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
+            "AND r.transcript_id = a.transcript_id WHERE a.decision = 'unknown' AND a.auto = 0"
+        ).fetchall()
+        for recording_id, speaker_id in rows:
+            recording = self.library.get(recording_id)
+            speaker = next(
+                (s for s in (self.library.speakers(recording) if recording else None) or () if s.id == speaker_id), None
+            )
+            if speaker is not None and speaker.embedding:
+                found.append(speaker.embedding)
         return found
 
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:

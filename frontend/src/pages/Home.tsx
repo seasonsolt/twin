@@ -21,6 +21,8 @@ import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
 import type { LibraryState } from './Library';
+import { NewTwinForm } from '../components/layout/NewTwin';
+import { usePersonas } from '../stores/personas';
 
 const STEPS: [string, string][] = [
   ['转写，区分说话人', '每段录音只转写一次。'],
@@ -76,6 +78,28 @@ export function Home() {
     />
   );
   const fresh = library !== null && library.recordings.length === 0;
+  // Someone without a twin of their own can start with one of themselves, beside the team's recordings.
+  const ownTwin = usePersonas((state) =>
+    state.items.some((item) => item.mine || (item.can_manage ?? true)),
+  );
+  useEffect(() => {
+    void usePersonas
+      .getState()
+      .refresh()
+      .catch(() => {});
+  }, []);
+  const drop = (
+    <FileDrop
+      label="添加录音"
+      size={ownTwin ? 'lg' : 'md'}
+      title="把会议录音拖到这里"
+      inputLabel="选择录音文件"
+      accept={MEDIA_ACCEPT}
+      disabled={uploading}
+      onFiles={(files) => void add(files)}
+      hint="音频或视频都可以，一次可以选多个。只有你的账号能看到。"
+    />
+  );
   return (
     <div className="home-page">
       <Page gap={8}>
@@ -98,24 +122,48 @@ export function Home() {
           <Skeleton className="h-64" />
         ) : fresh ? (
           <>
-            <Stack as="header" gap={2}>
-              <Heading level={2} size="display" align="center">
-                从一段会议录音开始
-              </Heading>
-              <Text tone="secondary" align="center">
-                不用先建档。上传后自动区分每个人、认出已知的人，新出现的人自动建档。
-              </Text>
-            </Stack>
-            <FileDrop
-              label="添加录音"
-              size="lg"
-              title="把会议录音拖到这里"
-              inputLabel="选择录音文件"
-              accept={MEDIA_ACCEPT}
-              disabled={uploading}
-              onFiles={(files) => void add(files)}
-              hint="音频或视频都可以，一次可以选多个。只有你的账号能看到。"
-            />
+            {ownTwin ? (
+              <>
+                <Stack as="header" gap={2}>
+                  <Heading level={2} size="display" align="center">
+                    从一段会议录音开始
+                  </Heading>
+                  <Text tone="secondary" align="center">
+                    不用先建档。上传后自动区分每个人、认出已知的人，新出现的人自动建档。
+                  </Text>
+                </Stack>
+                {drop}
+              </>
+            ) : (
+              <Grid columns={2}>
+                <Card as="section" aria-labelledby="start-self">
+                  <Stack gap={4}>
+                    <Stack gap={1}>
+                      <Heading id="start-self" level={2} size="title">
+                        给自己建分身
+                      </Heading>
+                      <Text size="sm" tone="secondary">
+                        它从你说过的话里学你怎么想、怎么说。
+                      </Text>
+                    </Stack>
+                    <NewTwinForm />
+                  </Stack>
+                </Card>
+                <Card as="section" aria-labelledby="start-team">
+                  <Stack gap={4}>
+                    <Stack gap={1}>
+                      <Heading id="start-team" level={2} size="title">
+                        从团队会议录音开始
+                      </Heading>
+                      <Text size="sm" tone="secondary">
+                        自动区分每个人、认出已知的人，新出现的人自动建档。
+                      </Text>
+                    </Stack>
+                    {drop}
+                  </Stack>
+                </Card>
+              </Grid>
+            )}
             <UploadList
               picks={unfinished}
               uploading={uploading}
@@ -139,10 +187,6 @@ export function Home() {
                 </Card>
               ))}
             </Grid>
-            <Text tone="secondary" align="center">
-              想先给自己建一个分身？
-              <TextLink to="/twins?create=1">用文字资料新建</TextLink>
-            </Text>
           </>
         ) : (
           <>

@@ -13,7 +13,6 @@ import { Profile } from '../pages/Profile';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
 import { Questionnaire } from '../pages/Questionnaire';
-import { Onboarding } from '../pages/Onboarding';
 import { Login } from '../features/auth/Login';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
@@ -172,7 +171,7 @@ it.each([
       'text-canvas',
     );
     expect(
-      within(sheet).getByRole('link', { name: '＋ 新建分身' }),
+      within(sheet).getByRole('button', { name: '＋ 新建分身' }),
     ).toBeEnabled();
     expect(
       within(sheet).getByRole('link', { name: '全部分身' }),
@@ -220,18 +219,6 @@ it.each([true, false])(
     }
   },
 );
-
-it('keeps the onboarding portrait and live name on the band above four steps', async () => {
-  mount(<Onboarding identity={identity} onDone={vi.fn()} />, '/chat');
-  expect(
-    screen.getByRole('banner', { name: '小林的舞台' }).querySelector('img'),
-  ).not.toBeNull();
-  expect(screen.getAllByRole('button', { name: /第 \d 步/ })).toHaveLength(4);
-  fireEvent.change(screen.getByRole('textbox', { name: '名字' }), {
-    target: { value: '阿宁' },
-  });
-  expect(screen.getByRole('banner', { name: '阿宁的舞台' })).toBeVisible();
-});
 
 it('renders persona-free login and waitlist heroes even with a previous persona in memory', async () => {
   mount(<Login />, '/login');

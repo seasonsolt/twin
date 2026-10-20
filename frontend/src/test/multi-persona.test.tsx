@@ -251,22 +251,25 @@ it('requires delete confirmation and purges only the deleted persona browser rec
   expect(sessionStorage.getItem(CHAT_KEY)).toBe('default history');
 });
 
-it('creates, switches and opens onboarding even though the new identity already has a name', async () => {
+it('creates a twin from the switcher in place and sets it up in its chat', async () => {
   window.location.hash = '#/chat';
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole('button', { name: /^切换分身/ }));
-  await user.click(screen.getByRole('link', { name: '＋ 新建分身' }));
+  await user.click(screen.getByRole('button', { name: '＋ 新建分身' }));
+  expect(window.location.hash).toBe('#/chat');
   await user.type(
     await screen.findByRole('textbox', { name: '分身名字' }),
     '新的分身',
   );
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
-  await screen.findByRole('heading', { name: '你是谁' });
-  expect(screen.getByRole('heading', { name: '新的分身' })).toBeVisible();
+  expect(
+    await screen.findByRole('region', { name: '让新的分身认识你' }),
+  ).toBeVisible();
   expect(getPersonaId()).toBe(NEW);
-  expect(screen.getByRole('textbox', { name: '名字' })).toHaveValue('新的分身');
-  expect(screen.getByRole('heading', { name: '新的分身' })).toBeVisible();
+  expect(
+    screen.queryByRole('textbox', { name: '名字' }),
+  ).not.toBeInTheDocument();
 });
 
 function Conversation() {

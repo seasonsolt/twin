@@ -7,6 +7,7 @@ import { Home } from '../pages/Home';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
 import { useAuth } from '../stores/auth';
+import { usePersonas } from '../stores/personas';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -49,10 +50,12 @@ beforeEach(() => {
   };
   people = [];
   useAuth.setState({ identity: null });
+  usePersonas.setState({ items: [] });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library') return json(state);
+      if (url === '/api/personas') return json(usePersonas.getState().items);
       if (url === '/api/library/people') return json({ items: people });
       if (url === '/api/library/review')
         return json({ items: [], voices: [], fragments: [], unsorted });
@@ -71,16 +74,45 @@ const show = () =>
     </MemoryRouter>,
   );
 
-it('starts an account without recordings from uploading one, not from setting up a twin', async () => {
+it('starts an account without recordings or a twin from two cards: a twin of themselves, or the team’s recordings', async () => {
+  show();
+  const self = await screen.findByRole('region', { name: '给自己建分身' });
+  expect(
+    within(self).getByRole('textbox', { name: '分身名字' }),
+  ).toBeInTheDocument();
+  expect(
+    within(self).getByText('下一步：加一段会议录音，勾出哪位是你。'),
+  ).toBeInTheDocument();
+  const team = screen.getByRole('region', { name: '从团队会议录音开始' });
+  expect(
+    within(team).getByRole('region', { name: '添加录音' }),
+  ).toBeInTheDocument();
+  expect(within(team).getByRole('button', { name: '选择文件' })).toBeEnabled();
+  expect(
+    screen.getByRole('list', { name: '接下来会发生什么' }).children,
+  ).toHaveLength(3);
+});
+
+it('starts an account that has its own twin from uploading a recording, not from another twin', async () => {
+  usePersonas.setState({
+    items: [
+      {
+        id: 'p-own',
+        name: '我',
+        avatar_url: null,
+        sources: 3,
+        created_at: '',
+        is_default: false,
+        can_manage: true,
+      },
+    ],
+  });
   show();
   expect(
     await screen.findByRole('heading', { name: '从一段会议录音开始' }),
   ).toBeInTheDocument();
   expect(screen.getByRole('region', { name: '添加录音' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '选择文件' })).toBeEnabled();
-  expect(
-    screen.getByRole('list', { name: '接下来会发生什么' }).children,
-  ).toHaveLength(3);
+  expect(screen.queryByRole('region', { name: '给自己建分身' })).toBeNull();
 });
 
 it('shows the team, what needs settling and the way to upload more', async () => {
@@ -150,7 +182,7 @@ it('keeps the service status off the team page, even for administrators', async 
     identity: { email: 'a@example.com', admin: true, auth_enabled: true },
   });
   show();
-  await screen.findByRole('heading', { name: '从一段会议录音开始' });
+  await screen.findByRole('heading', { name: '从团队会议录音开始' });
   expect(screen.queryByText('GPU 服务')).toBeNull();
   expect(
     vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('admin')),

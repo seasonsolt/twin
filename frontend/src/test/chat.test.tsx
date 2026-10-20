@@ -112,7 +112,8 @@ beforeEach(async () => {
     if (url === '/api/status')
       return json({
         target_name: '测试人',
-        counts: { sources: 0, items: 0 },
+        // Not a new twin: the setup card has its own tests (setup-card.test.tsx).
+        counts: { sources: 1, items: 0 },
       });
     if (url === '/api/identity') return json({ about: '关注团队的协作方式。' });
     if (url === '/api/persona/state') return json({ stale: true });

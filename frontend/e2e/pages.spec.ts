@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi, NOW, weekly } from './mockApi';
+import { mockApi, newTwin, NOW, weekly } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
@@ -71,6 +71,22 @@ const pages: {
       page.addInitScript(() =>
         localStorage.setItem('twin.current.conversation', 'c-plan'),
       ),
+  },
+  {
+    // Right after a twin is made: its chat, with a recording added and the speakers to pick from.
+    name: 'chat-setup',
+    path: '/#/chat',
+    ready: '这个版本先别上',
+    setup: async (page) => {
+      for (const [path, json] of [
+        ['**/api/identity', newTwin.identity],
+        ['**/api/status', newTwin.status],
+        [/\/api\/persona\/sources\?/u, newTwin.sources],
+        ['**/api/persona/sources/s-new/speakers', newTwin.speakers],
+        ['**/api/conversations', []],
+      ] as const)
+        await page.route(path, (route) => route.fulfill({ json }));
+    },
   },
   { name: 'twins', path: '/#/twins', ready: '周石言' },
   { name: 'work', path: '/#/work', ready: '按我的口吻写一份本周周报' },

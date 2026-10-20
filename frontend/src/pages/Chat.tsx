@@ -64,6 +64,7 @@ import {
   PersonaPortrait,
 } from '../components/layout/PersonaSwitcher';
 import { useIdentity } from '../features/identity/useIdentity';
+import { SetupCard } from '../features/setup/SetupCard';
 import { PersonaFade } from '../components/motion/PersonaFade';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -117,6 +118,18 @@ export function Chat() {
   );
   const name = status?.target_name || persona?.name || '本人';
   const canManage = persona?.can_manage ?? true;
+  // A twin still getting to know its person shows how in its chat until this visit ends, even once it is done.
+  const [setup, setSetup] = useState(false);
+  const newTwin =
+    canManage &&
+    !!identity.data &&
+    !identity.data.visitor &&
+    (!!identity.data.onboarding_pending || status?.counts.sources === 0);
+  useEffect(() => {
+    if (newTwin) setSetup(true);
+  }, [newTwin, setSetup]);
+  // While its steps show, the card is the empty chat's only content; once it remembers, the greeting returns.
+  const [setupReady, setSetupReady] = useState(false);
   const [stale, setStale] = useState(false);
   const [stateError, setStateError] = useState('');
   const [capabilities, setCapabilities] = useState<Capabilities | null>(
@@ -504,21 +517,36 @@ export function Chat() {
                       )}
                       {!chat.turns.length && !chat.loading && (
                         <ChatSurface variant="empty">
-                          <ChatIdentity size="empty">
-                            <PersonaPortrait persona={persona} />
-                          </ChatIdentity>
-                          <Heading
-                            level={2}
-                            size="display"
-                            weight="bold"
-                            align="center"
-                          >
-                            和{name}聊聊
-                          </Heading>
-                          {identity.data?.about && (
-                            <Text tone="secondary" align="center">
-                              {identity.data.about}
-                            </Text>
+                          {(!setup || setupReady) && (
+                            <>
+                              <ChatIdentity size="empty">
+                                <PersonaPortrait persona={persona} />
+                              </ChatIdentity>
+                              <Heading
+                                level={2}
+                                size="display"
+                                weight="bold"
+                                align="center"
+                              >
+                                和{name}聊聊
+                              </Heading>
+                              {identity.data?.about && (
+                                <Text tone="secondary" align="center">
+                                  {identity.data.about}
+                                </Text>
+                              )}
+                            </>
+                          )}
+                          {setup && identity.data && (
+                            <div className="w-full max-w-xl text-left">
+                              <SetupCard
+                                name={name}
+                                identity={identity.data}
+                                onIdentityChanged={identity.reload}
+                                onAsk={(question) => void chat.send(question)}
+                                onReadyChange={setSetupReady}
+                              />
+                            </div>
                           )}
                         </ChatSurface>
                       )}

@@ -233,7 +233,7 @@ it('offers only whole-recording or observer choices without diarization', async 
   await waitFor(() => expect(chosen).toEqual([]));
 });
 
-it('shows the onboarding recording shortcut only when candidates exist', async () => {
+it('shows the recording shortcut only when candidates exist', async () => {
   chosen = ['S1'];
   render(<RecordingShortcut />);
   await screen.findByText('从你的视频里挑一个');
@@ -250,7 +250,7 @@ it('shows the onboarding recording shortcut only when candidates exist', async (
   await waitFor(() => expect(adopt).toBeVisible());
 });
 
-it('hides the onboarding recording shortcut when no candidates exist', async () => {
+it('hides the recording shortcut when no candidates exist', async () => {
   await act(async () => {
     render(<RecordingShortcut />);
   });

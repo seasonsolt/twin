@@ -76,7 +76,7 @@ stdout 最后一行：`{"ok": true, "candidates": [{"time": 2.5, "image": "<out_
 
 ### 说话人与候选 API
 
-- `GET /api/persona/sources/{id}/speakers`：claimed、兼容 speaker、diarized、also_suggested（其他可能本人 ID 列表）、confirmed、automatic、pending、speakers（id/seconds/similarity/suggested/also_suggested/samples，其中两种 suggested 为布尔值）、voices/portraits（id/url 等）、candidate_error。
+- `GET /api/persona/sources/{id}/speakers`：claimed、兼容 speaker、diarized、also_suggested（其他可能本人 ID 列表）、confirmed、automatic、pending、speakers（id/seconds/similarity/suggested/also_suggested/quote/samples，其中两种 suggested 为布尔值，quote 是这位说话人最长的一句、超过 30 字截断加省略号，没有文字时为空串）、voices/portraits（id/url 等）、candidate_error。
 - `PUT /api/persona/sources/{id}/speaker {"speakers": ["S1", "S3"]}`，空列表表示旁观资料；继续接受旧 `{"speaker": "S1"}` / `{"speaker": null}`。两种字段只能提供一种，speakers 不接受 null；校验所有 ID 属于本条录音，按请求顺序去重。返回新确认结果与候选处理 job_id，自动排队重建。
 - `POST .../adopt-voice {"candidate": "<id>"}` / `POST .../adopt-portrait {"candidate": "<id>"}`：复用本人的 AssetStore 与手动处理，返回更新后的资产 profile。
 - 试听与候选 URL 为同源 GET，支持 `?persona=<id>`，与其他媒体 GET 使用相同的分身路由；候选 ID 随每次确认更换，旧 URL 返回 404。前端每个 audio/img URL 都显式携带 persona。

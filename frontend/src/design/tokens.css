@@ -1329,10 +1329,6 @@
 .persona-row:focus-visible {
   outline-color: var(--accent);
 }
-.onboarding-stage {
-  min-height: calc(360px + env(safe-area-inset-top, 0px));
-  padding-bottom: 80px;
-}
 .stage-flow .flow-static,
 .stage-flow .flow-animated > div {
   background: transparent;
@@ -1546,10 +1542,6 @@
   .stage-flow .stage-step[aria-current='step']::after {
     background: var(--accent);
   }
-  .onboarding-stage {
-    min-height: 300px;
-    padding-bottom: 28px;
-  }
 }
 @media (min-width: 1200px) {
   .content-main {
@@ -1729,7 +1721,7 @@
     gap: 32px;
   }
   .entry-page,
-  .onboarding-page .stage-flow {
+  .stage-flow {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: center;
@@ -1763,23 +1755,23 @@
   .entry-page .stage-brand-mark span + span {
     left: 100px;
   }
-  :is(.entry-page, .onboarding-page) .stage-person {
+  .entry-page .stage-person {
     padding-top: 0;
   }
-  :is(.entry-page, .onboarding-page) .stage-portrait {
+  .entry-page .stage-portrait {
     width: 240px;
     height: 240px;
   }
-  :is(.entry-page, .onboarding-page) .stage-name {
+  .entry-page .stage-name {
     font-size: 64px;
   }
-  :is(.entry-page, .onboarding-page) .stage-sun {
+  .entry-page .stage-sun {
     width: 200px;
     height: 200px;
     top: 15%;
     left: -60px;
   }
-  :is(.entry-page, .onboarding-page) .stage-coral {
+  .entry-page .stage-coral {
     width: 160px;
     height: 160px;
     top: 65%;
@@ -1811,6 +1803,10 @@
     height: 32px;
     margin: 4px 0 12px;
     outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .app-shell .rail-current-empty {
+    outline: 1.5px dashed var(--text-tertiary);
     outline-offset: 2px;
   }
   .nav-rail .rail-current .persona-portrait {

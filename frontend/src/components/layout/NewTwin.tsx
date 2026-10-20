@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
+import { create } from 'zustand';
 import { Plus } from 'lucide-react';
 import {
   Button,
@@ -25,16 +26,22 @@ const accountName = () =>
     .slice(0, 20)
     .join('');
 
+/** The new-twin card opened from somewhere without a trigger of its own (the twin switcher's link). */
+export const useNewTwinCard = create<{
+  open: boolean;
+  set: (open: boolean) => void;
+}>((set) => ({ open: false, set: (open) => set({ open }) }));
+
 /**
  * The name of a new twin, its first character shown as it is typed, and 创建并开始, which makes it, switches to it
  * and opens its chat. Used on the page itself where there is nothing else to look at, and in a small card otherwise.
  */
 export function NewTwinForm({
-  prefill = false,
+  prefill,
   onCreated,
   onCancel,
 }: {
-  /** Start from the account's name. */
+  /** Start from the account's name; by default only while the signed-in person has no twin of their own. */
   prefill?: boolean;
   /** Called once the twin exists, before its chat opens. */
   onCreated?: () => void;
@@ -42,7 +49,11 @@ export function NewTwinForm({
   onCancel?: () => void;
 }) {
   const navigate = useNavigate();
-  const [draft, setDraft] = useState(() => (prefill ? accountName() : ''));
+  const [draft, setDraft] = useState(() =>
+    (prefill ?? !usePersonas.getState().items.some((item) => item.mine))
+      ? accountName()
+      : '',
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const nameId = useId();
@@ -116,7 +127,7 @@ export function NewTwinForm({
         )}
       </Stack>
       <Text size="sm" tone="secondary">
-        每个分身有独立的记忆和聊天。创建后添加录音或资料，勾出哪位是你，就能开始聊。
+        下一步：加一段会议录音，勾出哪位是你。
       </Text>
     </Stack>
   );
@@ -193,7 +204,6 @@ export function NewTwin({
             新建分身
           </Heading>
           <NewTwinForm
-            prefill={initialOpen}
             onCreated={() => changeOpen(false)}
             onCancel={() => {
               returnFocus.current = true;
@@ -257,11 +267,28 @@ export function NewTwin({
           trigger.current?.focus();
         }}
       >
-        <NewTwinForm
-          prefill={initialOpen}
-          onCreated={() => changeOpen(false)}
-        />
+        <NewTwinForm onCreated={() => changeOpen(false)} />
       </Dialog>
     </>
+  );
+}
+
+/** The new-twin card for `useNewTwinCard`: over the page in view, which is there again when it closes. */
+export function NewTwinHost() {
+  const { open, set } = useNewTwinCard();
+  const mobile = useMobile();
+  // Leaving the workspace (signing out) leaves no card open for the next time it is shown.
+  useEffect(() => () => useNewTwinCard.getState().set(false), []);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={set}
+      title="新建分身"
+      variant={mobile ? 'sheet' : 'center'}
+      className="new-twin"
+      inPlace
+    >
+      <NewTwinForm onCreated={() => set(false)} />
+    </Dialog>
   );
 }

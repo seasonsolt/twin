@@ -23,6 +23,7 @@ import { useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
 import { useOpenSystem } from '../../features/admin/SystemDialog';
 import { PresetSvg } from '../../features/avatar/presets';
+import { useNewTwinCard } from './NewTwin';
 
 export function PersonaPortrait({ persona }: { persona?: Persona }) {
   const [failed, setFailed] = useState<string>();
@@ -229,7 +230,6 @@ export function PersonaSwitcher({
               { to: '/team', title: '团队' },
               { to: '/library', title: '录音库' },
               { to: '/twins', title: '全部分身' },
-              { to: '/twins?create=1', title: '＋ 新建分身' },
             ].map(({ to, title }) => (
               <TextLink
                 key={to}
@@ -242,6 +242,16 @@ export function PersonaSwitcher({
                 {title}
               </TextLink>
             ))}
+            {/* The card opens over the page in view rather than taking the person to the twins page. */}
+            <TextLink
+              onClick={() => {
+                navigating.current = true;
+                setOpen(false);
+                useNewTwinCard.getState().set(true);
+              }}
+            >
+              ＋ 新建分身
+            </TextLink>
             {identity?.admin && (
               <TextLink
                 onClick={() => {

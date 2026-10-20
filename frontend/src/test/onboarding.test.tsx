@@ -31,6 +31,7 @@ let identity: {
 };
 let status: Status;
 let processing: 'idle' | 'queued';
+let sources: object[];
 let fetcher: ReturnType<typeof vi.fn>;
 const json = (value: unknown) => new Response(JSON.stringify(value));
 beforeEach(() => {
@@ -38,6 +39,7 @@ beforeEach(() => {
   window.location.hash = '#/chat';
   sessionStorage.clear();
   processing = 'idle';
+  sources = [];
   useStatus.setState({ data: null, error: null });
   identity = {
     name: '本人',
@@ -78,7 +80,8 @@ beforeEach(() => {
     if (url === '/api/status') return Promise.resolve(json(status));
     if (url === '/api/persona/state')
       return Promise.resolve(json({ stale: false }));
-    if (isSourcesUrl(url)) return Promise.resolve(json(sourcesPage(url, [])));
+    if (isSourcesUrl(url))
+      return Promise.resolve(json(sourcesPage(url, sources)));
     if (isItemSummaryUrl(url)) return Promise.resolve(json(itemSummary([])));
     if (url.startsWith('/api/persona/items'))
       return Promise.resolve(json(itemsPage(url, [])));
@@ -99,98 +102,67 @@ beforeEach(() => {
       );
     if (url === '/api/media/capabilities')
       return Promise.resolve(json({ available: false }));
-    if (url === '/api/persona/notes')
+    if (url === '/api/persona/notes') {
+      sources = [
+        {
+          source_id: 'note',
+          title: '笔记',
+          status: 'processing',
+          detected_kind_label: '笔记',
+          remembered: 0,
+          first_date: null,
+        },
+      ];
       return Promise.resolve(json({ new: true }));
+    }
     throw new Error(url);
   });
   vi.stubGlobal('fetch', fetcher);
 });
 
 it.each([true, false])(
-  'shows a padded four-step flow with one Chinese final action (reduced motion: %s), then never shows again',
+  'opens a twin without memory on its chat, rail and all, with the setup card instead of a full-page flow (reduced motion: %s)',
   async (reduced) => {
     vi.mocked(useReducedMotion).mockReturnValue(reduced);
-    const view = render(<App />);
-    const heading = await screen.findByRole('heading', { name: '你是谁' });
-    expect(heading.closest('.effects-stepper-body')).toHaveClass(
-      'p-5',
-      'sm:p-6',
+    render(<App />);
+    // The whole app mounts first; give a loaded machine time.
+    const card = await screen.findByRole(
+      'region',
+      { name: '让本人认识你' },
+      { timeout: 5000 },
     );
     expect(
-      screen.queryByRole('navigation', { name: '主导航' }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '继续' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('名字'), {
-      target: { value: '小林' },
-    });
-    fireEvent.change(screen.getByLabelText('介绍一下自己'), {
-      target: { value: '喜欢徒步' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    await screen.findByText('已保存，可以继续添加记忆。');
-    fireEvent.click(screen.getByRole('button', { name: '继续' }));
-    await screen.findByRole('heading', { name: '形象和声音' });
-    expect(await screen.findByRole('button', { name: '换一张' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: '录一段' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: '继续' }));
-    await screen.findByRole('heading', { name: '添加记忆' });
-    expect(await screen.findByText(/^共 0 份/)).toHaveTextContent(
-      '共 0 份 · 已记住 0 份',
-    );
+      screen.getByRole('navigation', { name: '主导航' }),
+    ).toBeInTheDocument();
     expect(
-      screen.getByText(/^共 0 份/).closest('[aria-live]'),
-    ).toHaveTextContent('记忆整理排队中');
-    expect(screen.getAllByRole('tab')).toHaveLength(3);
-    expect(
-      screen.getByRole('button', { name: '正在整理记忆…' }),
-    ).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: '在后台继续处理' }));
-    const memoryInput = screen.getByLabelText('要记住的文字');
-    fireEvent.change(memoryInput, {
-      target: { value: '今天去散步了' },
-    });
+      within(card).getByRole('region', { name: '添加会议录音' }),
+    ).toBeVisible();
+    expect(screen.queryByRole('heading', { name: '你是谁' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '跳过' })).toBeNull();
+    // Writing a few lines stands in for a recording; the card follows it into 整理记忆.
     fireEvent.click(
-      within(memoryInput.closest('form')!).getByRole('button', {
-        name: '保存',
-      }),
+      within(card).getByRole('button', { name: '没有录音？写一段或上传文档' }),
     );
+    fireEvent.change(
+      within(card).getByRole('textbox', { name: '写一段关于你的事' }),
+      { target: { value: '今天去散步了' } },
+    );
+    processing = 'queued';
+    fireEvent.click(within(card).getByRole('button', { name: '保存' }));
     await waitFor(() =>
       expect(
         fetcher.mock.calls.some(([url]) => url === '/api/persona/notes'),
       ).toBe(true),
     );
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: '继续' })).toBeEnabled(),
-    );
-    fireEvent.click(screen.getByRole('button', { name: '继续' }));
-    const start = await screen.findByRole('button', { name: '开始聊天' });
-    expect(screen.getAllByRole('button', { name: '开始聊天' })).toHaveLength(1);
     expect(
-      screen.queryByRole('button', { name: /Complete|Continue|Back|完成/ }),
-    ).not.toBeInTheDocument();
-    expect(start.textContent).toBe('开始聊天');
-    fireEvent.click(start);
-    await screen.findByRole('heading', { name: '小林 / 新对话' });
-    view.unmount();
-    render(<App />);
-    await screen.findByRole('heading', { name: '小林 / 新对话' });
-    expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
+      await within(card).findByText(
+        '正在从你说的话里整理，好了会在这里告诉你。',
+      ),
+    ).toBeVisible();
   },
 );
-it('skips persistently without adding a self-introduction', async () => {
-  const view = render(<App />);
-  await screen.findByRole('heading', { name: '你是谁' });
-  fireEvent.click(screen.getByRole('button', { name: '跳过' }));
-  await screen.findByRole('navigation', { name: '主导航' });
-  expect(identity.name_source).toBe('user');
-  expect(identity.about).toBe('');
-  view.unmount();
-  render(<App />);
-  await screen.findByRole('navigation', { name: '主导航' });
-  expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
-});
 it.each(['user', 'memories'])(
-  'does not onboard when %s is already present; navigation has chat, work, profile and ledger',
+  'shows no setup card when %s is already present; navigation has chat, work, profile and ledger',
   async (present) => {
     if (present === 'user') identity.name_source = 'user';
     else status.counts.sources = 1;
@@ -202,6 +174,8 @@ it.each(['user', 'memories'])(
         .map((link) => link.textContent),
     ).toEqual(['聊天', '工作', '档案', '承诺账本']);
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
+    if (present === 'memories')
+      expect(screen.queryByRole('region', { name: /认识你$/ })).toBeNull();
   },
 );
 it.each(['persona', 'identity'])(

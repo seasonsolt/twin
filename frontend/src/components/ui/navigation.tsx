@@ -150,13 +150,16 @@ export function Switch({
 
 export function Tooltip({
   label,
+  hidden = false,
   children,
 }: {
   label: string;
+  /** Keep it out of the way, for instance while what the trigger opened is showing. */
+  hidden?: boolean;
   children: ReactElement;
 }) {
   return (
-    <TooltipPrimitive.Root>
+    <TooltipPrimitive.Root open={hidden ? false : undefined}>
       <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content

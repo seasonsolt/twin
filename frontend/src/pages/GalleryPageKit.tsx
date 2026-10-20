@@ -630,6 +630,15 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             </PlainButton>
             <NavPill to="/gallery" icon={Sparkles} label="导航" />
             <StepNumber>1</StepNumber>
+            <StepNumber size="sm" state="done">
+              1
+            </StepNumber>
+            <StepNumber size="sm" state="current">
+              2
+            </StepNumber>
+            <StepNumber size="sm" state="pending">
+              3
+            </StepNumber>
             <StatusDot tone="success" />
           </Row>
           <HistoryBar

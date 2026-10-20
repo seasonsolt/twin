@@ -5,7 +5,7 @@ import {
   type ReactNode,
 } from 'react';
 import { motion } from 'motion/react';
-import { Inbox, MoreHorizontal } from 'lucide-react';
+import { Check, Inbox, MoreHorizontal } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { Pressable } from '../motion';
 import { cn } from '../../lib/utils';
@@ -584,14 +584,37 @@ export function Disclosure({
   );
 }
 
-/** The number of a step in a short how-it-works list. */
-export function StepNumber({ children }: { children: ReactNode }) {
+/**
+ * The number of a step in a short how-it-works list. In a list worked through in order, `state` marks the steps:
+ * done shows a tick, current is filled with the accent, pending is only outlined.
+ */
+export function StepNumber({
+  state,
+  size = 'md',
+  children,
+}: {
+  state?: 'done' | 'current' | 'pending';
+  /** sm: beside a line of text in a card. */
+  size?: 'sm' | 'md';
+  children: ReactNode;
+}) {
   return (
     <span
       aria-hidden
-      className="grid size-8 shrink-0 place-items-center rounded-full bg-primary font-semibold text-canvas"
+      className={cn(
+        'grid shrink-0 place-items-center rounded-full font-semibold',
+        size === 'sm' ? 'size-6 text-xs' : 'size-8',
+        state === undefined && 'bg-primary text-canvas',
+        state === 'done' && 'bg-success text-on-accent',
+        state === 'current' && 'bg-accent text-on-accent',
+        state === 'pending' && 'border-2 border-tertiary/50 text-tertiary',
+      )}
     >
-      {children}
+      {state === 'done' ? (
+        <Check className={size === 'sm' ? 'size-3.5' : 'size-4'} />
+      ) : (
+        children
+      )}
     </span>
   );
 }

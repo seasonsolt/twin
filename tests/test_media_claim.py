@@ -34,6 +34,7 @@ from twin.persona.schema import Source, SourceKind
 from twin.persona.sources import parse_media
 from twin.persona.store import PersonaStore
 from twin.web import create_app
+from twin.web.claims import QUOTE_CHARS, quote
 
 
 def tone(seconds: int = 24) -> bytes:
@@ -50,6 +51,20 @@ def segments() -> list[Segment]:
         Segment(start=0, end=12, speaker="S1", text="我喜欢读书。"),
         Segment(start=12, end=24, speaker="S2", text="我喜欢散步。"),
     ]
+
+
+def test_a_speaker_is_quoted_by_their_longest_line_cut_to_one_row() -> None:
+    long = "这个版本先别上，" * 6
+    analysis = Analysis(
+        segments=[
+            Segment(start=0, end=2, speaker="S1", text="好。"),
+            Segment(start=2, end=9, speaker="S1", text=long),
+            Segment(start=9, end=12, speaker="S2", text="  "),
+        ],
+        speakers=[Speaker(id="S1", seconds=9), Speaker(id="S2", seconds=3)],
+    )
+    assert quote(analysis, "S1") == long[:QUOTE_CHARS] + "…"
+    assert quote(analysis, "S2") == ""
 
 
 @pytest.mark.parametrize(
@@ -401,6 +416,7 @@ def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monke
         initial = client.get(base + "/speakers").json()
         assert not initial["confirmed"] and len(initial["speakers"]) == 2
         assert len(initial["speakers"][0]["samples"]) == 3
+        assert [s["quote"] for s in initial["speakers"]] == ["我喜欢读书。", "我喜欢散步。"]
         sample = initial["speakers"][0]["samples"][0]
         assert client.get(sample + "&persona=default").headers["content-type"] == "audio/wav"
         assert client.put(base + "/speaker", json={"speaker": "missing"}, headers={"X-Twin": "1"}).status_code == 400

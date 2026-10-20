@@ -592,6 +592,46 @@ const sourceSummary = {
   failed: 0,
 };
 
+/** A twin made a moment ago: its chat shows how it gets to know its person, waiting on which speaker is them. */
+const newRecording = memory('s-new', '2026-10-18 周会', 'needs_speaker', {
+  kind: 'audio',
+  duration_s: 2520,
+});
+export const newTwin = {
+  identity: { ...identity, about: '', onboarding_pending: true },
+  status: { ...status, counts: { sources: 1, items: 0 } },
+  sources: {
+    items: [newRecording],
+    total: 1,
+    summary: {
+      ...sourceSummary,
+      total: 1,
+      duration_s: 2520,
+      needs_speaker: 1,
+      needs_name: 0,
+      busy: 0,
+      remembered: 0,
+    },
+    attention: [newRecording],
+  },
+  speakers: {
+    diarized: true,
+    speakers: [
+      ['S1', 1080, '这个版本先别上，等客户那边确认了再说'],
+      ['S2', 900, '客户下周要看演示，我们得先把流程走通'],
+      ['S3', 540, '设计稿我今晚再改一版，明早发群里'],
+    ].map(([id, seconds, quote], i) => ({
+      id,
+      seconds,
+      similarity: null,
+      suggested: false,
+      also_suggested: false,
+      quote,
+      samples: [`/api/persona/sources/s-new/samples/${i}/0`],
+    })),
+  },
+};
+
 // The system dialog administrators open from the rail: two services on the GPU machine, healthy now (the embedding
 // service had a bad hour), speech switched off, video not configured.
 const gpuNow = NOW.getTime() / 1000;

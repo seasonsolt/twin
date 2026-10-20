@@ -1,12 +1,6 @@
-import {
-  lazy,
-  startTransition,
-  Suspense,
-  useCallback,
-  useEffect,
-  useState,
-} from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Navigate, useLocation, useOutlet } from 'react-router';
+import { Plus } from 'lucide-react';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import {
   BookUser,
@@ -48,11 +42,10 @@ import {
 } from '../../stores/personas';
 import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
 import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
-import { NewTwin, NewTwinForm } from './NewTwin';
+import { NewTwin, NewTwinForm, NewTwinHost, useNewTwinCard } from './NewTwin';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import { THEMES, useTheme } from '../../stores/theme';
-import type { IdentityData } from '../../features/identity/useIdentity';
 const Claimed = lazy(() =>
   import('../../pages/Claimed').then((module) => ({
     default: module.Claimed,
@@ -61,11 +54,6 @@ const Claimed = lazy(() =>
 const MemberVoice = lazy(() =>
   import('../../pages/MemberVoice').then((module) => ({
     default: module.MemberVoice,
-  })),
-);
-const Onboarding = lazy(() =>
-  import('../../pages/Onboarding').then((module) => ({
-    default: module.Onboarding,
   })),
 );
 
@@ -138,7 +126,8 @@ function BottomTabs() {
 // Other twins shown in the rail beside the current one.
 const RAIL_SHORTCUTS = 2;
 
-function TwinRail() {
+/** `empty`: the account has no twin at all (not merely a list still loading). */
+function TwinRail({ empty = false }: { empty?: boolean }) {
   const { id, items, pendingId, refresh, switchTo } = usePersonas();
   const current = items.find((item) => item.id === id);
   // Collapsed to the current twin and the few used last; the rest are one click away in the switcher.
@@ -167,6 +156,7 @@ function TwinRail() {
     };
   }, [refresh]);
   const name = current?.name || '本人';
+  const [creating, setCreating] = useState(false);
   // Three scopes, top to bottom: the team's space, the twin being worked on with its own pages, the other twins.
   return (
     <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col items-center overflow-y-auto px-3 py-4">
@@ -183,15 +173,30 @@ function TwinRail() {
         aria-label={`当前分身：${name}`}
         className="flex flex-col items-center gap-1"
       >
-        <Tooltip label={`切换分身（当前：${name}）`}>
-          <span>
-            <PersonaSwitcher
-              label={`切换分身（当前：${name}）`}
-              className="rail-current"
-              trigger={<PersonaPortrait persona={current} />}
-            />
-          </span>
-        </Tooltip>
+        {!empty ? (
+          <Tooltip label={`切换分身（当前：${name}）`}>
+            <span>
+              <PersonaSwitcher
+                label={`切换分身（当前：${name}）`}
+                className="rail-current"
+                trigger={<PersonaPortrait persona={current} />}
+              />
+            </span>
+          </Tooltip>
+        ) : (
+          // No twin yet: an empty slot where it will be, which makes one.
+          <Tooltip label="新建分身">
+            <PlainButton
+              shape="circle"
+              aria-label="还没有分身，新建一个"
+              aria-haspopup="dialog"
+              className="rail-current rail-current-empty text-secondary"
+              onClick={() => useNewTwinCard.getState().set(true)}
+            >
+              <Plus aria-hidden className="size-4" />
+            </PlainButton>
+          </Tooltip>
+        )}
         <div className="w-full">
           <Navigation />
         </div>
@@ -229,9 +234,9 @@ function TwinRail() {
             </span>
           </Tooltip>
         )}
-        <Tooltip label="新建分身">
+        <Tooltip label="新建分身" hidden={creating}>
           <span>
-            <NewTwin variant="rail" />
+            <NewTwin variant="rail" onOpenChange={setCreating} />
           </span>
         </Tooltip>
       </div>
@@ -311,7 +316,7 @@ export function AppShell() {
   const location = useLocation();
   const conversation = conversationRoutes.has(location.pathname);
   const outlet = useOutlet();
-  // Account-level pages: not about the current twin, so no onboarding check or twin tabs.
+  // Account-level pages: not about the current twin, so no twin check or twin tabs.
   const twinLevel =
     location.pathname === '/twins' ||
     location.pathname === '/team' ||
@@ -319,9 +324,6 @@ export function AppShell() {
     location.pathname.startsWith('/library/') ||
     location.pathname === '/voice';
   const canManage = useCanManage();
-  const [onboarding, setOnboarding] = usePersonaState<IdentityData | null>(
-    null,
-  );
   const [checked, setChecked] = useState(false);
   const [noPersona, setNoPersona] = usePersonaState(false);
   useEffect(startStatusPolling, [personaId]);
@@ -346,21 +348,8 @@ export function AppShell() {
   useEffect(() => {
     if (twinLevel) return;
     const controller = new AbortController();
-    void Promise.all([
-      api<IdentityData>('/api/identity', { signal: controller.signal }),
-      api<{ counts: { sources: number } }>('/api/status', {
-        signal: controller.signal,
-      }),
-    ])
-      .then(([identity, status]) => {
-        if (
-          !controller.signal.aborted &&
-          !identity.visitor &&
-          (identity.onboarding_pending ||
-            (identity.name_source === 'config' && status.counts.sources === 0))
-        )
-          startTransition(() => setOnboarding(identity));
-      })
+    // Getting to know a new twin happens in its chat (the setup card); here only whether there is a twin at all.
+    void api('/api/identity', { signal: controller.signal })
       .catch((failure: unknown) => {
         if (
           !controller.signal.aborted &&
@@ -378,7 +367,7 @@ export function AppShell() {
         if (!controller.signal.aborted) setChecked(true);
       });
     return () => controller.abort();
-  }, [twinLevel, personaId, setOnboarding, setNoPersona]);
+  }, [twinLevel, personaId, setNoPersona]);
   if (waiting && !trying && location.pathname !== '/gallery')
     return (
       <Suspense
@@ -404,28 +393,14 @@ export function AppShell() {
   // No twin yet on a page about one (chat, work, profile): say so in the page and open the new-twin card right there,
   // in the workspace, rather than leaving it for a page of its own.
   const missing = noPersona && !twinLevel;
-  if (!missing && !twinLevel && location.pathname !== '/gallery') {
-    if (!checked) return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
-    if (onboarding)
-      return (
-        <>
-          <Suspense
-            fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}
-          >
-            <Onboarding
-              identity={onboarding}
-              onDone={() => setOnboarding(null)}
-            />
-          </Suspense>
-        </>
-      );
-  }
+  if (!missing && !twinLevel && location.pathname !== '/gallery' && !checked)
+    return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
   return (
     <div
       className={`app-shell flex min-h-dvh ${conversation ? 'conversation-shell' : ''}`}
     >
       <SkipLink target="main">跳至主内容</SkipLink>
-      {!mobile && <TwinRail />}
+      {!mobile && <TwinRail empty={noPersona} />}
       <div
         className={`app-column flex min-w-0 flex-1 flex-col ${conversation ? 'chat-app-column' : ''}`}
       >
@@ -468,10 +443,10 @@ export function AppShell() {
                           先新建一个分身
                         </Heading>
                         <Text tone="secondary">
-                          还没有人为你建分身。先建一个，介绍一下自己、加些资料，它就会慢慢认识你。
+                          还没有人为你建分身。先建一个，再加一段会议录音，它就会慢慢认识你。
                         </Text>
                       </Stack>
-                      <NewTwinForm prefill />
+                      <NewTwinForm />
                       {address && (
                         <TextLink size="sm" onClick={() => setListened(false)}>
                           其实开过会？回去再听一遍
@@ -494,6 +469,7 @@ export function AppShell() {
       </div>
       {mobile && !twinLevel && <BottomTabs />}
       {admin && <SystemDialog />}
+      <NewTwinHost />
     </div>
   );
 }

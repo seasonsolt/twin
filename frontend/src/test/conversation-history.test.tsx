@@ -285,7 +285,7 @@ it.each([false, true])(
     await waitFor(() => expect(server.rows.size).toBe(0));
     expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeNull();
     expect(
-      await within(panel).findByText('还没有对话，问他点什么吧'),
+      await within(panel).findByText(/^还没有对话，问.+点什么吧$/u),
     ).toBeVisible();
     await waitFor(() =>
       expect(screen.queryAllByRole('article')).toHaveLength(0),

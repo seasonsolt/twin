@@ -426,8 +426,14 @@ it.each([0, 1, 2])(
     const code = await requestCode(user);
     await user.type(code, '012345');
     await user.click(screen.getByRole('button', { name: '登录' }));
-    // No twin needs setting up first, not even for an account without one.
-    await screen.findByRole('heading', { name: '从一段会议录音开始' });
+    // No twin needs setting up first; an account without one is offered one beside the team's recordings.
+    await screen.findByRole('heading', {
+      name: count ? '从一段会议录音开始' : '从团队会议录音开始',
+    });
+    if (!count)
+      expect(
+        screen.getByRole('heading', { name: '给自己建分身' }),
+      ).toBeVisible();
     expect(window.location.hash).toBe('#/team');
   },
 );

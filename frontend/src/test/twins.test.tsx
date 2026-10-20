@@ -103,6 +103,11 @@ beforeEach(() => {
         ),
       );
     if (path === '/api/persona/processing') return json({ state: 'idle' });
+    if (/^\/api\/persona\/sources\/[^/]+\/speakers$/.test(path))
+      return json({
+        diarized: true,
+        speakers: [{ id: 'S1', seconds: 600, suggested: false, samples: [] }],
+      });
     if (path === '/api/media/capabilities')
       return json({ available: false, video: { available: false } });
     if (path === '/api/me/assets')
@@ -307,7 +312,7 @@ it('collapses the rail to the current and two recent twins, opens the rest from 
     'href',
     '#/twins',
   );
-  await user.click(within(twins).getByRole('link', { name: '＋ 新建分身' }));
+  await user.click(within(twins).getByRole('button', { name: '＋ 新建分身' }));
   expect(
     await screen.findByRole('form', { name: '新建分身' }),
   ).toBeInTheDocument();
@@ -473,19 +478,19 @@ it('deletes recoverably and restores a twin from the collapsed recent-deletions 
   ).toBe(true);
 });
 
-it('offers a return-to-twins link during onboarding', async () => {
+it('sets up a new twin from a card in its chat, with the rail still around it', async () => {
   items.push({ ...items[1], id: NEW, name: '新伙伴' });
   setPersonaId(NEW);
   usePersonas.setState({ id: NEW, items });
   window.location.hash = '#/chat';
   render(<App />);
-  const link = await screen.findByRole('link', { name: '返回我的分身' });
-  expect(link).toHaveAttribute('href', '#/twins');
-  await userEvent.setup().click(link);
+  const card = await screen.findByRole('region', { name: '让新伙伴认识你' });
+  expect(await within(card).findByText('哪位是你？')).toBeVisible();
   expect(
-    await screen.findByRole('heading', { name: '我的分身' }),
+    await within(card).findByRole('button', { name: '说话人 1 是我' }),
   ).toBeVisible();
-  expect(screen.getAllByRole('button', { name: /^和.*聊天$/u })).toHaveLength(
-    3,
-  );
+  expect(screen.getByRole('navigation', { name: '团队空间' })).toBeVisible();
+  expect(
+    screen.queryByRole('link', { name: '返回我的分身' }),
+  ).not.toBeInTheDocument();
 });

@@ -309,12 +309,13 @@
   overflow: visible;
 }
 .chat-redesign[data-empty='true'] .chat-thread {
-  justify-content: center;
+  justify-content: safe center;
   padding-bottom: 8dvh;
 }
+/* Centred while it fits; taller content (a new twin's setup card) scrolls from its top instead of being cut off. */
 .chat-redesign[data-empty='true'] .chat-scroll {
-  flex: 0 0 auto;
-  overflow: visible;
+  flex: 0 1 auto;
+  overflow-y: auto;
 }
 .chat-redesign[data-empty='true'] .chat-scroll > .chat-column-grid,
 .chat-redesign[data-empty='true'] .chat-conversation {
@@ -376,7 +377,7 @@
   .chat-redesign[data-empty='true'] .chat-scroll {
     flex: 1;
     display: grid;
-    align-items: center;
+    align-items: safe center;
     overflow-y: auto;
   }
   .chat-redesign .chat-surface-stage {

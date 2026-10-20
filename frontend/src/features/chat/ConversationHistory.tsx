@@ -194,7 +194,7 @@ export function ConversationHistory({
             {!chat.history.length &&
               !chat.historyLoading &&
               !chat.historyError && (
-                <p className="history-empty">还没有对话，问他点什么吧</p>
+                <p className="history-empty">还没有对话，问{name}点什么吧</p>
               )}
             {!!chat.history.length && !filtered.length && (
               <p className="history-empty">没有找到匹配的对话</p>

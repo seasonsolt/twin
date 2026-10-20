@@ -22,6 +22,19 @@ if TYPE_CHECKING:
     from .uploads import MediaIngestion
 
 
+# Long enough to recognise a voice by what it said, short enough for one line of a speaker row.
+QUOTE_CHARS = 30
+
+
+def quote(analysis: Analysis, speaker: str) -> str:
+    """The speaker's longest line, cut to one row, so a person can tell who it is without playing a clip."""
+    lines = [s.text.strip() for s in analysis.segments if s.speaker == speaker and s.text.strip()]
+    if not lines:
+        return ""
+    line = max(lines, key=len)
+    return line if len(line) <= QUOTE_CHARS else line[:QUOTE_CHARS] + "…"
+
+
 class SpeakerBody(BaseModel):
     speaker: str | None = Field(default=None, max_length=80)
     speakers: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = None
@@ -81,6 +94,7 @@ def register(app: FastAPI, settings: Settings, ingestion: MediaIngestion) -> Non
                     **s.model_dump(exclude={"embedding"}),
                     "suggested": s.id == analysis.suggested,
                     "also_suggested": s.id in analysis.also_suggested,
+                    "quote": quote(analysis, s.id),
                     "samples": [
                         f"{base}/samples/{position}/{i}?revision={analysis.revision}"
                         for i, _ in enumerate(sample_windows(analysis, s.id))

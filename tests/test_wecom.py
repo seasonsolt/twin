@@ -775,24 +775,27 @@ def test_channels_auth_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_deadline_final_precedes_slow_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     closed = []
 
-    async def stream(self: PersonaChat, messages: Sequence[ChatTurn]) -> AsyncIterator[str | ChatReply]:
-        try:
-            yield "草稿"
-            await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            await asyncio.sleep(0.2)
-            closed.append(True)
-            raise
-
-    monkeypatch.setattr(PersonaChat, "stream_reply", stream)
-
     async def check() -> None:
-        async with running(tmp_path, monkeypatch, answer_timeout=0.03) as (_, peer):
-            stamp = time.monotonic()
+        started, apologised = asyncio.Event(), asyncio.Event()
+
+        async def stream(self: PersonaChat, messages: Sequence[ChatTurn]) -> AsyncIterator[str | ChatReply]:
+            try:
+                started.set()
+                yield "草稿"
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                # A cleanup that ends only after the apology arrived: waiting for it first would never send one.
+                await apologised.wait()
+                closed.append(True)
+                raise
+
+        monkeypatch.setattr(PersonaChat, "stream_reply", stream)
+        # Long enough for the stream to start on a loaded machine, so the deadline cancels the stream itself.
+        async with running(tmp_path, monkeypatch, answer_timeout=1) as (_, peer):
             await peer.send(message())
             frames = await peer.receive("aibot_respond_msg")
-            assert frames[-1][1]["body"]["stream"]["content"] == APOLOGY
-            assert frames[-1][0] - stamp < 0.2 and not closed
+            assert started.is_set() and frames[-1][1]["body"]["stream"]["content"] == APOLOGY and not closed
+            apologised.set()
         assert closed == [True]
 
     asyncio.run(check())

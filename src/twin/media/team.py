@@ -24,6 +24,7 @@ import math
 import sqlite3
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel
@@ -49,9 +50,10 @@ AUTO_MIN_SECONDS = 20.0
 # A voice matching nobody becomes a new unnamed person after speaking this long; shorter ones wait for the owner.
 NEW_MIN_SECONDS = 60.0
 UNNAMED = "未命名"
-# Undecided speakers of different recordings are offered as one voice from this similarity to the voice's centroid,
-# so the owner settles a colleague once instead of once per meeting (``Team.voices``). Above ``SHOW``: a group is
-# confirmed as a whole, and a wrong one would give someone else's words to a twin.
+# Undecided speakers of different recordings are offered as one voice from this similarity to *every* speaker
+# already in it, so the owner settles a colleague once instead of once per meeting (``Team.voices``). Above ``SHOW``: a
+# group is confirmed as a whole, and a wrong one would give someone else's words to a twin. Matching a centroid
+# instead let similar colleagues chain into one voice on the pilot library (27 meetings, four people).
 GROUP = 0.6
 # A voice heard this little in all, and like nobody, is a fragment: offered together with the others, to set aside.
 FRAGMENT_SECONDS = 15.0
@@ -133,6 +135,16 @@ class Voice(BaseModel):
     seconds: float
     candidates: list[Candidate] = []
     near: bool = False
+
+
+@dataclass
+class _Group:
+    """A voice being gathered by ``Team.voices``."""
+
+    members: list[VoiceMember]
+    vectors: list[list[float]]
+    rejected: set[str]
+    likely: str | None
 
 
 class OpenVoice(BaseModel):
@@ -592,8 +604,9 @@ class Team:
     def voices(self, recordings: set[str] | None = None) -> tuple[list[Voice], list[Voice]]:
         """The undecided speakers of transcribed recordings, grouped by voice across recordings so a colleague heard
         in many meetings is asked about once: (voices, fragments). Longest speakers seed the groups, their
-        voiceprints being the steadiest; each later one joins the voice whose centroid it is closest to from
-        ``GROUP``, never one already speaking in its recording (diarization told them apart there). Fragments are
+        voiceprints being the steadiest; each later one joins the voice whose least similar speaker is still at
+        least ``GROUP`` alike, never one already speaking in its recording (diarization told them apart there) or
+        one whose speakers sound most like someone else than it does. Fragments are
         voices heard less than ``FRAGMENT_SECONDS`` and like nobody, which the owner can only set aside. Speakers
         someone disputed wait apart (``review``); those without a voiceprint wait in their recording.
         ``recordings``: only these."""
@@ -606,7 +619,8 @@ class Team:
                 )
             }
             prints = self._prints(db)
-        found: list[tuple[VoiceMember, list[float], set[str]]] = []
+        # (member, unit voiceprint, people it was denied to be, the person it sounds most like)
+        found: list[tuple[VoiceMember, list[float], set[str], str | None]] = []
         for recording in self.library.list():
             if recording.status != "ready" or recording.transcript_id is None:
                 continue
@@ -623,27 +637,37 @@ class Team:
                     speaker_id=speaker.id,
                     seconds=round(speaker.seconds, 1),
                 )
-                found.append((member, _unit(speaker.embedding), set(json.loads(row["rejected"])) if row else set()))
-        groups: list[tuple[list[VoiceMember], list[float], set[str]]] = []
-        for member, vector, rejected in sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id)):
+                rejected = set(json.loads(row["rejected"])) if row else set()
+                matched = self._match(speaker.embedding, prints, rejected)
+                found.append((member, _unit(speaker.embedding), rejected, matched[0].person_id if matched else None))
+        groups: list[_Group] = []
+        for member, vector, rejected, likely in sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id)):
             best, best_score = None, GROUP
             for group in groups:
-                if any(m.recording_id == member.recording_id for m in group[0]):
+                if likely and group.likely and likely != group.likely:
                     continue
-                score = _cosine(vector, group[1])
+                if any(m.recording_id == member.recording_id for m in group.members):
+                    continue
+                score = min(sum(a * b for a, b in zip(vector, other, strict=True)) for other in group.vectors)
                 if score >= best_score:
                     best, best_score = group, score
             if best is None:
-                groups.append(([member], list(vector), set(rejected)))
+                groups.append(_Group([member], [vector], set(rejected), likely))
             else:
-                best[0].append(member)
-                best[1][:] = [a + b for a, b in zip(best[1], vector, strict=True)]
-                best[2].update(rejected)
+                best.members.append(member)
+                best.vectors.append(vector)
+                best.rejected.update(rejected)
+                best.likely = best.likely or likely
         voices: list[Voice] = []
         fragments: list[Voice] = []
-        for members, centroid, rejected in groups:
+        for group in groups:
+            members = group.members
             key = "|".join(sorted(f"{m.recording_id}:{m.transcript_id}:{m.speaker_id}" for m in members))
-            candidates = self._match(centroid, prints, rejected)
+            centroid = [sum(values) for values in zip(*group.vectors, strict=True)]
+            # The person its speakers sound most like leads, as each of them would show it.
+            candidates = sorted(
+                self._match(centroid, prints, group.rejected), key=lambda c: c.person_id != group.likely
+            )
             voice = Voice(
                 id="voice_" + hashlib.sha256(key.encode()).hexdigest()[:12],
                 members=members,

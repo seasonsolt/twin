@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sqlite3
 import subprocess
@@ -420,6 +421,31 @@ def test_a_voice_heard_in_many_recordings_is_settled_once(tmp_path: Path) -> Non
     assert team.identities()[one] == (["张总"], 2) and team.voices()[1] == []
     with pytest.raises(ValueError, match="需要指定"):
         team.decide_voice([(two, revision(library, two)[0], "S2")], "confirm")
+
+
+def test_a_voice_never_chains_colleagues_who_sound_alike(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+
+    def angle(degrees: float) -> list[float]:
+        return [math.cos(math.radians(degrees)), math.sin(math.radians(degrees)), 0.0]
+
+    # Each one like the next, the first and last not alike: their centroid would take all three for one voice.
+    first = voices(library, "一.m4a", (angle(0), 300))
+    second = voices(library, "二.m4a", (angle(35), 200))
+    third = voices(library, "三.m4a", (angle(70), 100))
+    found, _ = team.voices()
+    assert [[m.recording_id for m in v.members] for v in found] == [[first, second], [third]]
+
+    # Alike, but one sounds most like 王宁 and the other like 艾总: asked about apart, each led by its own.
+    wang, ai = team.add_person("王宁"), team.add_person("艾总")
+    sample = voices(library, "样本.m4a", ([1.0, 0.6, 0.0], 60), ([1.0, -0.6, 0.0], 60))
+    decide(team, sample, "S1", "confirm", wang.id, sample=True)
+    decide(team, sample, "S2", "confirm", ai.id, sample=True)
+    one = voices(library, "四.m4a", ([1.0, 0.1, 0.0], 50))
+    other = voices(library, "五.m4a", ([1.0, -0.1, 0.0], 40))
+    led = {v.members[0].recording_id: v.candidates[0].name for v in team.voices({one, other})[0]}
+    assert led == {one: "王宁", other: "艾总"}
 
 
 def test_every_way_of_asking_is_refused_until_the_build_is_complete(tmp_path: Path) -> None:

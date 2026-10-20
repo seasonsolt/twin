@@ -462,6 +462,42 @@ def test_only_a_close_voice_is_suggested_and_only_a_very_close_one_is_the_defaul
     assert [(v.candidates[0].name, v.candidates[0].sure) for v in team.voices({close})[0]] == [("王宁", False)]
 
 
+def test_one_meeting_gives_a_person_one_voice_sample_so_its_room_does_not_lean_towards_them(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    # Voices of 张总, 李明 and a third colleague, and the room of a weekly meeting heard on all of them there.
+    zhang, li = team.add_person("张总"), team.add_person("李明")
+    samples = voices(library, "样本.m4a", ([1.0, 0.0, 0.0, 0.0], 60), ([0.0, 1.0, 0.0, 0.0], 60))
+    decide(team, samples, "S1", "confirm", zhang.id, sample=True)
+    decide(team, samples, "S2", "confirm", li.id, sample=True)
+    first = voices(library, "周会一.m4a", ([1.0, 0.0, 0.0, 0.8], 300), ([0.0, 0.0, 1.0, 0.8], 200))
+
+    # Once 张总 is settled in the meeting, its other voices are not offered as him: they are someone else there.
+    lead = next(v for v in team.voices({first})[0] if v.members[0].speaker_id == "S1")
+    team.decide_voice([(first, lead.members[0].transcript_id, "S1")], "confirm", zhang.id)
+    [other] = team.voices({first})[0]
+    assert not other.candidates
+    # The owner takes the other voice for 张总 too: the meeting is still one sample of his, its longest voice.
+    team.decide_voice([(first, other.members[0].transcript_id, "S2")], "confirm", zhang.id)
+    person = team.person(zhang.id)
+    assert person and (person.speakers, person.samples) == (3, 2)
+
+    # In the next meeting of that room, 李明 (0.62 to his sample) sounds 0.75 like the second voice of the first
+    # meeting, 0.40 like 张总 there: still suggested as 李明, not taken for whoever was settled most in the room.
+    second = voices(library, "周会二.m4a", ([0.0, 0.62, 0.45, 0.65], 10))
+    [voice] = team.voices({second})[0]
+    assert [(c.name, c.score) for c in voice.candidates] == [("李明", 0.617)]
+
+    # Two people sampled in one meeting and then merged keep its earlier sample alone.
+    double = team.add_person("张总（重复）")
+    decide(team, first, "S2", "confirm", double.id, sample=True)
+    team.merge(double.id, zhang.id)
+    person = team.person(zhang.id)
+    assert person and (person.speakers, person.samples) == (3, 2)
+    [voice] = team.voices({second})[0]
+    assert [(c.name, c.score) for c in voice.candidates] == [("李明", 0.617)]
+
+
 def test_a_settled_voice_gives_its_person_samples_from_several_recordings(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     team = Team(library)

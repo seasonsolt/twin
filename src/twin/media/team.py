@@ -70,6 +70,10 @@ FRAGMENT_SECONDS = 15.0
 # A voice settled as someone gives them up to this many voice samples, from different recordings: one sample of a
 # person heard through varying rooms and microphones recognised none of the waiting speakers on the pilot library,
 # a few per person recognised a fifth of the speech, all of it right. Besides the longest, only speakers this long.
+# A recording gives a person one sample however many of its speakers are theirs (``Team._prints``): its speakers share
+# a room and microphone, so a second sample from it adds no new room, only another chance for that room's other voices
+# to sound like them. In a 13-speaker weekly meeting, each voice settled as one colleague added a sample, and the
+# meeting's other voices, then that room's next meetings, drifted to whoever was settled most.
 VOICE_SAMPLES = 3
 SAMPLE_MIN_SECONDS = 60.0
 # Twin sources made from the library; the rest of the id names the recording and the person's own segments.
@@ -214,7 +218,10 @@ class Team:
         with self.library.read() as db:
             people = [Person.model_validate(dict(row)) for row in db.execute("SELECT * FROM people ORDER BY name")]
             samples = dict(
-                db.execute("SELECT person_id, COUNT(*) FROM voiceprints WHERE active = 1 GROUP BY person_id").fetchall()
+                db.execute(
+                    "SELECT person_id, COUNT(DISTINCT recording_id) FROM voiceprints WHERE active = 1 "
+                    "GROUP BY person_id"
+                ).fetchall()
             )
             sampled = db.execute(
                 "SELECT v.person_id, v.recording_id, v.speaker_id FROM voiceprints v "
@@ -439,10 +446,10 @@ class Team:
                     "AND speaker_id = ? AND person_id IS NOT ?",
                     (recording_id, transcript_id, speaker_id, after),
                 )
+            # The recording already gives them a sample, from this speaker or another (``VOICE_SAMPLES``).
             already = db.execute(
-                "SELECT 1 FROM voiceprints WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
-                "AND person_id IS ? AND active = 1",
-                (recording_id, transcript_id, speaker_id, after),
+                "SELECT 1 FROM voiceprints WHERE recording_id = ? AND person_id IS ? AND active = 1",
+                (recording_id, after),
             ).fetchone()
             if after and sample and speaker.embedding and not already:
                 db.execute(
@@ -834,10 +841,17 @@ class Team:
                     (recording_id, transcript_id, speaker.id, decision, owner, json.dumps(rejected), _now()),
                 )
             sampled: set[str] = set()
+            # A recording already giving them a sample gives no second one (``VOICE_SAMPLES``).
+            given = {
+                row[0]
+                for row in db.execute(
+                    "SELECT recording_id FROM voiceprints WHERE person_id = ? AND active = 1", (owner,)
+                )
+            }
             for recording_id, transcript_id, speaker in sorted(heard, key=lambda h: -h[2].seconds):
                 if not owner or len(sampled) >= VOICE_SAMPLES:
                     break
-                if not speaker.embedding or recording_id in sampled:
+                if not speaker.embedding or recording_id in sampled or recording_id in given:
                     continue
                 if sampled and speaker.seconds < SAMPLE_MIN_SECONDS:
                     break
@@ -1028,13 +1042,17 @@ class Team:
         return found
 
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:
-        return [
-            (row["person_id"], row["name"], json.loads(row["embedding"]))
-            for row in db.execute(
-                "SELECT v.person_id, p.name, v.embedding FROM voiceprints v JOIN people p ON p.id = v.person_id "
-                "WHERE v.active = 1"
-            )
-        ]
+        """Everyone's active voice samples, one per person and recording (the earliest; ``VOICE_SAMPLES``), also where
+        a merge of two people or an older library left more."""
+        found: dict[tuple[str, str], tuple[str, str, list[float]]] = {}
+        for row in db.execute(
+            "SELECT v.person_id, v.recording_id, p.name, v.embedding FROM voiceprints v "
+            "JOIN people p ON p.id = v.person_id WHERE v.active = 1 ORDER BY v.id"
+        ):
+            key = (row["person_id"], row["recording_id"])
+            if key not in found:
+                found[key] = (row["person_id"], row["name"], json.loads(row["embedding"]))
+        return list(found.values())
 
     @staticmethod
     def _match(

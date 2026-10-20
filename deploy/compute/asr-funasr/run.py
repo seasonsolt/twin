@@ -23,6 +23,13 @@ MAX_REFERENCES = 32
 # Cosine distance at which agglomerative clustering stops merging speaker windows; a larger value merges more.
 # 0.65 from the AliMeeting sweep in docs/ASR_EVAL.md: 0.55 split each person into several speakers, 0.75 merged people.
 CLUSTER_THRESHOLD = 0.65
+# A cluster under the size floor joins the nearest big cluster only when the cosine between their centroids is at
+# least MERGE_SIMILARITY - 0.2 / (its window count) and leads the next big cluster by MERGE_LEAD; otherwise it stays
+# its own (short) speaker. A single 1.5 s window is a noisy centroid, hence the allowance. Before 1.3.1 every small
+# cluster was merged, which on AliMeeting put 21% of a person who spoke ~10 s into someone else's speaker, and in a
+# long meeting let one generic centroid collect dozens of short clusters; see docs/ASR_EVAL.md.
+MERGE_SIMILARITY = 0.5
+MERGE_LEAD = 0.05
 
 
 def parse_request(payload):
@@ -130,6 +137,28 @@ def rebuild_spans(windows, found):
             spans.append([b, e])
             labels.append(label)
     return spans, labels
+
+
+def absorb(found, emb, big, similarity=MERGE_SIMILARITY, lead=MERGE_LEAD):
+    """Relabel each cluster outside `big` as the big cluster its centroid is closest to, when close enough and
+    clearly closer than to the runner-up; `emb` rows are unit voiceprints. Returns the new labels."""
+    import numpy as np
+
+    found = np.asarray(found).copy()
+    labels = [int(label) for label in dict.fromkeys(found.tolist())]
+    cent = {}
+    for label in labels:
+        mean = emb[found == label].mean(axis=0)
+        cent[label] = mean / (np.linalg.norm(mean) + 1e-9)
+    for label in labels:
+        if label in big:
+            continue
+        ranked = sorted(((float(np.dot(cent[label], cent[b])), b) for b in big), reverse=True)
+        runner_up = ranked[1][0] if len(ranked) > 1 else -1.0
+        size = int((found == label).sum())
+        if ranked and ranked[0][0] >= similarity - 0.2 / size and ranked[0][0] - runner_up >= lead:
+            found[found == label] = ranked[0][1]
+    return found
 
 
 def organize(spans, labels):
@@ -293,12 +322,10 @@ class Engine:
                 ).fit_predict(emb)
             else:
                 found = np.zeros(len(windows), dtype=int)
-            cent = {int(label): emb[found == label].mean(axis=0) for label in set(found)}
             floor = max(3, total / 100000)
-            big = [label for label in cent if (found == label).sum() * hop / 1000 >= floor] or list(cent)
-            for k, label in enumerate(found):
-                if int(label) not in big:
-                    found[k] = max(big, key=lambda b: float(np.dot(emb[k], cent[b])))
+            sizes = {int(label): int((found == label).sum()) for label in set(found)}
+            big = {label for label, n in sizes.items() if n * hop / 1000 >= floor} or set(sizes)
+            found = absorb(found, emb, big)
             for k in range(1, len(found) - 1):
                 if windows[k - 1][0] == windows[k][0] == windows[k + 1][0] and found[k - 1] == found[k + 1] != found[k]:
                     found[k] = found[k - 1]

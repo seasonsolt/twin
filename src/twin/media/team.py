@@ -155,6 +155,8 @@ class Voice(BaseModel):
     seconds: float
     candidates: list[Candidate] = []
     near: bool = False
+    # A member sounds like a voice the owner already said is nobody they know.
+    stranger: bool = False
 
 
 @dataclass
@@ -168,6 +170,7 @@ class _Group:
     # People already confirmed in a member's recording: not who this voice is, unless it is their split half.
     present: set[str]
     split: Candidate | None
+    stranger: bool
 
 
 class OpenVoice(BaseModel):
@@ -517,10 +520,10 @@ class Team:
 
     def classify(self, recording_id: str) -> int:
         """Decide the recording's untouched speakers where the voice leaves no doubt: very close to one person's
-        samples (``AUTO``); as close to a voice the owner said is nobody they know, and closer to it than to anyone
-        (a colleague the owner cannot name comes to meeting after meeting: asked about once); or, for a long voice
-        matching nobody, a new unnamed person kept by that voice. Returns how many speakers were decided. A speaker
-        the owner has acted on is never classified, and a match adds no voice sample, so mistakes do not spread."""
+        samples (``AUTO``), or, for a long voice matching nobody, a new unnamed person kept by that voice, unless the
+        owner said that voice is nobody they know (``_stranger``: they would be asked again who it is). Returns how
+        many speakers were decided. A speaker the owner has acted on is never classified, and a match adds no voice
+        sample, so mistakes do not spread."""
         recording = self.library.get(recording_id)
         if recording is None or recording.status != "ready" or recording.transcript_id is None:
             return 0
@@ -545,22 +548,12 @@ class Team:
                 if speaker.id in touched or not speaker.embedding:
                     continue
                 candidates = self._match(speaker.embedding, prints, set(), floor=SHOW)
-                best_score = candidates[0].score if candidates else 0.0
-                stranger = max((_cosine(speaker.embedding, v) for v in strangers), default=0.0)
-                if speaker.seconds >= AUTO_MIN_SECONDS and stranger >= AUTO and stranger - best_score >= AUTO_MARGIN:
-                    db.execute(
-                        "INSERT INTO attributions (recording_id, transcript_id, speaker_id, decision, person_id, "
-                        "rejected, updated_at, auto) VALUES (?, ?, ?, 'unknown', NULL, '[]', ?, 1)",
-                        (recording_id, recording.transcript_id, speaker.id, _now()),
-                    )
-                    count += 1
-                    continue
                 if candidates:
                     best, runner = candidates[0], candidates[1].score if len(candidates) > 1 else 0.0
                     if best.score < AUTO or best.score - runner < AUTO_MARGIN or speaker.seconds < AUTO_MIN_SECONDS:
                         continue
                     person_id = best.person_id
-                elif speaker.seconds >= NEW_MIN_SECONDS:
+                elif speaker.seconds >= NEW_MIN_SECONDS and not self._stranger(speaker.embedding, strangers, 0.0):
                     person = self._add_person(db, self._unnamed(db), auto=True)
                     person_id = person.id
                     db.execute(
@@ -668,8 +661,10 @@ class Team:
             }
             prints = self._prints(db)
             names = dict(db.execute("SELECT id, name FROM people").fetchall())
-        # (member, unit voiceprint, people it was denied to be, who it sounds most like, people confirmed beside it)
-        found: list[tuple[VoiceMember, list[float], set[str], Candidate | None, set[str]]] = []
+            strangers = self._strangers(db)
+        # (member, unit voiceprint, people it was denied to be, who it sounds most like, people confirmed beside it,
+        # whether it sounds like a voice the owner could not name)
+        found: list[tuple[VoiceMember, list[float], set[str], Candidate | None, set[str], bool]] = []
         for recording in self.library.list():
             if recording.status != "ready" or recording.transcript_id is None:
                 continue
@@ -691,9 +686,15 @@ class Team:
                 )
                 rejected = set(json.loads(row["rejected"])) if row else set()
                 matched = self._suggest(speaker.embedding, prints, rejected, here)
-                found.append((member, _unit(speaker.embedding), rejected, matched[0] if matched else None, present))
+                known = max(
+                    (c.score for c in self._match(speaker.embedding, prints, rejected, floor=-1.0)), default=0.0
+                )
+                stranger = self._stranger(speaker.embedding, strangers, known)
+                lead = matched[0] if matched else None
+                found.append((member, _unit(speaker.embedding), rejected, lead, present, stranger))
         groups: list[_Group] = []
-        for member, vector, rejected, lead, present in sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id)):
+        ordered = sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id))
+        for member, vector, rejected, lead, present, stranger in ordered:
             likely = lead.person_id if lead else None
             split = lead if lead and lead.split else None
             best, best_score = None, GROUP
@@ -708,7 +709,7 @@ class Team:
                 if score >= best_score:
                     best, best_score = group, score
             if best is None:
-                groups.append(_Group([member], [vector], set(rejected), likely, set(present), split))
+                groups.append(_Group([member], [vector], set(rejected), likely, set(present), split, stranger))
             else:
                 best.members.append(member)
                 best.vectors.append(vector)
@@ -716,6 +717,7 @@ class Team:
                 best.likely = best.likely or likely
                 best.present.update(present)
                 best.split = best.split or split
+                best.stranger = best.stranger or stranger
         voices: list[Voice] = []
         fragments: list[Voice] = []
         for group in groups:
@@ -733,6 +735,7 @@ class Team:
                 seconds=round(sum(m.seconds for m in members), 1),
                 candidates=candidates,
                 near=len(candidates) > 1 and candidates[0].score - candidates[1].score < NEAR,
+                stranger=group.stranger,
             )
             (fragments if voice.seconds < FRAGMENT_SECONDS and not candidates else voices).append(voice)
         voices.sort(key=lambda v: (-v.seconds, v.id))
@@ -998,6 +1001,15 @@ class Team:
             if speaker.embedding and row is not None and row["decision"] == "confirmed" and row["person_id"]:
                 found.append((str(row["person_id"]), names.get(row["person_id"], ""), speaker.embedding))
         return found
+
+    @staticmethod
+    def _stranger(embedding: list[float], strangers: list[list[float]], known: float) -> bool:
+        """Whether the voice is one the owner said is nobody they know (``_strangers``): as close to it as a
+        recognised person's (``AUTO``), and closer to it than to anyone known (``known``, the best score) by
+        ``AUTO_MARGIN``. On the pilot library such voices came back meeting after meeting; two of 114 confirmed
+        speakers would have passed for one."""
+        score = max((_cosine(embedding, vector) for vector in strangers), default=0.0)
+        return score >= AUTO and score - known >= AUTO_MARGIN
 
     def _strangers(self, db: sqlite3.Connection) -> list[list[float]]:
         """The voiceprints of speakers the owner said are nobody they know, in current transcripts."""

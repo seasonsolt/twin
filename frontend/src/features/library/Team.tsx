@@ -60,6 +60,8 @@ interface Voice {
   seconds: number;
   candidates: Speaker['candidates'];
   near: boolean;
+  // Sounds like a voice the owner already said is nobody they know.
+  stranger?: boolean;
 }
 
 /** A recording whose undecided speakers have no voiceprint to group by: settled in the recording itself. */
@@ -248,7 +250,9 @@ function VoiceRow({
   const sure = Boolean(likely?.sure) && !voice.near;
   const recordings = new Set(voice.members.map((m) => m.recording_id)).size;
   const title = !likely
-    ? '没听过的声音'
+    ? voice.stranger
+      ? '你标过不认识的声音'
+      : '没听过的声音'
     : sure
       ? `像${likely.name}`
       : `可能是${offered.map((c) => c.name).join('或')}`;
@@ -346,12 +350,12 @@ function VoiceRow({
             ))}
           <Button
             type="button"
-            variant="ghost"
+            variant={voice.stranger ? 'secondary' : 'ghost'}
             size="sm"
             disabled={busy}
             onClick={() => onDecide({ action: 'unknown' })}
           >
-            不认识
+            {voice.stranger ? '仍不认识' : '不认识'}
           </Button>
         </Row>
       }

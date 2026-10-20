@@ -1007,6 +1007,22 @@ it('asks about whoever speaks longest first, and measures progress by speech set
               candidates: [],
               near: false,
             },
+            {
+              id: 'voice_2',
+              members: [
+                {
+                  recording_id: 'rec_2',
+                  filename: '月会.m4a',
+                  transcript_id: 't2',
+                  speaker_id: 'S5',
+                  seconds: 30,
+                },
+              ],
+              seconds: 30,
+              candidates: [],
+              near: false,
+              stranger: true,
+            },
           ],
           fragments: [],
           unsorted: [],
@@ -1024,9 +1040,14 @@ it('asks about whoever speaks longest first, and measures progress by speech set
     </MemoryRouter>,
   );
   const list = await screen.findByRole('list', { name: '新出现的声音' });
-  const [first, second] = within(list).getAllByRole('listitem');
+  const [first, second, third] = within(list).getAllByRole('listitem');
   expect(first).toHaveTextContent('没听过的声音');
   expect(second).toHaveTextContent('未命名 1');
+  // A voice the owner could not name before says so, and is set aside again in one click.
+  expect(third).toHaveTextContent('你标过不认识的声音');
+  expect(
+    within(third).getByRole('button', { name: '仍不认识' }),
+  ).toBeInTheDocument();
   expect(
     screen.getByRole('progressbar', { name: '会议里的发言，已经知道是谁说的' }),
   ).toHaveAttribute('aria-valuenow', '900');

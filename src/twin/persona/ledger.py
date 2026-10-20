@@ -21,6 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ..llm import LLM, Effort
+from ..usage import default_stage
 from .lexical import BM25
 from .schema import Expression, LedgerEntry, LedgerKind, LedgerStatus, ReviewStatus, Source, SourceKind
 from .store import PersonaStore
@@ -262,13 +263,14 @@ def extract_meeting(
     dropped = 0
     now = _now()
     for window in _windows(expressions):
-        draft = llm.structured(
-            system=SYSTEM,
-            user=_user(source, name, kept, window),
-            schema=LedgerDraft,
-            effort=effort,
-            reasoning_effort=reasoning_effort,
-        )
+        with default_stage("ledger"):
+            draft = llm.structured(
+                system=SYSTEM,
+                user=_user(source, name, kept, window),
+                schema=LedgerDraft,
+                effort=effort,
+                reasoning_effort=reasoning_effort,
+            )
         lines = dict(window)
         known = {e.entry_id for e in kept}
         for item in draft.items:

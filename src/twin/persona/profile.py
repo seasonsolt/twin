@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
-from ..usage import call_totals, collect_calls
+from ..usage import call_totals, collect_calls, default_stage
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import FACET_SAMPLE_CHARS, ExtractStats, PersonaCandidate, PersonaItem, PEvidence
@@ -407,15 +407,16 @@ def _extract(llm: LLM, chunk: Chunk, allowed: frozenset[str], settings: Settings
         max_quotes=MAX_QUOTES,
         coverage=QUESTIONNAIRE_COVERAGE if chunk.source.kind == SourceKind.QUESTIONNAIRE else "",
     )
-    draft = retry_truncated(
-        lambda: llm.structured(
-            system=system,
-            user=chunk.text,
-            schema=ExtractDraft,
-            effort=settings.llm.effort_extract,
-            reasoning_effort=settings.llm.effective_reasoning_effort_extract,
+    with default_stage("memory.extract"):
+        draft = retry_truncated(
+            lambda: llm.structured(
+                system=system,
+                user=chunk.text,
+                schema=ExtractDraft,
+                effort=settings.llm.effort_extract,
+                reasoning_effort=settings.llm.effective_reasoning_effort_extract,
+            )
         )
-    )
     candidates: list[PersonaCandidate] = []
     stats = ExtractStats(returned=len(draft.items))
     for i, item in enumerate(draft.items):
@@ -645,7 +646,8 @@ def merge_facet(
                 effort=settings.llm.effort_extract,
                 reasoning_effort=settings.llm.effective_reasoning_effort_extract,
             )
-            draft = retry_truncated(call)
+            with default_stage("memory.merge"):
+                draft = retry_truncated(call)
             if cache is not None:
                 cache.put(key, draft)
         by_id = {c.candidate_id: c for c in batch}

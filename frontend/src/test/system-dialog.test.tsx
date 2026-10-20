@@ -242,6 +242,45 @@ it('opens over the page at the section in the address, and closing leaves the pa
   expect(screen.getByLabelText('地址')).not.toHaveTextContent('system');
 });
 
+it('shows where the last day of tokens went, by use, and says when some calls did not report theirs', async () => {
+  state = {
+    ...state,
+    usage: [
+      {
+        stage: 'proofread',
+        calls: 12,
+        failures: 1,
+        input_tokens: 1_500_000,
+        output_tokens: 4_000,
+        cached_tokens: 0,
+        unknown_calls: 0,
+      },
+      {
+        stage: 'chat.answer.hedge',
+        calls: 3,
+        failures: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_tokens: 0,
+        unknown_calls: 3,
+      },
+    ],
+  };
+  show();
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  const table = await within(dialog).findByRole('table', {
+    name: '最近 24 小时的 token 用量',
+  });
+  const rows = within(table).getAllByRole('row');
+  expect(rows).toHaveLength(3);
+  expect(rows[1]).toHaveTextContent('录音校对');
+  expect(rows[1]).toHaveTextContent('12（失败 1）');
+  expect(rows[2]).toHaveTextContent('聊天回答 · 抢先重发');
+  expect(
+    within(dialog).getByText(/有 3 次调用没有报告用量/u),
+  ).toBeInTheDocument();
+});
+
 it('switches speech off at once, and explains what video still needs', async () => {
   show('tts');
   const toggle = await screen.findByRole('switch', { name: '启用朗读' });

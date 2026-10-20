@@ -113,6 +113,19 @@ export interface SystemState {
     default_limit: number;
     default_hours: number;
   };
+  /** Model tokens of the last day by use, most first; absent from an older server. */
+  usage?: UsageRow[];
+}
+
+export interface UsageRow {
+  stage: string;
+  calls: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  /** Calls whose provider did not report usage: the totals are a floor. */
+  unknown_calls: number;
 }
 
 /** Switched-on services whose latest check failed: what the red dot on the 系统 entry counts. */

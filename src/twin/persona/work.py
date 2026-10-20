@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..config import LLMSettings, Settings, _endpoint
 from ..embed import Embedder
 from ..llm import LLM, LLMError
+from ..usage import CallRow, add_usage, call_row, current_recorder, default_stage
 from ..util import key_from_env, private_directory
 from ..websearch import WebSearch, make_web_search
 from .chat import PersonaChat, material_text, portrait_text
@@ -161,6 +162,37 @@ class WorkStore:
         return path if path.is_file() and path.is_relative_to(root) else None
 
 
+def _usage_callback(model: Any) -> Any:
+    """A LangChain callback counting each model call of the agent, its sub-agents included, under ``work.agent``:
+    the agent calls the model through LangChain, not through ``llm.py``."""
+    from langchain_core.callbacks import BaseCallbackHandler
+    from langchain_core.outputs import LLMResult
+
+    name = str(getattr(model, "model_name", None) or getattr(model, "model", None) or "unknown")
+
+    def row() -> CallRow:
+        made = call_row(model, "langchain")
+        made.stage, made.model = "work.agent", name
+        made.attempts = made.unknown_usage_attempts = 1
+        return made
+
+    class UsageCallback(BaseCallbackHandler):
+        def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+            made = row()
+            made.success = True
+            for generations in response.generations:
+                for generation in generations:
+                    add_usage(made, getattr(getattr(generation, "message", None), "usage_metadata", None))
+            current_recorder().add(made, False)
+
+        def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+            made = row()
+            made.error_type = type(error).__name__
+            current_recorder().add(made, False)
+
+    return UsageCallback()
+
+
 def work_model(s: LLMSettings) -> Any:
     """The LangChain chat model for ``s``. Tool calling needs an API: the Claude Code CLI cannot drive tools."""
     if s.provider == "claude_cli":
@@ -245,12 +277,13 @@ def route(llm: LLM, settings: Settings, task: WorkTask, text: str, name: str, fi
         f"现在这句话：{text[:2000]}"
     )
     try:
-        decided = llm.structured(
-            system=ROUTE_SYSTEM.format(name=name),
-            user=user,
-            schema=Route,
-            effort=settings.effective_chat_llm.effort_extract,
-        )
+        with default_stage("work.route"):
+            decided = llm.structured(
+                system=ROUTE_SYSTEM.format(name=name),
+                user=user,
+                schema=Route,
+                effort=settings.effective_chat_llm.effort_extract,
+            )
     except (LLMError, ValidationError):  # deciding is a shortcut; the agent handles anything
         return "task"
     return decided.kind
@@ -563,7 +596,7 @@ def run_turn(
     try:
         for update in agent.stream(
             {"messages": [*history, {"role": "user", "content": text}]},
-            config={"recursion_limit": MAX_STEPS},
+            config={"recursion_limit": MAX_STEPS, "callbacks": [_usage_callback(model)]},
             stream_mode="updates",
         ):
             for node in update.values():

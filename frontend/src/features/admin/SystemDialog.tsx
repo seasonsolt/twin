@@ -41,6 +41,7 @@ import {
   type ServiceState,
   type SwitchName,
   type SystemState,
+  type UsageRow,
 } from '../../stores/system';
 import { setFeatures } from '../../stores/auth';
 
@@ -254,6 +255,56 @@ function QuotaMeter({ quota }: { quota: SystemState['quota'] }) {
   );
 }
 
+const STAGES: Record<string, string> = {
+  'chat.answer': '聊天回答',
+  'chat.answer.hedge': '聊天回答 · 抢先重发',
+  'chat.rewrite': '聊天 · 理解问题',
+  'chat.derived': '聊天 · 推算日期和数量',
+  'chat.located': '聊天 · 找最新说法',
+  'chat.connected': '聊天 · 关联记录',
+  'chat.meta': '聊天 · 补回依据',
+  proofread: '录音校对',
+  'speaker.cues': '从发言辨认说话人',
+  'memory.extract': '整理记忆 · 抽取',
+  'memory.merge': '整理记忆 · 合并',
+  ledger: '承诺账本',
+  'work.route': '工作 · 判断要不要动手',
+  'work.agent': '工作模式',
+};
+
+function UsageTable({ usage }: { usage: UsageRow[] }) {
+  if (usage.length === 0)
+    return (
+      <Text size="sm" tone="secondary">
+        最近 24 小时还没有调用大模型。
+      </Text>
+    );
+  const unknown = usage.reduce((sum, row) => sum + row.unknown_calls, 0);
+  return (
+    <Stack gap={2}>
+      <Table
+        caption="最近 24 小时的 token 用量"
+        headers={['用途', '次数', '输入', '其中缓存', '输出']}
+        rows={usage.map((row) => [
+          STAGES[row.stage] ?? '其他',
+          row.failures
+            ? `${row.calls}（失败 ${row.failures}）`
+            : `${row.calls}`,
+          tokens(row.input_tokens),
+          tokens(row.cached_tokens),
+          tokens(row.output_tokens),
+        ])}
+      />
+      {unknown > 0 && (
+        <Text size="xs" tone="tertiary">
+          有 {unknown}{' '}
+          次调用没有报告用量（例如抢先重发后被关掉的那一份），实际用量比表里多。
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
 function Monitor({
   state,
   onSelect,
@@ -309,6 +360,15 @@ function Monitor({
       <Section level={4} title="Token 额度">
         <QuotaMeter quota={state.quota} />
       </Section>
+      {state.usage && (
+        <Section
+          level={4}
+          title="Token 用在哪"
+          description="所有大模型调用按用途汇总，只记次数和 token，不记内容。"
+        >
+          <UsageTable usage={state.usage} />
+        </Section>
+      )}
     </Stack>
   );
 }

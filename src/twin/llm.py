@@ -26,7 +26,7 @@ from typing import Any, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from .usage import attempt, request, tracked
+from .usage import add_usage, attempt, call_row, call_stage, current_recorder, current_stage, request, tracked
 from .util import key_from_env
 
 T = TypeVar("T", bound=BaseModel)
@@ -334,6 +334,8 @@ class OpenAICompatLLM:
         )
         self.base_url = str(getattr(self._client, "base_url", base_url or os.environ.get("OPENAI_BASE_URL", "")))
         self._async_client = async_client
+        # Whether streams ask for their usage; off for good once the server refuses ``stream_options``.
+        self._stream_usage = True
         self._async_options: dict[str, Any] = {
             "base_url": base_url,
             "api_key": key_from_env(api_key_env) or "EMPTY",
@@ -359,19 +361,48 @@ class OpenAICompatLLM:
             kwargs["extra_body"] = {k: v for k, v in self.extra_body.items() if k != "response_format"}
         if self.reasoning_effort is not None:
             kwargs["reasoning_effort"] = self.reasoning_effort
+        # Counted like a structured call. A stream closed before its end (the slower of a hedged pair, a reader
+        # who left) never gets to the usage chunk, so it counts as a call of unknown usage.
+        row = call_row(self, "openai_compat")
+        row.attempts = row.unknown_usage_attempts = 1
+        row.characters = len(system) + len(user)
+        start = time.perf_counter()
         try:
-            stream = await self._async_client.chat.completions.create(**kwargs)
+            if self._stream_usage:
+                kwargs["stream_options"] = {"include_usage": True}
+            try:
+                stream = await self._async_client.chat.completions.create(**kwargs)
+            except openai.BadRequestError:
+                if "stream_options" not in kwargs:
+                    raise
+                # A server that does not know stream_options: answer without counting rather than not at all.
+                self._stream_usage = False
+                del kwargs["stream_options"]
+                stream = await self._async_client.chat.completions.create(**kwargs)
             try:
                 async for chunk in stream:
+                    add_usage(row, getattr(chunk, "usage", None))
                     for choice in chunk.choices:
                         if choice.finish_reason == "content_filter" or getattr(choice.delta, "refusal", None):
                             raise LLMRefusal(f"{self.name} refused", category="content_filter")
                         if text := choice.delta.content:
                             yield text
+                row.success = True
             finally:
                 await stream.close()
         except openai.APIError as e:
+            row.error_type = type(e).__name__
             raise LLMError(f"{self.name}: {type(e).__name__}: {e}") from e
+        except (GeneratorExit, asyncio.CancelledError):
+            # Closed by its reader, not failed.
+            row.success = True
+            raise
+        except BaseException as e:
+            row.error_type = row.error_type or type(e).__name__
+            raise
+        finally:
+            row.latency_seconds = time.perf_counter() - start
+            current_recorder().add(row, False)
 
     def _response_format(self, schema: type[BaseModel]) -> dict[str, Any] | None:
         if self.json_mode == "json_schema":
@@ -456,8 +487,11 @@ class OpenAICompatLLM:
         raise LLMInvalidOutput(f"{self.name}: {last_error}", stop_reason=finish_reason) from last_error
 
 
-async def hedged_stream(factory: Callable[[], AsyncIterator[str]], hedge_after_s: float) -> AsyncGenerator[str]:
-    """Race only the first nonempty token; cancellation closes both the HTTP response and iterator."""
+async def hedged_stream(
+    factory: Callable[[], AsyncIterator[str]], hedge_after_s: float, *, stage: str | None = None
+) -> AsyncGenerator[str]:
+    """Race only the first nonempty token; cancellation closes both the HTTP response and iterator. Each stream
+    runs in its own task, counted under ``stage`` (the caller's by default), the hedge as ``<stage>.hedge``."""
     streams: list[AsyncIterator[str]] = []
     tasks: list[asyncio.Task[str]] = []
     arrivals: list[int] = []
@@ -470,9 +504,12 @@ async def hedged_stream(factory: Callable[[], AsyncIterator[str]], hedge_after_s
         raise LLMInvalidOutput("empty streaming reply")
 
     def start() -> None:
-        stream = factory()
-        streams.append(stream)
-        tasks.append(asyncio.create_task(first(stream, len(tasks))))
+        # The second request is counted apart, so how often hedging doubles a call shows.
+        label = current_stage() if current_stage() != "other" or stage is None else stage
+        with call_stage(f"{label}.hedge" if tasks else label):
+            stream = factory()
+            streams.append(stream)
+            tasks.append(asyncio.create_task(first(stream, len(tasks))))
 
     async def close(index: int) -> None:
         tasks[index].cancel()

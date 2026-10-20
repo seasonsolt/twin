@@ -5,15 +5,17 @@ from __future__ import annotations
 import datetime as dt
 import inspect
 import json
+import logging
 import math
 import posixpath
 import random
 import re
+import sqlite3
 import threading
 import time
 import warnings
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from datetime import UTC
@@ -26,6 +28,8 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, Field
 
 from .util import fingerprint, open_private, private_directory
+
+logger = logging.getLogger(__name__)
 
 
 class Price(BaseModel):
@@ -126,11 +130,22 @@ class UsageRecorder:
     recorded tokens always come from the provider. This is not a provider-enforced billing cap.
     """
 
-    def __init__(self, pricing: Mapping[str, Price] | None = None, max_cost_usd: float | None = None) -> None:
+    def __init__(
+        self,
+        pricing: Mapping[str, Price] | None = None,
+        max_cost_usd: float | None = None,
+        *,
+        ledger: UsageLedger | None = None,
+        keep_rows: bool = True,
+    ) -> None:
+        """``ledger`` also counts every call on disk; ``keep_rows=False`` keeps no rows in memory, for a recorder
+        that lives as long as the process (rows still reach ``collect_calls``)."""
         if max_cost_usd is not None and (not math.isfinite(max_cost_usd) or max_cost_usd < 0):
             raise ValueError("费用预算必须是非负有限数值")
         self.pricing = dict(pricing or {})
         self.max_cost_usd = max_cost_usd
+        self.ledger = ledger
+        self.keep_rows = keep_rows
         self.rows: list[CallRow] = []
         self._lock = threading.RLock()
         self._gate = threading.RLock()
@@ -174,9 +189,12 @@ class UsageRecorder:
     def add(self, row: CallRow, zero: bool) -> None:
         with self._lock:
             row.estimated_cost_usd = self.cost(row, zero=zero)
-            self.rows.append(row)
+            if self.keep_rows:
+                self.rows.append(row)
             for rows in _collectors.get():
                 rows.append(row)
+        if self.ledger is not None:
+            self.ledger.add(row)
 
     def summary(self) -> dict[str, Any]:
         with self._lock:
@@ -222,6 +240,88 @@ class UsageRecorder:
             f"未报告用量的尝试 {total['unknown_usage_attempts']} 次，字符 {total['characters']}；{money}。"
             + transient_summary(total["transient"])
         )
+
+
+class UsageLedger:
+    """Calls and tokens per hour, stage and model, kept on disk so a long-running service can say where its tokens
+    went. Never any text: only the stage label, the model name and counts. Hours older than ``KEEP_DAYS`` are
+    dropped when the ledger opens."""
+
+    KEEP_DAYS = 90
+
+    def __init__(self, path: Path, clock: Callable[[], dt.datetime] = lambda: dt.datetime.now(UTC)) -> None:
+        self.path = path
+        self._clock = clock
+        self._lock = threading.Lock()
+        private_directory(path.parent)
+        with closing(sqlite3.connect(path, timeout=30)) as db, db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS hours (hour TEXT NOT NULL, stage TEXT NOT NULL, model TEXT NOT NULL, "
+                "calls INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, "
+                "input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, "
+                "cached_tokens INTEGER NOT NULL DEFAULT 0, "
+                # Calls whose provider did not report usage (a hedged stream closed early, an old server):
+                # their tokens are unknown, so the totals above are a floor.
+                "unknown_calls INTEGER NOT NULL DEFAULT 0, "
+                "PRIMARY KEY (hour, stage, model))"
+            )
+            db.execute("DELETE FROM hours WHERE hour < ?", (self._hour(self._clock() - dt.timedelta(self.KEEP_DAYS)),))
+
+    @staticmethod
+    def _hour(at: dt.datetime) -> str:
+        return at.astimezone(UTC).strftime("%Y-%m-%dT%H:00Z")
+
+    def add(self, row: CallRow) -> None:
+        if row.backend == "hashing" or row.backend.endswith("_embed"):
+            return
+        values = (
+            self._hour(self._clock()),
+            row.stage,
+            row.model,
+            int(not row.success),
+            row.input_tokens or 0,
+            row.output_tokens or 0,
+            row.cached_tokens or 0,
+            int(row.unknown_usage_attempts > 0),
+        )
+        try:
+            with self._lock, closing(sqlite3.connect(self.path, timeout=30)) as db, db:
+                db.execute(
+                    "INSERT INTO hours (hour, stage, model, calls, failures, input_tokens, output_tokens, "
+                    "cached_tokens, unknown_calls) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT (hour, stage, model) DO UPDATE SET calls = calls + 1, "
+                    "failures = failures + excluded.failures, input_tokens = input_tokens + excluded.input_tokens, "
+                    "output_tokens = output_tokens + excluded.output_tokens, "
+                    "cached_tokens = cached_tokens + excluded.cached_tokens, "
+                    "unknown_calls = unknown_calls + excluded.unknown_calls",
+                    values,
+                )
+        except sqlite3.Error as e:
+            # Accounting never fails the call it accounts for.
+            logger.warning("usage ledger not updated: %s", type(e).__name__)
+
+    def since(self, hours: float) -> list[dict[str, Any]]:
+        """Totals per stage over the last ``hours``, most tokens first."""
+        start = self._hour(self._clock() - dt.timedelta(hours=hours))
+        with closing(sqlite3.connect(self.path, timeout=30)) as db:
+            rows = db.execute(
+                "SELECT stage, SUM(calls), SUM(failures), SUM(input_tokens), SUM(output_tokens), SUM(cached_tokens), "
+                "SUM(unknown_calls) FROM hours WHERE hour >= ? GROUP BY stage "
+                "ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC, stage",
+                (start,),
+            ).fetchall()
+        return [
+            {
+                "stage": stage,
+                "calls": calls,
+                "failures": failures,
+                "input_tokens": incoming,
+                "output_tokens": outgoing,
+                "cached_tokens": cached,
+                "unknown_calls": unknown,
+            }
+            for stage, calls, failures, incoming, outgoing, cached, unknown in rows
+        ]
 
 
 TRANSIENT_LABELS = {
@@ -315,6 +415,29 @@ def current_recorder() -> UsageRecorder:
     return _recorder.get() or _default
 
 
+def install_default(recorder: UsageRecorder) -> UsageRecorder:
+    """Make ``recorder`` take the calls made outside any ``record_usage`` (a web service's requests and background
+    work); returns the one it replaces."""
+    global _default
+    previous, _default = _default, recorder
+    return previous
+
+
+def current_stage() -> str:
+    return _stage.get()
+
+
+@contextmanager
+def default_stage(label: str) -> Iterator[None]:
+    """``call_stage(label)`` unless a caller already named the stage, whose label then stands: an evaluation
+    counting a whole answer as one stage keeps doing so."""
+    if _stage.get() != "other":
+        yield
+        return
+    with call_stage(label):
+        yield
+
+
 @contextmanager
 def call_stage(label: str) -> Iterator[None]:
     token = _stage.set(label)
@@ -389,6 +512,40 @@ def usage_run[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     return run
 
 
+def call_row(owner: Any, backend: str) -> CallRow:
+    """An empty row for a call ``owner`` (a backend with ``model`` and ``_client`` or ``base_url``) makes now, in
+    the current stage; the endpoint is kept only as a fingerprint."""
+    client = getattr(owner, "_client", None)
+    canonical = canonical_endpoint(str(getattr(client, "base_url", getattr(owner, "base_url", ""))))
+    endpoint = "sha256:" + fingerprint(canonical) if canonical else ""
+    return CallRow(_stage.get(), backend, getattr(owner, "model", getattr(owner, "name", "unknown")), endpoint)
+
+
+def add_usage(row: CallRow, usage: Any) -> None:
+    """Add a provider's ``usage`` (OpenAI or LangChain shape) to ``row``; a missing one leaves the row unknown."""
+    if usage is None:
+        return
+    incoming = _number(_field(usage, "prompt_tokens"))
+    outgoing = _number(_field(usage, "completion_tokens"))
+    cached = _number(_field(_field(usage, "prompt_tokens_details"), "cached_tokens"))
+    reasoning = _number(_field(_field(usage, "completion_tokens_details"), "reasoning_tokens"))
+    if incoming is None:
+        # LangChain's ``usage_metadata``.
+        incoming = _number(_field(usage, "input_tokens"))
+        outgoing = _number(_field(usage, "output_tokens"))
+        cached = _number(_field(_field(usage, "input_token_details"), "cache_read"))
+        reasoning = _number(_field(_field(usage, "output_token_details"), "reasoning"))
+    if incoming is None or outgoing is None:
+        return
+    row.input_tokens = (row.input_tokens or 0) + incoming
+    row.output_tokens = (row.output_tokens or 0) + outgoing
+    if cached is not None:
+        row.cached_tokens = (row.cached_tokens or 0) + cached
+    if reasoning is not None:
+        row.reasoning_tokens = (row.reasoning_tokens or 0) + reasoning
+    row.unknown_usage_attempts = max(0, row.unknown_usage_attempts - 1)
+
+
 def tracked[**P, R](backend: str, *, zero: bool = False) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """One row per logical structured call (or embedding batch), including all explicit retries."""
 
@@ -397,10 +554,7 @@ def tracked[**P, R](backend: str, *, zero: bool = False) -> Callable[[Callable[P
         def call(*args: P.args, **kwargs: P.kwargs) -> R:
             self = args[0]
             recorder = current_recorder()
-            client = getattr(self, "_client", None)
-            canonical = canonical_endpoint(str(getattr(client, "base_url", getattr(self, "base_url", ""))))
-            endpoint = "sha256:" + fingerprint(canonical) if canonical else ""
-            row = CallRow(_stage.get(), backend, getattr(self, "model", getattr(self, "name", "unknown")), endpoint)
+            row = call_row(self, backend)
             if zero:
                 row.input_tokens = row.output_tokens = row.reasoning_tokens = row.cached_tokens = 0
                 row.attempts = 1

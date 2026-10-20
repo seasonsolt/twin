@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from ..llm import LLM
+from ..usage import default_stage
 from .check import edit_distance
 from .ingest import Segment
 
@@ -82,7 +83,8 @@ def clean_segments(
     def ask(allowed: range) -> Edits | None:
         user = json.dumps({"meeting": meeting, "editable_ids": list(allowed)}, ensure_ascii=False)
         try:
-            return llm.structured(system=PROMPT, user=user, schema=Edits, effort="low", reasoning_effort="low")
+            with default_stage("proofread"):
+                return llm.structured(system=PROMPT, user=user, schema=Edits, effort="low", reasoning_effort="low")
         except Exception as e:
             # The exception text can quote the transcript; log only its type.
             logger.warning("transcript cleaning batch failed: %s", type(e).__name__)

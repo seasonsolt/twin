@@ -28,6 +28,7 @@ from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..usage import UsageLedger, UsageRecorder, install_default
 from . import assets, gpu, library, media, persona, system, voice
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
@@ -295,6 +296,7 @@ def create_app(
     work_model_factory: WorkModelFactory | None = None,
     synthesizer_factory: Callable[[], SpeechSynthesizer] | None = None,
     allowed_hosts: Iterable[str] = (),
+    usage: UsageLedger | None = None,
 ) -> FastAPI:
     """The web UI application. ``llm_factory`` / ``embedder_factory`` default to ``config.make_llm(settings.llm)``
     and ``config.make_embedder(settings.embed)``; both are called lazily, once. ``synthesizer_factory`` defaults to
@@ -303,8 +305,11 @@ def create_app(
     Injected factories are offline test seams. A model address or key an administrator changes in the system
     settings rebuilds the cached backends; other changes to twin.toml need a restart.
     ``allowed_hosts`` adds host names (besides localhost, 127.0.0.1 and [::1]) the server answers to, for
-    ``twin ui --host <address>``."""
+    ``twin ui --host <address>``. ``usage`` counts every model call the process makes outside a run of its own,
+    per hour and stage, for the system settings; it replaces the process's default recorder."""
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
+    if usage is not None:
+        install_default(UsageRecorder(settings.pricing, ledger=usage, keep_rows=False))
     backends = Backends(settings, llm_factory, embedder_factory, work_model_factory)
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)
@@ -502,7 +507,7 @@ def create_app(
     registry.register(app)
     libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits)
     voice.register(app, settings, libraries, registry)
-    system.register(app, system_settings, monitor, libraries)
+    system.register(app, system_settings, monitor, libraries, usage)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

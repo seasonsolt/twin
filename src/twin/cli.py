@@ -53,7 +53,15 @@ from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import MEMORY_KIND_LABELS, NEEDS_NAME, parse_note, parse_source
 from .persona.store import NewerStoreError, PersonaStore
 from .persona.text import SUPPORTED_SUFFIXES
-from .usage import BudgetExceeded, UsageRecorder, active_recorder, call_stage, failure_directory, record_usage
+from .usage import (
+    BudgetExceeded,
+    UsageLedger,
+    UsageRecorder,
+    active_recorder,
+    call_stage,
+    failure_directory,
+    record_usage,
+)
 from .util import RenameError, open_private, private_directory
 
 if TYPE_CHECKING:
@@ -693,7 +701,11 @@ def ui(
         )
     url_host = "127.0.0.1" if address in _WILDCARD_HOSTS else (f"[{address}]" if ":" in address else address)
     with _errors():
-        application = create_app(settings, allowed_hosts=(*extra_hosts, *(allow_host or ())))
+        application = create_app(
+            settings,
+            allowed_hosts=(*extra_hosts, *(allow_host or ())),
+            usage=UsageLedger(settings.db_path.parent / "usage.db"),
+        )
     _serve(application, host, port, f"http://{url_host}:{port}", open_browser)
 
 

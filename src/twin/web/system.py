@@ -30,6 +30,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ..assets import AssetStore
 from ..config import EmbedSettings, LLMSettings, Settings, egress_of
 from ..ops.envfile import MAX_VALUE, selected_env_file, write_env_value
+from ..usage import UsageLedger
 from ..util import private_directory
 from .gpu import GpuMonitor, _origin, asr_url
 from .library import Libraries
@@ -38,6 +39,8 @@ log = logging.getLogger(__name__)
 
 Switch = Literal["tts", "video"]
 SWITCHES: tuple[Switch, ...] = ("tts", "video")
+# The span of the token usage the view shows.
+USAGE_HOURS = 24
 MAX_HOURS = 24 * 30
 # Pages an administrator may switch off for everyone. Chat is the twin itself and always stays.
 Feature = Literal["work", "ledger"]
@@ -467,7 +470,9 @@ def keys_view(settings: Settings) -> list[dict[str, Any]]:
     return list(seen.values())
 
 
-def register(app: FastAPI, system: SystemSettings, monitor: GpuMonitor, libraries: Libraries) -> None:
+def register(
+    app: FastAPI, system: SystemSettings, monitor: GpuMonitor, libraries: Libraries, usage: UsageLedger | None = None
+) -> None:
     def admin(request: Request) -> str | None:
         identity = request.scope["twin_identity"]
         if not identity["admin"]:
@@ -493,6 +498,8 @@ def register(app: FastAPI, system: SystemSettings, monitor: GpuMonitor, librarie
                 "default_limit": library.batch_tokens,
                 "default_hours": library.batch_hours,
             },
+            # Where the model tokens of the last day went, by use; empty when the process keeps no ledger.
+            "usage": usage.since(USAGE_HOURS) if usage is not None else [],
         }
 
     @app.get("/api/admin/system")

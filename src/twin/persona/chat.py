@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..embed import Embedder, EmbedError, Matrix, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
+from ..usage import default_stage
 from ..util import Progress
 from . import gate
 from .attachments import AttachmentPassage
@@ -550,12 +551,13 @@ class PersonaChat:
         ctx.today = today
         self._attach_files(ctx, attachments)
         self._derive(messages, ctx)
-        draft = self.llm.structured(
-            system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
-            user=chat_user_message(messages, ctx),
-            schema=ChatDraft,
-            effort=self.settings.effective_chat_llm.effort_twin,
-        )
+        with default_stage("chat.answer"):
+            draft = self.llm.structured(
+                system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
+                user=chat_user_message(messages, ctx),
+                schema=ChatDraft,
+                effort=self.settings.effective_chat_llm.effort_twin,
+            )
         reply = self._finalize(draft, ctx, messages, as_of, persist=persist)
         if self.stale:
             raise gate.MemoryUpdating()
@@ -589,9 +591,10 @@ class PersonaChat:
         stream = getattr(self.llm, "stream", None)
         verified = True
         if stream is None:
-            draft = await off_loop(
-                partial(self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort)
-            )
+            with default_stage("chat.answer"):
+                draft = await off_loop(
+                    partial(self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort)
+                )
             yield draft.reply
         else:
             parser = ChatStreamParser()
@@ -599,6 +602,7 @@ class PersonaChat:
                 hedged_stream(
                     lambda: stream(system=system + STREAM_FORMAT, user=user + STREAM_REMINDER, effort=effort),
                     self.settings.effective_chat_llm.hedge_after_s,
+                    stage="chat.answer",
                 )
             ) as chunks:
                 async for chunk in chunks:
@@ -618,12 +622,13 @@ class PersonaChat:
         """The metadata of a streamed reply that left it out or wrote it unreadably, asked for on its own: the reply
         stays exactly as streamed, only what it rests on is filled in. None when that fails too."""
         try:
-            meta = self.llm.structured(
-                system=system,
-                user=user + META_RECOVERY.format(reply=reply),
-                schema=ChatMeta,
-                effort=self.settings.effective_chat_llm.effort_extract,
-            )
+            with default_stage("chat.meta"):
+                meta = self.llm.structured(
+                    system=system,
+                    user=user + META_RECOVERY.format(reply=reply),
+                    schema=ChatMeta,
+                    effort=self.settings.effective_chat_llm.effort_extract,
+                )
             draft = ChatDraft.model_validate({**meta.model_dump(exclude_unset=True), "reply": reply})
         except (LLMError, ValidationError, ValueError):
             return None
@@ -646,7 +651,8 @@ class PersonaChat:
         """Retrieve for the latest user turns, plus the aspects ``rewrite`` names; a failed rewrite only drops them."""
         query = "\n".join([m.content for m in messages if m.role == "user"][-2:])
         try:
-            found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
+            with default_stage("chat.rewrite"):
+                found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
         except LLMError:
             found = Rewrite()
         return self.retrieve(query, as_of, found.hints, found.alternatives, today)
@@ -667,7 +673,9 @@ class PersonaChat:
             "connected": lambda: connect(self.llm, question, material, ctx.ids, effort),
         }
         with ThreadPoolExecutor(max_workers=len(steps)) as pool:
-            futures = {name: pool.submit(copy_context().run, step) for name, step in steps.items()}
+            futures = {
+                name: pool.submit(copy_context().run, _staged(f"chat.{name}", step)) for name, step in steps.items()
+            }
         for name, future in futures.items():
             try:
                 setattr(ctx, name, future.result())
@@ -1080,6 +1088,16 @@ def _render_ledger(e: LedgerEntry, status: LedgerStatus, today: dt.date) -> str:
     parts.append(reviewed)
     speaker = "我" if e.speaker == SELF else e.speaker
     return f"- [{ledger_ref(e)}] {head} · {'；'.join(parts)}。原话（{speaker} 说）：「{_clip(e.quote, QUOTE_CHARS)}」"
+
+
+def _staged[T](label: str, step: Callable[[], T]) -> Callable[[], T]:
+    """``step`` with its model calls counted under ``label``."""
+
+    def run() -> T:
+        with default_stage(label):
+            return step()
+
+    return run
 
 
 def _said_dates(ctx: PersonaContext) -> dict[str, dt.date | None]:

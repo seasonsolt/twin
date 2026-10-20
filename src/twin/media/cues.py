@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from pydantic import BaseModel
 
 from ..llm import LLM
+from ..usage import default_stage
 from .ingest import Segment
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,8 @@ def name_speakers(llm: LLM, segments: list[Segment], roster: list[str]) -> tuple
         meeting = "\n".join(f"{i}|{segments[i].speaker}|{segments[i].text}" for i in window)
         user = json.dumps({"roster": roster, "meeting": meeting}, ensure_ascii=False)
         try:
-            answer = llm.structured(system=PROMPT, user=user, schema=Cues, effort="low", reasoning_effort="low")
+            with default_stage("speaker.cues"):
+                answer = llm.structured(system=PROMPT, user=user, schema=Cues, effort="low", reasoning_effort="low")
         except Exception as e:
             # The exception text can quote the transcript; log only its type.
             logger.warning("naming speakers failed: %s", type(e).__name__)

@@ -162,40 +162,41 @@ function Unnamed({
           )}
         </>
       }
-    >
-      <Row
-        as="form"
-        gap={2}
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!typed) return;
-          if (match) onResolve(match);
-          else onName(typed);
-        }}
-      >
-        <Input
-          aria-label={`${person.name}是谁`}
-          placeholder="这是谁"
-          maxLength={40}
-          value={name}
-          suggestions={known.map((p) => p.name)}
-          className="min-w-0 flex-1 sm:w-56 sm:flex-none"
-          onChange={(event) => setName(event.target.value)}
-        />
-        <Button type="submit" size="sm" disabled={busy || !typed}>
-          {match ? `是${match.name}` : '确认'}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={busy}
-          onClick={() => onResolve(null)}
+      trailing={
+        <Row
+          as="form"
+          gap={2}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!typed) return;
+            if (match) onResolve(match);
+            else onName(typed);
+          }}
         >
-          不认识
-        </Button>
-      </Row>
-    </ListRow>
+          <Input
+            aria-label={`${person.name}是谁`}
+            placeholder="这是谁"
+            maxLength={40}
+            value={name}
+            suggestions={known.map((p) => p.name)}
+            className="min-w-0 flex-1 sm:w-56 sm:flex-none"
+            onChange={(event) => setName(event.target.value)}
+          />
+          <Button type="submit" size="sm" disabled={busy || !typed}>
+            {match ? `是${match.name}` : '确认'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => onResolve(null)}
+          >
+            不认识
+          </Button>
+        </Row>
+      }
+    />
   );
 }
 
@@ -273,47 +274,52 @@ function VoiceRow({
           ))}
         </>
       }
-    >
-      <Row
-        as="form"
-        gap={2}
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (match) onDecide({ action: 'confirm', person_id: match.id });
-          else if (typed) onDecide({ action: 'confirm', new_person: typed });
-          else if (likely)
-            onDecide({ action: 'confirm', person_id: likely.person_id });
-        }}
-      >
-        <Input
-          aria-label={`${title}，是谁`}
-          placeholder={likely ? '写别人' : '这是谁'}
-          maxLength={40}
-          value={name}
-          suggestions={known.map((p) => p.name)}
-          className="min-w-0 flex-1 sm:w-56 sm:flex-none"
-          onChange={(event) => setName(event.target.value)}
-        />
-        <Button type="submit" size="sm" disabled={busy || (!typed && !likely)}>
-          {match
-            ? `是${match.name}`
-            : typed
-              ? '确认'
-              : likely
-                ? `是${likely.name}`
-                : '确认'}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={busy}
-          onClick={() => onDecide({ action: 'unknown' })}
+      trailing={
+        <Row
+          as="form"
+          gap={2}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (match) onDecide({ action: 'confirm', person_id: match.id });
+            else if (typed) onDecide({ action: 'confirm', new_person: typed });
+            else if (likely)
+              onDecide({ action: 'confirm', person_id: likely.person_id });
+          }}
         >
-          不认识
-        </Button>
-      </Row>
-    </ListRow>
+          <Input
+            aria-label={`${title}，是谁`}
+            placeholder={likely ? '写别人' : '这是谁'}
+            maxLength={40}
+            value={name}
+            suggestions={known.map((p) => p.name)}
+            className="min-w-0 flex-1 sm:w-56 sm:flex-none"
+            onChange={(event) => setName(event.target.value)}
+          />
+          <Button
+            type="submit"
+            size="sm"
+            disabled={busy || (!typed && !likely)}
+          >
+            {match
+              ? `是${match.name}`
+              : typed
+                ? '确认'
+                : likely
+                  ? `是${likely.name}`
+                  : '确认'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => onDecide({ action: 'unknown' })}
+          >
+            不认识
+          </Button>
+        </Row>
+      }
+    />
   );
 }
 

@@ -221,9 +221,11 @@ it('switches panels with pointer and arrow keys, resets scroll, and never scroll
   within(nav).getByRole('tab', { name: '形象和声音' }).focus();
   await user.keyboard('{ArrowRight}');
   expect(window.location.hash).toBe('#/profile?section=overview');
+  // The panel appears before the persona loads into it: wait for its content, not just the panel.
+  const persona = await screen.findByRole('tabpanel', { name: '人格' });
   expect(
-    await screen.findByRole('tabpanel', { name: '人格' }),
-  ).toHaveTextContent('我了解到的他');
+    await within(persona).findByRole('heading', { name: '我了解到的他' }),
+  ).toBeVisible();
   expect(view.container.querySelectorAll('.profile-section')).toHaveLength(1);
   act(() => fireEvent.scroll(window));
   expect(window.location.hash).toBe('#/profile?section=overview');

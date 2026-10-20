@@ -117,6 +117,22 @@ class DecisionBody(BaseModel):
     sample: bool = False
 
 
+class VoiceMemberRef(BaseModel):
+    recording_id: str
+    transcript_id: str
+    speaker_id: str
+
+
+class VoiceBody(BaseModel):
+    """Who a voice heard across recordings is (``Team.decide_voice``): the speakers as the page grouped them."""
+
+    members: list[VoiceMemberRef] = Field(min_length=1, max_length=2000)
+    action: Literal["confirm", "unknown"]
+    person_id: str | None = None
+    # Confirm as a new person of this name instead of ``person_id``.
+    new_person: str | None = Field(default=None, max_length=40)
+
+
 class Libraries:
     def __init__(
         self,
@@ -574,6 +590,30 @@ class Libraries:
         self.proofread(owner)
         return {"revision": revision, "person_id": person_id}
 
+    def decide_voice(self, owner: str, body: VoiceBody) -> dict[str, Any]:
+        team = self.team(owner)
+        person_id = body.person_id
+        if body.action == "confirm" and body.new_person:
+            try:
+                person_id = team.add_person(body.new_person).id
+            except ValueError as e:
+                raise HTTPException(409, str(e)) from None
+        members = [(m.recording_id, m.transcript_id, m.speaker_id) for m in body.members]
+        try:
+            team.decide_voice(members, body.action, person_id)
+        except Stale:
+            if body.action == "confirm" and body.new_person and person_id:
+                team.delete_person(person_id)  # Made for this decision only.
+            raise HTTPException(409, "这些录音刚被修改过，请刷新后再确认") from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        if body.action == "confirm":
+            # The new voice sample can settle speakers in every other recording.
+            team.classify_all()
+        self.changed(owner)
+        self.proofread(owner)
+        return {"person_id": person_id}
+
     def update(self, owner: str, person_id: str, body: PersonPatch) -> dict[str, Any]:
         team = self.team(owner)
         try:
@@ -899,8 +939,24 @@ def register(
 
     @app.get("/api/library/review")
     def get_review(request: Request) -> dict[str, Any]:
+        """What the viewer settles about the recordings they decide about: speakers someone said are not them
+        (``items``), undecided speakers grouped by voice across recordings so each colleague is asked about once
+        (``voices``), and the short voices like nobody, to set aside together (``fragments``)."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
-        return {"items": libraries.team(libraries.owner(request)).review(editable)}
+        team = libraries.team(libraries.owner(request))
+        voices, fragments = team.voices(editable)
+        return {
+            "items": [entry for entry in team.review(editable) if entry["disputed"]],
+            "voices": [voice.model_dump() for voice in voices],
+            "fragments": [member.model_dump() for voice in fragments for member in voice.members],
+        }
+
+    @app.post("/api/library/voices")
+    def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:
+        viewer = libraries.viewer(request)
+        for recording_id in {m.recording_id for m in body.members}:
+            libraries.allowed(viewer, recording_id, edit=True)
+        return libraries.decide_voice(libraries.owner(request), body)
 
     @app.get("/api/library/people")
     def get_people(request: Request) -> dict[str, Any]:

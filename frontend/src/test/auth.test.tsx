@@ -99,7 +99,7 @@ beforeEach(() => {
         },
       });
     if (path === '/api/library/people' || path === '/api/library/review')
-      return json({ items: [] });
+      return json({ items: [], voices: [], fragments: [] });
     if (!items.length)
       return json({ detail: '先新建一个分身', code: 'no_persona' }, 409);
     if (path === '/api/identity')

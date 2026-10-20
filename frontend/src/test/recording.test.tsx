@@ -200,7 +200,7 @@ it('creates a named person with sample opt-in and keeps the current selection wh
   });
 });
 
-it('derives the existing five-second windows after merging speech and removing overlap', () => {
+it('derives the existing ten-second windows after merging speech and removing overlap', () => {
   expect(
     sampleWindows(
       [
@@ -211,9 +211,15 @@ it('derives the existing five-second windows after merging speech and removing o
       'S1',
     ),
   ).toEqual([
-    [8, 13],
-    [9, 14],
-    [10, 15],
+    [8, 15],
+    [0, 6],
+  ]);
+  expect(
+    sampleWindows([{ start: 0, end: 30, speaker: 'S1', text: '' }], 'S1'),
+  ).toEqual([
+    [0, 10],
+    [10, 20],
+    [20, 30],
   ]);
 });
 

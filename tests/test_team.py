@@ -371,6 +371,57 @@ def linked_store(tmp_path: Path) -> tuple[Library, Path]:
     return library, db
 
 
+def test_a_voice_heard_in_many_recordings_is_settled_once(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    one = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 40), ([0.0, 1.0, 0.0], 30), ([0.0, 0.0, 1.0], 4))
+    two = voices(
+        library,
+        "二.m4a",
+        ([0.95, 0.05, 0.0], 25),
+        ([0.05, 0.95, 0.0], 20),
+        ([0.9, 0.1, 0.0], 10),  # Like S1 of this recording too, but diarization told them apart.
+    )
+    three = voices(library, "三.m4a", ([1.0, 0.1, 0.0], 12))
+
+    found, fragments = team.voices()
+    assert [[(m.recording_id, m.speaker_id) for m in v.members] for v in found] == [
+        [(one, "S1"), (two, "S1"), (three, "S1")],
+        [(one, "S2"), (two, "S2")],
+    ]
+    assert [v.seconds for v in found] == [77, 50] and not found[0].candidates
+    assert sorted((m.recording_id, m.speaker_id) for v in fragments for m in v.members) == sorted(
+        [(one, "S3"), (two, "S3")]
+    )
+    assert [[m.speaker_id for m in v.members] for v in team.voices({two})[0]] == [["S1"], ["S2"]]
+
+    # Settled as a whole: every meeting is 张总's now, and the longest speaker is his voice sample.
+    zhang = team.add_person("张总")
+    members = [(m.recording_id, m.transcript_id, m.speaker_id) for m in found[0].members]
+    before = {rid: revision(library, rid)[1] for rid in (one, two, three)}
+    team.decide_voice(members, "confirm", zhang.id)
+    person = team.person(zhang.id)
+    assert person and (person.speakers, person.samples, person.seconds) == (3, 1, 77)
+    assert all(revision(library, rid)[1] == before[rid] + 1 for rid in (one, two, three))
+    # The short speaker diarization split from him is like his sample now: asked about, no longer a fragment.
+    after, _ = team.voices()
+    assert [[m.speaker_id for m in v.members] for v in after] == [["S2", "S2"], ["S3"]]
+    assert [c.name for c in after[1].candidates] == ["张总"]
+
+    # A page showing an old grouping is refused as a whole.
+    with pytest.raises(Stale):
+        team.decide_voice([*members[:1], (two, revision(library, two)[0], "S2")], "unknown")
+    assert next(s for s in team.speakers(library.get(two)) if s.id == "S2").decision == "none"  # type: ignore[arg-type]
+
+    # Fragments are set aside together, and a voice like nobody's stays out of the samples.
+    team.decide_voice(
+        [(m.recording_id, m.transcript_id, m.speaker_id) for v in team.voices()[1] for m in v.members], "unknown"
+    )
+    assert team.identities()[one] == (["张总"], 2) and team.voices()[1] == []
+    with pytest.raises(ValueError, match="需要指定"):
+        team.decide_voice([(two, revision(library, two)[0], "S2")], "confirm")
+
+
 def test_every_way_of_asking_is_refused_until_the_build_is_complete(tmp_path: Path) -> None:
     library, db = linked_store(tmp_path)
     settings = Settings(db_path=db)
@@ -700,3 +751,29 @@ def test_a_twin_from_meetings_is_made_for_a_work_address_and_stays_private(web: 
     # Nobody but 张总, once signed in and having looked at it, lets colleagues ask it.
     public = web.patch(f"/api/personas/{twin['persona_id']}", json={"public": True}, headers=HEADERS)
     assert public.status_code == 409
+
+
+def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30), ([0.0, 1.0, 0.0], 3))
+    second = voices(library, "二.m4a", ([0.95, 0.05, 0.0], 20))
+    listed = web.get("/api/library/review").json()
+    assert listed["items"] == [] and [(m["recording_id"], m["speaker_id"]) for m in listed["fragments"]] == [
+        (first, "S2")
+    ]
+    lead = listed["voices"][0]
+    assert [(m["recording_id"], m["speaker_id"]) for m in lead["members"]] == [(first, "S1"), (second, "S1")]
+    members = [{k: m[k] for k in ("recording_id", "transcript_id", "speaker_id")} for m in lead["members"]]
+    post = web.post(
+        "/api/library/voices", json={"members": members, "action": "confirm", "new_person": "张总"}, headers=HEADERS
+    )
+    assert post.status_code == 200
+    [zhang] = [p for p in web.get("/api/library/people").json()["items"] if p["name"] == "张总"]
+    assert (zhang["id"], zhang["speakers"], zhang["samples"]) == (post.json()["person_id"], 2, 1)
+    # The same grouping again is out of date, and the person made for it is not left behind.
+    again = web.post(
+        "/api/library/voices", json={"members": members, "action": "confirm", "new_person": "李总"}, headers=HEADERS
+    )
+    assert again.status_code == 409
+    assert [p["name"] for p in web.get("/api/library/people").json()["items"]] == ["张总"]
+    assert web.get("/api/library/review").json()["voices"] == []

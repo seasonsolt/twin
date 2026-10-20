@@ -845,11 +845,38 @@ const handlers: Record<string, Handler> = {
     persona_id: 'p-zhaoqing',
   }),
   'GET /api/library/review': reply({
-    items: [
+    items: [],
+    voices: [
       {
-        ...weekly.speakers[2],
+        id: 'voice_shiyan',
+        members: [
+          {
+            recording_id: 'r-weekly',
+            filename: weekly.filename,
+            transcript_id: weekly.transcript_id,
+            speaker_id: 'S3',
+            seconds: 640,
+          },
+          {
+            recording_id: 'r-review',
+            filename: '2026-10-12 需求评审.mp4',
+            transcript_id: 't-review',
+            speaker_id: 'S2',
+            seconds: 410,
+          },
+        ],
+        seconds: 1050,
+        candidates: weekly.speakers[2].candidates,
+        near: false,
+      },
+    ],
+    fragments: [
+      {
         recording_id: 'r-weekly',
         filename: weekly.filename,
+        transcript_id: weekly.transcript_id,
+        speaker_id: 'S4',
+        seconds: 6,
       },
     ],
   }),

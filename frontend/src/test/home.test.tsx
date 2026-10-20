@@ -52,7 +52,8 @@ beforeEach(() => {
     vi.fn(async (url: string) => {
       if (url === '/api/library') return json(state);
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json({ items: [] });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [] });
       throw new Error(url);
     }),
   );

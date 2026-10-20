@@ -233,7 +233,7 @@ def test_voice_window_merging_overlap_length_and_samples(tmp_path: Path) -> None
     assert all(8 - 1e-9 <= end - start <= 20 + 1e-9 for start, end in windows)
     assert all(not (start < 12 and end > 10) for start, end in windows)
     assert len(sample_windows(analysis, "S1")) == 3
-    assert all(end - start == 5 for start, end in sample_windows(analysis, "S1"))
+    assert all(end - start == 10 for start, end in sample_windows(analysis, "S1"))
     audio = tmp_path / "short.wav"
     audio.write_bytes(tone(4))
     assert voice_windows(analysis, audio) == []

@@ -253,14 +253,19 @@ def voice_candidates(analysis: Analysis, folder: Path) -> list[Candidate]:
     return candidates
 
 
+# How long one moment to hear a speaker at lasts: long enough to tell a voice by.
+SAMPLE_SECONDS = 10.0
+
+
 def sample_windows(analysis: Analysis, speaker: str) -> list[tuple[float, float]]:
+    """Up to three moments to hear the speaker at, each at most ``SAMPLE_SECONDS`` long, from their longest runs."""
     runs = sorted(intervals(analysis, speaker), key=lambda p: p[1] - p[0], reverse=True)
     windows = []
     for start, end in runs:
-        count = 3 if end - start >= 5 else 1
+        count = 3 if end - start >= SAMPLE_SECONDS else 1
         for i in range(count):
-            offset = (end - start - 5) * i / max(count - 1, 1) if end - start > 5 else 0
-            windows.append((start + offset, min(start + offset + 5, end)))
+            offset = (end - start - SAMPLE_SECONDS) * i / max(count - 1, 1) if end - start > SAMPLE_SECONDS else 0
+            windows.append((start + offset, min(start + offset + SAMPLE_SECONDS, end)))
         if len(windows) >= 3:
             break
     return windows[:3]

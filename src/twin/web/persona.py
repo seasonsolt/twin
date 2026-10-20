@@ -467,6 +467,7 @@ def register(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with previous_lifespan(app):
+            await run_in_threadpool(ingestion.sweep)
             resume_processing()
             try:
                 yield

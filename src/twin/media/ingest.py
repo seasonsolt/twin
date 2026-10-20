@@ -9,8 +9,10 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol
 
@@ -273,6 +275,19 @@ def extract_audio(original: Path) -> tuple[Path, float, str | None]:
             None,
         )
     audio = original.with_name("audio.wav")
+    decode(original, audio)
+    with wave.open(str(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("音频为空")
+    reported_duration = float(info.get("format", {}).get("duration", duration))
+    if math.isfinite(reported_duration) and reported_duration > 0:
+        duration = reported_duration
+    return audio, duration, creation
+
+
+def decode(original: Path, audio: Path) -> None:
+    """Write the original's sound as 16 kHz mono 16-bit wav, the form transcription and voice cuts read."""
     # Create privately before ffmpeg opens it; no window with world-readable output.
     audio.touch(mode=0o600)
     audio.chmod(0o600)
@@ -292,20 +307,46 @@ def extract_audio(original: Path) -> tuple[Path, float, str | None]:
             "16000",
             "-c:a",
             "pcm_s16le",
+            "-f",
+            "wav",
             str(audio),
         ],
         capture_output=True,
         check=True,
         timeout=6 * 3600,
     )
-    with wave.open(str(audio), "rb") as wav:
-        duration = wav.getnframes() / wav.getframerate()
-    if not math.isfinite(duration) or duration <= 0:
-        raise ValueError("音频为空")
-    reported_duration = float(info.get("format", {}).get("duration", duration))
-    if math.isfinite(reported_duration) and reported_duration > 0:
-        duration = reported_duration
-    return audio, duration, creation
+
+
+_SOUND_LOCKS: dict[str, threading.RLock] = {}
+_SOUND_LOCKS_GUARD = threading.Lock()
+
+
+def sound_lock(folder: Path) -> threading.RLock:
+    """One lock per source folder, held while its sound is read or its ``audio.wav`` removed: a slow decode of one
+    recording holds up only that recording, and two requests never decode the same original at once."""
+    with _SOUND_LOCKS_GUARD:
+        return _SOUND_LOCKS.setdefault(str(folder), threading.RLock())
+
+
+@contextmanager
+def readable_wav(folder: Path) -> Iterator[Path]:
+    """A source's sound as wav: ``audio.wav`` while its transcription is under way, else decoded again from the
+    original into a temporary file that is deleted afterwards. The same original always decodes to the same
+    samples, so nothing derived from it needs to be kept. Holds the folder's ``sound_lock`` throughout."""
+    with sound_lock(folder):
+        wav = folder / "audio.wav"
+        if wav.is_file():
+            yield wav
+            return
+        original = next(folder.glob("original.*"), None)
+        if original is None:
+            raise FileNotFoundError("原始文件已不在")
+        temporary = folder / f".audio-{uuid.uuid4().hex}.wav"
+        try:
+            decode(original, temporary)
+            yield temporary
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def timestamp(seconds: float) -> str:

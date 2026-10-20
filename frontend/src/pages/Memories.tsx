@@ -485,9 +485,14 @@ export function Memories({
               ignored.push({ file: file.name, reason: '已跳过隐藏文件' });
               completed++;
             } else if (isMedia(file)) {
-              await uploadMedia(file, signal, (value) => {
-                if (alive.current) setUploadProgress(value);
-              });
+              await uploadMedia(
+                file,
+                signal,
+                (value) => {
+                  if (alive.current) setUploadProgress(value);
+                },
+                { compact: 'audio' },
+              );
               completed++;
               await refresh();
             } else documents.push(file);
@@ -594,20 +599,40 @@ export function Memories({
       <Text size="sm" tone="secondary">
         {uploadProgress.paused
           ? '网络已断开，联网后继续上传'
-          : '上传中，请保持页面打开'}
+          : uploadProgress.preparing !== undefined
+            ? '正在本机压缩音频，压缩后上传更快，请保持页面打开'
+            : '上传中，请保持页面打开'}
       </Text>
-      <progress
-        className="h-2 w-full"
-        aria-label="上传进度"
-        max={uploadProgress.size || 1}
-        value={uploadProgress.offset}
-      />
-      <Text size="sm" tone="secondary">
-        上传中{' '}
-        {Math.floor((uploadProgress.offset / (uploadProgress.size || 1)) * 100)}
-        % · {(uploadProgress.offset / 1024 ** 2).toFixed(1)} /{' '}
-        {(uploadProgress.size / 1024 ** 2).toFixed(1)} MB
-      </Text>
+      {uploadProgress.preparing !== undefined ? (
+        <>
+          <progress
+            className="h-2 w-full"
+            aria-label="压缩进度"
+            max={1}
+            value={uploadProgress.preparing}
+          />
+          <Text size="sm" tone="secondary">
+            压缩中 {Math.floor(uploadProgress.preparing * 100)}%
+          </Text>
+        </>
+      ) : (
+        <>
+          <progress
+            className="h-2 w-full"
+            aria-label="上传进度"
+            max={uploadProgress.size || 1}
+            value={uploadProgress.offset}
+          />
+          <Text size="sm" tone="secondary">
+            上传中{' '}
+            {Math.floor(
+              (uploadProgress.offset / (uploadProgress.size || 1)) * 100,
+            )}
+            % · {(uploadProgress.offset / 1024 ** 2).toFixed(1)} /{' '}
+            {(uploadProgress.size / 1024 ** 2).toFixed(1)} MB
+          </Text>
+        </>
+      )}
     </Card>
   );
   const view = async (memory: Memory) => {

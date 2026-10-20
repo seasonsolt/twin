@@ -244,13 +244,46 @@ def cut(audio: Path, output: Path, start: float, end: float) -> None:
     )
 
 
-def voice_candidates(analysis: Analysis, folder: Path) -> list[Candidate]:
+def voice_candidates(analysis: Analysis, folder: Path, audio: Path) -> list[Candidate]:
+    """Cut the claimed speakers' voice candidates from ``audio``, the source's sound (see ``readable_wav``)."""
     candidates = []
-    for i, (start, end) in enumerate(voice_windows(analysis, folder / "audio.wav")):
+    for i, (start, end) in enumerate(voice_windows(analysis, audio)):
         cid = f"{analysis.revision}-voice-{i}"
-        cut(folder / "audio.wav", folder / f"{cid}.wav", start, end)
+        cut(audio, folder / f"{cid}.wav", start, end)
         candidates.append(Candidate(id=cid, file=f"{cid}.wav", start=start, end=end))
     return candidates
+
+
+def sample_path(folder: Path, window: tuple[float, float]) -> Path:
+    """Where the listening sample of ``window`` is kept. It is named by its times alone: the same original cut at the
+    same times is the same sound, so a sample outlives choosing who is who (a new revision) and even a
+    transcription again."""
+    start, end = window
+    return folder / f"sample-{round(start * 1000)}-{round(end * 1000)}.wav"
+
+
+def missing_samples(analysis: Analysis, folder: Path) -> bool:
+    return any(
+        not sample_path(folder, window).is_file()
+        for speaker in analysis.speakers
+        for window in sample_windows(analysis, speaker.id)
+    )
+
+
+def cut_samples(analysis: Analysis, folder: Path, audio: Path) -> None:
+    """Cut every speaker's listening samples that are not there yet from ``audio``, so choosing who is who does not
+    wait for the original to be decoded again. Each is written aside and renamed, so a sample on disk is whole."""
+    for speaker in analysis.speakers:
+        for window in sample_windows(analysis, speaker.id):
+            path = sample_path(folder, window)
+            if path.is_file():
+                continue
+            temporary = path.with_name(f".{path.stem}-{uuid.uuid4().hex}.wav")
+            try:
+                cut(audio, temporary, *window)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 # How long one moment to hear a speaker at lasts: long enough to tell a voice by.

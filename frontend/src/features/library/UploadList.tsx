@@ -33,12 +33,16 @@ export function UploadList({
               label={
                 pick.progress?.paused
                   ? `${pick.file.name}（网络中断，恢复后继续）`
-                  : pick.file.name
+                  : pick.progress?.preparing !== undefined
+                    ? `${pick.file.name}（正在本机提取音频）`
+                    : pick.file.name
               }
               value={
-                pick.progress
-                  ? (pick.progress.offset / pick.progress.size) * 100
-                  : 0
+                pick.progress?.preparing !== undefined
+                  ? pick.progress.preparing * 100
+                  : pick.progress
+                    ? (pick.progress.offset / pick.progress.size) * 100
+                    : 0
               }
             />
           )}

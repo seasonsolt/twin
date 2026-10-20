@@ -93,7 +93,8 @@ def test_chunk_resume_finish_limits_and_csrf(client: TestClient, tmp_path: Path)
     assert (folder / "original.wav").read_bytes() == data
     assert folder.stat().st_mode & 0o777 == 0o700
     assert (folder / "original.wav").stat().st_mode & 0o777 == 0o600
-    assert (folder / "audio.wav").stat().st_mode & 0o777 == 0o600
+    # Nothing was transcribed, so no extracted audio is kept; a retry extracts it again.
+    assert not (folder / "audio.wav").exists() and not (folder / "audio.flac").exists()
     for size, name, status in [(MAX_MEDIA_SIZE + 1, "a.mp4", 413), (0, "a.wav", 400), (1, "a.exe", 400)]:
         response = client.post("/api/uploads", headers=HEADERS, json={"filename": name, "size": size})
         assert response.status_code == status and not response.json()["detail"].isascii()
@@ -137,11 +138,11 @@ def test_a_slow_chunk_does_not_hold_up_other_uploads(client: TestClient, monkeyp
     started, release = threading.Event(), threading.Event()
     append = Uploads.append
 
-    def stalled(self: Uploads, upload_id: str, chunk: bytes) -> None:
+    def stalled(self: Uploads, upload_id: str, chunk: bytes, offset: int | None = None) -> None:
         if upload_id == slow:
             started.set()
             assert release.wait(5)
-        append(self, upload_id, chunk)
+        append(self, upload_id, chunk, offset)
 
     monkeypatch.setattr(Uploads, "append", stalled)
     result: list[int] = []
@@ -415,3 +416,131 @@ def test_transcript_is_proofread_before_speakers_are_claimed(
     assert len(proofread) == int(enabled)
     assert bool([s for s in job["progress"] if "校对完成：修正 1 段" in s]) is enabled
     assert ("限界上下文" if enabled else "涨号上下文") in text
+
+
+def test_digest_follows_the_bytes_as_they_arrive(client: TestClient, tmp_path: Path) -> None:
+    import hashlib
+
+    from twin.web import uploads as uploads_module
+
+    data = os.urandom(3 * 1024**2 + 17)
+    sha = hashlib.sha256(data).hexdigest()
+    # Several request chunks in order: the running hash is used, and it matches a fresh read of the file.
+    uid = create(client, data)
+    cut = 1024**2 + 5
+    assert client.put(f"/api/uploads/{uid}?offset=0", headers=HEADERS, content=data[:cut]).status_code == 200
+    assert client.put(f"/api/uploads/{uid}?offset={cut}", headers=HEADERS, content=data[cut:]).status_code == 200
+    part = tmp_path / "uploads" / f"{uid}.part"
+    assert uploads_module._running[str(part)][1] == len(data)
+    assert Uploads(tmp_path).digest(uid) == sha
+    assert str(part) not in uploads_module._running
+    # A restart between chunks loses the running hash; the file is then read once and still agrees.
+    uid = create(client, data)
+    assert client.put(f"/api/uploads/{uid}?offset=0", headers=HEADERS, content=data[:cut]).status_code == 200
+    uploads_module._running.clear()
+    assert client.put(f"/api/uploads/{uid}?offset={cut}", headers=HEADERS, content=data[cut:]).status_code == 200
+    assert Uploads(tmp_path).digest(uid) == sha
+    # A rolled-back chunk drops the hash, so a retry cannot mix the two attempts.
+    uid = create(client, data)
+    uploads = Uploads(tmp_path)
+    uploads.append(uid, data[:10], 0)
+    uploads.truncate(uid, 0)
+    uploads.append(uid, data[:10], 0)
+    uploads.append(uid, data[10:], 10)
+    assert uploads.digest(uid) == sha
+
+
+def test_running_hashes_of_vanished_uploads_are_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from twin.web import uploads as uploads_module
+
+    monkeypatch.setattr(uploads_module, "MAX_RUNNING", 2)
+    monkeypatch.setattr(uploads_module, "_running", {})
+    uploads = Uploads(tmp_path)
+    ids = [uploads.create(UploadBody(filename="a.mp4", size=10))["id"] for _ in range(3)]
+    for upload_id in ids[:2]:
+        uploads.append(upload_id, b"ab", 0)
+    for upload_id in ids[:2]:
+        uploads.paths(upload_id)[1].unlink()
+    uploads.append(ids[2], b"ab", 0)
+    assert list(uploads_module._running) == [str(uploads.paths(ids[2])[1])]
+
+
+def test_sweep_removes_abandoned_uploads_and_orphan_parts(tmp_path: Path) -> None:
+    uploads = Uploads(tmp_path)
+    old = uploads.create(UploadBody(filename="a.mp4", size=5))["id"]
+    fresh = uploads.create(UploadBody(filename="b.mp4", size=5))["id"]
+    orphan = uploads.root / ("f" * 32 + ".part")
+    orphan.write_bytes(b"x")
+    longago = time.time() - 86401
+    for path in (*uploads.paths(old), orphan):
+        os.utime(path, (longago, longago))
+    assert uploads.sweep() == 2
+    assert not uploads.paths(old)[0].exists() and not orphan.exists()
+    assert uploads.paths(fresh)[0].exists() and uploads.paths(fresh)[1].exists()
+    assert Uploads(tmp_path / "none").sweep() == 0
+
+
+def test_audio_decodes_again_from_the_original(tmp_path: Path) -> None:
+    from twin.media.ingest import readable_wav
+
+    with pytest.raises(FileNotFoundError), readable_wav(tmp_path):
+        pass
+    data = wav_bytes(2)
+    (tmp_path / "original.wav").write_bytes(data)
+    with readable_wav(tmp_path) as wav, wave.open(str(wav)) as decoded:
+        assert wav.name.startswith(".audio-") and wav.stat().st_mode & 0o777 == 0o600
+        assert (decoded.getnframes(), decoded.getframerate(), decoded.getnchannels()) == (32000, 16000, 1)
+        assert decoded.readframes(32000) == data[44:]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["original.wav"]
+    # While transcription has it extracted, that file is used as it is.
+    (tmp_path / "audio.wav").write_bytes(data)
+    with readable_wav(tmp_path) as wav:
+        assert wav == tmp_path / "audio.wav"
+
+
+def test_failed_originals_expire_but_recent_and_ready_ones_stay(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from twin.config import LibrarySettings
+    from twin.media.library import Library
+
+    # Nothing is deleted unless an administrator asks for it: a failure may be the transcription service being down.
+    assert LibrarySettings().failed_keep_days == 0
+
+    library = Library(tmp_path)
+    ids = []
+    for index in range(3):
+        upload = tmp_path / f"u{index}.part"
+        upload.write_bytes(wav_bytes(index + 1))
+        recording, _ = library.add(upload, f"{index}.wav")
+        ids.append(recording.id)
+    old, recent, ready = ids
+    long_ago = "2020-01-01T00:00:00+00:00"
+    library.update(old, status="failed", error="x")
+    with library._db() as db:
+        db.execute("UPDATE recordings SET updated_at = ? WHERE id = ?", (long_ago, old))
+        db.execute("UPDATE recordings SET updated_at = ?, status = 'ready' WHERE id = ?", (long_ago, ready))
+    library.update(recent, status="failed", error="y")
+    assert library.expire_failed(0) == 0
+    with caplog.at_level("WARNING", logger="twin.media.library"):
+        assert library.expire_failed(30) == 1
+    assert [r.getMessage() for r in caplog.records if old in r.getMessage() and "0.wav" in r.getMessage()]
+    assert library._original(old) is None and library._original(recent) and library._original(ready)
+    assert "30 天" in (library.get(old) or library.list()[0]).error
+    assert library.retry(old) is None and library.retry(recent) is not None
+    assert library.expire_failed(30) == 0
+
+
+def test_start_up_drops_kept_audio_and_abandoned_uploads(tmp_path: Path) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db")
+    folder = tmp_path / "media-sources" / ("a" * 64)
+    folder.mkdir(parents=True)
+    legacy_sample = "b" * 32 + "-sample-0-1.wav"
+    for name in ("original.wav", "audio.wav", "audio.flac", ".audio-1.wav", "analysis.json", legacy_sample):
+        (folder / name).write_bytes(b"x")
+    uploads = Uploads(tmp_path)
+    abandoned = uploads.create(UploadBody(filename="a.mp4", size=5))["id"]
+    os.utime(uploads.paths(abandoned)[0], (time.time() - 86401,) * 2)
+    MediaIngestion(settings, None, lambda: None, lambda: None).sweep()  # type: ignore[arg-type]
+    assert sorted(p.name for p in folder.iterdir()) == ["analysis.json", "original.wav"]
+    assert not uploads.paths(abandoned)[0].exists()

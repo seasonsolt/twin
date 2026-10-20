@@ -909,6 +909,55 @@ const handlers: Record<string, Handler> = {
         candidates: weekly.speakers[2].candidates,
         near: false,
       },
+      // Many voices wait: the longest are asked first, the rest folded away.
+      ...[
+        {
+          id: 'voice_sure',
+          seconds: 800,
+          candidates: [
+            { person_id: 'u-qinghe', name: '许清禾', score: 0.93, sure: true },
+          ],
+        },
+        {
+          id: 'voice_called',
+          seconds: 700,
+          called: '老宋',
+          quote: '老宋你那边排期怎么样',
+          candidates: [],
+        },
+        { id: 'voice_blank', seconds: 500, candidates: [] },
+        {
+          id: 'voice_split',
+          seconds: 400,
+          candidates: [
+            { person_id: 'u-linzhou', name: '林舟', score: 0.8, split: true },
+          ],
+        },
+        { id: 'voice_short_1', seconds: 120, candidates: [] },
+        { id: 'voice_short_2', seconds: 90, candidates: [] },
+        {
+          id: 'voice_enough',
+          seconds: 60,
+          enough: true,
+          had: 3000,
+          candidates: [
+            { person_id: 'u-linzhou', name: '林舟', score: 0.9, sure: true },
+          ],
+        },
+        { id: 'voice_stranger', seconds: 50, stranger: true, candidates: [] },
+      ].map((voice) => ({
+        near: false,
+        members: [
+          {
+            recording_id: 'r-weekly',
+            filename: weekly.filename,
+            transcript_id: weekly.transcript_id,
+            speaker_id: 'S4',
+            seconds: voice.seconds,
+          },
+        ],
+        ...voice,
+      })),
     ],
     fragments: [
       {

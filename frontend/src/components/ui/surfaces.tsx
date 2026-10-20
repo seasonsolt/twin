@@ -341,6 +341,66 @@ export function ListRow({
   );
 }
 
+/**
+ * One thing to settle in a list: a mark or clip, a title, one line of details, an optional hint line, extra content
+ * under them (answers offered in one click), and the actions. With `actionsWidth="field"` the actions get a fixed
+ * column, so a list of rows with the same controls (a name field, confirm, menu) lines up; "auto" sizes it to the
+ * buttons, right-aligned. Render a list of them inside <Stack as="ul" gap={0}>.
+ */
+export function TaskRow({
+  as: Tag = 'li',
+  leading,
+  title,
+  meta,
+  hint,
+  children,
+  actions,
+  actionsWidth = 'auto',
+  ...props
+}: {
+  as?: 'li' | 'div';
+  /** A clip button or a StatusDot; the column stays when it is absent. */
+  leading?: ReactNode;
+  title: ReactNode;
+  /** One line, cut with an ellipsis. */
+  meta?: ReactNode;
+  /** One more line, quieter than `meta`. */
+  hint?: ReactNode;
+  children?: ReactNode;
+  actions?: ReactNode;
+  actionsWidth?: 'auto' | 'field';
+} & Pick<ComponentProps<'li'>, 'id' | 'aria-label'>) {
+  return (
+    <Tag
+      {...props}
+      className={cn(
+        'grid items-start gap-x-4 gap-y-2 border-b border-border py-3 last:border-b-0',
+        actionsWidth === 'field'
+          ? 'grid-cols-[2.25rem_minmax(0,1fr)] md:grid-cols-[2.25rem_minmax(0,1fr)_20rem]'
+          : 'grid-cols-[2.25rem_minmax(0,1fr)] md:grid-cols-[2.25rem_minmax(0,1fr)_auto]',
+      )}
+    >
+      <div className="grid min-h-9 place-items-center">{leading}</div>
+      <div className="min-w-0 space-y-1 pt-1">
+        <div className="truncate font-medium">{title}</div>
+        {meta && <div className="truncate text-sm text-secondary">{meta}</div>}
+        {hint && <div className="truncate text-sm text-tertiary">{hint}</div>}
+        {children}
+      </div>
+      {actions && (
+        <div
+          className={cn(
+            'col-span-2 flex items-center gap-2 md:col-span-1',
+            actionsWidth === 'auto' && 'justify-end',
+          )}
+        >
+          {actions}
+        </div>
+      )}
+    </Tag>
+  );
+}
+
 /** A number with what it counts, for summaries. */
 export function Stat({
   label,

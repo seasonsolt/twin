@@ -33,7 +33,8 @@ const pages: {
   viewport?: boolean;
   setup?: (page: Page) => Promise<unknown>;
 }[] = [
-  { name: 'team', path: '/#/team', ready: '需要你处理' },
+  { name: 'team', path: '/#/team', ready: '全部录音（' },
+  { name: 'team-todo', path: '/#/team?tab=todo', ready: '新出现的声音' },
   { name: 'library', path: '/#/library', ready: '2026-10-15 产品周会.m4a' },
   {
     name: 'recording',
@@ -208,7 +209,7 @@ const pages: {
   {
     name: 'team-ink',
     path: '/#/team',
-    ready: '需要你处理',
+    ready: '全部录音（',
     setup: (page) =>
       page.addInitScript(() => localStorage.setItem('twin:theme', 'ink')),
   },

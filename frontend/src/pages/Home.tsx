@@ -13,7 +13,6 @@ import {
   Stack,
   StepNumber,
   Text,
-  TextLink,
   Toolbar,
 } from '../components/ui';
 import { api } from '../lib/api';
@@ -217,11 +216,6 @@ export function Home() {
               uploads={unfinished.filter((pick) => !pick.error)}
               onStopUpload={uploading ? stop : undefined}
             />
-            <Text>
-              <TextLink to="/library">
-                全部录音（{library.recordings.length}）
-              </TextLink>
-            </Text>
           </>
         )}
       </Page>

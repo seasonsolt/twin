@@ -103,10 +103,13 @@ export function ClipButton({
   src,
   label,
   caption,
+  size = 'lg',
 }: {
   src: string;
   label: string;
   caption?: string;
+  /** lg 44px (default), md 36px for a clip inside a list row or card. */
+  size?: 'md' | 'lg';
 }) {
   const audio = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -139,7 +142,7 @@ export function ClipButton({
         <IconButton
           label={playing ? `暂停${label}` : label}
           shape="circle"
-          size="lg"
+          size={size}
           variant="secondary"
           aria-pressed={playing}
           onClick={toggle}

@@ -184,18 +184,19 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  const tasks = await screen.findByRole('region', { name: /新出现的声音/u });
   expect(await within(tasks).findByText('像张总')).toBeInTheDocument();
   expect(within(tasks).getByRole('link', { name: '打开录音' })).toHaveAttribute(
     'href',
     '/library/rec_9?speaker=S1',
   );
+  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
   const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
   expect(within(row).getByText('还没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
@@ -249,13 +250,13 @@ it('lists new voices apart and names them before a twin can be made', async () =
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const fresh = await screen.findByRole('region', { name: '需要你处理' });
+  const fresh = await screen.findByRole('region', { name: /新出现的声音/u });
   expect(within(fresh).getByText(/未命名 1/u)).toBeInTheDocument();
   expect(
     within(fresh).queryByRole('button', { name: '生成分身' }),
@@ -276,10 +277,12 @@ it('lists new voices apart and names them before a twin can be made', async () =
   await userEvent.click(within(fresh).getByRole('button', { name: '确认' }));
   await waitFor(() => expect(patches).toEqual([{ name: '李总' }]));
   // Named, they can have twins like anyone else.
+  await screen.findByText('现在没有需要你处理的事。');
+  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
   expect(
     await screen.findAllByRole('button', { name: '生成分身' }),
   ).toHaveLength(2);
-  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+  expect(screen.queryByText(/项待处理/u)).toBeNull();
 });
 
 it('edits a person name and gender and opens the profile of their twin', async () => {
@@ -382,7 +385,7 @@ it('moves focus to the next voice after naming one, then hides the empty queue',
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
@@ -394,11 +397,8 @@ it('moves focus to the next voice after naming one, then hides the empty queue',
   const next = screen.getByLabelText('未命名 2是谁');
   await waitFor(() => expect(next).toHaveFocus());
   await userEvent.type(next, '李总{Enter}');
-  await waitFor(() =>
-    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
-  );
+  await screen.findByText('现在没有需要你处理的事。');
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
-  expect(screen.getAllByRole('region')[0]).toHaveAccessibleName('人物');
 });
 
 it('settles a new voice as someone already known, or as nobody known, from its row', async () => {
@@ -424,7 +424,7 @@ it('settles a new voice as someone already known, or as nobody known, from its r
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
@@ -437,18 +437,17 @@ it('settles a new voice as someone already known, or as nobody known, from its r
     Array.from(offered.querySelectorAll('option')).map((o) => o.value),
   ).toEqual(['张总']);
   await userEvent.type(first, '张总');
-  await userEvent.click(screen.getByRole('button', { name: '是张总' }));
+  await userEvent.click(screen.getAllByRole('button', { name: '确认' })[0]);
   await waitFor(() =>
     expect(resolved).toEqual([{ id: 'first', into: 'per_1' }]),
   );
   const next = screen.getByLabelText('未命名 2是谁');
   await waitFor(() => expect(next).toHaveFocus());
+  await userEvent.click(screen.getByLabelText('更多选项：未命名 2'));
   await userEvent.click(screen.getByRole('button', { name: '不认识' }));
   await waitFor(() => expect(resolved).toHaveLength(2));
   expect(resolved[1]).toEqual({ id: 'second', into: null });
-  await waitFor(() =>
-    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
-  );
+  await screen.findByText('现在没有需要你处理的事。');
 });
 
 it('returns from a speaker confirmation to focus the next pending team item', async () => {
@@ -485,7 +484,7 @@ it('returns from a speaker confirmation to focus the next pending team item', as
     }),
   );
   render(
-    <MemoryRouter initialEntries={['/team']}>
+    <MemoryRouter initialEntries={['/team?tab=todo&cat=disputed']}>
       <ConfirmProvider>
         <Routes>
           <Route path="/team" element={<Team version={0} recordings={[]} />} />
@@ -494,10 +493,9 @@ it('returns from a speaker confirmation to focus the next pending team item', as
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  const waiting = within(tasks).getByText('有人说不是自己').closest('li')!;
+  const tasks = await screen.findByRole('region', { name: /有人说不是自己/u });
   await userEvent.click(
-    within(waiting).getByRole('link', { name: '试听并确认' }),
+    within(tasks).getByRole('link', { name: '试听并确认' }),
   );
   const card = (
     await screen.findByRole('heading', { name: 'S1 是谁？' })
@@ -522,7 +520,7 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team
           version={0}
@@ -547,7 +545,7 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
   expect(
     within(progress).getByText('上传.m4a · 上传中 50%'),
   ).toBeInTheDocument();
-  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+  expect(screen.getByText('现在没有需要你处理的事。')).toBeInTheDocument();
   await userEvent.click(
     within(progress).getByRole('button', { name: /停止上传/u }),
   );
@@ -578,7 +576,7 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
   await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '李');
   expect(screen.queryByRole('button', { name: '编辑张总' })).toBeNull();
   expect(screen.getByRole('button', { name: '编辑李总' })).toBeInTheDocument();
-  expect(screen.getByText('2 人')).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: /人物.*2/u })).toBeInTheDocument();
   expect(calls).toHaveLength(beforeSearch);
   await userEvent.click(screen.getByRole('button', { name: '编辑李总' }));
   expect(
@@ -636,16 +634,18 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  const tasks = await screen.findByRole('region', { name: /分身被退回/u });
+  expect(within(tasks).getByText('王总')).toBeInTheDocument();
   expect(
-    within(tasks).getByText('王总：wang@acme.cn 说这不是 TA'),
+    within(tasks).getByText('wang@acme.cn 说这不是 TA'),
   ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
   await userEvent.click(
     screen.getByRole('button', { name: '按邮箱或工号建分身（3）' }),
   );
@@ -704,7 +704,9 @@ it('shows a person who found themselves by voice as having their own twin', asyn
   const name = await screen.findByText('张总', { selector: 'p' });
   const row = name.closest('li')!;
   expect(within(row).getByText('本人已认领')).toBeInTheDocument();
-  expect(within(row).getByText(/分身归 TA 自己/u)).toBeInTheDocument();
+  expect(
+    within(row).getByRole('button', { name: '分身归 TA 自己' }),
+  ).toBeDisabled();
   expect(within(row).queryByRole('button', { name: '生成分身' })).toBeNull();
   expect(within(row).queryByRole('link', { name: '张总的档案' })).toBeNull();
 });
@@ -745,17 +747,19 @@ it('puts what someone said is not them first, and lets an administrator merge tw
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo&cat=disputed']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const disputed = (await screen.findByText('有人说不是自己')).closest('li')!;
-  expect(disputed).toHaveTextContent('周会.m4a · S4 原来标成的人说这不是 TA');
-  expect(screen.queryByText('王五', { selector: 'p' })).toBeNull();
-  const hint = screen.getByText('可能是同一个人').closest('li')!;
-  expect(hint).toHaveTextContent('张总 和 张总（2）');
+  const disputed = (await screen.findByText('周会.m4a · S4')).closest('li')!;
+  expect(disputed).toHaveTextContent('原来标成的人说这不是 TA');
+  // The tabs and the kinds are told apart by what each holds.
+  expect(screen.getByRole('tab', { name: /待处理.*2/u })).toBeInTheDocument();
+  await user.click(screen.getByRole('tab', { name: /可能是同一个人/u }));
+  const hint = (await screen.findByText('张总 和 张总（2）')).closest('li')!;
+  expect(hint).toHaveTextContent('1 段录音 · 3 段录音');
   // The one who spoke more is kept.
   await user.click(within(hint).getByRole('button', { name: '合并' }));
   await waitFor(() =>
@@ -763,7 +767,11 @@ it('puts what someone said is not them first, and lets an administrator merge tw
       ['/api/library/people/per_1/merge', { into: 'per_2' }],
     ]),
   );
-  await waitFor(() => expect(screen.queryByText('可能是同一个人')).toBeNull());
+  await waitFor(() =>
+    expect(screen.queryByText('张总 和 张总（2）')).toBeNull(),
+  );
+  await user.click(screen.getByRole('tab', { name: /人物/u }));
+  expect(screen.queryByText('王五', { selector: 'p' })).toBeNull();
 });
 
 it('settles a voice heard in several meetings once, and sets the fragments aside together', async () => {
@@ -811,14 +819,14 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
         <ToastViewport />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  const tasks = await screen.findByRole('region', { name: /新出现的声音/u });
   // Like 张总, but not so alike that Enter answers it: confirming him is a click of its own.
   const row = within(tasks).getByText('可能是张总').closest('li')!;
   expect(row).toHaveTextContent('2 段录音 · 共说了 8 分钟');
@@ -853,12 +861,11 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
   expect(await screen.findByRole('status')).toHaveTextContent(
     '又按声音认出了 3 位说话人，不用再问',
   );
-  const scraps = screen.getByText('零碎的声音').closest('li')!;
-  expect(scraps).toHaveTextContent('2 段录音里有 2 段很短的声音，共 7 秒');
+  const scraps = await screen.findByRole('region', { name: /零碎的声音/u });
+  expect(scraps).toHaveTextContent('2 段录音里有 2 段很短的声音');
+  expect(scraps).toHaveTextContent('共 7 秒');
   await user.click(within(scraps).getByRole('button', { name: '都放一边' }));
-  await waitFor(() =>
-    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
-  );
+  await screen.findByText('现在没有需要你处理的事。');
   expect(posts[1]).toMatchObject({ action: 'unknown' });
 });
 
@@ -911,7 +918,7 @@ it('opens a voice at its own speaker, next to the samples of who it may be', asy
     }),
   );
   render(
-    <MemoryRouter initialEntries={['/team']}>
+    <MemoryRouter initialEntries={['/team?tab=todo']}>
       <ConfirmProvider>
         <Routes>
           <Route path="/team" element={<Team version={0} recordings={[]} />} />
@@ -928,12 +935,15 @@ it('opens a voice at its own speaker, next to the samples of who it may be', asy
   expect(
     within(row).getByRole('button', { name: '听李总确认过的声音' }),
   ).toBeInTheDocument();
-  const people_ = screen.getByRole('region', { name: '人物' });
+  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
   expect(
-    within(people_).getAllByRole('button', { name: /确认过的声音/u }),
+    within(screen.getByRole('tabpanel')).getAllByRole('button', {
+      name: /确认过的声音/u,
+    }),
   ).toHaveLength(2);
+  await userEvent.click(screen.getByRole('tab', { name: /待处理/u }));
   // The recording opens at the voice's own speaker, not at its first undecided one.
-  await userEvent.click(within(row).getByRole('link', { name: '打开录音' }));
+  await userEvent.click(screen.getByRole('link', { name: '打开录音' }));
   expect(
     await screen.findByRole('heading', { name: 'S2 是谁？' }),
   ).toBeInTheDocument();
@@ -968,9 +978,9 @@ it('asks about recordings only as the server lists them, so an older list never 
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  await screen.findByRole('region', { name: '人物' });
+  await screen.findByRole('tab', { name: /人物/u });
   expect(screen.queryByText('还有人没认')).toBeNull();
-  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+  expect(screen.queryByText(/项待处理/u)).toBeNull();
 });
 
 it('asks about whoever speaks longest first, and measures progress by speech settled', async () => {
@@ -1033,23 +1043,25 @@ it('asks about whoever speaks longest first, and measures progress by speech set
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
   const list = await screen.findByRole('list', { name: '新出现的声音' });
-  const [first, second, third] = within(list).getAllByRole('listitem');
+  const [first, second] = within(list).getAllByRole('listitem');
   expect(first).toHaveTextContent('没听过的声音');
   expect(second).toHaveTextContent('未命名 1');
-  // A voice the owner could not name before says so, and is set aside again in one click.
-  expect(third).toHaveTextContent('你标过不认识的声音');
+  // A voice the owner could not name before waits folded away last, and is set aside again in a click.
+  const third = screen.getByText('你标过不认识的声音').closest('li')!;
+  expect(within(list).queryByText('你标过不认识的声音')).toBeNull();
+  await userEvent.click(within(third).getByLabelText(/^更多选项/u));
   expect(
     within(third).getByRole('button', { name: '仍不认识' }),
   ).toBeInTheDocument();
   expect(
-    screen.getByRole('progressbar', { name: '会议里的发言，已经知道是谁说的' }),
+    screen.getByRole('progressbar', { name: '已知是谁说的发言' }),
   ).toHaveAttribute('aria-valuenow', '900');
   // Whom the owner cannot name, the colleague can: an invitation to recognise their own voice.
   const copy = vi.spyOn(navigator.clipboard, 'writeText');
@@ -1121,14 +1133,14 @@ it('offers the name a meeting calls a voice, and asks about whoever a twin still
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
   const list = await screen.findByRole('list', { name: '新出现的声音' });
-  const [first, second, third] = within(list).getAllByRole('listitem');
+  const [first, second] = within(list).getAllByRole('listitem');
   // Someone the meeting names but the team does not know yet: added in one click.
   expect(first).toHaveTextContent('会上被叫作宋明');
   expect(first).toHaveTextContent('「那宋明你跟老夏解释一下」');
@@ -1136,6 +1148,8 @@ it('offers the name a meeting calls a voice, and asks about whoever a twin still
   expect(second).toHaveTextContent('会上被叫作张总');
   expect(within(second).getByRole('button', { name: '确认' })).toBeDisabled();
   // Surely 张总, who has enough to learn from already: last, whatever its length.
+  const third = screen.getByText('像张总').closest('li')!;
+  expect(within(list).queryByText('像张总')).toBeNull();
   expect(third).toHaveTextContent('像张总');
   expect(third).toHaveTextContent('张总已经有 40 分钟发言，够建分身了');
   await user.click(within(first).getByRole('button', { name: '是宋明' }));
@@ -1210,13 +1224,13 @@ it('settles a voice of several people and gives short voices to whom they sound 
     }),
   );
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?tab=todo']}>
       <ConfirmProvider>
         <Team version={0} recordings={[]} />
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  const tasks = await screen.findByRole('region', { name: /新出现的声音/u });
   // A voice like one the owner could not name waits behind a voice nobody has heard yet.
   const titles = within(tasks)
     .getAllByText(/^(没听过的声音|你标过不认识的声音)$/u)
@@ -1232,8 +1246,9 @@ it('settles a voice of several people and gives short voices to whom they sound 
     members: [{ recording_id: 'rec_8', speaker_id: 'S2' }],
   });
   // Short voices like 张总 are given in one click, without taking them as 张总's voice samples.
+  await userEvent.click(screen.getByRole('tab', { name: /零碎的声音/u }));
   await userEvent.click(
-    within(tasks).getByRole('button', { name: '2 段像张总：都是张总' }),
+    await screen.findByRole('button', { name: '2 段像张总：都是张总' }),
   );
   await waitFor(() => expect(posts).toHaveLength(2));
   expect(posts[1]).toEqual({
@@ -1293,4 +1308,97 @@ it('lists people heard longest first', async () => {
       .getAllByText(/^(短的|长的|中的)$/u, { selector: 'p' })
       .map((p) => p.textContent),
   ).toEqual(['长的', '中的', '短的']);
+});
+
+it('adds a person by hand from a small dialog, and keeps the people list where it was', async () => {
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people' && init?.method === 'POST') {
+        posts.push(JSON.parse(String(init.body)));
+        people = [...people, person({ id: 'per_5', name: '赵总' })];
+        return json({ id: 'per_5' }, 201);
+      }
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await userEvent.click(
+    await screen.findByRole('button', { name: '添加人物' }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: '添加人物' });
+  await userEvent.type(within(dialog).getByRole('textbox'), '赵总{Enter}');
+  await waitFor(() => expect(posts).toEqual([{ name: '赵总' }]));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(
+    await screen.findByText('赵总', { selector: 'p' }),
+  ).toBeInTheDocument();
+});
+
+it('shows the first five new voices, asks for five more, and retries every failed recording', async () => {
+  const retried: string[] = [];
+  const voices = Array.from({ length: 7 }, (_, i) => ({
+    id: `voice_${i}`,
+    members: [
+      {
+        recording_id: 'rec_1',
+        filename: '周会.m4a',
+        transcript_id: 't1',
+        speaker_id: `S${i}`,
+        seconds: 600 - i * 10,
+      },
+    ],
+    seconds: 600 - i * 10,
+    candidates: [],
+    near: false,
+  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices, fragments: [], unsorted: [] });
+      if (url.endsWith('/retry') && init?.method === 'POST') {
+        retried.push(url);
+        return json({});
+      }
+      throw new Error(url);
+    }),
+  );
+  const failed = ['a', 'b'].map(
+    (id) =>
+      ({ id, filename: `${id}.m4a`, status: 'failed' }) as LibraryRecording,
+  );
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo']}>
+      <ConfirmProvider>
+        <Team version={0} recordings={failed} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const list = await screen.findByRole('list', { name: '新出现的声音' });
+  expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+  expect(
+    screen.getByText(/还有 2 个说得更少（共 18 分钟）/u),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '再看 2 个' }));
+  expect(within(list).getAllByRole('listitem')).toHaveLength(7);
+  await userEvent.click(screen.getByRole('tab', { name: /转写失败/u }));
+  await userEvent.click(screen.getByRole('button', { name: '全部重试' }));
+  await waitFor(() =>
+    expect(retried).toEqual([
+      '/api/library/recordings/a/retry',
+      '/api/library/recordings/b/retry',
+    ]),
+  );
 });

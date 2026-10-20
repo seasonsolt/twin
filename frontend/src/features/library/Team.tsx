@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   ActionMenu,
   IdentityLink,
@@ -15,17 +15,23 @@ import {
   Badge,
   Button,
   Card,
+  Chip,
   ClipButton,
   toast,
   Dialog,
+  Disclosure,
   Field,
   Grid,
   Input,
-  ListRow,
+  Notice,
   Radio,
   Row,
   Section,
+  SideTabs,
   Stack,
+  StatusDot,
+  Tabs,
+  TaskRow,
   Text,
   TextLink,
   type TextTone,
@@ -100,6 +106,84 @@ type VoiceDecision =
   | { action: 'unknown' }
   | { action: 'mixed' };
 
+/** The kinds of thing waiting for the owner, in the order they are listed. */
+type Category =
+  | 'voice'
+  | 'unsorted'
+  | 'failed'
+  | 'similar'
+  | 'disputed'
+  | 'disowned'
+  | 'fragments';
+
+/** Which kind a task belongs to, from its id (the id a recording page hands back once it is settled). */
+const categoryOf = (task: string): Category | undefined =>
+  (
+    [
+      ['person-', 'voice'],
+      ['voice-', 'voice'],
+      ['unsorted-', 'unsorted'],
+      ['failed-', 'failed'],
+      ['similar-', 'similar'],
+      ['speaker-', 'disputed'],
+      ['disowned-', 'disowned'],
+      ['fragments', 'fragments'],
+    ] as const
+  ).find(([prefix]) => task.startsWith(prefix))?.[1];
+
+const CATEGORIES: {
+  id: Category;
+  label: string;
+  tone: 'warning' | 'danger' | 'info';
+  help: string;
+}[] = [
+  {
+    id: 'voice',
+    label: '新出现的声音',
+    tone: 'warning',
+    help: '说得最多的在前；处理完一项会自动跳到下一项',
+  },
+  {
+    id: 'unsorted',
+    label: '还没认人',
+    tone: 'warning',
+    help: '这些录音的说话人没有声纹可比，要在录音里逐个确认',
+  },
+  {
+    id: 'failed',
+    label: '转写失败',
+    tone: 'danger',
+    help: '转写没有成功，可以重试，或删掉这段录音',
+  },
+  {
+    id: 'similar',
+    label: '可能是同一个人',
+    tone: 'info',
+    help: '合并录音库时同名，没法确定是不是一个人',
+  },
+  {
+    id: 'disputed',
+    label: '有人说不是自己',
+    tone: 'warning',
+    help: '原来标成的人说这不是 TA，试听后改成对的人',
+  },
+  {
+    id: 'disowned',
+    label: '分身被退回',
+    tone: 'danger',
+    help: '对方登录后说这个分身不是 TA，换一个邮箱或工号',
+  },
+  {
+    id: 'fragments',
+    label: '零碎的声音',
+    tone: 'info',
+    help: '多是插话或附和，放一边不影响分身',
+  },
+];
+
+// New voices shown at first, and each time more are asked for.
+const VOICES_PER_PAGE = 5;
+
 const minutes = (seconds: number) =>
   `${Math.max(0, Math.round(seconds / 60))} 分钟`;
 const span = (seconds: number) =>
@@ -108,28 +192,61 @@ const span = (seconds: number) =>
 const recordingPath = (id: string, speaker?: string | null) =>
   `/library/${encodeURIComponent(id)}${speaker ? `?speaker=${encodeURIComponent(speaker)}` : ''}`;
 
-/** One thing for the owner to settle: what kind of task it is, what it is about, and how to settle it. */
-function Task({
-  kind,
-  tone = 'warning',
-  children,
+/** The name field, confirm button and "⋯" menu every voice row ends with, so the rows line up. Enter confirms. */
+function Ask({
+  label,
+  value,
+  onChange,
+  known,
+  menu,
+  confirmable,
+  primary,
+  busy,
+  onSubmit,
 }: {
-  kind: string;
-  tone?: TextTone;
-  children: ReactNode;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  known: Person[];
+  menu: { label: string; onSelect: () => void }[];
+  /** Whether there is an answer to confirm. */
+  confirmable: boolean;
+  /** A sure guess is already in the field: confirming it is the row's main action. */
+  primary: boolean;
+  busy: boolean;
+  onSubmit: () => void;
 }) {
   return (
-    <Card
-      as="li"
-      variant="outline"
-      padding="md"
-      className="flex flex-col gap-2"
+    <Row
+      as="form"
+      gap={2}
+      grow
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
     >
-      <Text as="span" size="sm" weight="medium" tone={tone}>
-        {kind}
-      </Text>
-      {children}
-    </Card>
+      <Input
+        aria-label={label}
+        placeholder="这是谁"
+        maxLength={40}
+        value={value}
+        suggestions={known.map((p) => p.name)}
+        className="min-w-0 flex-1"
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <Button
+        type="submit"
+        variant={primary ? 'primary' : 'secondary'}
+        disabled={busy || !confirmable}
+      >
+        确认
+      </Button>
+      <ActionMenu
+        label={`更多选项：${label.replace(/，?是谁$/u, '')}`}
+        items={menu.map((item) => ({ ...item, disabled: busy }))}
+      />
+    </Row>
   );
 }
 
@@ -152,11 +269,11 @@ function Unnamed({
   const typed = name.trim();
   const match = known.find((p) => p.name === typed);
   return (
-    <ListRow
-      variant="divided"
+    <TaskRow
       leading={
         person.recording_id && person.speaker_id ? (
           <ClipButton
+            size="md"
             label={`听${person.name}的声音`}
             src={withBase(
               `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
@@ -167,7 +284,7 @@ function Unnamed({
       title={person.name}
       meta={
         <>
-          说了 {minutes(person.seconds)} · {person.speakers} 段录音
+          {person.speakers} 段录音 · 共说了 {minutes(person.seconds)}
           {person.recording_id && (
             <>
               {' · '}
@@ -182,39 +299,23 @@ function Unnamed({
           )}
         </>
       }
-      trailing={
-        <Row
-          as="form"
-          gap={2}
-          onSubmit={(event) => {
-            event.preventDefault();
+      actionsWidth="field"
+      actions={
+        <Ask
+          label={`${person.name}是谁`}
+          value={name}
+          onChange={setName}
+          known={known}
+          busy={busy}
+          confirmable={!!typed}
+          primary={false}
+          menu={[{ label: '不认识', onSelect: () => onResolve(null) }]}
+          onSubmit={() => {
             if (!typed) return;
             if (match) onResolve(match);
             else onName(typed);
           }}
-        >
-          <Input
-            aria-label={`${person.name}是谁`}
-            placeholder="这是谁"
-            maxLength={40}
-            value={name}
-            suggestions={known.map((p) => p.name)}
-            className="min-w-0 flex-1 sm:w-56 sm:flex-none"
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Button type="submit" size="sm" disabled={busy || !typed}>
-            {match ? `是${match.name}` : '确认'}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => onResolve(null)}
-          >
-            不认识
-          </Button>
-        </Row>
+        />
       }
     />
   );
@@ -222,12 +323,20 @@ function Unnamed({
 
 /** The voice a person is recognised by (one of their voice samples, or a meeting they were confirmed in), as a
  * small reference beside what is being looked at. */
-function PersonClip({ person }: { person?: Person }) {
+function PersonClip({
+  person,
+  icon = false,
+}: {
+  person?: Person;
+  /** Only the round play button, for a card; otherwise a text button naming the person. */
+  icon?: boolean;
+}) {
   if (!person?.recording_id || !person.speaker_id) return null;
   return (
     <ClipButton
+      size="md"
       label={`听${person.name}确认过的声音`}
-      caption={`听${person.name}`}
+      caption={icon ? undefined : `听${person.name}`}
       src={withBase(
         `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
       )}
@@ -248,21 +357,22 @@ function VoiceRow({
   busy: boolean;
   onDecide: (decision: VoiceDecision) => void;
 }) {
-  const [name, setName] = useState('');
+  const [likely, other] = voice.candidates;
+  // Only a voice very close to one person is answered by Enter; a nearer guess is a choice to make on purpose.
+  const sure = Boolean(likely?.sure) && !voice.near;
+  // A sure guess is already in the field, so Enter confirms it; any other guess is one click away under the text.
+  const [name, setName] = useState(sure ? likely.name : '');
   const typed = name.trim();
   const match = known.find((p) => p.name === typed);
   // Heard one recording at a time: a voice grouped from several meetings is checked across them, not by its
   // loudest member alone.
   const [heard, setHeard] = useState(0);
   const current = voice.members[heard % voice.members.length];
-  const [likely, other] = voice.candidates;
   const offered = (voice.near && other ? [likely, other] : [likely]).filter(
     Boolean,
   );
   // Who it may be, to hear next to it before saying so.
   const compared = offered.map((c) => known.find((p) => p.id === c.person_id));
-  // Only a voice very close to one person is answered by Enter; a nearer guess is a choice to make on purpose.
-  const sure = Boolean(likely?.sure) && !voice.near;
   const recordings = new Set(voice.members.map((m) => m.recording_id)).size;
   // A name the meeting calls them that nobody in the team has yet: added as a new person in one click.
   const newName =
@@ -280,11 +390,26 @@ function VoiceRow({
         : sure
           ? `像${likely.name}`
           : `可能是${offered.map((c) => c.name).join('或')}`;
+  const hint = [
+    likely?.split &&
+      `这段录音里已经有${likely.name}，可能是同一个人被分成了两位`,
+    voice.enough &&
+      likely &&
+      `${likely.name}已经有 ${minutes(voice.had ?? 0)}发言，够建分身了，可以先处理别的`,
+    voice.called && voice.quote && `「${voice.quote}」`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const guesses = [
+    ...(newName && !typed ? [{ id: 'new', name: newName }] : []),
+    ...(!sure ? offered.map((c) => ({ id: c.person_id, name: c.name })) : []),
+  ];
+  const hearable = voice.members.length > 1 || compared.some(Boolean);
   return (
-    <ListRow
-      variant="divided"
+    <TaskRow
       leading={
         <ClipButton
+          size="md"
           key={`${current.recording_id}/${current.speaker_id}`}
           label={`听这个声音（${current.filename}）`}
           src={withBase(
@@ -304,6 +429,57 @@ function VoiceRow({
           >
             打开录音
           </TextLink>
+        </>
+      }
+      hint={hint || undefined}
+      actionsWidth="field"
+      actions={
+        <Ask
+          label={`${title}，是谁`}
+          value={name}
+          onChange={setName}
+          known={known}
+          busy={busy}
+          confirmable={!!typed || sure}
+          primary={sure}
+          menu={[
+            {
+              label: voice.stranger ? '仍不认识' : '不认识',
+              onSelect: () => onDecide({ action: 'unknown' }),
+            },
+            {
+              label: '几个人混在一起',
+              onSelect: () => onDecide({ action: 'mixed' }),
+            },
+          ]}
+          onSubmit={() => {
+            // The prefilled guess is answered by its id: a name can be shared by two people.
+            if (sure && (!typed || typed === likely.name))
+              onDecide({ action: 'confirm', person_id: likely.person_id });
+            else if (match)
+              onDecide({ action: 'confirm', person_id: match.id });
+            else if (typed) onDecide({ action: 'confirm', new_person: typed });
+          }}
+        />
+      }
+    >
+      {(guesses.length > 0 || hearable) && (
+        <Row gap={2} wrap>
+          {guesses.map((guess) => (
+            <Chip
+              key={guess.id}
+              disabled={busy}
+              onClick={() =>
+                onDecide(
+                  guess.id === 'new'
+                    ? { action: 'confirm', new_person: guess.name }
+                    : { action: 'confirm', person_id: guess.id },
+                )
+              }
+            >
+              是{guess.name}
+            </Chip>
+          ))}
           {voice.members.length > 1 && (
             <Button
               type="button"
@@ -318,103 +494,9 @@ function VoiceRow({
           {compared.map((person) => (
             <PersonClip key={person?.id} person={person} />
           ))}
-          {likely?.split && (
-            <>
-              <br />
-              这段录音里已经有{likely.name}，可能是同一个人被分成了两位
-            </>
-          )}
-          {voice.called && voice.quote && (
-            <>
-              <br />「{voice.quote}」
-            </>
-          )}
-          {voice.enough && likely && (
-            <>
-              <br />
-              {`${likely.name}已经有 ${minutes(voice.had ?? 0)}发言，够建分身了，可以先处理别的`}
-            </>
-          )}
-        </>
-      }
-      trailing={
-        <Row
-          as="form"
-          gap={2}
-          wrap
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (match) onDecide({ action: 'confirm', person_id: match.id });
-            else if (typed) onDecide({ action: 'confirm', new_person: typed });
-            else if (sure)
-              onDecide({ action: 'confirm', person_id: likely.person_id });
-          }}
-        >
-          <Input
-            aria-label={`${title}，是谁`}
-            placeholder={sure ? '写别人' : '这是谁'}
-            maxLength={40}
-            value={name}
-            suggestions={known.map((p) => p.name)}
-            className="min-w-0 basis-full sm:w-56 sm:basis-auto"
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Button type="submit" size="sm" disabled={busy || (!typed && !sure)}>
-            {match
-              ? `是${match.name}`
-              : !typed && sure
-                ? `是${likely.name}`
-                : '确认'}
-          </Button>
-          {newName && !typed && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                onDecide({ action: 'confirm', new_person: newName })
-              }
-            >
-              是{newName}
-            </Button>
-          )}
-          {!sure &&
-            offered.map((c) => (
-              <Button
-                key={c.person_id}
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  onDecide({ action: 'confirm', person_id: c.person_id })
-                }
-              >
-                是{c.name}
-              </Button>
-            ))}
-          <Button
-            type="button"
-            variant={voice.stranger ? 'secondary' : 'ghost'}
-            size="sm"
-            disabled={busy}
-            onClick={() => onDecide({ action: 'unknown' })}
-          >
-            {voice.stranger ? '仍不认识' : '不认识'}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => onDecide({ action: 'mixed' })}
-          >
-            几个人混在一起
-          </Button>
         </Row>
-      }
-    />
+      )}
+    </TaskRow>
   );
 }
 
@@ -722,6 +804,193 @@ function ClaimLine({ twin }: { twin?: Persona }) {
   );
 }
 
+/** Adding a person by hand: asked in a small dialog, so the people list keeps its place. */
+function AddPerson({
+  open,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onAdd: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (open) {
+      setName('');
+      setError('');
+    }
+  }, [open]);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(value) => !value && onClose()}
+      title="添加人物"
+    >
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!name.trim()) return;
+          setBusy(true);
+          onAdd(name.trim())
+            .then(onClose, (failure) =>
+              setError(failure instanceof Error ? failure.message : '没能添加'),
+            )
+            .finally(() => setBusy(false));
+        }}
+      >
+        <Field id="new-person-name" label="名字" error={error || undefined}>
+          <Input
+            id="new-person-name"
+            maxLength={40}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <Row gap={2} justify="end">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" loading={busy} disabled={!name.trim()}>
+            添加
+          </Button>
+        </Row>
+      </form>
+    </Dialog>
+  );
+}
+
+/** One person found in the meetings: who they are and what their twin is, with the one thing to do next. */
+function PersonCard({
+  person,
+  twin,
+  busy,
+  onOpen,
+  onEdit,
+  onAddress,
+  onRemove,
+}: {
+  person: Person;
+  twin?: Persona;
+  busy: boolean;
+  onOpen: (personaId: string, page: '/chat' | '/profile') => void;
+  onEdit: () => void;
+  onAddress: () => void;
+  onRemove: () => void;
+}) {
+  const lacking =
+    person.seconds > 0 && (person.lacking ?? 0) >= 60
+      ? `素材还差约 ${minutes(person.lacking ?? 0)}`
+      : '';
+  return (
+    <Card as="li" variant="outline" className="flex flex-col gap-4">
+      <Row gap={2}>
+        <Stack gap={0} grow>
+          <IdentityLink
+            to={person.persona_id ? '/profile' : undefined}
+            label={
+              person.persona_id ? `${person.name}的档案` : `编辑${person.name}`
+            }
+            onClick={() =>
+              person.persona_id
+                ? onOpen(person.persona_id, '/profile')
+                : onEdit()
+            }
+          >
+            <AvatarFrame>
+              <PersonFace person={person} twin={twin} />
+            </AvatarFrame>
+            <Stack gap={0} grow>
+              <Text size="lg" weight="semibold" truncate>
+                {person.name}
+              </Text>
+              <Text size="sm" tone="secondary" truncate>
+                {person.speakers} 段录音 · {minutes(person.seconds)}
+              </Text>
+            </Stack>
+          </IdentityLink>
+        </Stack>
+        <PersonClip person={person} icon />
+      </Row>
+      <Stack gap={1} align="start">
+        {person.self_claimed ? (
+          <Badge tone="success">本人已认领</Badge>
+        ) : person.twin_elsewhere ? (
+          <Badge tone="neutral">同事建了分身</Badge>
+        ) : person.persona_id ? (
+          person.updating ? (
+            <Badge tone="warning">记忆更新中</Badge>
+          ) : (
+            <Badge tone="success">可以聊</Badge>
+          )
+        ) : (
+          <Badge tone="neutral">还没有分身</Badge>
+        )}
+        <ClaimLine twin={twin} />
+        {lacking && (
+          <Text size="sm" tone="secondary">
+            {lacking}
+          </Text>
+        )}
+      </Stack>
+      <div className="mt-auto flex gap-2">
+        {person.self_claimed ? (
+          // Their twin is theirs, not the library's to open: nothing to do here.
+          <Button variant="secondary" className="flex-1" disabled>
+            分身归 TA 自己
+          </Button>
+        ) : person.twin_elsewhere ? (
+          <Button variant="secondary" className="flex-1" disabled>
+            由建它的同事管理
+          </Button>
+        ) : person.persona_id ? (
+          <Button
+            className="flex-1"
+            disabled={person.updating}
+            onClick={() => onOpen(person.persona_id!, '/chat')}
+          >
+            {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
+          </Button>
+        ) : person.can_manage === false ? null : (
+          <Button
+            variant="secondary"
+            className="flex-1"
+            disabled={busy || !person.speakers}
+            onClick={onAddress}
+          >
+            生成分身
+          </Button>
+        )}
+        {person.can_manage !== false && (
+          <ActionMenu
+            label={`更多：${person.name}`}
+            items={[
+              { label: '编辑名字和性别', disabled: busy, onSelect: onEdit },
+              ...(person.persona_id && twin?.claimed === false
+                ? [
+                    {
+                      label: '企业邮箱或工号',
+                      disabled: busy,
+                      onSelect: onAddress,
+                    },
+                  ]
+                : []),
+              ...(!person.persona_id &&
+              !person.self_claimed &&
+              !person.twin_elsewhere
+                ? [{ label: '删除', disabled: busy, onSelect: onRemove }]
+                : []),
+            ]}
+          />
+        )}
+      </div>
+    </Card>
+  );
+}
+
 /** What the owner has to settle, quiet background progress, and everyone found in
  * the recordings, each with their twin. */
 export function Team({
@@ -743,18 +1012,22 @@ export function Team({
   const [fragments, setFragments] = useState<Fragment[]>([]);
   const [unsorted, setUnsorted] = useState<Unsorted[]>([]);
   const [heard, setHeard] = useState<Review['heard']>();
-  const [name, setName] = useState('');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
   const [addressing, setAddressing] = useState<Person | null>(null);
   const [batching, setBatching] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [voicesShown, setVoicesShown] = useState(VOICES_PER_PAGE);
   const taskList = useRef<HTMLDivElement>(null);
   const location = useLocation();
+  const [params, setParams] = useSearchParams();
   const [focusPending, setFocusPending] = useState<string | null>(
     location.state?.resolvedTeamTask ?? null,
   );
+  // Back from settling a speaker in its recording: the tab and the kind of task it was part of.
+  const returnedFrom: string | undefined = location.state?.resolvedTeamTask;
   const confirm = useConfirm();
   const navigate = useNavigate();
   const refreshPersonas = usePersonas((state) => state.refresh);
@@ -796,14 +1069,10 @@ export function Team({
     await load();
     setBusy(false);
   };
-  const add = () =>
-    act(async () => {
-      await api('/api/library/people', {
-        method: 'POST',
-        json: { name: name.trim() },
-      });
-      setName('');
-    });
+  const add = async (value: string) => {
+    await api('/api/library/people', { method: 'POST', json: { name: value } });
+    await load();
+  };
   const saveClaim = (person: Person, claim: string) =>
     act(async () => {
       if (person.persona_id)
@@ -977,6 +1246,7 @@ export function Team({
       id: `person-${person.id}`,
       seconds: person.seconds,
       enough: false,
+      stranger: false,
       person,
     })),
     ...voices.map((voice) => ({
@@ -989,11 +1259,17 @@ export function Team({
   ].sort(
     // Whoever a twin still lacks first, then the longest; voices like one already marked 不认识 wait last.
     (a, b) =>
-      Number('stranger' in a && a.stranger) -
-        Number('stranger' in b && b.stranger) ||
+      Number(a.stranger) - Number(b.stranger) ||
       Number(a.enough) - Number(b.enough) ||
       b.seconds - a.seconds,
   );
+  // The longest are asked first; the rest wait behind "see more", and those that can wait (a twin is already
+  // possible, or they sound like a stranger) are folded away.
+  const mainVoices = voiced.filter((v) => !v.enough && !v.stranger);
+  const enoughVoices = voiced.filter((v) => v.enough && !v.stranger);
+  const strangerVoices = voiced.filter((v) => v.stranger);
+  const shownVoices = mainVoices.slice(0, voicesShown);
+  const laterVoices = mainVoices.slice(voicesShown);
   const taskIds = [
     ...voiced.map((v) => v.id),
     ...(fragments.length ? ['fragments'] : []),
@@ -1004,6 +1280,47 @@ export function Team({
     ...disowned.map((p) => `disowned-${p.id}`),
   ];
   const tasks = taskIds.length;
+  const counts: Record<Category, number> = {
+    voice: voiced.length,
+    unsorted: unsorted.length,
+    failed: failed.length,
+    similar: similar.length,
+    disputed: waiting.length,
+    disowned: disowned.length,
+    fragments: fragments.length ? 1 : 0,
+  };
+  const openCategories = CATEGORIES.filter((c) => counts[c.id] > 0);
+  const tab: 'people' | 'todo' =
+    params.get('tab') === 'todo' || returnedFrom ? 'todo' : 'people';
+  const asked =
+    params.get('cat') ?? (returnedFrom ? categoryOf(returnedFrom) : undefined);
+  // The kind in the address, or the first that still has something, when it was settled in full.
+  const category =
+    openCategories.find((c) => c.id === asked) ?? openCategories[0];
+  // Tab and kind live in the address, so a reload or the back button returns to them; other parameters stay.
+  const go = useCallback(
+    (change: Record<string, string | null>, state?: unknown) =>
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          for (const [key, value] of Object.entries(change))
+            if (value === null) next.delete(key);
+            else next.set(key, value);
+          return next;
+        },
+        { replace: true, state },
+      ),
+    [setParams],
+  );
+  const wanted = returnedFrom ? categoryOf(returnedFrom) : undefined;
+  useEffect(() => {
+    if (!returnedFrom) return;
+    if (
+      params.get('tab') !== 'todo' ||
+      (wanted && params.get('cat') !== wanted)
+    )
+      go({ tab: 'todo', ...(wanted ? { cat: wanted } : {}) }, location.state);
+  }, [returnedFrom, wanted, params, go, location.state]);
   const pending =
     arriving.length + organising.length + proofreading.length + uploads.length;
   const taskOrder = taskIds.join('|');
@@ -1017,7 +1334,10 @@ export function Team({
     next?.focus();
     setFocusPending(null);
     if (location.state?.resolvedTeamTask)
-      void navigate(location.pathname, { replace: true, state: null });
+      void navigate(`${location.pathname}${location.search}`, {
+        replace: true,
+        state: null,
+      });
   }, [focusPending, people, busy, taskOrder, location, navigate]);
 
   const retry = (recording: Recording) =>
@@ -1030,6 +1350,16 @@ export function Team({
       );
       await onReload?.();
     }, `failed-${recording.id}`);
+  // There is no call for all at once: the same retry for each, one after the other.
+  const retryAll = () =>
+    act(async () => {
+      for (const recording of failed)
+        await api(
+          `/api/library/recordings/${encodeURIComponent(recording.id)}/retry`,
+          { method: 'POST' },
+        );
+      await onReload?.();
+    }, `failed-${failed[0]?.id}`);
   const removeRecording = async (recording: Recording) => {
     if (
       !(await confirm({
@@ -1047,6 +1377,461 @@ export function Team({
       await onReload?.();
     }, `failed-${recording.id}`);
   };
+
+  const voiceRow = (entry: (typeof voiced)[number]) =>
+    'person' in entry ? (
+      <Unnamed
+        key={entry.id}
+        person={entry.person}
+        known={named ?? []}
+        busy={busy}
+        onName={(value) => void rename(entry.person, value)}
+        onResolve={(into) => void resolve(entry.person, into)}
+      />
+    ) : (
+      <VoiceRow
+        key={entry.id}
+        voice={entry.voice}
+        known={(people ?? []).filter((p) => !p.auto)}
+        busy={busy}
+        onDecide={(decision) =>
+          void decideVoice(entry.voice.members, decision, entry.id)
+        }
+      />
+    );
+  const folded = (summary: string, rows: typeof voiced) =>
+    rows.length > 0 && (
+      <Disclosure
+        summary={summary}
+        variant="plain"
+        defaultOpen={mainVoices.length === 0}
+      >
+        <Stack as="ul" gap={0}>
+          {rows.map(voiceRow)}
+        </Stack>
+      </Disclosure>
+    );
+  const sum = (rows: typeof voiced) =>
+    rows.reduce((total, row) => total + row.seconds, 0);
+  const attention = (tone: 'warning' | 'danger' | 'info') => (
+    <StatusDot tone={tone} />
+  );
+
+  // What the chosen kind of task shows, and the actions that settle all of its kind at once.
+  let batch: ReactNode = null;
+  let body: ReactNode = null;
+  if (category?.id === 'voice') {
+    body = (
+      <>
+        <Stack as="ul" gap={0} aria-label="新出现的声音">
+          {shownVoices.map(voiceRow)}
+        </Stack>
+        {laterVoices.length > 0 && (
+          <Row gap={3} justify="between" wrap>
+            <Text size="sm" tone="secondary">
+              还有 {laterVoices.length} 个说得更少（共 {span(sum(laterVoices))}
+              ）
+            </Text>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setVoicesShown((n) => n + VOICES_PER_PAGE)}
+            >
+              再看 {Math.min(VOICES_PER_PAGE, laterVoices.length)} 个
+            </Button>
+          </Row>
+        )}
+        {folded(`${enoughVoices.length} 个像已经够建分身的人`, enoughVoices)}
+        {folded(`${strangerVoices.length} 个像你标过不认识的`, strangerVoices)}
+        <Row gap={2} wrap>
+          <Text size="sm" tone="secondary">
+            认不出的人，可以请本人来认：登录后录一句话，系统会找出哪些是 TA 说的
+          </Text>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              const invite = `我们在用会议录音整理每个人的发言，为你建分身。打开这个链接，登录后录一句话，就能认出哪些是你说的：${window.location.origin}${basePath()}/#/voice`;
+              void navigator.clipboard.writeText(invite).then(
+                () => toast('邀请已复制，可以发给同事', 'success'),
+                () => toast(invite, 'info', 15000),
+              );
+            }}
+          >
+            复制邀请
+          </Button>
+        </Row>
+      </>
+    );
+  } else if (category?.id === 'unsorted') {
+    body = (
+      <Stack as="ul" gap={0}>
+        {unsorted.map((u) => (
+          <TaskRow
+            key={`unsorted-${u.recording_id}`}
+            leading={attention('warning')}
+            title={u.filename}
+            meta={
+              u.speakers === u.total
+                ? `${u.speakers} 位说话人待确认`
+                : `还有 ${u.speakers} 位没认`
+            }
+            actions={
+              <RouteButton
+                to={recordingPath(u.recording_id)}
+                state={{ teamTask: `unsorted-${u.recording_id}` }}
+                variant="secondary"
+                size="sm"
+              >
+                试听并确认
+              </RouteButton>
+            }
+          />
+        ))}
+      </Stack>
+    );
+  } else if (category?.id === 'failed') {
+    batch = failed.length > 1 && (
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={busy}
+        onClick={() => void retryAll()}
+      >
+        全部重试
+      </Button>
+    );
+    body = (
+      <Stack as="ul" gap={0}>
+        {failed.map((r) => (
+          <TaskRow
+            key={r.id}
+            leading={attention('danger')}
+            title={r.filename}
+            meta={r.error || undefined}
+            actions={
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void retry(r)}
+                >
+                  重试
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void removeRecording(r)}
+                >
+                  删除
+                </Button>
+              </>
+            }
+          />
+        ))}
+      </Stack>
+    );
+  } else if (category?.id === 'similar') {
+    body = (
+      <Stack as="ul" gap={0}>
+        {similar.map(([a, b]) => (
+          <TaskRow
+            key={`similar-${a.id}-${b.id}`}
+            leading={attention('info')}
+            title={`${a.name} 和 ${b.name}`}
+            meta={`${a.speakers} 段录音 · ${b.speakers} 段录音`}
+            actions={
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void merge(a, b)}
+                >
+                  合并
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void apart(a, b)}
+                >
+                  不是同一个人
+                </Button>
+              </>
+            }
+          />
+        ))}
+      </Stack>
+    );
+  } else if (category?.id === 'disputed') {
+    body = (
+      <Stack as="ul" gap={0}>
+        {waiting.map((w) => (
+          <TaskRow
+            key={`${w.recording_id}-${w.id}`}
+            leading={attention('warning')}
+            title={`${w.filename} · ${w.id}`}
+            meta="原来标成的人说这不是 TA"
+            actions={
+              <RouteButton
+                to={recordingPath(w.recording_id, w.id)}
+                state={{ teamTask: `speaker-${w.recording_id}-${w.id}` }}
+                variant="secondary"
+                size="sm"
+              >
+                试听并确认
+              </RouteButton>
+            }
+          />
+        ))}
+      </Stack>
+    );
+  } else if (category?.id === 'disowned') {
+    body = (
+      <Stack as="ul" gap={0}>
+        {disowned.map((p) => (
+          <TaskRow
+            key={`disowned-${p.id}`}
+            leading={attention('danger')}
+            title={p.name}
+            meta={`${twinOf(p)?.claim_rejected} 说这不是 TA`}
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() => setAddressing(p)}
+              >
+                换个邮箱或工号
+              </Button>
+            }
+          />
+        ))}
+      </Stack>
+    );
+  } else if (category?.id === 'fragments') {
+    batch = (
+      <>
+        {fragmentsLike.slice(0, 3).map(({ person, members }) => (
+          <Button
+            key={person.person_id}
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onClick={() =>
+              void decideVoice(
+                members,
+                {
+                  action: 'confirm',
+                  person_id: person.person_id,
+                  sample: false,
+                },
+                'fragments',
+              )
+            }
+          >
+            {members.length} 段像{person.name}：都是{person.name}
+          </Button>
+        ))}
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onClick={() =>
+            void decideVoice(fragments, { action: 'unknown' }, 'fragments')
+          }
+        >
+          都放一边
+        </Button>
+      </>
+    );
+    body = (
+      <Stack as="ul" gap={0}>
+        <TaskRow
+          leading={attention('info')}
+          title={`${fragmentRecordings} 段录音里有 ${fragments.length} 段很短的声音`}
+          meta={`共 ${span(fragments.reduce((total, m) => total + m.seconds, 0))}${fragmentsLike.length === 0 ? '，不像任何人' : ''}`}
+        />
+      </Stack>
+    );
+  }
+
+  const processing = pending > 0 && (
+    <Section label="正在处理" gap={2}>
+      <Text size="sm" weight="medium">
+        正在处理 {pending} 项
+      </Text>
+      <Stack as="ul" gap={1}>
+        {uploads.map((pick) => (
+          <Text
+            as="li"
+            key={`${pick.file.name}-${pick.file.lastModified}-${pick.file.size}`}
+            size="sm"
+            tone="secondary"
+            breakAll
+          >
+            {pick.file.name} ·{' '}
+            {pick.progress?.paused
+              ? '等待网络恢复'
+              : `上传中 ${Math.round(pick.progress ? (pick.progress.offset / pick.progress.size) * 100 : 0)}%`}
+          </Text>
+        ))}
+        {arriving.map((r) => (
+          <Stack as="li" key={r.id} gap={1}>
+            <Text size="sm" tone="secondary" breakAll>
+              {r.filename} · {r.status === 'queued' ? '排队转写' : '转写中'}
+            </Text>
+            {r.status === 'transcribing' && (
+              <Meter
+                label={`${r.filename}转写进度`}
+                size="sm"
+                hideLabel
+                value={r.duration_s ? r.transcribed_s : null}
+                max={r.duration_s ?? 100}
+              />
+            )}
+          </Stack>
+        ))}
+        {proofreading.map((r) => (
+          <Text
+            as="li"
+            key={`proofread-${r.id}`}
+            size="sm"
+            tone="secondary"
+            breakAll
+          >
+            {r.filename} · 等待校对
+          </Text>
+        ))}
+        {organising.map((p) => (
+          <Text as="li" key={p.id} size="sm" tone="secondary" breakAll>
+            {p.name} · 整理记忆中
+          </Text>
+        ))}
+      </Stack>
+      {uploads.length > 0 && onStopUpload && (
+        <TextLink size="sm" onClick={onStopUpload}>
+          停止上传（已传的部分下次接着传）
+        </TextLink>
+      )}
+    </Section>
+  );
+
+  const peopleTab = (
+    <Stack gap={5}>
+      {tasks > 0 && (
+        <Notice
+          tone="warning"
+          actions={
+            <Button variant="secondary" onClick={() => go({ tab: 'todo' })}>
+              去处理
+            </Button>
+          }
+        >
+          {tasks} 项待处理。认出更多说话人，分身的素材才会更足。
+        </Notice>
+      )}
+      {named && named.length === 0 && (
+        <Text size="sm" tone="secondary">
+          录音转写后，认出来的人会出现在这里；也可以打开录音，确认说话人是谁。
+        </Text>
+      )}
+      <Grid as="ul" columns={3}>
+        {named
+          ?.filter((person) =>
+            person.name
+              .toLocaleLowerCase()
+              .includes(search.trim().toLocaleLowerCase()),
+          )
+          .map((person) => (
+            <PersonCard
+              key={person.id}
+              person={person}
+              twin={twinOf(person)}
+              busy={busy}
+              onOpen={(personaId, page) => void open(personaId, page)}
+              onEdit={() => setEditing(person)}
+              onAddress={() => setAddressing(person)}
+              onRemove={() => void remove(person)}
+            />
+          ))}
+      </Grid>
+      <Row gap={3} justify="between" wrap>
+        <Text size="sm" tone="secondary">
+          {[
+            organising.length > 0 &&
+              `${organising.map((p) => p.name).join('、')} · 整理记忆中，完成后可以聊`,
+            pending > organising.length &&
+              `${pending - organising.length} 项录音正在处理`,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </Text>
+        <TextLink to="/library">全部录音（{recordings.length}）</TextLink>
+      </Row>
+    </Stack>
+  );
+  const todoTab =
+    tasks === 0 || !category ? (
+      <Stack gap={4}>
+        <Text tone="secondary">现在没有需要你处理的事。</Text>
+        {processing}
+      </Stack>
+    ) : (
+      <SideTabs
+        label="待处理类别"
+        value={category.id}
+        onValueChange={(value) => go({ cat: value })}
+        aside={processing}
+        groups={[
+          {
+            label: '待处理类别',
+            items: openCategories.map((c) => ({
+              value: c.id,
+              label: (
+                <Row gap={2} as="div">
+                  <StatusDot tone={c.tone} />
+                  {c.label}
+                </Row>
+              ),
+              trailing: (
+                <Text as="span" size="sm" tone="secondary">
+                  {counts[c.id]}
+                </Text>
+              ),
+            })),
+          },
+        ]}
+      >
+        <Section
+          framed
+          level={3}
+          title={category.label}
+          badge={
+            <Text as="span" size="sm" tone="secondary">
+              {counts[category.id]}
+            </Text>
+          }
+          description={category.help}
+          actions={
+            batch ? (
+              <Row gap={2} wrap>
+                {batch}
+              </Row>
+            ) : undefined
+          }
+        >
+          <Stack ref={taskList} gap={4}>
+            {body}
+          </Stack>
+        </Section>
+      </SideTabs>
+    );
+
   return (
     <>
       {error && (
@@ -1054,489 +1839,71 @@ export function Team({
           {error}
         </Text>
       )}
-      {tasks > 0 && (
-        <Section
-          title="需要你处理"
-          badge={<Badge tone="warning">{tasks}</Badge>}
-          actions={
-            <Text size="xs" tone="tertiary">
-              处理完一项会自动跳到下一项
-            </Text>
-          }
-          framed
-        >
-          <Stack ref={taskList} gap={3}>
-            {heard && heard.total > 0 && (
-              <Meter
-                size="sm"
-                value={heard.settled}
-                max={heard.total}
-                label="会议里的发言，已经知道是谁说的"
-              />
-            )}
-            {voiced.length > 0 && (
-              <Stack as="ul" gap={0} aria-label="新出现的声音">
-                {voiced.map((entry) =>
-                  'person' in entry ? (
-                    <Unnamed
-                      key={entry.id}
-                      person={entry.person}
-                      known={named ?? []}
-                      busy={busy}
-                      onName={(value) => void rename(entry.person, value)}
-                      onResolve={(into) => void resolve(entry.person, into)}
-                    />
-                  ) : (
-                    <VoiceRow
-                      key={entry.id}
-                      voice={entry.voice}
-                      known={(people ?? []).filter((p) => !p.auto)}
-                      busy={busy}
-                      onDecide={(decision) =>
-                        void decideVoice(
-                          entry.voice.members,
-                          decision,
-                          entry.id,
-                        )
-                      }
-                    />
-                  ),
-                )}
-              </Stack>
-            )}
-            {voiced.length > 0 && (
-              <Row gap={2} wrap>
-                <Text size="sm" tone="secondary">
-                  认不出的人，可以请本人来认：登录后录一句话，系统会找出哪些是
-                  TA 说的
-                </Text>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    const invite = `我们在用会议录音整理每个人的发言，为你建分身。打开这个链接，登录后录一句话，就能认出哪些是你说的：${window.location.origin}${basePath()}/#/voice`;
-                    void navigator.clipboard.writeText(invite).then(
-                      () => toast('邀请已复制，可以发给同事', 'success'),
-                      () => toast(invite, 'info', 15000),
-                    );
-                  }}
-                >
-                  复制邀请
-                </Button>
-              </Row>
-            )}
-            {tasks > unnamed.length + voices.length && (
-              <Grid as="ul" columns={3} gap={3}>
-                {fragments.length > 0 && (
-                  <Task key="fragments" kind="零碎的声音">
-                    <Text weight="medium">
-                      {fragmentRecordings} 段录音里有 {fragments.length}{' '}
-                      段很短的声音，共{' '}
-                      {span(fragments.reduce((sum, m) => sum + m.seconds, 0))}
-                      {fragmentsLike.length === 0 && '，不像任何人'}
-                    </Text>
-                    <Text size="sm" tone="secondary">
-                      多是插话或附和，放一边不影响分身
-                    </Text>
-                    <Row gap={2} wrap>
-                      {fragmentsLike.slice(0, 3).map(({ person, members }) => (
-                        <Button
-                          key={person.person_id}
-                          variant="secondary"
-                          size="sm"
-                          disabled={busy}
-                          onClick={() =>
-                            void decideVoice(
-                              members,
-                              {
-                                action: 'confirm',
-                                person_id: person.person_id,
-                                sample: false,
-                              },
-                              'fragments',
-                            )
-                          }
-                        >
-                          {members.length} 段像{person.name}：都是{person.name}
-                        </Button>
-                      ))}
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() =>
-                          void decideVoice(
-                            fragments,
-                            { action: 'unknown' },
-                            'fragments',
-                          )
-                        }
-                      >
-                        都放一边
-                      </Button>
-                    </Row>
-                  </Task>
-                )}
-                {similar.map(([a, b]) => (
-                  <Task key={`similar-${a.id}-${b.id}`} kind="可能是同一个人">
-                    <Text weight="medium">
-                      {a.name} 和 {b.name}
-                    </Text>
-                    <Text size="sm" tone="secondary">
-                      合并录音库时同名，没法确定是不是一个人
-                    </Text>
-                    <Row gap={2}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void merge(a, b)}
-                      >
-                        合并
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void apart(a, b)}
-                      >
-                        不是同一个人
-                      </Button>
-                    </Row>
-                  </Task>
-                ))}
-                {waiting.map((w) => (
-                  <Task key={`${w.recording_id}-${w.id}`} kind="有人说不是自己">
-                    <Text weight="medium">
-                      <span className="break-all">{w.filename}</span> · {w.id}{' '}
-                      原来标成的人说这不是 TA
-                    </Text>
-                    <RouteButton
-                      to={recordingPath(w.recording_id, w.id)}
-                      state={{
-                        teamTask: `speaker-${w.recording_id}-${w.id}`,
-                      }}
-                      size="sm"
-                    >
-                      试听并确认
-                    </RouteButton>
-                  </Task>
-                ))}
-                {unsorted.map((u) => (
-                  <Task
-                    key={`unsorted-${u.recording_id}`}
-                    kind={u.speakers === u.total ? '还没认人' : '还有人没认'}
-                  >
-                    <Text weight="medium">
-                      <span className="break-all">{u.filename}</span> ·{' '}
-                      {u.speakers} 位说话人待确认
-                    </Text>
-                    <RouteButton
-                      to={recordingPath(u.recording_id)}
-                      state={{ teamTask: `unsorted-${u.recording_id}` }}
-                      size="sm"
-                    >
-                      试听并确认
-                    </RouteButton>
-                  </Task>
-                ))}
-                {disowned.map((p) => (
-                  <Task
-                    key={`disowned-${p.id}`}
-                    kind="分身被退回"
-                    tone="danger"
-                  >
-                    <Text weight="medium" breakAll>
-                      {p.name}：{twinOf(p)?.claim_rejected} 说这不是 TA
-                    </Text>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => setAddressing(p)}
-                    >
-                      换个邮箱或工号
-                    </Button>
-                  </Task>
-                ))}
-                {failed.map((r) => (
-                  <Task key={r.id} kind="转写失败" tone="danger">
-                    <Text weight="medium" breakAll>
-                      {r.filename}
-                    </Text>
-                    <Row gap={2}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void retry(r)}
-                      >
-                        重试
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void removeRecording(r)}
-                      >
-                        删除
-                      </Button>
-                    </Row>
-                  </Task>
-                ))}
-              </Grid>
-            )}
-          </Stack>
-        </Section>
-      )}
-      <Section
-        title="人物"
-        badge={
-          <Text size="sm" tone="secondary">
-            {named?.length ?? 0} 人
-          </Text>
+      <Tabs
+        label="团队"
+        value={tab}
+        onValueChange={(value) =>
+          go({ tab: value === 'todo' ? 'todo' : null, cat: null })
         }
         actions={
-          <Row gap={2} wrap>
-            {toAddress.length > 0 && (
-              <Button variant="secondary" onClick={() => setBatching(true)}>
-                按邮箱或工号建分身（{toAddress.length}）
-              </Button>
-            )}
-            <Input
-              aria-label="找人"
-              placeholder="找人"
-              className="w-36"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <Row
-              as="form"
-              gap={2}
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (name.trim()) void add();
-              }}
-            >
+          tab === 'people' ? (
+            <Row gap={2} wrap>
               <Input
-                aria-label="人物名字"
-                placeholder="手动添加人物"
-                maxLength={40}
-                className="w-48"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
+                aria-label="找人"
+                placeholder="找人"
+                className="w-36"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
               />
-              <Button
-                type="submit"
-                variant="secondary"
-                disabled={busy || !name.trim()}
-              >
-                添加
+              {toAddress.length > 0 && (
+                <Button variant="secondary" onClick={() => setBatching(true)}>
+                  按邮箱或工号建分身（{toAddress.length}）
+                </Button>
+              )}
+              <Button variant="secondary" onClick={() => setAdding(true)}>
+                添加人物
               </Button>
             </Row>
-          </Row>
-        }
-      >
-        {named && named.length === 0 && (
-          <Text size="sm" tone="secondary">
-            录音转写后，认出来的人会出现在这里；也可以打开录音，确认说话人是谁。
-          </Text>
-        )}
-        <Grid as="ul" columns={3}>
-          {named
-            ?.filter((person) =>
-              person.name
-                .toLocaleLowerCase()
-                .includes(search.trim().toLocaleLowerCase()),
-            )
-            .map((person) => (
-              <Card
-                as="li"
-                key={person.id}
-                variant="outline"
-                className="flex flex-col gap-4"
-              >
-                <IdentityLink
-                  to={person.persona_id ? '/profile' : undefined}
-                  label={
-                    person.persona_id
-                      ? `${person.name}的档案`
-                      : `编辑${person.name}`
-                  }
-                  onClick={() =>
-                    person.persona_id
-                      ? void open(person.persona_id, '/profile')
-                      : setEditing(person)
-                  }
-                >
-                  <AvatarFrame>
-                    <PersonFace
-                      person={person}
-                      twin={twins.find((t) => t.id === person.persona_id)}
-                    />
-                  </AvatarFrame>
-                  <Stack gap={0} grow>
-                    <Text size="lg" weight="semibold" truncate>
-                      {person.name}
-                    </Text>
-                    <Text size="sm" tone="secondary">
-                      {person.speakers} 段录音 · {minutes(person.seconds)}
-                      {person.seconds > 0 && (person.lacking ?? 0) >= 60
-                        ? ` · 素材还差约 ${minutes(person.lacking ?? 0)}`
-                        : ''}
-                    </Text>
-                  </Stack>
-                </IdentityLink>
-                <Row gap={2} justify="between">
-                  {person.self_claimed ? (
-                    <Badge tone="success">本人已认领</Badge>
-                  ) : person.twin_elsewhere ? (
-                    <Badge tone="neutral">同事建了分身</Badge>
-                  ) : person.persona_id ? (
-                    person.updating ? (
-                      <Badge tone="warning">记忆更新中</Badge>
-                    ) : (
-                      <Badge tone="success">可以聊</Badge>
-                    )
-                  ) : (
-                    <Badge tone="neutral">还没有分身</Badge>
-                  )}
-                  <PersonClip person={person} />
-                </Row>
-                <ClaimLine
-                  twin={twins.find((t) => t.id === person.persona_id)}
+          ) : (
+            heard &&
+            heard.total > 0 && (
+              <div className="w-64">
+                <Meter
+                  size="sm"
+                  value={heard.settled}
+                  max={heard.total}
+                  label="已知是谁说的发言"
                 />
-                <div className="mt-auto flex flex-wrap gap-2">
-                  {person.self_claimed ? (
-                    <Text size="sm" tone="secondary">
-                      TA 听出了自己的声音，分身归 TA 自己
-                    </Text>
-                  ) : person.twin_elsewhere ? (
-                    <Text size="sm" tone="secondary">
-                      分身由建它的同事管理
-                    </Text>
-                  ) : person.persona_id ? (
-                    <>
-                      <Button
-                        className="flex-1"
-                        disabled={person.updating}
-                        onClick={() => void open(person.persona_id!, '/chat')}
-                      >
-                        {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
-                      </Button>
-                    </>
-                  ) : person.can_manage === false ? null : (
-                    <>
-                      <Button
-                        variant="secondary"
-                        className="flex-1"
-                        disabled={busy || !person.speakers}
-                        onClick={() => setAddressing(person)}
-                      >
-                        生成分身
-                      </Button>
-                    </>
-                  )}
-                  {person.can_manage !== false && (
-                    <ActionMenu
-                      label={`更多：${person.name}`}
-                      items={[
-                        {
-                          label: '编辑名字和性别',
-                          disabled: busy,
-                          onSelect: () => setEditing(person),
-                        },
-                        ...(person.persona_id &&
-                        twins.find((t) => t.id === person.persona_id)
-                          ?.claimed === false
-                          ? [
-                              {
-                                label: '企业邮箱或工号',
-                                disabled: busy,
-                                onSelect: () => setAddressing(person),
-                              },
-                            ]
-                          : []),
-                        ...(!person.persona_id &&
-                        !person.self_claimed &&
-                        !person.twin_elsewhere
-                          ? [
-                              {
-                                label: '删除',
-                                disabled: busy,
-                                onSelect: () => void remove(person),
-                              },
-                            ]
-                          : []),
-                      ]}
-                    />
-                  )}
-                </div>
-              </Card>
-            ))}
-        </Grid>
-      </Section>
-      {pending > 0 && (
-        <Section label="正在处理" gap={2}>
-          <Text size="sm" tone="secondary">
-            正在处理 {pending} 项
-          </Text>
-          <Stack as="ul" gap={1}>
-            {uploads.map((pick) => (
-              <Text
-                as="li"
-                key={`${pick.file.name}-${pick.file.lastModified}-${pick.file.size}`}
-                size="sm"
-                tone="secondary"
-                breakAll
-              >
-                {pick.file.name} ·{' '}
-                {pick.progress?.paused
-                  ? '等待网络恢复'
-                  : `上传中 ${Math.round(pick.progress ? (pick.progress.offset / pick.progress.size) * 100 : 0)}%`}
-              </Text>
-            ))}
-            {arriving.map((r) => (
-              <Stack as="li" key={r.id} gap={1}>
-                <Text size="sm" tone="secondary" breakAll>
-                  {r.filename} · {r.status === 'queued' ? '排队转写' : '转写中'}
+              </div>
+            )
+          )
+        }
+        items={[
+          {
+            value: 'people',
+            label: (
+              <Row gap={2} as="div">
+                人物
+                <Text as="span" size="sm" tone="inherit">
+                  {named?.length ?? 0}
                 </Text>
-                {r.status === 'transcribing' && (
-                  <Meter
-                    label={`${r.filename}转写进度`}
-                    size="sm"
-                    hideLabel
-                    value={r.duration_s ? r.transcribed_s : null}
-                    max={r.duration_s ?? 100}
-                  />
-                )}
-              </Stack>
-            ))}
-            {proofreading.map((r) => (
-              <Text
-                as="li"
-                key={`proofread-${r.id}`}
-                size="sm"
-                tone="secondary"
-                breakAll
-              >
-                {r.filename} · 等待校对
-              </Text>
-            ))}
-            {organising.map((p) => (
-              <Text as="li" key={p.id} size="sm" tone="secondary" breakAll>
-                {p.name} · 整理记忆中
-              </Text>
-            ))}
-          </Stack>
-          {uploads.length > 0 && onStopUpload && (
-            <TextLink size="sm" onClick={onStopUpload}>
-              停止上传（已传的部分下次接着传）
-            </TextLink>
-          )}
-        </Section>
-      )}
+              </Row>
+            ),
+            content: peopleTab,
+          },
+          {
+            value: 'todo',
+            label: (
+              <Row gap={2} as="div">
+                待处理
+                {tasks > 0 && <Badge tone="warning">{tasks}</Badge>}
+              </Row>
+            ),
+            content: todoTab,
+          },
+        ]}
+      />
+      <AddPerson open={adding} onClose={() => setAdding(false)} onAdd={add} />
       <BatchClaim
         open={batching}
         people={toAddress}

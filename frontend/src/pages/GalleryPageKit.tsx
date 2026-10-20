@@ -25,6 +25,7 @@ import {
   IdentityLink,
   RouteButton,
   Tabs,
+  TaskRow,
   VoiceChoice,
   AccountMenu,
   ActionMenu,
@@ -373,6 +374,62 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           <Text size="sm" tone="secondary">
             间距只能取 0/1/2/3/4/5/6/8 档（4px 为一档），不接受 className。
           </Text>
+        </Card>
+
+        <Card className="space-y-5">
+          <Heading level={3}>待办行 TaskRow</Heading>
+          <Stack as="ul" gap={0}>
+            <TaskRow
+              leading={
+                <ClipButton
+                  size="md"
+                  label="试听待办示例"
+                  src="/api/library/recordings/demo/speakers/S1/samples/0"
+                />
+              }
+              title="像林舟"
+              meta="3 段录音 · 共说了 26 分钟 · 打开录音"
+              hint="这段录音里已经有林舟，可能是同一个人被分成了两位"
+              actionsWidth="field"
+              actions={
+                <>
+                  <Input
+                    aria-label="待办示例，是谁"
+                    placeholder="这是谁"
+                    className="min-w-0 flex-1"
+                  />
+                  <Button disabled={disabled}>确认</Button>
+                  <ActionMenu
+                    label="待办示例的更多选项"
+                    items={[{ label: '不认识', onSelect: () => {} }]}
+                  />
+                </>
+              }
+            >
+              <Row gap={2} wrap>
+                <Chip onClick={() => toast('是林舟')}>是林舟</Chip>
+              </Row>
+            </TaskRow>
+            <TaskRow
+              leading={<StatusDot tone="danger" />}
+              title="电话会议.amr"
+              meta="10 月 12 日上传"
+              actions={
+                <Button variant="secondary" size="sm" disabled={disabled}>
+                  重试
+                </Button>
+              }
+            />
+          </Stack>
+          <Tabs
+            label="带工具的标签示例"
+            defaultValue="a"
+            items={[
+              { value: 'a', label: '人物 14', content: '人物的内容' },
+              { value: 'b', label: '待处理 3' },
+            ]}
+            actions={<Input aria-label="找人示例" placeholder="找人" />}
+          />
         </Card>
 
         <Card className="space-y-5">

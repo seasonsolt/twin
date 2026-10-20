@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -65,9 +65,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const show = () =>
+const show = (entry = '/') =>
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <ConfirmProvider>
         <Home />
       </ConfirmProvider>
@@ -150,23 +150,8 @@ it('shows the team, what needs settling and the way to upload more', async () =>
   expect(
     screen.getByRole('button', { name: '上传会议录音' }),
   ).toBeInTheDocument();
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
-  const progress = screen.getByRole('region', { name: '正在处理' });
-  expect(within(progress).getByRole('progressbar')).toHaveAttribute(
-    'aria-valuenow',
-    '300',
-  );
-  expect(within(progress).getByText('月会.m4a · 转写中')).toBeInTheDocument();
-  expect(
-    within(tasks).getByText('1', { selector: 'span' }),
-  ).toBeInTheDocument();
-  expect(within(tasks).queryByText(/月会/u)).toBeNull();
-  // A speaker no voice holds still asks for the owner, through its recording.
-  expect(within(tasks).getByText('还有人没认')).toBeInTheDocument();
-  expect(
-    within(tasks).getByRole('link', { name: '试听并确认' }),
-  ).toHaveAttribute('href', '/library/rec_1');
-  const people_ = screen.getByRole('region', { name: '人物' });
+  // The people come first; what waits for the owner is one tab away, counted.
+  const people_ = await screen.findByRole('tabpanel');
   expect(await within(people_).findByText('可以聊')).toBeInTheDocument();
   expect(
     within(people_).getByRole('button', { name: '和分身聊聊' }),
@@ -175,6 +160,23 @@ it('shows the team, what needs settling and the way to upload more', async () =>
     'href',
     '/library',
   );
+  expect(screen.getByRole('tab', { name: /待处理.*1/u })).toBeInTheDocument();
+  await userEvent.click(
+    within(people_).getByRole('button', { name: '去处理' }),
+  );
+  const tasks = await screen.findByRole('region', { name: /还没认人/u });
+  const progress = screen.getByRole('region', { name: '正在处理' });
+  expect(within(progress).getByRole('progressbar')).toHaveAttribute(
+    'aria-valuenow',
+    '300',
+  );
+  expect(within(progress).getByText('月会.m4a · 转写中')).toBeInTheDocument();
+  expect(within(tasks).queryByText(/月会/u)).toBeNull();
+  // A speaker no voice holds still asks for the owner, through its recording.
+  expect(within(tasks).getByText('还有 1 位没认')).toBeInTheDocument();
+  expect(
+    within(tasks).getByRole('link', { name: '试听并确认' }),
+  ).toHaveAttribute('href', '/library/rec_1');
 });
 
 it('keeps the service status off the team page, even for administrators', async () => {
@@ -223,17 +225,17 @@ it('counts only actions while keeping queued work and memory organisation quiet'
     recording({ id: 'queued', filename: '排队.m4a', status: 'queued' }),
     recording({ id: 'proofread', filename: '校对.m4a', proofread: 'waiting' }),
   ];
-  show();
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  show('/?tab=todo');
+  const tasks = await screen.findByRole('region', { name: /新出现的声音/u });
   expect(
     await within(tasks).findByRole('list', { name: '新出现的声音' }),
   ).toBeInTheDocument();
+  // Only what asks for the owner is counted: not the queued, proofread or organising work.
+  expect(screen.getByRole('tab', { name: /待处理.*2/u })).toBeInTheDocument();
+  expect(within(tasks).getAllByRole('listitem')).toHaveLength(1);
+  await userEvent.click(screen.getByRole('tab', { name: /转写失败/u }));
   expect(
-    within(tasks).getByText('2', { selector: 'span' }),
-  ).toBeInTheDocument();
-  expect(within(tasks).getAllByRole('listitem')).toHaveLength(2);
-  expect(
-    within(tasks).getByRole('button', { name: '重试' }),
+    await screen.findByRole('button', { name: '重试' }),
   ).toBeInTheDocument();
   const progress = screen.getByRole('region', { name: '正在处理' });
   expect(within(progress).getByText('正在处理 3 项')).toBeInTheDocument();
@@ -262,11 +264,9 @@ it('retries through the existing endpoint and moves the recording into processin
       return originalFetch(url, init);
     }),
   );
-  show();
+  show('/?tab=todo');
   await userEvent.click(await screen.findByRole('button', { name: '重试' }));
-  await waitFor(() =>
-    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
-  );
+  await screen.findByText('现在没有需要你处理的事。');
   expect(
     within(screen.getByRole('region', { name: '正在处理' })).getByText(
       '周会.m4a · 排队转写',
@@ -281,8 +281,8 @@ it('retries through the existing endpoint and moves the recording into processin
 it('renders neither queue when there are no actions or background work', async () => {
   state.recordings = [recording({})];
   show();
-  await screen.findByRole('region', { name: '人物' });
-  expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull();
+  await screen.findByRole('tab', { name: /人物/u });
+  expect(screen.queryByText(/项待处理/u)).toBeNull();
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
 });
 
@@ -302,8 +302,8 @@ it('deletes a failed recording only after confirmation and reloads the team', as
       return originalFetch(url, init);
     }),
   );
-  show();
-  const tasks = await screen.findByRole('region', { name: '需要你处理' });
+  show('/?tab=todo');
+  const tasks = await screen.findByRole('region', { name: /转写失败/u });
   await userEvent.click(within(tasks).getByRole('button', { name: '删除' }));
   const dialog = await screen.findByRole('dialog', {
     name: '删除「周会.m4a」？',
@@ -314,9 +314,7 @@ it('deletes a failed recording only after confirmation and reloads the team', as
   await userEvent.click(
     within(dialog).getByRole('button', { name: '删除录音' }),
   );
-  await waitFor(() =>
-    expect(screen.queryByRole('region', { name: '需要你处理' })).toBeNull(),
-  );
+  await screen.findByText('现在没有需要你处理的事。');
   expect(fetch).toHaveBeenCalledWith(
     '/api/library/recordings/rec_1',
     expect.objectContaining({ method: 'DELETE' }),

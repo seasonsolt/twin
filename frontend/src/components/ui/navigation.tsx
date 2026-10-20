@@ -25,6 +25,7 @@ export function Tabs({
   label = '内容分类',
   value: controlledValue,
   onValueChange,
+  actions,
 }: {
   items: {
     value: string;
@@ -39,6 +40,8 @@ export function Tabs({
   label?: string;
   value?: string;
   onValueChange?: (value: string) => void;
+  /** Tools for the chosen tab, on the same line as the tab list, at its end. */
+  actions?: ReactNode;
 }) {
   const [selected, setValue] = useState(defaultValue ?? items[0]?.value);
   const chosen = controlledValue ?? selected;
@@ -74,34 +77,45 @@ export function Tabs({
   return (
     <LayoutScope>
       <TabsPrimitive.Root value={value} onValueChange={change}>
-        <TabsPrimitive.List
-          aria-label={label}
-          className={`mb-4 gap-1 rounded-full border border-border bg-soft p-1 ${
-            scrollable ? 'flex w-full min-w-0 overflow-x-auto' : 'inline-flex'
-          }`}
+        <div
+          className={
+            actions
+              ? 'mb-4 flex flex-wrap items-center justify-between gap-3'
+              : undefined
+          }
         >
-          {items.map((item) => (
-            <TabsPrimitive.Trigger
-              key={item.value}
-              value={item.value}
-              disabled={item.disabled}
-              className={`relative min-h-11 rounded-full px-4 py-1.5 text-secondary data-[state=active]:text-canvas disabled:opacity-40 ${
-                scrollable ? 'shrink-0 whitespace-nowrap' : ''
-              }`}
-            >
-              {value === item.value && (
-                <motion.span
-                  layoutId={reduced ? undefined : `tab-${id}`}
-                  initial={reduced ? { opacity: 0 } : false}
-                  animate={{ opacity: 1 }}
-                  transition={transition}
-                  className="absolute inset-0 rounded-full bg-primary shadow-elevation-1"
-                />
-              )}
-              <span className="relative">{item.label}</span>
-            </TabsPrimitive.Trigger>
-          ))}
-        </TabsPrimitive.List>
+          <TabsPrimitive.List
+            aria-label={label}
+            className={`gap-1 rounded-full border border-border bg-soft p-1 ${
+              actions ? '' : 'mb-4'
+            } ${
+              scrollable ? 'flex w-full min-w-0 overflow-x-auto' : 'inline-flex'
+            }`}
+          >
+            {items.map((item) => (
+              <TabsPrimitive.Trigger
+                key={item.value}
+                value={item.value}
+                disabled={item.disabled}
+                className={`relative min-h-11 rounded-full px-4 py-1.5 text-secondary data-[state=active]:text-canvas disabled:opacity-40 ${
+                  scrollable ? 'shrink-0 whitespace-nowrap' : ''
+                }`}
+              >
+                {value === item.value && (
+                  <motion.span
+                    layoutId={reduced ? undefined : `tab-${id}`}
+                    initial={reduced ? { opacity: 0 } : false}
+                    animate={{ opacity: 1 }}
+                    transition={transition}
+                    className="absolute inset-0 rounded-full bg-primary shadow-elevation-1"
+                  />
+                )}
+                <span className="relative">{item.label}</span>
+              </TabsPrimitive.Trigger>
+            ))}
+          </TabsPrimitive.List>
+          {actions}
+        </div>
         {items.map((item) => (
           <TabsPrimitive.Content key={item.value} value={item.value}>
             {item.content}

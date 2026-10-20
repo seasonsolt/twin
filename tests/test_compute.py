@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.2", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.3.3", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -111,7 +111,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.3.2" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.3.3" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -508,7 +508,7 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         audio.write_bytes(b"boom")
         assert remote.transcribe(url, {"audio": str(audio)}) == {"ok": False, "error": "显存不足"}
         with urllib.request.urlopen(url + "/health") as response:
-            assert json.loads(response.read()) == {"ok": True, "version": "1.3.2", "device": "cuda", "busy": False}
+            assert json.loads(response.read()) == {"ok": True, "version": "1.3.3", "device": "cuda", "busy": False}
         bad = b'{"audio_bytes": 1, "hotwords": "x"}\nA'
         with pytest.raises(urllib.error.HTTPError) as rejected:
             urllib.request.urlopen(urllib.request.Request(url + "/transcribe", data=bad, method="POST"))

@@ -117,6 +117,10 @@ def parse_hotwords(value):
     return words[:MAX_HOTWORDS]
 
 
+# Threads computing voiceprints of stretches at once on CUDA (``Engine.embedding``).
+EMBED_THREADS = 8
+
+
 def model_paths():
     cache = Path(os.environ.get("MODELSCOPE_CACHE", "~/.cache/modelscope")).expanduser()
     manifest = tomllib.loads(MANIFEST.read_text())
@@ -279,13 +283,32 @@ class Engine:
 
         np = self.np
         wav = librosa.load(str(audio), sr=16000, mono=True)[0]
-        found = []
-        with self.torch.no_grad():
-            for parts in spans:
-                clip = np.concatenate([wav[int(b * 16000) : int(e * 16000)] for b, e in parts])
-                # A clip past the end of the audio, or too short for CAM++ to look at, has no voiceprint.
-                found.append(vector(self.embed(clip)) if len(clip) >= 1600 else None)
+        clips = [np.concatenate([wav[int(b * 16000) : int(e * 16000)] for b, e in parts]) for parts in spans]
+        # A clip past the end of the audio, or too short for CAM++ to look at, has no voiceprint.
+        wanted = [k for k, clip in enumerate(clips) if len(clip) >= 1600]
+        found = [None] * len(clips)
+        if self.device == "cuda" and self.spk_batch is not None:
+            # Clips differ in length and padding would change their voiceprints, so each is its own call; one by one
+            # most of a call is launching small kernels, so several threads keep the GPU busy (3x on a 4090, the
+            # same voiceprints). The model's own inference holds no state; AutoModel.generate rewrites shared kwargs.
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(EMBED_THREADS) as pool:
+                for k, value in zip(wanted, pool.map(lambda k: self.embed_gpu(clips[k]), wanted), strict=True):
+                    found[k] = vector(value)
+        else:
+            # MPS stays on CPU, where every new clip length would cost it a fresh graph.
+            with self.torch.no_grad():
+                for k in wanted:
+                    found[k] = vector(self.embed(clips[k]))
         return {"ok": True, "embeddings": found}
+
+    def embed_gpu(self, clip):
+        np, torch = self.np, self.torch
+        with torch.no_grad():  # per thread: grad mode is thread-local
+            found, _ = self.spk_batch.model.inference(data_in=[torch.from_numpy(clip)], device=self.device)
+        row = found[0]["spk_embedding"].detach().cpu().numpy().astype(np.float32).reshape(-1)
+        return row / (np.linalg.norm(row) + 1e-9)
 
     def embed_all(self, clips, done):
         # Equal-length groups avoid zero padding, so batched embeddings match single-clip ones. Small groups stay

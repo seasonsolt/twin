@@ -318,10 +318,10 @@ def score_twin(
 
 
 def follow_flags(reviews: Sequence[SpeakerReview]) -> dict[int, tuple[str, str, str | None]]:
-    """The fixes of an owner who excludes every flagged stretch of every speaker put to them, without listening."""
+    """Every flagged stretch of every heard speaker left out, as ``Reviews.settle`` does without asking anyone."""
     fixes: dict[int, tuple[str, str, str | None]] = {}
     for review in reviews:
-        if review.status != "ready" or review.share < review_rules.FLAG_SHARE or not review.open:
+        if review.status != "ready":
             continue
         for unit in review.units:
             if unit.verdict:
@@ -568,7 +568,7 @@ def render(cards: Sequence[dict[str, Any]], sessions: int, overrides: Mapping[st
         "| --- | --- | --- | --- | --- |",
     ]
     for card in cards:
-        for stage, label in (("owner", "主人确认后"), ("review", "听并判断"), ("follow", "照单全排除")):
+        for stage, label in (("owner", "主人确认后"), ("review", "听并判断"), ("follow", "疑似自动排除")):
             entry = card["twin"][stage]["strict"]
             lines.append(
                 f"| {card['engine']} | {label} | {_cell(entry['foreign'])} | {_cell(entry['cer'])} | "

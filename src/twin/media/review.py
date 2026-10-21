@@ -53,10 +53,13 @@ MARGIN = 0.1
 # (baseline from the same room) to 84% (another microphone) of the voices of people without samples.
 STRANGER = 0.25
 STRANGER_SECONDS = 3.0
-# A speaker is put to the owner when this share of their judged speech is suspect. Of 151 clean AliMeeting speakers
-# (four baselines and splits together) 6 passed it, most of them overlapping talkers, the worst at 47%; the median
-# was 0-2%. In the weekly meeting, speakers whose stretches sounded like them stayed at 0%.
-FLAG_SHARE = 0.2
+# Suspect stretches leave the person's twin without asking anyone (``Reviews.settle``): leaving out a stretch of
+# theirs costs a little of their speech, keeping someone else's puts words in their mouth, and on AliMeeting the
+# rule found 95-97% of others' stretches while flagging 3-6% of the person's own. The owner is asked only about a
+# speaker most of whose judged speech is suspect, which is one confirmed as the wrong person rather than one with a
+# few stray stretches: of 151 clean AliMeeting speakers none reached half (the worst 47%, the median 0-2%). On the
+# team library (470 speakers) 32 reach it, where 66 reached 20%.
+FLAG_SHARE = 0.5
 # A speaker the transcription service failed on is tried again after this long.
 RETRY = dt.timedelta(hours=6)
 
@@ -178,6 +181,8 @@ class UnitView(BaseModel):
     fix: FixAction | None = None
     to_person: str | None = None
     to_name: str | None = None
+    # Left out by the review itself (``Reviews.settle``), not by the owner.
+    auto: bool = False
 
 
 class SpeakerReview(BaseModel):
@@ -268,6 +273,7 @@ class Reviews:
             self._record(recording_id, transcript.id, {s: [] for s in confirmed}, [], str(error) or "复核失败")
             raise
         self._record(recording_id, transcript.id, found, prints, "")
+        self.settle({recording_id})
         return len(confirmed)
 
     def _record(
@@ -398,9 +404,9 @@ class Reviews:
             ):
                 stored.setdefault(row[0], []).append((row[1], json.loads(row[2]), json.loads(row[3]), row[4]))
             fixes = {
-                row[0]: (row[1], row[2], row[3])
+                row[0]: (row[1], row[2], row[3], bool(row[4]))
                 for row in db.execute(
-                    "SELECT segment, from_person, action, to_person FROM segment_fixes WHERE recording_id = ? "
+                    "SELECT segment, from_person, action, to_person, auto FROM segment_fixes WHERE recording_id = ? "
                     "AND transcript_id = ?",
                     (recording.id, transcript_id),
                 )
@@ -440,7 +446,7 @@ class Reviews:
                 )
                 fix = fixes.get(segments[0]) if segments else None
                 if fix and fix[0] == person_id:
-                    view.fix, view.to_person = fix[1], fix[2]
+                    view.fix, view.to_person, view.auto = fix[1], fix[2], fix[3]
                     view.to_name = everyone.get(fix[2]) if fix[2] else None
                 if transcript is not None:
                     view.text = " ".join(
@@ -465,7 +471,8 @@ class Reviews:
                     if view.verdict:
                         review.suspects += 1
                         review.suspect_seconds += seconds
-                        if view.fix is None:
+                        # Left out by the review alone, it still waits for the owner's word if they are asked.
+                        if view.fix is None or view.auto:
                             review.open += 1
                             review.open_seconds += seconds
                         if view.verdict == "other" and view.like:
@@ -481,6 +488,68 @@ class Reviews:
         return result
 
     # ------------------------------------------------------------------ deciding
+
+    def settle(self, recordings: set[str] | None = None) -> int:
+        """Leave every suspect stretch nobody has decided about out of the confirmed person's twin (``auto``), in
+        ``recordings`` or all heard ones, and close the twins this changes. A decision of the owner's is never
+        replaced, and a stretch they kept stays theirs. Returns how many segments were left out."""
+        from .team import Team
+
+        with self.library.read() as db:
+            heard = sorted(
+                row[0]
+                for row in db.execute(
+                    "SELECT DISTINCT v.recording_id FROM reviewed v JOIN recordings r ON r.id = v.recording_id "
+                    "AND r.transcript_id = v.transcript_id WHERE v.error = ''"
+                )
+            )
+        left = 0
+        for recording_id in heard:
+            if recordings is not None and recording_id not in recordings:
+                continue
+            recording = self.library.get(recording_id)
+            if recording is None or recording.transcript_id is None:
+                continue
+            rows = [
+                (segment, review.person_id)
+                for review in self._reviews(recording, None, text=False)
+                if review.status == "ready"
+                for unit in review.units
+                if unit.verdict and unit.fix is None
+                for segment in unit.segments
+            ]
+            if not rows:
+                continue
+            now = dt.datetime.now(dt.UTC).isoformat()
+            with self.library.transaction() as db:
+                current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
+                if current is None or current[0] != recording.transcript_id:
+                    continue
+                # Whoever was given a segment there before, should a stale decision about it give way.
+                given = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT to_person FROM segment_fixes WHERE recording_id = ? AND action = 'move'",
+                        (recording_id,),
+                    )
+                    if row[0]
+                }
+                added = 0
+                for segment, person_id in rows:
+                    # A decision about the person, made meanwhile, wins; one about whom the speaker used to be
+                    # confirmed as no longer holds and gives way.
+                    added += db.execute(
+                        "INSERT INTO segment_fixes (recording_id, transcript_id, segment, from_person, action, "
+                        "to_person, updated_at, auto) VALUES (?, ?, ?, ?, 'exclude', NULL, ?, 1) "
+                        "ON CONFLICT (recording_id, transcript_id, segment) DO UPDATE SET from_person = "
+                        "excluded.from_person, action = 'exclude', to_person = NULL, updated_at = excluded.updated_at, "
+                        "auto = 1 WHERE segment_fixes.from_person != excluded.from_person",
+                        (recording_id, recording.transcript_id, segment, person_id, now),
+                    ).rowcount
+                if added:
+                    Team._reopen(db, recording_id, {person_id for _, person_id in rows} | given)
+                left += added
+        return left
 
     def fix(
         self,

@@ -1475,12 +1475,15 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
     unit(0, {}),
     unit(1, { verdict: 'other', own: 0.2, other: 0.6, text: '研发不能砍。' }),
     unit(2, { verdict: 'other', own: 0.25, other: 0.5 }),
+    // Left out by the review itself: still the owner's to decide.
     unit(3, {
       verdict: 'stranger',
       own: 0.1,
       other: 0.1,
       like: null,
       like_name: null,
+      fix: 'exclude',
+      auto: true,
     }),
   ];
   const summary = () => ({
@@ -1494,9 +1497,10 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
     status: 'ready',
     seconds: 20,
     suspect_seconds: 15,
-    open_seconds: 5 * units.filter((u) => u.verdict && !u.fix).length,
+    open_seconds:
+      5 * units.filter((u) => u.verdict && (!u.fix || u.auto)).length,
     suspects: 3,
-    open: units.filter((u) => u.verdict && !u.fix).length,
+    open: units.filter((u) => u.verdict && (!u.fix || u.auto)).length,
     share: 0.75,
     likely: 'per_2',
     likely_name: '李总',
@@ -1530,6 +1534,7 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
                   ...u,
                   fix:
                     body.action === 'clear' ? null : (body.action as UnitFix),
+                  auto: false,
                   to_person: body.person_id ?? null,
                   to_name: body.person_id ? '李总' : null,
                 }
@@ -1580,8 +1585,13 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
   );
   expect(await within(side).findAllByText(/已改给李总/u)).toHaveLength(2);
   const stranger = within(pieces).getByText('第3段').closest('li')!;
-  expect(stranger).toHaveTextContent('不像团队里的任何人');
-  await user.click(within(stranger).getByRole('button', { name: '不是张总' }));
+  expect(stranger).toHaveTextContent('不像团队里的任何人，已自动排除');
+  expect(
+    within(side).getByRole('button', { name: '其实都是张总' }),
+  ).toBeInTheDocument();
+  await user.click(
+    within(stranger).getByRole('button', { name: '确实不是张总' }),
+  );
   await waitFor(() =>
     expect(puts[1]).toEqual({
       transcript_id: 't1',

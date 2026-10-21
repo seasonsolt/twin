@@ -153,7 +153,7 @@ const CATEGORIES: {
     id: 'mixed',
     label: '混进了别人的话',
     tone: 'warning',
-    help: '已确认的声音里有些片段听起来不像这个人；试听后排除，或改给对的人',
+    help: '已确认的声音大部分不像这个人，可能认错了人；疑似片段已自动排除，听几段后决定是谁',
   },
   {
     id: 'unsorted',

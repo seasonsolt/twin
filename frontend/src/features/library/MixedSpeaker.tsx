@@ -33,6 +33,8 @@ export interface ReviewUnit {
   fix: UnitFix | null;
   to_person: string | null;
   to_name: string | null;
+  // Left out by the review itself, not by the owner: it still waits for their word.
+  auto?: boolean;
 }
 
 /** A confirmed speaker some of whose speech does not sound like the person (``Reviews.suspects``). */
@@ -133,7 +135,7 @@ export function MixedSpeaker({
   const name = detail?.name ?? suspect?.name ?? '';
   const units = detail?.units ?? [];
   const suspects = units.filter((u) => u.verdict);
-  const open = suspects.filter((u) => !u.fix);
+  const open = suspects.filter((u) => !u.fix || u.auto);
   const likely = detail?.likely;
   const likelyName = detail?.likely_name;
   const toLikely = open.filter(
@@ -149,13 +151,15 @@ export function MixedSpeaker({
           ? '不像团队里的任何人'
           : `像${name}`;
     const decided =
-      unit.fix === 'exclude'
-        ? `已排除：不算${name}的话`
-        : unit.fix === 'move'
-          ? `已改给${unit.to_name ?? '别人'}`
-          : unit.fix === 'keep'
-            ? `已确认是${name}`
-            : null;
+      unit.fix === 'exclude' && unit.auto
+        ? `${heard}，已自动排除`
+        : unit.fix === 'exclude'
+          ? `已排除：不算${name}的话`
+          : unit.fix === 'move'
+            ? `已改给${unit.to_name ?? '别人'}`
+            : unit.fix === 'keep'
+              ? `已确认是${name}`
+              : null;
     return (
       <ListRow
         key={unit.index}
@@ -171,7 +175,7 @@ export function MixedSpeaker({
         meta={unit.text || '（没有识别出文字）'}
       >
         <Row gap={2} wrap>
-          {unit.fix ? (
+          {unit.fix && !unit.auto ? (
             <Button
               variant="ghost"
               size="sm"
@@ -198,7 +202,7 @@ export function MixedSpeaker({
                 disabled={busy}
                 onClick={() => void decide([unit], 'exclude')}
               >
-                不是{name}
+                {unit.auto ? `确实不是${name}` : `不是${name}`}
               </Button>
               {unit.verdict && (
                 <Button
@@ -225,7 +229,7 @@ export function MixedSpeaker({
       title={suspect ? `${suspect.filename} · ${suspect.speaker_id}` : ''}
       body={
         detail
-          ? `确认给了${name}。${suspects.length} 段（${span(detail.suspect_seconds)}）听起来不像 TA，占 ${Math.round(detail.share * 100)}%。排除或改给别人后，${name}的分身只按这段录音重新整理。`
+          ? `确认给了${name}，但 ${Math.round(detail.share * 100)}% 听起来不像 TA（${suspects.length} 段，${span(detail.suspect_seconds)}），可能整个认错了人。这些片段已自动排除，不进${name}的分身；听几段后决定是谁。`
           : undefined
       }
     >
@@ -254,6 +258,14 @@ export function MixedSpeaker({
               onClick={() => void decide(open, 'exclude')}
             >
               {open.length} 段疑似的都不是{name}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => void decide(open, 'keep')}
+            >
+              其实都是{name}
             </Button>
           </Row>
         )}

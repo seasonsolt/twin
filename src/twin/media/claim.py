@@ -81,9 +81,15 @@ class Analysis(BaseModel):
 # people absent from the meeting never passed 0.44. Diarization often splits one person into several clusters, so
 # further clusters are claimed too, but only from ALSO_CLAIM: small clusters of another person (overlapped speech)
 # reached 0.53. Unclaimed clusters from ALSO_SUGGEST are offered as "maybe you".
+# A reference voice cut from a far-field meeting (docs/MEDIA.md) lifts everyone in the room: on AISHELL-4 the
+# person's best cluster sat near 0.85 and other people in the room reached 0.66, so further clusters must also be
+# within CLAIM_GAP of the best one, and suggestions within SUGGEST_GAP. Chosen on room R003, checked on R004; every
+# split of the person on AliMeeting was within 0.2 and every suggestion that was them within 0.3 (docs/ASR_EVAL.md).
 AUTO_CLAIM = 0.5
 ALSO_CLAIM = 0.55
 ALSO_SUGGEST = 0.45
+CLAIM_GAP = 0.2
+SUGGEST_GAP = 0.3
 
 
 def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: bool, diarized: bool = True) -> Analysis:
@@ -104,20 +110,23 @@ def analyse(segments: list[Segment], speakers: list[Speaker], has_reference: boo
     ]
     ranked = sorted((s for s in speakers if s.similarity is not None), key=lambda s: s.similarity or 0, reverse=True)
     suggested = ranked[0].id if diarized and has_reference and ranked else None
+    best = (ranked[0].similarity or 0) if ranked else 0
+
+    def near(speaker: Speaker, floor: float, gap: float) -> bool:
+        return (speaker.similarity or 0) >= floor - 1e-9 and best - (speaker.similarity or 0) <= gap + 1e-9
+
     claimed: list[str] = []
     if diarized and len(speakers) == 1 and not has_reference:
         claimed = [speakers[0].id]
-    elif suggested and len(ranked) == len(speakers) and (ranked[0].similarity or 0) >= AUTO_CLAIM - 1e-9:
-        claimed = [suggested] + [s.id for s in ranked[1:] if (s.similarity or 0) >= ALSO_CLAIM - 1e-9]
+    elif suggested and len(ranked) == len(speakers) and best >= AUTO_CLAIM - 1e-9:
+        claimed = [suggested] + [s.id for s in ranked[1:] if near(s, ALSO_CLAIM, CLAIM_GAP)]
     return Analysis(
         segments=segments,
         speakers=speakers,
         claimed=claimed,
         diarized=diarized,
         also_suggested=[
-            s.id
-            for s in ranked
-            if s.id != suggested and s.id not in claimed and (s.similarity or 0) >= ALSO_SUGGEST - 1e-9
+            s.id for s in ranked if s.id != suggested and s.id not in claimed and near(s, ALSO_SUGGEST, SUGGEST_GAP)
         ]
         if suggested
         else [],

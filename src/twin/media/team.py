@@ -30,6 +30,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ..util import date_from_name
+from .collector import ATTRIBUTION_VERSION, CLEANUP_VERSION, LEGACY_ATTRIBUTION
 from .cues import Cue
 from .ingest import Segment, Speaker, timestamp
 from .library import Library, Recording, Transcript
@@ -249,6 +250,18 @@ def cosine(a: list[float], b: list[float]) -> float:
     return _cosine(a, b)
 
 
+def _stale(row: Mapping[str, object]) -> bool:
+    """Whether an attribution row is an automatic decision of ``Team.classify`` made under other rules than the
+    current ones (``collector``). The review's own moves (``Team.reassign``, which name whom the speaker is not)
+    belong to the cleanup layer, and the owner's decisions to no layer."""
+    if not row["auto"] or row["decision"] != "confirmed":
+        return False
+    version = row["version"]
+    if version is None:
+        return row["rejected"] == "[]" and LEGACY_ATTRIBUTION != ATTRIBUTION_VERSION
+    return str(version).startswith("attribution-") and version != ATTRIBUTION_VERSION
+
+
 class Team:
     def __init__(self, library: Library) -> None:
         self.library = library
@@ -459,9 +472,9 @@ class Team:
                 return False
             rejected = sorted(refused | {before})
             db.execute(
-                "UPDATE attributions SET person_id = ?, rejected = ?, auto = 1, updated_at = ? WHERE recording_id = ? "
-                "AND transcript_id = ? AND speaker_id = ?",
-                (after, json.dumps(rejected), _now(), recording_id, transcript_id, speaker_id),
+                "UPDATE attributions SET person_id = ?, rejected = ?, auto = 1, version = ?, updated_at = ? "
+                "WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
+                (after, json.dumps(rejected), CLEANUP_VERSION, _now(), recording_id, transcript_id, speaker_id),
             )
             db.execute(
                 "UPDATE voiceprints SET active = 0 WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
@@ -618,7 +631,8 @@ class Team:
         samples (``AUTO``), or, for a long voice matching nobody, a new unnamed person kept by that voice, unless the
         owner said that voice is nobody they know (``_stranger``: they would be asked again who it is). Returns how
         many speakers were decided. A speaker the owner has acted on is never classified, and a match adds no voice
-        sample, so mistakes do not spread."""
+        sample, so mistakes do not spread. An automatic decision made under other rules (``collector``) is made
+        again: where it comes out the same only its version changes, so only the twins it does change are closed."""
         recording = self.library.get(recording_id)
         if recording is None or recording.status != "ready" or recording.transcript_id is None:
             return 0
@@ -627,27 +641,31 @@ class Team:
             current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
             if current is None or current[0] != recording.transcript_id:
                 return 0
-            touched = {
-                row[0]
+            rows = {
+                row["speaker_id"]: row
                 for row in db.execute(
-                    "SELECT speaker_id FROM attributions WHERE recording_id = ? AND transcript_id = ?",
+                    "SELECT * FROM attributions WHERE recording_id = ? AND transcript_id = ?",
                     (recording_id, recording.transcript_id),
                 )
             }
+            stale = {speaker_id: row["person_id"] for speaker_id, row in rows.items() if _stale(row)}
             prints = self._prints(db)
             strangers = self._strangers(db)
             decided: set[str] = set()
             count = 0
+            undone = False
             # Longest first: their voiceprints are the steadiest, and a new person is made from the clearest voice.
             for speaker in sorted(speakers, key=lambda s: -s.seconds):
-                if speaker.id in touched or not speaker.embedding:
+                if (speaker.id in rows and speaker.id not in stale) or not speaker.embedding:
                     continue
+                before = stale.get(speaker.id)
+                person_id: str | None = None
                 candidates = self._match(speaker.embedding, prints, set(), floor=SHOW)
                 if candidates:
                     best, runner = candidates[0], candidates[1].score if len(candidates) > 1 else 0.0
-                    if best.score < AUTO or best.score - runner < AUTO_MARGIN or speaker.seconds < AUTO_MIN_SECONDS:
-                        continue
-                    person_id = best.person_id
+                    sure = best.score >= AUTO and best.score - runner >= AUTO_MARGIN
+                    if sure and speaker.seconds >= AUTO_MIN_SECONDS:
+                        person_id = best.person_id
                 elif speaker.seconds >= NEW_MIN_SECONDS and not self._stranger(speaker.embedding, strangers, 0.0):
                     person = self._add_person(db, self._unnamed(db), auto=True)
                     person_id = person.id
@@ -664,18 +682,37 @@ class Team:
                         ),
                     )
                     prints.append((person_id, person.name, speaker.embedding))
-                else:
+                if speaker.id in stale and person_id == before:
+                    db.execute(
+                        "UPDATE attributions SET version = ? WHERE recording_id = ? AND transcript_id = ? "
+                        "AND speaker_id = ?",
+                        (ATTRIBUTION_VERSION, recording_id, recording.transcript_id, speaker.id),
+                    )
+                    continue
+                if speaker.id in stale:
+                    db.execute(
+                        "DELETE FROM attributions WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
+                        (recording_id, recording.transcript_id, speaker.id),
+                    )
+                    if before:
+                        decided.add(before)
+                    count += person_id is None
+                    undone = True
+                if person_id is None:
                     continue
                 db.execute(
                     "INSERT INTO attributions (recording_id, transcript_id, speaker_id, decision, person_id, "
-                    "rejected, updated_at, auto) VALUES (?, ?, ?, 'confirmed', ?, '[]', ?, 1)",
-                    (recording_id, recording.transcript_id, speaker.id, person_id, _now()),
+                    "rejected, updated_at, auto, version) VALUES (?, ?, ?, 'confirmed', ?, '[]', ?, 1, ?)",
+                    (recording_id, recording.transcript_id, speaker.id, person_id, _now(), ATTRIBUTION_VERSION),
                 )
                 decided.add(person_id)
                 count += 1
             if not count:
                 return 0
             self._reopen(db, recording_id, decided)
+            if undone:
+                # An unnamed person whose only speaker was taken back is nobody any more.
+                self._prune(db)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return count
 

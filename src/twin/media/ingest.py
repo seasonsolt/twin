@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Protocol
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from .asr import SpeechRecognizer
+from .collector import asr_version
 from .schema import TranscriptionRequest
 
 if TYPE_CHECKING:
@@ -95,6 +96,8 @@ class CommandTranscriber:
         self.references: dict[str, Path] = {}
         self.speakers: list[Speaker] = []
         self.similarities: dict[str, dict[str, float | None]] = {}
+        # The service that made the last transcript (``collector.asr_version``; asr-funasr 1.4.1+), None when unsaid.
+        self.asr: str | None = None
 
     def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
         progress(0, duration)
@@ -105,12 +108,13 @@ class CommandTranscriber:
             request["reference"] = str(self.reference.resolve())
         if self.references:
             request["references"] = {name: str(path.resolve()) for name, path in self.references.items()}
-        self.speakers, self.similarities = [], {}
+        self.speakers, self.similarities, self.asr = [], {}, None
         try:
             stdout = self._run(json.dumps(request), duration, progress)
             payload = json.loads(stdout.strip().splitlines()[-1])
             if payload.get("ok") is not True or not isinstance(payload.get("segments"), list):
                 raise ValueError()
+            self.asr = asr_version(payload.get("version"), payload.get("pipeline"))
             segments = [Segment.model_validate(s) for s in payload["segments"]]
             self.speakers = [Speaker.model_validate(s) for s in payload.get("speakers", [])]
             if len({s.id for s in self.speakers}) != len(self.speakers):

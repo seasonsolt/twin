@@ -36,6 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..util import prepare_private_file, private_directory
+from .collector import ATTRIBUTION_VERSION, CLEANUP_VERSION, CollectorVersion, recollect_scope
 from .cues import Cue, Named, said
 from .ingest import (
     VIDEO_EXTENSIONS,
@@ -79,7 +80,9 @@ CREATE TABLE IF NOT EXISTS recordings (
     -- The transcript the model was asked to name the speakers of (once per transcript, whatever came of it).
     named TEXT,
     -- Who uploaded it (``owner_key`` of their account); NULL when nobody knows, which leaves it to administrators.
-    uploader TEXT
+    uploader TEXT,
+    -- The transcription service that made the current transcript (``collector.asr_version``); NULL when unknown.
+    asr TEXT
 );
 -- The people of this account's meetings; a person may exist before (or without) a twin.
 CREATE TABLE IF NOT EXISTS people (
@@ -118,6 +121,9 @@ CREATE TABLE IF NOT EXISTS attributions (
     auto INTEGER NOT NULL DEFAULT 0,
     -- The person it was given to said "不是我"; it waits for whoever decides about the recording.
     disputed INTEGER NOT NULL DEFAULT 0,
+    -- The rules that made an automatic decision (``collector``); NULL for the owner's, and for automatic ones made
+    -- before versions were recorded.
+    version TEXT,
     PRIMARY KEY (recording_id, transcript_id, speaker_id)
 );
 -- Two people who may be one, for an administrator to merge or keep apart (``media.merge``).
@@ -175,7 +181,14 @@ CREATE TABLE IF NOT EXISTS segment_fixes (
     to_person TEXT,
     updated_at TEXT NOT NULL,
     auto INTEGER NOT NULL DEFAULT 0,
+    -- The review rules that made an automatic decision (``collector.CLEANUP_VERSION``), as in ``attributions``.
+    version TEXT,
     PRIMARY KEY (recording_id, transcript_id, segment)
+);
+-- What the library last heard from the collector, e.g. ``asr``: the service the latest transcription came from.
+CREATE TABLE IF NOT EXISTS collector (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 -- Model tokens the library spent (proofreading, and builds of its twins), for the batch quota.
 CREATE TABLE IF NOT EXISTS spending (
@@ -211,6 +224,8 @@ class Recording(BaseModel):
     named: str | None = None
     # Who uploaded it (``owner_key``), if known.
     uploader: str | None = None
+    # The transcription service that made the current transcript, if known (``collector``).
+    asr: str | None = None
 
 
 class Transcript(BaseModel):
@@ -223,6 +238,8 @@ class Transcript(BaseModel):
     duration_s: float = Field(ge=0)
     segments: list[Segment]
     speakers: list[Speaker]
+    # The transcription service that made it (``collector.asr_version``); None when it did not say.
+    asr: str | None = None
 
 
 class Cleaned(BaseModel):
@@ -330,6 +347,9 @@ class Library:
                 ("attributions", "disputed", "INTEGER NOT NULL DEFAULT 0"),
                 ("recordings", "named", "TEXT"),
                 ("segment_fixes", "auto", "INTEGER NOT NULL DEFAULT 0"),
+                ("recordings", "asr", "TEXT"),
+                ("attributions", "version", "TEXT"),
+                ("segment_fixes", "version", "TEXT"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
@@ -663,6 +683,36 @@ class Library:
             ).fetchone()
         return int(row[0]), row[1]
 
+    def _heard_asr(self, asr: str | None) -> None:
+        """Note the service a transcription just came from as the current one, when it said which."""
+        if asr is not None:
+            with self._db() as db:
+                db.execute(
+                    "INSERT INTO collector (key, value) VALUES ('asr', ?) ON CONFLICT (key) DO UPDATE SET value = "
+                    "excluded.value",
+                    (asr,),
+                )
+
+    def collector(self) -> CollectorVersion:
+        """What would collect a recording now: the service the latest transcription came from, when it said which,
+        and the current attribution and review rules."""
+        with self._db() as db:
+            row = db.execute("SELECT value FROM collector WHERE key = 'asr'").fetchone()
+        return CollectorVersion(asr=row[0] if row else None, attribution=ATTRIBUTION_VERSION, cleanup=CLEANUP_VERSION)
+
+    def recollectable(self) -> tuple[Recording, ...]:
+        """Transcribed recordings the current service (``collector``) would transcribe anew, since another one made
+        their transcript or it did not say which, oldest first. The owner decides whether to; none while the current
+        service is unknown."""
+        current = self.collector()
+        return tuple(
+            recording
+            for recording in sorted(self.list(), key=lambda r: (r.created_at, r.id))
+            if recording.status == "ready"
+            and recording.transcript_id is not None
+            and recollect_scope(CollectorVersion(recording.asr, current.attribution, current.cleanup), current) == "asr"
+        )
+
     def _original(self, recording_id: str) -> Path | None:
         return next(self.folder(recording_id).glob("original.*"), None)
 
@@ -701,6 +751,7 @@ class Library:
                 duration_s=duration,
                 segments=segments,
                 speakers=speakers,
+                asr=transcriber.asr,
             )
             self._write_transcript(folder, transcript)
             self._encode_playback(audio, folder / "playback.flac")
@@ -714,7 +765,9 @@ class Library:
                 transcribed_s=duration,
                 speakers=len(speakers),
                 segments=len(segments),
+                asr=transcript.asr,
             )
+            self._heard_asr(transcript.asr)
         except BaseException as exc:
             audio.unlink(missing_ok=True)
             if _interrupted(exc):

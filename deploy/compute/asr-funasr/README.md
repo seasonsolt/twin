@@ -84,6 +84,8 @@ command = "python3 /path/to/twin/deploy/compute/asr-funasr/remote.py --url http:
 
 本人话语 CER 在 AliMeeting Eval / Test 上从 31.7% / 28.0% 降到 20.5% / 17.6%，在留出的 AISHELL-4 测试集上从 23.2% 降到 16.1%（选对说话人时），详见 [docs/ASR_EVAL.md](../../../docs/ASR_EVAL.md#个人上传路径三套分人方案对比2026-10-21)。请求带 `"pipeline": "classic"`（或 `run.py --pipeline classic`、`remote.py --pipeline classic`）可退回原流程，评测用它做配对对照；twin 自己从不传。缺少下面任一模型时自动退回 `classic`，`/health` 和 `--check` 报告实际使用的流程。
 
+1.4.1 起转写结果另带 `"version"`（包版本）和 `"pipeline"`（实际使用的流程），转写和声纹与 1.4.0 相同。twin 把它记在每份转写上，换了包版本或流程后，录音库会列出哪些录音可以用新版重新转写；更早的包不带这两项，twin 记为版本未知。
+
 额外的模型在运行时从官方仓库取（`pack.toml` 的 `cuda_models` 固定了版本与 sha256，不随包分发）：
 
 | 模型 | 来源 | 用途 |

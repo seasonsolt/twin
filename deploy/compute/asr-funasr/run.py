@@ -465,10 +465,19 @@ class Engine:
         cluster_threshold=CLUSTER_THRESHOLD,
         pipeline=None,
     ):
+        """The transcript, saying which pack version and pipeline made it (1.4.1+), so twin knows what a newer one
+        would transcribe again."""
         if self.overlap is not None and pipeline != "classic":
-            return self.overlap.transcribe(audio, diarize, reference, hotwords, progress, references)
-        if pipeline == "overlap":
+            result = self.overlap.transcribe(audio, diarize, reference, hotwords, progress, references)
+            used = "overlap"
+        elif pipeline == "overlap":
             raise ValueError("这台服务没有加载重叠感知转写")
+        else:
+            result = self.classic(audio, diarize, reference, hotwords, progress, references, cluster_threshold)
+            used = "classic"
+        return {**result, "version": tomllib.loads(MANIFEST.read_text())["version"], "pipeline": used}
+
+    def classic(self, audio, diarize, reference, hotwords, progress, references, cluster_threshold):
         import librosa
 
         np = self.np

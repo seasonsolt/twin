@@ -60,11 +60,13 @@
 | attribution | `Team.classify` 的阈值、分档、样本策略 | 用已有声纹重新归属，自动，秒级 |
 | cleanup | 片段复核（`media/review.py`）、LLM 校对 | 对已有转写重跑，自动 |
 
-- [ ] 1.1 参照 `persona/kernel.py` 的 `KernelVersion` / `rebuild_scope`，新增 `CollectorVersion(asr, attribution, cleanup)` 和 `recollect_scope(old, new)`，返回 `none / cleanup / attribution / asr`。
-- [ ] 1.2 `media/library.py`：转写记录产出它的采集器版本（按现有加列方式追加列）。旧数据标成 `asr ≤ 1.3.3`，版本未知。
-- [ ] 1.3 attribution 记录产出它的归属层版本。
-- [ ] 1.4 启动时比较版本：归属层或清理层变了就自动排队重跑；asr 层变了只标记“可重新采集”。
-- [ ] 1.5 测试：版本比较、迁移，以及旧库打开后不中断。
+- [x] 1.1 参照 `persona/kernel.py` 的 `KernelVersion` / `rebuild_scope`，新增 `CollectorVersion(asr, attribution, cleanup)` 和 `recollect_scope(old, new)`，返回 `none / cleanup / attribution / asr`。
+- [x] 1.2 `media/library.py`：转写记录产出它的采集器版本（按现有加列方式追加列）。旧数据标成 `asr ≤ 1.3.3`，版本未知。
+  - 已做：asr-funasr 1.4.1 起转写结果带 `version` 和 `pipeline`（如 `1.4.1/overlap`），记在转写文件和 `recordings.asr`。之前的转写（包括 daw 上 1.4.0 转的）一律记为未知，算作比任何已知版本旧；4090 换成 1.4.1 前，线上新转写也是未知。
+- [x] 1.3 attribution 记录产出它的归属层版本。
+- [x] 1.4 启动时比较版本：归属层或清理层变了就自动排队重跑；asr 层变了只标记“可重新采集”。
+  - 已做：按新规则重判旧规则做出的自动决定，结果不变的只改版本，不关闭分身。清理层只重判自动排除的片段；复核自动改给别人的说话人保留不动，因为那一步同时停用了样本，由负责人撤销。LLM 校对每份转写只做一次，不随清理层版本重跑（会花额度），换转写后自然重做。
+- [x] 1.5 测试：版本比较、迁移，以及旧库打开后不中断。
 
 ## 阶段 2：重新采集时保住人做过的工作
 

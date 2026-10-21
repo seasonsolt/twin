@@ -377,14 +377,20 @@ class Libraries:
         self.kick(owner)
 
     def _settle(self, owners: list[str]) -> None:
-        """Classify recordings transcribed before a crash (or before automatic classification existed), leave the
-        suspect stretches of confirmed speakers out of their twins (``Reviews.settle``), then bring every waiting
-        twin in line."""
+        """Classify recordings transcribed before a crash (or before automatic classification existed), and decide
+        again what was decided by voice under other rules (``media.collector``); judge again the stretches left out
+        under other review rules and leave the suspect stretches of confirmed speakers out of their twins
+        (``Reviews.settle``); then bring every waiting twin in line. Recordings a newer transcription service would
+        transcribe anew are only counted: the owner decides whether to."""
         for owner in owners:
             try:
                 self.team(owner).classify_all()
-                Reviews(self.library(owner)).settle()
+                reviews = Reviews(self.library(owner))
+                reviews.refresh()
+                reviews.settle()
                 self.changed(owner)
+                if waiting := len(self.library(owner).recollectable()):
+                    logger.info("%d recordings of %s could be transcribed again by the current service", waiting, owner)
             except Exception:
                 logger.exception("library of %s could not be settled after start-up", owner)
 

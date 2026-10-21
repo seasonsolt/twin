@@ -34,6 +34,7 @@ from typing import Literal
 import numpy as np
 from pydantic import BaseModel
 
+from .collector import CLEANUP_VERSION, LEGACY_CLEANUP
 from .ingest import CommandTranscriber, Segment
 from .library import Library, Recording
 
@@ -563,16 +564,74 @@ class Reviews:
                     # confirmed as no longer holds and gives way.
                     added += db.execute(
                         "INSERT INTO segment_fixes (recording_id, transcript_id, segment, from_person, action, "
-                        "to_person, updated_at, auto) VALUES (?, ?, ?, ?, 'exclude', NULL, ?, 1) "
+                        "to_person, updated_at, auto, version) VALUES (?, ?, ?, ?, 'exclude', NULL, ?, 1, ?) "
                         "ON CONFLICT (recording_id, transcript_id, segment) DO UPDATE SET from_person = "
                         "excluded.from_person, action = 'exclude', to_person = NULL, updated_at = excluded.updated_at, "
-                        "auto = 1 WHERE segment_fixes.from_person != excluded.from_person",
-                        (recording_id, recording.transcript_id, segment, person_id, now),
+                        "auto = 1, version = excluded.version WHERE segment_fixes.from_person != excluded.from_person",
+                        (recording_id, recording.transcript_id, segment, person_id, now, CLEANUP_VERSION),
                     ).rowcount
                 if added:
                     Team._reopen(db, recording_id, {person_id for _, person_id in rows} | given)
                 left += added
         return moved + left
+
+    def refresh(self) -> int:
+        """Judge again the stretches left out under other review rules (``collector.CLEANUP_VERSION``): one the
+        current rules still leave out keeps its place under the new version, and the others go back into the
+        person's twin. ``settle`` then leaves out what the current rules newly find. A speaker the review gave to
+        someone else stays given: that also withdrew a voice sample, and the owner can undo it. Returns how many
+        stretches went back."""
+        stale = "auto = 1 AND action = 'exclude' AND COALESCE(version, ?) != ?"
+        with self.library.read() as db:
+            waiting = [
+                row[0]
+                for row in db.execute(
+                    f"SELECT DISTINCT recording_id FROM segment_fixes WHERE {stale} ORDER BY recording_id",
+                    (LEGACY_CLEANUP, CLEANUP_VERSION),
+                )
+            ]
+        back = 0
+        for recording_id in waiting:
+            recording = self.library.get(recording_id)
+            if recording is None or recording.transcript_id is None:
+                continue
+            still = {
+                (segment, review.person_id)
+                for review in self._reviews(recording, None, text=False)
+                if review.status == "ready"
+                for unit in review.units
+                if unit.verdict
+                for segment in unit.segments
+            }
+            with self.library.transaction() as db:
+                current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
+                if current is None or current[0] != recording.transcript_id:
+                    continue
+                rows = db.execute(
+                    f"SELECT segment, from_person FROM segment_fixes WHERE recording_id = ? AND transcript_id = ? "
+                    f"AND {stale}",
+                    (recording_id, recording.transcript_id, LEGACY_CLEANUP, CLEANUP_VERSION),
+                ).fetchall()
+                returned: set[str] = set()
+                for segment, person_id in rows:
+                    key = (recording_id, recording.transcript_id, segment)
+                    if (segment, person_id) in still:
+                        db.execute(
+                            "UPDATE segment_fixes SET version = ? WHERE recording_id = ? AND transcript_id = ? "
+                            "AND segment = ?",
+                            (CLEANUP_VERSION, *key),
+                        )
+                        continue
+                    db.execute(
+                        "DELETE FROM segment_fixes WHERE recording_id = ? AND transcript_id = ? AND segment = ?", key
+                    )
+                    returned.add(person_id)
+                    back += 1
+                if returned:
+                    from .team import Team
+
+                    Team._reopen(db, recording_id, returned)
+        return back
 
     def _reassign(self, recordings: set[str] | None) -> int:
         """``settle``'s first step: speakers nearly all unlike their person and like one other, given to them."""

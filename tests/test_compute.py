@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.4.0", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.4.1", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -125,7 +125,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.4.0" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.4.1" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -395,6 +395,23 @@ def test_script_absorbs_small_clusters_only_into_a_clear_match(script):
     assert script.absorb(found, np.stack(rows), set(range(6))).tolist() == found.tolist()
 
 
+def test_script_says_which_version_and_pipeline_made_a_transcript(script):
+    class Overlap:
+        def transcribe(self, *args):
+            return {"ok": True, "segments": []}
+
+    engine = object.__new__(script.Engine)
+    engine.overlap = Overlap()
+    result = engine.transcribe(Path("a.wav"), True, None, [], lambda f: None)
+    assert result == {"ok": True, "segments": [], "version": "1.4.1", "pipeline": "overlap"}
+    engine.classic = lambda *args: {"ok": True, "segments": [], "speakers": []}
+    assert engine.transcribe(Path("a.wav"), True, None, [], lambda f: None, pipeline="classic")["pipeline"] == "classic"
+    engine.overlap = None
+    assert engine.transcribe(Path("a.wav"), True, None, [], lambda f: None)["version"] == "1.4.1"
+    with pytest.raises(ValueError, match="重叠感知"):
+        engine.transcribe(Path("a.wav"), True, None, [], lambda f: None, pipeline="overlap")
+
+
 def test_script_missing_models_is_json_without_dependencies(tmp_path):
     result = subprocess.run(
         [sys.executable, str(compute.PACK_ROOT / "asr-funasr/run.py"), "--check"],
@@ -535,7 +552,7 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         with urllib.request.urlopen(url + "/health") as response:
             assert json.loads(response.read()) == {
                 "ok": True,
-                "version": "1.4.0",
+                "version": "1.4.1",
                 "device": "cuda",
                 "pipeline": "overlap",
                 "busy": False,

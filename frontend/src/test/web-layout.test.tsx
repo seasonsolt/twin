@@ -249,7 +249,7 @@ it('splits desktop login into the brand stage and a bounded column of ways in', 
     ).toBeInTheDocument(),
   );
   expect(desktopCss).toMatch(
-    /\.auth-page \{[^}]*grid-template-columns: minmax\(0, 7fr\) minmax\(0, 5fr\)/s,
+    /\.auth-page \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/s,
   );
-  expect(desktopCss).toMatch(/\.auth-panel \{[^}]*max-width: 380px/s);
+  expect(desktopCss).toMatch(/\.auth-panel \{[^}]*max-width: 420px/s);
 });

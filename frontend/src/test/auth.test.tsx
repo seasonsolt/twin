@@ -341,7 +341,11 @@ it("offers the company sign-in as a form posted on this site, beside twin's own 
   expect(form).toHaveAttribute('method', 'post');
   expect(form).toHaveAttribute('action', '/auth/start?next=/twin/');
   expect(start).toHaveAttribute('type', 'submit');
-  expect(screen.getByText('或用 twin 账号登录')).toBeVisible();
+  const toggle = screen.getByRole('button', { name: '或用 twin 账号登录' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByRole('textbox', { name: '账号' })).toBeNull();
+  await userEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
   expect(screen.getByRole('textbox', { name: '账号' })).toHaveAttribute(
     'autocomplete',
     'username',

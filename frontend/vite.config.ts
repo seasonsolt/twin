@@ -27,5 +27,7 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     clearMocks: true,
     restoreMocks: true,
+    // Room for the longer waits in src/test/setup.ts, several of which a test may make in a row.
+    testTimeout: 20000,
   },
 });

@@ -130,9 +130,10 @@ it('says none of the speakers is the person', async () => {
   rows = [recording];
   mount();
   await screen.findByText('哪位是你？');
+  // The choices come with the speakers, which may arrive after the heading.
   await userEvent
     .setup()
-    .click(screen.getByRole('button', { name: '都不是我' }));
+    .click(await screen.findByRole('button', { name: '都不是我' }));
   await waitFor(() =>
     expect(calls('/api/persona/sources/rec/speaker')).toHaveLength(1),
   );

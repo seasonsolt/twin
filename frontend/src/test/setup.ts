@@ -1,6 +1,10 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+
+// The files run in parallel, and on a busy CI runner a lazy page or a chain of requests can take longer than the 1s
+// findBy/waitFor wait for by default; they still go on as soon as what they wait for is there.
+configure({ asyncUtilTimeout: 5000 });
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

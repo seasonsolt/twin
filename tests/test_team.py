@@ -55,7 +55,7 @@ def recording(library: Library, name: str, segments: list[Segment], speakers: li
     )
     folder = library.folder(recording_id)
     folder.mkdir(parents=True, mode=0o700)
-    Library._write_transcript(folder, transcript)
+    Library.write_transcript(folder, transcript)
     row = Recording(
         id=recording_id,
         sha256=uuid.uuid4().hex,
@@ -184,7 +184,7 @@ def test_the_same_words_moving_to_another_person_change_the_source(tmp_path: Pat
     swapped = transcript.model_copy(update={"id": transcript.id})
     folder = library.folder(rec)
     (folder / f"transcript-{transcript.id}.json").unlink()
-    Library._write_transcript(folder, swapped)
+    Library.write_transcript(folder, swapped)
     after = team.sources(zhang.id, "张总")[0]
     assert before.source_id != after.source_id
     assert [i for i, line in enumerate(after.lines) if line[2] and line[1].endswith(same)] == [19]

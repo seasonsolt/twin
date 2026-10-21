@@ -43,7 +43,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
 from ..llm import LLM
-from ..media import merge
+from ..media import merge, recollect
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.clean import BATCH, clean_segments
 from ..media.cues import Named, name_speakers
@@ -100,6 +100,11 @@ class PersonPatch(BaseModel):
 class MergeBody(BaseModel):
     # The person to keep; the other is folded into them.
     into: str
+
+
+class RecollectBody(BaseModel):
+    # The recordings to transcribe again; None: every one the viewer decides about that the current service would.
+    recordings: list[str] | None = Field(default=None, max_length=10000)
 
 
 class ApartBody(BaseModel):
@@ -826,9 +831,11 @@ class Libraries:
 
     def kick(self, owner: str) -> None:
         """Start transcribing the owner's next queued recording unless one is already running; with none queued,
-        hear the confirmed speakers of the next recording again (``media.review``), in the same slot of the
-        transcription service. Without a diarizing transcription service, or with the job queue full, recordings
-        stay queued; the next status poll tries again. Proofreading waiting for its turn starts too."""
+        hear the confirmed speakers of the next recording again (``media.review``), and with none of those either,
+        transcribe again the next recording the owner asked to (``media.recollect``), all in the same slot of the
+        transcription service, one at a time. Without a diarizing transcription service, or with the job queue
+        full, recordings stay queued; the next status poll tries again. Proofreading waiting for its turn starts
+        too."""
         self.proofread(owner)
         with self.lock:
             job = self.running.get(owner)
@@ -841,12 +848,14 @@ class Libraries:
             recording = library.next_queued()
             if recording is not None:
                 title, run = recording.filename, self.run
-            else:
-                waiting = Reviews(library).waiting()
-                if not waiting:
-                    return
+            elif waiting := Reviews(library).waiting():
                 recording = waiting[0]
                 title, run = f"复核说话人 {recording.filename}", self.run_review
+            elif again := recollect.waiting(library):
+                recording = again[0]
+                title, run = f"重新转写 {recording.filename}", self.run_recollect
+            else:
+                return
             target = recording.id
             with contextlib.suppress(TooManyJobs):
                 self.running[owner] = self.jobs.scoped(f"library:{owner}").submit(
@@ -873,6 +882,50 @@ class Libraries:
             with self.lock:
                 self.running.pop(owner, None)
             self.kick(owner)
+
+    def run_recollect(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Transcribe a recording again with the current service, carrying the owner's decisions over
+        (``media.recollect``); the twins whose speech in it changed catch up."""
+        library = self.library(owner)
+        try:
+            transcriber = make_transcriber(self.settings.asr)
+            if not isinstance(transcriber, CommandTranscriber):
+                return {"skipped": True}
+
+            def progress(done: float, total: float) -> None:
+                log(f"[1/2] 重新转写（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
+
+            log("[1/2] 重新转写")
+            try:
+                report = recollect.run(library, recording_id, transcriber, progress)
+            except TranscriptionError as exc:
+                raise JobError(str(exc)) from None
+            self.changed(owner)
+            log(f"[2/2] 完成：沿用 {report.carried} 位说话人的决定，{len(report.unsettled)} 位需要重新确认")
+            return {"recording_id": recording_id, "carried": report.carried, "unsettled": len(report.unsettled)}
+        finally:
+            with self.lock:
+                self.running.pop(owner, None)
+            self.kick(owner)
+
+    def recollection(self, owner: str, viewer: Viewer) -> dict[str, Any]:
+        """The recordings the viewer decides about that the current service would transcribe anew, and what each
+        transcription again carried over."""
+        library = self.library(owner)
+        editable = {rid for rid, access in self.access(viewer).items() if access.edit}
+        return {
+            "service": library.collector().asr,
+            "recordings": [
+                {"id": r.id, "filename": r.filename, "asr": r.asr, "asked": r.recollect}
+                for r in library.recollectable()
+                if r.id in editable
+            ],
+            "done": [
+                {"recording_id": recording_id, "rolled_back": rolled_back, **report.model_dump()}
+                for recording_id, report, rolled_back in recollect.reports(library)
+                if recording_id in editable
+            ],
+        }
 
     def units(self, owner: str, recording_id: str, speaker_id: str) -> dict[str, Any]:
         """A confirmed speaker's stretches with whom each sounds like (``media.review``)."""
@@ -1101,6 +1154,32 @@ def register(
         if recording is None:
             raise HTTPException(409, "只有转写失败、原始文件还在的录音可以重试")
         libraries.kick(owner)
+        return view(recording)
+
+    @app.get("/api/library/recollect")
+    def get_recollect(request: Request) -> dict[str, Any]:
+        return libraries.recollection(libraries.owner(request), libraries.viewer(request))
+
+    @app.post("/api/library/recollect", status_code=202)
+    def post_recollect(body: RecollectBody, request: Request) -> dict[str, Any]:
+        """Ask for recordings to be transcribed again by the current service; all the viewer may, without a list."""
+        owner, viewer = libraries.owner(request), libraries.viewer(request)
+        editable = {rid for rid, access in libraries.access(viewer).items() if access.edit}
+        wanted = editable if body.recordings is None else set(body.recordings) & editable
+        asked = recollect.ask(libraries.library(owner), wanted)
+        libraries.kick(owner)
+        return {"asked": asked}
+
+    @app.post("/api/library/recordings/{recording_id}/rollback")
+    def rollback(recording_id: str, request: Request) -> dict[str, Any]:
+        """Go back to the transcript before the recording was last transcribed again."""
+        owner = libraries.owner(request)
+        libraries.allowed(libraries.viewer(request), recording_id, edit=True)
+        if not recollect.rollback(libraries.library(owner), recording_id):
+            raise HTTPException(409, "这段录音没有可以回退的上一份转写")
+        libraries.changed(owner)
+        recording = libraries.library(owner).get(recording_id)
+        assert recording is not None
         return view(recording)
 
     @app.delete("/api/library/recordings/{recording_id}")

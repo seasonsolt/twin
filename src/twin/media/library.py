@@ -82,7 +82,11 @@ CREATE TABLE IF NOT EXISTS recordings (
     -- Who uploaded it (``owner_key`` of their account); NULL when nobody knows, which leaves it to administrators.
     uploader TEXT,
     -- The transcription service that made the current transcript (``collector.asr_version``); NULL when unknown.
-    asr TEXT
+    asr TEXT,
+    -- When the owner asked for it to be transcribed again by the current service (``media.recollect``).
+    recollect TEXT,
+    -- The transcript before the last transcription again, which it can go back to (``recollect.rollback``).
+    previous TEXT
 );
 -- The people of this account's meetings; a person may exist before (or without) a twin.
 CREATE TABLE IF NOT EXISTS people (
@@ -185,6 +189,17 @@ CREATE TABLE IF NOT EXISTS segment_fixes (
     version TEXT,
     PRIMARY KEY (recording_id, transcript_id, segment)
 );
+-- Each time a recording was transcribed again (``media.recollect``): what was carried over to the new transcript,
+-- and what could not be, as a JSON ``recollect.Report``.
+CREATE TABLE IF NOT EXISTS recollections (
+    recording_id TEXT NOT NULL,
+    old_transcript TEXT NOT NULL,
+    new_transcript TEXT NOT NULL,
+    at TEXT NOT NULL,
+    report TEXT NOT NULL,
+    rolled_back INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (recording_id, new_transcript)
+);
 -- What the library last heard from the collector, e.g. ``asr``: the service the latest transcription came from.
 CREATE TABLE IF NOT EXISTS collector (
     key TEXT PRIMARY KEY,
@@ -226,6 +241,9 @@ class Recording(BaseModel):
     uploader: str | None = None
     # The transcription service that made the current transcript, if known (``collector``).
     asr: str | None = None
+    # When the owner asked for it to be transcribed again, and the transcript before the last time it was.
+    recollect: str | None = None
+    previous: str | None = None
 
 
 class Transcript(BaseModel):
@@ -350,6 +368,8 @@ class Library:
                 ("recordings", "asr", "TEXT"),
                 ("attributions", "version", "TEXT"),
                 ("segment_fixes", "version", "TEXT"),
+                ("recordings", "recollect", "TEXT"),
+                ("recordings", "previous", "TEXT"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
@@ -683,7 +703,7 @@ class Library:
             ).fetchone()
         return int(row[0]), row[1]
 
-    def _heard_asr(self, asr: str | None) -> None:
+    def heard_asr(self, asr: str | None) -> None:
         """Note the service a transcription just came from as the current one, when it said which."""
         if asr is not None:
             with self._db() as db:
@@ -753,7 +773,7 @@ class Library:
                 speakers=speakers,
                 asr=transcriber.asr,
             )
-            self._write_transcript(folder, transcript)
+            self.write_transcript(folder, transcript)
             self._encode_playback(audio, folder / "playback.flac")
             audio.unlink(missing_ok=True)
             # Published before the upload goes: a stop in between leaves a ready recording, never a queued one
@@ -767,7 +787,7 @@ class Library:
                 segments=len(segments),
                 asr=transcript.asr,
             )
-            self._heard_asr(transcript.asr)
+            self.heard_asr(transcript.asr)
         except BaseException as exc:
             audio.unlink(missing_ok=True)
             if _interrupted(exc):
@@ -785,7 +805,7 @@ class Library:
         return result
 
     @staticmethod
-    def _write_transcript(folder: Path, transcript: Transcript) -> None:
+    def write_transcript(folder: Path, transcript: Transcript) -> None:
         path = folder / f"transcript-{transcript.id}.json"
         temporary = folder / f".{path.name}.tmp"
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

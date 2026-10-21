@@ -44,9 +44,6 @@ export function uploadAsset(
 }
 
 const SERVER_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-// What the server takes for a voice (``web.assets.VOICE_EXTENSIONS``), each suffix spelled out so .m4a is not greyed out.
-const VOICE_ACCEPT =
-  'audio/*,video/*,.wav,.mp3,.m4a,.aac,.ogg,.opus,.webm,.mp4,.mov,.caf';
 
 const isHeic = (file: File) =>
   /^image\/hei[cf](?:-sequence)?$/i.test(file.type) ||
@@ -525,7 +522,6 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
         <FileInput
           ref={voiceInput}
           label="选择录音或视频"
-          accept={VOICE_ACCEPT}
           disabled={disabled}
           onFiles={([file]) => {
             if (file) save('voice', file);

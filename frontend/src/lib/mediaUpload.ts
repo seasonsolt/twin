@@ -5,18 +5,13 @@ import { getPersonaId, personaKey } from './persona';
 
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STORAGE_KEY = 'twin:media-uploads';
-const MEDIA_EXTENSIONS =
+const extensions = new Set(
   'mp4 mov m4v webm mkv avi 3gp m4a mp3 wav aac ogg opus flac caf amr'.split(
     ' ',
-  );
-const extensions = new Set(MEDIA_EXTENSIONS);
-// For a file picker, every suffix spelled out: a browser decides what audio/* covers from the system's file types,
-// and some systems do not count .m4a as audio, which greys it out.
-export const MEDIA_ACCEPT = [
-  'audio/*',
-  'video/*',
-  ...MEDIA_EXTENSIONS.map((extension) => `.${extension}`),
-].join(',');
+  ),
+);
+// File pickers for recordings set no ``accept``: what the system counts as audio/* differs from one Windows machine to
+// the next, and on some .m4a stayed greyed out even when named. A picked file is checked here instead.
 export const isMedia = (file: File) =>
   extensions.has(file.name.split('.').at(-1)?.toLowerCase() ?? '');
 

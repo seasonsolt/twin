@@ -27,7 +27,7 @@ import {
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { UploadList } from '../features/library/UploadList';
-import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
+import { useUploads } from '../features/library/useUploads';
 
 export interface Recording {
   id: string;
@@ -270,7 +270,6 @@ export function Library() {
         <FileInput
           ref={input}
           label="选择录音文件"
-          accept={MEDIA_ACCEPT}
           multiple
           disabled={uploading}
           onFiles={(files) => void add(files)}

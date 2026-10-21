@@ -4,7 +4,6 @@ import {
   uploadMedia,
   type UploadProgress,
 } from '../../lib/mediaUpload';
-export { MEDIA_ACCEPT } from '../../lib/mediaUpload';
 
 export interface Pick {
   file: File;

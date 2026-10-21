@@ -19,7 +19,7 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
-import { MEDIA_ACCEPT, useUploads } from '../features/library/useUploads';
+import { useUploads } from '../features/library/useUploads';
 import type { LibraryState } from './Library';
 import { NewTwinForm } from '../components/layout/NewTwin';
 import { usePersonas } from '../stores/personas';
@@ -69,7 +69,6 @@ export function Home() {
       ref={input}
       label="选择录音文件"
       multiple
-      accept={MEDIA_ACCEPT}
       onFiles={(files) => void add(files)}
     />
   );
@@ -90,7 +89,6 @@ export function Home() {
       size={ownTwin ? 'lg' : 'md'}
       title="把会议录音拖到这里"
       inputLabel="选择录音文件"
-      accept={MEDIA_ACCEPT}
       disabled={uploading}
       onFiles={(files) => void add(files)}
       hint="音频或视频都可以，一次可以选多个。只有你的账号能看到。"

@@ -430,9 +430,8 @@ it('uploads a video as voice, plays the processed reference and offers synthesis
     ).toBeEnabled(),
   );
   const input = screen.getByLabelText('选择录音或视频');
-  expect(input.getAttribute('accept')!.split(',')).toEqual(
-    expect.arrayContaining(['audio/*', 'video/*', '.m4a', '.mp3', '.wav']),
-  );
+  // Any file can be picked: some Windows machines grey .m4a out of a filtered picker.
+  expect(input).not.toHaveAttribute('accept');
   const file = new File(['video audio'], 'record.mov', {
     type: 'video/quicktime',
   });

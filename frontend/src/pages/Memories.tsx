@@ -34,7 +34,6 @@ import {
 import { api } from '../lib/api';
 import {
   isMedia,
-  MEDIA_ACCEPT,
   uploadMedia,
   uploadForm,
   type UploadProgress,
@@ -50,7 +49,6 @@ import { useAuth } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
 import { TranscriptClaim } from '../features/sources/TranscriptClaim';
 
-const accept = `.txt,.md,.pdf,.docx,.epub,.html,.htm,.csv,.json,.srt,.vtt,${MEDIA_ACCEPT}`;
 const MAX_FOLDER_UPLOAD_BYTES = 500 * 1024 * 1024;
 export interface Memory {
   source_id: string;
@@ -689,7 +687,6 @@ export function Memories({
             : '点击选择文件，或拖到这里'
       }
       actionLabel={folder ? '选择文件夹' : '选择文件'}
-      accept={accept}
       directory={folder}
       disabled={busy}
       onFiles={(files) => upload(files, folder)}

@@ -313,10 +313,8 @@ it('opens the file picker from the header and accepts files dropped on the page'
   );
   show();
   await screen.findByText('还没有录音');
-  // Every suffix is spelled out, so .m4a is never greyed out where the system does not count it as audio/*.
-  expect(
-    screen.getByLabelText('选择录音文件').getAttribute('accept')!.split(','),
-  ).toEqual(expect.arrayContaining(['audio/*', '.m4a', '.mp3', '.amr']));
+  // Any file can be picked (some Windows machines grey .m4a out of a filtered picker); the page skips what is not media.
+  expect(screen.getByLabelText('选择录音文件')).not.toHaveAttribute('accept');
   const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
   await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
   expect(click).toHaveBeenCalledOnce();

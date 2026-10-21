@@ -99,25 +99,26 @@ twin 让每位同事都有一个随时在线的分身。它只用本人说过的
 
 | 系统 | 谁说了什么错字率 |
 | :-- | :-: |
-| **twin**<br/><sub>3D-Speaker 分人 + MossFormer2 重叠分离 + FireRedASR2</sub> | **16.1%** |
+| **twin 0.2**<br/><sub>3D-Speaker 分人 + MossFormer2 重叠分离 + FireRedASR2</sub> | **16.1%** |
 | MOSS-Transcribe-Diarize（在 AISHELL-4 上训练） | 15.8% |
 | VibeVoice-ASR | 25.0% |
 | Gemini 3 Pro | 27.4% |
 | 豆包 | 27.9% |
 | ElevenLabs | 38.0% |
-| FunASR 1.4.2（SeACo-Paraformer-large + CAM++ 聚类）<br/><sub>twin 上一版的转写</sub> | 26.6% |
+| twin 0.1<br/><sub>FunASR 1.4.2（SeACo-Paraformer-large + CAM++ 聚类）</sub> | 26.6% |
 
-**分人**：同一测试集上，只看“这段话是谁说的”分得对不对（分人错误率 DER，collar 0，全自动，重叠语音也算，越低越好）。twin 比 pyannote 的商业版低 0.7 个点：
+**分人**：同一测试集上，只看“这段话是谁说的”分得对不对（分人错误率 DER，collar 0，全自动，重叠语音也算，越低越好）。twin 0.2 比 pyannote 的商业版低 0.7 个点，比 twin 0.1 低近 10 个点：
 
 | 系统 | 分人错误率 |
 | :-- | :-: |
-| DiariZen-Large-s80（学术开源） | 9.8% |
-| **twin** | **10.7%** |
+| DiariZen-Large-s80（学术开源，在 AISHELL-4 上训练） | 9.8% |
+| **twin 0.2** | **10.7%** |
 | pyannote precision-2（商业版） | 11.4% |
 | pyannote community-1（开源） | 11.7% |
 | pyannote 3.1（开源） | 12.2% |
+| twin 0.1 | 20.6% |
 
-> 本人资料一组是作者本人资料上的自建题，twin 用前沿大模型作答，Second Me 用本地小模型。公开基准由 Sonnet 5.5 作答（换成 `gpt-6-luna` 作答时为 75% 和 55%），各家的题量、作答模型和评委都不同，只能看量级；Twin-2K-500 等其余成绩一并列在对比文档里。会议转写的对照数字取自 MOSS-Transcribe-Diarize 技术报告，分人的对照数字取自 pyannote 和 DiariZen 的模型卡，都没有在我们这里复现；twin 只用单个远场麦克风，识别、分离和声纹模型没有在 AISHELL-4 上训练，方案选定前也没有用过这批数据。
+> 本人资料一组是作者本人资料上的自建题，twin 用前沿大模型作答，Second Me 用本地小模型。公开基准由 Sonnet 5.5 作答（换成 `gpt-6-luna` 作答时为 75% 和 55%），各家的题量、作答模型和评委都不同，只能看量级；Twin-2K-500 等其余成绩一并列在对比文档里。会议转写的数字是识别器的原始输出；twin 默认开启的 LLM 校对为记忆整理服务，不以逐字还原原声为目标，不计入这里的成绩。会议转写的对照数字取自 MOSS-Transcribe-Diarize 技术报告，分人的对照数字取自 pyannote 和 DiariZen 的模型卡，都没有在我们这里复现；twin 只用单个远场麦克风，识别、分离和声纹模型没有在 AISHELL-4 上训练，方案选定前也没有用过这批数据。
 >
 > 题量、区间、失误分析和迭代走势见 [对比与评测](docs/COMPARISON.md)；会议转写的口径、AliMeeting 上的对照和局限见 [语音识别评测](docs/ASR_EVAL.md#aishell-4-公开成绩对照2026-10-21-检索)。
 

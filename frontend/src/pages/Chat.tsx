@@ -36,7 +36,11 @@ import {
   TypingIndicator,
 } from '../components/ui';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyBasis, ReplyDetails } from '../features/chat/ReplyDetails';
+import {
+  ReplyBasis,
+  ReplyDetails,
+  ReplyTime,
+} from '../features/chat/ReplyDetails';
 import { useConversation } from '../features/chat/useConversation';
 import { ChatStage } from '../features/chat/ChatStage';
 import {
@@ -590,7 +594,10 @@ export function Chat() {
                                   <>
                                     <div className="reply-actions mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                                       {turn.role === 'twin' && (
-                                        <ReplyBasis reply={turn.reply} />
+                                        <>
+                                          <ReplyBasis reply={turn.reply} />
+                                          <ReplyTime reply={turn.reply} />
+                                        </>
                                       )}
                                       <div
                                         role="group"

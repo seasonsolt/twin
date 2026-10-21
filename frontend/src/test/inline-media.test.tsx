@@ -272,6 +272,8 @@ it.each(['grounded', 'general', 'inferred', 'abstain'] as const)(
     expect(article.querySelector('.twin-bubble')).not.toBeNull();
     expect(within(article).getByText('先听听').tagName).toBe('STRONG');
     expect(article).not.toHaveClass('text-secondary');
+    // What the answer rests on opens from the "…" at the end of the line under it.
+    fireEvent.click(within(article).getByText('处理详情'));
     expect(
       within(article).getByRole('button', { name: /^依据 · 价值观$/ }),
     ).toBeVisible();

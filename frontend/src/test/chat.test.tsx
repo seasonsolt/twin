@@ -269,7 +269,7 @@ it('keeps a selected file for retry when the reply stream fails', async () => {
   expect(retriedFile.size).toBe(file.size);
 });
 
-it('shows reply generation time and expandable answer processing summary', async () => {
+it('shows when the reply was made beside it, and what it rests on behind 处理详情', async () => {
   mount();
   await submit();
 
@@ -298,19 +298,20 @@ it('shows reply generation time and expandable answer processing summary', async
   });
 
   const article = screen.getByRole('article', { name: '分身回复' });
-  // The kind of answer and its evidence are read with it; how it was made waits behind 处理详情.
+  // The kind of answer and when it was made are read with it; what it rests on waits behind 处理详情.
   expect(within(article).getByText('有本人资料支持')).toBeVisible();
-  expect(
-    within(article).getByRole('button', { name: /^依据 · 访谈 · .*等 2 处$/ }),
-  ).toBeVisible();
+  expect(article).toHaveTextContent(/生成用时 2\.4 秒 · \d{2}:\d{2} 完成/);
   const summary = within(article).getByText('处理详情');
   const disclosure = summary.closest('details')!;
   expect(disclosure).not.toHaveAttribute('open');
+  expect(disclosure).not.toHaveTextContent('生成用时');
   await userEvent.setup().click(summary);
   expect(disclosure).toHaveAttribute('open');
-  expect(disclosure).toHaveTextContent(/生成用时 2\.4 秒 · .* 完成/);
-  expect(disclosure).toHaveTextContent('记忆依据 1 条');
-  expect(disclosure).toHaveTextContent('附件依据 1 条');
+  expect(
+    within(disclosure).getByRole('button', {
+      name: /^依据 · 访谈 · .*等 2 处$/,
+    }),
+  ).toBeVisible();
 });
 
 it('explains an abstaining reply without implying all source material is missing', () => {
@@ -496,10 +497,11 @@ it('streams progressively, hides thinking on the first delta, then replaces text
   expect(
     within(abstention).getByRole('button', { name: '让测试人说这句' }),
   ).toBeVisible();
+  expect(within(abstention).getByText('资料不足，需要问本人')).toBeVisible();
+  await userEvent.setup().click(within(abstention).getByText('处理详情'));
   expect(
     within(abstention).getByRole('button', { name: /^依据 · 访谈/ }),
   ).toBeVisible();
-  expect(within(abstention).getByText('资料不足，需要问本人')).toBeVisible();
   expect(screen.queryByText(/置信度|%/)).not.toBeInTheDocument();
   expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
   expect(document.querySelector('input[type="date"]')).toBeNull();
@@ -942,14 +944,15 @@ it.each([true, false])(
     const bubble = article.querySelector('.twin-bubble')!;
     const row = screen.getByRole('group', { name: '回复媒体' });
     const play = await screen.findByRole('button', { name: '让测试人说这句' });
-    const citations = screen.getByRole('button', { name: /^依据 · 访谈/ });
     const basis = screen.getByRole('group', { name: '回答依据摘要' });
+    await userEvent.setup().click(within(row).getByText('处理详情'));
+    const citations = screen.getByRole('button', { name: /^依据 · 访谈/ });
     expect(bubble.querySelector('button')).toBeNull();
-    // Under the bubble, one line: what the answer rests on, then the voice at the end.
+    // Under the bubble, one line: what kind of answer it is, then the voice and the details (its evidence) at the end.
     expect(row.parentElement?.parentElement).toBe(article);
     expect(row.parentElement).toContainElement(basis);
     expect(row).toContainElement(play);
-    expect(basis).toContainElement(citations);
+    expect(row).toContainElement(citations);
     expect(row).toHaveClass('ml-auto', 'items-center');
     expect(play).toHaveClass('min-h-11', 'min-w-11');
     expect(bubble.querySelectorAll('p')).toHaveLength(2);

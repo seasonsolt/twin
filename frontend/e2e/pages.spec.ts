@@ -318,6 +318,26 @@ test('recording controls', async ({ page }) => {
   expect(missing).toEqual([]);
 });
 
+test('reply details', async ({ page }, info) => {
+  const missing: string[] = [];
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.addInitScript(() =>
+    localStorage.setItem('twin.current.conversation', 'c-plan'),
+  );
+  await page.goto('/#/chat');
+  await expect(
+    page.getByText('我会先把发布时间定在下周二').first(),
+  ).toBeVisible();
+  // When the answer was made is beside it; what it rests on opens from the "…" at its end.
+  await page.locator('summary', { hasText: '处理详情' }).last().click();
+  await expect(page.getByRole('button', { name: /^依据 · / })).toBeVisible();
+  await expect(page).toHaveScreenshot(
+    `chat-reply-details-${info.project.name}.png`,
+  );
+  expect(missing).toEqual([]);
+});
+
 test('chat presentation controls', async ({ page }, info) => {
   const missing: string[] = [];
   await page.clock.setFixedTime(NOW);

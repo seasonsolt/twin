@@ -34,9 +34,9 @@ export function replyMode(reply: ChatReply) {
 }
 
 /**
- * The line under an answer: what kind of answer it is and what it rests on. A grounded answer without evidence to
- * show says only that it drew on the profile; an answer nothing could be checked against shows no line at all,
- * and why an answer abstained is told in its details, not here.
+ * The line under an answer: what kind of answer it is. A grounded answer without evidence to show says only that it
+ * drew on the profile; an answer nothing could be checked against shows no label at all. What it rests on, and why an
+ * answer abstained, are told in its details.
  */
 export function ReplyBasis({ reply }: { reply: ChatReply }) {
   const cited = reply.cited ?? [];
@@ -50,7 +50,6 @@ export function ReplyBasis({ reply }: { reply: ChatReply }) {
       ) : (
         <Badge tone={mode.tone}>{mode.label}</Badge>
       )}
-      <Citations cited={cited} note={mode.note} />
     </Row>
   );
 }
@@ -91,14 +90,9 @@ export function placeDetails(details: HTMLDetailsElement) {
   content.scrollIntoView?.({ block: 'nearest' });
 }
 
-/** How the answer was made, for whoever wants to know: closed, and quieter than the answer and its evidence. */
-export function ReplyDetails({
-  reply,
-  compact = false,
-}: {
-  reply: ChatReply;
-  compact?: boolean;
-}) {
+/** When the answer was finished and how long it took, beside the line under it; nothing for an older reply that
+ * kept no times. */
+export function ReplyTime({ reply }: { reply: ChatReply }) {
   const elapsed = reply.elapsed_ms;
   const completed = reply.completed_at ? new Date(reply.completed_at) : null;
   if (
@@ -109,19 +103,29 @@ export function ReplyDetails({
     !Number.isFinite(completed.getTime())
   )
     return null;
-
   const clock = new Intl.DateTimeFormat('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23',
   }).format(completed);
-  const profileCitations =
-    reply.cited?.filter(
-      (citation) => citation.kind === 'item' || citation.kind === 'expression',
-    ).length ?? 0;
-  const fileCitations =
-    reply.cited?.filter((citation) => citation.kind === 'file').length ?? 0;
+  return (
+    <Text as="span" size="xs" tone="tertiary">
+      生成用时 {formatElapsed(elapsed)} ·{' '}
+      <time dateTime={reply.completed_at}>{clock} 完成</time>
+    </Text>
+  );
+}
 
+/** What the answer rests on, for whoever wants to check: closed, and quieter than the answer. Opening the evidence
+ * shows the original words in a layer at the right edge, where a memory that went wrong can be corrected. */
+export function ReplyDetails({
+  reply,
+  compact = false,
+}: {
+  reply: ChatReply;
+  compact?: boolean;
+}) {
+  const cited = reply.cited ?? [];
   return (
     <details
       className={
@@ -154,13 +158,11 @@ export function ReplyDetails({
         tone="secondary"
         className="reply-details-content space-y-1 border-l-2 border-accent/40 py-2 pl-3"
       >
-        <p>
-          生成用时 {formatElapsed(elapsed)} ·{' '}
-          <time dateTime={reply.completed_at}>{clock} 完成</time>
-        </p>
-        {profileCitations > 0 && <p>记忆依据 {profileCitations} 条</p>}
-        {fileCitations > 0 && <p>附件依据 {fileCitations} 条</p>}
-        {profileCitations === 0 && fileCitations === 0 && (
+        {cited.length > 0 ? (
+          <p>
+            <Citations cited={cited} note={replyMode(reply).note} />
+          </p>
+        ) : (
           <p>未引用可展示的档案或附件依据</p>
         )}
         {reply.verified === false && <p>这条回答没有附带依据说明，无法核对</p>}

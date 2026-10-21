@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -90,6 +90,222 @@ beforeEach(() => {
   );
 });
 afterEach(() => vi.restoreAllMocks());
+
+const emptyReview = { items: [], voices: [], fragments: [], unsorted: [] };
+const teamView = (version = 0) => (
+  <MemoryRouter>
+    <ConfirmProvider>
+      <Team version={version} recordings={[]} />
+    </ConfirmProvider>
+  </MemoryRouter>
+);
+
+function mockScrolling() {
+  const watches: {
+    notify: IntersectionObserverCallback;
+    target?: Element;
+    observer: IntersectionObserver;
+    disconnected: boolean;
+  }[] = [];
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      private watch: (typeof watches)[number];
+      constructor(notify: IntersectionObserverCallback) {
+        this.watch = {
+          notify,
+          observer: this as unknown as IntersectionObserver,
+          disconnected: false,
+        };
+        watches.push(this.watch);
+      }
+      observe(target: Element) {
+        this.watch.target = target;
+      }
+      disconnect() {
+        this.watch.disconnected = true;
+      }
+    },
+  );
+  return (label: string) => {
+    const watch = [...watches]
+      .reverse()
+      .find((item) => !item.disconnected && item.target?.textContent === label);
+    expect(watch, `active scroll trigger: ${label}`).toBeDefined();
+    watch!.notify(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      watch!.observer,
+    );
+  };
+}
+
+it('pages people on scroll, searches the whole roster, and keeps the expanded list through refresh', async () => {
+  const scrollTo = mockScrolling();
+  people = Array.from({ length: 41 }, (_, i) =>
+    person({
+      id: `person-${i}`,
+      name: `人物${String(i + 1).padStart(2, '0')}`,
+      seconds: 5000 - i,
+    }),
+  );
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  const view = render(teamView());
+  await screen.findByText('人物01', { selector: 'p' });
+  const panel = () => within(screen.getByRole('tabpanel', { name: /人物/u }));
+  expect(panel().getAllByRole('listitem')).toHaveLength(18);
+  expect(
+    screen.queryByText('人物41', { selector: 'p' }),
+  ).not.toBeInTheDocument();
+  await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '人物41');
+  expect(panel().getAllByRole('listitem')).toHaveLength(1);
+  expect(screen.getByText('人物41', { selector: 'p' })).toBeVisible();
+  await userEvent.clear(screen.getByRole('textbox', { name: '找人' }));
+  expect(panel().getAllByRole('listitem')).toHaveLength(18);
+  act(() => scrollTo('继续加载人物'));
+  expect(panel().getAllByRole('listitem')).toHaveLength(36);
+  view.rerender(teamView(1));
+  await waitFor(() =>
+    expect(panel().getAllByRole('listitem')).toHaveLength(36),
+  );
+  act(() => scrollTo('继续加载人物'));
+  expect(panel().getAllByRole('listitem')).toHaveLength(41);
+  expect(
+    screen.queryByRole('button', { name: '继续加载人物' }),
+  ).not.toBeInTheDocument();
+});
+
+it('pages a task category while its batch action still handles every recording', async () => {
+  const scrollTo = mockScrolling();
+  const retried: string[] = [];
+  const failed = Array.from(
+    { length: 22 },
+    (_, i) =>
+      ({
+        id: `failed-${i}`,
+        filename: `失败${i}.m4a`,
+        status: 'failed',
+      }) as LibraryRecording,
+  );
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      if (url.endsWith('/retry') && init?.method === 'POST') {
+        retried.push(url);
+        return json({});
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo&cat=failed']}>
+      <ConfirmProvider>
+        <Team version={0} recordings={failed} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await screen.findByRole('button', { name: '全部重试' });
+  expect(screen.getAllByRole('button', { name: '重试' })).toHaveLength(10);
+  await userEvent.click(screen.getByRole('button', { name: '全部重试' }));
+  await waitFor(() => expect(retried).toHaveLength(22));
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: '继续加载待处理事项' }),
+    ).toBeEnabled(),
+  );
+  act(() => scrollTo('继续加载待处理事项'));
+  expect(screen.getAllByRole('button', { name: '重试' })).toHaveLength(20);
+  act(() => scrollTo('继续加载待处理事项'));
+  expect(screen.getAllByRole('button', { name: '重试' })).toHaveLength(22);
+  expect(
+    screen.queryByRole('button', { name: '继续加载待处理事项' }),
+  ).not.toBeInTheDocument();
+});
+
+it('shows people while review is pending and does not call the unloaded queue empty', async () => {
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return pending;
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  expect(await screen.findByText('张总', { selector: 'p' })).toBeVisible();
+  await userEvent.click(screen.getByRole('tab', { name: /待处理/u }));
+  expect(screen.getByRole('status')).toHaveTextContent('正在加载待处理事项');
+  expect(
+    screen.queryByText('现在没有需要你处理的事。'),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    finish(json(emptyReview));
+  });
+  expect(await screen.findByText('现在没有需要你处理的事。')).toBeVisible();
+});
+
+it('keeps people usable when review fails and lets the owner retry in its tab', async () => {
+  let failed = true;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return failed
+          ? json({ detail: '复核暂时失败' }, 500)
+          : json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  expect(await screen.findByText('张总', { selector: 'p' })).toBeVisible();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('tab', { name: /待处理/u }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('复核暂时失败');
+  failed = false;
+  await userEvent.click(screen.getByRole('button', { name: '重试' }));
+  expect(await screen.findByText('现在没有需要你处理的事。')).toBeVisible();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('ignores an older review failure after a newer refresh has finished', async () => {
+  let fail!: (error: Error) => void;
+  const pending = new Promise<Response>((_, reject) => {
+    fail = reject;
+  });
+  let reviews = 0;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return ++reviews === 1 ? pending : json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  const view = render(teamView());
+  await screen.findByText('张总', { selector: 'p' });
+  view.rerender(teamView(1));
+  await userEvent.click(screen.getByRole('tab', { name: /待处理/u }));
+  expect(await screen.findByText('现在没有需要你处理的事。')).toBeVisible();
+  await act(async () => {
+    fail(new Error('older request failed'));
+  });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByText('现在没有需要你处理的事。')).toBeVisible();
+});
 
 const showRecording = () =>
   render(
@@ -622,7 +838,9 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
   expect(
     within(progress).getByText('上传.m4a · 上传中 50%'),
   ).toBeInTheDocument();
-  expect(screen.getByText('现在没有需要你处理的事。')).toBeInTheDocument();
+  expect(
+    await screen.findByText('现在没有需要你处理的事。'),
+  ).toBeInTheDocument();
   await userEvent.click(
     within(progress).getByRole('button', { name: /停止上传/u }),
   );
@@ -1422,7 +1640,8 @@ it('adds a person by hand from a small dialog, and keeps the people list where i
   ).toBeInTheDocument();
 });
 
-it('shows the first five new voices, asks for five more, and retries every failed recording', async () => {
+it('shows the first five new voices, continues on scroll, and retries every failed recording', async () => {
+  const scrollTo = mockScrolling();
   const retried: string[] = [];
   const voices = Array.from({ length: 7 }, (_, i) => ({
     id: `voice_${i}`,
@@ -1468,7 +1687,7 @@ it('shows the first five new voices, asks for five more, and retries every faile
   expect(
     screen.getByText(/还有 2 个说得更少（共 18 分钟）/u),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '再看 2 个' }));
+  act(() => scrollTo('再看 2 个'));
   expect(within(list).getAllByRole('listitem')).toHaveLength(7);
   await userEvent.click(screen.getByRole('tab', { name: /转写失败/u }));
   await userEvent.click(screen.getByRole('button', { name: '全部重试' }));

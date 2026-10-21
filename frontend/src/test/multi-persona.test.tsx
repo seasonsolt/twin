@@ -263,9 +263,8 @@ it('creates a twin from the switcher in place and sets it up in its chat', async
     '新的分身',
   );
   await user.click(screen.getByRole('button', { name: '创建并开始' }));
-  expect(
-    await screen.findByRole('region', { name: '让新的分身认识你' }),
-  ).toBeVisible();
+  const setup = await screen.findByRole('region', { name: '让新的分身认识你' });
+  await waitFor(() => expect(setup).toBeVisible());
   expect(getPersonaId()).toBe(NEW);
   expect(
     screen.queryByRole('textbox', { name: '名字' }),

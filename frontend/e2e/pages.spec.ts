@@ -235,6 +235,48 @@ for (const { name, path, ready, viewport, setup } of pages) {
   });
 }
 
+test('team continues the roster when its last rows scroll into view', async ({
+  page,
+}) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.setViewportSize({
+    width: page.viewportSize()!.width,
+    height: 600,
+  });
+  await mockApi(page, missing);
+  await page.route('**/api/library/people', (route) =>
+    route.fulfill({
+      json: {
+        items: Array.from({ length: 41 }, (_, i) => ({
+          id: `scroll-person-${i}`,
+          name: `同事${String(i + 1).padStart(2, '0')}`,
+          persona_id: null,
+          speakers: 1,
+          seconds: 5000 - i,
+          samples: 1,
+          updating: false,
+          auto: false,
+          gender: '',
+        })),
+      },
+    }),
+  );
+  await page.goto('/#/team');
+  const panel = page.getByRole('tabpanel', { name: /人物/u });
+  const rows = panel.getByRole('listitem');
+  const more = page.getByRole('button', { name: '继续加载人物' });
+  await expect(rows).toHaveCount(18);
+  await more.scrollIntoViewIfNeeded();
+  await expect(rows).toHaveCount(36);
+  await more.scrollIntoViewIfNeeded();
+  await expect(rows).toHaveCount(41);
+  await expect(more).toHaveCount(0);
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock').toEqual([]);
+});
+
 test('transcript claim', async ({ page }, info) => {
   const missing: string[] = [];
   const errors: string[] = [];

@@ -1049,15 +1049,33 @@ class Team:
                 found[row["recording_id"]] = (names, settled + 1)
         return found
 
-    def review(self, recordings: set[str] | None = None) -> list[dict[str, object]]:
+    def review(self, recordings: set[str] | None = None, *, disputed_only: bool = False) -> list[dict[str, object]]:
         """The owner's confirmation queue: speakers someone said are not them, then undecided speakers whose voice
-        matches someone, best match first. ``recordings``: only these."""
+        matches someone, best match first. ``recordings``: only these. ``disputed_only`` skips matching meetings
+        without a dispute: the web queue already groups their undecided speakers in ``voices``."""
+        if disputed_only:
+            with self.library.read() as db:
+                disputed = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT DISTINCT a.recording_id FROM attributions a JOIN recordings r "
+                        "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                        "WHERE a.decision = 'none' AND a.disputed = 1"
+                    )
+                }
+            recordings = disputed if recordings is None else recordings & disputed
+            if not recordings:
+                return []
         queue: list[dict[str, object]] = []
         for recording in self.library.list():
             if recording.status != "ready" or (recordings is not None and recording.id not in recordings):
                 continue
             for speaker in self.speakers(recording):
-                if speaker.decision == "none" and (speaker.candidates or speaker.disputed):
+                if (
+                    speaker.decision == "none"
+                    and (speaker.candidates or speaker.disputed)
+                    and (not disputed_only or speaker.disputed)
+                ):
                     queue.append(
                         {
                             "recording_id": recording.id,

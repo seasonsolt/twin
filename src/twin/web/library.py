@@ -59,6 +59,7 @@ from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import ClaimBody, Personas, claim_key
+from .review_queue import ReviewQueue
 from .uploads import UploadBody, Uploads, upload_routes
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,7 @@ class Libraries:
         self.root = settings.db_path.parent / "library"
         self.lock = threading.RLock()
         self.opened: dict[str, Library] = {}
+        self.review_queues: dict[str, ReviewQueue] = {}
         # The transcription job of each owner; the next recording is queued when it ends.
         self.running: dict[str, Job] = {}
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
@@ -196,6 +198,13 @@ class Libraries:
     def member(self, key: str) -> Path:
         """A member's own corner of the team's library: their uploads still arriving and their voice."""
         return self.library(TEAM).root / "members" / key
+
+    def review(self, owner: str, editable: set[str]) -> dict[str, Any]:
+        with self.lock:
+            if owner not in self.review_queues:
+                self.review_queues[owner] = ReviewQueue(self.library(owner))
+            queue = self.review_queues[owner]
+        return queue.get(editable)
 
     def uploads(self, viewer: Viewer) -> Uploads:
         return Uploads(self.member(viewer.key))
@@ -338,6 +347,8 @@ class Libraries:
         if self._waker is not None:
             self._waker.join(5)
             self._waker = None
+        for queue in self.review_queues.values():
+            queue.close()
 
     def sweep(self) -> int:
         """Give back disk nobody is using: every member's abandoned uploads (which otherwise count as arriving
@@ -1253,32 +1264,7 @@ def register(
         is settled (``heard``). All from one reading, so the page never infers a task from an older list of
         recordings."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
-        team = libraries.team(libraries.owner(request))
-        voices, fragments = team.voices(editable)
-        suspects = Reviews(team.library).suspects(editable)
-        settled, total = team.heard(editable)
-        return {
-            "heard": {"settled": settled, "total": total},
-            "items": [entry for entry in team.review(editable) if entry["disputed"]],
-            "voices": [voice.model_dump() for voice in voices],
-            # Each with whom its voice sounds like, so fragments like one person are given to them in one click.
-            "fragments": [
-                {
-                    **member.model_dump(),
-                    "like": {"person_id": voice.candidates[0].person_id, "name": voice.candidates[0].name}
-                    if voice.candidates
-                    else None,
-                }
-                for voice in fragments
-                for member in voice.members
-            ],
-            "unsorted": [
-                {"recording_id": r.id, "filename": r.filename, "speakers": n, "total": r.speakers}
-                for r, n in team.unvoiced(editable)
-            ],
-            # Confirmed speakers some of whose speech sounds like someone else (``media.review``).
-            "suspects": [review.model_dump() for review in suspects],
-        }
+        return libraries.review(libraries.owner(request), editable)
 
     @app.post("/api/library/voices")
     def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:

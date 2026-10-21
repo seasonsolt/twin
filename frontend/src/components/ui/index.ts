@@ -10,6 +10,7 @@ export * from './presence';
 export * from './workflow';
 export * from './aspects';
 export * from './resize';
+export * from './LoadMore';
 export {
   ChatSurface,
   ChatMessage,

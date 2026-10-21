@@ -1,0 +1,205 @@
+"""The cached web queue must be identical to the original reading and follow every committed change."""
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+import pytest
+from test_review import VOICES, Voices, library_with_mixed_speaker
+from test_team import decide, meeting, revision
+
+from twin.media.library import Library
+from twin.media.review import Reviews
+from twin.media.team import Team
+from twin.web.review_queue import ReviewQueue
+
+
+def original_queue(library: Library, recordings: set[str]) -> dict[str, Any]:
+    """The response before caching and before restricting the old queue to disputed speakers."""
+    team = Team(library)
+    voices, fragments = team.voices(recordings)
+    suspects = Reviews(library).suspects(recordings)
+    settled, total = team.heard(recordings)
+    return {
+        "heard": {"settled": settled, "total": total},
+        "items": [entry for entry in team.review(recordings) if entry["disputed"]],
+        "voices": [voice.model_dump() for voice in voices],
+        "fragments": [
+            {
+                **member.model_dump(),
+                "like": {"person_id": voice.candidates[0].person_id, "name": voice.candidates[0].name}
+                if voice.candidates
+                else None,
+            }
+            for voice in fragments
+            for member in voice.members
+        ],
+        "unsorted": [
+            {"recording_id": r.id, "filename": r.filename, "speakers": n, "total": r.speakers}
+            for r, n in team.unvoiced(recordings)
+        ],
+        "suspects": [review.model_dump() for review in suspects],
+    }
+
+
+def test_queue_stays_identical_after_samples_decisions_reviews_and_people_change(tmp_path: Path) -> None:
+    library, team, earlier, mixed, zhang, li = library_with_mixed_speaker(tmp_path)
+    scope = {earlier, mixed}
+    queue = ReviewQueue(library)
+    try:
+
+        def same() -> None:
+            expected = original_queue(library, scope)
+            assert queue.get(scope) == expected
+            assert queue.get(scope) == expected
+
+        same()
+        Reviews(library).run(mixed, Voices(VOICES))  # Reviewed units arrive without changing recording.revision.
+        same()
+        transcript, version = revision(library, mixed)
+        Reviews(library).fix(mixed, transcript, version, "S1", [1], "keep")
+        same()
+        team.rename(li, "李老师")  # A name and a sample elsewhere affect this recording too.
+        same()
+        decide(team, mixed, "S2", "confirm", li, sample=True)
+        same()
+        team.dispute(mixed, "S1", {zhang})
+        same()
+        assert queue.get(scope)["items"]
+        decide(team, mixed, "S1", "confirm", li)
+        same()
+        team.merge(zhang, li)
+        same()
+        library.delete(mixed)
+        same()
+    finally:
+        queue.close()
+
+
+def test_warm_reads_share_work_and_keep_permission_scopes_and_responses_separate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = Library(tmp_path / "library")
+    rec = meeting(library)
+    queue = ReviewQueue(library)
+    calls: list[set[str]] = []
+    build = queue._build
+
+    def counted(scope: set[str]) -> dict[str, Any]:
+        calls.append(scope)
+        return build(scope)
+
+    monkeypatch.setattr(queue, "_build", counted)
+    try:
+        expected = original_queue(library, {rec})
+        response = queue.get({rec})
+        response["heard"]["total"] = -1
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            assert all(value == expected for value in pool.map(queue.get, [{rec}] * 8))
+        assert calls == [{rec}]
+        assert queue.get(set()) == original_queue(library, set())
+        assert calls == [{rec}, set()]
+        assert queue.get({rec}) == expected
+        assert len(calls) == 2
+    finally:
+        queue.close()
+
+
+def test_external_commits_invalidate_but_rolled_back_changes_do_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library, _, earlier, mixed, _, _ = library_with_mixed_speaker(tmp_path)
+    Reviews(library).run(mixed, Voices(VOICES))
+    scope = {earlier, mixed}
+    queue = ReviewQueue(library)
+    calls = 0
+    build = queue._build
+
+    def counted(scope: set[str]) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return build(scope)
+
+    monkeypatch.setattr(queue, "_build", counted)
+    try:
+        before = queue.get(scope)
+        with sqlite3.connect(library.db_path) as external:
+            external.execute("UPDATE reviewed SET error = 'retry'")
+            external.rollback()
+            assert queue.get(scope) == before
+            assert calls == 1
+            external.execute("UPDATE reviewed SET error = 'retry'")
+        after = queue.get(scope)
+        assert after == original_queue(library, scope) and after != before
+        assert calls == 2
+    finally:
+        queue.close()
+
+
+def test_a_commit_during_computation_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library = Library(tmp_path / "library")
+    rec = meeting(library)
+    queue = ReviewQueue(library)
+    started, resume = threading.Event(), threading.Event()
+    calls = 0
+    build = queue._build
+
+    def paused(scope: set[str]) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        result = build(scope)
+        if calls == 1:
+            started.set()
+            assert resume.wait(5)
+        return result
+
+    monkeypatch.setattr(queue, "_build", paused)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(queue.get, {rec})
+            assert started.wait(5)
+            Team(library).add_person("新同事")
+            resume.set()
+            first.result(timeout=5)
+        assert queue.get({rec}) == original_queue(library, {rec})
+        assert calls == 2
+        queue.get({rec})
+        assert calls == 2
+    finally:
+        resume.set()
+        queue.close()
+
+
+def test_replacing_the_database_or_reopening_the_cache_cannot_reuse_an_old_reading(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    rec = meeting(library)
+    with sqlite3.connect(library.db_path) as db:
+        db.execute("PRAGMA journal_mode=DELETE")
+    queue = ReviewQueue(library)
+    try:
+        assert queue.get({rec})["fragments"]
+        other = Library(tmp_path / "other")
+        with sqlite3.connect(other.db_path) as db:
+            db.execute("PRAGMA journal_mode=DELETE")
+        other.db_path.replace(library.db_path)
+        assert queue.get({rec}) == original_queue(library, {rec})
+        assert queue.get({rec})["voices"] == []
+        queue.close()
+        assert queue.get({rec})["voices"] == []
+    finally:
+        queue.close()
+
+
+def test_no_dispute_skips_candidate_matching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library = Library(tmp_path / "library")
+    meeting(library)
+
+    def unnecessary(*args: Any) -> Any:
+        pytest.fail("No disputed speaker needs matching")
+
+    monkeypatch.setattr(Team, "speakers", unnecessary)
+    assert Team(library).review(disputed_only=True) == []

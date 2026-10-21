@@ -23,6 +23,7 @@ import {
   Field,
   Grid,
   Input,
+  LoadMore,
   Notice,
   Radio,
   Row,
@@ -203,6 +204,10 @@ const CATEGORIES: {
 
 // New voices shown at first, and each time more are asked for.
 const VOICES_PER_PAGE = 5;
+// Keep the full roster for search, speaker choices and batch actions; mount cards and tasks a page at a time.
+const PEOPLE_PER_PAGE = 18;
+const TASKS_PER_PAGE = 10;
+type PageGroup = Category | 'enough' | 'stranger';
 
 const minutes = (seconds: number) =>
   `${Math.max(0, Math.round(seconds / 60))} 分钟`;
@@ -1054,12 +1059,18 @@ export function Team({
   const [heard, setHeard] = useState<Review['heard']>();
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [peopleError, setPeopleError] = useState('');
+  const [reviewError, setReviewError] = useState('');
+  const [reviewReady, setReviewReady] = useState(false);
+  const loadVersion = useRef(0);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
   const [addressing, setAddressing] = useState<Person | null>(null);
   const [batching, setBatching] = useState(false);
   const [adding, setAdding] = useState(false);
   const [voicesShown, setVoicesShown] = useState(VOICES_PER_PAGE);
+  const [peopleShown, setPeopleShown] = useState(PEOPLE_PER_PAGE);
+  const [pages, setPages] = useState<Partial<Record<PageGroup, number>>>({});
   const taskList = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const [params, setParams] = useSearchParams();
@@ -1075,24 +1086,45 @@ export function Team({
   const twins = usePersonas((state) => state.items);
 
   const load = useCallback(async () => {
-    try {
-      const [folks, queue] = await Promise.all([
-        api<{ items: Person[] }>('/api/library/people'),
-        api<Review>('/api/library/review'),
-      ]);
-      setPeople(folks.items);
-      setWaiting(queue.items);
-      setVoices(queue.voices);
-      setFragments(queue.fragments);
-      setUnsorted(queue.unsorted);
-      setSuspects(queue.suspects ?? []);
-      setHeard(queue.heard);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '无法加载人物');
-    }
+    const current = ++loadVersion.current;
+    await Promise.all([
+      api<{ items: Person[] }>('/api/library/people')
+        .then((folks) => {
+          if (current !== loadVersion.current) return;
+          setPeople(folks.items);
+          setPeopleError('');
+        })
+        .catch((failure: unknown) => {
+          if (current === loadVersion.current)
+            setPeopleError(
+              failure instanceof Error ? failure.message : '无法加载人物',
+            );
+        }),
+      api<Review>('/api/library/review')
+        .then((queue) => {
+          if (current !== loadVersion.current) return;
+          setWaiting(queue.items);
+          setVoices(queue.voices);
+          setFragments(queue.fragments);
+          setUnsorted(queue.unsorted);
+          setSuspects(queue.suspects ?? []);
+          setHeard(queue.heard);
+          setReviewError('');
+          setReviewReady(true);
+        })
+        .catch((failure: unknown) => {
+          if (current === loadVersion.current)
+            setReviewError(
+              failure instanceof Error ? failure.message : '无法加载待处理事项',
+            );
+        }),
+    ]);
   }, []);
   useEffect(() => {
     void load();
+    return () => {
+      loadVersion.current += 1;
+    };
   }, [load, version]);
   const updating = !!people?.some((p) => p.updating);
   // A twin's memory takes minutes to rebuild: every few seconds would only load the server, many pages at once.
@@ -1262,6 +1294,9 @@ export function Team({
         !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
     )
     .sort((a, b) => b.seconds - a.seconds);
+  const matchingPeople = named?.filter((person) =>
+    person.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
+  );
   const byId = new Map((people ?? []).map((p) => [p.id, p]));
   const similar = (people ?? []).flatMap((p) =>
     (p.similar ?? [])
@@ -1364,6 +1399,14 @@ export function Team({
   // The kind in the address, or the first that still has something, when it was settled in full.
   const category =
     openCategories.find((c) => c.id === asked) ?? openCategories[0];
+  const taskPage = category
+    ? (pages[category.id] ?? TASKS_PER_PAGE)
+    : TASKS_PER_PAGE;
+  const showMore = (group: PageGroup, size = TASKS_PER_PAGE) =>
+    setPages((current) => ({
+      ...current,
+      [group]: (current[group] ?? size) + size,
+    }));
   // Tab and kind live in the address, so a reload or the back button returns to them; other parameters stay.
   const go = useCallback(
     (change: Record<string, string | null>, state?: unknown) =>
@@ -1480,7 +1523,11 @@ export function Team({
         }
       />
     );
-  const folded = (summary: string, rows: typeof voiced) =>
+  const folded = (
+    summary: string,
+    rows: typeof voiced,
+    group: 'enough' | 'stranger',
+  ) =>
     rows.length > 0 && (
       <Disclosure
         summary={summary}
@@ -1488,8 +1535,16 @@ export function Team({
         defaultOpen={mainVoices.length === 0}
       >
         <Stack as="ul" gap={0}>
-          {rows.map(voiceRow)}
+          {rows.slice(0, pages[group] ?? VOICES_PER_PAGE).map(voiceRow)}
         </Stack>
+        <LoadMore
+          shown={Math.min(rows.length, pages[group] ?? VOICES_PER_PAGE)}
+          total={rows.length}
+          label="继续显示声音"
+          disabled={busy}
+          active={tab === 'todo'}
+          onLoadMore={() => showMore(group, VOICES_PER_PAGE)}
+        />
       </Disclosure>
     );
   const sum = (rows: typeof voiced) =>
@@ -1508,22 +1563,26 @@ export function Team({
           {shownVoices.map(voiceRow)}
         </Stack>
         {laterVoices.length > 0 && (
-          <Row gap={3} justify="between" wrap>
-            <Text size="sm" tone="secondary">
-              还有 {laterVoices.length} 个说得更少（共 {span(sum(laterVoices))}
-              ）
-            </Text>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setVoicesShown((n) => n + VOICES_PER_PAGE)}
-            >
-              再看 {Math.min(VOICES_PER_PAGE, laterVoices.length)} 个
-            </Button>
-          </Row>
+          <LoadMore
+            shown={shownVoices.length}
+            total={mainVoices.length}
+            description={`还有 ${laterVoices.length} 个说得更少（共 ${span(sum(laterVoices))}）`}
+            label={`再看 ${Math.min(VOICES_PER_PAGE, laterVoices.length)} 个`}
+            disabled={busy}
+            active={tab === 'todo'}
+            onLoadMore={() => setVoicesShown((n) => n + VOICES_PER_PAGE)}
+          />
         )}
-        {folded(`${enoughVoices.length} 个像已经够建分身的人`, enoughVoices)}
-        {folded(`${strangerVoices.length} 个像你标过不认识的`, strangerVoices)}
+        {folded(
+          `${enoughVoices.length} 个像已经够建分身的人`,
+          enoughVoices,
+          'enough',
+        )}
+        {folded(
+          `${strangerVoices.length} 个像你标过不认识的`,
+          strangerVoices,
+          'stranger',
+        )}
         <Row gap={2} wrap>
           <Text size="sm" tone="secondary">
             认不出的人，可以请本人来认：登录后录一句话，系统会找出哪些是 TA 说的
@@ -1548,7 +1607,7 @@ export function Team({
   } else if (category?.id === 'mixed') {
     body = (
       <Stack as="ul" gap={0}>
-        {suspects.map((m) => (
+        {suspects.slice(0, taskPage).map((m) => (
           <TaskRow
             key={`mixed-${m.recording_id}-${m.speaker_id}`}
             leading={attention('info')}
@@ -1576,7 +1635,7 @@ export function Team({
   } else if (category?.id === 'unsorted') {
     body = (
       <Stack as="ul" gap={0}>
-        {unsorted.map((u) => (
+        {unsorted.slice(0, taskPage).map((u) => (
           <TaskRow
             key={`unsorted-${u.recording_id}`}
             leading={attention('warning')}
@@ -1613,7 +1672,7 @@ export function Team({
     );
     body = (
       <Stack as="ul" gap={0}>
-        {failed.map((r) => (
+        {failed.slice(0, taskPage).map((r) => (
           <TaskRow
             key={r.id}
             leading={attention('danger')}
@@ -1646,7 +1705,7 @@ export function Team({
   } else if (category?.id === 'similar') {
     body = (
       <Stack as="ul" gap={0}>
-        {similar.map(([a, b]) => (
+        {similar.slice(0, taskPage).map(([a, b]) => (
           <TaskRow
             key={`similar-${a.id}-${b.id}`}
             leading={attention('info')}
@@ -1679,7 +1738,7 @@ export function Team({
   } else if (category?.id === 'disputed') {
     body = (
       <Stack as="ul" gap={0}>
-        {waiting.map((w) => (
+        {waiting.slice(0, taskPage).map((w) => (
           <TaskRow
             key={`${w.recording_id}-${w.id}`}
             leading={attention('warning')}
@@ -1702,7 +1761,7 @@ export function Team({
   } else if (category?.id === 'disowned') {
     body = (
       <Stack as="ul" gap={0}>
-        {disowned.map((p) => (
+        {disowned.slice(0, taskPage).map((p) => (
           <TaskRow
             key={`disowned-${p.id}`}
             leading={attention('danger')}
@@ -1832,6 +1891,11 @@ export function Team({
 
   const peopleTab = (
     <Stack gap={5}>
+      {people === null && !peopleError && (
+        <Text role="status" tone="secondary">
+          正在加载人物…
+        </Text>
+      )}
       {tasks > 0 && (
         <Notice
           tone="warning"
@@ -1850,26 +1914,30 @@ export function Team({
         </Text>
       )}
       <Grid as="ul" columns={3}>
-        {named
-          ?.filter((person) =>
-            person.name
-              .toLocaleLowerCase()
-              .includes(search.trim().toLocaleLowerCase()),
-          )
-          .map((person) => (
-            <PersonCard
-              key={person.id}
-              person={person}
-              twin={twinOf(person)}
-              busy={busy}
-              onOpen={(personaId, page) => void open(personaId, page)}
-              onEdit={() => setEditing(person)}
-              onAddress={() => setAddressing(person)}
-              onRemove={() => void remove(person)}
-              onVoice={() => setHearing(person)}
-            />
-          ))}
+        {matchingPeople?.slice(0, peopleShown).map((person) => (
+          <PersonCard
+            key={person.id}
+            person={person}
+            twin={twinOf(person)}
+            busy={busy}
+            onOpen={(personaId, page) => void open(personaId, page)}
+            onEdit={() => setEditing(person)}
+            onAddress={() => setAddressing(person)}
+            onRemove={() => void remove(person)}
+            onVoice={() => setHearing(person)}
+          />
+        ))}
       </Grid>
+      {matchingPeople && (
+        <LoadMore
+          shown={Math.min(peopleShown, matchingPeople.length)}
+          total={matchingPeople.length}
+          label="继续加载人物"
+          disabled={busy}
+          active={tab === 'people'}
+          onLoadMore={() => setPeopleShown((count) => count + PEOPLE_PER_PAGE)}
+        />
+      )}
       <Row gap={3} justify="between" wrap>
         <Text size="sm" tone="secondary">
           {[
@@ -1885,7 +1953,27 @@ export function Team({
       </Row>
     </Stack>
   );
-  const todoTab = !category ? (
+  const todoTab = reviewError ? (
+    <Notice
+      tone="danger"
+      actions={
+        <Button variant="secondary" onClick={() => void load()}>
+          重试
+        </Button>
+      }
+    >
+      <Text role="alert" tone="inherit">
+        {reviewError}
+      </Text>
+    </Notice>
+  ) : !reviewReady ? (
+    <Stack gap={4}>
+      <Text role="status" tone="secondary">
+        正在加载待处理事项…
+      </Text>
+      {processing}
+    </Stack>
+  ) : !category ? (
     <Stack gap={4}>
       <Text tone="secondary">现在没有需要你处理的事。</Text>
       {processing}
@@ -1941,6 +2029,16 @@ export function Team({
       >
         <Stack ref={taskList} gap={4}>
           {body}
+          {category.id !== 'voice' && category.id !== 'fragments' && (
+            <LoadMore
+              shown={Math.min(taskPage, counts[category.id])}
+              total={counts[category.id]}
+              label="继续加载待处理事项"
+              disabled={busy}
+              active={tab === 'todo'}
+              onLoadMore={() => showMore(category.id)}
+            />
+          )}
         </Stack>
       </Section>
     </SideTabs>
@@ -1948,9 +2046,9 @@ export function Team({
 
   return (
     <>
-      {error && (
+      {(error || peopleError) && (
         <Text role="alert" tone="danger">
-          {error}
+          {error || peopleError}
         </Text>
       )}
       <Tabs
@@ -1967,7 +2065,10 @@ export function Team({
                 placeholder="找人"
                 className="w-36"
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPeopleShown(PEOPLE_PER_PAGE);
+                }}
               />
               {toAddress.length > 0 && (
                 <Button variant="secondary" onClick={() => setBatching(true)}>

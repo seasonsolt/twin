@@ -47,6 +47,7 @@ import {
   KeyValue,
   LinkButton,
   ListRow,
+  LoadMore,
   Meter,
   NavPill,
   Notice,
@@ -86,6 +87,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [section, setSection] = useState('monitor');
   const [sheetWidth, setSheetWidth] = useState(280);
   const [aspect, setAspect] = useState('D2');
+  const [visibleRows, setVisibleRows] = useState(3);
   return (
     <Stack gap={6}>
       <Section title="人格画像">
@@ -373,6 +375,24 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           </Grid>
           <Text size="sm" tone="secondary">
             间距只能取 0/1/2/3/4/5/6/8 档（4px 为一档），不接受 className。
+          </Text>
+        </Card>
+
+        <Card className="space-y-5">
+          <Heading level={3}>滚动分页 LoadMore</Heading>
+          <Stack as="ul" gap={2}>
+            {Array.from({ length: Math.min(visibleRows, 9) }, (_, i) => (
+              <ListRow key={i} title={`列表项目 ${i + 1}`} />
+            ))}
+          </Stack>
+          <LoadMore
+            shown={Math.min(visibleRows, 9)}
+            total={9}
+            disabled={disabled}
+            onLoadMore={() => setVisibleRows((count) => count + 3)}
+          />
+          <Text size="sm" tone="secondary">
+            靠近列表末尾时继续显示，也可以用按钮加载；已显示的项目留在原处。
           </Text>
         </Card>
 

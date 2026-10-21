@@ -82,6 +82,11 @@ def test_a_speaker_is_quoted_by_their_longest_line_cut_to_one_row() -> None:
         ([0.55, 0.5], True, ["S1"], ["S2"]),  # 0.5 starts a claim but is too low to join one
         ([0.5, 0.55], True, ["S2"], ["S1"]),
         ([0.7, 0.47], True, ["S1"], ["S2"]),
+        # A reference voice cut from a far-field meeting lifts everyone in the room: only clusters near the best
+        # one join a claim or are suggested.
+        ([0.88, 0.66], True, ["S1"], ["S2"]),
+        ([0.88, 0.68], True, ["S1", "S2"], []),
+        ([0.88, 0.55], True, ["S1"], []),
         ([0.9, 0.1], False, [], []),
         ([None, None], True, [], []),
         ([0.8, None], True, [], []),
@@ -115,9 +120,23 @@ def test_single_speaker_reference_and_capability() -> None:
 
 def test_near_misses_are_suggested_not_claimed() -> None:
     analysis = analyse(
-        segments(), [Speaker(id="S1", seconds=12, similarity=0.8), Speaker(id="S2", seconds=12, similarity=0.45)], True
+        segments(), [Speaker(id="S1", seconds=12, similarity=0.75), Speaker(id="S2", seconds=12, similarity=0.45)], True
     )
     assert analysis.claimed == ["S1"] and analysis.also_suggested == ["S2"]
+
+
+def test_far_field_room_mates_are_left_out() -> None:
+    # The shape seen on AISHELL-4 with a reference voice from the meeting itself: the person near 0.88, the others
+    # in the room from 0.5 to 0.6, a split-off piece of the person within 0.2 of the best. Only S2 is near enough to
+    # be offered as "maybe you".
+    scores = {"S1": 0.88, "S2": 0.6, "S3": 0.56, "S4": 0.5, "S5": 0.72}
+    analysis = analyse(
+        [Segment(start=i * 12, end=i * 12 + 12, speaker=sid, text="好。") for i, sid in enumerate(scores)],
+        [Speaker(id=sid, seconds=12, similarity=score) for sid, score in scores.items()],
+        True,
+    )
+    assert analysis.claimed == ["S1", "S5"]
+    assert analysis.also_suggested == ["S2"]
 
 
 @pytest.mark.parametrize("speaker", ["S1", None])

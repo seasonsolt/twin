@@ -1610,3 +1610,182 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
     expect(puts[2]).toMatchObject({ units: [3], action: 'clear' }),
   );
 });
+
+it('offers the middle tier’s candidate for Enter, and says once when the voice sounds like someone else', async () => {
+  const user = userEvent.setup();
+  let voices = [
+    {
+      id: 'voice_mid',
+      members: [
+        {
+          recording_id: 'rec_1',
+          filename: 'rec_1.m4a',
+          transcript_id: 't-rec_1',
+          speaker_id: 'S1',
+          seconds: 300,
+        },
+      ],
+      seconds: 300,
+      // Not so close that it is surely 张总, but far ahead of everyone else.
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.66 }],
+      near: false,
+      tier: 'mid',
+    },
+  ];
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices, fragments: [], unsorted: [] });
+      if (url === '/api/library/voices' && init?.method === 'POST') {
+        posts.push(JSON.parse(String(init.body)));
+        voices = [];
+        return json({
+          person_id: 'per_1',
+          recognised: 0,
+          unlike: { person_id: 'per_2', name: '李总', score: 0.8 },
+        });
+      }
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo']}>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+        <ToastViewport />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const tasks = await screen.findByRole('region', { name: /新出现的声音/u });
+  const row = within(tasks).getByText('多半是张总').closest('li')!;
+  const field = within(row).getByRole('combobox');
+  expect(field).toHaveValue('张总');
+  await user.click(field);
+  await user.keyboard('{Enter}');
+  await waitFor(() =>
+    expect(posts).toEqual([
+      {
+        members: [
+          { recording_id: 'rec_1', transcript_id: 't-rec_1', speaker_id: 'S1' },
+        ],
+        action: 'confirm',
+        person_id: 'per_1',
+      },
+    ]),
+  );
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    '这组声音听起来更像李总，已按你的选择记下',
+  );
+});
+
+it('spot-checks what voice alone gave a person, least sure first, and takes a voice sample away', async () => {
+  const user = userEvent.setup();
+  people = [person({ checks: 2 }), person({ id: 'per_2', name: '李总' })];
+  const check = (recording_id: string, lead: number) => ({
+    recording_id,
+    filename: `${recording_id}.m4a`,
+    transcript_id: `t-${recording_id}`,
+    revision: 1,
+    speaker_id: 'S4',
+    seconds: 90,
+    tier: 'high',
+    score: 0.7,
+    lead,
+  });
+  let voice = {
+    checks: [check('rec_8', 0.11), check('rec_9', 0.4)],
+    samples: [
+      {
+        id: 7,
+        recording_id: 'rec_1',
+        filename: '周会.m4a',
+        transcript_id: 't1',
+        speaker_id: 'S1',
+        seconds: 300,
+        source: 'speaker',
+        created_at: '2026-10-01',
+        claims: 2,
+        corrected: 1,
+      },
+    ],
+  };
+  const calls: { url: string; method?: string; body?: unknown }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      if (url === '/api/library/people/per_1/voice') return json(voice);
+      if (url === '/api/personas') return json([]);
+      calls.push({
+        url,
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      if (url === '/api/library/recordings/rec_8/speakers/S4') {
+        voice = { ...voice, checks: voice.checks.slice(1) };
+        return json({ revision: 2, person_id: 'per_1', unlike: null });
+      }
+      if (url === '/api/library/people/per_1/samples/7') {
+        voice = { checks: [], samples: [] };
+        return json({ returned: 1 });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+        <ToastViewport />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await user.click(await screen.findByRole('button', { name: '2 段可抽查' }));
+  const layer = await screen.findByRole('dialog', { name: '张总的声音' });
+  const listed = await within(layer).findByRole('list', {
+    name: '可抽查的发言',
+  });
+  const rows = within(listed).getAllByRole('listitem');
+  // The least sure first: the likeliest mistake is heard first.
+  expect(rows[0]).toHaveTextContent('rec_8.m4a');
+  expect(rows[0]).toHaveTextContent('把握不大');
+  expect(rows[1]).toHaveTextContent('很有把握');
+  await user.click(within(rows[0]).getByRole('button', { name: '是张总' }));
+  await waitFor(() =>
+    expect(calls[0]).toEqual({
+      url: '/api/library/recordings/rec_8/speakers/S4',
+      method: 'PUT',
+      body: {
+        transcript_id: 't-rec_8',
+        revision: 1,
+        action: 'confirm',
+        person_id: 'per_1',
+      },
+    }),
+  );
+  await waitFor(() =>
+    expect(within(listed).getAllByRole('listitem')).toHaveLength(1),
+  );
+  const samples = within(layer).getByRole('list', { name: '声线' });
+  expect(samples).toHaveTextContent('打标时留下 · 认出 2 段 · 被改过 1 次');
+  await user.click(within(samples).getByRole('button', { name: '移除' }));
+  const asked = await screen.findByRole('dialog', { name: '移除这段声线？' });
+  expect(asked).toHaveTextContent('靠它认出的 2 段发言会退回待处理');
+  await user.click(within(asked).getByRole('button', { name: '移除' }));
+  await waitFor(() =>
+    expect(calls[1]).toMatchObject({
+      url: '/api/library/people/per_1/samples/7',
+      method: 'DELETE',
+    }),
+  );
+  expect(
+    (await screen.findAllByText('已移除，1 段发言退回待处理')).length,
+  ).toBeGreaterThan(0);
+  expect(await within(layer).findByText(/还没有声音样本/u)).toBeVisible();
+});

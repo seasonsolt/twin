@@ -1101,6 +1101,27 @@ def test_tagging_says_in_place_when_the_voice_sounds_like_someone_else(web: Test
     assert speakers["S1"]["person_id"] == zhang["person_id"]
 
 
+def test_a_person_s_voice_is_checked_and_a_sample_removed_through_the_page(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30))
+    second = voices(library, "二.m4a", ([0.97, 0.05, 0.0], 40))
+    zhang = team.add_person("张总")
+    decide(team, first, "S1", "confirm", zhang.id, sample=True)
+    assert team.classify(second) == 1
+    [entry] = [p for p in web.get("/api/library/people").json()["items"] if p["id"] == zhang.id]
+    assert entry["checks"] == 1
+    voice = web.get(f"/api/library/people/{zhang.id}/voice").json()
+    assert [(c["recording_id"], c["speaker_id"], c["tier"]) for c in voice["checks"]] == [(second, "S1", "high")]
+    [sample] = voice["samples"]
+    assert (sample["recording_id"], sample["claims"], sample["source"]) == (first, 1, "speaker")
+    assert web.get("/api/library/people/per_missing/voice").status_code == 404
+    gone = web.delete(f"/api/library/people/{zhang.id}/samples/{sample['id']}", headers=HEADERS)
+    assert gone.status_code == 200 and gone.json() == {"returned": 1}
+    assert web.delete(f"/api/library/people/{zhang.id}/samples/{sample['id']}", headers=HEADERS).status_code == 404
+    assert web.get(f"/api/library/people/{zhang.id}/voice").json() == {"samples": [], "checks": []}
+
+
 def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30), ([0.0, 1.0, 0.0], 3))

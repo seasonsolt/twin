@@ -171,3 +171,45 @@ def test_voices_heard_in_more_recordings_are_asked_first(tmp_path: Path) -> None
     often = [voices(library, f"{n}.m4a", (STRANGER, 30)) for n in "二三"]
     listed, _ = team.voices()
     assert [{m.recording_id for m in v.members} for v in listed] == [set(often), {long}]
+
+
+def test_a_person_s_samples_and_what_voice_alone_gave_them_least_sure_first(tmp_path: Path) -> None:
+    library, team, first, zhang, _ = two_people(tmp_path)
+    decide(team, first, "S3", "unknown")
+    sure = voices(library, "二.m4a", ([0.97, 0.05, 0.0], 100))
+    unsure = voices(library, "三.m4a", ([0.75, 0.55, 0.37], 60))
+    assert team.classify_all() == 2
+    checks = team.checks(zhang)
+    assert [c.recording_id for c in checks] == [unsure, sure]
+    assert checks[0].tier == "high" and checks[0].lead is not None and checks[0].lead < checks[1].lead  # type: ignore[operator]
+    assert team.checks(zhang, {sure}) == checks[1:]
+    assert [p.checks for p in team.people() if p.id == zhang] == [2]
+    assert team.check_counts({sure}) == {zhang: 1}
+    [sample] = team.samples(zhang)
+    assert (sample.recording_id, sample.speaker_id, sample.source, sample.claims) == (first, "S1", "speaker", 2)
+
+    # Removed, it recognises nobody; what it gave 张总 goes back to the owner with 张总 offered.
+    assert team.remove_sample(zhang, sample.id) == 2
+    assert team.remove_sample(zhang, sample.id) is None
+    assert team.samples(zhang) == [] and team.checks(zhang) == []
+    assert attribution(library, first, "S1")["person_id"] == zhang  # The speaker it was taken from stays theirs.
+    listed, _ = team.voices({sure, unsure})
+    assert all(v.candidates == [] or v.candidates[0].person_id == zhang for v in listed)
+
+
+def test_a_voice_offered_to_confirm_with_one_key_is_mid(tmp_path: Path) -> None:
+    library, team, first, zhang, _ = two_people(tmp_path)
+    decide(team, first, "S3", "unknown")
+    # 0.65 like 张总, 0.58 like 李总: not enough of a lead to take alone, enough to offer 张总.
+    second = voices(library, "二.m4a", ([0.65, 0.58, -0.49], 40))
+    assert team.classify(second) == 0
+    [voice], _ = team.voices({second})
+    assert ([c.person_id for c in voice.candidates], voice.tier) == ([zhang], "mid")
+    # 0.65 and 0.62: too close to tell, whoever is offered.
+    close = voices(library, "近.m4a", ([0.65, 0.62, -0.44], 40))
+    [voice], _ = team.voices({close})
+    assert voice.tier == "low"
+    # 0.65 like 张总 but 0.76 like the voice the owner could not name in the first recording: asked.
+    third = voices(library, "三.m4a", ([0.65, 0.0, 0.76], 40))
+    [voice], _ = team.voices({third})
+    assert (voice.candidates[0].person_id, voice.tier) == (zhang, "low")

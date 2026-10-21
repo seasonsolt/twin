@@ -1299,6 +1299,8 @@ def register(
         visible = libraries.access(viewer)
         managed = libraries.managed(viewer)
         similar = team.similar()
+        # What the viewer may spot-check: speakers given by voice in recordings they decide about.
+        checks = None if viewer.admin else team.check_counts({rid for rid, a in visible.items() if a.edit})
         people = []
         for person in team.people():
             entry = registry.entry(person.persona_id) if person.persona_id and registry is not None else None
@@ -1318,6 +1320,7 @@ def register(
                     # A twin someone else keeps: not the viewer's to make again or delete.
                     "twin_elsewhere": bool(entry and not theirs and not opens),
                     "can_manage": managed is None or person.id in managed,
+                    "checks": person.checks if checks is None else checks.get(person.id, 0),
                     # Administrators settle who may be the same person.
                     "similar": [b if a == person.id else a for a, b in similar if person.id in (a, b)]
                     if viewer.admin
@@ -1325,6 +1328,38 @@ def register(
                 }
             )
         return {"items": people}
+
+    @app.get("/api/library/people/{person_id}/voice")
+    def get_person_voice(person_id: str, request: Request) -> dict[str, Any]:
+        """The person's voice samples and the speakers given to them by voice alone, least sure first, in the
+        recordings the viewer decides about (``Team.samples``, ``Team.checks``)."""
+        viewer = libraries.viewer(request)
+        libraries.manage(viewer, person_id)
+        team = libraries.team(libraries.owner(request))
+        if team.person(person_id) is None:
+            raise HTTPException(404, "找不到这个人")
+        editable = None if viewer.admin else {rid for rid, a in libraries.access(viewer).items() if a.edit}
+        return {
+            "samples": [s.model_dump() for s in team.samples(person_id, editable)],
+            "checks": [c.model_dump() for c in team.checks(person_id, editable)],
+        }
+
+    @app.delete("/api/library/people/{person_id}/samples/{sample_id}")
+    def delete_sample(person_id: str, sample_id: int, request: Request) -> dict[str, int]:
+        """A voice sample does not stand for the person: what it gave them goes back to the owner."""
+        owner = libraries.owner(request)
+        viewer = libraries.viewer(request)
+        libraries.manage(viewer, person_id)
+        team = libraries.team(owner)
+        sample = next((s for s in team.samples(person_id) if s.id == sample_id), None)
+        if sample is None:
+            raise HTTPException(404, "找不到这段声线")
+        libraries.allowed(viewer, sample.recording_id, edit=True)
+        back = team.remove_sample(person_id, sample_id)
+        if back is None:
+            raise HTTPException(404, "找不到这段声线")
+        libraries.changed(owner)
+        return {"returned": back}
 
     @app.post("/api/library/people", status_code=201)
     def post_person(body: PersonBody, request: Request) -> dict[str, Any]:

@@ -91,6 +91,8 @@ export interface Person {
   gender: Gender;
   recording_id: string | null;
   speaker_id: string | null;
+  // Speakers given to them by voice alone, to spot-check (``Team.checks``).
+  checks?: number;
 }
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   transcript_id: string | null;

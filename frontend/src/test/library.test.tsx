@@ -369,3 +369,87 @@ it('shows a colleague’s meeting one was in without its controls, and says when
     await screen.findByText('「周会.m4a」已经有同事上传过，由 TA 整理'),
   ).toBeInTheDocument();
 });
+
+it('offers recordings a newer transcription would collect again, and goes back to the earlier one', async () => {
+  const user = userEvent.setup();
+  state.recordings = [
+    recording({ id: 'a', filename: '周会.m4a' }),
+    recording({ id: 'b', filename: '月会.m4a', previous: 't-old' }),
+  ];
+  let recollect = {
+    service: '1.4.1/overlap',
+    recordings: [
+      {
+        id: 'a',
+        filename: '周会.m4a',
+        asr: null,
+        asked: null as string | null,
+      },
+      {
+        id: 'c',
+        filename: '季会.m4a',
+        asr: '1.3.3',
+        asked: null as string | null,
+      },
+    ],
+  };
+  const posts: { url: string; body?: unknown }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library') return json(state);
+      if (url === '/api/library/recollect' && init?.method === 'POST') {
+        posts.push({ url, body: JSON.parse(String(init.body)) });
+        recollect = {
+          ...recollect,
+          recordings: recollect.recordings.map((r) =>
+            r.id === 'a' ? { ...r, asked: 'now' } : r,
+          ),
+        };
+        return json({ asked: 1 });
+      }
+      if (url === '/api/library/recollect') return json(recollect);
+      if (url === '/api/library/recordings/b/rollback') {
+        posts.push({ url });
+        return json({});
+      }
+      return json({ items: [] });
+    }),
+  );
+  show();
+  expect(
+    await screen.findByText('2 份录音可以用新版转写重新采集，说话人分得更准'),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '选择录音' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: '用新版转写重新采集',
+  });
+  // Every one is chosen at first; the owner leaves out what they want kept as it is.
+  await user.click(within(dialog).getByRole('checkbox', { name: '季会.m4a' }));
+  await user.click(
+    within(dialog).getByRole('button', { name: '重新采集 1 份' }),
+  );
+  await waitFor(() =>
+    expect(posts).toEqual([
+      { url: '/api/library/recollect', body: { recordings: ['a'] } },
+    ]),
+  );
+  expect(
+    await screen.findByText('1 份录音正在排队用新版转写重新采集'),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByRole('button', { name: '选择其余 1 份' }),
+  ).toBeVisible();
+
+  await user.click(await screen.findByLabelText('更多：月会.m4a'));
+  await user.click(
+    await screen.findByRole('button', { name: '回到上一版转写' }),
+  );
+  const asked = await screen.findByRole('dialog', {
+    name: '「月会.m4a」回到上一版转写？',
+  });
+  await user.click(within(asked).getByRole('button', { name: '回到上一版' }));
+  await waitFor(() =>
+    expect(posts[1]).toEqual({ url: '/api/library/recordings/b/rollback' }),
+  );
+});

@@ -7,7 +7,10 @@ import {
   FileInput,
   ActionMenu,
   Card,
+  Checkbox,
+  Dialog,
   Meter,
+  Row,
   Page,
   Tabs,
   RouteButton,
@@ -45,6 +48,18 @@ export interface Recording {
   proofread?: Proofread;
   // Whether the viewer decides about it (they uploaded it, or administer); otherwise they were in it and may read it.
   can_edit?: boolean;
+  // The transcript before it was last transcribed again, to go back to.
+  previous?: string | null;
+}
+/** Recordings the current transcription service would transcribe anew (``Library.recollectable``). */
+interface Recollection {
+  service: string | null;
+  recordings: {
+    id: string;
+    filename: string;
+    asr: string | null;
+    asked: string | null;
+  }[];
 }
 export type Proofread = 'done' | 'failed' | 'waiting' | '';
 export interface Quota {
@@ -114,10 +129,19 @@ export function Library() {
   const confirm = useConfirm();
   const input = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState('all');
+  const [recollection, setRecollection] = useState<Recollection | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
-      setLibrary(await api<LibraryState>('/api/library'));
+      const [state, again] = await Promise.all([
+        api<LibraryState>('/api/library'),
+        // Only an offer: the library works the same without it.
+        api<Recollection>('/api/library/recollect').catch(() => null),
+      ]);
+      setLibrary(state);
+      setRecollection(Array.isArray(again?.recordings) ? again : null);
       setError('');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载录音库');
@@ -129,7 +153,9 @@ export function Library() {
   const { add, uploading, notice, unfinished, stop } = useUploads(
     () => void load(),
   );
-  const busy = uploading || !!library?.pending;
+  const offered = recollection?.recordings.filter((r) => !r.asked) ?? [];
+  const recollecting = recollection?.recordings.filter((r) => r.asked) ?? [];
+  const busy = uploading || !!library?.pending || recollecting.length > 0;
   // Proofreading runs on the server; the page follows it, slowly while the quota holds it back.
   const proofreading =
     !!library?.recordings.some((r) => r.proofread === 'waiting') ||
@@ -150,6 +176,37 @@ export function Library() {
       });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '重试失败');
+    }
+    await load();
+  };
+  const recollect = async (ids: string[]) => {
+    try {
+      await api('/api/library/recollect', {
+        method: 'POST',
+        json: { recordings: ids },
+      });
+      setPicking(false);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '操作失败');
+    }
+    await load();
+  };
+  const rollback = async (recording: Recording) => {
+    if (
+      !(await confirm({
+        title: `「${recording.filename}」回到上一版转写？`,
+        body: '回到重新采集之前的转写，那时做的确认都会恢复',
+        confirmLabel: '回到上一版',
+      }))
+    )
+      return;
+    try {
+      await api(
+        `/api/library/recordings/${encodeURIComponent(recording.id)}/rollback`,
+        { method: 'POST' },
+      );
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '回退失败');
     }
     await load();
   };
@@ -256,6 +313,28 @@ export function Library() {
             把录音拖到页面任意位置即可上传
           </Text>
         </Toolbar>
+        {(offered.length > 0 || recollecting.length > 0) && (
+          <Row gap={2} wrap>
+            <Text size="sm" tone="secondary" role="status">
+              {recollecting.length > 0
+                ? `${recollecting.length} 份录音正在排队用新版转写重新采集`
+                : `${offered.length} 份录音可以用新版转写重新采集，说话人分得更准`}
+            </Text>
+            {offered.length > 0 && (
+              <TextLink
+                size="sm"
+                onClick={() => {
+                  setPicked(new Set(offered.map((r) => r.id)));
+                  setPicking(true);
+                }}
+              >
+                {recollecting.length > 0
+                  ? `选择其余 ${offered.length} 份`
+                  : '选择录音'}
+              </TextLink>
+            )}
+          </Row>
+        )}
         <UploadList picks={unfinished} uploading={uploading} onStop={stop} />
         {!library ? (
           <Skeleton className="h-32" />
@@ -338,6 +417,15 @@ export function Library() {
                             <ActionMenu
                               label={`更多：${recording.filename}`}
                               items={[
+                                ...(recording.previous
+                                  ? [
+                                      {
+                                        label: '回到上一版转写',
+                                        onSelect: () =>
+                                          void rollback(recording),
+                                      },
+                                    ]
+                                  : []),
                                 {
                                   label: '删除',
                                   disabled: recording.status === 'transcribing',
@@ -375,6 +463,41 @@ export function Library() {
           </Card>
         )}
       </Page>
+      <Dialog
+        open={picking}
+        onOpenChange={setPicking}
+        title="用新版转写重新采集"
+        body="重新转写后，已经确认的说话人会尽量沿用，对不上的会请你重新确认；不满意可以在录音的菜单里回到上一版。转写时排队进行，不影响使用。"
+      >
+        <Stack gap={4}>
+          <Stack gap={0} aria-label="要重新采集的录音">
+            {offered.map((r) => (
+              <Checkbox
+                key={r.id}
+                label={r.filename}
+                checked={picked.has(r.id)}
+                onChange={(event) => {
+                  const next = new Set(picked);
+                  if (event.target.checked) next.add(r.id);
+                  else next.delete(r.id);
+                  setPicked(next);
+                }}
+              />
+            ))}
+          </Stack>
+          <Row gap={2} justify="end">
+            <Button variant="ghost" onClick={() => setPicking(false)}>
+              取消
+            </Button>
+            <Button
+              disabled={picked.size === 0}
+              onClick={() => void recollect([...picked])}
+            >
+              重新采集 {picked.size} 份
+            </Button>
+          </Row>
+        </Stack>
+      </Dialog>
     </FileDropSurface>
   );
 }

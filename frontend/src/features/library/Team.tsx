@@ -47,6 +47,7 @@ import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
 import type { Pick } from './useUploads';
 import { MixedSpeaker, type SuspectSpeaker } from './MixedSpeaker';
+import { PersonVoice } from './PersonVoice';
 
 interface Waiting extends Speaker {
   recording_id: string;
@@ -82,6 +83,9 @@ interface Voice {
   // The leading candidate, surely the one, already heard this long; enough for a twin, so the voice waits behind.
   had?: number;
   enough?: boolean;
+  // 'mid': voice alone is not sure enough to decide, but the leading candidate is far enough ahead to be offered
+  // for one key (``team.tier``).
+  tier?: 'mid' | 'low';
 }
 
 /** A recording whose undecided speakers have no voiceprint to group by: settled in the recording itself. */
@@ -373,8 +377,10 @@ function VoiceRow({
   onDecide: (decision: VoiceDecision) => void;
 }) {
   const [likely, other] = voice.candidates;
-  // Only a voice very close to one person is answered by Enter; a nearer guess is a choice to make on purpose.
-  const sure = Boolean(likely?.sure) && !voice.near;
+  // A voice very close to one person, or far enough ahead of everyone else (the middle tier), is answered by Enter;
+  // a nearer guess is a choice to make on purpose.
+  const middle = voice.tier === 'mid' && !!likely && !voice.near;
+  const sure = (Boolean(likely?.sure) && !voice.near) || middle;
   // A sure guess is already in the field, so Enter confirms it; any other guess is one click away under the text.
   const [name, setName] = useState(sure ? likely.name : '');
   const typed = name.trim();
@@ -403,7 +409,9 @@ function VoiceRow({
           ? '你标过不认识的声音'
           : '没听过的声音'
         : sure
-          ? `像${likely.name}`
+          ? likely.sure
+            ? `像${likely.name}`
+            : `多半是${likely.name}`
           : `可能是${offered.map((c) => c.name).join('或')}`;
   const hint = [
     likely?.split &&
@@ -887,6 +895,7 @@ function PersonCard({
   onEdit,
   onAddress,
   onRemove,
+  onVoice,
 }: {
   person: Person;
   twin?: Persona;
@@ -895,6 +904,8 @@ function PersonCard({
   onEdit: () => void;
   onAddress: () => void;
   onRemove: () => void;
+  /** Their voice samples, and what voice alone gave them, to spot-check. */
+  onVoice: () => void;
 }) {
   const lacking =
     person.seconds > 0 && (person.lacking ?? 0) >= 60
@@ -945,6 +956,11 @@ function PersonCard({
           <Badge tone="neutral">还没有分身</Badge>
         )}
         <ClaimLine twin={twin} />
+        {person.can_manage !== false && (person.checks ?? 0) > 0 && (
+          <TextLink size="sm" onClick={onVoice}>
+            {person.checks} 段可抽查
+          </TextLink>
+        )}
         {lacking && (
           <Text size="sm" tone="secondary">
             {lacking}
@@ -984,6 +1000,7 @@ function PersonCard({
             label={`更多：${person.name}`}
             items={[
               { label: '编辑名字和性别', disabled: busy, onSelect: onEdit },
+              { label: '声线和抽查', disabled: busy, onSelect: onVoice },
               ...(person.persona_id && twin?.claimed === false
                 ? [
                     {
@@ -1028,6 +1045,7 @@ export function Team({
   const [unsorted, setUnsorted] = useState<Unsorted[]>([]);
   const [suspects, setSuspects] = useState<SuspectSpeaker[]>([]);
   const [reviewing, setReviewing] = useState<SuspectSpeaker | null>(null);
+  const [hearing, setHearing] = useState<Person | null>(null);
   const [heard, setHeard] = useState<Review['heard']>();
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
@@ -1196,24 +1214,31 @@ export function Team({
     task: string,
   ) =>
     act(async () => {
-      const { recognised } = await api<{ recognised?: number }>(
-        '/api/library/voices',
-        {
-          method: 'POST',
-          json: {
-            members: members.map(
-              ({ recording_id, transcript_id, speaker_id }) => ({
-                recording_id,
-                transcript_id,
-                speaker_id,
-              }),
-            ),
-            ...decision,
-          },
+      const { recognised, unlike } = await api<{
+        recognised?: number;
+        unlike?: { person_id: string; name: string } | null;
+      }>('/api/library/voices', {
+        method: 'POST',
+        json: {
+          members: members.map(
+            ({ recording_id, transcript_id, speaker_id }) => ({
+              recording_id,
+              transcript_id,
+              speaker_id,
+            }),
+          ),
+          ...decision,
         },
-      );
+      });
+      // The voice sounds clearly more like someone else: said once, the owner's answer stands.
+      if (unlike)
+        toast(
+          `这组声音听起来更像${unlike.name}，已按你的选择记下；不对可以在人物的「抽查」里改`,
+          'warning',
+          8000,
+        );
       // What the new voice samples settled elsewhere: an answer that saves the next questions.
-      if (recognised)
+      else if (recognised)
         toast(`又按声音认出了 ${recognised} 位说话人，不用再问`, 'success');
     }, task);
   const open = async (personaId: string, page: '/chat' | '/profile') => {
@@ -1273,6 +1298,7 @@ export function Team({
     ...unnamed.map((person) => ({
       id: `person-${person.id}`,
       seconds: person.seconds,
+      recordings: person.speakers,
       enough: false,
       stranger: false,
       person,
@@ -1280,15 +1306,18 @@ export function Team({
     ...voices.map((voice) => ({
       id: `voice-${voice.id}`,
       seconds: voice.seconds,
+      recordings: new Set(voice.members.map((m) => m.recording_id)).size,
       enough: Boolean(voice.enough),
       stranger: Boolean(voice.stranger),
       voice,
     })),
   ].sort(
-    // Whoever a twin still lacks first, then the longest; voices like one already marked 不认识 wait last.
+    // Whoever a twin still lacks first, then the voice heard in the most recordings (settled, it tells the others
+    // there apart) and the longest; voices like one already marked 不认识 wait last.
     (a, b) =>
       Number(a.stranger) - Number(b.stranger) ||
       Number(a.enough) - Number(b.enough) ||
+      b.recordings - a.recordings ||
       b.seconds - a.seconds,
   );
   // The longest are asked first; the rest wait behind "see more", and those that can wait (a twin is already
@@ -1832,6 +1861,7 @@ export function Team({
               onEdit={() => setEditing(person)}
               onAddress={() => setAddressing(person)}
               onRemove={() => void remove(person)}
+              onVoice={() => setHearing(person)}
             />
           ))}
       </Grid>
@@ -2009,6 +2039,11 @@ export function Team({
       <MixedSpeaker
         suspect={reviewing}
         onClose={() => setReviewing(null)}
+        onChanged={load}
+      />
+      <PersonVoice
+        person={hearing}
+        onClose={() => setHearing(null)}
         onChanged={load}
       />
     </>

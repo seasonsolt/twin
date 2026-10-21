@@ -144,6 +144,40 @@ class Person(BaseModel):
     # have one, the voice others are matched against.
     recording_id: str | None = None
     speaker_id: str | None = None
+    # Speakers given to them by voice alone, which the owner may spot-check (``Team.checks``).
+    checks: int = 0
+
+
+class Check(BaseModel):
+    """A speaker given to someone by voice alone, to spot-check (``Team.checks``)."""
+
+    recording_id: str
+    filename: str
+    transcript_id: str
+    revision: int
+    speaker_id: str
+    seconds: float
+    # How sure voice alone was (``attributions.tier``), the best score and its lead; None when the review gave it
+    # (``Team.reassign``) or before they were recorded.
+    tier: str | None = None
+    score: float | None = None
+    lead: float | None = None
+
+
+class VoiceSample(BaseModel):
+    """One of a person's voice samples (``Team.samples``): where it was heard, how it was taken, how it fared."""
+
+    id: int
+    recording_id: str
+    filename: str
+    transcript_id: str
+    speaker_id: str
+    seconds: float
+    source: str | None = None
+    created_at: str
+    # Speakers it gave the person by voice alone that still stand, and those the owner gave otherwise.
+    claims: int = 0
+    corrected: int = 0
 
 
 class Candidate(BaseModel):
@@ -216,6 +250,9 @@ class Voice(BaseModel):
     # voice waits behind the others.
     had: float = 0
     enough: bool = False
+    # How sure voice alone is of the leading candidate (``tier``): "mid" is offered to confirm with one key. Never
+    # "high": what voice alone takes is not asked about.
+    tier: Tier = "low"
 
 
 @dataclass
@@ -232,6 +269,8 @@ class _Group:
     stranger: bool
     # What the meeting calls its members, longest member first.
     cues: list[Cue]
+    # Whom a member was given to by voice until its sample stopped standing (``Team._withdraw``).
+    suggest: str | None = None
 
 
 class OpenVoice(BaseModel):
@@ -345,7 +384,7 @@ class Team:
                 "WHERE v.active = 1 ORDER BY v.rowid"
             ).fetchall()
             confirmed = db.execute(
-                "SELECT a.person_id, a.recording_id, a.transcript_id, a.speaker_id FROM attributions a "
+                "SELECT a.person_id, a.recording_id, a.transcript_id, a.speaker_id, a.auto FROM attributions a "
                 "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
                 "WHERE a.decision = 'confirmed'"
             ).fetchall()
@@ -353,7 +392,10 @@ class Team:
         counts: dict[str, int] = {}
         heard: dict[str, tuple[Speaker, ...]] = {}
         heard_in: dict[str, tuple[str, str]] = {}
-        for person_id, recording_id, _, speaker_id in confirmed:
+        checks: dict[str, int] = {}
+        for person_id, recording_id, _, speaker_id, auto in confirmed:
+            if auto:
+                checks[person_id] = checks.get(person_id, 0) + 1
             if recording_id not in heard:
                 recording = self.library.get(recording_id)
                 heard[recording_id] = (self.library.speakers(recording) if recording else None) or ()
@@ -371,7 +413,97 @@ class Team:
             person.speakers = counts.get(person.id, 0)
             person.seconds = round(seconds.get(person.id, 0), 1)
             person.lacking = round(max(0.0, ENOUGH_SECONDS - person.seconds), 1)
+            person.checks = checks.get(person.id, 0)
         return people
+
+    def checks(self, person_id: str, recordings: set[str] | None = None) -> list[Check]:
+        """The speakers given to the person by voice alone, the least sure first (the smallest lead over the
+        runner-up; those the review gave, with no lead, before them), the longest first among equals: the most
+        likely mistakes, to hear first. ``recordings``: only these."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT a.recording_id, a.transcript_id, a.speaker_id, a.tier, a.score, a.lead, r.filename, r.revision "
+                "FROM attributions a JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                "WHERE a.person_id = ? AND a.decision = 'confirmed' AND a.auto = 1",
+                (person_id,),
+            ).fetchall()
+        found = []
+        for row in rows:
+            if recordings is not None and row["recording_id"] not in recordings:
+                continue
+            found.append(
+                Check(
+                    recording_id=row["recording_id"],
+                    filename=row["filename"],
+                    transcript_id=row["transcript_id"],
+                    revision=row["revision"],
+                    speaker_id=row["speaker_id"],
+                    seconds=round(self._seconds(row["recording_id"], row["speaker_id"]), 1),
+                    tier=row["tier"],
+                    score=row["score"],
+                    lead=row["lead"],
+                )
+            )
+        return sorted(found, key=lambda c: (c.lead if c.lead is not None else -1.0, -c.seconds, c.recording_id))
+
+    def check_counts(self, recordings: set[str]) -> dict[str, int]:
+        """How many speakers in these recordings each person was given by voice alone (``checks``)."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT a.person_id, a.recording_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
+                "AND r.transcript_id = a.transcript_id WHERE a.decision = 'confirmed' AND a.auto = 1"
+            ).fetchall()
+        found: dict[str, int] = {}
+        for person_id, recording_id in rows:
+            if recording_id in recordings:
+                found[person_id] = found.get(person_id, 0) + 1
+        return found
+
+    def samples(self, person_id: str, recordings: set[str] | None = None) -> list[VoiceSample]:
+        """The person's voice samples that stand, the earliest first, each with what it gave them by voice alone.
+        ``recordings``: only these."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT v.id, v.recording_id, v.transcript_id, v.speaker_id, v.source, v.created_at, v.corrected, "
+                "r.filename, (SELECT COUNT(*) FROM attributions a WHERE a.sample = v.id AND a.auto = 1 "
+                "AND a.decision = 'confirmed') AS claims FROM voiceprints v JOIN recordings r ON r.id = v.recording_id "
+                "WHERE v.person_id = ? AND v.active = 1 ORDER BY v.id",
+                (person_id,),
+            ).fetchall()
+        return [
+            VoiceSample(
+                id=row["id"],
+                recording_id=row["recording_id"],
+                filename=row["filename"],
+                transcript_id=row["transcript_id"],
+                speaker_id=row["speaker_id"],
+                seconds=round(self._seconds(row["recording_id"], row["speaker_id"]), 1),
+                source=row["source"],
+                created_at=row["created_at"],
+                claims=row["claims"],
+                corrected=row["corrected"],
+            )
+            for row in rows
+            if recordings is None or row["recording_id"] in recordings
+        ]
+
+    def remove_sample(self, person_id: str, sample_id: int) -> int | None:
+        """The owner says one of the person's samples does not stand for them: it no longer recognises anyone, and
+        the speakers it gave them go back to the owner (``_withdraw``), not dropped. How many went back; None when
+        the person has no such sample. The speaker it was taken from stays theirs."""
+        with self.library.transaction() as db:
+            row = db.execute(
+                "SELECT recording_id FROM voiceprints WHERE id = ? AND person_id = ? AND active = 1",
+                (sample_id, person_id),
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute("UPDATE voiceprints SET active = 0 WHERE id = ?", (sample_id,))
+            back = self._withdraw(db, {sample_id})
+            if back:
+                self._prune(db)
+            db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (row[0],))
+            return back
 
     def person(self, person_id: str) -> Person | None:
         return next((p for p in self.people() if p.id == person_id), None)
@@ -945,8 +1077,11 @@ class Team:
             names = dict(db.execute("SELECT id, name FROM people").fetchall())
             strangers = self._strangers(db)
         # (member, unit voiceprint, people it was denied to be, who it sounds most like, people confirmed beside it,
-        # whether it sounds like a voice the owner could not name, what the meeting calls it)
-        found: list[tuple[VoiceMember, list[float], set[str], Candidate | None, set[str], bool, Cue | None]] = []
+        # whether it sounds like a voice the owner could not name, what the meeting calls it, whom it was given to
+        # until its sample stopped standing)
+        found: list[
+            tuple[VoiceMember, list[float], set[str], Candidate | None, set[str], bool, Cue | None, str | None]
+        ] = []
         # How long each person is heard in all confirmed speakers, whichever recordings are asked about.
         had = {person.id: person.seconds for person in self.people()}
         for recording in self.library.list():
@@ -971,19 +1106,20 @@ class Team:
                 )
                 rejected = set(json.loads(row["rejected"])) if row else set()
                 matched = self._suggest(speaker.embedding, prints, rejected, here)
-                if row is not None and row["suggest"]:
+                suggest = row["suggest"] if row is not None else None
+                if suggest:
                     # Given to them by voice until its sample stopped standing (``_withdraw``).
-                    matched.sort(key=lambda c: c.person_id != row["suggest"])
+                    matched.sort(key=lambda c: c.person_id != suggest)
                 known = max(
                     (c.score for c in self._match(speaker.embedding, prints, rejected, floor=-1.0)), default=0.0
                 )
                 stranger = self._stranger(speaker.embedding, strangers, known)
                 lead = matched[0] if matched else None
                 cue = naming.get(speaker.id)
-                found.append((member, _unit(speaker.embedding), rejected, lead, present, stranger, cue))
+                found.append((member, _unit(speaker.embedding), rejected, lead, present, stranger, cue, suggest))
         groups: list[_Group] = []
         ordered = sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id))
-        for member, vector, rejected, lead, present, stranger, cue in ordered:
+        for member, vector, rejected, lead, present, stranger, cue, suggest in ordered:
             likely = lead.person_id if lead else None
             split = lead if lead and lead.split else None
             best, best_score = None, GROUP
@@ -1001,7 +1137,9 @@ class Team:
                     best, best_score = group, score
             if best is None:
                 cues = [cue] if cue else []
-                groups.append(_Group([member], [vector], set(rejected), likely, set(present), split, stranger, cues))
+                groups.append(
+                    _Group([member], [vector], set(rejected), likely, set(present), split, stranger, cues, suggest)
+                )
             else:
                 best.members.append(member)
                 best.vectors.append(vector)
@@ -1010,6 +1148,7 @@ class Team:
                 best.present.update(present)
                 best.split = best.split or split
                 best.stranger = best.stranger or stranger
+                best.suggest = best.suggest or suggest
                 if cue:
                     best.cues.append(cue)
         voices: list[Voice] = []
@@ -1027,6 +1166,25 @@ class Team:
             candidates, called = self._called(candidates, cue, centroid, prints, names, group.present | group.rejected)
             near = len(candidates) > 1 and candidates[0].score - candidates[1].score < NEAR
             lead = candidates[0] if candidates and candidates[0].sure and not near else None
+            # Its lead over the runner-up and the voices the owner could not name in other recordings (``_rival``).
+            heard_in = {m.recording_id for m in members}
+            ranked = self._match(centroid, [p for p in prints if p[0] not in group.present], group.rejected, floor=-1.0)
+            others = [c.score for c in ranked if candidates and c.person_id != candidates[0].person_id]
+            runner = max(
+                [
+                    *others[:1],
+                    *(c.score for c in candidates[1:2]),
+                    0.0,
+                    *(
+                        round(_cosine(centroid, vector), 3)
+                        for where, vector in strangers
+                        if STRANGER_RIVALS and where not in heard_in
+                    ),
+                ]
+            )
+            level = tier(candidates, runner, sum(m.seconds for m in members))
+            if level == "high" or (candidates and candidates[0].person_id == group.suggest):
+                level = "mid"
             voice = Voice(
                 id="voice_" + hashlib.sha256(key.encode()).hexdigest()[:12],
                 members=members,
@@ -1038,6 +1196,7 @@ class Team:
                 quote=cue.quote if called and cue else "",
                 had=round(had.get(lead.person_id, 0.0), 1) if lead else 0,
                 enough=lead is not None and had.get(lead.person_id, 0.0) >= ENOUGH_SECONDS,
+                tier=level,
             )
             (fragments if voice.seconds < FRAGMENT_SECONDS and not called else voices).append(voice)
         # Whoever a twin still lacks first, then the voice heard in the most recordings and the longest: settled, it
@@ -1516,12 +1675,12 @@ class Team:
         others = [c.model_copy(update={"sure": False}) for c in candidates if c.person_id != person_id]
         return [found.model_copy(update={"called": True}), *others][:2], cue.name
 
-    def _withdraw(self, db: sqlite3.Connection, samples: set[int]) -> bool:
+    def _withdraw(self, db: sqlite3.Connection, samples: set[int]) -> int:
         """Take back the speakers given to someone by voice alone through these voice samples, which no longer stand
         for them: each waits for the owner, offered to whom it was given (``voice_tiers``) rather than dropped.
-        Whether any was taken back."""
+        How many were taken back."""
         if not samples:
-            return False
+            return 0
         marks = ", ".join("?" * len(samples))
         rows = db.execute(
             "SELECT a.recording_id, a.transcript_id, a.speaker_id, a.person_id FROM attributions a JOIN recordings r "
@@ -1540,7 +1699,7 @@ class Team:
         for recording_id, people in taken.items():
             self._reopen(db, recording_id, people)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
-        return bool(rows)
+        return len(rows)
 
     @staticmethod
     def _correct(db: sqlite3.Connection, sample: int) -> set[int]:

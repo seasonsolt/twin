@@ -174,6 +174,8 @@ const people = [
     gender: 'male',
     recording_id: 'r-weekly',
     speaker_id: 'S1',
+    // Speakers given to 林舟 by voice alone, to spot-check.
+    checks: 3,
   },
   {
     id: 'u-qinghe',
@@ -846,6 +848,19 @@ const handlers: Record<string, Handler> = {
     },
   }),
   'GET /api/library/people': reply({ items: people }),
+  // 需求评审 was transcribed by an older service: the library offers to collect it again.
+  'GET /api/library/recollect': reply({
+    service: '1.4.1/overlap',
+    recordings: [
+      {
+        id: 'r-review',
+        filename: '2026-10-12 需求评审.mp4',
+        asr: '1.3.3',
+        asked: null,
+      },
+    ],
+    done: [],
+  }),
   // 员工 1b: voices like theirs in colleagues' meetings, one already said to be theirs.
   'GET /api/library/voice': reply({
     available: true,
@@ -917,6 +932,13 @@ const handlers: Record<string, Handler> = {
           candidates: [
             { person_id: 'u-qinghe', name: '许清禾', score: 0.93, sure: true },
           ],
+        },
+        // Not surely 周石言, but far ahead of everyone else: offered for Enter.
+        {
+          id: 'voice_mid',
+          seconds: 750,
+          tier: 'mid',
+          candidates: [{ person_id: 'u-shiyan', name: '周石言', score: 0.66 }],
         },
         {
           id: 'voice_called',

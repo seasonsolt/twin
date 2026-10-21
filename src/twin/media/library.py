@@ -7,7 +7,8 @@ change what.
 ``members/<owner_key>/`` (each member's chunked uploads still arriving, and their own voice, ``media.voice``) and
 ``recordings/<id>/``. Libraries of one account each, as earlier versions kept them, are merged into it once
 (``media.merge``). A recording folder only ever gains files:
-``transcript-<transcript_id>.json``, ``playback.flac`` and, once someone in it is identified, the model's proofreading
+``transcript-<transcript_id>.json``, ``playback.flac``, its denoised copy for listening ``playback-denoised.flac``
+(``media.denoise``) and, once someone in it is identified, the model's proofreading
 ``clean-<transcript_id>.json``, and the names the meeting calls its speakers by, ``names-<transcript_id>.json``, are
 written once under a temporary name and never changed, so backups hard-link them.
 The upload itself is deleted once the transcript and playback copy are verified; only its file name, size and
@@ -163,6 +164,12 @@ CREATE TABLE IF NOT EXISTS personas_sync (
     person_id TEXT NOT NULL,
     wanted INTEGER NOT NULL DEFAULT 1,
     done INTEGER NOT NULL DEFAULT 0
+);
+-- The last attempt at a recording's denoised copy for listening (``media.denoise``): ``error`` is '' once made.
+CREATE TABLE IF NOT EXISTS denoised (
+    recording_id TEXT PRIMARY KEY,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
 );
 -- A confirmed speaker heard again piece by piece (``media.review``): the voiceprint of each stretch of their speech,
 -- computed once per transcript. ``error`` is set, with no units, when the transcription service could not do it.
@@ -578,7 +585,7 @@ class Library:
                     (recording_id, recording_id),
                 )
                 db.execute("DELETE FROM attributions WHERE recording_id = ?", (recording_id,))
-                for table in ("reviewed", "review_units", "segment_fixes"):
+                for table in ("reviewed", "review_units", "segment_fixes", "denoised"):
                     db.execute(f"DELETE FROM {table} WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM voiceprints WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM recordings WHERE id = ?", (recording_id,))

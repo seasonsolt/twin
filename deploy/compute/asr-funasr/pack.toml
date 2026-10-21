@@ -1,5 +1,8 @@
 name = "asr-funasr"
-version = "1.4.1"
+version = "1.5.0"
+# The version whose transcripts this one reproduces, what a transcript says made it (run.py); bump it only when
+# transcripts change, or twin offers to transcribe every recording again for nothing.
+transcription = "1.4.1"
 kind = "command"
 platforms = ["darwin-arm64"]
 python = "3.12"
@@ -7,6 +10,7 @@ entry = "run.py"
 # Copied next to run.py. The overlap-aware path (overlap.py) runs on CUDA only; elsewhere these stay unused.
 files = [
   "overlap.py",
+  "denoise.py",
   "diarize.py",
   "segmentation.py",
   "weights/segmentation-community-1.safetensors",
@@ -184,3 +188,18 @@ sha256 = "1bc613de2112d257e61a349c3e72d1b1a9cf19c33d3ca954197ad2171e5ea07b"
 path = "train_bpe1000.model"
 size = 251707
 sha256 = "473bbc157cb4eade2059b30a3c877a1c29bd50cadbfbed869ae36eeade7fee07"
+
+# Playback denoising (1.5, CUDA, optional): what people listen to, never what is transcribed. Without it the service
+# transcribes as before and twin plays the original audio. Found like `cuda_models`; not fetched by `twin compute
+# install` either.
+[[playback_models]]
+id = "alibabasglab/MossFormer2_SE_48K"
+source = "huggingface"
+revision = "eff8c97925c8bec812af707814b3e5d777fd4503"
+role = "denoise"
+main = "last_best_checkpoint.pt"
+
+[[playback_models.files]]
+path = "last_best_checkpoint.pt"
+size = 221552019
+sha256 = "03692b9f773bbd6bb43b9c5a41f96b1e28affd66e13796b7bec66ad3d8b227c6"

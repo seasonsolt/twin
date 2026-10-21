@@ -12,6 +12,7 @@ import {
 } from '../../components/ui';
 import { api } from '../../lib/api';
 import { withBase } from '../../lib/base';
+import { useHeard } from '../../stores/listening';
 
 /** What the owner decided about a stretch: not the person, someone else's, or theirs indeed. */
 export type UnitFix = 'exclude' | 'move' | 'keep';
@@ -86,6 +87,7 @@ export function MixedSpeaker({
   onClose: () => void;
   onChanged: () => Promise<void> | void;
 }) {
+  const hear = useHeard();
   const [detail, setDetail] = useState<SuspectSpeaker | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -175,7 +177,7 @@ export function MixedSpeaker({
           <ClipButton
             size="md"
             label={`听 ${clock(unit.start)} 这段`}
-            src={withBase(`${base}/${unit.index}/clip`)}
+            src={hear(withBase(`${base}/${unit.index}/clip`))}
           />
         }
         title={`${clock(unit.start)} · ${Math.round(unit.seconds)} 秒 · ${decided ?? heard}`}

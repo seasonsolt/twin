@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.4.1", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.5.0", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -125,7 +125,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.4.1" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.5.0" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -430,6 +430,41 @@ def test_manifest_has_no_personal_paths():
     assert len(tomllib.loads(text)["models"]) == 4
 
 
+def test_denoising_is_optional_and_does_not_change_what_transcripts_say(script, tmp_path, monkeypatch):
+    manifest = tomllib.loads((compute.PACK_ROOT / "asr-funasr/pack.toml").read_text())
+    # Its model is not one the overlap-aware path needs, so a service without it transcribes as before.
+    assert [m["role"] for m in manifest["playback_models"]] == ["denoise"]
+    assert "denoise" not in {m["role"] for m in manifest["cuda_models"]}
+    assert (manifest["version"], manifest["transcription"]) == ("1.5.0", "1.4.1")
+    assert script.transcription_version() == "1.4.1"
+    monkeypatch.setenv("MODELSCOPE_CACHE", str(tmp_path))
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert script.playback_path() is None and script.Playback().available is False
+    audio = tmp_path / "a.flac"
+    audio.write_bytes(b"x")
+    assert script.parse_denoise({"audio": str(audio), "output": str(tmp_path / "b.flac")}) == (
+        audio,
+        tmp_path / "b.flac",
+    )
+    for output in ("b.flac", str(tmp_path / "b.wav"), str(tmp_path / "gone" / "b.flac"), None):
+        with pytest.raises(ValueError):
+            script.parse_denoise({"audio": str(audio), "output": output})
+    result = script.denoise_command({"audio": str(audio), "denoise": True, "output": str(tmp_path / "b.flac")})
+    assert result["ok"] is False and "不能降噪" in result["error"]
+
+
+def test_capabilities_answer_without_models(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(compute.PACK_ROOT / "asr-funasr/run.py")],
+        input=json.dumps({"capabilities": True}),
+        env={**os.environ, "MODELSCOPE_CACHE": str(tmp_path), "HF_HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout.splitlines()[-1]) == {"ok": True, "version": "1.5.0", "denoise": False}
+
+
 def test_script_hotwords_and_upload(script, tmp_path):
     assert script.parse_hotwords(None) == []
     assert script.parse_hotwords([" 魔搭 ", "", "两 个", "魔搭", "twin"]) == ["魔搭", "twin"]
@@ -552,7 +587,9 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         with urllib.request.urlopen(url + "/health") as response:
             assert json.loads(response.read()) == {
                 "ok": True,
-                "version": "1.4.1",
+                "version": "1.5.0",
+                "transcription": "1.4.1",
+                "denoise": False,
                 "device": "cuda",
                 "pipeline": "overlap",
                 "busy": False,
@@ -641,3 +678,59 @@ def test_embed_spans_are_checked(script):
     for bad in ("x", [[]], [[[1, 1]]], [[[0, True]]], [[[0, float("inf")]]], [[[0]]], [[[0, 1]] * 65]):
         with pytest.raises(ValueError, match="spans"):
             script.parse_spans({"spans": bad})
+
+
+def test_remote_denoising_round_trip(script, remote, tmp_path, capfd):
+    class FakeEngine:
+        device, pipeline = "cuda", "overlap"
+
+    class FakePlayback:
+        available = True
+
+        def __call__(self, audio, output, progress):
+            progress(0.5)
+            if audio.read_bytes() == b"boom":
+                raise RuntimeError("显存不足")
+            output.write_bytes(b"fLaC" + audio.read_bytes()[::-1] * 300000)
+            return {"ok": True, "denoised": True, "seconds": 1.0}
+
+    server = script.make_server(FakeEngine(), "127.0.0.1", 0, playback=FakePlayback())
+    old = script.make_server(FakeEngine(), "127.0.0.1", 0)
+    for each in (server, old):
+        threading.Thread(target=each.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    old_url = f"http://127.0.0.1:{old.server_address[1]}"
+    try:
+        audio, output = tmp_path / "playback.flac", tmp_path / "playback-denoised.flac"
+        audio.write_bytes(b"abc")
+        assert remote.capabilities(url) == {"ok": True, "version": "1.5.0", "denoise": True}
+        assert remote.capabilities(old_url)["denoise"] is False
+        request = {"audio": str(audio), "denoise": True, "output": str(output)}
+        assert remote.denoise(url, request) == {"ok": True, "denoised": True, "seconds": 1.0}
+        # Megabytes after the result line arrive whole, through a temporary file.
+        assert output.read_bytes() == b"fLaC" + b"cba" * 300000
+        assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+        assert "@@twin-progress 0.5000" in capfd.readouterr().err
+        audio.write_bytes(b"boom")
+        assert remote.denoise(url, request) == {"ok": False, "error": "显存不足"}
+        # A service that cannot denoise says so; output is left alone.
+        assert remote.denoise(old_url, {**request, "output": str(tmp_path / "other.flac")})["ok"] is False
+        assert not (tmp_path / "other.flac").exists()
+        with pytest.raises(ValueError, match="output"):
+            remote.denoise(url, {**request, "output": "relative.flac"})
+    finally:
+        for each in (server, old):
+            each.shutdown()
+            each.server_close()
+    with pytest.raises(ValueError, match="连不上"):
+        remote.capabilities(url, timeout=2)
+
+
+def test_remote_command_routes_capabilities_and_denoising(remote, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(remote, "capabilities", lambda url: {"ok": True, "version": "1.5.0", "denoise": True})
+    monkeypatch.setattr(remote, "denoise", lambda url, request, timeout: {"ok": True, "denoised": True})
+    for request, expected in (({"capabilities": True}, "version"), ({"denoise": True}, "denoised")):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request)))
+        monkeypatch.setattr(sys, "argv", ["remote.py"])
+        assert remote.main() == 0
+        assert expected in json.loads(capsys.readouterr().out.splitlines()[-1])

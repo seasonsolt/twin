@@ -42,6 +42,7 @@ import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
 import { byName } from '../../lib/names';
 import { basePath, withBase } from '../../lib/base';
+import { useHeard } from '../../stores/listening';
 import { usePolling } from '../../lib/usePolling';
 import { usePersonas, type Persona } from '../../stores/personas';
 import type { Recording } from '../../pages/Library';
@@ -290,6 +291,7 @@ function Unnamed({
   onName: (name: string) => void;
   onResolve: (into: Person | null) => void;
 }) {
+  const hear = useHeard();
   const [name, setName] = useState('');
   const typed = name.trim();
   const match = known.find((p) => p.name === typed);
@@ -300,8 +302,10 @@ function Unnamed({
           <ClipButton
             size="md"
             label={`听${person.name}的声音`}
-            src={withBase(
-              `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+            src={hear(
+              withBase(
+                `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+              ),
             )}
           />
         ) : undefined
@@ -356,14 +360,17 @@ function PersonClip({
   /** Only the round play button, for a card; otherwise a text button naming the person. */
   icon?: boolean;
 }) {
+  const hear = useHeard();
   if (!person?.recording_id || !person.speaker_id) return null;
   return (
     <ClipButton
       size="md"
       label={`听${person.name}确认过的声音`}
       caption={icon ? undefined : `听${person.name}`}
-      src={withBase(
-        `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+      src={hear(
+        withBase(
+          `/api/library/recordings/${encodeURIComponent(person.recording_id)}/speakers/${encodeURIComponent(person.speaker_id)}/samples/0`,
+        ),
       )}
     />
   );
@@ -382,6 +389,7 @@ function VoiceRow({
   busy: boolean;
   onDecide: (decision: VoiceDecision) => void;
 }) {
+  const hear = useHeard();
   const [likely, other] = voice.candidates;
   // A voice very close to one person, or far enough ahead of everyone else (the middle tier), is answered by Enter;
   // a nearer guess is a choice to make on purpose.
@@ -441,8 +449,10 @@ function VoiceRow({
           size="md"
           key={`${current.recording_id}/${current.speaker_id}`}
           label={`听这个声音（${current.filename}）`}
-          src={withBase(
-            `/api/library/recordings/${encodeURIComponent(current.recording_id)}/speakers/${encodeURIComponent(current.speaker_id)}/samples/0`,
+          src={hear(
+            withBase(
+              `/api/library/recordings/${encodeURIComponent(current.recording_id)}/speakers/${encodeURIComponent(current.speaker_id)}/samples/0`,
+            ),
           )}
         />
       }

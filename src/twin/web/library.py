@@ -43,7 +43,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
 from ..llm import LLM
-from ..media import merge, recollect
+from ..media import denoise, merge, recollect
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.clean import BATCH, clean_segments
 from ..media.cues import Named, name_speakers
@@ -72,6 +72,9 @@ SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 # goes on once the quota frees up, even if nobody opens the library page.
 WAKE_SECONDS = 60.0
 SWEEP_SECONDS = 3600.0
+# How often the transcription service is asked again whether it can denoise (``media.denoise``), while some
+# recording waits for a denoised copy.
+DENOISE_ASK_SECONDS = 600.0
 
 
 class Viewer(NamedTuple):
@@ -184,6 +187,9 @@ class Libraries:
         self.paused: dict[str, set[str]] = {}
         self._stop = threading.Event()
         self._waker: threading.Thread | None = None
+        # Whether the transcription service can denoise, and when it was last asked (``_denoises``).
+        self._can_denoise = False
+        self._denoise_asked = -math.inf
 
     def owner(self, request: Request) -> str:
         """The library a request works in: the team's (the one library of a deployment)."""
@@ -804,6 +810,7 @@ class Libraries:
         return {
             **view(recording),
             "proofread": self.proofread_state(library, recording, waiting),
+            "denoised": denoise.denoised(library, recording.id),
             "can_edit": access.edit,
             "mine": [s.id for s in speakers if s.decision == "confirmed" and s.person_id in people],
             "speakers": [
@@ -820,11 +827,18 @@ class Libraries:
         }
 
     def sample(
-        self, owner: str, recording_id: str, speaker_id: str, index: int, viewer: Viewer | None = None
+        self,
+        owner: str,
+        recording_id: str,
+        speaker_id: str,
+        index: int,
+        viewer: Viewer | None = None,
+        original: bool = False,
     ) -> FileResponse:
-        """A short WAV of the speaker (up to three, at different moments), cut from the playback copy and
-        kept in the library's media cache, which backups skip. ``viewer``: only if they may see the recording
-        (``web.voice`` checks its own way)."""
+        """A short WAV of the speaker (up to three, at different moments), cut from what people hear of the
+        recording (``media.denoise.listening``; ``original``: the audio as recorded) and kept in the library's
+        media cache, which backups skip. ``viewer``: only if they may see the recording (``web.voice`` checks its
+        own way)."""
         if viewer is not None:
             self.allowed(viewer, recording_id)
         library = self.library(owner)
@@ -838,13 +852,15 @@ class Libraries:
         cache = library.root / "media-cache" / recording.id
         # Named by its times, not its place in the list: choosing the moments differently never plays an old cut.
         start, end = windows[index]
-        target = cache / f"{transcript.id}-{speaker_id}-{round(start * 1000)}-{round(end * 1000)}.wav"
+        audio = denoise.listening(library, recording.id, original)
+        heard = "" if audio.name == "playback.flac" else "-denoised"
+        target = cache / f"{transcript.id}-{speaker_id}-{round(start * 1000)}-{round(end * 1000)}{heard}.wav"
         if not target.is_file():
             cache.mkdir(parents=True, mode=0o700, exist_ok=True)
             # ffmpeg picks the format from the suffix; a name of its own keeps two plays from sharing one file.
             temporary = target.with_name(f".{uuid.uuid4().hex}.tmp.wav")
             try:
-                cut(library.folder(recording.id) / "playback.flac", temporary, *windows[index])
+                cut(audio, temporary, *windows[index])
                 temporary.replace(target)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -875,6 +891,9 @@ class Libraries:
             elif again := recollect.waiting(library):
                 recording = again[0]
                 title, run = f"重新转写 {recording.filename}", self.run_recollect
+            elif (quiet := denoise.waiting(library)) and self._denoises(owner):
+                recording = quiet[0]
+                title, run = f"降噪 {recording.filename}", self.run_denoise
             else:
                 return
             target = recording.id
@@ -899,6 +918,46 @@ class Libraries:
             self.changed(owner)
             log(f"完成：复核了 {heard} 位说话人")
             return {"recording_id": recording_id, "speakers": heard}
+        finally:
+            with self.lock:
+                self.running.pop(owner, None)
+            self.kick(owner)
+
+    def _denoises(self, owner: str) -> bool:
+        """Whether the transcription service can denoise, as it last said: asked again in the background at most
+        every ``DENOISE_ASK_SECONDS``, so a status poll never waits on it; a yes starts the waiting recordings."""
+        now = time.monotonic()
+        if now - self._denoise_asked >= DENOISE_ASK_SECONDS:
+            self._denoise_asked = now
+
+            def ask() -> None:
+                transcriber = make_transcriber(self.settings.asr)
+                self._can_denoise = isinstance(transcriber, CommandTranscriber) and transcriber.can_denoise()
+                if self._can_denoise:
+                    self.kick(owner)
+
+            threading.Thread(target=ask, name="library-denoise-ask", daemon=True).start()
+        return self._can_denoise
+
+    def run_denoise(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Make a recording's denoised copy for listening (``media.denoise``); a failure is noted and tried again
+        later, so the next recording's turn comes."""
+        library = self.library(owner)
+        try:
+            transcriber = make_transcriber(self.settings.asr)
+            if not isinstance(transcriber, CommandTranscriber):
+                return {"skipped": True}
+
+            def progress(done: float, total: float) -> None:
+                log(f"[1/1] 降噪（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
+
+            log("[1/1] 生成降噪后的试听音频")
+            try:
+                made = denoise.run(library, recording_id, transcriber, progress)
+            except RuntimeError as exc:
+                raise JobError(f"降噪没有完成：{exc}") from None
+            log("完成" if made else "已有降噪后的试听音频")
+            return {"recording_id": recording_id, "denoised": made}
         finally:
             with self.lock:
                 self.running.pop(owner, None)
@@ -978,8 +1037,11 @@ class Libraries:
         self.changed(owner)
         return {"revision": revision, "person_id": person_id}
 
-    def unit_clip(self, owner: str, recording_id: str, speaker_id: str, index: int) -> FileResponse:
-        """One stretch of a confirmed speaker as WAV, its segments one after another, kept in the media cache."""
+    def unit_clip(
+        self, owner: str, recording_id: str, speaker_id: str, index: int, original: bool = False
+    ) -> FileResponse:
+        """One stretch of a confirmed speaker as WAV, its segments one after another, kept in the media cache; from
+        the denoised copy unless ``original``, like ``sample``."""
         library = self.library(owner)
         recording = library.get(recording_id)
         review = Reviews(library).speaker(recording, speaker_id, text=False) if recording else None
@@ -991,12 +1053,14 @@ class Libraries:
             raise HTTPException(404, "找不到这段录音")
         parts = [(transcript.segments[i].start, transcript.segments[i].end) for i in unit.segments]
         cache = library.root / "media-cache" / recording.id
-        target = cache / f"{transcript.id}-{speaker_id}-unit-{'-'.join(map(str, unit.segments))}.wav"
+        audio = denoise.listening(library, recording.id, original)
+        heard = "" if audio.name == "playback.flac" else "-denoised"
+        target = cache / f"{transcript.id}-{speaker_id}-unit-{'-'.join(map(str, unit.segments))}{heard}.wav"
         if not target.is_file():
             cache.mkdir(parents=True, mode=0o700, exist_ok=True)
             temporary = target.with_name(f".{uuid.uuid4().hex}.tmp.wav")
             try:
-                cut_parts(library.folder(recording.id) / "playback.flac", temporary, parts)
+                cut_parts(audio, temporary, parts)
                 temporary.replace(target)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -1217,8 +1281,12 @@ def register(
         return libraries.detail(libraries.owner(request), recording_id, libraries.viewer(request))
 
     @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/samples/{index}")
-    def get_sample(recording_id: str, speaker_id: str, index: int, request: Request) -> FileResponse:
-        return libraries.sample(libraries.owner(request), recording_id, speaker_id, index, libraries.viewer(request))
+    def get_sample(
+        recording_id: str, speaker_id: str, index: int, request: Request, original: bool = False
+    ) -> FileResponse:
+        return libraries.sample(
+            libraries.owner(request), recording_id, speaker_id, index, libraries.viewer(request), original
+        )
 
     @app.put("/api/library/recordings/{recording_id}/speakers/{speaker_id}")
     def put_speaker(recording_id: str, speaker_id: str, body: DecisionBody, request: Request) -> dict[str, Any]:
@@ -1237,9 +1305,11 @@ def register(
         return libraries.fix(libraries.owner(request), recording_id, speaker_id, body)
 
     @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/units/{index}/clip")
-    def get_unit_clip(recording_id: str, speaker_id: str, index: int, request: Request) -> FileResponse:
+    def get_unit_clip(
+        recording_id: str, speaker_id: str, index: int, request: Request, original: bool = False
+    ) -> FileResponse:
         libraries.allowed(libraries.viewer(request), recording_id, edit=True)
-        return libraries.unit_clip(libraries.owner(request), recording_id, speaker_id, index)
+        return libraries.unit_clip(libraries.owner(request), recording_id, speaker_id, index, original)
 
     @app.post("/api/library/recordings/{recording_id}/speakers/{speaker_id}/not-me")
     def not_me(recording_id: str, speaker_id: str, request: Request) -> dict[str, bool]:

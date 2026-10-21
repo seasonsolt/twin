@@ -170,6 +170,28 @@ class CommandTranscriber:
         except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
             raise RuntimeError("转写服务没能计算声纹，请检查语音识别配置后重试") from None
 
+    def can_denoise(self) -> bool:
+        """Whether the command can denoise audio for listening (asr-funasr 1.5.0+ on a GPU). An older command fails
+        the question quickly, without transcribing anything."""
+        try:
+            payload = json.loads(
+                self._run(json.dumps({"capabilities": True}), 0, lambda done, total: None).strip().splitlines()[-1]
+            )
+            return payload.get("ok") is True and payload.get("denoise") is True
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError, Interrupted):
+            return False
+
+    def denoise(self, audio: Path, output: Path, duration: float, progress: Progress) -> None:
+        """Write a denoised 16 kHz FLAC of ``audio`` to ``output``, for listening only (``media.denoise``);
+        ``RuntimeError`` when the command could not."""
+        request = {"audio": str(audio.resolve()), "denoise": True, "output": str(output.resolve())}
+        try:
+            payload = json.loads(self._run(json.dumps(request), duration, progress).strip().splitlines()[-1])
+            if payload.get("ok") is not True or payload.get("denoised") is not True:
+                raise ValueError()
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
+            raise RuntimeError("转写服务没能降噪") from None
+
     def _run(self, request: str, duration: float, progress: Progress) -> str:
         """Run the command; `@@twin-progress <0..1>` lines on stderr become progress in this (the job's) thread."""
         process = subprocess.Popen(

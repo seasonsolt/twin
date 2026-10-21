@@ -36,6 +36,7 @@ import {
 import { api, ApiError } from '../lib/api';
 import { sortByName } from '../lib/names';
 import { withBase } from '../lib/base';
+import { heard, useListening } from '../stores/listening';
 import type { Recording as RecordingRow } from './Library';
 import type { Processing } from '../features/memories/BuildProgress';
 
@@ -103,6 +104,8 @@ interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   // The viewer was identified in it and only reads it; ``mine`` are the speakers given to them.
   can_edit?: boolean;
   mine?: string[];
+  // Whether it has a denoised copy to listen to (``media.denoise``); its clips play that unless the original is asked.
+  denoised?: boolean;
   speakers: Speaker[];
   segments: { start: number; end: number; text: string; speaker: string }[];
 }
@@ -177,6 +180,7 @@ function SpeakerCard({
   busy,
   remaining,
   now,
+  denoised,
   onDecide,
 }: {
   recordingId: string;
@@ -187,6 +191,8 @@ function SpeakerCard({
   remaining: number;
   /** Whom the speaker is given to already, when a team task opens one settled automatically. */
   now?: string;
+  /** The recording has a denoised copy, so the original can be chosen instead. */
+  denoised: boolean;
   onDecide: (decision: Decision) => void;
 }) {
   const id = useId();
@@ -199,6 +205,7 @@ function SpeakerCard({
   const [name, setName] = useState('');
   const [sample, setSample] = useState(false);
   const [clip, setClip] = useState(0);
+  const { original, setOriginal } = useListening();
   const choices = sortByName(
     people.filter((p) => !speaker.rejected.includes(p.id)),
     (p) => p.name,
@@ -255,8 +262,11 @@ function SpeakerCard({
             <>
               <AudioPlayer
                 aria-label={`${speaker.id} 试听`}
-                src={withBase(
-                  `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speaker.id)}/samples/${clip}`,
+                src={heard(
+                  withBase(
+                    `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speaker.id)}/samples/${clip}`,
+                  ),
+                  original && denoised,
                 )}
               />
               <Row gap={2} wrap>
@@ -266,6 +276,15 @@ function SpeakerCard({
                     {windows[i] ? ` · ${clock(windows[i][0])}` : ''}
                   </Chip>
                 ))}
+                {denoised && (
+                  <Chip
+                    pressed={original}
+                    onClick={() => setOriginal(!original)}
+                    title="默认播放降噪后的声音；打开后播放原始录音"
+                  >
+                    原声
+                  </Chip>
+                )}
               </Row>
               {transcript && (
                 <Text size="sm" tone="secondary">
@@ -693,6 +712,7 @@ export function Recording() {
                   ? names.get(current.person_id ?? '')
                   : undefined
               }
+              denoised={detail.denoised === true}
               onDecide={(decision) => void decide(current, decision)}
             />
           ) : (

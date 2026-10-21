@@ -73,12 +73,13 @@ SOFTWARE.
 
 ## 运行时下载，不随包分发
 
-`pack.toml` 的 `cuda_models` 固定了版本与 sha256：
+`pack.toml` 的 `cuda_models` 和 `playback_models` 固定了版本与 sha256：
 
 | 模型 | 用途 | 许可 |
 | --- | --- | --- |
 | [iic/speech_campplus_sv_zh_en_16k-common_advanced](https://modelscope.cn/models/iic/speech_campplus_sv_zh_en_16k-common_advanced)（ModelScope） | 分人用的中英文声纹 | Apache-2.0 |
 | [alibabasglab/MossFormer2_SS_16K](https://huggingface.co/alibabasglab/MossFormer2_SS_16K) | 重叠语音两路分离 | Apache-2.0 |
 | [FireRedTeam/FireRedASR2-AED](https://huggingface.co/FireRedTeam/FireRedASR2-AED) | 识别 | Apache-2.0 |
+| [alibabasglab/MossFormer2_SE_48K](https://huggingface.co/alibabasglab/MossFormer2_SE_48K) | 试听用的降噪（不参与转写） | Apache-2.0 |
 
 推理代码来自 Python 依赖 `clearvoice`（ClearerVoice-Studio，Apache-2.0）和 `fireredasr2s`（FireRedASR2S，Apache-2.0），只在 GPU 服务的环境里安装。

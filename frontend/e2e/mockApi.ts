@@ -251,6 +251,7 @@ export const weekly = {
   ...recordings[0],
   transcript_id: 't-weekly',
   revision: 3,
+  denoised: true,
   speakers: [
     speaker('S1', 1500, {
       decision: 'confirmed',

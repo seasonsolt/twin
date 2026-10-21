@@ -108,6 +108,50 @@ it('uploads several recordings to the account library one after another', async 
   ).toBe(true);
 });
 
+it('takes more recordings while one is uploading, after it and only once', async () => {
+  const order: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((done) => {
+    release = done;
+  });
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/library') return json(state);
+    if (url.startsWith('/api/library/people') || url === '/api/library/review')
+      return json({ items: [], voices: [], fragments: [], unsorted: [] });
+    if (url === '/api/library/uploads') {
+      const { filename } = JSON.parse(String(init?.body)) as {
+        filename: string;
+      };
+      order.push(filename);
+      if (filename === '一.m4a') await held;
+      return json({ id: filename === '一.m4a' ? 'u1' : 'u2', offset: 0 });
+    }
+    if (url.includes('?offset=0')) return json({ offset: 3 });
+    if (url.endsWith('/finish')) return json({ id: url, new: true });
+    throw new Error(url);
+  });
+  vi.stubGlobal('fetch', fetcher);
+  show();
+  expect(await screen.findByText('还没有录音')).toBeInTheDocument();
+  const user = userEvent.setup({ applyAccept: false });
+  const first = new File(['abc'], '一.m4a', { lastModified: 1 });
+  await user.upload(screen.getByLabelText('选择录音文件'), [first]);
+  await waitFor(() => expect(order).toEqual(['一.m4a']));
+  expect(screen.getByRole('button', { name: '上传录音' })).toBeEnabled();
+  await user.upload(screen.getByLabelText('选择录音文件'), [
+    new File(['abc'], '一.m4a', { lastModified: 1 }),
+    new File(['def'], '二.wav', { lastModified: 2 }),
+  ]);
+  expect(order).toEqual(['一.m4a']);
+  release();
+  await waitFor(() => expect(order).toEqual(['一.m4a', '二.wav']));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([url]) => String(url).endsWith('/finish')),
+    ).toHaveLength(2),
+  );
+});
+
 it('shows failures with a retry and asks before deleting', async () => {
   state.recordings = [
     recording({

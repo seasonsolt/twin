@@ -89,7 +89,6 @@ export function Home() {
       size={ownTwin ? 'lg' : 'md'}
       title="把会议录音拖到这里"
       inputLabel="选择录音文件"
-      disabled={uploading}
       onFiles={(files) => void add(files)}
       hint="音频或视频都可以，一次可以选多个。只有你的账号能看到。"
     />
@@ -193,10 +192,7 @@ export function Home() {
                   会议里出现过的人。上传新录音后，系统会自动认人，有拿不准的再请你确认。
                 </Text>
               </Stack>
-              <Button
-                disabled={uploading}
-                onClick={() => input.current?.click()}
-              >
+              <Button onClick={() => input.current?.click()}>
                 <Upload aria-hidden className="size-5" />
                 上传会议录音
               </Button>

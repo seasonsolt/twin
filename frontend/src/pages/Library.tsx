@@ -247,7 +247,7 @@ export function Library() {
   };
   const filtered = recordings.filter(matches[filter]);
   return (
-    <FileDropSurface disabled={uploading} onFiles={(files) => void add(files)}>
+    <FileDropSurface onFiles={(files) => void add(files)}>
       <Page
         stackHeaderOnMobile
         title="录音库"
@@ -261,9 +261,7 @@ export function Library() {
                 {gb(Math.max(0, room))}
               </Text>
             )}
-            <Button disabled={uploading} onClick={() => input.current?.click()}>
-              上传录音
-            </Button>
+            <Button onClick={() => input.current?.click()}>上传录音</Button>
           </>
         }
       >
@@ -271,7 +269,6 @@ export function Library() {
           ref={input}
           label="选择录音文件"
           multiple
-          disabled={uploading}
           onFiles={(files) => void add(files)}
         />
         {error && (

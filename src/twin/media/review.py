@@ -60,6 +60,17 @@ STRANGER_SECONDS = 3.0
 # few stray stretches: of 151 clean AliMeeting speakers none reached half (the worst 47%, the median 0-2%). On the
 # team library (470 speakers) 32 reach it, where 66 reached 20%.
 FLAG_SHARE = 0.5
+# A speaker nearly all unlike the person (``REASSIGN_SHARE`` of judged speech) whose suspect speech mostly sounds
+# like one other known person (``REASSIGN_LEAD`` of it) was confirmed as the wrong person: it is given to that person
+# without asking, as an automatic decision the owner can undo. Strict on purpose, since a wrong move puts words in
+# someone else's mouth: on AliMeeting a single stretch pointed at the right person 89-93% of the time, and here most
+# of a speaker's stretches must agree. On the team library 7 of the 32 speakers put to the owner passed it, and 4
+# more once those were moved.
+REASSIGN_SHARE = 0.9
+REASSIGN_LEAD = 0.8
+# Rounds of giving away the speakers a moved voice sample was holding up; on the team library the second round moved
+# 4 more and the third none.
+REASSIGN_ROUNDS = 5
 # A speaker the transcription service failed on is tried again after this long.
 RETRY = dt.timedelta(hours=6)
 
@@ -348,10 +359,10 @@ class Reviews:
         reviews = self._reviews(recording, {speaker_id}, text=text)
         return reviews[0] if reviews else None
 
-    def suspects(self, recordings: set[str] | None = None) -> list[SpeakerReview]:
+    def suspects(self, recordings: set[str] | None = None, *, units: bool = False) -> list[SpeakerReview]:
         """Confirmed speakers with stretches still waiting for the owner, where at least ``FLAG_SHARE`` of their
         judged speech sounds like someone else or nobody known; most suspect speech first. ``recordings``: only
-        these."""
+        these; ``units``: with their stretches."""
         found: list[SpeakerReview] = []
         with self.library.read() as db:
             heard = {
@@ -369,7 +380,7 @@ class Reviews:
                 continue
             for review in self._reviews(recording, None, text=False):
                 if review.status == "ready" and review.open and review.share >= FLAG_SHARE:
-                    found.append(review.model_copy(update={"units": []}))
+                    found.append(review if units else review.model_copy(update={"units": []}))
         found.sort(key=lambda r: -r.open_seconds)
         return found
 
@@ -490,10 +501,22 @@ class Reviews:
     # ------------------------------------------------------------------ deciding
 
     def settle(self, recordings: set[str] | None = None) -> int:
-        """Leave every suspect stretch nobody has decided about out of the confirmed person's twin (``auto``), in
-        ``recordings`` or all heard ones, and close the twins this changes. A decision of the owner's is never
-        replaced, and a stretch they kept stays theirs. Returns how many segments were left out."""
+        """Give speakers confirmed as the wrong person to the one they sound like (``REASSIGN_SHARE``), then leave
+        every suspect stretch nobody has decided about out of the confirmed person's twin (``auto``), in
+        ``recordings`` or all heard ones (all once a speaker is given away), and close the twins this changes. A
+        decision of the owner's about a stretch is never replaced, and a stretch they kept stays theirs. Returns how
+        many speakers were given away and segments left out."""
         from .team import Team
+
+        moved = step = self._reassign(recordings)
+        # A speaker given away takes their voice sample from the wrong person, so others confirmed as that person
+        # on the strength of it may now sound unlike them too, in any recording: heard again until none moves.
+        for _ in range(REASSIGN_ROUNDS):
+            if not step:
+                break
+            recordings = None
+            step = self._reassign(None)
+            moved += step
 
         with self.library.read() as db:
             heard = sorted(
@@ -549,7 +572,27 @@ class Reviews:
                 if added:
                     Team._reopen(db, recording_id, {person_id for _, person_id in rows} | given)
                 left += added
-        return left
+        return moved + left
+
+    def _reassign(self, recordings: set[str] | None) -> int:
+        """``settle``'s first step: speakers nearly all unlike their person and like one other, given to them."""
+        from .team import Team
+
+        team = Team(self.library)
+        moved = 0
+        for review in self.suspects(recordings, units=True):
+            if review.share < REASSIGN_SHARE or not review.likely or not review.suspect_seconds:
+                continue
+            # The owner has started deciding about its stretches: theirs to finish.
+            if any(unit.fix and not unit.auto for unit in review.units):
+                continue
+            toward = sum(u.seconds for u in review.units if u.verdict == "other" and u.like == review.likely)
+            if toward / review.suspect_seconds < REASSIGN_LEAD:
+                continue
+            moved += team.reassign(
+                review.recording_id, review.transcript_id, review.speaker_id, review.person_id, review.likely
+            )
+        return moved
 
     def fix(
         self,

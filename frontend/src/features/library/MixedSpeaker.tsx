@@ -59,6 +59,8 @@ export interface SuspectSpeaker {
   units: ReviewUnit[];
 }
 
+const SAMPLES = 3;
+
 const clock = (seconds: number) => {
   const whole = Math.max(0, Math.floor(seconds));
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -71,9 +73,9 @@ const span = (seconds: number) =>
     : `${Math.round(seconds / 60)} 分钟`;
 
 /**
- * A confirmed speaker heard again stretch by stretch, beside the team page: the stretches that sound like someone
- * else or like nobody known come first, each to hear and to leave out of the person's twin, give to whom it sounds
- * like, or keep. Closing it leaves the team page where it was.
+ * A confirmed speaker heard again stretch by stretch, beside the team page: one decision for all the suspect
+ * stretches on top, a few of the longest to hear, and every stretch folded below to decide one by one. Closing it
+ * leaves the team page where it was.
  */
 export function MixedSpeaker({
   suspect,
@@ -142,6 +144,11 @@ export function MixedSpeaker({
     (u) => u.verdict === 'other' && u.like === likely,
   );
   const rest = units.filter((u) => !u.verdict);
+  // A few of the longest suspect stretches are enough to tell whose voice it is; the rest stay folded.
+  const samples = [...suspects]
+    .sort((a, b) => b.seconds - a.seconds || a.start - b.start)
+    .slice(0, SAMPLES);
+  const others = suspects.filter((u) => !samples.includes(u));
 
   const row = (unit: ReviewUnit) => {
     const heard =
@@ -229,7 +236,7 @@ export function MixedSpeaker({
       title={suspect ? `${suspect.filename} · ${suspect.speaker_id}` : ''}
       body={
         detail
-          ? `确认给了${name}，但 ${Math.round(detail.share * 100)}% 听起来不像 TA（${suspects.length} 段，${span(detail.suspect_seconds)}），可能整个认错了人。这些片段已自动排除，不进${name}的分身；听几段后决定是谁。`
+          ? `确认给了${name}，但 ${Math.round(detail.share * 100)}% 听起来不像 TA（${suspects.length} 段，${span(detail.suspect_seconds)}），可能整个认错了人。这些片段已自动排除，不进${name}的分身。听下面几段，决定是谁。`
           : undefined
       }
     >
@@ -248,7 +255,7 @@ export function MixedSpeaker({
                 disabled={busy}
                 onClick={() => void decide(toLikely, 'move', likely)}
               >
-                {toLikely.length} 段像{likelyName}：都改给{likelyName}
+                都改给{likelyName}
               </Button>
             )}
             <Button
@@ -257,7 +264,7 @@ export function MixedSpeaker({
               disabled={busy}
               onClick={() => void decide(open, 'exclude')}
             >
-              {open.length} 段疑似的都不是{name}
+              都不是{name}
             </Button>
             <Button
               variant="ghost"
@@ -269,10 +276,20 @@ export function MixedSpeaker({
             </Button>
           </Row>
         )}
-        {suspects.length > 0 && (
-          <Stack as="ul" gap={0} aria-label="疑似片段">
-            {suspects.map(row)}
+        {samples.length > 0 && (
+          <Stack as="ul" gap={0} aria-label="代表片段">
+            {samples.map(row)}
           </Stack>
+        )}
+        {others.length > 0 && (
+          <Disclosure
+            summary={`其余 ${others.length} 段疑似片段`}
+            variant="plain"
+          >
+            <Stack as="ul" gap={0}>
+              {others.map(row)}
+            </Stack>
+          </Disclosure>
         )}
         {rest.length > 0 && (
           <Disclosure

@@ -1555,23 +1555,26 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  const tasks = await screen.findByRole('region', { name: /混进了别人的话/u });
-  expect(tasks).toHaveTextContent(
-    '3 段（15 秒）听起来不像张总，占这个声音的 75%',
-  );
+  const tasks = await screen.findByRole('region', {
+    name: /可以补认的声音/u,
+  });
+  expect(tasks).toHaveTextContent('75% 不像张总（15 秒），已自动排除');
   expect(tasks).toHaveTextContent('多数像李总');
-  await user.click(within(tasks).getByRole('button', { name: '逐段试听' }));
+  // Left out already, it harms nobody: it waits under 有空再看 and is not counted as something to handle.
+  expect(screen.getByText('有空再看')).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '待处理' })).toBeInTheDocument();
+  await user.click(
+    within(tasks).getByRole('button', { name: '听一听，决定是谁' }),
+  );
   const side = await screen.findByRole('dialog', { name: '周会.m4a · S8' });
-  const pieces = await within(side).findByRole('list', { name: '疑似片段' });
+  const pieces = await within(side).findByRole('list', { name: '代表片段' });
   expect(within(pieces).getAllByRole('listitem')).toHaveLength(3);
   const first = within(pieces).getByText('研发不能砍。').closest('li')!;
   expect(first).toHaveTextContent('1:00 · 5 秒 · 更像李总研发不能砍。');
   expect(
     within(first).getByRole('button', { name: '听 1:00 这段' }),
   ).toBeInTheDocument();
-  await user.click(
-    within(side).getByRole('button', { name: '2 段像李总：都改给李总' }),
-  );
+  await user.click(within(side).getByRole('button', { name: '都改给李总' }));
   await waitFor(() =>
     expect(puts).toEqual([
       {
@@ -1601,9 +1604,7 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
     }),
   );
   // Settled in full: the task leaves the team page; an undo is still a click away beside it.
-  await waitFor(() =>
-    expect(screen.queryByText(/听起来不像张总，占/u)).toBeNull(),
-  );
+  await waitFor(() => expect(screen.queryByText(/不像张总（/u)).toBeNull());
   await user.click(within(stranger).getByRole('button', { name: '撤销' }));
   await waitFor(() =>
     expect(puts[2]).toMatchObject({ units: [3], action: 'clear' }),

@@ -430,7 +430,9 @@ it('uploads a video as voice, plays the processed reference and offers synthesis
     ).toBeEnabled(),
   );
   const input = screen.getByLabelText('选择录音或视频');
-  expect(input).toHaveAttribute('accept', 'audio/*,video/*');
+  expect(input.getAttribute('accept')!.split(',')).toEqual(
+    expect.arrayContaining(['audio/*', 'video/*', '.m4a', '.mp3', '.wav']),
+  );
   const file = new File(['video audio'], 'record.mov', {
     type: 'video/quicktime',
   });

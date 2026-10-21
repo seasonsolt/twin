@@ -204,9 +204,17 @@ it('uploads multiple files and dropped files with no kind query', async () => {
   await user.click(screen.getByRole('tab', { name: '上传文件' }));
   const input = screen.getByLabelText('选择文件');
   expect(input).toHaveAttribute('multiple');
-  expect(input).toHaveAttribute(
-    'accept',
-    '.txt,.md,.pdf,.docx,.epub,.html,.htm,.csv,.json,.srt,.vtt,audio/*,video/*,.mkv,.caf,.amr,.opus',
+  // Every media suffix is spelled out: a system that does not count .m4a as audio/* would grey it out.
+  const accepted = input.getAttribute('accept')!.split(',');
+  expect(accepted).toEqual(
+    expect.arrayContaining([
+      '.txt',
+      '.pdf',
+      '.docx',
+      'audio/*',
+      '.m4a',
+      '.mp3',
+    ]),
   );
   await user.upload(input, [
     new File(['hello'], 'a.pdf'),

@@ -4,6 +4,7 @@ import {
   uploadMedia,
   type UploadProgress,
 } from '../../lib/mediaUpload';
+export { MEDIA_ACCEPT } from '../../lib/mediaUpload';
 
 export interface Pick {
   file: File;
@@ -18,7 +19,6 @@ const LIBRARY_UPLOADS = {
   scope: 'library',
   compact: 'audio-and-video',
 } as const;
-export const MEDIA_ACCEPT = 'audio/*,video/*,.mkv,.caf,.amr,.opus,.m4a';
 
 /** Uploading recordings to the team's library, one file at a time; ``changed`` runs after each file. */
 export function useUploads(changed: () => void) {

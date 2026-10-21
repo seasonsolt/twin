@@ -38,6 +38,9 @@ home=$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)
 [[ -z "$embed_model" || -f "$embed_model/config.json" ]] || { echo "错误：$embed_model 不是模型目录" >&2; exit 2; }
 
 pack="$(cd "$(dirname "${BASH_SOURCE[0]}")/../compute/asr-funasr" && pwd)"
+# Modules run.py imports and bundled weights, listed in pack.toml (asr-funasr 1.4+).
+files=$("$python" -c 'import sys, tomllib; print(" ".join(tomllib.load(open(sys.argv[1], "rb")).get("files", [])))' \
+    "$pack/pack.toml")
 target="$home/twin-asr"
 key="$home/.ssh/twin_asr_tunnel"
 forwards="-R 127.0.0.1:$port:127.0.0.1:$port"
@@ -100,7 +103,7 @@ WantedBy=multi-user.target
 "
 
 if "$dry_run"; then
-    echo "将复制 run.py、pack.toml、embed.py 到 ${target}，并写入以下服务："
+    echo "将复制 run.py、pack.toml、embed.py${files:+ 和 $files} 到 ${target}，并写入以下服务："
     printf '%s\n' "--- /etc/systemd/system/twin-asr.service" "$asr_unit"
     [[ -z "$embed_model" ]] || printf '%s\n' "--- /etc/systemd/system/twin-embed.service" "$embed_unit"
     printf '%s\n' "--- /etc/systemd/system/twin-asr-tunnel.service" "$tunnel_unit"
@@ -110,6 +113,10 @@ fi
 
 install -d -o "$user" -g "$(id -gn "$user")" -m 755 "$target"
 install -o "$user" -g "$(id -gn "$user")" -m 644 "$pack/run.py" "$pack/pack.toml" "$(dirname "${BASH_SOURCE[0]}")/embed.py" "$target/"
+for file in $files; do
+    install -d -o "$user" -g "$(id -gn "$user")" -m 755 "$target/$(dirname "$file")"
+    install -o "$user" -g "$(id -gn "$user")" -m 644 "$pack/$file" "$target/$file"
+done
 install -d -o "$user" -g "$(id -gn "$user")" -m 700 "$home/.ssh"
 if [[ ! -f "$key" ]]; then
     runuser -u "$user" -- ssh-keygen -q -t ed25519 -N '' -C "twin-asr-tunnel@$(hostname)" -f "$key"

@@ -71,8 +71,16 @@ def edit_distance(ref: Sequence[str], hyp: Sequence[str]) -> int:
 def align_counts(ref: Sequence[str], hyp: Sequence[str]) -> tuple[int, int, int]:
     """(substitutions, deletions, insertions), identical to `asr.edit_counts` but vectorized per row, so a
     30-minute session (about 9000 characters a side) aligns in seconds; moves are kept as one byte per cell."""
+    substituted, deleted, inserted = align_tokens(ref, hyp)
+    return sum(substituted), sum(deleted), inserted
+
+
+def align_tokens(ref: Sequence[str], hyp: Sequence[str]) -> tuple[list[bool], list[bool], int]:
+    """The `align_counts` alignment per reference token: whether each was substituted, whether it was deleted, and
+    the number of inserted hypothesis tokens."""
+    substituted, deleted = [False] * len(ref), [False] * len(ref)
     if not ref or not hyp:
-        return 0, len(ref), len(hyp)
+        return substituted, [True] * len(ref), len(hyp)
     a, b = _encode(ref, hyp)
     n, m = len(a), len(b)
     offsets = np.arange(m + 1, dtype=np.int64)
@@ -80,20 +88,22 @@ def align_counts(ref: Sequence[str], hyp: Sequence[str]) -> tuple[int, int, int]
     row = offsets.copy()
     for i in range(n):
         row, moves[i] = _row(row, (b != a[i]).astype(np.int64), i + 1, offsets)
-    sub = dele = ins = 0
+    ins = 0
     i, j = n, m
     while i and j:
         move = moves[i - 1, j - 1]
         if move == 0:
-            sub += int(a[i - 1] != b[j - 1])
+            substituted[i - 1] = bool(a[i - 1] != b[j - 1])
             i, j = i - 1, j - 1
         elif move == 1:
-            dele += 1
+            deleted[i - 1] = True
             i -= 1
         else:
             ins += 1
             j -= 1
-    return sub, dele + i, ins + j
+    for k in range(i):
+        deleted[k] = True
+    return substituted, deleted, ins + j
 
 
 def _joined(utterances: Sequence[Utterance], mode: str) -> list[str]:
@@ -265,10 +275,21 @@ def attributed_counts(
     ``errors``/``reference_tokens`` give the target-speaker CER: the target's reference utterances against the
     claimed hypothesis segments, both in time order. ``misattributed`` is the share of claimed tokens spoken while
     only other people talked: each claimed segment's tokens are split by its frames where the target speaks versus
-    frames where only others do; frames with nobody speaking are left out of the split."""
+    frames where only others do; frames with nobody speaking are left out of the split. ``isolated_errors`` /
+    ``isolated_tokens`` restrict the same alignment to the target's utterances that overlap nobody else, counting
+    substitutions and deletions only (an insertion belongs to no reference utterance)."""
     mine = [u for u in hypothesis if u.speaker in set(claimed)]
-    ref_target = [u for u in reference if u.speaker == target]
-    sub, dele, ins = align_counts(_joined(ref_target, mode), _joined(mine, mode))
+    ref_target = sorted((u for u in reference if u.speaker == target), key=lambda u: (u.start, u.end))
+    ref_tokens: list[str] = []
+    isolated: list[bool] = []
+    for u in ref_target:
+        found = tokens(u.text, mode)
+        alone = not any(o.speaker != target and o.start < u.end and u.start < o.end for o in reference)
+        ref_tokens += found
+        isolated += [alone] * len(found)
+    substituted, deleted, ins = align_tokens(ref_tokens, _joined(mine, mode))
+    sub, dele = sum(substituted), sum(deleted)
+    isolated_errors = sum(a and (s or d) for a, s, d in zip(isolated, substituted, deleted, strict=True))
     count = _frame_count(reference, hypothesis)
     target_frames = _frames([(u.start, u.end) for u in ref_target], count)
     others = _frames([(u.start, u.end) for u in reference if u.speaker != target], count) & ~target_frames
@@ -285,7 +306,9 @@ def attributed_counts(
         "substitution": sub,
         "deletion": dele,
         "insertion": ins,
-        "reference_tokens": len(_joined(ref_target, mode)),
+        "reference_tokens": len(ref_tokens),
+        "isolated_tokens": sum(isolated),
+        "isolated_errors": isolated_errors,
         "claimed_tokens": claimed_tokens,
         "misattributed_tokens": other_tokens,
     }

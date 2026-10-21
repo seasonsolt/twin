@@ -70,3 +70,26 @@ command = "python3 /path/to/twin/deploy/compute/asr-funasr/remote.py --url http:
 ```
 
 服务一次只跑一个任务，其余请求排队；响应是逐行 JSON（进度，最后是结果），`remote.py` 把进度转成 `@@twin-progress` 行。上传的录音和参考声音写进临时目录，处理完立即删除。服务没有认证，只应监听本机，再经 SSH 隧道转发到 twin 所在机器，不要直接暴露到网络。`remote.py` 上传前会用 ffmpeg 把 wav 无损压成 FLAC（体积约为原来的 40%，识别结果不变；压缩失败就原样上传，`--no-flac` 关闭），带宽窄时上传时间能省一半以上。`remote.py --hotwords <文件>` 可指定热词文件（每行一个，`#` 开头为注释），请求自带热词时以请求为准。
+
+## GPU 上的重叠感知转写（1.4）
+
+1.4.0 起，CUDA 上默认走重叠感知转写（`pipeline = "overlap"`），Mac 和 CPU 不变（`classic`，即上面的 Paraformer 流程）：
+
+1. 响度归一到 −27 dBFS（分人仍用原始音频）。
+2. 3D-Speaker 的分人流程：FSMN VAD、1.5 秒窗 0.75 秒步长、中英文 CAM++ 声纹、谱聚类（随机种子固定，结果可复现）。
+3. pyannote community-1 的分段模型找出两人同时说话的地方，并给重叠帧补上第二个说话人。权重随包分发（`weights/`，约 5.6 MiB，sha256 写在 `pack.toml`），推理代码在 `segmentation.py`，不依赖 pyannote.audio、不需要 HF token。
+4. 重叠区（前后各带 0.5 秒上下文）用 MossFormer2 分成两路，按声纹把两路分给对应的人；每人每段只保留自己的声音，其他人说话的时间静音。
+5. FireRedASR2-AED 识别，CT-Transformer 补标点；FireRed 输出复读（同一字连续 8 次以上，或每秒超过 8 字）时改用 Paraformer 重识别这一段。
+6. 本人认领、声纹和返回格式与 `classic` 相同。
+
+本人话语 CER 在 AliMeeting Eval / Test 上从 31.7% / 28.0% 降到 20.5% / 17.6%，在留出的 AISHELL-4 测试集上从 23.2% 降到 16.1%（选对说话人时），详见 [docs/ASR_EVAL.md](../../../docs/ASR_EVAL.md#个人上传路径三套分人方案对比2026-10-21)。请求带 `"pipeline": "classic"`（或 `run.py --pipeline classic`、`remote.py --pipeline classic`）可退回原流程，评测用它做配对对照；twin 自己从不传。缺少下面任一模型时自动退回 `classic`，`/health` 和 `--check` 报告实际使用的流程。
+
+额外的模型在运行时从官方仓库取（`pack.toml` 的 `cuda_models` 固定了版本与 sha256，不随包分发）：
+
+| 模型 | 来源 | 用途 |
+| --- | --- | --- |
+| iic/speech_campplus_sv_zh_en_16k-common_advanced | ModelScope | 分人用的中英文声纹 |
+| alibabasglab/MossFormer2_SS_16K | Hugging Face | 重叠语音两路分离 |
+| FireRedTeam/FireRedASR2-AED | Hugging Face | 识别 |
+
+GPU 环境在 pack 依赖之外还需要 `clearvoice`、FireRedASR2S 的 `fireredasr2s` 包和 `safetensors`。4090 上常驻服务约占 12 GB 显存，常驻内存约 8–10 GB、峰值约 11 GB；AliMeeting Eval 上 RTF 0.04，AISHELL-4 上 0.03（Mac 经 SSH 隧道测，含上传），原流程约 0.01。第三方代码与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。

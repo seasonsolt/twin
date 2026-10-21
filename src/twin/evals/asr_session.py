@@ -54,6 +54,7 @@ class Session:
     duration: float
     reference: list[Utterance]
     voices: dict[str, Path]  # speaker → reference voice; these speakers are evaluated as "the person"
+    group: str | None = None  # sessions of one group may share people, so none is absent from another
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ class Run:
 
 
 def load_sessions(path: Path) -> list[Session]:
-    """JSON lines of {id, audio, duration, reference, references?}; paths relative to the manifest."""
+    """JSON lines of {id, audio, duration, reference, references?, group?}; paths relative to the manifest."""
     sessions: list[Session] = []
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -102,7 +103,10 @@ def load_sessions(path: Path) -> list[Session]:
             if not any(u.speaker == speaker for u in utterances):
                 raise ValueError(f"场次清单第 {number} 行：{speaker} 不在参考说话人中")
             voices[str(speaker)] = file.resolve()
-        sessions.append(Session(row["id"], audio.resolve(), float(duration), utterances, voices))
+        group = row.get("group")
+        if group is not None and not isinstance(group, str):
+            raise ValueError(f"场次清单第 {number} 行 group 必须是字符串")
+        sessions.append(Session(row["id"], audio.resolve(), float(duration), utterances, voices, group))
     if not sessions:
         raise ValueError("场次清单为空")
     return sessions
@@ -173,9 +177,11 @@ def _plan(session: Session) -> list[str]:
 
 
 def _absent(session: Session, sessions: Sequence[Session]) -> dict[str, Path]:
-    """Voices of people who are not in this session, in a fixed pseudo-random order, as many as fit one request."""
+    """Voices of people who are not in this session, in a fixed pseudo-random order, as many as fit one request.
+    Sessions of the same group are skipped: their speaker names differ, but the people may be the same."""
     present = {u.speaker for u in session.reference}
-    voices = {spk: path for other in sessions for spk, path in other.voices.items() if spk not in present}
+    others = [o for o in sessions if session.group is None or o.group != session.group]
+    voices = {spk: path for other in others for spk, path in other.voices.items() if spk not in present}
     order = sorted(voices, key=lambda spk: hashlib.sha256(f"absent-v1:{session.id}:{spk}".encode()).hexdigest())
     return {spk: voices[spk] for spk in order[: max(0, MAX_VOICES - len(session.voices))]}
 
@@ -335,6 +341,9 @@ def _person_rows(sessions: Sequence[Session], runs: dict[str, Run]) -> tuple[_Ro
                 rows.add(f"tokens_{mode}", counts["reference_tokens"])
                 rows.add(f"claimed_{mode}", counts["claimed_tokens"])
                 rows.add(f"misattributed_{mode}", counts["misattributed_tokens"])
+                rows.add(f"deletion_{mode}", counts["deletion"])
+                rows.add(f"isolated_errors_{mode}", counts["isolated_errors"])
+                rows.add(f"isolated_tokens_{mode}", counts["isolated_tokens"])
             rows.add("auto", 1.0 if analysis.claimed else 0.0)
     return rows, outcomes
 
@@ -377,6 +386,8 @@ def score_engine(name: str, sessions: Sequence[Session], runs: dict[str, Run], s
             result["person"][mode] = {
                 "cer": _ratio(p.get(f"errors_{mode}"), p.get(f"tokens_{mode}"), f"{seed}:{name}:l5:{mode}"),
                 "misattributed": sum(p.get(f"misattributed_{mode}")) / claimed if claimed else 0.0,
+                "deletion": sum(p.get(f"deletion_{mode}")) / max(sum(p.get(f"tokens_{mode}")), 1),
+                "isolated_cer": sum(p.get(f"isolated_errors_{mode}")) / max(sum(p.get(f"isolated_tokens_{mode}")), 1),
             }
     result["segmentation"]["speech_missed"] = sum(s.get("vad_missed")) / speech if speech else 0.0
     result["segmentation"]["speech_false_alarm"] = sum(s.get("vad_false_alarm")) / speech if speech else 0.0
@@ -563,15 +574,17 @@ def render_markdown(card: dict[str, Any]) -> str:
             "",
             "## L5 流程层（记到本人名下的文字）",
             "",
-            "未自动认领时按用户手动选对说话人计算。误归属 = 本人名下的字里，只有别人在说话的时段所占的比例。",
+            "未自动认领时按用户手动选对说话人计算。误归属 = 本人名下的字里，只有别人在说话的时段所占的比例。"
+            "无重叠句 = 本人与他人都不重叠的句子，只计替换和删除。",
             "",
-            "| 引擎 | 本人话语 CER（95% 区间） | 去口头语 | 他人误归属 | 自动认领比例 |",
-            "| --- | --- | --- | --- | --- |",
+            "| 引擎 | 本人话语 CER（95% 区间） | 去口头语 | 删除 | 无重叠句 | 他人误归属 | 自动认领比例 |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
         for e in engines:
             person = e["person"]
             lines.append(
                 f"| {e['engine']} | {_ci(person['strict']['cer'])} | {_pct(person['nofill']['cer']['rate'])} | "
+                f"{_pct(person['strict']['deletion'])} | {_pct(person['strict']['isolated_cer'])} | "
                 f"{_pct(person['strict']['misattributed'])} | {_pct(person['auto_claimed'] or 0)} |"
             )
     lines += [

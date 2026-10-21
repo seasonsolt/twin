@@ -1,9 +1,17 @@
 name = "asr-funasr"
-version = "1.3.3"
+version = "1.4.0"
 kind = "command"
 platforms = ["darwin-arm64"]
 python = "3.12"
 entry = "run.py"
+# Copied next to run.py. The overlap-aware path (overlap.py) runs on CUDA only; elsewhere these stay unused.
+files = [
+  "overlap.py",
+  "diarize.py",
+  "segmentation.py",
+  "weights/segmentation-community-1.safetensors",
+  "THIRD_PARTY.md",
+]
 
 [[models]]
 id = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
@@ -114,3 +122,65 @@ sha256 = "17342041bd5b22f6fd7e32f6e7a267b0bf65f018c0a721bada6547e3d28fbfc9"
 path = "configuration.json"
 size = 581
 sha256 = "6f7acaf1e81ca121f4a3c71b6ddb66beec24350a3ef330e2c846f17829176a8f"
+
+# Shipped in the pack: the segmentation model of pyannote/speaker-diarization-community-1 (CC-BY-4.0), its tensors
+# converted to safetensors from segmentation/pytorch_model.bin (sha256 7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe
+# 60f978bacf3f816e, 5906507 bytes). See THIRD_PARTY.md.
+[[bundled]]
+path = "weights/segmentation-community-1.safetensors"
+role = "segmentation"
+size = 5898772
+sha256 = "98112d10a80ba3ff572f1cf5b78f851febd15a2bba79b4d535e9391a21dba4b4"
+
+# The overlap-aware path (1.4, CUDA). `twin compute install` does not fetch these: the Mac keeps the 1.3 path.
+# A GPU service finds them in the ModelScope cache layouts like the models above, or (source = "huggingface") in
+# the Hugging Face hub cache under HF_HOME. `main` is the file the code loads.
+[[cuda_models]]
+id = "iic/speech_campplus_sv_zh_en_16k-common_advanced"
+source = "modelscope"
+revision = "master"
+role = "diarize-speaker"
+main = "campplus_cn_en_common.pt"
+
+[[cuda_models.files]]
+path = "campplus_cn_en_common.pt"
+size = 28044640
+sha256 = "92f29b94e6948786a26778c9e302525d185bb08c8b9f5252ed98776902840199"
+
+[[cuda_models]]
+id = "alibabasglab/MossFormer2_SS_16K"
+source = "huggingface"
+revision = "407cb030cd66340918ebb6c8cc63b18f8592cdbe"
+role = "separation"
+main = "last_best_checkpoint.pt"
+
+[[cuda_models.files]]
+path = "last_best_checkpoint.pt"
+size = 670353271
+sha256 = "00a3a48bda492db1e829b85dd443f8f43a43039a3e90f1a24962ea9caf14a11a"
+
+[[cuda_models]]
+id = "FireRedTeam/FireRedASR2-AED"
+source = "huggingface"
+revision = "2304afed56eacfee6256dee5937ed22ffa0b64ec"
+role = "firered"
+
+[[cuda_models.files]]
+path = "model.pth.tar"
+size = 4731558506
+sha256 = "4677cbd30988d63ed3e777f6a42a1e5260a3865317f6e15e488bef40954f7054"
+
+[[cuda_models.files]]
+path = "cmvn.ark"
+size = 1311
+sha256 = "6efba6105429d1630c05d818d956bfe4edfad37a04b3b27bb5a029b9adb37945"
+
+[[cuda_models.files]]
+path = "dict.txt"
+size = 79172
+sha256 = "1bc613de2112d257e61a349c3e72d1b1a9cf19c33d3ca954197ad2171e5ea07b"
+
+[[cuda_models.files]]
+path = "train_bpe1000.model"
+size = 251707
+sha256 = "473bbc157cb4eade2059b30a3c877a1c29bd50cadbfbed869ae36eeade7fee07"

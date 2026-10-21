@@ -2,7 +2,11 @@
 """离线会议转写命令；只在执行请求时导入模型依赖。`--serve` 常驻一个本机 HTTP 服务供 remote.py 调用。
 
 请求带 `"embed": true` 时只计算整段音频的声纹（用于本人声音），不转写；
-再带 `"spans"` 时按段各算一个声纹（用于复核已确认的说话人）。"""
+再带 `"spans"` 时按段各算一个声纹（用于复核已确认的说话人）。
+
+1.4 起在 CUDA 上默认走重叠感知转写（overlap.py：允许两人同时说话的分人、重叠处分离、FireRedASR2 识别），
+需要 pack.toml 的 `cuda_models` 齐全；Mac、CPU 或缺模型时仍走 1.3 的流程。`--pipeline` 可指定，
+请求里的 `"pipeline": "classic"` 让重叠感知的服务按 1.3 流程处理这一个请求（评测用，twin 自己从不传）。"""
 
 import argparse
 import contextlib
@@ -35,6 +39,8 @@ CLUSTER_THRESHOLD = 0.65
 # long meeting let one generic centroid collect dozens of short clusters; see docs/ASR_EVAL.md.
 MERGE_SIMILARITY = 0.5
 MERGE_LEAD = 0.05
+# "classic": VAD, CAM++ clustering, Paraformer (1.3); "overlap": overlap.py (1.4, CUDA only).
+PIPELINES = ("classic", "overlap")
 
 
 def parse_request(payload):
@@ -54,7 +60,10 @@ def parse_request(payload):
     if reference is not None and (not reference.is_absolute() or not reference.is_file()):
         reference = None
     hotwords, references = parse_hotwords(payload.get("hotwords")), parse_references(payload)
-    return audio, language, diarize, reference, hotwords, references, parse_cluster_threshold(payload)
+    pipeline = payload.get("pipeline")
+    if pipeline is not None and pipeline not in PIPELINES:
+        raise ValueError(f"pipeline 只能是 {' / '.join(PIPELINES)}")
+    return audio, language, diarize, reference, hotwords, references, parse_cluster_threshold(payload), pipeline
 
 
 def parse_cluster_threshold(payload):
@@ -121,20 +130,57 @@ def parse_hotwords(value):
 EMBED_THREADS = 8
 
 
-def model_paths():
+def model_directory(model):
+    """Where a manifest model's files are, or None: ModelScope cache layouts under MODELSCOPE_CACHE, and for models
+    from Hugging Face also the hub cache under HF_HOME; every file must be there with its listed size."""
     cache = Path(os.environ.get("MODELSCOPE_CACHE", "~/.cache/modelscope")).expanduser()
+    candidates = [
+        cache / "models" / model["id"].replace("/", "--") / "snapshots" / model["revision"],
+        cache / "hub" / model["id"],
+        cache / model["id"],
+    ]
+    if model.get("source") == "huggingface":
+        hub = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser() / "hub"
+        candidates.append(hub / f"models--{model['id'].replace('/', '--')}" / "snapshots" / model["revision"])
+    return next(
+        (
+            p
+            for p in candidates
+            if all((p / f["path"]).is_file() and (p / f["path"]).stat().st_size == f["size"] for f in model["files"])
+        ),
+        None,
+    )
+
+
+def model_paths():
     manifest = tomllib.loads(MANIFEST.read_text())
     result = {}
     for model in manifest["models"]:
-        candidates = [
-            cache / "models" / model["id"].replace("/", "--") / "snapshots" / model["revision"],
-            cache / "hub" / model["id"],
-            cache / model["id"],
-        ]
-        path = next((p for p in candidates if all((p / f["path"]).is_file() for f in model["files"])), None)
+        path = model_directory(model)
         if path is None:
             raise ValueError(f"缺少模型 {model['id']}，请运行 twin compute install asr-funasr --download-models")
         result[model["role"]] = str(path)
+    return result
+
+
+def overlap_paths():
+    """Role → path of the overlap-aware path's models (a file when the model lists one, else its directory), or None
+    when one is missing; the bundled segmentation weights are checked against their sha256."""
+    import hashlib
+
+    manifest = tomllib.loads(MANIFEST.read_text())
+    result = {}
+    for model in manifest.get("cuda_models", []):
+        path = model_directory(model)
+        if path is None:
+            return None
+        main = model.get("main")
+        result[model["role"]] = path / main if main else path
+    for weight in manifest.get("bundled", []):
+        path = MANIFEST.parent / weight["path"]
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != weight["sha256"]:
+            raise ValueError(f"算力包自带的 {weight['path']} 缺失或校验失败，请重新安装")
+        result[weight["role"]] = path
     return result
 
 
@@ -231,7 +277,7 @@ def report(fraction):
 class Engine:
     """The four models, loaded once; `--serve` keeps one Engine resident across requests."""
 
-    def __init__(self, device="auto"):
+    def __init__(self, device="auto", pipeline="auto"):
         paths = model_paths()
         os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         import numpy as np
@@ -264,6 +310,16 @@ class Engine:
             self.spk_batch = None
         self.device = device
         self.batch = 16 if device != "cpu" else 1
+        extra = overlap_paths() if pipeline != "classic" and device == "cuda" else None
+        if pipeline == "overlap" and extra is None:
+            raise ValueError("重叠感知转写需要 CUDA 和 pack.toml 里 cuda_models 列出的模型")
+        self.overlap = None
+        if extra is not None:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import overlap
+
+            self.overlap = overlap.Overlap(self, extra, paths["vad"])
+        self.pipeline = "overlap" if self.overlap else "classic"
 
     def embed(self, clip):
         np = self.np
@@ -362,11 +418,57 @@ class Engine:
             batched = self.embed_all([wav] * 8, lambda _: None)
             if not np.allclose(batched[0], embedding, atol=1e-3):
                 raise ValueError("声纹批量健康检查失败")
-        return {"ok": True, "device": self.device, "models": 4, "sample_seconds": 1, "embedding_dimensions": 192}
+        models = 4
+        if self.overlap is not None:
+            self.overlap.diarizer(wav)
+            streams = self.overlap.separate(wav)
+            self.overlap.recognize([wav], [])
+            if len(streams) != 2 or not all(np.isfinite(s).all() and len(s) == len(wav) for s in streams):
+                raise ValueError("分离健康检查失败")
+            models = 8
+        return {
+            "ok": True,
+            "device": self.device,
+            "pipeline": self.pipeline,
+            "models": models,
+            "sample_seconds": 1,
+            "embedding_dimensions": 192,
+        }
+
+    def describe(self, order, names, totals, centroids, reference, references):
+        """The speakers list of a result: time, similarity to the reference voice(s) and unit voiceprint."""
+        np = self.np
+        ref = self.voice(reference) if reference and centroids else None
+        voices = {name: self.voice(path) for name, path in (references or {}).items()} if centroids else {}
+        speakers = []
+        for label in order:
+            value = float(np.dot(ref, centroids[label])) if ref is not None and label in centroids else None
+            speaker = {"id": names[label], "seconds": round(totals[label], 2), "similarity": similarity(value)}
+            if label in centroids:
+                speaker["embedding"] = vector(centroids[label])
+            if references:
+                speaker["similarities"] = {
+                    name: similarity(float(np.dot(vec, centroids[label])) if label in centroids else None)
+                    for name, vec in voices.items()
+                }
+            speakers.append(speaker)
+        return speakers
 
     def transcribe(
-        self, audio, diarize, reference, hotwords, progress, references=None, cluster_threshold=CLUSTER_THRESHOLD
+        self,
+        audio,
+        diarize,
+        reference,
+        hotwords,
+        progress,
+        references=None,
+        cluster_threshold=CLUSTER_THRESHOLD,
+        pipeline=None,
     ):
+        if self.overlap is not None and pipeline != "classic":
+            return self.overlap.transcribe(audio, diarize, reference, hotwords, progress, references)
+        if pipeline == "overlap":
+            raise ValueError("这台服务没有加载重叠感知转写")
         import librosa
 
         np = self.np
@@ -416,32 +518,18 @@ class Engine:
                             **({"speaker": names[label]} if diarize else {}),
                         }
                     )
-        speakers = []
-        if diarize:
-            ref = self.voice(reference) if reference and centroids else None
-            voices = {name: self.voice(path) for name, path in (references or {}).items()} if centroids else {}
-            for label in order:
-                value = float(np.dot(ref, centroids[label])) if ref is not None and label in centroids else None
-                speaker = {"id": names[label], "seconds": round(totals[label], 2), "similarity": similarity(value)}
-                if label in centroids:
-                    speaker["embedding"] = vector(centroids[label])
-                if references:
-                    speaker["similarities"] = {
-                        name: similarity(float(np.dot(vec, centroids[label])) if label in centroids else None)
-                        for name, vec in voices.items()
-                    }
-                speakers.append(speaker)
+        speakers = self.describe(order, names, totals, centroids, reference, references) if diarize else []
         return {"ok": True, "segments": segments, **({"speakers": speakers} if diarize else {})}
 
 
-def run(request=None, *, device="auto", check=False, embed=False, spans=None):
-    engine = Engine(device)
+def run(request=None, *, device="auto", pipeline="auto", check=False, embed=False, spans=None):
+    engine = Engine(device, pipeline)
     if check:
         return engine.check()
-    audio, _language, diarize, reference, hotwords, references, cluster_threshold = request
+    audio, _language, diarize, reference, hotwords, references, cluster_threshold, chosen = request
     if embed:
         return engine.embedding(audio) if spans is None else engine.embedding(audio, spans)
-    return engine.transcribe(audio, diarize, reference, hotwords, report, references, cluster_threshold)
+    return engine.transcribe(audio, diarize, reference, hotwords, report, references, cluster_threshold, chosen)
 
 
 def read_upload(stream, length, directory):
@@ -495,8 +583,9 @@ def read_upload(stream, length, directory):
             raise ValueError("references 名称重复")
     if "hotwords" in meta:
         request["hotwords"] = meta["hotwords"]
-    if "cluster_threshold" in meta:
-        request["cluster_threshold"] = meta["cluster_threshold"]
+    for key in ("cluster_threshold", "pipeline"):
+        if key in meta:
+            request[key] = meta[key]
     return (*parse_request(request), parse_spans(meta))
 
 
@@ -520,7 +609,16 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
         def do_GET(self):
             if self.path != "/health":
                 return self.reply(404, {"ok": False, "error": "not found"})
-            self.reply(200, {"ok": True, "version": version, "device": engine.device, "busy": busy.locked()})
+            self.reply(
+                200,
+                {
+                    "ok": True,
+                    "version": version,
+                    "device": engine.device,
+                    "pipeline": engine.pipeline,
+                    "busy": busy.locked(),
+                },
+            )
 
         def do_POST(self):
             if self.path not in {"/transcribe", "/embed"}:
@@ -534,7 +632,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
             directory = tempfile.mkdtemp(prefix="twin-asr-")
             try:
                 try:
-                    audio, _language, diarize, reference, hotwords, references, threshold, spans = read_upload(
+                    audio, _language, diarize, reference, hotwords, references, threshold, chosen, spans = read_upload(
                         self.rfile, length, directory
                     )
                 except (ValueError, UnicodeDecodeError) as error:
@@ -561,6 +659,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                                 lambda f: line({"progress": round(f, 4)}),
                                 references,
                                 threshold,
+                                chosen,
                             )
                     except (BrokenPipeError, ConnectionResetError):
                         raise
@@ -580,6 +679,9 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="auto")
+    parser.add_argument(
+        "--pipeline", choices=("auto", *PIPELINES), default="auto", help="auto：CUDA 且模型齐全时用 overlap"
+    )
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--serve", action="store_true", help="常驻服务：加载一次模型，经 HTTP 处理请求")
     parser.add_argument("--host", default="127.0.0.1")
@@ -593,7 +695,7 @@ def main():
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     if args.serve:
-        engine = Engine(args.device)
+        engine = Engine(args.device, args.pipeline)
         sys.stderr.write(f"{json.dumps(engine.check(), ensure_ascii=False)}\n")
         server = make_server(engine, args.host, args.port)
         sys.stderr.write(f"listening on http://{args.host}:{args.port}\n")
@@ -613,7 +715,9 @@ def main():
         try:
             os.dup2(2, 1)
             with contextlib.redirect_stdout(sys.stderr):
-                payload = run(request, device=args.device, check=args.check, embed=embed, spans=spans)
+                payload = run(
+                    request, device=args.device, pipeline=args.pipeline, check=args.check, embed=embed, spans=spans
+                )
         finally:
             os.dup2(saved, 1)
             os.close(saved)

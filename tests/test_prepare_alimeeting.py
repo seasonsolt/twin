@@ -112,6 +112,15 @@ def test_read_textgrid_handles_utf16(tmp_path: Path) -> None:
     assert [t.text for t in prep.read_textgrid(path)] == ["你好"]
 
 
+def test_train_naming_puts_gender_before_the_speaker(tmp_path: Path) -> None:
+    assert prep.speaker_name("R0015_M0145_F_SPK0289") == "SPK0289"
+    assert prep.speaker_name("N_SPK8013") == "SPK8013"
+    near = tmp_path / "Train_Ali_near"
+    _wav(near / "audio_dir" / "R0015_M0145_F_SPK0289.wav", [_tone(1, 300)])
+    assert prep.near_audio(near, "R0015_M0145", "SPK0289") == near / "audio_dir" / "R0015_M0145_F_SPK0289.wav"
+    assert prep.near_audio(near, "R0015_M0145", "SPK0290") is None
+
+
 def test_isolated_drops_overlapping_turns() -> None:
     turns = [prep.Turn(0, 6, "A", "x"), prep.Turn(5, 7, "B", "y"), prep.Turn(8, 9, "A", "z")]
     assert [t.text for t in prep.isolated(turns)] == ["z"]

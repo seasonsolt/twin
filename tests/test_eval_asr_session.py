@@ -117,6 +117,26 @@ def test_load_sessions_rejects_unknown_person(tmp_path: Path) -> None:
         load_sessions(manifest)
 
 
+def test_absent_people_come_from_other_groups_only(tmp_path: Path) -> None:
+    from twin.evals.asr_session import _absent
+
+    manifest, _, _ = _setup(tmp_path)
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    rows[1]["references"] = {"C": "voices/A.wav"}
+    manifest.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    s1, s2 = load_sessions(manifest)
+    assert list(_absent(s1, [s1, s2])) == ["C"]
+    for row in rows:
+        row["group"] = "R003"  # one group of people meeting twice under different speaker names
+    manifest.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    s1, s2 = load_sessions(manifest)
+    assert s1.group == "R003" and _absent(s1, [s1, s2]) == {}
+    rows[0]["group"] = 3
+    manifest.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="group 必须是字符串"):
+        load_sessions(manifest)
+
+
 def test_load_session_engines_validates(tmp_path: Path) -> None:
     path = tmp_path / "e.toml"
     path.write_text('[[engine]]\nname = "x"\n', encoding="utf-8")

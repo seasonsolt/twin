@@ -19,7 +19,8 @@
   录音：麦克风不同，但内容与被评的远场重叠，认领结果偏乐观。`sessions.jsonl` 的 `voice_from` 记录每份参考声音
   取自哪一场。
 
-TextGrid 层名形如 `N_SPK8013`，去掉 `N_` 前缀作为说话人，近场录音为 `<场次>_N_<说话人>.wav`。
+TextGrid 层名形如 `N_SPK8013`（训练集为 `R0015_M0145_F_SPK0289`），取结尾的 `SPK…` 作为说话人；近场录音为
+`<场次>_N_<说话人>.wav`（训练集把 `N` 换成性别 `F` / `M`）。也可用于训练集里抽出的场次。
 """
 
 from __future__ import annotations
@@ -71,8 +72,14 @@ def read_textgrid(path: Path) -> list[Turn]:
             text = clean_text(m.group(3).replace('""', '"'))
             if text:
                 start, stop = round(float(m.group(1)), 3), round(float(m.group(2)), 3)
-                turns.append(Turn(start, stop, speaker.strip().removeprefix("N_"), text))
+                turns.append(Turn(start, stop, speaker_name(speaker), text))
     return sorted(turns, key=lambda t: (t.start, t.end, t.speaker))
+
+
+def speaker_name(tier: str) -> str:
+    """`SPK0289` from Eval/Test tiers (`N_SPK8013`) and Train tiers (`R0015_M0145_F_SPK0289`, gender before it)."""
+    found = re.search(r"SPK\d+$", tier.strip())
+    return found.group() if found else tier.strip().removeprefix("N_")
 
 
 def isolated(turns: list[Turn]) -> list[Turn]:
@@ -143,8 +150,9 @@ def session_audio(far: Path, session: str) -> Path:
 def near_audio(near: Path | None, session: str, speaker: str) -> Path | None:
     if near is None:
         return None
-    path = near / "audio_dir" / f"{session}_N_{speaker}.wav"
-    return path if path.is_file() else None
+    # Eval/Test: <session>_N_<speaker>.wav; Train puts the gender there: <session>_F_<speaker>.wav.
+    found = sorted((near / "audio_dir").glob(f"{session}_*_{speaker}.wav"))
+    return found[0] if found else None
 
 
 def prepare(root: Path, out: Path) -> dict[str, int]:

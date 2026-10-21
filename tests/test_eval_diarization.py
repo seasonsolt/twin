@@ -8,6 +8,7 @@ from twin.evals.asr import edit_counts
 from twin.evals.diarization import (
     Utterance,
     align_counts,
+    align_tokens,
     attributed_counts,
     claim_outcome,
     cp_counts,
@@ -33,6 +34,14 @@ def test_align_counts_edges() -> None:
     assert align_counts(list("ab"), []) == (0, 2, 0)
     assert align_counts([], list("ab")) == (0, 0, 2)
     assert align_counts(list("今天开会"), list("今天开灰了")) == (1, 0, 1)
+
+
+def test_align_tokens_marks_each_reference_token() -> None:
+    substituted, deleted, inserted = align_tokens(list("今天开会吧"), list("今开灰吧了"))
+    assert substituted == [False, False, False, True, False] and deleted == [False, True, False, False, False]
+    assert inserted == 1
+    assert align_tokens(list("ab"), []) == ([False, False], [True, True], 0)
+    assert align_tokens([], list("ab")) == ([], [], 2)
 
 
 def test_session_counts_concatenate_in_time_order_and_ignore_speakers() -> None:
@@ -141,3 +150,12 @@ def test_attributed_counts_score_target_words_and_misattribution() -> None:
     assert (result["substitution"], result["deletion"], result["insertion"]) == (0, 0, 2)
     assert result["claimed_tokens"] == 6
     assert result["misattributed_tokens"] == pytest.approx(2.0)
+
+
+def test_attributed_counts_split_errors_on_utterances_that_overlap_nobody() -> None:
+    # A's first turn is alone, the second overlaps B; the claimed text drops one alone word and one overlapped word.
+    reference = [Utterance(0, 2, "A", "开会了"), Utterance(3, 5, "A", "先说预算"), Utterance(4, 5, "B", "好")]
+    hypothesis = [Utterance(0, 2, "S1", "开会"), Utterance(3, 5, "S1", "先说预")]
+    result = attributed_counts(reference, hypothesis, ["S1"], "A", "strict")
+    assert (result["isolated_tokens"], result["isolated_errors"]) == (3, 1)
+    assert (result["reference_tokens"], result["deletion"]) == (7, 2)

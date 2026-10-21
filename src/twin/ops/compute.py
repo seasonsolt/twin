@@ -38,6 +38,7 @@ class Pack:
     python: str
     entry: str
     models: list[dict[str, Any]]
+    files: tuple[str, ...] = ()  # copied next to the entry, e.g. modules it imports and bundled weights
 
     @property
     def model_bytes(self) -> int:
@@ -66,6 +67,11 @@ def discover(root: Path = PACK_ROOT) -> list[Pack]:
                     or not re.fullmatch(r"[0-9a-f]{64}", file["sha256"])
                 ):
                     raise ValueError("模型文件路径或 sha256 无效")
+        files = tuple(data.get("files", []))
+        for name in files:
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts or not (path.parent / relative).is_file():
+                raise ValueError(f"算力包文件无效：{name}")
         packs.append(
             Pack(
                 path.parent,
@@ -76,6 +82,7 @@ def discover(root: Path = PACK_ROOT) -> list[Pack]:
                 data["python"],
                 data["entry"],
                 data["models"],
+                files,
             )
         )
     return packs
@@ -293,8 +300,9 @@ def _install(
                     str(pack.source / f"requirements-{platform.system().lower()}-{platform.machine().lower()}.lock"),
                 ]
             )
-            shutil.copy2(pack.source / pack.entry, work / pack.entry)
-            shutil.copy2(pack.source / "pack.toml", work / "pack.toml")
+            for name in (pack.entry, "pack.toml", *pack.files):
+                (work / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(pack.source / name, work / name)
             if (target / "verified.json").is_file():
                 shutil.copy2(target / "verified.json", work / "verified.json")
         progress("校验本地模型…")

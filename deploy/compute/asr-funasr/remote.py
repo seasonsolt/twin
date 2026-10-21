@@ -62,8 +62,9 @@ def build_request(payload, hotwords):
         ]
         meta["references"] = [{"name": n, "bytes": path.stat().st_size, "suffix": path.suffix} for n, path in voices]
         files += [path for _, path in voices]
-    if "cluster_threshold" in payload:
-        meta["cluster_threshold"] = payload["cluster_threshold"]
+    for key in ("cluster_threshold", "pipeline"):
+        if key in payload:
+            meta[key] = payload[key]
     if isinstance(payload.get("spans"), list):
         meta["spans"] = payload["spans"]
     if isinstance(payload.get("hotwords"), list):
@@ -144,11 +145,16 @@ def main():
     parser.add_argument("--timeout", type=float, default=3600.0, help="单次读写超时（秒）")
     parser.add_argument("--no-flac", action="store_true", help="wav 不先压成 FLAC，原样上传")
     parser.add_argument("--cluster-threshold", type=float, help="评测用：声纹聚类距离阈值，请求未指定时使用")
+    parser.add_argument(
+        "--pipeline", choices=("classic", "overlap"), help="评测用：让重叠感知的服务按指定流程处理（1.4 起）"
+    )
     args = parser.parse_args()
     try:
         request = json.loads(sys.stdin.read())
         if isinstance(request, dict) and args.cluster_threshold is not None:
             request.setdefault("cluster_threshold", args.cluster_threshold)
+        if isinstance(request, dict) and args.pipeline is not None:
+            request.setdefault("pipeline", args.pipeline)
         payload = transcribe(
             args.url,
             request,

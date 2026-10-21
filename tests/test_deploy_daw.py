@@ -111,6 +111,8 @@ def test_gpu_install_dry_run_writes_no_files(tmp_path: Path) -> None:
     )
     assert "-R 127.0.0.1:18790:127.0.0.1:18790 ubuntu@daw.example" in result.stdout
     assert "ExitOnForwardFailure=yes" in result.stdout
+    # asr-funasr 1.4: the modules run.py imports and the bundled weights go along.
+    assert "overlap.py" in result.stdout and "weights/segmentation-community-1.safetensors" in result.stdout
     missing = subprocess.run(["bash", str(ROOT / "deploy/gpu/install.sh"), "--dry-run"], capture_output=True, text=True)
     assert missing.returncode == 2 and "--user" in missing.stderr
 

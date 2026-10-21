@@ -932,6 +932,7 @@ AliMeeting Eval 上，落地版的基线和 1.3.3 完全一致（本人 CER 31.6
 | 线上基线 1.3.3 | 第 0 通道 | 否 | 全自动，不输出重叠 | 23.55% | — |
 | [M2MeT 官方基线](https://arxiv.org/abs/2110.07393)（x-vector + VBx） | 第 0 通道 | 否 | oracle VAD | 15.60% | 24.95% |
 | [DiariZen](https://arxiv.org/abs/2409.09408) | 单通道 | 是 | 全自动 | 10.2% | 17.6% |
+| [DiariZen-Large-s80-v2](https://github.com/BUTSpeechFIT/DiariZen)（官方 README，2026-10 检索） | 远场单通道 | 是 | 全自动 | — | 10.8% |
 | [pyannote community-1](https://github.com/pyannote/pyannote-audio)（官方基准） | “channel 1” | 是（分段模型系列） | 全自动 | — | 20.3% |
 | [Streaming Sortformer v2.1](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1) | 远场，通道未注明 | 是 | 全自动 | — | 13.55% |
 | [M2MeT 第 1 名](https://arxiv.org/abs/2202.03647)（TS-VAD） | 多通道 | 是 | oracle VAD，系统融合 | 2.98% | — |
@@ -957,9 +958,47 @@ AliMeeting Eval 上，落地版的基线和 1.3.3 完全一致（本人 CER 31.6
 - 和 2026 年的端到端大模型在同一档：VibeVoice-ASR 和 MOSS-TD 的切分、通道都没写清，不宜分高低。
 - DER（collar 0）20.42%：
   - 与 pyannote community-1 官方基准的 20.3% 相当；
-  - 不如在 AliMeeting 上训练过的 DiariZen（17.6%）和 Sortformer（13.55%）。
+  - 不如在 AliMeeting 上训练过的 DiariZen（论文 17.6%，v2 版 10.8%）和 Sortformer（13.55%）。
 - 挑战赛前列都用多通道、域内训练和 oracle 分段，不在一个层面。
 
 **找不到的数字**：
 - 不重叠单句的远场 CER 没有公开数字。第三方报的远场句（例如 Paraformer-large 25.64%）含他人串音，和我们的 7.73% 不是一个口径。
 - Qwen3-ASR、FireRedASR2、SenseVoice、Paraformer 的技术报告都没有 AliMeeting 成绩。
+
+## AISHELL-4 公开成绩对照（2026-10-21 检索）
+
+AISHELL-4 测试集是我们的留出集（见上文第 3 层），也有业内公开成绩。最接近我们口径的是 [MOSS-Transcribe-Diarize 技术报告](https://arxiv.org/abs/2601.01554)的表 2：同一个测试集，整场约 40 分钟的录音直接送进系统，同时列了几家商业和开源系统。差别：
+- 它用远场各通道的平均，我们只用第 0 通道；
+- MOSS 自己的训练数据含 AISHELL-4，我们的识别、分离和声纹模型没有用 AISHELL-4 训练（分段模型系列见上文局限）；
+- 商业系统按各自接口整场调用，版本是论文写作时的。
+
+**谁说了什么（cpCER）与整场错字率（CER），越低越好**
+
+| 系统 | cpCER | CER |
+| --- | --- | --- |
+| **twin（asr-funasr 1.4.0）** | **16.08%** | **15.12%** |
+| MOSS-Transcribe-Diarize（含 AISHELL-4 训练） | 15.83% | 14.84% |
+| VibeVoice-ASR | 24.99% | 21.40% |
+| Gemini 3 Pro | 27.43% | 22.75% |
+| 豆包 | 27.86% | 18.18% |
+| ElevenLabs | 37.95% | 19.58% |
+| Gemini 2.5 Pro | 53.42% | 42.70% |
+| FunASR 1.4.2（SeACo-Paraformer-large + CAM++ 聚类），twin 上一版（asr-funasr 1.3.3） | 26.55% | 21.07% |
+| [AISHELL-4 官方基线](https://arxiv.org/abs/2104.03603)（说话人相关 CER，含前端处理） | 39.86% | — |
+
+**分人错误率 DER（collar 0，全自动，不跳过重叠）**
+
+| 系统 | DER |
+| --- | --- |
+| [DiariZen-Large-s80](https://github.com/BUTSpeechFIT/DiariZen)（单声道） | 9.8% |
+| DiariZen-Large-s80-v2 | 10.1% |
+| **twin（asr-funasr 1.4.0）** | **10.70%** |
+| [pyannote precision-2](https://huggingface.co/pyannote/speaker-diarization-community-1)（商业版） | 11.4% |
+| pyannote community-1 | 11.7% |
+| pyannote 3.1 | 12.2% |
+
+**结论**：
+- “谁说了什么”的整场转写，twin 和在 AISHELL-4 上训练过的 MOSS 打平（cpCER 差 0.25 点），明显好于豆包、Gemini 3 Pro、VibeVoice 和 ElevenLabs。
+- 分人只算中上：好于 pyannote 的开源和商业版，差 DiariZen 约 1 点。
+- 公开数字来自各自论文和模型卡，没有在我们这里复现；[Speaker-Reasoner](https://arxiv.org/abs/2604.03074) 报告 cpCER 14.73%、DER 5.26%，它的评测口径我们还没有核对，所以没有列进表里。
+

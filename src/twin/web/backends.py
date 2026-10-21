@@ -59,7 +59,7 @@ class Backends:
                 except Exception as e:
                     raise BackendUnavailable(
                         f"无法初始化大模型后端 {self._settings.llm.provider}：{e}"
-                        "（密钥只能通过环境变量提供，见 README 的配置一节）"
+                        "（密钥只能通过环境变量提供，见 docs/GUIDE.md）"
                     ) from e
             return self._llm
 
@@ -73,7 +73,7 @@ class Backends:
                 except Exception as e:
                     raise BackendUnavailable(
                         f"无法初始化聊天大模型后端 {self._settings.effective_chat_llm.provider}：{e}"
-                        "（密钥只能通过环境变量提供，见 README 的配置一节）"
+                        "（密钥只能通过环境变量提供，见 docs/GUIDE.md）"
                     ) from e
             return self._chat_llm
 

@@ -298,9 +298,7 @@ def _llm(settings: Settings, *, chat: bool = False) -> CallTally:
     try:
         llm = make_llm(config, "chat_llm") if chat and settings.chat_llm is not None else make_llm(config)
     except Exception as e:
-        raise _fail(
-            f"无法初始化大模型后端 {config.provider}：{e}（密钥只能通过环境变量提供，见 README 的配置一节）"
-        ) from e
+        raise _fail(f"无法初始化大模型后端 {config.provider}：{e}（密钥只能通过环境变量提供，见 docs/GUIDE.md）") from e
     return CallTally(llm)
 
 

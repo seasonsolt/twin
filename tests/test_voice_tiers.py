@@ -17,19 +17,20 @@ def candidates(*scores: float) -> list[Candidate]:
     return [Candidate(person_id=f"p{i}", name=f"p{i}", score=score) for i, score in enumerate(scores)]
 
 
-def test_tiers_follow_the_lead_over_the_runner_up(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The rule before tiers: very close, far ahead of the runner-up, and long enough.
+def test_tiers_follow_the_lead_over_the_runner_up() -> None:
+    # Close, ahead of the runner-up by AUTO_MARGIN, and long enough: taken without asking.
     assert tier(candidates(0.8, 0.5), 0.5, 30) == "high"
-    assert tier(candidates(0.8, 0.7), 0.7, 30) == "low"
-    assert tier(candidates(0.8), 0.0, 10) == "low"
+    assert tier(candidates(0.62), 0.5, 30) == "high"
+    # Ahead by MID_MARGIN only, or not close enough: offered to confirm with one key.
+    assert tier(candidates(0.8, 0.72), 0.72, 30) == "mid"
+    assert tier(candidates(0.55), 0.3, 30) == "mid"
+    assert tier(candidates(0.8), 0.0, 10) == "mid"  # Sure, but too short to take alone.
+    # Too close to the runner-up, or below MID_FLOOR: asked.
+    assert tier(candidates(0.8, 0.78), 0.78, 30) == "low"
+    assert tier(candidates(0.44), 0.0, 30) == "low"
     assert tier([], 0.0, 300) == "low"
     # The runner-up counts however low it is, so a lead is measured against whoever comes second.
-    assert tier(candidates(0.76), 0.62, 30) == "low"
-    monkeypatch.setattr(team_module, "MID_MARGIN", 0.1)
-    assert tier(candidates(0.7, 0.55), 0.55, 30) == "mid"
-    assert tier(candidates(0.7, 0.65), 0.65, 30) == "low"
-    assert tier(candidates(0.55), 0.3, 30) == "low"  # Below MID_FLOOR.
-    assert tier(candidates(0.8), 0.0, 10) == "mid"  # Sure, but too short to take alone.
+    assert tier(candidates(0.7), 0.62, 30) == "mid"
 
 
 def two_people(tmp_path: Path) -> tuple[Library, Team, str, str]:
@@ -42,16 +43,15 @@ def two_people(tmp_path: Path) -> tuple[Library, Team, str, str]:
     return library, team, zhang.id, li.id
 
 
-def test_undecided_speakers_get_a_tier_and_whom_it_is_of(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_undecided_speakers_get_a_tier_and_whom_it_is_of(tmp_path: Path) -> None:
     library, team, zhang, li = two_people(tmp_path)
-    monkeypatch.setattr(team_module, "MID_MARGIN", 0.1)
-    second = voices(library, "二.m4a", ([0.97, 0.05, 0.0], 100), ([0.6, 0.0, 0.8], 40), ([0.5, 0.5, 0.7], 40))
+    second = voices(library, "二.m4a", ([0.97, 0.05, 0.0], 100), ([0.55, 0.0, 0.835], 40), ([0.5, 0.5, 0.7], 40))
     recording = library.get(second)
     assert recording is not None
     found = {
         sid: (level, c.person_id if c else None, lead) for sid, (level, c, lead) in team.voice_tiers(recording).items()
     }
-    assert found == {"S1": ("high", zhang, 0.948), "S2": ("mid", zhang, 0.6), "S3": ("low", zhang, 0.0)}
+    assert found == {"S1": ("high", zhang, 0.948), "S2": ("mid", zhang, 0.55), "S3": ("low", zhang, 0.0)}
     # A speaker denied to be 张总 is not offered 张总 again; a decided one has no tier.
     decide(team, second, "S2", "reject", zhang)
     decide(team, second, "S3", "confirm", li)

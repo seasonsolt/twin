@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 # Bump when ``Team.classify`` would decide speakers differently: every automatic decision is then made again.
-ATTRIBUTION_VERSION = "attribution-v1"
+ATTRIBUTION_VERSION = "attribution-v2"
 # Bump when ``Reviews.settle`` would leave other stretches out: every automatic exclusion is then judged again.
 CLEANUP_VERSION = "cleanup-v1"
 # What rows without a recorded version were made by.

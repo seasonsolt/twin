@@ -77,6 +77,9 @@ TUNABLE: dict[str, tuple[Any, str]] = {
             "SAMPLE_CAP",
             "SAMPLE_PICK",
             "SCORE_TOP",
+            "STRANGER_RIVALS",
+            "STRANGER",
+            "STRANGER_MARGIN",
         )
     },
     "library.MID_TO_TWIN": (STRATEGY, "MID_TO_TWIN"),

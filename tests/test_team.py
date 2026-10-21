@@ -1064,6 +1064,43 @@ def test_a_twin_from_meetings_is_made_for_a_work_address_and_stays_private(web: 
     assert public.status_code == 409
 
 
+def test_tagging_says_in_place_when_the_voice_sounds_like_someone_else(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30), ([0.0, 1.0, 0.0], 30))
+    second = voices(library, "二.m4a", ([0.2, 0.98, 0.0], 40))
+
+    def confirm(recording_id: str, speaker_id: str, **body: Any) -> dict[str, Any]:
+        detail = web.get(f"/api/library/recordings/{recording_id}").json()
+        put = web.put(
+            f"/api/library/recordings/{recording_id}/speakers/{speaker_id}",
+            json={
+                "transcript_id": detail["transcript_id"],
+                "revision": detail["revision"],
+                "action": "confirm",
+                **body,
+            },
+            headers=HEADERS,
+        )
+        assert put.status_code == 200
+        return dict(put.json())
+
+    zhang = confirm(first, "S1", new_person="张总", sample=True)
+    assert zhang["unlike"] is None
+    li = confirm(first, "S2", new_person="李总", sample=True)
+    # The owner says 张总, but the voice is surely 李总's: said, and decided as the owner said all the same.
+    said = confirm(second, "S1", person_id=zhang["person_id"])
+    assert said["unlike"] == {
+        "person_id": li["person_id"],
+        "name": "李总",
+        "score": 0.98,
+        "sure": True,
+        "split": False,
+        "called": False,
+    }
+    speakers = {s["id"]: s for s in web.get(f"/api/library/recordings/{second}").json()["speakers"]}
+    assert speakers["S1"]["person_id"] == zhang["person_id"]
+
+
 def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30), ([0.0, 1.0, 0.0], 3))

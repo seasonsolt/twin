@@ -180,6 +180,32 @@ def test_decisions_follow_the_speech_they_were_about(tmp_path: Path) -> None:
     assert [r.id for r in library.recollectable()] == [meeting]  # It can be asked again.
 
 
+def test_speakers_a_moved_sample_recognised_follow_it(tmp_path: Path) -> None:
+    library, team, meeting, _, _ = decided_library(tmp_path)
+    other = recording(
+        library,
+        "2026-03-09 周会.m4a",
+        [segment(0, 30, "S1")],
+        [Speaker(id="S1", seconds=30, embedding=[0.97, 0.05, 0.0])],
+    )
+    assert team.classify(other) == 1
+
+    def given() -> int:
+        with library.read() as db:
+            row = db.execute("SELECT sample FROM attributions WHERE recording_id = ?", (other,)).fetchone()
+        return int(row[0])
+
+    old = given()
+    recollect.ask(library, [meeting])
+    report = recollect.run(library, meeting, Newer(), lambda done, total: None)
+    assert report.samples_moved == [(old, given())] and given() != old
+    with library.read() as db:
+        source = db.execute("SELECT source FROM voiceprints WHERE id = ?", (given(),)).fetchone()[0]
+    assert source == "speaker"
+    assert recollect.rollback(library, meeting)
+    assert given() == old
+
+
 def test_a_failed_transcription_keeps_the_old_transcript(tmp_path: Path) -> None:
     library, team, meeting, zhang, _ = decided_library(tmp_path)
     old = library.get(meeting)

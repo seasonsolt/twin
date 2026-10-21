@@ -691,6 +691,10 @@ class Libraries:
                 person_id = team.add_person(body.new_person).id
             except ValueError as e:
                 raise HTTPException(409, str(e)) from None
+        # Said before deciding: once settled, the speaker's own sample would match them.
+        unlike = (
+            team.unlike([(recording_id, speaker_id)], person_id) if body.action == "confirm" and person_id else None
+        )
         try:
             revision = team.decide(
                 recording_id, body.transcript_id, body.revision, speaker_id, body.action, person_id, body.sample
@@ -707,7 +711,7 @@ class Libraries:
         self.changed(owner)
         self.resettle(owner, {recording_id})
         self.proofread(owner)
-        return {"revision": revision, "person_id": person_id}
+        return {"revision": revision, "person_id": person_id, "unlike": unlike.model_dump() if unlike else None}
 
     def decide_voice(self, owner: str, body: VoiceBody) -> dict[str, Any]:
         team = self.team(owner)
@@ -718,6 +722,8 @@ class Libraries:
             except ValueError as e:
                 raise HTTPException(409, str(e)) from None
         members = [(m.recording_id, m.transcript_id, m.speaker_id) for m in body.members]
+        heard = [(m.recording_id, m.speaker_id) for m in body.members]
+        unlike = team.unlike(heard, person_id) if body.action == "confirm" and person_id else None
         try:
             team.decide_voice(members, body.action, person_id, sample=body.sample)
         except Stale:
@@ -731,7 +737,11 @@ class Libraries:
         self.changed(owner)
         self.resettle(owner, {m.recording_id for m in body.members})
         self.proofread(owner)
-        return {"person_id": person_id, "recognised": recognised}
+        return {
+            "person_id": person_id,
+            "recognised": recognised,
+            "unlike": unlike.model_dump() if unlike else None,
+        }
 
     def update(self, owner: str, person_id: str, body: PersonPatch) -> dict[str, Any]:
         team = self.team(owner)

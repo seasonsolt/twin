@@ -110,9 +110,14 @@ CREATE TABLE IF NOT EXISTS voiceprints (
     speaker_id TEXT NOT NULL,
     embedding TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- How the sample was taken: "speaker" (the owner settled one speaker), "voice" (a voice heard across recordings,
+    -- settled at once), "new" (a new unnamed person), "moved" (to a newer transcript); NULL before this was recorded.
+    source TEXT,
+    -- How many speakers it gave someone by voice alone that the owner then gave otherwise (``Team.decide``).
+    corrected INTEGER NOT NULL DEFAULT 0
 );
--- The owner's decisions about speakers; matching never writes here.
+-- Decisions about speakers: the owner's, and those taken by voice alone (``auto``).
 CREATE TABLE IF NOT EXISTS attributions (
     recording_id TEXT NOT NULL,
     transcript_id TEXT NOT NULL,
@@ -128,6 +133,15 @@ CREATE TABLE IF NOT EXISTS attributions (
     -- The rules that made an automatic decision (``collector``); NULL for the owner's, and for automatic ones made
     -- before versions were recorded.
     version TEXT,
+    -- How sure voice alone was of an automatic decision (``team.tier``; "new" for a new unnamed person), the best
+    -- score and its lead over the runner-up, and the voice sample (``voiceprints.id``) that matched best.
+    tier TEXT,
+    score REAL,
+    lead REAL,
+    sample INTEGER,
+    -- An automatic decision taken back because its sample no longer stands (``Team._withdraw``): whom it was given
+    -- to, offered to the owner to confirm while the speaker is undecided.
+    suggest TEXT,
     PRIMARY KEY (recording_id, transcript_id, speaker_id)
 );
 -- Two people who may be one, for an administrator to merge or keep apart (``media.merge``).
@@ -370,6 +384,13 @@ class Library:
                 ("segment_fixes", "version", "TEXT"),
                 ("recordings", "recollect", "TEXT"),
                 ("recordings", "previous", "TEXT"),
+                ("attributions", "tier", "TEXT"),
+                ("attributions", "score", "REAL"),
+                ("attributions", "lead", "REAL"),
+                ("attributions", "sample", "INTEGER"),
+                ("attributions", "suggest", "TEXT"),
+                ("voiceprints", "source", "TEXT"),
+                ("voiceprints", "corrected", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:

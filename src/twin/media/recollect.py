@@ -322,8 +322,8 @@ def _move_samples(
     of it), with that speaker's voiceprint, so later decisions about the new speaker govern it. A sample whose speaker
     has no successor stays as it is: it is still a voice the owner confirmed, in the same voiceprint space."""
     for row in db.execute(
-        "SELECT id, person_id, speaker_id, created_at FROM voiceprints WHERE recording_id = ? AND transcript_id = ? "
-        "AND active = 1",
+        "SELECT id, person_id, speaker_id, created_at, source, corrected FROM voiceprints WHERE recording_id = ? "
+        "AND transcript_id = ? AND active = 1",
         (recording_id, old),
     ).fetchall():
         heirs = [
@@ -335,13 +335,24 @@ def _move_samples(
         vector = embeddings.get(heir)
         if not vector:
             continue
+        # The same sample on the new transcript: how it was taken and its track record go with it.
         cursor = db.execute(
             "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, active, "
-            "created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-            (row["person_id"], recording_id, new, heir, json.dumps(vector), row["created_at"]),
+            "created_at, source, corrected) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (
+                row["person_id"],
+                recording_id,
+                new,
+                heir,
+                json.dumps(vector),
+                row["created_at"],
+                row["source"],
+                row["corrected"],
+            ),
         )
         db.execute("UPDATE voiceprints SET active = 0 WHERE id = ?", (row["id"],))
         assert cursor.lastrowid is not None
+        db.execute("UPDATE attributions SET sample = ? WHERE sample = ?", (cursor.lastrowid, row["id"]))
         report.samples_moved.append((int(row["id"]), int(cursor.lastrowid)))
 
 
@@ -377,8 +388,13 @@ def rollback(library: Library, recording_id: str) -> bool:
             "UPDATE voiceprints SET active = 0 WHERE recording_id = ? AND transcript_id = ?",
             (recording_id, recording.transcript_id),
         )
-        for before, _after in report.samples_moved if report else ():
-            db.execute("UPDATE voiceprints SET active = 1 WHERE id = ?", (before,))
+        for before, after in report.samples_moved if report else ():
+            db.execute(
+                "UPDATE voiceprints SET active = 1, corrected = COALESCE((SELECT corrected FROM voiceprints "
+                "WHERE id = ?), corrected) WHERE id = ?",
+                (after, before),
+            )
+            db.execute("UPDATE attributions SET sample = ? WHERE sample = ?", (before, after))
         db.execute(
             "UPDATE recordings SET transcript_id = ?, previous = NULL, asr = ?, speakers = ?, segments = ?, "
             "revision = revision + 1, updated_at = ? WHERE id = ?",

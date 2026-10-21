@@ -56,25 +56,34 @@ SPLIT = 0.75
 # Candidates closer than this are shown together as "close, tell them apart".
 NEAR = 0.05
 # A speaker is taken to be someone without asking only this close to the person's samples, this much closer than to
-# anyone else, and after speaking this long (a short speaker's voiceprint is unsteady). Conservative until the pilot
-# calibrates them.
-AUTO = 0.75
-AUTO_MARGIN = 0.15
+# anyone else (the runner-up, people or voices the owner could not name: ``STRANGER_RIVALS``), and after speaking this
+# long (a short speaker's voiceprint is unsteady). Calibrated on daw's team library split by person (docs/ASR_EVAL.md,
+# attribution-v2): only the lead mattered; a lead of 0.15 left 75-88% of named people's speech to the owner, 0.1 with
+# strangers as rivals took 8.1% others' speech on the held-out half (9.8% before) and left 58%.
+AUTO = 0.6
+AUTO_MARGIN = 0.1
 AUTO_MIN_SECONDS = 20.0
 # The middle tier (``tier``, docs/PLAN_VOICE_COLLECTOR.md): not sure enough to decide alone, but the best candidate
-# leads the runner-up by ``MID_MARGIN`` from ``MID_FLOOR``, so the owner is offered them to confirm with one key. Off
-# until calibrated on the team library: in daw's cross-meeting check the best candidate was the person 79% of the time,
-# but only about 59% of the speakers voice alone left.
-MID_MARGIN = math.inf
-MID_FLOOR = 0.6
+# leads the runner-up by ``MID_MARGIN`` from ``MID_FLOOR``, so the owner is offered them to confirm with one key. On
+# daw about 60% of such suggestions were right: too few to give a twin the speech before the owner confirms.
+MID_MARGIN = 0.05
+MID_FLOOR = 0.45
+# 1: voices the owner said are nobody they know, in other recordings (``_strangers``), are rivals too: the best person
+# must lead the closest of them as well. Without it a lead of 0.1 took 21% others' speech on daw's held-out half,
+# most of it voices the owner could not name.
+STRANGER_RIVALS = 1.0
+# A voice is one the owner said is nobody they know (``_stranger``) this close to it and this much closer than to
+# anyone known: such voices came back meeting after meeting on the pilot library; two of 114 confirmed speakers would
+# have passed for one.
+STRANGER = 0.75
+STRANGER_MARGIN = 0.15
 # 1: a recording gives a person at most one speaker by voice alone (the longest), and their other speakers that sound
-# like them wait as the middle tier. Adding further speakers was the largest source of wrong claims in daw's
-# cross-meeting check; 0 until the team library is calibrated with it.
+# like them wait as the middle tier. Off: on daw's team library split by person it only took fewer right claims.
 ONE_PER_RECORDING = 0.0
 # Which voice samples of a person are matched (``_prints``): at most ``SAMPLE_CAP`` of them (0: all), chosen by
 # ``SAMPLE_PICK`` (0: the earliest, 1: from the longest speakers, 2: the most unlike each other, from the longest),
-# and a person's score is the mean of their best ``SCORE_TOP`` samples. Being calibrated (docs/ASR_EVAL.md); the
-# defaults are the rule before.
+# and a person's score is the mean of their best ``SCORE_TOP`` samples. On daw neither a cap nor a mean did better
+# than every sample and the best score (docs/ASR_EVAL.md).
 SAMPLE_CAP = 0.0
 SAMPLE_PICK = 0.0
 SCORE_TOP = 1.0
@@ -99,6 +108,11 @@ FRAGMENT_SECONDS = 15.0
 # meeting's other voices, then that room's next meetings, drifted to whoever was settled most.
 VOICE_SAMPLES = 3
 SAMPLE_MIN_SECONDS = 60.0
+# A voice sample stops standing for its person once the owner gave otherwise this many of the speakers it gave them by
+# voice alone, and more than half of them (``Team.decide``): a sample from a room where others sound like the person
+# draws those voices meeting after meeting (on daw 28% of samples were closer to someone else's sample than to any of
+# their own person's). A guess until the track records on daw are counted; the claims it took go back to the owner.
+RETIRE_CORRECTED = 3
 # A person heard this long already has what a twin learns from; voices surely theirs wait behind the others. On the
 # pilot library a third of the undecided speech was surely or likely someone already past it. A guess until twins built
 # from more or less speech are compared.
@@ -519,16 +533,28 @@ class Team:
             if after in refused or (row[1] and refused):
                 return False
             rejected = sorted(refused | {before})
+            # Given by the review, not by a voice sample: no tier, no sample's track record.
             db.execute(
-                "UPDATE attributions SET person_id = ?, rejected = ?, auto = 1, version = ?, updated_at = ? "
+                "UPDATE attributions SET person_id = ?, rejected = ?, auto = 1, version = ?, updated_at = ?, "
+                "tier = NULL, score = NULL, lead = NULL, sample = NULL "
                 "WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
                 (after, json.dumps(rejected), CLEANUP_VERSION, _now(), recording_id, transcript_id, speaker_id),
             )
+            gone = {
+                int(r[0])
+                for r in db.execute(
+                    "SELECT id FROM voiceprints WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
+                    "AND person_id IS NOT ? AND active = 1",
+                    (recording_id, transcript_id, speaker_id, after),
+                )
+            }
             db.execute(
                 "UPDATE voiceprints SET active = 0 WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
                 "AND person_id IS NOT ?",
                 (recording_id, transcript_id, speaker_id, after),
             )
+            if self._withdraw(db, gone):
+                self._prune(db)
             self._reopen(db, recording_id, {before, after})
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return True
@@ -588,13 +614,26 @@ class Team:
                 "rejected, updated_at, auto) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
                 (recording_id, transcript_id, speaker_id, decision, owner, json.dumps(rejected), _now()),
             )
+            gone: set[int] = set()
             if before != after:
                 # The samples taken from this speaker no longer stand for whom they were taken as.
+                gone = {
+                    int(r[0])
+                    for r in db.execute(
+                        "SELECT id FROM voiceprints WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
+                        "AND person_id IS NOT ? AND active = 1",
+                        (recording_id, transcript_id, speaker_id, after),
+                    )
+                }
                 db.execute(
                     "UPDATE voiceprints SET active = 0 WHERE recording_id = ? AND transcript_id = ? "
                     "AND speaker_id = ? AND person_id IS NOT ?",
                     (recording_id, transcript_id, speaker_id, after),
                 )
+                if row is not None and row["auto"] and before and row["sample"] is not None:
+                    # The owner gave otherwise a speaker a sample gave by voice alone: its track record.
+                    gone |= self._correct(db, int(row["sample"]))
+                self._withdraw(db, gone)
             # The recording already gives them a sample, from this speaker or another (``VOICE_SAMPLES``).
             already = db.execute(
                 "SELECT 1 FROM voiceprints WHERE recording_id = ? AND person_id IS ? AND active = 1",
@@ -603,7 +642,7 @@ class Team:
             if after and sample and speaker.embedding and not already:
                 db.execute(
                     "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
-                    "active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                    "active, created_at, source) VALUES (?, ?, ?, ?, ?, 1, ?, 'speaker')",
                     (after, recording_id, transcript_id, speaker_id, json.dumps(speaker.embedding), _now()),
                 )
             if before != after:
@@ -714,18 +753,24 @@ class Team:
                     continue
                 before = stale.get(speaker.id)
                 person_id: str | None = None
+                # How sure, the best score, its lead and the sample that matched (``attributions.tier``).
+                how: tuple[str, float | None, float | None, int | None] = ("high", None, None, None)
                 candidates = self._match(speaker.embedding, prints, set(), floor=SHOW)
                 if candidates:
-                    if tier(candidates, self._runner(speaker.embedding, prints), speaker.seconds) == "high":
+                    runner = self._rival(speaker.embedding, prints, strangers, recording_id)
+                    if tier(candidates, runner, speaker.seconds) == "high":
                         person_id = candidates[0].person_id
+                        best = candidates[0].score
+                        sample = self._sample(db, person_id, speaker.embedding)
+                        how = ("high", best, round(best - runner, 3), sample)
                     if person_id is not None and ONE_PER_RECORDING and person_id in here:
                         person_id = None
                 elif speaker.seconds >= NEW_MIN_SECONDS and not self._stranger(speaker.embedding, strangers, 0.0):
                     person = self._add_person(db, self._unnamed(db), auto=True)
                     person_id = person.id
-                    db.execute(
+                    cursor = db.execute(
                         "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
-                        "active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                        "active, created_at, source) VALUES (?, ?, ?, ?, ?, 1, ?, 'new')",
                         (
                             person_id,
                             recording_id,
@@ -736,11 +781,12 @@ class Team:
                         ),
                     )
                     prints.append((person_id, person.name, speaker.embedding))
+                    how = ("new", None, None, cursor.lastrowid)
                 if speaker.id in stale and person_id == before:
                     db.execute(
-                        "UPDATE attributions SET version = ? WHERE recording_id = ? AND transcript_id = ? "
-                        "AND speaker_id = ?",
-                        (ATTRIBUTION_VERSION, recording_id, recording.transcript_id, speaker.id),
+                        "UPDATE attributions SET version = ?, tier = ?, score = ?, lead = ?, sample = ? "
+                        "WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
+                        (ATTRIBUTION_VERSION, *how, recording_id, recording.transcript_id, speaker.id),
                     )
                     continue
                 if speaker.id in stale:
@@ -756,8 +802,17 @@ class Team:
                     continue
                 db.execute(
                     "INSERT INTO attributions (recording_id, transcript_id, speaker_id, decision, person_id, "
-                    "rejected, updated_at, auto, version) VALUES (?, ?, ?, 'confirmed', ?, '[]', ?, 1, ?)",
-                    (recording_id, recording.transcript_id, speaker.id, person_id, _now(), ATTRIBUTION_VERSION),
+                    "rejected, updated_at, auto, version, tier, score, lead, sample) "
+                    "VALUES (?, ?, ?, 'confirmed', ?, '[]', ?, 1, ?, ?, ?, ?, ?)",
+                    (
+                        recording_id,
+                        recording.transcript_id,
+                        speaker.id,
+                        person_id,
+                        _now(),
+                        ATTRIBUTION_VERSION,
+                        *how,
+                    ),
                 )
                 decided.add(person_id)
                 here.add(person_id)
@@ -773,9 +828,11 @@ class Team:
 
     def voice_tiers(self, recording: Recording) -> dict[str, tuple[Tier, Candidate | None, float]]:
         """For each undecided speaker of the recording: how sure voice alone is (``tier``), of whom, and by how much
-        they lead the runner-up. A speaker sure enough of someone who already has a speaker here is "mid" when a
-        recording gives a person one speaker by voice (``ONE_PER_RECORDING``); people the speaker was denied to be are
-        never candidates."""
+        they lead the runner-up (``_rival``). A speaker sure enough of someone who already has a speaker here is "mid"
+        when a recording gives a person one speaker by voice (``ONE_PER_RECORDING``), and so is one the owner acted on
+        or one taken back (``classify`` leaves both to the owner); one given to someone by voice until its sample
+        stopped standing (``_withdraw``) is offered to them again as "mid", while they still sound most alike. People
+        the speaker was denied to be are never candidates."""
         if recording.transcript_id is None:
             return {}
         with self.library.read() as db:
@@ -787,6 +844,7 @@ class Team:
                 )
             }
             prints = self._prints(db)
+            strangers = self._strangers(db)
         here = {row["person_id"] for row in rows.values() if row["decision"] == "confirmed" and row["person_id"]}
         found: dict[str, tuple[Tier, Candidate | None, float]] = {}
         for speaker in self.library.speakers(recording) or ():
@@ -794,11 +852,15 @@ class Team:
             if not speaker.embedding or (row is not None and row["decision"] != "none"):
                 continue
             rejected = set(json.loads(row["rejected"])) if row is not None else set()
-            ranked = self._match(speaker.embedding, prints, rejected, floor=-1.0)
-            runner = ranked[1].score if len(ranked) > 1 else 0.0
-            candidates = [c for c in ranked if c.score >= SHOW]
+            candidates = self._match(speaker.embedding, prints, rejected, floor=SHOW)
+            runner = self._rival(speaker.embedding, prints, strangers, recording.id) if candidates else 0.0
             level = tier(candidates, runner, speaker.seconds)
             if level == "high" and ONE_PER_RECORDING and candidates[0].person_id in here:
+                level = "mid"
+            if level == "high" and row is not None:
+                # ``classify`` leaves a speaker the owner acted on, or one taken back, to the owner.
+                level = "mid"
+            if level == "low" and candidates and row is not None and row["suggest"] == candidates[0].person_id:
                 level = "mid"
             best = candidates[0] if candidates else None
             found[speaker.id] = (level, best, round(best.score - runner, 3) if best else 0.0)
@@ -874,7 +936,7 @@ class Team:
             rows = {
                 (row["recording_id"], row["speaker_id"]): row
                 for row in db.execute(
-                    "SELECT a.recording_id, a.speaker_id, a.decision, a.person_id, a.rejected, a.disputed "
+                    "SELECT a.recording_id, a.speaker_id, a.decision, a.person_id, a.rejected, a.disputed, a.suggest "
                     "FROM attributions a JOIN recordings r ON r.id = a.recording_id "
                     "AND r.transcript_id = a.transcript_id"
                 )
@@ -909,6 +971,9 @@ class Team:
                 )
                 rejected = set(json.loads(row["rejected"])) if row else set()
                 matched = self._suggest(speaker.embedding, prints, rejected, here)
+                if row is not None and row["suggest"]:
+                    # Given to them by voice until its sample stopped standing (``_withdraw``).
+                    matched.sort(key=lambda c: c.person_id != row["suggest"])
                 known = max(
                     (c.score for c in self._match(speaker.embedding, prints, rejected, floor=-1.0)), default=0.0
                 )
@@ -975,9 +1040,10 @@ class Team:
                 enough=lead is not None and had.get(lead.person_id, 0.0) >= ENOUGH_SECONDS,
             )
             (fragments if voice.seconds < FRAGMENT_SECONDS and not called else voices).append(voice)
-        # Whoever a twin still lacks first, then the longest; voices like one the owner already said they do not
-        # know wait last, the least likely to teach a twin anything.
-        voices.sort(key=lambda v: (v.stranger, v.enough, -v.seconds, v.id))
+        # Whoever a twin still lacks first, then the voice heard in the most recordings and the longest: settled, it
+        # becomes a rival to everyone else's voice there (``_rival``) and recognises the most. Voices like one the
+        # owner already said they do not know wait last, the least likely to teach a twin anything.
+        voices.sort(key=lambda v: (v.stranger, v.enough, -len({m.recording_id for m in v.members}), -v.seconds, v.id))
         return voices, fragments
 
     def unvoiced(self, recordings: set[str] | None = None) -> list[tuple[Recording, int]]:
@@ -1093,13 +1159,40 @@ class Team:
                 sampled.add(recording_id)
                 db.execute(
                     "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
-                    "active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                    "active, created_at, source) VALUES (?, ?, ?, ?, ?, 1, ?, 'voice')",
                     (owner, recording_id, transcript_id, speaker.id, json.dumps(speaker.embedding), _now()),
                 )
             for recording_id in sorted({h[0] for h in heard}):
                 if owner:
                     self._reopen(db, recording_id, {owner})
                 db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
+
+    def unlike(self, members: Iterable[tuple[str, str]], person_id: str) -> Candidate | None:
+        """Someone else known whom the speakers (recording, speaker) clearly sound more like than ``person_id``, as
+        the owner is about to settle them as ``person_id``: ``AUTO_MARGIN`` closer to that person's samples, or, while
+        ``person_id`` has none, ``SURE`` close. Said once in place; the owner may well be right, as when someone's
+        samples come from one room."""
+        vectors = []
+        for recording_id, speaker_id in members:
+            recording = self.library.get(recording_id)
+            speaker = next(
+                (s for s in (self.library.speakers(recording) if recording else None) or () if s.id == speaker_id),
+                None,
+            )
+            if speaker is not None and speaker.embedding:
+                vectors.append(_unit(speaker.embedding))
+        if not vectors:
+            return None
+        centroid = [sum(values) for values in zip(*vectors, strict=True)]
+        with self.library.read() as db:
+            prints = self._prints(db)
+        other = next(iter(self._match(centroid, prints, {person_id}, floor=SUGGEST)), None)
+        own = self._match(centroid, [p for p in prints if p[0] == person_id], set(), floor=-1.0)
+        if other is None:
+            return None
+        if own and other.score - own[0].score >= AUTO_MARGIN:
+            return other
+        return other if not own and other.score >= SURE else None
 
     def attendance(self) -> dict[str, set[str]]:
         """Per recording, the people a speaker of its current transcript is confirmed as: who was there."""
@@ -1265,16 +1358,31 @@ class Team:
         return found
 
     @staticmethod
-    def _stranger(embedding: list[float], strangers: list[list[float]], known: float) -> bool:
-        """Whether the voice is one the owner said is nobody they know (``_strangers``): as close to it as a
-        recognised person's (``AUTO``), and closer to it than to anyone known (``known``, the best score) by
-        ``AUTO_MARGIN``. On the pilot library such voices came back meeting after meeting; two of 114 confirmed
-        speakers would have passed for one."""
-        score = max((_cosine(embedding, vector) for vector in strangers), default=0.0)
-        return score >= AUTO and score - known >= AUTO_MARGIN
+    def _stranger(embedding: list[float], strangers: list[tuple[str, list[float]]], known: float) -> bool:
+        """Whether the voice is one the owner said is nobody they know (``_strangers``): ``STRANGER`` close to it,
+        and closer to it than to anyone known (``known``, the best score) by ``STRANGER_MARGIN``."""
+        score = max((_cosine(embedding, vector) for _, vector in strangers), default=0.0)
+        return score >= STRANGER and score - known >= STRANGER_MARGIN
 
-    def _strangers(self, db: sqlite3.Connection) -> list[list[float]]:
-        """The voiceprints of speakers the owner said are nobody they know, in current transcripts."""
+    @staticmethod
+    def _rival(
+        embedding: list[float],
+        prints: Iterable[tuple[str, str, list[float]]],
+        strangers: list[tuple[str, list[float]]],
+        recording_id: str,
+    ) -> float:
+        """What the best person must lead (``tier``): the second most alike person with samples, however low, and
+        with ``STRANGER_RIVALS`` the closest voice the owner said is nobody they know in another recording (in the
+        same one, diarization already told it apart)."""
+        runner = Team._runner(embedding, prints)
+        if STRANGER_RIVALS:
+            others = [vector for where, vector in strangers if where != recording_id]
+            runner = max([runner, *(round(_cosine(embedding, vector), 3) for vector in others)])
+        return runner
+
+    def _strangers(self, db: sqlite3.Connection) -> list[tuple[str, list[float]]]:
+        """The recording and voiceprint of each speaker the owner said is nobody they know, in current
+        transcripts."""
         found = []
         rows = db.execute(
             "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
@@ -1286,7 +1394,7 @@ class Team:
                 (s for s in (self.library.speakers(recording) if recording else None) or () if s.id == speaker_id), None
             )
             if speaker is not None and speaker.embedding:
-                found.append(speaker.embedding)
+                found.append((recording_id, speaker.embedding))
         return found
 
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:
@@ -1326,6 +1434,17 @@ class Team:
         """How alike the speaker is to the second most alike person with samples, however low (``tier``)."""
         ranked = Team._match(embedding, prints, set(), floor=-1.0)
         return ranked[1].score if len(ranked) > 1 else 0.0
+
+    @staticmethod
+    def _sample(db: sqlite3.Connection, person_id: str, embedding: list[float]) -> int | None:
+        """The person's active voice sample (``voiceprints.id``) most alike the voice: the one that recognised it."""
+        found = [
+            (_cosine(embedding, json.loads(row[1])), int(row[0]))
+            for row in db.execute(
+                "SELECT id, embedding FROM voiceprints WHERE person_id = ? AND active = 1", (person_id,)
+            )
+        ]
+        return max(found)[1] if found else None
 
     @staticmethod
     def _match(
@@ -1396,6 +1515,48 @@ class Team:
             found = found.model_copy(update={"sure": found.sure or cue.sure})
         others = [c.model_copy(update={"sure": False}) for c in candidates if c.person_id != person_id]
         return [found.model_copy(update={"called": True}), *others][:2], cue.name
+
+    def _withdraw(self, db: sqlite3.Connection, samples: set[int]) -> bool:
+        """Take back the speakers given to someone by voice alone through these voice samples, which no longer stand
+        for them: each waits for the owner, offered to whom it was given (``voice_tiers``) rather than dropped.
+        Whether any was taken back."""
+        if not samples:
+            return False
+        marks = ", ".join("?" * len(samples))
+        rows = db.execute(
+            "SELECT a.recording_id, a.transcript_id, a.speaker_id, a.person_id FROM attributions a JOIN recordings r "
+            "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id WHERE a.auto = 1 "
+            f"AND a.decision = 'confirmed' AND a.sample IN ({marks})",
+            sorted(samples),
+        ).fetchall()
+        taken: dict[str, set[str]] = {}
+        for recording_id, transcript_id, speaker_id, person_id in rows:
+            db.execute(
+                "UPDATE attributions SET decision = 'none', person_id = NULL, suggest = ?, tier = 'mid', "
+                "updated_at = ? WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
+                (person_id, _now(), recording_id, transcript_id, speaker_id),
+            )
+            taken.setdefault(recording_id, set()).add(person_id)
+        for recording_id, people in taken.items():
+            self._reopen(db, recording_id, people)
+            db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
+        return bool(rows)
+
+    @staticmethod
+    def _correct(db: sqlite3.Connection, sample: int) -> set[int]:
+        """Count that the owner gave otherwise a speaker this sample gave by voice alone; the sample itself when that
+        makes it stop standing for its person (``RETIRE_CORRECTED``), nothing otherwise."""
+        db.execute("UPDATE voiceprints SET corrected = corrected + 1 WHERE id = ?", (sample,))
+        row = db.execute("SELECT corrected, active FROM voiceprints WHERE id = ?", (sample,)).fetchone()
+        if row is None or not row["active"] or row["corrected"] < RETIRE_CORRECTED:
+            return set()
+        standing = db.execute(
+            "SELECT COUNT(*) FROM attributions WHERE auto = 1 AND decision = 'confirmed' AND sample = ?", (sample,)
+        ).fetchone()[0]
+        if row["corrected"] <= standing:
+            return set()
+        db.execute("UPDATE voiceprints SET active = 0 WHERE id = ?", (sample,))
+        return {sample}
 
     @staticmethod
     def _reopen(db: sqlite3.Connection, recording_id: str, people: set[str]) -> None:

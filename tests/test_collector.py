@@ -119,19 +119,19 @@ def test_new_attribution_rules_decide_again_only_what_the_voice_decided(
             ).fetchall()
         return {row[0]: (row[1], row[2], row[3]) for row in found}
 
-    assert rows() == {"S1": (zhang.id, 1, "attribution-v1"), "S2": (li.id, 1, "attribution-v1"), "S3": (li.id, 0, None)}
+    assert rows() == {"S1": (zhang.id, 1, "attribution-v2"), "S2": (li.id, 1, "attribution-v2"), "S3": (li.id, 0, None)}
 
     # New rules that decide these speakers the same way: only the versions change, and no twin closes.
-    monkeypatch.setattr(team_module, "ATTRIBUTION_VERSION", "attribution-v2")
+    monkeypatch.setattr(team_module, "ATTRIBUTION_VERSION", "attribution-v3")
     assert team.classify_all() == 0
-    assert rows() == {"S1": (zhang.id, 1, "attribution-v2"), "S2": (li.id, 1, "attribution-v2"), "S3": (li.id, 0, None)}
+    assert rows() == {"S1": (zhang.id, 1, "attribution-v3"), "S2": (li.id, 1, "attribution-v3"), "S3": (li.id, 0, None)}
     assert (wanted_done(library, "p-zhang")[0], wanted_done(library, "p-li")[0]) == (zhang_wanted, li_wanted)
 
     # Stricter rules: 张总's speaker is no longer sure enough, and goes back to the owner; 李总's stays.
-    monkeypatch.setattr(team_module, "ATTRIBUTION_VERSION", "attribution-v3")
+    monkeypatch.setattr(team_module, "ATTRIBUTION_VERSION", "attribution-v4")
     monkeypatch.setattr(team_module, "AUTO", 0.99)
     assert team.classify(second) == 1
-    assert rows() == {"S2": (li.id, 1, "attribution-v3"), "S3": (li.id, 0, None)}
+    assert rows() == {"S2": (li.id, 1, "attribution-v4"), "S3": (li.id, 0, None)}
     assert wanted_done(library, "p-zhang")[0] == zhang_wanted + 1
     assert wanted_done(library, "p-li")[0] == li_wanted + 1  # They speak in the recording, whose sources changed.
     assert team.classify(second) == 0

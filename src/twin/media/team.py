@@ -21,6 +21,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import operator
 import sqlite3
 import uuid
 from collections.abc import Iterable, Mapping
@@ -288,15 +289,35 @@ def _now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
 
 
+class _Print(list[float]):
+    """A voiceprint that works out its unit vector once (``_unit``): a review compares every undecided speaker with
+    every voice sample, and normalising both each time took most of its seconds."""
+
+    __slots__ = ("unit",)
+
+    def __init__(self, vector: Iterable[float]) -> None:
+        super().__init__(vector)
+        self.unit: list[float] | None = None
+
+
+def _print(vector: list[float]) -> _Print:
+    return vector if isinstance(vector, _Print) else _Print(vector)
+
+
 def _unit(vector: list[float]) -> list[float]:
+    if isinstance(vector, _Print) and vector.unit is not None:
+        return vector.unit
     norm = math.sqrt(sum(x * x for x in vector)) or 1.0
-    return [x / norm for x in vector]
+    unit = [x / norm for x in vector]
+    if isinstance(vector, _Print):
+        vector.unit = unit
+    return unit
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
-    return sum(x * y for x, y in zip(_unit(a), _unit(b), strict=True))
+    return float(sum(map(operator.mul, _unit(a), _unit(b))))
 
 
 def segment_owners(
@@ -912,7 +933,7 @@ class Team:
                             _now(),
                         ),
                     )
-                    prints.append((person_id, person.name, speaker.embedding))
+                    prints.append((person_id, person.name, _print(speaker.embedding)))
                     how = ("new", None, None, cursor.lastrowid)
                 if speaker.id in stale and person_id == before:
                     db.execute(
@@ -1105,18 +1126,17 @@ class Team:
                     seconds=round(speaker.seconds, 1),
                 )
                 rejected = set(json.loads(row["rejected"])) if row else set()
-                matched = self._suggest(speaker.embedding, prints, rejected, here)
+                embedding = _print(speaker.embedding)
+                matched = self._suggest(embedding, prints, rejected, here)
                 suggest = row["suggest"] if row is not None else None
                 if suggest:
                     # Given to them by voice until its sample stopped standing (``_withdraw``).
                     matched.sort(key=lambda c: c.person_id != suggest)
-                known = max(
-                    (c.score for c in self._match(speaker.embedding, prints, rejected, floor=-1.0)), default=0.0
-                )
-                stranger = self._stranger(speaker.embedding, strangers, known)
+                known = max((c.score for c in self._match(embedding, prints, rejected, floor=-1.0)), default=0.0)
+                stranger = self._stranger(embedding, strangers, known)
                 lead = matched[0] if matched else None
                 cue = naming.get(speaker.id)
-                found.append((member, _unit(speaker.embedding), rejected, lead, present, stranger, cue, suggest))
+                found.append((member, _unit(embedding), rejected, lead, present, stranger, cue, suggest))
         groups: list[_Group] = []
         ordered = sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id))
         for member, vector, rejected, lead, present, stranger, cue, suggest in ordered:
@@ -1156,7 +1176,7 @@ class Team:
         for group in groups:
             members = group.members
             key = "|".join(sorted(f"{m.recording_id}:{m.transcript_id}:{m.speaker_id}" for m in members))
-            centroid = [sum(values) for values in zip(*group.vectors, strict=True)]
+            centroid = _Print(sum(values) for values in zip(*group.vectors, strict=True))
             matched = self._match(centroid, [p for p in prints if p[0] not in group.present], group.rejected)
             if group.split and group.split.person_id not in {c.person_id for c in matched}:
                 matched = [group.split, *matched][:2]
@@ -1509,17 +1529,18 @@ class Team:
     ) -> list[tuple[str, str, list[float]]]:
         """The people confirmed in a recording, from its speakers and their attribution rows by speaker: each one's
         person, name and voiceprint there (``_suggest``)."""
-        found = []
+        found: list[tuple[str, str, list[float]]] = []
         for speaker in speakers:
             row = rows.get(speaker.id)
             if speaker.embedding and row is not None and row["decision"] == "confirmed" and row["person_id"]:
-                found.append((str(row["person_id"]), names.get(row["person_id"], ""), speaker.embedding))
+                found.append((str(row["person_id"]), names.get(row["person_id"], ""), _print(speaker.embedding)))
         return found
 
     @staticmethod
     def _stranger(embedding: list[float], strangers: list[tuple[str, list[float]]], known: float) -> bool:
         """Whether the voice is one the owner said is nobody they know (``_strangers``): ``STRANGER`` close to it,
         and closer to it than to anyone known (``known``, the best score) by ``STRANGER_MARGIN``."""
+        embedding = _print(embedding)
         score = max((_cosine(embedding, vector) for _, vector in strangers), default=0.0)
         return score >= STRANGER and score - known >= STRANGER_MARGIN
 
@@ -1533,6 +1554,7 @@ class Team:
         """What the best person must lead (``tier``): the second most alike person with samples, however low, and
         with ``STRANGER_RIVALS`` the closest voice the owner said is nobody they know in another recording (in the
         same one, diarization already told it apart)."""
+        embedding = _print(embedding)
         runner = Team._runner(embedding, prints)
         if STRANGER_RIVALS:
             others = [vector for where, vector in strangers if where != recording_id]
@@ -1542,7 +1564,7 @@ class Team:
     def _strangers(self, db: sqlite3.Connection) -> list[tuple[str, list[float]]]:
         """The recording and voiceprint of each speaker the owner said is nobody they know, in current
         transcripts."""
-        found = []
+        found: list[tuple[str, list[float]]] = []
         rows = db.execute(
             "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
             "AND r.transcript_id = a.transcript_id WHERE a.decision = 'unknown' AND a.auto = 0"
@@ -1553,7 +1575,7 @@ class Team:
                 (s for s in (self.library.speakers(recording) if recording else None) or () if s.id == speaker_id), None
             )
             if speaker is not None and speaker.embedding:
-                found.append((recording_id, speaker.embedding))
+                found.append((recording_id, _print(speaker.embedding)))
         return found
 
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:
@@ -1566,7 +1588,7 @@ class Team:
         ):
             key = (row["person_id"], row["recording_id"])
             if key not in found:
-                found[key] = (row["person_id"], row["name"], json.loads(row["embedding"]), row["speaker_id"])
+                found[key] = (row["person_id"], row["name"], _Print(json.loads(row["embedding"])), row["speaker_id"])
         if SAMPLE_CAP <= 0:
             return [(person_id, name, vector) for person_id, name, vector, _ in found.values()]
         by_person: dict[str, list[_Sample]] = {}
@@ -1614,6 +1636,7 @@ class Team:
     ) -> list[Candidate]:
         """People with active samples the speaker was not denied to be, by their best-matching sample, from
         ``floor``; at most the top two."""
+        embedding = _print(embedding)
         scores: dict[str, tuple[str, list[float]]] = {}
         for person_id, name, vector in prints:
             if person_id not in rejected:
@@ -1636,6 +1659,7 @@ class Team:
         """Who an undecided speaker may be (``_match``), leaving out the people already confirmed in its recording
         (``here``: each one's person, name and voiceprint there): diarization tells a meeting's people apart, so a
         voice merely like one of them is someone else, unless it is as alike as a split half of theirs (``SPLIT``)."""
+        embedding = _print(embedding)
         present = {person_id for person_id, _, _ in here}
         found = {c.person_id: c for c in Team._match(embedding, [p for p in prints if p[0] not in present], rejected)}
         for person_id, name, vector in here:
@@ -1659,6 +1683,7 @@ class Team:
         the voice agrees (a candidate already) or was sure by itself, and a voice sure of someone else is no longer
         sure. A name nobody in the team has is shown as is, for the owner to add them. A person ``excluded`` (already
         confirmed elsewhere in the meeting, or denied) leaves no cue."""
+        embedding = _print(embedding)
         if cue is None:
             return candidates, None
         person_id = next((pid for pid, name in names.items() if name == cue.name), None)

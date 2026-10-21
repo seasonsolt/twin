@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
+import random
 import shutil
 import sqlite3
 import subprocess
@@ -221,6 +222,24 @@ def test_listing_people_and_candidates_reads_each_transcript_once(
         fresh = Team(Library(library.root))  # Every request makes its own.
         assert fresh.people()[0].speakers == 1 and fresh.review()
     assert len(reads) == len(set(reads)) <= 2  # Never the same transcript twice.
+
+
+def test_a_voiceprint_is_normalised_once_and_scores_exactly_as_before() -> None:
+    from twin.media.team import _cosine, _Print, _unit
+
+    def before(a: list[float], b: list[float]) -> float:
+        ua = [x / (math.sqrt(sum(x * x for x in a)) or 1.0) for x in a]
+        ub = [x / (math.sqrt(sum(x * x for x in b)) or 1.0) for x in b]
+        return sum(x * y for x, y in zip(ua, ub, strict=True))
+
+    rng = random.Random(7)
+    vectors = [[rng.gauss(0, 1) for _ in range(192)] for _ in range(20)]
+    prints = [_Print(v) for v in vectors]
+    assert _unit(prints[0]) is _unit(prints[0])
+    for a, pa in zip(vectors, prints, strict=True):
+        for b, pb in zip(vectors, prints, strict=True):
+            assert _cosine(pa, pb) == _cosine(a, pb) == _cosine(a, b) == before(a, b)
+    assert _cosine(prints[0], [1.0, 0.0]) == 0.0
 
 
 def voices(library: Library, name: str, *speakers: tuple[list[float], float]) -> str:

@@ -36,6 +36,8 @@ from .ingest import Segment, Speaker, timestamp
 from .library import Library, Recording, Transcript
 
 Action = Literal["confirm", "unknown", "mixed", "reject", "clear"]
+# How sure voice alone is of a speaker (``tier``): decided without asking, offered to confirm with one key, asked.
+Tier = Literal["high", "mid", "low"]
 Gender = Literal["", "male", "female"]
 Decision = Literal["none", "confirmed", "unknown", "mixed"]
 # A speaker is offered for review from this similarity to someone's voice samples: in AliMeeting calibration of the
@@ -59,6 +61,23 @@ NEAR = 0.05
 AUTO = 0.75
 AUTO_MARGIN = 0.15
 AUTO_MIN_SECONDS = 20.0
+# The middle tier (``tier``, docs/PLAN_VOICE_COLLECTOR.md): not sure enough to decide alone, but the best candidate
+# leads the runner-up by ``MID_MARGIN`` from ``MID_FLOOR``, so the owner is offered them to confirm with one key. Off
+# until calibrated on the team library: in daw's cross-meeting check the best candidate was the person 79% of the time,
+# but only about 59% of the speakers voice alone left.
+MID_MARGIN = math.inf
+MID_FLOOR = 0.6
+# 1: a recording gives a person at most one speaker by voice alone (the longest), and their other speakers that sound
+# like them wait as the middle tier. Adding further speakers was the largest source of wrong claims in daw's
+# cross-meeting check; 0 until the team library is calibrated with it.
+ONE_PER_RECORDING = 0.0
+# Which voice samples of a person are matched (``_prints``): at most ``SAMPLE_CAP`` of them (0: all), chosen by
+# ``SAMPLE_PICK`` (0: the earliest, 1: from the longest speakers, 2: the most unlike each other, from the longest),
+# and a person's score is the mean of their best ``SCORE_TOP`` samples. Being calibrated (docs/ASR_EVAL.md); the
+# defaults are the rule before.
+SAMPLE_CAP = 0.0
+SAMPLE_PICK = 0.0
+SCORE_TOP = 1.0
 # A voice matching nobody becomes a new unnamed person after speaking this long; shorter ones wait for the owner.
 NEW_MIN_SECONDS = 60.0
 UNNAMED = "未命名"
@@ -260,6 +279,35 @@ def _stale(row: Mapping[str, object]) -> bool:
     if version is None:
         return row["rejected"] == "[]" and LEGACY_ATTRIBUTION != ATTRIBUTION_VERSION
     return str(version).startswith("attribution-") and version != ATTRIBUTION_VERSION
+
+
+def tier(candidates: list[Candidate], runner: float, seconds: float) -> Tier:
+    """How sure voice alone is of a speaker whose candidates (``Team._match``) are these and whose second most alike
+    person scores ``runner`` (whoever it is, however low): "high" is taken without asking (``AUTO``, ``AUTO_MARGIN``,
+    ``AUTO_MIN_SECONDS``), "mid" is offered to the owner to confirm (``MID_FLOOR``, ``MID_MARGIN``), "low" is asked."""
+    if not candidates:
+        return "low"
+    best = candidates[0].score
+    if best >= AUTO and best - runner >= AUTO_MARGIN and seconds >= AUTO_MIN_SECONDS:
+        return "high"
+    if best >= MID_FLOOR and best - runner >= MID_MARGIN:
+        return "mid"
+    return "low"
+
+
+# A voice sample in ``Team._prints``: its recording, and its person, their name, the voiceprint and its speaker.
+_Sample = tuple[str, tuple[str, str, list[float], str]]
+
+
+def _unlike(samples: list[_Sample], cap: int) -> list[_Sample]:
+    """``cap`` of a person's samples, longest first, each next one the most unlike those already chosen."""
+    chosen = samples[:1]
+    rest = samples[1:]
+    while rest and len(chosen) < cap:
+        far = min(rest, key=lambda item: max(_cosine(item[1][2], other[1][2]) for other in chosen))
+        chosen.append(far)
+        rest.remove(far)
+    return chosen
 
 
 class Team:
@@ -649,6 +697,12 @@ class Team:
                 )
             }
             stale = {speaker_id: row["person_id"] for speaker_id, row in rows.items() if _stale(row)}
+            # Who already has a speaker here that stays (``ONE_PER_RECORDING``).
+            here = {
+                row["person_id"]
+                for speaker_id, row in rows.items()
+                if speaker_id not in stale and row["decision"] == "confirmed" and row["person_id"]
+            }
             prints = self._prints(db)
             strangers = self._strangers(db)
             decided: set[str] = set()
@@ -662,10 +716,10 @@ class Team:
                 person_id: str | None = None
                 candidates = self._match(speaker.embedding, prints, set(), floor=SHOW)
                 if candidates:
-                    best, runner = candidates[0], candidates[1].score if len(candidates) > 1 else 0.0
-                    sure = best.score >= AUTO and best.score - runner >= AUTO_MARGIN
-                    if sure and speaker.seconds >= AUTO_MIN_SECONDS:
-                        person_id = best.person_id
+                    if tier(candidates, self._runner(speaker.embedding, prints), speaker.seconds) == "high":
+                        person_id = candidates[0].person_id
+                    if person_id is not None and ONE_PER_RECORDING and person_id in here:
+                        person_id = None
                 elif speaker.seconds >= NEW_MIN_SECONDS and not self._stranger(speaker.embedding, strangers, 0.0):
                     person = self._add_person(db, self._unnamed(db), auto=True)
                     person_id = person.id
@@ -706,6 +760,7 @@ class Team:
                     (recording_id, recording.transcript_id, speaker.id, person_id, _now(), ATTRIBUTION_VERSION),
                 )
                 decided.add(person_id)
+                here.add(person_id)
                 count += 1
             if not count:
                 return 0
@@ -715,6 +770,39 @@ class Team:
                 self._prune(db)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return count
+
+    def voice_tiers(self, recording: Recording) -> dict[str, tuple[Tier, Candidate | None, float]]:
+        """For each undecided speaker of the recording: how sure voice alone is (``tier``), of whom, and by how much
+        they lead the runner-up. A speaker sure enough of someone who already has a speaker here is "mid" when a
+        recording gives a person one speaker by voice (``ONE_PER_RECORDING``); people the speaker was denied to be are
+        never candidates."""
+        if recording.transcript_id is None:
+            return {}
+        with self.library.read() as db:
+            rows = {
+                row["speaker_id"]: row
+                for row in db.execute(
+                    "SELECT * FROM attributions WHERE recording_id = ? AND transcript_id = ?",
+                    (recording.id, recording.transcript_id),
+                )
+            }
+            prints = self._prints(db)
+        here = {row["person_id"] for row in rows.values() if row["decision"] == "confirmed" and row["person_id"]}
+        found: dict[str, tuple[Tier, Candidate | None, float]] = {}
+        for speaker in self.library.speakers(recording) or ():
+            row = rows.get(speaker.id)
+            if not speaker.embedding or (row is not None and row["decision"] != "none"):
+                continue
+            rejected = set(json.loads(row["rejected"])) if row is not None else set()
+            ranked = self._match(speaker.embedding, prints, rejected, floor=-1.0)
+            runner = ranked[1].score if len(ranked) > 1 else 0.0
+            candidates = [c for c in ranked if c.score >= SHOW]
+            level = tier(candidates, runner, speaker.seconds)
+            if level == "high" and ONE_PER_RECORDING and candidates[0].person_id in here:
+                level = "mid"
+            best = candidates[0] if candidates else None
+            found[speaker.id] = (level, best, round(best.score - runner, 3) if best else 0.0)
+        return found
 
     def classify_all(self) -> int:
         """``classify`` every transcribed recording, as after someone's voice samples changed; how many speakers
@@ -1203,16 +1291,41 @@ class Team:
 
     def _prints(self, db: sqlite3.Connection) -> list[tuple[str, str, list[float]]]:
         """Everyone's active voice samples, one per person and recording (the earliest; ``VOICE_SAMPLES``), also where
-        a merge of two people or an older library left more."""
-        found: dict[tuple[str, str], tuple[str, str, list[float]]] = {}
+        a merge of two people or an older library left more; at most ``SAMPLE_CAP`` per person (``SAMPLE_PICK``)."""
+        found: dict[tuple[str, str], tuple[str, str, list[float], str]] = {}
         for row in db.execute(
-            "SELECT v.person_id, v.recording_id, p.name, v.embedding FROM voiceprints v "
+            "SELECT v.person_id, v.recording_id, v.speaker_id, p.name, v.embedding FROM voiceprints v "
             "JOIN people p ON p.id = v.person_id WHERE v.active = 1 ORDER BY v.id"
         ):
             key = (row["person_id"], row["recording_id"])
             if key not in found:
-                found[key] = (row["person_id"], row["name"], json.loads(row["embedding"]))
-        return list(found.values())
+                found[key] = (row["person_id"], row["name"], json.loads(row["embedding"]), row["speaker_id"])
+        if SAMPLE_CAP <= 0:
+            return [(person_id, name, vector) for person_id, name, vector, _ in found.values()]
+        by_person: dict[str, list[_Sample]] = {}
+        for (person_id, recording_id), sample in found.items():
+            by_person.setdefault(person_id, []).append((recording_id, sample))
+        kept: list[tuple[str, str, list[float]]] = []
+        for samples in by_person.values():
+            if SAMPLE_PICK >= 1:
+                samples.sort(key=lambda item: -self._seconds(item[0], item[1][3]))
+            chosen = samples[: int(SAMPLE_CAP)] if SAMPLE_PICK < 2 else _unlike(samples, int(SAMPLE_CAP))
+            kept += [(person_id, name, vector) for _, (person_id, name, vector, _) in chosen]
+        return kept
+
+    def _seconds(self, recording_id: str, speaker_id: str) -> float:
+        """How long the speaker a sample was taken from spoke; 0 when unknown."""
+        recording = self.library.get(recording_id)
+        found = next(
+            (s for s in (self.library.speakers(recording) if recording else None) or () if s.id == speaker_id), None
+        )
+        return found.seconds if found else 0.0
+
+    @staticmethod
+    def _runner(embedding: list[float], prints: Iterable[tuple[str, str, list[float]]]) -> float:
+        """How alike the speaker is to the second most alike person with samples, however low (``tier``)."""
+        ranked = Team._match(embedding, prints, set(), floor=-1.0)
+        return ranked[1].score if len(ranked) > 1 else 0.0
 
     @staticmethod
     def _match(
@@ -1223,14 +1336,16 @@ class Team:
     ) -> list[Candidate]:
         """People with active samples the speaker was not denied to be, by their best-matching sample, from
         ``floor``; at most the top two."""
-        best: dict[str, Candidate] = {}
+        scores: dict[str, tuple[str, list[float]]] = {}
         for person_id, name, vector in prints:
-            if person_id in rejected:
-                continue
-            score = round(_cosine(embedding, vector), 3)
-            if person_id not in best or score > best[person_id].score:
-                best[person_id] = Candidate(person_id=person_id, name=name, score=score, sure=score >= SURE)
-        ranked = sorted((c for c in best.values() if c.score >= floor), key=lambda c: -c.score)
+            if person_id not in rejected:
+                scores.setdefault(person_id, (name, []))[1].append(_cosine(embedding, vector))
+        best: list[Candidate] = []
+        for person_id, (name, found) in scores.items():
+            top = sorted(found, reverse=True)[: max(1, int(SCORE_TOP))]
+            score = round(sum(top) / len(top), 3)
+            best.append(Candidate(person_id=person_id, name=name, score=score, sure=score >= SURE))
+        ranked = sorted((c for c in best if c.score >= floor), key=lambda c: -c.score)
         return ranked[:2]
 
     @staticmethod

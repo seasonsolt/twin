@@ -13,6 +13,7 @@ from twin.evals.asr_library import (
     evaluate_engine,
     overridden,
     parse_overrides,
+    reach,
     render,
     run_library_benchmark,
     summarize,
@@ -135,3 +136,44 @@ def test_overrides_name_known_thresholds_and_are_put_back() -> None:
     with overridden({"team.AUTO": 0.5}):
         assert team.AUTO == 0.5
     assert before == team.AUTO
+
+
+def test_the_middle_tier_waits_for_one_key_or_goes_into_the_twin(tmp_path: Path) -> None:
+    sessions = load_sessions(write_session(tmp_path))
+    # Not sure enough to take S1 alone, but A leads everyone else by far: the middle tier.
+    tiers = {"team.AUTO": 1.01, "team.MID_MARGIN": 0.1}
+    with overridden(tiers):
+        result = evaluate_engine(
+            SessionEngine("fake", "unused"), sessions, tmp_path / "base", tmp_path / "a", lambda *_: None, Service()
+        )
+        card = summarize(result)
+    # A: the owner confirms A with one key; it still counts as speech they handled, and as a question.
+    assert result["tally"].total("classify_known_mid_right") == 40 and card["manual"]["rate"] == 1.0
+    assert (card["asked"]["strategy"], card["asked"]["total"], card["asked"]["mid"]) == ("A", 2, 1)
+    assert card["reach"]["wrong"] == 0
+
+    with overridden({**tiers, "library.MID_TO_TWIN": 1}):
+        result = evaluate_engine(
+            SessionEngine("fake", "unused"), sessions, tmp_path / "base", tmp_path / "b", lambda *_: None, Service()
+        )
+        card = summarize(result)
+    # B: A's speaker goes into A's twin as suggested, and only S2 is asked about.
+    assert result["tally"].total("classify_known_mid_right") == 40 and card["manual"]["rate"] == 0.5
+    assert (card["asked"]["strategy"], card["asked"]["total"], card["asked"]["mid"]) == ("B", 1, 0)
+    assert result["taken"] == [{"person": result["taken"][0]["person"], "lead": 1.0, "seconds": 40, "wrong": False}]
+    assert "中档" in render([card], 1)
+
+
+def test_reach_counts_wrong_speakers_near_the_top_of_their_persons_list() -> None:
+    taken = [
+        {"person": "p", "lead": 0.4, "seconds": 10, "wrong": False},
+        {"person": "p", "lead": 0.05, "seconds": 30, "wrong": True},
+        {"person": "q", "lead": 0.3, "seconds": 10, "wrong": False},
+        {"person": "q", "lead": 0.2, "seconds": 10, "wrong": False},
+        {"person": "q", "lead": 0.1, "seconds": 10, "wrong": False},
+        {"person": "q", "lead": 0.5, "seconds": 90, "wrong": True},
+    ]
+    found = reach(taken)
+    # p's wrong speaker is the least sure of p's; q's is the fourth of q's, outside the first three.
+    assert (found["wrong"], found["top3"], found["top5"], found["top3_seconds"]) == (2, 0.5, 1.0, 0.25)
+    assert reach([])["top3"] == 1.0

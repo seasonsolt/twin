@@ -6,7 +6,10 @@ different one, and this module runs that one with the production code, in a thro
 ``Reviews.run`` (every confirmed speaker heard again stretch by stretch) and ``segment_owners`` (whose words a twin
 keeps). Each stage is scored against the human reference:
 
-* classify: share of speech (seconds of hypothesis speakers) taken by voice alone, right, wrong or left to the owner;
+* classify: share of speech (seconds of hypothesis speakers) taken by voice alone, right, wrong or left to the owner,
+  and of what is left, how much is offered to the owner as one suggestion to confirm (the middle tier, ``team.tier``)
+  and how often that suggestion is right; how many speakers each meeting asks about; and of the speakers taken as
+  the wrong person, how many are near the top of that person's list ordered least sure first (reach);
 * review: stretches flagged as someone else's or a stranger's against who really spoke in them;
 * twin: the share of a person's words that were spoken by someone else, and the person's own words kept, before the
   review, after an owner who hears every flagged stretch and judges it right, and after one who follows every flag.
@@ -28,6 +31,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -37,22 +41,45 @@ from ..media import team as team_rules
 from ..media.ingest import CommandTranscriber
 from ..media.library import Library, Recording, Transcript
 from ..media.review import Reviews, SpeakerReview
-from ..media.team import Team, segment_owners
+from ..media.team import Candidate, Team, segment_owners
 from ..util import fingerprint, open_private, private_directory
 from .asr import MODES, _sha256, bootstrap_ratio
 from .asr_session import Session, SessionEngine, engine_identity, load_session_engines, load_sessions
 from .diarization import Utterance, attributed_counts, majority_speaker, spoken_by
 
 SAMPLE_PREFIX = "sample:"
-# Acceptance set by the owner (2026-10-20): at most this share of the words in a twin are someone else's, after the
-# review as the owner settles it; at most this share of the speech needs the owner's hand (speakers voice alone left
-# undecided, and speakers the review puts to them); and nobody taken by voice alone as the wrong person.
+# Acceptance (docs/PLAN_VOICE_COLLECTOR.md, 2026-10-21): at most this share of the words in a twin are someone
+# else's, after the review as the owner settles it, speakers taken by voice as the wrong person included; at most this
+# share of the speech needs the owner's hand (speakers voice alone left undecided, a suggestion to confirm included,
+# and speakers the review puts to them). "Nobody taken as the wrong person" of 2026-10-20 is withdrawn: the wrong ones
+# count in the first and are found through the person's list (``REACH``).
 GATE_FOREIGN = 0.05
 GATE_MANUAL = 0.10
+# Positions in a person's list of speakers taken by voice, least sure first, within which a wrong one counts as found.
+REACH = (3, 5, 10)
+# How the middle tier is used. MID_TO_TWIN 0 (A, the default): its speakers wait for the owner to confirm the
+# suggestion with one key. 1 (B): they go into the twin as suggested and are listed for checking, least sure first.
+STRATEGY = SimpleNamespace(MID_TO_TWIN=0.0)
 # The thresholds a run may try without editing code (``--set team.AUTO=0.6``): whatever the library flow reads at
 # run time from these modules.
-TUNABLE = {
-    **{f"team.{n}": (team_rules, n) for n in ("SHOW", "AUTO", "AUTO_MARGIN", "AUTO_MIN_SECONDS", "NEW_MIN_SECONDS")},
+TUNABLE: dict[str, tuple[Any, str]] = {
+    **{
+        f"team.{n}": (team_rules, n)
+        for n in (
+            "SHOW",
+            "AUTO",
+            "AUTO_MARGIN",
+            "AUTO_MIN_SECONDS",
+            "NEW_MIN_SECONDS",
+            "MID_MARGIN",
+            "MID_FLOOR",
+            "ONE_PER_RECORDING",
+            "SAMPLE_CAP",
+            "SAMPLE_PICK",
+            "SCORE_TOP",
+        )
+    },
+    "library.MID_TO_TWIN": (STRATEGY, "MID_TO_TWIN"),
     **{
         f"review.{n}": (review_rules, n)
         for n in ("MIN_SECONDS", "MAX_GAP", "JUDGE_SECONDS", "MARGIN", "STRANGER", "STRANGER_SECONDS", "FLAG_SHARE")
@@ -196,18 +223,32 @@ def score_classify(
     decided: dict[str, tuple[str, str | None, bool]],
     identity: dict[str, str],
     known: set[str],
+    tiers: Mapping[str, tuple[str, Candidate | None, float]] | None = None,
+    suggested: set[str] | None = None,
+    taken: list[dict[str, Any]] | None = None,
 ) -> set[str]:
-    """Seconds of speech by what ``Team.classify`` did: a speaker whose person has a sample is 'known'. Returns the
+    """Seconds of speech by what ``Team.classify`` did: a speaker whose person has a sample is 'known'. ``tiers``: what
+    voice alone said of each speaker before deciding (``Team.voice_tiers``); ``suggested``: speakers of the middle tier
+    put into the twin as suggested (``STRATEGY``). Speakers taken by voice are added to ``taken`` (person, lead,
+    seconds, wrong). A meeting's questions are the speakers left to the owner that are not fragments. Returns the
     speakers left to the owner."""
+    tiers, suggested = tiers or {}, suggested or set()
     left: set[str] = set()
+    asked = 0
     for speaker in transcript.speakers:
         who = truth[speaker.id]
         if who is None:
             continue
         decision, person_id, auto = decided.get(speaker.id, ("none", None, False))
+        level, candidate, lead = tiers.get(speaker.id, ("low", None, 0.0))
         kind = "known" if who in known else "unknown"
-        if not (auto and decision == "confirmed" and person_id):
-            outcome = "undecided"
+        if speaker.id in suggested and person_id:
+            outcome = "mid_right" if identity.get(person_id) == who else "mid_wrong"
+        elif not (auto and decision == "confirmed" and person_id):
+            if level == "mid" and candidate is not None:
+                outcome = "mid_right" if identity.get(candidate.person_id) == who else "mid_wrong"
+            else:
+                outcome = "undecided"
         elif identity.get(person_id) == who:
             outcome = "right"
         elif person_id not in identity:
@@ -218,10 +259,42 @@ def score_classify(
         tally.add(session.id, f"classify_{kind}_{outcome}", speaker.seconds)
         tally.add(session.id, f"classify_{kind}", speaker.seconds)
         tally.add(session.id, "speech_seconds", speaker.seconds)
-        if outcome == "undecided":
+        by_voice = outcome in ("right", "wrong") or speaker.id in suggested
+        if by_voice and person_id and taken is not None:
+            wrong = identity.get(person_id) != who
+            taken.append({"person": person_id, "lead": lead, "seconds": speaker.seconds, "wrong": wrong})
+        if not by_voice and outcome != "newperson":
             tally.add(session.id, "manual_seconds", speaker.seconds)
             left.add(speaker.id)
+            # Fragments are offered together and set aside in one click (``FRAGMENT_SECONDS``): not a question each.
+            if speaker.seconds >= team_rules.FRAGMENT_SECONDS:
+                asked += 1
+                if outcome.startswith("mid_"):
+                    tally.add(session.id, "asked_mid", 1)
+    tally.add(session.id, "asked", asked)
+    tally.add(session.id, "meetings", 1)
     return left
+
+
+def reach(taken: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Of the speakers taken by voice as the wrong person, how many (and how much speech) sit within the first ``n``
+    of that person's list, least sure (smallest lead) first, for each ``n`` in ``REACH``."""
+    lists: dict[str, list[Mapping[str, Any]]] = {}
+    for entry in taken:
+        lists.setdefault(str(entry["person"]), []).append(entry)
+    wrong = [
+        (rank, e)
+        for entries in lists.values()
+        for rank, e in enumerate(sorted(entries, key=lambda e: e["lead"]))
+        if e["wrong"]
+    ]
+    seconds = sum(e["seconds"] for _, e in wrong)
+    found: dict[str, Any] = {"wrong": len(wrong), "wrong_seconds": seconds}
+    for n in REACH:
+        within = [e for rank, e in wrong if rank < n]
+        found[f"top{n}"] = len(within) / len(wrong) if wrong else 1.0
+        found[f"top{n}_seconds"] = sum(e["seconds"] for e in within) / seconds if seconds else 1.0
+    return found
 
 
 def confirm_by_oracle(
@@ -395,6 +468,7 @@ def evaluate_engine(
     identity = file_samples(library, team, sessions, runner)
     known = set(identity.values())
     tally = Tally()
+    taken: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
     for session in sessions:
         say(engine.name, f"评估 {session.id}")
@@ -402,9 +476,21 @@ def evaluate_engine(
         transcript = library.transcript(recording)
         assert transcript is not None and recording.transcript_id is not None
         truth = _truth(session.reference, transcript)
+        before = team.voice_tiers(recording)
         team.classify(recording.id)
-        decided = _decisions(library, library.get(recording.id) or recording)
-        handled = score_classify(tally, session, transcript, truth, decided, identity, known)
+        recording = library.get(recording.id) or recording
+        tiers = {**before, **team.voice_tiers(recording)}
+        suggested: set[str] = set()
+        if STRATEGY.MID_TO_TWIN:
+            for sid, (level, candidate, _lead) in sorted(tiers.items()):
+                if level == "mid" and candidate is not None and recording.transcript_id is not None:
+                    team.decide(
+                        recording.id, recording.transcript_id, recording.revision, sid, "confirm", candidate.person_id
+                    )
+                    recording = library.get(recording.id) or recording
+                    suggested.add(sid)
+        decided = _decisions(library, recording)
+        handled = score_classify(tally, session, transcript, truth, decided, identity, known, tiers, suggested, taken)
         confirm_by_oracle(library, team, recording.id, truth, identity)
         recording = library.get(recording.id) or recording
         confirmed = {
@@ -438,12 +524,18 @@ def evaluate_engine(
             {
                 "session": session.id,
                 "speakers": {
-                    s.id: {"seconds": round(s.seconds, 1), "truth": truth[s.id], "decision": decided.get(s.id)}
+                    s.id: {
+                        "seconds": round(s.seconds, 1),
+                        "truth": truth[s.id],
+                        "decision": decided.get(s.id),
+                        "tier": tiers[s.id][0] if s.id in tiers else None,
+                        "lead": tiers[s.id][2] if s.id in tiers else None,
+                    }
                     for s in transcript.speakers
                 },
             }
         )
-    return {"engine": engine.name, "tally": tally, "items": items}
+    return {"engine": engine.name, "tally": tally, "items": items, "taken": taken}
 
 
 def summarize(result: dict[str, Any]) -> dict[str, Any]:
@@ -453,7 +545,7 @@ def summarize(result: dict[str, Any]) -> dict[str, Any]:
     def split(prefix: str, kinds: Sequence[str]) -> dict[str, Any]:
         return {kind: tally.ratio(f"{prefix}_{kind}", prefix, f"{seed}:{prefix}:{kind}") for kind in kinds}
 
-    outcomes = ("right", "wrong", "newperson", "undecided")
+    outcomes = ("right", "wrong", "newperson", "mid_right", "mid_wrong", "undecided")
     twin: dict[str, Any] = {}
     for stage in ("owner", "follow", "review"):
         twin[stage] = {
@@ -478,13 +570,23 @@ def summarize(result: dict[str, Any]) -> dict[str, Any]:
         "unready": tally.total("review_unready"),
     }
     wrong = tally.total("classify_known_wrong") + tally.total("classify_unknown_wrong")
+    if STRATEGY.MID_TO_TWIN:
+        wrong += tally.total("classify_known_mid_wrong") + tally.total("classify_unknown_mid_wrong")
     manual = tally.ratio("manual_seconds", "speech_seconds", f"{seed}:manual")
     review_foreign = twin["review"]["strict"]["foreign"]
     gate = {
         "auto_wrong_seconds": wrong,
         "foreign": review_foreign["rate"],
         "manual": manual["rate"],
-        "passed": wrong == 0 and review_foreign["rate"] <= GATE_FOREIGN and manual["rate"] <= GATE_MANUAL,
+        "passed": review_foreign["rate"] <= GATE_FOREIGN and manual["rate"] <= GATE_MANUAL,
+    }
+    per_meeting = [row.get("asked", 0.0) for row in tally.rows.values()]
+    asked = {
+        "strategy": "B" if STRATEGY.MID_TO_TWIN else "A",
+        "mean": float(np.mean(per_meeting)) if per_meeting else 0.0,
+        "max": max(per_meeting, default=0.0),
+        "mid": tally.total("asked_mid"),
+        "total": tally.total("asked"),
     }
     return {
         "engine": result["engine"],
@@ -496,6 +598,8 @@ def summarize(result: dict[str, Any]) -> dict[str, Any]:
         },
         "review": flagged,
         "twin": twin,
+        "asked": asked,
+        "reach": reach(result.get("taken", [])),
     }
 
 
@@ -517,8 +621,8 @@ def render(cards: Sequence[dict[str, Any]], sessions: int, overrides: Mapping[st
         "",
         "## 验收",
         "",
-        f"自动认错为 0；复核后分身里别人的话 ≤ {GATE_FOREIGN:.0%}；需要主人亲手处理的说话时长 ≤ {GATE_MANUAL:.0%}"
-        "（自动归属没决定的说话人，加进入复核队列的说话人）。",
+        f"复核后分身里别人的话 ≤ {GATE_FOREIGN:.0%}（含自动认错）；需要主人亲手处理的说话时长 ≤ {GATE_MANUAL:.0%}"
+        "（自动归属没决定的说话人，含一键确认的中档，加进入复核队列的说话人）。",
         "",
         "| 引擎 | 自动认错秒数 | 复核后别人的话 | 手工处理率（95% 区间） | 结论 |",
         "| --- | --- | --- | --- | --- |",
@@ -532,16 +636,43 @@ def render(cards: Sequence[dict[str, Any]], sessions: int, overrides: Mapping[st
         "",
         "按说话人秒数加权。「已知」= 这个人有样本声音；「未知」= 没有样本声音，正确做法是留给主人或新建。",
         "",
-        "| 引擎 | 人群 | 秒数 | 正确 | 认错 | 新建未命名 | 留给主人 |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| 引擎 | 人群 | 秒数 | 正确 | 认错 | 新建未命名 | 中档建议对 | 中档建议错 | 留给主人 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for card in cards:
         for kind, label in (("known", "已知"), ("unknown", "未知")):
             row = card["classify"][kind]
             lines.append(
                 f"| {card['engine']} | {label} | {row['seconds']:.0f} | {_cell(row['right'])} | "
-                f"{_cell(row['wrong'])} | {_cell(row['newperson'])} | {_cell(row['undecided'])} |"
+                f"{_cell(row['wrong'])} | {_cell(row['newperson'])} | {_cell(row['mid_right'])} | "
+                f"{_cell(row['mid_wrong'])} | {_cell(row['undecided'])} |"
             )
+    lines += [
+        "",
+        "## 中档、每场确认次数和纠错可达性",
+        "",
+        "中档 = 声音不够确定、但首选领先第二名足够多的说话人（`team.tier`）。策略 A：等主人一键确认建议人选；"
+        "策略 B：先按建议进分身，再列入抽查。"
+        "纠错可达性 = 认错的说话人落在此人列表（按领先幅度从小到大）前 N 条的比例。",
+        "",
+        "| 引擎 | 策略 | 中档建议对 / 错（秒） | 每场确认次数（≥15 秒，平均 / 最多） | 其中中档 | 认错说话人 | "
+        + " | ".join(f"前 {n} 条" for n in REACH)
+        + " |",
+        "| --- | --- | --- | --- | --- | --- | " + " | ".join("---" for _ in REACH) + " |",
+    ]
+    for card in cards:
+        mid = {
+            k: card["classify"]["known"][k]["rate"] * card["classify"]["known"]["seconds"]
+            + card["classify"]["unknown"][k]["rate"] * card["classify"]["unknown"]["seconds"]
+            for k in ("mid_right", "mid_wrong")
+        }
+        a, r = card["asked"], card["reach"]
+        lines.append(
+            f"| {card['engine']} | {a['strategy']} | {mid['mid_right']:.0f} / {mid['mid_wrong']:.0f} | "
+            f"{a['mean']:.1f} / {a['max']:.0f} | {a['mid']:.0f} | {r['wrong']} | "
+            + " | ".join(_pct(r[f"top{n}"]) for n in REACH)
+            + " |"
+        )
     lines += [
         "",
         "## 已确认说话人逐段复核（media.review）",

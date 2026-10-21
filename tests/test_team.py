@@ -866,6 +866,9 @@ def test_a_misattributed_fact_leaves_the_twin_and_reaches_the_right_one(web: Tes
     )
     assert moved.status_code == 200
     assert web.get("/api/status", headers=persona).json()["memory_updating"] is True
+    # The card says where the update is: queued until the held build runs.
+    card = next(p for p in web.get("/api/library/people").json()["items"] if p["persona_id"] == pid)
+    assert card["updating"] is True and card["build"] == {"state": "queued"}
     chat = {"messages": [{"role": "user", "content": "研发预算怎么看？"}]}
     for method, path, payload in [
         ("post", "/api/persona/chat/stream", chat),

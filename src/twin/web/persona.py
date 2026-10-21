@@ -500,18 +500,42 @@ def register(
             view["last_finished_at"] = store.get_meta("processing_last_finished_at") or view["last_finished_at"]
             view["last_calls"] = json.loads(store.get_meta("build:last_calls") or "null")
             view["last_error"] = store.get_meta("processing_last_error") or view["last_error"]
-            progress = store.build_progress() if view["state"] == "running" else None
-            merging = store.merge_progress() if progress and progress[0] == "merge" else None
+            progress = build_progress(store) if view["state"] == "running" else None
         if progress:
-            phase, chunks = progress
-            view["progress"] = {
-                "phase": phase,
-                "done": sum(done for done, _ in chunks.values()),
-                "total": sum(total for _, total in chunks.values()),
-            }
-            if merging:
-                view["progress"]["merged"], view["progress"]["to_merge"] = merging
+            view["progress"] = progress
         return view
+
+    def build_progress(store: PersonaStore) -> dict[str, Any] | None:
+        """The running build's phase, its chunks read and to read, and once it merges, its batches merged."""
+        progress = store.build_progress()
+        if not progress:
+            return None
+        phase, chunks = progress
+        view: dict[str, Any] = {
+            "phase": phase,
+            "done": sum(done for done, _ in chunks.values()),
+            "total": sum(total for _, total in chunks.values()),
+        }
+        merging = store.merge_progress() if phase == "merge" else None
+        if merging:
+            view["merged"], view["to_merge"] = merging
+        return view
+
+    def build_status() -> dict[str, Any]:
+        """How far the build has gone, in the shape of ``/api/persona/processing``, for the team's cards."""
+        view = processing.view()
+        status: dict[str, Any] = {"state": view["state"]}
+        snapshot = jobs.snapshot(view["job_id"]) if view["job_id"] is not None else None
+        if snapshot is not None:
+            status["stage"], status["tally"] = snapshot["stage"], snapshot["tally"]
+        if view["state"] == "running":
+            with open_store() as store:
+                progress = build_progress(store)
+            if progress:
+                status["progress"] = progress
+        return status
+
+    app.state.build_status = build_status
 
     @app.post("/api/persona/notes")
     def add_note(body: NoteBody) -> dict[str, Any]:

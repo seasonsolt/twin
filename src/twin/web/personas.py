@@ -206,6 +206,13 @@ class Personas:
                 self.apps[persona_id] = self.make_app(persona_id, self.settings_for(persona_id))
             return self.apps[persona_id]
 
+    def build_status(self, persona_id: str) -> dict[str, Any] | None:
+        """How far the twin's build has gone; None when the twin is not open here yet, which waiting to show a
+        card should not change."""
+        with self.lock:
+            app = self.apps.get(persona_id)
+        return app.state.build_status() if app is not None else None
+
     def view(self, entry: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         self.check_live(entry["id"])
         return self._view(entry, identity, self._settings(entry["id"], read_name=False), self.data["default"])

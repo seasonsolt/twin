@@ -364,6 +364,10 @@ def test_web_shows_chunk_progress_while_a_build_runs(settings: Settings) -> None
         job = client.post("/api/persona/build", headers=HEADERS).json()["job_id"]
         assert started.wait(5)
         assert client.get("/api/persona/processing").json()["progress"] == {"phase": "extract", "done": 0, "total": 1}
+        # The team's card reads the same progress.
+        registry = app.state.personas
+        status = registry.build_status(registry.data["default"])
+        assert status["state"] == "running" and status["progress"] == {"phase": "extract", "done": 0, "total": 1}
         [source] = client.get("/api/persona/sources").json()["items"]
         assert (source["status"], source["chunks_done"], source["chunks_total"]) == ("processing", 0, 1)
         release.set()

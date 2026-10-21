@@ -37,6 +37,7 @@ import { api, ApiError } from '../lib/api';
 import { sortByName } from '../lib/names';
 import { withBase } from '../lib/base';
 import type { Recording as RecordingRow } from './Library';
+import type { Processing } from '../features/memories/BuildProgress';
 
 export interface Candidate {
   person_id: string;
@@ -78,6 +79,8 @@ export interface Person {
   lacking?: number;
   samples: number;
   updating: boolean;
+  // Where the update is while ``updating``; null when the twin has not started on it in this server yet.
+  build?: Processing | null;
   // They found themselves here by voice: their twin is their own, not the library's to open.
   self_claimed?: boolean;
   // Whether the viewer may name them, make their twin or delete them (they uploaded a recording they are in).

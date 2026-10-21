@@ -65,6 +65,7 @@ import {
 } from '../components/layout/PersonaSwitcher';
 import { useIdentity } from '../features/identity/useIdentity';
 import { SetupCard } from '../features/setup/SetupCard';
+import { MemoryUpdating } from '../features/memories/BuildProgress';
 import { PersonaFade } from '../components/motion/PersonaFade';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -480,11 +481,7 @@ export function Chat() {
               <div className="chat-column-grid">
                 <PersonaFade>
                   <div className="chat-conversation flex flex-col space-y-4">
-                    {status?.memory_updating && (
-                      <Text role="status" size="sm" tone="secondary">
-                        记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。
-                      </Text>
-                    )}
+                    {status?.memory_updating && <MemoryUpdating />}
                     {stale && canManage && (
                       <Text role="status" size="xs" tone="secondary">
                         新添加的记忆正在处理中，聊天暂时使用已记住的内容。{' '}

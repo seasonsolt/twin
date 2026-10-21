@@ -1308,6 +1308,7 @@ def register(
             theirs = bool(entry and entry.get("by_voice"))
             opens = bool(entry and not theirs and registry is not None and registry.accessible(entry, identity))
             state = synced.get(person.persona_id or "")
+            updating = bool(opens and state and state[0] != state[1])
             heard = person.recording_id in visible
             people.append(
                 {
@@ -1315,7 +1316,11 @@ def register(
                     "recording_id": person.recording_id if heard else None,
                     "speaker_id": person.speaker_id if heard else None,
                     "persona_id": person.persona_id if opens else None,
-                    "updating": bool(opens and state and state[0] != state[1]),
+                    "updating": updating,
+                    # Where the update is (step and how far), shown on the card until the twin can talk.
+                    "build": registry.build_status(person.persona_id)
+                    if updating and person.persona_id and registry is not None
+                    else None,
                     "self_claimed": theirs,
                     # A twin someone else keeps: not the viewer's to make again or delete.
                     "twin_elsewhere": bool(entry and not theirs and not opens),

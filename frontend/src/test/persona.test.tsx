@@ -521,3 +521,58 @@ it.each([
     );
   },
 );
+
+it('shows how far a library update has gone in place of the refused profile, then loads it', async () => {
+  let updating = true;
+  const base = fetcher.getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((url: string) => {
+    if (updating && (isItemSummaryUrl(url) || url === '/api/persona/coverage'))
+      return Promise.resolve(
+        json(
+          {
+            detail: '记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答',
+            code: 'memory_updating',
+          },
+          409,
+        ),
+      );
+    if (url === '/api/persona/processing')
+      return Promise.resolve(
+        json({
+          state: 'running',
+          progress: { phase: 'extract', done: 77, total: 406 },
+        }),
+      );
+    return base(url);
+  });
+  useStatus.setState({
+    data: {
+      target_name: '小林',
+      counts: { sources: 1, items: 0 },
+      memory_updating: true,
+      llm: { provider: 'x', model: 'x' },
+      embed: { provider: 'x' },
+      egress: [],
+    },
+    error: null,
+  });
+  mountOverview();
+  expect(
+    await screen.findByRole('progressbar', { name: '第 1/3 步 · 读资料' }),
+  ).toHaveAttribute('aria-valuenow', '77');
+  expect(screen.getByText('19%')).toBeInTheDocument();
+  // The refusal is what the bar explains: no error and nothing to retry.
+  expect(
+    screen.queryByRole('button', { name: '重试' }),
+  ).not.toBeInTheDocument();
+  updating = false;
+  act(() =>
+    useStatus.setState({
+      data: { ...useStatus.getState().data!, memory_updating: false },
+    }),
+  );
+  expect(await screen.findByText(/共 1/u)).toBeInTheDocument();
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+});

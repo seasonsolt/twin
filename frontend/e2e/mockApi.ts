@@ -185,6 +185,17 @@ const people = [
     seconds: 2600,
     samples: 3,
     updating: true,
+    // Her twin is merging what it read: the card shows the step and how far it has gone.
+    build: {
+      state: 'running',
+      progress: {
+        phase: 'merge',
+        done: 406,
+        total: 406,
+        merged: 30,
+        to_merge: 130,
+      },
+    },
     auto: false,
     gender: 'female',
     recording_id: 'r-weekly',

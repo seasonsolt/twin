@@ -22,6 +22,8 @@ import type { ItemQuery } from './types';
 import { ItemCard } from './ItemCard';
 import { useItemSearch } from './useItemSearch';
 import { useProfile } from './useProfile';
+import { MemoryUpdating } from '../memories/BuildProgress';
+import { useStatus } from '../../stores/status';
 import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
 
 export const topics: Record<string, string> = {
@@ -303,6 +305,17 @@ function Aspect({
 export function Overview() {
   const personaId = usePersonaId();
   const profile = useProfile(true);
+  // Made from the recording library and catching up with changed recordings: the profile waits for the update.
+  const updating = !!useStatus((state) => state.data?.memory_updating);
+  const { refreshSummary, refreshCoverage } = profile;
+  const wasUpdating = useRef(updating);
+  useEffect(() => {
+    if (wasUpdating.current && !updating) {
+      void refreshSummary();
+      void refreshCoverage();
+    }
+    wasUpdating.current = updating;
+  }, [updating, refreshSummary, refreshCoverage]);
   const counts = new Map(
     (profile.summary?.dimensions ?? []).map((row) => [
       row.dimension_id,
@@ -347,7 +360,8 @@ export function Overview() {
     <div className="about-knowledge space-y-4 md:space-y-6">
       <Card padding="roomy" className="space-y-6">
         {profile.loading && <Skeleton className="h-40" />}
-        {profile.summaryError && (
+        {updating && <MemoryUpdating />}
+        {profile.summaryError && !updating && (
           <p role="alert" className="text-danger">
             {profile.summaryError}{' '}
             <Button
@@ -407,7 +421,7 @@ export function Overview() {
             </Stack>
           </Toolbar>
         )}
-        {profile.coverageError && (
+        {profile.coverageError && !updating && (
           <p role="alert">
             {profile.coverageError}{' '}
             <Button

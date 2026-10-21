@@ -177,7 +177,23 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
         init?.method === 'POST'
       ) {
         created.push(JSON.parse(String(init.body)));
-        people = [person({ persona_id: 'p-1', updating: true }), people[1]];
+        people = [
+          person({
+            persona_id: 'p-1',
+            updating: true,
+            build: {
+              state: 'running',
+              progress: {
+                phase: 'merge',
+                done: 406,
+                total: 406,
+                merged: 30,
+                to_merge: 130,
+              },
+            },
+          }),
+          people[1],
+        ];
         return json({ persona_id: 'p-1', new: true });
       }
       if (url === '/api/personas') return json({ items: [], default: null });
@@ -209,6 +225,18 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   );
   await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
   expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
+  // Until it can talk, the card shows the step the update is on and how far it has gone.
+  expect(
+    await screen.findByRole('progressbar', {
+      name: '第 2/3 步 · 合并成记忆',
+      // The dialog is still fading out over the page.
+      hidden: true,
+    }),
+  ).toHaveAttribute('aria-valuenow', '30');
+  expect(screen.getByText('23%')).toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: '和分身聊聊' }),
+  ).not.toBeInTheDocument();
   expect(created).toEqual([{ claim: 'zhang@acme.cn' }]);
 });
 

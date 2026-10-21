@@ -48,6 +48,7 @@ import type { Gender, Person, Speaker } from '../../pages/Recording';
 import type { Pick } from './useUploads';
 import { MixedSpeaker, type SuspectSpeaker } from './MixedSpeaker';
 import { PersonVoice } from './PersonVoice';
+import { BuildMeter } from '../memories/BuildProgress';
 
 interface Waiting extends Speaker {
   recording_id: string;
@@ -977,13 +978,17 @@ function PersonCard({
           <Button variant="secondary" className="flex-1" disabled>
             由建它的同事管理
           </Button>
+        ) : person.persona_id && person.updating ? (
+          // The twin can talk once its memory is updated: where the update is, in place of the button.
+          <div className="flex-1 self-center" aria-live="polite">
+            <BuildMeter processing={person.build} />
+          </div>
         ) : person.persona_id ? (
           <Button
             className="flex-1"
-            disabled={person.updating}
             onClick={() => onOpen(person.persona_id!, '/chat')}
           >
-            {person.updating ? '整理完成后可以聊' : '和分身聊聊'}
+            和分身聊聊
           </Button>
         ) : person.can_manage === false ? null : (
           <Button

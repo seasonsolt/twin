@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Check, Circle, LoaderCircle } from 'lucide-react';
-import { Card, Meter, Text, TypingIndicator } from '../../components/ui';
+import { Card, Meter, Stack, Text, TypingIndicator } from '../../components/ui';
+import { api } from '../../lib/api';
+import { usePersonaId } from '../../lib/usePersonaState';
+import { usePolling } from '../../lib/usePolling';
 
 export interface Processing {
   state: 'idle' | 'queued' | 'running';
@@ -68,6 +77,62 @@ export function buildSteps(processing: Processing): BuildStep[] {
       total: indexing ? tally?.total : undefined,
     },
   ];
+}
+
+/** The build in one bar, for a card: the step it is on and how far that step has gone. */
+export function BuildMeter({ processing }: { processing?: Processing | null }) {
+  const steps = processing ? buildSteps(processing) : [];
+  const current = steps.findIndex((step) => step.state === 'running');
+  if (processing?.state !== 'running' || current < 0)
+    return (
+      <Meter
+        label={processing?.state === 'queued' ? '排队整理' : '等待整理'}
+        value={null}
+      />
+    );
+  const step = steps[current];
+  return (
+    <Meter
+      label={`第 ${current + 1}/${steps.length} 步 · ${step.label}`}
+      value={step.total ? (step.done ?? 0) : null}
+      max={step.total || undefined}
+    />
+  );
+}
+
+/**
+ * A twin made from the recording library while its memory catches up with changed recordings: it cannot answer
+ * yet, and the bar shows how far the update has gone.
+ */
+export function MemoryUpdating() {
+  const personaId = usePersonaId();
+  const [processing, setProcessing] = useState<{
+    personaId: string;
+    view: Processing;
+  } | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const view = await api<Processing>('/api/persona/processing', {
+        headers: { 'X-Twin-Persona': personaId },
+      });
+      setProcessing({ personaId, view });
+    } catch {
+      // The bar keeps its last reading until the next poll.
+    }
+  }, [personaId]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  usePolling(load, 5000);
+  const view = processing?.personaId === personaId ? processing.view : null;
+  return (
+    <Stack gap={2} role="status" aria-live="polite">
+      <Text size="sm" tone="secondary">
+        记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。
+      </Text>
+      {view && <BuildMeter processing={view} />}
+    </Stack>
+  );
 }
 
 export const duration = (seconds: number) => {

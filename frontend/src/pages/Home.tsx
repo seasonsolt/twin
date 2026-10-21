@@ -35,13 +35,30 @@ const STEPS: [string, string][] = [
 export function Home() {
   const [library, setLibrary] = useState<LibraryState | null>(null);
   const [error, setError] = useState('');
-  // Bumped on every reload, so people and the review queue follow new transcripts.
+  // Bumped when a recording changes in a way people and the review queue follow (a transcript arriving, speakers
+  // settled, one removed), not on every poll: while recordings wait, the page polls every few seconds, and the
+  // review queue is the heaviest view the server computes.
   const [version, setVersion] = useState(0);
+  const seen = useRef('');
   const input = useRef<HTMLInputElement>(null);
   const load = useCallback(async () => {
     try {
-      setLibrary(await api<LibraryState>('/api/library'));
-      setVersion((v) => v + 1);
+      const next = await api<LibraryState>('/api/library');
+      setLibrary(next);
+      const key = JSON.stringify(
+        next.recordings.map((r) => [
+          r.id,
+          r.status,
+          r.speakers,
+          r.unsettled,
+          r.people,
+          r.previous ?? null,
+        ]),
+      );
+      if (key !== seen.current) {
+        seen.current = key;
+        setVersion((v) => v + 1);
+      }
       setError('');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '无法加载录音');

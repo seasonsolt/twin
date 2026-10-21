@@ -320,3 +320,33 @@ it('deletes a failed recording only after confirmation and reloads the team', as
     expect.objectContaining({ method: 'DELETE' }),
   );
 });
+
+it('polls the library while recordings wait but asks for people and the review queue again only when one changes', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    state.recordings = [
+      recording({}),
+      recording({ id: 'rec_2', status: 'queued', speakers: 0 }),
+    ];
+    state.pending = 1;
+    const fetcher = vi.mocked(fetch);
+    const calls = (path: string) =>
+      fetcher.mock.calls.filter(([url]) => url === path).length;
+    show('/team');
+    await vi.waitFor(() => expect(calls('/api/library/review')).toBe(1));
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(calls('/api/library')).toBeGreaterThanOrEqual(3);
+    expect(calls('/api/library/review')).toBe(1);
+    expect(calls('/api/library/people')).toBe(1);
+    state.recordings = [
+      recording({}),
+      recording({ id: 'rec_2', status: 'ready', unsettled: 2 }),
+    ];
+    state.pending = 0;
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.waitFor(() => expect(calls('/api/library/review')).toBe(2));
+    expect(calls('/api/library/people')).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});

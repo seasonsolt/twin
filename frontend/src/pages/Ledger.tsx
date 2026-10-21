@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
+import { byName } from '../lib/names';
 import { cn } from '../lib/utils';
 import {
   Badge,
@@ -428,7 +429,9 @@ function Entries({
           options={[
             ['', '所有人'],
             [SELF, '我自己'],
-            ...data.people.map((name): [string, string] => [name, name]),
+            ...[...data.people]
+              .sort(byName)
+              .map((name): [string, string] => [name, name]),
           ]}
         />
         <FilterSelect
@@ -519,7 +522,9 @@ function Brief({ people, version }: { people: string[]; version: number }) {
           label="见谁"
           value={person}
           onChange={setPerson}
-          options={people.map((name): [string, string] => [name, name])}
+          options={[...people]
+            .sort(byName)
+            .map((name): [string, string] => [name, name])}
         />
         <label className="flex flex-col gap-1">
           <Text as="span" size="sm" tone="secondary">

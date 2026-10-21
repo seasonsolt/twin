@@ -241,6 +241,12 @@ def open_twin(web: TestClient, persona_id: str) -> bool:
     return web.get("/api/status", headers={"X-Twin-Persona": persona_id}).json()["memory_updating"] is False
 
 
+def idle(web: TestClient, persona_id: str) -> bool:
+    """The twin answers and no build of it is queued or running, so every build so far has recorded its spending."""
+    processing = web.get("/api/persona/processing", headers={"X-Twin-Persona": persona_id}).json()
+    return processing["state"] == "idle" and open_twin(web, persona_id)
+
+
 def spending(library: Library) -> dict[str, int]:
     with library.read() as db:
         return dict(db.execute("SELECT kind, SUM(tokens) FROM spending GROUP BY kind").fetchall())
@@ -253,9 +259,9 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
     zhang = confirm(web, rec, "S2", new_person="张总")["person_id"]
     pid = web.post(f"/api/library/people/{zhang}/persona", headers=HEADERS).json()["persona_id"]
     until(lambda: recording_state(web, rec) == "done")
-    until(lambda: open_twin(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
-    # A build's spending is recorded just after the twin opens.
-    until(lambda: "rebuild" in spending(library))
+    # A build's spending is recorded just after the twin opens, as its job ends: read once no build is left, or a
+    # build of the words before proofreading would still be counting when the next decision's build is compared.
+    until(lambda: idle(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
     built = spending(library)["rebuild"]
     assert model.proofreads == 1
     detail = web.get(f"/api/library/recordings/{rec}").json()
@@ -272,7 +278,7 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
 
     # Another decision about the same recording does not proofread it again.
     confirm(web, rec, "S1", new_person="李总")
-    until(lambda: open_twin(web, pid) and spending(library)["rebuild"] > built)
+    until(lambda: idle(web, pid) and spending(library)["rebuild"] > built)
     web.get("/api/library")
     assert model.proofreads == 1
     spent = spending(library)

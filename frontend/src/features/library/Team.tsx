@@ -39,6 +39,7 @@ import {
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
 import { api } from '../../lib/api';
+import { byName } from '../../lib/names';
 import { basePath, withBase } from '../../lib/base';
 import { usePolling } from '../../lib/usePolling';
 import { usePersonas, type Persona } from '../../stores/personas';
@@ -141,18 +142,14 @@ const CATEGORIES: {
   label: string;
   tone: 'warning' | 'danger' | 'info';
   help: string;
+  /** Nothing goes wrong while it waits: listed apart, and not counted among what is waiting for the owner. */
+  optional?: boolean;
 }[] = [
   {
     id: 'voice',
     label: '新出现的声音',
     tone: 'warning',
     help: '说得最多的在前；处理完一项会自动跳到下一项',
-  },
-  {
-    id: 'mixed',
-    label: '混进了别人的话',
-    tone: 'warning',
-    help: '已确认的声音里有些片段听起来不像这个人；试听后排除，或改给对的人',
   },
   {
     id: 'unsorted',
@@ -189,6 +186,13 @@ const CATEGORIES: {
     label: '零碎的声音',
     tone: 'info',
     help: '多是插话或附和，放一边不影响分身',
+  },
+  {
+    id: 'mixed',
+    label: '可以补认的声音',
+    tone: 'info',
+    help: '这些声音大部分不像当初确认的人，不像的片段已经自动排除，不影响任何人的分身。有空时听几段，补认给真正说话的人',
+    optional: true,
   },
 ];
 
@@ -242,7 +246,7 @@ function Ask({
         placeholder="这是谁"
         maxLength={40}
         value={value}
-        suggestions={known.map((p) => p.name)}
+        suggestions={known.map((p) => p.name).sort(byName)}
         className="min-w-0 flex-1"
         onChange={(event) => onChange(event.target.value)}
       />
@@ -1304,7 +1308,10 @@ export function Team({
     ...failed.map((r) => `failed-${r.id}`),
     ...disowned.map((p) => `disowned-${p.id}`),
   ];
-  const tasks = taskIds.length;
+  // What can wait harms nobody meanwhile: the owner is not told it is waiting.
+  const tasks = taskIds.filter(
+    (id) => !CATEGORIES.find((c) => c.id === categoryOf(id))?.optional,
+  ).length;
   const counts: Record<Category, number> = {
     voice: voiced.length,
     mixed: suspects.length,
@@ -1510,9 +1517,9 @@ export function Team({
         {suspects.map((m) => (
           <TaskRow
             key={`mixed-${m.recording_id}-${m.speaker_id}`}
-            leading={attention('warning')}
+            leading={attention('info')}
             title={`${m.name} · ${m.filename} · ${m.speaker_id}`}
-            meta={`${m.open} 段（${span(m.open_seconds)}）听起来不像${m.name}，占这个声音的 ${Math.round(m.share * 100)}%`}
+            meta={`${Math.round(m.share * 100)}% 不像${m.name}（${span(m.open_seconds)}），已自动排除`}
             hint={
               m.likely_name
                 ? `多数像${m.likely_name}`
@@ -1525,7 +1532,7 @@ export function Team({
                 disabled={busy}
                 onClick={() => setReviewing(m)}
               >
-                逐段试听
+                听一听，决定是谁
               </Button>
             }
           />
@@ -1843,22 +1850,26 @@ export function Team({
       </Row>
     </Stack>
   );
-  const todoTab =
-    tasks === 0 || !category ? (
-      <Stack gap={4}>
-        <Text tone="secondary">现在没有需要你处理的事。</Text>
-        {processing}
-      </Stack>
-    ) : (
-      <SideTabs
-        label="待处理类别"
-        value={category.id}
-        onValueChange={(value) => go({ cat: value })}
-        aside={processing}
-        groups={[
-          {
-            label: '待处理类别',
-            items: openCategories.map((c) => ({
+  const todoTab = !category ? (
+    <Stack gap={4}>
+      <Text tone="secondary">现在没有需要你处理的事。</Text>
+      {processing}
+    </Stack>
+  ) : (
+    <SideTabs
+      label="待处理类别"
+      value={category.id}
+      onValueChange={(value) => go({ cat: value })}
+      aside={processing}
+      groups={[
+        { label: '待处理类别', optional: false },
+        { label: '有空再看', optional: true },
+      ]
+        .map(({ label, optional }) => ({
+          label,
+          items: openCategories
+            .filter((c) => !!c.optional === optional)
+            .map((c) => ({
               value: c.id,
               label: (
                 <Row gap={2} as="div">
@@ -1872,33 +1883,33 @@ export function Team({
                 </Text>
               ),
             })),
-          },
-        ]}
+        }))
+        .filter((group) => group.items.length > 0)}
+    >
+      <Section
+        framed
+        level={3}
+        title={category.label}
+        badge={
+          <Text as="span" size="sm" tone="secondary">
+            {counts[category.id]}
+          </Text>
+        }
+        description={category.help}
+        actions={
+          batch ? (
+            <Row gap={2} wrap>
+              {batch}
+            </Row>
+          ) : undefined
+        }
       >
-        <Section
-          framed
-          level={3}
-          title={category.label}
-          badge={
-            <Text as="span" size="sm" tone="secondary">
-              {counts[category.id]}
-            </Text>
-          }
-          description={category.help}
-          actions={
-            batch ? (
-              <Row gap={2} wrap>
-                {batch}
-              </Row>
-            ) : undefined
-          }
-        >
-          <Stack ref={taskList} gap={4}>
-            {body}
-          </Stack>
-        </Section>
-      </SideTabs>
-    );
+        <Stack ref={taskList} gap={4}>
+          {body}
+        </Stack>
+      </Section>
+    </SideTabs>
+  );
 
   return (
     <>

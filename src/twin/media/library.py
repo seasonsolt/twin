@@ -164,7 +164,8 @@ CREATE TABLE IF NOT EXISTS review_units (
 );
 -- The owner's decisions about single segments of a confirmed speaker (``media.review``): not ``from_person`` after
 -- all ('exclude'), someone else's ('move', to ``to_person``), or theirs indeed ('keep'). They hold while the
--- segment's speaker is still confirmed as ``from_person``.
+-- segment's speaker is still confirmed as ``from_person``. ``auto``: left out by the review itself, since the stretch
+-- sounds like someone else or nobody known (``Reviews.settle``); the owner's own decision replaces it.
 CREATE TABLE IF NOT EXISTS segment_fixes (
     recording_id TEXT NOT NULL,
     transcript_id TEXT NOT NULL,
@@ -173,6 +174,7 @@ CREATE TABLE IF NOT EXISTS segment_fixes (
     action TEXT NOT NULL,
     to_person TEXT,
     updated_at TEXT NOT NULL,
+    auto INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (recording_id, transcript_id, segment)
 );
 -- Model tokens the library spent (proofreading, and builds of its twins), for the batch quota.
@@ -327,6 +329,7 @@ class Library:
                 ("people", "account", "TEXT"),
                 ("attributions", "disputed", "INTEGER NOT NULL DEFAULT 0"),
                 ("recordings", "named", "TEXT"),
+                ("segment_fixes", "auto", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:

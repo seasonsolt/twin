@@ -95,14 +95,15 @@ def test_the_library_flow_is_scored_stage_by_stage(tmp_path: Path) -> None:
     review = card["review"]
     # The owner confirmed S2 as B, who has no samples, so only S1 was heard: 8 of its 40 seconds are B's.
     assert review["foreign_found"] == 1.0 and review["own_flagged"] == 0.0
-    assert review["put_to_owner"] == 1 and review["put_impure"] == 1 and review["unready"] == 1
+    # A fifth of S1 is suspect: left out without asking, since only a speaker mostly unlike the person is put to them.
+    assert review["put_to_owner"] == 0 and review["put_impure"] == 0 and review["unready"] == 1
     twin = card["twin"]
     # A's twin holds 8 foreign characters of its 40; with B's 40 own characters that is 8 of 80.
     assert twin["owner"]["strict"]["foreign"]["rate"] == 0.1
     assert twin["review"]["strict"]["foreign"]["rate"] == 0.0
     assert twin["follow"]["strict"]["foreign"]["rate"] == 0.0
-    # The owner decides S2 (40 s, undecided) and hears S1 (40 s, put to them): all 80 s of speech went through them.
-    assert card["manual"]["rate"] == 1.0 and card["manual"]["review_seconds"] == 40
+    # The owner decides S2 (40 s, undecided); S1 is not put to them: half the speech went through them.
+    assert card["manual"]["rate"] == 0.5 and card["manual"]["review_seconds"] == 0
     assert card["gate"]["auto_wrong_seconds"] == 0 and card["gate"]["foreign"] == 0.0
     assert not card["gate"]["passed"]
 

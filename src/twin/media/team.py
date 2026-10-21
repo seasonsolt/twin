@@ -437,6 +437,41 @@ class Team:
             views.append(view)
         return views
 
+    def reassign(self, recording_id: str, transcript_id: str, speaker_id: str, before: str, after: str) -> bool:
+        """The review found a speaker confirmed as ``before`` to be ``after`` (``Reviews.settle``): give it to them as
+        an automatic decision the owner can undo, with ``before`` among the people it is not, and the voice samples
+        taken from it as ``before`` no longer standing for them. False when the speaker is no longer ``before``'s."""
+        with self.library.transaction() as db:
+            # A decision the owner made after the speaker was heard again stands: they heard it themselves.
+            row = db.execute(
+                "SELECT a.rejected, a.auto FROM attributions a JOIN recordings r ON r.id = a.recording_id "
+                "AND r.transcript_id = a.transcript_id JOIN reviewed v ON v.recording_id = a.recording_id "
+                "AND v.transcript_id = a.transcript_id AND v.speaker_id = a.speaker_id WHERE a.recording_id = ? "
+                "AND a.transcript_id = ? AND a.speaker_id = ? AND a.decision = 'confirmed' AND a.person_id = ? "
+                "AND (a.auto = 1 OR a.updated_at <= v.created_at)",
+                (recording_id, transcript_id, speaker_id, before),
+            ).fetchone()
+            if row is None or not db.execute("SELECT 1 FROM people WHERE id = ?", (after,)).fetchone():
+                return False
+            refused = set(json.loads(row[0]))
+            # Never someone the owner said it is not; and given away once already, it is not passed on again.
+            if after in refused or (row[1] and refused):
+                return False
+            rejected = sorted(refused | {before})
+            db.execute(
+                "UPDATE attributions SET person_id = ?, rejected = ?, auto = 1, updated_at = ? WHERE recording_id = ? "
+                "AND transcript_id = ? AND speaker_id = ?",
+                (after, json.dumps(rejected), _now(), recording_id, transcript_id, speaker_id),
+            )
+            db.execute(
+                "UPDATE voiceprints SET active = 0 WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ? "
+                "AND person_id IS NOT ?",
+                (recording_id, transcript_id, speaker_id, after),
+            )
+            self._reopen(db, recording_id, {before, after})
+            db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
+            return True
+
     def decide(
         self,
         recording_id: str,

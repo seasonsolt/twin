@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { ChevronDown, ShieldCheck } from 'lucide-react';
 import {
   Button,
   Card,
@@ -42,6 +42,8 @@ async function signedIn() {
 export function Login() {
   const [methods, setMethods] = useState<LoginMethods | null>(null);
   const [waitlisted, setWaitlisted] = useState('');
+  const [ownOpen, setOwnOpen] = useState(false);
+  const ownId = useId();
   useEffect(() => {
     let active = true;
     api<LoginMethods>('/api/auth/methods')
@@ -88,19 +90,27 @@ export function Login() {
           </Stack>
         ) : (
           <>
-            <Stack gap={2}>
-              <Heading level={1} size="title">
-                {sso || methods.password ? '登录 twin' : '用邮箱登录'}
-              </Heading>
-              {sso && own && (
-                <Text tone="secondary">
-                  用公司账号进入，或使用管理员为你开的 twin 账号。
-                </Text>
-              )}
-            </Stack>
-            {sso && (
-              <Stack gap={2}>
-                {start ? (
+            <Card variant="outline" padding="lg" className="auth-card">
+              <div className="auth-card-head">
+                <span aria-hidden className="auth-tile">
+                  <span className="auth-mark">
+                    <span />
+                    <span />
+                  </span>
+                </span>
+                <Stack gap={1} align="center">
+                  {(sso || methods.password) && (
+                    <Text size="sm" tone="secondary">
+                      欢迎回来
+                    </Text>
+                  )}
+                  <Heading level={1} size="title">
+                    {sso || methods.password ? '登录 twin' : '用邮箱登录'}
+                  </Heading>
+                </Stack>
+              </div>
+              {sso &&
+                (start ? (
                   // The other app checks that the post comes from this site, then hands the browser to the sign-in.
                   <form method="post" action={start}>
                     <Button type="submit" size="lg" className="min-h-12 w-full">
@@ -113,29 +123,38 @@ export function Login() {
                     <ShieldCheck aria-hidden className="size-5" />
                     用享佳统一身份登录
                   </LinkButton>
-                )}
-                <Text size="sm" tone="secondary" align="center">
-                  将跳转到统一身份认证，完成后自动回到 twin
-                </Text>
-              </Stack>
-            )}
-            {sso && own && (
-              <Text
-                size="sm"
-                tone="secondary"
-                align="center"
-                className="auth-divider"
-              >
-                或用 twin 账号登录
-              </Text>
-            )}
-            {methods.password && <PasswordLogin primary={!sso} />}
-            {methods.email && (
-              <EmailLogin
-                primary={!sso && !methods.password}
-                onWaitlist={setWaitlisted}
-              />
-            )}
+                ))}
+              {sso && own && (
+                <div className="auth-divider">
+                  <Button
+                    variant="ghost"
+                    aria-expanded={ownOpen}
+                    aria-controls={ownId}
+                    onClick={() => setOwnOpen((open) => !open)}
+                  >
+                    或用 twin 账号登录
+                    <ChevronDown
+                      aria-hidden
+                      className={`size-4 transition-transform ${ownOpen ? 'rotate-180' : ''}`}
+                    />
+                  </Button>
+                </div>
+              )}
+              {(!sso || ownOpen) && (
+                <div id={ownId} className="space-y-4">
+                  {methods.password && <PasswordLogin primary={!sso} />}
+                  {methods.email && (
+                    <EmailLogin
+                      primary={!sso && !methods.password}
+                      onWaitlist={setWaitlisted}
+                    />
+                  )}
+                </div>
+              )}
+            </Card>
+            <Text size="sm" tone="secondary" align="center">
+              登录遇到问题？请联系管理员
+            </Text>
           </>
         )}
         <div className="auth-themes">
@@ -180,6 +199,7 @@ function AuthStage() {
           <li>超级组织</li>
         </ol>
       </div>
+      <p className="auth-footnote">享佳集团 · 内部使用</p>
     </header>
   );
 }

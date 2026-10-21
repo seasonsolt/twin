@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -128,10 +129,10 @@ def test_a_confirmed_speaker_is_heard_again_and_suspect_stretches_are_put_to_the
 def test_leaving_out_or_moving_stretches_rewrites_only_the_twins_they_change(tmp_path: Path) -> None:
     library, team, _, mixed, zhang, li = library_with_mixed_speaker(tmp_path)
     reviews = Reviews(library)
+    zhang_before = {s.source_id for s in team.sources(zhang, "张总")}
     reviews.run(mixed, Voices(VOICES))
     team.link(zhang, "p-zhang")
     team.link(li, "p-li")
-    zhang_before = {s.source_id for s in team.sources(zhang, "张总")}
     assert [s.title for s in team.sources(li, "李总")] == ["2026-03-01 例会"]
 
     transcript_id, current = revision(library, mixed)
@@ -280,3 +281,123 @@ def test_a_speaker_decided_again_reopens_whoever_was_given_its_stretches(tmp_pat
     decide(team, mixed, "S1", "clear")
     assert wanted_done(library, "p-li")[0] == before + 1
     assert [s.title for s in team.sources(li, "李总")] == ["2026-03-01 例会"]
+
+
+def test_suspect_stretches_leave_the_twin_without_asking_and_the_owner_can_take_them_back(tmp_path: Path) -> None:
+    library, team, _, mixed, zhang, li = library_with_mixed_speaker(tmp_path)
+    team.link(zhang, "p-zhang")
+    reviews = Reviews(library)
+    before = wanted_done(library, "p-zhang")[0]
+    reviews.run(mixed, Voices(VOICES))
+    # 李总's stretch and the stranger's are out of 张总's twin at once, and the twin is rebuilt once.
+    (source,) = [s for s in team.sources(zhang, "张总") if s.title == "2026-03-02 周会"]
+    assert [i for i, line in enumerate(source.lines) if line[2]] == [0]
+    assert wanted_done(library, "p-zhang")[0] == before + 1
+    view = reviews.speaker(library.get(mixed), "S1")  # type: ignore[arg-type]
+    assert view is not None and [(u.fix, u.auto) for u in view.units] == [
+        (None, False),
+        ("exclude", True),
+        ("exclude", True),
+    ]
+    # Left out by the review alone, the speaker still waits for the owner when most of it is suspect.
+    assert view.open == 2 and [s.speaker_id for s in reviews.suspects()] == ["S1"]
+    # Settling again changes nothing and closes no twin.
+    assert reviews.settle() == 0 and wanted_done(library, "p-zhang")[0] == before + 1
+
+    # The owner hears the stranger's stretch and keeps it: it is 张总's again, and stays so.
+    transcript_id, current = revision(library, mixed)
+    current = reviews.fix(mixed, transcript_id, current, "S1", [2], "keep")
+    assert reviews.settle() == 0
+    (source,) = [s for s in team.sources(zhang, "张总") if s.title == "2026-03-02 周会"]
+    assert [i for i, line in enumerate(source.lines) if line[2]] == [0, 3]
+    view = reviews.speaker(library.get(mixed), "S1")  # type: ignore[arg-type]
+    assert [(u.fix, u.auto) for u in view.units] == [(None, False), ("exclude", True), ("keep", False)]  # type: ignore[union-attr]
+
+    # Confirmed as 李总 instead, S1's stretches are judged against 李总: the one sounding like 张总 leaves them,
+    # and so does the stranger's, since keeping it was a word about 张总 and no longer holds.
+    decide(team, mixed, "S1", "confirm", li)
+    assert reviews.settle({mixed}) == 2
+    view = reviews.speaker(library.get(mixed), "S1")  # type: ignore[arg-type]
+    assert view is not None and view.person_id == li
+    assert [(u.verdict, u.fix) for u in view.units] == [("other", "exclude"), ("", None), ("stranger", "exclude")]
+
+
+def wrongly_confirmed(tmp_path: Path) -> tuple[Library, Team, str, str, str]:
+    """张总 and 李总 have samples from another meeting; in this one 李总's speaker was taken as 张总's sample."""
+    library, team, _, _, zhang, li = library_with_mixed_speaker(tmp_path)
+    wrong = recording(
+        library,
+        "2026-03-03 周会.m4a",
+        [segment(0, 4, "S1", "预算要砍。"), segment(40, 44, "S1", "研发先停。"), segment(80, 84, "S1", "下周再议。")],
+        [Speaker(id="S1", seconds=12, embedding=[0.1, 1.0, 0.0])],
+    )
+    decide(team, wrong, "S1", "confirm", zhang, sample=True)
+    return library, team, wrong, zhang, li
+
+
+LIKE_LI = {0.0: [0.1, 1.0, 0.0], 40.0: [0.0, 1.0, 0.0], 80.0: [0.05, 1.0, 0.0]}
+
+
+def attribution(library: Library, recording_id: str) -> tuple[str, int, list[str]]:
+    with library.read() as db:
+        row = db.execute(
+            "SELECT person_id, auto, rejected FROM attributions WHERE recording_id = ? AND speaker_id = 'S1'",
+            (recording_id,),
+        ).fetchone()
+    return str(row[0]), int(row[1]), json.loads(row[2])
+
+
+def test_a_speaker_confirmed_as_the_wrong_person_is_given_to_whom_it_sounds_like(tmp_path: Path) -> None:
+    library, team, wrong, zhang, li = wrongly_confirmed(tmp_path)
+    team.link(zhang, "p-zhang")
+    team.link(li, "p-li")
+    reviews = Reviews(library)
+    reviews.run(wrong, Voices(LIKE_LI))
+    # Every stretch sounds like 李总: the speaker is theirs now, as an automatic decision, and not 张总's.
+    assert attribution(library, wrong) == (li, 1, [zhang])
+    assert "2026-03-03 周会" not in {s.title for s in team.sources(zhang, "张总")}
+    (given,) = [s for s in team.sources(li, "李总") if s.title == "2026-03-03 周会"]
+    assert [i for i, line in enumerate(given.lines) if line[2]] == [0, 1, 2]
+    # The sample taken from it as 张总 no longer stands for them, and nothing is left for the owner.
+    with library.read() as db:
+        assert not db.execute(
+            "SELECT 1 FROM voiceprints WHERE recording_id = ? AND person_id = ? AND active = 1", (wrong, zhang)
+        ).fetchone()
+    assert wrong not in {s.recording_id for s in reviews.suspects()}
+    assert reviews.settle() == 0
+
+    # The owner hears it and says it is 张总 after all: their word stands, the review does not take it away again.
+    decide(team, wrong, "S1", "confirm", zhang)
+    # Only its stretches leave 张总's twin again (three segments), and the speaker is put to the owner.
+    assert reviews.settle({wrong}) == 3 and attribution(library, wrong) == (zhang, 0, [])
+    assert [s.speaker_id for s in reviews.suspects({wrong})] == ["S1"]
+
+
+def test_a_speaker_the_wrong_sample_held_up_is_given_away_with_it(tmp_path: Path) -> None:
+    library, team, wrong, zhang, li = wrongly_confirmed(tmp_path)
+    held = recording(
+        library,
+        "2026-03-04 周会.m4a",
+        [segment(0, 4, "S1", "预算砍一半。"), segment(40, 44, "S1", "研发也停。"), segment(80, 84, "S1", "就这样。")],
+        [Speaker(id="S1", seconds=12, embedding=[0.0, 1.0, 0.0])],
+    )
+    decide(team, held, "S1", "confirm", zhang)
+    reviews = Reviews(library)
+    # Heard first, it sounds like the sample wrongly taken as 张总's: nothing to doubt yet.
+    reviews.run(held, Voices(LIKE_LI))
+    assert attribution(library, held) == (zhang, 0, [])
+    assert held not in {s.recording_id for s in reviews.suspects()}
+    # Once that speaker is given to 李总, this one sounds like 李总 alone and follows in the same settling.
+    reviews.run(wrong, Voices(LIKE_LI))
+    assert attribution(library, wrong) == (li, 1, [zhang])
+    assert attribution(library, held) == (li, 1, [zhang])
+
+
+def test_a_speaker_is_never_given_to_someone_the_owner_said_it_is_not(tmp_path: Path) -> None:
+    library, _, wrong, zhang, li = wrongly_confirmed(tmp_path)
+    with library.transaction() as db:
+        db.execute("UPDATE attributions SET rejected = ? WHERE recording_id = ?", (json.dumps([li]), wrong))
+    Reviews(library).run(wrong, Voices(LIKE_LI))
+    assert attribution(library, wrong)[0] == zhang
+    # Left with 张总, every stretch is out of their twin and the speaker waits for the owner.
+    assert [s.speaker_id for s in Reviews(library).suspects({wrong})] == ["S1"]

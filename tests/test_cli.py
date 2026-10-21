@@ -73,6 +73,7 @@ def test_remaining_commands() -> None:
         "eval-asr",
         "eval-asr-session",
         "eval-asr-memory",
+        "eval-asr-library",
     ):
         assert name in result.output
     assert set(
@@ -96,6 +97,7 @@ def test_remaining_commands() -> None:
         "eval-asr",
         "eval-asr-session",
         "eval-asr-memory",
+        "eval-asr-library",
     }
 
 

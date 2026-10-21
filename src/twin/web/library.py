@@ -377,11 +377,13 @@ class Libraries:
         self.kick(owner)
 
     def _settle(self, owners: list[str]) -> None:
-        """Classify recordings transcribed before a crash (or before automatic classification existed), then bring
-        every waiting twin in line."""
+        """Classify recordings transcribed before a crash (or before automatic classification existed), leave the
+        suspect stretches of confirmed speakers out of their twins (``Reviews.settle``), then bring every waiting
+        twin in line."""
         for owner in owners:
             try:
                 self.team(owner).classify_all()
+                Reviews(self.library(owner)).settle()
                 self.changed(owner)
             except Exception:
                 logger.exception("library of %s could not be settled after start-up", owner)
@@ -390,6 +392,19 @@ class Libraries:
 
     def team(self, owner: str) -> Team:
         return Team(self.library(owner))
+
+    def resettle(self, owner: str, recordings: set[str]) -> None:
+        """A speaker there was confirmed as someone else: what sounds unlike that person leaves their twin
+        (``Reviews.settle``), in the background since it reads every stretch; the twins it changes catch up."""
+
+        def run() -> None:
+            try:
+                if Reviews(self.library(owner)).settle(recordings):
+                    self.changed(owner)
+            except Exception:
+                logger.exception("stretches of %s could not be settled", sorted(recordings))
+
+        threading.Thread(target=run, name="library-resettle", daemon=True).start()
 
     def changed(self, owner: str) -> None:
         """A decision changed some twins' wanted version: bring every waiting twin of the owner in line."""
@@ -679,6 +694,7 @@ class Libraries:
             # A new voice sample can settle speakers in every other recording.
             team.classify_all()
         self.changed(owner)
+        self.resettle(owner, {recording_id})
         self.proofread(owner)
         return {"revision": revision, "person_id": person_id}
 
@@ -702,6 +718,7 @@ class Libraries:
         # The new voice samples can settle speakers in every other recording: the owner hears how many.
         recognised = team.classify_all() if body.action == "confirm" else 0
         self.changed(owner)
+        self.resettle(owner, {m.recording_id for m in body.members})
         self.proofread(owner)
         return {"person_id": person_id, "recognised": recognised}
 
@@ -842,6 +859,8 @@ class Libraries:
                 heard = Reviews(self.library(owner)).run(recording_id, transcriber)
             except (RuntimeError, OSError, ValueError) as exc:
                 raise JobError(f"复核没有完成：{exc}") from None
+            # What the review left out of the confirmed people's twins (``Reviews.settle``) reaches them.
+            self.changed(owner)
             log(f"完成：复核了 {heard} 位说话人")
             return {"recording_id": recording_id, "speakers": heard}
         finally:

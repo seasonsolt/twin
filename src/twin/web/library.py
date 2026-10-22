@@ -69,6 +69,9 @@ GIB = 1024**3
 # Waits before rewriting a twin's sources again after a failed attempt; after the last, the twin stays closed until
 # the next change or restart.
 SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
+# Waits before building a twin again after only the model's rate limit stopped its build; after the last, its card
+# shows the failure until someone retries it or the next change.
+REBUILD_RETRY_SECONDS = (300.0, 900.0, 1800.0, 3600.0)
 # How often every library is woken without anyone looking: twins held for the quota are rebuilt and proofreading
 # goes on once the quota frees up, even if nobody opens the library page.
 WAKE_SECONDS = 60.0
@@ -199,6 +202,8 @@ class Libraries:
         # The proofreading job of each owner, and per owner the twins whose rebuild waits for the quota.
         self.proofreading: dict[str, Job] = {}
         self.paused: dict[str, set[str]] = {}
+        # Twins whose build the model's rate limit stopped: tries so far, and when the next is due (None while it runs).
+        self.rebuilds: dict[str, tuple[int, float | None]] = {}
         self._stop = threading.Event()
         self._waker: threading.Thread | None = None
         # Whether the transcription service can denoise, and when it was last asked (``_denoises``).
@@ -412,13 +417,20 @@ class Libraries:
                     logger.exception("library of %s could not be woken", owner)
 
     def wake(self, owner: str) -> None:
-        """Carry on with what waits: once the quota has room, the twins held for it are rebuilt; the next
-        recording is transcribed and the next proofread."""
+        """Carry on with what waits: once the quota has room, the twins held for it are rebuilt, and so are those
+        whose wait after the rate limit is over; the next recording is transcribed and the next proofread."""
         if not self.quota(owner)["exhausted"]:
             with self.lock:
                 held = self.paused.pop(owner, set())
             for persona_id in sorted(held):
                 self.sync(owner, persona_id)
+        now = time.time()
+        with self.lock:
+            due = sorted(p for p, (_, at) in self.rebuilds.items() if at is not None and at <= now)
+            for persona_id in due:
+                self.rebuilds[persona_id] = (self.rebuilds[persona_id][0], None)
+        for persona_id in due:
+            self.sync(owner, persona_id)
         self.kick(owner)
 
     def _settle(self, owners: list[str]) -> None:
@@ -532,6 +544,8 @@ class Libraries:
 
     def built(self, persona_id: str, version: int) -> None:
         """A twin's build from ``version`` completed: open it, or rewrite it when something changed meanwhile."""
+        with self.lock:
+            self.rebuilds.pop(persona_id, None)
         entry = self.registry.entry(persona_id) if self.registry is not None else None
         if entry is None:
             return
@@ -539,6 +553,36 @@ class Libraries:
         team = self.team(owner)
         if team.wanted(persona_id) is not None and not team.built(persona_id, version):
             self.sync(owner, persona_id)
+
+    def unbuilt(self, persona_id: str, rate_limited: bool) -> None:
+        """A twin's build did not complete, and the twin stays closed. Stopped only by the model's rate limit, it is
+        built again after a wait (``wake``), longer each time; otherwise it waits for someone to retry it."""
+        if Team(self.library(TEAM)).wanted(persona_id) is None:
+            return
+        with self.lock:
+            tries, _ = self.rebuilds.pop(persona_id, (0, None))
+            if not rate_limited or tries >= len(REBUILD_RETRY_SECONDS):
+                return
+            self.rebuilds[persona_id] = (tries + 1, time.time() + REBUILD_RETRY_SECONDS[tries])
+        logger.warning(
+            "model rate limit stopped the build of %s; trying again in %.0f s", persona_id, REBUILD_RETRY_SECONDS[tries]
+        )
+
+    def rebuild(self, persona_id: str) -> None:
+        """Someone retries a twin whose build did not complete: now, and with the waits after a rate limit afresh."""
+        with self.lock:
+            self.rebuilds.pop(persona_id, None)
+        self.sync(TEAM, persona_id)
+
+    def build_status(self, persona_id: str) -> dict[str, Any] | None:
+        """How far the twin's build has gone, for its card while it cannot talk; with when it is tried again by
+        itself after the rate limit stopped it."""
+        status = self.registry.build_status(persona_id) if self.registry is not None else None
+        with self.lock:
+            _, at = self.rebuilds.get(persona_id, (0, None))
+        if status is not None and status["state"] == "idle" and at is not None:
+            status["retry_at"] = dt.datetime.fromtimestamp(at, dt.UTC).isoformat()
+        return status
 
     def spent_building(self, persona_id: str, tokens: int) -> None:
         """A build of a twin made from a library ended: what it spent counts against that library's quota."""
@@ -1447,9 +1491,7 @@ def register(
                     "persona_id": person.persona_id if opens else None,
                     "updating": updating,
                     # Where the update is (step and how far), shown on the card until the twin can talk.
-                    "build": registry.build_status(person.persona_id)
-                    if updating and person.persona_id and registry is not None
-                    else None,
+                    "build": libraries.build_status(person.persona_id) if updating and person.persona_id else None,
                     "self_claimed": theirs,
                     # A twin someone else keeps: not the viewer's to make again or delete.
                     "twin_elsewhere": bool(entry and not theirs and not opens),
@@ -1568,5 +1610,22 @@ def register(
         libraries.manage(libraries.viewer(request), person_id)
         claim = claim_key(body.claim if body else None)
         return libraries.create_twin(owner, person_id, request.scope["twin_identity"], claim)
+
+    @app.post("/api/library/people/{person_id}/rebuild", status_code=202)
+    def rebuild_twin(person_id: str, request: Request) -> dict[str, bool]:
+        """Try again the twin of a person whose memory update did not complete, for whoever may open it."""
+        person = libraries.team(libraries.owner(request)).person(person_id)
+        entry = registry.entry(person.persona_id) if registry is not None and person and person.persona_id else None
+        if (
+            registry is None
+            or person is None
+            or person.persona_id is None
+            or entry is None
+            or entry.get("by_voice")
+            or not registry.accessible(entry, request.scope["twin_identity"])
+        ):
+            raise HTTPException(404, "找不到这个分身")
+        libraries.rebuild(person.persona_id)
+        return {"queued": True}
 
     return libraries

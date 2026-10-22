@@ -36,6 +36,7 @@ from twin.persona.schema import ChatTurn
 from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web import library as web_library
+from twin.web import persona as web_persona
 from twin.web.jobs import PersonaProcessing
 
 HEADERS = {"X-Twin": "1"}
@@ -957,6 +958,90 @@ def test_a_failed_sync_is_tried_again(web: TestClient, monkeypatch: pytest.Monke
     pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
     until(lambda: open_twin(web, pid))
     assert calls == [pid, pid]
+
+
+def failing_builds(monkeypatch: pytest.MonkeyPatch, *, limited: bool) -> None:
+    """Every build fails from now on: turned away by the model's rate limit, or for another reason."""
+
+    def fail(*_: Any) -> dict[str, Any]:
+        raise RuntimeError("the model did not answer")
+
+    monkeypatch.setattr(web_persona, "run_persona_build", fail)
+    monkeypatch.setattr(web_persona, "rate_limited", lambda rows: limited)
+
+
+def twin_card(web: TestClient, pid: str) -> dict[str, Any]:
+    return next(p for p in web.get("/api/library/people").json()["items"] if p["persona_id"] == pid)
+
+
+def change_every_twin(web: TestClient) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    with libraries.library("team").transaction() as db:
+        db.execute("UPDATE personas_sync SET wanted = wanted + 1")
+    libraries.changed("team")
+
+
+def test_a_build_the_rate_limit_stopped_is_built_again_after_a_wait(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    with monkeypatch.context() as limit:
+        failing_builds(limit, limited=True)
+        change_every_twin(web)
+        until(lambda: "retry_at" in (twin_card(web, pid)["build"] or {}))
+    card = twin_card(web, pid)
+    assert card["updating"] is True and card["build"]["state"] == "idle"
+    assert card["build"]["last_error"] == "模型服务限流，记忆没有整理完，请稍后重试"
+    tries, due = libraries.rebuilds[pid]
+    assert tries == 1 and due - time.time() > web_library.REBUILD_RETRY_SECONDS[0] - 60
+    libraries.wake("team")  # not due yet
+    assert twin_card(web, pid)["updating"] is True
+    # The wait is over and the limit has lifted: the wake builds it again, and the twin opens.
+    libraries.rebuilds[pid] = (tries, time.time() - 1)
+    libraries.wake("team")
+    until(lambda: open_twin(web, pid))
+    assert pid not in libraries.rebuilds and twin_card(web, pid)["updating"] is False
+
+
+def test_the_waits_after_a_rate_limit_end(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_library, "REBUILD_RETRY_SECONDS", (300.0, 900.0))
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    libraries.unbuilt(pid, True)
+    libraries.unbuilt(pid, True)
+    assert libraries.rebuilds[pid][0] == 2
+    libraries.unbuilt(pid, True)  # tried as often as it waits: its card shows the failure from now on
+    assert pid not in libraries.rebuilds
+    libraries.unbuilt(pid, True)
+    libraries.unbuilt(pid, False)  # another failure is not waited out
+    assert pid not in libraries.rebuilds
+    libraries.unbuilt("not-a-library-twin", True)
+    assert "not-a-library-twin" not in libraries.rebuilds
+
+
+def test_a_failed_build_shows_on_the_card_and_is_retried_from_there(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    with monkeypatch.context() as broken:
+        failing_builds(broken, limited=False)
+        change_every_twin(web)
+        until(lambda: "last_error" in (twin_card(web, pid)["build"] or {}))
+    build = twin_card(web, pid)["build"]
+    assert build == {"state": "idle", "last_error": "记忆处理失败，请检查模型配置后重试"}
+    assert pid not in libraries.rebuilds
+    assert web.post("/api/library/people/nobody/rebuild", headers=HEADERS).status_code == 404
+    assert web.post(f"/api/library/people/{li}/rebuild", headers=HEADERS).status_code == 202
+    until(lambda: open_twin(web, pid))
+    assert twin_card(web, pid)["updating"] is False
 
 
 def test_a_sync_leaves_the_recordings_that_did_not_change_alone(web: TestClient, tmp_path: Path) -> None:

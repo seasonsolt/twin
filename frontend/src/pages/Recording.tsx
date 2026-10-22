@@ -80,8 +80,9 @@ export interface Person {
   lacking?: number;
   samples: number;
   updating: boolean;
-  // Where the update is while ``updating``; null when the twin has not started on it in this server yet.
-  build?: Processing | null;
+  // Where the update is while ``updating``; null when the twin has not started on it in this server yet. Once a
+  // build stopped without completing, ``last_error`` says why, and ``retry_at`` when it is tried again by itself.
+  build?: (Processing & { retry_at?: string | null }) | null;
   // They found themselves here by voice: their twin is their own, not the library's to open.
   self_claimed?: boolean;
   // Whether the viewer may name them, make their twin or delete them (they uploaded a recording they are in).

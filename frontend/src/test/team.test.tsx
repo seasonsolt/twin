@@ -1681,6 +1681,80 @@ it('lists people heard longest first', async () => {
   ).toEqual(['长的', '中的', '短的']);
 });
 
+it('says why a twin update stopped and when it is tried again, and retries it from the card', async () => {
+  const retryAt = '2026-10-22T07:05:00Z';
+  const stopped = (change: Partial<Person>, last_error: string) =>
+    person({
+      ...change,
+      updating: true,
+      build: { state: 'idle', last_error, retry_at: change.build?.retry_at },
+    });
+  people = [
+    stopped(
+      { persona_id: 'p-1', build: { state: 'idle', retry_at: retryAt } },
+      '模型服务限流，记忆没有整理完，请稍后重试',
+    ),
+    stopped(
+      { id: 'per_2', name: '李总', persona_id: 'p-2' },
+      '记忆处理失败，请检查模型配置后重试',
+    ),
+  ];
+  const rebuilt: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/personas') return json({ items: [], default: null });
+      if (url.endsWith('/rebuild') && init?.method === 'POST') {
+        rebuilt.push(url);
+        people = [
+          people[0],
+          person({
+            id: 'per_2',
+            name: '李总',
+            persona_id: 'p-2',
+            updating: true,
+            build: { state: 'queued' },
+          }),
+        ];
+        return json({ queued: true }, 202);
+      }
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const clock = new Date(retryAt).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const zhang = (await screen.findByText('张总', { selector: 'p' })).closest(
+    'li',
+  )!;
+  expect(within(zhang).getByText('记忆更新没完成')).toBeInTheDocument();
+  expect(within(zhang).getByRole('alert')).toHaveTextContent(
+    '模型服务限流，记忆没有整理完，请稍后重试',
+  );
+  expect(within(zhang).getByText(`约 ${clock} 自动重试`)).toBeInTheDocument();
+  expect(within(zhang).queryByRole('progressbar')).not.toBeInTheDocument();
+  const li = screen.getByText('李总', { selector: 'p' }).closest('li')!;
+  expect(within(li).getByRole('alert')).toHaveTextContent(
+    '记忆处理失败，请检查模型配置后重试',
+  );
+  expect(within(li).queryByText(/自动重试/u)).not.toBeInTheDocument();
+  expect(
+    screen.getByText('张总、李总 · 记忆更新没完成', { exact: false }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/整理记忆中/u)).not.toBeInTheDocument();
+  await userEvent.click(within(li).getByRole('button', { name: '重试' }));
+  await waitFor(() =>
+    expect(rebuilt).toEqual(['/api/library/people/per_2/rebuild']),
+  );
+  expect(
+    await screen.findByText(/李总 · 整理记忆中，完成后可以聊/u),
+  ).toBeInTheDocument();
+});
+
 it('adds a person by hand from a small dialog, and keeps the people list where it was', async () => {
   const posts: unknown[] = [];
   vi.stubGlobal(

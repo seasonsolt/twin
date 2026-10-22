@@ -272,3 +272,11 @@ def test_identity_show_and_status_include_every_backend_and_judges(tmp_path: Pat
     rows = egress_status(Settings(judges=[LLMSettings(), LLMSettings()]))
     assert len(rows) == 7
     assert all(set(row) == {"kind", "provider", "host", "external", "declared"} for row in rows)
+
+
+def test_the_fallback_model_is_listed_where_data_leaves() -> None:
+    settings = Settings(
+        llm_fallback=LLMSettings(model="glm", base_url="https://fallback.invalid/v1", egress="external")
+    )
+    rows = egress_status(settings, external_only=True)
+    assert [(row["kind"], row["host"]) for row in rows] == [("llm_fallback", "fallback.invalid")]

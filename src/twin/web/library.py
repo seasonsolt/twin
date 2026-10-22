@@ -769,6 +769,14 @@ class Libraries:
             return "failed"
         return "waiting" if recording.id in waiting else ""
 
+    def proofread_view(
+        self, library: Library, recording: Recording, waiting: set[str], now: str | None
+    ) -> dict[str, Any]:
+        """``proofread`` (``proofread_state``) and ``proofreading``: the recording is the one being proofread
+        (``now``) and nothing is filed yet; once the corrections are, it is done while the job still ends."""
+        state = self.proofread_state(library, recording, waiting)
+        return {"proofread": state, "proofreading": state == "waiting" and recording.id == now}
+
     def create_twin(
         self, owner: str, person_id: str, identity: dict[str, Any], claim: str | None = None
     ) -> dict[str, Any]:
@@ -905,8 +913,7 @@ class Libraries:
         people = self.people_of(viewer)
         return {
             **self.view(recording),
-            "proofread": self.proofread_state(library, recording, waiting),
-            "proofreading": self.proofreading_now.get(owner) == recording.id,
+            **self.proofread_view(library, recording, waiting, self.proofreading_now.get(owner)),
             "denoised": denoise.denoised(library, recording.id),
             "can_edit": access.edit,
             "mine": [s.id for s in speakers if s.decision == "confirmed" and s.person_id in people],
@@ -1297,8 +1304,7 @@ class Libraries:
                     # Who was recognised, and how many speakers still wait for the owner.
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
-                    "proofread": self.proofread_state(library, r, waiting),
-                    "proofreading": now == r.id,
+                    **self.proofread_view(library, r, waiting, now),
                     "can_edit": access[r.id].edit,
                 }
                 for r in recordings

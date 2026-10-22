@@ -139,3 +139,29 @@ def test_overlap_keeps_as_many_clusters_as_the_model_counts(diarize):
     binary = diarize.add_overlap(turns, 2, segmentation)
     assert binary[:, 0].tolist() == [1, 1, 1, 1, 1, 1, 0, 0, 0, 0]
     assert binary[:, 1].tolist() == [0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+
+
+def voices(count, speakers, seed=0):
+    """Voiceprint-like windows: `speakers` directions in 192 dimensions, each window one of them plus noise."""
+    rng = np.random.default_rng(seed)
+    centres = rng.normal(size=(speakers, 192))
+    return (centres[rng.integers(speakers, size=count)] + 0.9 * rng.normal(size=(count, 192))).astype(np.float32)
+
+
+def test_a_long_recording_is_clustered_on_the_same_affinity_stored_sparsely(diarize, monkeypatch):
+    pytest.importorskip("scipy")
+    pytest.importorskip("sklearn")
+    x = voices(600, 5)
+    keep = int((1 - 0.012) * len(x))
+    affinity = diarize.cosine(x, x)
+    for row in affinity:
+        row[np.argsort(row)[:keep]] = 0
+    affinity = 0.5 * (affinity + affinity.T)
+    np.fill_diagonal(affinity, 0)
+    dense = -affinity
+    dense[np.diag_indices_from(dense)] = np.abs(affinity).sum(axis=1)
+    np.testing.assert_allclose(diarize.sparse_laplacian(x, len(x) - keep).toarray(), dense, atol=1e-5)
+
+    before = diarize.spectral(x)
+    monkeypatch.setattr(diarize, "DENSE_WINDOWS", 0)
+    assert (diarize.spectral(x) == before).all() and len(set(before)) == 5

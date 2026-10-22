@@ -433,15 +433,26 @@ class Engine:
         row = found[0]["spk_embedding"].detach().cpu().numpy().astype(np.float32).reshape(-1)
         return row / (np.linalg.norm(row) + 1e-9)
 
-    def embed_all(self, clips, done):
+    def embed_all(self, clips, done, singles_on_gpu=False):
         # Equal-length groups avoid zero padding, so batched embeddings match single-clip ones. Small groups stay
         # on CPU: every new clip length costs MPS a fresh graph, which outweighs the batch for a handful of clips.
+        # `singles_on_gpu` (CUDA): small groups go to the GPU one clip per call on threads instead, as `embedding`
+        # does; voiceprints alike to the CPU's to float precision, many times faster for thousands of clips.
         np, torch = self.np, self.torch
         result = [None] * len(clips)
         groups = {}
         for k, clip in enumerate(clips):
             groups.setdefault(len(clip), []).append(k)
         finished = 0
+        if singles_on_gpu and self.device == "cuda" and self.spk_batch is not None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            singles = [k for members in groups.values() if len(members) < 8 for k in members]
+            with ThreadPoolExecutor(EMBED_THREADS) as pool:
+                for k, value in zip(singles, pool.map(lambda k: self.embed_gpu(clips[k]), singles), strict=True):
+                    result[k] = value
+            finished = len(singles)
+            groups = {length: members for length, members in groups.items() if len(members) >= 8}
         with torch.no_grad():
             for members in groups.values():
                 if self.spk_batch is None or len(members) < 8:

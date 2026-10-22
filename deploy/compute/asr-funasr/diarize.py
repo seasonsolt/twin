@@ -25,6 +25,9 @@ SAMPLE_RATE = 16000
 WINDOW = 1.5
 STEP = 0.75
 BATCH = 64
+# Up to this many windows (about 3.5 hours of speech) clustering keeps the dense affinity of 3D-Speaker, so these
+# recordings are diarized exactly as before; longer ones use the same matrix stored sparsely (`sparse_laplacian`).
+DENSE_WINDOWS = 16000
 
 
 def merge_spans(first, second):
@@ -87,19 +90,47 @@ def spectral(x, pval=0.012, min_speakers=1, max_speakers=15, min_pnum=6):
     import scipy.sparse.linalg
     from sklearn.cluster import k_means
 
-    affinity = cosine(x, x)
-    keep = min(int((1 - pval) * affinity.shape[0]), affinity.shape[0] - min_pnum)
-    for row in affinity:
-        row[np.argsort(row)[:keep]] = 0
-    affinity = 0.5 * (affinity + affinity.T)
-    np.fill_diagonal(affinity, 0)
-    laplacian = -affinity
-    laplacian[np.diag_indices_from(laplacian)] = np.abs(affinity).sum(axis=1)
-    size = laplacian.shape[0]
+    size = x.shape[0]
+    keep = min(int((1 - pval) * size), size - min_pnum)
+    if size > DENSE_WINDOWS:
+        laplacian = sparse_laplacian(x, size - keep)
+    else:
+        affinity = cosine(x, x)
+        for row in affinity:
+            row[np.argsort(row)[:keep]] = 0
+        affinity = 0.5 * (affinity + affinity.T)
+        np.fill_diagonal(affinity, 0)
+        laplacian = -affinity
+        laplacian[np.diag_indices_from(laplacian)] = np.abs(affinity).sum(axis=1)
     values, vectors = scipy.sparse.linalg.eigsh(laplacian, k=min(max_speakers + 1, size), which="SM", v0=np.ones(size))
     gaps = np.diff(values[min_speakers - 1 : max_speakers + 1].astype(float))
     speakers = int(np.argmax(gaps)) + min_speakers
     return k_means(vectors[:, :speakers], speakers, random_state=0)[1]
+
+
+def sparse_laplacian(x, top, rows=2048):
+    """The Laplacian `spectral` builds, keeping only each window's `top` most alike windows as it goes: the same
+    matrix as a sparse one, built a block of rows at a time, so a long recording does not need several dense n x n
+    copies (a 12-hour meeting has some 50,000 windows: 10 GB each in float32)."""
+    import scipy.sparse
+
+    n = x.shape[0]
+    unit = x / np.linalg.norm(x, axis=1, keepdims=True)
+    picked = np.empty((n, top), dtype=np.int32)
+    values = np.empty((n, top), dtype=x.dtype)
+    for start in range(0, n, rows):
+        block = unit[start : start + rows] @ unit.T
+        best = np.argpartition(block, n - top, axis=1)[:, n - top :]
+        picked[start : start + rows] = best
+        values[start : start + rows] = np.take_along_axis(block, best, axis=1)
+        del block, best
+    affinity = scipy.sparse.csr_matrix((values.ravel(), picked.ravel(), np.arange(0, n * top + 1, top)), shape=(n, n))
+    del picked, values
+    affinity = 0.5 * (affinity + affinity.T)
+    affinity = (affinity - scipy.sparse.diags(affinity.diagonal())).tocsr()
+    affinity.eliminate_zeros()
+    degree = np.asarray(abs(affinity).sum(axis=1)).ravel()
+    return (scipy.sparse.diags(degree) - affinity).tocsr()
 
 
 def agglomerative(x, threshold=0.4):

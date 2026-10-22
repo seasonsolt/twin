@@ -78,7 +78,7 @@ def test_discover_manifest_and_lock():
     packs = compute.discover()
     assert [p.name for p in packs] == ["asr-funasr"]
     pack = packs[0]
-    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.5.0", "command", "3.12", "run.py")
+    assert (pack.version, pack.kind, pack.python, pack.entry) == ("1.5.1", "command", "3.12", "run.py")
     assert pack.platforms == ("darwin-arm64",)
     assert len(pack.models) == 4 and pack.model_bytes > 2_000_000_000
     assert sorted(m["role"] for m in pack.models) == ["asr", "punc", "speaker", "vad"]
@@ -125,7 +125,7 @@ def test_install_reuse_switch_and_status(environment):
     assert len(runner.calls) == 4 and runner.calls[-1][-1] == "--check"
     assert config.read_bytes() == original
     status = compute.status(pack, config)
-    assert "已安装" in status and "版本 1.5.0" in status and "指向当前安装" in status and "模型齐全" in status
+    assert "已安装" in status and "版本 1.5.1" in status and "指向当前安装" in status and "模型齐全" in status
     text = config.read_text()
     command = tomllib.loads(text)["asr"]["command"]
     config.write_text(text.replace(json.dumps(command), json.dumps(command + " --device mps")))
@@ -435,7 +435,7 @@ def test_denoising_is_optional_and_does_not_change_what_transcripts_say(script, 
     # Its model is not one the overlap-aware path needs, so a service without it transcribes as before.
     assert [m["role"] for m in manifest["playback_models"]] == ["denoise"]
     assert "denoise" not in {m["role"] for m in manifest["cuda_models"]}
-    assert (manifest["version"], manifest["transcription"]) == ("1.5.0", "1.4.1")
+    assert (manifest["version"], manifest["transcription"]) == ("1.5.1", "1.4.1")
     assert script.transcription_version() == "1.4.1"
     monkeypatch.setenv("MODELSCOPE_CACHE", str(tmp_path))
     monkeypatch.setenv("HF_HOME", str(tmp_path))
@@ -462,7 +462,7 @@ def test_capabilities_answer_without_models(tmp_path):
         text=True,
     )
     assert result.returncode == 0
-    assert json.loads(result.stdout.splitlines()[-1]) == {"ok": True, "version": "1.5.0", "denoise": False}
+    assert json.loads(result.stdout.splitlines()[-1]) == {"ok": True, "version": "1.5.1", "denoise": False}
 
 
 def test_script_hotwords_and_upload(script, tmp_path):
@@ -587,7 +587,7 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd):
         with urllib.request.urlopen(url + "/health") as response:
             assert json.loads(response.read()) == {
                 "ok": True,
-                "version": "1.5.0",
+                "version": "1.5.1",
                 "transcription": "1.4.1",
                 "denoise": False,
                 "device": "cuda",
@@ -703,7 +703,7 @@ def test_remote_denoising_round_trip(script, remote, tmp_path, capfd):
     try:
         audio, output = tmp_path / "playback.flac", tmp_path / "playback-denoised.flac"
         audio.write_bytes(b"abc")
-        assert remote.capabilities(url) == {"ok": True, "version": "1.5.0", "denoise": True}
+        assert remote.capabilities(url) == {"ok": True, "version": "1.5.1", "denoise": True}
         assert remote.capabilities(old_url)["denoise"] is False
         request = {"audio": str(audio), "denoise": True, "output": str(output)}
         assert remote.denoise(url, request) == {"ok": True, "denoised": True, "seconds": 1.0}

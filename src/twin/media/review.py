@@ -231,6 +231,38 @@ def _unit(vector: np.ndarray) -> np.ndarray:
     return np.asarray(vector / norm)
 
 
+def _summary_scores(
+    blobs: list[bytes | None], matrix: np.ndarray, owners: np.ndarray, count: int, me: int
+) -> dict[int, np.ndarray]:
+    """Score stretches in bounded batches for list summaries; detail/decision paths keep scalar arithmetic."""
+    found: dict[int, np.ndarray] = {}
+    if not len(matrix):
+        return found
+    valid = [i for i, blob in enumerate(blobs) if blob is not None and len(blob) == matrix.shape[1] * 4]
+    for start in range(0, len(valid), 256):
+        indices = valid[start : start + 256]
+        vectors = _unit(
+            np.frombuffer(b"".join(blob for i in indices if (blob := blobs[i]) is not None), dtype=np.float32)
+            .reshape(len(indices), -1)
+            .astype(np.float64)
+        )
+        scores = np.einsum("ij,kj->ki", matrix, vectors, optimize=False)
+        best = np.full((len(indices), count), -1.0)
+        for owner in range(count):
+            best[:, owner] = np.maximum(-1.0, scores[:, owners == owner].max(axis=1))
+        # Preserve scalar decisions at floating point boundaries and ties between likely people.
+        rivals = np.delete(best, me, axis=1)
+        other = rivals.max(axis=1) if count > 1 else np.full(len(indices), -1.0)
+        boundary = (np.abs(other - best[:, me] - MARGIN) < 1e-10) | (
+            np.abs(np.maximum(best[:, me], other) - STRANGER) < 1e-10
+        )
+        if count > 2:
+            ranked = np.partition(rivals, -2, axis=1)
+            boundary |= ranked[:, -1] - ranked[:, -2] < 1e-10
+        found.update((index, row) for index, row, near in zip(indices, best, boundary, strict=True) if not near)
+    return found
+
+
 @dataclass
 class _Voiceprints:
     """Everyone's active voice samples (``Reviews._voiceprints``), read once to judge many recordings."""
@@ -410,14 +442,20 @@ class Reviews:
             recording = self.library.get(recording_id)
             if recording is None:
                 continue
-            for review in self._reviews(recording, None, text=False, voiceprints=voiceprints):
+            for review in self._reviews(recording, None, text=False, voiceprints=voiceprints, include_units=units):
                 if review.status == "ready" and review.open and review.share >= FLAG_SHARE:
                     found.append(review if units else review.model_copy(update={"units": []}))
         found.sort(key=lambda r: -r.open_seconds)
         return found
 
     def _reviews(
-        self, recording: Recording, only: set[str] | None, *, text: bool, voiceprints: _Voiceprints | None = None
+        self,
+        recording: Recording,
+        only: set[str] | None,
+        *,
+        text: bool,
+        voiceprints: _Voiceprints | None = None,
+        include_units: bool = True,
     ) -> list[SpeakerReview]:
         transcript_id = recording.transcript_id
         if transcript_id is None:
@@ -480,52 +518,89 @@ class Reviews:
             mine = [k for k, owner in enumerate(owners) if people[owner] == person_id]
             review.status = "ready" if mine else "no_samples"
             likely: dict[str, float] = {}
-            for index, segments, parts, blob in stored.get(speaker_id, []):
-                seconds = sum(end - start for start, end in parts)
-                view = UnitView(
-                    index=index,
-                    segments=segments,
-                    start=parts[0][0],
-                    end=parts[-1][1],
-                    seconds=round(seconds, 2),
+            judged_seconds = suspect_seconds = open_seconds = 0.0
+            suspects = opened = 0
+            me = people.index(person_id) if mine else -1
+            stretches = stored.get(speaker_id, [])
+            summaries = (
+                _summary_scores(
+                    [
+                        blob if sum(end - start for start, end in parts) >= JUDGE_SECONDS else None
+                        for _, _, parts, blob in stretches
+                    ],
+                    matrix,
+                    owners,
+                    len(people),
+                    me,
                 )
+                if mine and not include_units
+                else {}
+            )
+            for position, (index, segments, parts, blob) in enumerate(stretches):
+                seconds = sum(end - start for start, end in parts)
+                if not include_units and seconds < JUDGE_SECONDS:
+                    continue
                 fix = fixes.get(segments[0]) if segments else None
-                if fix and fix[0] == person_id:
-                    view.fix, view.to_person, view.auto = fix[1], fix[2], fix[3]
-                    view.to_name = everyone.get(fix[2]) if fix[2] else None
-                if transcript is not None:
-                    view.text = " ".join(
-                        " ".join(transcript.segments[i].text.split()) for i in segments if i < len(transcript.segments)
-                    )
+                if fix and fix[0] != person_id:
+                    fix = None
+                own = other = None
+                like = None
+                verdict: Verdict = ""
                 if blob is not None and mine and len(matrix) and len(blob) == matrix.shape[1] * 4:
-                    vector = _unit(np.frombuffer(blob, dtype=np.float32).astype(np.float64))
-                    scores = matrix @ vector
-                    best = np.full(len(people), -1.0)
-                    np.maximum.at(best, owners, scores)
-                    me = people.index(person_id)
+                    best = summaries.get(position)
+                    if best is None:
+                        vector = _unit(np.frombuffer(blob, dtype=np.float32).astype(np.float64))
+                        scores = matrix @ vector
+                        best = np.full(len(people), -1.0)
+                        np.maximum.at(best, owners, scores)
                     own = float(best[me])
                     best[me] = -2.0
                     other_index = int(np.argmax(best)) if len(people) > 1 else -1
-                    other = float(best[other_index]) if other_index >= 0 else -1.0
-                    view.own, view.other = round(own, 3), (round(other, 3) if other_index >= 0 else None)
-                    if other_index >= 0:
-                        view.like, view.like_name = people[other_index], names[people[other_index]]
-                    view.verdict = judge(own, max(other, -1.0), seconds)
+                    other = float(best[other_index]) if other_index >= 0 else None
+                    like = people[other_index] if other_index >= 0 else None
+                    verdict = judge(own, max(other if other is not None else -1.0, -1.0), seconds)
                     if seconds >= JUDGE_SECONDS:
-                        review.seconds += seconds
-                    if view.verdict:
-                        review.suspects += 1
-                        review.suspect_seconds += seconds
-                        # Left out by the review alone, it still waits for the owner's word if they are asked.
-                        if view.fix is None or view.auto:
-                            review.open += 1
-                            review.open_seconds += seconds
-                        if view.verdict == "other" and view.like:
-                            likely[view.like] = likely.get(view.like, 0.0) + seconds
-                review.units.append(view)
-            review.seconds = round(review.seconds, 1)
-            review.suspect_seconds = round(review.suspect_seconds, 1)
-            review.open_seconds = round(review.open_seconds, 1)
+                        judged_seconds += seconds
+                    if verdict:
+                        suspects += 1
+                        suspect_seconds += seconds
+                        # Automatic exclusions still wait for the owner's word.
+                        if fix is None or fix[3]:
+                            opened += 1
+                            open_seconds += seconds
+                        if verdict == "other" and like:
+                            likely[like] = likely.get(like, 0.0) + seconds
+                # The queue needs totals, not a detailed object for every stretch in every recording.
+                if include_units:
+                    review.units.append(
+                        UnitView(
+                            index=index,
+                            segments=segments,
+                            start=parts[0][0],
+                            end=parts[-1][1],
+                            seconds=round(seconds, 2),
+                            fix=fix[1] if fix else None,
+                            to_person=fix[2] if fix else None,
+                            auto=fix[3] if fix else False,
+                            to_name=everyone.get(fix[2]) if fix and fix[2] else None,
+                            text=" ".join(
+                                " ".join(transcript.segments[i].text.split())
+                                for i in segments
+                                if i < len(transcript.segments)
+                            )
+                            if transcript is not None
+                            else "",
+                            own=round(own, 3) if own is not None else None,
+                            other=round(other, 3) if other is not None else None,
+                            like=like,
+                            like_name=names[like] if like else None,
+                            verdict=verdict,
+                        )
+                    )
+            review.seconds = round(judged_seconds, 1)
+            review.suspects, review.open = suspects, opened
+            review.suspect_seconds = round(suspect_seconds, 1)
+            review.open_seconds = round(open_seconds, 1)
             review.share = round(review.suspect_seconds / review.seconds, 3) if review.seconds else 0.0
             if likely:
                 review.likely = max(likely, key=lambda p: likely[p])

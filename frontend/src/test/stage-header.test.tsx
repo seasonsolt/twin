@@ -106,6 +106,8 @@ beforeEach(() => {
         video: false,
       });
     if (path === '/api/persona/state') return json({ stale: false });
+    if (path === '/api/auth/methods')
+      return json({ sso: null, password: false, email: true });
     if (path === '/api/auth/request') return json({ status: 'waitlist' });
     throw new Error(`Unexpected API ${path}`);
   });

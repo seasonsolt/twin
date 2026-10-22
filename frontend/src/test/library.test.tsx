@@ -65,7 +65,10 @@ it('uploads several recordings to the account library one after another', async 
   const order: string[] = [];
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/library') return json(state);
-    if (url.startsWith('/api/library/people') || url === '/api/library/review')
+    if (
+      url.startsWith('/api/library/people') ||
+      url.startsWith('/api/library/review')
+    )
       return json({ items: [], voices: [], fragments: [], unsorted: [] });
     if (url === '/api/library/uploads') {
       const { filename } = JSON.parse(String(init?.body)) as {
@@ -116,7 +119,10 @@ it('takes more recordings while one is uploading, after it and only once', async
   });
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/library') return json(state);
-    if (url.startsWith('/api/library/people') || url === '/api/library/review')
+    if (
+      url.startsWith('/api/library/people') ||
+      url.startsWith('/api/library/review')
+    )
       return json({ items: [], voices: [], fragments: [], unsorted: [] });
     if (url === '/api/library/uploads') {
       const { filename } = JSON.parse(String(init?.body)) as {
@@ -161,7 +167,10 @@ it('shows failures with a retry and asks before deleting', async () => {
   ];
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/library') return json(state);
-    if (url.startsWith('/api/library/people') || url === '/api/library/review')
+    if (
+      url.startsWith('/api/library/people') ||
+      url.startsWith('/api/library/review')
+    )
       return json({ items: [], voices: [], fragments: [], unsorted: [] });
     if (url.endsWith('/retry')) {
       state.recordings = [recording({ status: 'queued', error: '' })];

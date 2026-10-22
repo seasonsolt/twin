@@ -127,6 +127,11 @@ class PasswordBody(BaseModel):
     password: str = Field(max_length=256)
 
 
+class SignInUnavailable(Exception):
+    """The app that owns single sign-on could not say whose cookie this is: it timed out, was down or answered with
+    an error. That says nothing about the person, so they are not signed out for it."""
+
+
 class Auth:
     def __init__(self, settings: AuthSettings, root: Path) -> None:
         self.settings = settings
@@ -208,14 +213,21 @@ class Auth:
         }
 
     def resolve(self, cookies: Mapping[str, str]) -> dict[str, Any] | None:
+        """Raises SignInUnavailable when only the single sign-on could tell who this is and it cannot answer now."""
         if self.sso:
-            identity = self.sso_session(cookies.get(self.settings.sso.cookie))
+            try:
+                identity = self.sso_session(cookies.get(self.settings.sso.cookie))
+            except SignInUnavailable:
+                if self.passwords and (own := self.session(cookies.get(COOKIE))):
+                    return own
+                raise
             if identity or not self.passwords:
                 return identity
         return self.session(cookies.get(COOKIE))
 
     def sso_session(self, token: str | None) -> dict[str, Any] | None:
-        """Ask the app that owns the login who this cookie belongs to; remember the answer briefly."""
+        """Ask the app that owns the login who this cookie belongs to; remember the answer briefly. Only its 401 or
+        403 means signed out: when it cannot answer, SignInUnavailable, and nothing is remembered."""
         if not token or len(token) > 4096:
             return None
         key, now = digest(token), time.monotonic()
@@ -233,11 +245,11 @@ class Auth:
         except urllib.error.HTTPError as error:
             if error.code not in (401, 403):
                 logger.warning("SSO 身份查询失败：HTTP %s", error.code)
-                return None
+                raise SignInUnavailable from error
             payload = {}
         except (OSError, ValueError) as error:
             logger.warning("SSO 身份查询失败：%s", type(error).__name__)
-            return None
+            raise SignInUnavailable from error
         subject = str(payload.get("subject") or "").strip() if isinstance(payload, dict) else ""
         identity = None
         if subject and payload.get("authenticated") is not False:
@@ -552,6 +564,10 @@ def login_required(login_url: str | None = None) -> JSONResponse:
     return JSONResponse(body, status_code=401)
 
 
+def sign_in_unavailable() -> JSONResponse:
+    return JSONResponse({"detail": "登录服务暂时不可用，请稍后重试", "code": "sign_in_unavailable"}, status_code=503)
+
+
 class AuthMiddleware:
     def __init__(self, app: ASGIApp, auth: Auth) -> None:
         self.app, self.auth = app, auth
@@ -564,7 +580,14 @@ class AuthMiddleware:
         # SQLite is small; use a worker so concurrent requests don't block the event loop.
         from starlette.concurrency import run_in_threadpool
 
-        identity = await run_in_threadpool(self.auth.resolve, request.cookies)
+        try:
+            identity = await run_in_threadpool(self.auth.resolve, request.cookies)
+        except SignInUnavailable:
+            # The sign-in page still learns its ways and can sign in with twin's own account; the rest waits.
+            if not request.url.path.startswith("/api/auth/"):
+                await sign_in_unavailable()(scope, receive, send)
+                return
+            identity = None
         scope["twin_identity"] = identity
         if not identity and not request.url.path.startswith("/api/auth/") and request.url.path != "/api/whoami":
             await login_required(self.auth.login_url())(scope, receive, send)

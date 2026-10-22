@@ -35,9 +35,9 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -60,7 +60,7 @@ from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import ClaimBody, Personas, claim_key
-from .review_queue import ReviewQueue
+from .review_queue import ReviewQueue, page
 from .uploads import UploadBody, Uploads, upload_routes
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,8 @@ DENOISE_ASK_SECONDS = 600.0
 TRANSCRIPTION_SLOTS = 2
 # 16 kHz mono 16-bit: the decoded audio of a second of a recording before transcription.
 DECODED_BYTES_PER_SECOND = 16000 * 2
+# The most of one list of the review queue a page may ask for at once (``get_review``).
+MAX_REVIEW_PAGE = 10000
 
 
 class Viewer(NamedTuple):
@@ -188,6 +190,9 @@ class Libraries:
         self.running: dict[str, dict[str, Job]] = {}
         # Bytes a queued recording's decoded audio may take (``_room_ahead``), measured once per recording.
         self._decoded_bytes: dict[str, int] = {}
+        # How far each recording being transcribed has come, in seconds: kept here, since every step written to the
+        # library would make the review queue read everything again (``ReviewQueue``).
+        self.progress: dict[str, float] = {}
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
         self.syncing: set[str] = set()
         self.again: set[str] = set()
@@ -223,6 +228,15 @@ class Libraries:
 
     def uploads(self, viewer: Viewer) -> Uploads:
         return Uploads(self.member(viewer.key))
+
+    def view(self, recording: Recording) -> dict[str, Any]:
+        """The recording as pages show it, with how far its transcription has come (``progress``)."""
+        shown = view(recording)
+        with self.lock:
+            done = self.progress.get(recording.id)
+        if done is not None and recording.status == "transcribing":
+            shown["transcribed_s"] = done
+        return shown
 
     # ------------------------------------------------------------ who may see what
 
@@ -820,7 +834,7 @@ class Libraries:
         speakers = self.team(owner).speakers(recording)
         people = self.people_of(viewer)
         return {
-            **view(recording),
+            **self.view(recording),
             "proofread": self.proofread_state(library, recording, waiting),
             "denoised": denoise.denoised(library, recording.id),
             "can_edit": access.edit,
@@ -1110,7 +1124,8 @@ class Libraries:
         transcriber = make_transcriber(self.settings.asr)
 
         def progress(done: float, total: float) -> None:
-            library.update(recording_id, transcribed_s=done)
+            with self.lock:
+                self.progress[recording_id] = done
             log(f"[1/2] 转写（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
 
         try:
@@ -1129,6 +1144,7 @@ class Libraries:
             with self.lock:
                 self.running.get(owner, {}).pop(recording_id, None)
                 self._decoded_bytes.pop(recording_id, None)
+                self.progress.pop(recording_id, None)
             self.kick(owner)
 
     def capacity(self) -> dict[str, int]:
@@ -1205,7 +1221,7 @@ class Libraries:
         return {
             "recordings": [
                 {
-                    **view(r),
+                    **self.view(r),
                     # Who was recognised, and how many speakers still wait for the owner.
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
@@ -1366,15 +1382,32 @@ def register(
         return {"disputed": True}
 
     @app.get("/api/library/review")
-    def get_review(request: Request) -> dict[str, Any]:
+    def get_review(
+        request: Request,
+        voices: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        enough: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        strangers: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        items: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        unsorted: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        suspects: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+    ) -> dict[str, Any]:
         """What the viewer settles about the recordings they decide about: speakers someone said are not them
         (``items``), undecided speakers grouped by voice across recordings so each colleague is asked about once
         (``voices``), the short voices like nobody, to set aside together (``fragments``), and recordings whose
         speakers have no voiceprint to group by, settled one by one (``unsorted``), with how much of their speech
         is settled (``heard``). All from one reading, so the page never infers a task from an older list of
-        recordings."""
+        recordings. Each list is the first so many asked for (``review_queue.page``; all without a number), with how
+        many it holds in all (``totals``): the page shows a few of each and asks for more as the owner scrolls."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
-        return libraries.review(libraries.owner(request), editable)
+        limits = {
+            "voices": voices,
+            "enough": enough,
+            "strangers": strangers,
+            "items": items,
+            "unsorted": unsorted,
+            "suspects": suspects,
+        }
+        return page(libraries.review(libraries.owner(request), editable), limits)
 
     @app.post("/api/library/voices")
     def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:

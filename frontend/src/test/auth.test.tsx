@@ -98,7 +98,10 @@ beforeEach(() => {
           headroom_bytes: 0,
         },
       });
-    if (path === '/api/library/people' || path === '/api/library/review')
+    if (
+      path === '/api/library/people' ||
+      path.startsWith('/api/library/review')
+    )
       return json({ items: [], voices: [], fragments: [], unsorted: [] });
     if (!items.length)
       return json({ detail: '先新建一个分身', code: 'no_persona' }, 409);
@@ -169,7 +172,9 @@ it('logs in via email and a paste-friendly code without persisting credentials',
 });
 
 it('shows the waitlist without a code form or a way to try another email', async () => {
-  fetcher.mockImplementation(async () => json({ status: 'waitlist' }));
+  fetcher.mockImplementation(async (path: string) =>
+    json(path === '/api/auth/methods' ? methods : { status: 'waitlist' }),
+  );
   const user = userEvent.setup();
   render(<Login />);
   await user.type(

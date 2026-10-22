@@ -59,7 +59,9 @@ beforeEach(() => {
                       ? { state: 'idle' }
                       : path === '/api/media/capabilities'
                         ? { available: false, video: { available: false } }
-                        : { stale: false },
+                        : path === '/api/auth/methods'
+                          ? { sso: null, password: false, email: true }
+                          : { stale: false },
           ),
         ),
     ),

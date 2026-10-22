@@ -224,8 +224,8 @@ def test_listing_people_and_candidates_reads_each_transcript_once(
     assert len(reads) == len(set(reads)) <= 2  # Never the same transcript twice.
 
 
-def test_a_voiceprint_is_normalised_once_and_scores_exactly_as_before() -> None:
-    from twin.media.team import _cosine, _Print, _unit
+def test_a_voiceprint_is_normalised_once_and_scores_as_before() -> None:
+    from twin.media.team import _cosine, _cosines, _Print, _unit
 
     def before(a: list[float], b: list[float]) -> float:
         ua = [x / (math.sqrt(sum(x * x for x in a)) or 1.0) for x in a]
@@ -237,9 +237,27 @@ def test_a_voiceprint_is_normalised_once_and_scores_exactly_as_before() -> None:
     prints = [_Print(v) for v in vectors]
     assert _unit(prints[0]) is _unit(prints[0])
     for a, pa in zip(vectors, prints, strict=True):
-        for b, pb in zip(vectors, prints, strict=True):
-            assert _cosine(pa, pb) == _cosine(a, pb) == _cosine(a, b) == before(a, b)
+        many = _cosines(pa, prints)
+        for b, pb, score in zip(vectors, prints, many, strict=True):
+            # One product sums in another order than Python did: the last bit may differ, never a shown score.
+            assert _cosine(pa, pb) == _cosine(a, pb) == _cosine(a, b) == score
+            assert abs(score - before(a, b)) < 1e-12 and round(score, 3) == round(before(a, b), 3)
     assert _cosine(prints[0], [1.0, 0.0]) == 0.0
+    assert _cosines(prints[0], [[1.0, 0.0], prints[1]]) == [0.0, _cosine(prints[0], prints[1])]
+
+
+def test_samples_compared_at_once_follow_samples_added_and_those_of_another_model() -> None:
+    from twin.media.team import _Print, _Stacked
+
+    prints = _Stacked([("a", "甲", _Print([1.0, 0.0, 0.0])), ("b", "乙", _Print([0.0, 1.0, 0.0]))])
+    assert [c.person_id for c in Team._match([1.0, 0.1, 0.0], prints, set(), floor=-1.0)] == ["a", "b"]
+    # ``classify`` adds the sample of a new person while it goes.
+    prints.append(("c", "丙", _Print([1.0, 0.1, 0.0])))
+    assert Team._match([1.0, 0.1, 0.0], prints, set(), floor=-1.0)[0].person_id == "c"
+    prints.append(("d", "丁", _Print([1.0, 0.1])))
+    found = Team._match([1.0, 0.1, 0.0], prints, {"c"}, floor=-1.0)
+    assert [(c.person_id, c.score) for c in found] == [("a", 0.995), ("b", 0.1)]
+    assert [c.score for c in Team._match([1.0, 0.1], prints, set(), floor=-1.0)] == [1.0, 0.0]
 
 
 def voices(library: Library, name: str, *speakers: tuple[list[float], float]) -> str:
@@ -621,6 +639,16 @@ def test_voices_like_one_the_owner_could_not_name_wait_last(tmp_path: Path) -> N
     team.decide_voice([(m.recording_id, m.transcript_id, m.speaker_id) for m in voice.members], "unknown")
     voices(library, "二.m4a", ([0.05, 1.0, 0.0], 50), ([1.0, 0.0, 0.0], 30))
     assert [(v.seconds, v.stranger) for v in team.voices()[0]] == [(30, False), (50, True)]
+
+
+def test_voiceprints_of_two_models_group_each_with_their_own(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    # One model's voiceprint is like none of the other's, however close its numbers.
+    one = voices(library, "一.m4a", ([1.0, 0.0], 90), ([1.0, 0.0, 0.0], 40))
+    two = voices(library, "二.m4a", ([0.98, 0.1, 0.0], 30), ([0.99, 0.1], 20))
+    found = {frozenset((m.recording_id, m.speaker_id) for m in v.members) for v in team.voices()[0]}
+    assert found == {frozenset({(one, "S1"), (two, "S2")}), frozenset({(one, "S2"), (two, "S1")})}
 
 
 def name(library: Library, recording_id: str, *cues: tuple[str, str, bool]) -> None:
@@ -1167,6 +1195,22 @@ def test_a_person_s_voice_is_checked_and_a_sample_removed_through_the_page(web: 
     assert gone.status_code == 200 and gone.json() == {"returned": 1}
     assert web.delete(f"/api/library/people/{zhang.id}/samples/{sample['id']}", headers=HEADERS).status_code == 404
     assert web.get(f"/api/library/people/{zhang.id}/voice").json() == {"samples": [], "checks": []}
+
+
+def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60), ([0.0, 1.0, 0.0], 40), ([0.0, 0.0, 1.0], 20))
+    for name in ("二.m4a", "三.m4a"):
+        recording(library, name, [Segment(start=0, end=1, text="嗯。", speaker="S1")], [Speaker(id="S1", seconds=1)])
+    whole = web.get("/api/library/review").json()
+    assert [v["seconds"] for v in whole["voices"]] == [60, 40, 20] and len(whole["unsorted"]) == 2
+    first = web.get("/api/library/review?voices=2&enough=5&strangers=5&items=10&unsorted=1&suspects=10").json()
+    # The longest first, as on the whole list, and how many wait after them.
+    assert first["voices"] == whole["voices"][:2] and first["unsorted"] == whole["unsorted"][:1]
+    assert first["totals"]["voices"] == {"count": 3, "seconds": 120} and first["totals"]["unsorted"] == {"count": 2}
+    more = web.get("/api/library/review?voices=4&unsorted=2").json()
+    assert more["voices"] == whole["voices"] and more["unsorted"] == whole["unsorted"]
+    assert web.get("/api/library/review?voices=-1").status_code == 400
 
 
 def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:

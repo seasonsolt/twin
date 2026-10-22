@@ -52,7 +52,7 @@ uv run twin --config ./twin.toml compute install asr-funasr
 
 重叠流程的 FireRed 在支持原生 BF16 的 CUDA 显卡上使用 BF16 权重和输入；其余设备保留 FP32。beam=1 解码按 token 缓存 self-attention 的键和值，attention 使用 PyTorch SDPA，已有 cross-attention 缓存继续使用。其他 beam/search 参数仍交给上游解码器。分人、分离、声纹、复读回退和补标点规则不变。
 
-BF16 和 SDPA 可能改变极少量边界词，因此包版本和转写版本都升为 **1.5.4**。已有录音由用户决定是否重新转写。启动日志打印 FireRed 的实际精度；`/health` 返回包与转写版本。质量验证范围和限制见 [ASR 评测](../../../docs/ASR_EVAL.md)。
+BF16 和 SDPA 可能改变极少量边界词，因此包版本和转写版本都升为 **1.5.4**。分人没有变，twin 把 1.5.4 视同 1.4.1（`src/twin/media/collector.py` 的 `SAME_COLLECTION`），1.4.1 转写的录音不会被列为可以重新采集。启动日志打印 FireRed 的实际精度；`/health` 返回包与转写版本。质量验证范围和限制见 [ASR 评测](../../../docs/ASR_EVAL.md)。
 
 ## 热词
 

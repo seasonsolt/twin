@@ -5,7 +5,9 @@ It has three layers, versioned apart because running each again costs so differe
 - ``asr``: the transcription service (asr-funasr's version and pipeline), which says who spoke when and what. A new
   one means transcribing again on the GPU, so the owner decides when; the library only says which recordings could
   be (``Library.recollectable``). Each transcript records the service that made it (``Transcript.asr``); one made
-  before services said so is unknown (``None``), which is older than any known one.
+  before services said so is unknown (``None``), which is older than any known one. A service that only changed how
+  precisely it computes, not who spoke when, counts as the one before it (``SAME_COLLECTION``): its transcripts
+  differ in a few words, too little to transcribe a library again for.
 - ``attribution``: the rules by which ``Team.classify`` gives a speaker to someone by voice alone. Automatic
   decisions record the version that made them (``attributions.version``); one made under other rules is decided
   again at start-up from the voice samples already there, in seconds.
@@ -31,6 +33,10 @@ LEGACY_CLEANUP = "cleanup-v1"
 
 Scope = Literal["none", "cleanup", "attribution", "asr"]
 
+# A transcription service → the earlier one it collects like. 1.5.4 runs FireRed in BF16 with incremental decoding:
+# diarization, separation and voiceprints are 1.4.1's, and a few boundary words differ (docs/ASR_EVAL.md).
+SAME_COLLECTION = {"1.5.4/overlap": "1.4.1/overlap", "1.5.4/classic": "1.4.1/classic"}
+
 
 @dataclass(frozen=True)
 class CollectorVersion:
@@ -49,11 +55,18 @@ def asr_version(version: object, pipeline: object) -> str | None:
     return version.strip()
 
 
+def collects_like(asr: str | None) -> str | None:
+    """The earliest service ``asr`` collects like (``SAME_COLLECTION``), itself when none."""
+    while asr in SAME_COLLECTION:
+        asr = SAME_COLLECTION[asr]
+    return asr
+
+
 def recollect_scope(old: CollectorVersion, new: CollectorVersion) -> Scope:
     """The deepest layer that must run again for something collected by ``old`` to be as ``new`` would collect it:
     a layer run again runs every layer after it too. An unknown service is older than a known one; with the current
     service unknown nothing says the transcript is stale."""
-    if new.asr is not None and old.asr != new.asr:
+    if new.asr is not None and collects_like(old.asr) != collects_like(new.asr):
         return "asr"
     if old.attribution != new.attribution:
         return "attribution"

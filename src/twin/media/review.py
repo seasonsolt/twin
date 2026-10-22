@@ -236,7 +236,7 @@ def _summary_scores(
 ) -> dict[int, np.ndarray]:
     """Score stretches in bounded batches for list summaries; detail/decision paths keep scalar arithmetic."""
     found: dict[int, np.ndarray] = {}
-    if not len(matrix):
+    if not len(matrix) or not matrix.shape[1]:
         return found
     valid = [i for i, blob in enumerate(blobs) if blob is not None and len(blob) == matrix.shape[1] * 4]
     for start in range(0, len(valid), 256):

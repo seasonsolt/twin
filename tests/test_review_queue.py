@@ -297,6 +297,7 @@ def test_batched_summary_scores_match_scalar_and_defer_boundaries() -> None:
     blobs = [row.astype(np.float32).tobytes() for row in rng.normal(size=(530, 16))]
     found = _summary_scores([*blobs, None, b"bad"], matrix, owners, 3, 0)
     assert len(found) == len(blobs)
+    assert _summary_scores([b""], np.zeros((1, 0)), np.array([0]), 1, 0) == {}
     for index, best in found.items():
         vector = _unit(np.frombuffer(blobs[index], dtype=np.float32).astype(np.float64))
         expected = np.full(3, -1.0)

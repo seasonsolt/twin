@@ -231,6 +231,18 @@ def _unit(vector: np.ndarray) -> np.ndarray:
     return np.asarray(vector / norm)
 
 
+@dataclass
+class _Voiceprints:
+    """Everyone's active voice samples (``Reviews._voiceprints``), read once to judge many recordings."""
+
+    people: list[str]
+    recordings: list[str]
+    names: dict[str, str]
+    vectors: list[list[float]]
+    # Every row as a unit vector, when all are of one length.
+    matrix: np.ndarray | None = None
+
+
 class Reviews:
     """The confirmed speakers of the library, heard again (see the module)."""
 
@@ -328,31 +340,48 @@ class Reviews:
     # ------------------------------------------------------------------ judging
 
     @staticmethod
-    def _samples(db: sqlite3.Connection, recording_id: str) -> tuple[list[str], dict[str, str], np.ndarray, np.ndarray]:
-        """Everyone's active voice samples from recordings other than ``recording_id``, one per person and
-        recording (the earliest, as ``Team._prints``): (people, names, owner index per row, unit matrix)."""
-        rows = db.execute(
-            "SELECT v.person_id, v.recording_id, p.name, v.embedding FROM voiceprints v "
-            "JOIN people p ON p.id = v.person_id WHERE v.active = 1 AND v.recording_id != ? ORDER BY v.id",
-            (recording_id,),
-        ).fetchall()
+    def _voiceprints(db: sqlite3.Connection) -> _Voiceprints:
+        """Everyone's active voice samples, one per person and recording (the earliest, as ``Team._prints``)."""
+        found = _Voiceprints([], [], {}, [])
         seen: set[tuple[str, str]] = set()
-        people: list[str] = []
-        names: dict[str, str] = {}
-        owners: list[int] = []
-        vectors: list[list[float]] = []
-        for person_id, sample_recording, name, embedding in rows:
+        for person_id, sample_recording, name, embedding in db.execute(
+            "SELECT v.person_id, v.recording_id, p.name, v.embedding FROM voiceprints v "
+            "JOIN people p ON p.id = v.person_id WHERE v.active = 1 ORDER BY v.id"
+        ):
             if (person_id, sample_recording) in seen:
                 continue
             seen.add((person_id, sample_recording))
+            found.people.append(person_id)
+            found.recordings.append(sample_recording)
+            found.names[person_id] = name
+            found.vectors.append(json.loads(embedding))
+        if found.vectors and len({len(v) for v in found.vectors}) == 1:
+            found.matrix = _unit(np.asarray(found.vectors, dtype=np.float64))
+        return found
+
+    @staticmethod
+    def _samples(
+        db: sqlite3.Connection, recording_id: str, voiceprints: _Voiceprints | None = None
+    ) -> tuple[list[str], dict[str, str], np.ndarray, np.ndarray]:
+        """Everyone's active voice samples from recordings other than ``recording_id`` (``_voiceprints``, or those
+        read already): (people, names, owner index per row, unit matrix)."""
+        if voiceprints is None:
+            voiceprints = Reviews._voiceprints(db)
+        kept = [i for i, sample_recording in enumerate(voiceprints.recordings) if sample_recording != recording_id]
+        people: list[str] = []
+        names: dict[str, str] = {}
+        owners: list[int] = []
+        for i in kept:
+            person_id = voiceprints.people[i]
             if person_id not in names:
-                names[person_id] = name
+                names[person_id] = voiceprints.names[person_id]
                 people.append(person_id)
             owners.append(people.index(person_id))
-            vectors.append(json.loads(embedding))
-        if not vectors or len({len(v) for v in vectors}) != 1:
+        if not kept or len({len(voiceprints.vectors[i]) for i in kept}) != 1:
             return people, names, np.zeros(0, dtype=int), np.zeros((0, 0))
-        return people, names, np.asarray(owners), _unit(np.asarray(vectors, dtype=np.float64))
+        if voiceprints.matrix is not None:
+            return people, names, np.asarray(owners), voiceprints.matrix[kept]
+        return people, names, np.asarray(owners), _unit(np.asarray([voiceprints.vectors[i] for i in kept]))
 
     def speaker(self, recording: Recording, speaker_id: str, text: bool = True) -> SpeakerReview | None:
         """The confirmed speaker's stretches with how each sounds, and the owner's decisions; None when the
@@ -373,19 +402,23 @@ class Reviews:
                     "AND r.transcript_id = v.transcript_id WHERE v.error = ''"
                 )
             }
+            # Every recording is judged against the same samples: parsed once, not once per recording.
+            voiceprints = self._voiceprints(db)
         for recording_id in sorted(heard):
             if recordings is not None and recording_id not in recordings:
                 continue
             recording = self.library.get(recording_id)
             if recording is None:
                 continue
-            for review in self._reviews(recording, None, text=False):
+            for review in self._reviews(recording, None, text=False, voiceprints=voiceprints):
                 if review.status == "ready" and review.open and review.share >= FLAG_SHARE:
                     found.append(review if units else review.model_copy(update={"units": []}))
         found.sort(key=lambda r: -r.open_seconds)
         return found
 
-    def _reviews(self, recording: Recording, only: set[str] | None, *, text: bool) -> list[SpeakerReview]:
+    def _reviews(
+        self, recording: Recording, only: set[str] | None, *, text: bool, voiceprints: _Voiceprints | None = None
+    ) -> list[SpeakerReview]:
         transcript_id = recording.transcript_id
         if transcript_id is None:
             return []
@@ -424,7 +457,7 @@ class Reviews:
                 )
             }
             everyone = dict(db.execute("SELECT id, name FROM people").fetchall())
-            people, names, owners, matrix = self._samples(db, recording.id)
+            people, names, owners, matrix = self._samples(db, recording.id, voiceprints)
         transcript = self.library.cleaned(recording) if text else None
         result = []
         for speaker_id, person_id in sorted(confirmed.items()):

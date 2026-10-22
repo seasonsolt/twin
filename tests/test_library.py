@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -129,6 +130,41 @@ def test_upload_transcribes_once_keeps_voiceprints_and_drops_the_upload(client: 
     again = upload(client, wav_bytes(), "改了名字.wav")
     assert again.json()["new"] is False and again.json()["id"] == recording["id"]
     assert len(client.get("/api/library").json()["recordings"]) == 1
+
+
+@needs_ffmpeg
+def test_transcription_progress_shows_without_writing_the_library(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each step written to the library would make the review queue read everything again (``ReviewQueue``)."""
+    halfway, resume = threading.Event(), threading.Event()
+    versions: list[int] = []
+
+    class Watched(FakeTranscriber):
+        def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
+            observer = sqlite3.connect(tmp_path / "library" / "team" / "library.db")
+            try:
+
+                def report(done: float, total: float) -> None:
+                    versions.append(observer.execute("PRAGMA data_version").fetchone()[0])
+                    progress(done, total)
+                    versions.append(observer.execute("PRAGMA data_version").fetchone()[0])
+                    halfway.set()
+                    assert resume.wait(10)
+
+                return super().transcribe(audio, duration, report)
+            finally:
+                observer.close()
+
+    monkeypatch.setattr("twin.web.library.make_transcriber", lambda _: Watched())
+    upload(client, wav_bytes())
+    assert halfway.wait(10)
+    (shown,) = client.get("/api/library").json()["recordings"]
+    assert shown["status"] == "transcribing" and shown["transcribed_s"] == pytest.approx(0.5)
+    assert client.get(f"/api/library/recordings/{shown['id']}").json()["transcribed_s"] == pytest.approx(0.5)
+    resume.set()
+    (done,) = settled(client)["recordings"]
+    assert versions[0] == versions[1] and done["status"] == "ready" and done["transcribed_s"] == pytest.approx(1)
 
 
 @needs_ffmpeg

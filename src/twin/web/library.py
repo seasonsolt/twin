@@ -188,6 +188,9 @@ class Libraries:
         self.running: dict[str, dict[str, Job]] = {}
         # Bytes a queued recording's decoded audio may take (``_room_ahead``), measured once per recording.
         self._decoded_bytes: dict[str, int] = {}
+        # How far each recording being transcribed has come, in seconds: kept here, since every step written to the
+        # library would make the review queue read everything again (``ReviewQueue``).
+        self.progress: dict[str, float] = {}
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
         self.syncing: set[str] = set()
         self.again: set[str] = set()
@@ -223,6 +226,15 @@ class Libraries:
 
     def uploads(self, viewer: Viewer) -> Uploads:
         return Uploads(self.member(viewer.key))
+
+    def view(self, recording: Recording) -> dict[str, Any]:
+        """The recording as pages show it, with how far its transcription has come (``progress``)."""
+        shown = view(recording)
+        with self.lock:
+            done = self.progress.get(recording.id)
+        if done is not None and recording.status == "transcribing":
+            shown["transcribed_s"] = done
+        return shown
 
     # ------------------------------------------------------------ who may see what
 
@@ -820,7 +832,7 @@ class Libraries:
         speakers = self.team(owner).speakers(recording)
         people = self.people_of(viewer)
         return {
-            **view(recording),
+            **self.view(recording),
             "proofread": self.proofread_state(library, recording, waiting),
             "denoised": denoise.denoised(library, recording.id),
             "can_edit": access.edit,
@@ -1110,7 +1122,8 @@ class Libraries:
         transcriber = make_transcriber(self.settings.asr)
 
         def progress(done: float, total: float) -> None:
-            library.update(recording_id, transcribed_s=done)
+            with self.lock:
+                self.progress[recording_id] = done
             log(f"[1/2] 转写（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
 
         try:
@@ -1129,6 +1142,7 @@ class Libraries:
             with self.lock:
                 self.running.get(owner, {}).pop(recording_id, None)
                 self._decoded_bytes.pop(recording_id, None)
+                self.progress.pop(recording_id, None)
             self.kick(owner)
 
     def capacity(self) -> dict[str, int]:
@@ -1205,7 +1219,7 @@ class Libraries:
         return {
             "recordings": [
                 {
-                    **view(r),
+                    **self.view(r),
                     # Who was recognised, and how many speakers still wait for the owner.
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,

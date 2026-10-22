@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .media.video import VideoSynthesizer
 
 from .embed import Embedder, HashingEmbedder, OpenAICompatEmbedder, embedder_fingerprint
-from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, OpenAICompatLLM
+from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, FallbackLLM, OpenAICompatLLM
 from .media.asr import CloudflareWhisper, OpenAICompatTranscription, SpeechRecognizer
 from .media.schema import AVATAR_ALIASES, AVATAR_PRESETS, VoiceSpec
 from .media.tts import CloudflareMeloTTS, OpenAICompatSpeech, SilentSynthesizer, SpeechSynthesizer
@@ -450,6 +450,10 @@ class Settings(BaseModel):
     max_workers: int = 4
     llm: LLMSettings = Field(default_factory=LLMSettings)
     chat_llm: LLMSettings | None = None
+    # ``[llm_fallback]``: another endpoint that answers for ``llm`` and ``chat_llm`` while theirs is unavailable
+    # (quota spent, unreachable, key refused); see ``FallbackLLM``. Only the web service and API use it, so a
+    # benchmark run from the CLI never mixes in another model's answers.
+    llm_fallback: LLMSettings | None = None
     # Evaluation judges (``[[judges]]`` tables). Empty: the main ``llm`` judges. Use 2-3 models of families
     # other than the twin's, since a judge tends to prefer output resembling its own.
     judges: list[LLMSettings] = Field(default_factory=list)
@@ -540,6 +544,7 @@ def load_settings(path: Path | None = None) -> Settings:
     for key_env in [
         settings.llm.api_key_env,
         settings.effective_chat_llm.api_key_env,
+        *([settings.llm_fallback.api_key_env] if settings.llm_fallback is not None else []),
         settings.embed.api_key_env,
         settings.tts.api_key_env,
         settings.asr.api_key_env,
@@ -588,6 +593,13 @@ def make_llm(s: LLMSettings, section: str = "llm") -> LLM:
             extra_body=s.extra_body,
         )
     return ClaudeCLILLM(model=s.model or CLAUDE_DEFAULT_MODEL)
+
+
+def with_fallback(llm: LLM, settings: Settings) -> LLM:
+    """``llm``, answered by ``[llm_fallback]`` while it is unavailable, when one is configured."""
+    if settings.llm_fallback is None:
+        return llm
+    return FallbackLLM(llm, make_llm(settings.llm_fallback, "llm_fallback"))
 
 
 def make_synthesizer(s: TTSSettings) -> SpeechSynthesizer:

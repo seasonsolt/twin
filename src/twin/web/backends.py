@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from ..config import Settings, make_embedder, make_llm
+from ..config import Settings, make_embedder, make_llm, with_fallback
 from ..embed import Embedder
 from ..evals.harness import Judge
 from ..llm import LLM
@@ -31,8 +31,10 @@ class Backends:
         work_model_factory: WorkModelFactory | None = None,
     ) -> None:
         self._settings = settings
-        self._llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.llm))
-        self._chat_llm_factory: LLMFactory = llm_factory or (lambda: make_llm(settings.effective_chat_llm, "chat_llm"))
+        self._llm_factory: LLMFactory = llm_factory or (lambda: with_fallback(make_llm(settings.llm), settings))
+        self._chat_llm_factory: LLMFactory = llm_factory or (
+            lambda: with_fallback(make_llm(settings.effective_chat_llm, "chat_llm"), settings)
+        )
         self._embedder_factory: EmbedderFactory = embedder_factory or (lambda: make_embedder(settings.embed))
         self._work_model_factory: WorkModelFactory = work_model_factory or self._default_work_model
         self._lock = threading.Lock()

@@ -161,6 +161,9 @@ class Model(FakeLLM):
         self.namings = 0
         self.rosters: list[list[str]] = []
         self.lock = threading.Lock()
+        # Cleared, proofreading waits in the model until it is set again.
+        self.proofread_gate = threading.Event()
+        self.proofread_gate.set()
 
     def answer(self, system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
         if schema is Cues:
@@ -172,6 +175,7 @@ class Model(FakeLLM):
             return {"speakers": [{"speaker": "S2", "name": "张总", "evidence": said, "sure": False}] if said else []}
         if schema is not Edits:
             return {"items": []}
+        self.proofread_gate.wait(10)
         with self.lock:
             self.proofreads += 1
         meeting = json.loads(user)["meeting"]
@@ -284,6 +288,24 @@ def test_a_twin_is_rebuilt_from_the_proofread_words_once(web: TestClient, tmp_pa
     spent = spending(library)
     assert spent["proofread"] > 0 and spent["rebuild"] > 0 and spent["naming"] > 0
     assert web.get("/api/library").json()["quota"]["used"] == sum(spent.values())
+
+
+def test_the_recording_being_proofread_is_marked_as_such(web: TestClient, tmp_path: Path, model: Model) -> None:
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    model.proofread_gate.clear()
+
+    def marked() -> tuple[bool, bool]:
+        listed = next(r for r in web.get("/api/library").json()["recordings"] if r["id"] == rec)
+        return listed["proofreading"], web.get(f"/api/library/recordings/{rec}").json()["proofreading"]
+
+    assert marked() == (False, False)
+    confirm(web, rec, "S2", new_person="张总")
+    until(lambda: marked() == (True, True))
+    assert recording_state(web, rec) == "waiting"
+    model.proofread_gate.set()
+    until(lambda: recording_state(web, rec) == "done")
+    assert marked() == (False, False)
 
 
 def test_a_spent_quota_holds_proofreading_and_rebuilds_and_says_so(

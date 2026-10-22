@@ -847,6 +847,48 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
   expect(stop).toHaveBeenCalledOnce();
 });
 
+it('lists the recording being proofread first, as 校对中', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: [] });
+      if (url.startsWith('/api/library/review'))
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      throw new Error(url);
+    }),
+  );
+  const waiting = (id: string, filename: string, proofreading = false) =>
+    ({
+      id,
+      filename,
+      status: 'ready',
+      unsettled: 0,
+      speakers: 2,
+      proofread: 'waiting',
+      proofreading,
+    }) as LibraryRecording;
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo']}>
+      <ConfirmProvider>
+        <Team
+          version={0}
+          recordings={[
+            waiting('a', '周会.m4a'),
+            waiting('b', '月会.m4a', true),
+          ]}
+        />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const progress = screen.getByRole('region', { name: '正在处理' });
+  expect(
+    within(progress)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent),
+  ).toEqual(['月会.m4a · 校对中', '周会.m4a · 等待校对']);
+  await screen.findByText('现在没有需要你处理的事。');
+});
+
 it('searches people locally, opens an untwinned header for editing, and keeps deletion in its menu', async () => {
   const calls: string[] = [];
   const originalFetch = fetch;

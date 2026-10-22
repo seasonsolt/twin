@@ -202,6 +202,8 @@ class Libraries:
         # The proofreading job of each owner, and per owner the twins whose rebuild waits: for the quota, or while
         # the automatic rebuild is switched off (``LibrarySettings.auto_build``).
         self.proofreading: dict[str, Job] = {}
+        # The recording each owner's proofreading job is on, shown first as 校对中 among those waiting.
+        self.proofreading_now: dict[str, str] = {}
         self.paused: dict[str, set[str]] = {}
         # Twins someone asked to rebuild now: built even while the automatic rebuild is switched off.
         self.forced: set[str] = set()
@@ -652,6 +654,8 @@ class Libraries:
                 self.proofreading[owner] = self.jobs.scoped(f"library:{owner}").submit(
                     "media_ingest", title, lambda log: run(owner, recording.id, log)
                 )
+                if not unnamed:
+                    self.proofreading_now[owner] = recording.id
 
     def run_naming(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
         """Ask the model, once per transcript, what the meeting calls its speakers, filing the names next to it as
@@ -752,6 +756,7 @@ class Libraries:
         finally:
             with self.lock:
                 self.proofreading.pop(owner, None)
+                self.proofreading_now.pop(owner, None)
             self.proofread(owner)
 
     def proofread_state(self, library: Library, recording: Recording, waiting: set[str]) -> str:
@@ -901,6 +906,7 @@ class Libraries:
         return {
             **self.view(recording),
             "proofread": self.proofread_state(library, recording, waiting),
+            "proofreading": self.proofreading_now.get(owner) == recording.id,
             "denoised": denoise.denoised(library, recording.id),
             "can_edit": access.edit,
             "mine": [s.id for s in speakers if s.decision == "confirmed" and s.person_id in people],
@@ -1282,6 +1288,7 @@ class Libraries:
         identities = self.team(owner).identities()
         waiting = {r.id for r in library.unproofread()}
         with self.lock:
+            now = self.proofreading_now.get(owner)
             held_twins = len(self.paused.get(owner, ())) if quota["exhausted"] else 0
         return {
             "recordings": [
@@ -1291,6 +1298,7 @@ class Libraries:
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
                     "proofread": self.proofread_state(library, r, waiting),
+                    "proofreading": now == r.id,
                     "can_edit": access[r.id].edit,
                 }
                 for r in recordings

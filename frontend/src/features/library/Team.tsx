@@ -1430,9 +1430,10 @@ export function Team({
   // A colleague said a twin made for them is not theirs: it is back with the owner, to point at the right person.
   const disowned = named?.filter((p) => twinOf(p)?.claim_rejected) ?? [];
   const toAddress = named?.filter((p) => unaddressed(p, twinOf(p))) ?? [];
-  const proofreading = recordings.filter(
-    (r) => r.status === 'ready' && r.proofread === 'waiting',
-  );
+  // The one being proofread first, then those still to come.
+  const proofreading = recordings
+    .filter((r) => r.status === 'ready' && r.proofread === 'waiting')
+    .sort((a, b) => Number(!!b.proofreading) - Number(!!a.proofreading));
   const fragmentRecordings = new Set(fragments.map((m) => m.recording_id)).size;
   // Fragments by the person they sound like, most first: given to them in one click, without becoming voice samples.
   const fragmentsLike = [
@@ -2039,7 +2040,7 @@ export function Team({
             tone="secondary"
             breakAll
           >
-            {r.filename} · 等待校对
+            {r.filename} · {r.proofreading ? '校对中' : '等待校对'}
           </Text>
         ))}
         {organising.map((p) => (

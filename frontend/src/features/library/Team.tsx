@@ -916,6 +916,19 @@ function AddPerson({
   );
 }
 
+/** Why a twin's memory update stopped without completing, or null while it goes on or is done. */
+const stalledBuild = (person: Person) =>
+  person.updating && person.build?.state === 'idle'
+    ? (person.build.last_error ?? null)
+    : null;
+
+/** When a stopped update is tried again by itself, as a local clock time. */
+const retryClock = (at: string) =>
+  new Date(at).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
 /** One person found in the meetings: who they are and what their twin is, with the one thing to do next. */
 function PersonCard({
   person,
@@ -926,6 +939,7 @@ function PersonCard({
   onAddress,
   onRemove,
   onVoice,
+  onRebuild,
 }: {
   person: Person;
   twin?: Persona;
@@ -936,7 +950,11 @@ function PersonCard({
   onRemove: () => void;
   /** Their voice samples, and what voice alone gave them, to spot-check. */
   onVoice: () => void;
+  /** Build their twin again now, after its update stopped without completing. */
+  onRebuild: () => void;
 }) {
+  // The update stopped without completing: why, in place of a meter that would wait for nothing.
+  const stalled = stalledBuild(person);
   const lacking =
     person.seconds > 0 && (person.lacking ?? 0) >= 60
       ? `素材还差约 ${minutes(person.lacking ?? 0)}`
@@ -977,7 +995,9 @@ function PersonCard({
         ) : person.twin_elsewhere ? (
           <Badge tone="neutral">同事建了分身</Badge>
         ) : person.persona_id ? (
-          person.updating ? (
+          stalled ? (
+            <Badge tone="danger">记忆更新没完成</Badge>
+          ) : person.updating ? (
             <Badge tone="warning">记忆更新中</Badge>
           ) : (
             <Badge tone="success">可以聊</Badge>
@@ -1007,6 +1027,20 @@ function PersonCard({
           <Button variant="secondary" className="flex-1" disabled>
             由建它的同事管理
           </Button>
+        ) : person.persona_id && stalled ? (
+          <Stack gap={2} grow>
+            <Text size="sm" tone="danger" role="alert">
+              {stalled}
+            </Text>
+            {person.build?.retry_at && (
+              <Text size="sm" tone="secondary">
+                约 {retryClock(person.build.retry_at)} 自动重试
+              </Text>
+            )}
+            <Button variant="secondary" disabled={busy} onClick={onRebuild}>
+              重试
+            </Button>
+          </Stack>
         ) : person.persona_id && person.updating ? (
           // The twin can talk once its memory is updated: where the update is, in place of the button.
           <div className="flex-1 self-center" aria-live="polite">
@@ -1236,6 +1270,12 @@ export function Team({
         }),
       );
   };
+  const rebuild = (person: Person) =>
+    act(() =>
+      api(`/api/library/people/${encodeURIComponent(person.id)}/rebuild`, {
+        method: 'POST',
+      }),
+    );
   const rename = (person: Person, value: string) =>
     act(
       () =>
@@ -1354,7 +1394,10 @@ export function Team({
     (r) => r.status === 'queued' || r.status === 'transcribing',
   );
   const failed = recordings.filter((r) => r.status === 'failed');
-  const organising = people?.filter((p) => p.updating) ?? [];
+  // Twins catching up with the recordings, and those of them whose update stopped without completing.
+  const updatingTwins = people?.filter((p) => p.updating) ?? [];
+  const organising = updatingTwins.filter((p) => !stalledBuild(p));
+  const unfinished = updatingTwins.filter((p) => stalledBuild(p));
   const twinOf = (person: Person) =>
     twins.find((t) => t.id === person.persona_id);
   // A colleague said a twin made for them is not theirs: it is back with the owner, to point at the right person.
@@ -1518,7 +1561,10 @@ export function Team({
       go({ tab: 'todo', ...(wanted ? { cat: wanted } : {}) }, location.state);
   }, [returnedFrom, wanted, params, go, location.state]);
   const pending =
-    arriving.length + organising.length + proofreading.length + uploads.length;
+    arriving.length +
+    updatingTwins.length +
+    proofreading.length +
+    uploads.length;
   const taskOrder = taskIds.join('|');
   useEffect(() => {
     if (!focusPending || !people || busy) return;
@@ -1974,6 +2020,20 @@ export function Team({
             {p.name} · 整理记忆中
           </Text>
         ))}
+        {unfinished.map((p) => (
+          <Text
+            as="li"
+            key={p.id}
+            size="sm"
+            tone={p.build?.retry_at ? 'secondary' : 'danger'}
+            breakAll
+          >
+            {p.name} · 记忆更新没完成，
+            {p.build?.retry_at
+              ? `约 ${retryClock(p.build.retry_at)} 自动重试`
+              : '可在人物卡片上重试'}
+          </Text>
+        ))}
       </Stack>
       {uploads.length > 0 && onStopUpload && (
         <TextLink size="sm" onClick={onStopUpload}>
@@ -2019,6 +2079,7 @@ export function Team({
             onAddress={() => setAddressing(person)}
             onRemove={() => void remove(person)}
             onVoice={() => setHearing(person)}
+            onRebuild={() => void rebuild(person)}
           />
         ))}
       </Grid>
@@ -2037,8 +2098,10 @@ export function Team({
           {[
             organising.length > 0 &&
               `${organising.map((p) => p.name).join('、')} · 整理记忆中，完成后可以聊`,
-            pending > organising.length &&
-              `${pending - organising.length} 项录音正在处理`,
+            unfinished.length > 0 &&
+              `${unfinished.map((p) => p.name).join('、')} · 记忆更新没完成`,
+            pending > updatingTwins.length &&
+              `${pending - updatingTwins.length} 项录音正在处理`,
           ]
             .filter(Boolean)
             .join(' · ')}

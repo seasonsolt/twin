@@ -507,6 +507,7 @@ def create_app(
             persona.read_uploads,
             on_built=lambda version: libraries.built(persona_id, version),
             on_spent=lambda tokens: libraries.spent_building(persona_id, tokens),
+            on_unbuilt=lambda limited: libraries.unbuilt(persona_id, limited),
         )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(

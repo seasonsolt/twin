@@ -290,8 +290,10 @@ class JobManager:
         *,
         prepare: Callable[[Job], None] | None = None,
         require_idle: bool = False,
+        slotted: bool = True,
     ) -> Job:
-        """Accept a bounded background job; profile builds are mutually exclusive."""
+        """Accept a bounded background job; profile builds are mutually exclusive. ``slotted``: wait for the kind's
+        worker slot; False for work the caller bounds itself."""
         exclusive = kind in EXCLUSIVE_KINDS
         with self._lock:
             if (exclusive or require_idle) and self._exclusive_slot[0] is not None and self._exclusive_slot[0].active:
@@ -319,7 +321,7 @@ class JobManager:
             job.done.set()
             raise
         try:
-            threading.Thread(target=self._run, args=(job, fn), name=f"twin-{job.job_id}", daemon=True).start()
+            threading.Thread(target=self._run, args=(job, fn, slotted), name=f"twin-{job.job_id}", daemon=True).start()
         except BaseException:
             with self._lock:
                 job.status, job.finished = "failed", _now()
@@ -459,9 +461,11 @@ class JobManager:
         elif line.startswith("FAILED "):
             job.tally_failed += 1
 
-    def _run(self, job: Job, fn: JobFn) -> None:
+    def _run(self, job: Job, fn: JobFn, slotted: bool = True) -> None:
         slot = (
-            self._media_slot
+            None
+            if not slotted
+            else self._media_slot
             if job.kind == "media_ingest"
             else self._video_slot
             if job.kind == "video"

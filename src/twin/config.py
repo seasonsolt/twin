@@ -219,6 +219,15 @@ class ASRSettings(BaseModel):
     egress: Literal["local", "external"] | None = None
     # Proofread each media transcript with [llm] before speakers are claimed; sends the transcript text to [llm].
     clean: bool = True
+    # Whether the command hands requests to a resident service that hears them one at a time, so the recording
+    # library sends the next recording while one is heard; unset: when the command is asr-funasr's remote.py. A
+    # command that loads the models itself must not run twice at once.
+    ahead: bool | None = None
+
+    def takes_turns(self) -> bool:
+        if self.ahead is not None:
+            return self.ahead
+        return self.provider == "command" and "remote.py" in (self.command or "")
 
 
 class VisionSettings(BaseModel):

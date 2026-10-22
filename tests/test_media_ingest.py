@@ -525,7 +525,7 @@ def test_failed_originals_expire_but_recent_and_ready_ones_stay(
     with caplog.at_level("WARNING", logger="twin.media.library"):
         assert library.expire_failed(30) == 1
     assert [r.getMessage() for r in caplog.records if old in r.getMessage() and "0.wav" in r.getMessage()]
-    assert library._original(old) is None and library._original(recent) and library._original(ready)
+    assert library.original(old) is None and library.original(recent) and library.original(ready)
     assert "30 天" in (library.get(old) or library.list()[0]).error
     assert library.retry(old) is None and library.retry(recent) is not None
     assert library.expire_failed(30) == 0

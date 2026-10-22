@@ -29,6 +29,7 @@ import json
 import logging
 import math
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -47,7 +48,7 @@ from ..media import denoise, merge, recollect
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.clean import BATCH, clean_segments
 from ..media.cues import Named, name_speakers
-from ..media.ingest import CommandTranscriber, make_transcriber
+from ..media.ingest import CommandTranscriber, make_transcriber, probe_seconds
 from ..media.library import TEAM, Cleaned, Library, Recording, TranscriptionError, owner_key
 from ..media.review import Reviews, cut_parts
 from ..media.schema import AVATAR_GENDERS, default_avatar
@@ -75,6 +76,11 @@ SWEEP_SECONDS = 3600.0
 # How often the transcription service is asked again whether it can denoise (``media.denoise``), while some
 # recording waits for a denoised copy.
 DENOISE_ASK_SECONDS = 600.0
+# Jobs of one library on the transcription service at once: the one being heard and the next recording, decoded
+# and uploaded meanwhile so the service takes it straight after (``Libraries.kick``).
+TRANSCRIPTION_SLOTS = 2
+# 16 kHz mono 16-bit: the decoded audio of a second of a recording before transcription.
+DECODED_BYTES_PER_SECOND = 16000 * 2
 
 
 class Viewer(NamedTuple):
@@ -177,8 +183,11 @@ class Libraries:
         self.lock = threading.RLock()
         self.opened: dict[str, Library] = {}
         self.review_queues: dict[str, ReviewQueue] = {}
-        # The transcription job of each owner; the next recording is queued when it ends.
-        self.running: dict[str, Job] = {}
+        # Each owner's jobs on the transcription service by recording: one at a time, but for a second
+        # transcription decoding and uploading while the first is heard (``kick``).
+        self.running: dict[str, dict[str, Job]] = {}
+        # Bytes a queued recording's decoded audio may take (``_room_ahead``), measured once per recording.
+        self._decoded_bytes: dict[str, int] = {}
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
         self.syncing: set[str] = set()
         self.again: set[str] = set()
@@ -870,20 +879,30 @@ class Libraries:
         """Start transcribing the owner's next queued recording unless one is already running; with none queued,
         hear the confirmed speakers of the next recording again (``media.review``), and with none of those either,
         transcribe again the next recording the owner asked to (``media.recollect``), all in the same slot of the
-        transcription service, one at a time. Without a diarizing transcription service, or with the job queue
-        full, recordings stay queued; the next status poll tries again. Proofreading waiting for its turn starts
-        too."""
+        transcription service, one at a time. With a service that takes requests in turn (``takes_turns``), one more
+        queued recording may start beside a running job when its decoded audio leaves the headroom free
+        (``_room_ahead``): it decodes and uploads while the service is busy, which takes it next, so the service
+        does not sit idle between recordings. Without a diarizing
+        transcription service, or with the job queue full, recordings stay queued; the next status poll tries
+        again. Proofreading waiting for its turn starts too."""
         self.proofread(owner)
         with self.lock:
-            job = self.running.get(owner)
+            jobs = {rid: job for rid, job in self.running.get(owner, {}).items() if job.active}
+            self.running[owner] = jobs
+            # A command that runs the models itself is never started twice: it would load them twice.
+            ahead = self.settings.asr.takes_turns()
             # Stopping: what is waiting starts after the restart, not while the service goes down.
-            if (job is not None and job.active) or self._stop.is_set():
+            if len(jobs) >= (TRANSCRIPTION_SLOTS if ahead else 1) or self._stop.is_set():
                 return
             if not isinstance(make_transcriber(self.settings.asr), CommandTranscriber):
                 return
             library = self.library(owner)
-            recording = library.next_queued()
-            if recording is not None:
+            recording = library.next_queued(skip=jobs)
+            if jobs:
+                if recording is None or not self._room_ahead(library, recording):
+                    return
+                title, run = recording.filename, self.run
+            elif recording is not None:
                 title, run = recording.filename, self.run
             elif waiting := Reviews(library).waiting():
                 recording = waiting[0]
@@ -898,9 +917,26 @@ class Libraries:
                 return
             target = recording.id
             with contextlib.suppress(TooManyJobs):
-                self.running[owner] = self.jobs.scoped(f"library:{owner}").submit(
-                    "media_ingest", title, lambda log: run(owner, target, log)
+                # The service takes them in turn; the job queue's single media slot would hold the second back.
+                jobs[target] = self.jobs.scoped(f"library:{owner}").submit(
+                    "media_ingest", title, lambda log: run(owner, target, log), slotted=not ahead
                 )
+
+    def _room_ahead(self, library: Library, recording: Recording) -> bool:
+        """Whether the recording's decoded audio fits above the headroom with every upload still arriving in:
+        counted at the size of its 16 kHz 16-bit samples, which the FLAC kept stays under."""
+        size = self._decoded_bytes.get(recording.id)
+        if size is None:
+            original = library.original(recording.id)
+            try:
+                seconds = probe_seconds(original) if original is not None else None
+            except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+                seconds = None
+            if seconds is None:
+                return False  # Not measured: it waits for its turn alone, as before.
+            size = self._decoded_bytes[recording.id] = math.ceil(seconds * DECODED_BYTES_PER_SECOND)
+        capacity = self.capacity()
+        return capacity["free_bytes"] - capacity["arriving_bytes"] - size >= capacity["headroom_bytes"]
 
     def run_review(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
         """Hear the recording's confirmed speakers again, stretch by stretch; a failure is noted and tried again
@@ -920,7 +956,7 @@ class Libraries:
             return {"recording_id": recording_id, "speakers": heard}
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
             self.kick(owner)
 
     def _denoises(self, owner: str) -> bool:
@@ -960,7 +996,7 @@ class Libraries:
             return {"recording_id": recording_id, "denoised": made}
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
             self.kick(owner)
 
     def run_recollect(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
@@ -985,7 +1021,7 @@ class Libraries:
             return {"recording_id": recording_id, "carried": report.carried, "unsettled": len(report.unsettled)}
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
             self.kick(owner)
 
     def recollection(self, owner: str, viewer: Viewer) -> dict[str, Any]:
@@ -1088,7 +1124,8 @@ class Libraries:
             raise JobError(str(exc)) from None
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
+                self._decoded_bytes.pop(recording_id, None)
             self.kick(owner)
 
     def capacity(self) -> dict[str, int]:
@@ -1107,8 +1144,8 @@ class Libraries:
 
     def admit(self, viewer: Viewer, body: UploadBody) -> None:
         """Refuse an upload that would leave less than the headroom free once every upload still arriving is in,
-        or that would queue more than ``max_pending`` of the member's recordings. Transcription works on one
-        recording at a time, so its temporary audio fits in the headroom."""
+        or that would queue more than ``max_pending`` of the member's recordings. Transcription decodes one
+        recording at a time, and a second only with room for its audio above the headroom (``kick``)."""
         library = self.library(TEAM)
         waiting = library.pending(viewer.key) + self.uploads(viewer).arriving()[0]
         limit = self.settings.library.max_pending

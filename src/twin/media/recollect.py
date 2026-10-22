@@ -19,12 +19,11 @@ import json
 import logging
 import sqlite3
 import uuid
-import wave
 from collections.abc import Iterable, Mapping, Sequence
 
 from pydantic import BaseModel
 
-from .ingest import CommandTranscriber, Progress, Segment, decode
+from .ingest import CommandTranscriber, Progress, Segment, flac_seconds
 from .library import Library, Recording, Transcript, TranscriptionError, TranscriptionInterrupted, _interrupted
 from .team import Team, segment_owners
 
@@ -163,14 +162,12 @@ def run(library: Library, recording_id: str, transcriber: CommandTranscriber, pr
     playback = folder / "playback.flac"
     if recording is None or old is None or recording.status != "ready" or not playback.is_file():
         raise TranscriptionError("这段录音没有可以重新转写的转写和试听文件")
-    audio = folder / f".recollect-{uuid.uuid4().hex}.wav"
     try:
         try:
-            decode(playback, audio)
-            with wave.open(str(audio), "rb") as wav:
-                duration = wav.getnframes() / wav.getframerate()
+            # The playback copy holds the 16 kHz 16-bit samples themselves; the service reads FLAC as it is.
+            duration = flac_seconds(playback)
             transcriber.diarize, transcriber.reference, transcriber.references = True, None, {}
-            segments = transcriber.transcribe(audio, duration, progress)
+            segments = transcriber.transcribe(playback, duration, progress)
         except BaseException as exc:
             if _interrupted(exc):
                 raise TranscriptionInterrupted("重新转写被中断，会重新开始") from exc
@@ -193,8 +190,6 @@ def run(library: Library, recording_id: str, transcriber: CommandTranscriber, pr
     except BaseException:
         library.update(recording_id, recollect=None)
         raise
-    finally:
-        audio.unlink(missing_ok=True)
     report = _switch(library, recording, old, new)
     library.heard_asr(new.asr)
     Team(library).classify(recording_id)

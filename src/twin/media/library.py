@@ -28,8 +28,7 @@ import sqlite3
 import subprocess
 import threading
 import uuid
-import wave
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Literal
@@ -46,7 +45,7 @@ from .ingest import (
     Progress,
     Segment,
     Speaker,
-    extract_audio,
+    extract_flac,
     stopped,
 )
 
@@ -55,8 +54,6 @@ logger = logging.getLogger(__name__)
 RecordingStatus = Literal["queued", "transcribing", "ready", "failed"]
 # Recordings that still take a transcription turn; they count against ``LibrarySettings.max_pending``.
 PENDING: tuple[RecordingStatus, ...] = ("queued", "transcribing")
-# Generous per-recording timeout for re-encoding the playback copy.
-ENCODE_TIMEOUT = 6 * 3600
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS recordings (
@@ -454,10 +451,13 @@ class Library:
                 ).fetchone()[0]
             )
 
-    def next_queued(self) -> Recording | None:
+    def next_queued(self, skip: Collection[str] = ()) -> Recording | None:
+        """The longest-waiting queued recording; ``skip``: recordings whose transcription is already starting."""
         with self._db() as db:
             row = db.execute(
-                "SELECT * FROM recordings WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
+                f"SELECT * FROM recordings WHERE status = 'queued' AND id NOT IN ({','.join('?' * len(skip))}) "
+                "ORDER BY created_at, id LIMIT 1",
+                tuple(skip),
             ).fetchone()
         return Recording.model_validate(dict(row)) if row else None
 
@@ -527,7 +527,7 @@ class Library:
                 )
                 ready = [row[0] for row in db.execute("SELECT id FROM recordings WHERE status = 'ready'")]
             for recording_id in ready:
-                if (original := self._original(recording_id)) is not None:
+                if (original := self.original(recording_id)) is not None:
                     original.unlink(missing_ok=True)
             return self.pending()
 
@@ -535,7 +535,7 @@ class Library:
         """Queue a failed recording again; None when it is not failed or its upload is gone."""
         with self.lock:
             recording = self.get(recording_id)
-            if recording is None or recording.status != "failed" or not self._original(recording_id):
+            if recording is None or recording.status != "failed" or not self.original(recording_id):
                 return None
             self.update(recording_id, status="queued", error="", transcribed_s=0)
             return self.get(recording_id)
@@ -552,7 +552,7 @@ class Library:
             for recording in self.list():
                 if recording.status != "failed" or recording.updated_at >= cutoff:
                     continue
-                original = self._original(recording.id)
+                original = self.original(recording.id)
                 if original is None:
                     continue
                 logger.warning(
@@ -761,27 +761,29 @@ class Library:
             and recollect_scope(CollectorVersion(recording.asr, current.attribution, current.cleanup), current) == "asr"
         )
 
-    def _original(self, recording_id: str) -> Path | None:
+    def original(self, recording_id: str) -> Path | None:
+        """The upload of a recording not yet transcribed."""
         return next(self.folder(recording_id).glob("original.*"), None)
 
     def transcribe(self, recording_id: str, transcriber: CommandTranscriber, progress: Progress) -> Recording:
-        """Transcribe a queued recording with every speaker's voiceprint, keep a FLAC playback copy, then delete
-        the upload. On failure the upload stays, the recording is marked failed and ``TranscriptionError`` says
-        why; cut off by the service stopping, it is queued again (``TranscriptionInterrupted``)."""
+        """Transcribe a queued recording with every speaker's voiceprint, keep the FLAC it was transcribed from as
+        the playback copy, then delete the upload. On failure the upload stays, the recording is marked failed and
+        ``TranscriptionError`` says why; cut off by the service stopping, it is queued again
+        (``TranscriptionInterrupted``)."""
         with self.lock:
             recording = self.get(recording_id)
             if recording is None or recording.status != "queued":
                 raise TranscriptionError("这段录音已删除或不在排队中")
             self.update(recording_id, status="transcribing", error="", transcribed_s=0)
         folder = self.folder(recording_id)
-        audio = folder / "audio.wav"
+        audio = folder / "audio.flac"
         try:
-            original = self._original(recording_id)
+            original = self.original(recording_id)
             if original is None:
                 raise TranscriptionError("原始文件已不在，请重新上传")
             try:
-                audio, duration, creation = extract_audio(original)
-            except (subprocess.SubprocessError, OSError, ValueError, wave.Error) as exc:
+                duration, creation = extract_flac(original, audio)
+            except (subprocess.SubprocessError, OSError, ValueError, KeyError, IndexError) as exc:
                 raise TranscriptionError("无法读取音频，请确认文件完整且是常见音视频格式") from exc
             self.update(recording_id, duration_s=duration, creation_time=creation)
             transcriber.diarize, transcriber.reference, transcriber.references = True, None, {}
@@ -802,8 +804,8 @@ class Library:
                 asr=transcriber.asr,
             )
             self.write_transcript(folder, transcript)
-            self._encode_playback(audio, folder / "playback.flac")
-            audio.unlink(missing_ok=True)
+            # The very samples the transcript's times refer to.
+            audio.replace(folder / "playback.flac")
             # Published before the upload goes: a stop in between leaves a ready recording, never a queued one
             # whose upload is gone.
             self.update(
@@ -845,47 +847,3 @@ class Library:
             temporary.unlink()
             raise TranscriptionError("转写结果写入校验失败，请重试")
         temporary.replace(path)
-
-    @staticmethod
-    def _encode_playback(audio: Path, target: Path) -> None:
-        """Lossless FLAC of the 16 kHz mono transcription audio: what later listening and voice samples use."""
-        temporary = target.with_name(f".{target.name}.tmp")
-        temporary.touch(mode=0o600)
-        temporary.chmod(0o600)
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-v",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-i",
-                    str(audio),
-                    "-c:a",
-                    "flac",
-                    "-f",
-                    "flac",
-                    str(temporary),
-                ],
-                capture_output=True,
-                check=True,
-                timeout=ENCODE_TIMEOUT,
-            )
-            with wave.open(str(audio), "rb") as wav:
-                expected = wav.getnframes() / wav.getframerate()
-            probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(temporary)],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120,
-            )
-            actual = float(json.loads(probe.stdout)["format"]["duration"])
-        except (subprocess.SubprocessError, OSError, ValueError, KeyError, wave.Error) as exc:
-            temporary.unlink(missing_ok=True)
-            raise TranscriptionError("试听文件生成失败，请检查 ffmpeg 后重试") from exc
-        if abs(actual - expected) > 1:
-            temporary.unlink(missing_ok=True)
-            raise TranscriptionError("试听文件时长校验失败，请重试")
-        temporary.replace(target)

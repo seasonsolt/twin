@@ -500,6 +500,8 @@ class FakeLogin:
             "cookie-b": {"authenticated": True, "subject": "1002", "display_name": "李四", "account": "lisi"},
         }
         self.calls = 0
+        # Set to answer every query with this status, as the app does while it is failing.
+        self.failing: int | None = None
         login = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -508,6 +510,9 @@ class FakeLogin:
 
             def do_GET(self) -> None:
                 login.calls += 1
+                if login.failing:
+                    self.send_error(login.failing)
+                    return
                 cookies = SimpleCookie(self.headers.get("Cookie", ""))
                 session = login.sessions.get(cookies["sso"].value) if "sso" in cookies else None
                 body = json.dumps(session or {"detail": "请先登录"}).encode()
@@ -660,13 +665,31 @@ def test_sso_administrators_match_by_account_name(tmp_path: Path) -> None:
     assert AuthSettings().admin_emails == ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"]
 
 
-def test_sso_login_service_down_means_signed_out(sso: tuple[TestClient, FakeLogin]) -> None:
+def test_a_failing_sso_service_signs_nobody_out(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    web.cookies.set("sso", "cookie-a")
+    login.failing = 502
+    for path in ("/api/whoami", "/api/personas"):
+        response = web.get(path)
+        assert response.status_code == 503 and response.json()["code"] == "sign_in_unavailable"
+    assert web.get("/api/auth/methods").status_code == 200  # the sign-in page still learns its ways
+    login.failing = None  # a failure is not remembered: the next request asks again
+    assert web.get("/api/whoami").json()["email"] == "sso:1001"
+    login.sessions.pop("cookie-a")
+    auth(web).sso_cache.clear()
+    response = web.get("/api/whoami")  # only the service's own "not signed in" signs out
+    assert response.status_code == 401 and response.json()["login_url"] == "/login?next=/twin/"
+
+
+def test_an_unreachable_sso_service_signs_nobody_out(sso: tuple[TestClient, FakeLogin]) -> None:
     web, login = sso
     login.server.shutdown()
     login.server.server_close()
     web.cookies.set("sso", "cookie-a")
     response = web.get("/api/whoami")
-    assert response.status_code == 401 and response.json()["login_url"] == "/login?next=/twin/"
+    assert response.status_code == 503 and response.json()["detail"] == "登录服务暂时不可用，请稍后重试"
+    web.cookies.clear()  # without the other app's cookie there is nobody to ask about
+    assert web.get("/api/whoami").status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -816,6 +839,16 @@ def test_own_accounts_sign_in_beside_sso(both: tuple[TestClient, FakeLogin]) -> 
     web.cookies.set("sso", "cookie-a")  # the company sign-in wins when both are present
     assert web.get("/api/whoami").json()["email"] == "sso:1001"
     assert web.get("/api/persona/state", headers={"X-Twin-Persona": own}).status_code == 404
+
+
+def test_twins_own_account_stays_signed_in_while_sso_fails(both: tuple[TestClient, FakeLogin]) -> None:
+    web, login = both
+    auth(web).add_account("bob", "secret-123")
+    web.cookies.set("sso", "cookie-a")  # a stale cookie of the other app beside twin's own session
+    login.failing = 500
+    assert web.get("/api/whoami").status_code == 503
+    assert password_login(web, "bob", "secret-123").status_code == 200  # signing in needs no answer from it
+    assert web.get("/api/whoami").json()["email"] == "user:bob"
 
 
 def test_an_accounts_email_not_its_name_makes_it_an_administrator(both: tuple[TestClient, FakeLogin]) -> None:

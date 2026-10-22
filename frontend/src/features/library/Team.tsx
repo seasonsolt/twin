@@ -99,8 +99,14 @@ interface Unsorted {
   total: number;
 }
 
+/** The lists of the queue that come a page at a time (``review_queue.page``): voices by when they are asked,
+ * speakers someone said are not them, recordings settled one by one, and suspect confirmed speakers. */
+type Paged =
+  'voices' | 'enough' | 'strangers' | 'items' | 'unsorted' | 'suspects';
+
 interface Review {
   items: Waiting[];
+  // The first of each kind of voice asked for, in the order they are asked.
   voices: Voice[];
   fragments: Fragment[];
   unsorted: Unsorted[];
@@ -108,6 +114,8 @@ interface Review {
   suspects?: SuspectSpeaker[];
   // How long people speak in these recordings, and how much of it is settled.
   heard?: { settled: number; total: number };
+  // How many each list holds in all, and how long its voices speak; a list without one came whole.
+  totals?: Partial<Record<Paged, { count: number; seconds?: number }>>;
 }
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */
@@ -1067,12 +1075,15 @@ export function Team({
   const [reviewing, setReviewing] = useState<SuspectSpeaker | null>(null);
   const [hearing, setHearing] = useState<Person | null>(null);
   const [heard, setHeard] = useState<Review['heard']>();
+  const [totals, setTotals] = useState<Review['totals']>();
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [peopleError, setPeopleError] = useState('');
   const [reviewError, setReviewError] = useState('');
   const [reviewReady, setReviewReady] = useState(false);
-  const loadVersion = useRef(0);
+  // Each answer is shown only if no newer request of its kind was made meanwhile.
+  const peopleVersion = useRef(0);
+  const reviewVersion = useRef(0);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
   const [addressing, setAddressing] = useState<Person | null>(null);
@@ -1095,47 +1106,67 @@ export function Team({
   const switchTo = usePersonas((state) => state.switchTo);
   const twins = usePersonas((state) => state.items);
 
-  const load = useCallback(async () => {
-    const current = ++loadVersion.current;
-    await Promise.all([
-      api<{ items: Person[] }>('/api/library/people')
-        .then((folks) => {
-          if (current !== loadVersion.current) return;
-          setPeople(folks.items);
-          setPeopleError('');
-        })
-        .catch((failure: unknown) => {
-          if (current === loadVersion.current)
-            setPeopleError(
-              failure instanceof Error ? failure.message : '无法加载人物',
-            );
-        }),
-      api<Review>('/api/library/review')
-        .then((queue) => {
-          if (current !== loadVersion.current) return;
-          setWaiting(queue.items);
-          setVoices(queue.voices);
-          setFragments(queue.fragments);
-          setUnsorted(queue.unsorted);
-          setSuspects(queue.suspects ?? []);
-          setHeard(queue.heard);
-          setReviewError('');
-          setReviewReady(true);
-        })
-        .catch((failure: unknown) => {
-          if (current === loadVersion.current)
-            setReviewError(
-              failure instanceof Error ? failure.message : '无法加载待处理事项',
-            );
-        }),
-    ]);
+  // As many of each list as are shown, from the start: asking again with more keeps every list of one reading.
+  const reviewQuery = new URLSearchParams({
+    voices: String(voicesShown),
+    enough: String(pages.enough ?? VOICES_PER_PAGE),
+    strangers: String(pages.stranger ?? VOICES_PER_PAGE),
+    items: String(pages.disputed ?? TASKS_PER_PAGE),
+    unsorted: String(pages.unsorted ?? TASKS_PER_PAGE),
+    suspects: String(pages.mixed ?? TASKS_PER_PAGE),
+  } satisfies Record<Paged, string>).toString();
+  const loadPeople = useCallback(async () => {
+    const current = ++peopleVersion.current;
+    try {
+      const folks = await api<{ items: Person[] }>('/api/library/people');
+      if (current !== peopleVersion.current) return;
+      setPeople(folks.items);
+      setPeopleError('');
+    } catch (failure) {
+      if (current === peopleVersion.current)
+        setPeopleError(
+          failure instanceof Error ? failure.message : '无法加载人物',
+        );
+    }
   }, []);
+  const loadReview = useCallback(async () => {
+    const current = ++reviewVersion.current;
+    try {
+      const queue = await api<Review>(`/api/library/review?${reviewQuery}`);
+      if (current !== reviewVersion.current) return;
+      setWaiting(queue.items);
+      setVoices(queue.voices);
+      setFragments(queue.fragments);
+      setUnsorted(queue.unsorted);
+      setSuspects(queue.suspects ?? []);
+      setHeard(queue.heard);
+      setTotals(queue.totals);
+      setReviewError('');
+      setReviewReady(true);
+    } catch (failure) {
+      if (current === reviewVersion.current)
+        setReviewError(
+          failure instanceof Error ? failure.message : '无法加载待处理事项',
+        );
+    }
+  }, [reviewQuery]);
+  const load = useCallback(
+    async () => void (await Promise.all([loadPeople(), loadReview()])),
+    [loadPeople, loadReview],
+  );
   useEffect(() => {
-    void load();
+    void loadPeople();
     return () => {
-      loadVersion.current += 1;
+      peopleVersion.current += 1;
     };
-  }, [load, version]);
+  }, [loadPeople, version]);
+  // Also when more of a list is asked for: the queue answers from its cached reading, people are not read again.
+  useEffect(() => {
+    void loadReview();
+    return () => {
+      reviewVersion.current += 1;
+    };
+  }, [loadReview, version]);
   const updating = !!people?.some((p) => p.updating);
   // A twin's memory takes minutes to rebuild: every few seconds would only load the server, many pages at once.
   usePolling(load, updating ? 15000 : 0);
@@ -1375,8 +1406,39 @@ export function Team({
   const mainVoices = voiced.filter((v) => !v.enough && !v.stranger);
   const enoughVoices = voiced.filter((v) => v.enough && !v.stranger);
   const strangerVoices = voiced.filter((v) => v.stranger);
-  const shownVoices = mainVoices.slice(0, voicesShown);
-  const laterVoices = mainVoices.slice(voicesShown);
+  const sum = (rows: { seconds: number }[]) =>
+    rows.reduce((total, row) => total + row.seconds, 0);
+  // How many voices of a kind there are in all, and how long they speak, the first of them loaded only.
+  const inAll = (
+    list: 'voices' | 'enough' | 'strangers',
+    rows: typeof voiced,
+  ) => ({
+    count: totals?.[list]?.count ?? rows.length,
+    seconds: totals?.[list]?.seconds ?? sum(rows),
+  });
+  const mainLoaded = mainVoices.filter((v) => 'voice' in v);
+  const mainTotal = inAll('voices', mainLoaded);
+  const enoughTotal = inAll('enough', enoughVoices).count;
+  const strangerTotal = inAll('strangers', strangerVoices).count;
+  // New people (all loaded) among the voices: one ranked after the last voice loaded may yet be passed by a voice
+  // still to load, so none is shown past that voice until the rest are.
+  let lastLoaded = -1;
+  mainVoices.forEach((v, i) => {
+    if ('voice' in v) lastLoaded = i;
+  });
+  const shownVoices = (
+    mainLoaded.length < mainTotal.count
+      ? mainVoices.slice(0, lastLoaded + 1)
+      : mainVoices
+  ).slice(0, voicesShown);
+  const mainCount = mainVoices.length - mainLoaded.length + mainTotal.count;
+  const later = {
+    count: mainCount - shownVoices.length,
+    seconds:
+      sum(mainVoices.filter((v) => 'person' in v)) +
+      mainTotal.seconds -
+      sum(shownVoices),
+  };
   const taskIds = [
     ...voiced.map((v) => v.id),
     ...suspects.map((m) => `mixed-${m.recording_id}-${m.speaker_id}`),
@@ -1387,20 +1449,28 @@ export function Team({
     ...failed.map((r) => `failed-${r.id}`),
     ...disowned.map((p) => `disowned-${p.id}`),
   ];
-  // What can wait harms nobody meanwhile: the owner is not told it is waiting.
-  const tasks = taskIds.filter(
-    (id) => !CATEGORIES.find((c) => c.id === categoryOf(id))?.optional,
-  ).length;
+  // How many tasks of each kind there are, the first of them loaded only.
   const counts: Record<Category, number> = {
-    voice: voiced.length,
-    mixed: suspects.length,
-    unsorted: unsorted.length,
+    voice: mainCount + enoughTotal + strangerTotal,
+    mixed: totals?.suspects?.count ?? suspects.length,
+    unsorted: totals?.unsorted?.count ?? unsorted.length,
     failed: failed.length,
     similar: similar.length,
-    disputed: waiting.length,
+    disputed: totals?.items?.count ?? waiting.length,
     disowned: disowned.length,
     fragments: fragments.length ? 1 : 0,
   };
+  // How many of a kind are loaded: those still to load are asked for as the owner scrolls.
+  const loaded: Partial<Record<Category, number>> = {
+    mixed: suspects.length,
+    unsorted: unsorted.length,
+    disputed: waiting.length,
+  };
+  // What can wait harms nobody meanwhile: the owner is not told it is waiting.
+  const tasks = CATEGORIES.filter((c) => !c.optional).reduce(
+    (n, c) => n + counts[c.id],
+    0,
+  );
   const openCategories = CATEGORIES.filter((c) => counts[c.id] > 0);
   const tab: 'people' | 'todo' =
     params.get('tab') === 'todo' || returnedFrom ? 'todo' : 'people';
@@ -1533,32 +1603,36 @@ export function Team({
         }
       />
     );
+  // Asked for more than has arrived yet: the next page waits for it, however far the owner scrolls.
+  const awaited = (asked: number, shown: number, all: number) =>
+    asked > shown && shown < all;
   const folded = (
     summary: string,
     rows: typeof voiced,
+    all: number,
     group: 'enough' | 'stranger',
   ) =>
-    rows.length > 0 && (
+    all > 0 && (
       <Disclosure
         summary={summary}
         variant="plain"
-        defaultOpen={mainVoices.length === 0}
+        defaultOpen={mainCount === 0}
       >
         <Stack as="ul" gap={0}>
           {rows.slice(0, pages[group] ?? VOICES_PER_PAGE).map(voiceRow)}
         </Stack>
         <LoadMore
           shown={Math.min(rows.length, pages[group] ?? VOICES_PER_PAGE)}
-          total={rows.length}
+          total={all}
           label="继续显示声音"
-          disabled={busy}
+          disabled={
+            busy || awaited(pages[group] ?? VOICES_PER_PAGE, rows.length, all)
+          }
           active={tab === 'todo'}
           onLoadMore={() => showMore(group, VOICES_PER_PAGE)}
         />
       </Disclosure>
     );
-  const sum = (rows: typeof voiced) =>
-    rows.reduce((total, row) => total + row.seconds, 0);
   const attention = (tone: 'warning' | 'danger' | 'info') => (
     <StatusDot tone={tone} />
   );
@@ -1572,25 +1646,29 @@ export function Team({
         <Stack as="ul" gap={0} aria-label="新出现的声音">
           {shownVoices.map(voiceRow)}
         </Stack>
-        {laterVoices.length > 0 && (
+        {later.count > 0 && (
           <LoadMore
             shown={shownVoices.length}
-            total={mainVoices.length}
-            description={`还有 ${laterVoices.length} 个说得更少（共 ${span(sum(laterVoices))}）`}
-            label={`再看 ${Math.min(VOICES_PER_PAGE, laterVoices.length)} 个`}
-            disabled={busy}
+            total={mainCount}
+            description={`还有 ${later.count} 个说得更少（共 ${span(later.seconds)}）`}
+            label={`再看 ${Math.min(VOICES_PER_PAGE, later.count)} 个`}
+            disabled={
+              busy || awaited(voicesShown, shownVoices.length, mainCount)
+            }
             active={tab === 'todo'}
             onLoadMore={() => setVoicesShown((n) => n + VOICES_PER_PAGE)}
           />
         )}
         {folded(
-          `${enoughVoices.length} 个像已经够建分身的人`,
+          `${enoughTotal} 个像已经够建分身的人`,
           enoughVoices,
+          enoughTotal,
           'enough',
         )}
         {folded(
-          `${strangerVoices.length} 个像你标过不认识的`,
+          `${strangerTotal} 个像你标过不认识的`,
           strangerVoices,
+          strangerTotal,
           'stranger',
         )}
         <Row gap={2} wrap>
@@ -2041,10 +2119,20 @@ export function Team({
           {body}
           {category.id !== 'voice' && category.id !== 'fragments' && (
             <LoadMore
-              shown={Math.min(taskPage, counts[category.id])}
+              shown={Math.min(
+                taskPage,
+                loaded[category.id] ?? counts[category.id],
+              )}
               total={counts[category.id]}
               label="继续加载待处理事项"
-              disabled={busy}
+              disabled={
+                busy ||
+                awaited(
+                  taskPage,
+                  loaded[category.id] ?? counts[category.id],
+                  counts[category.id],
+                )
+              }
               active={tab === 'todo'}
               onLoadMore={() => showMore(category.id)}
             />

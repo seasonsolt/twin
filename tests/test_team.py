@@ -1197,6 +1197,22 @@ def test_a_person_s_voice_is_checked_and_a_sample_removed_through_the_page(web: 
     assert web.get(f"/api/library/people/{zhang.id}/voice").json() == {"samples": [], "checks": []}
 
 
+def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60), ([0.0, 1.0, 0.0], 40), ([0.0, 0.0, 1.0], 20))
+    for name in ("二.m4a", "三.m4a"):
+        recording(library, name, [Segment(start=0, end=1, text="嗯。", speaker="S1")], [Speaker(id="S1", seconds=1)])
+    whole = web.get("/api/library/review").json()
+    assert [v["seconds"] for v in whole["voices"]] == [60, 40, 20] and len(whole["unsorted"]) == 2
+    first = web.get("/api/library/review?voices=2&enough=5&strangers=5&items=10&unsorted=1&suspects=10").json()
+    # The longest first, as on the whole list, and how many wait after them.
+    assert first["voices"] == whole["voices"][:2] and first["unsorted"] == whole["unsorted"][:1]
+    assert first["totals"]["voices"] == {"count": 3, "seconds": 120} and first["totals"]["unsorted"] == {"count": 2}
+    more = web.get("/api/library/review?voices=4&unsorted=2").json()
+    assert more["voices"] == whole["voices"] and more["unsorted"] == whole["unsorted"]
+    assert web.get("/api/library/review?voices=-1").status_code == 400
+
+
 def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 30), ([0.0, 1.0, 0.0], 3))

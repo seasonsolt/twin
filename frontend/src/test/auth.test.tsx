@@ -98,7 +98,10 @@ beforeEach(() => {
           headroom_bytes: 0,
         },
       });
-    if (path === '/api/library/people' || path === '/api/library/review')
+    if (
+      path === '/api/library/people' ||
+      path.startsWith('/api/library/review')
+    )
       return json({ items: [], voices: [], fragments: [], unsorted: [] });
     if (!items.length)
       return json({ detail: '先新建一个分身', code: 'no_persona' }, 409);

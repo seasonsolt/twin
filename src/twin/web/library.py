@@ -35,9 +35,9 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -60,7 +60,7 @@ from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import ClaimBody, Personas, claim_key
-from .review_queue import ReviewQueue
+from .review_queue import ReviewQueue, page
 from .uploads import UploadBody, Uploads, upload_routes
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,8 @@ DENOISE_ASK_SECONDS = 600.0
 TRANSCRIPTION_SLOTS = 2
 # 16 kHz mono 16-bit: the decoded audio of a second of a recording before transcription.
 DECODED_BYTES_PER_SECOND = 16000 * 2
+# The most of one list of the review queue a page may ask for at once (``get_review``).
+MAX_REVIEW_PAGE = 10000
 
 
 class Viewer(NamedTuple):
@@ -1380,15 +1382,32 @@ def register(
         return {"disputed": True}
 
     @app.get("/api/library/review")
-    def get_review(request: Request) -> dict[str, Any]:
+    def get_review(
+        request: Request,
+        voices: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        enough: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        strangers: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        items: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        unsorted: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        suspects: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+    ) -> dict[str, Any]:
         """What the viewer settles about the recordings they decide about: speakers someone said are not them
         (``items``), undecided speakers grouped by voice across recordings so each colleague is asked about once
         (``voices``), the short voices like nobody, to set aside together (``fragments``), and recordings whose
         speakers have no voiceprint to group by, settled one by one (``unsorted``), with how much of their speech
         is settled (``heard``). All from one reading, so the page never infers a task from an older list of
-        recordings."""
+        recordings. Each list is the first so many asked for (``review_queue.page``; all without a number), with how
+        many it holds in all (``totals``): the page shows a few of each and asks for more as the owner scrolls."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
-        return libraries.review(libraries.owner(request), editable)
+        limits = {
+            "voices": voices,
+            "enough": enough,
+            "strangers": strangers,
+            "items": items,
+            "unsorted": unsorted,
+            "suspects": suspects,
+        }
+        return page(libraries.review(libraries.owner(request), editable), limits)
 
     @app.post("/api/library/voices")
     def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:

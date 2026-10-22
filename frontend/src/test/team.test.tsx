@@ -152,7 +152,7 @@ it('pages people on scroll, searches the whole roster, and keeps the expanded li
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -197,7 +197,7 @@ it('pages a task category while its batch action still handles every recording',
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       if (url.endsWith('/retry') && init?.method === 'POST') {
         retried.push(url);
         return json({});
@@ -239,7 +239,7 @@ it('shows people while review is pending and does not call the unloaded queue em
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return pending;
+      if (url.startsWith('/api/library/review')) return pending;
       throw new Error(url);
     }),
   );
@@ -262,7 +262,7 @@ it('keeps people usable when review fails and lets the owner retry in its tab', 
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return failed
           ? json({ detail: '复核暂时失败' }, 500)
           : json(emptyReview);
@@ -290,7 +290,7 @@ it('ignores an older review failure after a newer refresh has finished', async (
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return ++reviews === 1 ? pending : json(emptyReview);
       throw new Error(url);
     }),
@@ -363,7 +363,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [
@@ -484,7 +484,7 @@ it('lists new voices apart and names them before a twin can be made', async () =
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_9' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
@@ -555,7 +555,7 @@ it('edits a person name and gender and opens the profile of their twin', async (
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_1' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
@@ -614,7 +614,7 @@ it('stays where the owner is working after settling a voice, instead of jumping 
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (init?.method === 'PATCH') {
         const id = url.split('/').at(-1);
@@ -663,7 +663,7 @@ it('moves focus to the next voice after naming one, then hides the empty queue',
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (init?.method === 'PATCH') {
         const id = url.split('/').at(-1);
@@ -705,7 +705,7 @@ it('settles a new voice as someone already known, or as nobody known, from its r
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       const id = /people\/([^/]+)\/resolve$/u.exec(url)?.[1];
       if (id && init?.method === 'POST') {
@@ -749,7 +749,7 @@ it('returns from a speaker confirmation to focus the next pending team item', as
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: reviewed
             ? []
@@ -807,7 +807,7 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: [] });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);
     }),
@@ -854,7 +854,7 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push(url);
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       return originalFetch(url, init);
     }),
@@ -919,7 +919,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json(usePersonas.getState().items);
       sent.push([url, init?.method, JSON.parse(String(init?.body))]);
@@ -983,7 +983,7 @@ it('shows a person who found themselves by voice as having their own twin', asyn
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json([]);
       throw new Error(url);
@@ -1019,7 +1019,7 @@ it('puts what someone said is not them first, and lets an administrator merge tw
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [
             {
@@ -1097,7 +1097,7 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices, fragments, unsorted: [] });
       if (url === '/api/library/voices' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as { action: string };
@@ -1169,7 +1169,7 @@ it('opens a voice at its own speaker, next to the samples of who it may be', asy
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [
@@ -1249,7 +1249,7 @@ it('asks about recordings only as the server lists them, so an older list never 
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json([]);
       throw new Error(url);
@@ -1293,7 +1293,7 @@ it('asks about whoever speaks longest first, and measures progress by speech set
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [
@@ -1416,7 +1416,7 @@ it('offers the name a meeting calls a voice, and asks about whoever a twin still
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices, fragments: [], unsorted: [] });
       if (url === '/api/library/voices' && init?.method === 'POST') {
         posts.push(JSON.parse(String(init.body)));
@@ -1478,7 +1478,7 @@ it('settles a voice of several people and gives short voices to whom they sound 
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [
@@ -1585,7 +1585,7 @@ it('lists people heard longest first', async () => {
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);
     }),
@@ -1616,7 +1616,7 @@ it('adds a person by hand from a small dialog, and keeps the people list where i
         return json({ id: 'per_5' }, 201);
       }
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);
     }),
@@ -1662,7 +1662,7 @@ it('shows the first five new voices, continues on scroll, and retries every fail
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices, fragments: [], unsorted: [] });
       if (url.endsWith('/retry') && init?.method === 'POST') {
         retried.push(url);
@@ -1697,6 +1697,127 @@ it('shows the first five new voices, continues on scroll, and retries every fail
       '/api/library/recordings/b/retry',
     ]),
   );
+});
+
+it('asks for the first page of each list, and for more from the start as the owner scrolls', async () => {
+  const scrollTo = mockScrolling();
+  const voices = Array.from({ length: 12 }, (_, i) => ({
+    id: `voice_${i}`,
+    members: [
+      {
+        recording_id: `rec_${i}`,
+        filename: `周会${i}.m4a`,
+        transcript_id: 't1',
+        speaker_id: 'S1',
+        seconds: 1200 - i * 60,
+      },
+    ],
+    seconds: 1200 - i * 60,
+    candidates: [],
+    near: false,
+  }));
+  const unsorted = Array.from({ length: 13 }, (_, i) => ({
+    recording_id: `old_${i}`,
+    filename: `旧会${i}.m4a`,
+    speakers: 2,
+    total: 2,
+  }));
+  // A new unnamed person, heard less than every voice: asked about last.
+  people = [
+    person({ id: 'per_new', name: '未命名 1', auto: true, seconds: 30 }),
+  ];
+  const asked: string[] = [];
+  let hold: Promise<void> | null = null;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') {
+        asked.push(url);
+        return json({ items: people });
+      }
+      if (url.startsWith('/api/library/review?')) {
+        asked.push(url);
+        await hold;
+        // As the server cuts a page (``review_queue.page``): the first so many of each list, and how many in all.
+        const limits = new URL(url, 'http://localhost').searchParams;
+        const first = <T,>(name: string, rows: T[]) =>
+          rows.slice(0, Number(limits.get(name)));
+        return json({
+          items: [],
+          voices: first('voices', voices),
+          fragments: [],
+          unsorted: first('unsorted', unsorted),
+          suspects: [],
+          totals: {
+            voices: { count: 12, seconds: 10440 },
+            enough: { count: 0, seconds: 0 },
+            strangers: { count: 0, seconds: 0 },
+            items: { count: 0 },
+            unsorted: { count: 13 },
+            suspects: { count: 0 },
+          },
+        });
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/?tab=todo']}>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const list = await screen.findByRole('list', { name: '新出现的声音' });
+  expect(asked).toEqual([
+    '/api/library/people',
+    '/api/library/review?voices=5&enough=5&strangers=5&items=10&unsorted=10&suspects=10',
+  ]);
+  expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+  // Counted from the totals, not from the five loaded.
+  expect(screen.getByRole('tab', { name: /待处理/u })).toHaveTextContent(
+    '待处理26',
+  );
+  expect(
+    screen.getByText(/还有 8 个说得更少（共 85 分钟）/u),
+  ).toBeInTheDocument();
+
+  // The next page is asked for from the start; until it arrives the trigger waits instead of asking again.
+  let release = () => {};
+  hold = new Promise((resolve) => (release = resolve));
+  act(() => scrollTo('再看 5 个'));
+  await waitFor(() => expect(asked).toHaveLength(3));
+  expect(asked[2]).toContain('voices=10&');
+  expect(screen.getByRole('button', { name: '再看 5 个' })).toBeDisabled();
+  act(() => release());
+  await waitFor(() =>
+    expect(within(list).getAllByRole('listitem')).toHaveLength(10),
+  );
+  // Two voices still to load may come before the new person: they are not shown past the last voice loaded.
+  expect(screen.queryByText('未命名 1')).not.toBeInTheDocument();
+  hold = null;
+  act(() => scrollTo('再看 3 个'));
+  await waitFor(() =>
+    expect(within(list).getAllByRole('listitem')).toHaveLength(13),
+  );
+  expect(within(list).getAllByRole('listitem')[12]).toHaveTextContent(
+    '未命名 1',
+  );
+  expect(asked.filter((url) => url === '/api/library/people')).toHaveLength(1);
+
+  await userEvent.click(screen.getByRole('tab', { name: /还没认人/u }));
+  expect(screen.getByRole('tab', { name: /还没认人/u })).toHaveTextContent(
+    '13',
+  );
+  expect(screen.getAllByRole('link', { name: '试听并确认' })).toHaveLength(10);
+  expect(screen.getByText('已显示 10 / 13')).toBeInTheDocument();
+  act(() => scrollTo('继续加载待处理事项'));
+  await waitFor(() =>
+    expect(screen.getAllByRole('link', { name: '试听并确认' })).toHaveLength(
+      13,
+    ),
+  );
+  expect(asked.at(-1)).toContain('unsorted=20');
 });
 
 it('hears a confirmed voice again piece by piece, and gives what sounds like someone else to them', async () => {
@@ -1758,7 +1879,7 @@ it('hears a confirmed voice again piece by piece, and gives what sounds like som
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [],
@@ -1884,7 +2005,7 @@ it('offers the middle tier’s candidate for Enter, and says once when the voice
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices, fragments: [], unsorted: [] });
       if (url === '/api/library/voices' && init?.method === 'POST') {
         posts.push(JSON.parse(String(init.body)));
@@ -1965,7 +2086,7 @@ it('spot-checks what voice alone gave a person, least sure first, and takes a vo
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_1/voice') return json(voice);
       if (url === '/api/personas') return json([]);

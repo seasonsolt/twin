@@ -9,6 +9,43 @@ export const NOW = new Date('2026-10-17T10:00:00+08:00');
 type Handler = (url: URL, route: Route) => unknown;
 const reply = (body: unknown) => () => body;
 
+type Listed = { seconds?: number; enough?: boolean; stranger?: boolean };
+/** A page of the review queue as the server cuts it (``review_queue.page``): the first so many of each list the
+ * page asks for, and how many each holds in all. */
+const reviewPage = (
+  url: URL,
+  reading: Record<'items' | 'voices' | 'unsorted', Listed[]> &
+    Record<string, unknown>,
+) => {
+  const kind = (voice: Listed) =>
+    voice.stranger ? 'strangers' : voice.enough ? 'enough' : 'voices';
+  const lists: Record<string, Listed[]> = {
+    voices: [],
+    enough: [],
+    strangers: [],
+    items: reading.items,
+    unsorted: reading.unsorted,
+    suspects: (reading.suspects as Listed[] | undefined) ?? [],
+  };
+  for (const voice of reading.voices) lists[kind(voice)].push(voice);
+  const totals: Record<string, { count: number; seconds?: number }> = {};
+  for (const [name, rows] of Object.entries(lists)) {
+    totals[name] = { count: rows.length };
+    if (['voices', 'enough', 'strangers'].includes(name))
+      totals[name].seconds = rows.reduce((n, row) => n + (row.seconds ?? 0), 0);
+    const limit = url.searchParams.get(name);
+    if (limit !== null) lists[name] = rows.slice(0, Number(limit));
+  }
+  return {
+    ...reading,
+    voices: [...lists.voices, ...lists.enough, ...lists.strangers],
+    items: lists.items,
+    unsorted: lists.unsorted,
+    suspects: lists.suspects,
+    totals,
+  };
+};
+
 const personas = [
   {
     id: 'default',
@@ -1011,101 +1048,109 @@ const handlers: Record<string, Handler> = {
     ],
     persona_id: 'p-zhaoqing',
   }),
-  'GET /api/library/review': reply({
-    items: [],
-    voices: [
-      {
-        id: 'voice_shiyan',
-        members: [
+  'GET /api/library/review': (url) =>
+    reviewPage(url, {
+      items: [],
+      voices: [
+        {
+          id: 'voice_shiyan',
+          members: [
+            {
+              recording_id: 'r-weekly',
+              filename: weekly.filename,
+              transcript_id: weekly.transcript_id,
+              speaker_id: 'S3',
+              seconds: 640,
+            },
+            {
+              recording_id: 'r-review',
+              filename: '2026-10-12 需求评审.mp4',
+              transcript_id: 't-review',
+              speaker_id: 'S2',
+              seconds: 410,
+            },
+          ],
+          seconds: 1050,
+          candidates: weekly.speakers[2].candidates,
+          near: false,
+        },
+        // Many voices wait: the longest are asked first, the rest folded away.
+        ...[
           {
-            recording_id: 'r-weekly',
-            filename: weekly.filename,
-            transcript_id: weekly.transcript_id,
-            speaker_id: 'S3',
-            seconds: 640,
+            id: 'voice_sure',
+            seconds: 800,
+            candidates: [
+              {
+                person_id: 'u-qinghe',
+                name: '许清禾',
+                score: 0.93,
+                sure: true,
+              },
+            ],
+          },
+          // Not surely 周石言, but far ahead of everyone else: offered for Enter.
+          {
+            id: 'voice_mid',
+            seconds: 750,
+            tier: 'mid',
+            candidates: [
+              { person_id: 'u-shiyan', name: '周石言', score: 0.66 },
+            ],
           },
           {
-            recording_id: 'r-review',
-            filename: '2026-10-12 需求评审.mp4',
-            transcript_id: 't-review',
-            speaker_id: 'S2',
-            seconds: 410,
+            id: 'voice_called',
+            seconds: 700,
+            called: '老宋',
+            quote: '老宋你那边排期怎么样',
+            candidates: [],
           },
-        ],
-        seconds: 1050,
-        candidates: weekly.speakers[2].candidates,
-        near: false,
-      },
-      // Many voices wait: the longest are asked first, the rest folded away.
-      ...[
-        {
-          id: 'voice_sure',
-          seconds: 800,
-          candidates: [
-            { person_id: 'u-qinghe', name: '许清禾', score: 0.93, sure: true },
-          ],
-        },
-        // Not surely 周石言, but far ahead of everyone else: offered for Enter.
-        {
-          id: 'voice_mid',
-          seconds: 750,
-          tier: 'mid',
-          candidates: [{ person_id: 'u-shiyan', name: '周石言', score: 0.66 }],
-        },
-        {
-          id: 'voice_called',
-          seconds: 700,
-          called: '老宋',
-          quote: '老宋你那边排期怎么样',
-          candidates: [],
-        },
-        { id: 'voice_blank', seconds: 500, candidates: [] },
-        {
-          id: 'voice_split',
-          seconds: 400,
-          candidates: [
-            { person_id: 'u-linzhou', name: '林舟', score: 0.8, split: true },
-          ],
-        },
-        { id: 'voice_short_1', seconds: 120, candidates: [] },
-        { id: 'voice_short_2', seconds: 90, candidates: [] },
-        {
-          id: 'voice_enough',
-          seconds: 60,
-          enough: true,
-          had: 3000,
-          candidates: [
-            { person_id: 'u-linzhou', name: '林舟', score: 0.9, sure: true },
-          ],
-        },
-        { id: 'voice_stranger', seconds: 50, stranger: true, candidates: [] },
-      ].map((voice) => ({
-        near: false,
-        members: [
+          { id: 'voice_blank', seconds: 500, candidates: [] },
           {
-            recording_id: 'r-weekly',
-            filename: weekly.filename,
-            transcript_id: weekly.transcript_id,
-            speaker_id: 'S4',
-            seconds: voice.seconds,
+            id: 'voice_split',
+            seconds: 400,
+            candidates: [
+              { person_id: 'u-linzhou', name: '林舟', score: 0.8, split: true },
+            ],
           },
-        ],
-        ...voice,
-      })),
-    ],
-    fragments: [
-      {
-        recording_id: 'r-weekly',
-        filename: weekly.filename,
-        transcript_id: weekly.transcript_id,
-        speaker_id: 'S4',
-        seconds: 6,
-        like: null,
-      },
-    ],
-    unsorted: [],
-    heard: { settled: 7920, total: 12600 },
-  }),
+          { id: 'voice_short_1', seconds: 120, candidates: [] },
+          { id: 'voice_short_2', seconds: 90, candidates: [] },
+          {
+            id: 'voice_enough',
+            seconds: 60,
+            enough: true,
+            had: 3000,
+            candidates: [
+              { person_id: 'u-linzhou', name: '林舟', score: 0.9, sure: true },
+            ],
+          },
+          { id: 'voice_stranger', seconds: 50, stranger: true, candidates: [] },
+        ].map((voice) => ({
+          near: false,
+          members: [
+            {
+              recording_id: 'r-weekly',
+              filename: weekly.filename,
+              transcript_id: weekly.transcript_id,
+              speaker_id: 'S4',
+              seconds: voice.seconds,
+            },
+          ],
+          ...voice,
+        })),
+      ],
+      fragments: [
+        {
+          recording_id: 'r-weekly',
+          filename: weekly.filename,
+          transcript_id: weekly.transcript_id,
+          speaker_id: 'S4',
+          seconds: 6,
+          like: null,
+        },
+      ],
+      unsorted: [],
+      heard: { settled: 7920, total: 12600 },
+    }),
   'GET /api/library/recordings/r-weekly': reply(weekly),
   'POST /api/library/recordings/r-broken/retry': reply({
     ...recordings.find((r) => r.id === 'r-broken'),

@@ -461,12 +461,18 @@ function VoiceRow({
         <>
           {recordings} 段录音 · 共说了 {span(voice.seconds)}
           {' · '}
+          {/* The recording being heard, which settles that one alone: it says how many more wait here. */}
           <TextLink
             size="sm"
             to={recordingPath(current.recording_id, current.speaker_id)}
-            state={{ teamTask: `voice-${voice.id}` }}
+            state={{
+              teamTask: `voice-${voice.id}`,
+              voiceRecordings: recordings,
+            }}
           >
-            打开录音
+            {voice.members.length > 1
+              ? `打开第 ${(heard % voice.members.length) + 1} 段`
+              : '打开录音'}
           </TextLink>
         </>
       }

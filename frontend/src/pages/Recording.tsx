@@ -180,6 +180,7 @@ function SpeakerCard({
   busy,
   remaining,
   now,
+  elsewhere = 0,
   denoised,
   onDecide,
 }: {
@@ -191,6 +192,8 @@ function SpeakerCard({
   remaining: number;
   /** Whom the speaker is given to already, when a team task opens one settled automatically. */
   now?: string;
+  /** Other recordings the same voice waits in, when a team task opens it: deciding here settles this one alone. */
+  elsewhere?: number;
   /** The recording has a denoised copy, so the original can be chosen instead. */
   denoised: boolean;
   onDecide: (decision: Decision) => void;
@@ -240,7 +243,7 @@ function SpeakerCard({
               {speaker.id} 是谁？
             </Heading>
             <Text size="sm" tone="secondary">
-              说了 {span(speaker.seconds)}
+              这段录音里说了 {span(speaker.seconds)}
             </Text>
           </Row>
           <Text size="sm" tone="tertiary">
@@ -250,6 +253,12 @@ function SpeakerCard({
         {now && (
           <Text size="sm" tone="secondary">
             现在算作{now}，听一下是谁。
+          </Text>
+        )}
+        {elsewhere > 0 && (
+          <Text size="sm" tone="secondary">
+            这个声音还出现在另外 {elsewhere}{' '}
+            段录音里。这里只确认这一段，其余的回到待处理一起确认。
           </Text>
         )}
         {speaker.disputed && (
@@ -270,6 +279,9 @@ function SpeakerCard({
                 )}
               />
               <Row gap={2} wrap>
+                <Text as="span" size="sm" tone="tertiary">
+                  这段录音里的 {speaker.samples} 个片段
+                </Text>
                 {Array.from({ length: speaker.samples }, (_, i) => (
                   <Chip key={i} pressed={clip === i} onClick={() => setClip(i)}>
                     片段 {i + 1}
@@ -711,6 +723,11 @@ export function Recording() {
                 current.decision === 'confirmed'
                   ? names.get(current.person_id ?? '')
                   : undefined
+              }
+              elsewhere={
+                current.id === linked
+                  ? Math.max(0, (location.state?.voiceRecordings ?? 1) - 1)
+                  : 0
               }
               denoised={detail.denoised === true}
               onDecide={(decision) => void decide(current, decision)}

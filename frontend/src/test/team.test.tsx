@@ -1134,10 +1134,10 @@ it('settles a voice heard in several meetings once, and sets the fragments aside
   expect(
     within(row).getByRole('button', { name: '听这个声音（rec_2.m4a）' }),
   ).toBeInTheDocument();
-  expect(within(row).getByRole('link', { name: '打开录音' })).toHaveAttribute(
-    'href',
-    '/library/rec_2?speaker=S3',
-  );
+  // The link opens the recording being heard, numbered like the button that turns to the next one.
+  expect(
+    within(row).getByRole('link', { name: '打开第 2 段' }),
+  ).toHaveAttribute('href', '/library/rec_2?speaker=S3');
   await user.click(within(row).getByRole('button', { name: '是张总' }));
   await waitFor(() =>
     expect(posts).toEqual([
@@ -1241,6 +1241,82 @@ it('opens a voice at its own speaker, next to the samples of who it may be', asy
   await userEvent.click(screen.getByRole('link', { name: '打开录音' }));
   expect(
     await screen.findByRole('heading', { name: 'S2 是谁？' }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/这个声音还出现在/u)).not.toBeInTheDocument();
+});
+
+it('says a voice opened from the team settles its one recording, heard in clips of that recording', async () => {
+  const member = (recording: string, speakerId: string) => ({
+    recording_id: recording,
+    filename: `${recording}.m4a`,
+    transcript_id: `t-${recording}`,
+    speaker_id: speakerId,
+    seconds: 300,
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review')
+        return json({
+          items: [],
+          voices: [
+            {
+              id: 'voice_1',
+              members: [
+                member('rec_1', 'S2'),
+                member('rec_2', 'S1'),
+                member('rec_3', 'S4'),
+              ],
+              seconds: 900,
+              candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+              near: false,
+            },
+          ],
+          fragments: [],
+          unsorted: [],
+        });
+      if (url === '/api/library/recordings/rec_1')
+        return json({
+          id: 'rec_1',
+          filename: '周会.m4a',
+          status: 'ready',
+          transcript_id: 't1',
+          revision,
+          speakers: [speaker({}), speaker({ id: 'S2', samples: 3 })],
+          segments: [
+            { start: 0, end: 4, text: '先看预算。', speaker: 'S1' },
+            { start: 4, end: 9, text: '我反对压缩研发。', speaker: 'S2' },
+          ],
+        });
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/team?tab=todo']}>
+      <ConfirmProvider>
+        <Routes>
+          <Route path="/team" element={<Team version={0} recordings={[]} />} />
+          <Route path="/library/:recordingId" element={<Recording />} />
+        </Routes>
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const row = (await screen.findByText('可能是张总')).closest('li')!;
+  expect(row).toHaveTextContent('3 段录音 · 共说了 15 分钟');
+  await userEvent.click(within(row).getByRole('link', { name: '打开第 1 段' }));
+  expect(
+    await screen.findByRole('heading', { name: 'S2 是谁？' }),
+  ).toBeInTheDocument();
+  // Its minutes and clips are this recording's, and deciding here leaves the voice's other recordings waiting.
+  expect(screen.getByText('这段录音里说了 5 分钟')).toBeInTheDocument();
+  expect(screen.getByText('这段录音里的 3 个片段')).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: /^片段 \d/u })).toHaveLength(3);
+  expect(
+    screen.getByText(
+      '这个声音还出现在另外 2 段录音里。这里只确认这一段，其余的回到待处理一起确认。',
+    ),
   ).toBeInTheDocument();
 });
 

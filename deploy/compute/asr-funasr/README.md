@@ -48,6 +48,12 @@ uv run twin --config ./twin.toml compute install asr-funasr
 
 转写、声纹提取和匹配全程本机离线；运行强制设置 `HF_HUB_OFFLINE`、`MODELSCOPE_OFFLINE`、`TRANSFORMERS_OFFLINE`，模型加载禁用更新。缺模型只报错，不触发下载。安装 Python 依赖需要网络或已有包缓存；模型下载需要显式 `--download-models`。后续记忆整理/聊天仍使用 twin 配置的大模型，其出境范围由该配置决定。
 
+## FireRed 推理优化（1.5.4）
+
+重叠流程的 FireRed 在支持原生 BF16 的 CUDA 显卡上使用 BF16 权重和输入；其余设备保留 FP32。beam=1 解码按 token 缓存 self-attention 的键和值，attention 使用 PyTorch SDPA，已有 cross-attention 缓存继续使用。其他 beam/search 参数仍交给上游解码器。分人、分离、声纹、复读回退和补标点规则不变。
+
+BF16 和 SDPA 可能改变极少量边界词，因此包版本和转写版本都升为 **1.5.4**。已有录音由用户决定是否重新转写。启动日志打印 FireRed 的实际精度；`/health` 返回包与转写版本。质量验证范围和限制见 [ASR 评测](../../../docs/ASR_EVAL.md)。
+
 ## 热词
 
 请求 JSON 可带 `"hotwords": ["邓郁松", "魔搭"]`：去掉空白项和含空格的词，去重，最多 200 个。热词只提高这些词被识别出来的概率，不会强行替换文字。热词的来源（例如从记忆里的人名、项目名自动整理）以后再定，目前默认不传。

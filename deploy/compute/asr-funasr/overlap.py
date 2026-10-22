@@ -180,7 +180,10 @@ class FireRed:
     """FireRedASR2-AED from its model directory (fireredasr2s package); `__call__` returns raw lower-cased text."""
 
     def __init__(self, root, device):
+        import logging
+
         import torch
+        from firered_decode import inference_dtype, install_greedy_decoder
         from fireredasr2s.fireredasr2.asr import load_fireredasr_aed_model
         from fireredasr2s.fireredasr2.data.asr_feat import ASRFeatExtractor
         from fireredasr2s.fireredasr2.tokenizer.aed_tokenizer import ChineseCharEnglishSpmTokenizer
@@ -188,8 +191,11 @@ class FireRed:
         self.torch, self.device = torch, device
         self.features = ASRFeatExtractor(str(root / "cmvn.ark"))
         self.tokenizer = ChineseCharEnglishSpmTokenizer(str(root / "dict.txt"), str(root / "train_bpe1000.model"))
-        self.model = load_fireredasr_aed_model(str(root / "model.pth.tar")).eval().to(device)
+        self.dtype = inference_dtype(torch, device)
+        self.model = load_fireredasr_aed_model(str(root / "model.pth.tar")).eval().to(device=device, dtype=self.dtype)
         cache_cross_attention(self.model.decoder)
+        install_greedy_decoder(self.model.decoder)
+        logging.getLogger(__name__).info("FireRed AED: %s, incremental beam-1 decoding with SDPA", self.dtype)
 
     def __call__(self, clips):
         ids = [str(k) for k in range(len(clips))]
@@ -200,7 +206,7 @@ class FireRed:
         if feats is not None:
             with self.torch.no_grad():
                 hyps = self.model.transcribe(
-                    feats.to(self.device),
+                    feats.to(device=self.device, dtype=self.dtype),
                     lengths.to(self.device),
                     beam_size=BEAM,
                     nbest=1,

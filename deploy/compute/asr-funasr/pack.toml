@@ -1,8 +1,8 @@
 name = "asr-funasr"
-version = "1.5.3"
+version = "1.5.4"
 # The version whose transcripts this one reproduces, what a transcript says made it (run.py); bump it only when
 # transcripts change, or twin offers to transcribe every recording again for nothing.
-transcription = "1.4.1"
+transcription = "1.5.4"
 kind = "command"
 platforms = ["darwin-arm64"]
 python = "3.12"
@@ -10,6 +10,7 @@ entry = "run.py"
 # Copied next to run.py. The overlap-aware path (overlap.py) runs on CUDA only; elsewhere these stay unused.
 files = [
   "overlap.py",
+  "firered_decode.py",
   "denoise.py",
   "diarize.py",
   "segmentation.py",

@@ -14,6 +14,7 @@
 
 import argparse
 import contextlib
+import functools
 import json
 import math
 import os
@@ -388,6 +389,14 @@ class Engine:
             self.overlap = overlap.Overlap(self, extra, paths["vad"])
         self.pipeline = "overlap" if self.overlap else "classic"
 
+    @functools.cached_property
+    def gpu_threads(self):
+        """The threads that embed clips one per call on CUDA, kept for the service's life: CUDA keeps state for
+        every thread that used it, and threads started for each request left theirs behind, gigabytes an hour."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        return ThreadPoolExecutor(EMBED_THREADS, thread_name_prefix="embed")
+
     def embed(self, clip):
         np = self.np
         value = self.spk.generate(input=clip, disable_pbar=True)[0]["spk_embedding"]
@@ -414,11 +423,8 @@ class Engine:
             # Clips differ in length and padding would change their voiceprints, so each is its own call; one by one
             # most of a call is launching small kernels, so several threads keep the GPU busy (3x on a 4090, the
             # same voiceprints). The model's own inference holds no state; AutoModel.generate rewrites shared kwargs.
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(EMBED_THREADS) as pool:
-                for k, value in zip(wanted, pool.map(lambda k: self.embed_gpu(clips[k]), wanted), strict=True):
-                    found[k] = vector(value)
+            for k, value in zip(wanted, self.gpu_threads.map(lambda k: self.embed_gpu(clips[k]), wanted), strict=True):
+                found[k] = vector(value)
         else:
             # MPS stays on CPU, where every new clip length would cost it a fresh graph.
             with self.torch.no_grad():
@@ -445,12 +451,11 @@ class Engine:
             groups.setdefault(len(clip), []).append(k)
         finished = 0
         if singles_on_gpu and self.device == "cuda" and self.spk_batch is not None:
-            from concurrent.futures import ThreadPoolExecutor
-
             singles = [k for members in groups.values() if len(members) < 8 for k in members]
-            with ThreadPoolExecutor(EMBED_THREADS) as pool:
-                for k, value in zip(singles, pool.map(lambda k: self.embed_gpu(clips[k]), singles), strict=True):
-                    result[k] = value
+            for k, value in zip(
+                singles, self.gpu_threads.map(lambda k: self.embed_gpu(clips[k]), singles), strict=True
+            ):
+                result[k] = value
             finished = len(singles)
             groups = {length: members for length, members in groups.items() if len(members) >= 8}
         with torch.no_grad():

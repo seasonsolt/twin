@@ -86,8 +86,8 @@
    D2–D5、D7 映射到"看法与做法"，D6 映射到"说话方式"；T0、T0c 全部映射到唯一的细项；TP 没有对应关系，把旧编号都
    映射到空元组（删除）。打开已有数据库时会按这张表迁移条目，重新整理只补抽、重合并变了的细项；但评测每次都从空库
    建档（`--profile-cache` 按建档源码指纹分开），这条迁移路径不影响消融结果，写它只是为了让测试通过、分支能跑。
-6. 建议在 `main` 上补一处保护（属于发布脚本，不属于内核，可以在第二阶段做）：`scripts/release-stable.sh`
-   拒绝发布 `PROMPT_VERSION` 或 `TAXONOMY_VERSION` 以 `abl-` 开头的提交。
+6. 发布有一处保护（属于发布脚本，不属于内核）：cnb 的“发布到 stable”（`deploy/release_stable.py`）
+   拒绝发布 `PROMPT_VERSION` 或 `TAXONOMY_VERSION` 带 `abl-` 的提交。
 
 T9-nocore、T9-core18 只改 `chat.py`，不动内核版本号，能复用 T9 的建档缓存。
 

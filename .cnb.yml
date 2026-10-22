@@ -27,7 +27,7 @@ main:
         - name: mypy
           script: uv run mypy
         - name: pytest
-          # Each worker has its own temporary databases, so tests run in parallel as in release-stable.sh.
+          # Each worker has its own temporary databases, so tests run in parallel.
           script: uv run pytest -q -n auto
 
     - name: frontend
@@ -56,7 +56,18 @@ main:
 
   pull_request: *checks
 
-# Releasing (scripts/release-stable.sh fast-forwards stable) deploys to daw, served at https://daw.xjjk.com/twin/.
+  # The "发布到 stable" button on the main branch page (.cnb/web_trigger.yml): checks that the chosen main commit
+  # passed the checks above and that stable fast-forwards to it, prints what is released, then pushes stable.
+  web_trigger_release:
+    - name: release-stable
+      docker:
+        image: python:3.12-bookworm
+      stages:
+        - name: release
+          script: python3 deploy/release_stable.py
+
+# Releasing (the button above fast-forwards stable to a main commit that passed its checks, so they don't run again)
+# deploys to daw, served at https://daw.xjjk.com/twin/.
 # Same route as the audiostudio project on the same machine: Tencent Cloud TAT runs deploy/daw/deploy.sh as root.
 stable:
   push:
@@ -65,10 +76,6 @@ stable:
         image: python:3.12-bookworm
         volumes:
           - /root/.cache/uv:copy-on-write
-          # ffmpeg and the CJK fonts take a minute or two to download each run; keep packages and lists cached
-          # (the image's docker-clean deletes packages after install, so the tools stage removes it first).
-          - /var/cache/apt/archives:copy-on-write
-          - /var/lib/apt/lists:copy-on-write
       imports:
         - https://cnb.cool/xjjk/config/-/blob/main/env.dev.yml
       env:
@@ -76,17 +83,7 @@ stable:
         TWIN_TAT_INSTANCE_ID: ins-mgz1lxik
       stages:
         - name: tools
-          script:
-            - rm -f /etc/apt/apt.conf.d/docker-clean
-            - apt-get update
-            - apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
-            - pip install --no-cache-dir uv==0.13.0
-        - name: verify
-          script:
-            - uv sync --frozen --python 3.12
-            - uv run ruff check src tests deploy
-            - uv run mypy
-            - uv run pytest -q -n auto
+          script: pip install --no-cache-dir uv==0.13.0
         - name: package
           # Only what runs on daw; the committed frontend build is under src/twin/web/static.
           script: >-
@@ -99,3 +96,6 @@ stable:
             wait: true
             timeout: 600
           script: uv run --no-project --with tencentcloud-sdk-python-common python deploy/daw/deploy_via_tat.py /tmp/twin-release.tar.gz
+        - name: daw switched
+          # A deploy that exits 0 without switching daw has happened; only what daw serves turns the job green.
+          script: python3 deploy/daw/check_live.py "$CNB_COMMIT"

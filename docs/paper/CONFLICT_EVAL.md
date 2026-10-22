@@ -224,7 +224,7 @@ R-N 必须同时去掉候选前的类别标记，否则模型还是看得到哪�
 `MERGE_SYSTEM` 规则 3，版本号按 [TAXONOMY_ABLATION.md § 3](TAXONOMY_ABLATION.md) 的约定用 `abl-` 前缀，如
 `PROMPT_VERSION = "persona-v6-abl-rs"`，在 `PROMPT_FINGERPRINTS` 里登记新指纹，否则 `tests/test_kernel.py` 失败。
 代价是分块缓存键含 `PROMPT_VERSION`，每组都会整套重抽，抽取波动混进比较，费用也高得多，所以不作为主方案。
-这些分支不合并到 `main`，不发布到 `stable`；`release-stable.sh` 拒绝 `abl-` 版本的保护见消融方案第 3 节第 6 条。
+这些分支不合并到 `main`，不发布到 `stable`；发布脚本 `deploy/release_stable.py` 拒绝 `abl-` 版本，见消融方案第 3 节第 6 条。
 
 **如果评测后决定采用 R-F**：在 `main` 上改 `MERGE_SYSTEM` 规则 3，把分组写进提示词（只提升 `PROMPT_VERSION`
 到 `persona-v7` 并登记指纹）。不要把分组做成 `Facet` 的新字段：`taxonomy_fingerprint()` 覆盖 `Facet` 的全部

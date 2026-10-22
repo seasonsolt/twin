@@ -502,24 +502,61 @@ def unavailable(error: BaseException) -> bool:
     return False
 
 
+def failure_kind(error: BaseException) -> str:
+    """What a failed call says about why, safe to log (never its message, which can quote the request): its type,
+    and the status code or type of the provider error under it, e.g. ``LLMError(429)``."""
+    cause = error.__cause__
+    while cause is not None:
+        status = getattr(cause, "status_code", None)
+        if isinstance(status, int):
+            return f"{type(error).__name__}({status})"
+        if cause.__cause__ is None:
+            return f"{type(error).__name__}({type(cause).__name__})"
+        cause = cause.__cause__
+    return type(error).__name__
+
+
 class FallbackLLM:
     """The main backend, and another one (``[llm_fallback]``) that answers while the main one is unavailable
     (``unavailable``: out of quota, unreachable, key refused). After such a failure the fallback takes every call
     for ``rest`` seconds, so a spent quota does not cost each call a failed try, then the main one is tried again.
-    A failure of the request itself (invalid output, a refusal, a rejected input) is the caller's, as without one."""
+    A failure of the request itself (invalid output, a refusal, a rejected input) is the caller's, as without one.
+    At most ``concurrent`` calls go to the fallback at once (a number, or read at every call, so a change applies
+    to the next one); the others wait here for a turn."""
 
     def __init__(
-        self, primary: LLM, fallback: LLM, *, rest: float = 300.0, clock: Callable[[], float] = time.monotonic
+        self,
+        primary: LLM,
+        fallback: LLM,
+        *,
+        rest: float = 300.0,
+        concurrent: int | Callable[[], int] = 4,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.primary = primary
         self.fallback = fallback
         self.name = primary.name
         self.rest = rest
+        self._limit = concurrent if callable(concurrent) else lambda: concurrent
+        self._turn = threading.Condition()
+        self._running = 0
         self._clock = clock
         self._lock = threading.Lock()
         self._resting_until = 0.0
         if callable(getattr(primary, "stream", None)) and callable(getattr(fallback, "stream", None)):
             self.stream = self._stream
+
+    def _take_turn(self) -> None:
+        with self._turn:
+            # Woken by a call ending, or each second to see a limit an administrator raised meanwhile.
+            while not self._turn.wait_for(lambda: self._running < max(1, self._limit()), timeout=1.0):
+                pass
+            self._running += 1
+
+    def _end_turn(self) -> None:
+        with self._turn:
+            self._running -= 1
+            self._turn.notify_all()
 
     def _primary_resting(self) -> bool:
         with self._lock:
@@ -537,7 +574,11 @@ class FallbackLLM:
                 if not unavailable(e):
                     raise
                 self._primary_failed()
-        return self.fallback.structured(system=system, user=user, schema=schema, **options)
+        self._take_turn()
+        try:
+            return self.fallback.structured(system=system, user=user, schema=schema, **options)
+        finally:
+            self._end_turn()
 
     async def _stream(self, **options: Any) -> AsyncGenerator[str]:
         """The main backend's stream, or the fallback's when the main one fails before its first text."""
@@ -555,8 +596,12 @@ class FallbackLLM:
                 self._primary_failed()
             finally:
                 await stream.aclose()
-        async for text in self.fallback.stream(**options):  # type: ignore[attr-defined]
-            yield text
+        await asyncio.to_thread(self._take_turn)
+        try:
+            async for text in self.fallback.stream(**options):  # type: ignore[attr-defined]
+                yield text
+        finally:
+            self._end_turn()
 
 
 async def hedged_stream(

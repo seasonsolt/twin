@@ -46,6 +46,10 @@ class LLMSettings(BaseModel):
     timeout: float = Field(default=600.0, gt=0)
     hedge_after_s: float = Field(default=2.5, ge=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
+    # The most calls sent to this endpoint at once; the others wait their turn here. Only ``[llm_fallback]`` reads
+    # it, at every call, so an administrator's change applies at once: an endpoint kept for emergencies tends to
+    # serve few at a time, and proofreading alone asks 16 at a time, which a small gateway queues past its timeout.
+    max_concurrent: int = Field(default=4, gt=0)
     extra_body: dict[str, JsonValue] = Field(default_factory=dict)
     egress: Literal["local", "external"] | None = None
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
@@ -502,10 +506,12 @@ def configuration_fingerprint(
     """Identify answer-affecting settings and the actual panel without serializing endpoints or credentials."""
     return fingerprint(
         {
-            "llm": settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
+            "llm": settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env", "max_concurrent"}),
             "judges": [{"id": judge_id, "effort": effort} for judge_id, effort in judges],
             "chat_llm": {
-                **settings.effective_chat_llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
+                **settings.effective_chat_llm.model_dump(
+                    mode="json", exclude={"base_url", "api_key_env", "max_concurrent"}
+                ),
                 "name": llm.name,
             },
             "judge_reasoning_effort": [judge.reasoning_effort for judge in settings.judges],
@@ -602,9 +608,11 @@ def make_llm(s: LLMSettings, section: str = "llm") -> LLM:
 
 def with_fallback(llm: LLM, settings: Settings) -> LLM:
     """``llm``, answered by ``[llm_fallback]`` while it is unavailable, when one is configured."""
-    if settings.llm_fallback is None:
+    fallback = settings.llm_fallback
+    if fallback is None:
         return llm
-    return FallbackLLM(llm, make_llm(settings.llm_fallback, "llm_fallback"))
+    # Read at every call: the section is the one an administrator's change is written into.
+    return FallbackLLM(llm, make_llm(fallback, "llm_fallback"), concurrent=lambda: fallback.max_concurrent)
 
 
 def make_synthesizer(s: TTSSettings) -> SpeechSynthesizer:

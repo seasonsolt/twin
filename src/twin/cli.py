@@ -114,6 +114,7 @@ api_key_env = "TWIN_LLM_KEY"
 # api_key_env = "TWIN_LLM_FALLBACK_KEY"
 # json_mode = "json_object"
 # extra_body = { thinking = { type = "disabled" } }
+# max_concurrent = 4  # 同时发给备选模型的请求数，超出的排队；也可在系统设置里随时调整
 
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。

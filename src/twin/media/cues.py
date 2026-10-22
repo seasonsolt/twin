@@ -11,7 +11,7 @@ from contextvars import copy_context
 
 from pydantic import BaseModel
 
-from ..llm import LLM
+from ..llm import LLM, failure_kind
 from ..usage import default_stage
 from .ingest import Segment
 
@@ -112,8 +112,8 @@ def name_speakers(llm: LLM, segments: list[Segment], roster: list[str]) -> tuple
             with default_stage("speaker.cues"):
                 return llm.structured(system=PROMPT, user=user, schema=Cues, effort="low", reasoning_effort="low")
         except Exception as e:
-            # The exception text can quote the transcript; log only its type.
-            logger.warning("naming speakers failed: %s", type(e).__name__)
+            # The exception text can quote the transcript; log only what kind of failure it was.
+            logger.warning("naming speakers failed: %s", failure_kind(e))
             return None
 
     # A window of a long meeting waits minutes on the model: they are asked together, as proofreading's batches are,

@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +17,16 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
 from twin import api
-from twin.config import LLMSettings, Settings, load_settings, make_llm
+from twin.config import LLMSettings, Settings, load_settings, make_llm, with_fallback
 from twin.egress import egress_status
 from twin.embed import HashingEmbedder
-from twin.llm import FakeLLM, FallbackLLM, LLMError, LLMInvalidOutput, LLMRefusal
+from twin.llm import FakeLLM, FallbackLLM, LLMError, LLMInvalidOutput, LLMRefusal, failure_kind
 from twin.persona.items import PersonaItem
 from twin.persona.schema import ChatDraft
 from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.backends import Backends
+from twin.web.system import SystemSettings
 
 
 @pytest.fixture(autouse=True)
@@ -301,3 +304,47 @@ def test_the_web_backends_wrap_the_models_with_the_configured_fallback(
         assert backends.llm().structured(system="s", user="u", schema=ChatDraft).reply == "备选回答"
     assert hosts == ["main.test", "fallback.test"]
     assert not isinstance(Backends(Settings(db_path=tmp_path / "twin.db"), None, None)._llm_factory, FallbackLLM)
+
+
+def test_the_fallback_takes_only_so_many_calls_at_once() -> None:
+    running, peak = [0], [0]
+    lock = threading.Lock()
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.05)
+        with lock:
+            running[0] -= 1
+        return {"reply": "备选", "citations": [], "confidence": 0.1, "abstain": True}
+
+    def down(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        raise _failing(_Status(429))
+
+    llm = FallbackLLM(FakeLLM(down), FakeLLM(answer), concurrent=2)
+    with ThreadPoolExecutor(8) as pool:
+        replies = list(pool.map(lambda _: llm.structured(system="s", user="u", schema=ChatDraft).reply, range(8)))
+    assert replies == ["备选"] * 8 and peak[0] == 2
+
+
+def test_a_failure_is_logged_by_kind_without_its_message() -> None:
+    assert failure_kind(_failing(_Status(429))) == "LLMError(429)"
+    timeout = _failing(openai.APITimeoutError(request=httpx.Request("POST", "http://x")))
+    assert failure_kind(timeout) == "LLMError(APITimeoutError)"
+    assert failure_kind(LLMInvalidOutput("会议原文")) == "LLMInvalidOutput"
+
+
+def test_an_administrator_sets_how_many_calls_the_fallback_takes_at_once(tmp_path: Path) -> None:
+    settings = Settings(
+        db_path=tmp_path / "twin.db", llm_fallback=LLMSettings(model="glm", base_url="http://fallback.test/v1")
+    )
+    llm = with_fallback(FakeLLM(lambda *_: {}), settings)
+    assert isinstance(llm, FallbackLLM) and llm._limit() == 4
+    system = SystemSettings(settings, tmp_path / "system.json", env_file=tmp_path / ".env")
+    system.set_param("llm_fallback.max_concurrent", 2, "admin")
+    assert llm._limit() == 2
+    with pytest.raises(ValueError):
+        system.set_param("llm_fallback.max_concurrent", 0, "admin")
+    unconfigured = SystemSettings(Settings(db_path=tmp_path / "t.db"), tmp_path / "s.json", env_file=tmp_path / ".e")
+    assert "llm_fallback.max_concurrent" not in {p["key"] for p in unconfigured.params_view()}

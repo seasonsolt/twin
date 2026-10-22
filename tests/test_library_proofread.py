@@ -464,5 +464,6 @@ def test_with_the_automatic_rebuild_off_a_twin_that_only_gains_recordings_keeps_
     confirm(web, first, "S2", person_id=zhang)
     until(lambda: card(web, zhang)["held"])
     switch_rebuild(web, True)
-    until(lambda: idle(web, pid) and len(own_words(tmp_path, pid)) == 2)
+    # The build becomes idle before its completion is recorded in the library sync ledger.
+    until(lambda: idle(web, pid) and len(own_words(tmp_path, pid)) == 2 and not card(web, zhang)["updating"])
     assert not card(web, zhang)["held"] and not card(web, zhang)["updating"]

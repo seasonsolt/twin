@@ -701,12 +701,36 @@ def read_upload(stream, length, directory):
     return (*parse_request(request), parse_spans(meta))
 
 
+def _libc():
+    import ctypes
+
+    try:
+        return ctypes.CDLL("libc.so.6")
+    except OSError:
+        return None  # not glibc (macOS): its allocator gives large blocks back by itself
+
+
+def release_memory():
+    """Give what a finished job freed back to the system. Each request runs on a thread of its own, and glibc keeps
+    what a thread freed for reuse: after a few multi-hour recordings the service held over 27 GB and was killed."""
+    import gc
+
+    gc.collect()
+    libc = _libc()
+    if libc is not None:
+        libc.malloc_trim(0)
+
+
 def make_server(engine, host, port, *, max_bytes=4 << 30, playback=None):
     """One job at a time on the resident engine; the response streams NDJSON progress lines, then the result. A
     denoising result says how many bytes of FLAC follow it, the response's last bytes."""
     version = tomllib.loads(MANIFEST.read_text())["version"]
     denoises = playback is not None and playback.available
     busy = threading.Lock()
+    libc = _libc()
+    if libc is not None:
+        # Two malloc arenas instead of one per thread that ever ran a job (M_ARENA_MAX).
+        libc.mallopt(-8, 2)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -788,6 +812,8 @@ def make_server(engine, host, port, *, max_bytes=4 << 30, playback=None):
                         raise
                     except Exception as error:
                         result = {"ok": False, "error": str(error) or type(error).__name__}
+                    finally:
+                        release_memory()
                 line({"result": result})
                 if result.get("ok") and audio_out is not None:
                     with audio_out.open("rb") as stream:

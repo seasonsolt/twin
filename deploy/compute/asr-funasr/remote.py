@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -151,6 +152,16 @@ def denoise(url, payload, *, timeout=3600.0):
         connection.close()
 
 
+# Seconds between tries while nothing answers: two minutes in all. A service that restarts (an upgrade, or after the
+# system ended it) answers again once its models are loaded, in half a minute; through the SSH tunnel a connection is
+# accepted meanwhile and closed without a response. A job is only sent again when the service never answered it.
+CONNECT_WAITS = (5.0,) * (int(os.environ.get("TWIN_ASR_CONNECT_SECONDS", "120")) // 5)
+
+
+class Unreachable(ValueError):
+    """The service did not answer the request at all."""
+
+
 def request(connection, path, header, files, length):
     try:
         connection.request(
@@ -161,7 +172,7 @@ def request(connection, path, header, files, length):
         )
         response = connection.getresponse()
     except OSError:
-        raise ValueError("连不上转写服务，请检查 GPU 机器上的服务和隧道") from None
+        raise Unreachable("连不上转写服务，请检查 GPU 机器上的服务和隧道") from None
     if response.status != 200:
         try:
             error = json.loads(response.read())["error"]
@@ -194,9 +205,18 @@ def transcribe(url, payload, *, hotwords=None, timeout=3600.0, flac=True):
 def send(parts, payload, hotwords, timeout):
     header, files = build_request(payload, hotwords)
     length = len(header) + sum(path.stat().st_size for path in files)
+    path = parts.path.rstrip("/") + ("/embed" if payload.get("embed") is True else "/transcribe")
+    for wait in CONNECT_WAITS:
+        try:
+            return post(parts, path, header, files, length, timeout)
+        except Unreachable:
+            time.sleep(wait)
+    return post(parts, path, header, files, length, timeout)
+
+
+def post(parts, path, header, files, length, timeout):
     connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=timeout)
     try:
-        path = parts.path.rstrip("/") + ("/embed" if payload.get("embed") is True else "/transcribe")
         return results(request(connection, path, header, files, length))
     finally:
         connection.close()

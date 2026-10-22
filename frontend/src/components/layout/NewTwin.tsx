@@ -1,19 +1,16 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { create } from 'zustand';
-import { Plus } from 'lucide-react';
 import {
   Button,
   Card,
   Dialog,
   Field,
   Heading,
-  IconButton,
   Input,
   Row,
   Stack,
   Text,
-  type DialogAnchor,
 } from '../ui';
 import { useMobile } from '../../lib/useMobile';
 import { api } from '../../lib/api';
@@ -140,46 +137,20 @@ export function NewTwin({
   onOpenChange,
 }: {
   initialOpen?: boolean;
-  /** The trigger's content (not used by the rail's round plus button). */
+  /** The trigger's content. */
   children?: ReactNode;
   /**
-   * button: a primary button; rail: the round plus in the side rail, both opening a small card over the work in
-   * view. card: the dashed tile in the twins grid, which turns into the form in place (nothing there to keep in view).
+   * button: a primary button, opening a small card over the work in view. card: the dashed tile in the twins grid,
+   * which turns into the form in place (nothing there to keep in view).
    */
-  variant?: 'button' | 'rail' | 'card';
+  variant?: 'button' | 'card';
   onOpenChange?: (open: boolean) => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(initialOpen);
   const mobile = useMobile();
-  const [anchor, setAnchor] = useState<DialogAnchor>();
   const returnFocus = useRef(false);
   const headingId = useId();
-  // Beside the rail's plus: to its right, level with it, so the card comes out of what was clicked.
-  useEffect(() => {
-    if (mobile || !open || variant !== 'rail') {
-      setAnchor(undefined);
-      return;
-    }
-    const place = () => {
-      const rect = trigger.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = Math.min(360, window.innerWidth - rect.right - 32);
-      setAnchor(
-        rect.top > window.innerHeight / 2
-          ? {
-              left: rect.right + 16,
-              top: 'auto',
-              bottom: Math.max(16, window.innerHeight - rect.bottom),
-              width,
-            }
-          : { left: rect.right + 16, top: rect.top, width },
-      );
-    };
-    place();
-    window.addEventListener('resize', place);
-    return () => window.removeEventListener('resize', place);
-  }, [mobile, open, variant]);
   // The tile comes back after 取消: focus goes back to it.
   useEffect(() => {
     if (!open && returnFocus.current) {
@@ -231,35 +202,21 @@ export function NewTwin({
     );
   return (
     <>
-      {variant === 'rail' ? (
-        <IconButton
-          {...triggerProps}
-          aria-haspopup="dialog"
-          label="新建分身"
-          shape="circle"
-          size="md"
-          className="rail-new text-primary"
-        >
-          <Plus aria-hidden className="size-6" />
-        </IconButton>
-      ) : (
-        <Button
-          {...triggerProps}
-          aria-haspopup="dialog"
-          size="lg"
-          aria-label="新建分身"
-        >
-          {children}
-        </Button>
-      )}
-      {/* Over work in view: a card beside the rail's plus, in the middle of the page from a button, from the bottom
-          edge on a phone. The page behind is only dimmed and is there again when it closes. */}
+      <Button
+        {...triggerProps}
+        aria-haspopup="dialog"
+        size="lg"
+        aria-label="新建分身"
+      >
+        {children}
+      </Button>
+      {/* Over work in view: a card in the middle of the page, from the bottom edge on a phone. The page behind is only
+          dimmed and is there again when it closes. */}
       <Dialog
         open={open}
         onOpenChange={changeOpen}
         title="新建分身"
         variant={mobile ? 'sheet' : 'center'}
-        anchor={mobile ? undefined : anchor}
         className="new-twin"
         inPlace
         onCloseAutoFocus={(event) => {

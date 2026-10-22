@@ -37,7 +37,8 @@ type ButtonLook = {
   /** pill: fully rounded ends, for a lone action on a photo or video. */
   shape?: 'default' | 'pill';
 };
-const buttonClasses = ({
+/** A button's classes, for something that must look like one but cannot be a Button (a menu's `<summary>`). */
+export const buttonClasses = ({
   variant = 'primary',
   size = 'md',
   shape = 'default',

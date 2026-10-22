@@ -158,24 +158,23 @@ it('pages people on scroll, searches the whole roster, and keeps the expanded li
   );
   const view = render(teamView());
   await screen.findByText('人物01', { selector: 'p' });
+  // One row per person under the table's header row.
   const panel = () => within(screen.getByRole('tabpanel', { name: /人物/u }));
-  expect(panel().getAllByRole('listitem')).toHaveLength(18);
+  expect(panel().getAllByRole('row')).toHaveLength(19);
   expect(
     screen.queryByText('人物41', { selector: 'p' }),
   ).not.toBeInTheDocument();
   await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '人物41');
-  expect(panel().getAllByRole('listitem')).toHaveLength(1);
+  expect(panel().getAllByRole('row')).toHaveLength(2);
   expect(screen.getByText('人物41', { selector: 'p' })).toBeVisible();
   await userEvent.clear(screen.getByRole('textbox', { name: '找人' }));
-  expect(panel().getAllByRole('listitem')).toHaveLength(18);
+  expect(panel().getAllByRole('row')).toHaveLength(19);
   act(() => scrollTo('继续加载人物'));
-  expect(panel().getAllByRole('listitem')).toHaveLength(36);
+  expect(panel().getAllByRole('row')).toHaveLength(37);
   view.rerender(teamView(1));
-  await waitFor(() =>
-    expect(panel().getAllByRole('listitem')).toHaveLength(36),
-  );
+  await waitFor(() => expect(panel().getAllByRole('row')).toHaveLength(37));
   act(() => scrollTo('继续加载人物'));
-  expect(panel().getAllByRole('listitem')).toHaveLength(41);
+  expect(panel().getAllByRole('row')).toHaveLength(42);
   expect(
     screen.queryByRole('button', { name: '继续加载人物' }),
   ).not.toBeInTheDocument();
@@ -430,8 +429,8 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     '/library/rec_9?speaker=S1',
   );
   await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
-  const row = screen.getByText('张总', { selector: 'p' }).closest('li')!;
-  expect(within(row).getByText('还没有分身')).toBeInTheDocument();
+  const row = screen.getByText('张总', { selector: 'p' }).closest('tr')!;
+  expect(within(row).getByText('没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
   // Made for 张总's work e-mail (or employee number): they take it when they sign in.
   const dialog = await screen.findByRole('dialog', { name: '为张总建分身' });
@@ -440,8 +439,8 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     'zhang@acme.cn',
   );
   await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
-  expect(await screen.findByText('记忆更新中')).toBeInTheDocument();
-  // Until it can talk, the card shows the step the update is on and how far it has gone.
+  expect(await screen.findByText('整理中')).toBeInTheDocument();
+  // Until it can talk, the row shows the step the update is on and how far it has gone.
   expect(
     await screen.findByRole('progressbar', {
       name: '第 2/3 步 · 合并成记忆',
@@ -451,7 +450,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   ).toHaveAttribute('aria-valuenow', '30');
   expect(screen.getByText('23%')).toBeInTheDocument();
   expect(
-    screen.queryByRole('button', { name: '和分身聊聊' }),
+    screen.queryByRole('button', { name: '聊天' }),
   ).not.toBeInTheDocument();
   expect(created).toEqual([{ claim: 'zhang@acme.cn' }]);
 });
@@ -578,13 +577,13 @@ it('edits a person name and gender and opens the profile of their twin', async (
     </MemoryRouter>,
   );
   const row = (await screen.findByText('张总', { selector: 'p' })).closest(
-    'li',
+    'tr',
   )!;
   // The twin's own illustration stands for them.
   expect(
     within(row).getByRole('img', { name: '插画形象：石', hidden: true }),
   ).toBeInTheDocument();
-  await userEvent.click(within(row).getByLabelText('更多：张总'));
+  await userEvent.click(within(row).getByLabelText('张总的更多操作'));
   expect(within(row).queryByRole('button', { name: '删除' })).toBeNull();
   await userEvent.click(
     within(row).getByRole('button', { name: '编辑名字和性别' }),
@@ -879,7 +878,7 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
   ).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '取消' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  await userEvent.click(screen.getByLabelText('更多：李总'));
+  await userEvent.click(screen.getByLabelText('李总的更多操作'));
   expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
 });
 
@@ -997,11 +996,10 @@ it('shows a person who found themselves by voice as having their own twin', asyn
     </MemoryRouter>,
   );
   const name = await screen.findByText('张总', { selector: 'p' });
-  const row = name.closest('li')!;
+  const row = name.closest('tr')!;
+  // Their twin is theirs, not the library's to open: the row says so and offers nothing to do.
   expect(within(row).getByText('本人已认领')).toBeInTheDocument();
-  expect(
-    within(row).getByRole('button', { name: '分身归 TA 自己' }),
-  ).toBeDisabled();
+  expect(within(row).queryByRole('button', { name: '聊天' })).toBeNull();
   expect(within(row).queryByRole('button', { name: '生成分身' })).toBeNull();
   expect(within(row).queryByRole('link', { name: '张总的档案' })).toBeNull();
 });

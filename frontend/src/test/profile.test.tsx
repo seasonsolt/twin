@@ -340,7 +340,10 @@ it('protects the default twin and confirms deletion before clearing only the del
   expect(sessionStorage.getItem(CHAT_KEY)).toBe('default history');
   await screen.findByRole('heading', { name: '我的分身' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  await user.click(await screen.findByRole('link', { name: '档案' }));
+  // Back to the default twin's profile (the side bar is about the team; the profile is opened by its address).
+  act(() => {
+    window.location.hash = '#/profile';
+  });
   await openDelete(user);
   await screen.findByText('默认分身不能删除');
   await waitFor(() =>

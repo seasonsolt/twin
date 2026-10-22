@@ -435,12 +435,24 @@ export function Chat() {
           ) : (
             <>
               {!sheetOpen && (
-                <IconButton
-                  label="展开对话列表"
-                  onClick={() => layout.setChoice('sheet', true)}
-                >
-                  <PanelLeft size={18} aria-hidden />
-                </IconButton>
+                <>
+                  <IconButton
+                    label="展开对话列表"
+                    onClick={() => layout.setChoice('sheet', true)}
+                  >
+                    <PanelLeft size={18} aria-hidden />
+                  </IconButton>
+                  {/* With the list folded away, the twin's portrait is where it is switched. */}
+                  <PersonaSwitcher
+                    label={`切换分身（当前：${name}）`}
+                    className="flex shrink-0 items-center"
+                    trigger={
+                      <ChatIdentity size="mobile">
+                        <PersonaPortrait persona={persona} />
+                      </ChatIdentity>
+                    }
+                  />
+                </>
               )}
               <Heading
                 level={1}

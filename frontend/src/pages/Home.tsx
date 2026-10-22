@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Upload } from 'lucide-react';
 import {
   Button,
@@ -15,12 +15,11 @@ import {
   Text,
   Toolbar,
 } from '../components/ui';
-import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { useUploads } from '../features/library/useUploads';
-import type { LibraryState } from './Library';
+import { useTeam } from '../stores/team';
 import { NewTwinForm } from '../components/layout/NewTwin';
 import { usePersonas } from '../stores/personas';
 
@@ -33,39 +32,20 @@ const STEPS: [string, string][] = [
 /** The account's start page: the people found in its meeting recordings, what needs settling, and uploading. With
  * no recording yet, it is the way to the first one. */
 export function Home() {
-  const [library, setLibrary] = useState<LibraryState | null>(null);
-  const [error, setError] = useState('');
-  // Bumped when a recording changes in a way people and the review queue follow (a transcript arriving, speakers
-  // settled, one removed), not on every poll: while recordings wait, the page polls every few seconds, and the
-  // review queue is the heaviest view the server computes.
-  const [version, setVersion] = useState(0);
-  const seen = useRef('');
+  // The library the side bar also counts from. `version` moves when a recording changes in a way people and the
+  // review queue follow (a transcript arriving, speakers settled, one removed), not on every poll: while recordings
+  // wait, the page polls every few seconds, and the review queue is the heaviest view the server computes.
+  const library = useTeam((state) => state.library);
+  const error = useTeam((state) => state.error);
+  const version = useTeam((state) => state.version);
   const input = useRef<HTMLInputElement>(null);
-  const load = useCallback(async () => {
-    try {
-      const next = await api<LibraryState>('/api/library');
-      setLibrary(next);
-      const key = JSON.stringify(
-        next.recordings.map((r) => [
-          r.id,
-          r.status,
-          r.speakers,
-          r.unsettled,
-          r.people,
-          r.previous ?? null,
-        ]),
-      );
-      if (key !== seen.current) {
-        seen.current = key;
-        setVersion((v) => v + 1);
-      }
-      setError('');
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '无法加载录音');
-    }
-  }, []);
+  const load = useCallback(() => useTeam.getState().refresh(true), []);
+  const poll = useCallback(() => useTeam.getState().refresh(), []);
+  // This page loads people and the review queue itself: the side bar takes them from here rather than asking twice.
   useEffect(() => {
+    const detach = useTeam.getState().attach();
     void load();
+    return detach;
   }, [load]);
   const { add, uploading, notice, unfinished, stop } = useUploads(
     () => void load(),
@@ -79,7 +59,7 @@ export function Home() {
         ? 60000
         : 15000
       : 0;
-  usePolling(load, interval);
+  usePolling(poll, interval);
 
   const picker = (
     <FileInput
@@ -201,14 +181,9 @@ export function Home() {
         ) : (
           <>
             <Toolbar as="header" gap={4} align="end">
-              <Stack gap={1}>
-                <Heading level={2} size="display">
-                  团队
-                </Heading>
-                <Text tone="secondary">
-                  会议里出现过的人。上传新录音后，系统会自动认人，有拿不准的再请你确认。
-                </Text>
-              </Stack>
+              <Heading level={2} size="display">
+                团队
+              </Heading>
               <Button onClick={() => input.current?.click()}>
                 <Upload aria-hidden className="size-5" />
                 上传会议录音

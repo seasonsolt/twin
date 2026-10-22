@@ -136,7 +136,7 @@ it.each([375, 390, 767])(
   },
 );
 it.each([768, 1024, 1280, 1440])(
-  'shows the slim rail at %spx',
+  'shows the side bar at %spx',
   async (width) => {
     vi.stubGlobal('innerWidth', width);
     vi.stubGlobal(
@@ -149,9 +149,9 @@ it.each([768, 1024, 1280, 1440])(
     );
     const view = mount();
     const nav = await screen.findByRole('navigation', { name: '主导航' });
-    expect(within(nav).getAllByRole('link')).toHaveLength(4);
-    expect(view.container.querySelector('.nav-rail')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^切换分身/ })).toBeVisible();
+    expect(within(nav).getAllByRole('link')).toHaveLength(5);
+    expect(view.container.querySelector('.nav-sidebar')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '上传会议录音' })).toBeVisible();
     expect(
       screen.queryByRole('button', { name: /收起侧栏|展开侧栏/ }),
     ).not.toBeInTheDocument();

@@ -50,6 +50,10 @@ import {
   LoadMore,
   Meter,
   NavPill,
+  SearchButton,
+  SearchDialog,
+  StatusCard,
+  TeamMark,
   Notice,
   Page,
   PlainButton,
@@ -80,6 +84,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const { theme, setTheme } = useTheme();
   const [side, setSide] = useState(false);
   const [who, setWho] = useState('');
+  const [finding, setFinding] = useState(false);
   const [sample, setSample] = useState(true);
   const [mine, setMine] = useState('all');
   const [filters, setFilters] = useState(['决定']);
@@ -163,6 +168,70 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           <NavPill to="/gallery" icon={Mic} label="图标导航" layout="rail" />
           <ChatAction selected>形象</ChatAction>
         </Row>
+        <div className="w-56">
+          <Stack gap={3}>
+            <TeamMark name="示例团队" />
+            <SearchButton
+              label="找人"
+              shortcut="⌘K"
+              onClick={() => setFinding(true)}
+            />
+            <SearchDialog
+              open={finding}
+              onOpenChange={setFinding}
+              title="找人"
+              placeholder="输入名字"
+              empty="没有叫这个名字的人"
+              items={[
+                { id: 'lin', label: '林舟', detail: '看档案' },
+                { id: 'xu', label: '许清禾', detail: '看档案' },
+                { id: 'zhou', label: '周石言', detail: '没有分身' },
+              ]}
+              onSelect={(item) => toast(`去${item.label}`)}
+            />
+            <Stack gap={1}>
+              <NavPill
+                to="/gallery"
+                icon={Mic}
+                label="侧栏导航"
+                layout="sidebar"
+                count={41}
+              />
+              <NavPill
+                to="/library"
+                icon={Sparkles}
+                label="待处理"
+                layout="sidebar"
+                count={7}
+                countTone="accent"
+                active={false}
+              />
+            </Stack>
+            <StatusCard
+              to="/library"
+              title="后台 3 项"
+              action="查看"
+              detail="1 项转写中 · 2 项排队"
+              progress={{ value: 40, max: 100, label: '当前一项的进度' }}
+            />
+            <AccountMenu
+              layout="sidebar"
+              name="周石言"
+              detail="管理员"
+              groups={[
+                [
+                  {
+                    key: 'logout',
+                    label: '退出登录',
+                    icon: LogOut,
+                    danger: true,
+                    onSelect: () => toast('退出登录'),
+                  },
+                ],
+              ]}
+            />
+          </Stack>
+        </div>
         <ChatSurface variant="sheet" width={sheetWidth}>
           <Stack gap={2}>
             <ChatIdentity>

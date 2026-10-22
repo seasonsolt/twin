@@ -162,7 +162,7 @@ it.each([true, false])(
   },
 );
 it.each(['user', 'memories'])(
-  'shows no setup card when %s is already present; navigation has chat, work, profile and ledger',
+  'shows no setup card when %s is already present; navigation has the team, chat, library, tasks and promises',
   async (present) => {
     if (present === 'user') identity.name_source = 'user';
     else status.counts.sources = 1;
@@ -172,7 +172,7 @@ it.each(['user', 'memories'])(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '工作', '档案', '承诺账本']);
+    ).toEqual(['团队', '对话', '录音库', '待处理', '承诺']);
     expect(screen.queryByText('让我们认识一下')).not.toBeInTheDocument();
     if (present === 'memories')
       expect(screen.queryByRole('region', { name: /认识你$/ })).toBeNull();

@@ -134,27 +134,6 @@ it('makes a new twin in a small card where the person is, showing its first char
   expect(trigger).toHaveFocus();
 });
 
-it('opens the card beside the rail plus, level with it', async () => {
-  mount(<NewTwin variant="rail" />);
-  const user = userEvent.setup();
-  const trigger = screen.getByRole('button', { name: '新建分身' });
-  vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
-    left: 12,
-    right: 56,
-    top: 700,
-    bottom: 744,
-    width: 44,
-    height: 44,
-    x: 12,
-    y: 700,
-    toJSON: () => ({}),
-  });
-  await user.click(trigger);
-  const dialog = screen.getByRole('dialog', { name: '新建分身' });
-  await waitFor(() => expect(dialog.style.left).toBe('72px'));
-  expect(dialog.style.bottom).toBe(`${window.innerHeight - 744}px`);
-});
-
 it('keeps the sheet, optional stage and scrolling conversation separate with the composer inside the thread', async () => {
   const view = mount(<Chat />);
   expect(view.container.querySelector('.chat-stage')).toBeNull();

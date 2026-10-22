@@ -275,12 +275,17 @@ it('shows the full signed-in email in the account popover and logs out', async (
   const account = await screen.findByRole('button', { name: '账户' });
   expect(account).toHaveTextContent('M');
   expect(account).toHaveAttribute('aria-expanded', 'false');
-  expect(screen.queryByText(member.email)).not.toBeInTheDocument();
+  // The wide side bar names who is signed in on the button itself; the popover repeats it in full.
+  expect(account).toHaveTextContent(member.email);
   await user.click(account);
   expect(screen.getByRole('dialog', { name: '账户' })).toHaveClass(
     'account-popover',
   );
-  expect(screen.getByText(member.email)).toBeVisible();
+  expect(
+    within(screen.getByRole('dialog', { name: '账户' })).getByText(
+      member.email,
+    ),
+  ).toBeVisible();
   const menu = screen.getByRole('dialog', { name: '账户' });
   expect(menu).toHaveAttribute('data-side', 'right');
   expect(menu).toHaveAttribute('data-align', 'end');

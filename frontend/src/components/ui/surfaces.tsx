@@ -5,11 +5,12 @@ import {
   type ReactNode,
 } from 'react';
 import { motion } from 'motion/react';
-import { Check, Inbox, MoreHorizontal } from 'lucide-react';
+import { Link } from 'react-router';
+import { Check, ChevronDown, Inbox, MoreHorizontal } from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { Pressable } from '../motion';
 import { cn } from '../../lib/utils';
-import { Button, toneClasses, type Tone } from './controls';
+import { Button, buttonClasses, toneClasses, type Tone } from './controls';
 
 const cardVariants = {
   /** Content inside an existing card, with padding but no second surface. */
@@ -200,13 +201,25 @@ export function Table({
   caption,
   headers,
   rows,
+  scroll = true,
 }: {
   caption: string;
   headers: string[];
   rows: ReactNode[][];
+  /**
+   * Scroll sideways when too wide (the default). Off for a table whose rows open menus, which a scrolling box would
+   * cut off: on a desktop it then lays out at full width; a phone keeps each cell on one line and scrolls it rather
+   * than widen the page or break its words a character at a time.
+   */
+  scroll?: boolean;
 }) {
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
+    <div
+      className={cn(
+        'rounded-md border border-border',
+        scroll ? 'overflow-x-auto' : 'max-md:overflow-x-auto',
+      )}
+    >
       <table className="w-full border-collapse text-left text-sm">
         <caption className="sr-only">{caption}</caption>
         <thead className="bg-canvas text-secondary">
@@ -226,7 +239,13 @@ export function Table({
           {rows.map((row, i) => (
             <tr key={i} className="border-t border-border">
               {row.map((cell, j) => (
-                <td key={j} className="px-4 py-3">
+                <td
+                  key={j}
+                  className={cn(
+                    'px-4 py-3',
+                    !scroll && 'max-md:whitespace-nowrap',
+                  )}
+                >
                   {cell}
                 </td>
               ))}
@@ -235,6 +254,46 @@ export function Table({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * A small card that is one link: a heading with where it leads on the right, a line under it, and how far the
+ * current piece of work has got (the side bar's 后台 card).
+ */
+export function StatusCard({
+  to,
+  title,
+  action,
+  detail,
+  progress,
+}: {
+  to: string;
+  title: string;
+  action: string;
+  detail?: string;
+  progress?: { value: number | null; max: number; label: string };
+}) {
+  return (
+    <Link
+      to={to}
+      className="flex flex-col gap-1.5 rounded-md border border-border bg-surface px-3 py-2.5 text-primary hover:border-tertiary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+    >
+      <span className="flex justify-between gap-2 text-xs">
+        <span className="font-medium">{title}</span>
+        <span className="text-secondary">{action} ›</span>
+      </span>
+      {detail && <span className="text-xs text-secondary">{detail}</span>}
+      {progress && (
+        <Meter
+          size="sm"
+          hideLabel
+          value={progress.value}
+          max={progress.max}
+          label={progress.label}
+        />
+      )}
+    </Link>
   );
 }
 
@@ -687,18 +746,33 @@ export function ActionMenu({
   label,
   items,
   className,
+  text,
 }: {
   label: string;
   items: { label: string; onSelect: () => void; disabled?: boolean }[];
   className?: string;
+  /** Words on the button (a secondary button with a caret, such as “添加”) instead of the round “⋯”. */
+  text?: string;
 }) {
   return (
     <details className={cn('relative', className)}>
       <summary
-        aria-label={label}
-        className="grid size-11 cursor-pointer list-none place-items-center rounded-full text-secondary hover:bg-soft [&::-webkit-details-marker]:hidden"
+        aria-label={text ? undefined : label}
+        className={cn(
+          'cursor-pointer list-none [&::-webkit-details-marker]:hidden',
+          text
+            ? buttonClasses({ variant: 'secondary' })
+            : 'grid size-11 place-items-center rounded-full text-secondary hover:bg-soft',
+        )}
       >
-        <MoreHorizontal size={20} aria-hidden />
+        {text ? (
+          <>
+            {text}
+            <ChevronDown size={16} aria-hidden />
+          </>
+        ) : (
+          <MoreHorizontal size={20} aria-hidden />
+        )}
       </summary>
       <div className="absolute right-0 z-10 grid min-w-28 rounded-lg border border-border bg-surface p-1 shadow-elevation-2">
         {items.map((item) => (

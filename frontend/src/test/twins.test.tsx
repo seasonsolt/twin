@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -226,11 +226,23 @@ it.each([
   'profile',
   'profile?section=memories',
   'profile?section=assets',
-])('switches from the rail while staying on %s', async (route) => {
+])('switches twins while staying on %s', async (route) => {
   window.location.hash = `#/${route}`;
   render(<App />);
   const user = userEvent.setup();
-  await user.click(await screen.findByRole('button', { name: '切换到朋友' }));
+  if (route === 'chat') {
+    // On chat the twin's portrait in the header opens the switcher.
+    await user.click(await screen.findByRole('button', { name: /^切换分身/ }));
+    await user.click(
+      within(screen.getByRole('dialog', { name: '切换分身' })).getByRole(
+        'button',
+        { name: /^朋友/ },
+      ),
+    );
+  } else {
+    await screen.findByRole('banner', { name: '主人的舞台' });
+    await act(async () => usePersonas.getState().switchTo(B));
+  }
   expect(usePersonas.getState().id).toBe(B);
   expect(window.location.hash).toBe(`#/${route}`);
   expect(
@@ -238,13 +250,13 @@ it.each([
       name: route === 'chat' ? '朋友 / 新对话' : '朋友的舞台',
     }),
   ).toBeVisible();
-  expect(screen.getAllByRole('button', { name: /^切换分身/ })).toHaveLength(1);
-  expect(
-    screen.getByRole('button', { name: /^切换分身/ }).querySelector('img'),
-  ).toHaveAttribute('src', `/api/media/avatar-image?persona=${B}`);
+  if (route === 'chat')
+    expect(
+      screen.getByRole('button', { name: /^切换分身/ }).querySelector('img'),
+    ).toHaveAttribute('src', `/api/media/avatar-image?persona=${B}`);
 });
 
-it('collapses the rail to the current and two recent twins, opens the rest from +N, and shows the account', async () => {
+it('keeps the side bar about the team, and switches among many twins from the chat header', async () => {
   items.push(
     ...Array.from({ length: 6 }, (_, index) => ({
       ...items[1],
@@ -254,21 +266,22 @@ it('collapses the rail to the current and two recent twins, opens the rest from 
   );
   window.location.hash = '#/chat';
   render(<App />);
-  const switcher = await screen.findByRole('button', { name: /^切换分身/ });
-  expect(screen.getAllByRole('button', { name: /^切换分身/ })).toHaveLength(1);
-  const aside = switcher.closest('aside')!;
-  expect(aside).toHaveClass('nav-rail');
+  const nav = await screen.findByRole('navigation', { name: '主导航' });
+  const aside = nav.closest('aside')!;
+  expect(aside).toHaveClass('nav-sidebar');
   expect(aside).not.toHaveClass('border-r');
-  expect(aside).not.toHaveClass('bg-accent');
-  expect(switcher).toHaveClass('rail-current');
-  expect(aside.querySelectorAll('.persona-portrait')).toHaveLength(3);
+  // No twin is picked in the side bar: the twins are reached through the team, find (⌘K) and the chat header.
+  expect(aside.querySelectorAll('.persona-portrait')).toHaveLength(0);
   expect(
-    within(aside).getAllByRole('button', { name: /^切换到/u }),
-  ).toHaveLength(2);
-  const more = within(aside).getByRole('button', { name: '还有 5 个分身' });
-  expect(more).toHaveTextContent('+5');
-  expect(within(aside).getByRole('button', { name: '新建分身' })).toBeVisible();
-  expect(within(aside).queryByText(account.email)).not.toBeInTheDocument();
+    within(aside).queryByRole('button', { name: /^切换/u }),
+  ).not.toBeInTheDocument();
+  expect(within(aside).getByRole('button', { name: '找人' })).toBeVisible();
+  expect(
+    within(aside).getByRole('button', { name: '上传会议录音' }),
+  ).toBeVisible();
+  expect(within(aside).getByRole('button', { name: '账户' })).toHaveTextContent(
+    account.email,
+  );
   const user = userEvent.setup();
   const accountButton = screen.getByRole('button', { name: '账户' });
   await user.click(accountButton);
@@ -282,23 +295,7 @@ it('collapses the rail to the current and two recent twins, opens the rest from 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
   );
   expect(accountButton).toHaveFocus();
-  // The last twin switched to moves up into the rail.
-  await user.click(more);
-  await user.click(
-    within(screen.getByRole('dialog', { name: '切换分身' })).getByRole(
-      'button',
-      { name: /分身5/u },
-    ),
-  );
-  await waitFor(() =>
-    expect(
-      within(aside).getAllByRole('button', { name: /^切换到/u })[0],
-    ).toHaveAccessibleName('切换到主人'),
-  );
-  await waitFor(() =>
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
-  );
-  await user.click(switcher);
+  await user.click(screen.getByRole('button', { name: /^切换分身/ }));
   const twins = screen.getByRole('dialog', { name: '切换分身' });
   expect(within(twins).getAllByRole('button', { name: /条记忆/ })).toHaveLength(
     8,
@@ -308,6 +305,11 @@ it('collapses the rail to the current and two recent twins, opens the rest from 
     1,
   );
   await user.clear(within(twins).getByLabelText('搜索分身'));
+  // The twin's own pages, which left the side bar, are a click away here.
+  expect(within(twins).getByRole('link', { name: '档案' })).toHaveAttribute(
+    'href',
+    '#/profile',
+  );
   expect(within(twins).getByRole('link', { name: '全部分身' })).toHaveAttribute(
     'href',
     '#/twins',
@@ -478,7 +480,7 @@ it('deletes recoverably and restores a twin from the collapsed recent-deletions 
   ).toBe(true);
 });
 
-it('sets up a new twin from a card in its chat, with the rail still around it', async () => {
+it('sets up a new twin from a card in its chat, with the side bar still around it', async () => {
   items.push({ ...items[1], id: NEW, name: '新伙伴' });
   setPersonaId(NEW);
   usePersonas.setState({ id: NEW, items });
@@ -489,7 +491,7 @@ it('sets up a new twin from a card in its chat, with the rail still around it', 
   expect(
     await within(card).findByRole('button', { name: '说话人 1 是我' }),
   ).toBeVisible();
-  expect(screen.getByRole('navigation', { name: '团队空间' })).toBeVisible();
+  expect(screen.getByRole('navigation', { name: '主导航' })).toBeVisible();
   expect(
     screen.queryByRole('link', { name: '返回我的分身' }),
   ).not.toBeInTheDocument();

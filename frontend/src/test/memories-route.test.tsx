@@ -77,15 +77,11 @@ it.each([
       section ? `#/profile?section=${section}` : '#/profile',
     ),
   );
-  expect(screen.getByRole('link', { name: '档案' })).toHaveAttribute(
-    'href',
-    '#/profile',
-  );
+  // The side bar is about the team: none of its places is the profile, so none is marked current.
+  const nav = screen.getByRole('navigation', { name: '主导航' });
+  expect(within(nav).getAllByRole('link')).toHaveLength(5);
   expect(
-    within(screen.getByRole('navigation', { name: '主导航' })).getAllByRole(
-      'link',
-    ),
-  ).toHaveLength(4);
-  expect(screen.getAllByRole('button', { name: /^切换分身/ })).toHaveLength(1);
+    within(nav).queryByRole('link', { current: 'page' }),
+  ).not.toBeInTheDocument();
   expect(screen.getByRole('tablist', { name: '档案章节' })).toBeInTheDocument();
 });

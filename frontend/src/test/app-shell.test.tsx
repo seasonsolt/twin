@@ -116,45 +116,20 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       screen.queryByText(/localhost|local-provider/),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '档案' })).toHaveAttribute(
-      'href',
-      '/profile',
-    );
     expect(screen.getByRole('heading', { name: '人格' })).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
-    ).toHaveLength(4);
-    for (const label of [
-      '团队',
-      '录音库',
-      '聊天',
-      '工作',
-      '档案',
-      '承诺账本',
-    ]) {
+    ).toHaveLength(5);
+    for (const label of ['团队', '对话', '录音库', '待处理', '承诺']) {
+      // The wide side bar: icon on the left, the words beside it, named by those words.
       const link = screen.getByRole('link', { name: label });
-      expect(link).toHaveAttribute('aria-label', label);
-      expect(link).toHaveClass('size-11', 'rounded-md');
-      expect(within(link).getByText(label)).toHaveClass('sr-only');
+      expect(link).toHaveClass('w-full', 'rounded-md');
+      expect(within(link).getByText(label)).toBeVisible();
+      expect(within(link).getByText(label)).not.toHaveClass('sr-only');
     }
-    expect(screen.getByRole('link', { name: '档案' })).toHaveClass(
-      'bg-surface',
-      'shadow-elevation-1',
-    );
-    const switcher = screen.getByRole('button', {
-      name: '切换分身（当前：本人）',
-    });
-    await act(async () => switcher.click());
-    await waitFor(() =>
-      expect(screen.getByRole('dialog', { name: '切换分身' })).toBeVisible(),
-    );
-    await act(async () =>
-      within(screen.getByRole('dialog', { name: '切换分身' }))
-        .getByRole('button', { name: '关闭' })
-        .click(),
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: '切换分身' })).toBeNull(),
+    // The profile belongs to a twin, not to the team: no place in the side bar is current.
+    expect(screen.getByRole('link', { name: '对话' })).not.toHaveAttribute(
+      'aria-current',
     );
     // Pages an administrator switched off leave the menu at once; chat always stays.
     act(() =>
@@ -173,7 +148,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
           .getByRole('navigation', { name: '主导航' })
           .querySelectorAll('a'),
       ].map((link) => link.textContent),
-    ).toEqual(['聊天', '档案']);
+    ).toEqual(['团队', '对话', '录音库', '待处理']);
   } finally {
     useAuth.setState({ identity: null });
     rendered.unmount();

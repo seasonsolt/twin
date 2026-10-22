@@ -277,7 +277,10 @@ test('team continues the roster when its last rows scroll into view', async ({
   );
   await page.goto('/#/team');
   const panel = page.getByRole('tabpanel', { name: /人物/u });
-  const rows = panel.getByRole('listitem');
+  // The people's rows of the team table, below its header row.
+  const rows = panel
+    .getByRole('row')
+    .filter({ hasNot: page.getByRole('columnheader') });
   const more = page.getByRole('button', { name: '继续加载人物' });
   await expect(rows).toHaveCount(18);
   await more.scrollIntoViewIfNeeded();
@@ -365,13 +368,18 @@ test('chat presentation controls', async ({ page }, info) => {
   if (!mobile) {
     const active = page
       .getByRole('navigation', { name: '主导航', exact: true })
-      .getByRole('link', { name: '聊天', exact: true });
-    await expect(active).toHaveCSS('width', '44px');
-    await expect(active).toHaveCSS('height', '44px');
+      .getByRole('link', { name: '对话', exact: true });
+    // A full-width row of the wide side bar, raised white when current.
+    await expect(active).toHaveCSS('width', '200px');
+    await expect(active).toHaveCSS('height', '40px');
     await expect(active).toHaveCSS('background-color', 'rgb(255, 255, 255)');
     await page.getByRole('button', { name: '收起对话列表' }).click();
     await expect(
       page.getByRole('heading', { name: '林舟 / 下周发布怎么安排' }),
+    ).toBeVisible();
+    // With the list folded away, the twin is still switched from its portrait in the header.
+    await expect(
+      page.getByRole('button', { name: '切换分身（当前：林舟）' }),
     ).toBeVisible();
     await page.reload();
     await expect(

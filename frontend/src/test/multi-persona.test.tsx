@@ -559,7 +559,7 @@ it('keeps deferred questionnaire leave-page writes attributed to their original 
   ).toBe(true);
 });
 
-it('keeps the chat page and layout mounted through prefetch and its timeout, with immediate rail feedback', async () => {
+it('keeps the chat page and layout mounted through prefetch and its timeout, with immediate switcher feedback', async () => {
   window.location.hash = '#/chat';
   const view = render(<App />);
   const input = await screen.findByRole('textbox', { name: '你说' });
@@ -599,7 +599,7 @@ it('keeps the chat page and layout mounted through prefetch and its timeout, wit
   expect(screen.getByRole('textbox', { name: '你说' })).toBe(input);
   expect(input).toHaveAttribute('placeholder', '和朋友聊点什么…');
   expect(view.container.querySelector('.skeleton')).toBeNull();
-  expect(view.container.querySelector('.rail-current img')).toHaveAttribute(
+  expect(switcher.querySelector('img')).toHaveAttribute(
     'src',
     `/api/media/avatar-image?persona=${B}`,
   );

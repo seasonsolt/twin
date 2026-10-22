@@ -18,8 +18,8 @@ import {
   TextLink,
 } from '../ui';
 import { personaUrl } from '../../lib/persona';
-import { usePersonas, type Persona } from '../../stores/personas';
-import { useAuth } from '../../stores/auth';
+import { useCanManage, usePersonas, type Persona } from '../../stores/personas';
+import { featureOn, useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
 import { useOpenSystem } from '../../features/admin/SystemDialog';
 import { PresetSvg } from '../../features/avatar/presets';
@@ -87,6 +87,7 @@ export function PersonaSwitcher({
     : items;
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
+  const canManage = useCanManage();
   const openSystem = useOpenSystem();
   useEffect(() => {
     if (!open) return;
@@ -226,7 +227,12 @@ export function PersonaSwitcher({
             </PlainButton>
           ))}
           <Row gap={4} wrap>
+            {/* The twin's own pages are reached from here: the side bar is about the team. */}
             {[
+              ...(canManage ? [{ to: '/profile', title: '档案' }] : []),
+              ...(featureOn(identity, 'work')
+                ? [{ to: '/work', title: '工作' }]
+                : []),
               { to: '/team', title: '团队' },
               { to: '/library', title: '录音库' },
               { to: '/twins', title: '全部分身' },

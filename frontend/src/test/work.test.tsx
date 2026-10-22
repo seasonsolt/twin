@@ -302,7 +302,7 @@ it('names the twin in a download link, which cannot send the persona header', as
   );
 });
 
-it('gives a visitor of a public twin chat and work, and nothing to manage', async () => {
+it('gives a visitor of a public twin the conversation alone, and nothing to manage; work is still there', async () => {
   const previous = usePersonas.getState();
   usePersonas.setState({
     id: 'p2',
@@ -330,7 +330,11 @@ it('gives a visitor of a public twin chat and work, and nothing to manage', asyn
       within(nav)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '工作']);
+    ).toEqual(['对话']);
+    expect(
+      screen.queryByRole('button', { name: '上传会议录音' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '找人' })).toBeNull();
   } finally {
     usePersonas.setState(previous);
   }

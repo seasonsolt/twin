@@ -153,17 +153,13 @@ it('shows the team, what needs settling and the way to upload more', async () =>
   // The people come first; what waits for the owner is one tab away, counted.
   const people_ = await screen.findByRole('tabpanel');
   expect(await within(people_).findByText('可以聊')).toBeInTheDocument();
-  expect(
-    within(people_).getByRole('button', { name: '和分身聊聊' }),
-  ).toBeEnabled();
+  expect(within(people_).getByRole('button', { name: '聊天' })).toBeEnabled();
   expect(screen.getByRole('link', { name: '全部录音（2）' })).toHaveAttribute(
     'href',
     '/library',
   );
   expect(screen.getByRole('tab', { name: /待处理.*1/u })).toBeInTheDocument();
-  await userEvent.click(
-    within(people_).getByRole('button', { name: '去处理' }),
-  );
+  await userEvent.click(screen.getByRole('tab', { name: /待处理/u }));
   const tasks = await screen.findByRole('region', { name: /还没认人/u });
   const progress = screen.getByRole('region', { name: '正在处理' });
   expect(within(progress).getByRole('progressbar')).toHaveAttribute(

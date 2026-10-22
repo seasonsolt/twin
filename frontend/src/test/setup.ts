@@ -40,7 +40,15 @@ Object.defineProperty(globalThis, 'ResizeObserver', {
   writable: true,
   value: ResizeObserverMock,
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.unstubAllGlobals();
+  // The app-wide stores outlive a page: each case starts from nothing loaded and nothing uploading. Imported here,
+  // after the case, so a file's module mocks are in place before these stores load what they use.
+  const [{ resetUploads }, { resetTeam }] = await Promise.all([
+    import('../stores/uploads'),
+    import('../stores/team'),
+  ]);
+  resetUploads();
+  resetTeam();
 });

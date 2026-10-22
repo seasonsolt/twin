@@ -5,6 +5,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type ComponentType,
@@ -12,7 +13,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { crossfade, exitDurations, useMotionPreset } from '../../design/motion';
-import { Button, IconButton, type Tone } from './controls';
+import { Button, IconButton, Input, type Tone } from './controls';
 import { cn } from '../../lib/utils';
 
 export type DialogAnchor = Pick<
@@ -448,5 +449,137 @@ export function SettingsDialog({
         </AnimatePresence>
       </RadixDialog.Portal>
     </RadixDialog.Root>
+  );
+}
+
+export interface SearchItem {
+  id: string;
+  label: string;
+  /** One short line after the name: what can be done with it. */
+  detail?: string;
+  /** A portrait or mark before the name. */
+  leading?: ReactNode;
+}
+
+/**
+ * Find one thing by typing its name and go to it: a field over a short list of matches, ↑↓ to move, Enter to
+ * pick. Only the first `limit` matches are listed; typing more narrows them.
+ */
+export function SearchDialog({
+  open,
+  onOpenChange,
+  title,
+  placeholder,
+  items,
+  onSelect,
+  empty,
+  limit = 8,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  placeholder: string;
+  items: SearchItem[];
+  onSelect: (item: SearchItem) => void;
+  /** Said when nothing matches what was typed. */
+  empty: string;
+  limit?: number;
+}) {
+  const [query, setQuery] = useState('');
+  const [at, setAt] = useState(0);
+  const listId = useId();
+  useEffect(() => {
+    if (!open) return;
+    setQuery('');
+    setAt(0);
+  }, [open]);
+  const wanted = query.trim().toLocaleLowerCase();
+  const shown = items
+    .filter((item) => item.label.toLocaleLowerCase().includes(wanted))
+    .slice(0, limit);
+  const current = Math.min(at, shown.length - 1);
+  const pick = (item: SearchItem | undefined) => {
+    if (!item) return;
+    onOpenChange(false);
+    onSelect(item);
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      className="search-dialog"
+    >
+      <div className="flex flex-col gap-2">
+        <Input
+          autoFocus
+          type="search"
+          role="combobox"
+          aria-label={title}
+          aria-expanded={shown.length > 0}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            current >= 0 ? `${listId}-${shown[current].id}` : undefined
+          }
+          placeholder={placeholder}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setAt(0);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              const step = event.key === 'ArrowDown' ? 1 : -1;
+              setAt(
+                (current + step + shown.length) % Math.max(1, shown.length),
+              );
+            } else if (event.key === 'Enter') {
+              event.preventDefault();
+              pick(shown[current]);
+            }
+          }}
+        />
+        {shown.length ? (
+          <ul
+            id={listId}
+            role="listbox"
+            aria-label={title}
+            className="flex flex-col"
+          >
+            {shown.map((item, index) => (
+              <li
+                key={item.id}
+                id={`${listId}-${item.id}`}
+                role="option"
+                aria-selected={index === current}
+                onMouseEnter={() => setAt(index)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(item)}
+                className={cn(
+                  'flex min-h-11 cursor-pointer items-center gap-3 rounded-sm px-2',
+                  index === current && 'bg-soft',
+                )}
+              >
+                {item.leading}
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {item.label}
+                </span>
+                {item.detail && (
+                  <span className="shrink-0 text-xs text-secondary">
+                    {item.detail}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p role="status" className="px-2 py-3 text-sm text-secondary">
+            {empty}
+          </p>
+        )}
+      </div>
+    </Dialog>
   );
 }

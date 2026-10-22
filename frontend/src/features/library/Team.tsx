@@ -14,14 +14,12 @@ import {
   AvatarFrame,
   Badge,
   Button,
-  Card,
   Chip,
   ClipButton,
   toast,
   Dialog,
   Disclosure,
   Field,
-  Grid,
   Input,
   LoadMore,
   Notice,
@@ -33,9 +31,11 @@ import {
   StatusDot,
   Tabs,
   TaskRow,
+  Table,
   Text,
   TextLink,
   type TextTone,
+  type Tone,
   useConfirm,
 } from '../../components/ui';
 import { Avatar } from '../avatar/Avatar';
@@ -44,12 +44,20 @@ import { byName } from '../../lib/names';
 import { basePath, withBase } from '../../lib/base';
 import { usePolling } from '../../lib/usePolling';
 import { usePersonas, type Persona } from '../../stores/personas';
+import { useTeam } from '../../stores/team';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
 import type { Pick } from './useUploads';
 import { MixedSpeaker, type SuspectSpeaker } from './MixedSpeaker';
 import { PersonVoice } from './PersonVoice';
 import { BuildMeter } from '../memories/BuildProgress';
+import {
+  disownedPeople,
+  namedPeople,
+  similarPairs,
+  unnamedPeople,
+  waitingCount,
+} from './teamCounts';
 
 interface Waiting extends Speaker {
   recording_id: string;
@@ -892,8 +900,31 @@ function AddPerson({
   );
 }
 
-/** One person found in the meetings: who they are and what their twin is, with the one thing to do next. */
-function PersonCard({
+/** Where a person's twin stands, as the team table's filter and status column name it. */
+type TwinState = 'ready' | 'updating' | 'none' | 'own' | 'elsewhere';
+const twinState = (person: Person): TwinState =>
+  person.self_claimed
+    ? 'own'
+    : person.twin_elsewhere
+      ? 'elsewhere'
+      : person.persona_id
+        ? person.updating
+          ? 'updating'
+          : 'ready'
+        : 'none';
+const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
+  ready: { label: '可以聊', tone: 'success' },
+  updating: { label: '整理中', tone: 'warning' },
+  none: { label: '没有分身', tone: 'neutral' },
+  own: { label: '本人已认领', tone: 'success' },
+  elsewhere: { label: '同事建了分身', tone: 'neutral' },
+};
+// The filters over the table; the two kinds managed elsewhere show under 全部 only.
+const TWIN_FILTERS: TwinState[] = ['ready', 'updating', 'none'];
+
+/** One person found in the meetings, as a row of the team table: who they are, how much of them was recorded, where
+ * their twin stands, and the one thing to do next with the rest in “⋯”. */
+function personRow({
   person,
   twin,
   busy,
@@ -912,125 +943,108 @@ function PersonCard({
   onRemove: () => void;
   /** Their voice samples, and what voice alone gave them, to spot-check. */
   onVoice: () => void;
-}) {
+}): ReactNode[] {
+  const state = twinState(person);
   const lacking =
     person.seconds > 0 && (person.lacking ?? 0) >= 60
       ? `素材还差约 ${minutes(person.lacking ?? 0)}`
       : '';
-  return (
-    <Card as="li" variant="outline" className="flex flex-col gap-4">
-      <Row gap={2}>
-        <Stack gap={0} grow>
-          <IdentityLink
-            to={person.persona_id ? '/profile' : undefined}
-            label={
-              person.persona_id ? `${person.name}的档案` : `编辑${person.name}`
-            }
-            onClick={() =>
-              person.persona_id
-                ? onOpen(person.persona_id, '/profile')
-                : onEdit()
-            }
-          >
-            <AvatarFrame>
-              <PersonFace person={person} twin={twin} />
-            </AvatarFrame>
-            <Stack gap={0} grow>
-              <Text size="lg" weight="semibold" truncate>
-                {person.name}
-              </Text>
-              <Text size="sm" tone="secondary" truncate>
-                {person.speakers} 段录音 · {minutes(person.seconds)}
-              </Text>
-            </Stack>
-          </IdentityLink>
-        </Stack>
-        <PersonClip person={person} icon />
-      </Row>
-      <Stack gap={1} align="start">
-        {person.self_claimed ? (
-          <Badge tone="success">本人已认领</Badge>
-        ) : person.twin_elsewhere ? (
-          <Badge tone="neutral">同事建了分身</Badge>
-        ) : person.persona_id ? (
-          person.updating ? (
-            <Badge tone="warning">记忆更新中</Badge>
-          ) : (
-            <Badge tone="success">可以聊</Badge>
-          )
-        ) : (
-          <Badge tone="neutral">还没有分身</Badge>
-        )}
+  const checks =
+    person.can_manage !== false && (person.checks ?? 0) > 0
+      ? (person.checks ?? 0)
+      : 0;
+  return [
+    <IdentityLink
+      key="who"
+      to={person.persona_id ? '/profile' : undefined}
+      label={person.persona_id ? `${person.name}的档案` : `编辑${person.name}`}
+      onClick={() =>
+        person.persona_id ? onOpen(person.persona_id, '/profile') : onEdit()
+      }
+    >
+      <AvatarFrame>
+        <PersonFace person={person} twin={twin} />
+      </AvatarFrame>
+      <Stack gap={0} grow>
+        <Text weight="semibold" truncate>
+          {person.name}
+        </Text>
         <ClaimLine twin={twin} />
-        {person.can_manage !== false && (person.checks ?? 0) > 0 && (
-          <TextLink size="sm" onClick={onVoice}>
-            {person.checks} 段可抽查
-          </TextLink>
-        )}
-        {lacking && (
+      </Stack>
+    </IdentityLink>,
+    <Row key="heard" gap={2}>
+      <Text size="sm" tone="secondary">
+        {person.speakers} 段 · {minutes(person.seconds)}
+      </Text>
+      <PersonClip person={person} icon />
+    </Row>,
+    <Stack key="twin" gap={1}>
+      <Row gap={2}>
+        <StatusDot tone={TWIN_STATES[state].tone} />
+        <Text size="sm">{TWIN_STATES[state].label}</Text>
+      </Row>
+      {state === 'updating' && (
+        // The twin can talk once its memory is updated: where the update is, under the word.
+        <div aria-live="polite">
+          <BuildMeter processing={person.build} />
+        </div>
+      )}
+      {checks > 0 ? (
+        <TextLink size="sm" onClick={onVoice}>
+          {checks} 段可抽查
+        </TextLink>
+      ) : (
+        lacking && (
           <Text size="sm" tone="secondary">
             {lacking}
           </Text>
-        )}
-      </Stack>
-      <div className="mt-auto flex gap-2">
-        {person.self_claimed ? (
-          // Their twin is theirs, not the library's to open: nothing to do here.
-          <Button variant="secondary" className="flex-1" disabled>
-            分身归 TA 自己
-          </Button>
-        ) : person.twin_elsewhere ? (
-          <Button variant="secondary" className="flex-1" disabled>
-            由建它的同事管理
-          </Button>
-        ) : person.persona_id && person.updating ? (
-          // The twin can talk once its memory is updated: where the update is, in place of the button.
-          <div className="flex-1 self-center" aria-live="polite">
-            <BuildMeter processing={person.build} />
-          </div>
-        ) : person.persona_id ? (
-          <Button
-            className="flex-1"
-            onClick={() => onOpen(person.persona_id!, '/chat')}
-          >
-            和分身聊聊
-          </Button>
-        ) : person.can_manage === false ? null : (
-          <Button
-            variant="secondary"
-            className="flex-1"
-            disabled={busy || !person.speakers}
-            onClick={onAddress}
-          >
-            生成分身
-          </Button>
-        )}
-        {person.can_manage !== false && (
-          <ActionMenu
-            label={`更多：${person.name}`}
-            items={[
-              { label: '编辑名字和性别', disabled: busy, onSelect: onEdit },
-              { label: '声线和抽查', disabled: busy, onSelect: onVoice },
-              ...(person.persona_id && twin?.claimed === false
-                ? [
-                    {
-                      label: '企业邮箱或工号',
-                      disabled: busy,
-                      onSelect: onAddress,
-                    },
-                  ]
-                : []),
-              ...(!person.persona_id &&
-              !person.self_claimed &&
-              !person.twin_elsewhere
-                ? [{ label: '删除', disabled: busy, onSelect: onRemove }]
-                : []),
-            ]}
-          />
-        )}
-      </div>
-    </Card>
-  );
+        )
+      )}
+    </Stack>,
+    <Row key="act" gap={1} justify="end">
+      {state === 'ready' ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => onOpen(person.persona_id!, '/chat')}
+        >
+          聊天
+        </Button>
+      ) : state === 'none' && person.can_manage !== false ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={busy || !person.speakers}
+          onClick={onAddress}
+        >
+          生成分身
+        </Button>
+      ) : null}
+      {person.can_manage !== false && (
+        <ActionMenu
+          label={`${person.name}的更多操作`}
+          items={[
+            { label: '编辑名字和性别', disabled: busy, onSelect: onEdit },
+            { label: '声线和抽查', disabled: busy, onSelect: onVoice },
+            ...(person.persona_id && twin?.claimed === false
+              ? [
+                  {
+                    label: '企业邮箱或工号',
+                    disabled: busy,
+                    onSelect: onAddress,
+                  },
+                ]
+              : []),
+            ...(!person.persona_id &&
+            !person.self_claimed &&
+            !person.twin_elsewhere
+              ? [{ label: '删除', disabled: busy, onSelect: onRemove }]
+              : []),
+          ]}
+        />
+      )}
+    </Row>,
+  ];
 }
 
 /** What the owner has to settle, quiet background progress, and everyone found in
@@ -1058,6 +1072,7 @@ export function Team({
   const [hearing, setHearing] = useState<Person | null>(null);
   const [heard, setHeard] = useState<Review['heard']>();
   const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<TwinState | null>(null);
   const [error, setError] = useState('');
   const [peopleError, setPeopleError] = useState('');
   const [reviewError, setReviewError] = useState('');
@@ -1079,6 +1094,13 @@ export function Team({
   );
   // Back from settling a speaker in its recording: the tab and the kind of task it was part of.
   const returnedFrom: string | undefined = location.state?.resolvedTeamTask;
+  // Someone looked up by name (⌘K) who has no twin to open: the roster, narrowed to them.
+  const sought: string | undefined = location.state?.search;
+  useEffect(() => {
+    if (!sought) return;
+    setSearch(sought);
+    setFilter(null);
+  }, [sought, location.key]);
   const confirm = useConfirm();
   const navigate = useNavigate();
   const refreshPersonas = usePersonas((state) => state.refresh);
@@ -1092,6 +1114,8 @@ export function Team({
         .then((folks) => {
           if (current !== loadVersion.current) return;
           setPeople(folks.items);
+          // The side bar counts the same people and tasks: it takes them from here rather than asking again.
+          useTeam.getState().absorb({ people: folks.items });
           setPeopleError('');
         })
         .catch((failure: unknown) => {
@@ -1103,6 +1127,7 @@ export function Team({
       api<Review>('/api/library/review')
         .then((queue) => {
           if (current !== loadVersion.current) return;
+          useTeam.getState().absorb({ review: queue });
           setWaiting(queue.items);
           setVoices(queue.voices);
           setFragments(queue.fragments);
@@ -1283,26 +1308,20 @@ export function Team({
     void navigate(page);
   };
 
-  // Only who the viewer may settle: voices in recordings they uploaded (or all, for an administrator).
-  const unnamed = people?.filter((p) => p.auto && p.can_manage !== false) ?? [];
+  const unnamed = unnamedPeople(people ?? []);
   // The team's roster holds everyone; this page shows the people the viewer looks after or can talk to.
   // Whoever was heard longest first: the people with the most recorded speech make the fullest twins. Equal
   // ones keep the server's order by name.
-  const named = people
-    ?.filter(
-      (p) =>
-        !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
-    )
-    .sort((a, b) => b.seconds - a.seconds);
-  const matchingPeople = named?.filter((person) =>
-    person.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
+  const named =
+    people && namedPeople(people).sort((a, b) => b.seconds - a.seconds);
+  const matchingPeople = named?.filter(
+    (person) =>
+      (!filter || twinState(person) === filter) &&
+      person.name
+        .toLocaleLowerCase()
+        .includes(search.trim().toLocaleLowerCase()),
   );
-  const byId = new Map((people ?? []).map((p) => [p.id, p]));
-  const similar = (people ?? []).flatMap((p) =>
-    (p.similar ?? [])
-      .filter((id) => p.id < id && byId.has(id))
-      .map((id) => [p, byId.get(id)!] as const),
-  );
+  const similar = similarPairs(people ?? []);
   const arriving = recordings.filter(
     (r) => r.status === 'queued' || r.status === 'transcribing',
   );
@@ -1311,7 +1330,7 @@ export function Team({
   const twinOf = (person: Person) =>
     twins.find((t) => t.id === person.persona_id);
   // A colleague said a twin made for them is not theirs: it is back with the owner, to point at the right person.
-  const disowned = named?.filter((p) => twinOf(p)?.claim_rejected) ?? [];
+  const disowned = named ? disownedPeople(named, twins) : [];
   const toAddress = named?.filter((p) => unaddressed(p, twinOf(p))) ?? [];
   const proofreading = recordings.filter(
     (r) => r.status === 'ready' && r.proofread === 'waiting',
@@ -1378,9 +1397,12 @@ export function Team({
     ...disowned.map((p) => `disowned-${p.id}`),
   ];
   // What can wait harms nobody meanwhile: the owner is not told it is waiting.
-  const tasks = taskIds.filter(
-    (id) => !CATEGORIES.find((c) => c.id === categoryOf(id))?.optional,
-  ).length;
+  const tasks = waitingCount({
+    people: people ?? [],
+    review: { items: waiting, voices, fragments, unsorted },
+    recordings,
+    twins,
+  });
   const counts: Record<Category, number> = {
     voice: voiced.length,
     mixed: suspects.length,
@@ -1896,38 +1918,65 @@ export function Team({
           正在加载人物…
         </Text>
       )}
-      {tasks > 0 && (
-        <Notice
-          tone="warning"
-          actions={
-            <Button variant="secondary" onClick={() => go({ tab: 'todo' })}>
-              去处理
-            </Button>
-          }
-        >
-          {tasks} 项待处理。认出更多说话人，分身的素材才会更足。
-        </Notice>
-      )}
       {named && named.length === 0 && (
         <Text size="sm" tone="secondary">
           录音转写后，认出来的人会出现在这里；也可以打开录音，确认说话人是谁。
         </Text>
       )}
-      <Grid as="ul" columns={3}>
-        {matchingPeople?.slice(0, peopleShown).map((person) => (
-          <PersonCard
-            key={person.id}
-            person={person}
-            twin={twinOf(person)}
-            busy={busy}
-            onOpen={(personaId, page) => void open(personaId, page)}
-            onEdit={() => setEditing(person)}
-            onAddress={() => setAddressing(person)}
-            onRemove={() => void remove(person)}
-            onVoice={() => setHearing(person)}
+      {named && named.length > 0 && (
+        <Row gap={2} wrap>
+          <Input
+            aria-label="找人"
+            placeholder="找人"
+            className="w-48"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPeopleShown(PEOPLE_PER_PAGE);
+            }}
           />
-        ))}
-      </Grid>
+          <Row gap={2} wrap role="group" aria-label="按分身状态筛选">
+            {([null, ...TWIN_FILTERS] as const).map((state) => {
+              const count = state
+                ? named.filter((p) => twinState(p) === state).length
+                : named.length;
+              return (
+                (!state || count > 0) && (
+                  <Chip
+                    key={state ?? 'all'}
+                    pressed={filter === state}
+                    onClick={() => {
+                      setFilter(state);
+                      setPeopleShown(PEOPLE_PER_PAGE);
+                    }}
+                  >
+                    {state ? TWIN_STATES[state].label : '全部'} {count}
+                  </Chip>
+                )
+              );
+            })}
+          </Row>
+        </Row>
+      )}
+      {matchingPeople && matchingPeople.length > 0 && (
+        <Table
+          caption="成员"
+          headers={['成员', '录音', '分身', '操作']}
+          scroll={false}
+          rows={matchingPeople.slice(0, peopleShown).map((person) =>
+            personRow({
+              person,
+              twin: twinOf(person),
+              busy,
+              onOpen: (personaId, page) => void open(personaId, page),
+              onEdit: () => setEditing(person),
+              onAddress: () => setAddressing(person),
+              onRemove: () => void remove(person),
+              onVoice: () => setHearing(person),
+            }),
+          )}
+        />
+      )}
       {matchingPeople && (
         <LoadMore
           shown={Math.min(peopleShown, matchingPeople.length)}
@@ -2059,26 +2108,21 @@ export function Team({
         }
         actions={
           tab === 'people' ? (
-            <Row gap={2} wrap>
-              <Input
-                aria-label="找人"
-                placeholder="找人"
-                className="w-36"
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPeopleShown(PEOPLE_PER_PAGE);
-                }}
-              />
-              {toAddress.length > 0 && (
-                <Button variant="secondary" onClick={() => setBatching(true)}>
-                  按邮箱或工号建分身（{toAddress.length}）
-                </Button>
-              )}
-              <Button variant="secondary" onClick={() => setAdding(true)}>
-                添加人物
-              </Button>
-            </Row>
+            <ActionMenu
+              text="添加"
+              label="添加"
+              items={[
+                { label: '添加人物', onSelect: () => setAdding(true) },
+                ...(toAddress.length > 0
+                  ? [
+                      {
+                        label: `按邮箱或工号建分身（${toAddress.length}）`,
+                        onSelect: () => setBatching(true),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           ) : (
             heard &&
             heard.total > 0 && (

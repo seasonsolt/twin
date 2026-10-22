@@ -1,15 +1,23 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Navigate, useLocation, useOutlet } from 'react-router';
-import { Plus } from 'lucide-react';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import {
   BookUser,
   Briefcase,
+  Inbox,
   ListChecks,
   LogOut,
   MessageCircle,
   Mic,
   Settings2,
+  Upload,
   Users,
 } from 'lucide-react';
 import { startStatusPolling, useStatus } from '../../stores/status';
@@ -17,20 +25,24 @@ import { failing, startSystemPolling, useSystem } from '../../stores/system';
 import { SystemDialog, useOpenSystem } from '../../features/admin/SystemDialog';
 import {
   AccountMenu,
+  Button,
   Card,
+  FileInput,
   Heading,
   Stack,
   NavPill,
   PlainButton,
   Row,
+  SearchButton,
   Skeleton,
   SkipLink,
+  StatusCard,
+  TeamMark,
   Text,
   TextLink,
   ThemePicker,
-  Tooltip,
 } from '../ui';
-import { LayoutScope, PageTransition } from '../motion';
+import { PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
 import {
@@ -38,11 +50,13 @@ import {
   useCanManage,
   usePersonas,
   useTrial,
-  type Persona,
 } from '../../stores/personas';
-import { recentPersonas, rememberPersona } from '../../lib/recentPersonas';
-import { PersonaSwitcher, PersonaPortrait } from './PersonaSwitcher';
-import { NewTwin, NewTwinForm, NewTwinHost, useNewTwinCard } from './NewTwin';
+import { useTeam } from '../../stores/team';
+import { usePolling } from '../../lib/usePolling';
+import { useUploads } from '../../features/library/useUploads';
+import { namedPeople, waitingCount } from '../../features/library/teamCounts';
+import { FindPerson } from './FindPerson';
+import { NewTwinForm, NewTwinHost } from './NewTwin';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import { THEMES, useTheme } from '../../stores/theme';
@@ -83,26 +97,6 @@ function useNavItems() {
   );
 }
 
-function Navigation() {
-  const items = useNavItems();
-  return (
-    <LayoutScope>
-      <nav aria-label="主导航" className="space-y-1">
-        {items.map(({ route, title, icon }) => (
-          <NavPill
-            key={route}
-            to={`/${route}`}
-            icon={icon}
-            label={title}
-            layout="rail"
-            indicator="active-nav"
-          />
-        ))}
-      </nav>
-    </LayoutScope>
-  );
-}
-
 function BottomTabs() {
   const items = useNavItems();
   return (
@@ -123,30 +117,31 @@ function BottomTabs() {
   );
 }
 
-// Other twins shown in the rail beside the current one.
-const RAIL_SHORTCUTS = 2;
+// The backend has no team name yet: the side bar shows this until it does.
+const TEAM_NAME = '我的团队';
 
-/** `empty`: the account has no twin at all (not merely a list still loading). */
-function TwinRail({ empty = false }: { empty?: boolean }) {
-  const { id, items, pendingId, refresh, switchTo } = usePersonas();
-  const current = items.find((item) => item.id === id);
-  // Collapsed to the current twin and the few used last; the rest are one click away in the switcher.
-  const [recent, setRecent] = useState(recentPersonas);
+/** The side bar: whose space it is, finding someone, uploading, the places to work in and how much waits there,
+ * and what runs in the background. A guest, who may only talk to the twins, has the conversation alone. */
+function Sidebar() {
+  const refreshPersonas = usePersonas((state) => state.refresh);
+  const twins = usePersonas((state) => state.items);
+  const canManage = useCanManage();
+  const identity = useAuth((state) => state.identity);
+  const location = useLocation();
+  const todo =
+    location.pathname === '/team' &&
+    new URLSearchParams(location.search).get('tab') === 'todo';
+  const [finding, setFinding] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const library = useTeam((state) => state.library);
+  const people = useTeam((state) => state.people);
+  const review = useTeam((state) => state.review);
+  const refresh = useCallback(() => useTeam.getState().refresh(), []);
+  const { add, unfinished } = useUploads(
+    () => void useTeam.getState().refresh(true),
+  );
   useEffect(() => {
-    rememberPersona(id);
-    setRecent(recentPersonas());
-  }, [id]);
-  const others = items.filter((item) => item.id !== id);
-  const rank = (persona: Persona) => {
-    const at = recent.indexOf(persona.id);
-    return at < 0 ? recent.length + others.indexOf(persona) : at;
-  };
-  const shortcuts = [...others]
-    .sort((a, b) => rank(a) - rank(b))
-    .slice(0, RAIL_SHORTCUTS);
-  const hidden = others.length - shortcuts.length;
-  useEffect(() => {
-    const load = () => void refresh().catch(() => {});
+    const load = () => void refreshPersonas().catch(() => {});
     load();
     window.addEventListener('twin-assets-changed', load);
     window.addEventListener('twin-identity-changed', load);
@@ -154,100 +149,136 @@ function TwinRail({ empty = false }: { empty?: boolean }) {
       window.removeEventListener('twin-assets-changed', load);
       window.removeEventListener('twin-identity-changed', load);
     };
-  }, [refresh]);
-  const name = current?.name || '本人';
-  const [creating, setCreating] = useState(false);
-  // Three scopes, top to bottom: the team's space, the twin being worked on with its own pages, the other twins.
+  }, [refreshPersonas]);
+  useEffect(() => {
+    if (canManage) void refresh();
+  }, [canManage, refresh]);
+  useEffect(() => {
+    if (!canManage) return;
+    const open = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setFinding(true);
+      }
+    };
+    window.addEventListener('keydown', open);
+    return () => window.removeEventListener('keydown', open);
+  }, [canManage]);
+
+  const recordings = library?.recordings ?? [];
+  const sending = unfinished.filter((pick) => !pick.error);
+  const unsent = unfinished.filter((pick) => pick.error);
+  const transcribing = recordings.filter((r) => r.status === 'transcribing');
+  const queued = recordings.filter((r) => r.status === 'queued');
+  const organising = people?.filter((p) => p.updating) ?? [];
+  const jobs =
+    sending.length + transcribing.length + queued.length + organising.length;
+  usePolling(refresh, !canManage ? 0 : jobs ? 3000 : 30000);
+  const members = people ? namedPeople(people).length : undefined;
+  const waiting =
+    people && review ? waitingCount({ people, review, recordings, twins }) : 0;
+  // How far the piece of work under way has got: the file being sent, else the recording being transcribed.
+  const moving = sending.find((pick) => pick.progress);
+  const progress = moving?.progress
+    ? { value: moving.progress.offset, max: moving.progress.size }
+    : transcribing[0]
+      ? {
+          value: transcribing[0].duration_s
+            ? transcribing[0].transcribed_s
+            : null,
+          max: transcribing[0].duration_s ?? 1,
+        }
+      : undefined;
+  const background = [
+    sending.length && `${sending.length} 项上传中`,
+    transcribing.length && `${transcribing.length} 项转写中`,
+    queued.length && `${queued.length} 项排队`,
+    organising.length && `${organising.length} 人整理中`,
+    unsent.length && `${unsent.length} 项上传失败`,
+  ].filter(Boolean);
+  const items = canManage
+    ? [
+        {
+          to: '/team',
+          title: '团队',
+          icon: Users,
+          count: members,
+          active: location.pathname === '/team' && !todo,
+        },
+        { to: '/chat', title: '对话', icon: MessageCircle },
+        { to: '/library', title: '录音库', icon: Mic },
+        {
+          to: '/team?tab=todo',
+          title: '待处理',
+          icon: Inbox,
+          count: waiting || undefined,
+          accent: true,
+          active: todo,
+        },
+        ...(featureOn(identity, 'ledger')
+          ? [{ to: '/ledger', title: '承诺', icon: ListChecks }]
+          : []),
+      ]
+    : [{ to: '/chat', title: '对话', icon: MessageCircle }];
   return (
-    <aside className="nav-rail sticky top-0 flex h-dvh shrink-0 flex-col items-center overflow-y-auto px-3 py-4">
-      <nav aria-label="团队空间" className="flex flex-col gap-1">
-        {[
-          { to: '/team', title: '团队', icon: Users },
-          { to: '/library', title: '录音库', icon: Mic },
-        ].map(({ to, title, icon }) => (
-          <NavPill key={to} to={to} icon={icon} label={title} layout="rail" />
+    <aside className="nav-sidebar sticky top-0 flex h-dvh shrink-0 flex-col gap-3 overflow-y-auto px-3 py-4">
+      <TeamMark name={TEAM_NAME} />
+      {canManage && (
+        <>
+          <SearchButton
+            label="找人"
+            shortcut="⌘K"
+            onClick={() => setFinding(true)}
+          />
+          <Button
+            size="lg"
+            className="w-full"
+            onClick={() => input.current?.click()}
+          >
+            <Upload aria-hidden className="size-5" />
+            上传会议录音
+          </Button>
+          <FileInput
+            ref={input}
+            label="选择录音文件"
+            multiple
+            onFiles={(files) => void add(files)}
+          />
+          <FindPerson open={finding} onOpenChange={setFinding} />
+        </>
+      )}
+      <nav aria-label="主导航" className="flex flex-col gap-0.5">
+        {items.map(({ to, title, icon, count, accent, active }) => (
+          <NavPill
+            key={to}
+            to={to}
+            icon={icon}
+            label={title}
+            layout="sidebar"
+            count={count}
+            countTone={accent ? 'accent' : 'muted'}
+            active={active}
+          />
         ))}
       </nav>
-      <div className="rail-divider my-3 w-7" />
-      <section
-        aria-label={`当前分身：${name}`}
-        className="flex flex-col items-center gap-1"
-      >
-        {!empty ? (
-          <Tooltip label={`切换分身（当前：${name}）`}>
-            <span>
-              <PersonaSwitcher
-                label={`切换分身（当前：${name}）`}
-                className="rail-current"
-                trigger={<PersonaPortrait persona={current} />}
-              />
-            </span>
-          </Tooltip>
-        ) : (
-          // No twin yet: an empty slot where it will be, which makes one.
-          <Tooltip label="新建分身">
-            <PlainButton
-              shape="circle"
-              aria-label="还没有分身，新建一个"
-              aria-haspopup="dialog"
-              className="rail-current rail-current-empty text-secondary"
-              onClick={() => useNewTwinCard.getState().set(true)}
-            >
-              <Plus aria-hidden className="size-4" />
-            </PlainButton>
-          </Tooltip>
-        )}
-        <div className="w-full">
-          <Navigation />
-        </div>
-      </section>
       <div className="flex-1" />
-      <div
-        className="flex flex-col items-center gap-2"
-        aria-label="分身快捷切换"
-      >
-        {shortcuts.map((persona) => (
-          <Tooltip key={persona.id} label={persona.name}>
-            <PlainButton
-              shape="circle"
-              aria-label={`切换到${persona.name}`}
-              aria-busy={pendingId === persona.id}
-              className="rail-twin hover:bg-soft"
-              onClick={() => void switchTo(persona.id)}
-            >
-              <PersonaPortrait persona={persona} />
-            </PlainButton>
-          </Tooltip>
-        ))}
-        {hidden > 0 && (
-          <Tooltip label="全部分身">
-            <span>
-              <PersonaSwitcher
-                label={`还有 ${hidden} 个分身`}
-                className="grid size-9 place-items-center bg-soft hover:bg-border"
-                trigger={
-                  <Text as="span" size="sm" weight="semibold" tone="accent">
-                    +{hidden}
-                  </Text>
-                }
-              />
-            </span>
-          </Tooltip>
-        )}
-        <Tooltip label="新建分身" hidden={creating}>
-          <span>
-            <NewTwin variant="rail" onOpenChange={setCreating} />
-          </span>
-        </Tooltip>
-      </div>
-      <RailAccount />
+      {background.length > 0 && (
+        <StatusCard
+          to="/library"
+          title={`后台 ${jobs + unsent.length} 项`}
+          action="查看"
+          detail={background.join(' · ')}
+          progress={progress && { ...progress, label: '当前一项的进度' }}
+        />
+      )}
+      <SidebarAccount />
     </aside>
   );
 }
 
-/** The account menu at the foot of the rail: who is signed in, the palette, the system settings for an
+/** The account menu at the foot of the side bar: who is signed in, the palette, the system settings for an
  * administrator (a red dot when a switched-on service is failing), and signing out. */
-function RailAccount() {
+function SidebarAccount() {
   const identity = useAuth((state) => state.identity);
   const openSystem = useOpenSystem();
   const down = useSystem((state) => failing(state.data).length);
@@ -257,8 +288,9 @@ function RailAccount() {
   if (!identity) return null;
   const canSignOut = identity.auth_enabled;
   return (
-    <div className="rail-account mt-auto pt-4">
+    <div className="sidebar-account mt-auto pt-4">
       <AccountMenu
+        layout="sidebar"
         name={accountLabel(identity) || '本机'}
         detail={identity.admin ? '管理员' : undefined}
         error={error}
@@ -400,7 +432,7 @@ export function AppShell() {
       className={`app-shell flex min-h-dvh ${conversation ? 'conversation-shell' : ''}`}
     >
       <SkipLink target="main">跳至主内容</SkipLink>
-      {!mobile && <TwinRail empty={noPersona} />}
+      {!mobile && <Sidebar />}
       <div
         className={`app-column flex min-w-0 flex-1 flex-col ${conversation ? 'chat-app-column' : ''}`}
       >

@@ -11,7 +11,8 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { NavLink } from 'react-router';
+import { Search } from 'lucide-react';
+import { Link, NavLink } from 'react-router';
 import { useMotionPreset } from '../../design/motion';
 import { LayoutScope } from '../motion';
 import { cn } from '../../lib/utils';
@@ -192,8 +193,9 @@ export const TooltipProvider = TooltipPrimitive.Provider;
 
 /**
  * A pill-shaped link in the app's navigation; the current page's is filled dark. `stacked` puts the icon above a
- * small label (the side rail), `inline` sets them side by side (the phone's bottom tabs). `indicator` names a
- * highlight that slides between the links sharing it (wrap them in a LayoutScope).
+ * small label, `inline` sets them side by side (the phone's bottom tabs), `rail` is the icon alone with its label in
+ * a tooltip, `sidebar` is a full-width row of the wide side bar, icon on the left and the label after it.
+ * `indicator` names a highlight that slides between the links sharing it (wrap them in a LayoutScope).
  */
 export function NavPill({
   to,
@@ -201,66 +203,150 @@ export function NavPill({
   label,
   layout = 'stacked',
   indicator,
+  count,
+  countTone = 'muted',
+  active,
 }: {
   to: string;
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   label: string;
-  layout?: 'stacked' | 'inline' | 'rail';
+  layout?: 'stacked' | 'inline' | 'rail' | 'sidebar';
   indicator?: string;
+  /** In the side bar, a number at the end of the row: how many there are (muted) or how many wait (accent). */
+  count?: number;
+  countTone?: 'muted' | 'accent';
+  /** Whether this is the current page, when the address alone cannot tell (two links to one page's tabs). */
+  active?: boolean;
 }) {
   const { reduced, transition } = useMotionPreset('layout');
-  const link = (
-    <NavLink
-      aria-label={layout === 'rail' ? label : undefined}
-      to={to}
-      className={({ isActive }) =>
-        cn(
-          'relative flex items-center justify-center',
-          layout === 'rail' ? 'size-11 rounded-md' : 'rounded-full',
-          layout === 'rail'
-            ? 'text-secondary hover:bg-white/60'
-            : layout === 'stacked'
-              ? 'rail-link min-h-16 flex-col gap-1 text-xs text-primary'
-              : 'min-h-11 gap-2 text-sm text-secondary',
-          isActive &&
-            (layout === 'rail'
-              ? 'bg-surface text-primary shadow-elevation-1'
-              : 'text-canvas'),
-          isActive && layout === 'inline' && 'font-semibold',
-          // Hover tint for the rail comes from .rail-link in tokens.css (fine pointers only).
-          isActive && !indicator && layout !== 'rail' && 'bg-primary',
-        )
-      }
-    >
-      {({ isActive }) => (
-        <>
-          {isActive && indicator && layout !== 'rail' && (
-            <motion.span
-              layoutId={reduced ? undefined : indicator}
-              initial={reduced ? { opacity: 0 } : false}
-              animate={{ opacity: 1 }}
-              transition={transition}
-              className="absolute inset-0 rounded-full bg-primary"
-            />
-          )}
-          <Icon aria-hidden className="relative size-5 shrink-0" />
-          <span
-            className={
-              layout === 'rail' ? 'sr-only' : 'relative whitespace-nowrap'
-            }
-          >
-            {label}
-          </span>
-        </>
+  // On the side, the current page is a raised white tile rather than a dark pill.
+  const side = layout === 'rail' || layout === 'sidebar';
+  const counted = layout === 'sidebar' && count !== undefined;
+  const classes = (isActive: boolean) =>
+    cn(
+      'relative flex items-center justify-center',
+      side ? 'rounded-md' : 'rounded-full',
+      layout === 'rail'
+        ? 'size-11 text-secondary hover:bg-white/60'
+        : layout === 'sidebar'
+          ? 'min-h-10 w-full justify-start gap-3 px-3 text-secondary hover:bg-white/60'
+          : layout === 'stacked'
+            ? 'rail-link min-h-16 flex-col gap-1 text-xs text-primary'
+            : 'min-h-11 gap-2 text-sm text-secondary',
+      isActive &&
+        (side ? 'bg-surface text-primary shadow-elevation-1' : 'text-canvas'),
+      isActive &&
+        (layout === 'inline' || layout === 'sidebar') &&
+        'font-semibold',
+      // Hover tint for the stacked links comes from .rail-link in tokens.css (fine pointers only).
+      isActive && !indicator && !side && 'bg-primary',
+    );
+  const content = (isActive: boolean) => (
+    <>
+      {isActive && indicator && !side && (
+        <motion.span
+          layoutId={reduced ? undefined : indicator}
+          initial={reduced ? { opacity: 0 } : false}
+          animate={{ opacity: 1 }}
+          transition={transition}
+          className="absolute inset-0 rounded-full bg-primary"
+        />
       )}
-    </NavLink>
+      <Icon aria-hidden className="relative size-5 shrink-0" />
+      <span
+        className={
+          layout === 'rail'
+            ? 'sr-only'
+            : layout === 'sidebar'
+              ? 'relative min-w-0 flex-1 truncate'
+              : 'relative whitespace-nowrap'
+        }
+      >
+        {label}
+      </span>
+      {counted && (
+        <span
+          aria-hidden
+          className={
+            countTone === 'accent'
+              ? 'grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 text-xs font-bold text-on-accent'
+              : 'text-xs font-normal text-secondary'
+          }
+        >
+          {count}
+        </span>
+      )}
+    </>
   );
+  const name = counted ? `${label}（${count}）` : undefined;
+  const link =
+    active === undefined ? (
+      <NavLink
+        aria-label={layout === 'rail' ? label : name}
+        to={to}
+        className={({ isActive }) => classes(isActive)}
+      >
+        {({ isActive }) => content(isActive)}
+      </NavLink>
+    ) : (
+      <Link
+        aria-label={name}
+        aria-current={active ? 'page' : undefined}
+        to={to}
+        className={classes(active)}
+      >
+        {content(active)}
+      </Link>
+    );
   return layout === 'rail' ? (
     <Tooltip label={label}>
       <span className="block">{link}</span>
     </Tooltip>
   ) : (
     link
+  );
+}
+
+/** The side bar's way into search: looks like a field, opens the search; `shortcut` is the key that does the same. */
+export function SearchButton({
+  label,
+  shortcut,
+  onClick,
+}: {
+  label: string;
+  shortcut?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-keyshortcuts={shortcut === '⌘K' ? 'Meta+K Control+K' : undefined}
+      className="flex min-h-10 w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-left text-secondary hover:border-tertiary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+    >
+      <Search aria-hidden className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {shortcut && (
+        <kbd aria-hidden className="font-sans text-xs text-secondary">
+          {shortcut}
+        </kbd>
+      )}
+    </button>
+  );
+}
+
+/** Whose space this is, at the top of the side bar: the product's mark and the team's name. */
+export function TeamMark({ name }: { name: string }) {
+  return (
+    <div className="flex min-h-10 items-center gap-2.5 px-2">
+      <span
+        aria-hidden
+        className="grid size-7 shrink-0 place-items-center rounded-sm bg-accent font-bold text-on-accent"
+      >
+        t
+      </span>
+      <span className="min-w-0 truncate font-bold">{name}</span>
+    </div>
   );
 }
 
@@ -286,7 +372,10 @@ export function AccountMenu({
   groups,
   error,
   theme,
+  layout = 'rail',
 }: {
+  /** rail: the round avatar alone; sidebar: a full-width row with the name and the second line beside it. */
+  layout?: 'rail' | 'sidebar';
   name: string;
   /** A second line under the name: the role or how they signed in. */
   detail?: string;
@@ -319,15 +408,32 @@ export function AccountMenu({
           ref={trigger}
           type="button"
           aria-label={alert ? `账户（${alert}）` : '账户'}
-          className="relative mx-auto grid size-11 place-items-center rounded-full text-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className={cn(
+            'relative focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
+            layout === 'sidebar'
+              ? 'flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-white/60'
+              : 'mx-auto grid size-11 place-items-center rounded-full text-lg',
+          )}
         >
-          {avatar('size-11')}
-          {alert && (
-            <span
-              aria-hidden
-              data-account-alert=""
-              className="absolute top-0 right-0 size-2.5 rounded-full bg-danger ring-2 ring-canvas"
-            />
+          <span className="relative shrink-0">
+            {avatar(layout === 'sidebar' ? 'size-9' : 'size-11')}
+            {alert && (
+              <span
+                aria-hidden
+                data-account-alert=""
+                className="absolute top-0 right-0 size-2.5 rounded-full bg-danger ring-2 ring-canvas"
+              />
+            )}
+          </span>
+          {layout === 'sidebar' && (
+            <span aria-hidden className="min-w-0 flex-1 leading-tight">
+              <span className="block truncate font-medium">{name}</span>
+              {detail && (
+                <span className="block truncate text-xs text-secondary">
+                  {detail}
+                </span>
+              )}
+            </span>
           )}
         </button>
       </PopoverPrimitive.Trigger>

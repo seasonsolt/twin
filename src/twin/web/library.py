@@ -506,7 +506,10 @@ class Libraries:
                 if source.source_id.startswith(SOURCE_PREFIX) and source.source_id not in wanted_sources:
                     store.delete_source(source.source_id)
             for parsed in wanted_sources.values():
-                store.put_source(parsed)
+                # A change usually touches one or two recordings: rewriting every source would mark them all for
+                # the build again and hold the database while a build is writing to it.
+                if not store.holds(parsed):
+                    store.put_source(parsed)
             store.clear_source_errors()
             # After the sources: a build that reads this version has read these sources.
             store.set_meta(gate.SYNCED, str(wanted))

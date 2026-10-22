@@ -931,6 +931,26 @@ def test_a_failed_sync_is_tried_again(web: TestClient, monkeypatch: pytest.Monke
     assert calls == [pid, pid]
 
 
+def test_a_sync_leaves_the_recordings_that_did_not_change_alone(web: TestClient, tmp_path: Path) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    rec = meeting(Library(tmp_path / "library" / "team"))
+    detail = web.get(f"/api/library/recordings/{rec}").json()
+    body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}
+    li = web.put(f"/api/library/recordings/{rec}/speakers/S2", json={**body, "new_person": "李总"}, headers=HEADERS)
+    pid = web.post(f"/api/library/people/{li.json()['person_id']}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    db_path = tmp_path / "personas" / pid / "twin.db"
+    with PersonaStore(db_path) as store:
+        before = store.get_meta("sources_changed_at"), store.meta_with_prefix("source_pending:")
+    # Another recording changed: this twin's meeting reads the same, so it is neither rewritten nor built again.
+    with libraries.library("team").transaction() as db:
+        db.execute("UPDATE personas_sync SET wanted = wanted + 1")
+    assert libraries.write_sources("team", pid) is True
+    with PersonaStore(db_path) as store:
+        assert (store.get_meta("sources_changed_at"), store.meta_with_prefix("source_pending:")) == before
+        assert len(store.list_sources()) == 1
+
+
 def test_a_deleted_twin_is_not_synced(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     libraries = web.app.state.libraries  # type: ignore[attr-defined]
     li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]

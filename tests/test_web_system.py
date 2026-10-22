@@ -1,11 +1,14 @@
-"""System settings: the administrator's switches for speech and video, the token quota, the models' addresses and
-names, the keys (written, never read back), and the views of twin.toml and the keys."""
+"""System settings: the administrator's switches for speech and video, the token quota, common parameters, the
+models' addresses and names, the keys (written, never read back), the views of twin.toml and the keys, and the
+upgrade of every twin's memory kernel and ledger."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import stat
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,16 +18,26 @@ from test_web_gpu import Fake
 
 from twin.config import (
     EmbedSettings,
+    KernelSettings,
     LibrarySettings,
     LLMSettings,
     Settings,
     TTSSettings,
     VideoSettings,
 )
+from twin.embed import HashingEmbedder
+from twin.llm import FakeLLM
+from twin.media.collector import ATTRIBUTION_VERSION, CLEANUP_VERSION
 from twin.media.tts import SilentSynthesizer, SpeechSynthesizer
 from twin.ops.envfile import load_env_file, write_env_value
+from twin.persona.kernel import KERNEL
+from twin.persona.ledger import LEDGER_VERSION
+from twin.persona.sources import parse_note
+from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.gpu import GpuMonitor, targets
+from twin.web.jobs import PersonaProcessing
+from twin.web.personas import Personas
 from twin.web.system import ModelBody, SystemSettings
 
 CSRF = {"X-Twin": "1"}
@@ -351,3 +364,129 @@ def test_admin_switches_work_and_ledger_off_but_never_chat(tmp_path: Path) -> No
     assert not SystemSettings(Settings(db_path=tmp_path / "twin.db")).feature_on("work")
     client.put("/api/admin/system/features/work", json={"enabled": True}, headers=CSRF)
     assert client.get("/api/persona/work").status_code == 200
+
+
+def test_admin_changes_common_parameters_at_once(tmp_path: Path) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db", library=LibrarySettings(max_pending=20))
+    client = client_for(settings)
+    params = {p["key"]: p for p in client.get("/api/admin/system").json()["params"]}
+    assert params["library.max_pending"] | {"help": None} == {
+        "key": "library.max_pending",
+        "label": "每人排队转写上限",
+        "help": None,
+        "unit": "条",
+        "value": 20,
+        "default": 20,
+        "custom": False,
+        "changed_at": None,
+        "changed_by": None,
+    }
+    assert params["kernel.auto_rebuild"]["value"] is True
+
+    body = client.put("/api/admin/system/params/library.max_pending", json={"value": 3}, headers=CSRF).json()
+    changed = next(p for p in body["params"] if p["key"] == "library.max_pending")
+    assert (changed["value"], changed["default"], changed["custom"]) == (3, 20, True)
+    assert settings.library.max_pending == 3
+    assert client.get("/api/library").json()["max_pending"] == 3
+
+    # Every twin's copy of the settings shares the section, so a twin made later follows too.
+    client.put("/api/admin/system/params/kernel.auto_rebuild", json={"value": False}, headers=CSRF)
+    registry: Personas = client.app.state.personas
+    other = client.post("/api/personas", json={"name": "另一个"}, headers=CSRF).json()["id"]
+    assert not registry.settings_for("default").kernel.auto_rebuild
+    assert not registry.settings_for(other).kernel.auto_rebuild
+
+    for key, value, message in [
+        ("library.max_pending", 0, "每人排队转写上限要大于 0"),
+        ("library.max_pending", 1.5, "每人排队转写上限请填整数"),
+        ("library.max_pending", True, "请填数字"),
+        ("library.headroom_gb", -1, "磁盘安全余量不能小于 0"),
+        ("kernel.auto_rebuild", 1, "请填开或关"),
+    ]:
+        refused = client.put(f"/api/admin/system/params/{key}", json={"value": value}, headers=CSRF)
+        assert refused.status_code == 400 and refused.json()["detail"] == message, (key, value)
+    assert settings.library.max_pending == 3
+    assert client.put("/api/admin/system/params/max_workers", json={"value": 9}, headers=CSRF).status_code == 404
+
+    system: SystemSettings = client.app.state.system
+    assert system.audit()[0] | {"at": None} == {
+        "at": None,
+        "by": None,
+        "action": "param",
+        "param": "kernel.auto_rebuild",
+        "value": [True, False],
+    }
+    # Kept across a restart; an empty value goes back to twin.toml.
+    restarted = Settings(db_path=tmp_path / "twin.db", library=LibrarySettings(max_pending=20))
+    SystemSettings(restarted)
+    assert restarted.library.max_pending == 3 and not restarted.kernel.auto_rebuild
+    client.put("/api/admin/system/params/library.max_pending", json={}, headers=CSRF)
+    assert settings.library.max_pending == 20
+    # A damaged stored value falls back to twin.toml rather than failing the server.
+    stored = json.loads((tmp_path / "system.json").read_text())
+    stored["params"]["kernel.max_auto_rebuild_chunks"] = {"value": -5}
+    (tmp_path / "system.json").write_text(json.dumps(stored))
+    fallback = Settings(db_path=tmp_path / "twin.db")
+    SystemSettings(fallback)
+    assert fallback.kernel.max_auto_rebuild_chunks == 400
+
+
+def test_admin_upgrades_every_twins_kernel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db", kernel=KernelSettings(auto_rebuild=False))
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_note("我喜欢写程序", settings))
+        store.mark_profile_built(
+            dt.datetime.now(dt.UTC).isoformat(), store.get_meta("sources_changed_at"), replace(KERNEL, prompt="old")
+        )
+    queued: list[bool] = []
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda self: queued.append(True))
+    application = create_app(
+        settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder
+    )
+    with TestClient(application, base_url="http://localhost", headers=CSRF) as client:
+        assert not queued  # automatic upgrade is off
+        other = client.post("/api/personas", json={"name": "新分身"}).json()["id"]
+        components = client.get("/api/admin/system/components").json()
+        assert components["kernel"]["version"] == KERNEL.__dict__
+        twins = {t["id"]: t for t in components["kernel"]["twins"]}
+        assert twins["default"] | {"version": None} == {
+            "id": "default",
+            "name": "本人",
+            "version": None,
+            "built": replace(KERNEL, prompt="old").__dict__,
+            "scope": "full",
+            "pending_chunks": 1,
+            "state": "awaiting_confirmation",
+        }
+        assert twins[other]["name"] == "新分身" and twins[other]["scope"] == "none"
+        assert components["ledger"] | {"twins": None} == {"version": LEDGER_VERSION, "enabled": True, "twins": None}
+        assert components["library"] == {"attribution": ATTRIBUTION_VERSION, "cleanup": CLEANUP_VERSION}
+
+        # Only the twin built on the older kernel is rebuilt.
+        body = client.post("/api/admin/system/components/kernel").json()
+        assert body["queued"] == ["default"] and len(queued) == 1
+        assert client.post("/api/admin/system/components/kernel", json={"persona_ids": [other]}).json()["queued"] == []
+        missing = client.post("/api/admin/system/components/kernel", json={"persona_ids": ["nobody"]})
+        assert missing.status_code == 404
+        entry = application.state.system.audit()[0]
+        assert (entry["action"], entry["personas"]) == ("kernel", ["default"])
+
+        # Nothing to read again: no meeting yet. With the ledger off it cannot be upgraded.
+        assert client.post("/api/admin/system/components/ledger").json()["queued"] == []
+        client.put("/api/admin/system/features/ledger", json={"enabled": False})
+        refused = client.post("/api/admin/system/components/ledger")
+        assert refused.status_code == 409 and "承诺账本已关闭" in refused.json()["detail"]
+        assert client.get("/api/admin/system/components").json()["ledger"]["twins"] == []
+
+
+def test_members_cannot_see_or_upgrade_components(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    application = create_app(Settings(db_path=tmp_path / "twin.db"))
+    monkeypatch.setattr(
+        application.state.auth,
+        "identity",
+        lambda email: {"email": "member@example.com", "admin": False, "auth_enabled": False},
+    )
+    with TestClient(application, base_url="http://localhost", headers=CSRF) as client:
+        assert client.get("/api/admin/system/components").status_code == 403
+        assert client.post("/api/admin/system/components/kernel").status_code == 403
+        assert client.put("/api/admin/system/params/library.max_pending", json={"value": 2}).status_code == 403

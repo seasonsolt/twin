@@ -169,6 +169,15 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
             job = jobs.submit("ledger_build", "整理承诺账本", run)
         return {"job_id": job.job_id, "notice": None}
 
+    def ledger_status() -> dict[str, Any]:
+        with open_store() as store:
+            total, pending = meetings(store)
+        return {"meetings": total, "pending": pending, "running": jobs.active_of("ledger_build") is not None}
+
+    # For the system settings, which list and start every twin's ledger upgrade.
+    app.state.ledger_status = ledger_status
+    app.state.ledger_build = start_build
+
     @app.get("/api/persona/ledger/brief")
     def get_brief(person: str = Query(min_length=1, max_length=80), as_of: dt.date | None = None) -> dict[str, Any]:
         """What to bring up with ``person``: their open commitments, what was promised to them, recent progress,

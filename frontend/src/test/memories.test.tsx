@@ -8,7 +8,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, toast } from '../components/ui';
 import { Memories, type Memory } from '../pages/Memories';
@@ -93,10 +93,6 @@ beforeEach(() => {
       state = { state: 'queued' };
       return json({ deleted: true });
     }
-    if (url === '/api/kernel/rebuild') {
-      state = { state: 'queued' };
-      return json({ job_id: 'k1' }, 202);
-    }
     if (url === '/api/persona/build') {
       state = { state: 'queued' };
       return json({ job_id: 'j1' }, 202);
@@ -110,11 +106,16 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetcher);
 });
 afterEach(() => vi.useRealTimers());
+function Where() {
+  const location = useLocation();
+  return <p aria-label="地址">{location.pathname + location.search}</p>;
+}
 function mount() {
   return render(
     <ConfirmProvider>
       <MemoryRouter initialEntries={['/memories']}>
         <Memories />
+        <Where />
       </MemoryRouter>
     </ConfirmProvider>,
   );
@@ -640,17 +641,14 @@ it('keeps Chinese upload errors and aborts uploads on unmount', async () => {
   expect(init.signal.aborted).toBe(true);
 });
 
-it('shows the kernel version when memories are on the current kernel', async () => {
+it('says nothing about the kernel when memories are on the current one', async () => {
   mount();
-  expect(
-    await screen.findByText('记忆内核 persona-v4 · 分类 v1'),
-  ).toBeInTheDocument();
-  expect(screen.getByText(/已是最新/)).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '升级记忆内核' })).toBeNull();
+  expect(await screen.findByText(/写一段话/)).toBeInTheDocument();
+  expect(screen.queryByText(/记忆内核/)).toBeNull();
 });
 
 it.each([true, false])(
-  'offers a kernel upgrade when memories were built on an older kernel (admin %s)',
+  'says in one line that an older kernel is in use, and points an administrator to the settings (admin %s)',
   async (admin) => {
     useAuth.setState({
       identity: { email: null, admin, auth_enabled: false },
@@ -663,26 +661,22 @@ it.each([true, false])(
       state: 'awaiting_confirmation',
     };
     mount();
-    expect(await screen.findByText(/可以升级/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/现有记忆按 persona-v4 · 分类 v1 整理/),
-    ).toHaveTextContent('需重新整理 512 段，会调用模型');
-    const button = screen.queryByRole('button', { name: '升级记忆内核' });
+    const line = await screen.findByText(
+      /记忆内核有新版本 persona-v5 · 分类 v1/,
+    );
+    // Upgrading is the system settings' task: no upgrade button on the page.
+    expect(screen.queryByRole('button', { name: '升级记忆内核' })).toBeNull();
+    const go = screen.queryByRole('button', { name: '去设置里升级' });
     if (!admin) {
-      expect(button).toBeNull();
-      expect(screen.getByText('请管理员升级。')).toBeInTheDocument();
+      expect(line).toHaveTextContent('管理员升级前沿用旧档案');
+      expect(go).toBeNull();
       return;
     }
-    await userEvent.click(button!);
-    await waitFor(() =>
-      expect(fetcher).toHaveBeenCalledWith(
-        '/api/kernel/rebuild',
-        expect.objectContaining({ method: 'POST' }),
-      ),
+    expect(line).toHaveTextContent('升级前沿用旧档案');
+    await userEvent.click(go!);
+    expect(await screen.findByLabelText('地址')).toHaveTextContent(
+      'system=upgrades',
     );
-    expect(
-      await screen.findByText(/正在从 persona-v4 · 分类 v1 升级/),
-    ).toBeInTheDocument();
     useAuth.setState({ identity: null });
   },
 );

@@ -409,29 +409,45 @@ def create_app(
                 return JSONResponse({"detail": "另一个分身正在处理记忆，请稍后重试"}, status_code=409)
             return await job_conflict(request, exc)
 
+        def kernel_status(store: PersonaStore) -> dict[str, Any]:
+            """The kernel the memories were built on, what upgrading to the running one redoes, and how far it is."""
+            built = store.kernel_built()
+            # A twin with no memories yet has nothing built on an older kernel, though it records none.
+            scope = rebuild_scope(built, KERNEL) if store.count_sources() or store.count_items() else "none"
+            kernel_pending = pending_chunks(store, resolved) if scope != "none" else 0
+            state = context.state.processing.view()
+            blocked = scope != "none" and (
+                not resolved.kernel.auto_rebuild or kernel_pending > resolved.kernel.max_auto_rebuild_chunks
+            )
+            return {
+                "version": KERNEL.__dict__,
+                "built": built.__dict__ if built else None,
+                "scope": scope,
+                "pending_chunks": kernel_pending,
+                "state": state["state"]
+                if state["state"] != "idle"
+                else "error"
+                if store.get_meta("processing_last_error")
+                else "awaiting_confirmation"
+                if blocked
+                else "ready"
+                if scope == "none"
+                else "pending",
+            }
+
+        def open_kernel_status() -> dict[str, Any]:
+            with PersonaStore(resolved.db_path) as store:
+                return kernel_status(store)
+
+        # For the system settings, which list every twin's kernel.
+        context.state.kernel_status = open_kernel_status
+
         @context.get("/api/status")
         def get_status() -> dict[str, Any]:
             with PersonaStore(resolved.db_path) as store:
                 counts = {"sources": store.count_sources(), "items": store.count_items()}
                 egress = egress_status(resolved, external_only=True)
-                built = store.kernel_built()
-                scope = rebuild_scope(built, KERNEL)
-                kernel_pending = pending_chunks(store, resolved) if scope != "none" else 0
-                state = context.state.processing.view()
-                blocked = scope != "none" and (
-                    not resolved.kernel.auto_rebuild or kernel_pending > resolved.kernel.max_auto_rebuild_chunks
-                )
-                kernel_state = (
-                    state["state"]
-                    if state["state"] != "idle"
-                    else "error"
-                    if store.get_meta("processing_last_error")
-                    else "awaiting_confirmation"
-                    if blocked
-                    else "ready"
-                    if scope == "none"
-                    else "pending"
-                )
+                kernel = kernel_status(store)
             description = backends.describe()
             name = stored_identity(resolved.db_path)[0] or resolved.target_name
             try:
@@ -444,13 +460,7 @@ def create_app(
                 # A twin made from the recording library while it is rebuilt after a change: it does not answer.
                 "memory_updating": updating,
                 "counts": counts,
-                "kernel": {
-                    "version": KERNEL.__dict__,
-                    "built": built.__dict__ if built else None,
-                    "scope": scope,
-                    "pending_chunks": kernel_pending,
-                    "state": kernel_state,
-                },
+                "kernel": kernel,
                 "llm": {"provider": resolved.llm.provider, "model": resolved.llm.model, **description["llm"]},
                 "embed": {"provider": resolved.embed.provider, **description["embed"]},
                 "egress": egress,
@@ -507,7 +517,7 @@ def create_app(
     registry.register(app)
     libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits)
     voice.register(app, settings, libraries, registry)
-    system.register(app, system_settings, monitor, libraries, usage)
+    system.register(app, system_settings, monitor, libraries, registry, usage)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
+import type { KernelStatus, KernelVersion } from './status';
+
+const pad = (n: number) => String(n).padStart(2, '0');
+/** "10-17 09:12" for a Unix time in seconds, in the viewer's time zone. */
+export function clock(seconds: number) {
+  const d = new Date(seconds * 1000);
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 export interface ServiceCheck {
   at: number;
@@ -60,12 +68,64 @@ export interface EditableModel {
 export interface AuditEntry {
   at: string;
   by: string | null;
-  action: 'model' | 'key' | string;
+  action: 'model' | 'key' | 'param' | 'kernel' | 'ledger' | string;
   section?: string;
   address?: [string, string];
   model?: [string | null, string | null];
   env?: string;
   set?: boolean;
+  param?: string;
+  value?: [boolean | number, boolean | number];
+  personas?: string[];
+}
+
+/** A twin.toml value an administrator may change here, effective at once. */
+export interface ParamState {
+  key: string;
+  label: string;
+  help: string;
+  unit: string;
+  value: boolean | number;
+  /** twin.toml's value, which an empty change goes back to. */
+  default: boolean | number;
+  custom: boolean;
+  changed_at: string | null;
+  changed_by: string | null;
+}
+
+/** The parts a release may raise the version of, and where each twin stands. */
+export interface Components {
+  kernel: {
+    version: KernelVersion;
+    twins: ({ id: string; name: string } & KernelStatus)[];
+  };
+  ledger: {
+    version: string;
+    /** False when an administrator switched 承诺账本 off: nothing is listed. */
+    enabled: boolean;
+    twins: {
+      id: string;
+      name: string;
+      meetings: number;
+      /** Meetings the running reader has not read. */
+      pending: number;
+      running: boolean;
+    }[];
+  };
+  library: { attribution: string; cleanup: string };
+}
+
+/** Twins whose kernel or ledger an administrator may upgrade now. */
+export function upgradable(components: Components | null) {
+  if (!components) return 0;
+  const kernels = components.kernel.twins.filter(
+    (twin) =>
+      twin.scope !== 'none' && !['queued', 'running'].includes(twin.state),
+  ).length;
+  const ledgers = components.ledger.twins.filter(
+    (twin) => twin.pending > 0 && !twin.running,
+  ).length;
+  return kernels + ledgers;
 }
 
 export interface FeatureState {
@@ -101,6 +161,8 @@ export interface SystemState {
   env_file?: string;
   /** The latest changes made here, newest first; never a key's value. */
   audit?: AuditEntry[];
+  /** Common parameters; absent from an older server. */
+  params?: ParamState[];
   quota: {
     /** 0: no limit. */
     limit: number;
@@ -137,9 +199,40 @@ export const useSystem = create<{
   error: string;
   load: (refresh?: boolean) => Promise<void>;
   put: (url: string, json: unknown) => Promise<void>;
+  /** Fetched when the dialog opens, not polled: it opens every twin's memories. */
+  components: Components | null;
+  componentsError: string;
+  loadComponents: () => Promise<void>;
+  /** Starts the upgrade of one part for the given twins, or all that need it; errors go to the caller. */
+  upgrade: (part: 'kernel' | 'ledger', personaIds?: string[]) => Promise<void>;
 }>((set) => ({
   data: null,
   error: '',
+  components: null,
+  componentsError: '',
+  loadComponents: async () => {
+    try {
+      const components = await api<Components>('/api/admin/system/components');
+      if (!components?.kernel || !components.ledger)
+        throw new Error('服务器版本不支持部件升级');
+      set({ components, componentsError: '' });
+    } catch (failure) {
+      set({
+        componentsError:
+          failure instanceof Error ? failure.message : '无法获取部件版本',
+      });
+    }
+  },
+  upgrade: async (part, personaIds) => {
+    const components = await api<Components>(
+      `/api/admin/system/components/${part}`,
+      {
+        method: 'POST',
+        json: personaIds ? { persona_ids: personaIds } : {},
+      },
+    );
+    set({ components, componentsError: '' });
+  },
   load: async (refresh = false) => {
     try {
       const data = await api<SystemState>(

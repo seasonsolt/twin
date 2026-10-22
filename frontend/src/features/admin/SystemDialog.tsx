@@ -6,7 +6,9 @@ import {
   Cpu,
   KeyRound,
   LayoutGrid,
+  PackageCheck,
   RefreshCw,
+  SlidersHorizontal,
   Video,
   Volume2,
   Waypoints,
@@ -33,8 +35,11 @@ import {
   type SettingsSection,
 } from '../../components/ui';
 import {
+  clock,
   failing,
+  upgradable,
   useSystem,
+  type Components,
   type AuditEntry,
   type EditableModel,
   type ServiceCheck,
@@ -44,12 +49,22 @@ import {
   type UsageRow,
 } from '../../stores/system';
 import { setFeatures } from '../../stores/auth';
+import { Params, Upgrades } from './Upgrades';
 
 /** The search parameter that holds the open section: the dialog sits over any page and closing it returns there. */
 export const SYSTEM_PARAM = 'system';
 
 type SectionKey =
-  'monitor' | 'gpu' | 'embed' | 'asr' | 'tts' | 'video' | 'features' | 'tokens';
+  | 'monitor'
+  | 'gpu'
+  | 'embed'
+  | 'asr'
+  | 'tts'
+  | 'video'
+  | 'features'
+  | 'tokens'
+  | 'params'
+  | 'upgrades';
 
 const SECTIONS: (Omit<SettingsSection, 'status'> & { key: SectionKey })[] = [
   { key: 'monitor', label: '监控', icon: Activity },
@@ -60,6 +75,8 @@ const SECTIONS: (Omit<SettingsSection, 'status'> & { key: SectionKey })[] = [
   { key: 'video', label: '视频服务', icon: Video },
   { key: 'features', label: '功能', group: '设置', icon: LayoutGrid },
   { key: 'tokens', label: '模型与 Token', icon: KeyRound },
+  { key: 'params', label: '系统参数', icon: SlidersHorizontal },
+  { key: 'upgrades', label: '部件升级', icon: PackageCheck },
 ];
 
 /** Opens the system dialog at a section, over the current page. */
@@ -73,13 +90,6 @@ export function useOpenSystem() {
       }),
     [setParams],
   );
-}
-
-const pad = (n: number) => String(n).padStart(2, '0');
-/** "10-17 09:12" for a Unix time in seconds, in the viewer's time zone. */
-export function clock(seconds: number) {
-  const d = new Date(seconds * 1000);
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function span(seconds: number) {
@@ -108,7 +118,12 @@ const tokens = (n: number) =>
 function sectionStatus(
   key: SectionKey,
   state: SystemState | null,
+  components: Components | null,
 ): SettingsSection['status'] {
+  if (key === 'upgrades') {
+    const count = upgradable(components);
+    return count ? { label: `${count} 项可升级` } : undefined;
+  }
   if (!state) return undefined;
   if (key === 'monitor') {
     const count = failing(state).length;
@@ -876,7 +891,22 @@ function KeyForm({
   );
 }
 
-function auditText(entry: AuditEntry) {
+function auditText(entry: AuditEntry, params: SystemState['params']) {
+  if (entry.action === 'param' && entry.value) {
+    const param = params?.find((p) => p.key === entry.param);
+    const [, after] = entry.value;
+    const value =
+      typeof after === 'boolean'
+        ? after
+          ? '开'
+          : '关'
+        : `${after}${param?.unit ?? ''}`;
+    return `把${param?.label ?? entry.param ?? '参数'}改为 ${value}`;
+  }
+  if (entry.action === 'kernel')
+    return `升级了 ${entry.personas?.length ?? 0} 个分身的记忆内核`;
+  if (entry.action === 'ledger')
+    return `整理了 ${entry.personas?.length ?? 0} 个分身的承诺账本`;
   if (entry.action === 'key')
     return `${entry.set ? '设置' : '移除'}了 ${entry.env ?? '密钥'}`;
   if (entry.action === 'model' && entry.model && entry.address)
@@ -980,7 +1010,7 @@ function Tokens({ state }: { state: SystemState }) {
             {state.audit.slice(0, 5).map((entry, index) => (
               <Text as="li" key={index} size="xs" tone="secondary">
                 {clock(Date.parse(entry.at) / 1000)} {entry.by ?? '本机'}{' '}
-                {auditText(entry)}
+                {auditText(entry, state.params)}
               </Text>
             ))}
           </Stack>
@@ -990,8 +1020,8 @@ function Tokens({ state }: { state: SystemState }) {
   );
 }
 
-/** For administrators: every service, the speech and video switches, and the token settings, in one dialog over the
- * current page. Which section is open lives in the URL (?system=…), so closing it leaves the page as it was. */
+/** For administrators: every service, the speech and video switches, the token settings, common parameters and the
+ * upgrade of each twin's memory kernel and ledger, in one dialog over the current page. Which section is open lives in the URL (?system=…), so closing it leaves the page as it was. */
 export function SystemDialog() {
   const [params, setParams] = useSearchParams();
   const requested = params.get(SYSTEM_PARAM);
@@ -999,11 +1029,16 @@ export function SystemDialog() {
   const active: SectionKey = SECTIONS.some((s) => s.key === requested)
     ? (requested as SectionKey)
     : 'monitor';
-  const { data, error, load } = useSystem();
+  const { data, error, load, components, loadComponents } = useSystem();
   const [checking, setChecking] = useState(false);
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
+  // Each time the dialog opens or the section is chosen, so the menu can say what is waiting to be upgraded.
+  const upgrades = open && active === 'upgrades';
+  useEffect(() => {
+    if (open) void loadComponents();
+  }, [open, upgrades, loadComponents]);
   const select = (key: string) =>
     setParams(
       (current) => {
@@ -1030,7 +1065,7 @@ export function SystemDialog() {
       note="仅管理员可见"
       sections={SECTIONS.map((section) => ({
         ...section,
-        status: sectionStatus(section.key, data),
+        status: sectionStatus(section.key, data, components),
       }))}
       active={active}
       onSelect={select}
@@ -1067,6 +1102,10 @@ export function SystemDialog() {
           <Features state={data} />
         ) : active === 'tokens' ? (
           <Tokens state={data} />
+        ) : active === 'params' ? (
+          <Params state={data} />
+        ) : active === 'upgrades' ? (
+          <Upgrades state={data} />
         ) : (
           <ServicePane name={active} state={data} />
         ))}

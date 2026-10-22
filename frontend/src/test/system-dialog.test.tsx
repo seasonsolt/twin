@@ -3,9 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import { Settings2 } from 'lucide-react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { AccountMenu } from '../components/ui';
+import { AccountMenu, ConfirmProvider } from '../components/ui';
 import { SystemDialog } from '../features/admin/SystemDialog';
-import { useSystem, type SystemState } from '../stores/system';
+import {
+  useSystem,
+  type Components,
+  type ParamState,
+  type SystemState,
+} from '../stores/system';
 import { useAuth } from '../stores/auth';
 
 vi.mock('motion/react', async (original) => ({
@@ -49,11 +54,78 @@ const service = (key: string, name: string, ok: boolean | null) => ({
   buckets: hours,
 });
 
+const v6 = { schema: 4, prompt: 'persona-v6', taxonomy: 'v2' };
+const v7 = { schema: 4, prompt: 'persona-v7', taxonomy: 'v2' };
+const param = (
+  key: string,
+  label: string,
+  value: boolean | number,
+  unit = '',
+): ParamState => ({
+  key,
+  label,
+  help: `${label}的说明`,
+  unit,
+  value,
+  default: value,
+  custom: false,
+  changed_at: null,
+  changed_by: null,
+});
+
 let state: SystemState;
+let components: Components;
 let puts: { url: string; body: unknown }[];
+let posts: { url: string; body: unknown }[];
 beforeEach(() => {
   puts = [];
-  useSystem.setState({ data: null, error: '' });
+  posts = [];
+  useSystem.setState({
+    data: null,
+    error: '',
+    components: null,
+    componentsError: '',
+  });
+  components = {
+    kernel: {
+      version: v7,
+      twins: [
+        {
+          id: 'default',
+          name: '林舟',
+          version: v7,
+          built: v6,
+          scope: 'full',
+          pending_chunks: 512,
+          state: 'awaiting_confirmation',
+        },
+        {
+          id: 'p2',
+          name: '陈默',
+          version: v7,
+          built: v7,
+          scope: 'none',
+          pending_chunks: 0,
+          state: 'ready',
+        },
+      ],
+    },
+    ledger: {
+      version: 'ledger-v1',
+      enabled: true,
+      twins: [
+        {
+          id: 'default',
+          name: '林舟',
+          meetings: 4,
+          pending: 2,
+          running: false,
+        },
+        { id: 'p2', name: '陈默', meetings: 1, pending: 0, running: false },
+      ],
+    },
+    library: { attribution: 'attribution-v2', cleanup: 'cleanup-v1' },
+  };
   state = {
     now: NOW,
     interval: 60,
@@ -138,6 +210,11 @@ beforeEach(() => {
     ],
     env_file: '.env',
     audit: [],
+    params: [
+      param('kernel.auto_rebuild', '自动升级记忆内核', true),
+      param('kernel.max_auto_rebuild_chunks', '自动升级上限', 400, '段'),
+      param('library.max_pending', '每人排队转写上限', 20, '条'),
+    ],
     quota: {
       limit: 1000,
       hours: 24,
@@ -152,6 +229,20 @@ beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        posts.push({ url, body: JSON.parse(String(init.body)) as unknown });
+        components = {
+          ...components,
+          kernel: {
+            ...components.kernel,
+            twins: components.kernel.twins.map((twin) =>
+              twin.scope === 'none' ? twin : { ...twin, state: 'queued' },
+            ),
+          },
+        };
+        return json({ queued: ['default'], ...components });
+      }
+      if (url === '/api/admin/system/components') return json(components);
       if (init?.method === 'PUT') {
         const body: unknown = JSON.parse(String(init.body));
         puts.push({ url, body });
@@ -178,6 +269,20 @@ beforeEach(() => {
                 enabled: (body as { enabled: boolean }).enabled,
               },
             },
+          };
+        const key = /\/params\/([\w.]+)$/.exec(url)?.[1];
+        if (key)
+          state = {
+            ...state,
+            params: state.params?.map((p) =>
+              p.key === key
+                ? {
+                    ...p,
+                    value: (body as { value?: number }).value ?? p.default,
+                    custom: 'value' in (body as object),
+                  }
+                : p,
+            ),
           };
         const env = /\/keys\/(\w+)$/.exec(url)?.[1];
         if (env)
@@ -216,10 +321,12 @@ function Where() {
 
 const show = (section = 'monitor') =>
   render(
-    <MemoryRouter initialEntries={[`/team?tab=x&system=${section}`]}>
-      <SystemDialog />
-      <Where />
-    </MemoryRouter>,
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={[`/team?tab=x&system=${section}`]}>
+        <SystemDialog />
+        <Where />
+      </MemoryRouter>
+    </ConfirmProvider>,
   );
 
 it('opens over the page at the section in the address, and closing leaves the page as it was', async () => {
@@ -455,4 +562,95 @@ it('keeps the system settings in the account menu and marks the account button w
   );
   expect(open).toHaveBeenCalledOnce();
   expect(screen.queryByRole('dialog', { name: '账户' })).toBeNull();
+});
+
+it('lists what each twin was built on and upgrades every outdated kernel after a confirmation', async () => {
+  const user = userEvent.setup();
+  show('upgrades');
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  // The menu says what waits, wherever the dialog opened.
+  expect(
+    await within(dialog).findByRole('button', { name: /部件升级.*2 项可升级/ }),
+  ).toBeInTheDocument();
+  const kernels = await screen.findByRole('table', {
+    name: '各分身的记忆内核',
+  });
+  expect(within(kernels).getByText('persona-v6 · 分类 v2')).toBeInTheDocument();
+  expect(
+    within(kernels).getByText('待确认 · 需重新整理 512 段'),
+  ).toBeInTheDocument();
+  expect(within(kernels).getByText('已是最新')).toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: '升级 陈默 的记忆内核' }),
+  ).toBeNull();
+  expect(screen.getByText('attribution-v2')).toBeInTheDocument();
+
+  await user.click(
+    screen.getByRole('button', { name: '全部升级（1 个分身）' }),
+  );
+  const confirm = await screen.findByRole('dialog', {
+    name: '升级全部分身的记忆内核',
+  });
+  expect(confirm).toHaveTextContent('共需重新整理 512 段，会调用模型');
+  await user.click(within(confirm).getByRole('button', { name: '全部升级' }));
+  await vi.waitFor(() =>
+    expect(posts).toEqual([
+      { url: '/api/admin/system/components/kernel', body: {} },
+    ]),
+  );
+  expect(await within(kernels).findByText('排队中')).toBeInTheDocument();
+  expect(screen.getByText('正在升级，完成后这里会更新。')).toBeInTheDocument();
+
+  // One twin's ledger, without asking: it reads only meetings not yet read.
+  await user.click(
+    await screen.findByRole('button', { name: '整理 林舟 的承诺账本' }),
+  );
+  await vi.waitFor(() =>
+    expect(posts.at(-1)).toEqual({
+      url: '/api/admin/system/components/ledger',
+      body: { persona_ids: ['default'] },
+    }),
+  );
+});
+
+it('changes a parameter at once, refuses what is not a number, and goes back to twin.toml', async () => {
+  const user = userEvent.setup();
+  show('params');
+  const field = await screen.findByLabelText('每人排队转写上限（条）');
+  // Kernel parameters live with the kernel, not here.
+  expect(screen.queryByRole('switch', { name: '自动升级记忆内核' })).toBeNull();
+  await user.clear(field);
+  await user.type(field, 'abc');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('请填数字');
+  expect(puts).toEqual([]);
+  await user.clear(field);
+  await user.type(field, '5');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+  await vi.waitFor(() =>
+    expect(puts).toEqual([
+      {
+        url: '/api/admin/system/params/library.max_pending',
+        body: { value: 5 },
+      },
+    ]),
+  );
+  await user.click(
+    await screen.findByRole('button', { name: '恢复 twin.toml 的设置' }),
+  );
+  await vi.waitFor(() => expect(puts.at(-1)?.body).toEqual({}));
+  expect(await screen.findByLabelText('每人排队转写上限（条）')).toHaveValue(
+    '20',
+  );
+
+  await user.click(screen.getByRole('button', { name: /部件升级/ }));
+  await user.click(
+    await screen.findByRole('switch', { name: '自动升级记忆内核' }),
+  );
+  await vi.waitFor(() =>
+    expect(puts.at(-1)).toEqual({
+      url: '/api/admin/system/params/kernel.auto_rebuild',
+      body: { value: false },
+    }),
+  );
 });

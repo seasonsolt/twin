@@ -103,6 +103,18 @@ const pages: {
     ready: 'TWIN_LLM_KEY',
     viewport: true,
   },
+  {
+    name: 'system-params',
+    path: '/#/team?system=params',
+    ready: '每人排队转写上限（条）',
+    viewport: true,
+  },
+  {
+    name: 'system-upgrades',
+    path: '/#/team?system=upgrades',
+    ready: '全部升级（1 个分身）',
+    viewport: true,
+  },
   { name: 'profile', path: '/#/profile', ready: '最有把握的几点' },
   {
     name: 'memories',

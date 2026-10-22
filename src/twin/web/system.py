@@ -4,10 +4,14 @@ Three layers, each with one job. ``twin.toml`` says where each service is and wh
 the keys: this view names each variable and says whether it is set, never its value; an administrator can replace
 or remove one, written to the server's env file (owner-only) and used from the next request on. ``data/system.json``
 holds what an administrator changes here, effective at once: whether speech and video are switched on, the
-library's token quota, and the address and model name of the text, chat and embedding models, which then take the
-place of twin.toml's. A service works when it is configured and switched on; a switch nobody has touched follows
-the configuration, so upgrading changes nothing. Every change made here is appended to ``system-audit.jsonl``
-beside it: who, when and what, never a key's value.
+library's token quota, a few common parameters (``PARAMS``), and the address and model name of the text, chat and
+embedding models, which then take the place of twin.toml's. A service works when it is configured and switched on;
+a switch nobody has touched follows the configuration, so upgrading changes nothing. Every change made here is
+appended to ``system-audit.jsonl`` beside it: who, when and what, never a key's value.
+
+The view also lists the parts whose version a release may raise, and where each twin stands: the memory kernel and
+the ledger's reader are upgraded here, for one twin or all of them; the recording library's rules apply themselves
+at start.
 """
 
 from __future__ import annotations
@@ -19,21 +23,28 @@ import os
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..assets import AssetStore
 from ..config import EmbedSettings, LLMSettings, Settings, egress_of
+from ..media.collector import ATTRIBUTION_VERSION, CLEANUP_VERSION
 from ..ops.envfile import MAX_VALUE, selected_env_file, write_env_value
+from ..persona.kernel import KERNEL
+from ..persona.ledger import LEDGER_VERSION
+from ..persona.store import stored_identity
 from ..usage import UsageLedger
 from ..util import private_directory
 from .gpu import GpuMonitor, _origin, asr_url
+from .jobs import JobConflict
 from .library import Libraries
+from .personas import Personas
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +61,48 @@ ModelSection = Literal["llm", "chat_llm", "embed"]
 MODEL_SECTIONS: tuple[ModelSection, ...] = ("llm", "chat_llm", "embed")
 MODEL_FIELDS = ("base_url", "model")
 _BASE_URL = re.compile(r"https?://[A-Za-z0-9.\-\[\]:]+(/[^\s?#]*)?")
+
+
+@dataclass(frozen=True)
+class Param:
+    """One twin.toml value an administrator may change here. It is written into ``settings``' own section object,
+    which every twin's copy of the settings shares, and read where it is used, so it applies at once."""
+
+    section: Literal["kernel", "library"]
+    field: str
+    label: str
+    help: str
+    unit: str = ""
+
+
+PARAMS: dict[str, Param] = {
+    "kernel.auto_rebuild": Param(
+        "kernel",
+        "auto_rebuild",
+        "自动升级记忆内核",
+        "新版本发布后，启动时自动按新内核重新整理记忆；关闭后在“部件升级”里手动升级。",
+    ),
+    "kernel.max_auto_rebuild_chunks": Param(
+        "kernel",
+        "max_auto_rebuild_chunks",
+        "自动升级上限",
+        "需要重新整理的段数超过这个数时不自动升级，等管理员确认；每段调用一次模型。",
+        "段",
+    ),
+    "library.max_pending": Param(
+        "library", "max_pending", "每人排队转写上限", "每位成员同时等待转写的录音最多这么多条。", "条"
+    ),
+    "library.headroom_gb": Param(
+        "library", "headroom_gb", "磁盘安全余量", "添加录音后可用空间会低于这个值时，拒绝上传。", "GB"
+    ),
+    "library.failed_keep_days": Param(
+        "library",
+        "failed_keep_days",
+        "转写失败的原件保留天数",
+        "过期后删除原件；0 表示一直保留，转写服务恢复后还能重试。",
+        "天",
+    ),
+}
 
 
 class SwitchBody(BaseModel):
@@ -76,6 +129,18 @@ class KeyBody(BaseModel):
     value: str | None = Field(default=None, max_length=MAX_VALUE)
 
 
+class ParamBody(BaseModel):
+    """Empty: back to twin.toml's value."""
+
+    value: bool | int | float | None = None
+
+
+class UpgradeBody(BaseModel):
+    """The twins to upgrade; empty: every twin that needs it."""
+
+    persona_ids: list[str] | None = Field(default=None, max_length=1000)
+
+
 class SystemSettings:
     """The administrator's runtime settings, kept in ``system.json`` beside the database. Model overrides are
     written into ``settings``' own [llm] / [chat_llm] / [embed] objects, which every persona's copy of the settings
@@ -94,12 +159,15 @@ class SystemSettings:
             for name in MODEL_SECTIONS
             if (section := self.section(name)) is not None
         }
+        self._toml_params = {key: getattr(getattr(settings, p.section), p.field) for key, p in PARAMS.items()}
         # Raised on every change of a model or key, so whatever caches a client built from them builds it again.
         self.generation = 0
         # Called with "llm" / "chat_llm" / "embed" / "keys" after a change.
         self.listeners: list[Callable[[str], None]] = []
         for name in MODEL_SECTIONS:
             self._apply(name)
+        for key in PARAMS:
+            self._apply_param(key)
 
     @property
     def env_file(self) -> Path:
@@ -227,6 +295,78 @@ class SystemSettings:
     def quota_custom(self) -> bool:
         with self._lock:
             return isinstance(self._data.get("quota"), dict)
+
+    # ------------------------------------------------------------ parameters
+
+    def _param_override(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            stored = self._data.get("params", {}).get(key)
+        return stored if isinstance(stored, dict) and "value" in stored else None
+
+    def _apply_param(self, key: str) -> None:
+        param = PARAMS[key]
+        override = self._param_override(key)
+        try:
+            value = self._valid(key, override["value"]) if override else self._toml_params[key]
+        except ValueError:
+            log.warning("系统设置里的参数 %s 无效，按 twin.toml 的配置运行", key)
+            value = self._toml_params[key]
+        setattr(getattr(self.settings, param.section), param.field, value)
+
+    def _valid(self, key: str, value: object) -> bool | int | float:
+        """``value`` checked against the field's own type and bounds in twin.toml's schema."""
+        param = PARAMS[key]
+        flag = isinstance(self._toml_params[key], bool)
+        if isinstance(value, bool) != flag:
+            raise ValueError("请填开或关" if flag else "请填数字")
+        section = getattr(self.settings, param.section)
+        try:
+            checked = type(section).model_validate({param.field: value})
+        except ValidationError as e:
+            bounds = e.errors()[0].get("ctx", {})
+            if "ge" in bounds:
+                raise ValueError(f"{param.label}不能小于 {bounds['ge']:g}") from None
+            if "gt" in bounds:
+                raise ValueError(f"{param.label}要大于 {bounds['gt']:g}") from None
+            kind = "整数" if isinstance(self._toml_params[key], int) else "数字"
+            raise ValueError(f"{param.label}请填{kind}") from None
+        result: bool | int | float = getattr(checked, param.field)
+        return result
+
+    def set_param(self, key: str, value: object, by: str | None) -> None:
+        if key not in PARAMS:
+            raise LookupError("没有这个参数")
+        before = getattr(getattr(self.settings, PARAMS[key].section), PARAMS[key].field)
+        checked = None if value is None else self._valid(key, value)
+        with self._lock:
+            params = self._data.setdefault("params", {})
+            if checked is None:
+                params.pop(key, None)
+            else:
+                params[key] = {"value": checked, **self._stamp(by)}
+            self._save()
+        self._apply_param(key)
+        after = getattr(getattr(self.settings, PARAMS[key].section), PARAMS[key].field)
+        self._record(by, "param", param=key, value=[before, after])
+
+    def params_view(self) -> list[dict[str, Any]]:
+        found = []
+        for key, param in PARAMS.items():
+            override = self._param_override(key)
+            found.append(
+                {
+                    "key": key,
+                    "label": param.label,
+                    "help": param.help,
+                    "unit": param.unit,
+                    "value": getattr(getattr(self.settings, param.section), param.field),
+                    "default": self._toml_params[key],
+                    "custom": override is not None,
+                    "changed_at": override.get("at") if override else None,
+                    "changed_by": override.get("by") if override else None,
+                }
+            )
+        return found
 
     # ------------------------------------------------------------ models and keys
 
@@ -470,8 +610,54 @@ def keys_view(settings: Settings) -> list[dict[str, Any]]:
     return list(seen.values())
 
 
+# ---------------------------------------------------------------- parts a release upgrades
+
+
+def _twins(registry: Personas) -> list[tuple[str, FastAPI, str]]:
+    """Every live twin: its id, its application and its name, in the order they were made."""
+    with registry.lock:
+        ids = [entry["id"] for entry in registry.data["personas"] if not entry.get("deleted_at")]
+    found = []
+    for persona_id in ids:
+        try:
+            context = registry.application(persona_id)
+            settings = registry.settings_for(persona_id)
+        except HTTPException:  # removed meanwhile
+            continue
+        found.append((persona_id, context, stored_identity(settings.db_path)[0] or settings.target_name))
+    return found
+
+
+def components_view(registry: Personas, ledger_on: bool) -> dict[str, Any]:
+    """The parts a release may raise the version of, and where each twin stands against the running version."""
+    kernels, ledgers = [], []
+    for persona_id, context, name in _twins(registry):
+        kernels.append({"id": persona_id, "name": name, **context.state.kernel_status()})
+        if ledger_on:
+            ledgers.append({"id": persona_id, "name": name, **context.state.ledger_status()})
+    return {
+        "kernel": {"version": KERNEL.__dict__, "twins": kernels},
+        "ledger": {"version": LEDGER_VERSION, "enabled": ledger_on, "twins": ledgers},
+        "library": {"attribution": ATTRIBUTION_VERSION, "cleanup": CLEANUP_VERSION},
+    }
+
+
+def _chosen(registry: Personas, body: UpgradeBody | None) -> list[tuple[str, FastAPI, str]]:
+    twins = _twins(registry)
+    if body is None or body.persona_ids is None:
+        return twins
+    if unknown := set(body.persona_ids) - {persona_id for persona_id, _, _ in twins}:
+        raise HTTPException(404, f"找不到分身 {sorted(unknown)[0]}")
+    return [twin for twin in twins if twin[0] in body.persona_ids]
+
+
 def register(
-    app: FastAPI, system: SystemSettings, monitor: GpuMonitor, libraries: Libraries, usage: UsageLedger | None = None
+    app: FastAPI,
+    system: SystemSettings,
+    monitor: GpuMonitor,
+    libraries: Libraries,
+    registry: Personas,
+    usage: UsageLedger | None = None,
 ) -> None:
     def admin(request: Request) -> str | None:
         identity = request.scope["twin_identity"]
@@ -492,6 +678,7 @@ def register(
             "keys": keys_view(system.settings),
             "env_file": system.env_file.name,
             "audit": system.audit(),
+            "params": system.params_view(),
             "quota": {
                 **libraries.quota(libraries.owner(request)),
                 "custom": system.quota_custom(),
@@ -567,3 +754,55 @@ def register(
             raise HTTPException(404, "没有这个功能；聊天不能关闭")
         system.set_feature(name, body.enabled, by)
         return view(request)
+
+    @app.put("/api/admin/system/params/{key}")
+    def put_param(key: str, body: ParamBody, request: Request) -> dict[str, Any]:
+        """Change one of ``PARAMS``, effective at once; an empty value goes back to twin.toml's."""
+        by = admin(request)
+        try:
+            system.set_param(key, body.value, by)
+        except LookupError as e:
+            raise HTTPException(404, str(e)) from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        return view(request)
+
+    @app.get("/api/admin/system/components")
+    def get_components(request: Request) -> dict[str, Any]:
+        """The memory kernel, the ledger's reader and the library's rules: the running versions and, for the first
+        two, what each twin was built on and what upgrading would redo."""
+        admin(request)
+        return components_view(registry, system.feature_on("ledger"))
+
+    @app.post("/api/admin/system/components/kernel", status_code=202)
+    def upgrade_kernels(request: Request, body: UpgradeBody | None = None) -> dict[str, Any]:
+        """Rebuild the chosen twins (all by default) whose memories were built on an older kernel. They take turns,
+        one twin's build at a time; each keeps its old profile until its own build is done."""
+        by = admin(request)
+        queued = []
+        for persona_id, context, _ in _chosen(registry, body):
+            if context.state.kernel_status()["scope"] != "none":
+                context.state.processing.queue()
+                queued.append(persona_id)
+        if queued:
+            system._record(by, "kernel", personas=queued, version=KERNEL.__dict__)
+        return {"queued": queued, **components_view(registry, system.feature_on("ledger"))}
+
+    @app.post("/api/admin/system/components/ledger", status_code=202)
+    def upgrade_ledgers(request: Request, body: UpgradeBody | None = None) -> dict[str, Any]:
+        """Read again, with the running reader, the meetings of the chosen twins (all by default) it has not read."""
+        by = admin(request)
+        if not system.feature_on("ledger"):
+            raise HTTPException(409, "承诺账本已关闭，开启后才能升级")
+        queued = []
+        for persona_id, context, _ in _chosen(registry, body):
+            status = context.state.ledger_status()
+            if status["pending"] and not status["running"]:
+                try:
+                    context.state.ledger_build(None)
+                except JobConflict:  # started meanwhile
+                    continue
+                queued.append(persona_id)
+        if queued:
+            system._record(by, "ledger", personas=queued, version=LEDGER_VERSION)
+        return {"queued": queued, **components_view(registry, True)}

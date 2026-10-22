@@ -817,6 +817,63 @@ const system = {
     { env: 'TWIN_API_TOKEN', use: '外部调用 /api', set: false },
   ],
   env_file: '.env',
+  params: [
+    {
+      key: 'kernel.auto_rebuild',
+      label: '自动升级记忆内核',
+      help: '新版本发布后，启动时自动按新内核重新整理记忆；关闭后在“部件升级”里手动升级。',
+      unit: '',
+      value: false,
+      default: true,
+      custom: true,
+      changed_at: '2026-10-16T08:00:00+00:00',
+      changed_by: 'admin@example.com',
+    },
+    {
+      key: 'kernel.max_auto_rebuild_chunks',
+      label: '自动升级上限',
+      help: '需要重新整理的段数超过这个数时不自动升级，等管理员确认；每段调用一次模型。',
+      unit: '段',
+      value: 400,
+      default: 400,
+      custom: false,
+      changed_at: null,
+      changed_by: null,
+    },
+    {
+      key: 'library.max_pending',
+      label: '每人排队转写上限',
+      help: '每位成员同时等待转写的录音最多这么多条。',
+      unit: '条',
+      value: 20,
+      default: 20,
+      custom: false,
+      changed_at: null,
+      changed_by: null,
+    },
+    {
+      key: 'library.headroom_gb',
+      label: '磁盘安全余量',
+      help: '添加录音后可用空间会低于这个值时，拒绝上传。',
+      unit: 'GB',
+      value: 50,
+      default: 20,
+      custom: true,
+      changed_at: '2026-10-15T03:20:00+00:00',
+      changed_by: 'admin@example.com',
+    },
+    {
+      key: 'library.failed_keep_days',
+      label: '转写失败的原件保留天数',
+      help: '过期后删除原件；0 表示一直保留，转写服务恢复后还能重试。',
+      unit: '天',
+      value: 0,
+      default: 0,
+      custom: false,
+      changed_at: null,
+      changed_by: null,
+    },
+  ],
   audit: [
     {
       at: '2026-10-17T01:30:00+00:00',
@@ -838,10 +895,53 @@ const system = {
   },
 };
 
+const kernelVersion = { schema: 4, prompt: 'persona-v7', taxonomy: 'v2' };
+const components = {
+  kernel: {
+    version: kernelVersion,
+    twins: [
+      {
+        id: 'default',
+        name: '林舟',
+        version: kernelVersion,
+        built: kernelVersion,
+        scope: 'none',
+        pending_chunks: 0,
+        state: 'ready',
+      },
+      {
+        id: 'p-qinghe',
+        name: '许清禾',
+        version: kernelVersion,
+        built: { schema: 4, prompt: 'persona-v6', taxonomy: 'v2' },
+        scope: 'full',
+        pending_chunks: 186,
+        state: 'awaiting_confirmation',
+      },
+    ],
+  },
+  ledger: {
+    version: 'ledger-v1',
+    enabled: true,
+    twins: [
+      { id: 'default', name: '林舟', meetings: 9, pending: 0, running: false },
+      {
+        id: 'p-qinghe',
+        name: '许清禾',
+        meetings: 3,
+        pending: 3,
+        running: false,
+      },
+    ],
+  },
+  library: { attribution: 'attribution-v2', cleanup: 'cleanup-v1' },
+};
+
 const handlers: Record<string, Handler> = {
   'GET /api/whoami': reply({ email: null, admin: true, auth_enabled: false }),
   'GET /api/auth/methods': reply({ sso: null, password: false, email: true }),
   'GET /api/admin/system': reply(system),
+  'GET /api/admin/system/components': reply(components),
   'GET /api/personas': reply(personas),
   'GET /api/status': reply(status),
   'GET /api/identity': reply(identity),

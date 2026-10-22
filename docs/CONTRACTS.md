@@ -18,8 +18,8 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `PersonaStore` 先读 `PRAGMA user_version`，最新库设置 WAL 后直接返回，不获取写事务；旧库才在 `BEGIN IMMEDIATE` 内复读版本、按顺序执行 `_MIGRATIONS` 并更新版本。旧无版本库保留数据，失败回滚全部迁移并关闭连接；超前 schema 抛出中文 `NewerStoreError`，拒绝打开。只读 `schema_version()` 返回数据库实际版本。
 - `p_meta['kernel:built']` 存稳定 JSON；只有成功且来源版本未变的构建才与 `built_at`、pending 标记在同一事务更新。失败不会宣告内核构建成功。
 - `stale_reason` 返回 `sources` / `kernel` / null，首次有来源或来源时间变化优先；空白库不标过期。`pending_chunks` 复用分段和内容键，只计未抽取且资料已就绪的分段，不调用模型。prompt 进入分段键；taxonomy 为 v1 时合并键保持原公式，其他值才额外进入合并键。启动恢复、Web 状态及 CLI status 仅在内核范围不为 none 时估算待重抽分段，否则为 0。
-- `[kernel] auto_rebuild=true`、`max_auto_rebuild_chunks=400`；启动时有内核差异且禁用自动重建或待重抽数量超过阈值时等待确认。`GET /api/status` 返回 `kernel: {version, built, scope, pending_chunks, state}`，state 为 ready/pending/queued/running/error/awaiting_confirmation；version/built 为版本对象，未记录 built 为 null。`processing.notice` 在等待确认时为“记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案”。
-- `POST /api/kernel/rebuild` 使用当前分身，要求管理员及 `X-Twin: 1`，返回 202 `{job_id}`；复用原有互斥构建任务。`twin kernel status` 逐分身显示版本、数据库实际 schema、范围和分段数；`twin kernel rebuild [--persona ID|--all] [--yes]` 默认配置分身，超过阈值必须显式 `--yes`。
+- `[kernel] auto_rebuild=true`、`max_auto_rebuild_chunks=400`；启动时有内核差异且禁用自动重建或待重抽数量超过阈值时等待确认。`GET /api/status` 返回 `kernel: {version, built, scope, pending_chunks, state}`，state 为 ready/pending/queued/running/error/awaiting_confirmation；version/built 为版本对象，未记录 built 为 null；还没有资料和条目的分身 scope 为 none。两个 `[kernel]` 参数可在系统设置「系统参数」里由管理员改写（`data/system.json`，立即生效）。`processing.notice` 在等待确认时为“记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案”。
+- `POST /api/kernel/rebuild` 使用当前分身，要求管理员及 `X-Twin: 1`，返回 202 `{job_id}`；复用原有互斥构建任务。系统设置「部件升级」用 `GET/POST /api/admin/system/components[/kernel]` 一次查看和升级所有分身（见 WEB_UI.md）。`twin kernel status` 逐分身显示版本、数据库实际 schema、范围和分段数；`twin kernel rebuild [--persona ID|--all] [--yes]` 默认配置分身，超过阈值必须显式 `--yes`。
 
 ## Identity 与用户建档
 

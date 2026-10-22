@@ -39,15 +39,13 @@ import {
   type UploadProgress,
 } from '../lib/mediaUpload';
 import { usePendingWork } from '../lib/pendingWork';
-import {
-  useStatus,
-  type KernelStatus,
-  type KernelVersion,
-} from '../stores/status';
+import { useStatus, type KernelStatus } from '../stores/status';
 import { usePersonas } from '../stores/personas';
 import { useAuth } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
 import { TranscriptClaim } from '../features/sources/TranscriptClaim';
+import { useOpenSystem } from '../features/admin/SystemDialog';
+import { kernelLabel } from '../features/admin/Upgrades';
 
 const MAX_FOLDER_UPLOAD_BYTES = 500 * 1024 * 1024;
 export interface Memory {
@@ -215,73 +213,40 @@ function MemoryWork({
   ) : null;
 }
 
-const kernelLabel = (version: KernelVersion) =>
-  `${version.prompt} · 分类 ${version.taxonomy}`;
-
+/** One line when the memories were built on an older kernel: upgrading is an administrator's task in the system
+ * settings, so the page only says why the profile is the old one and, to an administrator, where to upgrade. */
 function KernelLine({
   kernel,
   processing,
   admin,
-  busy,
-  onUpgrade,
 }: {
   kernel: KernelStatus;
   processing: Processing;
   admin: boolean;
-  busy: boolean;
-  onUpgrade: () => void;
 }) {
-  const current = (
-    <span className="font-medium">记忆内核 {kernelLabel(kernel.version)}</span>
-  );
-  if (kernel.scope === 'none')
-    return (
-      <Text size="sm" tone="secondary">
-        {current}
-        {' · 已是最新'}
-      </Text>
-    );
+  const openSystem = useOpenSystem();
   const from = kernel.built ? kernelLabel(kernel.built) : '旧版';
   if (processing.state !== 'idle')
     return (
       <Text role="status" size="sm" tone="secondary">
-        {current}
-        {` · 正在从 ${from} 升级，整理完成前沿用旧档案`}
+        记忆内核正在从 {from} 升级到 {kernelLabel(kernel.version)}
+        ，整理完成前沿用旧档案
       </Text>
     );
   return (
-    <Card
-      as="div"
-      variant="outline"
-      padding="sm"
-      role="status"
-      className="space-y-1"
-    >
-      <Text size="sm">
-        {current}
-        {' · 可以升级'}
-      </Text>
-      <Text size="sm" tone="secondary">
-        现有记忆按 {from} 整理，升级后按新版本重新整理
-        {kernel.pending_chunks > 0 &&
-          `，需重新整理 ${kernel.pending_chunks} 段，会调用模型`}
-        。升级完成前沿用旧档案。
-      </Text>
-      {admin ? (
+    <Text role="status" size="sm" tone="secondary">
+      记忆内核有新版本 {kernelLabel(kernel.version)}，
+      {admin ? '升级前沿用旧档案。' : '管理员升级前沿用旧档案。'}
+      {admin && (
         <Button
-          className="min-h-11"
+          variant="ghost"
           size="sm"
-          disabled={busy}
-          onClick={onUpgrade}
+          onClick={() => openSystem('upgrades')}
         >
-          升级记忆内核
+          去设置里升级
         </Button>
-      ) : (
-        <Text size="sm" tone="secondary">
-          请管理员升级。
-        </Text>
       )}
-    </Card>
+    </Text>
   );
 }
 
@@ -564,11 +529,6 @@ export function Memories({
     void mutate((signal) =>
       api('/api/persona/build', { method: 'POST', signal }),
     );
-  const rebuildKernel = () =>
-    void mutate(async (signal) => {
-      await api('/api/kernel/rebuild', { method: 'POST', signal });
-      void useStatus.getState().refresh();
-    });
   const reextract = (memory: Memory) =>
     void mutate((signal) =>
       api(
@@ -838,14 +798,8 @@ export function Memories({
               添加记忆
             </Button>
           )}
-          {kernel && (!embedded || kernel.scope !== 'none') ? (
-            <KernelLine
-              kernel={kernel}
-              processing={processing}
-              admin={admin}
-              busy={busy}
-              onUpgrade={rebuildKernel}
-            />
+          {kernel && kernel.scope !== 'none' ? (
+            <KernelLine kernel={kernel} processing={processing} admin={admin} />
           ) : (
             processing.notice && (
               <Text role="status" size="sm" tone="secondary">

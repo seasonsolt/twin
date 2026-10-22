@@ -603,6 +603,10 @@ class Libraries:
         status = self.registry.build_status(persona_id) if self.registry is not None else None
         with self.lock:
             _, at = self.rebuilds.get(persona_id, (0, None))
+            syncing = persona_id in self.syncing
+        if status is not None and status["state"] == "idle" and syncing:
+            # Its sources are being written and the build is queued right after (a retry, say): already on its way.
+            return {"state": "queued"}
         if status is not None and status["state"] == "idle" and at is not None:
             status["retry_at"] = dt.datetime.fromtimestamp(at, dt.UTC).isoformat()
         return status

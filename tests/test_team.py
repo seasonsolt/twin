@@ -1039,7 +1039,18 @@ def test_a_failed_build_shows_on_the_card_and_is_retried_from_there(
     assert build == {"state": "idle", "last_error": "记忆处理失败，请检查模型配置后重试"}
     assert pid not in libraries.rebuilds
     assert web.post("/api/library/people/nobody/rebuild", headers=HEADERS).status_code == 404
+    # While the retry writes the twin's sources, before its build is queued, the card already says it is on its way.
+    writing = threading.Event()
+    write_sources = libraries.write_sources
+
+    def slow(owner: str, persona_id: str) -> bool:
+        writing.wait(10)
+        return write_sources(owner, persona_id)
+
+    monkeypatch.setattr(libraries, "write_sources", slow)
     assert web.post(f"/api/library/people/{li}/rebuild", headers=HEADERS).status_code == 202
+    assert twin_card(web, pid)["build"] == {"state": "queued"}
+    writing.set()
     until(lambda: open_twin(web, pid))
     assert twin_card(web, pid)["updating"] is False
 

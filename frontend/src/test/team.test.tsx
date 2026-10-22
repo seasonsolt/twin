@@ -1257,7 +1257,7 @@ it('says a voice opened from the team settles its one recording, heard in clips 
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [

@@ -1931,6 +1931,23 @@ class Team:
             rows = db.execute("SELECT persona_id, person_id, wanted, done FROM personas_sync").fetchall()
         return [(str(r[0]), str(r[1]), int(r[2]), int(r[3])) for r in rows]
 
+    def answer_behind(self, persona_id: str, version: int) -> None:
+        """The twin's change up to ``version`` only adds recordings: until it is rebuilt it may answer from its last
+        build (``persona.gate``). A later change, unchecked, closes it again."""
+        with self.library.transaction() as db:
+            db.execute(
+                "UPDATE personas_sync SET answerable = ? WHERE persona_id = ? AND wanted = ?",
+                (version, persona_id, version),
+            )
+
+    def answering_behind(self) -> set[str]:
+        """The twins answering from their last build while a change that only adds recordings waits."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT persona_id FROM personas_sync WHERE wanted != done AND answerable = wanted"
+            ).fetchall()
+        return {str(r[0]) for r in rows}
+
     def wanted(self, persona_id: str) -> int | None:
         with self.library.read() as db:
             row = db.execute("SELECT wanted FROM personas_sync WHERE persona_id = ?", (persona_id,)).fetchone()

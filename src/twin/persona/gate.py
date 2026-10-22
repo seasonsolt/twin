@@ -3,8 +3,10 @@
 Such a twin answers only from a complete build of the library's current decisions: its row in the owner's
 ``library.db`` (``personas_sync``) has ``done == wanted``. Every decision that changes the twin's recordings raises
 ``wanted`` in the same transaction, so from that moment until a build of exactly that state succeeds, nothing of the
-twin's memory is used: its own words, its profile and the meeting record alike. Twins not made from a library are
-unaffected.
+twin's memory is used: its own words, its profile and the meeting record alike. One exception: while the rebuild is
+held (quota spent, automatic rebuild switched off), a change found to only add recordings to the last build
+(``answerable == wanted``) leaves the twin answering from that build, since nothing it holds was taken away; any
+further change closes it until checked again. Twins not made from a library are unaffected.
 """
 
 from __future__ import annotations
@@ -72,11 +74,11 @@ def _version(db_path: Path, linked: str | None) -> int | None:
         path = (db_path.resolve().parent / info["db"]).resolve()
         with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=10)) as db:
             row = db.execute(
-                "SELECT wanted, done FROM personas_sync WHERE persona_id = ?", (info["persona"],)
+                "SELECT wanted, done, answerable FROM personas_sync WHERE persona_id = ?", (info["persona"],)
             ).fetchone()
     except (ValueError, KeyError, TypeError, sqlite3.Error):
         row = None
-    if row is None or row[0] != row[1]:
+    if row is None or (row[0] != row[1] and row[2] != row[0]):
         raise MemoryUpdating()
     return int(row[1])
 

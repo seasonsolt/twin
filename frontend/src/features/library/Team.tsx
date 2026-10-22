@@ -918,7 +918,7 @@ function AddPerson({
 
 /** Why a twin's memory update stopped without completing, or null while it goes on or is done. */
 const stalledBuild = (person: Person) =>
-  person.updating && person.build?.state === 'idle'
+  person.updating && !person.held && person.build?.state === 'idle'
     ? (person.build.last_error ?? null)
     : null;
 
@@ -997,6 +997,10 @@ function PersonCard({
         ) : person.persona_id ? (
           stalled ? (
             <Badge tone="danger">记忆更新没完成</Badge>
+          ) : person.answers_behind ? (
+            <Badge tone="neutral">有新录音待整理</Badge>
+          ) : person.held ? (
+            <Badge tone="warning">记忆整理已暂停</Badge>
           ) : person.updating ? (
             <Badge tone="warning">记忆更新中</Badge>
           ) : (
@@ -1027,6 +1031,27 @@ function PersonCard({
           <Button variant="secondary" className="flex-1" disabled>
             由建它的同事管理
           </Button>
+        ) : person.persona_id && person.answers_behind ? (
+          // It answers from the memory it has while the new recordings wait.
+          <Stack gap={2} grow>
+            <Button onClick={() => onOpen(person.persona_id!, '/chat')}>
+              和分身聊聊
+            </Button>
+            {person.held && (
+              <TextLink size="sm" onClick={onRebuild}>
+                立即整理
+              </TextLink>
+            )}
+          </Stack>
+        ) : person.persona_id && person.held ? (
+          <Stack gap={2} grow>
+            <Text size="sm" tone="secondary">
+              录音归属有变化，整理后才能聊
+            </Text>
+            <Button variant="secondary" disabled={busy} onClick={onRebuild}>
+              立即整理
+            </Button>
+          </Stack>
         ) : person.persona_id && stalled ? (
           <Stack gap={2} grow>
             <Text size="sm" tone="danger" role="alert">
@@ -1396,7 +1421,9 @@ export function Team({
   const failed = recordings.filter((r) => r.status === 'failed');
   // Twins catching up with the recordings, and those of them whose update stopped without completing.
   const updatingTwins = people?.filter((p) => p.updating) ?? [];
-  const organising = updatingTwins.filter((p) => !stalledBuild(p));
+  const organising = updatingTwins.filter((p) => !stalledBuild(p) && !p.held);
+  // Held while the administrator switched the automatic rebuild off.
+  const paused = updatingTwins.filter((p) => p.held);
   const unfinished = updatingTwins.filter((p) => stalledBuild(p));
   const twinOf = (person: Person) =>
     twins.find((t) => t.id === person.persona_id);
@@ -2020,6 +2047,11 @@ export function Team({
             {p.name} · 整理记忆中
           </Text>
         ))}
+        {paused.map((p) => (
+          <Text as="li" key={p.id} size="sm" tone="secondary" breakAll>
+            {p.name} · 记忆整理已暂停
+          </Text>
+        ))}
         {unfinished.map((p) => (
           <Text
             as="li"
@@ -2098,6 +2130,8 @@ export function Team({
           {[
             organising.length > 0 &&
               `${organising.map((p) => p.name).join('、')} · 整理记忆中，完成后可以聊`,
+            paused.length > 0 &&
+              `${paused.map((p) => p.name).join('、')} · 记忆整理已暂停`,
             unfinished.length > 0 &&
               `${unfinished.map((p) => p.name).join('、')} · 记忆更新没完成`,
             pending > updatingTwins.length &&

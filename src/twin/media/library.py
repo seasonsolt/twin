@@ -160,7 +160,9 @@ CREATE TABLE IF NOT EXISTS personas_sync (
     persona_id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL,
     wanted INTEGER NOT NULL DEFAULT 1,
-    done INTEGER NOT NULL DEFAULT 0
+    done INTEGER NOT NULL DEFAULT 0,
+    -- The wanted version found to only add recordings to the last build: the twin answers from ``done`` meanwhile.
+    answerable INTEGER
 );
 -- The last attempt at a recording's denoised copy for listening (``media.denoise``): ``error`` is '' once made.
 CREATE TABLE IF NOT EXISTS denoised (
@@ -395,6 +397,7 @@ class Library:
                 ("attributions", "suggest", "TEXT"),
                 ("voiceprints", "source", "TEXT"),
                 ("voiceprints", "corrected", "INTEGER NOT NULL DEFAULT 0"),
+                ("personas_sync", "answerable", "INTEGER"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:

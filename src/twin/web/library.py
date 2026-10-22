@@ -33,7 +33,7 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
 
@@ -199,9 +199,12 @@ class Libraries:
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
         self.syncing: set[str] = set()
         self.again: set[str] = set()
-        # The proofreading job of each owner, and per owner the twins whose rebuild waits for the quota.
+        # The proofreading job of each owner, and per owner the twins whose rebuild waits: for the quota, or while
+        # the automatic rebuild is switched off (``LibrarySettings.auto_build``).
         self.proofreading: dict[str, Job] = {}
         self.paused: dict[str, set[str]] = {}
+        # Twins someone asked to rebuild now: built even while the automatic rebuild is switched off.
+        self.forced: set[str] = set()
         # Twins whose build the model's rate limit stopped: tries so far, and when the next is due (None while it runs).
         self.rebuilds: dict[str, tuple[int, float | None]] = {}
         self._stop = threading.Event()
@@ -417,9 +420,10 @@ class Libraries:
                     logger.exception("library of %s could not be woken", owner)
 
     def wake(self, owner: str) -> None:
-        """Carry on with what waits: once the quota has room, the twins held for it are rebuilt, and so are those
-        whose wait after the rate limit is over; the next recording is transcribed and the next proofread."""
-        if not self.quota(owner)["exhausted"]:
+        """Carry on with what waits: once the quota has room and the automatic rebuild is on, the twins held are
+        rebuilt, and so are those whose wait after the rate limit is over; the next recording is transcribed and the
+        next proofread."""
+        if not self.quota(owner)["exhausted"] and self.settings.library.auto_build:
             with self.lock:
                 held = self.paused.pop(owner, set())
             for persona_id in sorted(held):
@@ -517,16 +521,25 @@ class Libraries:
         row = next((r for r in team.synced() if r[0] == persona_id), None)
         if row is None or self.registry is None or self.registry.entry(persona_id) is None:
             return False
-        _, person_id, wanted, _ = row
-        if self.quota(owner)["exhausted"]:
-            # The twin stays closed; ``status`` rewrites it once the quota frees up.
-            with self.lock:
-                self.paused.setdefault(owner, set()).add(persona_id)
-            return False
+        _, person_id, wanted, done = row
+        exhausted = self.quota(owner)["exhausted"]
+        with self.lock:
+            held = exhausted or not (self.settings.library.auto_build or persona_id in self.forced)
         db_path = self.registry.settings_for(persona_id).db_path
         person = team.person(person_id)
         name = stored_identity(db_path)[0] or (person.name if person else self.settings.target_name)
         wanted_sources = {source.source_id: parsed_source(source) for source in team.sources(person_id, name)}
+        if held:
+            # Left as it was built; ``wake`` rewrites it once the quota frees up and the automatic rebuild is on.
+            # Meanwhile it answers from that memory only if the change merely adds to what it was built from.
+            with PersonaStore(db_path) as store:
+                if only_adds(store, wanted_sources, done):
+                    team.answer_behind(persona_id, wanted)
+            with self.lock:
+                self.paused.setdefault(owner, set()).add(persona_id)
+            return False
+        with self.lock:
+            self.forced.discard(persona_id)
         with PersonaStore(db_path) as store:
             for source in store.list_sources():
                 if source.source_id.startswith(SOURCE_PREFIX) and source.source_id not in wanted_sources:
@@ -569,10 +582,18 @@ class Libraries:
         )
 
     def rebuild(self, persona_id: str) -> None:
-        """Someone retries a twin whose build did not complete: now, and with the waits after a rate limit afresh."""
+        """Someone retries a twin whose build did not complete, or rebuilds one the switched-off automatic rebuild
+        holds: now, and with the waits after a rate limit afresh."""
         with self.lock:
             self.rebuilds.pop(persona_id, None)
+            self.forced.add(persona_id)
+            self.paused.get(TEAM, set()).discard(persona_id)
         self.sync(TEAM, persona_id)
+
+    def held(self, owner: str, persona_id: str) -> bool:
+        """Whether the twin's rebuild waits while the automatic rebuild is switched off."""
+        with self.lock:
+            return not self.settings.library.auto_build and persona_id in self.paused.get(owner, set())
 
     def build_status(self, persona_id: str) -> dict[str, Any] | None:
         """How far the twin's build has gone, for its card while it cannot talk; with when it is tried again by
@@ -1261,7 +1282,7 @@ class Libraries:
         identities = self.team(owner).identities()
         waiting = {r.id for r in library.unproofread()}
         with self.lock:
-            held_twins = len(self.paused.get(owner, ()))
+            held_twins = len(self.paused.get(owner, ())) if quota["exhausted"] else 0
         return {
             "recordings": [
                 {
@@ -1281,6 +1302,18 @@ class Libraries:
             # What waits for the quota: recordings to proofread and twins to rebuild.
             "quota": {**quota, "waiting_proofread": len(waiting), "waiting_twins": held_twins},
         }
+
+
+def only_adds(store: PersonaStore, wanted: Mapping[str, ParsedSource], done: int) -> bool:
+    """Whether the twin holds the sources of its last complete build (``done``) and each of them is still wanted
+    as it is: what changed since only adds recordings, so nothing it would answer from was taken away."""
+    if not done or store.get_meta(gate.SYNCED) != str(done):
+        return False
+    return all(
+        source.source_id in wanted and store.holds(wanted[source.source_id])
+        for source in store.list_sources()
+        if source.source_id.startswith(SOURCE_PREFIX)
+    )
 
 
 def parsed_source(source: TwinSource) -> ParsedSource:
@@ -1469,6 +1502,7 @@ def register(
         identity = request.scope["twin_identity"]
         team = libraries.team(owner)
         synced = {persona_id: (wanted, done) for persona_id, _, wanted, done in team.synced()}
+        behind = team.answering_behind()
         visible = libraries.access(viewer)
         managed = libraries.managed(viewer)
         similar = team.similar()
@@ -1490,6 +1524,10 @@ def register(
                     "speaker_id": person.speaker_id if heard else None,
                     "persona_id": person.persona_id if opens else None,
                     "updating": updating,
+                    # While its rebuild waits: whether it answers from its last build (the change only adds
+                    # recordings), and whether the switched-off automatic rebuild holds it.
+                    "answers_behind": bool(updating and person.persona_id in behind),
+                    "held": bool(updating and person.persona_id and libraries.held(owner, person.persona_id)),
                     # Where the update is (step and how far), shown on the card until the twin can talk.
                     "build": libraries.build_status(person.persona_id) if updating and person.persona_id else None,
                     "self_claimed": theirs,

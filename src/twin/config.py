@@ -129,8 +129,13 @@ class LibrarySettings(BaseModel):
     ``batch_hours``; once spent, proofreading and rebuilds wait until the window frees up. 0 means no limit.
     The original of a recording whose transcription failed is kept for a retry; with ``failed_keep_days`` set, it is
     deleted that many days after the failure. 0 (the default) keeps it for good: a failure may be the transcription
-    service being down, and a deleted original cannot be had back."""
+    service being down, and a deleted original cannot be had back.
+    With ``auto_build`` off, what changes a twin's recordings is noted but its memory is not rebuilt until it is
+    switched on again or someone rebuilds that twin: for a large batch of meetings coming in, so each twin is rebuilt
+    once at the end rather than after every recording. Meanwhile a twin whose change only adds recordings keeps
+    answering from the memory it has; one that lost or had speech reassigned waits (``persona.gate``)."""
 
+    auto_build: bool = True
     headroom_gb: float = Field(default=20, ge=0)
     max_pending: int = Field(default=20, gt=0)
     batch_tokens: int = Field(default=20_000_000, ge=0)

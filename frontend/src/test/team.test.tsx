@@ -1755,6 +1755,64 @@ it('says why a twin update stopped and when it is tried again, and retries it fr
   ).toBeInTheDocument();
 });
 
+it('keeps a held twin that only gained recordings talking, and rebuilds a closed one by hand', async () => {
+  people = [
+    person({
+      persona_id: 'p-1',
+      updating: true,
+      answers_behind: true,
+      held: true,
+      build: { state: 'idle' },
+    }),
+    person({
+      id: 'per_2',
+      name: '李总',
+      persona_id: 'p-2',
+      updating: true,
+      held: true,
+      build: { state: 'idle' },
+    }),
+  ];
+  const rebuilt: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/personas') return json({ items: [], default: null });
+      if (url.endsWith('/rebuild') && init?.method === 'POST') {
+        rebuilt.push(url);
+        return json({ queued: true }, 202);
+      }
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const zhang = (await screen.findByText('张总', { selector: 'p' })).closest(
+    'li',
+  )!;
+  expect(within(zhang).getByText('有新录音待整理')).toBeInTheDocument();
+  expect(
+    within(zhang).getByRole('button', { name: '和分身聊聊' }),
+  ).toBeInTheDocument();
+  expect(within(zhang).queryByRole('alert')).not.toBeInTheDocument();
+  const li = screen.getByText('李总', { selector: 'p' }).closest('li')!;
+  expect(within(li).getByText('记忆整理已暂停')).toBeInTheDocument();
+  expect(
+    within(li).queryByRole('button', { name: '和分身聊聊' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByText('张总、李总 · 记忆整理已暂停', { exact: false }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText(/记忆更新没完成|整理记忆中/u),
+  ).not.toBeInTheDocument();
+  await userEvent.click(within(li).getByRole('button', { name: '立即整理' }));
+  await waitFor(() =>
+    expect(rebuilt).toEqual(['/api/library/people/per_2/rebuild']),
+  );
+});
+
 it('adds a person by hand from a small dialog, and keeps the people list where it was', async () => {
   const posts: unknown[] = [];
   vi.stubGlobal(

@@ -246,11 +246,18 @@ function TwinRail({ empty = false }: { empty?: boolean }) {
 }
 
 /** The account menu at the foot of the rail: who is signed in, the palette, the system settings for an
- * administrator (a red dot when a switched-on service is failing), and signing out. */
+ * administrator (a red dot when a switched-on service is failing or the memory rebuild is switched off), and
+ * signing out. */
 function RailAccount() {
   const identity = useAuth((state) => state.identity);
   const openSystem = useOpenSystem();
   const down = useSystem((state) => failing(state.data).length);
+  // The administrator switched the automatic memory rebuild off: a reminder to switch it on again.
+  const held = useSystem(
+    (state) =>
+      state.data?.params?.find((p) => p.key === 'library.auto_build')?.value ===
+      false,
+  );
   const { theme, setTheme } = useTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -272,7 +279,11 @@ function RailAccount() {
                   key: 'system',
                   label: '系统设置',
                   icon: Settings2,
-                  alert: down ? `${down} 项服务异常` : undefined,
+                  alert: down
+                    ? `${down} 项服务异常`
+                    : held
+                      ? '记忆自动整理已暂停'
+                      : undefined,
                   onSelect: () => openSystem(),
                 },
               ]

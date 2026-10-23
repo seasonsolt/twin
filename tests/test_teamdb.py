@@ -75,6 +75,24 @@ def test_a_failing_migration_changes_nothing(tmp_path: Path, monkeypatch: pytest
         assert db.execute("SELECT name FROM sqlite_master WHERE name = 'half'").fetchone() is None
 
 
+def test_a_database_from_before_lenses_gains_them_after_a_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "team" / "team.db"
+    with TeamDB(path) as team:
+        team.record_conversation("c1", "p1", "a@x.com", "colleague", "标题", STAMP)
+    # Put it back as it was written by the version before lenses.
+    with sqlite3.connect(path) as db:
+        db.executescript("DROP TABLE lens_uses; DROP TABLE lenses; PRAGMA user_version = 5;")
+    with TeamDB(path) as team:
+        assert team.schema_version() == len(teamdb._MIGRATIONS)
+        assert [c.id for c in team.conversations()] == ["c1"]
+        lens = team.create_lens(persona_id="p1", name="视角", facets=["3.4"], audience="{}")
+        team.record_lens_use(lens.id, "问", "答", ["3.4"])
+        assert [u.said for u in team.lens_uses(lens.id)] == ["答"]
+    [snapshot] = list((path.parent / teamdb.SNAPSHOT_DIR).glob("team-*schema5.db"))
+    with sqlite3.connect(snapshot) as old:
+        assert old.execute("SELECT name FROM sqlite_master WHERE name = 'lenses'").fetchone() is None
+
+
 def test_the_index_keeps_the_tier_a_conversation_was_created_with(tmp_path: Path) -> None:
     with TeamDB(tmp_path / "team.db") as team:
         team.record_conversation("c1", "p1", "me@x.com", "self", "我的", STAMP)

@@ -17,13 +17,15 @@ names the handoff and is written once, ``finish_reply``), so one that stopped ha
 
 The organisation's layer is here as well: team answers (what a person confirmed once, for every twin to quote as it
 stands, with the vector that finds them by meaning), the cache of how well each twin knows each facet (for finding
-who knows about a matter) and delegations (the person's assistant asking colleagues' twins in their name, one hop
-from the person, which ``create_delegation`` and ``record_conversation`` check as they write).
+who knows about a matter), delegations (the person's assistant asking colleagues' twins in their name, one hop
+from the person, which ``create_delegation`` and ``record_conversation`` check as they write) and lenses (a person
+lending their judgement, with what each use was: the question and what was said, never who asked).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 import sqlite3
@@ -56,6 +58,8 @@ HANDOFF_DAYS = 7
 AnswerStatus = Literal["valid", "stale", "withdrawn"]
 # How many colleagues' twins one delegation asks, at most.
 MAX_DELEGATES = 3
+# A lens is in force, held for the moment by the person, or taken back for good.
+LensStatus = Literal["active", "paused", "withdrawn"]
 # ``conversations(asked_by=...)`` left out: everyone's (None is a real value there, the asker of a service without
 # sign-in).
 _ANYONE = object()
@@ -166,6 +170,30 @@ _MIGRATIONS: tuple[str, ...] = (
         created_at TEXT NOT NULL);
     CREATE INDEX delegations_conversation ON delegations(conversation_id);
     """,
+    # 6: lenses, a person lending their judgement to colleagues, and what each lens was used for. A use holds the
+    # question and what the lens said and nothing of who asked: no asker, no conversation, no handoff.
+    """
+    CREATE TABLE lenses (
+        id TEXT PRIMARY KEY,
+        persona_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        facets TEXT NOT NULL,
+        audience TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'withdrawn')),
+        forgiven TEXT NOT NULL DEFAULT '{}',
+        published_at TEXT NOT NULL,
+        ended_at TEXT);
+    CREATE INDEX lenses_persona ON lenses(persona_id, status);
+    CREATE TABLE lens_uses (
+        id TEXT PRIMARY KEY,
+        lens_id TEXT NOT NULL REFERENCES lenses(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,
+        said TEXT NOT NULL,
+        facets TEXT NOT NULL,
+        corrected INTEGER NOT NULL DEFAULT 0,
+        at TEXT NOT NULL);
+    CREATE INDEX lens_uses_lens ON lens_uses(lens_id, at);
+    """,
 )
 
 SNAPSHOT_DIR = "snapshots"
@@ -182,6 +210,14 @@ class NewerTeamError(RuntimeError):
 
 class DelegationRefused(RuntimeError):
     """A write that would take delegation beyond one hop from the person (or past its limits); the message says why."""
+
+
+class LensUnavailable(RuntimeError):
+    """The lens is not in a state the change needs (taken back, or not in force for a use)."""
+
+    def __init__(self, lens_id: str, status: LensStatus | None) -> None:
+        super().__init__(f"lens {lens_id} is {status or 'unknown'}")
+        self.lens_id, self.status = lens_id, status
 
 
 class HandoffUnavailable(RuntimeError):
@@ -290,6 +326,60 @@ class Delegation:
     conversation_id: str
     question: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class Lens:
+    """The judgement a person lends: the facets they opened, and to whom. ``audience`` is JSON (``lenses``);
+    ``forgiven`` counts, per facet, the corrections that were put right when the facet was opened again."""
+
+    id: str
+    persona_id: str
+    name: str
+    facets: tuple[str, ...]
+    audience: str
+    status: LensStatus
+    forgiven: dict[str, int]
+    published_at: str
+    ended_at: str | None
+
+
+@dataclass(frozen=True)
+class LensUse:
+    """What a lens was asked and said. Nothing of who asked, and nothing that leads to the conversation or the handoff
+    the question was in: the person sees what their judgement was used for, never by whom."""
+
+    id: str
+    lens_id: str
+    question: str
+    said: str
+    facets: tuple[str, ...]
+    corrected: bool
+    at: str
+
+
+_LENS_COLUMNS = "id, persona_id, name, facets, audience, status, forgiven, published_at, ended_at"
+_LENS_USE_COLUMNS = "id, lens_id, question, said, facets, corrected, at"
+
+
+def _lens(row: Sequence[object]) -> Lens:
+    return Lens(
+        str(row[0]),
+        str(row[1]),
+        str(row[2]),
+        tuple(json.loads(str(row[3]))),
+        str(row[4]),
+        row[5],  # type: ignore[arg-type]
+        {str(k): int(v) for k, v in json.loads(str(row[6])).items()},
+        str(row[7]),
+        None if row[8] is None else str(row[8]),
+    )
+
+
+def _lens_use(row: Sequence[object]) -> LensUse:
+    return LensUse(
+        str(row[0]), str(row[1]), str(row[2]), str(row[3]), tuple(json.loads(str(row[4]))), bool(row[5]), str(row[6])
+    )
 
 
 _HANDOFF_COLUMNS = (
@@ -631,6 +721,7 @@ class TeamDB:
             db.execute("DELETE FROM facet_coverage WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM meta WHERE key = ?", (f"{COVERAGE_SIGNATURE}{persona_id}",))
             db.execute("DELETE FROM delegations WHERE persona_id = ?", (persona_id,))
+            db.execute("DELETE FROM lenses WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM conversations WHERE persona_id = ?", (persona_id,))
 
     def reconcile_persona(self, persona_id: str, rows: Iterable[tuple[str, str | None, str, str]]) -> Reconciled:
@@ -1195,3 +1286,163 @@ class TeamDB:
                 ).fetchall()
             found.update((r[0], int(r[1])) for r in rows)
         return found
+
+    # ------------------------------------------------------------ lenses
+
+    def create_lens(
+        self,
+        *,
+        persona_id: str,
+        name: str,
+        facets: Sequence[str],
+        audience: str,
+        lens_id: str | None = None,
+        now: dt.datetime | None = None,
+    ) -> Lens:
+        """Publish a lens, in force from now."""
+        new_id = lens_id or uuid.uuid4().hex[:16]
+        with self._tx() as db:
+            db.execute(
+                f"INSERT INTO lenses ({_LENS_COLUMNS}) VALUES (?, ?, ?, ?, ?, 'active', '{{}}', ?, NULL)",
+                (new_id, persona_id, name, json.dumps(list(facets)), audience, _stamp(now)),
+            )
+        found = self.get_lens(new_id)
+        assert found is not None
+        return found
+
+    def get_lens(self, lens_id: str) -> Lens | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {_LENS_COLUMNS} FROM lenses WHERE id = ?", (lens_id,)).fetchone()
+        return None if row is None else _lens(row)
+
+    def lenses(self, *, persona_id: str | None = None, statuses: Collection[str] | None = None) -> list[Lens]:
+        """Lenses, the newest published first; of one twin, in some states."""
+        where: list[str] = []
+        params: list[object] = []
+        if persona_id is not None:
+            where.append("persona_id = ?")
+            params.append(persona_id)
+        if statuses is not None:
+            where.append(f"status IN ({','.join('?' * len(statuses))})")
+            params.extend(statuses)
+        sql = f"SELECT {_LENS_COLUMNS} FROM lenses" + (f" WHERE {' AND '.join(where)}" if where else "")
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY published_at DESC, id", params).fetchall()
+        return [_lens(r) for r in rows]
+
+    def update_lens(
+        self,
+        lens_id: str,
+        *,
+        name: str | None = None,
+        facets: Sequence[str] | None = None,
+        audience: str | None = None,
+        forgiven: dict[str, int] | None = None,
+    ) -> Lens:
+        """Change a lens that has not been taken back: its name, the facets it opens, to whom, and which corrections
+        no longer count."""
+        with self._tx() as db:
+            row = db.execute("SELECT status FROM lenses WHERE id = ?", (lens_id,)).fetchone()
+            if row is None or row[0] == "withdrawn":
+                raise LensUnavailable(lens_id, None if row is None else row[0])
+            changes: dict[str, object] = {}
+            if name is not None:
+                changes["name"] = name
+            if facets is not None:
+                changes["facets"] = json.dumps(list(facets))
+            if audience is not None:
+                changes["audience"] = audience
+            if forgiven is not None:
+                changes["forgiven"] = json.dumps(forgiven)
+            if changes:
+                db.execute(
+                    f"UPDATE lenses SET {', '.join(f'{k} = ?' for k in changes)} WHERE id = ?",
+                    (*changes.values(), lens_id),
+                )
+        found = self.get_lens(lens_id)
+        assert found is not None
+        return found
+
+    def set_lens_status(self, lens_id: str, status: LensStatus, now: dt.datetime | None = None) -> Lens:
+        """Hold a lens (``paused``), put it back in force (``active``) or take it back for good (``withdrawn``, from
+        which there is no way back: a new lens is published instead). Withdrawing twice, or holding one that was
+        taken back, is refused."""
+        with self._tx() as db:
+            row = db.execute("SELECT status FROM lenses WHERE id = ?", (lens_id,)).fetchone()
+            if row is None or row[0] == "withdrawn":
+                raise LensUnavailable(lens_id, None if row is None else row[0])
+            db.execute(
+                "UPDATE lenses SET status = ?, ended_at = ? WHERE id = ?",
+                (status, _stamp(now) if status == "withdrawn" else None, lens_id),
+            )
+        found = self.get_lens(lens_id)
+        assert found is not None
+        return found
+
+    def record_lens_use(
+        self, lens_id: str, question: str, said: str, facets: Sequence[str], today: dt.date | None = None
+    ) -> LensUse:
+        """Keep what a lens was asked and said, on the day it was (the hour is not kept). Refused unless the lens is
+        in force at this moment, which is what makes a held or taken-back lens stop at once."""
+        use_id = uuid.uuid4().hex[:16]
+        with self._tx() as db:
+            row = db.execute("SELECT status FROM lenses WHERE id = ?", (lens_id,)).fetchone()
+            if row is None or row[0] != "active":
+                raise LensUnavailable(lens_id, None if row is None else row[0])
+            db.execute(
+                f"INSERT INTO lens_uses ({_LENS_USE_COLUMNS}) VALUES (?, ?, ?, ?, ?, 0, ?)",
+                (
+                    use_id,
+                    lens_id,
+                    question,
+                    said,
+                    json.dumps(list(facets)),
+                    (today or dt.datetime.now(dt.UTC).date()).isoformat(),
+                ),
+            )
+        found = self.get_lens_use(use_id)
+        assert found is not None
+        return found
+
+    def get_lens_use(self, use_id: str) -> LensUse | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {_LENS_USE_COLUMNS} FROM lens_uses WHERE id = ?", (use_id,)).fetchone()
+        return None if row is None else _lens_use(row)
+
+    def lens_uses(self, lens_id: str, *, limit: int = 50, facet: str | None = None) -> list[LensUse]:
+        """The uses of a lens, newest first; those that touched one facet."""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_LENS_USE_COLUMNS} FROM lens_uses WHERE lens_id = ? ORDER BY at DESC, rowid DESC",
+                (lens_id,),
+            ).fetchall()
+        found = [_lens_use(r) for r in rows]
+        if facet is not None:
+            found = [u for u in found if facet in u.facets]
+        return found[:limit]
+
+    def count_lens_uses(self, lens_id: str, since: dt.date) -> int:
+        with self._lock:
+            return int(
+                self._db.execute(
+                    "SELECT COUNT(*) FROM lens_uses WHERE lens_id = ? AND at >= ?", (lens_id, since.isoformat())
+                ).fetchone()[0]
+            )
+
+    def correct_lens_use(self, use_id: str) -> LensUse | None:
+        """Mark a use as put right by the person; None when there is no such use."""
+        with self._tx() as db:
+            db.execute("UPDATE lens_uses SET corrected = 1 WHERE id = ?", (use_id,))
+        return self.get_lens_use(use_id)
+
+    def corrections(self, lens_id: str) -> dict[str, int]:
+        """How many corrected uses touched each facet, over the life of the lens."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT facets FROM lens_uses WHERE lens_id = ? AND corrected = 1", (lens_id,)
+            ).fetchall()
+        counts: dict[str, int] = {}
+        for (facets,) in rows:
+            for facet in json.loads(facets):
+                counts[facet] = counts.get(facet, 0) + 1
+        return counts

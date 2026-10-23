@@ -76,7 +76,7 @@ const egress = [
   },
 ];
 
-const status = {
+export const status = {
   target_name: '林舟',
   counts: { sources: 12, items: 48 },
   memory_updating: false,
@@ -672,6 +672,194 @@ const teamConversation = {
           stale_note: '10 月 27 日「产品周会」里说：旧模板 10 月底就停了。',
         },
       ]),
+    },
+  ],
+};
+// 第 12、13 屏: the facets the person could open and what stands in the way of the rest, the lens they published, what
+// it was used for (never by whom), and a colleague's question answered by it.
+const lensFacet = (
+  facet_id: string,
+  name: string,
+  dimension: string,
+  more: Record<string, unknown> = {},
+) => ({
+  facet_id,
+  name,
+  dimension_id: 'D3',
+  dimension,
+  level: 3,
+  label: '了解较多',
+  checked: false,
+  checked_label: '',
+  occasions: 4,
+  ok: true,
+  reasons: [],
+  ...more,
+});
+export const lensFacets = [
+  lensFacet('5.1', '拿手的事', '擅长什么', {
+    checked: true,
+    checked_label: '回答经过检查',
+  }),
+  lensFacet('3.4', '常见取舍', '怎么做决定'),
+  lensFacet('3.3', '依据偏好', '怎么做决定', {
+    checked: true,
+    checked_label: '回答经过检查',
+  }),
+  lensFacet('4.2', '追问习惯', '怎么思考'),
+  lensFacet('2.3', '做事的原则', '看重什么'),
+  lensFacet('2.1', '核心价值排序', '看重什么', {
+    ok: false,
+    level: 2,
+    label: '了解一些',
+    occasions: 2,
+    reasons: ['场合不足 3 个'],
+  }),
+  lensFacet('3.1', '风险偏好', '怎么做决定', {
+    ok: false,
+    level: 1,
+    label: '提到过',
+    occasions: 1,
+    reasons: ['多是别人的话', '来源只有一种'],
+  }),
+  lensFacet('4.4', '对不确定性的处理', '怎么思考', {
+    ok: false,
+    level: 2,
+    label: '了解一些',
+    reasons: ['内容有矛盾'],
+  }),
+];
+const lens = {
+  id: 'l-1',
+  name: '大客户谈判',
+  status: 'active',
+  published_at: '2026-10-12T09:00:00Z',
+  audience: { scope: 'team', twins: [] },
+  facets: [
+    { facet_id: '5.1', name: '拿手的事' },
+    { facet_id: '3.4', name: '常见取舍' },
+    { facet_id: '3.3', name: '依据偏好' },
+    { facet_id: '4.2', name: '追问习惯' },
+    { facet_id: '2.3', name: '做事的原则' },
+  ],
+  speaking: ['5.1', '3.3', '4.2', '2.3'],
+  failing: [],
+  stopped: [{ facet_id: '3.4', name: '常见取舍', corrected: 3 }],
+  uses_week: 12,
+};
+export const lensList = { lenses: [lens], facets: lensFacets, stop_after: 3 };
+const lensUses = [
+  {
+    id: 'lu-1',
+    question: '客户嫌报价高，要求再降 10%，我该怎么回？',
+    said: '先问清预算是谁定的、什么时候定\n让价换条件，比如拉长合同期或预付，不单方面降',
+    facets: [{ facet_id: '3.3', name: '依据偏好' }],
+    corrected: false,
+    at: '2026-10-17',
+  },
+  {
+    id: 'lu-2',
+    question: '新客户第一次见面，要不要带方案过去？',
+    said: '第一次只带问题清单，听完再出方案',
+    facets: [{ facet_id: '4.2', name: '追问习惯' }],
+    corrected: false,
+    at: '2026-10-16',
+  },
+  {
+    id: 'lu-3',
+    question: '渠道商要独家代理，答应吗？',
+    said: '',
+    facets: [],
+    corrected: false,
+    at: '2026-10-16',
+  },
+  {
+    id: 'lu-4',
+    question: '大客户续约前要做哪些准备？',
+    said: '先复盘上一年的使用数据，再约决策人',
+    facets: [{ facet_id: '2.3', name: '做事的原则' }],
+    corrected: true,
+    at: '2026-10-14',
+  },
+];
+const lensPreview = {
+  views: [
+    {
+      facet_id: '3.3',
+      facet: '依据偏好',
+      text: '先不谈价格，先问清预算是谁定的、什么时候定。',
+      basis: [
+        {
+          quote: '我一般先问预算是谁定的',
+          date: '2026-10-08',
+          kind: '音频',
+        },
+      ],
+    },
+    {
+      facet_id: '2.3',
+      facet: '做事的原则',
+      text: '让价换条件，比如拉长合同期或预付，不单方面降。',
+      basis: [
+        {
+          quote: '降价可以，但要换合同期',
+          date: '2026-09-28',
+          kind: '聊天记录',
+        },
+      ],
+    },
+  ],
+  settled_by_person: true,
+};
+const lensCard = {
+  id: 'l-1',
+  name: '大客户谈判',
+  owner_name: '王屿',
+  views: lensPreview.views,
+  empty: false,
+  settled_by_person: true,
+  note: '根据王屿说过的话推测，不代表王屿的意见',
+};
+const lensConversation = {
+  id: 'c-lens',
+  title: '客户嫌报价高怎么回',
+  audience: 'colleague',
+  turns: [
+    {
+      id: 't1',
+      role: 'user',
+      content: '客户嫌报价高，要求再降 10%，我该怎么回？',
+      timestamp: '2026-10-17T01:30:00Z',
+    },
+    {
+      id: 't2',
+      role: 'twin',
+      content: lensPreview.views.map((v) => v.text).join('\n'),
+      timestamp: '2026-10-17T01:30:02Z',
+      reply: {
+        reply: lensPreview.views.map((v) => v.text).join('\n'),
+        citations: [],
+        confidence: 1,
+        abstain: false,
+        abstain_reason: '',
+        retrieved_ids: [],
+        mode: 'general',
+        verified: true,
+        lens: lensCard,
+      },
+    },
+  ],
+};
+export const lensChoices = {
+  lenses: [
+    {
+      id: 'l-1',
+      name: '大客户谈判',
+      owner_name: '王屿',
+      facets: lensCard.views.map((v) => ({
+        facet_id: v.facet_id,
+        name: v.facet,
+      })),
     },
   ],
 };
@@ -1837,6 +2025,13 @@ const handlers: Record<string, Handler> = {
   'GET /api/conversations/c-deleg': reply(delegationConversation),
   'GET /api/persona/delegations/d-1': reply(delegationView),
   'GET /api/persona/team-answers': reply({ team_answers: myTeamAnswers }),
+  'GET /api/conversations/c-lens': reply(lensConversation),
+  // 第 12、13 屏: the person's lens, its uses, and how a lens reads before it is published.
+  'GET /api/persona/lenses': reply(lensList),
+  'GET /api/persona/lenses/l-1/uses': reply({ uses: lensUses }),
+  'POST /api/persona/lenses/preview': reply(lensPreview),
+  // A colleague is offered no lens unless a page says so.
+  'GET /api/persona/lenses/available': reply({ lenses: [] }),
   // 第 16 屏: one question to the whole team: the answer it has, whom to ask, the meetings.
   'GET /api/personas/ask': reply({
     team_answers: [

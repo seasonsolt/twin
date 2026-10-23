@@ -80,6 +80,9 @@ VISITOR_ROUTES = [
         ("GET", r"/api/media/(audio|video|video/jobs)/[^/]+"),
         ("POST", r"/api/media/(audio|video)"),
         ("POST", r"/api/persona/chat/stream"),
+        # A colleague asking a lens the person published (``web.lenses``).
+        ("GET", r"/api/persona/lenses/available"),
+        ("POST", r"/api/persona/lenses/(ask-owner|[^/]+/ask)"),
         ("GET|POST", r"/api/conversations"),
         ("GET|PATCH|DELETE", r"/api/conversations/[^/]+"),
         # Work mode: each visitor sees only their own tasks (``web.work``).

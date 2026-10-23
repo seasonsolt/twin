@@ -24,6 +24,7 @@ from ..config import Settings
 from ..egress import egress_status
 from ..finder import Finder, refresh_coverage
 from ..handoffs import HandoffDesk, run_all
+from ..lenses import Lenses
 from ..media.tts import SpeechSynthesizer
 from ..persona import gate
 from ..persona.gate import MemoryUpdating
@@ -36,6 +37,7 @@ from ..usage import UsageLedger, UsageRecorder, install_default
 from . import ask as ask_routes
 from . import assets, gpu, library, media, persona, system, team_answers, voice
 from . import delegation as delegation_routes
+from . import lenses as lens_routes
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .commitments import register_all as register_all_commitments
@@ -339,6 +341,18 @@ def create_app(
 
     answers = TeamAnswers(team, twin_name, lambda: [i for i in twins_in_use() if i not in registry.removing])
     finder = Finder(team)
+    lenses = Lenses(team)
+
+    def member_twins(account: str | None) -> set[str]:
+        """The twins a signed-in colleague has taken: how a lens meant for named people knows them."""
+        if account is None:
+            return set()
+        with registry.lock:
+            return {
+                p["id"]
+                for p in registry.data["personas"]
+                if p.get("member") == account and not p.get("deleted_at") and p["id"] not in registry.removing
+            }
 
     def twin_purged(persona_id: str) -> None:
         team.forget_persona(persona_id)
@@ -573,6 +587,16 @@ def create_app(
             delegations=delegations,
         )
         delegation_routes.register(context, delegations, desk, backends, request_asker_name)
+        lens_routes.register(
+            context,
+            resolved,
+            lenses,
+            desk,
+            backends,
+            ConversationIndex(team, persona_id),
+            persona_id,
+            member_twins,
+        )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(
             context,

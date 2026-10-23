@@ -120,9 +120,12 @@ def item(
     sources: int = 2,
     own_words: bool = True,
     behavior: bool = False,
+    kinds: tuple[SourceKind, ...] = (SourceKind.CHAT,),
+    conflict: str = "",
 ) -> PersonaItem:
     """An item standing on ``sources`` occasions, one a day from ``day``; on the person's own words, or only on what
-    others said (``own_words`` False); ``behavior`` adds a piece of evidence of what they did."""
+    others said (``own_words`` False); ``behavior`` adds a piece of evidence of what they did; ``kinds`` are the kinds
+    of source the occasions come from, in turn; ``conflict`` marks it as contradicting something."""
     import datetime as dt
 
     start = dt.date.fromisoformat(day)
@@ -130,7 +133,7 @@ def item(
         PEvidence(
             expression_id=f"e_{item_id}_{n}#00000",
             source_id=f"s_{item_id}_{n}",
-            source_kind=SourceKind.CHAT,
+            source_kind=kinds[n % len(kinds)],
             evidence_class=EvidenceClass.BEHAVIOR if behavior and n == 0 else EvidenceClass.SELF_REPORT,
             date=start + dt.timedelta(days=n),
             quote=f"原话{statement}",
@@ -138,7 +141,7 @@ def item(
         )
         for n in range(sources)
     ]
-    return PersonaItem(item_id=item_id, facet_id=facet, statement=statement, evidence=evidence)
+    return PersonaItem(item_id=item_id, facet_id=facet, statement=statement, evidence=evidence, conflict=conflict)
 
 
 @dataclass

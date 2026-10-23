@@ -1,11 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
   awayMerged,
+  lensChoices,
+  lensList,
   mockApi,
   newTwin,
   NOW,
   ownAssistant,
   personas,
+  status,
   weekly,
 } from './mockApi';
 
@@ -143,6 +146,40 @@ const pages: {
     },
   },
   {
+    // 第 12 屏的另一端: a colleague asked the lens of someone else's twin; the statements, their basis and who to ask.
+    name: 'chat-lens',
+    path: '/#/chat',
+    ready: '根据王屿说过的话推测，不代表王屿的意见',
+    setup: async (page) => {
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'me@example.com',
+            admin: false,
+            auth_enabled: true,
+            team_name: '产品研发部',
+          },
+        }),
+      );
+      await page.route('**/api/personas', (route) =>
+        route.fulfill({ json: personas.filter((p) => p.id === 'p-public') }),
+      );
+      await page.route('**/api/status', (route) =>
+        route.fulfill({ json: { ...status, target_name: '王屿' } }),
+      );
+      await page.route('**/api/persona/lenses/available', (route) =>
+        route.fulfill({ json: lensChoices }),
+      );
+      await page.addInitScript(() => {
+        localStorage.setItem('twin:persona', 'p-public');
+        localStorage.setItem(
+          'twin.persona:p-public:twin.current.conversation',
+          'c-lens',
+        );
+      });
+    },
+  },
+  {
     // Right after a twin is made: its chat, with a recording added and the speakers to pick from.
     name: 'chat-setup',
     path: '/#/chat',
@@ -226,6 +263,12 @@ const pages: {
     name: 'member-team-answers',
     path: '/#/team/u-linzhou?section=memories&view=answers',
     ready: '续约折扣谁能批？',
+  },
+  // 第 13 屏: the person's lens, what it was used for and not by whom, and a facet corrected out.
+  {
+    name: 'member-lens',
+    path: '/#/team/u-linzhou?section=lens',
+    ready: '最近被用在哪',
   },
   {
     name: 'member-assets',
@@ -549,6 +592,29 @@ test('fill in what the twin does not know', async ({ page }, info) => {
   await expect(dialog.getByText('整理成 2 条')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot(`fill-in-${info.project.name}.png`);
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
+test('publish a lens', async ({ page }, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  // 第 12 屏: nothing published yet.
+  await page.route('**/api/persona/lenses', (route) =>
+    route.fulfill({ json: { ...lensList, lenses: [] } }),
+  );
+  await page.goto('/#/team/u-linzhou?section=lens');
+  await page.getByRole('button', { name: '发布为视角' }).click();
+  const dialog = page.getByRole('dialog', { name: '发布为视角' });
+  await dialog.getByRole('textbox', { name: '名字' }).fill('大客户谈判');
+  await dialog.getByRole('checkbox', { name: /依据偏好/ }).check();
+  await dialog.getByRole('checkbox', { name: /做事的原则/ }).check();
+  await expect(dialog.getByRole('region', { name: '预览' })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`lens-publish-${info.project.name}.png`);
   expect(errors, 'page errors').toEqual([]);
   expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
 });

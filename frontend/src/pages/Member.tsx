@@ -22,6 +22,7 @@ import { memberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useIdentity } from '../features/identity/useIdentity';
 import { Away } from '../features/away/Away';
+import { LensTab } from '../features/lens/LensTab';
 import { useAway } from '../features/away/useAway';
 import { PersonFace } from '../features/library/PersonFace';
 import { MemberHeader } from '../features/members/MemberHeader';
@@ -39,7 +40,7 @@ import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 import { useTeam } from '../stores/team';
 
-type Section = 'overview' | 'memories' | 'away' | 'ledger' | 'assets';
+type Section = 'overview' | 'memories' | 'away' | 'ledger' | 'lens' | 'assets';
 
 /** One member who has a twin: who they are, what the twin knows of them, and (for the person themselves) what it
  * could not answer while they were away. Someone else's public twin shows no more than the way to talk to it. */
@@ -61,11 +62,13 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
     'memories',
     ...(self ? (['away'] as const) : []),
     ...(ledgerOn ? (['ledger'] as const) : []),
+    // Lending their judgement to colleagues is the person's alone to decide.
+    ...(self ? (['lens'] as const) : []),
     'assets',
   ];
   // Older links name places that now live elsewhere: the graph is a view of the memories, and the questions the twin
   // could not answer are the person's own, under 你不在时.
-  const requested = params.get('section') ?? '';
+  const requested = params.get('section') ?? params.get('tab') ?? '';
   const renamed: Record<string, Section> = {
     graph: 'memories',
     questions: self ? 'away' : 'overview',
@@ -232,6 +235,15 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                       value: 'ledger',
                       label: '承诺',
                       content: <Ledger />,
+                    },
+                  ]
+                : []),
+              ...(self
+                ? [
+                    {
+                      value: 'lens',
+                      label: '视角',
+                      content: <LensTab person={name} twinId={twin.id} />,
                     },
                   ]
                 : []),

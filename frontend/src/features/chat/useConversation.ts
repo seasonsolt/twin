@@ -13,6 +13,7 @@ import {
   waiting,
   withHandoffs,
   type ChatReply,
+  type HandoffLine,
   type NoteTier,
   type Turn,
 } from './types';
@@ -143,6 +144,7 @@ export function useConversation(active: boolean) {
   const historyRequest = useRef<AbortController | null>(null);
   const failed = useRef<string | null>(null);
   const failedTrial = useRef(false);
+  const failedLens = useRef<string | null>(null);
   const selectId = useCallback(
     (value: string | null) => {
       id.current = value;
@@ -272,8 +274,13 @@ export function useConversation(active: boolean) {
     personaId,
   ]);
 
-  /** ``trial``: ask as a colleague would be answered (看同事会得到什么), and keep nothing of it. */
-  const send = async (text = draft, trial = false) => {
+  /** ``trial``: ask as a colleague would be answered (看同事会得到什么), and keep nothing of it. ``lens``: put the
+   * question to that lens of the person (a colleague's, not a streamed answer of the twin). */
+  const send = async (
+    text = draft,
+    trial = false,
+    lens: string | null = null,
+  ) => {
     text = text.trim();
     if (
       !text ||
@@ -314,6 +321,30 @@ export function useConversation(active: boolean) {
         if (controller.signal.aborted || !mounted.current) return;
         selectId(created.id);
         setAudience(created.audience ?? null);
+      }
+      if (lens && !trial) {
+        const reply = await api<ChatReply>(
+          `/api/persona/lenses/${encodeURIComponent(lens)}/ask`,
+          {
+            method: 'POST',
+            json: { question: text, conversation_id: id.current },
+            headers: headers(),
+            signal: controller.signal,
+          },
+        );
+        if (controller.signal.aborted || !mounted.current) return;
+        const answer: Turn = {
+          id: crypto.randomUUID(),
+          role: 'twin',
+          content: reply.reply,
+          timestamp: new Date().toISOString(),
+          reply,
+        };
+        setTurns([...pending, answer]);
+        setNewest(answer.id);
+        failed.current = null;
+        void refreshHistory();
+        return;
       }
       const payload = trial
         ? {
@@ -396,6 +427,7 @@ export function useConversation(active: boolean) {
         setDraft(text);
         failed.current = text;
         failedTrial.current = trial;
+        failedLens.current = lens;
         setError(message(error));
         if (error instanceof ApiError && error.status === 404) selectId(null);
       }
@@ -511,6 +543,24 @@ export function useConversation(active: boolean) {
       ),
     );
   };
+  /** After a lens could not settle it: hand the question to the person, in the asker's name. The line under the
+   * answer then says where it stands. Rejects with why it could not. */
+  const askLensOwner = async (turnId: string) => {
+    const current = id.current;
+    if (!current) return;
+    const { handoff } = await api<{ handoff: HandoffLine }>(
+      '/api/persona/lenses/ask-owner',
+      {
+        method: 'POST',
+        json: { conversation_id: current },
+        headers: headers(),
+      },
+    );
+    if (!mounted.current || personaId !== getPersonaId()) return;
+    setTurns((rows) =>
+      rows.map((turn) => (turn.id === turnId ? { ...turn, handoff } : turn)),
+    );
+  };
   /** Take back a promise the assistant wrote into the commitments from what the person said. */
   const undoPromise = async (turnId: string) => {
     const promise = turns.find((turn) => turn.id === turnId)?.reply?.commitment;
@@ -534,6 +584,7 @@ export function useConversation(active: boolean) {
     audience,
     setNoteTier,
     undoPromise,
+    askLensOwner,
     draft,
     setDraft,
     attachments,
@@ -554,7 +605,8 @@ export function useConversation(active: boolean) {
     rename,
     remove,
     retry: () => {
-      if (failed.current) void send(failed.current, failedTrial.current);
+      if (failed.current)
+        void send(failed.current, failedTrial.current, failedLens.current);
       else if (restoreFailed) setRestoreVersion((value) => value + 1);
     },
   };

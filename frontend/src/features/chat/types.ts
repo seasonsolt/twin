@@ -1,5 +1,6 @@
 import type { TeamAnswerCard } from '../answers/types';
 import type { DelegationNote } from '../delegation/types';
+import type { LensCardData } from '../lens/types';
 
 export interface Citation {
   id: string;
@@ -82,6 +83,8 @@ export interface ChatReply {
   /** The person's assistant asked colleagues' twins in their name (帮我问问…): which asking, and its own note on it. */
   delegation?: DelegationNote;
   commitment?: PromiseLine;
+  /** A lens's answer (a colleague asked the person's lens): statements with their basis, in place of the twin's words. */
+  lens?: LensCardData;
   /** A trial question's answer: not part of the conversation, and what it left out. */
   preview?: { withheld: Withheld[] };
 }

@@ -36,6 +36,8 @@ import type { Persona } from '../../stores/personas';
 import { askOwner } from '../answers/askOwner';
 import { TeamAnswerCard } from '../answers/TeamAnswerCard';
 import { Delegation } from '../delegation/Delegation';
+import { LensCard } from '../lens/LensCard';
+import { useLensChoices } from '../lens/useLensChoices';
 import { useIdentity } from '../identity/useIdentity';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { SetupCard } from '../setup/SetupCard';
@@ -182,6 +184,20 @@ export function ChatThread({
     .reverse()
     .find((turn) => turn.role === 'twin')?.id;
   const trying = !!trial?.on;
+  // The lenses the person behind this twin published for colleagues, to ask in place of the twin; the one chosen
+  // answers the next question.
+  const lenses = useLensChoices(active && !assistant);
+  const [lensId, setLensId] = useState<string | null>(null);
+  const lens = lenses.choices.find((choice) => choice.id === lensId);
+  const { reload: reloadLenses } = lenses;
+  const failed = chat.error;
+  useEffect(() => {
+    // A lens that was held or taken back meanwhile is no longer offered.
+    if (failed && lensId) void reloadLenses();
+  }, [failed, lensId, reloadLenses]);
+  useEffect(() => {
+    if (lensId && lenses.choices.length && !lens) setLensId(null);
+  }, [lensId, lens, lenses.choices.length, setLensId]);
   const send = () => {
     if (chat.busy || chat.loading || chat.restoreFailed || !chat.draft.trim())
       return;
@@ -190,7 +206,7 @@ export function ChatThread({
     setAttachmentError('');
     void refreshState();
     pinNext.current = true;
-    void chat.send(chat.draft, !!trial?.on);
+    void chat.send(chat.draft, !!trial?.on, lens?.id ?? null);
   };
   const addAttachments = (files: File[]) => {
     if (!files.length) return;
@@ -363,13 +379,26 @@ export function ChatThread({
                             }
                             data-speaking={speaking(turn.id)}
                           >
-                            <MessageText
-                              text={turn.content}
-                              plain={turn.role === 'user'}
-                              streaming={
-                                turn.role === 'twin' && !turn.reply && chat.busy
-                              }
-                            />
+                            {turn.reply?.lens ? (
+                              <LensCard
+                                card={turn.reply.lens}
+                                onAskOwner={
+                                  turn.id === lastAnswer && !turn.handoff
+                                    ? () => chat.askLensOwner(turn.id)
+                                    : undefined
+                                }
+                              />
+                            ) : (
+                              <MessageText
+                                text={turn.content}
+                                plain={turn.role === 'user'}
+                                streaming={
+                                  turn.role === 'twin' &&
+                                  !turn.reply &&
+                                  chat.busy
+                                }
+                              />
+                            )}
                           </div>
                           {turn.reply && (
                             <>
@@ -377,7 +406,7 @@ export function ChatThread({
                                 reply={turn.reply}
                                 editable={canManage}
                                 own={assistant && !turn.preview}
-                                plain={!!turn.reply.note}
+                                plain={!!turn.reply.note || !!turn.reply.lens}
                               >
                                 <div
                                   role="group"
@@ -635,9 +664,11 @@ export function ChatThread({
             placeholder={
               trying
                 ? '问一句，看同事会得到什么…'
-                : assistant
-                  ? '问问我的分身，或说“记一下…”“帮我问问…”'
-                  : `和${name}聊点什么…`
+                : lens
+                  ? `问问${lens.owner_name}的视角…`
+                  : assistant
+                    ? '问问我的分身，或说“记一下…”“帮我问问…”'
+                    : `和${name}聊点什么…`
             }
           />
           <Row gap={1} wrap>
@@ -661,6 +692,17 @@ export function ChatThread({
                 看同事会得到什么
               </Chip>
             )}
+            {lenses.choices.map((choice) => (
+              <Chip
+                key={choice.id}
+                pressed={choice.id === lensId}
+                onClick={() =>
+                  setLensId(choice.id === lensId ? null : choice.id)
+                }
+              >
+                视角 · {choice.name}
+              </Chip>
+            ))}
             <div className="flex-1" />
             <ChatAction
               type="submit"

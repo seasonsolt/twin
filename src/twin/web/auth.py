@@ -24,6 +24,7 @@ from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -66,6 +67,16 @@ def work_address(value: str | None) -> str | None:
         return normalize_email(value) if value else None
     except HTTPException:
         return None
+
+
+def photo_url(value: Any) -> str | None:
+    """The web address of a profile photo the company sign-in gives, or None when it gives none that twin can fetch."""
+    url = str(value or "").strip()
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    return url if len(url) <= 1024 and parts.scheme in {"http", "https"} and parts.hostname else None
 
 
 def digest(value: str) -> str:
@@ -197,16 +208,19 @@ class Auth:
         *aliases: str | None,
         address: str | None = None,
         account: str | None = None,
+        photo: str | None = None,
     ) -> dict[str, Any]:
         """``aliases``: other names the login service gives the same person (an SSO account name or address),
         compared with the administrators. ``address``: the person's work e-mail, by which a twin an administrator
         made for them becomes theirs (``email`` is the account's key, which for SSO is not an address); ``account``: the
-        name the company sign-in gives them, such as the employee number 77845, which does the same."""
+        name the company sign-in gives them, such as the employee number 77845, which does the same; ``photo``: the
+        address of their company profile photo, which the twins they take wear (``Personas.offer_photo``)."""
         return {
             "email": email,
             "name": name,
             "address": address,
             "account": account,
+            "photo": photo,
             "admin": not self.settings.enabled or self.is_admin(email, *aliases),
             "auth_enabled": self.settings.enabled,
             "provider": self.settings.provider if self.settings.enabled else None,
@@ -256,7 +270,13 @@ class Auth:
             name = str(payload.get("display_name") or payload.get("account") or "").strip() or None
             account, address = (str(payload.get(k) or "").strip() or None for k in ("account", "email"))
             identity = self.identity(
-                f"sso:{subject}", name, account, address, address=work_address(address), account=account
+                f"sso:{subject}",
+                name,
+                account,
+                address,
+                address=work_address(address),
+                account=account,
+                photo=photo_url(payload.get("avatar_url")),
             )
             if subject not in self.sso_seen:
                 self.sso_seen.add(subject)
@@ -524,7 +544,9 @@ class Auth:
         @app.get("/api/whoami")
         def whoami(request: Request) -> Response:
             identity = request.scope.get("twin_identity")
-            return JSONResponse({**identity, **self.extra()}) if identity else login_required(self.login_url())
+            if not identity:
+                return login_required(self.login_url())
+            return JSONResponse({**{k: v for k, v in identity.items() if k != "photo"}, **self.extra()})
 
         @app.get("/api/admin/waitlist")
         def waitlist(request: Request) -> list[dict[str, Any]]:

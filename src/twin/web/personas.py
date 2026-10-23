@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from ..media.schema import default_avatar
 from ..persona import gate
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..util import private_directory
+from .assets import wear_photo
 from .auth import normalize_email
 from .jobs import JobManager
 
@@ -48,6 +50,9 @@ class ClaimBody(BaseModel):
     # The colleague's work e-mail or employee number; None or "" forgets it.
     claim: str | None = Field(default=None, max_length=254)
 
+
+# How long to wait before fetching again a company profile photo that could not be fetched.
+PHOTO_RETRY_SECONDS = 600.0
 
 EMPLOYEE_NUMBER = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
@@ -107,6 +112,9 @@ class Personas:
         self.requests: dict[str, int] = {}
         self.requests_lock = threading.Lock()
         self.removing: set[str] = set()
+        # When each twin last tried each company profile photo (``offer_photo``), and the thread fetching it.
+        self.photo_tries: dict[tuple[str, str], float] = {}
+        self.photo_jobs: dict[str, threading.Thread] = {}
         self.make_app: Callable[[str, Settings], FastAPI]
         self.on_removed: Callable[[str], None] = lambda _: None
         self.on_restored: Callable[[str], None] = lambda _: None
@@ -262,16 +270,63 @@ class Personas:
         """Give the signed-in person the twins made for their work e-mail or employee number that nobody has taken
         yet (under ``lock``). The company sign-in fixes both, so they alone say whose a twin is."""
         keys = claim_keys(identity)
-        if not keys or not identity.get("email"):
+        if keys and identity.get("email"):
+            changed = False
+            for entry in self.data["personas"]:
+                if entry.get("claim") in keys and not entry.get("member") and not entry.get("deleted_at"):
+                    entry["member"] = identity["email"]
+                    entry["claimed_at"] = self.clock().isoformat()
+                    changed = True
+            if changed:
+                self.save()
+        self.offer_photo(identity)
+
+    def offer_photo(self, identity: dict[str, Any]) -> None:
+        """Let the twins the signed-in person has taken wear the profile photo the company sign-in gives (under
+        ``lock``). Each twin fetches it once, in the background; ``photo`` in its entry is the last one it was
+        offered, so signing in again with the same photo does nothing."""
+        url, email = identity.get("photo"), identity.get("email")
+        if not url or not email:
             return
-        changed = False
+        now = time.monotonic()
         for entry in self.data["personas"]:
-            if entry.get("claim") in keys and not entry.get("member") and not entry.get("deleted_at"):
-                entry["member"] = identity["email"]
-                entry["claimed_at"] = self.clock().isoformat()
-                changed = True
-        if changed:
-            self.save()
+            persona_id = entry["id"]
+            if (
+                entry.get("member") != email
+                or entry.get("deleted_at")
+                or entry.get("photo") == url
+                or persona_id in self.removing
+                or now < self.photo_tries.get((persona_id, url), -PHOTO_RETRY_SECONDS) + PHOTO_RETRY_SECONDS
+            ):
+                continue
+            self.photo_tries[(persona_id, url)] = now
+            job = threading.Thread(target=self.adopt_photo, args=(persona_id, url), name="twin-photo", daemon=True)
+            self.photo_jobs[persona_id] = job
+            job.start()
+
+    def adopt_photo(self, persona_id: str, url: str) -> None:
+        """``offer_photo``'s background work: the twin counts as in flight, so it is not moved to the trash while
+        its portrait is written. A photo that cannot be fetched now is not recorded and is tried again later."""
+        with self.lock:
+            entry = self.entry(persona_id)
+            if entry is None or persona_id in self.removing:
+                return
+            worn_before = bool(entry.get("photo"))
+            settings = self._settings(persona_id, read_name=False)
+            self.enter(persona_id)
+        try:
+            worn = wear_photo(settings, url, worn_before=worn_before)
+        except OSError as error:
+            logger.warning("取企业头像失败（%s），稍后再试", type(error).__name__)
+            return
+        finally:
+            self.leave(persona_id)
+        with self.lock:
+            if (entry := self.entry(persona_id)) is not None:
+                entry["photo"] = url
+                self.save()
+        if worn:
+            logger.info("分身 %s 换上了企业头像", persona_id)
 
     def accessible(self, entry: dict[str, Any], identity: dict[str, Any]) -> bool:
         """Administrators, whoever made the twin, and the person it was made for and who has taken it."""

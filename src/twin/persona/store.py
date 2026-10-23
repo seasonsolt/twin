@@ -149,6 +149,10 @@ def stored_speaker_names(path: Path) -> SpeakerNames:
         return store.speaker_names()
 
 
+# Set once the person picks the twin's illustration themselves (``web.identity``).
+AVATAR_CHOSEN = "identity:avatar_chosen"
+
+
 def stored_avatar(path: Path, configured: str = "chestnut") -> str:
     value = None
     if path.is_file():

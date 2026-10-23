@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
 import subprocess
 import tempfile
+import urllib.request
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -21,10 +23,14 @@ from ..assets import AssetStore
 from ..config import Settings
 from ..media.clip import ffmpeg_path
 from ..media.tts import MediaUnavailable
+from ..persona.store import AVATAR_CHOSEN, PersonaStore
 
 register_heif_opener()
+logger = logging.getLogger(__name__)
 
 PORTRAIT_LIMIT = 15 * 1024 * 1024
+# A company profile photo (``wear_photo``) is a small picture; anything larger is not one.
+PHOTO_LIMIT = 5 * 1024 * 1024
 VOICE_LIMIT = 95_000_000
 # A sentence read aloud to find oneself in colleagues' meetings (``web.voice``).
 VOICEPRINT_LIMIT = 10 * 1024 * 1024
@@ -95,6 +101,45 @@ def portrait(path: Path, fields: dict[str, str]) -> bytes:
         return output.getvalue()
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
         raise HTTPException(400, "无法读取照片，请选择有效的 JPEG、PNG、WebP 或 HEIC/HEIF 图片") from None
+
+
+def fetch_photo(url: str) -> bytes:
+    """Raises OSError when the photo cannot be fetched now, ValueError when it is too large to be a photo."""
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "image/*"}), timeout=10) as response:
+        content: bytes = response.read(PHOTO_LIMIT + 1)
+    if len(content) > PHOTO_LIMIT:
+        raise ValueError("photo too large")
+    return content
+
+
+def wear_photo(settings: Settings, url: str, *, worn_before: bool) -> bool:
+    """Make the company profile photo at ``url`` the twin's portrait, unless the person decided how it looks: they
+    uploaded or picked a portrait, picked an illustration, or took off the profile photo it wore before
+    (``worn_before``). A profile photo it wears is replaced by a newer one. Returns whether it now wears this one;
+    raises OSError when the photo cannot be fetched now and may be tried again later."""
+    store = AssetStore(settings.db_path)
+    worn = store.profile()["portrait"]
+    if (worn is None and worn_before) or (worn is not None and worn.get("source") != "sso"):
+        return False
+    if settings.db_path.is_file():
+        with PersonaStore(settings.db_path) as persona:
+            if persona.get_meta(AVATAR_CHOSEN):
+                return False
+    try:
+        content = fetch_photo(url)
+        store.prepare()
+        with tempfile.NamedTemporaryFile(dir=store.directory, suffix=".upload") as upload:
+            upload.write(content)
+            upload.flush()
+            picture = portrait(Path(upload.name), {})
+    except (ValueError, HTTPException) as error:
+        # Not a photo twin can use (too small, not an image): asking again gives the same answer.
+        logger.warning("企业头像不能用作肖像：%s", getattr(error, "detail", None) or error)
+        return False
+    if store.profile()["portrait"] != worn:  # the person chose one meanwhile
+        return False
+    store.save("portrait", picture, source="sso")
+    return True
 
 
 def voice(path: Path, directory: Path) -> tuple[bytes, float]:

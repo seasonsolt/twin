@@ -883,21 +883,3 @@ it('takes 回去再听一遍 to the first step of the way in, with no empty twin
   await user.click(screen.getByRole('button', { name: '稍后再说' }));
   await screen.findByRole('heading', { name: '我的分身，你的分身已经建好了' });
 });
-
-it('says whose team the sign-in is for once the team has a name, and nothing before', async () => {
-  const gate = () => (
-    <MemoryRouter initialEntries={['/chat']}>
-      <AuthGate>
-        <h1>应用</h1>
-      </AuthGate>
-    </MemoryRouter>
-  );
-  const view = render(gate());
-  await screen.findByRole('heading', { name: '用邮箱登录' });
-  expect(screen.queryByText(/邀请你加入/u)).toBeNull();
-  view.unmount();
-  methods = { ...emailOnly, team_name: '产品研发部' };
-  render(gate());
-  const invited = await screen.findByText(/邀请你加入/u);
-  expect(invited).toHaveTextContent('邀请你加入 产品研发部');
-});

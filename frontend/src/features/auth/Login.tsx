@@ -11,9 +11,11 @@ import {
   Skeleton,
   Stack,
   Text,
+  ThemePicker,
 } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
+import { THEMES, useTheme } from '../../stores/theme';
 
 /** The ways the server signs people in (GET /api/auth/methods). */
 export interface LoginMethods {
@@ -23,17 +25,15 @@ export interface LoginMethods {
   password: boolean;
   /** A code sent by e-mail. */
   email: boolean;
-  /** The team's name, once an administrator has set one. */
-  team_name?: string | null;
 }
 
 /** Paths on this site only: never send the browser, or a form, to another origin. */
 const local = (path: string | null | undefined) =>
   path && path.startsWith('/') && !path.startsWith('//') ? path : '';
 
-/** Once signed in, ``#/login`` leads on to the team (people are found in the recordings, not set up first), so there
- * is nothing to navigate here. */
+/** Start from the team once signed in: people are found in the recordings, not set up first. */
 async function signedIn() {
+  window.location.hash = '#/team';
   await useAuth.getState().login();
 }
 
@@ -64,6 +64,8 @@ export function Login() {
   const start = local(methods?.sso?.start_url);
   const link = local(methods?.sso?.login_url);
   const sso = Boolean(start || link);
+  const own = Boolean(methods?.password || methods?.email);
+  const { theme, setTheme } = useTheme();
   return (
     <main className="auth-page bg-background">
       <AuthStage />
@@ -106,16 +108,6 @@ export function Login() {
           </Stack>
         ) : (
           <>
-            {methods.team_name && (
-              <Card as="div" variant="soft" padding="sm">
-                <Text align="center">
-                  邀请你加入{' '}
-                  <Text as="span" weight="semibold">
-                    {methods.team_name}
-                  </Text>
-                </Text>
-              </Card>
-            )}
             <Card variant="outline" padding="lg" className="auth-card">
               <div className="auth-card-head">
                 <span aria-hidden className="auth-tile">
@@ -150,16 +142,25 @@ export function Login() {
                     用享佳统一身份登录
                   </LinkButton>
                 ))}
-              {sso && methods.email && (
+              {sso && own && (
                 <div className="auth-divider">
-                  <Text size="sm" tone="secondary">
-                    或用邮箱验证码
-                  </Text>
+                  <Button
+                    variant="ghost"
+                    aria-expanded={ownOpen}
+                    aria-controls={ownId}
+                    onClick={() => setOwnOpen((open) => !open)}
+                  >
+                    或用 twin 账号登录
+                    <ChevronDown
+                      aria-hidden
+                      className={`size-4 transition-transform ${ownOpen ? 'rotate-180' : ''}`}
+                    />
+                  </Button>
                 </div>
               )}
-              {(!sso || methods.email) && (
-                <div className="space-y-4">
-                  {!sso && methods.password && <PasswordLogin primary />}
+              {(!sso || ownOpen) && (
+                <div id={ownId} className="space-y-4">
+                  {methods.password && <PasswordLogin primary={!sso} />}
                   {methods.email && (
                     <EmailLogin
                       primary={!sso && !methods.password}
@@ -168,35 +169,20 @@ export function Login() {
                   )}
                 </div>
               )}
-              {sso && methods.password && (
-                <>
-                  <div className="auth-divider">
-                    <Button
-                      variant="ghost"
-                      aria-expanded={ownOpen}
-                      aria-controls={ownId}
-                      onClick={() => setOwnOpen((open) => !open)}
-                    >
-                      或用 twin 账号登录
-                      <ChevronDown
-                        aria-hidden
-                        className={`size-4 transition-transform ${ownOpen ? 'rotate-180' : ''}`}
-                      />
-                    </Button>
-                  </div>
-                  {ownOpen && (
-                    <div id={ownId}>
-                      <PasswordLogin primary={false} />
-                    </div>
-                  )}
-                </>
-              )}
             </Card>
             <Text size="sm" tone="secondary" align="center">
               登录遇到问题？请联系管理员
             </Text>
           </>
         )}
+        <div className="auth-themes">
+          <ThemePicker
+            value={theme}
+            options={THEMES}
+            onChange={setTheme}
+            named
+          />
+        </div>
       </section>
     </main>
   );

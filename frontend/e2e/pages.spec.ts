@@ -14,8 +14,8 @@ import {
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
-/** Signed out, with the company sign-in and twin's own accounts offered (`byEmail`: a code by e-mail, not a password). */
-async function signInWithSso(page: Page, byEmail = false) {
+/** Signed out, with the company sign-in and twin's own accounts offered. */
+async function signInWithSso(page: Page) {
   await page.route('**/api/whoami', (route) =>
     route.fulfill({
       status: 401,
@@ -29,9 +29,8 @@ async function signInWithSso(page: Page, byEmail = false) {
           start_url: '/auth/start?next=/twin/',
           login_url: '/login?next=/twin/',
         },
-        password: !byEmail,
-        email: byEmail,
-        team_name: '产品研发部',
+        password: true,
+        email: false,
       },
     }),
   );
@@ -451,13 +450,6 @@ const pages: {
     path: '/#/chat',
     ready: '用享佳统一身份登录',
     setup: signInWithSso,
-  },
-  {
-    // The company sign-in first; the e-mail code is right below it, already open.
-    name: 'login-sso-email',
-    path: '/#/chat',
-    ready: '或用邮箱验证码',
-    setup: (page) => signInWithSso(page, true),
   },
   // The other palettes, as picked on the sign-in page and remembered in this browser.
   ...(['blue', 'ink'] as const).map((theme) => ({

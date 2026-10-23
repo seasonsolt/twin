@@ -163,7 +163,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | --- | --- |
 | `POST /api/auth/request` | `{email}` → `{status:"code_sent"}` 或 `{status:"waitlist"}`；邮件只含验证码，无链接 |
 | `POST /api/auth/verify` | `{email,code}` → `{email,admin}` 并设置 twin_session cookie；代码 10 分钟有效，5 次错误后销毁 |
-| `GET /api/auth/methods` | 未登录也可读：`{sso:{start_url,login_url}|null, password, email, team_name}`，登录页据此显示方式；团队有名字时，登录卡片上方多一行“邀请你加入 团队名” |
+| `GET /api/auth/methods` | 未登录也可读：`{sso:{start_url,login_url}|null, password, email, team_name}`，登录页据此显示方式（`team_name` 登录前就能读，登录页目前不显示） |
 | `POST /api/auth/password` | `{username,password}` → 身份并设置 twin_session cookie；错误统一为“账号或密码不对”，同一账号 15 分钟 5 次、同一地址一小时 30 次失败后 429 |
 | `POST /api/auth/logout` | 删除服务端会话并清 twin_session；SSO 下同时清那个应用的会话 cookie（`Path=/`） |
 | `GET /api/whoami` | `{email,admin,auth_enabled,features,team_name}`；启用登录且未登录返回 401；`team_name` 是系统设置里的团队名，侧栏和首次进入页的顶部读它，没设置时显示“我的团队” |

@@ -1848,6 +1848,10 @@
   font-size: 13px;
   opacity: 0.85;
 }
+.auth-themes {
+  margin-top: auto;
+  align-self: center;
+}
 @media (min-width: 1200px) {
   .auth-page {
     display: grid;
@@ -1898,5 +1902,8 @@
     justify-content: center;
     max-width: 420px;
     padding: 56px 0 24px;
+  }
+  .auth-themes {
+    margin-top: 12px;
   }
 }

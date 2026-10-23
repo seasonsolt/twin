@@ -183,7 +183,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - **团队库** `data/team/team.db`（0700 / 0600、WAL、自己的 `_MIGRATIONS`、迁移前快照在 `team/snapshots/`、比程序新就拒绝打开、`meta` 表记对账时间）；会话索引是分身库的可重建副本，启动时按各分身库对账（缺的补成同事档，标题时间同步，已不存在的标已删除），命令行 `twin team reconcile`（对账）、`twin team reindex`（按各分身库重建，已在索引里的会话保留原来的档位，其余同事档）。分身进回收站时索引隐藏（接口按活着的分身过滤），7 天后彻底删除时索引一起删。备份照旧复制整个 `data/`，新库自动在内。
 - **覆盖度四档**：`GET /api/persona/coverage` 每个细项的 `level` 改成 0 还不了解 / 1 提到过 / 2 了解一些 / 3 了解较多（`level_labels`），另有 `trusted`（有一条本人原话或本人确认过的依据）和 `checked`（了解较多且测试题至少 3 道、准确度到 0.7；`checked_label` 是“回答经过检查”，不是第五档）；方面的 `covered` / `sufficient` / `verified` 分别是第 1 档以上、第 3 档、第 3 档且 `checked` 的占比；补全建议只给第 0、1 档的细项。同事档的观看者看到的覆盖度只按同事能用的条目算。
 - **people 与团队表**：`GET /api/library/people` 每个人多 `last_meeting`（`{recording_id, title, date}`，观看者能看到的录音里最近一场）、`talk`（观看者能聊天的分身编号，别人公开的分身也有）；自己建的、别人公开的、按工号建的分身没有录音库的人时自动补一个人（只补有名字的分身，不连录音库、不跟着转写；分身改名后，只为它补的、不在任何录音里的人跟着改名，录音里的人仍叫会议里的名字），名字已经是某个人的名字时不按名字合并，响应的 `matches` 列出等建分身的人确认的（分身、人、名字），`POST /api/library/people/{id}/same` 体 `{persona_id, same}` 确认是同一个人（连上）或不是（以后不再问，记在团队库 `meta`）。手工建的分身的人，只有管理员和建分身、认领它的人能改名或删除，管理录音的同事不行。
-- **团队名**：`PUT /api/admin/system/team` 体 `{"name": "…" | null}`（管理员，最长 20 字，存 `system.json`），`GET /api/admin/system`、`/api/whoami` 带 `team_name`，登录页读的 `GET /api/auth/methods` 也带 `team_name`（登录前就能读）。
+- **团队名**：`PUT /api/admin/system/team` 体 `{"name": "…" | null}`（管理员，最长 20 字，存 `system.json`），`GET /api/admin/system`、`/api/whoami` 带 `team_name`，`GET /api/auth/methods` 也带 `team_name`（登录前就能读；登录页沿用 main 的样子，目前不显示）。
 
 ### 转交闭环（团队版二·2）
 

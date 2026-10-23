@@ -149,6 +149,16 @@ class Person(BaseModel):
     checks: int = 0
 
 
+class LastMeeting(BaseModel):
+    """The latest meeting a person was heard in (``Team.last_meetings``)."""
+
+    recording_id: str
+    # The recording's file name without its extension.
+    title: str
+    # The day, as YYYY-MM-DD.
+    date: str
+
+
 class Check(BaseModel):
     """A speaker given to someone by voice alone, to spot-check (``Team.checks``)."""
 
@@ -437,6 +447,30 @@ class Team:
             person.checks = checks.get(person.id, 0)
         return people
 
+    def last_meetings(self, recordings: set[str] | None = None) -> dict[str, LastMeeting]:
+        """The latest meeting each person was heard in (a speaker given to them, by the owner or by voice), by the
+        day it took place: the recording's own creation time, else a date in its file name, else the day it was
+        added. ``recordings``: only these, so a viewer is told of meetings they may see."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT DISTINCT a.person_id, r.id, r.filename, r.creation_time, r.created_at FROM attributions a "
+                "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                "WHERE a.decision = 'confirmed' AND a.person_id IS NOT NULL"
+            ).fetchall()
+        latest: dict[str, LastMeeting] = {}
+        for row in rows:
+            if recordings is not None and row["id"] not in recordings:
+                continue
+            named = date_from_name(row["filename"])
+            day = (row["creation_time"] or (named.isoformat() if named else None) or row["created_at"] or "")[:10]
+            if not day:
+                continue
+            meeting = LastMeeting(recording_id=row["id"], title=row["filename"].rsplit(".", 1)[0], date=day)
+            held = latest.get(row["person_id"])
+            if held is None or (meeting.date, meeting.recording_id) > (held.date, held.recording_id):
+                latest[row["person_id"]] = meeting
+        return latest
+
     def checks(self, person_id: str, recordings: set[str] | None = None) -> list[Check]:
         """The speakers given to the person by voice alone, the least sure first (the smallest lead over the
         runner-up; those the review gave, with no lead, before them), the longest first among equals: the most
@@ -529,23 +563,46 @@ class Team:
     def person(self, person_id: str) -> Person | None:
         return next((p for p in self.people() if p.id == person_id), None)
 
-    def add_person(self, name: str) -> Person:
+    def add_person(self, name: str, persona_id: str | None = None) -> Person:
+        """A person by name. ``persona_id``: the twin they already have, made by hand, which the library neither
+        builds nor follows (``link`` is for twins made from its recordings)."""
         name = " ".join(name.split())
         if not name:
             raise ValueError("名字不能为空")
         with self.library.transaction() as db:
-            return self._add_person(db, name)
+            return self._add_person(db, name, persona_id=persona_id)
 
     @staticmethod
-    def _add_person(db: sqlite3.Connection, name: str, auto: bool = False) -> Person:
+    def _add_person(db: sqlite3.Connection, name: str, auto: bool = False, persona_id: str | None = None) -> Person:
         if db.execute("SELECT 1 FROM people WHERE name = ?", (name,)).fetchone():
             raise ValueError(f"已经有叫「{name}」的人")
-        person = Person(id="per_" + uuid.uuid4().hex[:12], name=name, created_at=_now(), auto=auto)
+        person = Person(
+            id="per_" + uuid.uuid4().hex[:12], name=name, persona_id=persona_id, created_at=_now(), auto=auto
+        )
         db.execute(
-            "INSERT INTO people (id, name, persona_id, created_at, auto) VALUES (?, ?, NULL, ?, ?)",
-            (person.id, person.name, person.created_at, int(auto)),
+            "INSERT INTO people (id, name, persona_id, created_at, auto) VALUES (?, ?, ?, ?, ?)",
+            (person.id, person.name, person.persona_id, person.created_at, int(auto)),
         )
         return person
+
+    def roster(self) -> list[tuple[str, str, str | None]]:
+        """``(id, name, twin)`` of everyone, read without counting their speech (which ``people`` does)."""
+        with self.library.read() as db:
+            rows = db.execute("SELECT id, name, persona_id FROM people ORDER BY name").fetchall()
+        return [(r["id"], r["name"], r["persona_id"]) for r in rows]
+
+    def attach(self, person_id: str, persona_id: str) -> bool:
+        """Say that a twin made by hand is this person's, when neither has the other yet; False otherwise."""
+        with self.library.transaction() as db:
+            row = db.execute("SELECT persona_id FROM people WHERE id = ?", (person_id,)).fetchone()
+            if (
+                row is None
+                or row["persona_id"]
+                or db.execute("SELECT 1 FROM people WHERE persona_id = ?", (persona_id,)).fetchone()
+            ):
+                return False
+            db.execute("UPDATE people SET persona_id = ? WHERE id = ?", (persona_id, person_id))
+        return True
 
     def delete_person(self, person_id: str) -> bool:
         """Forget a person and their voice samples; their speakers become undecided. False while they have a

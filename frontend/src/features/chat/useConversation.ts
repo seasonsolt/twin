@@ -7,7 +7,7 @@ import { loadEssential, peekEssential } from '../../lib/personaPrefetch';
 import { api, ApiError } from '../../lib/api';
 import { getPersonaId, personaKey } from '../../lib/persona';
 import { readSSE } from '../../lib/sse';
-import type { ChatReply, Turn } from './types';
+import { spoken, type ChatReply, type Turn } from './types';
 
 export const CHAT_KEY = 'twin.next.chat';
 export const CURRENT_CHAT_KEY = 'twin.current.conversation';
@@ -293,6 +293,7 @@ export function useConversation(active: boolean) {
       const payload = {
         conversation_id: id.current,
         messages: pending
+          .filter(spoken)
           .slice(-40)
           .map(({ role, content }) => ({ role, content })),
       };

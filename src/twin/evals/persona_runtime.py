@@ -28,6 +28,7 @@ from ..persona.profile import build_profile
 from ..persona.schema import ChatReply, ChatTurn, Expression, ParsedSource, Source, SourceKind
 from ..persona.sources import parse_chat, parse_note, source_id_for
 from ..persona.store import PersonaStore
+from ..persona.tiers import SELF
 from ..usage import active_recorder, call_stage, collect_calls
 from ..util import fingerprint, private_directory, run_parallel
 
@@ -385,7 +386,7 @@ class PersonaRuntime:
         settings = self._db_settings(key)
         with PersonaStore(settings.db_path) as store:
             with self._stage(self.metadata, "answer"):
-                reply = PersonaChat(store, self.chat_llm, self.embedder, settings).reply(
+                reply = PersonaChat(store, self.chat_llm, self.embedder, settings, audience=SELF).reply(
                     [ChatTurn(role="user", content=prompt)], persist=False, today=today
                 )
             self.metadata.update(reply.model_dump(mode="json"))

@@ -96,7 +96,7 @@ def test_the_persons_chat_answers_from_the_ledger_entries_the_question_is_about(
     recorder = Recorder()
     settings = Settings(db_path=tmp_path / "twin.db")
     with PersonaStore(tmp_path / "twin.db") as store:
-        chat = PersonaChat(store, recorder.llm, HashingEmbedder(), settings, ledger=True)
+        chat = PersonaChat(store, recorder.llm, HashingEmbedder(), settings, ledger=True, audience="self")
         reply = chat.reply([ChatTurn(role="user", content=QUESTION)], today=TODAY)
         [prompt] = recorder.prompts
         assert "承诺账本" in prompt
@@ -134,13 +134,23 @@ def test_without_the_ledger_flag_the_chat_never_sees_it(tmp_path: Path) -> None:
     assert reply.citations == []
 
 
+def test_a_colleagues_conversation_never_has_the_ledger_even_when_asked_for(tmp_path: Path) -> None:
+    seed(tmp_path / "twin.db")
+    recorder = Recorder()
+    with PersonaStore(tmp_path / "twin.db") as store:
+        chat = PersonaChat(store, recorder.llm, HashingEmbedder(), Settings(db_path=tmp_path / "twin.db"), ledger=True)
+        assert chat.audience == "colleague" and not chat.ledger
+        chat.reply([ChatTurn(role="user", content=QUESTION)], today=TODAY)
+    assert "承诺账本" not in recorder.prompts[0] and "le_" not in recorder.prompts[0]
+
+
 def test_a_past_date_sees_only_what_was_said_by_then(tmp_path: Path) -> None:
     seed(tmp_path / "twin.db")
     recorder = Recorder()
     with PersonaStore(tmp_path / "twin.db") as store:
-        PersonaChat(store, recorder.llm, HashingEmbedder(), Settings(db_path=tmp_path / "twin.db"), ledger=True).reply(
-            [ChatTurn(role="user", content=QUESTION)], as_of=dt.date(2026, 10, 13)
-        )
+        PersonaChat(
+            store, recorder.llm, HashingEmbedder(), Settings(db_path=tmp_path / "twin.db"), ledger=True, audience="self"
+        ).reply([ChatTurn(role="user", content=QUESTION)], as_of=dt.date(2026, 10, 13))
     assert "[le_0123456789abcdef]" in recorder.prompts[0] and "le_fedcba9876543210" not in recorder.prompts[0]
     assert "当前状态：进行中" in recorder.prompts[0]
 
@@ -181,7 +191,10 @@ def test_a_visitor_of_a_public_twin_never_reaches_the_ledger(web: tuple[TestClie
     login(client, MEMBER)
     persona = client.post("/api/personas", json={"name": "测试分身"}, headers=CSRF).json()["id"]
     seed(tmp_path / "personas" / persona / "twin.db")
-    assert client.patch(f"/api/personas/{persona}", json={"public": True}, headers=CSRF).status_code == 200
+    # 张总 is the person this twin is made for, who has taken it and said it is all right.
+    assert client.put(f"/api/personas/{persona}/claim", json={"claim": MEMBER}, headers=CSRF).status_code == 200
+    assert [p["mine"] for p in client.get("/api/personas").json()] == [True]
+    assert client.post(f"/api/personas/{persona}/approve", json={"public": True}, headers=CSRF).status_code == 200
     headers = {**CSRF, "X-Twin-Persona": persona}
     body = {"messages": [{"role": "user", "content": QUESTION}]}
     owned = client.post("/api/persona/chat/stream", json=body, headers=headers)

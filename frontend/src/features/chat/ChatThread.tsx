@@ -29,6 +29,7 @@ import {
   usePersonaId,
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
+import { useSeesWhole } from '../../stores/access';
 import { useStatus } from '../../stores/status';
 import type { Persona } from '../../stores/personas';
 import { useIdentity } from '../identity/useIdentity';
@@ -38,6 +39,7 @@ import { MessageText } from './MessageText';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { useConversation } from './useConversation';
+import { spoken } from './types';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -75,6 +77,8 @@ export function ChatThread({
   modeSwitch?: ReactNode;
 }) {
   const personaId = usePersonaId();
+  // The person behind a twin reads what it says in their name; theirs to know, said once under the box.
+  const seen = !useSeesWhole(persona) && persona?.claimed !== false;
   const identity = useIdentity(active);
   const { audio, video, capabilities, toggleReply, speaking } = playback;
   const status = useStatus((state) => state.data);
@@ -271,7 +275,7 @@ export function ChatThread({
                 <MessageList
                   label="对话记录"
                   className="space-y-4"
-                  items={chat.turns.map((turn) => ({
+                  items={chat.turns.filter(spoken).map((turn) => ({
                     id: turn.id,
                     text: turn.content,
                     content: (
@@ -525,6 +529,16 @@ export function ChatThread({
             </ChatAction>
           </Row>
         </ChatSurface>
+        {seen && (
+          <Text
+            size="xs"
+            tone="tertiary"
+            align="center"
+            className="mx-auto mt-2 max-w-3xl"
+          >
+            本人看得到分身的回答
+          </Text>
+        )}
       </form>
     </div>
   );

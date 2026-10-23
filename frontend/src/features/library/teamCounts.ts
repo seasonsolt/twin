@@ -18,7 +18,8 @@ export interface ReviewLists {
 export const namedPeople = (people: Person[]) =>
   people.filter(
     (p) =>
-      !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
+      !p.auto &&
+      (p.can_manage !== false || p.persona_id || p.talk || p.self_claimed),
   );
 
 /** Twins no recording belongs to (made by hand, or someone else's public twin): rows of the team table like the

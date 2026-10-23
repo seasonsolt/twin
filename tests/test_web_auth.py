@@ -270,6 +270,7 @@ def test_logout_expiration_csrf_and_static(web: TestClient) -> None:
         "auth_enabled": True,
         "provider": "email",
         "features": {"work": True, "ledger": True},
+        "team_name": None,
     }
     assert web.post("/api/auth/logout").status_code == 403
     result = web.post("/api/auth/logout", headers=CSRF)
@@ -350,6 +351,7 @@ def test_auth_disabled_and_config_errors(tmp_path: Path, monkeypatch: pytest.Mon
             "auth_enabled": False,
             "provider": None,
             "features": {"work": True, "ledger": True},
+            "team_name": None,
         }
         assert web.get("/api/status").status_code == 200
         assert not (tmp_path / "auth.db").exists()
@@ -560,6 +562,7 @@ def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> 
         "auth_enabled": True,
         "provider": "sso",
         "features": {"work": True, "ledger": True},
+        "team_name": None,
     }
     own = create(web)
     calls = login.calls
@@ -756,12 +759,14 @@ def test_the_sign_in_page_learns_its_ways_while_signed_out(both: tuple[TestClien
         "sso": {"start_url": "/auth/start?next=/twin/", "login_url": "/login?next=/twin/"},
         "password": True,
         "email": False,
+        "team_name": None,
     }
     only_sso, _ = sso
     assert only_sso.get("/api/auth/methods").json() == {
         "sso": {"start_url": None, "login_url": "/login?next=/twin/"},
         "password": False,
         "email": False,
+        "team_name": None,
     }
     assert password_login(only_sso, "bob", "secret-123").status_code == 404
 
@@ -811,6 +816,7 @@ def test_own_accounts_sign_in_beside_sso(both: tuple[TestClient, FakeLogin]) -> 
         "auth_enabled": True,
         "provider": "sso",
         "features": {"work": True, "ledger": True},
+        "team_name": None,
     }
     own = create(web)
     web.cookies.set("sso", "cookie-a")  # the company sign-in wins when both are present

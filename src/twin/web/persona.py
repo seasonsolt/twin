@@ -45,9 +45,9 @@ from ..persona.chat import (
     open_store_off_loop,
     search_items,
 )
-from ..persona.coverage import LEVEL_LABELS, coverage_report
+from ..persona.coverage import CHECKED_LABEL, LEVEL_LABELS, coverage_report
 from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
-from ..persona.items import PReview
+from ..persona.items import PersonaItem, PReview
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.ledger import KIND_LABELS as LEDGER_KIND_LABELS
 from ..persona.profile import (
@@ -65,9 +65,10 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
+from ..persona.tiers import COLLEAGUE, SELF, Audience, Tier, for_audience, item_tier, private_expressions
 from ..usage import CallRow, collect_calls, model_tokens, transient_summary
 from .backends import Backends, BackendUnavailable
-from .conversations import append_reply, append_user, owner
+from .conversations import ConversationIndex, append_reply, append_user, owner, request_audience
 from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
 
 if TYPE_CHECKING:
@@ -110,6 +111,18 @@ class ReviewBody(BaseModel):
 class ChatBody(BaseModel):
     messages: list[ChatTurn] = Field(min_length=1, max_length=MAX_CHAT_TURNS)
     conversation_id: str | None = Field(default=None, max_length=100)
+
+
+class TierBody(BaseModel):
+    tier: Tier | None
+
+
+def visible_item(store: PersonaStore, item_id: str, audience: Audience) -> None:
+    """404 unless the item exists and ``audience`` may see it: an item of the person's own tier does not show that it
+    exists to anyone else."""
+    item = store.get_item(item_id)
+    if item is None or (audience != SELF and item_tier(item, store.item_tiers()) != COLLEAGUE):
+        raise HTTPException(404, f"找不到档案条目 {item_id}（可能已在重新构建时合并）")
 
 
 def _date(value: str | None, field: str) -> dt.date | None:
@@ -173,34 +186,56 @@ def run_chat(
     log: Log,
     conversation_id: str | None = None,
     email: str | None = None,
+    audience: Audience = SELF,
+    index: ConversationIndex | None = None,
 ) -> dict[str, Any]:
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
-        # This route is the person's own (visitors only reach the stream), so the ledger is material.
-        reply = PersonaChat(store, llm, embedder, settings, ledger=True).reply(messages)
-        return append_reply(store, conversation_id, email, chat_payload(store, reply))
+        # The ledger is the person's own: only a conversation of the tier that may use everything has it.
+        reply = PersonaChat(store, llm, embedder, settings, ledger=audience == SELF, audience=audience).reply(messages)
+        return append_reply(store, conversation_id, email, chat_payload(store, reply, audience=audience), index)
+
+
+def for_citation(store: PersonaStore, items: dict[str, PersonaItem], audience: Audience) -> dict[str, PersonaItem]:
+    """The cited items a conversation of ``audience`` may be shown."""
+    if audience == SELF or not items:
+        return items
+    allowed = {i.item_id for i in for_audience(items.values(), store.item_tiers(), audience)}
+    return {item_id: item for item_id, item in items.items() if item_id in allowed}
 
 
 def chat_payload(
-    store: PersonaStore, reply: ChatReply, attachment_passages: Sequence[AttachmentPassage] = ()
+    store: PersonaStore,
+    reply: ChatReply,
+    attachment_passages: Sequence[AttachmentPassage] = (),
+    audience: Audience = SELF,
 ) -> dict[str, Any]:
     return {
         **reply.model_dump(mode="json"),
-        "cited": cited_view(store, reply.citations, {p.citation_id: p for p in attachment_passages}),
+        "cited": cited_view(store, reply.citations, {p.citation_id: p for p in attachment_passages}, audience),
     }
 
 
 def cited_view(
-    store: PersonaStore, citations: Sequence[str], attachments: dict[str, AttachmentPassage] | None = None
+    store: PersonaStore,
+    citations: Sequence[str],
+    attachments: dict[str, AttachmentPassage] | None = None,
+    audience: Audience = SELF,
 ) -> list[dict[str, Any]]:
-    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out."""
-    items = store.get_items(list(citations))
+    """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out, and so
+    are items of a tier the conversation's audience may not use, whatever the answer cited."""
+    items = for_citation(store, store.get_items(list(citations)), audience)
+    hidden: set[str] | None = set() if audience == SELF else None
     cited: list[dict[str, Any]] = []
     for ref in citations:
         if (item := items.get(ref)) is not None and item.review is not ReviewStatus.REJECTED:
             facet = FACET_BY_ID[item.facet_id].name
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
         elif (e := store.get_expression(ref)) is not None:
+            if hidden is None:  # read once, and only when an answer cites someone's words
+                hidden = private_expressions(store.list_items(), store.item_tiers())
+            if ref in hidden:
+                continue
             day = e.date.isoformat() if e.date else None
             cited.append({"id": ref, "kind": "expression", "date": day, "channel": e.channel, "text": e.text})
         elif (passage := (attachments or {}).get(ref)) is not None:
@@ -213,7 +248,11 @@ def cited_view(
                     "text": passage.text,
                 }
             )
-        elif ref.startswith(LEDGER_PREFIX) and (entry := store.get_ledger_entry(ref[len(LEDGER_PREFIX) :])) is not None:
+        elif (
+            audience == SELF
+            and ref.startswith(LEDGER_PREFIX)
+            and (entry := store.get_ledger_entry(ref[len(LEDGER_PREFIX) :])) is not None
+        ):
             cited.append(
                 {
                     "id": ref,
@@ -326,11 +365,13 @@ def register(
     read_uploads: Callable[[Request], Awaitable[list[tuple[str, bytes]]]],
     on_built: Callable[[int], None] | None = None,
     on_spent: Callable[[int], None] | None = None,
+    *,
+    index: ConversationIndex,
 ) -> MediaIngestion:
     """``on_built(version)``: a build completed without any failure, from the library sources written at
     ``version`` (``gate.SYNCED``); a twin made from a recording library opens once that version is still wanted.
     ``on_spent(tokens)``: a build of such a twin ended (however it ended) after spending ``tokens`` model tokens,
-    which count against the library's batch quota."""
+    which count against the library's batch quota. ``index``: this twin's conversations in the team database."""
 
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
@@ -384,7 +425,7 @@ def register(
 
     from . import conversations, identity
 
-    conversations.register(app, settings)
+    conversations.register(app, settings, index)
     identity.register(app, settings, queue_build)
 
     from . import uploads
@@ -404,7 +445,7 @@ def register(
     followups.register(app, settings, queue_build)
     from . import work
 
-    work.register(app, settings, backends, jobs, cited_view)
+    work.register(app, settings, backends, jobs, lambda store, refs, audience: cited_view(store, refs, None, audience))
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():
@@ -699,7 +740,7 @@ def register(
         job = processing.start()
         return {"job_id": job.job_id}
 
-    def item_view(i: Any) -> dict[str, Any]:
+    def item_view(i: Any, tiers: dict[str, Tier]) -> dict[str, Any]:
         facet = FACET_BY_ID[i.facet_id]
         return {
             **i.model_dump(mode="json"),
@@ -707,10 +748,13 @@ def register(
             "dimension_id": facet.dimension_id,
             "dimension_name": DIMENSION_BY_ID[facet.dimension_id].name,
             "occasions": i.occasions(),
+            "tier": item_tier(i, tiers),
+            "tier_changed": i.item_id in tiers,
         }
 
     @app.get("/api/persona/items")
     def list_items(
+        request: Request,
         include_rejected: bool = False,
         dimension: Annotated[list[str] | None, Query()] = None,
         review: ReviewStatus | None = None,
@@ -740,8 +784,10 @@ def register(
                 include_rejected=include_rejected,
                 limit=limit,
                 offset=offset,
+                audience=request_audience(request),
             )
-            result: dict[str, Any] = {"items": [item_view(i) for i in items], "total": total}
+            tiers = store.item_tiers()
+            result: dict[str, Any] = {"items": [item_view(i, tiers) for i in items], "total": total}
             if with_sources:
                 cited = sorted({e.source_id for i in items for e in i.evidence if e.source_id})
                 result["sources"] = {
@@ -753,6 +799,7 @@ def register(
 
     @app.get("/api/persona/items/search")
     def search_profile_items(
+        request: Request,
         q: Annotated[str, Query(min_length=1, max_length=200)],
         limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = SEARCH_SIZE,
     ) -> dict[str, Any]:
@@ -762,20 +809,23 @@ def register(
         query = q.strip()
         if not query:
             raise HTTPException(400, "请输入要找的内容")
+        audience = request_audience(request)
         with open_store() as store:
             try:
-                found = search_items(store, backends.embedder(), query, limit)
+                found = search_items(store, backends.embedder(), query, limit, audience)
             except (BackendUnavailable, EmbedError, ValueError):
-                found = search_items(store, None, query, limit)
-        return {"items": [item_view(i) for i in found], "total": len(found)}
+                found = search_items(store, None, query, limit, audience)
+            tiers = store.item_tiers()
+        return {"items": [item_view(i, tiers) for i in found], "total": len(found)}
 
     @app.get("/api/persona/items/summary")
-    def items_summary() -> dict[str, Any]:
+    def items_summary(request: Request) -> dict[str, Any]:
         """Item counts per dimension in taxonomy order, rejected items left out, and how many have evidence that
         disagrees (worth a look, never a queue to work through)."""
         with open_store() as store:
-            counts = store.item_counts()
-            _, conflicts = store.query_items(conflict=True, limit=0)
+            audience = request_audience(request)
+            counts = store.item_counts(audience)
+            _, conflicts = store.query_items(conflict=True, limit=0, audience=audience)
         totals: dict[str, int] = {}
         for (facet_id, status), n in counts.items():
             if status is ReviewStatus.REJECTED or facet_id not in FACET_BY_ID:
@@ -790,7 +840,7 @@ def register(
         return {"total": sum(totals.values()), "conflicts": conflicts, "dimensions": dimensions}
 
     @app.post("/api/persona/items/{item_id}/review")
-    def review_item(item_id: str, body: ReviewBody) -> dict[str, Any]:
+    def review_item(item_id: str, body: ReviewBody, request: Request) -> dict[str, Any]:
         """Confirm, edit (with a new statement), reject, or with ``unreviewed`` clear the review of an item."""
         statement = (body.statement or "").strip()
         if body.status is ReviewStatus.EDITED and not statement:
@@ -804,22 +854,38 @@ def register(
                 reviewed_at=dt.datetime.now().isoformat(timespec="seconds"),
             )
         with open_store() as store:
+            visible_item(store, item_id, request_audience(request))
             try:
                 store.set_review(item_id, review)
             except KeyError as e:
                 raise HTTPException(404, f"找不到档案条目 {item_id}（可能已在重新构建时合并）") from e
             item = store.get_item(item_id)
-        assert item is not None
-        return item_view(item)
+            assert item is not None
+            return item_view(item, store.item_tiers())
+
+    @app.put("/api/persona/items/{item_id}/tier")
+    def set_item_tier(item_id: str, body: TierBody, request: Request) -> dict[str, Any]:
+        """Say who may use an item: colleagues' conversations or only the person (``tier``), or with null go back to the
+        default of its facet. Only the person themself decides, and only about items they can see."""
+        if request_audience(request) != SELF:
+            raise HTTPException(403, "只有本人可以改记忆的档位")
+        with open_store() as store:
+            visible_item(store, item_id, SELF)
+            store.set_item_tier(item_id, body.tier)
+            item = store.get_item(item_id)
+            assert item is not None
+            return item_view(item, store.item_tiers())
 
     @app.get("/api/persona/coverage")
-    def get_coverage(as_of: str | None = None) -> dict[str, Any]:
+    def get_coverage(request: Request, as_of: str | None = None) -> dict[str, Any]:
+        """What the twin knows per facet, of the memories the viewer may see: the person sees all of it, anyone else
+        only the colleague tier, which can be less."""
         with open_store() as store:
-            report = coverage_report(
-                store.list_items(), consented_facets(store), _date(as_of, "as_of"), demand=store.chat_demand()
-            )
+            items = for_audience(store.list_items(), store.item_tiers(), request_audience(request))
+            report = coverage_report(items, consented_facets(store), _date(as_of, "as_of"), demand=store.chat_demand())
         data = report.model_dump(mode="json")
         data["level_labels"] = LEVEL_LABELS
+        data["checked_label"] = CHECKED_LABEL
         data["kind_labels"] = {k.value: v for k, v in SOURCE_KIND_LABELS.items()}
         data["taxonomy"] = TAXONOMY_VERSION
         return data
@@ -831,23 +897,25 @@ def register(
     def start_chat(body: ChatBody, request: Request) -> Any:
         messages = validate_chat(body)
         email = owner(request)
+        audience = index.audience(body.conversation_id, request_audience(request))
         with open_store() as store:
             if not store.has_items():
-                append_user(store, body.conversation_id, email, messages[-1].content)
+                append_user(store, body.conversation_id, email, messages[-1].content, index)
                 reply = no_profile_reply(store)
                 return JSONResponse(
-                    append_reply(store, body.conversation_id, email, chat_payload(store, reply)), status_code=200
+                    append_reply(store, body.conversation_id, email, chat_payload(store, reply), index),
+                    status_code=200,
                 )
         llm, embedder = backends.chat_llm(), backends.embedder()
 
         def accept(job: Job) -> None:
             with open_store() as store:
-                append_user(store, body.conversation_id, email, messages[-1].content)
+                append_user(store, body.conversation_id, email, messages[-1].content, index)
 
         job = jobs.submit(
             "chat",
             "和分身聊天",
-            lambda log: run_chat(settings, llm, embedder, messages, log, body.conversation_id, email),
+            lambda log: run_chat(settings, llm, embedder, messages, log, body.conversation_id, email, audience, index),
             prepare=accept,
         )
         return {"job_id": job.job_id}
@@ -857,8 +925,10 @@ def register(
     ) -> StreamingResponse:
         messages = validate_chat(body)
         email = owner(request)
-        # The ledger is private: only the person themselves, never a visitor of a public twin, chats with it.
-        ledger = not request.scope.get("twin_visitor")
+        # The ledger is private: only a conversation of the tier that may use everything has it, never a visitor's or
+        # a manager's.
+        audience = index.audience(body.conversation_id, request_audience(request))
+        ledger = audience == SELF and not request.scope.get("twin_visitor")
         with open_store() as store:
             profiled = store.has_items() or bool(attachment_passages)
         ticket: Ticket | None = None
@@ -867,7 +937,7 @@ def register(
             ticket = jobs.admit_stream()
         try:
             with open_store() as store:
-                append_user(store, body.conversation_id, email, messages[-1].content)
+                append_user(store, body.conversation_id, email, messages[-1].content, index)
         except BaseException:
             if ticket is not None:
                 ticket.close()
@@ -876,10 +946,10 @@ def register(
         started_at = time.monotonic()
 
         def save(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
-            payload = chat_payload(store, reply, attachment_passages)
+            payload = chat_payload(store, reply, attachment_passages, audience)
             payload["elapsed_ms"] = max(0, round((time.monotonic() - started_at) * 1000))
             payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
-            return append_reply(store, body.conversation_id, email, payload)
+            return append_reply(store, body.conversation_id, email, payload, index)
 
         def unbuilt() -> tuple[str, dict[str, Any]]:
             with open_store() as store:
@@ -897,7 +967,9 @@ def register(
             async with ticket.running():
                 with await open_store_off_loop(settings.db_path) as store:
                     # Off the loop: it checks the twin's memory gate, which reads the store.
-                    chat = await off_loop(partial(PersonaChat, store, llm, embedder, settings, ledger=ledger))
+                    chat = await off_loop(
+                        partial(PersonaChat, store, llm, embedder, settings, ledger=ledger, audience=audience)
+                    )
                     async with aclosing(
                         chat.stream_reply(messages, attachments=attachment_passages, persist=not attachment_passages)
                     ) as replies:

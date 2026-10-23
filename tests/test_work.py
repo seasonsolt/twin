@@ -151,7 +151,7 @@ def test_the_persons_own_task_recalls_with_the_ledger_and_hands_over_office_file
     seed(tmp_path / "twin.db")
     settings = Settings(db_path=tmp_path / "twin.db")
     store = WorkStore(settings.db_path)
-    task = store.create("把老王的报价整理成表", MEMBER, visitor=False)
+    task = store.create("把老王的报价整理成表", MEMBER, visitor=False, audience="self")
     model = Scripted(
         steps=[
             lambda _: call("recall", query="老王 报价方案"),
@@ -183,6 +183,31 @@ def test_the_persons_own_task_recalls_with_the_ledger_and_hands_over_office_file
     )
     assert [f["path"] for f in store.files(task.task_id)] == turn.files
     assert (store.files_dir(task.task_id) / "草稿" / "要点.md").read_text(encoding="utf-8") == "先收钱"
+
+
+def test_a_task_recalls_only_what_its_audience_may_use(tmp_path: Path) -> None:
+    seed(tmp_path / "twin.db")
+    secret = "SECRET-FAMILY-9a 孩子的学校"
+    with PersonaStore(tmp_path / "twin.db") as store:
+        store.replace_facet_items(
+            "9.3", [PersonaItem(item_id="pi_home", facet_id="9.3", statement=secret, evidence=[])]
+        )
+        index_persona(store, HashingEmbedder(), Settings(db_path=tmp_path / "twin.db"))
+    settings = Settings(db_path=tmp_path / "twin.db")
+    store = WorkStore(settings.db_path)
+    seen: dict[str, tuple[str, str]] = {}
+    for audience in ("self", "colleague"):
+        task = store.create("回想一下", MEMBER, visitor=False, audience=audience)  # type: ignore[arg-type]
+        model = Scripted(
+            steps=[lambda _: call("recall", query="孩子 学校 老王 报价"), lambda _: AIMessage(content="好了")]
+        )
+        step(store, task, model, settings, "回想一下")
+        seen[audience] = (model.tool_results()["recall"], model.system)
+    # The person's own task remembers the family and the ledger; a colleague's, or a manager's, neither.
+    assert "SECRET-FAMILY-9a" in seen["self"][0] and "给华澜新报价方案" in seen["self"][0]
+    assert "SECRET-FAMILY-9a" not in seen["colleague"][0] and "给华澜新报价方案" not in seen["colleague"][0]
+    assert "SECRET-FAMILY-9a" not in seen["colleague"][1] and "回款优先" in seen["colleague"][0]
+    assert "会上定了什么和谁答应了什么" in seen["self"][1] and "会上定了什么和谁答应了什么" not in seen["colleague"][1]
 
 
 def test_a_visitors_task_has_no_ledger_and_no_pending_questions(tmp_path: Path) -> None:
@@ -566,7 +591,10 @@ def test_a_visitor_works_with_a_public_twin_and_sees_only_their_own_tasks(
     member = login(client, MEMBER)
     persona = client.post("/api/personas", json={"name": "测试分身"}, headers=CSRF).json()["id"]
     seed(tmp_path / "personas" / persona / "twin.db")
-    assert client.patch(f"/api/personas/{persona}", json={"public": True}, headers=CSRF).status_code == 200
+    # 张总 is the person this twin is made for, who has taken it and said it is all right.
+    assert client.put(f"/api/personas/{persona}/claim", json={"claim": MEMBER}, headers=CSRF).status_code == 200
+    assert [p["mine"] for p in client.get("/api/personas").json()] == [True]
+    assert client.post(f"/api/personas/{persona}/approve", json={"public": True}, headers=CSRF).status_code == 200
     headers = {**CSRF, "X-Twin-Persona": persona}
     own = client.post("/api/persona/work", json={"text": "写私事"}, headers=headers).json()["task"]["task_id"]
     assert wait_idle(client, own, headers)["status"] == "idle"

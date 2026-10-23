@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   MemoryRouter,
@@ -346,4 +346,50 @@ it('gives a visitor of a public twin the same page: the conversation, and the in
   expect(
     within(screen.getByRole('banner')).queryByRole('link', { name: '林舟' }),
   ).toBeNull();
+});
+
+it('says once under the box that the person behind a twin reads what it answers, and not to the person themselves', async () => {
+  const note = '本人看得到分身的回答';
+  const view = mount();
+  expect(await screen.findByText(note)).toBeVisible();
+  view.unmount();
+  // The person themselves, who took the twin and said it is all right.
+  mount('/chat', { twin: { mine: true, approved: true } });
+  await screen.findByRole('form', { name: '消息输入' });
+  expect(screen.queryByText(note)).toBeNull();
+});
+
+it('says nothing of it where the twin has no person yet, or on a machine with one person and no sign-in', async () => {
+  const note = '本人看得到分身的回答';
+  const view = mount('/chat', { twin: { can_manage: true, claimed: false } });
+  await screen.findByRole('form', { name: '消息输入' });
+  expect(screen.queryByText(note)).toBeNull();
+  view.unmount();
+  mount();
+  act(() =>
+    useAuth.setState({
+      identity: { email: null, admin: true, auth_enabled: false },
+    }),
+  );
+  await waitFor(() => expect(screen.queryByText(note)).toBeNull());
+});
+
+it('keeps the person’s own replies out of what is shown and sent, until they have a place', async () => {
+  const own: Turn = {
+    id: 's1',
+    role: 'self',
+    content: '周五前给你方案',
+    timestamp: when,
+    handoff_id: 'h_1',
+  };
+  server.rows.get('c1')!.turns = [...turns, own];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  expect(await screen.findByText('先收钱，再说扩张。')).toBeVisible();
+  expect(screen.queryByText('周五前给你方案')).toBeNull();
+  const { spoken } = await import('../features/chat/types');
+  expect([...turns, own].filter(spoken).map((turn) => turn.role)).toEqual([
+    'user',
+    'twin',
+  ]);
 });

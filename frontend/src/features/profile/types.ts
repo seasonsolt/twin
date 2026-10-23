@@ -2,6 +2,12 @@ import type { SourceKind } from '../sources/types';
 /** An item is used as soon as it is extracted; the person only steps in to correct one (edited) or remove it
  * (rejected). `confirmed` survives from when items were confirmed one by one. */
 export type ReviewStatus = 'unreviewed' | 'confirmed' | 'edited' | 'rejected';
+/** Who may use a memory: colleagues' conversations, or only the person themself. */
+export type Tier = 'colleague' | 'self';
+export const TIER_LABELS: Record<Tier, string> = {
+  colleague: '同事能用',
+  self: '只有本人能用',
+};
 export interface ProfileItem {
   item_id: string;
   dimension_id: string;
@@ -14,6 +20,9 @@ export interface ProfileItem {
   conflict: string;
   occasions: number;
   review: ReviewStatus;
+  /** Its facet's tier unless the person changed it. Absent from an older server: colleagues may use it. */
+  tier?: Tier;
+  tier_changed?: boolean;
   evidence: {
     expression_id: string;
     source_id: string;
@@ -26,7 +35,10 @@ export interface ProfileItem {
 export interface Coverage {
   taxonomy: string;
   as_of: string;
+  /** 0 还不了解, 1 提到过, 2 了解一些, 3 了解较多: how much the twin knows. */
   level_labels: Record<string, string>;
+  /** 回答经过检查: a mark beside level 3, not a level. */
+  checked_label?: string;
   kind_labels: Record<string, string>;
   dimensions: {
     dimension_id: string;
@@ -44,6 +56,8 @@ export interface Coverage {
     dimension_id: string;
     consented: boolean;
     level: number;
+    /** Level 3 and its answers held up when checked. */
+    checked?: boolean;
     sufficiency: number;
     confirmed: number;
     asked: number;

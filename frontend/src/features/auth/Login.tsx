@@ -22,6 +22,8 @@ export interface LoginMethods {
   password: boolean;
   /** A code sent by e-mail. */
   email: boolean;
+  /** The team's name, once an administrator has set one. */
+  team_name?: string | null;
 }
 
 // A server from before the sign-in page asked had only e-mail codes of its own.
@@ -86,6 +88,16 @@ export function Login() {
           </Stack>
         ) : (
           <>
+            {methods.team_name && (
+              <Card as="div" variant="soft" padding="sm">
+                <Text align="center">
+                  邀请你加入{' '}
+                  <Text as="span" weight="semibold">
+                    {methods.team_name}
+                  </Text>
+                </Text>
+              </Card>
+            )}
             <Card variant="outline" padding="lg" className="auth-card">
               <div className="auth-card-head">
                 <span aria-hidden className="auth-tile">

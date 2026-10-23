@@ -285,6 +285,11 @@ beforeEach(() => {
               },
             },
           };
+        if (url === '/api/admin/system/team')
+          state = {
+            ...state,
+            team_name: (body as { name: string }).name.trim() || null,
+          };
         const key = /\/params\/([\w.]+)$/.exec(url)?.[1];
         if (key)
           state = {
@@ -693,4 +698,35 @@ it('flags the library in the menu only once its queue or disk is full', async ()
   expect(
     within(dialog).getByRole('button', { name: /录音库容量.*队列已满/ }),
   ).toBeInTheDocument();
+});
+
+it('names the team in the settings, and the side bar and the way in follow at once', async () => {
+  const user = userEvent.setup();
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  show('team');
+  const field = await screen.findByRole('textbox', { name: '团队名' });
+  expect(field).toHaveValue('');
+  expect(field).toHaveAttribute('placeholder', '我的团队');
+  expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  await user.type(field, ' 产品研发部 ');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+  await vi.waitFor(() =>
+    expect(useAuth.getState().identity?.team_name).toBe('产品研发部'),
+  );
+  expect(puts).toEqual([
+    { url: '/api/admin/system/team', body: { name: ' 产品研发部 ' } },
+  ]);
+  expect(await screen.findByRole('textbox', { name: '团队名' })).toHaveValue(
+    '产品研发部',
+  );
+  await user.click(screen.getByRole('button', { name: '清除' }));
+  await vi.waitFor(() =>
+    expect(useAuth.getState().identity?.team_name).toBeNull(),
+  );
+  expect(puts.at(-1)).toEqual({
+    url: '/api/admin/system/team',
+    body: { name: '' },
+  });
 });

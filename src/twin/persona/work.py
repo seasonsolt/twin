@@ -41,6 +41,7 @@ from .followups import list_followups
 from .office import Cell, docx_bytes, xlsx_bytes
 from .schema import ChatTurn
 from .store import PersonaStore
+from .tiers import COLLEAGUE, SELF, Audience
 
 WORK_DIR = "work"
 TASK_FILE = "task.json"
@@ -74,6 +75,9 @@ class WorkTask(BaseModel):
     # Who started it: the signed-in email (None without sign-in) and whether as a visitor of a public twin.
     by: str | None = None
     visitor: bool = False
+    # The tier of memory it answers from (``persona.tiers``): fixed when the task starts, and never raised after;
+    # tasks from before it was recorded are the colleague tier.
+    audience: Audience = COLLEAGUE
     created_at: str
     updated_at: str
     turns: list[WorkTurn] = Field(default_factory=list)
@@ -105,13 +109,21 @@ class WorkStore:
     def files_dir(self, task_id: str) -> Path:
         return self._dir(task_id) / FILES_DIR
 
-    def create(self, text: str, by: str | None, visitor: bool) -> WorkTask:
+    def create(self, text: str, by: str | None, visitor: bool, audience: Audience = COLLEAGUE) -> WorkTask:
         private_directory(self.root)
         task_id = f"w_{secrets.token_hex(6)}"
         private_directory(self._dir(task_id))
         private_directory(self.files_dir(task_id))
         stamp = now()
-        task = WorkTask(task_id=task_id, title=_title(text), by=by, visitor=visitor, created_at=stamp, updated_at=stamp)
+        task = WorkTask(
+            task_id=task_id,
+            title=_title(text),
+            by=by,
+            visitor=visitor,
+            audience=audience,
+            created_at=stamp,
+            updated_at=stamp,
+        )
         self.save(task)
         return task
 
@@ -324,6 +336,7 @@ class Toolbox:
     owner: bool
     log: Log
     written: set[str]
+    audience: Audience = COLLEAGUE
     search: WebSearch | None = None
     # The pages read_web_page may open: links from this turn's search results and the person's own messages, so a
     # page cannot have the agent carry what it remembers to a link of the page's choosing.
@@ -334,7 +347,7 @@ class Toolbox:
         own tasks, what was decided and promised in meetings. Use it before writing anything about myself."""
         self.log(f"回想：{query.strip()[:STEP_TEXT]}")
         with PersonaStore(self.settings.db_path) as store:
-            chat = PersonaChat(store, self.llm, self.embedder, self.settings, ledger=self.owner)
+            chat = PersonaChat(store, self.llm, self.embedder, self.settings, ledger=self.owner, audience=self.audience)
             return material_text(chat.retrieve(query.strip()[:2000]))
 
     def pending_questions(self) -> str:
@@ -527,7 +540,9 @@ def answer_turn(task: WorkTask, text: str, settings: Settings, llm: LLM, embedde
     messages = [ChatTurn(role="user" if t.role == "user" else "twin", content=t.content) for t in task.turns]
     messages = [*messages[-HISTORY_TURNS:], ChatTurn(role="user", content=text)]
     with PersonaStore(settings.db_path) as store:
-        reply = PersonaChat(store, llm, embedder, settings, ledger=not task.visitor).reply(messages)
+        reply = PersonaChat(store, llm, embedder, settings, ledger=not task.visitor, audience=task.audience).reply(
+            messages
+        )
     return WorkTurn(role="assistant", content=reply.reply[:MAX_TEXT], at=now(), citations=list(reply.citations))
 
 
@@ -553,7 +568,7 @@ def run_turn(
     from langchain_core.messages import AIMessage
     from langgraph.errors import GraphRecursionError
 
-    owner = not task.visitor
+    owner = not task.visitor and task.audience == SELF
     written = [p.relative_to(files).as_posix() for p in files.rglob("*") if p.is_file()]
     if route(llm, settings, task, text, name, written) == "answer":
         answered = answer_turn(task, text, settings, llm, embedder, log)
@@ -568,12 +583,14 @@ def run_turn(
         steps.append(line)
         log(line)
 
-    toolbox = Toolbox(settings, llm, embedder, files, owner, note, set(), search=make_web_search(settings))
+    toolbox = Toolbox(
+        settings, llm, embedder, files, owner, note, set(), audience=task.audience, search=make_web_search(settings)
+    )
     toolbox.links.update(
         link for said in [*(t.content for t in task.turns if t.role == "user"), text] for link in LINK.findall(said)
     )
     with PersonaStore(settings.db_path) as store:
-        core, voice = portrait_text(*PersonaChat(store, llm, embedder, settings).portrait())
+        core, voice = portrait_text(*PersonaChat(store, llm, embedder, settings, audience=task.audience).portrait())
     system = SYSTEM.format(
         name=name,
         today=(today or dt.date.today()).isoformat(),

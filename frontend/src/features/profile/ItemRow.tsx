@@ -12,16 +12,24 @@ import {
   toast,
 } from '../../components/ui';
 import { EvidenceList } from './ItemCard';
-import { secondhand, type ProfileItem, type ReviewStatus } from './types';
+import {
+  secondhand,
+  TIER_LABELS,
+  type ProfileItem,
+  type ReviewStatus,
+  type Tier,
+} from './types';
 
 /**
  * What the twin remembers, as one line: the memory, when it applies and how many occasions it rests on. 改 opens
- * the field to correct it; the evidence, removing it and putting the extracted wording back are under “⋯”.
+ * the field to correct it; the evidence, removing it, putting the extracted wording back and who may use it are
+ * under “⋯”. Only the person behind the twin can say who may use a memory (``onTier``); a private one is marked.
  */
 export function ItemRow({
   item,
   pending,
   onReview,
+  onTier,
   kindLabels,
 }: {
   item: ProfileItem;
@@ -31,6 +39,7 @@ export function ItemRow({
     status: ReviewStatus,
     statement?: string,
   ) => Promise<boolean>;
+  onTier?: (item: ProfileItem, tier: Tier) => Promise<boolean>;
   kindLabels: Record<string, string>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -59,6 +68,7 @@ export function ItemRow({
               .filter(Boolean)
               .join(' · ')}
           </Text>
+          {item.tier === 'self' && <Badge>{TIER_LABELS.self}</Badge>}
           {item.review === 'edited' && <Badge tone="info">你改过</Badge>}
           {secondhand(item) && <Badge>只有别人的说法</Badge>}
           {item.conflict && <Badge tone="warning">有矛盾</Badge>}
@@ -88,6 +98,22 @@ export function ItemRow({
                   disabled: pending,
                   onSelect: () => void onReview(item, 'rejected'),
                 },
+                ...(onTier
+                  ? [
+                      {
+                        label:
+                          item.tier === 'self'
+                            ? '设为同事能用'
+                            : '设为只有本人',
+                        disabled: pending,
+                        onSelect: () =>
+                          void onTier(
+                            item,
+                            item.tier === 'self' ? 'colleague' : 'self',
+                          ),
+                      },
+                    ]
+                  : []),
                 ...(item.review === 'edited'
                   ? [
                       {

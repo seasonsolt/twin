@@ -10,6 +10,7 @@ import {
   PackageCheck,
   RefreshCw,
   SlidersHorizontal,
+  Users,
   Video,
   Volume2,
   Waypoints,
@@ -54,6 +55,7 @@ import type { LibraryState } from '../../pages/Library';
 import { useTeam } from '../../stores/team';
 import { LibraryCapacity, libraryStatus } from './LibraryCapacity';
 import { Params, Upgrades } from './Upgrades';
+import { TeamName } from './TeamName';
 
 /** The search parameter that holds the open section: the dialog sits over any page and closing it returns there. */
 export const SYSTEM_PARAM = 'system';
@@ -65,6 +67,7 @@ type SectionKey =
   | 'asr'
   | 'tts'
   | 'video'
+  | 'team'
   | 'features'
   | 'tokens'
   | 'library'
@@ -78,7 +81,8 @@ const SECTIONS: (Omit<SettingsSection, 'status'> & { key: SectionKey })[] = [
   { key: 'asr', label: 'ASR 转写', icon: AudioLines },
   { key: 'tts', label: 'TTS 朗读', icon: Volume2 },
   { key: 'video', label: '视频服务', icon: Video },
-  { key: 'features', label: '功能', group: '设置', icon: LayoutGrid },
+  { key: 'team', label: '团队', group: '设置', icon: Users },
+  { key: 'features', label: '功能', icon: LayoutGrid },
   { key: 'tokens', label: '模型与 Token', icon: KeyRound },
   { key: 'library', label: '录音库容量', icon: HardDrive },
   { key: 'params', label: '系统参数', icon: SlidersHorizontal },
@@ -1107,6 +1111,8 @@ export function SystemDialog() {
           <Gpu state={data} onSelect={select} />
         ) : active === 'video' ? (
           <VideoPane state={data} />
+        ) : active === 'team' ? (
+          <TeamName key={data.team_name ?? ''} name={data.team_name} />
         ) : active === 'features' ? (
           <Features state={data} />
         ) : active === 'tokens' ? (

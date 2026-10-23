@@ -60,6 +60,8 @@ FEATURE_PATHS: dict[str, Feature] = {"/api/persona/work": "work", "/api/persona/
 ModelSection = Literal["llm", "chat_llm", "embed"]
 MODEL_SECTIONS: tuple[ModelSection, ...] = ("llm", "chat_llm", "embed")
 MODEL_FIELDS = ("base_url", "model")
+# The name the sidebar and the sign-in page show for the team.
+TEAM_NAME_CHARS = 20
 _BASE_URL = re.compile(r"https?://[A-Za-z0-9.\-\[\]:]+(/[^\s?#]*)?")
 
 
@@ -133,6 +135,12 @@ class ParamBody(BaseModel):
     """Empty: back to twin.toml's value."""
 
     value: bool | int | float | None = None
+
+
+class TeamNameBody(BaseModel):
+    """Empty: no team name."""
+
+    name: str | None = Field(default=None, max_length=TEAM_NAME_CHARS * 4)
 
 
 class UpgradeBody(BaseModel):
@@ -264,6 +272,30 @@ class SystemSettings:
                 "changed_by": entry.get("by"),
             }
         return found
+
+    # ------------------------------------------------------------ team name
+
+    def team_name(self) -> str | None:
+        """The team's name as the sidebar and the sign-in page show it; None until an administrator sets one."""
+        with self._lock:
+            stored = self._data.get("team")
+        name = stored.get("name") if isinstance(stored, dict) else None
+        return name if isinstance(name, str) and name.strip() else None
+
+    def set_team_name(self, name: str | None, by: str | None) -> None:
+        name = " ".join((name or "").split())
+        if len(name) > TEAM_NAME_CHARS:
+            raise ValueError(f"团队名不能超过 {TEAM_NAME_CHARS} 个字")
+        if name and not name.isprintable():
+            raise ValueError("团队名不能含换行等控制字符")
+        before = self.team_name()
+        with self._lock:
+            if name:
+                self._data["team"] = {"name": name, **self._stamp(by)}
+            else:
+                self._data.pop("team", None)
+            self._save()
+        self._record(by, "team_name", name=[before, name or None])
 
     # ------------------------------------------------------------ quota
 
@@ -672,6 +704,7 @@ def register(
             **monitor.snapshot(),
             "switches": {name: system.switch_view(name) for name in SWITCHES},
             "features": system.feature_view(),
+            "team_name": system.team_name(),
             "config": config_view(system.settings),
             "models": models_view(system.settings),
             "editable_models": editable_models(system),
@@ -753,6 +786,16 @@ def register(
         if name not in FEATURES:
             raise HTTPException(404, "没有这个功能；聊天不能关闭")
         system.set_feature(name, body.enabled, by)
+        return view(request)
+
+    @app.put("/api/admin/system/team")
+    def put_team(body: TeamNameBody, request: Request) -> dict[str, Any]:
+        """Name the team, for the sidebar and the sign-in page; empty removes the name."""
+        by = admin(request)
+        try:
+            system.set_team_name(body.name, by)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
         return view(request)
 
     @app.put("/api/admin/system/params/{key}")

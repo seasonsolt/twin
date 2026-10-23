@@ -36,6 +36,19 @@ export const useIsSelf = (twin: Persona | undefined) =>
     useAuth((state) => state.identity?.auth_enabled === false),
   );
 
+/** Whether the viewer is the person behind the twin, who sees all of what it remembers and answers for: the one it
+ * was made for, once they have taken it and said it is all right (as the server counts it, ``Personas.audience``).
+ * With no sign-in there is one person. Everyone else, those who look after the twin included, sees the part
+ * colleagues may use. */
+export const seesWhole = (twin: Persona | undefined, signInOff: boolean) =>
+  signInOff || (!!twin?.mine && !!twin.approved);
+
+export const useSeesWhole = (twin: Persona | undefined) =>
+  seesWhole(
+    twin,
+    useAuth((state) => state.identity?.auth_enabled === false),
+  );
+
 /** The signed-in person's own twin, if they have one. */
 export const useSelfTwin = () => {
   const signInOff = useAuth((state) => state.identity?.auth_enabled === false);

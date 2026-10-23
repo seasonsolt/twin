@@ -130,7 +130,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       // The wide side bar: icon on the left, the words beside it, named by those words.
       const link = within(
         screen.getByRole('navigation', { name: '主导航' }),
-      ).getByRole('link', { name: label });
+      ).getByRole('link', { name: new RegExp(`^${label}`, 'u') });
       expect(link).toHaveClass('w-full', 'rounded-md');
       expect(within(link).getByText(label)).toBeVisible();
       expect(within(link).getByText(label)).not.toHaveClass('sr-only');
@@ -156,7 +156,8 @@ it('keeps only name/AI label in the header and describes external hosts only on 
           .getByRole('navigation', { name: '主导航' })
           .querySelectorAll('a'),
       ].map((link) => link.textContent),
-    ).toEqual(['团队', '对话', '录音库', '待处理']);
+      // The team's page counts its members (the twin whose page this is), the others nothing yet.
+    ).toEqual(['团队1', '对话', '录音库', '待处理']);
   } finally {
     useAuth.setState({ identity: null });
     rendered.unmount();

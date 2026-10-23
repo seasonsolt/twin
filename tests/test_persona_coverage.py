@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import datetime as dt
 
-from twin.persona.coverage import coverage_report, facet_coverage, report_markdown
+from twin.persona.coverage import CHECKED_LABEL, LEVEL_LABELS, coverage_report, facet_coverage, report_markdown
 from twin.persona.dimensions import FACETS
 from twin.persona.items import PersonaItem, PEvidence
-from twin.persona.schema import EvidenceClass, SourceKind
+from twin.persona.schema import EvidenceClass, ReviewStatus, SourceKind
 
 D = dt.date
 AS_OF = D(2026, 10, 3)
@@ -43,12 +43,40 @@ def test_levels_follow_occasions_source_variety_conflicts_and_probes() -> None:
         )
     ]
     full = facet_coverage("3.1", rich, AS_OF, True)
-    assert (full.occasions, full.sufficiency, full.level) == (3, 1.0, 2)
+    assert (full.occasions, full.sufficiency, full.level, full.checked) == (3, 1.0, 3, False)
     assert full.by_kind == {SourceKind.CHAT: 2, SourceKind.QUESTIONNAIRE: 1}
     assert facet_coverage("3.1", rich, AS_OF, True, [1.0, 0.5]).accuracy is None  # too few probes
-    assert facet_coverage("3.1", rich, AS_OF, True, [1.0, 0.5, 1.0]).level == 3
+    # Right answers are a mark beside "a good deal", not a level above it.
+    checked = facet_coverage("3.1", rich, AS_OF, True, [1.0, 0.5, 1.0])
+    assert (checked.level, checked.checked) == (3, True)
+    wrong = facet_coverage("3.1", rich, AS_OF, True, [0.5, 0.5, 0.5])
+    assert (wrong.level, wrong.checked) == (3, False)
     capped = facet_coverage("3.1", [rich[0].model_copy(update={"conflict": "自述看数据，行为凭直觉"})], AS_OF, True)
-    assert (capped.sufficiency, capped.level, capped.conflicts) == (0.5, 1, 1)
+    assert (capped.sufficiency, capped.level, capped.conflicts) == (0.5, 2, 1)
+
+
+def test_the_four_levels_say_how_much_the_twin_knows() -> None:
+    chat = [ev("c", SourceKind.CHAT, D(2026, 9, 2)), ev("c", SourceKind.CHAT, D(2026, 9, 3))]
+    # 还不了解: nothing at all.
+    assert facet_coverage("3.1", [], AS_OF, True).level == 0
+    # 提到过: one occasion, however well it is put.
+    assert facet_coverage("3.1", [item("3.1", chat[0])], AS_OF, True).level == 1
+    # 提到过: many occasions, but only what others said of the person, never their own words or their confirmation.
+    others = [e.model_copy(update={"own_words": False}) for e in [*chat, ev("d", SourceKind.CHAT, D(2026, 9, 4))]]
+    said = facet_coverage("3.1", [item("3.1", *others)], AS_OF, True)
+    assert (said.occasions, said.trusted, said.level) == (3, False, 1)
+    # ... until the person confirms what was said: then it is known as far as the evidence goes.
+    confirmed = item("3.1", *others).model_copy(update={"review": ReviewStatus.CONFIRMED})
+    assert facet_coverage("3.1", [confirmed], AS_OF, True).level == 3
+    # 了解一些: two occasions in the person's words, not yet enough for a good deal (0.58 of 0.7).
+    some = facet_coverage("3.1", [item("3.1", *chat)], AS_OF, True)
+    assert (some.occasions, some.sufficiency, some.level, some.checked) == (2, 0.583, 2, False)
+    # 了解较多: sufficiency reaches 0.7 on the person's own words.
+    more = facet_coverage("3.1", [item("3.1", *chat, ev("q", SourceKind.QUESTIONNAIRE, D(2026, 9, 1)))], AS_OF, True)
+    assert (more.occasions, more.sufficiency, more.level) == (3, 1.0, 3)
+    assert (
+        LEVEL_LABELS == {0: "还不了解", 1: "提到过", 2: "了解一些", 3: "了解较多"} and CHECKED_LABEL == "回答经过检查"
+    )
 
 
 def test_fast_dimension_counts_only_recent_evidence() -> None:
@@ -69,8 +97,8 @@ def test_report_summarises_dimensions_matrix_and_suggestions() -> None:
     first = report.suggestions[0]
     assert first.facet_id == "6.1" and first.sources == [SourceKind.INTERVIEW]  # conflicts first
     q = next(s for s in report.suggestions if s.facet_id == "2.1")
-    assert "可以补一些实际做过的事" in q.reason and SourceKind.QUESTIONNAIRE not in q.sources
+    assert q.reason == "只在一个场合提到过" and SourceKind.QUESTIONNAIRE not in q.sources
     assert not any(s.facet_id.startswith("9.") for s in report.suggestions)
     md = report_markdown(report)
     assert "| D2 看重什么 | 4/4 | 25% | 0% | 0% | 0 |" in md
-    assert "| 6.1 用词与口头禅（矛盾） | 已了解一些 | 0.42 |" in md and "| 9.1 兴趣爱好 | 未授权 |" in md
+    assert "| 6.1 用词与口头禅（矛盾） | 提到过 | 0.42 |" in md and "| 9.1 兴趣爱好 | 未授权 |" in md

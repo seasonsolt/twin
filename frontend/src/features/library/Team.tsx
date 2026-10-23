@@ -37,7 +37,7 @@ import { useAuth } from '../../stores/auth';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useNewTwinCard } from '../../components/layout/NewTwin';
 import type { Recording } from '../../pages/Library';
-import type { Gender, Person } from '../../pages/Recording';
+import type { Gender, Person, TwinMatch } from '../../pages/Recording';
 import type { Pick } from './useUploads';
 import { PersonClip } from './PersonClip';
 import { PersonVoice } from './PersonVoice';
@@ -268,15 +268,19 @@ function BatchClaim({
   );
 }
 
-/** Whose a twin made from the meetings is: waiting for its person to sign in, or theirs. */
-function ClaimLine({ twin }: { twin?: Persona }) {
-  const [label, tone]: [string, TextTone] | [null, null] = twin?.claimed
-    ? ['本人已认领', 'success']
-    : twin?.claim_rejected
+/** What is worth a line under a name: that a colleague sent the twin back or the twin waits for its person to sign in,
+ * else who they are in their own words (``about``), else that the twin is theirs. */
+function ClaimLine({ twin, about }: { twin?: Persona; about?: string | null }) {
+  const [label, tone]: [string, TextTone] | [null, null] =
+    twin?.claimed === false && twin.claim_rejected
       ? [`${twin.claim_rejected} 说不是 TA，换一个`, 'danger']
-      : twin?.claim
+      : twin?.claimed === false && twin.claim
         ? [`等 ${twin.claim} 登录认领`, 'secondary']
-        : [null, null];
+        : about
+          ? [about, 'secondary']
+          : twin?.claimed
+            ? ['本人已认领', 'success']
+            : [null, null];
   return (
     label && (
       <Text size="sm" tone={tone} breakAll>
@@ -355,9 +359,9 @@ type TwinState = 'ready' | 'updating' | 'none' | 'own' | 'elsewhere';
 const twinState = (person: Person): TwinState =>
   person.self_claimed
     ? 'own'
-    : person.twin_elsewhere
+    : person.twin_elsewhere && !person.talk
       ? 'elsewhere'
-      : person.persona_id
+      : person.persona_id || person.talk
         ? person.updating
           ? 'updating'
           : 'ready'
@@ -371,6 +375,23 @@ const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
 };
 // The filters over the table; the two kinds managed elsewhere show under 全部 only.
 const TWIN_FILTERS: TwinState[] = ['ready', 'updating', 'none'];
+
+/** A meeting's day as the table's 最近 column says it: 10月15日. */
+const meetingDay = (date: string) => {
+  const [, month, day] = date.split('-');
+  return `${Number(month)}月${Number(day)}日`;
+};
+
+/** The latest meeting someone was heard in, or nothing. */
+function Recent({ person }: { person: Person }) {
+  return (
+    <Text size="sm" tone="secondary" truncate>
+      {person.last_meeting
+        ? `${meetingDay(person.last_meeting.date)} ${person.last_meeting.title}`
+        : '—'}
+    </Text>
+  );
+}
 
 /** One person found in the meetings, as a row of the team table: who they are, how much of them was recorded, where
  * their twin stands, and the one thing to do next with the rest in “⋯”. */
@@ -421,7 +442,7 @@ function personRow({
         <Text weight="semibold" truncate>
           {person.name}
         </Text>
-        <ClaimLine twin={twin} />
+        <ClaimLine twin={twin} about={person.about} />
       </Stack>
     </IdentityLink>,
     <Row key="heard" gap={2}>
@@ -453,12 +474,13 @@ function personRow({
         )
       )}
     </Stack>,
+    <Recent key="recent" person={person} />,
     <Row key="act" gap={1} justify="end">
       {state === 'ready' ? (
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => onOpen(person.persona_id!)}
+          onClick={() => onOpen((person.persona_id ?? person.talk)!)}
         >
           聊天
         </Button>
@@ -508,14 +530,19 @@ function personRow({
 function twinRow({
   twin,
   me,
+  match,
   onOpen,
   onMember,
+  onSame,
 }: {
   twin: Persona;
   /** The signed-in person's address, so only other people's twins name their owner. */
   me?: string | null;
+  /** Someone in the meetings with this twin's name, whom its keeper may say it is. */
+  match?: TwinMatch;
   onOpen: (personaId: string) => void;
   onMember: () => void;
+  onSame: (match: TwinMatch, same: boolean) => void;
 }): ReactNode[] {
   return [
     <IdentityLink
@@ -531,10 +558,17 @@ function twinRow({
         <Text weight="semibold" truncate>
           {twin.name}
         </Text>
-        {twin.owner && twin.owner !== me && (
-          <Text size="sm" tone="secondary" truncate title={twin.owner}>
-            {twin.owner}
+        {match ? (
+          <Text size="sm" tone="secondary" truncate>
+            会议里有同名的人
           </Text>
+        ) : (
+          twin.owner &&
+          twin.owner !== me && (
+            <Text size="sm" tone="secondary" truncate title={twin.owner}>
+              {twin.owner}
+            </Text>
+          )
         )}
       </Stack>
     </IdentityLink>,
@@ -545,10 +579,22 @@ function twinRow({
       <StatusDot tone={TWIN_STATES.ready.tone} />
       <Text size="sm">{TWIN_STATES.ready.label}</Text>
     </Row>,
+    <Text key="recent" size="sm" tone="secondary">
+      —
+    </Text>,
     <Row key="act" gap={1} justify="end">
       <Button size="sm" variant="secondary" onClick={() => onOpen(twin.id)}>
         聊天
       </Button>
+      {match && (
+        <ActionMenu
+          label={`${twin.name}是不是会议里的人`}
+          items={[
+            { label: '是会议里的人', onSelect: () => onSame(match, true) },
+            { label: '不是同一个人', onSelect: () => onSame(match, false) },
+          ]}
+        />
+      )}
     </Row>,
   ];
 }
@@ -589,8 +635,17 @@ function Roster({
   onReload?: () => Promise<void>;
   uploads?: Pick[];
 }) {
-  const { people, peopleError, error, busy, act, load, saveClaim } =
-    useTeamData({ version, onReload });
+  const {
+    people,
+    matches,
+    sameTwin,
+    peopleError,
+    error,
+    busy,
+    act,
+    load,
+    saveClaim,
+  } = useTeamData({ version, onReload });
   const [hearing, setHearing] = useState<Person | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<TwinState | null>(null);
@@ -783,7 +838,7 @@ function Roster({
       {matchingPeople && matchingPeople.length > 0 && (
         <Table
           caption="成员"
-          headers={['成员', '录音', '分身', '操作']}
+          headers={['成员', '录音', '分身', '最近', '操作']}
           scroll={false}
           rows={matchingPeople.slice(0, peopleShown).map((entry) =>
             'person' in entry
@@ -801,8 +856,10 @@ function Roster({
               : twinRow({
                   twin: entry.twin,
                   me: identity?.email,
+                  match: matches.find((m) => m.persona_id === entry.twin.id),
                   onOpen: (personaId) => void chat(personaId),
                   onMember: () => void navigate(twinMemberPath(entry.twin.id)),
+                  onSame: (match, same) => void sameTwin(match, same),
                 }),
           )}
         />

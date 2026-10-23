@@ -28,10 +28,12 @@ from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..teamdb import TeamDB, team_path
 from ..usage import UsageLedger, UsageRecorder, install_default
 from . import assets, gpu, library, media, persona, system, voice
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
+from .conversations import ConversationIndex
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
 
@@ -314,12 +316,22 @@ def create_app(
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)
     registry = Personas(settings, jobs)
+    team = TeamDB(team_path(settings.db_path.parent))
+    app.state.team = team
+
+    def twin_purged(persona_id: str) -> None:
+        team.forget_persona(persona_id)
+        libraries.twin_purged(persona_id)
+
+    registry.on_purged = twin_purged
     for entry in registry.data["personas"]:
         if not entry.get("deleted_at"):
             path = registry.settings_for(entry["id"]).db_path
             if path.is_file():
-                with PersonaStore(path):
-                    pass
+                with PersonaStore(path) as store:
+                    # What the twin's database has and the team's index lacks (conversations from before the index,
+                    # or a write that did not make it) is added, as the colleague tier.
+                    team.reconcile_persona(entry["id"], store.conversation_rows())
     hub = WeComHub(settings, registry, backends, jobs)
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
     registry.on_restored = lambda persona_id: anyio.from_thread.run(hub.persona_restored, persona_id)
@@ -343,7 +355,8 @@ def create_app(
                     resume()
 
     system_settings.listeners.append(system_changed)
-    auth.extra = lambda: {"features": system_settings.features()}
+    auth.extra = lambda: {"features": system_settings.features(), "team_name": system_settings.team_name()}
+    auth.public = lambda: {"team_name": system_settings.team_name()}
     app.add_middleware(PersonaMiddleware, registry=registry)
     # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.
     app.add_middleware(system.FeatureGate, system=system_settings)
@@ -498,6 +511,7 @@ def create_app(
             persona.read_uploads,
             on_built=lambda version: libraries.built(persona_id, version),
             on_spent=lambda tokens: libraries.spent_building(persona_id, tokens),
+            index=ConversationIndex(team, persona_id),
         )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(
@@ -515,7 +529,7 @@ def create_app(
 
     registry.make_app = persona_app
     registry.register(app)
-    libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits)
+    libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits, team)
     voice.register(app, settings, libraries, registry)
     system.register(app, system_settings, monitor, libraries, registry, usage)
     previous_lifespan = app.router.lifespan_context
@@ -541,6 +555,7 @@ def create_app(
                 await hub.stop()
                 for context in list(registry.apps.values()):
                     context.state.processing.close()
+                team.close()
 
     app.router.lifespan_context = lifespan
 

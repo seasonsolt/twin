@@ -26,7 +26,7 @@ import {
 } from '../ui';
 import { useCanManage, useSelfTwin } from '../../stores/access';
 import { usePersonas } from '../../stores/personas';
-import { TEAM_NAME, useTeam } from '../../stores/team';
+import { useTeam, useTeamName } from '../../stores/team';
 import { api } from '../../lib/api';
 import { twinMemberPath } from '../../lib/members';
 import { usePolling } from '../../lib/usePolling';
@@ -109,6 +109,7 @@ export function Sidebar() {
   const twins = usePersonas((state) => state.items);
   const canManage = useCanManage();
   const identity = useAuth((state) => state.identity);
+  const teamName = useTeamName();
   const location = useLocation();
   const [finding, setFinding] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -202,7 +203,7 @@ export function Sidebar() {
     : [{ to: '/chat', title: '对话', icon: MessageCircle }];
   return (
     <aside className="nav-sidebar sticky top-0 flex h-dvh shrink-0 flex-col gap-3 overflow-y-auto px-3 py-4">
-      <TeamMark name={TEAM_NAME} />
+      <TeamMark name={teamName} />
       {canManage && (
         <>
           <SearchButton

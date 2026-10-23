@@ -70,9 +70,10 @@ const layers: { label: string; layer: AspectLayer; ids: string[] }[] = [
 const order = layers.flatMap((group) => group.ids);
 const layerOf = (id: string) =>
   layers.find((group) => group.ids.includes(id))?.layer ?? 'core';
-// How well something is known, in words: the server counts four levels, and the third, once answers hold up when
-// checked, carries a tick.
-const levelNames = ['还不了解', '了解一些', '了解较多', '了解较多 ✓'];
+// How well something is known, in words: the four levels the server counts, each more than the last. A facet whose
+// answers also held up when checked carries a tick after the last (``checked``).
+const levelNames = ['还不了解', '提到过', '了解一些', '了解较多'];
+const CHECKED_MARK = ' ✓';
 
 const COLLAPSED = 5;
 const TOP = 3;
@@ -102,6 +103,11 @@ function ItemList({ query, profile }: { query: ItemQuery; profile: Profile }) {
           pending={profile.pending.has(item.item_id)}
           onReview={(reviewed, status, statement) =>
             profile.review(reviewed, status, statement, page)
+          }
+          onTier={
+            profile.canTier
+              ? (changed, tier) => profile.tier(changed, tier, page)
+              : undefined
           }
           kindLabels={profile.coverage?.kind_labels ?? {}}
         />
@@ -167,6 +173,11 @@ function SearchResults({
           pending={profile.pending.has(item.item_id)}
           onReview={(reviewed, status, statement) =>
             profile.review(reviewed, status, statement, search)
+          }
+          onTier={
+            profile.canTier
+              ? (changed, tier) => profile.tier(changed, tier, search)
+              : undefined
           }
           kindLabels={profile.coverage?.kind_labels ?? {}}
         />
@@ -279,7 +290,7 @@ function Aspect({
                 <LevelDots
                   level={facet.level ?? 0}
                   layer={layer}
-                  label={levelLabels[facet.level ?? 0]}
+                  label={`${levelLabels[facet.level ?? 0]}${facet.checked ? CHECKED_MARK : ''}`}
                 />
               </Badge>
             </li>
@@ -430,7 +441,7 @@ export function Overview() {
         {(wanted.length > 0 || profile.summary) && (
           <Row gap={3} wrap>
             <Text as="span" size="sm" tone="secondary">
-              还想多了解：
+              这几个方面分身还不了解，或只提到过：
             </Text>
             {wanted.map((text) => (
               <TextLink key={text} to="?section=memories" size="sm">

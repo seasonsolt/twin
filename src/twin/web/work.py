@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..persona.store import PersonaStore, stored_identity
+from ..persona.tiers import COLLEAGUE, Audience
 from ..persona.work import (
     MAX_TEXT,
     Steering,
@@ -31,7 +32,7 @@ from ..persona.work import (
     task_view,
 )
 from .backends import Backends, BackendUnavailable
-from .conversations import owner
+from .conversations import owner, request_audience
 from .jobs import Job, JobManager, Log
 
 
@@ -40,11 +41,11 @@ class WorkBody(BaseModel):
     task_id: str | None = None
 
 
-CitedView = Callable[[PersonaStore, Sequence[str]], list[dict[str, Any]]]
+CitedView = Callable[[PersonaStore, Sequence[str], Audience], list[dict[str, Any]]]
 
 
 def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobManager, cited: CitedView) -> None:
-    """``cited`` says what a turn's citations are, as chat shows them."""
+    """``cited`` says what a turn's citations are to a task of an audience, as chat shows them."""
     store = WorkStore(settings.db_path)
     # Starting a turn checks and marks the task running in one step, so a task never runs two turns at once.
     admission = threading.Lock()
@@ -66,7 +67,7 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
             with PersonaStore(settings.db_path) as persona:
                 for turn, shown in zip(task.turns, data["turns"], strict=True):
                     if turn.citations:
-                        shown["cited"] = cited(persona, turn.citations)
+                        shown["cited"] = cited(persona, turn.citations, task.audience)
         snapshot = jobs.snapshot(task.job_id) if task.job_id and task.status == "running" else None
         data["progress"] = snapshot["progress"] if snapshot else []
         steering = steerings.get(task.task_id)
@@ -99,10 +100,14 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
             raise HTTPException(503, str(e)) from e
         name = stored_identity(settings.db_path)[0] or settings.target_name
         with admission:
+            audience = request_audience(request)
             if body.task_id is None:
-                task = store.create(text, by, visitor)
+                task = store.create(text, by, visitor, audience)
             else:
                 task = mine(request, body.task_id)
+                # A task never answers from more than its asker may have now.
+                if task.audience != audience:
+                    task.audience = COLLEAGUE
                 steering = steerings.get(task.task_id)
                 if steering is not None and view(task)["status"] == "running":
                     task.turns.append(WorkTurn(role="user", content=text, at=now()))

@@ -149,6 +149,13 @@ uv run twin kernel restore <快照文件> --persona default --yes   # 停止网�
 
 确认新稳定版修好后，`git switch stable` 再运行 `./scripts/local-up.sh` 回到自动更新。
 
+团队库的会话索引是各分身库里会话的副本（外加每段会话按哪一档记忆回答），启动时自动对账。索引对不上时，停止网页后手动运行：
+
+```bash
+uv run twin team reconcile   # 缺的补进索引（同事档），标题和时间同步，已不存在的标为已删除
+uv run twin team reindex     # 按各分身库重建；已在索引里的会话保留原来的档位，其余记为同事档
+```
+
 ## 数据在哪里、怎么清空
 
 默认布局：
@@ -158,6 +165,7 @@ uv run twin kernel restore <快照文件> --persona default --yes   # 停止网�
 | 配置与密钥（均不入 git） | `twin.toml`、`.env` |
 | 默认分身数据库 | `data/twin.db` |
 | 分身注册表 | `data/personas.json` |
+| 团队库（会话索引，连起两个人的数据；迁移前快照在 `data/team/snapshots/`） | `data/team/team.db` |
 | 示例及其他独立分身 | `data/personas/p-<ID>/twin.db` 及同级素材目录 |
 | 合成会议 | `data/demo/` |
 | 上传、素材、缓存、回收站 | `data/` 下相应目录 |

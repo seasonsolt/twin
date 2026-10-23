@@ -16,6 +16,7 @@ vi.mock('motion/react', async (original) => ({
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Overview } from '../features/profile/Overview';
 import { setPersonaId } from '../lib/persona';
+import { useAuth } from '../stores/auth';
 import { usePersonas } from '../stores/personas';
 import { MemberAt, showTwins } from './member';
 import { ConfirmProvider, toast } from '../components/ui';
@@ -24,7 +25,7 @@ vi.mock('../components/ui', async (original) => ({
   ...(await original<typeof import('../components/ui')>()),
   toast: vi.fn(),
 }));
-import type { ProfileItem } from '../features/profile/types';
+import type { ProfileItem, Tier } from '../features/profile/types';
 import { useStatus } from '../stores/status';
 import {
   isItemSearchUrl,
@@ -123,6 +124,7 @@ beforeEach(() => {
 afterEach(() => {
   setPersonaId('default');
   usePersonas.setState({ id: 'default', items: [], pendingId: null });
+  useAuth.setState({ identity: null });
 });
 const mount = () => {
   showTwins();
@@ -578,7 +580,7 @@ it('shows how far a library update has gone in place of the refused profile, the
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
 });
 
-it('names how well an aspect and its facets are known in the shorter words, with a tick on the third level', async () => {
+it('names how well an aspect and its facets are known in four levels, with a tick on a checked third', async () => {
   rows = dimensionItems('D2', 3);
   const original = fetcher.getMockImplementation()! as (
     url: string,
@@ -588,15 +590,29 @@ it('names how well an aspect and its facets are known in the shorter words, with
       ? Promise.resolve(
           json({
             kind_labels: {},
-            level_labels: { 1: '已了解一些', 2: '了解较多', 3: '回答经过检查' },
+            level_labels: { 1: '提到过', 2: '了解一些', 3: '了解较多' },
+            checked_label: '回答经过检查',
             facets: [
               {
                 facet_id: '2.1',
                 dimension_id: 'D2',
                 name: '核心价值',
                 level: 3,
+                checked: true,
               },
               { facet_id: '2.2', dimension_id: 'D2', name: '底线', level: 1 },
+              {
+                facet_id: '2.3',
+                dimension_id: 'D2',
+                name: '原则',
+                level: 2,
+              },
+              {
+                facet_id: '2.4',
+                dimension_id: 'D2',
+                name: '看人',
+                level: 3,
+              },
             ],
             suggestions: [],
           }),
@@ -607,13 +623,102 @@ it('names how well an aspect and its facets are known in the shorter words, with
   const user = userEvent.setup();
   await user.click(await screen.findByRole('tab', { name: '看重什么 3' }));
   const panel = await screen.findByRole('tabpanel', { name: '看重什么 3' });
-  // The aspect is the rounded mean of its facets (3 and 1): 了解较多.
-  expect(await within(panel).findByText(/了解较多 · 3 条/u)).toBeVisible();
+  // The aspect is the rounded mean of its facets (3, 1, 2 and 3): 了解较多 (2.25 rounds to 2, so 了解一些).
+  expect(await within(panel).findByText(/了解一些 · 3 条/u)).toBeVisible();
   expect(
     within(panel).getByRole('img', { name: '了解较多 ✓' }),
   ).toBeInTheDocument();
   expect(
+    within(panel).getByRole('img', { name: '了解较多' }),
+  ).toBeInTheDocument();
+  expect(
     within(panel).getByRole('img', { name: '了解一些' }),
   ).toBeInTheDocument();
+  expect(
+    within(panel).getByRole('img', { name: '提到过' }),
+  ).toBeInTheDocument();
   expect(screen.queryByText(/回答经过检查|已了解一些/u)).toBeNull();
+});
+
+const withTier = (
+  response: (request: RequestInit) => Response | Promise<Response>,
+) => {
+  const original = fetcher.getMockImplementation()! as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((url: string, init?: RequestInit) =>
+    url.endsWith('/tier')
+      ? Promise.resolve(response(init ?? {}))
+      : original(url, init),
+  );
+};
+
+it('lets the person themselves say who may use a memory, and marks the ones only they may', async () => {
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  rows = [
+    { ...item, item_id: 'a', statement: '孩子的事', tier: 'self' },
+    { ...item, item_id: 'b', statement: '工作上的做法', tier: 'colleague' },
+  ];
+  withTier((init) => {
+    const { tier } = JSON.parse(String(init.body)) as { tier: Tier };
+    rows = rows.map((row) =>
+      row.item_id === 'a' ? { ...row, tier, tier_changed: true } : row,
+    );
+    return json(rows[0]);
+  });
+  mountOverview();
+  await cards(2);
+  const card = (name: string) => within(screen.getByRole('article', { name }));
+  expect(card('孩子的事').getByText('只有本人能用')).toBeVisible();
+  expect(card('工作上的做法').queryByText('只有本人能用')).toBeNull();
+  await choose(card('孩子的事'), '设为同事能用');
+  await waitFor(() =>
+    expect(card('孩子的事').queryByText('只有本人能用')).toBeNull(),
+  );
+  const put = fetcher.mock.calls.find(([url]) =>
+    String(url).endsWith('/tier'),
+  )!;
+  expect(put[0]).toBe('/api/persona/items/a/tier');
+  expect(put[1]).toMatchObject({
+    method: 'PUT',
+    body: JSON.stringify({ tier: 'colleague' }),
+  });
+  expect(toast).toHaveBeenCalledWith('之后同事问到时也会用它', 'success');
+  // The other way round, the memory goes back to the person alone.
+  await choose(card('工作上的做法'), '设为只有本人');
+  await waitFor(() =>
+    expect(toast).toHaveBeenCalledWith('之后只有你自己的对话会用它', 'success'),
+  );
+});
+
+it('puts a memory back as it was when saving who may use it fails', async () => {
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  rows = [{ ...item, item_id: 'a', statement: '孩子的事', tier: 'self' }];
+  withTier(() => json({ detail: '保存失败' }, 500));
+  mountOverview();
+  await cards(1);
+  await choose(article(), '设为同事能用');
+  await waitFor(() => expect(toast).toHaveBeenCalledWith('保存失败', 'danger'));
+  expect(article().getByText('只有本人能用')).toBeVisible();
+});
+
+it('shows whoever only looks after a twin the colleague tier alone, with no say over it', async () => {
+  // A manager is a colleague to the twin's person: the server sends only what colleagues may use.
+  useAuth.setState({
+    identity: { email: 'boss@example.test', admin: true, auth_enabled: true },
+  });
+  rows = [
+    { ...item, item_id: 'b', statement: '工作上的做法', tier: 'colleague' },
+  ];
+  mountOverview();
+  await cards(1);
+  await userEvent.click(article().getByLabelText(/^更多：/u));
+  expect(screen.getByRole('button', { name: '删掉' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '设为只有本人' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '设为同事能用' })).toBeNull();
 });

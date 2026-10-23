@@ -140,8 +140,10 @@ class Auth:
         self.passwords = settings.enabled and (settings.provider == "password" or settings.password_login)
         self.sso_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
         self.sso_seen: set[str] = set()
-        # More for /api/whoami beside the identity: which pages are switched on.
+        # More for /api/whoami beside the identity: which pages are switched on, the team's name.
         self.extra: Callable[[], dict[str, Any]] = dict
+        # More for /api/auth/methods, which anyone may read: the team's name for the sign-in page.
+        self.public: Callable[[], dict[str, Any]] = dict
         if self.email and not os.environ.get(settings.smtp.password_env):
             raise ValueError(f"[auth.smtp] 缺少密码环境变量 {settings.smtp.password_env}")
         if self.email or self.passwords:
@@ -364,6 +366,7 @@ class Auth:
             else None,
             "password": self.passwords,
             "email": self.email,
+            **self.public(),
         }
 
     def rate_limit(self, email: str | None, ip: str) -> None:

@@ -1,9 +1,11 @@
 """Completeness of the persona profile per facet and dimension (docs/PERSONA_DIMENSIONS.md, section 4).
 
 Per facet: covered (an item exists), sufficiency S in [0, 1] from distinct occasions and source variety, accuracy A
-from test probes (None until at least ``MIN_PROBES`` were scored), and a level 0-3. Per dimension: the share of
-consented facets at level >= 1, >= 2 and 3. Also a facet x source-kind matrix of occasions and the next facets to
-collect for, with the source kinds most likely to fill them.
+from test probes (None until at least ``MIN_PROBES`` were scored), and a level 0-3 that says one thing only, how much
+the twin knows of it, in the same direction: 0 not yet, 1 mentioned, 2 some, 3 a good deal. Whether its answers are
+right is another matter, a ``checked`` mark on a facet at level 3. Per dimension: the share of consented facets at
+level >= 1, at level 3 and checked. Also a facet x source-kind matrix of occasions and the next facets to collect for,
+with the source kinds most likely to fill them.
 """
 
 from __future__ import annotations
@@ -38,7 +40,10 @@ LIKELY_SOURCES: dict[str, tuple[SourceKind, ...]] = {
     "D9": (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW),
 }
 
-LEVEL_LABELS = {0: "还不了解", 1: "已了解一些", 2: "了解较多", 3: "回答经过检查"}
+LEVEL_LABELS = {0: "还不了解", 1: "提到过", 2: "了解一些", 3: "了解较多"}
+CHECKED_LABEL = "回答经过检查"
+# Occasions a facet must stand on to be known better than mentioned.
+SOME_OCCASIONS = 2
 
 
 class FacetCoverage(BaseModel):
@@ -53,6 +58,12 @@ class FacetCoverage(BaseModel):
     conflicts: int
     # Items the person confirmed or edited.
     confirmed: int = 0
+    # Whether any item stands on the person's own words or was confirmed by them; without one, what others said of the
+    # person is at most mentioned.
+    trusted: bool = False
+    # Level 3 and the test questions (at least ``MIN_PROBES``) were answered right (``VERIFIED``): a mark beside the
+    # level, not a fifth one.
+    checked: bool = False
     # Logged chat questions touching the facet, and how many of them the twin abstained on.
     asked: int = 0
     abstained: int = 0
@@ -69,6 +80,7 @@ class DimensionCoverage(BaseModel):
     name: str
     facets: int
     consented: int
+    # The shares of the consented facets at level 1 or more, at level 3, and at level 3 and checked.
     covered: float | None
     sufficient: float | None
     verified: float | None
@@ -120,13 +132,14 @@ def facet_coverage(
         if conflicts:
             s = min(s, CONFLICT_CAP)
     accuracy = sum(probe_scores) / len(probe_scores) if len(probe_scores) >= MIN_PROBES else None
+    trusted = any(i.trusted for i in items)
     level = 0
     if items:
+        # Mentioned: said on a single occasion, or only by others, never in the person's own words or confirmed by them.
         level = 1
-        if s >= SUFFICIENT:
-            level = 2
-            if accuracy is not None and accuracy >= VERIFIED:
-                level = 3
+        if occasions >= SOME_OCCASIONS and trusted:
+            level = 3 if s >= SUFFICIENT else 2
+    checked = level == 3 and accuracy is not None and accuracy >= VERIFIED
     return FacetCoverage(
         facet_id=facet_id,
         name=facet.name,
@@ -138,6 +151,8 @@ def facet_coverage(
         source_kinds=kinds,
         conflicts=conflicts,
         confirmed=sum(1 for i in items if i.verified),
+        trusted=trusted,
+        checked=checked,
         asked=demand[0],
         abstained=demand[1],
         sufficiency=round(s, 3),
@@ -153,6 +168,9 @@ def _share(values: Sequence[bool]) -> float | None:
 
 
 def _suggest(f: FacetCoverage) -> Suggestion | None:
+    """What to share next for a facet the twin does not know yet (level 0) or only mentions (level 1)."""
+    if f.level >= 2:
+        return None
     likely = list(LIKELY_SOURCES[f.dimension_id])
     if f.conflicts:
         reason = f"有 {f.conflicts} 处内容不一致，可以再聊聊"
@@ -161,21 +179,15 @@ def _suggest(f: FacetCoverage) -> Suggestion | None:
         reason = f"聊天里被问到 {f.asked} 次，答不上 {f.abstained} 次"
     elif f.level == 0:
         reason = "还没有任何证据"
-    elif f.level == 1:
+    else:
         missing: list[str] = []
-        if f.occasions < OCCASION_TARGET:
-            missing.append(f"例子还不多（{f.occasions}/{OCCASION_TARGET}）")
-        if not f.behavior:
-            missing.append("可以补一些实际做过的事")
-        if len(f.source_kinds) < 2:
-            missing.append("只有一类来源")
+        if not f.trusted:
+            missing.append("只有别人说起过，还没有本人的原话")
+        if f.occasions < SOME_OCCASIONS:
+            missing.append("只在一个场合提到过")
         reason = "；".join(missing) or "还可以多了解一些"
         if not f.behavior:
             likely = [k for k in likely if k not in (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW)] or likely
-    elif f.level == 2 and f.accuracy is None:
-        return None
-    else:
-        return None
     return Suggestion(facet_id=f.facet_id, name=f.name, reason=reason, sources=likely)
 
 
@@ -212,12 +224,12 @@ def coverage_report(
                 facets=len(facets_of(d.dimension_id)),
                 consented=len(own),
                 covered=_share([f.level >= 1 for f in own]),
-                sufficient=_share([f.level >= 2 for f in own]),
-                verified=_share([f.level == 3 for f in own]),
+                sufficient=_share([f.level == 3 for f in own]),
+                verified=_share([f.checked for f in own]),
                 conflicts=sum(f.conflicts for f in own),
             )
         )
-    order = {0: 1, 1: 2, 2: 3}
+    order = {0: 1, 1: 2}
     pending = [s for f in facets if f.consented and (s := _suggest(f)) is not None]
     rank = {f.facet_id: (0 if f.conflicts else 0.5 if f.abstained else order.get(f.level, 4)) for f in facets}
     by_id = {f.facet_id: f for f in facets}
@@ -236,7 +248,7 @@ def report_markdown(report: CoverageReport, max_suggestions: int = 12) -> str:
         "",
         "## 各个方面",
         "",
-        "| 方面 | 愿意分享的内容 | 已了解一些 | 了解较多 | 回答经过检查 | 内容不一致 |",
+        "| 方面 | 愿意分享的内容 | 至少提到过 | 了解较多 | 回答经过检查 | 内容不一致 |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for d in report.dimensions:
@@ -254,7 +266,7 @@ def report_markdown(report: CoverageReport, max_suggestions: int = 12) -> str:
         "| --- | --- | ---: | ---: | ---: | " + " | ".join("---:" for _ in kinds) + " |",
     ]
     for f in report.facets:
-        level = LEVEL_LABELS[f.level] if f.consented else "未授权"
+        level = (LEVEL_LABELS[f.level] + (" ✓" if f.checked else "")) if f.consented else "未授权"
         cells = [str(f.by_kind.get(k, 0) or "") for k in kinds]
         flag = "（矛盾）" if f.conflicts else ""
         demand = f"{f.asked} / {f.abstained}" if f.asked else ""

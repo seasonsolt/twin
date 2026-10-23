@@ -1,12 +1,16 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
+import { useAuth } from './auth';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
 import type { ReviewLists } from '../features/library/teamCounts';
 
-/** The team's name where it is shown (the side bar, the way in). The backend has none yet: this stands in until the
- * system settings hold one. */
+/** What the side bar calls the team until an administrator has named it in the system settings. */
 export const TEAM_NAME = '我的团队';
+
+/** The team's name for the side bar and the way in: the one the administrator set, else the stand-in. */
+export const useTeamName = () =>
+  useAuth((state) => state.identity?.team_name) || TEAM_NAME;
 
 /** What, in the recordings, people and the review queue follow: a transcript arriving, speakers settled, one
  * removed. Not progress, which moves on every poll while recordings wait. */

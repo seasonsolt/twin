@@ -118,7 +118,8 @@ def test_persona_pages(tmp_path: Path) -> None:
     assert build["items"] == 1 and build["failures"] == []
     coverage = browser.get("/api/persona/coverage", {"as_of": "2026-10-03"})
     money = next(f for f in coverage["facets"] if f["facet_id"] == "2.1")
-    assert money["level"] == 2 and money["by_kind"] == {"questionnaire": 1, "chat": 1}
+    assert money["level"] == 3 and not money["checked"] and money["by_kind"] == {"questionnaire": 1, "chat": 1}
+    assert coverage["level_labels"]["1"] == "提到过" and coverage["checked_label"] == "回答经过检查"
 
     messages = [{"role": "user", "content": "你看重什么？"}]
     chat = browser.run("/api/persona/chat", json={"messages": messages})["result"]

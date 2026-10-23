@@ -96,6 +96,20 @@ export interface Person {
   speaker_id: string | null;
   // Speakers given to them by voice alone, to spot-check (``Team.checks``).
   checks?: number;
+  // The latest meeting they were heard in, among the recordings the viewer may see.
+  last_meeting?: { recording_id: string; title: string; date: string } | null;
+  // The twin the viewer may talk to: one they look after, or one made public.
+  talk?: string | null;
+  // The first line of their introduction (their position, for one who wrote it that way).
+  about?: string | null;
+}
+
+/** A twin made by hand that bears the name of someone found in the meetings: whoever keeps it says if they are the
+ * same person. */
+export interface TwinMatch {
+  persona_id: string;
+  person_id: string;
+  name: string;
 }
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   transcript_id: string | null;

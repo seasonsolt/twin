@@ -490,3 +490,30 @@ def test_members_cannot_see_or_upgrade_components(tmp_path: Path, monkeypatch: p
         assert client.get("/api/admin/system/components").status_code == 403
         assert client.post("/api/admin/system/components/kernel").status_code == 403
         assert client.put("/api/admin/system/params/library.max_pending", json={"value": 2}).status_code == 403
+
+
+def test_admin_names_the_team_for_the_sidebar_and_the_sign_in_page(tmp_path: Path) -> None:
+    client = client_for(Settings(db_path=tmp_path / "twin.db"))
+    assert client.get("/api/admin/system").json()["team_name"] is None
+    assert client.get("/api/whoami").json()["team_name"] is None
+    assert client.get("/api/auth/methods").json()["team_name"] is None
+    body = client.put("/api/admin/system/team", json={"name": "  产品  研发部 "}, headers=CSRF).json()
+    assert body["team_name"] == "产品 研发部"
+    assert client.get("/api/whoami").json()["team_name"] == "产品 研发部"
+    assert client.get("/api/auth/methods").json()["team_name"] == "产品 研发部"
+    system: SystemSettings = client.app.state.system
+    assert system.audit()[0] | {"at": None} == {
+        "at": None,
+        "by": None,
+        "action": "team_name",
+        "name": [None, "产品 研发部"],
+    }
+    # Kept across a restart, and private like the rest of system.json.
+    assert SystemSettings(Settings(db_path=tmp_path / "twin.db")).team_name() == "产品 研发部"
+    assert stat.S_IMODE((tmp_path / "system.json").stat().st_mode) == 0o600
+    for bad in ("一二三四五六七八九十一二三四五六七八九十一", "有\x07控制"):
+        refused = client.put("/api/admin/system/team", json={"name": bad}, headers=CSRF)
+        assert refused.status_code == 400, bad
+    assert client.get("/api/whoami").json()["team_name"] == "产品 研发部"
+    assert client.put("/api/admin/system/team", json={}, headers=CSRF).json()["team_name"] is None
+    assert client.get("/api/auth/methods").json()["team_name"] is None

@@ -28,10 +28,19 @@ export interface ChatReply {
   completed_at?: string;
 }
 
+export type Speaker = 'user' | 'twin';
+
 export interface Turn {
   id: string;
-  role: 'user' | 'twin';
+  /** ``self`` is the person's own reply, written into a conversation to answer a handoff; nothing shows it yet. */
+  role: Speaker | 'self';
   content: string;
   timestamp: string;
   reply?: ChatReply;
+  /** The handoff a ``self`` turn answers. */
+  handoff_id?: string;
 }
+
+/** The turns of the conversation as it is shown and sent: the asker's and the twin's. */
+export const spoken = (turn: Turn): turn is Turn & { role: Speaker } =>
+  turn.role !== 'self';

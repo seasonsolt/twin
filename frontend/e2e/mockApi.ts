@@ -9,7 +9,7 @@ export const NOW = new Date('2026-10-17T10:00:00+08:00');
 type Handler = (url: URL, route: Route) => unknown;
 const reply = (body: unknown) => () => body;
 
-const personas = [
+export const personas = [
   {
     id: 'default',
     name: '林舟',
@@ -200,6 +200,12 @@ const people = [
     speaker_id: 'S1',
     // Speakers given to 林舟 by voice alone, to spot-check.
     checks: 3,
+    about: '产品负责人',
+    last_meeting: {
+      recording_id: 'r-weekly',
+      title: '产品周会',
+      date: '2026-10-15',
+    },
   },
   {
     id: 'u-qinghe',
@@ -224,6 +230,11 @@ const people = [
     gender: 'female',
     recording_id: 'r-weekly',
     speaker_id: 'S2',
+    last_meeting: {
+      recording_id: 'r-review',
+      title: '需求评审',
+      date: '2026-10-12',
+    },
   },
   {
     id: 'u-shiyan',
@@ -237,6 +248,11 @@ const people = [
     gender: '',
     recording_id: 'r-weekly',
     speaker_id: 'S3',
+    last_meeting: {
+      recording_id: 'r-weekly',
+      title: '产品周会',
+      date: '2026-10-15',
+    },
   },
   {
     id: 'u-auto-1',
@@ -386,7 +402,7 @@ const dimensions = [
   ['D6', '说话方式', 6],
   ['D7', '和人相处', 2],
   ['D8', '最近在关注', 0],
-  ['D9', '生活与喜好', 0],
+  ['D9', '生活与喜好', 1],
 ] as const;
 
 const itemSummary = {
@@ -405,6 +421,7 @@ const statements: [string, string, string, string, string][] = [
   ['D3', '3.4', '常见取舍', '赶进度时宁可砍范围，也不降低质量', '临近发布'],
   ['D6', '6.2', '句式与结构', '开会时先讲结论，再补原因', ''],
   ['D5', '5.1', '拿手的事', '熟悉会议纪要和知识库类产品', ''],
+  ['D9', '9.2', '生活习惯与作息', '晚上十点以后不看工作消息', ''],
 ];
 const items = statements.map(
   ([dimension_id, facet_id, facet_name, statement, applies_when], i) => ({
@@ -419,6 +436,9 @@ const items = statements.map(
     conflict: i === 4 ? '另一段录音里他说过赶工时可以先上线再修' : '',
     occasions: 7 - i,
     review: i === 1 ? 'edited' : 'unreviewed',
+    // What colleagues may use: every facet but the personal ones, unless the person said otherwise.
+    tier: dimension_id === 'D9' ? 'self' : 'colleague',
+    tier_changed: false,
     evidence: [
       {
         expression_id: `e-${i + 1}`,
@@ -460,18 +480,23 @@ const facetLevels: [string, string, number][] = [
   ['8.1', '近期重点', 0],
   ['8.2', '正在做的事', 0],
   ['9.1', '兴趣爱好', 0],
-  ['9.2', '生活习惯与作息', 0],
+  ['9.2', '生活习惯与作息', 1],
 ];
+
+// Facets at the third level whose answers held up when the twin was asked about them.
+const checkedFacets = new Set(['2.1', '5.1']);
 
 const coverage = {
   taxonomy: 't3',
   as_of: '2026-10-17',
+  // How much the twin knows of a facet, each more than the last; a facet whose answers held up carries a tick.
   level_labels: {
     '0': '还不了解',
-    '1': '已了解一些',
-    '2': '了解较多',
-    '3': '回答经过检查',
+    '1': '提到过',
+    '2': '了解一些',
+    '3': '了解较多',
   },
+  checked_label: '回答经过检查',
   kind_labels: { chat: '聊天', document: '文档', interview: '访谈' },
   dimensions: dimensions.map(([dimension_id, name]) => {
     const own = facetLevels.filter(([id]) => `D${id[0]}` === dimension_id);
@@ -481,8 +506,8 @@ const coverage = {
       facets: own.length,
       consented: own.length,
       covered: own.filter(([, , level]) => level > 0).length / own.length,
-      sufficient: own.filter(([, , level]) => level > 1).length / own.length,
-      verified: own.filter(([, , level]) => level > 2).length / own.length,
+      sufficient: own.filter(([, , level]) => level > 2).length / own.length,
+      verified: own.filter(([id]) => checkedFacets.has(id)).length / own.length,
       conflicts: dimension_id === 'D3' ? 1 : 0,
     };
   }),
@@ -492,6 +517,7 @@ const coverage = {
     dimension_id: `D${facet_id[0]}`,
     consented: true,
     level,
+    checked: checkedFacets.has(facet_id),
     sufficiency: level / 3,
     confirmed: 0,
     asked: 0,
@@ -503,13 +529,13 @@ const coverage = {
     {
       facet_id: '8.1',
       name: '近期重点',
-      reason: '还没有提到过',
+      reason: '还没有任何证据',
       sources: ['interview'],
     },
     {
       facet_id: '9.1',
       name: '兴趣爱好',
-      reason: '还没有提到过',
+      reason: '还没有任何证据',
       sources: ['interview'],
     },
   ],
@@ -679,6 +705,7 @@ const gpuHours = (failing: number) =>
     failures: i === failing ? 12 : 0,
   }));
 const system = {
+  team_name: '产品研发部',
   now: gpuNow,
   interval: 60,
   window: 86400,
@@ -962,8 +989,18 @@ const components = {
 };
 
 const handlers: Record<string, Handler> = {
-  'GET /api/whoami': reply({ email: null, admin: true, auth_enabled: false }),
-  'GET /api/auth/methods': reply({ sso: null, password: false, email: true }),
+  'GET /api/whoami': reply({
+    email: null,
+    admin: true,
+    auth_enabled: false,
+    team_name: '产品研发部',
+  }),
+  'GET /api/auth/methods': reply({
+    sso: null,
+    password: false,
+    email: true,
+    team_name: '产品研发部',
+  }),
   'GET /api/admin/system': reply(system),
   'GET /api/admin/system/components': reply(components),
   'GET /api/personas': reply(personas),
@@ -1001,7 +1038,7 @@ const handlers: Record<string, Handler> = {
       headroom_bytes: 20 * 1024 ** 3,
     },
   }),
-  'GET /api/library/people': reply({ items: people }),
+  'GET /api/library/people': reply({ items: people, matches: [] }),
   // 需求评审 was transcribed by an older service: the library offers to collect it again.
   'GET /api/library/recollect': reply({
     service: '1.4.1/overlap',

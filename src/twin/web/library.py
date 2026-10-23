@@ -56,6 +56,7 @@ from ..persona import gate
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import parse_media
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..teamdb import TeamDB
 from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import ClaimBody, Personas, claim_key
@@ -72,6 +73,8 @@ SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 # goes on once the quota frees up, even if nobody opens the library page.
 WAKE_SECONDS = 60.0
 SWEEP_SECONDS = 3600.0
+# ``meta`` key (in the team database) of a twin made by hand that its keeper said is not the person of its name.
+APART = "people:apart:"
 
 
 class Viewer(NamedTuple):
@@ -91,6 +94,27 @@ class Access(NamedTuple):
 
 class PersonBody(BaseModel):
     name: str = Field(min_length=1, max_length=40)
+
+
+ABOUT_CHARS = 40
+
+
+def self_introduction(registry: Personas | None, persona_id: str | None) -> str | None:
+    """The first line of what a twin says about its person (their position, for one who wrote it that way), cut
+    short; None when there is none."""
+    if registry is None or not persona_id:
+        return None
+    try:
+        about = stored_identity(registry.settings_for(persona_id).db_path)[1]
+    except HTTPException:
+        return None
+    line = next((line.strip() for line in about.splitlines() if line.strip()), "")
+    return (line[: ABOUT_CHARS - 1] + "…" if len(line) > ABOUT_CHARS else line) or None
+
+
+class SameBody(BaseModel):
+    persona_id: str = Field(max_length=100)
+    same: bool
 
 
 class PersonPatch(BaseModel):
@@ -166,8 +190,11 @@ class Libraries:
         registry: Personas | None = None,
         llm: Callable[[], LLM] | None = None,
         limits: Callable[[], tuple[int, float]] | None = None,
+        teamdb: TeamDB | None = None,
     ) -> None:
         self.settings, self.jobs, self.registry, self.llm = settings, jobs, registry, llm
+        # The team's own database: where it is kept that a twin made by hand is not the person of the same name.
+        self.teamdb = teamdb
         # The token quota (tokens per window of hours); an administrator can change it while the server runs.
         self.limits = limits or (lambda: (settings.library.batch_tokens, settings.library.batch_hours))
         self.root = settings.db_path.parent / "library"
@@ -264,15 +291,120 @@ class Libraries:
         editable = {rid for rid, access in self.access(viewer).items() if access.edit}
         attended = team.attendance()
         heard = set().union(*attended.values()) if attended else set()
-        found = {person.id for person in team.people() if person.id not in heard}
+        people = team.people()
+        found = {person.id for person in people if person.id not in heard}
         for recording_id in editable:
             found |= attended.get(recording_id, set())
+        # A twin made by hand is its maker's to speak for, not the library's: whoever keeps the recordings does not
+        # rename its person (which renames the twin) or delete it with them.
+        made = {person.id: person.persona_id for person in people if person.persona_id}
+        if made and self.registry is not None:
+            built = {persona_id for persona_id, _, _, _ in team.synced()}
+            for person_id, persona_id in made.items():
+                entry = self.registry.entry(persona_id)
+                if (
+                    persona_id not in built
+                    and entry is not None
+                    and viewer.email
+                    not in (
+                        entry.get("owner"),
+                        entry.get("member"),
+                    )
+                ):
+                    found.discard(person_id)
         return found
 
     def manage(self, viewer: Viewer, person_id: str) -> None:
         managed = self.managed(viewer)
         if managed is not None and person_id not in managed:
             raise HTTPException(403, "只有上传了 TA 所在录音的同事或管理员可以整理这个人")
+
+    def live_twins(self) -> list[dict[str, Any]]:
+        """The registry's twins that are not deleted, as copies."""
+        assert self.registry is not None
+        with self.registry.lock:
+            return [dict(entry) for entry in self.registry.data["personas"] if not entry.get("deleted_at")]
+
+    def twin_name(self, persona_id: str) -> str | None:
+        """What the twin has been named, or None when it has not been (it still answers to the placeholder) or is
+        gone meanwhile."""
+        assert self.registry is not None
+        try:
+            settings = self.registry.settings_for(persona_id)
+        except HTTPException:
+            return None
+        return " ".join((stored_identity(settings.db_path)[0] or "").split()) or None
+
+    def adopt_personas(self) -> int:
+        """Give every twin the library has no person for (made by hand, or by someone for themself) a person of its
+        own, so the team's table has one row for each. A twin whose name is already a person's is not joined to them
+        by the name: whoever keeps the twin says whether they are the same (``twin_matches``). Returns how many
+        persons were added."""
+        if self.registry is None:
+            return 0
+        team = self.team(TEAM)
+        added = 0
+        # The registry is read before this lock is taken: a twin forgotten for good takes the two in the other order.
+        built = {twin for twin, _, _, _ in team.synced()}
+        named = {entry["id"]: self.twin_name(entry["id"]) for entry in self.live_twins() if entry["id"] not in built}
+        with self.lock:
+            roster = team.roster()
+            linked = {twin for _, _, twin in roster if twin}
+            names = {name for _, name, _ in roster}
+            heard = set().union(*team.attendance().values())
+            # A person only made for their twin keeps its name, as the person (who is not in any meeting) is not
+            # named anywhere else; one heard in meetings keeps the name the meetings call them.
+            for person_id, person_name, twin in roster:
+                name = named.get(twin) if twin else None
+                if name and name != person_name and name not in names and person_id not in heard:
+                    try:
+                        team.rename(person_id, name)
+                    except ValueError:
+                        continue
+                    names.discard(person_name)
+                    names.add(name)
+            for persona_id, name in named.items():
+                if persona_id in linked or name is None or name in names:
+                    continue
+                try:
+                    team.add_person(name, persona_id)
+                except ValueError:
+                    continue
+                names.add(name)
+                added += 1
+        return added
+
+    def twin_purged(self, persona_id: str) -> None:
+        """A twin was forgotten for good (a week in the trash). The person made for a twin made by hand, whom no
+        meeting has them in, goes with it; anyone else keeps their place and simply has no twin."""
+        team = self.team(TEAM)
+        with self.lock:
+            built = {twin for twin, _, _, _ in team.synced()}
+            heard = set().union(*team.attendance().values())
+            for person_id, _, twin in team.roster():
+                if twin == persona_id and persona_id not in built and person_id not in heard:
+                    team.unlink(persona_id)
+                    team.delete_person(person_id)
+
+    def twin_matches(self, identity: dict[str, Any]) -> list[dict[str, str]]:
+        """Twins made by hand that the identity keeps and whose name a person of the library has, with no twin yet:
+        for them to say whether it is the same person."""
+        if self.registry is None:
+            return []
+        roster = self.team(TEAM).roster()
+        linked = {twin for _, _, twin in roster if twin}
+        free = {name: person_id for person_id, name, twin in roster if not twin}
+        found = []
+        for entry in self.live_twins():
+            persona_id = entry["id"]
+            if persona_id in linked or not self.registry.accessible(entry, identity):
+                continue
+            if self.teamdb is not None and self.teamdb.get_meta(f"{APART}{persona_id}"):
+                continue
+            name = self.twin_name(persona_id)
+            if name in free:
+                found.append({"persona_id": persona_id, "person_id": free[name], "name": name})
+        return found
 
     def resume(self) -> None:
         """At start-up: libraries of one account each are merged into the team's (once), recordings cut off by the
@@ -289,6 +421,7 @@ class Libraries:
             with self.lock:
                 self.opened.clear()
         self.relink()
+        self.adopt_personas()
         owners = []
         for folder in sorted(self.root.iterdir()):
             if folder.name.startswith(".") or not (folder / "library.db").is_file():
@@ -1151,8 +1284,9 @@ def register(
     registry: Personas | None = None,
     llm: Callable[[], LLM] | None = None,
     limits: Callable[[], tuple[int, float]] | None = None,
+    teamdb: TeamDB | None = None,
 ) -> Libraries:
-    libraries = Libraries(settings, jobs, registry, llm, limits)
+    libraries = Libraries(settings, jobs, registry, llm, limits, teamdb)
     app.state.libraries = libraries
 
     @app.get("/api/library")
@@ -1281,10 +1415,13 @@ def register(
         viewer = libraries.viewer(request)
         identity = request.scope["twin_identity"]
         team = libraries.team(owner)
+        # Every twin is a row of the team's table: the ones nobody made from recordings get a person.
+        libraries.adopt_personas()
         synced = {persona_id: (wanted, done) for persona_id, _, wanted, done in team.synced()}
         visible = libraries.access(viewer)
         managed = libraries.managed(viewer)
         similar = team.similar()
+        meetings = team.last_meetings(set(visible))
         # What the viewer may spot-check: speakers given by voice in recordings they decide about.
         checks = None if viewer.admin else team.check_counts({rid for rid, a in visible.items() if a.edit})
         people = []
@@ -1296,17 +1433,24 @@ def register(
             state = synced.get(person.persona_id or "")
             updating = bool(opens and state and state[0] != state[1])
             heard = person.recording_id in visible
+            talks = bool(entry and not theirs and registry is not None and registry.visible(entry, identity))
             people.append(
                 {
                     **person.model_dump(exclude={"account"}),
                     "recording_id": person.recording_id if heard else None,
                     "speaker_id": person.speaker_id if heard else None,
                     "persona_id": person.persona_id if opens else None,
+                    # The twin the viewer may talk to: theirs to manage, or one made public.
+                    "talk": person.persona_id if talks else None,
+                    # Their introduction's first line, where the twin is one the viewer may talk to or look after.
+                    "about": self_introduction(registry, person.persona_id) if talks or opens else None,
                     "updating": updating,
                     # Where the update is (step and how far), shown on the card until the twin can talk.
                     "build": registry.build_status(person.persona_id)
                     if updating and person.persona_id and registry is not None
                     else None,
+                    # The latest meeting among the recordings the viewer may see.
+                    "last_meeting": meetings[person.id].model_dump() if person.id in meetings else None,
                     "self_claimed": theirs,
                     # A twin someone else keeps: not the viewer's to make again or delete.
                     "twin_elsewhere": bool(entry and not theirs and not opens),
@@ -1318,7 +1462,27 @@ def register(
                     else [],
                 }
             )
-        return {"items": people}
+        return {"items": people, "matches": libraries.twin_matches(identity)}
+
+    @app.post("/api/library/people/{person_id}/same")
+    def post_same(person_id: str, body: SameBody, request: Request) -> dict[str, bool]:
+        """Whoever keeps a twin made by hand says whether it is the person of its name in the meetings: if so the two
+        are joined; if not, the twin stays a row of its own and is not asked about again."""
+        if registry is None:
+            raise HTTPException(503, "无法确认")
+        identity = request.scope["twin_identity"]
+        entry = registry.entry(body.persona_id)
+        if entry is None or not registry.accessible(entry, identity):
+            raise HTTPException(404, "分身不存在")
+        match = next((m for m in libraries.twin_matches(identity) if m["persona_id"] == body.persona_id), None)
+        if match is None or match["person_id"] != person_id:
+            raise HTTPException(409, "这个分身和这个人对不上了，请刷新后再看")
+        if body.same:
+            if not libraries.team(TEAM).attach(person_id, body.persona_id):
+                raise HTTPException(409, "这个人或这个分身已经有对应的了")
+        elif libraries.teamdb is not None:
+            libraries.teamdb.set_meta(f"{APART}{body.persona_id}", person_id)
+        return {"same": body.same}
 
     @app.get("/api/library/people/{person_id}/voice")
     def get_person_voice(person_id: str, request: Request) -> dict[str, Any]:

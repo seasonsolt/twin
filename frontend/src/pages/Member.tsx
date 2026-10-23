@@ -18,6 +18,7 @@ import {
 } from '../components/ui';
 import { api } from '../lib/api';
 import { useMobile } from '../lib/useMobile';
+import { memberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useIdentity } from '../features/identity/useIdentity';
 import { Followups } from '../features/followups/Followups';
@@ -264,6 +265,8 @@ export function Member() {
   const current = usePersonaId();
   const [listed, setListed] = useState(false);
   const [failed, setFailed] = useState('');
+  // The roster has been asked for, whatever came of it: the address of a twin waits for it, to lead on to the person.
+  const [asked, setAsked] = useState(false);
   useEffect(() => {
     let alive = true;
     void usePersonas
@@ -276,23 +279,31 @@ export function Member() {
     };
   }, []);
   useEffect(() => {
-    if (!personId || people) return;
+    if (!(personId || twinRoute) || people) return;
     let alive = true;
     void useTeam
       .getState()
       .refreshPeople()
       .catch((failure: unknown) => {
-        if (alive)
+        // A twin's page does not stand on the roster: without it the twin is shown as it is.
+        if (alive && personId)
           setFailed(
             failure instanceof Error ? failure.message : '无法加载成员',
           );
-      });
+      })
+      .finally(() => alive && setAsked(true));
     return () => {
       alive = false;
     };
-  }, [personId, people]);
+  }, [personId, twinRoute, people]);
   const person = personId ? people?.find((p) => p.id === personId) : undefined;
-  const twin = twins.find((t) => t.id === (twinRoute ?? person?.persona_id));
+  const twin = twins.find(
+    (t) => t.id === (twinRoute ?? person?.persona_id ?? person?.talk),
+  );
+  // A twin that has a person in the team's roster is reached by the person: the twin's own address leads there.
+  const ofTwin = twinRoute
+    ? people?.find((p) => p.persona_id === twinRoute || p.talk === twinRoute)
+    : undefined;
   const target = twin?.id;
   useEffect(() => {
     if (target && target !== current)
@@ -308,6 +319,8 @@ export function Member() {
       </Page>
     );
   if (twinRoute) {
+    if (!people && !asked) return <Loading />;
+    if (ofTwin) return <Navigate to={memberPath(ofTwin.id)} replace />;
     if (!twin) return listed ? <Navigate to="/team" replace /> : <Loading />;
   } else if (!people) return <Loading />;
   else if (!person) return <Navigate to="/team" replace />;
@@ -319,7 +332,10 @@ export function Member() {
     <TwinMember
       key={twin.id}
       twin={twin}
-      person={person ?? people?.find((p) => p.persona_id === twin.id)}
+      person={
+        person ??
+        people?.find((p) => p.persona_id === twin.id || p.talk === twin.id)
+      }
     />
   );
 }

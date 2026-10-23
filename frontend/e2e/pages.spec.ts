@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi, newTwin, NOW, weekly } from './mockApi';
+import { mockApi, newTwin, NOW, personas, weekly } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
@@ -20,6 +20,7 @@ async function signInWithSso(page: Page, byEmail = false) {
         },
         password: !byEmail,
         email: byEmail,
+        team_name: '产品研发部',
       },
     }),
   );
@@ -83,6 +84,31 @@ const pages: {
       ),
   },
   {
+    // A colleague talking to someone else's public twin: a line under the box says its person reads the answers.
+    name: 'chat-colleague',
+    path: '/#/chat',
+    ready: '本人看得到分身的回答',
+    setup: async (page) => {
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'me@example.com',
+            admin: false,
+            auth_enabled: true,
+            team_name: '产品研发部',
+          },
+        }),
+      );
+      await page.route('**/api/personas', (route) =>
+        route.fulfill({ json: personas.filter((p) => p.id === 'p-public') }),
+      );
+      await page.addInitScript(() => {
+        localStorage.setItem('twin:persona', 'p-public');
+        localStorage.setItem('twin.current.conversation', 'c-plan');
+      });
+    },
+  },
+  {
     // Right after a twin is made: its chat, with a recording added and the speakers to pick from.
     name: 'chat-setup',
     path: '/#/chat',
@@ -111,6 +137,13 @@ const pages: {
     name: 'system-tokens',
     path: '/#/team?system=tokens',
     ready: 'TWIN_LLM_KEY',
+    viewport: true,
+  },
+  // The team's name, for the side bar and the way in.
+  {
+    name: 'system-team',
+    path: '/#/team?system=team',
+    ready: '团队名',
     viewport: true,
   },
   {

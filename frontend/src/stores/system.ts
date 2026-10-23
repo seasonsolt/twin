@@ -143,6 +143,8 @@ export interface SystemState {
   switches: Record<SwitchName, SwitchState>;
   /** 工作 and 承诺账本, which an administrator may switch off for everyone. */
   features?: Record<'work' | 'ledger', FeatureState>;
+  /** The team's name, once set. */
+  team_name?: string | null;
   /** Label/value rows of twin.toml per service: hosts and models only. */
   config: Record<'embed' | 'asr' | 'tts' | 'video', [string, string][]>;
   models: {

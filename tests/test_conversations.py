@@ -221,3 +221,55 @@ def test_stream_failure_keeps_started_user_turn(tmp_path: Path) -> None:
         assert parse_events(response) == [("error", {"detail": "分身暂时无法回复，请重试"})]
         turns = web.get(f"/api/conversations/{cid}").json()["turns"]
         assert len(turns) == 1 and turns[0]["role"] == "user" and turns[0]["content"] == "问题"
+
+
+def test_the_persons_own_reply_is_a_turn_of_its_own_added_once_per_handoff(tmp_path: Path) -> None:
+    with PersonaStore(tmp_path / "twin.db") as store:
+        cid = store.create_conversation("asker@example.com")
+        store.append_conversation_turn(cid, "asker@example.com", "user", "能答应吗？")
+        store.append_conversation_turn(cid, "asker@example.com", "twin", "我回头答复你。", {"reply": "我回头答复你。"})
+        # Written back by the person's reply to the handoff, however often the write is tried.
+        assert store.append_conversation_turn(cid, "asker@example.com", "self", "可以，周五前。", handoff_id="h_1")
+        assert not store.append_conversation_turn(cid, "asker@example.com", "self", "可以，周五前。", handoff_id="h_1")
+        assert store.append_conversation_turn(cid, "asker@example.com", "self", "另一件事", handoff_id="h_2")
+        assert store.append_conversation_turn(cid, "asker@example.com", "user", "好的")  # turns without one are free
+        turns = store.get_conversation(cid, "asker@example.com")["turns"]
+        assert [(t["role"], t.get("handoff_id")) for t in turns] == [
+            ("user", None),
+            ("twin", None),
+            ("self", "h_1"),
+            ("self", "h_2"),
+            ("user", None),
+        ]
+        assert store.list_conversations("asker@example.com")[0]["turns"] == 5
+        # The same handoff in another conversation is another turn.
+        other = store.create_conversation("asker@example.com")
+        assert store.append_conversation_turn(other, "asker@example.com", "self", "可以", handoff_id="h_1")
+        # Only the asker's own conversation takes it.
+        with pytest.raises(KeyError):
+            store.append_conversation_turn(cid, "someone@example.com", "self", "x", handoff_id="h_3")
+
+
+def test_conversations_from_before_the_persons_reply_open_unchanged(tmp_path: Path) -> None:
+    from twin.persona import store as storage
+
+    path = tmp_path / "twin.db"
+    with sqlite3.connect(path) as db:
+        for migration in storage._MIGRATIONS[:4]:  # the database as it was before the handoff column
+            db.executescript(migration)
+        db.execute("PRAGMA user_version = 4")
+        db.execute("INSERT INTO conversations VALUES ('c1', 'a@example.com', '旧对话', 't0', 't1')")
+        db.execute("INSERT INTO conversation_turns VALUES ('c1', 1, 'user', '以前的问题', NULL, 't0')")
+        db.execute(
+            "INSERT INTO conversation_turns VALUES ('c1', 2, 'twin', '以前的回答', '{\"reply\": \"以前的回答\"}', 't1')"
+        )
+    with PersonaStore(path) as store:
+        assert store.schema_version() == len(storage._MIGRATIONS)
+        opened = store.get_conversation("c1", "a@example.com")
+        assert opened["title"] == "旧对话"
+        assert [(t["role"], t["content"], "handoff_id" in t) for t in opened["turns"]] == [
+            ("user", "以前的问题", False),
+            ("twin", "以前的回答", False),
+        ]
+        assert opened["turns"][1]["reply"] == {"reply": "以前的回答"}
+        assert store.append_conversation_turn("c1", "a@example.com", "user", "接着问")

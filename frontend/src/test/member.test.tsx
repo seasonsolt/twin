@@ -565,6 +565,60 @@ it('opens the member page of someone found in the recordings, switching to their
   expect(screen.getByRole('tablist', { name: '档案章节' })).toBeVisible();
 });
 
+it('leads the address of a twin that has a person in the roster on to the person’s page', async () => {
+  people = [person({})];
+  window.location.hash = '#/team/twin/friend';
+  render(<App />);
+  await waitFor(() => expect(window.location.hash).toBe('#/team/per_1'));
+  const heading = await screen.findByRole('heading', {
+    level: 1,
+    name: '朋友',
+  });
+  await waitFor(() => expect(heading).toBeVisible());
+});
+
+it('opens the page of a person whose twin the viewer only talks to, by the twin the roster offers', async () => {
+  useAuth.setState({
+    identity: {
+      email: 'me@example.test',
+      name: '我',
+      admin: false,
+      auth_enabled: true,
+    },
+  });
+  items = [
+    twin({ id: 'p-own', name: '我', mine: true, approved: true }),
+    twin({ can_manage: false, public: true, owner: 'friend@example.test' }),
+  ];
+  usePersonas.setState({ items });
+  people = [person({ persona_id: null, talk: 'friend', twin_elsewhere: true })];
+  window.location.hash = '#/team/twin/friend';
+  render(<App />);
+  await waitFor(() => expect(window.location.hash).toBe('#/team/per_1'));
+  // The page fades in once the twin in view is the one it is about.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: '和朋友聊天' })).toBeVisible(),
+  );
+  expect(screen.queryByText('还没有分身')).toBeNull();
+});
+
+it('keeps the address of a twin with no person in the roster, and does not wait for a roster that cannot be read', async () => {
+  const original = fetcher.getMockImplementation()! as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/api/library/people') throw new Error('人物读不出来');
+    return original(path, init);
+  });
+  window.location.hash = '#/team/twin/friend';
+  render(<App />);
+  expect(
+    await screen.findByRole('heading', { level: 1, name: '朋友' }),
+  ).toBeVisible();
+  expect(window.location.hash).toBe('#/team/twin/friend');
+});
+
 it('shows someone without a twin by the recordings they spoke in, and makes a twin for them', async () => {
   people = [
     person({ id: 'per_2', name: '新同事', persona_id: null, speakers: 2 }),

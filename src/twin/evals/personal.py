@@ -31,6 +31,7 @@ from ..persona.quotes import extract_quotes, normalize_quote
 from ..persona.schema import ChatReply, ChatTurn, SourceKind
 from ..persona.sources import expression_view, parse_text
 from ..persona.store import PersonaStore
+from ..persona.tiers import SELF
 from ..util import open_private, private_directory
 from .harness import (
     Judge,
@@ -451,7 +452,7 @@ def run_persona_evaluation(
         local = settings.model_copy(update={"db_path": store.path})
         return _evaluate(
             cases,
-            PersonaSystem(PersonaChat(store, llm, embedder, local)),
+            PersonaSystem(PersonaChat(store, llm, embedder, local, audience=SELF)),
             panel,
             persona_ref,
             repeats=repeats,
@@ -556,7 +557,7 @@ def run_evaluation(
             settings = chat.settings.model_copy(update={"db_path": store.path})
             return _evaluate(
                 cases,
-                PersonaSystem(PersonaChat(store, chat.llm, chat.embedder, settings)),
+                PersonaSystem(PersonaChat(store, chat.llm, chat.embedder, settings, audience=SELF)),
                 panel,
                 persona_ref,
                 repeats=repeats,

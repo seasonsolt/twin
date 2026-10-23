@@ -61,6 +61,8 @@ LAYERS: dict[str, int] = {
     "persona.when": 0,
     "persona.schema": 1,
     "persona.items": 1,
+    "persona.tiers": 1,
+    "teamdb": 3,
     "llm": 2,
     "embed": 2,
     "config": 2,

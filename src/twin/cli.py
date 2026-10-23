@@ -53,6 +53,7 @@ from .persona.schema import SOURCE_KIND_LABELS, ChatTurn, SourceKind
 from .persona.sources import MEMORY_KIND_LABELS, NEEDS_NAME, parse_note, parse_source
 from .persona.store import NewerStoreError, PersonaStore
 from .persona.text import SUPPORTED_SUFFIXES
+from .persona.tiers import SELF as SELF_TIER
 from .usage import (
     BudgetExceeded,
     UsageLedger,
@@ -867,6 +868,43 @@ def account_list(ctx: typer.Context) -> None:
         _say("还没有账号：用 twin account add <账号名> 创建")
 
 
+team_app = typer.Typer(help="团队库：会话索引的对账和重建。", no_args_is_help=True)
+app.add_typer(team_app, name="team")
+
+
+def _team_conversations(settings: Settings) -> dict[str, list[tuple[str, str | None, str, str]]]:
+    """Every live twin's conversations as its own database has them: id, asker, title, updated at."""
+    found: dict[str, list[tuple[str, str | None, str, str]]] = {}
+    for persona_id, resolved in _kernel_personas(settings):
+        if resolved.db_path.is_file():
+            with _persona_store(resolved) as store:
+                found[persona_id] = store.conversation_rows()
+    return found
+
+
+@team_app.command("reconcile")
+def team_reconcile(ctx: typer.Context) -> None:
+    """对账：把分身库里有、索引里没有的会话补进索引（记为同事档），刷新标题和时间，已不存在的标为已删除。"""
+    from .teamdb import TeamDB, team_path
+
+    settings = _settings(ctx)
+    with _errors(), TeamDB(team_path(settings.db_path.parent)) as team:
+        for persona_id, rows in _team_conversations(settings).items():
+            done = team.reconcile_persona(persona_id, rows)
+            _say(f"分身 {persona_id}：补 {done.added}，更新 {done.updated}，标记已删除 {done.removed}")
+
+
+@team_app.command("reindex")
+def team_reindex(ctx: typer.Context) -> None:
+    """重建会话索引：按各分身库里的会话重做一遍；已在索引里的会话保留原来的档位，其余记为同事档。"""
+    from .teamdb import TeamDB, team_path
+
+    settings = _settings(ctx)
+    with _errors(), TeamDB(team_path(settings.db_path.parent)) as team:
+        done = team.rebuild_conversations(_team_conversations(settings))
+        _say(f"已重建：{done.added} 段会话（丢掉旧索引 {done.removed} 行）")
+
+
 kernel_app = typer.Typer(help="查看和重建记忆内核。", no_args_is_help=True)
 app.add_typer(kernel_app, name="kernel")
 
@@ -1157,7 +1195,9 @@ def persona_chat(
     with _persona_store(settings) as store:
         if profile_stale(store):
             _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
-        twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings, ledger=True)
+        twin = PersonaChat(
+            store, _llm(settings, chat=True), _embedder(settings), settings, ledger=True, audience=SELF_TIER
+        )
         history: list[ChatTurn] = []
         while True:
             text = message if message is not None else typer.prompt("你", default="", show_default=False)
@@ -2271,7 +2311,7 @@ def survey_ask_command(
                 flagged = screen_leakage(store, survey, None if no_judge else _llm(settings))
                 if flagged:
                     _progress(f"有 {len(flagged)} 题可能已在记忆里答过，照常作答，但默认不计分。")
-                twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings)
+                twin = PersonaChat(store, _llm(settings, chat=True), _embedder(settings), settings, audience=SELF_TIER)
                 try:
                     sheet = ask_survey(
                         twin,

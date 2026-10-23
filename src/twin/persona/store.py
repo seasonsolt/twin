@@ -34,6 +34,7 @@ from .kernel import (
     taxonomy_plan,
 )
 from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
+from .tiers import DEFAULT_TIERS, SELF, TIERS, Audience, Tier, carry_tiers
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p_sources (
@@ -77,9 +78,19 @@ _MIGRATIONS: tuple[str, ...] = (
     # 4: the facets a chunk was extracted for (JSON list), so a new facet is extracted alone; NULL for chunks
     # extracted before it, whose id still contains the facet set (``adopt_legacy_chunks``).
     "ALTER TABLE p_chunks ADD COLUMN facets TEXT;",
+    # 5: the tier (``persona.tiers``) of the items whose person changed it; every other item has its facet's default.
+    "CREATE TABLE IF NOT EXISTS p_item_tiers (item_id TEXT PRIMARY KEY, tier TEXT NOT NULL, set_at TEXT NOT NULL);",
+    # 6: the person's own reply in a conversation (role 'self') names the handoff it answers, once per conversation.
+    "ALTER TABLE conversation_turns ADD COLUMN handoff_id TEXT;"
+    " CREATE UNIQUE INDEX IF NOT EXISTS conversation_turns_handoff"
+    " ON conversation_turns(conversation_id, handoff_id) WHERE handoff_id IS NOT NULL;",
 )
 
 
+# An item's tier in SQL (``persona.tiers``): the person's change, else its facet's default. The ids are the taxonomy's
+# own (digits and a dot), never input.
+_SELF_FACETS_SQL = ",".join(f"'{f}'" for f, tier in sorted(DEFAULT_TIERS.items()) if tier == "self")
+_TIER_SQL = f"COALESCE(t.tier, CASE WHEN i.facet_id IN ({_SELF_FACETS_SQL}) THEN 'self' ELSE 'colleague' END)"
 SNAPSHOT_DIR = "kernel-snapshots"
 # The taxonomy the stored facet ids belong to (``_migrate_taxonomy``).
 TAXONOMY_META = "taxonomy:facets"
@@ -250,6 +261,7 @@ class PersonaStore:
             if self._taxonomy_of_rows() != stored:  # another connection moved it meanwhile
                 return
             reviews = self.reviews()
+            tiers = self.item_tiers()
             # Read every moving row before writing any, so ids that trade places do not move twice.
             items = {
                 old: [
@@ -272,6 +284,7 @@ class PersonaStore:
                     db.executemany("DELETE FROM p_candidates WHERE candidate_id = ?", [(c,) for c in candidates[old]])
                 if not targets:
                     db.executemany("DELETE FROM p_reviews WHERE item_id = ?", [(i.item_id,) for i in items[old]])
+                    db.executemany("DELETE FROM p_item_tiers WHERE item_id = ?", [(i.item_id,) for i in items[old]])
                     db.executemany("DELETE FROM p_items WHERE item_id = ?", [(i.item_id,) for i in items[old]])
                     continue
                 first = targets[0]
@@ -286,9 +299,13 @@ class PersonaStore:
                     )
                 for other in targets[1:]:
                     inherit.setdefault(other, []).extend(
-                        {"item": i.model_dump(mode="json"), "review": reviews[i.item_id].model_dump(mode="json")}
+                        {
+                            "item": i.model_dump(mode="json"),
+                            **({"review": reviews[i.item_id].model_dump(mode="json")} if i.item_id in reviews else {}),
+                            **({"tier": tiers[i.item_id]} if i.item_id in tiers else {}),
+                        }
                         for i in items[old]
-                        if i.item_id in reviews
+                        if i.item_id in reviews or i.item_id in tiers
                     )
             for chunk_id, facets in db.execute(
                 "SELECT chunk_id, facets FROM p_chunks WHERE facets IS NOT NULL"
@@ -775,16 +792,26 @@ class PersonaStore:
         old = self.list_items(facet_id, raw=True)
         inherited = json.loads(self.get_meta(f"{INHERIT_META}{facet_id}") or "[]")
         reviews = {
-            **{c["item"]["item_id"]: PReview.model_validate(c["review"]) for c in inherited},
+            **{c["item"]["item_id"]: PReview.model_validate(c["review"]) for c in inherited if "review" in c},
             **self.reviews(),
+        }
+        tiers = {
+            **{c["item"]["item_id"]: c["tier"] for c in inherited if c.get("tier") in TIERS},
+            **self.item_tiers(),
         }
         heirs = [*old, *(PersonaItem.model_validate(c["item"]) for c in inherited)]
         carried = carry_reviews(heirs, items, reviews)
+        carried_tiers = carry_tiers(heirs, items, tiers)
+        now = dt.datetime.now().isoformat(timespec="seconds")
         with self._tx() as db:
             db.execute("DELETE FROM p_meta WHERE key = ?", (f"{INHERIT_META}{facet_id}",))
             db.executemany("DELETE FROM p_reviews WHERE item_id = ?", [(o.item_id,) for o in old])
             db.executemany(
                 "INSERT OR REPLACE INTO p_reviews VALUES (?, ?)", [(i, r.model_dump_json()) for i, r in carried.items()]
+            )
+            db.executemany("DELETE FROM p_item_tiers WHERE item_id = ?", [(o.item_id,) for o in old])
+            db.executemany(
+                "INSERT OR REPLACE INTO p_item_tiers VALUES (?, ?, ?)", [(i, t, now) for i, t in carried_tiers.items()]
             )
             db.execute("DELETE FROM p_items WHERE facet_id = ?", (facet_id,))
             db.executemany(
@@ -821,11 +848,12 @@ class PersonaStore:
         include_rejected: bool = False,
         limit: int | None = None,
         offset: int = 0,
+        audience: Audience = SELF,
     ) -> tuple[list[PersonaItem], int]:
         """One page of items with reviews applied, filtered in SQL, and the number of items matching the filters.
         ``text`` matches the statement as shown (the edited one after an edit) and the evidence quotes;
         ``source_id`` keeps items with evidence from that source; ``conflict`` keeps items whose evidence disagrees;
-        ``by_evidence`` puts the best-supported first."""
+        ``by_evidence`` puts the best-supported first; ``audience`` leaves out the items it may not use."""
         status = f"COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}')"
         clauses: list[str] = []
         params: list[object] = []
@@ -854,9 +882,14 @@ class PersonaStore:
             params.append(source_id)
         if conflict:
             clauses.append("COALESCE(json_extract(i.json, '$.conflict'), '') != ''")
+        if audience != SELF:
+            clauses.append(f"{_TIER_SQL} = 'colleague'")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
-        base = f"FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id{where}"
+        base = (
+            "FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+            f"LEFT JOIN p_item_tiers t ON t.item_id = i.item_id{where}"
+        )
         with self._lock:
             total = int(self._db.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0])
             rows = self._db.execute(
@@ -869,12 +902,14 @@ class PersonaStore:
         ]
         return items, total
 
-    def item_counts(self) -> dict[tuple[str, ReviewStatus], int]:
-        """Item counts per facet and review status (rejected items included)."""
+    def item_counts(self, audience: Audience = SELF) -> dict[tuple[str, ReviewStatus], int]:
+        """Item counts per facet and review status (rejected items included), of the items ``audience`` may use."""
+        only = "" if audience == SELF else f" WHERE {_TIER_SQL} = 'colleague'"
         with self._lock:
             rows = self._db.execute(
                 f"SELECT i.facet_id, COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}'), "
-                "COUNT(*) FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id GROUP BY 1, 2"
+                "COUNT(*) FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
+                f"LEFT JOIN p_item_tiers t ON t.item_id = i.item_id{only} GROUP BY 1, 2"
             ).fetchall()
         return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
 
@@ -945,6 +980,29 @@ class PersonaStore:
                 db.execute("DELETE FROM p_reviews WHERE item_id = ?", (item_id,))
             else:
                 db.execute("INSERT OR REPLACE INTO p_reviews VALUES (?, ?)", (item_id, review.model_dump_json()))
+
+    # ------------------------------------------------------------ tiers
+
+    def item_tiers(self) -> dict[str, Tier]:
+        """The tiers the person set, by item id; an item not listed has its facet's default (``persona.tiers``)."""
+        with self._lock:
+            rows = self._db.execute("SELECT item_id, tier FROM p_item_tiers").fetchall()
+        return {r[0]: r[1] for r in rows if r[1] in TIERS}
+
+    def set_item_tier(self, item_id: str, tier: Tier | None) -> None:
+        """Record the tier the person chose for an item, or with None go back to its facet's default."""
+        if tier is not None and tier not in TIERS:
+            raise ValueError(tier)
+        with self._tx() as db:
+            if db.execute("SELECT 1 FROM known_items WHERE item_id = ?", (item_id,)).fetchone() is None:
+                raise KeyError(item_id)
+            if tier is None:
+                db.execute("DELETE FROM p_item_tiers WHERE item_id = ?", (item_id,))
+            else:
+                db.execute(
+                    "INSERT OR REPLACE INTO p_item_tiers VALUES (?, ?, ?)",
+                    (item_id, tier, dt.datetime.now().isoformat(timespec="seconds")),
+                )
 
     def get_meta(self, key: str) -> str | None:
         with self._lock:
@@ -1215,7 +1273,7 @@ class PersonaStore:
             if row is None:
                 raise KeyError(conversation_id)
             turns = self._db.execute(
-                "SELECT seq, role, content, reply_json, created_at FROM conversation_turns "
+                "SELECT seq, role, content, reply_json, created_at, handoff_id FROM conversation_turns "
                 "WHERE conversation_id = ? ORDER BY seq",
                 (conversation_id,),
             ).fetchall()
@@ -1229,10 +1287,25 @@ class PersonaStore:
                     "content": r[2],
                     "timestamp": r[4],
                     **({"reply": json.loads(r[3])} if r[3] else {}),
+                    **({"handoff_id": r[5]} if r[5] else {}),
                 }
                 for r in turns
             ],
         }
+
+    def conversation_head(self, conversation_id: str) -> tuple[str | None, str, str] | None:
+        """``(owner, title, updated_at)`` of a conversation; None when there is none."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT owner, title, updated_at FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+        return None if row is None else (row[0], row[1], row[2])
+
+    def conversation_rows(self) -> list[tuple[str, str | None, str, str]]:
+        """``(id, owner, title, updated_at)`` of every conversation of every asker, for the team's index of them."""
+        with self._lock:
+            rows = self._db.execute("SELECT id, owner, title, updated_at FROM conversations ORDER BY id").fetchall()
+        return [(r[0], r[1], r[2], r[3]) for r in rows]
 
     def append_conversation_turn(
         self,
@@ -1242,7 +1315,10 @@ class PersonaStore:
         content: str,
         reply: dict[str, Any] | None = None,
         timestamp: str | None = None,
-    ) -> None:
+        handoff_id: str | None = None,
+    ) -> bool:
+        """Add a turn: the asker's ``user`` turn, the twin's, or the person's own reply (``self``) to a handoff,
+        which is added once per conversation however often it is tried. False when it was already there."""
         now = dt.datetime.now(dt.UTC).isoformat()
         with self._tx() as db:
             if not db.in_transaction:
@@ -1251,6 +1327,14 @@ class PersonaStore:
                 "SELECT 1 FROM conversations WHERE id = ? AND owner IS ?", (conversation_id, owner)
             ).fetchone():
                 raise KeyError(conversation_id)
+            if (
+                handoff_id is not None
+                and db.execute(
+                    "SELECT 1 FROM conversation_turns WHERE conversation_id = ? AND handoff_id = ?",
+                    (conversation_id, handoff_id),
+                ).fetchone()
+            ):
+                return False
             seq = db.execute(
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversation_turns WHERE conversation_id = ?", (conversation_id,)
             ).fetchone()[0]
@@ -1261,7 +1345,9 @@ class PersonaStore:
                 ).fetchone()
             )
             db.execute(
-                "INSERT INTO conversation_turns VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO conversation_turns "
+                "(conversation_id, seq, role, content, reply_json, created_at, handoff_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     conversation_id,
                     seq,
@@ -1269,11 +1355,13 @@ class PersonaStore:
                     content,
                     json.dumps(reply, ensure_ascii=False) if reply else None,
                     timestamp or now,
+                    handoff_id,
                 ),
             )
             db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id))
             if first_user:
                 db.execute("UPDATE conversations SET title = ? WHERE id = ?", (content.strip()[:24], conversation_id))
+        return True
 
     def rename_conversation(self, conversation_id: str, owner: str | None, title: str) -> bool:
         with self._tx() as db:

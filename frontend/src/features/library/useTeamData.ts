@@ -3,7 +3,7 @@ import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import { toast } from '../../components/ui';
 import type { Recording } from '../../pages/Library';
-import type { Person } from '../../pages/Recording';
+import type { Person, TwinMatch } from '../../pages/Recording';
 import { usePersonas } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
 import type { SuspectSpeaker } from './MixedSpeaker';
@@ -33,6 +33,7 @@ export function useTeamData({
   onReload?: () => Promise<void>;
 }) {
   const [people, setPeople] = useState<Person[] | null>(null);
+  const [matches, setMatches] = useState<TwinMatch[]>([]);
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [fragments, setFragments] = useState<Fragment[]>([]);
@@ -50,10 +51,11 @@ export function useTeamData({
   const load = useCallback(async () => {
     const current = ++loadVersion.current;
     await Promise.all([
-      api<{ items: Person[] }>('/api/library/people')
+      api<{ items: Person[]; matches?: TwinMatch[] }>('/api/library/people')
         .then((folks) => {
           if (current !== loadVersion.current) return;
           setPeople(folks.items);
+          setMatches(folks.matches ?? []);
           // The side bar counts the same people and tasks: it takes them from here rather than asking again.
           useTeam.getState().absorb({ people: folks.items });
           setPeopleError('');
@@ -212,6 +214,15 @@ export function useTeamData({
       },
       { reload },
     );
+  // Whoever keeps a twin made by hand says whether it is the person of its name in the meetings.
+  const sameTwin = (match: TwinMatch, same: boolean) =>
+    act(async () => {
+      await api(
+        `/api/library/people/${encodeURIComponent(match.person_id)}/same`,
+        { method: 'POST', json: { persona_id: match.persona_id, same } },
+      );
+      await refreshPersonas();
+    });
   const retry = (recording: Recording) =>
     act(async () => {
       await api(
@@ -240,6 +251,8 @@ export function useTeamData({
 
   return {
     people,
+    matches,
+    sameTwin,
     peopleError,
     waiting,
     voices,

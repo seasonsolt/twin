@@ -996,3 +996,112 @@ it('keeps the 已删除 tab away while nothing is deleted, and offers 新建分�
   expect(useNewTwinCard.getState().open).toBe(true);
   useNewTwinCard.getState().set(false);
 });
+
+it('names the latest meeting of each person in its own column, and a line about them where they wrote one', async () => {
+  people = [
+    person({
+      persona_id: 'p-1',
+      about: '产品负责人',
+      last_meeting: {
+        recording_id: 'r1',
+        title: '产品周会',
+        date: '2026-10-15',
+      },
+    }),
+    person({ id: 'per_2', name: '李总', last_meeting: null }),
+  ];
+  usePersonas.setState({ items: [twinOf({})] });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const table = await screen.findByRole('table', { name: '成员' });
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent),
+  ).toEqual(['成员', '录音', '分身', '最近', '操作']);
+  const first = screen
+    .getByRole('link', { name: '张总的成员页' })
+    .closest('tr')!;
+  expect(within(first).getByText('产品负责人')).toBeVisible();
+  expect(within(first).getByText('10月15日 产品周会')).toBeVisible();
+  const second = screen
+    .getByRole('link', { name: '李总的成员页' })
+    .closest('tr')!;
+  expect(within(second).getByText('—')).toBeVisible();
+});
+
+it('lets someone talk to a public twin of a person from the table, though the twin is not theirs to look after', async () => {
+  people = [
+    person({
+      persona_id: null,
+      talk: 'p-pub',
+      twin_elsewhere: true,
+      can_manage: false,
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  const switched: string[] = [];
+  usePersonas.setState({
+    items: [],
+    switchTo: async (id: string) => {
+      switched.push(id);
+    },
+  });
+  render(teamView());
+  const row = (
+    await screen.findByRole('link', { name: '张总的成员页' })
+  ).closest('tr')!;
+  expect(within(row).getByText('可以聊')).toBeVisible();
+  await userEvent.click(within(row).getByRole('button', { name: '聊天' }));
+  expect(switched).toEqual(['p-pub']);
+});
+
+it('asks whoever keeps a twin made by hand whether it is the person of the same name in the meetings', async () => {
+  people = [person({ id: 'per_9', name: '王总', persona_id: null })];
+  const matches = [{ persona_id: 'p-own', person_id: 'per_9', name: '王总' }];
+  const answers: Record<string, unknown>[] = [];
+  usePersonas.setState({
+    items: [twinOf({ id: 'p-own', name: '王总', owner: 'me@acme.cn' })],
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people')
+        return json({ items: people, matches });
+      if (url === '/api/library/review') return json(emptyReview);
+      if (url === '/api/library/people/per_9/same') {
+        answers.push(JSON.parse(String(init?.body)));
+        return json({ same: true });
+      }
+      if (url === '/api/personas') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  // The table also lists the person of that name from the meetings: this is the twin's own row.
+  const link = (
+    await screen.findAllByRole('link', { name: '王总的成员页' })
+  ).find((anchor) => anchor.getAttribute('href') === '/team/twin/p-own');
+  const row = link!.closest('tr');
+  expect(row).not.toBeNull();
+  expect(within(row!).getByText('会议里有同名的人')).toBeVisible();
+  await userEvent.click(within(row!).getByLabelText('王总是不是会议里的人'));
+  await userEvent.click(screen.getByRole('button', { name: '是会议里的人' }));
+  await waitFor(() =>
+    expect(answers).toEqual([{ persona_id: 'p-own', same: true }]),
+  );
+});

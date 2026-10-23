@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -221,4 +221,23 @@ it('gives a guest the conversation alone: no counts, finding, uploading or backg
   expect(
     vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/library'),
   ).toBe(false);
+});
+
+it('names the space after the team once an administrator has named it, and follows a rename at once', async () => {
+  useAuth.setState({
+    identity: {
+      email: null,
+      admin: true,
+      auth_enabled: false,
+      team_name: '产品研发部',
+    },
+  });
+  show('/team');
+  expect(await screen.findByText('产品研发部')).toBeVisible();
+  expect(screen.queryByText('我的团队')).toBeNull();
+  const { setTeamName } = await import('../stores/auth');
+  act(() => setTeamName('增长组'));
+  expect(await screen.findByText('增长组')).toBeVisible();
+  act(() => setTeamName(null));
+  expect(await screen.findByText('我的团队')).toBeVisible();
 });

@@ -17,6 +17,8 @@ export interface Identity {
   provider?: 'email' | 'sso' | 'password' | null;
   /** Pages an administrator switched on or off for everyone; missing (an older server) means on. */
   features?: Partial<Record<Feature, boolean>>;
+  /** The team's name, set in the system settings; none until an administrator names it. */
+  team_name?: string | null;
 }
 
 /** Pages that can be switched off. Chat is the twin itself and never is. */
@@ -32,6 +34,13 @@ export function setFeatures(features: Partial<Record<Feature, boolean>>) {
       ...state.identity,
       features: { ...state.identity.features, ...features },
     },
+  }));
+}
+
+/** After an administrator named the team, show it at once, without signing in again. */
+export function setTeamName(name: string | null) {
+  useAuth.setState((state) => ({
+    identity: state.identity && { ...state.identity, team_name: name },
   }));
 }
 

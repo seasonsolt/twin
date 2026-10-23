@@ -58,6 +58,8 @@ from .schema import (
 from .sources import ExpressionView
 from .store import PersonaStore
 from .style import extreme_rate
+from .tiers import COLLEAGUE, Audience, for_audience, private_expressions
+from .tiers import SELF as SELF_AUDIENCE
 from .when import time_window
 
 ITEMS_NS = "items"
@@ -265,6 +267,8 @@ class PersonaContext:
     # A twin made from a recording library answers as a meeting record (see ``gate``): no profile items, only what
     # was said in the meetings, dated, and what was decided there.
     meeting_record: bool = False
+    # The tier of memory this conversation answers from (``tiers``): items of a tier it may not use are not here.
+    audience: Audience = COLLEAGUE
 
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
@@ -380,12 +384,15 @@ def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref
     ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
 
 
-def search_items(store: PersonaStore, embedder: Embedder | None, query: str, k: int) -> list[PersonaItem]:
+def search_items(
+    store: PersonaStore, embedder: Embedder | None, query: str, k: int, audience: Audience = SELF_AUDIENCE
+) -> list[PersonaItem]:
     """The person's items closest to ``query``, ranked the way chat retrieval ranks them (meaning and keywords, RRF),
     so searching shows what the twin would draw on; keywords also reach the evidence quotes. Reviews are applied and
-    rejected items left out. With no ``embedder`` (or no stored vectors) only keywords rank, and only matches count.
+    rejected items left out, and so are those ``audience`` may not use. With no ``embedder`` (or no stored vectors)
+    only keywords rank, and only matches count.
     """
-    items = {i.item_id: i for i in store.list_items()}
+    items = {i.item_id: i for i in for_audience(store.list_items(), store.item_tiers(), audience)}
     vector = embedder.embed([_clip(query, 2000)])[0] if embedder is not None else np.zeros(0, dtype=np.float32)
     vectors = _space_vectors(store, ITEMS_NS, embedder_fingerprint(embedder) if embedder is not None else None)
     corpus = _Corpus(vectors, items, lambda i: "\n".join([item_text(i), *(e.quote for e in i.evidence)]))
@@ -430,11 +437,23 @@ def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatR
 
 class PersonaChat:
     def __init__(
-        self, store: PersonaStore, llm: LLM, embedder: Embedder, settings: Settings, *, ledger: bool = False
+        self,
+        store: PersonaStore,
+        llm: LLM,
+        embedder: Embedder,
+        settings: Settings,
+        *,
+        ledger: bool = False,
+        audience: Audience = COLLEAGUE,
     ) -> None:
-        """``ledger``: whether the commitment ledger is material, only when the person themselves is asking; it is
-        private, so a visitor, a channel or an agent never sees it. ``MemoryUpdating`` for a twin made from a
-        recording library while its memory is being rebuilt: every way of asking a twin goes through here."""
+        """``audience``: the tier of memory the conversation answers from. A conversation of the person themself
+        (``self``) may use every item; any other (``colleague``, the default, so a caller that says nothing never
+        shows more than a colleague may see) only the items of the colleague tier, in the retrieval, the core
+        portrait and what an inference may rest on. ``ledger``: whether the commitment ledger is material, only when
+        the person themselves is asking; it is private, so a visitor, a colleague's conversation, a channel or an
+        agent never sees it. ``MemoryUpdating`` for a twin made from a recording library while its memory is being
+        rebuilt: every way of asking a twin goes through here."""
+        self.audience = audience
         self.memory = gate.version(store)
         self.meeting_record = gate.meeting_record(store)
         # Set by an answer that finished after the twin's memory changed under it: not logged, not to be shown as
@@ -444,7 +463,7 @@ class PersonaChat:
         self.llm = llm
         self.embedder = embedder
         self.settings = settings
-        self.ledger = ledger
+        self.ledger = ledger and audience == SELF_AUDIENCE
 
     def retrieve(
         self,
@@ -465,8 +484,15 @@ class PersonaChat:
             # One read of the corpus serves the evidence quotes, the person's own words and other people's.
             view = ExpressionView(self.store, self.settings)
             items = self._items(as_of, view)
-            expressions = {e.expression_id: e for e in view.select(target_only=True, until=as_of)}
-            others = others_view(self.store, self.settings, until=as_of, view=view)
+            hidden = self._private_expressions()
+            expressions = {
+                e.expression_id: e for e in view.select(target_only=True, until=as_of) if e.expression_id not in hidden
+            }
+            others = {
+                ref: e
+                for ref, e in others_view(self.store, self.settings, until=as_of, view=view).items()
+                if ref not in hidden
+            }
             fingerprint: str | None = embedder_fingerprint(self.embedder)
             try:
                 vectors = embedding.result()
@@ -506,13 +532,23 @@ class PersonaChat:
             window=window,
             ledger=entries,
             meeting_record=self.meeting_record,
+            audience=self.audience,
         )
 
     def _items(self, as_of: dt.date | None, view: ExpressionView) -> dict[str, PersonaItem]:
-        """The profile items an answer may use; none for a meeting record, whose portrait is not yet trusted."""
+        """The profile items an answer may use: those of the conversation's tier; none for a meeting record, whose
+        portrait is not yet trusted."""
         if self.meeting_record:
             return {}
-        return {i.item_id: i for i in _visible_items(self.store, self.settings, as_of, view)}
+        items = _visible_items(self.store, self.settings, as_of, view)
+        return {i.item_id: i for i in for_audience(items, self.store.item_tiers(), self.audience)}
+
+    def _private_expressions(self) -> set[str]:
+        """The words this conversation may not be shown because only items of a tier it may not use stand on them
+        (none for the person's own)."""
+        if self.audience == SELF_AUDIENCE:
+            return set()
+        return private_expressions(self.store.list_items(), self.store.item_tiers())
 
     def _portrait(
         self, items: Sequence[PersonaItem], expressions: Sequence[Expression]
@@ -532,7 +568,9 @@ class PersonaChat:
     def portrait(self) -> tuple[list[PersonaItem], list[str]]:
         """What every chat prompt carries whatever is asked: the core items and the voice samples."""
         view = ExpressionView(self.store, self.settings)
-        return self._portrait(list(self._items(None, view).values()), view.select(target_only=True))
+        hidden = self._private_expressions()
+        said = [e for e in view.select(target_only=True) if e.expression_id not in hidden]
+        return self._portrait(list(self._items(None, view).values()), said)
 
     def reply(
         self,

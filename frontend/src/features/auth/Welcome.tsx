@@ -3,7 +3,7 @@ import { Button, Steps, TeamMark, Toolbar } from '../../components/ui';
 import { Claimed } from '../../pages/Claimed';
 import { MemberVoice } from '../../pages/MemberVoice';
 import type { Persona } from '../../stores/personas';
-import { TEAM_NAME } from '../../stores/team';
+import { useTeamName } from '../../stores/team';
 import { useWelcome } from '../../stores/welcome';
 
 /**
@@ -15,6 +15,7 @@ export function Welcome(
   props: { step: 'voice' } | { step: 'claim'; persona: Persona },
 ) {
   const voice = props.step === 'voice';
+  const teamName = useTeamName();
   // Stable: the voice step loads again when the function it is given changes.
   const later = useCallback(() => {
     if (voice) useWelcome.getState().finishVoice();
@@ -24,7 +25,7 @@ export function Welcome(
     <div className="flex min-h-dvh flex-col">
       <header className="px-8 py-4">
         <Toolbar gap={4}>
-          <TeamMark name={TEAM_NAME} />
+          <TeamMark name={teamName} />
           <Steps
             label="步骤"
             steps={['认出你自己', '看看你的分身']}

@@ -26,6 +26,7 @@ from ..config import Settings
 from ..media.schema import default_avatar
 from ..persona import gate
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..persona.tiers import COLLEAGUE, SELF, Audience
 from ..util import private_directory
 from .auth import normalize_email
 from .jobs import JobManager
@@ -110,6 +111,8 @@ class Personas:
         self.make_app: Callable[[str, Settings], FastAPI]
         self.on_removed: Callable[[str], None] = lambda _: None
         self.on_restored: Callable[[str], None] = lambda _: None
+        # A twin in the trash was forgotten for good (a week after it was deleted).
+        self.on_purged: Callable[[str], None] = lambda _: None
         with self.lock:
             if not self.path.exists():
                 self.data: dict[str, Any] = {
@@ -140,6 +143,8 @@ class Personas:
         if expired:
             self.data["personas"] = [entry for entry in self.data["personas"] if entry not in expired]
             self.save()
+            for entry in expired:
+                self.on_purged(entry["id"])
         return [self.root / "trash" / entry["trash_directory"] for entry in expired]
 
     @staticmethod
@@ -277,6 +282,19 @@ class Personas:
         """Administrators, whoever made the twin, and the person it was made for and who has taken it."""
         email = identity["email"]
         return bool(identity["admin"] or (email and email in (entry.get("owner"), entry.get("member"))))
+
+    @staticmethod
+    def audience(entry: dict[str, Any] | None, identity: dict[str, Any]) -> Audience:
+        """The tier of memory a conversation of this signed-in person with the twin answers from: all of it for the
+        person the twin is made for, once they have taken it and said it is all right (and for whoever uses a
+        service without sign-in, who is the only person there is); the colleague tier for everyone else, those who
+        manage the twin included."""
+        if not identity.get("auth_enabled"):
+            return SELF
+        email = identity.get("email")
+        if entry and email and entry.get("member") == email and entry.get("approved_at"):
+            return SELF
+        return COLLEAGUE
 
     def own(self, persona_id: str, identity: dict[str, Any]) -> dict[str, Any]:
         """The live twin taken by the signed-in person, made for them by someone else or not."""
@@ -601,5 +619,6 @@ class PersonaMiddleware:
                 if persona_id is None:
                     return None
             context = registry.application(persona_id)
+            scope["twin_audience"] = registry.audience(registry.entry(persona_id), identity)
             registry.enter(persona_id)
             return context, persona_id

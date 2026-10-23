@@ -3,10 +3,10 @@ import { Notice, TextLink } from '../../components/ui';
 import { api } from '../../lib/api';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import type { SourcePage } from '../../pages/Memories';
-import { Overview } from './Overview';
+import { Overview, type AskPerson } from './Overview';
 
 /** The 档案 tab: how well each aspect of the person is known, and what the twin would draw on for it. */
-export function OverviewTab() {
+export function OverviewTab({ ask }: { ask?: AskPerson }) {
   const personaId = usePersonaId();
   const [speakerCount, setSpeakerCount] = usePersonaState(0);
   useEffect(() => {
@@ -29,7 +29,7 @@ export function OverviewTab() {
           {speakerCount} 段录音待确认
         </Notice>
       )}
-      <Overview />
+      <Overview ask={ask} />
     </>
   );
 }

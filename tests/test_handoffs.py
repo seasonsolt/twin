@@ -401,6 +401,73 @@ def test_the_reply_lands_in_each_askers_own_conversation_once_whoever_else_asked
     assert {h["id"] for h in scene.page()["waiting"]} == {handoffs[ASKERS["shen"]].id, handoffs[ASKERS["wang"]].id}
 
 
+def test_the_person_chooses_who_may_use_a_reply_as_a_memory_when_they_send_it(scene: Scene) -> None:
+    def private() -> set[str]:
+        with PersonaStore(scene.path) as store:
+            return store.private_note_sources()
+
+    def answers() -> list[str]:
+        with PersonaStore(scene.path) as store:
+            return [s.source_id for s in store.list_sources() if s.origin.startswith("handoff:")]
+
+    scene.asked("shen", DECISION)
+    [made] = scene.team.handoffs(persona_id=scene.persona)
+    # Kept to themself: the memory exists, and nothing made from it reaches a colleague's conversation.
+    sent = scene.reply(made.id, "这次不上，大文件导入放下个版本。", tier="self")
+    assert sent.status_code == 200, sent.text
+    [source_id] = answers()
+    assert private() == {source_id}
+    settled = scene.team.get_handoff(made.id)
+    assert settled is not None and settled.reply_tier == "self"
+    # Sending it again keeps one memory, in the same tier.
+    assert scene.reply(made.id, "这次不上，大文件导入放下个版本。", tier="self").status_code == 409
+    assert answers() == [source_id] and private() == {source_id}
+
+
+def test_a_reply_for_colleagues_leaves_its_tier_to_the_facets_and_one_the_person_does_not_keep_is_no_memory(
+    scene: Scene,
+) -> None:
+    scene.asked("shen", DECISION)
+    scene.asked("xu", DECISION)
+    first, second = scene.team.handoffs(persona_id=scene.persona)
+    assert scene.reply(first.id, "上。", tier="colleague").status_code == 200
+    assert scene.reply(second.id, "不上。", tier="none").status_code == 200
+    with PersonaStore(scene.path) as store:
+        assert [s.origin for s in store.list_sources() if s.origin.startswith("handoff:")] == [f"handoff:{first.id}"]
+        assert store.private_note_sources() == set()
+    # What was sent is written in each conversation whatever the tier; an unknown tier is refused.
+    assert scene.team.get_handoff(second.id).reply_tier == "none"  # type: ignore[union-attr]
+    scene.asked("wang", DECISION)
+    [_, _, last] = scene.team.handoffs(persona_id=scene.persona)
+    assert scene.reply(last.id, "上。", tier="everyone").status_code == 400
+
+
+def test_a_reply_to_several_askers_is_kept_once_in_the_tier_chosen(scene: Scene) -> None:
+    scene.asked("shen", DECISION)
+    scene.asked("xu", DECISION)
+    group = [h.id for h in scene.team.handoffs(persona_id=scene.persona)]
+    scene.as_("person")
+    response = scene.web.post(
+        "/api/persona/handoffs/reply-many",
+        json={"ids": group, "text": "这次不上。", "tier": "self"},
+        headers=scene.headers,
+    )
+    assert response.status_code == 200, response.text
+    with PersonaStore(scene.path) as store:
+        kept = [s.source_id for s in store.list_sources() if s.origin.startswith("handoff:")]
+        assert len(kept) == 1 and store.private_note_sources() == set(kept)
+
+
+def test_a_reply_made_a_team_answer_cannot_be_kept_from_colleagues(scene: Scene) -> None:
+    scene.asked("shen", DECISION)
+    [made] = scene.team.handoffs(persona_id=scene.persona)
+    scene.as_("person")
+    body = {"ids": [made.id], "text": "这次不上。", "tier": "self", "team_answer": {"title": "大文件导入上不上"}}
+    refused = scene.web.post("/api/persona/handoffs/reply-many", json=body, headers=scene.headers)
+    assert refused.status_code == 400
+    assert scene.team.get_handoff(made.id).status == "delivered"  # type: ignore[union-attr]
+
+
 def test_a_reply_sent_twice_is_written_once(scene: Scene) -> None:
     conversation, _ = scene.asked("shen", DECISION)
     [made] = scene.team.handoffs(persona_id=scene.persona)

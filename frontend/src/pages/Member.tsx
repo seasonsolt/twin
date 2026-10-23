@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Navigate,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
@@ -18,7 +19,7 @@ import {
 } from '../components/ui';
 import { api } from '../lib/api';
 import { useMobile } from '../lib/useMobile';
-import { memberPath } from '../lib/members';
+import { memberPath, twinMemberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useIdentity } from '../features/identity/useIdentity';
 import { Away } from '../features/away/Away';
@@ -179,7 +180,19 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                 label: '档案',
                 content: (
                   <Stack gap={4}>
-                    <OverviewTab />
+                    <OverviewTab
+                      ask={
+                        // Someone looking after a twin made for a person can ask that person for more.
+                        !self && twin.claim
+                          ? {
+                              name,
+                              path: person
+                                ? memberPath(person.id)
+                                : twinMemberPath(twin.id),
+                            }
+                          : undefined
+                      }
+                    />
                   </Stack>
                 ),
               },
@@ -281,6 +294,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
  */
 export function Member() {
   const { id: personId, twinId: twinRoute } = useParams();
+  const { search } = useLocation();
   const people = useTeam((state) => state.people);
   const twins = usePersonas((state) => state.items);
   const current = usePersonaId();
@@ -341,7 +355,9 @@ export function Member() {
     );
   if (twinRoute) {
     if (!people && !asked) return <Loading />;
-    if (ofTwin) return <Navigate to={memberPath(ofTwin.id)} replace />;
+    // The tab asked for goes with it (the account's 你不在时 number leads to ``?section=away``).
+    if (ofTwin)
+      return <Navigate to={`${memberPath(ofTwin.id)}${search}`} replace />;
     if (!twin) return listed ? <Navigate to="/team" replace /> : <Loading />;
   } else if (!people) return <Loading />;
   else if (!person) return <Navigate to="/team" replace />;

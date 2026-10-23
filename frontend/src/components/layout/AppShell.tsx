@@ -74,8 +74,12 @@ export function AppShell() {
     if (waiting && waiting.id !== personaId)
       void usePersonas.getState().switchTo(waiting.id);
   }, [waiting, personaId]);
+  // A company account that has not found itself yet starts at the way in whatever address it came by (the invitation
+  // is the site's own), so whether there is a twin at all is asked on the team's pages too.
+  const finding = !!address && !voiceDone;
+  const asking = !twinLevel || finding;
   useEffect(() => {
-    if (twinLevel) return;
+    if (!asking) return;
     const controller = new AbortController();
     // Getting to know a new twin happens in its chat (the setup card); here only whether there is a twin at all.
     void api('/api/identity', { signal: controller.signal })
@@ -96,7 +100,7 @@ export function AppShell() {
         if (!controller.signal.aborted) setChecked(true);
       });
     return () => controller.abort();
-  }, [twinLevel, personaId, setNoPersona]);
+  }, [asking, personaId, setNoPersona]);
   const welcome = (step: 'voice' | 'claim') => (
     <Suspense fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}>
       {step === 'claim' && waiting ? (
@@ -117,7 +121,7 @@ export function AppShell() {
     !visitorRoutes.has(location.pathname.slice(1))
   )
     return <Navigate to="/chat" replace />;
-  if (noPersona && !twinLevel && address && !voiceDone)
+  if (noPersona && finding)
     return onWelcome ? welcome('voice') : <Navigate to="/welcome" replace />;
   // Nothing left to do on the way in: on to the app.
   if (onWelcome)
@@ -129,7 +133,12 @@ export function AppShell() {
   // No twin yet on a page about one (chat, work, profile): say so in the page and open the new-twin card right there,
   // in the workspace, rather than leaving it for a page of its own.
   const missing = noPersona && !twinLevel;
-  if (!missing && !twinLevel && location.pathname !== '/gallery' && !checked)
+  if (
+    !missing &&
+    !(twinLevel && !finding) &&
+    location.pathname !== '/gallery' &&
+    !checked
+  )
     return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
   return (
     <div

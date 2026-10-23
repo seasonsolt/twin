@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   AspectRing,
   Badge,
@@ -15,8 +16,10 @@ import {
   Text,
   TextLink,
   Toolbar,
+  toast,
   type AspectLayer,
 } from '../../components/ui';
+import { basePath } from '../../lib/base';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import type { ItemQuery } from './types';
 import { ItemRow } from './ItemRow';
@@ -248,6 +251,19 @@ function Surest({ revision }: { revision: unknown }) {
   );
 }
 
+/** Who can be asked to fill in the aspects: the person behind the twin, seen by someone who is not them, and the
+ * address of their page, where the link leads. */
+export interface AskPerson {
+  name: string;
+  path: string;
+}
+
+/** The words to send the person, with the link that opens 补一补 on the aspect. */
+function askText(person: AskPerson, aspect: string) {
+  const link = `${window.location.origin}${basePath()}/#${person.path}${person.path.includes('?') ? '&' : '?'}fill=${aspect}`;
+  return `${person.name}，团队里关于你的「${topics[aspect]}」还了解得不够。方便时点这里补几句：${link}`;
+}
+
 /** One aspect: what it covers, how well each of its facets is known, and the memories behind it. */
 function Aspect({
   id,
@@ -256,6 +272,7 @@ function Aspect({
   levelLabels,
   profile,
   onFill,
+  ask,
 }: {
   id: string;
   total: number;
@@ -264,6 +281,8 @@ function Aspect({
   profile: Profile;
   /** Opens 补一补 for this aspect; absent where the viewer is not the person. */
   onFill?: (scope: FillScope) => void;
+  /** Where the viewer is not the person: the one to ask to fill this aspect in. */
+  ask?: AskPerson;
 }) {
   const personaId = usePersonaId();
   const layer = layerOf(id);
@@ -319,14 +338,30 @@ function Aspect({
       ) : (
         <Card variant="soft" padding="md" className="space-y-2">
           <Text size="sm">还不了解这一面。</Text>
-          <TextLink to="?section=memories">{suggestions[id]}</TextLink>
+          {!ask && (
+            <TextLink to="?section=memories">{suggestions[id]}</TextLink>
+          )}
         </Card>
+      )}
+      {ask && (
+        <TextLink
+          size="sm"
+          onClick={() => {
+            const text = askText(ask, id);
+            void navigator.clipboard.writeText(text).then(
+              () => toast(`已复制，发给${ask.name}`, 'success'),
+              () => toast(text, 'info', 15000),
+            );
+          }}
+        >
+          请{ask.name}补充 ›
+        </TextLink>
       )}
     </Stack>
   );
 }
 
-export function Overview() {
+export function Overview({ ask }: { ask?: AskPerson }) {
   const personaId = usePersonaId();
   const profile = useProfile(true);
   // Made from the recording library and catching up with changed recordings: the profile waits for the update.
@@ -362,6 +397,21 @@ export function Overview() {
   const [chosen, setChosen] = usePersonaState<string | null>(null);
   // 补一补 is open: for what the twin knows least, or for one aspect.
   const [filling, setFilling] = useState<FillScope | null>(null);
+  // A link from a colleague asking for more of one aspect opens 补一补 on it, for the person it is meant for.
+  const [params, setParams] = useSearchParams();
+  const requested = params.get('fill');
+  useEffect(() => {
+    if (!requested || !profile.canTier) return;
+    if (requested in topics) setFilling({ dimension: requested });
+    setParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete('fill');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [requested, profile.canTier, setParams]);
   const search = useItemSearch(text);
   const selected =
     chosen ?? aspects.find((aspect) => aspect.total > 0)?.id ?? order[0];
@@ -542,6 +592,7 @@ export function Overview() {
                 levelLabels={levelNames}
                 profile={profile}
                 onFill={profile.canTier ? setFilling : undefined}
+                ask={profile.canTier ? undefined : ask}
               />
             </SideTabs>
           )}

@@ -234,7 +234,9 @@ it('lists only the kinds that have something, new voices first, longest speaking
   const user = userEvent.setup();
   const copy = vi.spyOn(navigator.clipboard, 'writeText');
   await user.click(screen.getByRole('button', { name: '复制邀请' }));
-  expect(copy).toHaveBeenCalledWith(expect.stringMatching(/\/#\/voice$/u));
+  expect(copy).toHaveBeenCalledWith(
+    expect.stringMatching(/https?:\/\/[^#\s]+\/$/u),
+  );
 });
 
 it('offers every name a voice may be as a button, the surest in the lead, and tells what the meeting calls it', async () => {

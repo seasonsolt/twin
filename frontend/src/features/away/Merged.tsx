@@ -17,6 +17,7 @@ import {
   toast,
 } from '../../components/ui';
 import { TeamAnswerCard } from '../answers/TeamAnswerCard';
+import { ReplyTierChoice, type ReplyTier } from './ReplyTier';
 import { useStatus } from '../../stores/status';
 import type { Handoff } from './useAway';
 import { Initial, clock } from './Waiting';
@@ -49,6 +50,7 @@ export function Merged({
   const [renaming, setRenaming] = useState(false);
   const [text, setText] = useState('');
   const [team, setTeam] = useState(false);
+  const [tier, setTier] = useState<ReplyTier>('colleague');
   const [busy, setBusy] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState('');
@@ -83,6 +85,8 @@ export function Merged({
         json: {
           ids: items.map((item) => item.id),
           text: text.trim(),
+          // A team answer is for everyone: it is also a memory they may use.
+          tier: team ? 'colleague' : tier,
           ...(team
             ? { team_answer: { title: title.trim(), body: text.trim() } }
             : {}),
@@ -172,7 +176,12 @@ export function Merged({
           placeholder={`以本人回复 ${items.length} 人，各发到各自的对话`}
           onChange={(event) => setText(event.target.value)}
         />
-        <Row gap={2} wrap>
+        <Row gap={3} wrap>
+          <ReplyTierChoice
+            value={team ? 'colleague' : tier}
+            onChange={setTier}
+            disabled={busy || team}
+          />
           <Checkbox
             label="同时设为团队答案"
             checked={team}

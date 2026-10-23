@@ -18,7 +18,7 @@ import { Overview } from '../features/profile/Overview';
 import { setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
 import { usePersonas } from '../stores/personas';
-import { MemberAt, showTwins } from './member';
+import { MemberAt, memberTwin, showTwins } from './member';
 import { ConfirmProvider, toast } from '../components/ui';
 
 vi.mock('../components/ui', async (original) => ({
@@ -720,4 +720,98 @@ it('shows whoever only looks after a twin the colleague tier alone, with no say 
   expect(screen.getByRole('button', { name: '删掉' })).toBeVisible();
   expect(screen.queryByRole('button', { name: '设为只有本人' })).toBeNull();
   expect(screen.queryByRole('button', { name: '设为同事能用' })).toBeNull();
+});
+
+it('lets someone looking after a twin ask its person for more of an aspect, with a link that opens 补一补 there', async () => {
+  useAuth.setState({
+    identity: { email: 'boss@example.test', admin: true, auth_enabled: true },
+  });
+  showTwins([memberTwin({ claim: 'lin@example.test' })]);
+  const copy = vi.spyOn(navigator.clipboard, 'writeText');
+  render(
+    <ConfirmProvider>
+      <MemberAt />
+    </ConfirmProvider>,
+  );
+  await screen.findByRole('article');
+  await userEvent.click(screen.getByRole('button', { name: '请小林补充 ›' }));
+  expect(copy).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /小林，.*「看重什么」.*#\/team\/twin\/default\?fill=D2$/u,
+    ),
+  );
+  expect(toast).toHaveBeenCalledWith('已复制，发给小林', 'success');
+});
+
+it('asks nobody to fill in a twin that is not made for a person, and not the person themself', async () => {
+  useAuth.setState({
+    identity: { email: 'boss@example.test', admin: true, auth_enabled: true },
+  });
+  showTwins([memberTwin()]);
+  const view = render(
+    <ConfirmProvider>
+      <MemberAt />
+    </ConfirmProvider>,
+  );
+  await screen.findByRole('article');
+  expect(screen.queryByRole('button', { name: /补充 ›$/u })).toBeNull();
+  view.unmount();
+  useAuth.setState({
+    identity: { email: 'lin@example.test', admin: false, auth_enabled: true },
+  });
+  showTwins([
+    memberTwin({ claim: 'lin@example.test', mine: true, approved: true }),
+  ]);
+  render(
+    <ConfirmProvider>
+      <MemberAt />
+    </ConfirmProvider>,
+  );
+  await screen.findByRole('article');
+  expect(screen.queryByRole('button', { name: /补充 ›$/u })).toBeNull();
+});
+
+it('opens 补一补 on the aspect a colleague asked for, for the person', async () => {
+  useAuth.setState({
+    identity: { email: 'lin@example.test', admin: false, auth_enabled: true },
+  });
+  showTwins([
+    memberTwin({ claim: 'lin@example.test', mine: true, approved: true }),
+  ]);
+  const base = fetcher.getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((url: string) => {
+    if (url.startsWith('/api/persona/fill?'))
+      return Promise.resolve(json({ questions: [] }));
+    if (url.startsWith('/api/persona/handoffs'))
+      return Promise.resolve(
+        json({
+          waiting: [],
+          groups: [],
+          often: [],
+          answers: { total: 0, stale: 0 },
+          guessed: [],
+          sourced: [],
+          sourced_count: 0,
+          answered: 0,
+          shelved: [],
+          settled: [],
+          pending: 0,
+          days: 7,
+        }),
+      );
+    return base(url);
+  });
+  render(
+    <ConfirmProvider>
+      <MemberAt path="/team/twin/default?fill=D3" />
+    </ConfirmProvider>,
+  );
+  await screen.findByRole('dialog', { name: '补一补' });
+  expect(
+    fetcher.mock.calls.some(
+      ([url]) => url === '/api/persona/fill?dimension=D3',
+    ),
+  ).toBe(true);
 });

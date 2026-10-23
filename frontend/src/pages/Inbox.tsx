@@ -68,7 +68,7 @@ type Shown = Category | Folded;
 
 /** Send the person to the people the library found, for them to recognise themselves by voice. */
 function copyInvite() {
-  const invite = `我们在用会议录音整理每个人的发言，为你建分身。打开这个链接，登录后录一句话，就能认出哪些是你说的：${window.location.origin}${basePath()}/#/voice`;
+  const invite = `我们在用会议录音整理每个人的发言，为你建分身。打开这个链接，登录后录一句话，就能认出哪些是你说的：${window.location.origin}${basePath()}/`;
   void navigator.clipboard.writeText(invite).then(
     () => toast('邀请已复制，可以发给同事', 'success'),
     () => toast(invite, 'info', 15000),

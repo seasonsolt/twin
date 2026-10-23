@@ -15,6 +15,7 @@ import {
   Textarea,
   toast,
 } from '../../components/ui';
+import { ReplyTierChoice, type ReplyTier } from './ReplyTier';
 import type { Handoff } from './useAway';
 
 /** The time of day of a moment, where the reader is (the server keeps UTC). */
@@ -77,6 +78,7 @@ export function Waiting({
   const [text, setText] = useState('');
   const [moving, setMoving] = useState(false);
   const [due, setDue] = useState(item.commit?.due ?? '');
+  const [tier, setTier] = useState<ReplyTier>('colleague');
   const [busy, setBusy] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState('');
@@ -245,7 +247,7 @@ export function Waiting({
             value={text}
             placeholder={
               item.source_known
-                ? `发到${item.asker_name}的对话，并存进记忆`
+                ? `发到${item.asker_name}的对话`
                 : '用你自己的话回答，会作为你的原话记下来'
             }
             onChange={(event) => setText(event.target.value)}
@@ -255,40 +257,52 @@ export function Waiting({
               {error}
             </Text>
           )}
-          <Row gap={2} justify="end">
-            {!item.source_known && <Badge>来源不明</Badge>}
-            <Button
-              size="sm"
-              variant="ghost"
-              loading={drafting}
+          <Row gap={2} justify="between" wrap>
+            <ReplyTierChoice
+              value={tier}
+              onChange={setTier}
               disabled={busy}
-              onClick={() => void draft()}
-            >
-              请分身起草
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setOpen(false)}
-            >
-              收起
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy}
-              disabled={!text.trim()}
-              onClick={() =>
-                void run(
-                  () => post('reply', { text: text.trim() }),
-                  item.source_known ? '已发送，正在整理成记忆' : '已记下',
-                  () => setText(''),
-                )
-              }
-            >
-              {item.source_known ? '发送' : '记下'}
-            </Button>
+              keepable={!item.source_known}
+            />
+            <Row gap={2}>
+              {!item.source_known && <Badge>来源不明</Badge>}
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={drafting}
+                disabled={busy}
+                onClick={() => void draft()}
+              >
+                请分身起草
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setOpen(false)}
+              >
+                收起
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy}
+                disabled={!text.trim()}
+                onClick={() =>
+                  void run(
+                    () => post('reply', { text: text.trim(), tier }),
+                    !item.source_known
+                      ? '已记下'
+                      : tier === 'none'
+                        ? '已发送'
+                        : '已发送，正在整理成记忆',
+                    () => setText(''),
+                  )
+                }
+              >
+                {item.source_known ? '发送' : '记下'}
+              </Button>
+            </Row>
           </Row>
         </Stack>
       </Stack>

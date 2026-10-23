@@ -422,9 +422,12 @@ class HandoffDesk:
         """The handoff, when it is this twin's and addressed to this person (KeyError otherwise)."""
         return self._mine(handoff_id, owner)
 
-    def reply(self, handoff_id: str, owner: str | None, text: str, *, remember: bool = True) -> Handoff:
-        """The person's own reply: written into the asker's conversation as theirs, and kept as a memory unless
-        ``remember`` is False."""
+    def reply(
+        self, handoff_id: str, owner: str | None, text: str, *, remember: bool = True, tier: ReplyTier | None = None
+    ) -> Handoff:
+        """The person's own reply: written into the asker's conversation as theirs, and kept as a memory in the tier
+        they chose (``tier``: ``none`` keeps nothing, ``colleague`` leaves it to its facet's default, ``self`` keeps it
+        to themself); without one, ``remember`` says whether it is kept."""
         assert self.team is not None
         text = text.strip()
         if not 1 <= len(text) <= REPLY_MAX_CHARS:
@@ -432,15 +435,21 @@ class HandoffDesk:
         self._mine(handoff_id, owner)
         if DRAFT_GAP in text:
             raise HandoffRefused("草稿里还有【请你定】没填，改完再发")
-        return self._settle(handoff_id, text, "colleague" if remember else "none", "replied")
+        return self._settle(handoff_id, text, tier or ("colleague" if remember else "none"), "replied")
 
     def reply_many(
-        self, handoff_ids: Sequence[str], owner: str | None, text: str, *, remember: bool = True
+        self,
+        handoff_ids: Sequence[str],
+        owner: str | None,
+        text: str,
+        *,
+        remember: bool = True,
+        tier: ReplyTier | None = None,
     ) -> tuple[list[Handoff], list[tuple[str, str]]]:
         """One reply to several handoffs that are one matter: it is written into each asker's own conversation as the
         person's (each handoff stays its own, settled on its own), and kept as a memory once, for the first that is
-        settled, not once for each. Returns the ones settled and, for those that could not be, why (one the asker
-        deleted, or that was answered in the meantime, does not stop the others)."""
+        settled, not once for each, in the ``tier`` chosen. Returns the ones settled and, for those that could not be,
+        why (one the asker deleted, or that was answered in the meantime, does not stop the others)."""
         assert self.team is not None
         text = text.strip()
         ids = list(dict.fromkeys(handoff_ids))
@@ -456,7 +465,8 @@ class HandoffDesk:
         failed: list[tuple[str, str]] = []
         for handoff_id in ids:
             try:
-                done.append(self._settle(handoff_id, text, "colleague" if remember and not done else "none", "replied"))
+                kept = tier or ("colleague" if remember else "none")
+                done.append(self._settle(handoff_id, text, kept if not done else "none", "replied"))
             except HandoffRefused as e:
                 failed.append((handoff_id, str(e)))
         return done, failed
@@ -726,12 +736,22 @@ class HandoffDesk:
         name = self.name()
         if h.id.startswith(LEGACY_PREFIX):
             try:
-                answer_followup(store, h.group_key, h.reply, name)
+                _, source = answer_followup(store, h.group_key, h.reply, name)
+                self._keep_to_self(store, h, source.source_id)
                 return True
             except KeyError:
                 pass
         parsed = parse_answer(h.question, h.reply, name, f"handoff:{h.id}", previous=h.context)
-        return store.put_source(parsed)
+        added = store.put_source(parsed)
+        self._keep_to_self(store, h, parsed.source.source_id)
+        return added
+
+    @staticmethod
+    def _keep_to_self(store: PersonaStore, h: Handoff, source_id: str) -> None:
+        """A reply the person kept to themself: nothing made from it reaches a colleague's conversation (the same note
+        tier as ``记一下``). Safe to run again, as the memory is when a stop is finished."""
+        if h.reply_tier == "self":
+            store.set_note_tier(source_id, SELF_AUDIENCE)
 
     def redo_writing(self, older_than: dt.timedelta = dt.timedelta(0)) -> int:
         """Finish the replies that were kept and not written back, after a stop; how many were finished. Only those

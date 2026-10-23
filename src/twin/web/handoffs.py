@@ -18,7 +18,7 @@ from ..llm import LLMError
 from ..persona.store import PersonaStore
 from ..persona.tiers import SELF
 from ..teamanswers import BODY_MAX, TITLE_MAX, TeamAnswerRefused, TeamAnswers, clean, summary_title
-from ..teamdb import Handoff
+from ..teamdb import Handoff, ReplyTier
 from .backends import Backends, BackendUnavailable
 from .conversations import owner, request_audience
 
@@ -28,6 +28,9 @@ class ReplyBody(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     # Keep the reply as a memory too; False writes it into the conversation only.
     remember: bool = True
+    # Who may use it as a memory: ``colleague`` (by the defaults of the facets it falls under), ``self`` (only the
+    # person themself) or ``none`` (not kept). Left out, ``remember`` says.
+    tier: ReplyTier | None = None
 
 
 class AcceptBody(BaseModel):
@@ -55,6 +58,7 @@ class ReplyManyBody(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=GROUP_MAX)
     text: str = Field(min_length=1, max_length=4000)
     remember: bool = True
+    tier: ReplyTier | None = None
     # 同时设为团队答案: the reply, once it is sent, for the whole team to quote.
     team_answer: AnswerBody | None = None
 
@@ -84,6 +88,10 @@ def register(
         if isinstance(failure, KeyError):
             return HTTPException(404, "找不到这条，请刷新后重试")
         return HTTPException(409, str(failure))
+
+    def kept(body: ReplyBody | ReplyManyBody) -> bool:
+        """Whether the reply is also kept as a memory."""
+        return body.tier != "none" if body.tier is not None else body.remember
 
     def settled(h: Handoff, me: str | None, *, remembered: bool = False) -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
@@ -144,10 +152,10 @@ def register(
         me = person(request)
         team_ready()
         try:
-            h = desk.reply(handoff_id, me, body.text, remember=body.remember)
+            h = desk.reply(handoff_id, me, body.text, remember=body.remember, tier=body.tier)
         except (KeyError, HandoffRefused) as e:
             raise refused(e) from e
-        return settled(h, me, remembered=body.remember)
+        return settled(h, me, remembered=kept(body))
 
     @app.post("/api/persona/handoffs/{handoff_id}/draft")
     def draft(handoff_id: str, request: Request) -> dict[str, str]:
@@ -232,11 +240,13 @@ def register(
         person's, each handoff is settled on its own. ``team_answer`` also makes it a team answer."""
         me = person(request)
         answers = team_ready()
+        if body.team_answer is not None and body.tier in ("none", "self"):
+            raise HTTPException(400, "设为团队答案的回复，同事要能用")
         try:
             if body.team_answer is not None:
                 first = desk.handoff_of(body.ids[0], me)
                 clean(body.team_answer.title or summary_title(first.question), body.team_answer.body or body.text)
-            done, failed = desk.reply_many(body.ids, me, body.text, remember=body.remember)
+            done, failed = desk.reply_many(body.ids, me, body.text, remember=body.remember, tier=body.tier)
         except TeamAnswerRefused as e:
             raise HTTPException(400, str(e)) from None
         except (KeyError, HandoffRefused) as e:
@@ -254,7 +264,7 @@ def register(
             except (KeyError, HandoffRefused) as e:
                 # The replies are sent; only the team answer did not come out, which the person can set again.
                 failed.append((done[0].id, str(e)))
-        if body.remember or made is not None:
+        if kept(body) or made is not None:
             queue_build()
         return {
             "done": [h.id for h in done],

@@ -1,0 +1,1 @@
+import{j as a}from"./motion-Dnt18g5a.js";import{A as t}from"./Avatar-CdEoglGT.js";function m({name:e,twin:r,preset:s}){return r?r.avatar_url?a.jsx("img",{src:r.avatar_url,alt:"",className:"size-full object-cover"}):a.jsx(t,{preset:s??r.avatar_preset,blinking:!1}):a.jsx(a.Fragment,{children:Array.from(e)[0]})}export{m as P};

@@ -739,6 +739,45 @@ it('looks for someone signed in with a work address in the meetings before an em
   expect(window.location.hash).not.toBe('#/welcome');
 });
 
+it.each(['#/', '#/team', '#/library', '#/inbox'])(
+  'sends an invited work address without a twin to finding themselves from %s, the way the invitation opens',
+  async (start) => {
+    loggedIn = true;
+    whoami = { ...member, address: 'me@xjjk.com' };
+    items = [];
+    const base = fetcher.getMockImplementation() as (
+      path: string,
+      init: RequestInit,
+    ) => Promise<Response>;
+    fetcher.mockImplementation(async (path: string, init: RequestInit) =>
+      path === '/api/library/voice'
+        ? json({
+            available: true,
+            enrolled: false,
+            items: [],
+            persona_id: null,
+          })
+        : base(path, init),
+    );
+    window.location.hash = start;
+    render(<App />);
+    await screen.findByRole('heading', { name: '会议里可能有你' });
+    expect(window.location.hash).toBe('#/welcome');
+    expect(screen.queryByRole('navigation', { name: '主导航' })).toBeNull();
+  },
+);
+
+it('leaves the team page alone for a work address that passed the way in', async () => {
+  loggedIn = true;
+  whoami = { ...member, address: 'me@xjjk.com' };
+  items = [];
+  useWelcome.getState().finishVoice();
+  window.location.hash = '#/team';
+  render(<App />);
+  await screen.findByRole('heading', { name: '从一段会议录音开始' });
+  expect(window.location.hash).toBe('#/team');
+});
+
 it('a twin of the voices someone recognised leads back to them instead of 这不是我', async () => {
   loggedIn = true;
   items = [{ ...persona, mine: true, from_meetings: true, approved: false }];

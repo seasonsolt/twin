@@ -599,6 +599,30 @@ it('leads the address of a twin that has a person in the roster on to the person
   await waitFor(() => expect(heading).toBeVisible());
 });
 
+it('keeps the tab asked for when the address of a twin leads on to the person’s page', async () => {
+  useAuth.setState({
+    identity: {
+      email: 'me@example.test',
+      name: '我',
+      admin: false,
+      auth_enabled: true,
+    },
+  });
+  items = [twin({ id: 'friend', name: '朋友', mine: true, approved: true })];
+  usePersonas.setState({ items });
+  people = [person({})];
+  handoffs = [pending('q1', '需求评审里那组接口，这次就改还是下个版本？')];
+  window.location.hash = '#/team/twin/friend?section=away';
+  render(<App />);
+  await waitFor(() =>
+    expect(window.location.hash).toBe('#/team/per_1?section=away'),
+  );
+  expect(await screen.findByRole('tab', { name: /你不在时/u })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+});
+
 it('opens the page of a person whose twin the viewer only talks to, by the twin the roster offers', async () => {
   useAuth.setState({
     identity: {

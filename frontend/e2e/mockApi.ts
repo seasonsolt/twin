@@ -29,6 +29,8 @@ export const personas = [
     created_at: '2026-09-12T02:00:00Z',
     is_default: false,
     can_manage: true,
+    // Made for her work address: whoever looks after it can ask her for more.
+    claim: 'xu.qinghe@example.com',
   },
   // A twin made by hand, which no recording belongs to: a row of the team table like the others.
   {
@@ -1805,7 +1807,14 @@ const handlers: Record<string, Handler> = {
             about: '做增长的，爱跑步。',
             avatar_preset: 'bun',
           }
-        : identity;
+        : asked === 'p-qinghe'
+          ? {
+              ...identity,
+              name: '许清禾',
+              about: '做需求评审，也带新人。',
+              avatar_preset: 'wave',
+            }
+          : identity;
   },
   'GET /api/media/capabilities': reply(capabilities),
   'GET /api/library': reply({

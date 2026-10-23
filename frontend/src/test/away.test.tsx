@@ -125,7 +125,7 @@ it('opens the first question with the twin’s answer and a box for the person�
   await waitFor(() =>
     expect(posts()).toContainEqual([
       '/api/persona/handoffs/h1/reply',
-      { text: '这次先改，下版本补测试。' },
+      { text: '这次先改，下版本补测试。', tier: 'colleague' },
     ]),
   );
   await waitFor(() => expect(changed).toHaveBeenCalled());
@@ -135,6 +135,52 @@ it('opens the first question with the twin’s answer and a box for the person�
   expect(
     await screen.findByRole('article', { name: /新来的实习生/u }),
   ).toBeVisible();
+});
+
+it('lets the person choose who may use a reply as a memory when they send it', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: [handoff({})], pending: 1 });
+  render(<Away />);
+  const card = await screen.findByRole('article', {
+    name: /需求评审里那组接口/u,
+  });
+  const choice = within(card).getByRole('radiogroup', {
+    name: '谁能用这条记忆',
+  });
+  // Colleagues may use it unless the person says otherwise.
+  expect(within(choice).getByRole('radio', { name: '同事能用' })).toBeChecked();
+  expect(
+    within(choice)
+      .getAllByRole('radio')
+      .map((radio) => radio.textContent),
+  ).toEqual(['同事能用', '只有我', '不存']);
+  await user.click(within(choice).getByRole('radio', { name: '只有我' }));
+  await user.type(within(card).getByRole('textbox'), '这是我自己的看法。');
+  await user.click(within(card).getByRole('button', { name: '发送' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual([
+      '/api/persona/handoffs/h1/reply',
+      { text: '这是我自己的看法。', tier: 'self' },
+    ]),
+  );
+});
+
+it('sends a reply that is not kept to the asker only', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: [handoff({})], pending: 1 });
+  render(<Away />);
+  const card = await screen.findByRole('article', {
+    name: /需求评审里那组接口/u,
+  });
+  await user.click(within(card).getByRole('radio', { name: '不存' }));
+  await user.type(within(card).getByRole('textbox'), '先不改。');
+  await user.click(within(card).getByRole('button', { name: '发送' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual([
+      '/api/persona/handoffs/h1/reply',
+      { text: '先不改。', tier: 'none' },
+    ]),
+  );
 });
 
 it('puts the twin’s draft in the box for the person to change, and sends nothing', async () => {
@@ -432,10 +478,36 @@ it('answers them all at once, into each one’s own conversation, and can make t
       {
         ids: ['a', 'b', 'c'],
         text: '支持到 12 月底。',
+        tier: 'colleague',
         team_answer: { title: '旧模板还支持吗？', body: '支持到 12 月底。' },
       },
     ]),
   );
+});
+
+it('answers them all in the tier chosen, and a team answer is always for colleagues', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: same, groups: [['a', 'b', 'c']], pending: 3 });
+  mountAway();
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  await user.type(
+    within(card).getByRole('textbox', { name: '以本人回复 3 人' }),
+    '先不动。',
+  );
+  await user.click(within(card).getByRole('radio', { name: '只有我' }));
+  await user.click(within(card).getByRole('button', { name: '回复 3 人' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual([
+      '/api/persona/handoffs/reply-many',
+      { ids: ['a', 'b', 'c'], text: '先不动。', tier: 'self' },
+    ]),
+  );
+  // Making it the team's takes the choice away: everyone may use what everyone is shown.
+  await user.click(
+    within(card).getByRole('checkbox', { name: '同时设为团队答案' }),
+  );
+  expect(within(card).getByRole('radio', { name: '同事能用' })).toBeChecked();
+  expect(within(card).getByRole('radio', { name: '只有我' })).toBeDisabled();
 });
 
 it('takes them apart when they were not one matter, each as its own row to answer', async () => {

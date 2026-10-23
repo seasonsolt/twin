@@ -237,6 +237,24 @@ const pages: {
   },
   // 第 5 屏: a member's page, from the team table (林舟, whose twin is the one in view).
   { name: 'member', path: '/#/team/u-linzhou', ready: '最有把握的几点' },
+  // Someone else's page, seen by whoever looks after the twin: each aspect ends with the way to ask her for more.
+  {
+    name: 'member-ask',
+    path: '/#/team/u-qinghe',
+    ready: '请许清禾补充 ›',
+    setup: (page) =>
+      page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'chen.yi@example.com',
+            name: '陈一',
+            admin: true,
+            auth_enabled: true,
+            team_name: '产品研发部',
+          },
+        }),
+      ),
+  },
   {
     name: 'member-memories',
     path: '/#/team/u-linzhou?section=memories',

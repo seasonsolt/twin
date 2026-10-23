@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { useLocation } from 'react-router';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { api } from '../lib/api';
 import { byName } from '../lib/names';
@@ -24,7 +23,6 @@ import {
   useConfirm,
   type Tone,
 } from '../components/ui';
-import { StageHeader } from '../components/layout/StageHeader';
 import { JobProgress } from '../features/jobs/JobProgress';
 import { useJob } from '../features/jobs/useJob';
 import type {
@@ -578,8 +576,10 @@ function Brief({ people, version }: { people: string[]; version: number }) {
   );
 }
 
-export function Ledger({ embedded = false }: { embedded?: boolean }) {
-  const active = useLocation().pathname === '/ledger' || embedded;
+/** The commitments of the twin in view, from the meetings it was in: filters by kind, person and state, the
+ * entries with their quotes, and what to bring up before meeting someone. Opened under a member, or on its own
+ * (``/commitments``) for whoever is chosen there. */
+export function Ledger() {
   const personaId = usePersonaId();
   const confirm = useConfirm();
   const [data, setData] = usePersonaState<LedgerData | null>(null);
@@ -606,15 +606,14 @@ export function Ledger({ embedded = false }: { embedded?: boolean }) {
     [setData, setError],
   );
   useEffect(() => {
-    if (!active) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [active, load, personaId]);
+  }, [load, personaId]);
   const job = useJob<LedgerBuildResult>({
     kind: 'ledger_build',
     storageKey: 'twin.next.job.ledgerBuild',
-    active,
+    active: true,
     onDone: (done, { restored }) => {
       void load();
       if (!restored && done.result)
@@ -656,16 +655,7 @@ export function Ledger({ embedded = false }: { embedded?: boolean }) {
     data?.entries.filter((entry) => entry.review === 'unreviewed').length ?? 0;
   return (
     <div>
-      {!embedded && <StageHeader />}
-      <div className={embedded ? 'space-y-6' : 'page-content space-y-6'}>
-        {!embedded && (
-          <header className="space-y-2">
-            <Heading level={2}>承诺账本</Heading>
-            <Text size="sm" tone="secondary">
-              从会议里记下的决定、承诺、异议和进展。每条都附着会上的原话，确认后再拿去跟进。
-            </Text>
-          </header>
-        )}
+      <div className="space-y-6">
         {error && (
           <div role="alert" className="space-y-2 text-danger">
             <p>{error}</p>

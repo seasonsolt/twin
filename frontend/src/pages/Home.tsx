@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { Upload } from 'lucide-react';
 import {
   Button,
@@ -23,8 +23,8 @@ import { useMobile } from '../lib/useMobile';
 import { usePolling } from '../lib/usePolling';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
+import { useLibraryFeed } from '../features/library/useLibraryFeed';
 import { useUploads } from '../features/library/useUploads';
-import { useTeam } from '../stores/team';
 
 const STEPS: [string, string][] = [
   ['转写，分出每个人', '每段录音只转写一次。'],
@@ -44,22 +44,9 @@ function copyInvite() {
 /** The account's start page: the people found in its meeting recordings, what needs settling, and uploading. With
  * no recording yet, it is the way to the first one. */
 export function Home() {
-  // The library the side bar also counts from. `version` moves when a recording changes in a way people and the
-  // review queue follow (a transcript arriving, speakers settled, one removed), not on every poll: while recordings
-  // wait, the page polls every few seconds, and the review queue is the heaviest view the server computes.
-  const library = useTeam((state) => state.library);
-  const error = useTeam((state) => state.error);
-  const version = useTeam((state) => state.version);
+  const { library, error, version, load, poll } = useLibraryFeed();
   const input = useRef<HTMLInputElement>(null);
   const mobile = useMobile();
-  const load = useCallback(() => useTeam.getState().refresh(true), []);
-  const poll = useCallback(() => useTeam.getState().refresh(), []);
-  // This page loads people and the review queue itself: the side bar takes them from here rather than asking twice.
-  useEffect(() => {
-    const detach = useTeam.getState().attach();
-    void load();
-    return detach;
-  }, [load]);
   const { add, uploading, notice, unfinished, stop } = useUploads(
     () => void load(),
   );
@@ -183,7 +170,6 @@ export function Home() {
               recordings={library.recordings}
               onReload={load}
               uploads={unfinished.filter((pick) => !pick.error)}
-              onStopUpload={uploading ? stop : undefined}
             />
           </>
         )}

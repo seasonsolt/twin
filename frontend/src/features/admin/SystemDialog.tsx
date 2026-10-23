@@ -4,6 +4,7 @@ import {
   Activity,
   AudioLines,
   Cpu,
+  HardDrive,
   KeyRound,
   LayoutGrid,
   PackageCheck,
@@ -49,6 +50,9 @@ import {
   type UsageRow,
 } from '../../stores/system';
 import { setFeatures } from '../../stores/auth';
+import type { LibraryState } from '../../pages/Library';
+import { useTeam } from '../../stores/team';
+import { LibraryCapacity, libraryStatus } from './LibraryCapacity';
 import { Params, Upgrades } from './Upgrades';
 
 /** The search parameter that holds the open section: the dialog sits over any page and closing it returns there. */
@@ -63,6 +67,7 @@ type SectionKey =
   | 'video'
   | 'features'
   | 'tokens'
+  | 'library'
   | 'params'
   | 'upgrades';
 
@@ -75,6 +80,7 @@ const SECTIONS: (Omit<SettingsSection, 'status'> & { key: SectionKey })[] = [
   { key: 'video', label: '视频服务', icon: Video },
   { key: 'features', label: '功能', group: '设置', icon: LayoutGrid },
   { key: 'tokens', label: '模型与 Token', icon: KeyRound },
+  { key: 'library', label: '录音库容量', icon: HardDrive },
   { key: 'params', label: '系统参数', icon: SlidersHorizontal },
   { key: 'upgrades', label: '部件升级', icon: PackageCheck },
 ];
@@ -119,11 +125,13 @@ function sectionStatus(
   key: SectionKey,
   state: SystemState | null,
   components: Components | null,
+  library: LibraryState | null,
 ): SettingsSection['status'] {
   if (key === 'upgrades') {
     const count = upgradable(components);
     return count ? { label: `${count} 项可升级` } : undefined;
   }
+  if (key === 'library') return libraryStatus(library);
   if (!state) return undefined;
   if (key === 'monitor') {
     const count = failing(state).length;
@@ -1020,7 +1028,7 @@ function Tokens({ state }: { state: SystemState }) {
   );
 }
 
-/** For administrators: every service, the speech and video switches, the token settings, common parameters and the
+/** For administrators: every service, the speech and video switches, the token settings, the recording library's room, common parameters and the
  * upgrade of each twin's memory kernel and ledger, in one dialog over the current page. Which section is open lives in the URL (?system=…), so closing it leaves the page as it was. */
 export function SystemDialog() {
   const [params, setParams] = useSearchParams();
@@ -1030,6 +1038,7 @@ export function SystemDialog() {
     ? (requested as SectionKey)
     : 'monitor';
   const { data, error, load, components, loadComponents } = useSystem();
+  const library = useTeam((state) => state.library);
   const [checking, setChecking] = useState(false);
   useEffect(() => {
     if (open) void load();
@@ -1065,7 +1074,7 @@ export function SystemDialog() {
       note="仅管理员可见"
       sections={SECTIONS.map((section) => ({
         ...section,
-        status: sectionStatus(section.key, data, components),
+        status: sectionStatus(section.key, data, components, library),
       }))}
       active={active}
       onSelect={select}
@@ -1102,6 +1111,8 @@ export function SystemDialog() {
           <Features state={data} />
         ) : active === 'tokens' ? (
           <Tokens state={data} />
+        ) : active === 'library' ? (
+          <LibraryCapacity />
         ) : active === 'params' ? (
           <Params state={data} />
         ) : active === 'upgrades' ? (

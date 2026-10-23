@@ -28,8 +28,13 @@ const Questionnaire = lazy(() =>
     default: module.Questionnaire,
   })),
 );
-const Ledger = lazy(() =>
-  import('./pages/Ledger').then((module) => ({ default: module.Ledger })),
+const Commitments = lazy(() =>
+  import('./pages/Commitments').then((module) => ({
+    default: module.Commitments,
+  })),
+);
+const Inbox = lazy(() =>
+  import('./pages/Inbox').then((module) => ({ default: module.Inbox })),
 );
 const Library = lazy(() =>
   import('./pages/Library').then((module) => ({ default: module.Library })),
@@ -95,6 +100,7 @@ export function App() {
                       element={<Navigate to="/team" replace />}
                     />
                     <Route path="library" element={<Library />} />
+                    <Route path="inbox" element={<Inbox />} />
                     <Route path="voice" element={<MemberVoice />} />
                     <Route
                       path="library/:recordingId"
@@ -105,12 +111,17 @@ export function App() {
                     {/* The old profile addresses lead to the member page of the twin in view. */}
                     <Route path="profile" element={<ProfileRedirect />} />
                     <Route
-                      path="ledger"
+                      path="commitments"
                       element={
                         <FeaturePage feature="ledger">
-                          <Ledger />
+                          <Commitments />
                         </FeaturePage>
                       }
+                    />
+                    {/* The ledger is the commitments of whoever is chosen there. */}
+                    <Route
+                      path="ledger"
+                      element={<Navigate to="/commitments" replace />}
                     />
                     <Route
                       path="memories"

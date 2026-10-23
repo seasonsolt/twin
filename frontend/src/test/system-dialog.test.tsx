@@ -12,6 +12,7 @@ import {
   type SystemState,
 } from '../stores/system';
 import { useAuth } from '../stores/auth';
+import type { LibraryState } from '../pages/Library';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -74,6 +75,7 @@ const param = (
 });
 
 let state: SystemState;
+let library: LibraryState;
 let components: Components;
 let puts: { url: string; body: unknown }[];
 let posts: { url: string; body: unknown }[];
@@ -226,6 +228,18 @@ beforeEach(() => {
       default_hours: 24,
     },
   };
+  library = {
+    recordings: [],
+    pending: 3,
+    max_pending: 20,
+    asr: true,
+    capacity: {
+      free_bytes: 80 * 1024 ** 3,
+      arriving_bytes: 2 * 1024 ** 3,
+      arriving: 2,
+      headroom_bytes: 20 * 1024 ** 3,
+    },
+  };
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -242,6 +256,7 @@ beforeEach(() => {
         };
         return json({ queued: ['default'], ...components });
       }
+      if (url === '/api/library') return json(library);
       if (url === '/api/admin/system/components') return json(components);
       if (init?.method === 'PUT') {
         const body: unknown = JSON.parse(String(init.body));
@@ -653,4 +668,29 @@ it('changes a parameter at once, refuses what is not a number, and goes back to 
       body: { value: false },
     }),
   );
+});
+
+it('shows how much room the recordings have, from the library itself', async () => {
+  show('library');
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  // The menu carries it, apart from the services.
+  expect(
+    within(dialog).getByRole('button', { name: /录音库容量/, current: 'page' }),
+  ).toBeInTheDocument();
+  expect(
+    await within(dialog).findByRole('progressbar', { name: '排队 3 / 20' }),
+  ).toHaveAttribute('aria-valuenow', '3');
+  // What is free, less what is arriving and what is kept back.
+  expect(within(dialog).getByText('约 58.0 GB')).toBeInTheDocument();
+  expect(within(dialog).getByText('2 项 · 2.0 GB')).toBeInTheDocument();
+});
+
+it('flags the library in the menu only once its queue or disk is full', async () => {
+  library = { ...library, pending: 20 };
+  show('library');
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  await within(dialog).findByRole('progressbar', { name: '排队 20 / 20' });
+  expect(
+    within(dialog).getByRole('button', { name: /录音库容量.*队列已满/ }),
+  ).toBeInTheDocument();
 });

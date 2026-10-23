@@ -597,6 +597,48 @@ export function AvatarFrame({
 }
 
 /**
+ * The people in something, as overlapping round initials: up to `max`, then +n, and a "?" when some speakers are
+ * still unnamed. One image for screen readers, who get the names.
+ */
+export function AvatarStack({
+  names,
+  unknown = 0,
+  max = 4,
+}: {
+  names: string[];
+  /** How many speakers nobody has named yet. */
+  unknown?: number;
+  max?: number;
+}) {
+  const shown = names.slice(0, max);
+  const rest = names.length - shown.length;
+  if (!names.length && !unknown) return null;
+  return (
+    <span
+      role="img"
+      aria-label={`参会人：${names.join('、')}${unknown ? `${names.length ? '，' : ''}${unknown} 位没认出` : ''}`}
+      className="flex items-center -space-x-2"
+    >
+      {shown.map((name) => (
+        <AvatarFrame key={name} size="sm" outlined>
+          {Array.from(name)[0]}
+        </AvatarFrame>
+      ))}
+      {rest > 0 && (
+        <AvatarFrame size="sm" outlined>
+          +{rest}
+        </AvatarFrame>
+      )}
+      {unknown > 0 && (
+        <AvatarFrame size="sm" outlined muted>
+          ?
+        </AvatarFrame>
+      )}
+    </span>
+  );
+}
+
+/**
  * A portrait photo filling its frame, cropped towards the face (the upper part of the picture) rather than the middle.
  */
 export function Portrait(props: Omit<ComponentProps<'img'>, 'className'>) {

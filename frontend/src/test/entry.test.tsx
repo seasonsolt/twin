@@ -9,6 +9,10 @@ import { usePersonas, type Persona } from '../stores/personas';
 vi.mock('../pages/Chat', () => ({ Chat: () => <p>聊天页</p> }));
 vi.mock('../pages/Profile', () => ({ Profile: () => <p>档案页</p> }));
 vi.mock('../pages/Library', () => ({ Library: () => <p>录音库页</p> }));
+vi.mock('../pages/Inbox', () => ({ Inbox: () => <p>待处理页</p> }));
+vi.mock('../pages/Commitments', () => ({
+  Commitments: () => <p>承诺页</p>,
+}));
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
   useReducedMotion: () => true,
@@ -138,6 +142,9 @@ it('gives a guest, who only meets twins made public, the conversation alone', as
   // The places of the team are not a guest's, by address either: nor its members' pages, nor the old profile.
   for (const address of [
     '#/library',
+    '#/inbox',
+    '#/commitments',
+    '#/ledger',
     '#/team/twin/p-pub',
     '#/team/u-1',
     '#/profile',
@@ -146,4 +153,15 @@ it('gives a guest, who only meets twins made public, the conversation alone', as
     window.location.hash = address;
     await waitFor(() => expect(window.location.hash).toBe('#/chat'));
   }
+});
+
+it('opens what waits and the commitments at their own addresses, and leads the old ledger address to the commitments', async () => {
+  whoami = { email: 'admin@example.test', admin: true, auth_enabled: true };
+  await signIn();
+  await entries();
+  window.location.hash = '#/inbox';
+  expect(await screen.findByText('待处理页')).toBeInTheDocument();
+  window.location.hash = '#/ledger';
+  expect(await screen.findByText('承诺页')).toBeInTheDocument();
+  expect(window.location.hash).toBe('#/commitments');
 });

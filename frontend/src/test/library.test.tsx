@@ -86,7 +86,9 @@ it('uploads several recordings to the account library one after another', async 
   vi.stubGlobal('fetch', fetcher);
   show();
   expect(await screen.findByText('还没有录音')).toBeInTheDocument();
-  expect(screen.getByText(/还能放约 30.0 GB/u)).toBeInTheDocument();
+  // Room and queue are the system settings' to show: the page itself keeps to the recordings.
+  expect(screen.queryByText(/还能放约/u)).toBeNull();
+  expect(screen.queryByText(/排队 0/u)).toBeNull();
   await userEvent
     .setup({ applyAccept: false })
     .upload(screen.getByLabelText('选择录音文件'), [
@@ -137,7 +139,6 @@ it('takes more recordings while one is uploading, after it and only once', async
   const first = new File(['abc'], '一.m4a', { lastModified: 1 });
   await user.upload(screen.getByLabelText('选择录音文件'), [first]);
   await waitFor(() => expect(order).toEqual(['一.m4a']));
-  expect(screen.getByRole('button', { name: '上传录音' })).toBeEnabled();
   await user.upload(screen.getByLabelText('选择录音文件'), [
     new File(['abc'], '一.m4a', { lastModified: 1 }),
     new File(['def'], '二.wav', { lastModified: 2 }),
@@ -204,7 +205,7 @@ it('says recordings wait when no diarizing transcription service is set up', asy
   expect(
     await screen.findByText(/还没有配置能区分说话人的转写服务/u),
   ).toBeInTheDocument();
-  expect(screen.getByText(/排队 1 \/ 20/u)).toBeInTheDocument();
+  expect(screen.queryByText(/排队 1 \/ 20/u)).toBeNull();
 });
 
 it('tells for each transcribed recording whether its speakers are identified', async () => {
@@ -232,11 +233,23 @@ it('tells for each transcribed recording whether its speakers are identified', a
   show();
   const row = async (name: string) =>
     within((await screen.findByRole('link', { name })).closest('li')!);
-  expect((await row('周会.m4a')).getByText('4 位待确认')).toBeInTheDocument();
+  // Whoever is not named yet is a "?", and the button says how many to settle.
+  const unnamed = await row('周会.m4a');
+  expect(unnamed.getByRole('link', { name: '认 4 位说话人' })).toHaveAttribute(
+    'href',
+    '/library/a',
+  );
+  expect(
+    unnamed.getByRole('img', { name: '参会人：4 位没认出' }),
+  ).toBeVisible();
   const partly = await row('月会.m4a');
-  expect(partly.getByText('2 位待确认')).toBeInTheDocument();
-  expect(partly.getByText(/张总、李总/u)).toBeInTheDocument();
-  expect((await row('季会.m4a')).getByText('已认人')).toBeInTheDocument();
+  expect(partly.getByRole('link', { name: '认 2 位说话人' })).toBeVisible();
+  expect(
+    partly.getByRole('img', { name: '参会人：张总、李总，2 位没认出' }),
+  ).toBeVisible();
+  const done = await row('季会.m4a');
+  expect(done.getByText('都认出来了')).toBeInTheDocument();
+  expect(done.queryByRole('link', { name: /说话人/u })).toBeNull();
 });
 
 it('says when the batch quota holds proofreading and twin updates back', async () => {
@@ -306,7 +319,7 @@ it('filters locally with counts, including proofreading in processing, and shows
   expect(screen.getByRole('list', { name: '录音列表' }).children).toHaveLength(
     1,
   );
-  expect(screen.getByRole('link', { name: '确认说话人' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: '认 2 位说话人' })).toHaveAttribute(
     'href',
     '/library/a',
   );
@@ -326,21 +339,39 @@ it('filters locally with counts, including proofreading in processing, and shows
   expect(vi.mocked(fetch).mock.calls).toHaveLength(calls);
 });
 
-it('shows an empty category while retaining the upload action', async () => {
-  state.recordings = [recording({})];
+it('shows an empty category, and finds recordings by title or by who was in them', async () => {
+  state.recordings = [
+    recording({
+      id: 'a',
+      filename: '产品周会.m4a',
+      people: ['林舟', '许清禾'],
+    }),
+    recording({ id: 'b', filename: '迭代复盘.m4a', people: ['周越'] }),
+  ];
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => json(state)),
   );
   show();
-  await screen.findByRole('button', { name: '全部 1' });
+  await screen.findByRole('button', { name: '全部 2' });
   await userEvent.click(screen.getByRole('button', { name: '失败 0' }));
   expect(screen.getByText('这一类里没有录音。')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '上传录音' })).toBeEnabled();
-  expect(screen.queryByText('还没有录音')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: '全部 2' }));
+  const list = () => screen.getByRole('list', { name: '录音列表' }).children;
+  const search = screen.getByRole('searchbox', { name: '找录音' });
+  await userEvent.type(search, '复盘');
+  expect(list()).toHaveLength(1);
+  expect(screen.getByText('迭代复盘.m4a')).toBeInTheDocument();
+  await userEvent.clear(search);
+  await userEvent.type(search, '许清禾');
+  expect(list()).toHaveLength(1);
+  expect(screen.getByText('产品周会.m4a')).toBeInTheDocument();
+  await userEvent.clear(search);
+  await userEvent.type(search, '没有这个人');
+  expect(screen.getByText('没有找到。')).toBeInTheDocument();
 });
 
-it('opens the file picker from the header and accepts files dropped on the page', async () => {
+it('takes files from the picker and dropped on the page, with the upload button only where there is no side bar', async () => {
   const order: string[] = [];
   vi.stubGlobal(
     'fetch',
@@ -359,9 +390,8 @@ it('opens the file picker from the header and accepts files dropped on the page'
   await screen.findByText('还没有录音');
   // Any file can be picked (some Windows machines grey .m4a out of a filtered picker); the page skips what is not media.
   expect(screen.getByLabelText('选择录音文件')).not.toHaveAttribute('accept');
-  const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
-  await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
-  expect(click).toHaveBeenCalledOnce();
+  // The side bar uploads; the page has no second button for it.
+  expect(screen.queryByRole('button', { name: '上传录音' })).toBeNull();
   fireEvent.drop(screen.getByRole('region', { name: '拖放上传录音' }), {
     dataTransfer: {
       files: [new File(['abc'], '拖入.m4a', { type: 'audio/mp4' })],
@@ -463,10 +493,12 @@ it('offers recordings a newer transcription would collect again, and goes back t
     }),
   );
   show();
-  expect(
-    await screen.findByText('2 份录音可以用新版转写重新采集，说话人分得更准'),
-  ).toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: '选择录音' }));
+  // No banner: one recording at a time from its own menu, or all that are offered from the page's.
+  expect(screen.queryByText(/可以用新版转写重新采集/u)).toBeNull();
+  await user.click(await screen.findByLabelText('更多'));
+  await user.click(
+    screen.getByRole('button', { name: '用新版转写重新采集（2）' }),
+  );
   const dialog = await screen.findByRole('dialog', {
     name: '用新版转写重新采集',
   });
@@ -480,12 +512,10 @@ it('offers recordings a newer transcription would collect again, and goes back t
       { url: '/api/library/recollect', body: { recordings: ['a'] } },
     ]),
   );
-  expect(
-    await screen.findByText('1 份录音正在排队用新版转写重新采集'),
-  ).toBeInTheDocument();
-  expect(
-    await screen.findByRole('button', { name: '选择其余 1 份' }),
-  ).toBeVisible();
+  // Asked for, the recording is in 处理中 and says so.
+  await user.click(await screen.findByRole('button', { name: '处理中 1' }));
+  expect(await screen.findByText('重新采集中')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '全部 2' }));
 
   await user.click(await screen.findByLabelText('更多：月会.m4a'));
   await user.click(
@@ -498,4 +528,56 @@ it('offers recordings a newer transcription would collect again, and goes back t
   await waitFor(() =>
     expect(posts[1]).toEqual({ url: '/api/library/recordings/b/rollback' }),
   );
+});
+
+it('keeps an upload button on a phone, where there is no side bar', async () => {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => json(state)),
+  );
+  show();
+  await screen.findByText('还没有录音');
+  const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
+  await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
+  expect(click).toHaveBeenCalledOnce();
+});
+
+it('offers to collect one recording again from its own menu, after asking', async () => {
+  const user = userEvent.setup();
+  state.recordings = [recording({ id: 'a', filename: '周会.m4a' })];
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library') return json(state);
+      if (url === '/api/library/recollect' && init?.method === 'POST') {
+        posts.push(JSON.parse(String(init.body)));
+        return json({ asked: 1 });
+      }
+      if (url === '/api/library/recollect')
+        return json({
+          service: '1.5.0',
+          recordings: [
+            { id: 'a', filename: '周会.m4a', asr: null, asked: null },
+          ],
+        });
+      return json({ items: [] });
+    }),
+  );
+  show();
+  await user.click(await screen.findByLabelText('更多：周会.m4a'));
+  await user.click(screen.getByRole('button', { name: '重新采集' }));
+  const ask = await screen.findByRole('dialog', {
+    name: '重新采集「周会.m4a」？',
+  });
+  await user.click(within(ask).getByRole('button', { name: '重新采集' }));
+  await waitFor(() => expect(posts).toEqual([{ recordings: ['a'] }]));
 });

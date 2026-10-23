@@ -481,11 +481,11 @@ export function Recording() {
       });
       setReopened(decision.action === 'clear' ? speaker.id : null);
       if (
-        location.state?.teamTask &&
+        location.state?.inboxTask &&
         ['confirm', 'unknown', 'mixed'].includes(decision.action)
       ) {
-        void navigate('/team', {
-          state: { resolvedTeamTask: location.state.teamTask },
+        void navigate('/inbox', {
+          state: { resolvedInboxTask: location.state.inboxTask },
         });
         return;
       }
@@ -699,7 +699,7 @@ export function Recording() {
             <Notice
               tone="success"
               title="这段录音的说话人都确认好了"
-              actions={<RouteButton to="/team">回团队处理下一项</RouteButton>}
+              actions={<RouteButton to="/inbox">处理下一项</RouteButton>}
             >
               相关的人会在后台重新整理记忆。
             </Notice>

@@ -101,7 +101,7 @@ it.each([375, 390, 767])(
       within(tabs)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['聊天', '档案', '承诺账本']);
+    ).toEqual(['聊天', '档案', '承诺']);
     expect(within(tabs).getByRole('link', { name: '聊天' })).toHaveAttribute(
       'aria-current',
       'page',

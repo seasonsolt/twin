@@ -1,4 +1,11 @@
-import { useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import {
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { Link } from 'react-router';
 import { ChevronRight, Pause, Play } from 'lucide-react';
 import { Button, IconButton } from './controls';
@@ -97,6 +104,11 @@ export function AudioPlayer(
   return <audio {...props} controls preload="none" className="h-11 w-full" />;
 }
 
+/** What a shortcut key can do to a clip button. */
+export interface ClipControls {
+  toggle: () => void;
+}
+
 /** A round play/pause button for a short clip, heard where it is listed without a player taking up a row. With a
  * ``caption`` it is a small text button instead, for a clip heard beside the main one (a reference to compare with). */
 export function ClipButton({
@@ -104,12 +116,15 @@ export function ClipButton({
   label,
   caption,
   size = 'lg',
+  controls,
 }: {
   src: string;
   label: string;
   caption?: string;
   /** lg 44px (default), md 36px for a clip inside a list row or card. */
   size?: 'md' | 'lg';
+  /** Play or pause from outside, for a shortcut key. */
+  controls?: Ref<ClipControls>;
 }) {
   const audio = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -117,8 +132,9 @@ export function ClipButton({
     const element = audio.current;
     if (!element) return;
     if (playing) element.pause();
-    else void element.play().catch(() => setPlaying(false));
+    else void Promise.resolve(element.play()).catch(() => setPlaying(false));
   };
+  useImperativeHandle(controls, () => ({ toggle }));
   const icon = playing ? (
     <Pause aria-hidden className="size-4" />
   ) : (

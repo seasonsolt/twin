@@ -173,9 +173,10 @@ it('confirms, focuses the next speaker, reopens a previous one, then shows the a
     await screen.findByText('这段录音的说话人都确认好了'),
   ).toBeInTheDocument();
   expect(document.querySelectorAll('audio')).toHaveLength(0);
-  expect(
-    screen.getByRole('link', { name: '回团队处理下一项' }),
-  ).toHaveAttribute('href', '/team');
+  expect(screen.getByRole('link', { name: '处理下一项' })).toHaveAttribute(
+    'href',
+    '/inbox',
+  );
   expect(screen.getAllByText('不进任何分身')).toHaveLength(2);
   expect(screen.getByText('完整转写稿（3 段）')).toBeInTheDocument();
 });

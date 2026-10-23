@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActionMenu,
+  AvatarStack,
   Badge,
   Button,
-  EmptyState,
-  FileDropSurface,
-  FileInput,
-  ActionMenu,
   Card,
   Checkbox,
   Dialog,
-  Meter,
-  Row,
-  Page,
-  Tabs,
-  RouteButton,
+  EmptyState,
+  FileDropSurface,
+  FileInput,
+  Input,
   ListRow,
+  Meter,
   Notice,
+  Page,
+  RouteButton,
+  Row,
   Skeleton,
   Stack,
+  Tabs,
   Text,
   TextLink,
   Toolbar,
@@ -25,6 +27,7 @@ import {
   type Tone,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { useMobile } from '../lib/useMobile';
 import { usePolling } from '../lib/usePolling';
 import { UploadList } from '../features/library/UploadList';
 import { useUploads } from '../features/library/useUploads';
@@ -90,12 +93,10 @@ const statusLabel: Record<Recording['status'], [string, Tone]> = {
   ready: ['已转写', 'success'],
   failed: ['失败', 'danger'],
 };
-/** A transcribed recording is described by how far its speakers are identified. */
-function identityLabel(recording: Recording): [string, Tone] {
+/** What a recording is, apart from a transcribed one whose speakers are named (those say it in the row itself). */
+function stateLabel(recording: Recording): [string, Tone] | null {
   if (recording.can_edit === false) return ['你参加的', 'neutral'];
-  if (recording.status !== 'ready') return statusLabel[recording.status];
-  if (!recording.unsettled) return ['已认人', 'success'];
-  return [`${recording.unsettled} 位待确认`, 'warning'];
+  return recording.status === 'ready' ? null : statusLabel[recording.status];
 }
 const proofreadLabel: Record<Proofread, string> = {
   done: '已校对',
@@ -119,7 +120,6 @@ export function quotaNotice(quota: Quota): string {
     `${held.length ? `，${held.join('和 ')}已暂停` : '，新的校对和分身更新会暂停'}${resumes}。需要更多额度请联系管理员。`
   );
 }
-const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 const minutes = (seconds: number | null) =>
   seconds === null ? '' : `${Math.max(1, Math.round(seconds / 60))} 分钟`;
 
@@ -191,6 +191,16 @@ export function Library() {
     }
     await load();
   };
+  const collectAgain = async (recording: Recording) => {
+    if (
+      await confirm({
+        title: `重新采集「${recording.filename}」？`,
+        body: '重新转写后，已经确认的说话人会尽量沿用，对不上的会请你重新确认；不满意可以在录音的菜单里回到上一版',
+        confirmLabel: '重新采集',
+      })
+    )
+      await recollect([recording.id]);
+  };
   const rollback = async (recording: Recording) => {
     if (
       !(await confirm({
@@ -230,11 +240,10 @@ export function Library() {
     await load();
   };
 
-  const capacity = library?.capacity;
-  const room = capacity
-    ? capacity.free_bytes - capacity.arriving_bytes - capacity.headroom_bytes
-    : 0;
+  const mobile = useMobile();
+  const [search, setSearch] = useState('');
   const recordings = library?.recordings ?? [];
+  const recollectingIds = new Set(recollecting.map((r) => r.id));
   const matches: Record<string, (recording: Recording) => boolean> = {
     all: () => true,
     waiting: (r) =>
@@ -242,26 +251,43 @@ export function Library() {
     processing: (r) =>
       r.status === 'queued' ||
       r.status === 'transcribing' ||
-      r.proofread === 'waiting',
+      r.proofread === 'waiting' ||
+      recollectingIds.has(r.id),
     failed: (r) => r.status === 'failed',
   };
-  const filtered = recordings.filter(matches[filter]);
+  // By title or by who was in it.
+  const wanted = search.trim().toLocaleLowerCase();
+  const found = (r: Recording) =>
+    !wanted ||
+    [r.filename, ...r.people].some((text) =>
+      text.toLocaleLowerCase().includes(wanted),
+    );
+  const filtered = recordings.filter((r) => matches[filter](r) && found(r));
   return (
     <FileDropSurface onFiles={(files) => void add(files)}>
       <Page
         stackHeaderOnMobile
         title="录音库"
         titleSize="display"
-        description="团队共用：你上传的由你整理，你参加的会议你也能查看。转写校验完成后删除原件，保留转写稿和试听用的音频。"
         actions={
           <>
-            {library && capacity && (
-              <Text size="xs" tone="tertiary">
-                排队 {library.pending} / {library.max_pending} · 还能放约{' '}
-                {gb(Math.max(0, room))}
-              </Text>
+            {offered.length > 0 && (
+              <ActionMenu
+                label="更多"
+                items={[
+                  {
+                    label: `用新版转写重新采集（${offered.length}）`,
+                    onSelect: () => {
+                      setPicked(new Set(offered.map((r) => r.id)));
+                      setPicking(true);
+                    },
+                  },
+                ]}
+              />
             )}
-            <Button onClick={() => input.current?.click()}>上传录音</Button>
+            {mobile && (
+              <Button onClick={() => input.current?.click()}>上传录音</Button>
+            )}
           </>
         }
       >
@@ -305,32 +331,15 @@ export function Library() {
               label: `${label} ${recordings.filter(matches[value]).length}`,
             }))}
           />
-          <Text size="xs" tone="tertiary">
-            把录音拖到页面任意位置即可上传
-          </Text>
+          <Input
+            type="search"
+            aria-label="找录音"
+            placeholder="找录音"
+            className="w-48"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
         </Toolbar>
-        {(offered.length > 0 || recollecting.length > 0) && (
-          <Row gap={2} wrap>
-            <Text size="sm" tone="secondary" role="status">
-              {recollecting.length > 0
-                ? `${recollecting.length} 份录音正在排队用新版转写重新采集`
-                : `${offered.length} 份录音可以用新版转写重新采集，说话人分得更准`}
-            </Text>
-            {offered.length > 0 && (
-              <TextLink
-                size="sm"
-                onClick={() => {
-                  setPicked(new Set(offered.map((r) => r.id)));
-                  setPicking(true);
-                }}
-              >
-                {recollecting.length > 0
-                  ? `选择其余 ${offered.length} 份`
-                  : '选择录音'}
-              </TextLink>
-            )}
-          </Row>
-        )}
         <UploadList picks={unfinished} uploading={uploading} onStop={stop} />
         {!library ? (
           <Skeleton className="h-32" />
@@ -343,19 +352,21 @@ export function Library() {
           <Card>
             {filtered.length === 0 ? (
               <Text align="center" tone="secondary">
-                这一类里没有录音。
+                {search.trim() ? '没有找到。' : '这一类里没有录音。'}
               </Text>
             ) : (
               <Stack as="ul" gap={0} aria-label="录音列表">
                 {filtered.map((recording) => {
-                  const [label, tone] = identityLabel(recording);
+                  const label = stateLabel(recording);
+                  const ready = recording.status === 'ready';
+                  const editable = recording.can_edit !== false;
                   return (
                     <ListRow
                       variant="divided"
                       stackOnMobile
                       key={recording.id}
                       title={
-                        recording.status === 'ready' ? (
+                        ready ? (
                           <TextLink
                             to={`/library/${encodeURIComponent(recording.id)}`}
                             weight="medium"
@@ -378,41 +389,58 @@ export function Library() {
                               { month: 'long', day: 'numeric' },
                             ),
                         minutes(recording.duration_s),
-                        recording.status === 'ready'
-                          ? `${recording.speakers} 位说话人`
-                          : '',
-                        recording.people.join('、'),
+                        ready ? `${recording.speakers} 位说话人` : '',
                         proofreadLabel[recording.proofread ?? ''],
                       ]
                         .filter(Boolean)
                         .join(' · ')}
                       trailing={
                         <>
-                          <Badge tone={tone}>{label}</Badge>
-                          {recording.status === 'failed' &&
-                            recording.can_edit !== false && (
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => void retry(recording)}
-                              >
-                                重试
-                              </Button>
-                            )}
-                          {recording.status === 'ready' &&
-                            recording.unsettled > 0 &&
-                            recording.can_edit !== false && (
-                              <RouteButton
-                                size="sm"
-                                to={`/library/${encodeURIComponent(recording.id)}`}
-                              >
-                                确认说话人
-                              </RouteButton>
-                            )}
-                          {recording.can_edit !== false && (
+                          {ready && (
+                            <AvatarStack
+                              names={recording.people}
+                              unknown={editable ? recording.unsettled : 0}
+                            />
+                          )}
+                          {label && <Badge tone={label[1]}>{label[0]}</Badge>}
+                          {recollectingIds.has(recording.id) && (
+                            <Badge>重新采集中</Badge>
+                          )}
+                          {ready && editable && !recording.unsettled && (
+                            <Text as="span" size="sm" tone="success">
+                              都认出来了
+                            </Text>
+                          )}
+                          {recording.status === 'failed' && editable && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void retry(recording)}
+                            >
+                              重试
+                            </Button>
+                          )}
+                          {ready && recording.unsettled > 0 && editable && (
+                            <RouteButton
+                              size="sm"
+                              to={`/library/${encodeURIComponent(recording.id)}`}
+                            >
+                              认 {recording.unsettled} 位说话人
+                            </RouteButton>
+                          )}
+                          {editable && (
                             <ActionMenu
                               label={`更多：${recording.filename}`}
                               items={[
+                                ...(offered.some((r) => r.id === recording.id)
+                                  ? [
+                                      {
+                                        label: '重新采集',
+                                        onSelect: () =>
+                                          void collectAgain(recording),
+                                      },
+                                    ]
+                                  : []),
                                 ...(recording.previous
                                   ? [
                                       {

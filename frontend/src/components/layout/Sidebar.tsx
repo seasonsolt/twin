@@ -37,14 +37,31 @@ import {
 import { useUploads } from '../../features/library/useUploads';
 import { memberCount, waitingCount } from '../../features/library/teamCounts';
 import { FindPerson } from './FindPerson';
-import { accountLabel, featureOn, useAuth } from '../../stores/auth';
+import {
+  accountLabel,
+  featureOn,
+  useAuth,
+  type Feature,
+} from '../../stores/auth';
 import { THEMES, useTheme } from '../../stores/theme';
 
 /** The phone's bottom tabs; the wide side bar has its own entries (below). */
-const navItems = [
+const navItems: {
+  route: string;
+  title: string;
+  icon: typeof MessageCircle;
+  visitor: boolean;
+  feature?: Feature;
+}[] = [
   { route: 'chat', title: '聊天', icon: MessageCircle, visitor: true },
   { route: 'profile', title: '档案', icon: BookUser, visitor: false },
-  { route: 'ledger', title: '承诺账本', icon: ListChecks, visitor: false },
+  {
+    route: 'commitments',
+    title: '承诺',
+    icon: ListChecks,
+    visitor: false,
+    feature: 'ledger',
+  },
 ];
 
 /** What a guest, who may only talk to the twins, can open: the conversation, and the old address of work, which
@@ -61,7 +78,7 @@ function useNavItems() {
   return navItems.filter(
     (item) =>
       (canManage || item.visitor) &&
-      (item.route !== 'ledger' ? true : featureOn(identity, item.route)),
+      (!item.feature || featureOn(identity, item.feature)),
   );
 }
 
@@ -93,9 +110,6 @@ export function Sidebar() {
   const canManage = useCanManage();
   const identity = useAuth((state) => state.identity);
   const location = useLocation();
-  const todo =
-    location.pathname === '/team' &&
-    new URLSearchParams(location.search).get('tab') === 'todo';
   const [finding, setFinding] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const library = useTeam((state) => state.library);
@@ -169,21 +183,20 @@ export function Sidebar() {
           icon: Users,
           count: members,
           active:
-            (location.pathname === '/team' && !todo) ||
+            location.pathname === '/team' ||
             location.pathname.startsWith('/team/'),
         },
         { to: '/chat', title: '对话', icon: MessageCircle },
         { to: '/library', title: '录音库', icon: Mic },
         {
-          to: '/team?tab=todo',
+          to: '/inbox',
           title: '待处理',
           icon: Inbox,
           count: waiting || undefined,
           accent: true,
-          active: todo,
         },
         ...(featureOn(identity, 'ledger')
-          ? [{ to: '/ledger', title: '承诺', icon: ListChecks }]
+          ? [{ to: '/commitments', title: '承诺', icon: ListChecks }]
           : []),
       ]
     : [{ to: '/chat', title: '对话', icon: MessageCircle }];

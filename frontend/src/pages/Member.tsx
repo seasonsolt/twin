@@ -221,7 +221,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                     {
                       value: 'ledger',
                       label: '承诺',
-                      content: <Ledger embedded />,
+                      content: <Ledger />,
                     },
                   ]
                 : []),

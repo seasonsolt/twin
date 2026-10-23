@@ -118,6 +118,7 @@ const show = (entry: string) =>
             <Route element={<AppShell />}>
               <Route path="team" element={<Where />} />
               <Route path="library" element={<Where />} />
+              <Route path="inbox" element={<Where />} />
               <Route path="team/:id" element={<Where />} />
               <Route path="team/twin/:twinId" element={<Where />} />
               <Route path="chat" element={<Where />} />
@@ -129,7 +130,7 @@ const show = (entry: string) =>
   );
 
 it('counts the team and what waits as the team page does, and marks the tab in view as the place', async () => {
-  show('/team?tab=todo');
+  show('/inbox');
   const nav = await screen.findByRole('navigation', { name: '主导航' });
   // Two named people (the unnamed voice is a task, not a member); waiting: that voice, the review's voice, the
   // failed recording.
@@ -137,7 +138,7 @@ it('counts the team and what waits as the team page does, and marks the tab in v
     await within(nav).findByRole('link', { name: '团队（2）' }),
   ).toHaveAttribute('href', '/team');
   const todo = within(nav).getByRole('link', { name: '待处理（3）' });
-  expect(todo).toHaveAttribute('href', '/team?tab=todo');
+  expect(todo).toHaveAttribute('href', '/inbox');
   expect(todo).toHaveAttribute('aria-current', 'page');
   expect(
     within(nav).getByRole('link', { name: '团队（2）' }),

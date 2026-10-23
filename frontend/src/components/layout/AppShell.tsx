@@ -48,6 +48,7 @@ export function AppShell() {
     location.pathname.startsWith('/team/') ||
     location.pathname === '/library' ||
     location.pathname.startsWith('/library/') ||
+    location.pathname === '/inbox' ||
     location.pathname === '/voice';
   const onWelcome = location.pathname === '/welcome';
   const canManage = useCanManage();

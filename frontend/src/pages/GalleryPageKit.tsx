@@ -30,6 +30,7 @@ import {
   AccountMenu,
   ActionMenu,
   AvatarFrame,
+  AvatarStack,
   Badge,
   BadgeToggle,
   Button,
@@ -352,7 +353,11 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           >
             <AvatarFrame size="sm">林</AvatarFrame>林舟 · 声音像 71%
           </VoiceChoice>
-          <RouteButton to="/gallery">确认说话人</RouteButton>
+          <RouteButton to="/gallery">认 2 位说话人</RouteButton>
+          <AvatarStack
+            names={['林舟', '许清禾', '周', '陈', '吴']}
+            unknown={2}
+          />
         </Row>
         <AudioPlayer aria-label="试听示例" />
         <FileDropSurface

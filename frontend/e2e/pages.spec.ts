@@ -34,7 +34,16 @@ const pages: {
   setup?: (page: Page) => Promise<unknown>;
 }[] = [
   { name: 'team', path: '/#/team', ready: '全部录音（' },
-  { name: 'team-todo', path: '/#/team?tab=todo', ready: '新出现的声音' },
+  // 第 8 屏: what waits for the owner, the new voices first, each answered with a button.
+  { name: 'inbox', path: '/#/inbox', ready: '新的声音' },
+  // 第 9 屏: the same voices one at a time, with who they may be to hear beside them.
+  { name: 'inbox-focus', path: '/#/inbox?view=focus', ready: '这是谁？' },
+  // 承诺: one person's commitments, chosen in the page.
+  {
+    name: 'commitments',
+    path: '/#/commitments',
+    ready: '周五前按活跃用户重算留存口径',
+  },
   { name: 'library', path: '/#/library', ready: '2026-10-15 产品周会.m4a' },
   {
     name: 'recording',
@@ -108,6 +117,12 @@ const pages: {
     name: 'system-params',
     path: '/#/team?system=params',
     ready: '每人排队转写上限（条）',
+    viewport: true,
+  },
+  {
+    name: 'system-library',
+    path: '/#/team?system=library',
+    ready: '排队转写',
     viewport: true,
   },
   {

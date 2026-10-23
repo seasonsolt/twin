@@ -12,7 +12,7 @@ import type { Person } from '../../pages/Recording';
 import { usePersonas } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
 import { PersonFace } from '../library/PersonFace';
-import { WorkClaim } from '../library/Team';
+import { WorkClaim } from '../library/WorkClaim';
 import { MemberHeader } from './MemberHeader';
 
 const day = (iso: string) => {

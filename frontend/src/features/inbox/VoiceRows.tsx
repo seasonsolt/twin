@@ -103,7 +103,7 @@ export function NameField({
         className="min-w-0 flex-1"
         onChange={(event) => setName(event.target.value)}
       />
-      <Button type="submit" variant="secondary" disabled={!name.trim()}>
+      <Button type="submit" disabled={!name.trim()}>
         确认
       </Button>
     </Row>
@@ -165,7 +165,8 @@ export function VoiceRow({
             {options.map((option) => (
               <Button
                 key={option.id}
-                variant={option.sure ? 'primary' : 'secondary'}
+                // Once 其他人 is chosen, the name typed is the row's answer.
+                variant={option.sure && !asking ? 'primary' : 'secondary'}
                 aria-label={
                   option.added
                     ? `新建成员：${option.name}`

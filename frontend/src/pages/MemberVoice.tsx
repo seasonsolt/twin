@@ -21,6 +21,7 @@ import { useRecorder } from '../features/assets/useRecorder';
 import { api, ApiError } from '../lib/api';
 import { withBase } from '../lib/base';
 import { usePersonas } from '../stores/personas';
+import { useWelcome } from '../stores/welcome';
 
 /** A voice in a colleague's meeting: one sentence of it, offered or already said to be theirs. */
 export interface VoiceItem {
@@ -125,7 +126,9 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
     try {
       await usePersonas.getState().refresh();
       await usePersonas.getState().switchTo(personaId);
-      // On the way in, the twin now waiting for them is the next step; the way in shows it without a navigation.
+      // The voice step is over: on the way in, the twin now waiting for them is the next step, shown without a
+      // navigation; heard again, it leads to the twin.
+      useWelcome.getState().finishVoice();
       if (!onSkip) navigate('/profile');
     } finally {
       setBusy('');

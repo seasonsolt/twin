@@ -416,6 +416,42 @@ it('shows what the person answered themself as theirs, apart from the twin’s a
   );
 });
 
+it('shows under the person’s reply that the promise they took on is in the commitments, a link for those who see them', async () => {
+  const taken = {
+    ...handed(),
+    status: 'accepted' as const,
+    status_label: '已接受',
+  };
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    { ...turns[1], handoff: taken },
+    own,
+  ];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  const view = mount('/chat', { twin: { can_manage: true } });
+  const mine = await screen.findByRole('article', { name: '本人回复' });
+  expect(
+    within(mine).getByRole('link', { name: '已记为承诺 ›' }),
+  ).toHaveAttribute('href', '/commitments');
+  view.unmount();
+  mount();
+  const theirs = await screen.findByRole('article', { name: '本人回复' });
+  expect(within(theirs).getByText('已记为承诺')).toBeVisible();
+  expect(within(theirs).queryByRole('link')).toBeNull();
+});
+
+it('says nothing of a commitment under a reply that only answered in words', async () => {
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    { ...turns[1], handoff: handed() },
+    own,
+  ];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  const mine = await screen.findByRole('article', { name: '本人回复' });
+  expect(within(mine).queryByText(/已记为承诺/u)).toBeNull();
+});
+
 it('marks nothing apart in a conversation where nothing was handed to the person', async () => {
   localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
   mount();

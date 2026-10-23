@@ -111,6 +111,16 @@ export interface Turn {
 export const waiting = (turn: Turn) =>
   turn.handoff?.status === 'delivered' || turn.handoff?.status === 'writing';
 
+/** Whether the person took on, as a commitment, what the handoff a reply of theirs answers asked them to promise. */
+export const promiseTaken = (turns: Turn[], handoffId: string | undefined) =>
+  !!handoffId &&
+  turns.some(
+    (turn) =>
+      turn.handoff?.id === handoffId &&
+      turn.handoff.kind === 'commit' &&
+      turn.handoff.status === 'accepted',
+  );
+
 /** What the line under an answer says of the handoff: the asker is told it went to the person and where it stands. */
 export function handoffText(line: HandoffLine) {
   const where: Record<HandoffLine['status'], string> = {

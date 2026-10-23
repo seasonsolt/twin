@@ -154,11 +154,14 @@ export function Home() {
               <Heading level={2} size="display">
                 团队
               </Heading>
-              <Button onClick={() => input.current?.click()}>
-                <Upload aria-hidden className="size-5" />
-                上传会议录音
-              </Button>
-              {picker}
+              {/* The side bar has the button; a phone has no side bar. */}
+              {mobile && (
+                <Button onClick={() => input.current?.click()}>
+                  <Upload aria-hidden className="size-5" />
+                  上传会议录音
+                </Button>
+              )}
+              {mobile && picker}
             </Toolbar>
             <UploadList
               picks={unfinished.filter((pick) => pick.error)}

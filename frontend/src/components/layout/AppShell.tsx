@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Navigate, useLocation, useOutlet } from 'react-router';
+import { Navigate, useLocation, useNavigate, useOutlet } from 'react-router';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { startSystemPolling } from '../../stores/system';
@@ -26,6 +26,7 @@ import { GlobalDrop } from './GlobalDrop';
 import { NewTwinForm, NewTwinHost } from './NewTwin';
 import { useAuth } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
+import type { ShellContext } from './shellContext';
 const Welcome = lazy(() =>
   import('../../features/auth/Welcome').then((module) => ({
     default: module.Welcome,
@@ -34,6 +35,18 @@ const Welcome = lazy(() =>
 
 // Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
 const conversationRoutes = new Set(['/chat']);
+// Pages that say themselves that there is no twin yet, in place of the new-twin card.
+const ownEmpty = new Set(['/commitments']);
+
+/** The old address of finding one's voice: the first step of the way in, taken up again. */
+function VoiceAgain() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    useWelcome.getState().hearAgain();
+    void navigate('/welcome', { replace: true });
+  }, [navigate]);
+  return null;
+}
 
 export function AppShell() {
   const personaId = usePersonaId();
@@ -41,19 +54,18 @@ export function AppShell() {
   const { error } = useStatus();
   const location = useLocation();
   const conversation = conversationRoutes.has(location.pathname);
-  const outlet = useOutlet();
   // Account-level pages: not about the current twin, so no twin check or twin tabs.
   const twinLevel =
     location.pathname === '/team' ||
     location.pathname.startsWith('/team/') ||
     location.pathname === '/library' ||
     location.pathname.startsWith('/library/') ||
-    location.pathname === '/inbox' ||
-    location.pathname === '/voice';
+    location.pathname === '/inbox';
   const onWelcome = location.pathname === '/welcome';
   const canManage = useCanManage();
   const [checked, setChecked] = useState(false);
   const [noPersona, setNoPersona] = usePersonaState(false);
+  const outlet = useOutlet({ noTwin: noPersona } satisfies ShellContext);
   useEffect(startStatusPolling, [personaId]);
   const admin = useAuth((state) => state.identity?.admin);
   // Signed in through the company login: look for them in colleagues' meetings before an empty twin.
@@ -62,6 +74,7 @@ export function AppShell() {
   );
   const voiceDone = useWelcome((state) => state.voiceDone);
   const claimDone = useWelcome((state) => state.claimDone);
+  const again = useWelcome((state) => state.again);
   const after = useWelcome((state) => state.after);
   useEffect(() => (admin ? startSystemPolling() : undefined), [admin]);
   // A twin a colleague made for this person comes first: until they have looked at it, it answers nobody else.
@@ -106,10 +119,14 @@ export function AppShell() {
       {step === 'claim' && waiting ? (
         <Welcome step="claim" persona={waiting} />
       ) : (
-        <Welcome step="voice" />
+        <Welcome step="voice" again={again} />
       )}
     </Suspense>
   );
+  // Finding their voice again, asked for from the twin step (or by the old ``#/voice``): the first step of the way in.
+  if (location.pathname === '/voice') return <VoiceAgain />;
+  if (again)
+    return onWelcome ? welcome('voice') : <Navigate to="/welcome" replace />;
   // The way in comes before the app: a twin made for this person first, else finding their voice in the meetings.
   if (waiting && !claimDone && !trying && location.pathname !== '/gallery')
     return onWelcome ? welcome('claim') : <Navigate to="/welcome" replace />;
@@ -132,7 +149,7 @@ export function AppShell() {
     );
   // No twin yet on a page about one (chat, work, profile): say so in the page and open the new-twin card right there,
   // in the workspace, rather than leaving it for a page of its own.
-  const missing = noPersona && !twinLevel;
+  const missing = noPersona && !twinLevel && !ownEmpty.has(location.pathname);
   if (
     !missing &&
     !(twinLevel && !finding) &&

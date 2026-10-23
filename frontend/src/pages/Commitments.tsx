@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router';
-import { Chip, Page, Row } from '../components/ui';
+import { Chip, EmptyState, Page, Row } from '../components/ui';
+import { useNoTwin } from '../components/layout/shellContext';
 import { PersonPicker } from '../features/chat/PersonPicker';
 import { usePersonaId } from '../lib/usePersonaState';
 import { usePersonas } from '../stores/personas';
@@ -12,6 +13,16 @@ export function Commitments() {
   const persona = usePersonas((state) => state.items.find((p) => p.id === id));
   const [params, setParams] = useSearchParams();
   const everyone = params.get('who') === 'all';
+  const noTwin = useNoTwin();
+  if (noTwin)
+    return (
+      <Page title="承诺" titleSize="display">
+        <EmptyState
+          title="还没有承诺"
+          body="有了分身、整理过会议后，这里会列出谁答应了什么。"
+        />
+      </Page>
+    );
   return (
     <Page
       title="承诺"

@@ -159,23 +159,29 @@ export function Chat() {
         : [...new Set([...previous, ...ids])],
     );
   }, [dataRows, scope.kind]);
-  // ``?with=`` opens the page on one twin: it is written to, and the list is narrowed to it.
-  // ``?open=`` with it opens that conversation of the twin (such as what the assistant asked in the person's name).
+  // ``?with=`` opens the page on one twin: it is written to, and the list is narrowed to it; ``me`` is the person's
+  // own twin (我的分身), once the twins are known. ``?open=`` with it opens that conversation of the twin (such as
+  // what the assistant asked in the person's name).
   const withParam = params.get('with');
   const openParam = params.get('open');
   const [opening, setOpening] = useState<Session | null>(null);
   useEffect(() => {
     if (!withParam) return;
-    setScope({ kind: 'person', id: withParam });
-    void switchTo(withParam);
-    if (openParam)
-      setOpening({
-        kind: 'chat',
-        id: openParam,
-        title: '',
-        updated_at: '',
-        personaId: withParam,
-      });
+    if (withParam === 'me' && !people.length) return;
+    const target =
+      withParam === 'me' ? people.find((item) => item.mine)?.id : withParam;
+    if (target) {
+      setScope({ kind: 'person', id: target });
+      void switchTo(target);
+      if (openParam)
+        setOpening({
+          kind: 'chat',
+          id: openParam,
+          title: '',
+          updated_at: '',
+          personaId: target,
+        });
+    }
     setParams(
       (previous) => {
         const query = new URLSearchParams(previous);
@@ -185,7 +191,7 @@ export function Chat() {
       },
       { replace: true },
     );
-  }, [withParam, openParam, switchTo, setParams]);
+  }, [withParam, openParam, people, switchTo, setParams]);
   const playback = usePlayback({ active, chat, name, openStage });
   const { audio, capabilities, currentTurn, toggleReply, stopPlayback } =
     playback;

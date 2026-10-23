@@ -507,3 +507,15 @@ it('opens a conversation of another twin from its address: the twin it is with, 
   expect(await screen.findByText('先问最近做的事。')).toBeVisible();
   expect(usePersonas.getState().id).toBe('p-wang');
 });
+
+it('opens on the person’s own twin from ``?with=me``', async () => {
+  // The page starts on another twin (``default``); the person's own is 王屿 here.
+  mount(
+    [
+      twin('default', '林舟'),
+      twin('p-wang', '王屿', { mine: true, approved: true }),
+    ],
+    '/chat?with=me',
+  );
+  await waitFor(() => expect(usePersonas.getState().id).toBe('p-wang'));
+});

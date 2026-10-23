@@ -178,9 +178,8 @@ it('shows the team and the way to upload more, with what waits left to the inbox
   ];
   show();
   expect(await screen.findByRole('heading', { name: '团队' })).toBeVisible();
-  expect(
-    screen.getByRole('button', { name: '上传会议录音' }),
-  ).toBeInTheDocument();
+  // Uploading is the side bar's button, said once.
+  expect(screen.queryByRole('button', { name: '上传会议录音' })).toBeNull();
   // The people come first; what waits for the owner is the inbox's, not a tab of this page.
   const people_ = await screen.findByRole('tabpanel');
   expect(await within(people_).findByText('可以聊')).toBeInTheDocument();

@@ -12,7 +12,8 @@ import { useWelcome } from '../../stores/welcome';
  * step can be left for later; the app is reached from both.
  */
 export function Welcome(
-  props: { step: 'voice' } | { step: 'claim'; persona: Persona },
+  props:
+    { step: 'voice'; again?: boolean } | { step: 'claim'; persona: Persona },
 ) {
   const voice = props.step === 'voice';
   const teamName = useTeamName();
@@ -43,7 +44,8 @@ export function Welcome(
         {props.step === 'claim' ? (
           <Claimed persona={props.persona} />
         ) : (
-          <MemberVoice onSkip={later} />
+          // Heard again by someone who has a twin: nothing to skip to, 稍后再说 above leads back.
+          <MemberVoice onSkip={props.again ? undefined : later} />
         )}
       </main>
     </div>

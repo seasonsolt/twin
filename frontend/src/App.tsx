@@ -40,11 +40,6 @@ const Recording = lazy(() =>
 const Home = lazy(() =>
   import('./pages/Home').then((module) => ({ default: module.Home })),
 );
-const MemberVoice = lazy(() =>
-  import('./pages/MemberVoice').then((module) => ({
-    default: module.MemberVoice,
-  })),
-);
 const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
@@ -96,7 +91,8 @@ export function App() {
                     />
                     <Route path="library" element={<Library />} />
                     <Route path="inbox" element={<Inbox />} />
-                    <Route path="voice" element={<MemberVoice />} />
+                    {/* Finding one's voice is the way in's first step now: AppShell takes it there. */}
+                    <Route path="voice" element={null} />
                     <Route
                       path="library/:recordingId"
                       element={<Recording />}

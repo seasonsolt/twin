@@ -790,6 +790,34 @@ it('a twin of the voices someone recognised leads back to them instead of 这不
   );
 });
 
+it('takes 回去再听一遍 to the first step of the way in, with no empty twin to skip to, and back to the twin after', async () => {
+  loggedIn = true;
+  items = [{ ...persona, mine: true, from_meetings: true, approved: false }];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) =>
+    path === '/api/library/voice'
+      ? json({ available: true, enrolled: false, items: [], persona_id: null })
+      : base(path, init),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '我的分身，你的分身已经建好了' });
+  await user.click(screen.getByRole('link', { name: '回去再听一遍' }));
+  await screen.findByRole('heading', { name: '会议里可能有你' });
+  expect(window.location.hash).toBe('#/welcome');
+  expect(
+    within(screen.getByRole('list', { name: '步骤' }))
+      .getByText('认出你自己')
+      .closest('li'),
+  ).toHaveAttribute('aria-current', 'step');
+  expect(screen.queryByRole('button', { name: /空分身/u })).toBeNull();
+  await user.click(screen.getByRole('button', { name: '稍后再说' }));
+  await screen.findByRole('heading', { name: '我的分身，你的分身已经建好了' });
+});
+
 it('says whose team the sign-in is for once the team has a name, and nothing before', async () => {
   const gate = () => (
     <MemoryRouter initialEntries={['/chat']}>

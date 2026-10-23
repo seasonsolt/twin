@@ -46,7 +46,7 @@ import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { useConversation } from './useConversation';
-import { handoffText, type Turn } from './types';
+import { handoffText, promiseTaken, type Turn } from './types';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -334,6 +334,16 @@ export function ChatThread({
                           <div className="min-w-0">
                             <MessageText text={turn.content} plain />
                           </div>
+                          {promiseTaken(chat.turns, turn.handoff_id) &&
+                            (persona?.can_manage ? (
+                              <TextLink size="xs" to="/commitments">
+                                已记为承诺 ›
+                              </TextLink>
+                            ) : (
+                              <Text size="xs" tone="secondary">
+                                已记为承诺
+                              </Text>
+                            ))}
                         </ChatMessage>
                       ) : (
                         <ChatMessage

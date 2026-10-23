@@ -1,5 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Outlet, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import type { LedgerData, LedgerEntry } from '../features/ledger/types';
@@ -173,4 +173,27 @@ it('lists everyone together on request, and changes an entry in the ledger that 
       persona: 'p-2',
     }),
   );
+});
+
+it('says there is nothing yet when the account has no twin, instead of asking for one', () => {
+  usePersonas.setState({ id: '', items: [] });
+  render(
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/commitments']}>
+          <Routes>
+            <Route element={<Outlet context={{ noTwin: true }} />}>
+              <Route path="commitments" element={<Commitments />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
+  );
+  expect(screen.getByRole('heading', { name: '承诺' })).toBeVisible();
+  expect(screen.getByText('还没有承诺')).toBeVisible();
+  expect(screen.queryByRole('button', { name: /切换分身/u })).toBeNull();
+  expect(
+    asked.filter((call) => call.url.startsWith('/api/persona/ledger')),
+  ).toEqual([]);
 });

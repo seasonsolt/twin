@@ -454,7 +454,7 @@ def test_a_use_in_another_lens_is_not_the_persons_to_correct_and_a_correction_is
     assert corrected.status_code == 200 and corrected.json()["use"]["corrected"] is True
     assert scene.web.post(f"/api/persona/lenses/{lens_id}/uses/nope/correct", headers=wang.headers).status_code == 404
     assert scene.web.post(f"/api/persona/lenses/nope/uses/{use.id}/correct", headers=wang.headers).status_code == 404
-    other = made(scene, ["2.3"], name="另一个视角")
+    other = made(scene, ["2.3"], name="另一个赋能")
     crossed = scene.web.post(f"/api/persona/lenses/{other}/uses/{use.id}/correct", headers=wang.headers)
     assert crossed.status_code == 404
     assert [

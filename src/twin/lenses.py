@@ -379,7 +379,7 @@ class Lenses:
             raise LensRefused("请至少开放一个方面")
         unknown = [f for f in chosen if f not in LENS_FACETS]
         if unknown:
-            raise LensRefused("这个方面不能开放：视角只借看重什么、怎么做决定、怎么思考和擅长什么")
+            raise LensRefused("这个方面不能开放：赋能只借看重什么、怎么做决定、怎么思考和擅长什么")
         verdicts = {v.facet_id: v for v in self.verdicts(store)}
         failing = [verdicts[f] for f in chosen if not verdicts[f].ok]
         if failing:

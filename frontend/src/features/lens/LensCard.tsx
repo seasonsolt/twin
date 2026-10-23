@@ -33,10 +33,10 @@ export function LensCard({
   };
   const owner = card.owner_name;
   return (
-    <Card variant="outline" padding="md" as="article" aria-label="视角">
+    <Card variant="outline" padding="md" as="article" aria-label="赋能">
       <Stack gap={3}>
         <Row gap={2} wrap>
-          <Badge tone="info">视角</Badge>
+          <Badge tone="info">赋能</Badge>
           <Text as="span" size="xs" tone="secondary">
             {owner} · {card.name}
           </Text>

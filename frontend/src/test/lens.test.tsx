@@ -158,8 +158,8 @@ const mount = () =>
 it('offers to publish when there is no lens, and only the facets that are well founded can be ticked', async () => {
   const user = userEvent.setup();
   mount();
-  await user.click(await screen.findByRole('button', { name: '发布为视角' }));
-  const panel = await screen.findByRole('dialog', { name: '发布为视角' });
+  await user.click(await screen.findByRole('button', { name: '发布赋能' }));
+  const panel = await screen.findByRole('dialog', { name: '发布赋能' });
   // What is well founded can be ticked, with where it sits and how well the twin knows it, and the check mark.
   const group = within(panel).getByRole('group', { name: '开放哪些方面' });
   expect(
@@ -177,7 +177,10 @@ it('offers to publish when there is no lens, and only the facets that are well f
   expect(within(group).getAllByText('✓')).toHaveLength(2);
   // The others are folded with why not.
   await user.click(within(group).getByText('还不能开放 2'));
-  expect(within(group).getByText('场合不足 3 个')).toBeVisible();
+  // The layer fades in: wait for it to be seen.
+  await waitFor(() =>
+    expect(within(group).getByText('场合不足 3 个')).toBeVisible(),
+  );
   expect(within(group).getByText('多是别人的话、来源只有一种')).toBeVisible();
   // Nothing can be published without a name and a facet.
   const publish = within(panel).getByRole('button', { name: '发布给全团队' });
@@ -207,8 +210,8 @@ it('offers to publish when there is no lens, and only the facets that are well f
 it('publishes to named people, never to the person themself, and needs at least one', async () => {
   const user = userEvent.setup();
   mount();
-  await user.click(await screen.findByRole('button', { name: '发布为视角' }));
-  const panel = await screen.findByRole('dialog', { name: '发布为视角' });
+  await user.click(await screen.findByRole('button', { name: '发布赋能' }));
+  const panel = await screen.findByRole('dialog', { name: '发布赋能' });
   await user.type(within(panel).getByRole('textbox', { name: '名字' }), '谈判');
   await user.click(within(panel).getByRole('checkbox', { name: /常见取舍/u }));
   await user.click(within(panel).getByRole('radio', { name: '指定的人' }));
@@ -236,8 +239,8 @@ it('says what the server refused with and keeps the panel open', async () => {
     return json({ detail: '还不能开放：常见取舍（来源只有一种）' }, 400);
   });
   mount();
-  await user.click(await screen.findByRole('button', { name: '发布为视角' }));
-  const panel = await screen.findByRole('dialog', { name: '发布为视角' });
+  await user.click(await screen.findByRole('button', { name: '发布赋能' }));
+  const panel = await screen.findByRole('dialog', { name: '发布赋能' });
   await user.type(within(panel).getByRole('textbox', { name: '名字' }), '谈判');
   await user.click(within(panel).getByRole('checkbox', { name: /常见取舍/u }));
   await user.click(within(panel).getByRole('button', { name: '发布给全团队' }));
@@ -546,12 +549,12 @@ it('lets a colleague ask a lens of the twin in view, and shows its answer in the
   useStatus.setState({ data: null, error: null });
   const user = userEvent.setup();
   const { calls } = chatWith(offered);
-  const chip = await screen.findByRole('button', { name: '视角 · 大客户谈判' });
+  const chip = await screen.findByRole('button', { name: '赋能 · 大客户谈判' });
   expect(chip).toHaveAttribute('aria-pressed', 'false');
   await user.click(chip);
   expect(chip).toHaveAttribute('aria-pressed', 'true');
   const box = screen.getByRole('textbox', { name: '你说' });
-  expect(box).toHaveAttribute('placeholder', '问问王屿的视角…');
+  expect(box).toHaveAttribute('placeholder', '向王屿的赋能提问…');
   await user.type(box, '客户嫌报价高，预算是谁定的？');
   await user.click(screen.getByRole('button', { name: '发送' }));
   const asked = await screen.findByText('具体怎么定：未开放，可直接问王屿。');
@@ -582,7 +585,7 @@ it('offers nothing when the twin has no lens for the viewer', async () => {
   useStatus.setState({ data: null, error: null });
   chatWith([]);
   await screen.findByRole('textbox', { name: '你说' });
-  expect(screen.queryByRole('button', { name: /^视角/u })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^赋能/u })).toBeNull();
 });
 
 it('shows why when the lens could not be asked any more, and no longer offers it', async () => {
@@ -594,14 +597,14 @@ it('shows why when the lens could not be asked any more, and no longer offers it
   let held = false;
   const { calls } = chatWith(offered, () => {
     held = true;
-    return json({ detail: '这个视角现在不能用' }, 404);
+    return json({ detail: '这个赋能现在不能用' }, 404);
   });
-  const chip = await screen.findByRole('button', { name: '视角 · 大客户谈判' });
+  const chip = await screen.findByRole('button', { name: '赋能 · 大客户谈判' });
   await user.click(chip);
   await user.type(screen.getByRole('textbox', { name: '你说' }), '问个问题');
   await user.click(screen.getByRole('button', { name: '发送' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    '这个视角现在不能用',
+    '这个赋能现在不能用',
   );
   expect(held).toBe(true);
   expect(

@@ -87,7 +87,7 @@ function LensBlock({
             variant="danger"
             onClick={() =>
               void confirm({
-                title: '撤回这个视角？',
+                title: '撤回这个赋能？',
                 body: '同事马上不能再用，撤回后不能恢复；已经问过的对话不变。',
                 confirmLabel: '撤回',
                 tone: 'danger',
@@ -134,7 +134,7 @@ function LensBlock({
 }
 
 /**
- * 视角, for the person alone: a lens lends their judgement to colleagues, facet by facet. With none published it
+ * 赋能, for the person alone: a lens lends their judgement to colleagues, facet by facet. With none published it
  * offers to publish one; otherwise each lens is managed here, with what it was used for. `person` is their name.
  */
 export function LensTab({
@@ -187,8 +187,8 @@ export function LensTab({
   if (data.lenses.length === 0)
     return (
       <>
-        <EmptyState title="还没有视角">
-          <Button onClick={() => setPublishing(true)}>发布为视角</Button>
+        <EmptyState title="还没有赋能">
+          <Button onClick={() => setPublishing(true)}>发布赋能</Button>
         </EmptyState>
         {dialog(data)}
       </>
@@ -207,7 +207,7 @@ export function LensTab({
       ))}
       <Row>
         <Button variant="ghost" onClick={() => setPublishing(true)}>
-          发布新视角
+          发布新赋能
         </Button>
       </Row>
       {dialog(data)}

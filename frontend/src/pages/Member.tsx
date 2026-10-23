@@ -255,7 +255,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                 ? [
                     {
                       value: 'lens',
-                      label: '视角',
+                      label: '赋能',
                       content: <LensTab person={name} twinId={twin.id} />,
                     },
                   ]

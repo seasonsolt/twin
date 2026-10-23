@@ -23,7 +23,7 @@ import type { FacetVerdict, Lens, LensList, LensStatement } from './types';
 const NAME_MAX = 20;
 
 /**
- * 发布为视角, a layer beside the page: a name, the facets to open (only those well founded can be ticked; the rest are
+ * 发布赋能, a layer beside the page: a name, the facets to open (only those well founded can be ticked; the rest are
  * folded under 还不能开放 with why), whom it is for, and a preview of how it reads. With `lens` it adjusts one that is
  * published: a facet that was corrected out shows 已停用, and ticking it opens it afresh.
  */
@@ -146,7 +146,7 @@ export function LensPublish({
     <Dialog
       open={open}
       onOpenChange={(next) => !next && onClose()}
-      title={lens ? '调整范围' : '发布为视角'}
+      title={lens ? '调整范围' : '发布赋能'}
       variant="side"
     >
       <Stack gap={5}>
@@ -231,7 +231,7 @@ export function LensPublish({
               <Row gap={2}>
                 <Badge>预览</Badge>
                 <Text as="span" size="sm" weight="bold">
-                  {person} · {name.trim() || '视角'}
+                  {person} · {name.trim() || '赋能'}
                 </Text>
               </Row>
               <LensStatements views={views} />

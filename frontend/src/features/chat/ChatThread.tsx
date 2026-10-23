@@ -675,7 +675,7 @@ export function ChatThread({
               trying
                 ? '问一句，看同事会得到什么…'
                 : lens
-                  ? `问问${lens.owner_name}的视角…`
+                  ? `向${lens.owner_name}的赋能提问…`
                   : assistant
                     ? '问问我的分身，或说“记一下…”“帮我问问…”'
                     : `和${name}聊点什么…`
@@ -710,7 +710,7 @@ export function ChatThread({
                   setLensId(choice.id === lensId ? null : choice.id)
                 }
               >
-                视角 · {choice.name}
+                赋能 · {choice.name}
               </Chip>
             ))}
             <div className="flex-1" />

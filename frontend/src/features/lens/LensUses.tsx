@@ -79,7 +79,7 @@ export function LensUses({
         <Heading level={3} size="section">
           最近被用在哪
         </Heading>
-        <Badge title="只记问题和视角说的话">不显示提问人</Badge>
+        <Badge title="只记问题和赋能说的话">不显示提问人</Badge>
         {facet && <TextLink onClick={() => onFacet(null)}>看全部</TextLink>}
       </Row>
       {error && (

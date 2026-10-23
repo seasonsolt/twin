@@ -625,8 +625,8 @@ test('publish a lens', async ({ page }, info) => {
     route.fulfill({ json: { ...lensList, lenses: [] } }),
   );
   await page.goto('/#/team/u-linzhou?section=lens');
-  await page.getByRole('button', { name: '发布为视角' }).click();
-  const dialog = page.getByRole('dialog', { name: '发布为视角' });
+  await page.getByRole('button', { name: '发布赋能' }).click();
+  const dialog = page.getByRole('dialog', { name: '发布赋能' });
   await dialog.getByRole('textbox', { name: '名字' }).fill('大客户谈判');
   await dialog.getByRole('checkbox', { name: /依据偏好/ }).check();
   await dialog.getByRole('checkbox', { name: /做事的原则/ }).check();

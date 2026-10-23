@@ -85,7 +85,7 @@ def test_a_database_from_before_lenses_gains_them_after_a_snapshot(tmp_path: Pat
     with TeamDB(path) as team:
         assert team.schema_version() == len(teamdb._MIGRATIONS)
         assert [c.id for c in team.conversations()] == ["c1"]
-        lens = team.create_lens(persona_id="p1", name="视角", facets=["3.4"], audience="{}")
+        lens = team.create_lens(persona_id="p1", name="赋能", facets=["3.4"], audience="{}")
         team.record_lens_use(lens.id, "问", "答", ["3.4"])
         assert [u.said for u in team.lens_uses(lens.id)] == ["答"]
     [snapshot] = list((path.parent / teamdb.SNAPSHOT_DIR).glob("team-*schema5.db"))

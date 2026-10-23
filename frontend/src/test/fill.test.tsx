@@ -180,5 +180,7 @@ it('says so when there is nothing left to ask', async () => {
     vi.fn(async () => json({ questions: [] })),
   );
   open();
-  expect(await screen.findByText(/暂时没有要补的/)).toBeVisible();
+  // The dialog fades in: the words are there before they can be seen.
+  const none = await screen.findByText(/暂时没有要补的/);
+  await waitFor(() => expect(none).toBeVisible());
 });

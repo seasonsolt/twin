@@ -37,8 +37,8 @@ from .backends import Backends, BackendUnavailable
 from .conversations import ConversationIndex, append_reply, append_user, owner, request_asker_name, request_audience
 from .handoffs import person
 
-NOT_NOW = "这个视角现在不能用"
-OWN_LENS = "这是你自己的视角，发布前可以在“视角”里预览"
+NOT_NOW = "这个赋能现在不能用"
+OWN_LENS = "这是你自己的赋能，发布前可以在“赋能”里预览"
 
 
 class AudienceBody(BaseModel):
@@ -101,7 +101,7 @@ def reply_text(owner_name: str, answer: LensAnswer) -> str:
     """The words of the turn the answer is saved as, which the conversation lists and copies."""
     lines = [v.text for v in answer.views]
     if not lines:
-        return f"这个视角没有能回答的内容，可以直接问{owner_name}。"
+        return f"这个赋能没有能回答的内容，可以直接问{owner_name}。"
     if answer.settled_by_person:
         lines.append(f"具体怎么定：未开放，可直接问{owner_name}。")
     return "\n".join(lines)
@@ -123,9 +123,9 @@ def register(
 
     def refused(failure: Exception) -> HTTPException:
         if isinstance(failure, KeyError):
-            return HTTPException(404, "找不到这个视角，请刷新后重试")
+            return HTTPException(404, "找不到这个赋能，请刷新后重试")
         if isinstance(failure, LensUnavailable):
-            return HTTPException(409, "这个视角已经撤回了" if failure.status == "withdrawn" else NOT_NOW)
+            return HTTPException(409, "这个赋能已经撤回了" if failure.status == "withdrawn" else NOT_NOW)
         return HTTPException(400 if isinstance(failure, LensRefused) else 409, str(failure))
 
     def view_of(lens: Lens) -> dict[str, Any]:

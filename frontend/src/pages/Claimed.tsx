@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Badge,
@@ -15,7 +15,8 @@ import {
   TextLink,
   useConfirm,
 } from '../components/ui';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
+import { usePolling } from '../lib/usePolling';
 import { twinMemberPath } from '../lib/members';
 import { usePersonas, useTrial, type Persona } from '../stores/personas';
 import { useWelcome } from '../stores/welcome';
@@ -27,36 +28,53 @@ const QUESTIONS = [
   '这周还欠谁什么？',
   '你做决定时最看重什么？',
 ];
+// The memory is being rebuilt from changed recordings: nothing is missing, it is on its way.
+const WAIT = '正在整理，好了自动显示。';
 
-/** What the twin has gathered so far: the person's commitments from the meetings, and how it sees them. */
+/** What the twin has gathered so far: the person's commitments from the meetings, and how it sees them. While its
+ * memory is being rebuilt neither can be read (``updating``): the page says so and looks again now and then. */
 function useGathered(persona: Persona) {
   const [commitments, setCommitments] = useState<LedgerEntry[] | null>(null);
   const [items, setItems] = useState<ProfileItem[] | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      const options = { signal, headers: { 'X-Twin-Persona': persona.id } };
+      let rebuilding = false;
+      // Either can be missing while the twin is still being put together: the page then shows what there is.
+      const missing = (failure: unknown) => {
+        if (failure instanceof ApiError && failure.code === 'memory_updating')
+          rebuilding = true;
+        return null;
+      };
+      const [ledger, page] = await Promise.all([
+        api<LedgerData>('/api/persona/ledger', options).catch(missing),
+        api<ItemPage>(
+          '/api/persona/items?sort=evidence&limit=3',
+          options,
+        ).catch(missing),
+      ]);
+      if (signal?.aborted) return;
+      setUpdating(rebuilding);
+      setCommitments(
+        (ledger?.entries ?? [])
+          .filter(
+            (entry) =>
+              entry.kind === 'commitment' && entry.owner === persona.name,
+          )
+          .slice(0, 3),
+      );
+      setItems(page?.items ?? []);
+    },
+    [persona.id, persona.name],
+  );
   useEffect(() => {
     const controller = new AbortController();
-    const options = {
-      signal: controller.signal,
-      headers: { 'X-Twin-Persona': persona.id },
-    };
-    // Either can be missing while the twin is still being put together: the page then shows what there is.
-    void api<LedgerData>('/api/persona/ledger', options)
-      .then((data) =>
-        setCommitments(
-          (data.entries ?? [])
-            .filter(
-              (entry) =>
-                entry.kind === 'commitment' && entry.owner === persona.name,
-            )
-            .slice(0, 3),
-        ),
-      )
-      .catch(() => setCommitments([]));
-    void api<ItemPage>('/api/persona/items?sort=evidence&limit=3', options)
-      .then((page) => setItems(page.items ?? []))
-      .catch(() => setItems([]));
+    void load(controller.signal);
     return () => controller.abort();
-  }, [persona.id, persona.name]);
-  return { commitments, items };
+  }, [load]);
+  usePolling(load, updating ? 15000 : 0);
+  return { commitments, items, updating };
 }
 
 /**
@@ -67,7 +85,7 @@ function useGathered(persona: Persona) {
  * for them back to whoever made it, and a twin of their voices leads back to those voices.
  */
 export function Claimed({ persona }: { persona: Persona }) {
-  const { commitments, items } = useGathered(persona);
+  const { commitments, items, updating } = useGathered(persona);
   const [shared, setShared] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -151,7 +169,7 @@ export function Claimed({ persona }: { persona: Persona }) {
               ))
             ) : (
               <Text size="sm" tone="secondary">
-                还没整理出来，过一会儿在承诺账本里能看到。
+                {updating ? WAIT : '还没整理出来，过一会儿在承诺账本里能看到。'}
               </Text>
             )}
           </Stack>
@@ -176,7 +194,7 @@ export function Claimed({ persona }: { persona: Persona }) {
               ))
             ) : (
               <Text size="sm" tone="secondary">
-                还没整理出来，过一会儿在档案里能看到。
+                {updating ? WAIT : '还没整理出来，过一会儿在档案里能看到。'}
               </Text>
             )}
           </Stack>

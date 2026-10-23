@@ -25,6 +25,9 @@ export const recordingsKey = (recordings: Recording[]) =>
       r.previous ?? null,
     ]),
   );
+// A twin's rebuild started by someone else, or at start-up, changes no recording: people are asked for again too.
+const libraryKey = (library: LibraryState) =>
+  `${recordingsKey(library.recordings)}/${library.twins?.revision ?? 0}`;
 
 interface Team {
   library: LibraryState | null;
@@ -66,7 +69,7 @@ export const useTeam = create<Team>((set, get) => {
   const load = async () => {
     try {
       const library = await api<LibraryState>('/api/library');
-      const key = recordingsKey(library.recordings);
+      const key = libraryKey(library);
       const changed = key !== seen;
       seen = key;
       set((state) => ({

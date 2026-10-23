@@ -1371,6 +1371,7 @@ class Libraries:
         waiting = {r.id for r in library.unproofread()}
         with self.lock:
             held_twins = len(self.paused.get(owner, ()))
+        synced = self.team(owner).synced()
         return {
             "recordings": [
                 {
@@ -1389,6 +1390,12 @@ class Libraries:
             "capacity": self.capacity(),
             # What waits for the quota: recordings to proofread and twins to rebuild.
             "quota": {**quota, "waiting_proofread": len(waiting), "waiting_twins": held_twins},
+            # Twins being rebuilt, and a number that moves whenever one starts or finishes: a rebuild started by
+            # someone else or at start-up changes no recording, and the team page would not ask for people again.
+            "twins": {
+                "updating": sum(wanted != done for _, _, wanted, done in synced),
+                "revision": sum(wanted + done for _, _, wanted, done in synced),
+            },
         }
 
 

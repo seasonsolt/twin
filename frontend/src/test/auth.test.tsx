@@ -705,6 +705,67 @@ it('shows what the twin gathered and lets its person try it out in chat first', 
   await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
 });
 
+it('says what the twin gathered is on its way while its memory is rebuilt, and shows it once done', async () => {
+  loggedIn = true;
+  items = [
+    {
+      ...persona,
+      name: '赵晴',
+      mine: true,
+      made_by_other: true,
+      approved: false,
+    },
+  ];
+  let rebuilding = true;
+  const updating = () =>
+    new Response(
+      JSON.stringify({ detail: '记忆更新中', code: 'memory_updating' }),
+      { status: 409 },
+    );
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === '/api/persona/ledger')
+      return rebuilding
+        ? updating()
+        : json({
+            entries: [
+              {
+                entry_id: 'l1',
+                kind: 'commitment',
+                owner: '赵晴',
+                what: '周五前重算留存口径',
+              },
+            ],
+          });
+    if (path.startsWith('/api/persona/items?'))
+      return rebuilding ? updating() : json({ items: [], total: 0 });
+    try {
+      return await base(path, init);
+    } catch {
+      return json({});
+    }
+  });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    render(<App />);
+    expect(await screen.findAllByText('正在整理，好了自动显示。')).toHaveLength(
+      2,
+    );
+    expect(screen.queryByText(/还没整理出来/u)).toBeNull();
+    rebuilding = false;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(await screen.findByText('周五前重算留存口径')).toBeInTheDocument();
+    expect(
+      screen.getByText('还没整理出来，过一会儿在档案里能看到。'),
+    ).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('looks for someone signed in with a work address in the meetings before an empty twin', async () => {
   loggedIn = true;
   whoami = { ...member, address: 'me@xjjk.com' };

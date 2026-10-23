@@ -9,6 +9,7 @@ import type { Person } from '../pages/Recording';
 import { basePath } from '../lib/base';
 import { useAuth } from '../stores/auth';
 import { usePersonas } from '../stores/personas';
+import { useTeam } from '../stores/team';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -190,6 +191,34 @@ it('shows the team and the way to upload more, with what waits left to the inbox
   );
   expect(screen.queryByRole('tab', { name: /待处理/u })).toBeNull();
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
+});
+
+it('marks a twin 整理中 when a rebuild starts with no recording changing, as one started at start-up', async () => {
+  state.recordings = [recording({ people: ['张总'] })];
+  state.twins = { updating: 0, revision: 2 };
+  const zhang: Person = {
+    id: 'per_1',
+    name: '张总',
+    persona_id: 'p-1',
+    speakers: 2,
+    seconds: 1200,
+    samples: 1,
+    updating: false,
+    auto: false,
+    gender: '',
+    recording_id: 'rec_1',
+    speaker_id: 'S1',
+  };
+  people = [zhang];
+  show();
+  const table = await screen.findByRole('tabpanel');
+  expect(await within(table).findByText('可以聊')).toBeInTheDocument();
+  // The side bar's next look at the library finds a rebuild under way: the people are asked for again.
+  state.twins = { updating: 1, revision: 3 };
+  people = [{ ...zhang, updating: true }];
+  await useTeam.getState().refresh(true);
+  expect(await within(table).findByText('整理中')).toBeInTheDocument();
+  expect(within(table).queryByText('可以聊')).toBeNull();
 });
 
 it('keeps the service status off the team page, even for administrators', async () => {

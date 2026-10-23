@@ -149,12 +149,20 @@ def test_a_twin_whose_memory_is_being_rebuilt_is_left_out_until_it_is_done(web: 
     with library.transaction() as db:
         db.execute("INSERT INTO personas_sync (persona_id, person_id, wanted, done) VALUES (?, 'per_x', 2, 1)", (lin,))
     assert web.get("/api/persona/ledger", headers={"X-Twin-Persona": lin}).status_code == 409
-    rows = web.get("/api/personas/commitments").json()["entries"]
-    assert [(r["entry_id"], r["owner"]) for r in rows] == [("xu_own_0001", "许清禾")]
+    everyone = web.get("/api/personas/commitments").json()
+    assert [(r["entry_id"], r["owner"]) for r in everyone["entries"]] == [("xu_own_0001", "许清禾")]
+    # Whose is missing is said, so an empty list does not read as no meetings at all.
+    assert everyone["updating"] == [{"id": lin, "name": "林舟"}]
+    # The library says a rebuild is under way, so the team page asks for people again without a recording changing.
+    started = web.get("/api/library").json()["twins"]
+    assert started["updating"] == 1
     with library.transaction() as db:
         db.execute("UPDATE personas_sync SET done = wanted")
-    rows = web.get("/api/personas/commitments").json()["entries"]
-    assert {r["entry_id"] for r in rows} == {"lin_own_001", "xu_own_0001"}
+    finished = web.get("/api/library").json()["twins"]
+    assert finished["updating"] == 0 and finished["revision"] != started["revision"]
+    everyone = web.get("/api/personas/commitments").json()
+    assert {r["entry_id"] for r in everyone["entries"]} == {"lin_own_001", "xu_own_0001"}
+    assert everyone["updating"] == []
 
 
 def test_a_rejected_entry_is_left_out_unless_asked_for_and_the_reviewed_copy_wins(

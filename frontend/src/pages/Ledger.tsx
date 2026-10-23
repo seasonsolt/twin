@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { byName } from '../lib/names';
+import { usePolling } from '../lib/usePolling';
 import { cn } from '../lib/utils';
 import {
   Badge,
@@ -25,6 +26,7 @@ import {
 } from '../components/ui';
 import { AWAY_CHANGED } from '../features/away/useAway';
 import { JobProgress } from '../features/jobs/JobProgress';
+import { MemoryUpdating } from '../features/memories/BuildProgress';
 import { useJob } from '../features/jobs/useJob';
 import type {
   LedgerBrief,
@@ -613,6 +615,8 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
   const confirm = useConfirm();
   const [data, setData] = usePersonaState<LedgerData | null>(null);
   const [error, setError] = usePersonaState('');
+  // The twin's memory is being rebuilt: its ledger is not read until then, which is no failure.
+  const [rebuilding, setRebuilding] = usePersonaState(false);
   const [editing, setEditing] = useState<LedgerEntry | null>(null);
   const [version, setVersion] = useState(0);
   const load = useCallback(
@@ -626,13 +630,19 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
         );
         setData(next);
         setError('');
+        setRebuilding(false);
         setVersion((current) => current + 1);
       } catch (failure) {
         if (signal?.aborted) return;
+        if (failure instanceof ApiError && failure.code === 'memory_updating') {
+          setRebuilding(true);
+          setError('');
+          return;
+        }
         setError(failure instanceof Error ? failure.message : '加载失败');
       }
     },
-    [setData, setError, everyone],
+    [setData, setError, setRebuilding, everyone],
   );
   useEffect(() => {
     const controller = new AbortController();
@@ -707,6 +717,12 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
     });
     if (ok) await job.start('/api/persona/ledger/build', { force: true });
   };
+  // A rebuild takes minutes: look again now and then until it is over.
+  const organising = data?.updating ?? [];
+  usePolling(load, rebuilding || organising.length ? 15000 : 0);
+  const organisingLine = organising.length
+    ? `${organising.map((twin) => twin.name).join('、')}整理中，完成后列出`
+    : '';
   const meetings = data?.meetings;
   const unreviewed =
     data?.entries.filter((entry) => entry.review === 'unreviewed').length ?? 0;
@@ -721,14 +737,15 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
             </Button>
           </div>
         )}
-        {!data && !error && <Skeleton className="h-40" />}
+        {rebuilding && <MemoryUpdating />}
+        {!data && !error && !rebuilding && <Skeleton className="h-40" />}
         {meetings && (
           <Card className="flex flex-wrap items-center justify-between gap-3">
             <p role="status">
               {meetings.total
-                ? `共 ${meetings.total} 场会议${meetings.pending ? `，${meetings.pending} 场还没整理` : '，都已整理'}${unreviewed ? `；${unreviewed} 条待确认` : ''}`
+                ? `共 ${meetings.total} 场会议${meetings.pending ? `，${meetings.pending} 场还没整理` : '，都已整理'}${unreviewed ? `；${unreviewed} 条待确认` : ''}${organisingLine ? `；${organisingLine}` : ''}`
                 : everyone
-                  ? '还没有会议。'
+                  ? organisingLine || '还没有会议。'
                   : '还没有会议。添加有你和别人发言的录音或会议记录，并选出哪位是你。'}
             </p>
             {!everyone && (

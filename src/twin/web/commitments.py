@@ -98,18 +98,20 @@ def register_all(app: FastAPI, registry: Personas) -> None:
         names: dict[str, str] = {}
         meetings: set[str] = set()
         waiting = 0
+        updating: list[dict[str, str]] = []
         for twin in looked_after:
             path = registry.db_path_of(twin["id"])
             if not path.is_file():
                 continue
+            settings = registry.settings_for(twin["id"])
+            who = stored_identity(path)[0] or settings.target_name
             try:
                 gate.version_at(path)
             except gate.MemoryUpdating:
                 # Its memory is being brought in line with changed recordings: nothing of it is used until then,
-                # as in its own ledger (``MemoryGateMiddleware``).
+                # as in its own ledger (``MemoryGateMiddleware``); the list says whose is missing for now.
+                updating.append({"id": twin["id"], "name": who})
                 continue
-            settings = registry.settings_for(twin["id"])
-            who = stored_identity(path)[0] or settings.target_name
             names[twin["id"]] = who
             with PersonaStore(path) as store:
                 entries = store.list_ledger()
@@ -142,5 +144,6 @@ def register_all(app: FastAPI, registry: Personas) -> None:
             "status_labels": STATUS_LABELS,
             "meetings": {"total": len(meetings), "pending": waiting},
             "twins": [{"id": persona_id, "name": who} for persona_id, who in names.items()],
+            "updating": updating,
             "job_id": None,
         }

@@ -197,3 +197,75 @@ it('says there is nothing yet when the account has no twin, instead of asking fo
     asked.filter((call) => call.url.startsWith('/api/persona/ledger')),
   ).toEqual([]);
 });
+
+const show = (entry: string) =>
+  render(
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <Commitments />
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
+  );
+
+it('says a twin whose memory is being rebuilt is on its way, not that its ledger failed, and shows it once done', async () => {
+  let rebuilding = true;
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.startsWith('/api/persona/ledger'))
+          return rebuilding
+            ? new Response(
+                JSON.stringify({
+                  detail:
+                    '记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答',
+                  code: 'memory_updating',
+                }),
+                { status: 409 },
+              )
+            : json(ledger);
+        if (url === '/api/persona/processing') return json({});
+        if (url === '/api/jobs') return json([]);
+        return json({});
+      }),
+    );
+    show('/commitments');
+    expect(
+      await screen.findByText(/记忆更新中：录音的说话人归属刚有变化/u),
+    ).toBeVisible();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: '重试加载' })).toBeNull();
+    rebuilding = false;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(
+      await screen.findByRole('region', { name: '10月12日经营会' }),
+    ).toBeVisible();
+    expect(screen.queryByText(/记忆更新中/u)).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('names the twins left out of everyone’s list while they are rebuilt, instead of saying there are no meetings', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url.startsWith('/api/personas/commitments'))
+        return json({
+          ...ledger,
+          entries: [],
+          people: [],
+          meetings: { total: 0, pending: 0 },
+          twins: [],
+          updating: [{ id: 'p-1', name: '林舟' }],
+        });
+      return json({});
+    }),
+  );
+  show('/commitments?who=all');
+  expect(await screen.findByText('林舟整理中，完成后列出')).toBeVisible();
+  expect(screen.queryByText('还没有会议。')).toBeNull();
+});

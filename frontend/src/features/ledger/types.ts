@@ -54,6 +54,8 @@ export interface LedgerData {
   job_id: string | null;
   /** The ledgers a list of everyone's is made of. */
   twins?: { id: string; name: string }[];
+  /** In a list of everyone's: the twins left out while their memory is being rebuilt. */
+  updating?: { id: string; name: string }[];
 }
 
 export interface LedgerBrief {

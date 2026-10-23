@@ -94,6 +94,8 @@ export interface LibraryState {
     headroom_bytes: number;
   };
   quota?: Quota;
+  /** Twins being rebuilt; ``revision`` moves whenever a rebuild starts or finishes. */
+  twins?: { updating: number; revision: number };
 }
 const statusLabel: Record<Recording['status'], [string, Tone]> = {
   queued: ['排队', 'neutral'],

@@ -357,7 +357,8 @@ const pages: {
       await page.route('**/api/library/people', (route) =>
         route.fulfill({ json: { items: [] } }),
       );
-      await page.route('**/api/library/review', (route) =>
+      // The side bar asks for the queue a page at a time (with a query): nothing waits there either.
+      await page.route(/\/api\/library\/review(\?.*)?$/, (route) =>
         route.fulfill({
           json: { items: [], voices: [], fragments: [], unsorted: [] },
         }),

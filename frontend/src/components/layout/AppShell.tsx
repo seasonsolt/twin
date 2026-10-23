@@ -150,13 +150,18 @@ export function AppShell() {
   // No twin yet on a page about one (chat, work, profile): say so in the page and open the new-twin card right there,
   // in the workspace, rather than leaving it for a page of its own.
   const missing = noPersona && !twinLevel && !ownEmpty.has(location.pathname);
-  if (
+  // Until whether there is a twin is known, and while a page's code loads, only the page waits: the side bar and the
+  // frame stay as they are, so moving between places never blanks the screen.
+  const pending =
     !missing &&
     !(twinLevel && !finding) &&
     location.pathname !== '/gallery' &&
-    !checked
-  )
-    return <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />;
+    !checked;
+  const page = (
+    <Suspense fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-3xl" />}>
+      {pending ? <Skeleton className="mx-auto mt-12 h-64 max-w-3xl" /> : outlet}
+    </Suspense>
+  );
   return (
     <div
       className={`app-shell flex min-h-dvh ${conversation ? 'conversation-shell' : ''}`}
@@ -192,7 +197,7 @@ export function AppShell() {
           className={`app-main mx-auto w-full flex-1 outline-none ${conversation ? 'chat-main' : 'max-w-6xl content-main'}`}
         >
           {conversation && !missing ? (
-            outlet
+            page
           ) : (
             <PageTransition route={location.pathname}>
               {missing ? (
@@ -225,10 +230,10 @@ export function AppShell() {
               ) : location.pathname === '/gallery' ? (
                 <>
                   <StageHeader />
-                  <div className="page-content">{outlet}</div>
+                  <div className="page-content">{page}</div>
                 </>
               ) : (
-                outlet
+                page
               )}
             </PageTransition>
           )}

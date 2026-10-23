@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Upload } from 'lucide-react';
 import {
   Button,
@@ -25,6 +25,7 @@ import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { useLibraryFeed } from '../features/library/useLibraryFeed';
 import { useUploads } from '../features/library/useUploads';
+import { useTeam } from '../stores/team';
 
 const STEPS: [string, string][] = [
   ['转写，分出每个人', '每段录音只转写一次。'],
@@ -70,6 +71,14 @@ export function Home() {
     />
   );
   const fresh = library !== null && library.recordings.length === 0;
+  // With no recording the page lists no one, and the side bar, leaving people to the page, would count no one either.
+  useEffect(() => {
+    if (fresh && !useTeam.getState().people)
+      void useTeam
+        .getState()
+        .refreshPeople()
+        .catch(() => {});
+  }, [fresh]);
   const drop = (
     <FileDrop
       label="添加录音"

@@ -34,9 +34,12 @@ const emailOnly = { sso: null, password: false, email: true };
 let loggedIn: boolean;
 let whoami: Record<string, unknown>;
 let items: Persona[];
+// Set to hold the answer to whether there is a twin until it is let go.
+let identityHeld: Promise<void> | null;
 beforeEach(() => {
   loggedIn = false;
   items = [];
+  identityHeld = null;
   localStorage.clear();
   useAuth.getState().clear();
   window.location.hash = '#/chat';
@@ -72,8 +75,10 @@ beforeEach(() => {
         path.startsWith('/api/library/review')
       )
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
-      if (path === '/api/identity')
+      if (path === '/api/identity') {
+        if (identityHeld) await identityHeld;
         return json({ name: '林舟', about: '', aliases: [], egress: [] });
+      }
       return json({});
     }),
   );
@@ -139,7 +144,7 @@ it('gives a guest, who only meets twins made public, the conversation alone', as
   await signIn();
   expect(await entries()).toEqual(['对话']);
   await waitFor(() => expect(window.location.hash).toBe('#/chat'));
-  expect(screen.getByText('聊天页')).toBeVisible();
+  expect(await screen.findByText('聊天页')).toBeVisible();
   expect(screen.queryByRole('button', { name: '问一句、找人' })).toBeNull();
   expect(screen.queryByRole('button', { name: '上传会议录音' })).toBeNull();
   // The places of the team are not a guest's, by address either: nor its members' pages, nor the old profile.
@@ -167,4 +172,21 @@ it('opens what waits and the commitments at their own addresses, and leads the o
   window.location.hash = '#/ledger';
   expect(await screen.findByText('承诺页')).toBeInTheDocument();
   expect(window.location.hash).toBe('#/commitments');
+});
+
+it('keeps the side bar where it is while the next place waits for its twin', async () => {
+  whoami = { email: 'admin@example.test', admin: true, auth_enabled: true };
+  await signIn();
+  await entries();
+  const nav = screen.getByRole('navigation', { name: '主导航' });
+  let letGo = () => {};
+  identityHeld = new Promise((resolve) => (letGo = resolve));
+  window.location.hash = '#/commitments';
+  await waitFor(() => expect(window.location.hash).toBe('#/commitments'));
+  // Only the page waits: the navigation is the very same, not drawn again.
+  expect(screen.queryByText('承诺页')).toBeNull();
+  expect(screen.getByRole('navigation', { name: '主导航' })).toBe(nav);
+  letGo();
+  expect(await screen.findByText('承诺页')).toBeInTheDocument();
+  expect(screen.getByRole('navigation', { name: '主导航' })).toBe(nav);
 });

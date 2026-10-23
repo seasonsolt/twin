@@ -123,6 +123,13 @@ def model_tokens(selected: list[CallRow]) -> int:
     return total
 
 
+def rate_limited(selected: list[CallRow]) -> bool:
+    """Whether only a provider's rate limit failed ``selected``: some calls failed, and every one of them was turned
+    away with 429, which waiting cures."""
+    failed = [row for row in selected if not row.success]
+    return bool(failed) and all(row.transient.get("429") for row in failed)
+
+
 class UsageRecorder:
     """Thread-safe rows and budget gate. Budgeted attempts serialize admission and settlement.
 

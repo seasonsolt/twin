@@ -59,7 +59,7 @@ beforeEach(() => {
       if (url === '/api/library') return json(state);
       if (url === '/api/personas') return json(usePersonas.getState().items);
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted });
       throw new Error(url);
     }),
@@ -251,7 +251,8 @@ it('polls the library while recordings wait but asks for people and the review q
     state.pending = 1;
     const fetcher = vi.mocked(fetch);
     const calls = (path: string) =>
-      fetcher.mock.calls.filter(([url]) => url === path).length;
+      fetcher.mock.calls.filter(([url]) => String(url).split('?')[0] === path)
+        .length;
     show('/team');
     await vi.waitFor(() => expect(calls('/api/library/review')).toBe(1));
     await vi.advanceTimersByTimeAsync(9000);

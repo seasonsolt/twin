@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import shutil
+import sqlite3
+import subprocess
+import threading
 import time
 import wave
 from collections import namedtuple
@@ -17,7 +20,7 @@ from fastapi.testclient import TestClient
 from twin.config import ASRSettings, LibrarySettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
-from twin.media.ingest import CommandTranscriber, Progress, Segment, Speaker
+from twin.media.ingest import CommandTranscriber, Progress, Segment, Speaker, extract_audio
 from twin.media.library import Library, TranscriptionError, TranscriptionInterrupted, owner_key
 from twin.ops.backup import backup, restore
 from twin.ops.paths import TwinPaths
@@ -130,6 +133,41 @@ def test_upload_transcribes_once_keeps_voiceprints_and_drops_the_upload(client: 
 
 
 @needs_ffmpeg
+def test_transcription_progress_shows_without_writing_the_library(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each step written to the library would make the review queue read everything again (``ReviewQueue``)."""
+    halfway, resume = threading.Event(), threading.Event()
+    versions: list[int] = []
+
+    class Watched(FakeTranscriber):
+        def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
+            observer = sqlite3.connect(tmp_path / "library" / "team" / "library.db")
+            try:
+
+                def report(done: float, total: float) -> None:
+                    versions.append(observer.execute("PRAGMA data_version").fetchone()[0])
+                    progress(done, total)
+                    versions.append(observer.execute("PRAGMA data_version").fetchone()[0])
+                    halfway.set()
+                    assert resume.wait(10)
+
+                return super().transcribe(audio, duration, report)
+            finally:
+                observer.close()
+
+    monkeypatch.setattr("twin.web.library.make_transcriber", lambda _: Watched())
+    upload(client, wav_bytes())
+    assert halfway.wait(10)
+    (shown,) = client.get("/api/library").json()["recordings"]
+    assert shown["status"] == "transcribing" and shown["transcribed_s"] == pytest.approx(0.5)
+    assert client.get(f"/api/library/recordings/{shown['id']}").json()["transcribed_s"] == pytest.approx(0.5)
+    resume.set()
+    (done,) = settled(client)["recordings"]
+    assert versions[0] == versions[1] and done["status"] == "ready" and done["transcribed_s"] == pytest.approx(1)
+
+
+@needs_ffmpeg
 def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp_path: Path) -> None:
     FakeTranscriber.fail = True
     upload(client, wav_bytes())
@@ -214,6 +252,128 @@ def test_a_stop_right_after_publishing_leaves_a_ready_recording(
     assert published and published.status == "ready" and published.transcript_id
     assert library.resume() == 0
     assert not (folder / "original.wav").exists() and library.transcript(published) is not None
+
+
+def pcm(path: Path) -> bytes:
+    """A file's sound as 16-bit samples, the way the transcription service reads it."""
+    return subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-i", str(path), "-f", "s16le", "-"], capture_output=True, check=True
+    ).stdout
+
+
+@needs_ffmpeg
+def test_the_audio_sent_for_transcription_is_kept_as_the_playback_copy(tmp_path: Path) -> None:
+    """One FLAC is decoded: it carries the very samples the wav did (so transcripts and times stay as they were),
+    goes to the service and becomes the playback copy, with nothing encoded again."""
+    original = tmp_path / "会议.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=d=3:c=pink:r=44100",
+            "-ac",
+            "2",
+            str(original),
+        ],
+        check=True,
+    )
+    wav, _, _ = extract_audio(original)
+    expected = pcm(wav)
+    library = Library(tmp_path / "library" / "team")
+    recording, _ = library.add(original, original.name)
+    sent: list[bytes] = []
+
+    class Keeping(FakeTranscriber):
+        def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
+            assert audio.suffix == ".flac" and abs(duration - 3) < 0.1
+            sent.append(audio.read_bytes())
+            return super().transcribe(audio, duration, progress)
+
+    library.transcribe(recording.id, Keeping(), lambda done, total: None)
+    playback = library.folder(recording.id) / "playback.flac"
+    assert sent == [playback.read_bytes()] and pcm(playback) == expected
+
+
+def silent_flac(tmp_path: Path, seconds: int) -> bytes:
+    """A recording far smaller than its decoded audio."""
+    path = tmp_path / f"silence-{seconds}.flac"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=16000:cl=mono:d={seconds}",
+            str(path),
+        ],
+        check=True,
+    )
+    return path.read_bytes()
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    ("ahead", "free", "together"),
+    [
+        (True, 10**12, 2),
+        # The decoded audio would eat into the headroom: one by one.
+        (True, 100_000, 1),
+        # A command that loads the models itself is never run twice at once.
+        (False, 10**12, 1),
+    ],
+)
+def test_the_next_recording_starts_while_one_is_transcribed_when_its_audio_fits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ahead: bool, free: int, together: int
+) -> None:
+    """With a service that hears requests in turn, two recordings at most are with it at once, the second only when
+    its decoded audio (10 s, 320 kB) leaves the headroom free."""
+    started: list[Path] = []
+    release = threading.Event()
+
+    class Held(FakeTranscriber):
+        def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
+            started.append(audio)
+            assert release.wait(10)
+            return super().transcribe(audio, duration, progress)
+
+    monkeypatch.setattr("twin.web.library.make_transcriber", lambda _: Held())
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr("twin.web.library.shutil.disk_usage", lambda _: usage(10**12, 0, free))
+    settings = Settings(
+        db_path=tmp_path / "twin.db",
+        asr=ASRSettings(provider="command", command="unused", ahead=ahead),
+        library=LibrarySettings(headroom_gb=0, max_pending=3),
+    )
+    app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://localhost") as client:
+        for seconds in (10, 11, 12):
+            assert upload(client, silent_flac(tmp_path, seconds), f"{seconds}.flac").status_code == 200
+        deadline = time.monotonic() + 5
+        while len(started) < together and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.2)
+        assert len(started) == together and len(set(started)) == together
+        statuses = sorted(r["status"] for r in client.get("/api/library").json()["recordings"])
+        assert statuses == ["queued"] * (3 - together) + ["transcribing"] * together
+        release.set()
+        assert {r["status"] for r in settled(client)["recordings"]} == {"ready"}
+        assert len(started) == 3
+
+
+def test_only_a_resident_service_takes_the_next_recording_early() -> None:
+    assert ASRSettings(provider="command", command="python3 remote.py --url http://127.0.0.1:18790").takes_turns()
+    assert not ASRSettings(provider="command", command="uv run run.py").takes_turns()
+    assert ASRSettings(provider="command", command="uv run run.py", ahead=True).takes_turns()
+    assert not ASRSettings(provider="command", command="python3 remote.py", ahead=False).takes_turns()
 
 
 def test_uploads_are_admitted_by_free_space_and_queue_length(

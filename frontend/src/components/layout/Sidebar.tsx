@@ -284,7 +284,8 @@ function useWaiting(twinId: string | undefined) {
 }
 
 /** The account menu at the foot of the side bar: who is signed in, the palette, the system settings for an
- * administrator (a red dot when a switched-on service is failing), and signing out. */
+ * administrator (a red dot when a switched-on service is failing or the memory rebuild is switched off), and
+ * signing out. */
 export function SidebarAccount() {
   const identity = useAuth((state) => state.identity);
   const navigate = useNavigate();
@@ -292,6 +293,12 @@ export function SidebarAccount() {
   const waiting = useWaiting(self?.can_manage === false ? undefined : self?.id);
   const openSystem = useOpenSystem();
   const down = useSystem((state) => failing(state.data).length);
+  // The administrator switched the automatic memory rebuild off: a reminder to switch it on again.
+  const held = useSystem(
+    (state) =>
+      state.data?.params?.find((p) => p.key === 'library.auto_build')?.value ===
+      false,
+  );
   const { theme, setTheme } = useTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -327,7 +334,11 @@ export function SidebarAccount() {
                   key: 'system',
                   label: '系统设置',
                   icon: Settings2,
-                  alert: down ? `${down} 项服务异常` : undefined,
+                  alert: down
+                    ? `${down} 项服务异常`
+                    : held
+                      ? '记忆自动整理已暂停'
+                      : undefined,
                   onSelect: () => openSystem(),
                 },
               ]

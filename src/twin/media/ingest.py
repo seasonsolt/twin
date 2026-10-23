@@ -15,7 +15,7 @@ import wave
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
@@ -170,6 +170,28 @@ class CommandTranscriber:
         except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
             raise RuntimeError("转写服务没能计算声纹，请检查语音识别配置后重试") from None
 
+    def can_denoise(self) -> bool:
+        """Whether the command can denoise audio for listening (asr-funasr 1.5.0+ on a GPU). An older command fails
+        the question quickly, without transcribing anything."""
+        try:
+            payload = json.loads(
+                self._run(json.dumps({"capabilities": True}), 0, lambda done, total: None).strip().splitlines()[-1]
+            )
+            return payload.get("ok") is True and payload.get("denoise") is True
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError, Interrupted):
+            return False
+
+    def denoise(self, audio: Path, output: Path, duration: float, progress: Progress) -> None:
+        """Write a denoised 16 kHz FLAC of ``audio`` to ``output``, for listening only (``media.denoise``);
+        ``RuntimeError`` when the command could not."""
+        request = {"audio": str(audio.resolve()), "denoise": True, "output": str(output.resolve())}
+        try:
+            payload = json.loads(self._run(json.dumps(request), duration, progress).strip().splitlines()[-1])
+            if payload.get("ok") is not True or payload.get("denoised") is not True:
+                raise ValueError()
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError, IndexError, AttributeError):
+            raise RuntimeError("转写服务没能降噪") from None
+
     def _run(self, request: str, duration: float, progress: Progress) -> str:
         """Run the command; `@@twin-progress <0..1>` lines on stderr become progress in this (the job's) thread."""
         process = subprocess.Popen(
@@ -311,6 +333,53 @@ def make_transcriber(settings: ASRSettings) -> Transcriber | None:
 
 
 def extract_audio(original: Path) -> tuple[Path, float, str | None]:
+    info, creation = _probe(original)
+    audio = original.with_name("audio.wav")
+    decode(original, audio)
+    with wave.open(str(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+    return audio, _duration(info, duration), creation
+
+
+def extract_flac(original: Path, audio: Path) -> tuple[float, str | None]:
+    """``extract_audio`` into ``audio`` as FLAC: the same 16-bit samples as its wav, at about half the size, so the
+    one file is sent to the transcription service and then kept as the playback copy."""
+    info, creation = _probe(original)
+    decode(original, audio, flac=True)
+    return _duration(info, flac_seconds(audio)), creation
+
+
+def probe_seconds(original: Path) -> float | None:
+    """The length an upload states, without decoding it; None when it states none."""
+    seconds = float(_probe(original)[0].get("format", {}).get("duration", "nan"))
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def flac_seconds(audio: Path) -> float:
+    """The decoded length of a FLAC file, from the sample count in its header."""
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=duration_ts,sample_rate",
+            "-of",
+            "json",
+            str(audio),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    stream = json.loads(probe.stdout)["streams"][0]
+    return int(stream["duration_ts"]) / int(stream["sample_rate"])
+
+
+def _probe(original: Path) -> tuple[dict[str, Any], str | None]:
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(original)],
         capture_output=True,
@@ -329,23 +398,25 @@ def extract_audio(original: Path) -> tuple[Path, float, str | None]:
             ),
             None,
         )
-    audio = original.with_name("audio.wav")
-    decode(original, audio)
-    with wave.open(str(audio), "rb") as wav:
-        duration = wav.getnframes() / wav.getframerate()
-    if not math.isfinite(duration) or duration <= 0:
+    return info, creation
+
+
+def _duration(info: dict[str, Any], decoded: float) -> float:
+    """The original's own length when it states one, else the decoded length; ``ValueError`` for no sound."""
+    if not math.isfinite(decoded) or decoded <= 0:
         raise ValueError("音频为空")
-    reported_duration = float(info.get("format", {}).get("duration", duration))
-    if math.isfinite(reported_duration) and reported_duration > 0:
-        duration = reported_duration
-    return audio, duration, creation
+    reported_duration = float(info.get("format", {}).get("duration", decoded))
+    return reported_duration if math.isfinite(reported_duration) and reported_duration > 0 else decoded
 
 
-def decode(original: Path, audio: Path) -> None:
-    """Write the original's sound as 16 kHz mono 16-bit wav, the form transcription and voice cuts read."""
+def decode(original: Path, audio: Path, *, flac: bool = False) -> None:
+    """Write the original's sound as 16 kHz mono 16-bit wav, the form transcription and voice cuts read; ``flac``:
+    the same samples packed losslessly (``-sample_fmt s16``, or the encoder would keep the resampler's 32 bits and
+    the samples would differ from the wav's)."""
     # Create privately before ffmpeg opens it; no window with world-readable output.
     audio.touch(mode=0o600)
     audio.chmod(0o600)
+    encoding = ["-sample_fmt", "s16", "-c:a", "flac", "-f", "flac"] if flac else ["-c:a", "pcm_s16le", "-f", "wav"]
     subprocess.run(
         [
             "ffmpeg",
@@ -360,10 +431,7 @@ def decode(original: Path, audio: Path) -> None:
             "1",
             "-ar",
             "16000",
-            "-c:a",
-            "pcm_s16le",
-            "-f",
-            "wav",
+            *encoding,
             str(audio),
         ],
         capture_output=True,

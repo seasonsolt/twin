@@ -36,6 +36,7 @@ import {
 import { api, ApiError } from '../lib/api';
 import { sortByName } from '../lib/names';
 import { withBase } from '../lib/base';
+import { heard, useListening } from '../stores/listening';
 import type { Recording as RecordingRow } from './Library';
 import type { Processing } from '../features/memories/BuildProgress';
 
@@ -79,8 +80,13 @@ export interface Person {
   lacking?: number;
   samples: number;
   updating: boolean;
-  // Where the update is while ``updating``; null when the twin has not started on it in this server yet.
-  build?: Processing | null;
+  // Where the update is while ``updating``; null when the twin has not started on it in this server yet. Once a
+  // build stopped without completing, ``last_error`` says why, and ``retry_at`` when it is tried again by itself.
+  build?: (Processing & { retry_at?: string | null }) | null;
+  // While the update waits: the twin answers from its last memory (the change only adds recordings), and the
+  // administrator's switched-off automatic rebuild holds it.
+  answers_behind?: boolean;
+  held?: boolean;
   // They found themselves here by voice: their twin is their own, not the library's to open.
   self_claimed?: boolean;
   // Whether the viewer may name them, make their twin or delete them (they uploaded a recording they are in).
@@ -119,6 +125,8 @@ interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   // The viewer was identified in it and only reads it; ``mine`` are the speakers given to them.
   can_edit?: boolean;
   mine?: string[];
+  // Whether it has a denoised copy to listen to (``media.denoise``); its clips play that unless the original is asked.
+  denoised?: boolean;
   speakers: Speaker[];
   segments: { start: number; end: number; text: string; speaker: string }[];
 }
@@ -194,6 +202,8 @@ function SpeakerCard({
   busy,
   remaining,
   now,
+  elsewhere = 0,
+  denoised,
   onDecide,
 }: {
   recordingId: string;
@@ -206,6 +216,10 @@ function SpeakerCard({
   remaining: number;
   /** Whom the speaker is given to already, when a team task opens one settled automatically. */
   now?: string;
+  /** Other recordings the same voice waits in, when a team task opens it: deciding here settles this one alone. */
+  elsewhere?: number;
+  /** The recording has a denoised copy, so the original can be chosen instead. */
+  denoised: boolean;
   onDecide: (decision: Decision) => void;
 }) {
   const id = useId();
@@ -218,6 +232,7 @@ function SpeakerCard({
   const [name, setName] = useState('');
   const [sample, setSample] = useState(false);
   const [clip, setClip] = useState(0);
+  const { original, setOriginal } = useListening();
   const choices = sortByName(
     people.filter((p) => !speaker.rejected.includes(p.id)),
     (p) => p.name,
@@ -264,6 +279,12 @@ function SpeakerCard({
             现在算作{now}，听一下是谁。
           </Text>
         )}
+        {elsewhere > 0 && (
+          <Text size="sm" tone="secondary">
+            这个声音还出现在另外 {elsewhere}{' '}
+            段录音里。这里只确认这一段，其余的回到待处理一起确认。
+          </Text>
+        )}
         {speaker.disputed && (
           <Text size="sm" tone="warning">
             原来标成的人说这不是 TA，请重新听一下是谁。
@@ -274,17 +295,32 @@ function SpeakerCard({
             <>
               <AudioPlayer
                 aria-label={`${speaker.id} 试听`}
-                src={withBase(
-                  `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speaker.id)}/samples/${clip}`,
+                src={heard(
+                  withBase(
+                    `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speaker.id)}/samples/${clip}`,
+                  ),
+                  original && denoised,
                 )}
               />
               <Row gap={2} wrap>
+                <Text as="span" size="sm" tone="tertiary">
+                  这段录音里的 {speaker.samples} 个片段
+                </Text>
                 {Array.from({ length: speaker.samples }, (_, i) => (
                   <Chip key={i} pressed={clip === i} onClick={() => setClip(i)}>
                     片段 {i + 1}
                     {windows[i] ? ` · ${clock(windows[i][0])}` : ''}
                   </Chip>
                 ))}
+                {denoised && (
+                  <Chip
+                    pressed={original}
+                    onClick={() => setOriginal(!original)}
+                    title="默认播放降噪后的声音；打开后播放原始录音"
+                  >
+                    原声
+                  </Chip>
+                )}
               </Row>
               {transcript && (
                 <Text size="sm" tone="secondary">
@@ -740,7 +776,12 @@ export function Recording() {
               key={`${current.id}-${detail.revision}`}
               recordingId={detail.id}
               speaker={current}
-              said={said(current)}
+              // Deciding here settles this recording alone: how much they said in it.
+              said={
+                detail.kind === 'transcript'
+                  ? said(current)
+                  : `这段录音里${said(current)}`
+              }
               people={people}
               segments={detail.segments}
               busy={busy}
@@ -750,6 +791,12 @@ export function Recording() {
                   ? names.get(current.person_id ?? '')
                   : undefined
               }
+              elsewhere={
+                current.id === linked
+                  ? Math.max(0, (location.state?.voiceRecordings ?? 1) - 1)
+                  : 0
+              }
+              denoised={detail.denoised === true}
               onDecide={(decision) => void decide(current, decision)}
             />
           ) : (

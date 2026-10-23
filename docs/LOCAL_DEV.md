@@ -132,7 +132,7 @@ uv run twin --config ./twin.toml compute status
 
 ## 更新代码
 
-按 Ctrl-C 停止服务后重新运行 `./scripts/local-up.sh` 即可：在 `stable` 分支且没有本地改动时，脚本先从仓库快进到最新稳定版，再用新版本启动；`--no-update` 跳过。其他分支请自己 `git pull`。
+按 Ctrl-C 停止服务后重新运行 `./scripts/local-up.sh` 即可：在 `stable` 分支且没有本地改动时，脚本先从仓库快进到最新稳定版，再用新版本启动；`--no-update` 跳过。其他分支请自己 `git pull`。稳定版由维护者在 cnb 的 `main` 分支页面点“发布到 stable”发布，见 `deploy/daw/README.md`。
 
 依赖按锁文件同步，转写包有新版本时自动升级。数据库迁移和记忆内核增量重新整理自动完成，无需删库；需要重新整理的分段超过费用闸（默认 400）时，管理员在“记忆”页点“开始重新整理”，或运行 `uv run twin kernel rebuild --yes`。已有配置、密钥与资料保留。
 

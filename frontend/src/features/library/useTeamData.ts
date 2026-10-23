@@ -231,6 +231,13 @@ export function useTeamData({
       );
       await onReload?.();
     });
+  // Build a twin again now: its update stopped without completing, or the switched-off automatic rebuild holds it.
+  const rebuild = (person: Person) =>
+    act(() =>
+      api(`/api/library/people/${encodeURIComponent(person.id)}/rebuild`, {
+        method: 'POST',
+      }),
+    );
   // There is no call for all at once: the same retry for each, one after the other.
   const retryAll = (recordings: Recording[]) =>
     act(async () => {
@@ -275,5 +282,6 @@ export function useTeamData({
     retry,
     retryAll,
     removeRecording,
+    rebuild,
   };
 }

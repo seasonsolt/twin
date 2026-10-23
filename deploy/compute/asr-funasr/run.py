@@ -6,10 +6,15 @@
 
 1.4 起在 CUDA 上默认走重叠感知转写（overlap.py：允许两人同时说话的分人、重叠处分离、FireRedASR2 识别），
 需要 pack.toml 的 `cuda_models` 齐全；Mac、CPU 或缺模型时仍走 1.3 的流程。`--pipeline` 可指定，
-请求里的 `"pipeline": "classic"` 让重叠感知的服务按 1.3 流程处理这一个请求（评测用，twin 自己从不传）。"""
+请求里的 `"pipeline": "classic"` 让重叠感知的服务按 1.3 流程处理这一个请求（评测用，twin 自己从不传）。
+
+1.5 起请求带 `"denoise": true` 和 `"output"`（绝对路径，.flac）时只把音频降噪成 16 kHz FLAC 写到 output，供人试听
+（denoise.py，需要 CUDA 和 pack.toml 的 `playback_models`），不转写；`{"capabilities": true}` 不加载模型，只回答
+这台服务能不能降噪。转写结果里的 `version` 是 pack.toml 的 `transcription`：只加了别的能力的版本不让 twin 重新转写。"""
 
 import argparse
 import contextlib
+import functools
 import json
 import math
 import os
@@ -150,6 +155,69 @@ def model_directory(model):
         ),
         None,
     )
+
+
+def playback_path():
+    """The denoising checkpoint (pack.toml `playback_models`), or None when it is not in a cache."""
+    for model in tomllib.loads(MANIFEST.read_text()).get("playback_models", []):
+        path = model_directory(model)
+        return path / model["main"] if path else None
+    return None
+
+
+def transcription_version():
+    """The version whose transcripts this pack reproduces; see the module docstring."""
+    manifest = tomllib.loads(MANIFEST.read_text())
+    return manifest.get("transcription", manifest["version"])
+
+
+def parse_denoise(payload):
+    """The (audio, output) of a denoising request."""
+    audio, output = Path(str(payload.get("audio", ""))), payload.get("output")
+    if not audio.is_absolute() or not audio.is_file():
+        raise ValueError("音频文件不存在")
+    if not isinstance(output, str) or not Path(output).is_absolute() or Path(output).suffix != ".flac":
+        raise ValueError("output 必须是 .flac 的绝对路径")
+    if not Path(output).parent.is_dir():
+        raise ValueError("output 所在目录不存在")
+    return audio, Path(output)
+
+
+class Playback:
+    """Denoised listening copies (denoise.py); the model loads on first use, only on CUDA with its checkpoint."""
+
+    def __init__(self, device="auto"):
+        self.checkpoint, self.device, self.model = playback_path(), device, None
+
+    @property
+    def available(self):
+        if self.checkpoint is None or self.device not in {"auto", "cuda"}:
+            return False
+        import torch
+
+        return torch.cuda.is_available()
+
+    def __call__(self, audio, output, progress):
+        if not self.available:
+            raise ValueError("这台服务不能降噪：需要 CUDA 和 pack.toml 里 playback_models 列出的模型")
+        import numpy as np
+        import soundfile
+        import torchaudio
+
+        if self.model is None:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import denoise
+
+            self.model = denoise.Denoiser(self.checkpoint, "cuda")
+        samples, rate = soundfile.read(str(audio), dtype="float32", always_2d=True)
+        samples = samples.mean(axis=1)
+        if rate != 16000:
+            samples = torchaudio.functional.resample(self.model.torch.from_numpy(samples), rate, 16000).numpy()
+        clean = self.model(np.ascontiguousarray(samples), progress)
+        temporary = output.with_name(f".{output.name}.tmp")
+        soundfile.write(str(temporary), clean, 16000, format="FLAC", subtype="PCM_16")
+        temporary.replace(output)
+        return {"ok": True, "denoised": True, "seconds": round(len(clean) / 16000, 3)}
 
 
 def model_paths():
@@ -321,6 +389,14 @@ class Engine:
             self.overlap = overlap.Overlap(self, extra, paths["vad"])
         self.pipeline = "overlap" if self.overlap else "classic"
 
+    @functools.cached_property
+    def gpu_threads(self):
+        """The threads that embed clips one per call on CUDA, kept for the service's life: CUDA keeps state for
+        every thread that used it, and threads started for each request left theirs behind, gigabytes an hour."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        return ThreadPoolExecutor(EMBED_THREADS, thread_name_prefix="embed")
+
     def embed(self, clip):
         np = self.np
         value = self.spk.generate(input=clip, disable_pbar=True)[0]["spk_embedding"]
@@ -347,11 +423,8 @@ class Engine:
             # Clips differ in length and padding would change their voiceprints, so each is its own call; one by one
             # most of a call is launching small kernels, so several threads keep the GPU busy (3x on a 4090, the
             # same voiceprints). The model's own inference holds no state; AutoModel.generate rewrites shared kwargs.
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(EMBED_THREADS) as pool:
-                for k, value in zip(wanted, pool.map(lambda k: self.embed_gpu(clips[k]), wanted), strict=True):
-                    found[k] = vector(value)
+            for k, value in zip(wanted, self.gpu_threads.map(lambda k: self.embed_gpu(clips[k]), wanted), strict=True):
+                found[k] = vector(value)
         else:
             # MPS stays on CPU, where every new clip length would cost it a fresh graph.
             with self.torch.no_grad():
@@ -366,15 +439,25 @@ class Engine:
         row = found[0]["spk_embedding"].detach().cpu().numpy().astype(np.float32).reshape(-1)
         return row / (np.linalg.norm(row) + 1e-9)
 
-    def embed_all(self, clips, done):
+    def embed_all(self, clips, done, singles_on_gpu=False):
         # Equal-length groups avoid zero padding, so batched embeddings match single-clip ones. Small groups stay
         # on CPU: every new clip length costs MPS a fresh graph, which outweighs the batch for a handful of clips.
+        # `singles_on_gpu` (CUDA): small groups go to the GPU one clip per call on threads instead, as `embedding`
+        # does; voiceprints alike to the CPU's to float precision, many times faster for thousands of clips.
         np, torch = self.np, self.torch
         result = [None] * len(clips)
         groups = {}
         for k, clip in enumerate(clips):
             groups.setdefault(len(clip), []).append(k)
         finished = 0
+        if singles_on_gpu and self.device == "cuda" and self.spk_batch is not None:
+            singles = [k for members in groups.values() if len(members) < 8 for k in members]
+            for k, value in zip(
+                singles, self.gpu_threads.map(lambda k: self.embed_gpu(clips[k]), singles), strict=True
+            ):
+                result[k] = value
+            finished = len(singles)
+            groups = {length: members for length, members in groups.items() if len(members) >= 8}
         with torch.no_grad():
             for members in groups.values():
                 if self.spk_batch is None or len(members) < 8:
@@ -465,8 +548,8 @@ class Engine:
         cluster_threshold=CLUSTER_THRESHOLD,
         pipeline=None,
     ):
-        """The transcript, saying which pack version and pipeline made it (1.4.1+), so twin knows what a newer one
-        would transcribe again."""
+        """The transcript, saying which version and pipeline made it (1.4.1+; `transcription_version`), so twin
+        knows what a newer one would transcribe again."""
         if self.overlap is not None and pipeline != "classic":
             result = self.overlap.transcribe(audio, diarize, reference, hotwords, progress, references)
             used = "overlap"
@@ -475,7 +558,7 @@ class Engine:
         else:
             result = self.classic(audio, diarize, reference, hotwords, progress, references, cluster_threshold)
             used = "classic"
-        return {**result, "version": tomllib.loads(MANIFEST.read_text())["version"], "pipeline": used}
+        return {**result, "version": transcription_version(), "pipeline": used}
 
     def classic(self, audio, diarize, reference, hotwords, progress, references, cluster_threshold):
         import librosa
@@ -529,6 +612,31 @@ class Engine:
                     )
         speakers = self.describe(order, names, totals, centroids, reference, references) if diarize else []
         return {"ok": True, "segments": segments, **({"speakers": speakers} if diarize else {})}
+
+
+def capabilities(device="auto"):
+    """What this pack can do here, without loading a model."""
+    try:
+        denoises = Playback(device).available
+    except ImportError:
+        denoises = False
+    return {"ok": True, "version": tomllib.loads(MANIFEST.read_text())["version"], "denoise": denoises}
+
+
+def denoise_command(payload, device="auto"):
+    try:
+        audio, output = parse_denoise(payload)
+        sys.stdout.flush()
+        saved = os.dup(1)
+        try:
+            os.dup2(2, 1)
+            with contextlib.redirect_stdout(sys.stderr):
+                return Playback(device)(audio, output, report)
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+    except Exception as error:
+        return {"ok": False, "error": str(error) or type(error).__name__}
 
 
 def run(request=None, *, device="auto", pipeline="auto", check=False, embed=False, spans=None):
@@ -598,10 +706,36 @@ def read_upload(stream, length, directory):
     return (*parse_request(request), parse_spans(meta))
 
 
-def make_server(engine, host, port, *, max_bytes=4 << 30):
-    """One job at a time on the resident engine; the response streams NDJSON progress lines, then the result."""
+def _libc():
+    import ctypes
+
+    try:
+        return ctypes.CDLL("libc.so.6")
+    except OSError:
+        return None  # not glibc (macOS): its allocator gives large blocks back by itself
+
+
+def release_memory():
+    """Give what a finished job freed back to the system. Each request runs on a thread of its own, and glibc keeps
+    what a thread freed for reuse: after a few multi-hour recordings the service held over 27 GB and was killed."""
+    import gc
+
+    gc.collect()
+    libc = _libc()
+    if libc is not None:
+        libc.malloc_trim(0)
+
+
+def make_server(engine, host, port, *, max_bytes=4 << 30, playback=None):
+    """One job at a time on the resident engine; the response streams NDJSON progress lines, then the result. A
+    denoising result says how many bytes of FLAC follow it, the response's last bytes."""
     version = tomllib.loads(MANIFEST.read_text())["version"]
+    denoises = playback is not None and playback.available
     busy = threading.Lock()
+    libc = _libc()
+    if libc is not None:
+        # Two malloc arenas instead of one per thread that ever ran a job (M_ARENA_MAX).
+        libc.mallopt(-8, 2)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -623,6 +757,8 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                 {
                     "ok": True,
                     "version": version,
+                    "transcription": transcription_version(),
+                    "denoise": denoises,
                     "device": engine.device,
                     "pipeline": engine.pipeline,
                     "busy": busy.locked(),
@@ -630,7 +766,7 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
             )
 
         def do_POST(self):
-            if self.path not in {"/transcribe", "/embed"}:
+            if self.path not in {"/transcribe", "/embed", "/denoise"}:
                 return self.reply(404, {"ok": False, "error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length", ""))
@@ -655,9 +791,16 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                     self.wfile.flush()
 
                 line({"queued": busy.locked()})
+                audio_out = None
                 with busy:
                     try:
-                        if self.path == "/embed":
+                        if self.path == "/denoise":
+                            if not denoises:
+                                raise ValueError("这台服务不能降噪")
+                            audio_out = Path(directory) / "denoised.flac"
+                            result = playback(audio, audio_out, lambda f: line({"progress": round(f, 4)}))
+                            result = {**result, "audio_bytes": audio_out.stat().st_size}
+                        elif self.path == "/embed":
                             result = engine.embedding(audio) if spans is None else engine.embedding(audio, spans)
                         else:
                             result = engine.transcribe(
@@ -674,7 +817,13 @@ def make_server(engine, host, port, *, max_bytes=4 << 30):
                         raise
                     except Exception as error:
                         result = {"ok": False, "error": str(error) or type(error).__name__}
+                    finally:
+                        release_memory()
                 line({"result": result})
+                if result.get("ok") and audio_out is not None:
+                    with audio_out.open("rb") as stream:
+                        shutil.copyfileobj(stream, self.wfile, 1 << 20)
+                    self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 sys.stderr.write("client went away; job abandoned\n")
             finally:
@@ -706,13 +855,21 @@ def main():
     if args.serve:
         engine = Engine(args.device, args.pipeline)
         sys.stderr.write(f"{json.dumps(engine.check(), ensure_ascii=False)}\n")
-        server = make_server(engine, args.host, args.port)
+        server = make_server(engine, args.host, args.port, playback=Playback(engine.device))
         sys.stderr.write(f"listening on http://{args.host}:{args.port}\n")
         server.serve_forever()
         return 0
     embed = False
     try:
         payload = None if args.check else json.loads(sys.stdin.read())
+        answer = None
+        if isinstance(payload, dict) and payload.get("capabilities") is True:
+            answer = capabilities(args.device)
+        elif isinstance(payload, dict) and payload.get("denoise") is True:
+            answer = denoise_command(payload, args.device)
+        if answer is not None:
+            emit(answer)
+            return 0 if answer["ok"] else 1
         if isinstance(payload, dict) and args.cluster_threshold is not None:
             payload.setdefault("cluster_threshold", args.cluster_threshold)
         request = None if payload is None else parse_request(payload)

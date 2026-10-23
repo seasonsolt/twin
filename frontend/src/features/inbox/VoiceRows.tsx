@@ -13,6 +13,7 @@ import {
 } from '../../components/ui';
 import { withBase } from '../../lib/base';
 import { byName } from '../../lib/names';
+import { useHeard } from '../../stores/listening';
 import type { Person } from '../../pages/Recording';
 import { recordingPath, span } from '../library/review';
 import {
@@ -121,6 +122,7 @@ export function VoiceRow({
   onAnswer: (item: VoiceItem, answer: Answer) => void;
 }) {
   const navigate = useNavigate();
+  const hear = useHeard();
   const { facts, title, meta } = voiceFacts(item);
   const members = heardIn(item);
   const [heard, setHeard] = useState(0);
@@ -137,7 +139,7 @@ export function VoiceRow({
             size="md"
             key={`${current.recording_id}/${current.speaker_id}`}
             label={`听这个声音${current.filename ? `（${current.filename}）` : ''}`}
-            src={clipSrc(current)}
+            src={hear(clipSrc(current))}
           />
         )
       }
@@ -203,14 +205,23 @@ export function VoiceRow({
               ...(current
                 ? [
                     {
-                      label: '打开录音',
+                      // The recording being heard, which settles that one alone: it says how many more wait.
+                      label:
+                        members.length > 1
+                          ? `打开第 ${(heard % members.length) + 1} 段`
+                          : '打开录音',
                       onSelect: () =>
                         void navigate(
                           recordingPath(
                             current.recording_id,
                             current.speaker_id,
                           ),
-                          { state: { inboxTask: item.id } },
+                          {
+                            state: {
+                              inboxTask: item.id,
+                              voiceRecordings: item.recordings,
+                            },
+                          },
                         ),
                     },
                   ]

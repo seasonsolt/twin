@@ -57,6 +57,8 @@ export interface Recording {
   unsettled: number;
   // Whether the model proofread the transcript: done, gave nothing, still to come, or not due (no one identified).
   proofread?: Proofread;
+  // The one being proofread right now (one per library at a time).
+  proofreading?: boolean;
   // Whether the viewer decides about it (they uploaded it, or administer); otherwise they were in it and may read it.
   can_edit?: boolean;
   // The transcript before it was last transcribed again, to go back to.
@@ -422,7 +424,9 @@ export function Library() {
                           ? `约 ${minutes(recording.duration_s)}`
                           : minutes(recording.duration_s),
                         ready ? `${recording.speakers} 位说话人` : '',
-                        proofreadLabel[recording.proofread ?? ''],
+                        recording.proofreading
+                          ? '校对中'
+                          : proofreadLabel[recording.proofread ?? ''],
                       ]
                         .filter(Boolean)
                         .join(' · ')}

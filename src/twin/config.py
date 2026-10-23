@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .media.video import VideoSynthesizer
 
 from .embed import Embedder, HashingEmbedder, OpenAICompatEmbedder, embedder_fingerprint
-from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, OpenAICompatLLM
+from .llm import LLM, AnthropicLLM, ClaudeCLILLM, Effort, FallbackLLM, OpenAICompatLLM
 from .media.asr import CloudflareWhisper, OpenAICompatTranscription, SpeechRecognizer
 from .media.schema import AVATAR_ALIASES, AVATAR_PRESETS, VoiceSpec
 from .media.tts import CloudflareMeloTTS, OpenAICompatSpeech, SilentSynthesizer, SpeechSynthesizer
@@ -46,6 +46,10 @@ class LLMSettings(BaseModel):
     timeout: float = Field(default=600.0, gt=0)
     hedge_after_s: float = Field(default=2.5, ge=0, allow_inf_nan=False)
     max_retries: int = Field(default=2, ge=0)
+    # The most calls sent to this endpoint at once; the others wait their turn here. Only ``[llm_fallback]`` reads
+    # it, at every call, so an administrator's change applies at once: an endpoint kept for emergencies tends to
+    # serve few at a time, and proofreading alone asks 16 at a time, which a small gateway queues past its timeout.
+    max_concurrent: int = Field(default=4, gt=0)
     extra_body: dict[str, JsonValue] = Field(default_factory=dict)
     egress: Literal["local", "external"] | None = None
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
@@ -129,8 +133,13 @@ class LibrarySettings(BaseModel):
     ``batch_hours``; once spent, proofreading and rebuilds wait until the window frees up. 0 means no limit.
     The original of a recording whose transcription failed is kept for a retry; with ``failed_keep_days`` set, it is
     deleted that many days after the failure. 0 (the default) keeps it for good: a failure may be the transcription
-    service being down, and a deleted original cannot be had back."""
+    service being down, and a deleted original cannot be had back.
+    With ``auto_build`` off, what changes a twin's recordings is noted but its memory is not rebuilt until it is
+    switched on again or someone rebuilds that twin: for a large batch of meetings coming in, so each twin is rebuilt
+    once at the end rather than after every recording. Meanwhile a twin whose change only adds recordings keeps
+    answering from the memory it has; one that lost or had speech reassigned waits (``persona.gate``)."""
 
+    auto_build: bool = True
     headroom_gb: float = Field(default=20, ge=0)
     max_pending: int = Field(default=20, gt=0)
     batch_tokens: int = Field(default=20_000_000, ge=0)
@@ -219,6 +228,15 @@ class ASRSettings(BaseModel):
     egress: Literal["local", "external"] | None = None
     # Proofread each media transcript with [llm] before speakers are claimed; sends the transcript text to [llm].
     clean: bool = True
+    # Whether the command hands requests to a resident service that hears them one at a time, so the recording
+    # library sends the next recording while one is heard; unset: when the command is asr-funasr's remote.py. A
+    # command that loads the models itself must not run twice at once.
+    ahead: bool | None = None
+
+    def takes_turns(self) -> bool:
+        if self.ahead is not None:
+            return self.ahead
+        return self.provider == "command" and "remote.py" in (self.command or "")
 
 
 class VisionSettings(BaseModel):
@@ -441,6 +459,10 @@ class Settings(BaseModel):
     max_workers: int = 4
     llm: LLMSettings = Field(default_factory=LLMSettings)
     chat_llm: LLMSettings | None = None
+    # ``[llm_fallback]``: another endpoint that answers for ``llm`` and ``chat_llm`` while theirs is unavailable
+    # (quota spent, unreachable, key refused); see ``FallbackLLM``. Only the web service and API use it, so a
+    # benchmark run from the CLI never mixes in another model's answers.
+    llm_fallback: LLMSettings | None = None
     # Evaluation judges (``[[judges]]`` tables). Empty: the main ``llm`` judges. Use 2-3 models of families
     # other than the twin's, since a judge tends to prefer output resembling its own.
     judges: list[LLMSettings] = Field(default_factory=list)
@@ -484,10 +506,12 @@ def configuration_fingerprint(
     """Identify answer-affecting settings and the actual panel without serializing endpoints or credentials."""
     return fingerprint(
         {
-            "llm": settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
+            "llm": settings.llm.model_dump(mode="json", exclude={"base_url", "api_key_env", "max_concurrent"}),
             "judges": [{"id": judge_id, "effort": effort} for judge_id, effort in judges],
             "chat_llm": {
-                **settings.effective_chat_llm.model_dump(mode="json", exclude={"base_url", "api_key_env"}),
+                **settings.effective_chat_llm.model_dump(
+                    mode="json", exclude={"base_url", "api_key_env", "max_concurrent"}
+                ),
                 "name": llm.name,
             },
             "judge_reasoning_effort": [judge.reasoning_effort for judge in settings.judges],
@@ -531,6 +555,7 @@ def load_settings(path: Path | None = None) -> Settings:
     for key_env in [
         settings.llm.api_key_env,
         settings.effective_chat_llm.api_key_env,
+        *([settings.llm_fallback.api_key_env] if settings.llm_fallback is not None else []),
         settings.embed.api_key_env,
         settings.tts.api_key_env,
         settings.asr.api_key_env,
@@ -579,6 +604,15 @@ def make_llm(s: LLMSettings, section: str = "llm") -> LLM:
             extra_body=s.extra_body,
         )
     return ClaudeCLILLM(model=s.model or CLAUDE_DEFAULT_MODEL)
+
+
+def with_fallback(llm: LLM, settings: Settings) -> LLM:
+    """``llm``, answered by ``[llm_fallback]`` while it is unavailable, when one is configured."""
+    fallback = settings.llm_fallback
+    if fallback is None:
+        return llm
+    # Read at every call: the section is the one an administrator's change is written into.
+    return FallbackLLM(llm, make_llm(fallback, "llm_fallback"), concurrent=lambda: fallback.max_concurrent)
 
 
 def make_synthesizer(s: TTSSettings) -> SpeechSynthesizer:

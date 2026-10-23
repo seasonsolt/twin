@@ -181,3 +181,58 @@ def test_embedding_requests_follow_the_openai_shape(embed: ModuleType) -> None:
         assert client.embed(["甲", "乙"]).tolist() == [[1.0, 0.0], [1.0, 0.0]]
     finally:
         server.shutdown()
+
+
+def test_release_archive_names_its_commit(tmp_path: Path) -> None:
+    """The deploy job's `git archive` fills src/twin/web/RELEASE in, which the web page then reports to check_live."""
+    work = tmp_path / "work"
+    (work / "src/twin/web").mkdir(parents=True)
+    for name in (".gitattributes", "src/twin/web/RELEASE"):
+        (work / name).write_bytes((ROOT / name).read_bytes())
+    run = {"cwd": work, "check": True, "capture_output": True}
+    subprocess.run(["git", "init", "-q"], **run)
+    subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"], **run)
+    subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "r"], **run)
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], **run).stdout.decode().strip()
+    archive = subprocess.run(["git", "archive", "HEAD", "--", "src"], **run).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        member = tar.extractfile("src/twin/web/RELEASE")
+        assert member and member.read().decode().strip() == commit
+    cnb = (ROOT / ".cnb.yml").read_text()
+    assert "git archive --format=tar.gz --output=/tmp/twin-release.tar.gz HEAD" in cnb
+    assert 'deploy/daw/check_live.py "$CNB_COMMIT"' in cnb
+
+
+def test_check_live_is_red_until_daw_runs_the_release(tmp_path: Path) -> None:
+    import http.server
+    import threading
+
+    serving: dict[str, str] = {}
+
+    class Page(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            for name, value in serving.items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(b"<title>twin</title>")
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    check = [sys.executable, str(DAW / "check_live.py"), "a" * 40, "--url", url, "--attempts", "2", "--interval", "0"]
+    try:
+        missing = subprocess.run(check, capture_output=True, text=True)
+        assert missing.returncode != 0 and "没有 X-Twin-Release" in missing.stderr
+        serving["X-Twin-Release"] = "b" * 40
+        old = subprocess.run(check, capture_output=True, text=True)
+        assert old.returncode != 0 and "b" * 40 in old.stderr
+        serving["X-Twin-Release"] = "a" * 40
+        assert "已切换" in subprocess.run(check, capture_output=True, text=True, check=True).stdout
+    finally:
+        server.shutdown()
+    down = subprocess.run([*check[:3], "--url", url, "--attempts", "1"], capture_output=True, text=True)
+    assert down.returncode != 0 and "无法访问" in down.stderr

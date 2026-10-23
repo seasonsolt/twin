@@ -11,12 +11,48 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
 from ..media.library import Library
 from ..media.review import Reviews
 from ..media.team import Team
+
+# The lists a page of the queue holds the first so many of: voices by when they are asked (``Team.voices`` sorts
+# them so), speakers someone said are not them, recordings settled one by one, and suspect confirmed speakers.
+# Fragments are one task, settled all at once, and always come whole.
+PAGED = ("voices", "enough", "strangers", "items", "unsorted", "suspects")
+
+
+def _group(voice: Mapping[str, Any]) -> str:
+    """Which list a voice is in: like one the owner could not name, surely someone heard enough already, or asked."""
+    return "strangers" if voice.get("stranger") else "enough" if voice.get("enough") else "voices"
+
+
+def page(reading: Mapping[str, Any], limits: Mapping[str, int | None]) -> dict[str, Any]:
+    """The first ``limits[name]`` of each list in ``PAGED`` (the whole list without a limit), and how many each holds
+    in all (``totals``; with how long they speak, for voices). The page asks again for more from the start, not for
+    the rest after an offset: every list on it is of one reading, so a task settled meanwhile is neither shown twice
+    nor skipped."""
+    voices: dict[str, list[dict[str, Any]]] = {"voices": [], "enough": [], "strangers": []}
+    for voice in reading["voices"]:
+        voices[_group(voice)].append(voice)
+    lists = {**voices, **{name: reading[name] for name in ("items", "unsorted", "suspects")}}
+    totals: dict[str, dict[str, float]] = {}
+    for name in PAGED:
+        totals[name] = {"count": len(lists[name])}
+        if name in voices:
+            totals[name]["seconds"] = round(sum(voice["seconds"] for voice in lists[name]), 1)
+        limit = limits.get(name)
+        if limit is not None:
+            lists[name] = lists[name][:limit]
+    return {
+        **reading,
+        "voices": [voice for name in voices for voice in lists[name]],
+        **{name: lists[name] for name in ("items", "unsorted", "suspects")},
+        "totals": totals,
+    }
 
 
 class ReviewQueue:

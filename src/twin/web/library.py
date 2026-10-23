@@ -30,26 +30,27 @@ import json
 import logging
 import math
 import shutil
+import subprocess
 import threading
 import time
 import unicodedata
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
 from ..llm import LLM
-from ..media import merge, recollect
+from ..media import denoise, merge, recollect
 from ..media.claim import Analysis, cut, sample_windows
 from ..media.clean import BATCH, clean_segments
 from ..media.cues import Named, name_speakers
-from ..media.ingest import CommandTranscriber, make_transcriber
+from ..media.ingest import CommandTranscriber, make_transcriber, probe_seconds
 from ..media.library import TEAM, Cleaned, Library, Recording, TranscriptionError, owner_key
 from ..media.review import Reviews, cut_parts
 from ..media.schema import AVATAR_GENDERS, default_avatar
@@ -62,7 +63,7 @@ from ..teamdb import TeamDB
 from ..usage import CallRow, collect_calls, model_tokens
 from .jobs import Job, JobError, JobManager, Log, TooManyJobs
 from .personas import ClaimBody, Personas, claim_key
-from .review_queue import ReviewQueue
+from .review_queue import ReviewQueue, page
 from .uploads import UploadBody, Uploads, upload_routes
 
 logger = logging.getLogger(__name__)
@@ -71,12 +72,25 @@ GIB = 1024**3
 # Waits before rewriting a twin's sources again after a failed attempt; after the last, the twin stays closed until
 # the next change or restart.
 SYNC_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
+# Waits before building a twin again after only the model's rate limit stopped its build; after the last, its card
+# shows the failure until someone retries it or the next change.
+REBUILD_RETRY_SECONDS = (300.0, 900.0, 1800.0, 3600.0)
 # How often every library is woken without anyone looking: twins held for the quota are rebuilt and proofreading
 # goes on once the quota frees up, even if nobody opens the library page.
 WAKE_SECONDS = 60.0
 SWEEP_SECONDS = 3600.0
 # ``meta`` key (in the team database) of a twin made by hand that its keeper said is not the person of its name.
 APART = "people:apart:"
+# How often the transcription service is asked again whether it can denoise (``media.denoise``), while some
+# recording waits for a denoised copy.
+DENOISE_ASK_SECONDS = 600.0
+# Jobs of one library on the transcription service at once: the one being heard and the next recording, decoded
+# and uploaded meanwhile so the service takes it straight after (``Libraries.kick``).
+TRANSCRIPTION_SLOTS = 2
+# 16 kHz mono 16-bit: the decoded audio of a second of a recording before transcription.
+DECODED_BYTES_PER_SECOND = 16000 * 2
+# The most of one list of the review queue a page may ask for at once (``get_review``).
+MAX_REVIEW_PAGE = 10000
 
 
 class Viewer(NamedTuple):
@@ -229,16 +243,32 @@ class Libraries:
         self.lock = threading.RLock()
         self.opened: dict[str, Library] = {}
         self.review_queues: dict[str, ReviewQueue] = {}
-        # The transcription job of each owner; the next recording is queued when it ends.
-        self.running: dict[str, Job] = {}
+        # Each owner's jobs on the transcription service by recording: one at a time, but for a second
+        # transcription decoding and uploading while the first is heard (``kick``).
+        self.running: dict[str, dict[str, Job]] = {}
+        # Bytes a queued recording's decoded audio may take (``_room_ahead``), measured once per recording.
+        self._decoded_bytes: dict[str, int] = {}
+        # How far each recording being transcribed has come, in seconds: kept here, since every step written to the
+        # library would make the review queue read everything again (``ReviewQueue``).
+        self.progress: dict[str, float] = {}
         # Twins whose sources are being rewritten, and those changed again meanwhile (rewritten once more after).
         self.syncing: set[str] = set()
         self.again: set[str] = set()
-        # The proofreading job of each owner, and per owner the twins whose rebuild waits for the quota.
+        # The proofreading job of each owner, and per owner the twins whose rebuild waits: for the quota, or while
+        # the automatic rebuild is switched off (``LibrarySettings.auto_build``).
         self.proofreading: dict[str, Job] = {}
+        # The recording each owner's proofreading job is on, shown first as 校对中 among those waiting.
+        self.proofreading_now: dict[str, str] = {}
         self.paused: dict[str, set[str]] = {}
+        # Twins someone asked to rebuild now: built even while the automatic rebuild is switched off.
+        self.forced: set[str] = set()
+        # Twins whose build the model's rate limit stopped: tries so far, and when the next is due (None while it runs).
+        self.rebuilds: dict[str, tuple[int, float | None]] = {}
         self._stop = threading.Event()
         self._waker: threading.Thread | None = None
+        # Whether the transcription service can denoise, and when it was last asked (``_denoises``).
+        self._can_denoise = False
+        self._denoise_asked = -math.inf
 
     def owner(self, request: Request) -> str:
         """The library a request works in: the team's (the one library of a deployment)."""
@@ -263,6 +293,15 @@ class Libraries:
 
     def uploads(self, viewer: Viewer) -> Uploads:
         return Uploads(self.member(viewer.key))
+
+    def view(self, recording: Recording) -> dict[str, Any]:
+        """The recording as pages show it, with how far its transcription has come (``progress``)."""
+        shown = view(recording)
+        with self.lock:
+            done = self.progress.get(recording.id)
+        if done is not None and recording.status == "transcribing":
+            shown["transcribed_s"] = done
+        return shown
 
     # ------------------------------------------------------------ who may see what
 
@@ -544,13 +583,21 @@ class Libraries:
                     logger.exception("library of %s could not be woken", owner)
 
     def wake(self, owner: str) -> None:
-        """Carry on with what waits: once the quota has room, the twins held for it are rebuilt; the next
-        recording is transcribed and the next proofread."""
-        if not self.quota(owner)["exhausted"]:
+        """Carry on with what waits: once the quota has room and the automatic rebuild is on, the twins held are
+        rebuilt, and so are those whose wait after the rate limit is over; the next recording is transcribed and the
+        next proofread."""
+        if not self.quota(owner)["exhausted"] and self.settings.library.auto_build:
             with self.lock:
                 held = self.paused.pop(owner, set())
             for persona_id in sorted(held):
                 self.sync(owner, persona_id)
+        now = time.time()
+        with self.lock:
+            due = sorted(p for p, (_, at) in self.rebuilds.items() if at is not None and at <= now)
+            for persona_id in due:
+                self.rebuilds[persona_id] = (self.rebuilds[persona_id][0], None)
+        for persona_id in due:
+            self.sync(owner, persona_id)
         self.kick(owner)
 
     def _settle(self, owners: list[str]) -> None:
@@ -637,22 +684,34 @@ class Libraries:
         row = next((r for r in team.synced() if r[0] == persona_id), None)
         if row is None or self.registry is None or self.registry.entry(persona_id) is None:
             return False
-        _, person_id, wanted, _ = row
-        if self.quota(owner)["exhausted"]:
-            # The twin stays closed; ``status`` rewrites it once the quota frees up.
-            with self.lock:
-                self.paused.setdefault(owner, set()).add(persona_id)
-            return False
+        _, person_id, wanted, done = row
+        exhausted = self.quota(owner)["exhausted"]
+        with self.lock:
+            held = exhausted or not (self.settings.library.auto_build or persona_id in self.forced)
         db_path = self.registry.settings_for(persona_id).db_path
         person = team.person(person_id)
         name = stored_identity(db_path)[0] or (person.name if person else self.settings.target_name)
         wanted_sources = {source.source_id: parsed_source(source) for source in team.sources(person_id, name)}
+        if held:
+            # Left as it was built; ``wake`` rewrites it once the quota frees up and the automatic rebuild is on.
+            # Meanwhile it answers from that memory only if the change merely adds to what it was built from.
+            with PersonaStore(db_path) as store:
+                if only_adds(store, wanted_sources, done):
+                    team.answer_behind(persona_id, wanted)
+            with self.lock:
+                self.paused.setdefault(owner, set()).add(persona_id)
+            return False
+        with self.lock:
+            self.forced.discard(persona_id)
         with PersonaStore(db_path) as store:
             for source in store.list_sources():
                 if source.source_id.startswith(SOURCE_PREFIX) and source.source_id not in wanted_sources:
                     store.delete_source(source.source_id)
             for parsed in wanted_sources.values():
-                store.put_source(parsed)
+                # A change usually touches one or two recordings: rewriting every source would mark them all for
+                # the build again and hold the database while a build is writing to it.
+                if not store.holds(parsed):
+                    store.put_source(parsed)
             store.clear_source_errors()
             # After the sources: a build that reads this version has read these sources.
             store.set_meta(gate.SYNCED, str(wanted))
@@ -661,6 +720,8 @@ class Libraries:
 
     def built(self, persona_id: str, version: int) -> None:
         """A twin's build from ``version`` completed: open it, or rewrite it when something changed meanwhile."""
+        with self.lock:
+            self.rebuilds.pop(persona_id, None)
         entry = self.registry.entry(persona_id) if self.registry is not None else None
         if entry is None:
             return
@@ -668,6 +729,48 @@ class Libraries:
         team = self.team(owner)
         if team.wanted(persona_id) is not None and not team.built(persona_id, version):
             self.sync(owner, persona_id)
+
+    def unbuilt(self, persona_id: str, rate_limited: bool) -> None:
+        """A twin's build did not complete, and the twin stays closed. Stopped only by the model's rate limit, it is
+        built again after a wait (``wake``), longer each time; otherwise it waits for someone to retry it."""
+        if Team(self.library(TEAM)).wanted(persona_id) is None:
+            return
+        with self.lock:
+            tries, _ = self.rebuilds.pop(persona_id, (0, None))
+            if not rate_limited or tries >= len(REBUILD_RETRY_SECONDS):
+                return
+            self.rebuilds[persona_id] = (tries + 1, time.time() + REBUILD_RETRY_SECONDS[tries])
+        logger.warning(
+            "model rate limit stopped the build of %s; trying again in %.0f s", persona_id, REBUILD_RETRY_SECONDS[tries]
+        )
+
+    def rebuild(self, persona_id: str) -> None:
+        """Someone retries a twin whose build did not complete, or rebuilds one the switched-off automatic rebuild
+        holds: now, and with the waits after a rate limit afresh."""
+        with self.lock:
+            self.rebuilds.pop(persona_id, None)
+            self.forced.add(persona_id)
+            self.paused.get(TEAM, set()).discard(persona_id)
+        self.sync(TEAM, persona_id)
+
+    def held(self, owner: str, persona_id: str) -> bool:
+        """Whether the twin's rebuild waits while the automatic rebuild is switched off."""
+        with self.lock:
+            return not self.settings.library.auto_build and persona_id in self.paused.get(owner, set())
+
+    def build_status(self, persona_id: str) -> dict[str, Any] | None:
+        """How far the twin's build has gone, for its card while it cannot talk; with when it is tried again by
+        itself after the rate limit stopped it."""
+        status = self.registry.build_status(persona_id) if self.registry is not None else None
+        with self.lock:
+            _, at = self.rebuilds.get(persona_id, (0, None))
+            syncing = persona_id in self.syncing
+        if status is not None and status["state"] == "idle" and syncing:
+            # Its sources are being written and the build is queued right after (a retry, say): already on its way.
+            return {"state": "queued"}
+        if status is not None and status["state"] == "idle" and at is not None:
+            status["retry_at"] = dt.datetime.fromtimestamp(at, dt.UTC).isoformat()
+        return status
 
     def spent_building(self, persona_id: str, tokens: int) -> None:
         """A build of a twin made from a library ended: what it spent counts against that library's quota."""
@@ -716,6 +819,8 @@ class Libraries:
                 self.proofreading[owner] = self.jobs.scoped(f"library:{owner}").submit(
                     "media_ingest", title, lambda log: run(owner, recording.id, log)
                 )
+                if not unnamed:
+                    self.proofreading_now[owner] = recording.id
 
     def run_naming(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
         """Ask the model, once per transcript, what the meeting calls its speakers, filing the names next to it as
@@ -816,6 +921,7 @@ class Libraries:
         finally:
             with self.lock:
                 self.proofreading.pop(owner, None)
+                self.proofreading_now.pop(owner, None)
             self.proofread(owner)
 
     def proofread_state(self, library: Library, recording: Recording, waiting: set[str]) -> str:
@@ -829,6 +935,14 @@ class Libraries:
         if recording.transcript_id and recording.proofread == recording.transcript_id:
             return "failed"
         return "waiting" if recording.id in waiting else ""
+
+    def proofread_view(
+        self, library: Library, recording: Recording, waiting: set[str], now: str | None
+    ) -> dict[str, Any]:
+        """``proofread`` (``proofread_state``) and ``proofreading``: the recording is the one being proofread
+        (``now``) and nothing is filed yet; once the corrections are, it is done while the job still ends."""
+        state = self.proofread_state(library, recording, waiting)
+        return {"proofread": state, "proofreading": state == "waiting" and recording.id == now}
 
     def create_twin(
         self, owner: str, person_id: str, identity: dict[str, Any], claim: str | None = None
@@ -966,8 +1080,9 @@ class Libraries:
         people = self.people_of(viewer)
         heard = recording.kind != "transcript"
         return {
-            **view(recording),
-            "proofread": self.proofread_state(library, recording, waiting),
+            **self.view(recording),
+            **self.proofread_view(library, recording, waiting, self.proofreading_now.get(owner)),
+            "denoised": denoise.denoised(library, recording.id),
             "timed": transcript.timed if transcript else True,
             "can_edit": access.edit,
             "mine": [s.id for s in speakers if s.decision == "confirmed" and s.person_id in people],
@@ -985,11 +1100,18 @@ class Libraries:
         }
 
     def sample(
-        self, owner: str, recording_id: str, speaker_id: str, index: int, viewer: Viewer | None = None
+        self,
+        owner: str,
+        recording_id: str,
+        speaker_id: str,
+        index: int,
+        viewer: Viewer | None = None,
+        original: bool = False,
     ) -> FileResponse:
-        """A short WAV of the speaker (up to three, at different moments), cut from the playback copy and
-        kept in the library's media cache, which backups skip. ``viewer``: only if they may see the recording
-        (``web.voice`` checks its own way)."""
+        """A short WAV of the speaker (up to three, at different moments), cut from what people hear of the
+        recording (``media.denoise.listening``; ``original``: the audio as recorded) and kept in the library's
+        media cache, which backups skip. ``viewer``: only if they may see the recording (``web.voice`` checks its
+        own way)."""
         if viewer is not None:
             self.allowed(viewer, recording_id)
         library = self.library(owner)
@@ -1005,13 +1127,15 @@ class Libraries:
         cache = library.root / "media-cache" / recording.id
         # Named by its times, not its place in the list: choosing the moments differently never plays an old cut.
         start, end = windows[index]
-        target = cache / f"{transcript.id}-{speaker_id}-{round(start * 1000)}-{round(end * 1000)}.wav"
+        audio = denoise.listening(library, recording.id, original)
+        heard = "" if audio.name == "playback.flac" else "-denoised"
+        target = cache / f"{transcript.id}-{speaker_id}-{round(start * 1000)}-{round(end * 1000)}{heard}.wav"
         if not target.is_file():
             cache.mkdir(parents=True, mode=0o700, exist_ok=True)
             # ffmpeg picks the format from the suffix; a name of its own keeps two plays from sharing one file.
             temporary = target.with_name(f".{uuid.uuid4().hex}.tmp.wav")
             try:
-                cut(library.folder(recording.id) / "playback.flac", temporary, *windows[index])
+                cut(audio, temporary, *windows[index])
                 temporary.replace(target)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -1021,20 +1145,30 @@ class Libraries:
         """Start transcribing the owner's next queued recording unless one is already running; with none queued,
         hear the confirmed speakers of the next recording again (``media.review``), and with none of those either,
         transcribe again the next recording the owner asked to (``media.recollect``), all in the same slot of the
-        transcription service, one at a time. Without a diarizing transcription service, or with the job queue
-        full, recordings stay queued; the next status poll tries again. Proofreading waiting for its turn starts
-        too."""
+        transcription service, one at a time. With a service that takes requests in turn (``takes_turns``), one more
+        queued recording may start beside a running job when its decoded audio leaves the headroom free
+        (``_room_ahead``): it decodes and uploads while the service is busy, which takes it next, so the service
+        does not sit idle between recordings. Without a diarizing
+        transcription service, or with the job queue full, recordings stay queued; the next status poll tries
+        again. Proofreading waiting for its turn starts too."""
         self.proofread(owner)
         with self.lock:
-            job = self.running.get(owner)
+            jobs = {rid: job for rid, job in self.running.get(owner, {}).items() if job.active}
+            self.running[owner] = jobs
+            # A command that runs the models itself is never started twice: it would load them twice.
+            ahead = self.settings.asr.takes_turns()
             # Stopping: what is waiting starts after the restart, not while the service goes down.
-            if (job is not None and job.active) or self._stop.is_set():
+            if len(jobs) >= (TRANSCRIPTION_SLOTS if ahead else 1) or self._stop.is_set():
                 return
             if not isinstance(make_transcriber(self.settings.asr), CommandTranscriber):
                 return
             library = self.library(owner)
-            recording = library.next_queued()
-            if recording is not None:
+            recording = library.next_queued(skip=jobs)
+            if jobs:
+                if recording is None or not self._room_ahead(library, recording):
+                    return
+                title, run = recording.filename, self.run
+            elif recording is not None:
                 title, run = recording.filename, self.run
             elif waiting := Reviews(library).waiting():
                 recording = waiting[0]
@@ -1042,13 +1176,33 @@ class Libraries:
             elif again := recollect.waiting(library):
                 recording = again[0]
                 title, run = f"重新转写 {recording.filename}", self.run_recollect
+            elif (quiet := denoise.waiting(library)) and self._denoises(owner):
+                recording = quiet[0]
+                title, run = f"降噪 {recording.filename}", self.run_denoise
             else:
                 return
             target = recording.id
             with contextlib.suppress(TooManyJobs):
-                self.running[owner] = self.jobs.scoped(f"library:{owner}").submit(
-                    "media_ingest", title, lambda log: run(owner, target, log)
+                # The service takes them in turn; the job queue's single media slot would hold the second back.
+                jobs[target] = self.jobs.scoped(f"library:{owner}").submit(
+                    "media_ingest", title, lambda log: run(owner, target, log), slotted=not ahead
                 )
+
+    def _room_ahead(self, library: Library, recording: Recording) -> bool:
+        """Whether the recording's decoded audio fits above the headroom with every upload still arriving in:
+        counted at the size of its 16 kHz 16-bit samples, which the FLAC kept stays under."""
+        size = self._decoded_bytes.get(recording.id)
+        if size is None:
+            original = library.original(recording.id)
+            try:
+                seconds = probe_seconds(original) if original is not None else None
+            except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+                seconds = None
+            if seconds is None:
+                return False  # Not measured: it waits for its turn alone, as before.
+            size = self._decoded_bytes[recording.id] = math.ceil(seconds * DECODED_BYTES_PER_SECOND)
+        capacity = self.capacity()
+        return capacity["free_bytes"] - capacity["arriving_bytes"] - size >= capacity["headroom_bytes"]
 
     def run_review(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
         """Hear the recording's confirmed speakers again, stretch by stretch; a failure is noted and tried again
@@ -1068,7 +1222,47 @@ class Libraries:
             return {"recording_id": recording_id, "speakers": heard}
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
+            self.kick(owner)
+
+    def _denoises(self, owner: str) -> bool:
+        """Whether the transcription service can denoise, as it last said: asked again in the background at most
+        every ``DENOISE_ASK_SECONDS``, so a status poll never waits on it; a yes starts the waiting recordings."""
+        now = time.monotonic()
+        if now - self._denoise_asked >= DENOISE_ASK_SECONDS:
+            self._denoise_asked = now
+
+            def ask() -> None:
+                transcriber = make_transcriber(self.settings.asr)
+                self._can_denoise = isinstance(transcriber, CommandTranscriber) and transcriber.can_denoise()
+                if self._can_denoise:
+                    self.kick(owner)
+
+            threading.Thread(target=ask, name="library-denoise-ask", daemon=True).start()
+        return self._can_denoise
+
+    def run_denoise(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Make a recording's denoised copy for listening (``media.denoise``); a failure is noted and tried again
+        later, so the next recording's turn comes."""
+        library = self.library(owner)
+        try:
+            transcriber = make_transcriber(self.settings.asr)
+            if not isinstance(transcriber, CommandTranscriber):
+                return {"skipped": True}
+
+            def progress(done: float, total: float) -> None:
+                log(f"[1/1] 降噪（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
+
+            log("[1/1] 生成降噪后的试听音频")
+            try:
+                made = denoise.run(library, recording_id, transcriber, progress)
+            except RuntimeError as exc:
+                raise JobError(f"降噪没有完成：{exc}") from None
+            log("完成" if made else "已有降噪后的试听音频")
+            return {"recording_id": recording_id, "denoised": made}
+        finally:
+            with self.lock:
+                self.running.get(owner, {}).pop(recording_id, None)
             self.kick(owner)
 
     def run_recollect(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
@@ -1093,7 +1287,7 @@ class Libraries:
             return {"recording_id": recording_id, "carried": report.carried, "unsettled": len(report.unsettled)}
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
             self.kick(owner)
 
     def recollection(self, owner: str, viewer: Viewer) -> dict[str, Any]:
@@ -1145,8 +1339,11 @@ class Libraries:
         self.changed(owner)
         return {"revision": revision, "person_id": person_id}
 
-    def unit_clip(self, owner: str, recording_id: str, speaker_id: str, index: int) -> FileResponse:
-        """One stretch of a confirmed speaker as WAV, its segments one after another, kept in the media cache."""
+    def unit_clip(
+        self, owner: str, recording_id: str, speaker_id: str, index: int, original: bool = False
+    ) -> FileResponse:
+        """One stretch of a confirmed speaker as WAV, its segments one after another, kept in the media cache; from
+        the denoised copy unless ``original``, like ``sample``."""
         library = self.library(owner)
         recording = library.get(recording_id)
         review = Reviews(library).speaker(recording, speaker_id, text=False) if recording else None
@@ -1158,12 +1355,14 @@ class Libraries:
             raise HTTPException(404, "找不到这段录音")
         parts = [(transcript.segments[i].start, transcript.segments[i].end) for i in unit.segments]
         cache = library.root / "media-cache" / recording.id
-        target = cache / f"{transcript.id}-{speaker_id}-unit-{'-'.join(map(str, unit.segments))}.wav"
+        audio = denoise.listening(library, recording.id, original)
+        heard = "" if audio.name == "playback.flac" else "-denoised"
+        target = cache / f"{transcript.id}-{speaker_id}-unit-{'-'.join(map(str, unit.segments))}{heard}.wav"
         if not target.is_file():
             cache.mkdir(parents=True, mode=0o700, exist_ok=True)
             temporary = target.with_name(f".{uuid.uuid4().hex}.tmp.wav")
             try:
-                cut_parts(library.folder(recording.id) / "playback.flac", temporary, parts)
+                cut_parts(audio, temporary, parts)
                 temporary.replace(target)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -1174,7 +1373,8 @@ class Libraries:
         transcriber = make_transcriber(self.settings.asr)
 
         def progress(done: float, total: float) -> None:
-            library.update(recording_id, transcribed_s=done)
+            with self.lock:
+                self.progress[recording_id] = done
             log(f"[1/2] 转写（已完成 {done / 60:.1f} / {total / 60:.1f} 分钟）")
 
         try:
@@ -1191,7 +1391,9 @@ class Libraries:
             raise JobError(str(exc)) from None
         finally:
             with self.lock:
-                self.running.pop(owner, None)
+                self.running.get(owner, {}).pop(recording_id, None)
+                self._decoded_bytes.pop(recording_id, None)
+                self.progress.pop(recording_id, None)
             self.kick(owner)
 
     # ------------------------------------------------------------ transcripts brought in as text
@@ -1316,8 +1518,8 @@ class Libraries:
 
     def admit(self, viewer: Viewer, body: UploadBody) -> None:
         """Refuse an upload that would leave less than the headroom free once every upload still arriving is in,
-        or that would queue more than ``max_pending`` of the member's recordings. Transcription works on one
-        recording at a time, so its temporary audio fits in the headroom."""
+        or that would queue more than ``max_pending`` of the member's recordings. Transcription decodes one
+        recording at a time, and a second only with room for its audio above the headroom (``kick``)."""
         library = self.library(TEAM)
         waiting = library.pending(viewer.key) + self.uploads(viewer).arriving()[0]
         limit = self.settings.library.max_pending
@@ -1370,16 +1572,17 @@ class Libraries:
         identities = self.team(owner).identities()
         waiting = {r.id for r in library.unproofread()}
         with self.lock:
-            held_twins = len(self.paused.get(owner, ()))
+            now = self.proofreading_now.get(owner)
+            held_twins = len(self.paused.get(owner, ())) if quota["exhausted"] else 0
         synced = self.team(owner).synced()
         return {
             "recordings": [
                 {
-                    **view(r),
+                    **self.view(r),
                     # Who was recognised, and how many speakers still wait for the owner.
                     "people": identities.get(r.id, ([], 0))[0],
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
-                    "proofread": self.proofread_state(library, r, waiting),
+                    **self.proofread_view(library, r, waiting, now),
                     "can_edit": access[r.id].edit,
                 }
                 for r in recordings
@@ -1397,6 +1600,18 @@ class Libraries:
                 "revision": sum(wanted + done for _, _, wanted, done in synced),
             },
         }
+
+
+def only_adds(store: PersonaStore, wanted: Mapping[str, ParsedSource], done: int) -> bool:
+    """Whether the twin holds the sources of its last complete build (``done``) and each of them is still wanted
+    as it is: what changed since only adds recordings, so nothing it would answer from was taken away."""
+    if not done or store.get_meta(gate.SYNCED) != str(done):
+        return False
+    return all(
+        source.source_id in wanted and store.holds(wanted[source.source_id])
+        for source in store.list_sources()
+        if source.source_id.startswith(SOURCE_PREFIX)
+    )
 
 
 def parsed_source(source: TwinSource) -> ParsedSource:
@@ -1529,8 +1744,12 @@ def register(
         return libraries.detail(libraries.owner(request), recording_id, libraries.viewer(request))
 
     @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/samples/{index}")
-    def get_sample(recording_id: str, speaker_id: str, index: int, request: Request) -> FileResponse:
-        return libraries.sample(libraries.owner(request), recording_id, speaker_id, index, libraries.viewer(request))
+    def get_sample(
+        recording_id: str, speaker_id: str, index: int, request: Request, original: bool = False
+    ) -> FileResponse:
+        return libraries.sample(
+            libraries.owner(request), recording_id, speaker_id, index, libraries.viewer(request), original
+        )
 
     @app.put("/api/library/recordings/{recording_id}/speakers/{speaker_id}")
     def put_speaker(recording_id: str, speaker_id: str, body: DecisionBody, request: Request) -> dict[str, Any]:
@@ -1549,9 +1768,11 @@ def register(
         return libraries.fix(libraries.owner(request), recording_id, speaker_id, body)
 
     @app.get("/api/library/recordings/{recording_id}/speakers/{speaker_id}/units/{index}/clip")
-    def get_unit_clip(recording_id: str, speaker_id: str, index: int, request: Request) -> FileResponse:
+    def get_unit_clip(
+        recording_id: str, speaker_id: str, index: int, request: Request, original: bool = False
+    ) -> FileResponse:
         libraries.allowed(libraries.viewer(request), recording_id, edit=True)
-        return libraries.unit_clip(libraries.owner(request), recording_id, speaker_id, index)
+        return libraries.unit_clip(libraries.owner(request), recording_id, speaker_id, index, original)
 
     @app.post("/api/library/recordings/{recording_id}/speakers/{speaker_id}/not-me")
     def not_me(recording_id: str, speaker_id: str, request: Request) -> dict[str, bool]:
@@ -1568,15 +1789,32 @@ def register(
         return {"disputed": True}
 
     @app.get("/api/library/review")
-    def get_review(request: Request) -> dict[str, Any]:
+    def get_review(
+        request: Request,
+        voices: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        enough: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        strangers: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        items: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        unsorted: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        suspects: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+    ) -> dict[str, Any]:
         """What the viewer settles about the recordings they decide about: speakers someone said are not them
         (``items``), undecided speakers grouped by voice across recordings so each colleague is asked about once
         (``voices``), the short voices like nobody, to set aside together (``fragments``), and recordings whose
         speakers have no voiceprint to group by, settled one by one (``unsorted``), with how much of their speech
         is settled (``heard``). All from one reading, so the page never infers a task from an older list of
-        recordings."""
+        recordings. Each list is the first so many asked for (``review_queue.page``; all without a number), with how
+        many it holds in all (``totals``): the page shows a few of each and asks for more as the owner scrolls."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
-        return libraries.review(libraries.owner(request), editable)
+        limits = {
+            "voices": voices,
+            "enough": enough,
+            "strangers": strangers,
+            "items": items,
+            "unsorted": unsorted,
+            "suspects": suspects,
+        }
+        return page(libraries.review(libraries.owner(request), editable), limits)
 
     @app.post("/api/library/voices")
     def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:
@@ -1596,6 +1834,7 @@ def register(
         # Every twin is a row of the team's table: the ones nobody made from recordings get a person.
         libraries.adopt_personas()
         synced = {persona_id: (wanted, done) for persona_id, _, wanted, done in team.synced()}
+        behind = team.answering_behind()
         visible = libraries.access(viewer)
         managed = libraries.managed(viewer)
         similar = team.similar()
@@ -1623,10 +1862,12 @@ def register(
                     # Their introduction's first line, where the twin is one the viewer may talk to or look after.
                     "about": self_introduction(registry, person.persona_id) if talks or opens else None,
                     "updating": updating,
+                    # While its rebuild waits: whether it answers from its last build (the change only adds
+                    # recordings), and whether the switched-off automatic rebuild holds it.
+                    "answers_behind": bool(updating and person.persona_id in behind),
+                    "held": bool(updating and person.persona_id and libraries.held(owner, person.persona_id)),
                     # Where the update is (step and how far), shown on the card until the twin can talk.
-                    "build": registry.build_status(person.persona_id)
-                    if updating and person.persona_id and registry is not None
-                    else None,
+                    "build": libraries.build_status(person.persona_id) if updating and person.persona_id else None,
                     # The latest meeting among the recordings the viewer may see.
                     "last_meeting": meetings[person.id].model_dump() if person.id in meetings else None,
                     "self_claimed": theirs,
@@ -1767,5 +2008,22 @@ def register(
         libraries.manage(libraries.viewer(request), person_id)
         claim = claim_key(body.claim if body else None)
         return libraries.create_twin(owner, person_id, request.scope["twin_identity"], claim)
+
+    @app.post("/api/library/people/{person_id}/rebuild", status_code=202)
+    def rebuild_twin(person_id: str, request: Request) -> dict[str, bool]:
+        """Try again the twin of a person whose memory update did not complete, for whoever may open it."""
+        person = libraries.team(libraries.owner(request)).person(person_id)
+        entry = registry.entry(person.persona_id) if registry is not None and person and person.persona_id else None
+        if (
+            registry is None
+            or person is None
+            or person.persona_id is None
+            or entry is None
+            or entry.get("by_voice")
+            or not registry.accessible(entry, request.scope["twin_identity"])
+        ):
+            raise HTTPException(404, "找不到这个分身")
+        libraries.rebuild(person.persona_id)
+        return {"queued": True}
 
     return libraries

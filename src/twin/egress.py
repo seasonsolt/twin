@@ -29,6 +29,7 @@ def configured_backends(settings: Settings) -> list[BackendSettings]:
         *settings.judges,
         *([settings.vision] if settings.vision.command else []),
         *([settings.chat_llm] if settings.chat_llm is not None else []),
+        *([settings.llm_fallback] if settings.llm_fallback is not None else []),
     ]
 
 
@@ -63,6 +64,8 @@ def egress_status(settings: Settings, *, external_only: bool = False) -> list[di
             {
                 "kind": "chat_llm"
                 if settings.chat_llm is not None and section is settings.chat_llm
+                else "llm_fallback"
+                if settings.llm_fallback is not None and section is settings.llm_fallback
                 else "judge"
                 if external_only and 5 <= index < 5 + len(settings.judges)
                 else info.kind,

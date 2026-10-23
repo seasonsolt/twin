@@ -1,63 +1,68 @@
 import { Eyes, Mouth, type ArtProps } from './animation';
 import { Suit } from './attire';
+import { Face } from './face';
 
 export function Wave({ blink, mouth }: ArtProps) {
   return (
     <>
-      <rect width="220" height="220" fill="#DCE3EA" />
+      <rect width="220" height="220" fill="#D3D9E0" />
       <path
-        d="M54 88 C40 140 46 168 58 180 L162 180 C174 168 180 140 166 88Z"
-        fill="#3B2A24"
+        d="M72 88 C64 128 66 158 76 176 L144 176 C154 158 156 128 148 88Z"
+        fill="#34261F"
       />
-      <Suit neck="#E9A985" jacket="#3A4250" lapel="#2B313C" shirt="#EEF1F5" />
-      <ellipse cx="110" cy="104" rx="52" ry="60" fill="#F6C8A4" />
+      <Suit neck="#DBAD8E" jacket="#3B4452" lapel="#2E3541" shirt="#EEF1F5" />
+      <Face skin="#EBC0A0" shade="#DBAD8E" deep="#CC9C7E" jaw="soft" />
       <path
-        d="M58 116 C46 56 80 34 112 36 C150 38 176 62 162 116 C158 94 152 78 140 68 C122 76 96 74 76 66 C66 80 60 96 58 116Z"
-        fill="#3B2A24"
-      />
-      <path
-        d="M58 100 C50 120 52 150 58 170 C64 160 64 130 62 110Z M162 100 C170 120 168 150 162 170 C156 160 156 130 158 110Z"
-        fill="#3B2A24"
+        d="M74 100 C68 60 88 42 112 42 C136 42 154 60 146 102 C142 84 136 72 126 66 C112 62 100 66 96 60 C90 70 80 80 74 100Z"
+        fill="#34261F"
       />
       <path
-        d="M78 94 Q88 90 98 93"
-        stroke="#2E211C"
-        strokeWidth="3.5"
+        d="M76 88 C70 118 72 146 80 166 L88 160 C82 140 80 116 83 94Z M144 88 C150 118 148 146 140 166 L132 160 C138 140 140 116 137 94Z"
+        fill="#34261F"
+      />
+      <path
+        d="M86 88 Q93 85 100 87"
+        stroke="#34261F"
+        strokeWidth="2.2"
         fill="none"
         strokeLinecap="round"
       />
       <path
-        d="M122 93 Q132 90 142 94"
-        stroke="#2E211C"
-        strokeWidth="3.5"
+        d="M120 87 Q127 85 134 88"
+        stroke="#34261F"
+        strokeWidth="2.2"
         fill="none"
         strokeLinecap="round"
       />
-      <Eyes blink={blink} y={110}>
-        <ellipse cx="88" cy="110" rx="4.5" ry="5.5" fill="#2B1D18" />
-        <ellipse cx="132" cy="110" rx="4.5" ry="5.5" fill="#2B1D18" />
-        <circle cx="89.5" cy="108" r="1.5" fill="#fff" />
-        <circle cx="133.5" cy="108" r="1.5" fill="#fff" />
+      <Eyes blink={blink} y={98}>
+        <path d="M87 98 Q93 93.6 99 98 Q93 101 87 98Z" fill="#2A211D" />
+        <path d="M121 98 Q127 93.6 133 98 Q127 101 121 98Z" fill="#2A211D" />
+        <path
+          d="M86 97.5 Q93 92.5 100 97 M120 97 Q127 92.5 134 97.5"
+          stroke="#2A211D"
+          strokeWidth="1.4"
+          fill="none"
+          strokeLinecap="round"
+        />
       </Eyes>
       <path
-        d="M108 120 Q111 127 114 125"
-        stroke="#D28A66"
-        strokeWidth="3"
+        d="M110 104 L107 119 Q110 121 113 119"
+        stroke="#C49478"
+        strokeWidth="1.8"
         fill="none"
         strokeLinecap="round"
+        strokeLinejoin="round"
       />
-      <Mouth level={mouth} y={140.25} color="#A9463F">
+      <Mouth level={mouth} y={132} color="#8A4740">
         <path
           className="mouth"
-          d="M100 139 Q110 145 120 139"
-          stroke="#A9463F"
-          strokeWidth="3.5"
+          d="M102 131 Q110 134 118 131"
+          stroke="#A0584F"
+          strokeWidth="2.6"
           fill="none"
           strokeLinecap="round"
         />
       </Mouth>
-      <circle cx="58" cy="128" r="3.5" fill="#C9CED6" />
-      <circle cx="162" cy="128" r="3.5" fill="#C9CED6" />
     </>
   );
 }

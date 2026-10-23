@@ -36,6 +36,7 @@ from twin.persona.schema import ChatTurn
 from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web import library as web_library
+from twin.web import persona as web_persona
 from twin.web.jobs import PersonaProcessing
 
 HEADERS = {"X-Twin": "1"}
@@ -224,8 +225,8 @@ def test_listing_people_and_candidates_reads_each_transcript_once(
     assert len(reads) == len(set(reads)) <= 2  # Never the same transcript twice.
 
 
-def test_a_voiceprint_is_normalised_once_and_scores_exactly_as_before() -> None:
-    from twin.media.team import _cosine, _Print, _unit
+def test_a_voiceprint_is_normalised_once_and_scores_as_before() -> None:
+    from twin.media.team import _cosine, _cosines, _Print, _unit
 
     def before(a: list[float], b: list[float]) -> float:
         ua = [x / (math.sqrt(sum(x * x for x in a)) or 1.0) for x in a]
@@ -237,9 +238,27 @@ def test_a_voiceprint_is_normalised_once_and_scores_exactly_as_before() -> None:
     prints = [_Print(v) for v in vectors]
     assert _unit(prints[0]) is _unit(prints[0])
     for a, pa in zip(vectors, prints, strict=True):
-        for b, pb in zip(vectors, prints, strict=True):
-            assert _cosine(pa, pb) == _cosine(a, pb) == _cosine(a, b) == before(a, b)
+        many = _cosines(pa, prints)
+        for b, pb, score in zip(vectors, prints, many, strict=True):
+            # One product sums in another order than Python did: the last bit may differ, never a shown score.
+            assert _cosine(pa, pb) == _cosine(a, pb) == _cosine(a, b) == score
+            assert abs(score - before(a, b)) < 1e-12 and round(score, 3) == round(before(a, b), 3)
     assert _cosine(prints[0], [1.0, 0.0]) == 0.0
+    assert _cosines(prints[0], [[1.0, 0.0], prints[1]]) == [0.0, _cosine(prints[0], prints[1])]
+
+
+def test_samples_compared_at_once_follow_samples_added_and_those_of_another_model() -> None:
+    from twin.media.team import _Print, _Stacked
+
+    prints = _Stacked([("a", "甲", _Print([1.0, 0.0, 0.0])), ("b", "乙", _Print([0.0, 1.0, 0.0]))])
+    assert [c.person_id for c in Team._match([1.0, 0.1, 0.0], prints, set(), floor=-1.0)] == ["a", "b"]
+    # ``classify`` adds the sample of a new person while it goes.
+    prints.append(("c", "丙", _Print([1.0, 0.1, 0.0])))
+    assert Team._match([1.0, 0.1, 0.0], prints, set(), floor=-1.0)[0].person_id == "c"
+    prints.append(("d", "丁", _Print([1.0, 0.1])))
+    found = Team._match([1.0, 0.1, 0.0], prints, {"c"}, floor=-1.0)
+    assert [(c.person_id, c.score) for c in found] == [("a", 0.995), ("b", 0.1)]
+    assert [c.score for c in Team._match([1.0, 0.1], prints, set(), floor=-1.0)] == [1.0, 0.0]
 
 
 def voices(library: Library, name: str, *speakers: tuple[list[float], float]) -> str:
@@ -623,6 +642,16 @@ def test_voices_like_one_the_owner_could_not_name_wait_last(tmp_path: Path) -> N
     assert [(v.seconds, v.stranger) for v in team.voices()[0]] == [(30, False), (50, True)]
 
 
+def test_voiceprints_of_two_models_group_each_with_their_own(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    # One model's voiceprint is like none of the other's, however close its numbers.
+    one = voices(library, "一.m4a", ([1.0, 0.0], 90), ([1.0, 0.0, 0.0], 40))
+    two = voices(library, "二.m4a", ([0.98, 0.1, 0.0], 30), ([0.99, 0.1], 20))
+    found = {frozenset((m.recording_id, m.speaker_id) for m in v.members) for v in team.voices()[0]}
+    assert found == {frozenset({(one, "S1"), (two, "S2")}), frozenset({(one, "S2"), (two, "S1")})}
+
+
 def name(library: Library, recording_id: str, *cues: tuple[str, str, bool]) -> None:
     """File what the meeting calls speakers: (speaker, name, whether the name was said plainly)."""
     found = library.get(recording_id)
@@ -931,6 +960,121 @@ def test_a_failed_sync_is_tried_again(web: TestClient, monkeypatch: pytest.Monke
     assert calls == [pid, pid]
 
 
+def failing_builds(monkeypatch: pytest.MonkeyPatch, *, limited: bool) -> None:
+    """Every build fails from now on: turned away by the model's rate limit, or for another reason."""
+
+    def fail(*_: Any) -> dict[str, Any]:
+        raise RuntimeError("the model did not answer")
+
+    monkeypatch.setattr(web_persona, "run_persona_build", fail)
+    monkeypatch.setattr(web_persona, "rate_limited", lambda rows: limited)
+
+
+def twin_card(web: TestClient, pid: str) -> dict[str, Any]:
+    return next(p for p in web.get("/api/library/people").json()["items"] if p["persona_id"] == pid)
+
+
+def change_every_twin(web: TestClient) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    with libraries.library("team").transaction() as db:
+        db.execute("UPDATE personas_sync SET wanted = wanted + 1")
+    libraries.changed("team")
+
+
+def test_a_build_the_rate_limit_stopped_is_built_again_after_a_wait(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    with monkeypatch.context() as limit:
+        failing_builds(limit, limited=True)
+        change_every_twin(web)
+        until(lambda: "retry_at" in (twin_card(web, pid)["build"] or {}))
+    card = twin_card(web, pid)
+    assert card["updating"] is True and card["build"]["state"] == "idle"
+    assert card["build"]["last_error"] == "模型服务限流，记忆没有整理完，请稍后重试"
+    tries, due = libraries.rebuilds[pid]
+    assert tries == 1 and due - time.time() > web_library.REBUILD_RETRY_SECONDS[0] - 60
+    libraries.wake("team")  # not due yet
+    assert twin_card(web, pid)["updating"] is True
+    # The wait is over and the limit has lifted: the wake builds it again, and the twin opens.
+    libraries.rebuilds[pid] = (tries, time.time() - 1)
+    libraries.wake("team")
+    until(lambda: open_twin(web, pid))
+    assert pid not in libraries.rebuilds and twin_card(web, pid)["updating"] is False
+
+
+def test_the_waits_after_a_rate_limit_end(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_library, "REBUILD_RETRY_SECONDS", (300.0, 900.0))
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    libraries.unbuilt(pid, True)
+    libraries.unbuilt(pid, True)
+    assert libraries.rebuilds[pid][0] == 2
+    libraries.unbuilt(pid, True)  # tried as often as it waits: its card shows the failure from now on
+    assert pid not in libraries.rebuilds
+    libraries.unbuilt(pid, True)
+    libraries.unbuilt(pid, False)  # another failure is not waited out
+    assert pid not in libraries.rebuilds
+    libraries.unbuilt("not-a-library-twin", True)
+    assert "not-a-library-twin" not in libraries.rebuilds
+
+
+def test_a_failed_build_shows_on_the_card_and_is_retried_from_there(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
+    pid = web.post(f"/api/library/people/{li}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    with monkeypatch.context() as broken:
+        failing_builds(broken, limited=False)
+        change_every_twin(web)
+        until(lambda: "last_error" in (twin_card(web, pid)["build"] or {}))
+    build = twin_card(web, pid)["build"]
+    assert build == {"state": "idle", "last_error": "记忆处理失败，请检查模型配置后重试"}
+    assert pid not in libraries.rebuilds
+    assert web.post("/api/library/people/nobody/rebuild", headers=HEADERS).status_code == 404
+    # While the retry writes the twin's sources, before its build is queued, the card already says it is on its way.
+    writing = threading.Event()
+    write_sources = libraries.write_sources
+
+    def slow(owner: str, persona_id: str) -> bool:
+        writing.wait(10)
+        return write_sources(owner, persona_id)
+
+    monkeypatch.setattr(libraries, "write_sources", slow)
+    assert web.post(f"/api/library/people/{li}/rebuild", headers=HEADERS).status_code == 202
+    assert twin_card(web, pid)["build"] == {"state": "queued"}
+    writing.set()
+    until(lambda: open_twin(web, pid))
+    assert twin_card(web, pid)["updating"] is False
+
+
+def test_a_sync_leaves_the_recordings_that_did_not_change_alone(web: TestClient, tmp_path: Path) -> None:
+    libraries = web.app.state.libraries  # type: ignore[attr-defined]
+    rec = meeting(Library(tmp_path / "library" / "team"))
+    detail = web.get(f"/api/library/recordings/{rec}").json()
+    body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "confirm"}
+    li = web.put(f"/api/library/recordings/{rec}/speakers/S2", json={**body, "new_person": "李总"}, headers=HEADERS)
+    pid = web.post(f"/api/library/people/{li.json()['person_id']}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: open_twin(web, pid))
+    db_path = tmp_path / "personas" / pid / "twin.db"
+    with PersonaStore(db_path) as store:
+        before = store.get_meta("sources_changed_at"), store.meta_with_prefix("source_pending:")
+    # Another recording changed: this twin's meeting reads the same, so it is neither rewritten nor built again.
+    with libraries.library("team").transaction() as db:
+        db.execute("UPDATE personas_sync SET wanted = wanted + 1")
+    assert libraries.write_sources("team", pid) is True
+    with PersonaStore(db_path) as store:
+        assert (store.get_meta("sources_changed_at"), store.meta_with_prefix("source_pending:")) == before
+        assert len(store.list_sources()) == 1
+
+
 def test_a_deleted_twin_is_not_synced(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     libraries = web.app.state.libraries  # type: ignore[attr-defined]
     li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
@@ -1147,6 +1291,22 @@ def test_a_person_s_voice_is_checked_and_a_sample_removed_through_the_page(web: 
     assert gone.status_code == 200 and gone.json() == {"returned": 1}
     assert web.delete(f"/api/library/people/{zhang.id}/samples/{sample['id']}", headers=HEADERS).status_code == 404
     assert web.get(f"/api/library/people/{zhang.id}/voice").json() == {"samples": [], "checks": []}
+
+
+def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60), ([0.0, 1.0, 0.0], 40), ([0.0, 0.0, 1.0], 20))
+    for name in ("二.m4a", "三.m4a"):
+        recording(library, name, [Segment(start=0, end=1, text="嗯。", speaker="S1")], [Speaker(id="S1", seconds=1)])
+    whole = web.get("/api/library/review").json()
+    assert [v["seconds"] for v in whole["voices"]] == [60, 40, 20] and len(whole["unsorted"]) == 2
+    first = web.get("/api/library/review?voices=2&enough=5&strangers=5&items=10&unsorted=1&suspects=10").json()
+    # The longest first, as on the whole list, and how many wait after them.
+    assert first["voices"] == whole["voices"][:2] and first["unsorted"] == whole["unsorted"][:1]
+    assert first["totals"]["voices"] == {"count": 3, "seconds": 120} and first["totals"]["unsorted"] == {"count": 2}
+    more = web.get("/api/library/review?voices=4&unsorted=2").json()
+    assert more["voices"] == whole["voices"] and more["unsorted"] == whole["unsorted"]
+    assert web.get("/api/library/review?voices=-1").status_code == 400
 
 
 def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:

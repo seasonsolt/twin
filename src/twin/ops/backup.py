@@ -33,7 +33,9 @@ def _copy_tree(source: Path, target: Path, *, snapshot: bool, recordings: bool =
         # Uploads awaiting transcription are deleted once transcribed, so a backup does not keep them alive for
         # weeks (a restored recording without one is re-uploaded); also skipped: a transcription's temporary audio
         # and files not yet published under their final name.
-        if recordings and (path.name.startswith(("original.", "audio.wav")) or path.name.endswith(".tmp")):
+        if recordings and (
+            path.name.startswith(("original.", "audio.wav", "audio.flac")) or path.name.endswith(".tmp")
+        ):
             continue
         destination = target / path.name
         if path.is_dir():

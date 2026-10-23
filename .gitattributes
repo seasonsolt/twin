@@ -1,3 +1,5 @@
 tests/golden/** -text
 src/twin/web/static/assets/** linguist-generated=true -diff
 src/twin/web/static/index.html linguist-generated=true -diff
+# git archive writes the commit into the release, so daw can say which one it runs (deploy/daw/check_live.py).
+src/twin/web/RELEASE export-subst

@@ -48,6 +48,12 @@ uv run twin --config ./twin.toml compute install asr-funasr
 
 转写、声纹提取和匹配全程本机离线；运行强制设置 `HF_HUB_OFFLINE`、`MODELSCOPE_OFFLINE`、`TRANSFORMERS_OFFLINE`，模型加载禁用更新。缺模型只报错，不触发下载。安装 Python 依赖需要网络或已有包缓存；模型下载需要显式 `--download-models`。后续记忆整理/聊天仍使用 twin 配置的大模型，其出境范围由该配置决定。
 
+## FireRed 推理优化（1.5.4）
+
+重叠流程的 FireRed 在支持原生 BF16 的 CUDA 显卡上使用 BF16 权重和输入；其余设备保留 FP32。beam=1 解码按 token 缓存 self-attention 的键和值，attention 使用 PyTorch SDPA，已有 cross-attention 缓存继续使用。其他 beam/search 参数仍交给上游解码器。分人、分离、声纹、复读回退和补标点规则不变。
+
+BF16 和 SDPA 可能改变极少量边界词，因此包版本和转写版本都升为 **1.5.4**。分人没有变，twin 把 1.5.4 视同 1.4.1（`src/twin/media/collector.py` 的 `SAME_COLLECTION`），1.4.1 转写的录音不会被列为可以重新采集。启动日志打印 FireRed 的实际精度；`/health` 返回包与转写版本。质量验证范围和限制见 [ASR 评测](../../../docs/ASR_EVAL.md)。
+
 ## 热词
 
 请求 JSON 可带 `"hotwords": ["邓郁松", "魔搭"]`：去掉空白项和含空格的词，去重，最多 200 个。热词只提高这些词被识别出来的概率，不会强行替换文字。热词的来源（例如从记忆里的人名、项目名自动整理）以后再定，目前默认不传。
@@ -69,7 +75,7 @@ provider = "command"
 command = "python3 /path/to/twin/deploy/compute/asr-funasr/remote.py --url http://127.0.0.1:18790"
 ```
 
-服务一次只跑一个任务，其余请求排队；响应是逐行 JSON（进度，最后是结果），`remote.py` 把进度转成 `@@twin-progress` 行。上传的录音和参考声音写进临时目录，处理完立即删除。服务没有认证，只应监听本机，再经 SSH 隧道转发到 twin 所在机器，不要直接暴露到网络。`remote.py` 上传前会用 ffmpeg 把 wav 无损压成 FLAC（体积约为原来的 40%，识别结果不变；压缩失败就原样上传，`--no-flac` 关闭），带宽窄时上传时间能省一半以上。`remote.py --hotwords <文件>` 可指定热词文件（每行一个，`#` 开头为注释），请求自带热词时以请求为准。
+服务一次只跑一个任务，其余请求排队；响应是逐行 JSON（进度，最后是结果），`remote.py` 把进度转成 `@@twin-progress` 行。正因为服务自己排队，twin 的录音库在用 `remote.py` 时会提前开始下一条录音：解码、上传和上一条的识别同时进行，服务做完一条马上接下一条，不再空等；下一条解码后的音频要放得进 `[library] headroom_gb` 之外的空间才提前开始，否则照旧一条一条来。`[asr] ahead = true / false` 可以强制打开或关闭；在本机直接跑模型的命令（`run.py`）默认不提前，免得同时加载两份模型。上传的录音和参考声音写进临时目录，处理完立即删除。服务没有认证，只应监听本机，再经 SSH 隧道转发到 twin 所在机器，不要直接暴露到网络。`remote.py` 上传前会用 ffmpeg 把 wav 无损压成 FLAC（体积约为原来的 40%，识别结果不变；压缩失败就原样上传，`--no-flac` 关闭），带宽窄时上传时间能省一半以上。`remote.py --hotwords <文件>` 可指定热词文件（每行一个，`#` 开头为注释），请求自带热词时以请求为准。
 
 ## GPU 上的重叠感知转写（1.4）
 
@@ -85,6 +91,10 @@ command = "python3 /path/to/twin/deploy/compute/asr-funasr/remote.py --url http:
 本人话语 CER 在 AliMeeting Eval / Test 上从 31.7% / 28.0% 降到 20.5% / 17.6%，在留出的 AISHELL-4 测试集上从 23.2% 降到 16.1%（选对说话人时），详见 [docs/ASR_EVAL.md](../../../docs/ASR_EVAL.md#个人上传路径三套分人方案对比2026-10-21)。请求带 `"pipeline": "classic"`（或 `run.py --pipeline classic`、`remote.py --pipeline classic`）可退回原流程，评测用它做配对对照；twin 自己从不传。缺少下面任一模型时自动退回 `classic`，`/health` 和 `--check` 报告实际使用的流程。
 
 1.4.1 起转写结果另带 `"version"`（包版本）和 `"pipeline"`（实际使用的流程），转写和声纹与 1.4.0 相同。twin 把它记在每份转写上，换了包版本或流程后，录音库会列出哪些录音可以用新版重新转写；更早的包不带这两项，twin 记为版本未知。
+
+1.5.1 转写结果与 1.4.1 相同、只是更快：单段声纹在 GPU 上算，识别和补标点交替进行。超过 16000 个声纹窗（约 3.5 小时语音）的录音，谱聚类改用同一个相似度矩阵的稀疏存储；此前 8 小时以上的录音要几十 GB 内存、会被系统杀掉，现在约 3 GB。
+
+1.5.2 每条请求结束后把释放的内存交还系统（服务按请求开线程，glibc 原本会留着各线程释放的内存，连续转写几条多小时录音后超过 27 GB 被系统杀掉）；`remote.py` 在服务没有任何响应时（重启加载模型的半分钟里）每 5 秒重试，最多 2 分钟，环境变量 `TWIN_ASR_CONNECT_SECONDS` 可改。
 
 额外的模型在运行时从官方仓库取（`pack.toml` 的 `cuda_models` 固定了版本与 sha256，不随包分发）：
 

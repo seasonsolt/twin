@@ -21,13 +21,14 @@ import datetime as dt
 import hashlib
 import json
 import math
-import operator
 import sqlite3
 import uuid
-from collections.abc import Iterable, Mapping
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, TypeVar
 
+import numpy as np
 from pydantic import BaseModel
 
 from ..util import date_from_name
@@ -40,6 +41,7 @@ Action = Literal["confirm", "unknown", "mixed", "reject", "clear"]
 # How sure voice alone is of a speaker (``tier``): decided without asking, offered to confirm with one key, asked.
 Tier = Literal["high", "mid", "low"]
 Gender = Literal["", "male", "female"]
+_Item = TypeVar("_Item", bound=tuple[Any, ...])
 Decision = Literal["none", "confirmed", "unknown", "mixed"]
 # A speaker is offered for review from this similarity to someone's voice samples: in AliMeeting calibration of the
 # single-person claim, people absent from a meeting never passed 0.44. The pilot recalibrates it.
@@ -300,14 +302,15 @@ def _now() -> str:
 
 
 class _Print(list[float]):
-    """A voiceprint that works out its unit vector once (``_unit``): a review compares every undecided speaker with
-    every voice sample, and normalising both each time took most of its seconds."""
+    """A voiceprint that works out its unit vector once (``_unit``, ``_array``): a review compares every undecided
+    speaker with every voice sample, and normalising both each time took most of its seconds."""
 
-    __slots__ = ("unit",)
+    __slots__ = ("array", "unit")
 
     def __init__(self, vector: Iterable[float]) -> None:
         super().__init__(vector)
         self.unit: list[float] | None = None
+        self.array: np.ndarray | None = None
 
 
 def _print(vector: list[float]) -> _Print:
@@ -324,10 +327,83 @@ def _unit(vector: list[float]) -> list[float]:
     return unit
 
 
+def _array(vector: list[float]) -> np.ndarray:
+    """The unit vector (``_unit``) as an array, kept on a ``_Print``."""
+    if isinstance(vector, _Print) and vector.array is not None:
+        return vector.array
+    array = np.asarray(_unit(vector), dtype=np.float64)
+    if isinstance(vector, _Print):
+        vector.array = array
+    return array
+
+
+def _dots(matrix: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """The dot product of each row of ``matrix`` with ``vector``, each row summed by itself: a voice scores the same
+    against one sample as against many (a matrix product sums one row in another order than several)."""
+    return np.asarray((matrix * vector).sum(axis=1))
+
+
+def _cosines(a: list[float], vectors: Sequence[list[float]]) -> list[float]:
+    """How alike ``a`` is to each of ``vectors`` (``_cosine``), in one product: a review compares every undecided
+    speaker with every voice sample, and summing their products in Python took most of its seconds."""
+    found = [0.0] * len(vectors)
+    alike = [i for i, vector in enumerate(vectors) if len(vector) == len(a)]
+    if alike:
+        scores = _dots(np.stack([_array(vectors[i]) for i in alike]), _array(a))
+        for i, score in zip(alike, scores.tolist(), strict=True):
+            found[i] = score
+    return found
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
-    if len(a) != len(b):
-        return 0.0
-    return float(sum(map(operator.mul, _unit(a), _unit(b))))
+    return _cosines(a, [b])[0]
+
+
+class _Stacked(list[_Item]):
+    """Voices whose voiceprint comes last (voice samples, ``Team._prints``; voices nobody knows, ``Team._strangers``),
+    with their unit vectors stacked once (``_scores``), again only after voices are added."""
+
+    __slots__ = ("_counted", "_matrix", "_owners", "_people", "_stacked")
+
+    def __init__(self, items: Iterable[_Item]) -> None:
+        super().__init__(items)
+        self._matrix: np.ndarray | None = None
+        self._people: list[tuple[str, str]] = []
+        self._owners = np.zeros(0, dtype=np.intp)
+        # How many voices the matrix and the people were worked out from.
+        self._stacked = self._counted = -1
+
+    def matrix(self) -> np.ndarray | None:
+        """Every voiceprint as a unit vector, a row each; None when they are not all of one length."""
+        if self._stacked != len(self):
+            widths = {len(item[-1]) for item in self}
+            self._matrix = np.stack([_array(item[-1]) for item in self]) if len(widths) == 1 else None
+            self._stacked = len(self)
+        return self._matrix
+
+    def people(self) -> tuple[list[tuple[str, str]], np.ndarray]:
+        """For voice samples (person, name, voiceprint): each person and name in order of their first sample, and
+        whose each sample is, by index into them."""
+        if self._counted != len(self):
+            index: dict[str, int] = {}
+            people: list[tuple[str, str]] = []
+            owners: list[int] = []
+            for person_id, name, *_ in self:
+                if person_id not in index:
+                    index[person_id] = len(people)
+                    people.append((person_id, name))
+                owners.append(index[person_id])
+            self._people, self._owners = people, np.asarray(owners, dtype=np.intp)
+            self._counted = len(self)
+        return self._people, self._owners
+
+
+def _scores(embedding: list[float], items: Iterable[tuple[Any, ...]]) -> list[float]:
+    """How alike the voice is to each of ``items``, whose voiceprint comes last (``_cosines``)."""
+    matrix = items.matrix() if isinstance(items, _Stacked) else None
+    if matrix is None or matrix.shape[1] != len(embedding):
+        return _cosines(embedding, [item[-1] for item in items])
+    return list(_dots(matrix, _array(embedding)).tolist())
 
 
 def segment_owners(
@@ -397,6 +473,8 @@ def _unlike(samples: list[_Sample], cap: int) -> list[_Sample]:
 class Team:
     def __init__(self, library: Library) -> None:
         self.library = library
+        # Voice samples by their stored text, parsed once however often this reads them (``_prints``).
+        self._parsed: dict[str, _Print] = {}
 
     # ------------------------------------------------------------------ people
 
@@ -670,9 +748,9 @@ class Team:
 
     # --------------------------------------------------------------- decisions
 
-    def speakers(self, recording: Recording) -> list[SpeakerView]:
+    def speakers(self, recording: Recording, only: set[str] | None = None) -> list[SpeakerView]:
         """Every speaker of the recording's current transcript, with the owner's decision and, while undecided,
-        the people their voice matches best."""
+        the people their voice matches best. ``only``: just these speakers."""
         speakers = self.library.speakers(recording)
         if speakers is None:
             return []
@@ -698,6 +776,8 @@ class Team:
         called = self.library.names(recording)
         views = []
         for speaker in speakers:
+            if only is not None and speaker.id not in only:
+                continue
             row = rows.get(speaker.id)
             view = SpeakerView(
                 id=speaker.id,
@@ -1110,24 +1190,24 @@ class Team:
         """The owner's confirmation queue: speakers someone said are not them, then undecided speakers whose voice
         matches someone, best match first. ``recordings``: only these. ``disputed_only`` skips matching meetings
         without a dispute: the web queue already groups their undecided speakers in ``voices``."""
+        # The disputed speakers of each recording: with ``disputed_only``, the only ones matched.
+        disputed: dict[str, set[str]] = {}
         if disputed_only:
             with self.library.read() as db:
-                disputed = {
-                    row[0]
-                    for row in db.execute(
-                        "SELECT DISTINCT a.recording_id FROM attributions a JOIN recordings r "
-                        "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
-                        "WHERE a.decision = 'none' AND a.disputed = 1"
-                    )
-                }
-            recordings = disputed if recordings is None else recordings & disputed
+                for recording_id, speaker_id in db.execute(
+                    "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r "
+                    "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
+                    "WHERE a.decision = 'none' AND a.disputed = 1"
+                ):
+                    disputed.setdefault(recording_id, set()).add(speaker_id)
+            recordings = set(disputed) if recordings is None else recordings & set(disputed)
             if not recordings:
                 return []
         queue: list[dict[str, object]] = []
         for recording in self.library.list():
             if recording.status != "ready" or (recordings is not None and recording.id not in recordings):
                 continue
-            for speaker in self.speakers(recording):
+            for speaker in self.speakers(recording, disputed.get(recording.id) if disputed_only else None):
                 if (
                     speaker.decision == "none"
                     and (speaker.candidates or speaker.disputed)
@@ -1214,28 +1294,47 @@ class Team:
                 found.append((member, _unit(embedding), rejected, lead, present, stranger, cue, suggest))
         groups: list[_Group] = []
         ordered = sorted(found, key=lambda f: (-f[0].seconds, f[0].recording_id))
+        # The speakers grouped so far by voiceprint length (one per model), a row each, and the group of each row:
+        # one product scores a speaker against all of its model.
+        widths = Counter(len(f[1]) for f in ordered)
+        grouped = {width: np.zeros((count, width)) for width, count in widths.items()}
+        group_of = {width: np.zeros(count, dtype=np.intp) for width, count in widths.items()}
+        filled = dict.fromkeys(widths, 0)
+        group_width: list[int] = []
         for member, vector, rejected, lead, present, stranger, cue, suggest in ordered:
             likely = lead.person_id if lead else None
             split = lead if lead and lead.split else None
-            best, best_score = None, GROUP
-            for group in groups:
+            # How alike the speaker is to the least alike speaker of each group.
+            width, row = len(vector), filled[len(vector)]
+            least = np.full(len(groups), np.inf)
+            np.minimum.at(least, group_of[width][:row], _dots(grouped[width][:row], np.asarray(vector)))
+            best, best_index, best_score = None, 0, GROUP
+            for index, group in enumerate(groups):
+                # A voiceprint of another model is like none of the group's.
+                if group_width[index] != width:
+                    continue
                 if likely and group.likely and likely != group.likely:
                     continue
                 if cue and group.cues and cue.name != group.cues[0].name:
                     continue
                 if (group.likely in present and not split) or (likely in group.present and not group.split):
                     continue
-                score = min(sum(a * b for a, b in zip(vector, other, strict=True)) for other in group.vectors)
+                score = float(least[index])
                 if score < SPLIT and any(m.recording_id == member.recording_id for m in group.members):
                     continue
                 if score >= best_score:
-                    best, best_score = group, score
+                    best, best_index, best_score = group, index, score
+            grouped[width][row] = vector
+            filled[width] += 1
             if best is None:
+                group_of[width][row] = len(groups)
+                group_width.append(width)
                 cues = [cue] if cue else []
                 groups.append(
                     _Group([member], [vector], set(rejected), likely, set(present), split, stranger, cues, suggest)
                 )
             else:
+                group_of[width][row] = best_index
                 best.members.append(member)
                 best.vectors.append(vector)
                 best.rejected.update(rejected)
@@ -1252,7 +1351,7 @@ class Team:
             members = group.members
             key = "|".join(sorted(f"{m.recording_id}:{m.transcript_id}:{m.speaker_id}" for m in members))
             centroid = _Print(sum(values) for values in zip(*group.vectors, strict=True))
-            matched = self._match(centroid, [p for p in prints if p[0] not in group.present], group.rejected)
+            matched = self._match(centroid, prints, group.rejected | group.present)
             if group.split and group.split.person_id not in {c.person_id for c in matched}:
                 matched = [group.split, *matched][:2]
             # The person its speakers sound most like leads, as each of them would show it.
@@ -1263,18 +1362,15 @@ class Team:
             lead = candidates[0] if candidates and candidates[0].sure and not near else None
             # Its lead over the runner-up and the voices the owner could not name in other recordings (``_rival``).
             heard_in = {m.recording_id for m in members}
-            ranked = self._match(centroid, [p for p in prints if p[0] not in group.present], group.rejected, floor=-1.0)
+            ranked = self._match(centroid, prints, group.rejected | group.present, floor=-1.0)
             others = [c.score for c in ranked if candidates and c.person_id != candidates[0].person_id]
+            rivals = [vector for where, vector in strangers if STRANGER_RIVALS and where not in heard_in]
             runner = max(
                 [
                     *others[:1],
                     *(c.score for c in candidates[1:2]),
                     0.0,
-                    *(
-                        round(_cosine(centroid, vector), 3)
-                        for where, vector in strangers
-                        if STRANGER_RIVALS and where not in heard_in
-                    ),
+                    *(round(score, 3) for score in _cosines(centroid, rivals)),
                 ]
             )
             level = tier(candidates, runner, sum(m.seconds for m in members))
@@ -1615,8 +1711,7 @@ class Team:
     def _stranger(embedding: list[float], strangers: list[tuple[str, list[float]]], known: float) -> bool:
         """Whether the voice is one the owner said is nobody they know (``_strangers``): ``STRANGER`` close to it,
         and closer to it than to anyone known (``known``, the best score) by ``STRANGER_MARGIN``."""
-        embedding = _print(embedding)
-        score = max((_cosine(embedding, vector) for _, vector in strangers), default=0.0)
+        score = max(_scores(_print(embedding), strangers), default=0.0)
         return score >= STRANGER and score - known >= STRANGER_MARGIN
 
     @staticmethod
@@ -1633,19 +1728,22 @@ class Team:
         runner = Team._runner(embedding, prints)
         if STRANGER_RIVALS:
             others = [vector for where, vector in strangers if where != recording_id]
-            runner = max([runner, *(round(_cosine(embedding, vector), 3) for vector in others)])
+            runner = max([runner, *(round(score, 3) for score in _cosines(embedding, others))])
         return runner
 
     def _strangers(self, db: sqlite3.Connection) -> list[tuple[str, list[float]]]:
         """The recording and voiceprint of each speaker the owner said is nobody they know, in current
         transcripts."""
-        found: list[tuple[str, list[float]]] = []
+        found: _Stacked[tuple[str, list[float]]] = _Stacked([])
         rows = db.execute(
             "SELECT a.recording_id, a.speaker_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
             "AND r.transcript_id = a.transcript_id WHERE a.decision = 'unknown' AND a.auto = 0"
         ).fetchall()
+        recordings: dict[str, Recording | None] = {}
         for recording_id, speaker_id in rows:
-            recording = self.library.get(recording_id)
+            if recording_id not in recordings:
+                recordings[recording_id] = self.library.get(recording_id)
+            recording = recordings[recording_id]
             speaker = next(
                 (s for s in (self.library.speakers(recording) if recording else None) or () if s.id == speaker_id), None
             )
@@ -1663,9 +1761,12 @@ class Team:
         ):
             key = (row["person_id"], row["recording_id"])
             if key not in found:
-                found[key] = (row["person_id"], row["name"], _Print(json.loads(row["embedding"])), row["speaker_id"])
+                text = row["embedding"]
+                if text not in self._parsed:
+                    self._parsed[text] = _Print(json.loads(text))
+                found[key] = (row["person_id"], row["name"], self._parsed[text], row["speaker_id"])
         if SAMPLE_CAP <= 0:
-            return [(person_id, name, vector) for person_id, name, vector, _ in found.values()]
+            return _Stacked((person_id, name, vector) for person_id, name, vector, _ in found.values())
         by_person: dict[str, list[_Sample]] = {}
         for (person_id, recording_id), sample in found.items():
             by_person.setdefault(person_id, []).append((recording_id, sample))
@@ -1675,7 +1776,7 @@ class Team:
                 samples.sort(key=lambda item: -self._seconds(item[0], item[1][3]))
             chosen = samples[: int(SAMPLE_CAP)] if SAMPLE_PICK < 2 else _unlike(samples, int(SAMPLE_CAP))
             kept += [(person_id, name, vector) for _, (person_id, name, vector, _) in chosen]
-        return kept
+        return _Stacked(kept)
 
     def _seconds(self, recording_id: str, speaker_id: str) -> float:
         """How long the speaker a sample was taken from spoke; 0 when unknown."""
@@ -1712,17 +1813,28 @@ class Team:
         """People with active samples the speaker was not denied to be, by their best-matching sample, from
         ``floor``; at most the top two."""
         embedding = _print(embedding)
-        scores: dict[str, tuple[str, list[float]]] = {}
-        for person_id, name, vector in prints:
-            if person_id not in rejected:
-                scores.setdefault(person_id, (name, []))[1].append(_cosine(embedding, vector))
-        best: list[Candidate] = []
-        for person_id, (name, found) in scores.items():
-            top = sorted(found, reverse=True)[: max(1, int(SCORE_TOP))]
-            score = round(sum(top) / len(top), 3)
-            best.append(Candidate(person_id=person_id, name=name, score=score, sure=score >= SURE))
-        ranked = sorted((c for c in best if c.score >= floor), key=lambda c: -c.score)
-        return ranked[:2]
+        prints = prints if isinstance(prints, _Stacked) else _Stacked(prints)
+        people, owners = prints.people()
+        scores = _scores(embedding, prints)
+        found: list[tuple[str, str, float]] = []
+        if int(SCORE_TOP) <= 1:
+            best = np.full(len(people), -np.inf)
+            np.maximum.at(best, owners, scores)
+            found = [
+                (person_id, name, round(score, 3))
+                for (person_id, name), score in zip(people, best.tolist(), strict=True)
+                if person_id not in rejected
+            ]
+        else:
+            by_person: list[list[float]] = [[] for _ in people]
+            for owner, score in zip(owners.tolist(), scores, strict=True):
+                by_person[owner].append(score)
+            for (person_id, name), heard in zip(people, by_person, strict=True):
+                if person_id not in rejected:
+                    top = sorted(heard, reverse=True)[: int(SCORE_TOP)]
+                    found.append((person_id, name, round(sum(top) / len(top), 3)))
+        ranked = sorted((f for f in found if f[2] >= floor), key=lambda f: -f[2])
+        return [Candidate(person_id=p, name=n, score=score, sure=score >= SURE) for p, n, score in ranked[:2]]
 
     @staticmethod
     def _suggest(
@@ -1736,7 +1848,7 @@ class Team:
         voice merely like one of them is someone else, unless it is as alike as a split half of theirs (``SPLIT``)."""
         embedding = _print(embedding)
         present = {person_id for person_id, _, _ in here}
-        found = {c.person_id: c for c in Team._match(embedding, [p for p in prints if p[0] not in present], rejected)}
+        found = {c.person_id: c for c in Team._match(embedding, prints, rejected | present)}
         for person_id, name, vector in here:
             score = round(_cosine(embedding, vector), 3)
             if person_id in rejected or score < SPLIT or (person_id in found and found[person_id].score >= score):
@@ -1875,6 +1987,23 @@ class Team:
         with self.library.read() as db:
             rows = db.execute("SELECT persona_id, person_id, wanted, done FROM personas_sync").fetchall()
         return [(str(r[0]), str(r[1]), int(r[2]), int(r[3])) for r in rows]
+
+    def answer_behind(self, persona_id: str, version: int) -> None:
+        """The twin's change up to ``version`` only adds recordings: until it is rebuilt it may answer from its last
+        build (``persona.gate``). A later change, unchecked, closes it again."""
+        with self.library.transaction() as db:
+            db.execute(
+                "UPDATE personas_sync SET answerable = ? WHERE persona_id = ? AND wanted = ?",
+                (version, persona_id, version),
+            )
+
+    def answering_behind(self) -> set[str]:
+        """The twins answering from their last build while a change that only adds recordings waits."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT persona_id FROM personas_sync WHERE wanted != done AND answerable = wanted"
+            ).fetchall()
+        return {str(r[0]) for r in rows}
 
     def wanted(self, persona_id: str) -> int | None:
         with self.library.read() as db:

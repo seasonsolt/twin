@@ -7,6 +7,7 @@ import {
   Heading,
   Input,
   LinkButton,
+  Notice,
   Skeleton,
   Stack,
   Text,
@@ -26,9 +27,6 @@ export interface LoginMethods {
   team_name?: string | null;
 }
 
-// A server from before the sign-in page asked had only e-mail codes of its own.
-const EMAIL_ONLY: LoginMethods = { sso: null, password: false, email: true };
-
 /** Paths on this site only: never send the browser, or a form, to another origin. */
 const local = (path: string | null | undefined) =>
   path && path.startsWith('/') && !path.startsWith('//') ? path : '';
@@ -41,6 +39,9 @@ async function signedIn() {
 
 export function Login() {
   const [methods, setMethods] = useState<LoginMethods | null>(null);
+  // Without an answer the page cannot know the ways in, so it guesses none: a guess may offer one that cannot work.
+  const [unanswered, setUnanswered] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [waitlisted, setWaitlisted] = useState('');
   const [ownOpen, setOwnOpen] = useState(false);
   const ownId = useId();
@@ -48,20 +49,18 @@ export function Login() {
     let active = true;
     api<LoginMethods>('/api/auth/methods')
       .then((found) => {
-        if (active)
-          setMethods(
-            found && typeof found === 'object' && 'password' in found
-              ? found
-              : EMAIL_ONLY,
-          );
+        if (!active) return;
+        if (found && typeof found === 'object' && 'password' in found)
+          setMethods(found);
+        else setUnanswered(true);
       })
       .catch(() => {
-        if (active) setMethods(EMAIL_ONLY);
+        if (active) setUnanswered(true);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [attempt]);
   const start = local(methods?.sso?.start_url);
   const link = local(methods?.sso?.login_url);
   const sso = Boolean(start || link);
@@ -69,7 +68,26 @@ export function Login() {
     <main className="auth-page bg-background">
       <AuthStage />
       <section aria-label="登录方式" className="auth-panel">
-        {!methods ? (
+        {unanswered ? (
+          <Notice
+            tone="warning"
+            actions={
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setUnanswered(false);
+                  setAttempt((count) => count + 1);
+                }}
+              >
+                重试
+              </Button>
+            }
+          >
+            <Text role="alert" tone="inherit">
+              暂时连不上 twin，可能正在重启，请稍后重试
+            </Text>
+          </Notice>
+        ) : !methods ? (
           <Skeleton className="h-48" />
         ) : waitlisted ? (
           <Stack gap={4}>

@@ -7,6 +7,7 @@ pydantic instance back. Backends:
 - ``OpenAICompatLLM``: any OpenAI-compatible endpoint (vLLM / SGLang private deployments, DeepSeek,
   Qwen DashScope, Kimi, GLM ...). Validates and retries once on schema violations.
 - ``ClaudeCLILLM``: shells out to a logged-in ``claude`` CLI. Local development only.
+- ``FallbackLLM``: a main backend and another that answers while the main one is unavailable.
 - ``FakeLLM``: deterministic handler for tests.
 """
 
@@ -485,6 +486,122 @@ class OpenAICompatLLM:
                     {"role": "user", "content": f"上面的输出不符合 schema：{e}\n请只输出修正后的完整 JSON。"}
                 )
         raise LLMInvalidOutput(f"{self.name}: {last_error}", stop_reason=finish_reason) from last_error
+
+
+def unavailable(error: BaseException) -> bool:
+    """Whether a failed call says the service would not answer at all (unreachable, out of quota, key refused, down)
+    rather than anything about this request or the model's answer to it."""
+    cause: BaseException | None = error
+    while cause is not None:
+        if type(cause).__name__ in {"APIConnectionError", "APITimeoutError"}:
+            return True
+        status = getattr(cause, "status_code", None)
+        if isinstance(status, int):
+            return status in {401, 402, 403, 429} or status >= 500
+        cause = cause.__cause__
+    return False
+
+
+def failure_kind(error: BaseException) -> str:
+    """What a failed call says about why, safe to log (never its message, which can quote the request): its type,
+    and the status code or type of the provider error under it, e.g. ``LLMError(429)``."""
+    cause = error.__cause__
+    while cause is not None:
+        status = getattr(cause, "status_code", None)
+        if isinstance(status, int):
+            return f"{type(error).__name__}({status})"
+        if cause.__cause__ is None:
+            return f"{type(error).__name__}({type(cause).__name__})"
+        cause = cause.__cause__
+    return type(error).__name__
+
+
+class FallbackLLM:
+    """The main backend, and another one (``[llm_fallback]``) that answers while the main one is unavailable
+    (``unavailable``: out of quota, unreachable, key refused). After such a failure the fallback takes every call
+    for ``rest`` seconds, so a spent quota does not cost each call a failed try, then the main one is tried again.
+    A failure of the request itself (invalid output, a refusal, a rejected input) is the caller's, as without one.
+    At most ``concurrent`` calls go to the fallback at once (a number, or read at every call, so a change applies
+    to the next one); the others wait here for a turn."""
+
+    def __init__(
+        self,
+        primary: LLM,
+        fallback: LLM,
+        *,
+        rest: float = 300.0,
+        concurrent: int | Callable[[], int] = 4,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.name = primary.name
+        self.rest = rest
+        self._limit = concurrent if callable(concurrent) else lambda: concurrent
+        self._turn = threading.Condition()
+        self._running = 0
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._resting_until = 0.0
+        if callable(getattr(primary, "stream", None)) and callable(getattr(fallback, "stream", None)):
+            self.stream = self._stream
+
+    def _take_turn(self) -> None:
+        with self._turn:
+            # Woken by a call ending, or each second to see a limit an administrator raised meanwhile.
+            while not self._turn.wait_for(lambda: self._running < max(1, self._limit()), timeout=1.0):
+                pass
+            self._running += 1
+
+    def _end_turn(self) -> None:
+        with self._turn:
+            self._running -= 1
+            self._turn.notify_all()
+
+    def _primary_resting(self) -> bool:
+        with self._lock:
+            return self._clock() < self._resting_until
+
+    def _primary_failed(self) -> None:
+        with self._lock:
+            self._resting_until = self._clock() + self.rest
+
+    def structured(self, *, system: str, user: str, schema: type[T], **options: Any) -> T:
+        if not self._primary_resting():
+            try:
+                return self.primary.structured(system=system, user=user, schema=schema, **options)
+            except LLMError as e:
+                if not unavailable(e):
+                    raise
+                self._primary_failed()
+        self._take_turn()
+        try:
+            return self.fallback.structured(system=system, user=user, schema=schema, **options)
+        finally:
+            self._end_turn()
+
+    async def _stream(self, **options: Any) -> AsyncGenerator[str]:
+        """The main backend's stream, or the fallback's when the main one fails before its first text."""
+        if not self._primary_resting():
+            stream = self.primary.stream(**options)  # type: ignore[attr-defined]
+            started = False
+            try:
+                async for text in stream:
+                    started = True
+                    yield text
+                return
+            except LLMError as e:
+                if started or not unavailable(e):
+                    raise
+                self._primary_failed()
+            finally:
+                await stream.aclose()
+        await asyncio.to_thread(self._take_turn)
+        try:
+            async for text in self.fallback.stream(**options):  # type: ignore[attr-defined]
+                yield text
+        finally:
+            self._end_turn()
 
 
 async def hedged_stream(

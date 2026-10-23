@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -95,10 +96,105 @@ def body(header, files):
                 yield block
 
 
-def transcribe(url, payload, *, hotwords=None, timeout=3600.0, flac=True):
+def address(url):
     parts = urlsplit(url)
     if parts.scheme != "http" or not parts.hostname:
         raise ValueError("转写服务地址无效")
+    return parts
+
+
+def capabilities(url, timeout=30.0):
+    """What the service can do besides transcribing (asr-funasr 1.5+); an older one answers without "denoise"."""
+    parts = address(url)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=timeout)
+    try:
+        try:
+            connection.request("GET", parts.path.rstrip("/") + "/health")
+            health = json.loads(connection.getresponse().read())
+        except (OSError, ValueError):
+            raise ValueError("连不上转写服务，请检查 GPU 机器上的服务和隧道") from None
+    finally:
+        connection.close()
+    return {"ok": True, "version": health.get("version"), "denoise": health.get("denoise") is True}
+
+
+def denoise(url, payload, *, timeout=3600.0):
+    """Have the service denoise ``audio`` for listening and write the FLAC it returns to ``output``."""
+    parts = address(url)
+    output = payload.get("output")
+    if not isinstance(output, str) or not Path(output).is_absolute() or Path(output).suffix != ".flac":
+        raise ValueError("output 必须是 .flac 的绝对路径")
+    header, files = build_request(payload, None)
+    length = len(header) + sum(path.stat().st_size for path in files)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=timeout)
+    try:
+        response = request(connection, parts.path.rstrip("/") + "/denoise", header, files, length)
+        result = results(response)
+        if result.get("ok") is not True:
+            return result
+        size = result.get("audio_bytes")
+        if not isinstance(size, int) or size <= 0:
+            raise ValueError("转写服务返回无效结果")
+        target = Path(output)
+        temporary = target.with_name(f".{target.name}.tmp")
+        with temporary.open("wb") as stream:
+            remaining = size
+            while remaining:
+                block = response.read(min(remaining, 1 << 20))
+                if not block:
+                    temporary.unlink(missing_ok=True)
+                    raise ValueError("转写服务中途断开")
+                stream.write(block)
+                remaining -= len(block)
+        temporary.replace(target)
+        return {key: value for key, value in result.items() if key != "audio_bytes"}
+    finally:
+        connection.close()
+
+
+# Seconds between tries while nothing answers: two minutes in all. A service that restarts (an upgrade, or after the
+# system ended it) answers again once its models are loaded, in half a minute; through the SSH tunnel a connection is
+# accepted meanwhile and closed without a response. A job is only sent again when the service never answered it.
+CONNECT_WAITS = (5.0,) * (int(os.environ.get("TWIN_ASR_CONNECT_SECONDS", "120")) // 5)
+
+
+class Unreachable(ValueError):
+    """The service did not answer the request at all."""
+
+
+def request(connection, path, header, files, length):
+    try:
+        connection.request(
+            "POST",
+            path,
+            body=body(header, files),
+            headers={"Content-Type": "application/octet-stream", "Content-Length": str(length)},
+        )
+        response = connection.getresponse()
+    except OSError:
+        raise Unreachable("连不上转写服务，请检查 GPU 机器上的服务和隧道") from None
+    if response.status != 200:
+        try:
+            error = json.loads(response.read())["error"]
+        except (ValueError, KeyError, TypeError):
+            error = f"HTTP {response.status}"
+        raise ValueError(f"转写服务拒绝请求：{error}")
+    return response
+
+
+def results(response):
+    """Progress lines up to the result, which it returns; the response is left at the bytes after that line."""
+    while raw := response.readline():
+        line = json.loads(raw)
+        if "progress" in line:
+            report(float(line["progress"]))
+        elif "result" in line:
+            return line["result"]
+    raise ValueError("转写服务中途断开")
+
+
+def transcribe(url, payload, *, hotwords=None, timeout=3600.0, flac=True):
+    parts = address(url)
     build_request(payload, hotwords)
     with tempfile.TemporaryDirectory(prefix="twin-asr-") as directory:
         if flac:
@@ -109,31 +205,19 @@ def transcribe(url, payload, *, hotwords=None, timeout=3600.0, flac=True):
 def send(parts, payload, hotwords, timeout):
     header, files = build_request(payload, hotwords)
     length = len(header) + sum(path.stat().st_size for path in files)
+    path = parts.path.rstrip("/") + ("/embed" if payload.get("embed") is True else "/transcribe")
+    for wait in CONNECT_WAITS:
+        try:
+            return post(parts, path, header, files, length, timeout)
+        except Unreachable:
+            time.sleep(wait)
+    return post(parts, path, header, files, length, timeout)
+
+
+def post(parts, path, header, files, length, timeout):
     connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=timeout)
     try:
-        try:
-            connection.request(
-                "POST",
-                parts.path.rstrip("/") + ("/embed" if payload.get("embed") is True else "/transcribe"),
-                body=body(header, files),
-                headers={"Content-Type": "application/octet-stream", "Content-Length": str(length)},
-            )
-            response = connection.getresponse()
-        except OSError:
-            raise ValueError("连不上转写服务，请检查 GPU 机器上的服务和隧道") from None
-        if response.status != 200:
-            try:
-                error = json.loads(response.read())["error"]
-            except (ValueError, KeyError, TypeError):
-                error = f"HTTP {response.status}"
-            raise ValueError(f"转写服务拒绝请求：{error}")
-        for raw in response:
-            line = json.loads(raw)
-            if "progress" in line:
-                report(float(line["progress"]))
-            elif "result" in line:
-                return line["result"]
-        raise ValueError("转写服务中途断开")
+        return results(request(connection, path, header, files, length))
     finally:
         connection.close()
 
@@ -155,13 +239,18 @@ def main():
             request.setdefault("cluster_threshold", args.cluster_threshold)
         if isinstance(request, dict) and args.pipeline is not None:
             request.setdefault("pipeline", args.pipeline)
-        payload = transcribe(
-            args.url,
-            request,
-            hotwords=read_hotwords(args.hotwords),
-            timeout=args.timeout,
-            flac=not args.no_flac,
-        )
+        if isinstance(request, dict) and request.get("capabilities") is True:
+            payload = capabilities(args.url)
+        elif isinstance(request, dict) and request.get("denoise") is True:
+            payload = denoise(args.url, request, timeout=args.timeout)
+        else:
+            payload = transcribe(
+                args.url,
+                request,
+                hotwords=read_hotwords(args.hotwords),
+                timeout=args.timeout,
+                flac=not args.no_flac,
+            )
         if not isinstance(payload, dict) or "ok" not in payload:
             raise ValueError("转写服务返回无效结果")
     except Exception as error:

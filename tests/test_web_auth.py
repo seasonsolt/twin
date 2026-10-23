@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import threading
@@ -16,12 +17,13 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from pydantic import ValidationError
 
 from twin.assets import AssetStore
 from twin.config import AuthSettings, Settings, SMTPSettings, SSOSettings
 from twin.web import create_app
-from twin.web.auth import Auth, digest, normalize_email, send_code
+from twin.web.auth import Auth, digest, normalize_email, photo_url, send_code
 from twin.web.jobs import PersonaProcessing
 
 CSRF = {"X-Twin": "1"}
@@ -502,6 +504,11 @@ class FakeLogin:
             "cookie-b": {"authenticated": True, "subject": "1002", "display_name": "李四", "account": "lisi"},
         }
         self.calls = 0
+        # Set to answer every query with this status, as the app does while it is failing.
+        self.failing: int | None = None
+        # Profile photos the company keeps, by path, and how often each was fetched.
+        self.photos: dict[str, bytes] = {}
+        self.photo_fetches: dict[str, int] = {}
         login = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -509,7 +516,18 @@ class FakeLogin:
                 pass
 
             def do_GET(self) -> None:
+                if self.path in login.photos:
+                    login.photo_fetches[self.path] = login.photo_fetches.get(self.path, 0) + 1
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(login.photos[self.path])))
+                    self.end_headers()
+                    self.wfile.write(login.photos[self.path])
+                    return
                 login.calls += 1
+                if login.failing:
+                    self.send_error(login.failing)
+                    return
                 cookies = SimpleCookie(self.headers.get("Cookie", ""))
                 session = login.sessions.get(cookies["sso"].value) if "sso" in cookies else None
                 body = json.dumps(session or {"detail": "请先登录"}).encode()
@@ -521,7 +539,8 @@ class FakeLogin:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/auth/me"
+        self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.url = f"{self.origin}/api/auth/me"
 
 
 @pytest.fixture
@@ -636,6 +655,108 @@ def test_a_twin_made_for_an_employee_number_is_taken_by_that_sso_account(sso: tu
     assert mine["id"] == persona and mine["mine"] is True and mine["approved"] is False
 
 
+def picture(size: int, color: str) -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (size, size), color).save(output, format="PNG")
+    return output.getvalue()
+
+
+def worn(web: TestClient, persona: str) -> dict[str, Any] | None:
+    """The twin's portrait once it has finished trying the profile photo it was offered."""
+    registry = web.app.state.personas  # type: ignore[attr-defined]
+    if (job := registry.photo_jobs.get(persona)) is not None:
+        job.join(10)
+    portrait: dict[str, Any] | None = AssetStore(registry.settings_for(persona).db_path).profile()["portrait"]
+    return portrait
+
+
+def test_a_taken_twin_wears_the_company_profile_photo(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    login.photos = {"/a.png": picture(640, "navy"), "/b.png": picture(640, "gray"), "/tiny.png": picture(64, "red")}
+    login.sessions["cookie-a"]["avatar_url"] = login.origin + "/a.png"
+    web.cookies.set("sso", "cookie-b")
+    persona = create(web)
+    web.put(f"/api/personas/{persona}/claim", json={"claim": "zhangsan"}, headers=CSRF)
+    assert web.get("/api/personas").json()[0]["avatar_url"] is None
+
+    web.cookies.set("sso", "cookie-a")
+    assert "photo" not in web.get("/api/whoami").json()
+    web.get("/api/personas")
+    assert (worn(web, persona) or {}).get("source") == "sso"
+    [mine] = web.get("/api/personas").json()
+    assert mine["avatar_url"] == f"/api/media/avatar-image?persona={persona}"
+    image = web.get(mine["avatar_url"])
+    assert image.status_code == 200 and Image.open(io.BytesIO(image.content)).getpixel((0, 0)) == (0, 0, 128)
+    web.get("/api/personas")
+    assert login.photo_fetches == {"/a.png": 1}  # signing in again with the same photo fetches nothing
+
+    web.app.state.auth.sso_cache.clear()  # type: ignore[attr-defined]
+    login.sessions["cookie-a"]["avatar_url"] = login.origin + "/b.png"  # a newer company photo replaces it
+    web.get("/api/personas")
+    first = worn(web, persona)
+    assert first is not None and first["source"] == "sso" and login.photo_fetches["/b.png"] == 1
+
+    web.app.state.auth.sso_cache.clear()  # type: ignore[attr-defined]
+    login.sessions["cookie-a"]["avatar_url"] = login.origin + "/tiny.png"  # too small to use: kept as it was
+    web.get("/api/personas")
+    assert worn(web, persona) == first
+
+    own = web.put(
+        "/api/me/portrait",
+        files={"file": ("me.png", picture(800, "green"))},
+        headers={**CSRF, "X-Twin-Persona": persona},
+    )
+    assert own.status_code == 200
+    mine_now = worn(web, persona)
+    web.app.state.auth.sso_cache.clear()  # type: ignore[attr-defined]
+    login.sessions["cookie-a"]["avatar_url"] = login.origin + "/a.png"  # never over the one they uploaded
+    web.get("/api/personas")
+    assert worn(web, persona) == mine_now and "source" not in (mine_now or {})
+
+
+def test_the_company_photo_leaves_alone_a_look_the_person_chose(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    login.photos = {"/a.png": picture(640, "navy"), "/b.png": picture(640, "gray")}
+    login.sessions["cookie-a"]["avatar_url"] = login.origin + "/a.png"
+    web.cookies.set("sso", "cookie-a")
+    picked, removed = create(web), create(web)  # 张三 made both of themselves from meetings (``web.voice``)
+    web.app.state.personas.data["personas"][-2]["member"] = "sso:1001"  # type: ignore[attr-defined]
+    web.app.state.personas.data["personas"][-1]["member"] = "sso:1001"  # type: ignore[attr-defined]
+    chosen = web.put(
+        "/api/identity/avatar-preset", json={"preset": "stone"}, headers={**CSRF, "X-Twin-Persona": picked}
+    )
+    assert chosen.status_code == 200
+    web.get("/api/personas")
+    assert worn(web, picked) is None  # they picked an illustration
+    assert (worn(web, removed) or {}).get("source") == "sso"
+
+    removing = web.delete("/api/me/portrait", headers={**CSRF, "X-Twin-Persona": removed})
+    assert removing.status_code == 200
+    web.app.state.auth.sso_cache.clear()  # type: ignore[attr-defined]
+    login.sessions["cookie-a"]["avatar_url"] = login.origin + "/b.png"
+    web.get("/api/personas")
+    assert worn(web, removed) is None  # they took the photo off: a newer one does not put it back
+    assert login.photo_fetches == {"/a.png": 1}
+
+
+@pytest.mark.parametrize(
+    "value,url",
+    [
+        ("https://wework.qpic.cn/wwhead/abc/0", "https://wework.qpic.cn/wwhead/abc/0"),
+        ("  http://a.example/p.png ", "http://a.example/p.png"),
+        ("file:///etc/passwd", None),
+        ("javascript:alert(1)", None),
+        ("https://", None),
+        ("http://[::1", None),
+        ("https://a.example/" + "x" * 1100, None),
+        (None, None),
+        (42, None),
+    ],
+)
+def test_only_a_web_address_counts_as_a_profile_photo(value: Any, url: str | None) -> None:
+    assert photo_url(value) == url
+
+
 def test_sso_administrators_match_by_account_name(tmp_path: Path) -> None:
     auth = Auth(
         AuthSettings(
@@ -663,13 +784,31 @@ def test_sso_administrators_match_by_account_name(tmp_path: Path) -> None:
     assert AuthSettings().admin_emails == ["zhangxun@xjjk.com", "qianjinwen@xjjk.com"]
 
 
-def test_sso_login_service_down_means_signed_out(sso: tuple[TestClient, FakeLogin]) -> None:
+def test_a_failing_sso_service_signs_nobody_out(sso: tuple[TestClient, FakeLogin]) -> None:
+    web, login = sso
+    web.cookies.set("sso", "cookie-a")
+    login.failing = 502
+    for path in ("/api/whoami", "/api/personas"):
+        response = web.get(path)
+        assert response.status_code == 503 and response.json()["code"] == "sign_in_unavailable"
+    assert web.get("/api/auth/methods").status_code == 200  # the sign-in page still learns its ways
+    login.failing = None  # a failure is not remembered: the next request asks again
+    assert web.get("/api/whoami").json()["email"] == "sso:1001"
+    login.sessions.pop("cookie-a")
+    auth(web).sso_cache.clear()
+    response = web.get("/api/whoami")  # only the service's own "not signed in" signs out
+    assert response.status_code == 401 and response.json()["login_url"] == "/login?next=/twin/"
+
+
+def test_an_unreachable_sso_service_signs_nobody_out(sso: tuple[TestClient, FakeLogin]) -> None:
     web, login = sso
     login.server.shutdown()
     login.server.server_close()
     web.cookies.set("sso", "cookie-a")
     response = web.get("/api/whoami")
-    assert response.status_code == 401 and response.json()["login_url"] == "/login?next=/twin/"
+    assert response.status_code == 503 and response.json()["detail"] == "登录服务暂时不可用，请稍后重试"
+    web.cookies.clear()  # without the other app's cookie there is nobody to ask about
+    assert web.get("/api/whoami").status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -822,6 +961,16 @@ def test_own_accounts_sign_in_beside_sso(both: tuple[TestClient, FakeLogin]) -> 
     web.cookies.set("sso", "cookie-a")  # the company sign-in wins when both are present
     assert web.get("/api/whoami").json()["email"] == "sso:1001"
     assert web.get("/api/persona/state", headers={"X-Twin-Persona": own}).status_code == 404
+
+
+def test_twins_own_account_stays_signed_in_while_sso_fails(both: tuple[TestClient, FakeLogin]) -> None:
+    web, login = both
+    auth(web).add_account("bob", "secret-123")
+    web.cookies.set("sso", "cookie-a")  # a stale cookie of the other app beside twin's own session
+    login.failing = 500
+    assert web.get("/api/whoami").status_code == 503
+    assert password_login(web, "bob", "secret-123").status_code == 200  # signing in needs no answer from it
+    assert web.get("/api/whoami").json()["email"] == "user:bob"
 
 
 def test_an_accounts_email_not_its_name_makes_it_an_administrator(both: tuple[TestClient, FakeLogin]) -> None:

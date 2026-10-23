@@ -165,6 +165,10 @@ def stored_speaker_names(path: Path) -> SpeakerNames:
         return store.speaker_names()
 
 
+# Set once the person picks the twin's illustration themselves (``web.identity``).
+AVATAR_CHOSEN = "identity:avatar_chosen"
+
+
 def stored_avatar(path: Path, configured: str = "chestnut") -> str:
     value = None
     if path.is_file():
@@ -437,6 +441,19 @@ class PersonaStore:
                 "INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"source_pending:{source.source_id}", uuid.uuid4().hex)
             )
         return existed is None
+
+    def holds(self, parsed: ParsedSource) -> bool:
+        """Whether the source is stored as given, with the same expressions (when it was imported aside): storing
+        it again would change nothing but mark it for the next build."""
+        source = parsed.source
+        with self._lock:
+            stored = self.get_source(source.source_id)
+            if stored is None or stored.model_copy(update={"imported_at": source.imported_at}) != source:
+                return False
+            rows = self._db.execute(
+                "SELECT json FROM p_expressions WHERE source_id = ? ORDER BY idx", (source.source_id,)
+            ).fetchall()
+        return [row[0] for row in rows] == [e.model_dump_json() for e in parsed.expressions]
 
     def reattribute_source(self, parsed: ParsedSource) -> None:
         """Store a source again after who is the person in it changed: what was extracted from it and the

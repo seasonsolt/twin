@@ -74,7 +74,7 @@ class Param:
     """One twin.toml value an administrator may change here. It is written into ``settings``' own section object,
     which every twin's copy of the settings shares, and read where it is used, so it applies at once."""
 
-    section: Literal["kernel", "library"]
+    section: Literal["kernel", "library", "llm_fallback"]
     field: str
     label: str
     help: str
@@ -94,6 +94,21 @@ PARAMS: dict[str, Param] = {
         "自动升级上限",
         "需要重新整理的段数超过这个数时不自动升级，等管理员确认；每段调用一次模型。",
         "段",
+    ),
+    "library.auto_build": Param(
+        "library",
+        "auto_build",
+        "自动整理记忆",
+        "录音有变化时自动重新整理相关分身的记忆。大批上传会议时可先关闭，传完再打开，每个分身只整理一次；"
+        "关闭期间只新增了录音的分身照常用已有记忆回答，录音被移走或改了归属的分身要等整理完才能聊。",
+    ),
+    "llm_fallback.max_concurrent": Param(
+        "llm_fallback",
+        "max_concurrent",
+        "备选模型并发数",
+        "主模型不可用、改由备选模型回答时，同时发给备选模型的请求最多这么多，其余排队等候。"
+        "备选服务承载不了时调小，扛得住时调大可以更快。",
+        "路",
     ),
     "library.max_pending": Param(
         "library", "max_pending", "每人排队转写上限", "每位成员同时等待转写的录音最多这么多条。", "条"
@@ -171,14 +186,16 @@ class SystemSettings:
             for name in MODEL_SECTIONS
             if (section := self.section(name)) is not None
         }
-        self._toml_params = {key: getattr(getattr(settings, p.section), p.field) for key, p in PARAMS.items()}
+        # The parameters of sections twin.toml has (``[llm_fallback]`` is optional).
+        self._params = {key: p for key, p in PARAMS.items() if getattr(settings, p.section) is not None}
+        self._toml_params = {key: getattr(getattr(settings, p.section), p.field) for key, p in self._params.items()}
         # Raised on every change of a model or key, so whatever caches a client built from them builds it again.
         self.generation = 0
         # Called with "llm" / "chat_llm" / "embed" / "keys" after a change.
         self.listeners: list[Callable[[str], None]] = []
         for name in MODEL_SECTIONS:
             self._apply(name)
-        for key in PARAMS:
+        for key in self._params:
             self._apply_param(key)
 
     @property
@@ -370,7 +387,7 @@ class SystemSettings:
         return result
 
     def set_param(self, key: str, value: object, by: str | None) -> None:
-        if key not in PARAMS:
+        if key not in self._params:
             raise LookupError("没有这个参数")
         before = getattr(getattr(self.settings, PARAMS[key].section), PARAMS[key].field)
         checked = None if value is None else self._valid(key, value)
@@ -387,7 +404,7 @@ class SystemSettings:
 
     def params_view(self) -> list[dict[str, Any]]:
         found = []
-        for key, param in PARAMS.items():
+        for key, param in self._params.items():
             override = self._param_override(key)
             found.append(
                 {

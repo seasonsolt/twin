@@ -4,9 +4,13 @@ twin 挂在 audio-studio 的域名下，用它的登录；转写和文字向量�
 
 ## 发布
 
-推送 `stable` 分支（`./scripts/release-stable.sh`）触发 `.cnb.yml` 的 `deploy-daw`：检查 → `git archive` 打包 →
+在 cnb 的 `main` 分支页面点“发布到 stable”（可填提交，留空发布 `main` 最新提交）：`deploy/release_stable.py`
+确认该提交在 `main` 上的检查已通过、`stable` 能快进过去，列出发布的提交和记忆内核是否变化，再推送 `stable`。
+推送 `stable` 触发 `.cnb.yml` 的 `deploy-daw`（检查已在 `main` 上跑过，不再重跑）：`git archive` 打包 →
 腾讯云 TAT 分片上传 → 在 daw 上以 root 运行 `deploy/daw/deploy.sh`。脚本先备份数据，再切换 `current`；新版本
-健康检查失败会自动回到上一版。部署备份只保留最近 10 份，更早的在下一次备份时删除；录音库录音和分身的原件、
+健康检查失败会自动回到上一版。最后 `deploy/daw/check_live.py` 读 https://daw.xjjk.com/twin/ 的 `X-Twin-Release`
+响应头（`git archive` 写进 `src/twin/web/RELEASE` 的提交号），不是本次提交就标红，上传中途退出这类“绿了但没切换”
+的情况因此也会显示失败。部署备份只保留最近 10 份，更早的在下一次备份时删除；录音库录音和分身的原件、
 试听片段、声音候选等写完不再改的文件用硬链接，不重复占盘（与线上同盘，不能代替异地备份）。
 
 ## 首次准备（管理员在 daw 上手工做一次，部署不会改动）

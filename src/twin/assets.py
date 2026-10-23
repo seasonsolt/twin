@@ -65,14 +65,20 @@ class AssetStore:
             temporary.unlink(missing_ok=True)
 
     def save(
-        self, kind: Literal["portrait", "voice"], content: bytes, duration_s: float | None = None
+        self,
+        kind: Literal["portrait", "voice"],
+        content: bytes,
+        duration_s: float | None = None,
+        source: str | None = None,
     ) -> dict[str, Any]:
+        """``source``: where a portrait nobody chose came from, such as "sso" for the company profile photo, which a
+        newer one may replace; one the person uploaded or picked has none."""
         self.prepare()
         sha = hashlib.sha256(content).hexdigest()
         name = sha + (".png" if kind == "portrait" else ".wav")
         self.write(self.directory / name, content)
         entry = (
-            {"sha": sha, "file": name}
+            {"sha": sha, "file": name, **({"source": source} if source else {})}
             if kind == "portrait"
             else {"id": "self-" + sha[:16], "file": name, "duration_s": duration_s}
         )

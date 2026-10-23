@@ -418,3 +418,52 @@ def test_naming_waits_for_the_quota(web: TestClient, tmp_path: Path, model: Mode
     web.get("/api/library")
     until(lambda: named(web, library, rec))
     assert model.namings == 1
+
+
+def switch_rebuild(web: TestClient, enabled: bool) -> None:
+    put = web.put("/api/admin/system/params/library.auto_build", json={"value": enabled}, headers=HEADERS)
+    assert put.status_code == 200, put.text
+
+
+def card(web: TestClient, person_id: str) -> dict[str, Any]:
+    return next(p for p in web.get("/api/library/people").json()["items"] if p["id"] == person_id)
+
+
+def test_with_the_automatic_rebuild_off_a_twin_that_only_gains_recordings_keeps_answering(
+    fast_wake: None, web: TestClient, tmp_path: Path, model: Model
+) -> None:
+    library = library_of(tmp_path)
+    first = misheard(library)
+    zhang = confirm(web, first, "S2", new_person="张总")["person_id"]
+    pid = web.post(f"/api/library/people/{zhang}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: idle(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
+
+    # Switched off: a new meeting of 张总 is noted, not built, and the twin answers from what it had meanwhile.
+    switch_rebuild(web, False)
+    second = meeting(library, "2026-03-09 周会.m4a")
+    confirm(web, second, "S2", person_id=zhang)
+    until(lambda: card(web, zhang)["held"])
+    assert card(web, zhang)["updating"] and card(web, zhang)["answers_behind"]
+    assert open_twin(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"]
+    assert wanted_done(library, pid)[0] != wanted_done(library, pid)[1]
+
+    # Speech taken away from what it was built from: it stops answering until rebuilt.
+    detail = web.get(f"/api/library/recordings/{first}").json()
+    body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "reject"}
+    body["person_id"] = zhang
+    assert web.put(f"/api/library/recordings/{first}/speakers/S2", json=body, headers=HEADERS).status_code == 200
+    until(lambda: not card(web, zhang)["answers_behind"])
+    assert not open_twin(web, pid) and card(web, zhang)["held"]
+
+    # Rebuilt by hand while still switched off.
+    assert web.post(f"/api/library/people/{zhang}/rebuild", headers=HEADERS).status_code == 202
+    until(lambda: idle(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
+    assert not card(web, zhang)["held"]
+
+    # Switched on again: what waited is built by itself.
+    confirm(web, first, "S2", person_id=zhang)
+    until(lambda: card(web, zhang)["held"])
+    switch_rebuild(web, True)
+    # The build becomes idle before its completion is recorded in the library sync ledger.
+    until(lambda: idle(web, pid) and len(own_words(tmp_path, pid)) == 2 and not card(web, zhang)["updating"])
+    assert not card(web, zhang)["held"] and not card(web, zhang)["updating"]

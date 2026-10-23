@@ -9,27 +9,27 @@ export const presets = {
   chestnut: {
     name: '栗',
     Art: Chestnut,
-    colors: ['#F3C4A2', '#4A2E26', '#24364F', '#D5E0EE', '#1F5FBF'],
+    colors: ['#E6B897', '#3A2A24', '#2B323C', '#CBD2DB', '#34435A'],
   },
   wave: {
     name: '澜',
     Art: Wave,
-    colors: ['#F6C8A4', '#3B2A24', '#3A4250', '#DCE3EA', '#4A6F9C'],
+    colors: ['#EBC0A0', '#34261F', '#3B4452', '#D3D9E0', '#2E3541'],
   },
   bun: {
     name: '禾',
     Art: Bun,
-    colors: ['#EDB48C', '#2C2320', '#6B7A8F', '#E1E5EA', '#56657A'],
+    colors: ['#E3AE8A', '#241D1B', '#5A6573', '#DCDFE4', '#4A5461'],
   },
   stone: {
     name: '石',
     Art: Stone,
-    colors: ['#D6976E', '#2A2522', '#2F3A48', '#D3DCE6', '#8C2F39'],
+    colors: ['#B9805B', '#1F1B19', '#26303D', '#CED5DE', '#5E2A33'],
   },
   silver: {
     name: '岚',
     Art: Silver,
-    colors: ['#F5CDB2', '#D9DBE0', '#3D4F6B', '#CDD5E1', '#2F3F57'],
+    colors: ['#EEC6AC', '#BCC0C7', '#33435C', '#CDD4DE', '#27354A'],
   },
 };
 export type PresetId = keyof typeof presets;

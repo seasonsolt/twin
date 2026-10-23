@@ -49,20 +49,20 @@ export function Mouth({
             className="mouth"
             cx="110"
             cy={y}
-            rx={10 + level}
-            ry={[0, 3, 6, 10][level]}
+            rx={7 + level}
+            ry={[0, 2, 4, 6.5][level]}
             fill={color}
           />
           {level === 3 && (
             <>
               <path
-                d={`M103 ${y - 5} Q110 ${y - 2} 117 ${y - 5}`}
+                d={`M105 ${y - 3.5} Q110 ${y - 1.5} 115 ${y - 3.5}`}
                 fill="none"
-                stroke="#FFF8EE"
-                strokeWidth="3"
+                stroke="#F4EFE8"
+                strokeWidth="2"
                 strokeLinecap="round"
               />
-              <ellipse cx="110" cy={y + 5} rx="5" ry="2" fill="#E8826B" />
+              <ellipse cx="110" cy={y + 3.5} rx="3.5" ry="1.4" fill="#C9776A" />
             </>
           )}
         </>

@@ -48,6 +48,8 @@ from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
 
 STATIC_DIR = Path(__file__).with_name("static")
+# `git archive` writes the commit into this file (export-subst in .gitattributes); a checkout keeps the placeholder.
+RELEASE_FILE = Path(__file__).with_name("RELEASE")
 # StaticFiles takes content types from the platform's mimetypes table, which on Windows comes from the registry and can
 # map .js to text/plain; with nosniff the browser then refuses to run the page's module scripts.
 mimetypes.add_type("text/javascript", ".js")
@@ -93,6 +95,13 @@ _PLACEHOLDER_PAGE = """<!doctype html>
 <p>接口仍然可用，例如 <a href="/api/status">/api/status</a>。</p>
 </body></html>
 """
+
+
+def release_commit() -> str | None:
+    """The commit a `git archive` release was built from; None when running from a checkout."""
+    text = RELEASE_FILE.read_text().strip() if RELEASE_FILE.is_file() else ""
+    return text if len(text) == 40 and all(char in "0123456789abcdef" for char in text) else None
+
 
 # ---------------------------------------------------------------- security
 
@@ -581,6 +590,7 @@ def create_app(
             persona.read_uploads,
             on_built=lambda version: libraries.built(persona_id, version),
             on_spent=lambda tokens: libraries.spent_building(persona_id, tokens),
+            on_unbuilt=lambda limited: libraries.unbuilt(persona_id, limited),
             index=ConversationIndex(team, persona_id),
             desk=desk,
             after_build=team_refresh,
@@ -654,11 +664,15 @@ def create_app(
     def next_redirect(request: Request) -> RedirectResponse:
         return RedirectResponse(forwarded_prefix(request) + "/", status_code=308)
 
+    # daw's deploy job reads it to tell whether the release it just shipped is the one running.
+    release = release_commit()
+    release_headers = {"X-Twin-Release": release} if release else None
+
     @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     def frontend_page() -> Response:
         index = STATIC_DIR / "index.html"
         if index.is_file():
-            return FileResponse(index, media_type="text/html")
+            return FileResponse(index, media_type="text/html", headers=release_headers)
         return HTMLResponse(_PLACEHOLDER_PAGE)
 
     if (STATIC_DIR / "assets").is_dir():

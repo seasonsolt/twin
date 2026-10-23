@@ -19,6 +19,7 @@ import {
   type ClipControls,
 } from '../../components/ui';
 import type { Person } from '../../pages/Recording';
+import { useHeard } from '../../stores/listening';
 import { recordingPath } from '../library/review';
 import { PersonClip } from '../library/PersonClip';
 import { NameField, clipSrc, heardIn, voiceFacts } from './VoiceRows';
@@ -70,6 +71,7 @@ export function InboxFocus({
   const clip = useRef<ClipControls>(null);
   const field = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const hear = useHeard();
   const known = useMemo(() => people.filter((p) => !p.auto), [people]);
   const { facts, title } = voiceFacts(item ?? EMPTY);
   const members = item ? heardIn(item) : [];
@@ -172,7 +174,7 @@ export function InboxFocus({
               controls={clip}
               size="lg"
               label="播放这个声音"
-              src={clipSrc(current)}
+              src={hear(clipSrc(current))}
             />
           )}
           <Stack gap={1} grow>
@@ -273,7 +275,12 @@ export function InboxFocus({
                     onSelect: () =>
                       void navigate(
                         recordingPath(current.recording_id, current.speaker_id),
-                        { state: { inboxTask: item.id } },
+                        {
+                          state: {
+                            inboxTask: item.id,
+                            voiceRecordings: item.recordings,
+                          },
+                        },
                       ),
                   },
                 ]

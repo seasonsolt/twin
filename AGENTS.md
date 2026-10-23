@@ -28,7 +28,7 @@
 
 ## 打磨记忆内核与发布
 
-- 同事运行 `stable` 分支；内核在 `main` 上迭代，确认后运行 `./scripts/release-stable.sh` 发布（检查通过后只快进 `stable`）。
+- 同事运行 `stable` 分支；内核在 `main` 上迭代，确认后在 cnb 的 `main` 分支页面点“发布到 stable”（`.cnb/web_trigger.yml`）：只发布 `main` 检查已通过的提交，只快进 `stable`，日志里列出发布的提交和记忆内核是否变化；推送 `stable` 后自动部署 daw，daw 没切换到新版本时部署流水线标红。生产发布每次先问用户。
 - 修改抽取/合并提示词、输出结构（`persona/profile.py`）或维度分类（`persona/dimensions.py`）时，必须同时提升 `persona/kernel.py` 的 `PROMPT_VERSION` / `TAXONOMY_VERSION` 并记录新指纹，否则 `tests/test_kernel.py` 失败；不提升版本，同事已有的记忆不会按新内核重新整理。细项编号有增删、拆分或改号时，还要在 `persona/kernel.py` 的 `TAXONOMY_FACET_IDS` 加上新版本，并在 `TAXONOMY_MIGRATIONS` 写明每个旧编号的去向，否则 `tests/test_taxonomy_upgrade.py` 失败。打开数据库时按声明迁移已有条目和审核记录，不调用模型，档案和聊天不中断；重新整理时只补抽拆出和新增的细项、只重合并定义变了的细项，拆出的细项继承审核记录。直接删掉的细项会连审核记录一起删除，内容挪到别处时要写明去向。
 - 修改录音库自动归属（`media/team.py` 的 `Team.classify` 阈值、分档、样本策略）时提升 `media/collector.py` 的 `ATTRIBUTION_VERSION`，修改片段复核规则（`media/review.py` 的判定和自动排除）时提升 `CLEANUP_VERSION`：启动时按新规则重判旧规则做出的自动决定，结果不变的只改版本、不关闭分身；人做的决定不受影响。转写包换版本或流程后，录音库只标出可以重新转写的录音，由用户决定。
 - 数据库结构变化只能在 `persona/store.py` 的 `_MIGRATIONS` 末尾追加；迁移和新内核整理前会自动快照，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。

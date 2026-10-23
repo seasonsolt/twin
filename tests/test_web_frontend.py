@@ -201,3 +201,16 @@ def test_assets_do_not_follow_symlinks_outside_static(tmp_path: Path, monkeypatc
     response = client.get("/assets/escape.js")
     assert response.status_code == 404 and response.json() == {"detail": "找不到请求的资源"}
     assert_security(response)
+
+
+def test_page_names_the_release_only_in_an_archived_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    release = tmp_path / "RELEASE"
+    monkeypatch.setattr(web_app, "RELEASE_FILE", release)
+    release.write_text("$Format:%H$\n")  # a checkout: git archive did not fill it in
+    checkout = TestClient(create_app(Settings(db_path=tmp_path / "a.db")), base_url="http://127.0.0.1")
+    assert "x-twin-release" not in checkout.get("/").headers
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    release.write_text(commit + "\n")
+    archived = TestClient(create_app(Settings(db_path=tmp_path / "b.db")), base_url="http://127.0.0.1")
+    assert archived.get("/").headers["x-twin-release"] == commit
+    assert archived.head("/").headers["x-twin-release"] == commit

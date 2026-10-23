@@ -13,7 +13,7 @@ from ..egress import egress_status
 from ..identity import Identity
 from ..media.schema import AVATAR_ALIASES, AVATAR_CHOICES, AVATAR_PRESETS
 from ..persona.sources import parse_note
-from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..persona.store import AVATAR_CHOSEN, PersonaStore, stored_avatar, stored_identity
 from ..persona.transcripts import settle
 
 
@@ -64,6 +64,8 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
             raise HTTPException(400, f"形象仅支持预置：{'、'.join(AVATAR_PRESETS)}")
         with PersonaStore(settings.db_path) as store:
             store.set_meta("identity:avatar_preset", preset)
+            # The person chose how the twin looks: the company profile photo no longer replaces it.
+            store.set_meta(AVATAR_CHOSEN, "1")
         return get_identity(request)
 
     @app.post("/api/identity/onboarding-complete")

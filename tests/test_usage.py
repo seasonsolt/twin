@@ -22,10 +22,12 @@ from twin.evals.schema import FailurePolicy, PairingPolicy, Purpose, Report, Sce
 from twin.llm import AnthropicLLM, ClaudeCLILLM, FakeLLM, LLMInvalidOutput, LLMRefusal, OpenAICompatLLM
 from twin.usage import (
     BudgetExceeded,
+    CallRow,
     Price,
     UsageRecorder,
     call_stage,
     canonical_endpoint,
+    rate_limited,
     record_usage,
     request,
     tracked,
@@ -583,3 +585,15 @@ def test_activity_tracks_calls_in_flight_retries_and_progress() -> None:
         started = threading.Barrier(1)
         Backend().call()
     assert activity.snapshot()["waiting"] == 0 and activity.snapshot()["retries"] == 0
+
+
+def test_only_calls_turned_away_with_429_are_rate_limited() -> None:
+    def row(success: bool, **transient: int) -> CallRow:
+        return CallRow("build", "openai", "m", "https://x", success=success, transient=dict(transient))
+
+    limited = row(False, **{"429": 3})
+    assert rate_limited([row(True), limited, limited])
+    assert not rate_limited([row(True), row(True, **{"429": 1})])  # nothing failed
+    assert not rate_limited([limited, row(False, **{"5xx": 3})])  # a failure waiting may not cure
+    assert not rate_limited([limited, row(False)])
+    assert not rate_limited([])

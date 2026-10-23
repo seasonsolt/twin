@@ -23,6 +23,7 @@ export const settingsSections = [
 ];
 const backendNames: Record<string, string> = {
   llm: '大模型',
+  llm_fallback: '备选大模型',
   embed: '向量',
   tts: '朗读',
   asr: '语音识别',

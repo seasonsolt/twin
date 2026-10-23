@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .config import Settings, make_embedder, make_llm
+from .config import Settings, make_embedder, make_llm, with_fallback
 from .embed import Embedder
 from .llm import LLM
 from .persona.chat import PersonaChat
@@ -60,10 +60,11 @@ class ServiceBackend:
                 return answer_question(self.chat_factory(), question, as_of)
             with self._lock:
                 if self._llm is None or self._embedder is None:
-                    llm = (
+                    llm = with_fallback(
                         make_llm(self.settings.chat_llm, "chat_llm")
                         if self.settings.chat_llm is not None
-                        else make_llm(self.settings.llm)
+                        else make_llm(self.settings.llm),
+                        self.settings,
                     )
                     embedder = make_embedder(self.settings.embed)
                     self._llm, self._embedder = llm, embedder

@@ -78,8 +78,13 @@ def playback(library: Library, recording_id: str) -> None:
 
 @pytest.fixture(autouse=True)
 def no_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The playback copy is decoded by ffmpeg in production; here it already is the wav the service hears."""
-    monkeypatch.setattr(recollect, "decode", lambda source, target: target.write_bytes(source.read_bytes()))
+    """The playback copy is a FLAC measured by ffprobe in production; here it is a wav under that name."""
+
+    def seconds(path: Path) -> float:
+        with wave.open(str(path), "rb") as wav:
+            return wav.getnframes() / wav.getframerate()
+
+    monkeypatch.setattr(recollect, "flac_seconds", seconds)
 
 
 def decided_library(tmp_path: Path) -> tuple[Library, Team, str, str, str]:

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 import re
+from concurrent.futures import ThreadPoolExecutor
 from itertools import groupby
 
 import numpy as np
@@ -179,7 +180,10 @@ class FireRed:
     """FireRedASR2-AED from its model directory (fireredasr2s package); `__call__` returns raw lower-cased text."""
 
     def __init__(self, root, device):
+        import logging
+
         import torch
+        from firered_decode import inference_dtype, install_greedy_decoder
         from fireredasr2s.fireredasr2.asr import load_fireredasr_aed_model
         from fireredasr2s.fireredasr2.data.asr_feat import ASRFeatExtractor
         from fireredasr2s.fireredasr2.tokenizer.aed_tokenizer import ChineseCharEnglishSpmTokenizer
@@ -187,8 +191,11 @@ class FireRed:
         self.torch, self.device = torch, device
         self.features = ASRFeatExtractor(str(root / "cmvn.ark"))
         self.tokenizer = ChineseCharEnglishSpmTokenizer(str(root / "dict.txt"), str(root / "train_bpe1000.model"))
-        self.model = load_fireredasr_aed_model(str(root / "model.pth.tar")).eval().to(device)
+        self.dtype = inference_dtype(torch, device)
+        self.model = load_fireredasr_aed_model(str(root / "model.pth.tar")).eval().to(device=device, dtype=self.dtype)
         cache_cross_attention(self.model.decoder)
+        install_greedy_decoder(self.model.decoder)
+        logging.getLogger(__name__).info("FireRed AED: %s, incremental beam-1 decoding with SDPA", self.dtype)
 
     def __call__(self, clips):
         ids = [str(k) for k in range(len(clips))]
@@ -199,7 +206,7 @@ class FireRed:
         if feats is not None:
             with self.torch.no_grad():
                 hyps = self.model.transcribe(
-                    feats.to(self.device),
+                    feats.to(device=self.device, dtype=self.dtype),
                     lengths.to(self.device),
                     beam_size=BEAM,
                     nbest=1,
@@ -269,10 +276,13 @@ class Overlap:
         self.firered = FireRed(paths["firered"], device)
 
     def recognize(self, clips, hotwords):
+        return self.finish(clips, self.firered(clips), hotwords)
+
+    def finish(self, clips, raw, hotwords):
+        """Punctuate FireRed's text of `clips`; what looks like a decoding loop goes to Paraformer instead."""
         engine = self.engine
         texts = [
-            str(engine.punc.generate(input=text, disable_pbar=True)[0]["text"]).strip() if text else ""
-            for text in self.firered(clips)
+            str(engine.punc.generate(input=text, disable_pbar=True)[0]["text"]).strip() if text else "" for text in raw
         ]
         redo = [k for k, clip in enumerate(clips) if degenerate(texts[k], len(clip) / SAMPLE_RATE)]
         if redo:
@@ -302,7 +312,7 @@ class Overlap:
                     windows.append(wav[t * 160 : min(int(r[-1]) + 1, t + 150) * 160])
                     t += 75
             if windows:
-                claims[x] = unit(engine.embed_all(windows, lambda _: None).mean(axis=0))
+                claims[x] = unit(engine.embed_all(windows, lambda _: None, singles_on_gpu=True).mean(axis=0))
         return separated, claims
 
     def assign(self, wav, regions, separated, progress):
@@ -344,13 +354,27 @@ class Overlap:
         order = sorted(speakers, key=lambda x: -totals[x])
         names = {x: f"S{i + 1}" for i, x in enumerate(order)}
         segments = []
-        for i in range(0, len(pieces), ASR_BATCH):
-            part = pieces[i : i + ASR_BATCH]
-            for (b, e, x, _), text in zip(part, self.recognize([p[3] for p in part], hotwords), strict=True):
+
+        def keep(i, part, texts):
+            for (b, e, x, _), text in zip(part, texts, strict=True):
                 if text:
                     speaker = {"speaker": names[x]} if diarize else {}
                     segments.append({"start": round(b, 2), "end": round(e, 2), "text": text, **speaker})
             progress(0.6 + 0.4 * (i + len(part)) / len(pieces))
+
+        # FireRed takes the batches in order while the previous batch is punctuated (and its loops retried) on a
+        # thread of its own: the same batches and the same calls as one after another, the GPU no longer waiting.
+        with ThreadPoolExecutor(1) as finishing:
+            behind = None
+            for i in range(0, len(pieces), ASR_BATCH):
+                part = pieces[i : i + ASR_BATCH]
+                clips = [p[3] for p in part]
+                raw = self.firered(clips)
+                if behind is not None:
+                    keep(*behind[:2], behind[2].result())
+                behind = (i, part, finishing.submit(self.finish, clips, raw, hotwords))
+            if behind is not None:
+                keep(*behind[:2], behind[2].result())
         segments.sort(key=lambda s: (s["start"], s.get("speaker", "")))
         result = {"ok": True, "segments": segments}
         if diarize:

@@ -24,6 +24,7 @@ from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -66,6 +67,16 @@ def work_address(value: str | None) -> str | None:
         return normalize_email(value) if value else None
     except HTTPException:
         return None
+
+
+def photo_url(value: Any) -> str | None:
+    """The web address of a profile photo the company sign-in gives, or None when it gives none that twin can fetch."""
+    url = str(value or "").strip()
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    return url if len(url) <= 1024 and parts.scheme in {"http", "https"} and parts.hostname else None
 
 
 def digest(value: str) -> str:
@@ -125,6 +136,11 @@ class PasswordBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(max_length=64)
     password: str = Field(max_length=256)
+
+
+class SignInUnavailable(Exception):
+    """The app that owns single sign-on could not say whose cookie this is: it timed out, was down or answered with
+    an error. That says nothing about the person, so they are not signed out for it."""
 
 
 class Auth:
@@ -194,30 +210,40 @@ class Auth:
         *aliases: str | None,
         address: str | None = None,
         account: str | None = None,
+        photo: str | None = None,
     ) -> dict[str, Any]:
         """``aliases``: other names the login service gives the same person (an SSO account name or address),
         compared with the administrators. ``address``: the person's work e-mail, by which a twin an administrator
         made for them becomes theirs (``email`` is the account's key, which for SSO is not an address); ``account``: the
-        name the company sign-in gives them, such as the employee number 77845, which does the same."""
+        name the company sign-in gives them, such as the employee number 77845, which does the same; ``photo``: the
+        address of their company profile photo, which the twins they take wear (``Personas.offer_photo``)."""
         return {
             "email": email,
             "name": name,
             "address": address,
             "account": account,
+            "photo": photo,
             "admin": not self.settings.enabled or self.is_admin(email, *aliases),
             "auth_enabled": self.settings.enabled,
             "provider": self.settings.provider if self.settings.enabled else None,
         }
 
     def resolve(self, cookies: Mapping[str, str]) -> dict[str, Any] | None:
+        """Raises SignInUnavailable when only the single sign-on could tell who this is and it cannot answer now."""
         if self.sso:
-            identity = self.sso_session(cookies.get(self.settings.sso.cookie))
+            try:
+                identity = self.sso_session(cookies.get(self.settings.sso.cookie))
+            except SignInUnavailable:
+                if self.passwords and (own := self.session(cookies.get(COOKIE))):
+                    return own
+                raise
             if identity or not self.passwords:
                 return identity
         return self.session(cookies.get(COOKIE))
 
     def sso_session(self, token: str | None) -> dict[str, Any] | None:
-        """Ask the app that owns the login who this cookie belongs to; remember the answer briefly."""
+        """Ask the app that owns the login who this cookie belongs to; remember the answer briefly. Only its 401 or
+        403 means signed out: when it cannot answer, SignInUnavailable, and nothing is remembered."""
         if not token or len(token) > 4096:
             return None
         key, now = digest(token), time.monotonic()
@@ -235,18 +261,24 @@ class Auth:
         except urllib.error.HTTPError as error:
             if error.code not in (401, 403):
                 logger.warning("SSO 身份查询失败：HTTP %s", error.code)
-                return None
+                raise SignInUnavailable from error
             payload = {}
         except (OSError, ValueError) as error:
             logger.warning("SSO 身份查询失败：%s", type(error).__name__)
-            return None
+            raise SignInUnavailable from error
         subject = str(payload.get("subject") or "").strip() if isinstance(payload, dict) else ""
         identity = None
         if subject and payload.get("authenticated") is not False:
             name = str(payload.get("display_name") or payload.get("account") or "").strip() or None
             account, address = (str(payload.get(k) or "").strip() or None for k in ("account", "email"))
             identity = self.identity(
-                f"sso:{subject}", name, account, address, address=work_address(address), account=account
+                f"sso:{subject}",
+                name,
+                account,
+                address,
+                address=work_address(address),
+                account=account,
+                photo=photo_url(payload.get("avatar_url")),
             )
             if subject not in self.sso_seen:
                 self.sso_seen.add(subject)
@@ -515,7 +547,9 @@ class Auth:
         @app.get("/api/whoami")
         def whoami(request: Request) -> Response:
             identity = request.scope.get("twin_identity")
-            return JSONResponse({**identity, **self.extra()}) if identity else login_required(self.login_url())
+            if not identity:
+                return login_required(self.login_url())
+            return JSONResponse({**{k: v for k, v in identity.items() if k != "photo"}, **self.extra()})
 
         @app.get("/api/admin/waitlist")
         def waitlist(request: Request) -> list[dict[str, Any]]:
@@ -555,6 +589,10 @@ def login_required(login_url: str | None = None) -> JSONResponse:
     return JSONResponse(body, status_code=401)
 
 
+def sign_in_unavailable() -> JSONResponse:
+    return JSONResponse({"detail": "登录服务暂时不可用，请稍后重试", "code": "sign_in_unavailable"}, status_code=503)
+
+
 class AuthMiddleware:
     def __init__(self, app: ASGIApp, auth: Auth) -> None:
         self.app, self.auth = app, auth
@@ -567,7 +605,14 @@ class AuthMiddleware:
         # SQLite is small; use a worker so concurrent requests don't block the event loop.
         from starlette.concurrency import run_in_threadpool
 
-        identity = await run_in_threadpool(self.auth.resolve, request.cookies)
+        try:
+            identity = await run_in_threadpool(self.auth.resolve, request.cookies)
+        except SignInUnavailable:
+            # The sign-in page still learns its ways and can sign in with twin's own account; the rest waits.
+            if not request.url.path.startswith("/api/auth/"):
+                await sign_in_unavailable()(scope, receive, send)
+                return
+            identity = None
         scope["twin_identity"] = identity
         if not identity and not request.url.path.startswith("/api/auth/") and request.url.path != "/api/whoami":
             await login_required(self.auth.login_url())(scope, receive, send)

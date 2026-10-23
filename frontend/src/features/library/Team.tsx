@@ -354,27 +354,66 @@ type TeamEntry = { key: string; name: string; state: TwinState } & (
   { person: Person } | { twin: Persona }
 );
 
-/** Where a person's twin stands, as the team table's filter and status column name it. */
-type TwinState = 'ready' | 'updating' | 'none' | 'own' | 'elsewhere';
+/** Why a twin's memory update stopped without completing, or null while it goes on or is done. */
+const stalledBuild = (person: Person) =>
+  person.updating && !person.held && person.build?.state === 'idle'
+    ? (person.build.last_error ?? null)
+    : null;
+
+/** When a stopped update is tried again by itself, as a local clock time. */
+const retryClock = (at: string) =>
+  new Date(at).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+/** Where a person's twin stands, as the team table's filter and status column name it. ``behind``: new recordings
+ * wait while it answers from the memory it has; ``held``: the administrator switched the automatic rebuild off;
+ * ``stalled``: its update stopped without completing. */
+type TwinState =
+  | 'ready'
+  | 'behind'
+  | 'updating'
+  | 'held'
+  | 'stalled'
+  | 'none'
+  | 'own'
+  | 'elsewhere';
 const twinState = (person: Person): TwinState =>
   person.self_claimed
     ? 'own'
     : person.twin_elsewhere && !person.talk
       ? 'elsewhere'
       : person.persona_id || person.talk
-        ? person.updating
-          ? 'updating'
-          : 'ready'
+        ? stalledBuild(person)
+          ? 'stalled'
+          : person.answers_behind
+            ? 'behind'
+            : person.held
+              ? 'held'
+              : person.updating
+                ? 'updating'
+                : 'ready'
         : 'none';
 const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
   ready: { label: '可以聊', tone: 'success' },
+  behind: { label: '有新录音', tone: 'neutral' },
   updating: { label: '整理中', tone: 'warning' },
+  held: { label: '整理已暂停', tone: 'warning' },
+  stalled: { label: '更新没完成', tone: 'danger' },
   none: { label: '没有分身', tone: 'neutral' },
   own: { label: '本人已认领', tone: 'success' },
   elsewhere: { label: '同事建了分身', tone: 'neutral' },
 };
-// The filters over the table; the two kinds managed elsewhere show under 全部 only.
-const TWIN_FILTERS: TwinState[] = ['ready', 'updating', 'none'];
+// The filters over the table (each only while someone is in it); the two kinds managed elsewhere show under 全部.
+const TWIN_FILTERS: TwinState[] = [
+  'ready',
+  'behind',
+  'updating',
+  'held',
+  'stalled',
+  'none',
+];
 
 /** A meeting's day as the table's 最近 column says it: 10月15日. */
 const meetingDay = (date: string) => {
@@ -405,6 +444,7 @@ function personRow({
   onAddress,
   onRemove,
   onVoice,
+  onRebuild,
 }: {
   person: Person;
   twin?: Persona;
@@ -418,6 +458,8 @@ function personRow({
   onRemove: () => void;
   /** Their voice samples, and what voice alone gave them, to spot-check. */
   onVoice: () => void;
+  /** Build their twin again now: its update stopped, or the switched-off automatic rebuild holds it. */
+  onRebuild: () => void;
 }): ReactNode[] {
   const state = twinState(person);
   const lacking =
@@ -454,8 +496,18 @@ function personRow({
     <Stack key="twin" gap={1}>
       <Row gap={2}>
         <StatusDot tone={TWIN_STATES[state].tone} />
-        <Text size="sm">{TWIN_STATES[state].label}</Text>
+        <Text
+          size="sm"
+          title={state === 'stalled' ? (stalledBuild(person) ?? '') : undefined}
+        >
+          {TWIN_STATES[state].label}
+        </Text>
       </Row>
+      {state === 'stalled' && person.build?.retry_at && (
+        <Text size="sm" tone="secondary">
+          约 {retryClock(person.build.retry_at)} 自动重试
+        </Text>
+      )}
       {state === 'updating' && (
         // The twin can talk once its memory is updated: where the update is, under the word.
         <div aria-live="polite">
@@ -476,13 +528,23 @@ function personRow({
     </Stack>,
     <Recent key="recent" person={person} />,
     <Row key="act" gap={1} justify="end">
-      {state === 'ready' ? (
+      {state === 'ready' || state === 'behind' ? (
         <Button
           size="sm"
           variant="secondary"
           onClick={() => onOpen((person.persona_id ?? person.talk)!)}
         >
           聊天
+        </Button>
+      ) : (state === 'held' || state === 'stalled') &&
+        person.can_manage !== false ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={busy}
+          onClick={onRebuild}
+        >
+          {state === 'held' ? '立即整理' : '重试'}
         </Button>
       ) : state === 'none' && person.can_manage !== false ? (
         <Button
@@ -502,6 +564,10 @@ function personRow({
         <ActionMenu
           label={`${person.name}的更多操作`}
           items={[
+            // Waiting for the switched-off automatic rebuild, though it answers meanwhile.
+            ...(state === 'behind' && person.held
+              ? [{ label: '立即整理', disabled: busy, onSelect: onRebuild }]
+              : []),
             { label: '编辑名字和性别', disabled: busy, onSelect: onEdit },
             { label: '声线和抽查', disabled: busy, onSelect: onVoice },
             ...(person.persona_id && twin?.claimed === false
@@ -645,6 +711,7 @@ function Roster({
     act,
     load,
     saveClaim,
+    rebuild,
   } = useTeamData({ version, onReload });
   const [hearing, setHearing] = useState<Person | null>(null);
   const [search, setSearch] = useState('');
@@ -764,7 +831,12 @@ function Roster({
   const arriving = recordings.filter(
     (r) => r.status === 'queued' || r.status === 'transcribing',
   );
-  const organising = people?.filter((p) => p.updating) ?? [];
+  // Twins catching up with the recordings, held while the automatic rebuild is switched off, or whose update
+  // stopped without completing.
+  const updatingTwins = people?.filter((p) => p.updating) ?? [];
+  const organising = updatingTwins.filter((p) => !stalledBuild(p) && !p.held);
+  const paused = updatingTwins.filter((p) => p.held);
+  const unfinished = updatingTwins.filter((p) => stalledBuild(p));
   const twinOf = (person: Person) =>
     twins.find((t) => t.id === person.persona_id);
   const toAddress = named?.filter((p) => unaddressed(p, twinOf(p))) ?? [];
@@ -786,7 +858,10 @@ function Roster({
       { replace: true },
     );
   const pending =
-    arriving.length + organising.length + proofreading.length + uploads.length;
+    arriving.length +
+    updatingTwins.length +
+    proofreading.length +
+    uploads.length;
 
   const peopleTab = (
     <Stack gap={5}>
@@ -852,6 +927,7 @@ function Roster({
                   onAddress: () => setAddressing(entry.person),
                   onRemove: () => void remove(entry.person),
                   onVoice: () => setHearing(entry.person),
+                  onRebuild: () => void rebuild(entry.person),
                 })
               : twinRow({
                   twin: entry.twin,
@@ -879,8 +955,12 @@ function Roster({
           {[
             organising.length > 0 &&
               `${organising.map((p) => p.name).join('、')} · 整理记忆中，完成后可以聊`,
-            pending > organising.length &&
-              `${pending - organising.length} 项录音正在处理`,
+            paused.length > 0 &&
+              `${paused.map((p) => p.name).join('、')} · 记忆整理已暂停`,
+            unfinished.length > 0 &&
+              `${unfinished.map((p) => p.name).join('、')} · 记忆更新没完成`,
+            pending > updatingTwins.length &&
+              `${pending - updatingTwins.length} 项录音正在处理`,
           ]
             .filter(Boolean)
             .join(' · ')}

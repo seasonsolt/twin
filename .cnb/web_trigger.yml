@@ -1,0 +1,15 @@
+# The release gate: one click on the main branch page fast-forwards stable, whose push deploys to daw
+# (web_trigger_release in .cnb.yml runs deploy/release_stable.py).
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 发布到 stable
+        description: 发布 main 到 stable 并部署 daw
+        event: web_trigger_release
+        inputs:
+          RELEASE_COMMIT:
+            name: 提交
+            description: 只能发布 main 上检查已通过的提交；留空发布 main 的最新提交
+            placeholder: 留空 = main 的最新提交
+            type: input
+            required: false

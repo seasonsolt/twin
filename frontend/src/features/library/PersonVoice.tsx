@@ -14,6 +14,7 @@ import {
 } from '../../components/ui';
 import { api } from '../../lib/api';
 import { withBase } from '../../lib/base';
+import { useHeard } from '../../stores/listening';
 import type { Person } from '../../pages/Recording';
 
 /** A speaker given to the person by voice alone (``Team.checks``), least sure first. */
@@ -95,6 +96,7 @@ export function PersonVoice({
   const [error, setError] = useState('');
   const [shown, setShown] = useState(CHECKS_PER_PAGE);
   const confirm = useConfirm();
+  const hear = useHeard();
   const base = person
     ? `/api/library/people/${encodeURIComponent(person.id)}`
     : '';
@@ -212,7 +214,7 @@ export function PersonVoice({
                       <ClipButton
                         size="md"
                         label={`听这段（${check.filename}）`}
-                        src={clip(check.recording_id, check.speaker_id)}
+                        src={hear(clip(check.recording_id, check.speaker_id))}
                       />
                     }
                     title={
@@ -294,7 +296,7 @@ export function PersonVoice({
                       <ClipButton
                         size="md"
                         label={`听这段声线（${sample.filename}）`}
-                        src={clip(sample.recording_id, sample.speaker_id)}
+                        src={hear(clip(sample.recording_id, sample.speaker_id))}
                       />
                     }
                     title={

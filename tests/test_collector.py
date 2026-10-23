@@ -29,6 +29,11 @@ def test_the_deepest_changed_layer_is_collected_again() -> None:
     # Another service, or one that did not say which it was, transcribes again.
     assert recollect_scope(CollectorVersion("1.4.1/classic", "attribution-v2", "cleanup-v1"), now) == "asr"
     assert recollect_scope(CollectorVersion(None, "attribution-v2", "cleanup-v1"), now) == "asr"
+    # A service that only computes more cheaply collects like the one before it, either way round.
+    later = CollectorVersion("1.5.4/overlap", "attribution-v2", "cleanup-v1")
+    assert recollect_scope(now, later) == "none" and recollect_scope(later, now) == "none"
+    assert recollect_scope(CollectorVersion("1.4.1/classic", "attribution-v2", "cleanup-v1"), later) == "asr"
+    assert recollect_scope(CollectorVersion("1.4.0/overlap", "attribution-v2", "cleanup-v1"), later) == "asr"
     # With the current service unknown, nothing says a transcript is stale.
     assert recollect_scope(now, CollectorVersion(None, "attribution-v2", "cleanup-v1")) == "none"
     assert asr_version("1.4.1", "overlap") == "1.4.1/overlap" and asr_version("1.4.1", None) == "1.4.1"

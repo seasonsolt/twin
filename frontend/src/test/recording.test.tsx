@@ -8,6 +8,7 @@ import {
   type Speaker,
   type Person,
 } from '../pages/Recording';
+import { useListening } from '../stores/listening';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -36,11 +37,15 @@ const segments = [
 let speakers: Speaker[];
 let revision: number;
 let fail: boolean;
+let denoised: boolean;
 let requests: Record<string, unknown>[];
 beforeEach(() => {
   revision = 1;
   fail = false;
+  denoised = false;
   requests = [];
+  localStorage.clear();
+  useListening.setState({ original: false });
   speakers = ['S1', 'S2'].map((id) => ({
     id,
     seconds: 300,
@@ -74,6 +79,7 @@ beforeEach(() => {
           revision,
           speakers,
           segments,
+          denoised,
         });
       if (init?.method === 'PUT') {
         const body = JSON.parse(String(init.body));
@@ -124,6 +130,8 @@ it('shows one current speaker and one player; clips change audio and matching tr
   expect(document.querySelectorAll('audio')).toHaveLength(1);
   const audio = screen.getByLabelText('S1 试听');
   expect(audio).toHaveAttribute('src', expect.stringContaining('/samples/0'));
+  // Nothing to switch between until the recording has a denoised copy.
+  expect(screen.queryByRole('button', { name: '原声' })).toBeNull();
   expect(within(current).getByText('再看计划。')).toBeInTheDocument();
   const second = within(current).getByRole('button', {
     name: '片段 2 · 00:26',
@@ -141,6 +149,24 @@ it('shows one current speaker and one player; clips change audio and matching tr
     within(current).getByRole('button', { name: /林舟.*声音像 71%/u }),
   );
   expect(screen.getByRole('button', { name: '确认是林舟' })).toBeEnabled();
+});
+
+it('plays the denoised copy by default and the original once asked, remembered by this browser', async () => {
+  denoised = true;
+  show();
+  const audio = await screen.findByLabelText('S1 试听');
+  expect(audio.getAttribute('src')).toMatch(/\/samples\/0$/u);
+  const original = screen.getByRole('button', { name: '原声' });
+  expect(original).toHaveAttribute('aria-pressed', 'false');
+  await userEvent.click(original);
+  expect(original).toHaveAttribute('aria-pressed', 'true');
+  expect(audio.getAttribute('src')).toMatch(/\/samples\/0\?original=true$/u);
+  expect(localStorage.getItem('twin:listen-original')).toBe('1');
+  await userEvent.click(screen.getByRole('button', { name: '片段 2 · 00:26' }));
+  expect(audio.getAttribute('src')).toMatch(/\/samples\/1\?original=true$/u);
+  await userEvent.click(original);
+  expect(audio.getAttribute('src')).toMatch(/\/samples\/1$/u);
+  expect(localStorage.getItem('twin:listen-original')).toBeNull();
 });
 
 it('confirms, focuses the next speaker, reopens a previous one, then shows the all-done state', async () => {

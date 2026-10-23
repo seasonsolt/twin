@@ -1105,3 +1105,77 @@ it('asks whoever keeps a twin made by hand whether it is the person of the same 
     expect(answers).toEqual([{ persona_id: 'p-own', same: true }]),
   );
 });
+
+it('says where a twin whose update waits stands, and builds it again from its row', async () => {
+  const build = {
+    state: 'idle',
+    step: '',
+    done: 0,
+    total: 0,
+    last_error: '模型限流，整理中断',
+    retry_at: '2026-10-23T03:30:00Z',
+  } as unknown as NonNullable<Person['build']>;
+  people = [
+    person({
+      id: 'per_1',
+      name: '张总',
+      persona_id: 'p-1',
+      updating: true,
+      build,
+    }),
+    person({
+      id: 'per_2',
+      name: '李总',
+      persona_id: 'p-2',
+      updating: true,
+      held: true,
+    }),
+    person({
+      id: 'per_3',
+      name: '王总',
+      persona_id: 'p-3',
+      updating: true,
+      answers_behind: true,
+      held: true,
+    }),
+  ];
+  const rebuilt: string[] = [];
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const path = String(url);
+    if (path === '/api/library/review') return json(emptyReview);
+    if (path.endsWith('/rebuild')) {
+      rebuilt.push(path);
+      return json({ ok: true });
+    }
+    return base(url, init);
+  });
+  const user = userEvent.setup();
+  render(teamView());
+  const row = async (name: string) =>
+    (await screen.findByRole('link', { name: `${name}的成员页` })).closest(
+      'tr',
+    )!;
+  // The update stopped: why on hover, when it is tried again by itself, and 重试 now.
+  const stalled = await row('张总');
+  expect(within(stalled).getByText('更新没完成')).toHaveAttribute(
+    'title',
+    '模型限流，整理中断',
+  );
+  expect(within(stalled).getByText(/自动重试$/u)).toBeInTheDocument();
+  // Held by the switched-off automatic rebuild: 立即整理.
+  const held = await row('李总');
+  expect(within(held).getByText('整理已暂停')).toBeInTheDocument();
+  await user.click(within(held).getByRole('button', { name: '立即整理' }));
+  // New recordings wait while it answers from what it has: it can be talked to, and built now from “⋯”.
+  const behind = await row('王总');
+  expect(within(behind).getByText('有新录音')).toBeInTheDocument();
+  expect(within(behind).getByRole('button', { name: '聊天' })).toBeEnabled();
+  await user.click(within(stalled).getByRole('button', { name: '重试' }));
+  await waitFor(() =>
+    expect(rebuilt).toEqual([
+      '/api/library/people/per_2/rebuild',
+      '/api/library/people/per_1/rebuild',
+    ]),
+  );
+});

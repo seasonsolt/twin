@@ -106,6 +106,17 @@ api_key_env = "TWIN_LLM_KEY"
 # extra_body = { thinking = { type = "disabled" } }
 # hedge_after_s = 2.5 # 配置 [chat_llm] 时使用这里的值；流式请求不使用 JSON mode
 
+# 可选备选模型：[llm] / [chat_llm] 的服务不可用（额度用尽 429、连不上、密钥被拒、5xx）时由它回答，
+# 之后 5 分钟内直接用备选，再试主模型。输出无效、请求被拒等不切换。只用于网页和 API，命令行评测不用。
+# [llm_fallback]
+# provider = "openai_compat"
+# model = "glm-5.3"
+# base_url = "https://example.com/v1"
+# api_key_env = "TWIN_LLM_FALLBACK_KEY"
+# json_mode = "json_object"
+# extra_body = { thinking = { type = "disabled" } }
+# max_concurrent = 4  # 同时发给备选模型的请求数，超出的排队；也可在系统设置里随时调整
+
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。
 # 本机转发代理应设置 egress = "external"。

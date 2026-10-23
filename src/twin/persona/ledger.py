@@ -46,6 +46,7 @@ STATUS_LABELS: dict[LedgerStatus, str] = {
     "not_done": "未完成",
     "reopened": "重新打开",
     "unknown": "未知",
+    "pending_accept": "待你接受",
 }
 _KINDS = {label: kind for kind, label in KIND_LABELS.items()}
 _STATUSES = {label: status for status, label in STATUS_LABELS.items()}
@@ -431,7 +432,12 @@ def brief(ledger: list[LedgerEntry], person: str, as_of: dt.date) -> Brief:
     live = [e for e in ledger if e.review is not ReviewStatus.REJECTED]
     by_id = {e.entry_id: e for e in live}
     status = {e.entry_id: current_status(e, live) for e in live}
-    latest = [e for e in latest_of_threads(live) if e.kind == "commitment" and status[e.entry_id] != "confirmed_done"]
+    # A promise someone asked the person for in a conversation is not one until they take it.
+    latest = [
+        e
+        for e in latest_of_threads(live)
+        if e.kind == "commitment" and status[e.entry_id] not in ("confirmed_done", "pending_accept")
+    ]
 
     def urgency(e: LedgerEntry) -> tuple[int, dt.date]:
         return (0 if e.due and e.due < as_of else 1 if e.due else 2, e.due or dt.date.max)

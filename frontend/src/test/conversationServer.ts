@@ -47,6 +47,7 @@ export function conversationServer() {
           .map((row) => ({
             ...row,
             preview: row.turns.at(-1)?.content || '',
+            owner_replied: row.turns.at(-1)?.role === 'self',
             turns: row.turns.length,
           })),
       );

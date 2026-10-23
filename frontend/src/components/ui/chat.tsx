@@ -31,7 +31,8 @@ export function ChatMessage({
   last = false,
   ...props
 }: ComponentProps<'article'> & {
-  speaker: 'user' | 'twin';
+  /** self: the person's own words in an answer to a question the twin handed them. */
+  speaker: 'user' | 'twin' | 'self';
   last?: boolean;
 }) {
   return (

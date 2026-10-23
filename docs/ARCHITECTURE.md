@@ -41,7 +41,7 @@ flowchart TB
 | L1 | 4 | `persona.sources` `persona.questionnaire` `persona.quotes` |
 | L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） `persona.transcripts`（转写稿认领本人） `persona.office`（Word/Excel 交付） |
 | L3 | 6 | `persona.chat` |
-| L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` `persona.work`（工作模式：Deep Agents 干活、交付文件） |
+| L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` `handoffs`（转交：回答里要本人定的部分、本人回复写回提问人的会话） `persona.work`（工作模式：Deep Agents 干活、交付文件） |
 | 评测 | 8 | `evals.*` `media.check` |
 | L5 | 9 | `cli` `web.*` `channels.wecom` `frontend/` `api` `mcp_server` |
 
@@ -123,7 +123,7 @@ flowchart LR
 - 管理员管理全部；成员默认最多建 3 个，认领别人建的分身不占名额。对话记录按登录的人隔离，管理员也看不到成员的对话。
 - 本人没点“没问题”之前，认领来的分身先显示认领页，可试聊，同事问不到它；点“这不是我”退回建它的人（`claim_rejected`）。
 - 每个分身一个目录（`personas/p-<id>/`，0700）；删除先进回收站，7 天内可恢复。
-- 一个人的记忆留在他自己的分身库；连起两个人的、属于团队的，放团队库 `data/team/team.db`（`teamdb`）：现在是会话索引（谁问了哪个分身、按哪一档记忆答，会话正文仍在分身库），以后是转交、团队答案等。团队库不复制记忆内容，索引可以从各分身库重建（`twin team reconcile` / `reindex`）。
+- 一个人的记忆留在他自己的分身库；连起两个人的、属于团队的，放团队库 `data/team/team.db`（`teamdb`）：现在是会话索引（谁问了哪个分身、按哪一档记忆答，会话正文仍在分身库）和转交（分身的回答里要本人决定、答应、评价的部分，每个提问人、每段会话一条，本人的回复三步写回提问人的会话、只写一次），以后是团队答案等。团队库不复制记忆内容，索引可以从各分身库重建（`twin team reconcile` / `reindex`）。
 - 两档记忆：每条条目属于“同事能用”或“只有本人能用”（`persona.tiers`，默认按细项，本人逐条改）。会话建立时定下按哪一档答：认领了分身并点过“没问题”的本人是本人档，管理员、建分身的人、访客、没认领时的任何人都是同事档；检索、核心画像和推测的依据都在检索前按档过滤，管理者聊天和查看记忆也按同事档。
 - 切换分身不重载页面：先预取新分身的资料和头像，再一次性切换；旧分身的播放和生成随之停止。
 - 真人视频只用该分身自己的照片和声音，不会回退到别人的素材。

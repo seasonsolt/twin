@@ -84,6 +84,16 @@ const pages: {
       ),
   },
   {
+    // What the twin left to its person, and the person's own reply under it, marked as theirs.
+    name: 'chat-handoff',
+    path: '/#/chat',
+    ready: '方案周五前给你。大文件导入先不放这次。',
+    setup: (page) =>
+      page.addInitScript(() =>
+        localStorage.setItem('twin.current.conversation', 'c-handoff'),
+      ),
+  },
+  {
     // A colleague talking to someone else's public twin: a line under the box says its person reads the answers.
     name: 'chat-colleague',
     path: '/#/chat',
@@ -171,11 +181,11 @@ const pages: {
     path: '/#/team/u-linzhou?section=memories',
     ready: '发布流程笔记.md',
   },
-  // 第 10 屏, step one: the questions the twin could not answer, for the person themselves.
+  // 第 10 屏: what the twin left to the person, the answers it guessed, for the person themselves.
   {
     name: 'member-away',
     path: '/#/team/u-linzhou?section=away',
-    ready: '你怎么看远程办公？',
+    ready: '分身推测 2',
   },
   {
     name: 'member-assets',

@@ -51,6 +51,8 @@ export interface Session {
   updated_at: string;
   /** What was last said, searched together with the title. */
   preview?: string;
+  /** A short mark after the title, such as 本人已回. */
+  tag?: string;
   /** A task still being worked on: it says so instead of a time, and cannot be deleted yet. */
   running?: boolean;
 }
@@ -333,6 +335,11 @@ export function SessionList({
                                   >
                                     <span className="history-title">
                                       {row.title}
+                                      {row.tag && (
+                                        <span className="history-kind">
+                                          {row.tag}
+                                        </span>
+                                      )}
                                       {row.kind === 'task' && (
                                         <span className="history-kind">
                                           {row.running ? '任务 · 在做' : '任务'}

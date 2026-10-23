@@ -23,6 +23,7 @@ import {
   useConfirm,
   type Tone,
 } from '../components/ui';
+import { AWAY_CHANGED } from '../features/away/useAway';
 import { JobProgress } from '../features/jobs/JobProgress';
 import { useJob } from '../features/jobs/useJob';
 import type {
@@ -44,6 +45,7 @@ const statusTones: Record<LedgerStatus, Tone> = {
   not_done: 'danger',
   reopened: 'danger',
   unknown: 'neutral',
+  pending_accept: 'warning',
 };
 const reviewLabels = {
   confirmed: '已确认',
@@ -134,6 +136,7 @@ function EntryCard({
   entry,
   onReview,
   onEdit,
+  onTake,
 }: {
   entry: LedgerEntry;
   onReview?: (
@@ -141,8 +144,12 @@ function EntryCard({
     action: 'confirm' | 'reject' | 'reset',
   ) => void;
   onEdit?: (entry: LedgerEntry) => void;
+  /** Take on or turn down a promise someone asked for in a conversation. */
+  onTake?: (entry: LedgerEntry, action: 'accept' | 'decline') => void;
 }) {
   const rejected = entry.review === 'rejected';
+  const asked =
+    !!onTake && entry.current_status === 'pending_accept' && !rejected;
   return (
     <Card className={cn('space-y-3', rejected && 'opacity-60')}>
       <article
@@ -170,7 +177,21 @@ function EntryCard({
         </p>
         <Facts entry={entry} />
         <Quote entry={entry} />
-        {(onReview || onEdit) && (
+        {asked && (
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => onTake(entry, 'accept')}>
+              接下
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onTake(entry, 'decline')}
+            >
+              不接
+            </Button>
+          </div>
+        )}
+        {!asked && (onReview || onEdit) && (
           <div className="flex flex-wrap gap-2">
             {onReview && entry.review === 'unreviewed' && (
               <Button size="sm" onClick={() => onReview(entry, 'confirm')}>
@@ -382,6 +403,7 @@ function Entries({
   data,
   onReview,
   onEdit,
+  onTake,
 }: {
   data: LedgerData;
   onReview: (
@@ -389,6 +411,7 @@ function Entries({
     action: 'confirm' | 'reject' | 'reset',
   ) => void;
   onEdit: (entry: LedgerEntry) => void;
+  onTake: (entry: LedgerEntry, action: 'accept' | 'decline') => void;
 }) {
   const [kind, setKind] = useState('');
   const [person, setPerson] = useState('');
@@ -467,6 +490,7 @@ function Entries({
               entry={entry}
               onReview={onReview}
               onEdit={onEdit}
+              onTake={onTake}
             />
           ))}
         </section>
@@ -642,6 +666,22 @@ export function Ledger() {
       toast(failure instanceof Error ? failure.message : '操作失败', 'danger'),
     );
   };
+  const onTake = (entry: LedgerEntry, action: 'accept' | 'decline') => {
+    void api(
+      `/api/persona/ledger/${encodeURIComponent(entry.entry_id)}/${action}`,
+      { method: 'POST', json: {} },
+    )
+      .then(async () => {
+        await load();
+        window.dispatchEvent(new Event(AWAY_CHANGED));
+      })
+      .catch((failure: unknown) =>
+        toast(
+          failure instanceof Error ? failure.message : '操作失败',
+          'danger',
+        ),
+      );
+  };
   const rebuild = async () => {
     const ok = await confirm({
       title: '重新整理全部会议',
@@ -710,6 +750,7 @@ export function Ledger() {
                     data={data}
                     onReview={onReview}
                     onEdit={setEditing}
+                    onTake={onTake}
                   />
                 ),
               },

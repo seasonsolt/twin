@@ -26,7 +26,7 @@ export const useManagesCurrent = () =>
 
 /** Whether a twin is its viewer's own: the one they took on signing in (made for them, or found by their voice). On
  * a machine without sign-in there is one person, and the first twin is theirs. Only they answer for it when it can
- * not (``features/followups``); an administrator looking after it is not it. */
+ * not (``features/away``); an administrator looking after it is not it. */
 export const isSelf = (twin: Persona | undefined, signInOff: boolean) =>
   !!twin && (!!twin.mine || (signInOff && twin.is_default));
 

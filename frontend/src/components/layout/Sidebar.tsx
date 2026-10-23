@@ -30,10 +30,7 @@ import { useTeam, useTeamName } from '../../stores/team';
 import { api } from '../../lib/api';
 import { twinMemberPath } from '../../lib/members';
 import { usePolling } from '../../lib/usePolling';
-import {
-  FOLLOWUPS_CHANGED,
-  type FollowupList,
-} from '../../features/followups/useFollowups';
+import { AWAY_CHANGED } from '../../features/away/useAway';
 import { useUploads } from '../../features/library/useUploads';
 import { memberCount, waitingCount } from '../../features/library/teamCounts';
 import { FindPerson } from './FindPerson';
@@ -257,7 +254,8 @@ export function Sidebar() {
   );
 }
 
-/** How many questions wait for the person in their own twin's 你不在时 (none for someone without such a twin). */
+/** How many handoffs wait for the person's decision in their own twin's 你不在时 (none for someone without such a
+ * twin). */
 function useWaiting(twinId: string | undefined) {
   const [count, setCount] = useState(0);
   const load = useCallback(async () => {
@@ -266,12 +264,11 @@ function useWaiting(twinId: string | undefined) {
       return;
     }
     try {
-      const list = await api<FollowupList>('/api/persona/followups', {
-        headers: { 'X-Twin-Persona': twinId },
-      });
-      setCount(
-        (list.items ?? []).filter((item) => item.status === 'pending').length,
+      const { pending } = await api<{ pending: number }>(
+        '/api/persona/handoffs/count',
+        { headers: { 'X-Twin-Persona': twinId } },
       );
+      setCount(pending);
     } catch {
       // A count that cannot be had is no count: the account stays as it is.
     }
@@ -279,8 +276,8 @@ function useWaiting(twinId: string | undefined) {
   useEffect(() => {
     void load();
     const changed = () => void load();
-    window.addEventListener(FOLLOWUPS_CHANGED, changed);
-    return () => window.removeEventListener(FOLLOWUPS_CHANGED, changed);
+    window.addEventListener(AWAY_CHANGED, changed);
+    return () => window.removeEventListener(AWAY_CHANGED, changed);
   }, [load]);
   usePolling(load, twinId ? 60000 : 0);
   return twinId ? count : 0;

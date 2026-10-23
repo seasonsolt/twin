@@ -141,6 +141,10 @@
   padding: var(--spacing-3) var(--spacing-4);
   background: var(--canvas);
 }
+.chat-message[data-speaker='self'] {
+  padding-left: var(--spacing-3);
+  border-left: 2px solid var(--info);
+}
 .chat-message .message-text {
   font-size: var(--text-lg);
   line-height: 1.75;

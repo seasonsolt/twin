@@ -267,8 +267,9 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
         </ChatSurface>
         <ChatSurface variant="panel">
           <ChatMessage speaker="user">下周怎么安排？</ChatMessage>
-          <ChatMessage speaker="twin" last>
-            先确认团队的时间。
+          <ChatMessage speaker="twin">先确认团队的时间。</ChatMessage>
+          <ChatMessage speaker="self" last>
+            周五前给你方案。
           </ChatMessage>
         </ChatSurface>
         <ChatSurface variant="composer">

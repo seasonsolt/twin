@@ -6,8 +6,15 @@ import {
 import { loadEssential, peekEssential } from '../../lib/personaPrefetch';
 import { api, ApiError } from '../../lib/api';
 import { getPersonaId, personaKey } from '../../lib/persona';
+import { usePolling } from '../../lib/usePolling';
 import { readSSE } from '../../lib/sse';
-import { spoken, type ChatReply, type Turn } from './types';
+import {
+  spoken,
+  waiting,
+  withHandoffs,
+  type ChatReply,
+  type Turn,
+} from './types';
 
 export const CHAT_KEY = 'twin.next.chat';
 export const CURRENT_CHAT_KEY = 'twin.current.conversation';
@@ -17,6 +24,8 @@ export interface ConversationSummary {
   updated_at: string;
   turns: number;
   preview: string;
+  /** The last word is the person's own reply to what the twin handed them. */
+  owner_replied?: boolean;
 }
 interface Conversation {
   id: string;
@@ -338,6 +347,7 @@ export function useConversation(active: boolean) {
         } else if (event === 'final') {
           twin.reply = data as ChatReply;
           twin.content = twin.reply.reply;
+          twin.handoff = twin.reply.handoff;
           finished = true;
           setTurns([...pending, { ...twin }]);
           setNewest(twin.id);
@@ -367,6 +377,24 @@ export function useConversation(active: boolean) {
       if (!controller.signal.aborted && mounted.current) setBusy(false);
     }
   };
+  // What an answer left to the person is theirs to settle, when they can: until then the conversation is asked again
+  // for where it stands, and for their reply, which then appears under the answer.
+  const waitingFor = conversationId && !busy && turns.some(waiting);
+  const follow = useCallback(async () => {
+    const current = id.current;
+    if (!current || !mounted.current || personaId !== getPersonaId()) return;
+    try {
+      const conversation = await api<Conversation>(
+        `/api/conversations/${encodeURIComponent(current)}`,
+        { headers: headers() },
+      );
+      if (id.current === current && mounted.current)
+        setTurns((now) => withHandoffs(now, conversation.turns));
+    } catch {
+      // The next look will do.
+    }
+  }, [headers, personaId, setTurns]);
+  usePolling(follow, waitingFor ? 20000 : 0);
   const clear = () => {
     request.current?.abort();
     request.current = null;

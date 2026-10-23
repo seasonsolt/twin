@@ -134,6 +134,7 @@ export function Chat() {
           title: row.title,
           updated_at: row.updated_at,
           preview: row.preview,
+          tag: row.owner_replied ? '本人已回' : undefined,
         })),
         ...(workOn ? (work.tasks ?? []) : []).map((row): Session => ({
           kind: 'task',

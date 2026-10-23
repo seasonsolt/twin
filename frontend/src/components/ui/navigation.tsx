@@ -416,7 +416,7 @@ export function AccountMenu({
             alert
               ? `账户（${alert}）`
               : count > 0
-                ? `账户（${count} 条待回答）`
+                ? `账户（${count} 条待决定）`
                 : '账户'
           }
           className={cn(

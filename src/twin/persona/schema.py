@@ -119,6 +119,12 @@ def _chat_mode_defaults(data: object) -> object:
     return data
 
 
+# What in one answer the person themself has to settle: a decision, a promise, a judgement of a named colleague, or
+# something only they can answer that the profile does not hold. "none" when the answer leaves nothing to them.
+OwnerPart = Literal["none", "decide", "commit", "evaluate", "missing"]
+OWNER_PARTS: tuple[str, ...] = ("decide", "commit", "evaluate", "missing")
+
+
 class ChatDraft(BaseModel):
     asked: str = Field(default="", description="对方最后一句话要的那一项具体信息或结论，一句话，如“兑换优惠券的商店名”")
     reply: str = Field(description="以本人身份、第一人称、他平时的说话方式写的回复")
@@ -134,6 +140,17 @@ class ChatDraft(BaseModel):
         default=True,
         description="reply 是否给出了 asked 所要的那一项；只讲了相关背景、近似信息，或在说明没有这条记录时为 false",
     )
+    owner_part: OwnerPart = Field(
+        default="none",
+        description="这一句里有没有要本人自己定的部分（混合请求也算，能答的部分照常答）：decide 要本人决定或选择、"
+        "commit 要本人答应做某件事、evaluate 要本人评价某个具体的人、missing 只有本人才答得了而资料里没有；没有填 none",
+    )
+    owner_ask: str = Field(default="", description="owner_part 不是 none 时：要本人定的那一件事，一句话")
+    commit_what: str = Field(
+        default="",
+        description="owner_part 为 commit 时：对方要本人答应的事，直接写事情本身，如“周五前给沈从一版发布方案”",
+    )
+    commit_due: str = Field(default="", description="owner_part 为 commit 时：对方要的截止日期 YYYY-MM-DD；没说留空")
 
     @model_validator(mode="before")
     @classmethod
@@ -168,6 +185,12 @@ class ChatReply(BaseModel):
     quotes_removed: int = 0
     # False when the model sent no valid metadata, so nothing about the reply's grounding could be checked.
     verified: bool = True
+    # What in this answer is left to the person themself (``OwnerPart``); only set where there is a person to hand it
+    # to, so a handoff is made for exactly the replies that carry one.
+    owner_part: OwnerPart = "none"
+    owner_ask: str = ""
+    commit_what: str = ""
+    commit_due: dt.date | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -191,7 +214,12 @@ class ReviewStatus(StrEnum):
 
 
 LedgerKind = Literal["decision", "commitment", "objection", "progress"]
-LedgerStatus = Literal["open", "claimed_done", "evidenced", "confirmed_done", "not_done", "reopened", "unknown"]
+LedgerStatus = Literal[
+    "open", "claimed_done", "evidenced", "confirmed_done", "not_done", "reopened", "unknown", "pending_accept"
+]
+# Where an entry was read from: a meeting's recording or transcript, or a conversation in which someone asked the
+# twin for a promise only the person can make (it waits as ``pending_accept`` until they take it).
+LedgerOrigin = Literal["meeting", "conversation"]
 
 
 class LedgerEntry(BaseModel):
@@ -227,3 +255,6 @@ class LedgerEntry(BaseModel):
     extractor: str
     created_at: str
     updated_at: str
+    # Entries written before conversations were a source read as meeting entries (these defaults), unchanged.
+    origin: LedgerOrigin = "meeting"
+    handoff_id: str | None = None

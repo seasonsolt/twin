@@ -6,7 +6,8 @@ export type LedgerStatus =
   | 'confirmed_done'
   | 'not_done'
   | 'reopened'
-  | 'unknown';
+  | 'unknown'
+  | 'pending_accept';
 export type LedgerReview = 'unreviewed' | 'confirmed' | 'edited' | 'rejected';
 
 export interface LedgerEntry {
@@ -35,6 +36,9 @@ export interface LedgerEntry {
   version: number;
   thread: string;
   confirmation_message: string | null;
+  /** Read from a meeting, or asked of the person in a conversation (waiting as 待你接受 until they take it). */
+  origin?: 'meeting' | 'conversation';
+  handoff_id?: string | null;
 }
 
 export interface LedgerData {

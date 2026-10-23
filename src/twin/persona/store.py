@@ -12,7 +12,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1257,12 +1257,22 @@ class PersonaStore:
             rows = self._db.execute(
                 "SELECT c.id, c.title, c.updated_at, "
                 "(SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = c.id), "
-                "(SELECT content FROM conversation_turns WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1) "
+                "(SELECT content FROM conversation_turns WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1), "
+                "(SELECT role FROM conversation_turns WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1) "
                 "FROM conversations c WHERE owner IS ? ORDER BY updated_at DESC, id DESC LIMIT 50 OFFSET ?",
                 (owner, offset),
             ).fetchall()
+        # ``owner_replied``: the last word in it is the person's own reply to a handoff.
         return [
-            {"id": r[0], "title": r[1], "updated_at": r[2], "turns": r[3], "preview": (r[4] or "")[:120]} for r in rows
+            {
+                "id": r[0],
+                "title": r[1],
+                "updated_at": r[2],
+                "turns": r[3],
+                "preview": (r[4] or "")[:120],
+                "owner_replied": r[5] == "self",
+            }
+            for r in rows
         ]
 
     def get_conversation(self, conversation_id: str, owner: str | None) -> dict[str, Any]:
@@ -1306,6 +1316,104 @@ class PersonaStore:
         with self._lock:
             rows = self._db.execute("SELECT id, owner, title, updated_at FROM conversations ORDER BY id").fetchall()
         return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def conversation_turn(self, conversation_id: str, seq: int) -> dict[str, Any] | None:
+        """One turn of a conversation (``role``, ``content``, ``reply``, ``at``); None when there is none."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT role, content, reply_json, created_at FROM conversation_turns "
+                "WHERE conversation_id = ? AND seq = ?",
+                (conversation_id, seq),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"role": row[0], "content": row[1], "reply": json.loads(row[2]) if row[2] else None, "at": row[3]}
+
+    def previous_user_turn(self, conversation_id: str, before: int) -> str:
+        """What the asker said before the question a twin's turn ``before`` answers; empty when it was the first."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT content FROM conversation_turns WHERE conversation_id = ? AND seq < ? AND role = 'user' "
+                "ORDER BY seq DESC LIMIT 1 OFFSET 1",
+                (conversation_id, before),
+            ).fetchone()
+        return "" if row is None else str(row[0])
+
+    def question_before(self, conversation_id: str, seq: int) -> str:
+        """The asker's turn a twin's turn ``seq`` answers."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT content FROM conversation_turns WHERE conversation_id = ? AND seq < ? AND role = 'user' "
+                "ORDER BY seq DESC LIMIT 1",
+                (conversation_id, seq),
+            ).fetchone()
+        return "" if row is None else str(row[0])
+
+    def last_turn_seq(self, conversation_id: str, role: str | None = None) -> int | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT MAX(seq) FROM conversation_turns WHERE conversation_id = ?" + (" AND role = ?" if role else ""),
+                (conversation_id, role) if role else (conversation_id,),
+            ).fetchone()
+        return None if row is None or row[0] is None else int(row[0])
+
+    def handoff_turn(self, conversation_id: str, handoff_id: str) -> int | None:
+        """Where the person's reply to a handoff stands in the conversation; None when it is not there."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT seq FROM conversation_turns WHERE conversation_id = ? AND handoff_id = ?",
+                (conversation_id, handoff_id),
+            ).fetchone()
+        return None if row is None else int(row[0])
+
+    def owner_replies(self, conversation_id: str, asker: str | None) -> list[str]:
+        """What the person answered themself in the conversation of ``asker`` (their ``self`` turns), oldest first;
+        none in a conversation that is not that asker's."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT t.content FROM conversation_turns t JOIN conversations c ON c.id = t.conversation_id "
+                "WHERE t.conversation_id = ? AND c.owner IS ? AND t.role = 'self' ORDER BY t.seq",
+                (conversation_id, asker),
+            ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def twin_replies(
+        self, conversation_ids: Sequence[str], since: str, *, limit: int = 500
+    ) -> list[tuple[str, int, str, dict[str, Any], str, str]]:
+        """``(conversation, seq, content, reply, asked at, question)`` of the twin's turns written since ``since``
+        in these conversations, newest first; ``question`` is the asker's turn each one answers."""
+        out: list[tuple[str, int, str, dict[str, Any], str, str]] = []
+        ids = list(conversation_ids)
+        for start in range(0, len(ids), 400):
+            batch = ids[start : start + 400]
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT t.conversation_id, t.seq, t.content, t.reply_json, t.created_at, "
+                    "COALESCE((SELECT u.content FROM conversation_turns u WHERE u.conversation_id = t.conversation_id "
+                    "AND u.seq < t.seq AND u.role = 'user' ORDER BY u.seq DESC LIMIT 1), '') "
+                    "FROM conversation_turns t WHERE t.role = 'twin' AND t.reply_json IS NOT NULL "
+                    f"AND t.created_at >= ? AND t.conversation_id IN ({','.join('?' * len(batch))})",
+                    (since, *batch),
+                ).fetchall()
+            out += [(r[0], int(r[1]), r[2], json.loads(r[3]), r[4], r[5]) for r in rows]
+        out.sort(key=lambda row: row[4], reverse=True)
+        return out[:limit]
+
+    def owner_part_turns(self, conversation_ids: Sequence[str]) -> list[tuple[str, int, dict[str, Any]]]:
+        """``(conversation, seq, reply)`` of the twin's turns that left something to the person (``owner_part``)."""
+        out: list[tuple[str, int, dict[str, Any]]] = []
+        ids = list(conversation_ids)
+        for start in range(0, len(ids), 400):
+            batch = ids[start : start + 400]
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT conversation_id, seq, reply_json FROM conversation_turns WHERE role = 'twin' "
+                    "AND COALESCE(json_extract(reply_json, '$.owner_part'), 'none') != 'none' "
+                    f"AND conversation_id IN ({','.join('?' * len(batch))}) ORDER BY conversation_id, seq",
+                    batch,
+                ).fetchall()
+            out += [(r[0], int(r[1]), json.loads(r[2])) for r in rows]
+        return out
 
     def append_conversation_turn(
         self,

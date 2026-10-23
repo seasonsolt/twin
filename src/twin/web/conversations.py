@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from ..config import Settings
+from ..handoffs import HandoffDesk
 from ..persona.store import PersonaStore
 from ..persona.tiers import COLLEAGUE, SELF, Audience
 from ..teamdb import TeamDB
@@ -53,6 +54,14 @@ def request_audience(request: Request) -> Audience:
     return SELF if request.scope.get("twin_audience") == SELF else COLLEAGUE
 
 
+def request_asker_name(request: Request) -> str:
+    """What the signed-in person is called where they are shown to the person they asked: their name, else the part of
+    their account before the @."""
+    identity = request.scope["twin_identity"]
+    name = str(identity.get("name") or "").strip()
+    return name or str(identity.get("email") or "").split("@")[0]
+
+
 class ConversationIndex:
     """One twin's conversations in the team database (``teamdb``): written right after the twin's own database, and
     mended at startup if a write did not make it, so a failure here never fails the conversation."""
@@ -60,10 +69,12 @@ class ConversationIndex:
     def __init__(self, team: TeamDB | None, persona_id: str) -> None:
         self.team, self.persona_id = team, persona_id
 
-    def created(self, store: PersonaStore, conversation_id: str, asker: str | None, audience: Audience) -> None:
+    def created(
+        self, store: PersonaStore, conversation_id: str, asker: str | None, audience: Audience, asker_name: str = ""
+    ) -> None:
         self._write(
             lambda team, head: team.record_conversation(
-                conversation_id, self.persona_id, asker, audience, head[1], head[2]
+                conversation_id, self.persona_id, asker, audience, head[1], head[2], asker_name=asker_name
             ),
             store,
             conversation_id,
@@ -133,17 +144,25 @@ def append_reply(
     email: str | None,
     payload: dict[str, Any],
     index: ConversationIndex | None = None,
+    handoffs: tuple[HandoffDesk, str, Audience] | None = None,
 ) -> dict[str, Any]:
+    """Save the twin's reply in the conversation. ``handoffs``: the desk, what the asker is called and the tier the
+    conversation answers from, to hand on what the reply left to the person; where it did, the payload says how the
+    handoff stands (it is not saved with the reply: the state changes, and the conversation reads it afresh)."""
     if conversation_id is not None:
         # Deletion while a reply is running must not recreate the conversation.
         with suppress(KeyError):
             store.append_conversation_turn(conversation_id, email, "twin", payload["reply"], payload)
             if index is not None:
                 index.touched(store, conversation_id)
+            if handoffs is not None:
+                desk, asker_name, audience = handoffs
+                if made := desk.raise_for(store, conversation_id, email, asker_name, audience, payload):
+                    payload["handoff"] = made
     return payload
 
 
-def register(app: FastAPI, settings: Settings, index: ConversationIndex) -> None:
+def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: HandoffDesk) -> None:
     @app.get("/api/conversations")
     def list_conversations(request: Request, offset: int = Query(default=0, ge=0)) -> list[dict[str, Any]]:
         with PersonaStore(settings.db_path) as store:
@@ -162,14 +181,16 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex) -> None
             except KeyError:
                 raise HTTPException(404, "找不到这段对话") from None
             # The tier is fixed here, once, and not worked out again at each question.
-            index.created(store, conversation_id, owner(request), request_audience(request))
+            index.created(
+                store, conversation_id, owner(request), request_audience(request), request_asker_name(request)
+            )
         return {"id": conversation_id}
 
     @app.get("/api/conversations/{conversation_id}")
     def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
             try:
-                return store.get_conversation(conversation_id, owner(request))
+                return desk.annotate(store.get_conversation(conversation_id, owner(request)))
             except KeyError:
                 raise HTTPException(404, "找不到这段对话") from None
 

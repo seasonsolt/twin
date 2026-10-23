@@ -5,15 +5,16 @@ from __future__ import annotations
 
 import datetime as dt
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
+from ..handoffs import HandoffDesk, HandoffRefused
 from ..persona.ledger import (
     KIND_LABELS,
     LEDGER_VERSION,
@@ -30,6 +31,7 @@ from ..persona.ledger import (
 from ..persona.schema import LedgerEntry, LedgerKind, LedgerStatus, ReviewStatus
 from ..persona.store import PersonaStore, stored_identity
 from .backends import Backends
+from .handoffs import person
 from .jobs import JobConflict, JobManager, Log
 
 
@@ -72,7 +74,7 @@ def entry_view(
     }
 
 
-def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobManager) -> None:
+def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobManager, desk: HandoffDesk) -> None:
     admission = threading.Lock()
 
     @contextmanager
@@ -134,6 +136,38 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
                 raise HTTPException(404, f"找不到账本条目 {entry_id}（可能已在重新整理时替换）") from e
             ledger = [e for e in store.list_ledger() if e.review is not ReviewStatus.REJECTED]
         return entry_view(revised, ledger)
+
+    class AcceptBody(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        due: dt.date | None = None
+
+    def taken(entry_id: str, request: Request, act: Callable[[str | None], Any]) -> dict[str, Any]:
+        """A promise someone asked the person for in a conversation, taken or turned down: the handoff it came from
+        writes the answer back to the asker. Only the person themself can."""
+        me = person(request)
+        if desk.team is None:
+            raise HTTPException(503, "团队库没有打开")
+        try:
+            handoff = act(me)
+        except HandoffRefused as e:
+            raise HTTPException(409, str(e)) from e
+        if handoff is None:
+            raise HTTPException(404, "这条不是别人在对话里请你答应的事")
+        with open_store() as store:
+            entry = store.get_ledger_entry(entry_id)
+            ledger = [e for e in store.list_ledger() if e.review is not ReviewStatus.REJECTED]
+        return entry_view(entry, ledger) if entry is not None else {"entry_id": entry_id}
+
+    @app.post("/api/persona/ledger/{entry_id}/accept")
+    def accept(entry_id: str, request: Request, body: AcceptBody | None = None) -> dict[str, Any]:
+        """接下: take on a promise someone asked for in a conversation (on a new date if ``due``)."""
+        due = body.due if body else None
+        return taken(entry_id, request, lambda me: desk.accept_ledger_entry(entry_id, me, due))
+
+    @app.post("/api/persona/ledger/{entry_id}/decline")
+    def decline(entry_id: str, request: Request) -> dict[str, Any]:
+        """不接: turn down a promise someone asked for in a conversation."""
+        return taken(entry_id, request, lambda me: desk.decline_ledger_entry(entry_id, me))
 
     @app.post("/api/persona/ledger/build", status_code=202)
     def start_build(body: LedgerBuildBody | None = None) -> dict[str, Any]:

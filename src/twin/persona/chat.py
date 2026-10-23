@@ -23,6 +23,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from pydantic import ValidationError
@@ -52,6 +53,7 @@ from .schema import (
     Expression,
     LedgerEntry,
     LedgerStatus,
+    OwnerPart,
     ReviewStatus,
     SourceKind,
 )
@@ -61,6 +63,24 @@ from .style import extreme_rate
 from .tiers import COLLEAGUE, Audience, for_audience, private_expressions
 from .tiers import SELF as SELF_AUDIENCE
 from .when import time_window
+
+# Whom a conversation's answer can hand what only the person can settle to: ``owner``, the person it is made for
+# (the answer says it goes to them, and says in its metadata what), ``unclaimed``, a twin nobody has taken (there is no
+# one to hand it to: the answer says to ask the person directly), ``none``, a conversation of the person themself or
+# any caller that makes no handoffs.
+Reach = Literal["owner", "unclaimed", "none"]
+UNCLAIMED_NOTE = "{name}还没认领分身，请直接联系本人。"
+UNCLAIMED_CUE = "请直接联系本人"
+# A question that asks the person for a promise, a decision, a judgement or a straight answer is held back until its
+# quotes are checked (``PersonaChat.stream_reply``). The retrieval rewrite decides it; these words decide it when
+# that call fails.
+OWNER_CUE = re.compile(
+    r"答应|承诺|保证|拍板|批准|审批|同意我|你来定|你定|准话|评价|评一下|靠谱吗|靠不靠谱|能不能独立|能否独立|前给我|之前给我|给我一版|给我一个|"
+    r"commit|promise|approve",
+    re.IGNORECASE,
+)
+# What the person answered themself in the conversation, kept to the newest few.
+OWNER_SAID_TURNS = 4
 
 ITEMS_NS = "items"
 # A bracketed record id written into the reply text, with the space before it.
@@ -269,6 +289,12 @@ class PersonaContext:
     meeting_record: bool = False
     # The tier of memory this conversation answers from (``tiers``): items of a tier it may not use are not here.
     audience: Audience = COLLEAGUE
+    reach: Reach = "none"
+    # What the person said themself in this conversation, in answer to a handoff, oldest first; it settles the
+    # matter, and the answer may quote it.
+    owner_said: list[str] = field(default_factory=list)
+    # The question asks the person for a promise, decision or judgement: the answer is checked before it is shown.
+    owner_cue: bool = False
 
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
@@ -445,6 +471,7 @@ class PersonaChat:
         *,
         ledger: bool = False,
         audience: Audience = COLLEAGUE,
+        reach: Reach = "none",
     ) -> None:
         """``audience``: the tier of memory the conversation answers from. A conversation of the person themself
         (``self``) may use every item; any other (``colleague``, the default, so a caller that says nothing never
@@ -452,8 +479,10 @@ class PersonaChat:
         portrait and what an inference may rest on. ``ledger``: whether the commitment ledger is material, only when
         the person themselves is asking; it is private, so a visitor, a colleague's conversation, a channel or an
         agent never sees it. ``MemoryUpdating`` for a twin made from a recording library while its memory is being
-        rebuilt: every way of asking a twin goes through here."""
+        rebuilt: every way of asking a twin goes through here. ``reach``: whom the part of an answer only the person can
+        settle goes to (``Reach``); the person themself, whatever it says, is never handed anything."""
         self.audience = audience
+        self.reach: Reach = "none" if audience == SELF_AUDIENCE else reach
         self.memory = gate.version(store)
         self.meeting_record = gate.meeting_record(store)
         # Set by an answer that finished after the twin's memory changed under it: not logged, not to be shown as
@@ -580,6 +609,7 @@ class PersonaChat:
         attachments: Sequence[AttachmentPassage] = (),
         persist: bool = True,
         today: dt.date | None = None,
+        owner_said: Sequence[str] = (),
     ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
@@ -587,6 +617,7 @@ class PersonaChat:
             return unbuilt
         ctx = self._search(messages, as_of, today)
         ctx.today = today
+        ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
         self._attach_files(ctx, attachments)
         self._derive(messages, ctx)
         with default_stage("chat.answer"):
@@ -608,6 +639,7 @@ class PersonaChat:
         *,
         attachments: Sequence[AttachmentPassage] = (),
         persist: bool = True,
+        owner_said: Sequence[str] = (),
     ) -> AsyncGenerator[str | ChatReply]:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
@@ -617,6 +649,7 @@ class PersonaChat:
             yield unbuilt
             return
         ctx = await off_loop(partial(self._search, messages, as_of))
+        ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
         self._attach_files(ctx, attachments)
         await off_loop(partial(self._derive, messages, ctx))
         system, user = await off_loop(
@@ -628,12 +661,14 @@ class PersonaChat:
         effort = self.settings.effective_chat_llm.effort_twin
         stream = getattr(self.llm, "stream", None)
         verified = True
+        held = ctx.owner_cue and self.reach != "none"
         if stream is None:
             with default_stage("chat.answer"):
                 draft = await off_loop(
                     partial(self.llm.structured, system=system, user=user, schema=ChatDraft, effort=effort)
                 )
-            yield draft.reply
+            if not held:
+                yield draft.reply
         else:
             parser = ChatStreamParser()
             async with aclosing(
@@ -644,9 +679,12 @@ class PersonaChat:
                 )
             ) as chunks:
                 async for chunk in chunks:
-                    if delta := parser.feed(chunk):
+                    delta = parser.feed(chunk)
+                    # An answer to a request for a promise, decision or judgement is not shown word by word: it is
+                    # shown once its quotes are checked.
+                    if delta and not held:
                         yield delta
-            if delta := parser.finish():
+            if (delta := parser.finish()) and not held:
                 yield delta
             draft = parser.draft()
             verified = parser.verified
@@ -654,7 +692,10 @@ class PersonaChat:
                 recovered = await off_loop(partial(self._recover_meta, system, user, draft.reply))
                 if recovered is not None:
                     draft, verified = recovered, True
-        yield await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist, verified=verified))
+        final = await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist, verified=verified))
+        if held and not self.stale:
+            yield final.reply
+        yield final
 
     def _recover_meta(self, system: str, user: str, reply: str) -> ChatDraft | None:
         """The metadata of a streamed reply that left it out or wrote it unreadably, asked for on its own: the reply
@@ -693,7 +734,10 @@ class PersonaChat:
                 found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
         except LLMError:
             found = Rewrite()
-        return self.retrieve(query, as_of, found.hints, found.alternatives, today)
+        ctx = self.retrieve(query, as_of, found.hints, found.alternatives, today)
+        ctx.reach = self.reach
+        ctx.owner_cue = found.owner_cue or bool(OWNER_CUE.search(messages[-1].content))
+        return ctx
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:
         """Fill ``ctx.derived`` for span, order and total questions, ``ctx.located`` for questions about the
@@ -765,6 +809,7 @@ class PersonaChat:
         elif not any(c in ctx.trusted for c in citations):
             confidence = min(confidence, UNVERIFIED_CONFIDENCE_CAP)
         topics = [f for f in dict.fromkeys(f.strip() for f in draft.topic_facets) if f in FACET_BY_ID]
+        text, owner_part = self._hand_over(text, draft)
         reply = ChatReply(
             reply=text,
             citations=citations,
@@ -777,12 +822,38 @@ class PersonaChat:
             mode="abstain" if abstain else draft.mode,
             quotes_removed=quotes_removed,
             verified=verified,
+            owner_part=owner_part,
+            owner_ask=draft.owner_ask.strip()[:300] if owner_part != "none" else "",
+            commit_what=(draft.commit_what.strip() or draft.owner_ask.strip())[:300] if owner_part == "commit" else "",
+            commit_due=_iso_date(draft.commit_due) if owner_part == "commit" else None,
         )
         self.stale = not gate.current(self.store, self.memory)
         if persist and not self.stale:
             asked = [m.content for m in messages if m.role == "user"]
             self.store.log_chat(asked[-1], reply, asked[-2] if len(asked) > 1 else "")
         return reply
+
+    def _hand_over(self, text: str, draft: ChatDraft) -> tuple[str, OwnerPart]:
+        """The reply's text and what of it goes to the person. Where nobody has taken the twin there is no one to
+        hand anything to, so the reply says to ask the person directly; for the person themself there is nothing to
+        hand over."""
+        if self.reach == "none" or draft.owner_part == "none":
+            return text, "none"
+        if self.reach == "unclaimed":
+            if UNCLAIMED_CUE not in text:
+                name = self.store.get_meta("identity:name") or self.settings.target_name
+                text = f"{text.rstrip()}\n\n{UNCLAIMED_NOTE.format(name=name)}"
+            return text, "none"
+        return text, draft.owner_part
+
+
+def _iso_date(text: str) -> dt.date | None:
+    """A date the model wrote as YYYY-MM-DD, within a year either way of today; anything else is no date."""
+    try:
+        day = dt.date.fromisoformat(text.strip())
+    except ValueError:
+        return None
+    return day if abs((day - dt.date.today()).days) <= 366 else None
 
 
 # ---------------------------------------------------------------- prompts and schemas
@@ -794,7 +865,9 @@ STREAM_FORMAT = """
 ## 输出格式
 先直接输出回复正文（不要用 JSON 或代码块包裹整篇回复，不要 reply 标签），然后换行输出一行且仅一行 <<<META>>>，
 随后输出一个紧凑 JSON 对象，字段为 asked、answered、citations、confidence、mode、abstain、abstain_reason、\
-topic_facets。asked 是对方要的那一项具体内容（字符串），answered 是正文是否给出了它（布尔值）。
+topic_facets、owner_part、owner_ask、commit_what、commit_due。asked 是对方要的那一项具体内容（字符串），\
+answered 是正文是否给出了它（布尔值）。owner_part 是 none、decide、commit、evaluate 或 missing\
+（见“转交”一节；没有时填 none），owner_ask、commit_what、commit_due 是字符串，用不到时为空。
 citations 和 topic_facets 是字符串数组，confidence 是 0 到 1 的数字，mode 是 grounded、general、inferred 或 abstain，
 abstain 是布尔值，abstain_reason 是弃权原因字符串（不弃权时为空）。
 所有字段遵守上述规则。JSON 不包含 reply，正文只输出一次，不要在正文中输出分隔符。
@@ -820,7 +893,8 @@ META_RECOVERY = """
 {reply}
 
 这段回复已经发给对方，不要改写它。只按上面的规则为它补上元数据：citations 填它实际用到的资料编号，\
-mode、confidence、abstain、abstain_reason、asked、answered、topic_facets 按它实际说的内容判断。"""
+mode、confidence、abstain、abstain_reason、asked、answered、topic_facets、owner_part、owner_ask、commit_what、\
+commit_due 按它实际说的内容判断。"""
 
 
 class ChatStreamParser:
@@ -1017,6 +1091,7 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
     materials.extend(passage.text for passage in ctx.attachments)
     materials.extend(e.quote for e, _ in ctx.ledger)
+    materials.extend(ctx.owner_said)
     return materials
 
 
@@ -1030,6 +1105,32 @@ def _render_item(item: PersonaItem) -> str:
     label = f"原话（{said.isoformat()} 说）" if said else "原话"
     return f"- [{item.item_id}] {item_text(item)}（{meta}{verified}{conflict}）{label}：「{_clip(quote, QUOTE_CHARS)}」"
 
+
+# What the model says, in the metadata, about the part of an answer only the person can settle (``Reach``).
+HANDOFF_SECTION = """
+
+## 转交
+这一句里如果有要我本人定的部分，正文照上文的规则不替我答应、不拍板、不评价具体的人（其余能答的部分照常答，混合请求也一样），\
+同时在元数据里标出来：
+- owner_part：decide（要我决定或选择）、commit（要我答应做某件事或给个期限）、evaluate（要我评价某个具体的人）、\
+missing（对方要的是只有我本人才答得了的答复，比如我的打算、立场或安排，而资料里没有；闲聊、私事和不影响工作的小事不算）；\
+没有这类部分填 none。资料或账本里已经有的说法，照说就是了，不算。
+- owner_ask：要我定的那一件事，一句话。
+- commit_what、commit_due：owner_part 为 commit 时，对方要我答应的事（直接写事情本身，如“周五前给沈从一版发布方案”）\
+和对方要的截止日期（YYYY-MM-DD，没说就留空）。
+这几个字段只在元数据里，不写进正文。"""
+
+UNCLAIMED_SECTION = """
+
+## 这个分身还没有人认领
+{name}还没认领这个分身，没有人能接转交。遇到要本人决定、答应、评价的部分，正文里直接说“{name}还没认领分身，请直接联系本人”，\
+不说“先看看安排”“回头答复”这类会有人回复的话；owner_part 一律填 none。"""
+
+OWNER_SAID_SECTION = """
+
+## 本人已经亲自答复的
+用户消息的【本人亲自答复】里是本人在这段对话里亲口说的话。它说了的事以它为准，盖过你之前说过的；对方再问到同一件事，\
+照它说，不再说转给本人，也不改它的意思。"""
 
 STYLE_SECTION = """
 
@@ -1075,6 +1176,12 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     prompt = CHAT_SYSTEM.format(name=name, scope=scope, today=today, core=core, style=style, voice=voice, facets=facets)
     if ctx.meeting_record:
         prompt += MEETING_RECORD_SECTION
+    if ctx.reach == "owner":
+        prompt += HANDOFF_SECTION
+    elif ctx.reach == "unclaimed":
+        prompt += UNCLAIMED_SECTION.format(name=name)
+    if ctx.owner_said:
+        prompt += OWNER_SAID_SECTION
     if ctx.attachments:
         prompt += (
             "\n\n## 本次上传文件\n"
@@ -1104,6 +1211,7 @@ CHAT_STATUS_LABELS: dict[LedgerStatus, str] = {
     **STATUS_LABELS,
     "claimed_done": "负责人说已完成",
     "evidenced": "有交付证据",
+    "pending_accept": "对方求我答应，我还没接",
 }
 
 
@@ -1216,6 +1324,12 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
             f"【时间】对方话里的相对时间（如“上周六”“四周前”）大约指 {lo.isoformat()} 至 {hi.isoformat()}；"
             "资料里这几天说过的、和所问的事对得上的那件事，就是对方在问的，不要因为说法不同或日期没写成相对时间就"
             "说没有记录。",
+        ]
+    if ctx.owner_said:
+        lines += [
+            "",
+            "【本人亲自答复】（本人在这段对话里亲口说的，最新的在后）",
+            *(f"- 「{t.strip()}」" for t in ctx.owner_said),
         ]
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:

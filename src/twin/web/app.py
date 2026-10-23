@@ -22,6 +22,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from ..channels.wecom import WeComHub
 from ..config import Settings
 from ..egress import egress_status
+from ..handoffs import HandoffDesk, run_all
 from ..media.tts import SpeechSynthesizer
 from ..persona import gate
 from ..persona.gate import MemoryUpdating
@@ -324,6 +325,20 @@ def create_app(
         libraries.twin_purged(persona_id)
 
     registry.on_purged = twin_purged
+
+    def desk_for(persona_id: str) -> HandoffDesk:
+        """The handoffs of one twin: where its database is, who it is made for now, what it is called."""
+        resolved = registry.settings_for(persona_id)
+        return HandoffDesk(
+            team,
+            persona_id,
+            store_path=lambda: resolved.db_path,
+            owner=lambda: (registry.entry(persona_id) or {}).get("member"),
+            name=lambda: stored_identity(resolved.db_path)[0] or resolved.target_name,
+            on_turn=ConversationIndex(team, persona_id).touched,
+        )
+
+    desks: list[HandoffDesk] = []
     for entry in registry.data["personas"]:
         if not entry.get("deleted_at"):
             path = registry.settings_for(entry["id"]).db_path
@@ -332,9 +347,18 @@ def create_app(
                     # What the twin's database has and the team's index lacks (conversations from before the index,
                     # or a write that did not make it) is added, as the colleague tier.
                     team.reconcile_persona(entry["id"], store.conversation_rows())
+                desks.append(desk_for(entry["id"]))
+    # The old 待你回答 become handoffs (once), replies that stopped halfway are finished, and handoffs that did not
+    # make it into the team database are made.
+    run_all(desks)
     hub = WeComHub(settings, registry, backends, jobs)
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
-    registry.on_restored = lambda persona_id: anyio.from_thread.run(hub.persona_restored, persona_id)
+
+    def restored(persona_id: str) -> None:
+        run_all([desk_for(persona_id)])
+        anyio.from_thread.run(hub.persona_restored, persona_id)
+
+    registry.on_restored = restored
     app.state.channels = hub
     app.state.personas = registry
     app.state.auth = auth
@@ -512,6 +536,7 @@ def create_app(
             on_built=lambda version: libraries.built(persona_id, version),
             on_spent=lambda tokens: libraries.spent_building(persona_id, tokens),
             index=ConversationIndex(team, persona_id),
+            desk=desk_for(persona_id),
         )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(

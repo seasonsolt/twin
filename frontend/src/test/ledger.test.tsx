@@ -69,6 +69,7 @@ const labels = {
     not_done: '未完成',
     reopened: '重新打开',
     unknown: '未知',
+    pending_accept: '待你接受',
   },
 } satisfies Pick<LedgerData, 'kind_labels' | 'status_labels'>;
 
@@ -292,4 +293,43 @@ it('explains how to get meetings when there are none', async () => {
     screen.queryByRole('button', { name: /整理/ }),
   ).not.toBeInTheDocument();
   expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+});
+
+it('lets the person take or turn down a promise someone asked for in a conversation', async () => {
+  const user = userEvent.setup();
+  ledger.entries = [
+    entry({
+      entry_id: 'h1',
+      source_id: 'handoff:h1',
+      meeting_title: '沈从的对话',
+      speaker: '沈从',
+      quote: '周五前给我一版发布方案',
+      owner: '本人',
+      counterpart: '沈从',
+      what: '周五前给沈从一版发布方案',
+      status: 'pending_accept',
+      current_status: 'pending_accept',
+      current_status_label: '待你接受',
+      confirmation_message: null,
+      origin: 'conversation',
+      handoff_id: 'h1',
+    }),
+  ];
+  ledger.people = [];
+  setup();
+  const asked = await screen.findByRole('article', {
+    name: '承诺：周五前给沈从一版发布方案',
+  });
+  expect(within(asked).getByText('待你接受')).toBeInTheDocument();
+  expect(
+    within(asked).queryByRole('button', { name: '确认' }),
+  ).not.toBeInTheDocument();
+  await user.click(within(asked).getByRole('button', { name: '接下' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual(['/api/persona/ledger/h1/accept', {}]),
+  );
+  await user.click(within(asked).getByRole('button', { name: '不接' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual(['/api/persona/ledger/h1/decline', {}]),
+  );
 });

@@ -374,22 +374,95 @@ it('says nothing of it where the twin has no person yet, or on a machine with on
   await waitFor(() => expect(screen.queryByText(note)).toBeNull());
 });
 
-it('keeps the person’s own replies out of what is shown and sent, until they have a place', async () => {
-  const own: Turn = {
-    id: 's1',
-    role: 'self',
-    content: '周五前给你方案',
-    timestamp: when,
-    handoff_id: 'h_1',
-  };
-  server.rows.get('c1')!.turns = [...turns, own];
+const handed = (status: 'delivered' | 'replied' = 'replied') =>
+  ({
+    id: 'h_1',
+    kind: 'commit' as const,
+    status,
+    status_label: status === 'replied' ? '已回复' : '已送达',
+    owner_name: '林舟',
+  }) satisfies Turn['handoff'];
+const own: Turn = {
+  id: 's1',
+  role: 'self',
+  content: '周五前给你方案',
+  timestamp: when,
+  handoff_id: 'h_1',
+};
+
+it('shows what the person answered themself as theirs, apart from the twin’s answer, with where the handoff stands', async () => {
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    { ...turns[1], handoff: handed() },
+    own,
+  ];
   localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
   mount();
   expect(await screen.findByText('先收钱，再说扩张。')).toBeVisible();
-  expect(screen.queryByText('周五前给你方案')).toBeNull();
-  const { spoken } = await import('../features/chat/types');
+  const mine = screen.getByRole('article', { name: '本人回复' });
+  expect(within(mine).getByText('本人')).toBeVisible();
+  expect(within(mine).getByText('周五前给你方案')).toBeVisible();
+  const twin = screen.getByRole('article', { name: '分身回复' });
+  expect(within(twin).getByText('林舟的分身')).toBeVisible();
+  expect(within(twin).getByRole('status')).toHaveTextContent(
+    '已转给林舟本人 · 已回复',
+  );
+});
+
+it('marks nothing apart in a conversation where nothing was handed to the person', async () => {
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  expect(await screen.findByText('先收钱，再说扩张。')).toBeVisible();
+  expect(screen.queryByText('林舟的分身')).toBeNull();
+  expect(screen.queryByRole('article', { name: '本人回复' })).toBeNull();
+});
+
+it('does not send the person’s words back as part of what was said, and folds the server’s view of a handoff into the page', async () => {
+  const { spoken, withHandoffs } = await import('../features/chat/types');
   expect([...turns, own].filter(spoken).map((turn) => turn.role)).toEqual([
     'user',
     'twin',
   ]);
+  // The answer arrives after the page was opened: it is placed right under the answer it belongs to, once, and the
+  // state of the handoff follows; what the page has and the server lacks stays.
+  const waiting = [turns[0], { ...turns[1], handoff: handed('delivered') }];
+  const remote = [turns[0], { ...turns[1], handoff: handed() }, own];
+  const merged = withHandoffs(waiting, remote);
+  expect(merged.map((turn) => turn.role)).toEqual(['user', 'twin', 'self']);
+  expect(merged[1].handoff?.status).toBe('replied');
+  expect(withHandoffs(merged, remote)).toEqual(merged);
+  const unsaved: Turn = { ...turns[0], id: 'u9', content: '还没存的一句' };
+  expect(withHandoffs([...waiting, unsaved], remote).at(-1)).toBe(unsaved);
+});
+
+it('asks again while the person’s answer is awaited, and shows it under the answer when it comes', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  try {
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      { ...turns[1], handoff: handed('delivered') },
+    ];
+    localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+    mount();
+    const waiting = await screen.findByRole('status');
+    expect(waiting).toHaveTextContent('已转给林舟本人 · 等回复');
+    expect(screen.queryByRole('article', { name: '本人回复' })).toBeNull();
+    // The person answers.
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      { ...turns[1], handoff: handed() },
+      own,
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(
+      await screen.findByRole('article', { name: '本人回复' }),
+    ).toHaveTextContent('周五前给你方案');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '已转给林舟本人 · 已回复',
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });

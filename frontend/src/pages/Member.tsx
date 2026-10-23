@@ -21,8 +21,8 @@ import { useMobile } from '../lib/useMobile';
 import { memberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useIdentity } from '../features/identity/useIdentity';
-import { Followups } from '../features/followups/Followups';
-import { useFollowups } from '../features/followups/useFollowups';
+import { Away } from '../features/away/Away';
+import { useAway } from '../features/away/useAway';
 import { PersonFace } from '../features/library/PersonFace';
 import { MemberHeader } from '../features/members/MemberHeader';
 import { NoTwinMember } from '../features/members/NoTwinMember';
@@ -54,10 +54,8 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const memories = useStatus((state) => state.data?.counts?.items);
   const memoryUpdating = useStatus((state) => state.data?.memory_updating);
   const updating = !!person?.updating || !!memoryUpdating;
-  const away = useFollowups(self && canManage);
-  const waiting = away.data?.items?.filter(
-    (i) => i.status === 'pending',
-  ).length;
+  const away = useAway(self && canManage);
+  const waiting = away.data?.pending;
   const available: Section[] = [
     'overview',
     'memories',
@@ -213,7 +211,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                           ) : null}
                         </Row>
                       ),
-                      content: <Followups away={away} />,
+                      content: <Away away={away} />,
                     },
                   ]
                 : []),

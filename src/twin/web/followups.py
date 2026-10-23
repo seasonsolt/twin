@@ -1,5 +1,6 @@
 """Web routes of the questions the twin could not answer (``/api/persona/followups...``): the queue, the person's
-answers, which become new memories, and setting a question aside."""
+answers, which become new memories, and setting a question aside. Kept for one more period: the page now reads the
+handoffs (``web.handoffs``), which these questions became, and a change made here is followed there."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import Settings
+from ..handoffs import HandoffDesk
 from ..persona.followups import answer_followup, list_followups, set_followup
 from ..persona.store import PersonaStore, stored_identity
 
@@ -23,7 +25,7 @@ class FollowupStatusBody(BaseModel):
     status: Literal["pending", "dismissed"]
 
 
-def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) -> None:
+def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None], desk: HandoffDesk) -> None:
     @app.get("/api/persona/followups")
     def list_all() -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
@@ -41,6 +43,7 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
                 raise HTTPException(404, "找不到这个问题，请刷新后重试") from e
             except ValueError as e:
                 raise HTTPException(400, str(e)) from e
+        desk.sync_legacy(followup_id, "answered")
         queue_build()
         return {"followup": asdict(followup), "source_id": source.source_id, "source_title": source.title}
 
@@ -48,6 +51,8 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None]) 
     def set_status(followup_id: str, body: FollowupStatusBody) -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
             try:
-                return asdict(set_followup(store, followup_id, body.status))
+                changed = asdict(set_followup(store, followup_id, body.status))
             except KeyError as e:
                 raise HTTPException(404, "找不到这个问题，请刷新后重试") from e
+        desk.sync_legacy(followup_id, body.status)
+        return changed

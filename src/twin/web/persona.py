@@ -26,6 +26,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..config import Settings
 from ..embed import Embedder, EmbedError
+from ..handoffs import HandoffDesk
 from ..llm import LLM
 from ..persona import gate
 from ..persona.attachments import (
@@ -68,7 +69,14 @@ from ..persona.text import extract_text
 from ..persona.tiers import COLLEAGUE, SELF, Audience, Tier, for_audience, item_tier, private_expressions
 from ..usage import CallRow, collect_calls, model_tokens, transient_summary
 from .backends import Backends, BackendUnavailable
-from .conversations import ConversationIndex, append_reply, append_user, owner, request_audience
+from .conversations import (
+    ConversationIndex,
+    append_reply,
+    append_user,
+    owner,
+    request_asker_name,
+    request_audience,
+)
 from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
 
 if TYPE_CHECKING:
@@ -188,12 +196,31 @@ def run_chat(
     email: str | None = None,
     audience: Audience = SELF,
     index: ConversationIndex | None = None,
+    handoffs: tuple[HandoffDesk, str] | None = None,
 ) -> dict[str, Any]:
+    """``handoffs``: the desk and what the asker is called, to hand on what the reply leaves to the person."""
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
         # The ledger is the person's own: only a conversation of the tier that may use everything has it.
-        reply = PersonaChat(store, llm, embedder, settings, ledger=audience == SELF, audience=audience).reply(messages)
-        return append_reply(store, conversation_id, email, chat_payload(store, reply, audience=audience), index)
+        chat = PersonaChat(
+            store,
+            llm,
+            embedder,
+            settings,
+            ledger=audience == SELF,
+            audience=audience,
+            reach=handoffs[0].reach(email) if handoffs else "none",
+        )
+        owner_said = store.owner_replies(conversation_id, email) if conversation_id else []
+        reply = chat.reply(messages, owner_said=owner_said)
+        return append_reply(
+            store,
+            conversation_id,
+            email,
+            chat_payload(store, reply, audience=audience),
+            index,
+            (handoffs[0], handoffs[1], audience) if handoffs else None,
+        )
 
 
 def for_citation(store: PersonaStore, items: dict[str, PersonaItem], audience: Audience) -> dict[str, PersonaItem]:
@@ -330,7 +357,14 @@ def validate_chat(body: ChatBody) -> list[ChatTurn]:
 
 STALE_REPLY = "记忆刚更新，这条回答可能已经过时，没有保存。请再问一次"
 # Reading a twin's memory: refused while a twin made from a recording library is being rebuilt (``gate``).
-GATED_PATHS = ("/api/persona/chat", "/api/persona/items", "/api/persona/followups", "/api/persona/ledger")
+GATED_PATHS = (
+    "/api/persona/chat",
+    "/api/persona/items",
+    "/api/persona/followups",
+    "/api/persona/handoffs",
+    "/api/persona/answers",
+    "/api/persona/ledger",
+)
 
 
 class MemoryGateMiddleware:
@@ -367,11 +401,13 @@ def register(
     on_spent: Callable[[int], None] | None = None,
     *,
     index: ConversationIndex,
+    desk: HandoffDesk,
 ) -> MediaIngestion:
     """``on_built(version)``: a build completed without any failure, from the library sources written at
     ``version`` (``gate.SYNCED``); a twin made from a recording library opens once that version is still wanted.
     ``on_spent(tokens)``: a build of such a twin ended (however it ended) after spending ``tokens`` model tokens,
-    which count against the library's batch quota. ``index``: this twin's conversations in the team database."""
+    which count against the library's batch quota. ``index``: this twin's conversations in the team database;
+    ``desk``: its handoffs, what its answers leave to the person."""
 
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
@@ -425,7 +461,7 @@ def register(
 
     from . import conversations, identity
 
-    conversations.register(app, settings, index)
+    conversations.register(app, settings, index, desk)
     identity.register(app, settings, queue_build)
 
     from . import uploads
@@ -439,10 +475,12 @@ def register(
     transcripts.register(app, settings, queue_build)
     from . import ledger
 
-    ledger.register(app, settings, backends, jobs)
+    ledger.register(app, settings, backends, jobs, desk)
     from . import followups
+    from . import handoffs as handoff_routes
 
-    followups.register(app, settings, queue_build)
+    followups.register(app, settings, queue_build, desk)
+    handoff_routes.register(app, settings, desk, queue_build, backends)
     from . import work
 
     work.register(app, settings, backends, jobs, lambda store, refs, audience: cited_view(store, refs, None, audience))
@@ -898,6 +936,7 @@ def register(
         messages = validate_chat(body)
         email = owner(request)
         audience = index.audience(body.conversation_id, request_audience(request))
+        asker = (desk, request_asker_name(request))
         with open_store() as store:
             if not store.has_items():
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
@@ -915,7 +954,9 @@ def register(
         job = jobs.submit(
             "chat",
             "和分身聊天",
-            lambda log: run_chat(settings, llm, embedder, messages, log, body.conversation_id, email, audience, index),
+            lambda log: run_chat(
+                settings, llm, embedder, messages, log, body.conversation_id, email, audience, index, asker
+            ),
             prepare=accept,
         )
         return {"job_id": job.job_id}
@@ -928,6 +969,7 @@ def register(
         # The ledger is private: only a conversation of the tier that may use everything has it, never a visitor's or
         # a manager's.
         audience = index.audience(body.conversation_id, request_audience(request))
+        asker_name = request_asker_name(request)
         ledger = audience == SELF and not request.scope.get("twin_visitor")
         with open_store() as store:
             profiled = store.has_items() or bool(attachment_passages)
@@ -949,7 +991,7 @@ def register(
             payload = chat_payload(store, reply, attachment_passages, audience)
             payload["elapsed_ms"] = max(0, round((time.monotonic() - started_at) * 1000))
             payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
-            return append_reply(store, body.conversation_id, email, payload, index)
+            return append_reply(store, body.conversation_id, email, payload, index, (desk, asker_name, audience))
 
         def unbuilt() -> tuple[str, dict[str, Any]]:
             with open_store() as store:
@@ -968,10 +1010,27 @@ def register(
                 with await open_store_off_loop(settings.db_path) as store:
                     # Off the loop: it checks the twin's memory gate, which reads the store.
                     chat = await off_loop(
-                        partial(PersonaChat, store, llm, embedder, settings, ledger=ledger, audience=audience)
+                        partial(
+                            PersonaChat,
+                            store,
+                            llm,
+                            embedder,
+                            settings,
+                            ledger=ledger,
+                            audience=audience,
+                            reach=desk.reach(email),
+                        )
                     )
+                    # What the person answered themself in this conversation settles it; read here, from what the
+                    # server saved, never from what the page sends.
+                    owner_said = await off_loop(partial(store.owner_replies, body.conversation_id or "", email))
                     async with aclosing(
-                        chat.stream_reply(messages, attachments=attachment_passages, persist=not attachment_passages)
+                        chat.stream_reply(
+                            messages,
+                            attachments=attachment_passages,
+                            persist=not attachment_passages,
+                            owner_said=owner_said,
+                        )
                     ) as replies:
                         async for result in replies:
                             if isinstance(result, str):

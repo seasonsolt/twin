@@ -376,6 +376,145 @@ const conversation = {
   ],
 };
 
+// A colleague's question the twin left to the person, and the person's own reply under it.
+const handoffConversation = {
+  id: 'c-handoff',
+  title: '下周发布怎么安排',
+  turns: [
+    {
+      id: 'h1',
+      role: 'user',
+      content: '下周发布怎么安排？周五前给我方案。',
+      timestamp: '2026-10-17T01:30:00Z',
+    },
+    {
+      id: 'h2',
+      role: 'twin',
+      content: '发布定在下周二，周三前备好测试环境。大文件导入再测一轮再定。',
+      timestamp: '2026-10-17T01:30:08Z',
+      reply: {
+        reply: '发布定在下周二，周三前备好测试环境。大文件导入再测一轮再定。',
+        citations: ['i-1'],
+        confidence: 0.82,
+        abstain: false,
+        abstain_reason: '',
+        retrieved_ids: ['i-1'],
+        mode: 'grounded',
+        elapsed_ms: 4200,
+        completed_at: '2026-10-17T01:30:08Z',
+        cited: [
+          {
+            id: 'i-1',
+            kind: 'item',
+            text: '发布前会先确认测试环境和回滚方案',
+            facet: '工作方式',
+            date: '2026-10-15',
+          },
+        ],
+      },
+      handoff: {
+        id: 'hf-1',
+        kind: 'commit',
+        status: 'replied',
+        status_label: '已回复',
+        owner_name: '林舟',
+      },
+    },
+    {
+      id: 'h3',
+      role: 'self',
+      content: '方案周五前给你。大文件导入先不放这次。',
+      timestamp: '2026-10-17T03:05:00Z',
+      handoff_id: 'hf-1',
+    },
+  ],
+};
+
+// 第 10 屏: what the twin left to the person, the answers it guessed, and how many it answered from the profile.
+const handoffRow = {
+  kind: 'decide',
+  kind_label: '要你决定',
+  status: 'delivered',
+  status_label: '已送达',
+  context: '',
+  ask: '',
+  source_known: true,
+  commit: null,
+  reply: null,
+  replied_at: null,
+};
+const away = {
+  waiting: [
+    {
+      ...handoffRow,
+      id: 'hf-1',
+      kind: 'commit',
+      kind_label: '要你答应',
+      asker_name: '沈从',
+      question: '下周的发布你打算怎么安排？周五前给我一版方案。',
+      answer: '发布定在下周二，周三前备好测试环境。这个我先看看安排。',
+      created_at: '2026-10-16T13:14:00Z',
+      expires_at: '2026-10-19T13:14:00Z',
+      days_left: 2,
+      commit: {
+        entry_id: 'le-1',
+        what: '周五前给沈从一版发布方案',
+        due: '2026-10-25',
+        pending: true,
+      },
+    },
+    {
+      ...handoffRow,
+      id: 'hf-2',
+      kind: 'missing',
+      kind_label: '无出处',
+      asker_name: '许清禾',
+      question: '需求评审里那组接口，你倾向这次就改，还是下个版本再说？',
+      answer: null,
+      created_at: '2026-10-17T01:02:00Z',
+      expires_at: '2026-10-22T01:02:00Z',
+      days_left: 5,
+    },
+    {
+      ...handoffRow,
+      id: 'hf-3',
+      kind: 'evaluate',
+      kind_label: '涉及评价',
+      asker_name: '陈一',
+      question: '你觉得新来的实习生能不能独立负责导入模块？',
+      answer: null,
+      created_at: '2026-10-17T02:40:00Z',
+      expires_at: '2026-10-22T02:40:00Z',
+      days_left: 5,
+    },
+  ],
+  guessed: [
+    {
+      conversation_id: 'c-g1',
+      turn: 2,
+      asker_name: '沈从',
+      question: '要是发布延期一周，你能接受吗？',
+      answer: '能接受，但我会先把大文件导入拿出这次发布。',
+      at: '2026-10-17T02:00:00Z',
+    },
+    {
+      conversation_id: 'c-g2',
+      turn: 2,
+      asker_name: '王屿',
+      question: '周报你更喜欢按项目写还是按人写？',
+      answer: '按项目写，每个项目一句结论加下周要做的事。',
+      at: '2026-10-17T02:10:00Z',
+    },
+  ],
+  sourced: [],
+  sourced_count: 7,
+  answered: 12,
+  shelved: [],
+  settled: [],
+  pending: 3,
+  days: 7,
+};
+
 const history = [
   {
     id: 'c-plan',
@@ -1200,6 +1339,7 @@ const handlers: Record<string, Handler> = {
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/conversations': reply(history),
   'GET /api/conversations/c-plan': reply(conversation),
+  'GET /api/conversations/c-handoff': reply(handoffConversation),
   'GET /api/persona/coverage': reply(coverage),
   'GET /api/persona/items/summary': reply(itemSummary),
   'GET /api/persona/items': (url) => {
@@ -1338,25 +1478,8 @@ const handlers: Record<string, Handler> = {
     progress: [],
     stopping: false,
   }),
-  'GET /api/persona/followups': reply({
-    pending: 1,
-    items: [
-      {
-        followup_id: 'q-1',
-        question: '你怎么看远程办公？',
-        previous: '我还没听你聊过远程办公。',
-        reason: '记忆里没有相关的内容',
-        asked: 2,
-        first_at: '2026-10-16T02:00:00Z',
-        last_at: '2026-10-17T03:00:00Z',
-        status: 'pending',
-        handled_at: null,
-        asked_since: 0,
-        source_id: null,
-        unresolved: true,
-      },
-    ],
-  }),
+  'GET /api/persona/handoffs': reply(away),
+  'GET /api/persona/handoffs/count': reply({ pending: away.pending }),
   'GET /api/persona/transcripts/speakers': () => transcriptRoster,
   'GET /api/persona/aliases': () => ({
     aliases: ['林总'],

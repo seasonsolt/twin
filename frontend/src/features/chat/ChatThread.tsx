@@ -4,6 +4,7 @@ import { MessageList } from '../../components/effects/MessageList';
 import { PersonaFade } from '../../components/motion/PersonaFade';
 import { PersonaPortrait } from '../../components/layout/PersonaSwitcher';
 import {
+  Badge,
   Button,
   ChatAction,
   ChatIdentity,
@@ -39,7 +40,7 @@ import { MessageText } from './MessageText';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { useConversation } from './useConversation';
-import { spoken } from './types';
+import { handoffText } from './types';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -151,6 +152,11 @@ export function ChatThread({
   useEffect(() => {
     if (active && !pinnedId) end.current?.scrollIntoView?.({ block: 'end' });
   }, [active, end, pinnedId, chat.turns, chat.busy, composerHeight]);
+  // Once the person has had a say, or a question went to them, who said what is marked: the twin's answers and
+  // the person's own words are not the same thing.
+  const marked = chat.turns.some(
+    (turn) => turn.role === 'self' || turn.handoff,
+  );
   const lastAnswer = [...chat.turns]
     .reverse()
     .find((turn) => turn.role === 'twin')?.id;
@@ -275,116 +281,144 @@ export function ChatThread({
                 <MessageList
                   label="对话记录"
                   className="space-y-4"
-                  items={chat.turns.filter(spoken).map((turn) => ({
+                  items={chat.turns.map((turn) => ({
                     id: turn.id,
                     text: turn.content,
-                    content: (
-                      <ChatMessage
-                        speaker={turn.role}
-                        last={turn.id === lastAnswer}
-                        aria-label={turn.role === 'user' ? '你说' : '分身回复'}
-                        data-pin={turn.role === 'user' ? turn.id : undefined}
-                      >
-                        <div
-                          className={
-                            turn.role === 'twin'
-                              ? 'twin-bubble min-w-0'
-                              : 'min-w-0'
+                    content:
+                      turn.role === 'self' ? (
+                        <ChatMessage speaker="self" aria-label="本人回复">
+                          <Row gap={2}>
+                            <Badge tone="info">本人</Badge>
+                            <Text as="span" size="xs" tone="secondary">
+                              {name}
+                            </Text>
+                          </Row>
+                          <div className="min-w-0">
+                            <MessageText text={turn.content} plain />
+                          </div>
+                        </ChatMessage>
+                      ) : (
+                        <ChatMessage
+                          speaker={turn.role}
+                          last={turn.id === lastAnswer}
+                          aria-label={
+                            turn.role === 'user' ? '你说' : '分身回复'
                           }
-                          data-speaking={speaking(turn.id)}
+                          data-pin={turn.role === 'user' ? turn.id : undefined}
                         >
-                          <MessageText
-                            text={turn.content}
-                            plain={turn.role === 'user'}
-                            streaming={
-                              turn.role === 'twin' && !turn.reply && chat.busy
-                            }
-                          />
-                        </div>
-                        {turn.reply && (
-                          <>
-                            <ReplyLine reply={turn.reply} editable={canManage}>
-                              <div
-                                role="group"
-                                aria-label="回复媒体"
-                                className="answer-controls ml-auto flex items-center"
-                              >
-                                {capabilities?.available && (
-                                  <PlainButton
-                                    shape="circle"
-                                    className="reply-play min-h-11 min-w-11"
-                                    aria-label={
-                                      speaking(turn.id)
-                                        ? '正在说这句，点击暂停'
-                                        : `让${name}说这句`
-                                    }
-                                    aria-busy={
-                                      audio.id === turn.id && audio.loading
-                                    }
-                                    data-speaking={speaking(turn.id)}
-                                    data-generating={
-                                      video.videos[turn.id]?.status ===
-                                      'generating'
-                                    }
-                                    onClick={() => toggleReply(turn)}
-                                  >
-                                    <span
-                                      className="reply-play-visual"
-                                      aria-hidden
-                                    >
-                                      {speaking(turn.id) ? (
-                                        <span className="speaking-bars">
-                                          <i />
-                                          <i />
-                                          <i />
-                                        </span>
-                                      ) : (
-                                        <Play size={16} />
-                                      )}
-                                    </span>
-                                  </PlainButton>
-                                )}
-                                <IconButton
-                                  label="复制"
-                                  onClick={() => {
-                                    void navigator.clipboard
-                                      .writeText(turn.content)
-                                      .then(() => toast('已复制'))
-                                      .catch(() => toast('复制失败，请重试'));
-                                  }}
-                                >
-                                  <Copy size={16} aria-hidden />
-                                </IconButton>
-                              </div>
-                            </ReplyLine>
-                            {capabilities?.available &&
-                              audio.id === turn.id && (
-                                <progress
-                                  aria-label="语音播放进度"
-                                  max={1}
-                                  value={audio.progress}
-                                  className="sr-only"
-                                />
-                              )}
-                            {capabilities?.available &&
-                              audio.errors[turn.id] && (
-                                <Text role="alert" size="xs" tone="danger">
-                                  {audio.errors[turn.id]}
-                                </Text>
-                              )}
-                          </>
-                        )}
-                        {capabilities?.video?.available &&
-                          video.videos[turn.id]?.status === 'failed' && (
-                            <Text role="alert" size="xs" tone="secondary">
-                              真人版生成失败 ·{' '}
-                              <TextLink onClick={() => video.retry(turn.id)}>
-                                重试生成视频
-                              </TextLink>
+                          {marked && turn.role === 'twin' && (
+                            <Text as="span" size="xs" tone="secondary">
+                              {name}的分身
                             </Text>
                           )}
-                      </ChatMessage>
-                    ),
+                          <div
+                            className={
+                              turn.role === 'twin'
+                                ? 'twin-bubble min-w-0'
+                                : 'min-w-0'
+                            }
+                            data-speaking={speaking(turn.id)}
+                          >
+                            <MessageText
+                              text={turn.content}
+                              plain={turn.role === 'user'}
+                              streaming={
+                                turn.role === 'twin' && !turn.reply && chat.busy
+                              }
+                            />
+                          </div>
+                          {turn.reply && (
+                            <>
+                              <ReplyLine
+                                reply={turn.reply}
+                                editable={canManage}
+                              >
+                                <div
+                                  role="group"
+                                  aria-label="回复媒体"
+                                  className="answer-controls ml-auto flex items-center"
+                                >
+                                  {capabilities?.available && (
+                                    <PlainButton
+                                      shape="circle"
+                                      className="reply-play min-h-11 min-w-11"
+                                      aria-label={
+                                        speaking(turn.id)
+                                          ? '正在说这句，点击暂停'
+                                          : `让${name}说这句`
+                                      }
+                                      aria-busy={
+                                        audio.id === turn.id && audio.loading
+                                      }
+                                      data-speaking={speaking(turn.id)}
+                                      data-generating={
+                                        video.videos[turn.id]?.status ===
+                                        'generating'
+                                      }
+                                      onClick={() => toggleReply(turn)}
+                                    >
+                                      <span
+                                        className="reply-play-visual"
+                                        aria-hidden
+                                      >
+                                        {speaking(turn.id) ? (
+                                          <span className="speaking-bars">
+                                            <i />
+                                            <i />
+                                            <i />
+                                          </span>
+                                        ) : (
+                                          <Play size={16} />
+                                        )}
+                                      </span>
+                                    </PlainButton>
+                                  )}
+                                  <IconButton
+                                    label="复制"
+                                    onClick={() => {
+                                      void navigator.clipboard
+                                        .writeText(turn.content)
+                                        .then(() => toast('已复制'))
+                                        .catch(() => toast('复制失败，请重试'));
+                                    }}
+                                  >
+                                    <Copy size={16} aria-hidden />
+                                  </IconButton>
+                                </div>
+                              </ReplyLine>
+                              {turn.handoff && (
+                                <Text role="status" size="xs" tone="secondary">
+                                  {handoffText(turn.handoff)}
+                                </Text>
+                              )}
+                              {capabilities?.available &&
+                                audio.id === turn.id && (
+                                  <progress
+                                    aria-label="语音播放进度"
+                                    max={1}
+                                    value={audio.progress}
+                                    className="sr-only"
+                                  />
+                                )}
+                              {capabilities?.available &&
+                                audio.errors[turn.id] && (
+                                  <Text role="alert" size="xs" tone="danger">
+                                    {audio.errors[turn.id]}
+                                  </Text>
+                                )}
+                            </>
+                          )}
+                          {capabilities?.video?.available &&
+                            video.videos[turn.id]?.status === 'failed' && (
+                              <Text role="alert" size="xs" tone="secondary">
+                                真人版生成失败 ·{' '}
+                                <TextLink onClick={() => video.retry(turn.id)}>
+                                  重试生成视频
+                                </TextLink>
+                              </Text>
+                            )}
+                        </ChatMessage>
+                      ),
                   }))}
                 />
                 {chat.busy && !chat.newest && (

@@ -15,7 +15,7 @@ vi.mock('motion/react', async (original) => ({
 }));
 let items: Persona[];
 let people: Record<string, unknown>[];
-let followups: Record<string, unknown>[];
+let handoffs: Record<string, unknown>[];
 let fetcher: ReturnType<typeof vi.fn>;
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
@@ -44,25 +44,30 @@ const person = (change: Record<string, unknown>) => ({
   ...change,
 });
 const pending = (id: string, question: string) => ({
-  followup_id: id,
+  id,
+  kind: 'decide',
+  kind_label: '要你决定',
+  status: 'delivered',
+  status_label: '已送达',
+  asker_name: '许清禾',
   question,
-  previous: '',
-  reason: '',
-  asked: 1,
-  first_at: '2026-10-14T09:00:00',
-  last_at: '2026-10-14T16:24:38',
-  status: 'pending',
-  handled_at: null,
-  asked_since: 0,
-  source_id: null,
-  unresolved: false,
+  context: '',
+  ask: '',
+  answer: null,
+  source_known: true,
+  created_at: '2026-10-14T09:00:00+00:00',
+  expires_at: '2026-10-21T09:00:00+00:00',
+  days_left: 3,
+  commit: null,
+  reply: null,
+  replied_at: null,
 });
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   items = [twin({ id: 'default', name: '本人', is_default: true }), twin({})];
   people = [];
-  followups = [];
+  handoffs = [];
   setPersonaId('friend');
   usePersonas.setState({ id: 'friend', items, pendingId: null });
   useAuth.setState({ identity: null });
@@ -156,10 +161,19 @@ beforeEach(() => {
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     if (path === '/api/persona/items/summary')
       return json({ total: 0, conflicts: 0, dimensions: [] });
-    if (path === '/api/persona/followups')
+    if (path === '/api/persona/handoffs/count')
+      return json({ pending: handoffs.length });
+    if (path === '/api/persona/handoffs')
       return json({
-        items: followups,
-        pending: followups.filter((f) => f.status === 'pending').length,
+        waiting: handoffs,
+        guessed: [],
+        sourced: [],
+        sourced_count: 0,
+        answered: 0,
+        shelved: [],
+        settled: [],
+        pending: handoffs.length,
+        days: 7,
       });
     if (path.startsWith('/api/persona/items'))
       return json({ items: [], total: 0 });
@@ -506,7 +520,7 @@ it('lets the person themselves see what the twin could not answer, counted on th
   });
   items = [twin({ id: 'friend', name: '我', mine: true, approved: true })];
   usePersonas.setState({ items });
-  followups = [pending('q1', '需求评审里那组接口，这次就改还是下个版本？')];
+  handoffs = [pending('q1', '需求评审里那组接口，这次就改还是下个版本？')];
   window.location.hash = '#/team/twin/friend';
   render(<App />);
   const user = userEvent.setup();
@@ -518,18 +532,18 @@ it('lets the person themselves see what the twin could not answer, counted on th
   ).toEqual(['档案', '记忆12', '你不在时1', '承诺', '形象和声音']);
   expect(screen.getByText('（你）', { exact: false })).toBeVisible();
   expect(
-    await screen.findByRole('button', { name: '账户（1 条待回答）' }),
+    await screen.findByRole('button', { name: '账户（1 条待决定）' }),
   ).toBeVisible();
   await user.click(within(nav).getByRole('tab', { name: /你不在时/u }));
   expect(window.location.hash).toBe('#/team/twin/friend?section=away');
-  const row = await screen.findByRole('listitem', {
+  // The first question waits opened, with the box for the person's own words.
+  const row = await screen.findByRole('article', {
     name: '需求评审里那组接口，这次就改还是下个版本？',
   });
-  await user.click(within(row).getByRole('button', { name: '回复' }));
   await user.type(within(row).getByRole('textbox'), '这次不改');
-  followups = [];
-  await user.click(within(row).getByRole('button', { name: '记下' }));
-  expect(await screen.findByText('没有待回答的问题。')).toBeVisible();
+  handoffs = [];
+  await user.click(within(row).getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('没有等你决定的事。')).toBeVisible();
   // The count on the account follows.
   expect(await screen.findByRole('button', { name: '账户' })).toBeVisible();
   // The card on the profile and the entry in the settings are gone: the questions live here.
@@ -537,7 +551,7 @@ it('lets the person themselves see what the twin could not answer, counted on th
 });
 
 it('keeps 你不在时 for the person themselves: an administrator looking after the twin does not see it', async () => {
-  followups = [pending('q1', '这个问题只有本人能答')];
+  handoffs = [pending('q1', '这个问题只有本人能答')];
   render(<App />);
   await screen.findByRole('tablist', { name: '档案章节' });
   expect(screen.queryByRole('tab', { name: /你不在时/u })).toBeNull();
@@ -545,7 +559,7 @@ it('keeps 你不在时 for the person themselves: an administrator looking after
   expect(
     fetcher.mock.calls.some(
       ([path, init]) =>
-        path === '/api/persona/followups' &&
+        path.startsWith('/api/persona/handoffs') &&
         new Headers(init?.headers).get('X-Twin-Persona') === 'friend',
     ),
   ).toBe(false);

@@ -330,6 +330,41 @@ it('groups by local day and pages through older conversations', async () => {
     within(panel).queryByRole('button', { name: '显示更多' }),
   ).not.toBeInTheDocument();
 });
+it('marks a conversation whose last word is the person’s own reply', async () => {
+  const timestamp = new Date().toISOString();
+  server.rows.set('answered', {
+    id: 'answered',
+    title: '下周发布怎么安排',
+    updated_at: timestamp,
+    persona: 'default',
+    turns: [
+      { id: 'answered:1', role: 'user', content: '周五前给我方案', timestamp },
+      {
+        id: 'answered:2',
+        role: 'self',
+        content: '方案周五前给你。',
+        timestamp,
+        handoff_id: 'h1',
+      },
+    ],
+  });
+  server.rows.set('open', {
+    id: 'open',
+    title: '还在等',
+    updated_at: timestamp,
+    persona: 'default',
+    turns: [{ id: 'open:1', role: 'user', content: '在吗', timestamp }],
+  });
+  mount();
+  const panel = await history();
+  const marked = (await within(panel).findByText('下周发布怎么安排')).closest(
+    'li',
+  )!;
+  expect(within(marked).getByText('本人已回')).toBeInTheDocument();
+  const other = within(panel).getByText('还在等').closest('li')!;
+  expect(within(other).queryByText('本人已回')).toBeNull();
+});
+
 it('shows a fade only while more rows are below the internal scroll position', async () => {
   vi.stubGlobal(
     'matchMedia',

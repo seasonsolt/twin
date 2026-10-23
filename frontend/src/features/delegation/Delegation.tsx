@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CircleHelp } from 'lucide-react';
 import { useNavigate } from 'react-router';
+import { usePolling } from '../../lib/usePolling';
 import { api } from '../../lib/api';
 import {
   ActionMenu,
@@ -165,6 +166,10 @@ export function Delegation({ note }: { note: DelegationNote }) {
   useEffect(() => {
     void load();
   }, [load]);
+  usePolling(
+    load,
+    view?.targets.some((target) => target.state === 'handed') ? 10000 : 0,
+  );
   const act = async (path: string, json: object, done?: string) => {
     setBusy(true);
     try {
@@ -181,7 +186,7 @@ export function Delegation({ note }: { note: DelegationNote }) {
       setBusy(false);
     }
   };
-  if (error)
+  if (error && !view)
     return (
       <Text role="alert" size="sm" tone="danger">
         {error}

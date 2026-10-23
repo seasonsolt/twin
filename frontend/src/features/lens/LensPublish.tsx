@@ -92,9 +92,12 @@ export function LensPublish({
   const [error, setError] = useState('');
   const openable = aspects.filter((aspect) => aspect.ok);
   const blocked = aspects.filter((aspect) => !aspect.ok);
-  const colleagues = (people ?? []).filter(
-    (p) => p.persona_id && p.persona_id !== twinId,
-  );
+  const colleagues = (people ?? [])
+    .map((person) => ({
+      ...person,
+      recipient: person.talk ?? person.persona_id,
+    }))
+    .filter((person) => person.recipient && person.recipient !== twinId);
   const picked = openable
     .filter((aspect) => chosen.has(aspect.id))
     .flatMap((aspect) =>
@@ -241,9 +244,9 @@ export function LensPublish({
               <Checkbox
                 key={p.id}
                 label={p.name}
-                checked={twins.has(p.persona_id ?? '')}
+                checked={twins.has(p.recipient ?? '')}
                 onChange={(event) =>
-                  toggleTwin(p.persona_id ?? '', event.target.checked)
+                  toggleTwin(p.recipient ?? '', event.target.checked)
                 }
               />
             ))}

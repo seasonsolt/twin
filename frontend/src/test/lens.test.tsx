@@ -121,8 +121,8 @@ beforeEach(() => {
   usePersonas.setState({ id: 'default', items: [] });
   useTeam.setState({
     people: [
-      { id: 'pe1', name: '沈从', persona_id: 'p-shen' },
-      { id: 'pe2', name: '陈一', persona_id: 'p-chen' },
+      { id: 'pe1', name: '沈从', persona_id: null, talk: 'p-shen' },
+      { id: 'pe2', name: '陈一', persona_id: null, talk: 'p-chen' },
       { id: 'pe3', name: '王屿', persona_id: 'default' },
     ] as never,
   });

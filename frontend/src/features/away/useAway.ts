@@ -1,4 +1,5 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { usePolling } from '../../lib/usePolling';
 import { api } from '../../lib/api';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 
@@ -91,13 +92,15 @@ export function useAway(enabled = true) {
   const personaId = usePersonaId();
   const [data, setData] = usePersonaState<Away | null>(null);
   const [error, setError] = usePersonaState('');
+  const latest = useRef(data);
+  latest.current = data;
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
         setData(await api<Away>('/api/persona/handoffs', { signal }));
         setError('');
       } catch (failure) {
-        if (signal?.aborted) return;
+        if (signal?.aborted || latest.current) return;
         setError(failure instanceof Error ? failure.message : '加载失败');
       }
     },
@@ -109,6 +112,7 @@ export function useAway(enabled = true) {
     void load(controller.signal);
     return () => controller.abort();
   }, [enabled, load, personaId]);
+  usePolling(() => load(), enabled ? 15000 : 0);
   const reload = useCallback(async () => {
     await load();
     window.dispatchEvent(new Event(AWAY_CHANGED));

@@ -209,6 +209,7 @@ export function Sidebar() {
             onClick={() => setFinding(true)}
           />
           <Button
+            variant={location.pathname === '/chat' ? 'secondary' : 'primary'}
             size="lg"
             className="w-full"
             onClick={() => input.current?.click()}

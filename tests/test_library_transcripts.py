@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections import namedtuple
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from twin.config import Settings
+from twin.config import LibrarySettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.library import Library
@@ -48,7 +49,8 @@ PLAIN = "林舟：开始吧\n许清禾：好\n说话人 1：嗯\n林舟：继续
 
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
-    settings = Settings(db_path=tmp_path / "twin.db")
+    # No headroom asked of the test machine's disk; ``test_a_transcript_is_refused_like_an_upload`` sets it.
+    settings = Settings(db_path=tmp_path / "twin.db", library=LibrarySettings(headroom_gb=0))
     app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)
     with TestClient(app, base_url="http://localhost") as client:
         yield client
@@ -211,3 +213,19 @@ def test_a_member_chosen_for_a_label_overrides_the_name_and_an_unknown_one_is_re
     assert recording is not None
     seen = {s.id: (s.decision, s.person_id) for s in team.speakers(recording)}
     assert seen["林舟"] == ("confirmed", xu.id) and seen["许清禾"] == ("none", None)
+
+
+def test_a_transcript_is_refused_like_an_upload_when_the_disk_or_the_queue_is_full(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr("twin.web.library.shutil.disk_usage", lambda _: usage(100, 90, 10))
+    refused = bring_in(client, "站会.txt", PLAIN)
+    assert refused.status_code == 507 and "磁盘空间不足" in refused.json()["detail"]
+    monkeypatch.setattr("twin.web.library.shutil.disk_usage", lambda _: usage(10**12, 0, 10**12))
+    monkeypatch.setattr("twin.media.library.Library.pending", lambda *_: 20)  # the member's queue is full
+    full = bring_in(client, "站会.txt", PLAIN)
+    assert full.status_code == 409 and "排队" in full.json()["detail"]
+    assert client.get("/api/library").json()["recordings"] == []
+    monkeypatch.setattr("twin.media.library.Library.pending", lambda *_: 0)
+    assert bring_in(client, "站会.txt", PLAIN).status_code == 201

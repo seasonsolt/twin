@@ -25,10 +25,18 @@ logger = logging.getLogger(__name__)
 
 
 class SavedTurn(BaseModel):
+    """A turn of a conversation brought over from the browser. ``reply`` is accepted and dropped (``imported``)."""
+
     role: Literal["user", "twin"]
     content: str = Field(max_length=4000)
     timestamp: dt.datetime
     reply: dict[str, Any] | None = None
+
+    def imported(self) -> dict[str, Any]:
+        """The turn as it is saved: its text only. What a twin turn's metadata says (what it left to the person, a
+        promise, how it answered, what it cited) is believed only where the twin wrote it, so a turn sent in by the
+        asker cannot make handoffs, commitments or answers on the person's page (``handoffs``)."""
+        return self.model_dump(mode="json", exclude={"reply"})
 
 
 class CreateBody(BaseModel):
@@ -105,14 +113,16 @@ class ConversationIndex:
         if conversation_id is None:
             return
         self._write(
-            lambda team, head: team.refresh_conversation(conversation_id, head[1], head[2]), store, conversation_id
+            lambda team, head: team.refresh_conversation(conversation_id, head[1], head[2], persona_id=self.persona_id),
+            store,
+            conversation_id,
         )
 
     def deleted(self, conversation_id: str) -> None:
         if self.team is None:
             return
         try:
-            self.team.delete_conversation(conversation_id)
+            self.team.delete_conversation(conversation_id, persona_id=self.persona_id)
         except sqlite3.Error:
             logger.warning("could not mark conversation %s deleted in the team index", conversation_id, exc_info=True)
 
@@ -125,7 +135,7 @@ class ConversationIndex:
         if self.team is None:
             return current
         try:
-            stored = self.team.audience_of(conversation_id)
+            stored = self.team.audience_of(conversation_id, persona_id=self.persona_id)
         except sqlite3.Error:
             logger.warning("could not read conversation %s from the team index", conversation_id, exc_info=True)
             return COLLEAGUE
@@ -201,7 +211,7 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
             try:
                 conversation_id = store.create_conversation(
                     owner(request),
-                    [turn.model_dump(mode="json") for turn in body.turns],
+                    [turn.imported() for turn in body.turns],
                     str(body.migration_id) if body.migration_id else None,
                 )
             except KeyError:

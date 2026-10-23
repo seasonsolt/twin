@@ -540,6 +540,54 @@ def test_a_note_kept_to_themself_is_not_in_a_managers_list_of_memories_nor_reada
     assert NOTE in scene.web.get(f"/api/persona/sources/{note_id}/text", headers=scene.headers).text
 
 
+def test_what_a_person_kept_in_a_twin_that_is_not_theirs_goes_with_them_when_they_say_so(scene: Scene) -> None:
+    """The person said "这不是我": their notes kept to themself, the memory made from them, their conversations and
+    the promises made there do not stay for whoever takes the twin next; what the meetings say stays."""
+    scene.as_("admin")  # the administrator makes the twin for PERSON
+    made = scene.web.post("/api/personas", json={"name": "认领的分身"}, headers=CSRF).json()["id"]
+    path = scene.root / "personas" / made / "twin.db"
+    with PersonaStore(path) as store:
+        store.set_meta("built_at", "2026-01-01")
+        store.replace_facet_items("2.1", [item("pi_work", "2.1", WORK)])
+    headers = {**CSRF, "X-Twin-Persona": made}
+    assert scene.web.put(f"/api/personas/{made}/claim", json={"claim": PERSON}, headers=CSRF).status_code == 200
+    scene.as_("person")
+    assert any(p["id"] == made and p["mine"] for p in scene.web.get("/api/personas").json())  # taken on signing in
+    assert scene.web.post(f"/api/personas/{made}/approve", json={"public": False}, headers=CSRF).status_code == 200
+    mine = scene.web.post("/api/conversations", json={}, headers=headers).json()["id"]
+    sent = {"messages": [{"role": "user", "content": f"记一下，下周三请假复查 {NOTE}"}], "conversation_id": mine}
+    final = scene.web.post("/api/persona/chat/stream", json=sent, headers=headers).text
+    note_id = json.loads(final.split("event: final\ndata: ", 1)[1].split("\n\n", 1)[0])["note"]["id"]
+    promised = {"messages": [{"role": "user", "content": "我答应王屿周五前给方案"}], "conversation_id": mine}
+    assert scene.web.post("/api/persona/chat/stream", json=promised, headers=headers).status_code == 200
+    with PersonaStore(path) as store:
+        assert store.note_tiers() == {note_id: "self"} and len(store.list_ledger()) == 1
+        noted = item("pi_note", "9.3", NOTE).model_copy(
+            update={"evidence": [item("pi_note", "9.3", NOTE).evidence[0].model_copy(update={"source_id": note_id})]}
+        )
+        store.replace_facet_items("9.3", [noted])
+    assert NOTE in scene.web.get(f"/api/persona/sources/{note_id}/text", headers=headers).text
+
+    assert scene.web.post(f"/api/personas/{made}/disown", headers=CSRF).json() == {"disowned": True}
+    with PersonaStore(path) as store:
+        assert store.get_source(note_id) is None and store.note_tiers() == {}
+        assert store.list_ledger() == []
+        assert store.list_conversations(PERSON) == []
+        assert [i.item_id for i in store.list_items()] == ["pi_work"]  # what the meetings say stays
+    assert list((path.parent / "kernel-snapshots").iterdir())  # kept before anything was removed
+
+    # The administrator gives it to someone else, who takes it: none of it is theirs to read.
+    scene.as_("admin")
+    assert scene.web.put(f"/api/personas/{made}/claim", json={"claim": VISITOR}, headers=CSRF).status_code == 200
+    scene.as_("visitor")
+    assert any(p["id"] == made and p["mine"] for p in scene.web.get("/api/personas").json())
+    assert scene.web.post(f"/api/personas/{made}/approve", json={"public": False}, headers=CSRF).status_code == 200
+    assert scene.web.get(f"/api/persona/sources/{note_id}/text", headers=headers).status_code == 404
+    assert scene.web.get(f"/api/conversations/{mine}", headers=headers).status_code == 404
+    ledger = scene.web.get("/api/persona/ledger", headers=headers)
+    assert ledger.status_code == 200 and "王屿" not in ledger.text
+
+
 def test_without_sign_in_the_one_person_lists_their_conversations_and_no_twin_is_known_to_be_theirs(
     tmp_path: Path,
 ) -> None:

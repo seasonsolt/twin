@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { keepingAlive } from '../../lib/api';
 
 /** How long a settled row waits for 撤销 before the server is told. */
 export const UNDO_MS = 5000;
@@ -14,8 +15,10 @@ interface Entry {
 /**
  * Answers the server hears a few seconds after they are given, so a wrong click costs nothing: until then the row
  * shows what was done with 撤销, and taking it back sends no request. Whatever is still waiting when the page is
- * left (or closed) is sent at once. The answers go one after another, and ``settle`` (loading the page again) runs
- * once the last one is told, not between them, so a run of many answers does not load the heaviest view each time.
+ * left is sent at once. The answers go one after another, and ``settle`` (loading the page again) runs once the last
+ * one is told, not between them, so a run of many answers does not load the heaviest view each time. When the tab is
+ * closed (``pagehide``) there is no after: everything still waiting is sent together, each request kept alive past
+ * the page.
  */
 export function useDeferred({
   settle,
@@ -99,13 +102,41 @@ export function useDeferred({
       if (entry.state === 'waiting') send(id);
   }, [send]);
 
+  /** The page is going away: start every answer still waiting now, side by side and kept alive (``keepingAlive``),
+   * as a chain would start the later ones only after the page is gone. */
+  const sendAll = useCallback(() => {
+    const now = [...entries.current.values()].filter(
+      (entry) => entry.state === 'waiting',
+    );
+    if (!now.length) return;
+    for (const entry of now) {
+      clearTimeout(entry.timer);
+      entry.state = 'sent';
+      inflight.current += 1;
+      let started: Promise<unknown>;
+      try {
+        started = keepingAlive(entry.run);
+      } catch (failure) {
+        started = Promise.reject(failure);
+      }
+      void started
+        .catch(() => {})
+        .then(() => {
+          inflight.current -= 1;
+          return finish();
+        })
+        .catch(() => {});
+    }
+    changed();
+  }, [finish]);
+
   useEffect(() => {
-    window.addEventListener('pagehide', flush);
+    window.addEventListener('pagehide', sendAll);
     return () => {
-      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('pagehide', sendAll);
       flush();
     };
-  }, [flush]);
+  }, [flush, sendAll]);
 
   const all = [...entries.current.entries()];
   return {

@@ -258,7 +258,10 @@ export function Sidebar() {
  * twin). */
 function useWaiting(twinId: string | undefined) {
   const [count, setCount] = useState(0);
+  // Only the latest question's answer counts: one asked of a twin before the person had another is not theirs now.
+  const asked = useRef(0);
   const load = useCallback(async () => {
+    const ask = ++asked.current;
     if (!twinId) {
       setCount(0);
       return;
@@ -268,7 +271,7 @@ function useWaiting(twinId: string | undefined) {
         '/api/persona/handoffs/count',
         { headers: { 'X-Twin-Persona': twinId } },
       );
-      setCount(pending);
+      if (ask === asked.current) setCount(pending);
     } catch {
       // A count that cannot be had is no count: the account stays as it is.
     }

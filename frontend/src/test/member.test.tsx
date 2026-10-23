@@ -729,6 +729,7 @@ it('leads the old profile addresses to the member page of the twin in view, on t
     ['#/profile', '#/team/twin/friend'],
     ['#/profile?section=assets', '#/team/twin/friend?section=assets'],
     ['#/profile?section=memories', '#/team/twin/friend?section=memories'],
+    ['#/profile?tab=away', '#/team/twin/friend?section=away'],
     ['#/memories', '#/team/twin/friend?section=memories'],
     ['#/sources', '#/team/twin/friend?section=memories'],
     ['#/about', '#/team/twin/friend'],

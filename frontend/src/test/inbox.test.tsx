@@ -434,6 +434,43 @@ it('tells the server every answer still waiting when the page is left', async ()
   ).toEqual(['confirm', 'confirm', 'confirm']);
 });
 
+it('sends every answer still waiting at once, kept alive, when the tab is closed', async () => {
+  const user = clock();
+  server.voices = ['a', 'b', 'c'].map((id, i) =>
+    voice(id, {
+      members: [member('rec_1', `S${i}`, 300 - i)],
+      seconds: 300 - i,
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+  );
+  view();
+  await user.click(
+    await screen
+      .findAllByRole('button', { name: '归给张总' })
+      .then((all) => all[0]),
+  );
+  await user.click(screen.getAllByRole('button', { name: '归给张总' })[0]);
+  await user.click(screen.getAllByRole('button', { name: '归给张总' })[0]);
+  expect(posted('/api/library/voices')).toHaveLength(0);
+  // No waiting for one to be answered before the next is sent: the page is gone by then.
+  act(() => {
+    window.dispatchEvent(new Event('pagehide'));
+  });
+  expect(posted('/api/library/voices')).toHaveLength(3);
+  const sent = vi
+    .mocked(fetch)
+    .mock.calls.filter(([url]) => url === '/api/library/voices');
+  expect(sent.map(([, init]) => init?.keepalive)).toEqual([true, true, true]);
+  // Nothing else was sent kept alive.
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(
+        ([url, init]) => url !== '/api/library/voices' && init?.keepalive,
+      ),
+  ).toEqual([]);
+});
+
 it('adds a new person for a name the meeting called, or one typed, and settles an unnamed person from their row', async () => {
   const user = clock();
   server.people = [
@@ -1117,6 +1154,35 @@ it('hears who it may be beside the voice, and answers with a key or a name, one 
     expect.objectContaining({ action: 'confirm', new_person: '王屿' }),
     expect.objectContaining({ action: 'confirm', new_person: '宋明' }),
   ]);
+});
+
+it('leaves the keys to a dialog or menu open over the one-by-one view', async () => {
+  const user = clock();
+  server.voices = [
+    voice('a', {
+      seconds: 300,
+      members: [member('rec_1', 'S1', 300)],
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+    voice('b', { seconds: 100, members: [member('rec_2', 'S2', 100)] }),
+  ];
+  view('/inbox?view=focus');
+  expect(await screen.findByText('1 / 2')).toBeVisible();
+  const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  document.body.append(dialog);
+  await user.keyboard('1s');
+  expect(screen.getByText('1 / 2')).toBeVisible();
+  expect(screen.queryByText('已归给张总')).toBeNull();
+  dialog.remove();
+  // A key something else already took is not the queue's either.
+  const taken = (event: KeyboardEvent) => event.preventDefault();
+  window.addEventListener('keydown', taken, { capture: true });
+  await user.keyboard('1');
+  window.removeEventListener('keydown', taken, { capture: true });
+  expect(screen.queryByText('已归给张总')).toBeNull();
+  await user.keyboard('1');
+  expect(await screen.findByText('已归给张总')).toBeVisible();
 });
 
 it('takes back the last answer with U, and leaves the voice to be heard again', async () => {

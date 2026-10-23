@@ -417,6 +417,42 @@ it('says when only the meetings could be searched', async () => {
   ).toBeVisible();
 });
 
+it('does not count for the person what an earlier twin of theirs had waiting, answered late', async () => {
+  let late: (value: Response) => void = () => {};
+  const asked: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/persona/handoffs/count') {
+        const twinId = new Headers(init?.headers).get('X-Twin-Persona') ?? '';
+        asked.push(twinId);
+        if (twinId === 'default')
+          return new Promise<Response>((resolve) => {
+            late = resolve;
+          });
+        return json({ pending: 0 });
+      }
+      if (url === '/api/personas') return json(usePersonas.getState().items);
+      return json({});
+    }),
+  );
+  show('/chat');
+  await waitFor(() => expect(asked).toContain('default'));
+  // Their own twin is another one now, which has nothing waiting.
+  act(() => {
+    usePersonas.setState({
+      id: 'p-new',
+      items: [twin({ id: 'p-new', name: '林舟' })],
+    });
+  });
+  await waitFor(() => expect(asked).toContain('p-new'));
+  await act(async () => {
+    late(json({ pending: 5 }));
+  });
+  expect(screen.getByRole('button', { name: '账户' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: /条待决定/u })).toBeNull();
+});
+
 it('gives a guest the conversation alone: no counts, finding, uploading or background', async () => {
   usePersonas.setState({
     id: 'p-public',

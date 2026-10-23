@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from twin.assets import AssetStore
 from twin.config import AuthSettings, Settings, SMTPSettings, SSOSettings
+from twin.web import assets as web_assets
 from twin.web import create_app
 from twin.web.auth import Auth, digest, normalize_email, photo_url, send_code
 from twin.web.jobs import PersonaProcessing
@@ -509,6 +510,8 @@ class FakeLogin:
         # Profile photos the company keeps, by path, and how often each was fetched.
         self.photos: dict[str, bytes] = {}
         self.photo_fetches: dict[str, int] = {}
+        # Paths answered with a redirect to the address given.
+        self.redirects: dict[str, str] = {}
         login = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -516,6 +519,12 @@ class FakeLogin:
                 pass
 
             def do_GET(self) -> None:
+                if self.path in login.redirects:
+                    self.send_response(302)
+                    self.send_header("Location", login.redirects[self.path])
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if self.path in login.photos:
                     login.photo_fetches[self.path] = login.photo_fetches.get(self.path, 0) + 1
                     self.send_response(200)
@@ -547,6 +556,9 @@ class FakeLogin:
 def sso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, FakeLogin]]:
     monkeypatch.delenv("TWIN_SMTP_PASSWORD", raising=False)  # SSO needs no mail account
     monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    # The company keeps its photos here on this machine; only ``test_a_profile_photo_is_fetched_only_from_the_internet``
+    # sees the addresses as they are.
+    monkeypatch.setattr(web_assets, "public_address", lambda _: True)
     login = FakeLogin()
     settings = Settings(
         db_path=tmp_path / "twin.db",
@@ -661,6 +673,16 @@ def picture(size: int, color: str) -> bytes:
     return output.getvalue()
 
 
+def bomb() -> bytes:
+    """A small file of a picture far larger than a profile photo is."""
+    output = io.BytesIO()
+    Image.new("1", (8000, 8000)).save(output, format="PNG")
+    return output.getvalue()
+
+
+public_as_is = web_assets.public_address
+
+
 def worn(web: TestClient, persona: str) -> dict[str, Any] | None:
     """The twin's portrait once it has finished trying the profile photo it was offered."""
     registry = web.app.state.personas  # type: ignore[attr-defined]
@@ -737,6 +759,34 @@ def test_the_company_photo_leaves_alone_a_look_the_person_chose(sso: tuple[TestC
     web.get("/api/personas")
     assert worn(web, removed) is None  # they took the photo off: a newer one does not put it back
     assert login.photo_fetches == {"/a.png": 1}
+
+
+def test_a_profile_photo_is_fetched_only_from_the_internet(
+    sso: tuple[TestClient, FakeLogin], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The address comes from the sign-in service: one inside the network (this machine, the cloud's metadata) is
+    never asked, nor is one a redirect leads to; a picture that says it is of billions of pixels is not decoded."""
+    _, login = sso
+    login.photos = {"/a.png": picture(640, "navy"), "/bomb.png": bomb()}
+    login.redirects = {"/moved.png": login.origin + "/a.png"}
+    monkeypatch.setattr(web_assets, "public_address", public_as_is)
+    with pytest.raises(web_assets.PrivateAddress):
+        web_assets.fetch_photo(login.origin + "/a.png")
+    for address in ("127.0.0.1", "10.0.0.8", "169.254.169.254", "::1", "fe80::1", "::ffff:192.168.1.1", "100.64.0.1"):
+        assert not web_assets.public_address(address), address
+    assert web_assets.public_address("8.8.8.8") and web_assets.public_address("2606:4700:4700::1111")
+    # The first address is let through as if it were on the internet; the one it redirects to is not.
+    allowed = iter([True])
+    monkeypatch.setattr(web_assets, "public_address", lambda _: next(allowed, False))
+    with pytest.raises(web_assets.PrivateAddress):
+        web_assets.fetch_photo(login.origin + "/moved.png")
+    assert login.photo_fetches == {}
+    for address in ("file:///etc/passwd", "ftp://a.example/p.png"):
+        with pytest.raises(ValueError):
+            web_assets.fetch_photo(address)
+    monkeypatch.setattr(web_assets, "public_address", lambda _: True)
+    with pytest.raises(ValueError, match="pixels"):
+        web_assets.fetch_photo(login.origin + "/bomb.png")
 
 
 @pytest.mark.parametrize(

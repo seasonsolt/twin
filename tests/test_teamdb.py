@@ -186,3 +186,76 @@ def test_a_backup_carries_the_team_database(tmp_path: Path, monkeypatch: pytest.
     target = backup(paths, paths.data, paths.config)
     with sqlite3.connect(target / "data" / "team" / "team.db") as copy:
         assert copy.execute("SELECT id FROM conversations").fetchall() == [("c1",)]
+
+
+def test_a_conversation_id_another_twin_holds_stays_that_twins(tmp_path: Path) -> None:
+    """Twins' databases copied from one another share conversation ids, and a client may choose one: the index keeps
+    each id with the twin that had it first, and nothing done for the other twin renames, undeletes, withdraws or
+    crashes on it."""
+    with TeamDB(tmp_path / "team.db") as team:
+        team.record_conversation("x", "p1", "me@x.com", "self", "我的", STAMP)
+        team.create_handoff(
+            persona_id="p1",
+            owner="me@x.com",
+            conversation_id="x",
+            turn=2,
+            asker="a@x.com",
+            asker_name="a",
+            kind="decide",
+            question="要不要做",
+        )
+        # Another twin's conversation with the same id, recorded as it is created.
+        team.record_conversation("x", "p2", "you@x.com", "colleague", "改名", "2026-10-23T09:00:00+00:00")
+        [held] = team.conversations(include_deleted=True)
+        assert (held.persona_id, held.title, held.audience, held.updated_at) == ("p1", "我的", "self", STAMP)
+        assert team.audience_of("x", persona_id="p2") is None and team.audience_of("x", persona_id="p1") == "self"
+        # The other twin renaming or deleting its own conversation leaves the first twin's and its handoffs alone.
+        team.refresh_conversation("x", "改名", STAMP, persona_id="p2")
+        team.delete_conversation("x", persona_id="p2")
+        assert team.withdraw_conversation("x", persona_id="p2") == 0
+        assert [(c.title, c.deleted_at) for c in team.conversations()] == [("我的", None)]
+        assert {h.status for h in team.handoffs()} == {"delivered"}
+        # Deleted by its own twin, it is not brought back by the other one.
+        team.delete_conversation("x", persona_id="p1")
+        assert {h.status for h in team.handoffs()} == {"withdrawn"}
+        team.record_conversation("x", "p2", "you@x.com", "colleague", "改名", STAMP)
+        assert team.conversations() == []
+        # Reconciling the other twin at startup neither raises nor takes it; nor does a rebuild.
+        done = team.reconcile_persona("p2", [("x", "you@x.com", "改名", STAMP), ("y", None, "自己的", STAMP)])
+        assert (done.added, done.updated, done.removed) == (1, 0, 0)
+        rebuilt = team.rebuild_conversations({"p2": [("x", "you@x.com", "改名", STAMP), ("y", None, "自己的", STAMP)]})
+        assert rebuilt.added == 1
+        assert {(c.id, c.persona_id, c.title) for c in team.conversations(include_deleted=True)} == {
+            ("x", "p1", "我的"),
+            ("y", "p2", "自己的"),
+        }
+        # The twin that holds it still reconciles it as its own.
+        assert team.reconcile_persona("p1", [("x", "me@x.com", "我的", STAMP)]).updated == 1
+        assert [c.persona_id for c in team.conversations() if c.id == "x"] == ["p1"]
+
+
+def test_a_revised_team_answer_is_embedded_again(tmp_path: Path) -> None:
+    with TeamDB(tmp_path / "team.db") as team:
+        made = team.create_team_answer(persona_id="p1", owner="me@x.com", title="旧标题", body="旧内容")
+        assert made is not None
+        team.put_answer_vector(made.id, "m", b"\0\0\0\0")
+        team.revise_team_answer(made.id, "新标题", "新内容")
+        assert team.answer_vectors() == {}
+
+
+def test_a_twin_gone_for_good_takes_its_delegations_and_answers_and_leaves_colleagues_conversations(
+    tmp_path: Path,
+) -> None:
+    with TeamDB(tmp_path / "team.db") as team:
+        team.record_conversation("mine", "p1", "me@x.com", "self", "问问同事", STAMP)
+        delegation = team.create_delegation(initiator="me@x.com", persona_id="p1", conversation_id="mine", question="?")
+        team.record_conversation(
+            "asked", "p2", "me@x.com", "colleague", "代问", STAMP, via="delegate", delegation_id=delegation.id
+        )
+        answer = team.create_team_answer(persona_id="p1", owner="me@x.com", title="答", body="内容")
+        assert answer is not None
+        team.forget_persona("p1")
+        [kept] = team.conversations()
+        assert (kept.id, kept.persona_id, kept.via, kept.delegation_id) == ("asked", "p2", "delegate", None)
+        assert team.get_delegation(delegation.id) is None
+        assert team.get_team_answer(answer.id) is None and team.team_answers() == []

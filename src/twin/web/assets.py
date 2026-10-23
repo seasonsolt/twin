@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import http.client
 import io
+import ipaddress
 import logging
 import math
+import socket
 import subprocess
 import tempfile
+import urllib.parse
 import urllib.request
 import wave
 from collections.abc import Callable
@@ -31,6 +35,8 @@ logger = logging.getLogger(__name__)
 PORTRAIT_LIMIT = 15 * 1024 * 1024
 # A company profile photo (``wear_photo``) is a small picture; anything larger is not one.
 PHOTO_LIMIT = 5 * 1024 * 1024
+# Nor is one of more pixels than this (read from its header, before it is decoded): a few bytes can say billions.
+PHOTO_PIXELS = 40_000_000
 VOICE_LIMIT = 95_000_000
 # A sentence read aloud to find oneself in colleagues' meetings (``web.voice``).
 VOICEPRINT_LIMIT = 10 * 1024 * 1024
@@ -103,12 +109,92 @@ def portrait(path: Path, fields: dict[str, str]) -> bytes:
         raise HTTPException(400, "无法读取照片，请选择有效的 JPEG、PNG、WebP 或 HEIC/HEIF 图片") from None
 
 
+class PrivateAddress(ValueError):
+    """The photo's address is not on the internet: the service, its host's network or the cloud's metadata."""
+
+
+def public_address(address: str) -> bool:
+    """Whether a photo may be fetched from this IP address: a global unicast one, not private, loopback, link-local,
+    shared, reserved or multicast (an IPv4 address written as IPv6 is judged as itself)."""
+    ip = ipaddress.ip_address(address.split("%", 1)[0])
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_global and not ip.is_multicast
+
+
+def _public_connection(
+    address: tuple[str, int], timeout: float | None = None, source_address: tuple[str, int] | None = None
+) -> socket.socket:
+    """``socket.create_connection`` to an address of ``public_address`` only. The name is resolved once and the
+    connection made to the address that was checked, so it cannot resolve elsewhere in between."""
+    host, port = address
+    found = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    for *_, sockaddr in found:
+        if not public_address(str(sockaddr[0])):
+            raise PrivateAddress(f"{host} is not a public address")
+    error: OSError = OSError(f"{host} has no address")
+    for *_, sockaddr in found:
+        try:
+            return socket.create_connection((str(sockaddr[0]), port), timeout, source_address)
+        except OSError as e:
+            error = e
+    raise error
+
+
+class _PublicHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _public_connection
+
+
+class _PublicHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _public_connection
+
+
+class _PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_PublicHTTPConnection, req)
+
+
+class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_PublicHTTPSConnection, req, context=self._context)  # type: ignore[attr-defined]
+
+
+def _photo_opener() -> urllib.request.OpenerDirector:
+    """http(s) only, each hop of a redirect connected through ``_public_connection``, and no proxy (through which the
+    address reached could not be checked)."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        _PublicHTTPHandler(),
+        _PublicHTTPSHandler(),
+        urllib.request.HTTPRedirectHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
 def fetch_photo(url: str) -> bytes:
-    """Raises OSError when the photo cannot be fetched now, ValueError when it is too large to be a photo."""
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "image/*"}), timeout=10) as response:
+    """Raises OSError when the photo cannot be fetched now, ValueError when it is too large to be a photo or its
+    address (or that of a redirect) is not a public http(s) one (``PrivateAddress``)."""
+    if urllib.parse.urlsplit(url).scheme not in {"http", "https"}:
+        raise ValueError("photo address is not http(s)")
+    request = urllib.request.Request(url, headers={"Accept": "image/*"})
+    with _photo_opener().open(request, timeout=10) as response:
         content: bytes = response.read(PHOTO_LIMIT + 1)
     if len(content) > PHOTO_LIMIT:
         raise ValueError("photo too large")
+    try:
+        with Image.open(io.BytesIO(content)) as probe:
+            width, height = probe.size
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ValueError(f"not a usable photo: {type(error).__name__}") from None
+    if width * height > PHOTO_PIXELS:
+        raise ValueError("photo has too many pixels")
     return content
 
 
@@ -132,7 +218,7 @@ def wear_photo(settings: Settings, url: str, *, worn_before: bool) -> bool:
             upload.write(content)
             upload.flush()
             picture = portrait(Path(upload.name), {})
-    except (ValueError, HTTPException) as error:
+    except (ValueError, HTTPException, Image.DecompressionBombError) as error:
         # Not a photo twin can use (too small, not an image): asking again gives the same answer.
         logger.warning("企业头像不能用作肖像：%s", getattr(error, "detail", None) or error)
         return False

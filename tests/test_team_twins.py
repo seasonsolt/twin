@@ -138,6 +138,21 @@ def test_a_twin_named_like_a_person_is_joined_only_when_its_keeper_says_they_are
     assert Team(team_library(tmp_path)).synced() == []  # the library still does not build it
 
 
+def test_a_twin_of_the_same_name_is_not_joined_by_someone_who_may_not_make_that_persons_twin(
+    web: TestClient, tmp_path: Path
+) -> None:
+    """赵六 may not see the meeting 张三 is in: naming a twin of their own 张三 does not let it speak for him."""
+    zhang = heard_zhang(tmp_path)
+    persona = make_twin(web, OTHER, "张三")
+    assert matches(as_(web, OTHER)) == []  # not offered
+    hijack = web.post(f"/api/library/people/{zhang}/same", json={"persona_id": persona, "same": True}, headers=CSRF)
+    assert hijack.status_code == 403
+    assert people(as_(web, UPLOADER))["张三"]["persona_id"] is None
+    # Whoever keeps the meeting still makes his twin.
+    made = web.post(f"/api/library/people/{zhang}/persona", headers=CSRF)
+    assert made.status_code == 200 and made.json()["new"] is True
+
+
 def test_a_twin_said_not_to_be_the_person_stays_a_twin_of_its_own_and_is_not_asked_about_again(
     web: TestClient, tmp_path: Path
 ) -> None:

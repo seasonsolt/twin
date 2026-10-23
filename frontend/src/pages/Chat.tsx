@@ -28,6 +28,7 @@ import { usePlayback } from '../features/chat/usePlayback';
 import { useWork } from '../features/work/useWork';
 import { WorkThread } from '../features/work/WorkThread';
 import { api } from '../lib/api';
+import { getPersonaId } from '../lib/persona';
 import { twinMemberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useMediaQuery, useMobile } from '../lib/useMobile';
@@ -140,9 +141,13 @@ export function Chat() {
   );
   const own = everything.data?.mine ?? null;
   const ownId = own?.persona_id ?? null;
-  // Choosing another twin to write to leaves the assistant's list behind.
+  // The twin the page is on its way to for the assistant's list (「我的分身」 chosen from another twin's page).
+  const goingToOwn = useRef<string | null>(null);
+  // Choosing another twin to write to leaves the assistant's list behind; going to the person's own is not that.
   useEffect(() => {
-    if (scope.kind === 'mine' && ownId !== personaId) setScope({ kind: 'all' });
+    if (scope.kind !== 'mine' || ownId === personaId) return;
+    if (ownId !== null && goingToOwn.current === ownId) return;
+    setScope({ kind: 'all' });
   }, [scope.kind, ownId, personaId]);
   // The people a conversation was had with, newest first, as the list's chips; kept while one is chosen.
   const [known, setKnown] = useState<string[]>([]);
@@ -425,7 +430,15 @@ export function Chat() {
                   return;
                 }
                 setScope({ kind: 'mine' });
-                void switchTo(ownId);
+                goingToOwn.current = ownId;
+                void switchTo(ownId).finally(() => {
+                  if (goingToOwn.current === ownId) goingToOwn.current = null;
+                  // Another twin was chosen meanwhile, or the switch did not happen: not the assistant's list.
+                  if (getPersonaId() !== ownId)
+                    setScope((current) =>
+                      current.kind === 'mine' ? { kind: 'all' } : current,
+                    );
+                });
               },
             }
           : undefined

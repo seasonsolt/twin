@@ -339,7 +339,11 @@ class HandoffDesk:
 
     def reconcile(self) -> int:
         """Make the handoffs of replies that left something to the person and have none (a stop between the twin's
-        database and the team's), in recent conversations; how many were made."""
+        database and the team's), in recent conversations; how many were made. Only the twin's own replies count: a
+        conversation brought over from the browser keeps the text of its twin turns and none of their metadata
+        (``web.conversations``), so nothing it says is handed on. A question asked again in a conversation that already
+        has a handoff of it was taken into that one (``TeamDB.create_handoff``) and is not handed on by itself later,
+        whatever became of the first."""
         if self.team is None or self.owner() is None:
             return 0
         since = (_now() - dt.timedelta(days=RECONCILE_DAYS)).isoformat()
@@ -347,17 +351,30 @@ class HandoffDesk:
         if not rows:
             return 0
         by_id = {c.id: c for c in rows}
+        handed: dict[tuple[str, str], int] = {}
+        for h in self.team.handoffs(persona_id=self.persona_id):
+            if h.conversation_id in by_id and h.turn is not None and h.group_key:
+                key = (h.conversation_id, h.group_key)
+                handed[key] = min(h.turn, handed.get(key, h.turn))
         made = 0
         with PersonaStore(self.store_path()) as store:
             for conversation_id, seq, reply in store.owner_part_turns(list(by_id)):
                 if reply.get("team_answers"):
                     continue
+                key = (conversation_id, followup_id(store.question_before(conversation_id, seq)))
+                if handed.get(key, seq) < seq:
+                    continue
                 conversation = by_id[conversation_id]
                 try:
-                    if self._raise(store, conversation_id, seq, conversation.asker, conversation.asker_name, reply):
-                        made += 1
+                    raised = self._raise(
+                        store, conversation_id, seq, conversation.asker, conversation.asker_name, reply
+                    )
                 except sqlite3.Error:
                     logger.warning("could not mend the handoff of conversation %s", conversation_id, exc_info=True)
+                    continue
+                if raised is not None:
+                    made += 1
+                    handed.setdefault(key, seq)
         return made
 
     # ------------------------------------------------------------ the asker's side
@@ -524,8 +541,9 @@ class HandoffDesk:
             raise HandoffRefused(_unavailable(h.status))
         name = self.name()
         with PersonaStore(self.store_path()) as store:
-            # The person's own conversation with the twin: every item and the ledger may be drawn on.
-            chat = PersonaChat(store, llm, embedder, settings, ledger=True, audience=SELF_AUDIENCE)
+            # The draft is sent to the colleague: it draws on what the twin may tell them (the colleague tier their
+            # conversation answers from, as every handed-on one does), never on the person's own tier or ledger.
+            chat = PersonaChat(store, llm, embedder, settings, audience=COLLEAGUE)
             ctx = chat.retrieve(h.question)
             said = None
             if h.conversation_id is not None and h.turn is not None:
@@ -554,7 +572,8 @@ class HandoffDesk:
     def accept(self, handoff_id: str, owner: str | None, due: dt.date | None = None) -> Handoff:
         """Take on the commitment a handoff asks for (on a new date if ``due``); the asker is told in the
         conversation. A handoff already answered in words only has the commitment taken."""
-        assert self.team is not None
+        team = self.team
+        assert team is not None
         h = self._mine(handoff_id, owner)
         if h.kind != "commit":
             raise HandoffRefused("这条转交没有要你答应的事")
@@ -572,15 +591,18 @@ class HandoffDesk:
                 }
             )
             if h.status == "replied":
+                # The handoff moves first: of two requests at once, only the one that moved it writes the ledger.
+                moved = self._guard(lambda: team.set_handoff_status(h.id, "accepted", ("replied",)))
                 store.put_ledger_entry(taken)
-                return self.team.set_handoff_status(h.id, "accepted", ("replied",))
+                return moved
         return self._settle(
             h.id, accept_text(entry.what, taken.due), "none", "accepted", before=lambda s: s.put_ledger_entry(taken)
         )
 
     def decline(self, handoff_id: str, owner: str | None) -> Handoff:
         """Turn down the commitment a handoff asks for; the asker is told in the conversation."""
-        assert self.team is not None
+        team = self.team
+        assert team is not None
         h = self._mine(handoff_id, owner)
         if h.kind != "commit":
             raise HandoffRefused("这条转交没有要你答应的事")
@@ -596,8 +618,9 @@ class HandoffDesk:
                 }
             )
             if h.status == "replied":
+                moved = self._guard(lambda: team.set_handoff_status(h.id, "declined", ("replied",)))
                 store.put_ledger_entry(declined)
-                return self.team.set_handoff_status(h.id, "declined", ("replied",))
+                return moved
         return self._settle(h.id, DECLINE_TEXT, "none", "declined", before=lambda s: s.put_ledger_entry(declined))
 
     def accept_ledger_entry(self, entry_id: str, owner: str | None, due: dt.date | None = None) -> Handoff | None:
@@ -890,7 +913,8 @@ class HandoffDesk:
     def away(self, owner: str | None, embedder: Embedder | None = None) -> Away:
         """The person's page for what happened while they were away: what waits for them, the answers the twin
         guessed, how many it answered from the profile, and what was settled or put aside. ``embedder``: to tell which
-        waiting questions are one matter (``groups``); without one, only equal questions are."""
+        waiting questions are one matter (``groups``); without one, only equal questions are. Only the twin's own
+        replies are read: twin turns brought over from the browser have no metadata (``web.conversations``)."""
         assert self.team is not None
         self.team.expire_due()
         # A reply whose writing stopped halfway (the request failed) is finished the next time the person looks.

@@ -223,3 +223,54 @@ def test_only_the_twins_a_person_looks_after_are_in_their_list(accounts: TestCli
     seed(theirs_db, [entry("xu_own_0001", library_source("bbbbbbbbbbbb"), 7, lg.SELF, "周三前补齐渠道数据")])
     rows = accounts.get("/api/personas/commitments").json()["entries"]
     assert [(r["entry_id"], r["owner"]) for r in rows] == [("xu_own_0001", "许清禾")]
+
+
+def test_a_promise_asked_for_in_a_conversation_is_the_persons_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commitment made from a handoff holds the asker's question and name, which only the person sees, as the
+    handoff itself: an administrator looking after the twin neither lists, briefs on nor reviews it."""
+    from teamkit import ADMIN, make_web
+
+    for scene in make_web(tmp_path, monkeypatch):
+        lin = scene.add_twin("lin", MEMBER, "林舟")
+        asked = entry(
+            "asked_00001",
+            "conv_source",
+            2,
+            lg.SELF,
+            "周五前给许清禾报价",
+            origin="conversation",
+            counterpart="许清禾",
+            handoff_id="h1",
+        )
+        seed(lin.path, [asked, entry("meeting_001", "text_meeting", 3, lg.SELF, "月底前评审新人手册")])
+        brief = "/api/persona/ledger/brief?person=许清禾"
+
+        scene.as_(ADMIN)
+        listed = scene.web.get("/api/persona/ledger", headers=lin.headers)
+        assert listed.status_code == 200, listed.text
+        assert [e["entry_id"] for e in listed.json()["entries"]] == ["meeting_001"]
+        assert scene.web.get(brief, headers=lin.headers).json()["mine"] == []
+        everyone = scene.web.get("/api/personas/commitments").json()["entries"]
+        assert {e["entry_id"] for e in everyone} == {"meeting_001"}
+        refused = scene.web.post(
+            "/api/persona/ledger/asked_00001/review", json={"action": "reject"}, headers=lin.headers
+        )
+        assert refused.status_code == 403
+        assert (
+            scene.web.post(
+                "/api/persona/ledger/meeting_001/review", json={"action": "confirm"}, headers=lin.headers
+            ).status_code
+            == 200
+        )
+
+        scene.as_(MEMBER)
+        mine = scene.web.get("/api/persona/ledger", headers=lin.headers).json()["entries"]
+        assert {e["entry_id"] for e in mine} == {"asked_00001", "meeting_001"}
+        assert [e["entry_id"] for e in scene.web.get(brief, headers=lin.headers).json()["mine"]] == ["asked_00001"]
+        assert "asked_00001" in {e["entry_id"] for e in scene.web.get("/api/personas/commitments").json()["entries"]}
+        reviewed = scene.web.post(
+            "/api/persona/ledger/asked_00001/review", json={"action": "confirm"}, headers=lin.headers
+        )
+        assert reviewed.status_code == 200, reviewed.text

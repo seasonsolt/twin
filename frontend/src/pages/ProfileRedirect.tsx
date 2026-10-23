@@ -47,7 +47,8 @@ export function ProfileRedirect({ section }: { section?: string }) {
     };
   }, [listed, twin, people]);
   const ready = listed && (!twin || !!people || asked);
-  const wanted = section ?? params.get('section') ?? '';
+  // Older links named the tab ``?tab=``; the member page's own word for it is ``section``.
+  const wanted = section ?? params.get('section') ?? params.get('tab') ?? '';
   const view = params.get('view');
   const query = new URLSearchParams();
   if (wanted) query.set('section', wanted);

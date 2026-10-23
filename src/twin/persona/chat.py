@@ -522,8 +522,8 @@ class PersonaChat:
             embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
             # One read of the corpus serves the evidence quotes, the person's own words and other people's.
             view = ExpressionView(self.store, self.settings)
-            items = self._items(as_of, view)
             hidden = self._private_expressions()
+            items = self._items(as_of, view, hidden)
             expressions = {
                 e.expression_id: e for e in view.select(target_only=True, until=as_of) if e.expression_id not in hidden
             }
@@ -575,20 +575,32 @@ class PersonaChat:
             assistant=self.assistant,
         )
 
-    def _items(self, as_of: dt.date | None, view: ExpressionView) -> dict[str, PersonaItem]:
-        """The profile items an answer may use: those of the conversation's tier; none for a meeting record, whose
-        portrait is not yet trusted."""
+    def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:
+        """The profile items an answer may use: those of the conversation's tier, without the evidence of ``hidden``
+        words (an item opened to colleagues may still quote a note kept private, whose quote the prompt would show);
+        none for a meeting record, whose portrait is not yet trusted."""
         if self.meeting_record:
             return {}
-        items = _visible_items(self.store, self.settings, as_of, view)
-        return {i.item_id: i for i in for_audience(items, self.store.item_tiers(), self.audience)}
+        items = for_audience(
+            _visible_items(self.store, self.settings, as_of, view), self.store.item_tiers(), self.audience
+        )
+        if hidden:
+            items = [
+                i.model_copy(update={"evidence": [e for e in i.evidence if e.expression_id not in hidden]})
+                if any(e.expression_id in hidden for e in i.evidence)
+                else i
+                for i in items
+            ]
+        return {i.item_id: i for i in items}
 
     def _private_expressions(self) -> PrivateWords:
         """The words this conversation may not be shown because only items of a tier it may not use stand on them, or
         because they are in a note the person kept to themself (none for the person's own conversation)."""
         if self.audience == SELF_AUDIENCE:
             return PrivateWords()
-        return private_words(self.store.list_items(), self.store.item_tiers(), self.store.private_note_sources())
+        return private_words(
+            self.store.list_items(include_rejected=True), self.store.item_tiers(), self.store.private_note_sources()
+        )
 
     def _portrait(
         self, items: Sequence[PersonaItem], expressions: Sequence[Expression]
@@ -610,7 +622,7 @@ class PersonaChat:
         view = ExpressionView(self.store, self.settings)
         hidden = self._private_expressions()
         said = [e for e in view.select(target_only=True) if e.expression_id not in hidden]
-        return self._portrait(list(self._items(None, view).values()), said)
+        return self._portrait(list(self._items(None, view, hidden).values()), said)
 
     def reply(
         self,

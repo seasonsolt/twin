@@ -33,6 +33,16 @@ const typing = (target: EventTarget | null) =>
   (target.isContentEditable ||
     ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 
+/** What is open over the page and has its own keys: a dialog (a confirmation, settings), a popover or a menu. */
+const OVERLAY =
+  '[role="dialog"], [role="alertdialog"], [role="menu"], dialog[open]';
+/** A dialog or menu is open, or the key was meant for one: the keys are not the queue's. */
+const covered = (event: KeyboardEvent) =>
+  event.defaultPrevented ||
+  (event.target instanceof Element && !!event.target.closest(OVERLAY)) ||
+  !!document.activeElement?.closest(OVERLAY) ||
+  !!document.querySelector(OVERLAY);
+
 /**
  * New voices one at a time: hear it, hear who it may be, answer. Everything is on the keyboard: space plays,
  * ← → hear another recording of the voice, 1 2 pick one of the names offered, S leaves it for later, N types a name,
@@ -86,7 +96,8 @@ export function InboxFocus({
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || covered(event))
+        return;
       const { item, options, known, members, last } = live.current;
       if (typing(event.target)) {
         if (event.key === 'Escape' && event.target instanceof HTMLElement)

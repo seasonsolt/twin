@@ -18,9 +18,9 @@ from twin.persona import kernel
 from twin.persona.chat import PersonaChat, PersonaContext, search_items
 from twin.persona.coverage import coverage_report
 from twin.persona.dimensions import FACETS, taxonomy_fingerprint
-from twin.persona.items import PersonaItem, PEvidence
-from twin.persona.schema import ChatReply, ChatTurn, EvidenceClass, SourceKind
-from twin.persona.sources import parse_chat
+from twin.persona.items import PersonaItem, PEvidence, PReview
+from twin.persona.schema import ChatReply, ChatTurn, EvidenceClass, ReviewStatus, SourceKind
+from twin.persona.sources import parse_chat, parse_note
 from twin.persona.store import PersonaStore
 from twin.persona.tiers import (
     COLLEAGUE,
@@ -356,3 +356,112 @@ def test_the_evidence_shown_to_a_colleague_leaves_out_those_words_too() -> None:
         refs = [ids["private"], ids["shared"], "pi_family", "pi_work"]
         assert [c["id"] for c in cited_view(store, refs, None, "colleague")] == [ids["shared"], "pi_work"]
         assert [c["id"] for c in cited_view(store, refs, None, "self")] == refs
+
+
+def test_a_rejected_private_item_keeps_its_words_hidden_and_a_rejected_open_one_opens_none() -> None:
+    from twin.web.persona import cited_view
+
+    store, ids = said_store()
+    with store:
+        store.set_review("pi_family", PReview(status=ReviewStatus.REJECTED, reviewed_at="2026-10-23T10:00:00"))
+        everything = store.list_items(include_rejected=True)
+        family = next(i for i in everything if i.item_id == "pi_family")
+        assert private_expressions(everything, store.item_tiers()) == {ids["private"], ids["others"]}
+        llm = Recorder()
+        chat(store, llm, "colleague").reply([ChatTurn(role="user", content="家里的事和回款的事")], persist=False)
+        assert SAID_PRIVATE not in shown(llm) and SAID_OTHERS not in shown(llm)
+        assert [c["id"] for c in cited_view(store, [ids["private"], ids["shared"]], None, "colleague")] == [
+            ids["shared"]
+        ]
+        # An item of the colleague tier the person rejected does not vouch for words a private item stands on.
+        rejected = family.model_copy(update={"item_id": "pi_gone", "review": ReviewStatus.REJECTED})
+        private = family.model_copy(update={"review": ReviewStatus.UNREVIEWED})
+        assert private_expressions([private, rejected], {"pi_family": "self", "pi_gone": "colleague"}) == {
+            ids["private"],
+            ids["others"],
+        }
+
+
+NOTE_OPEN = "OPEN-NOTE-4b"
+NOTE_KEPT = "KEPT-NOTE-6e"
+
+
+def noted(item_id: str, facet: str, sources: list[str], *candidates: str) -> PersonaItem:
+    return PersonaItem(
+        item_id=item_id,
+        facet_id=facet,
+        statement=f"他说起过 {item_id}",
+        member_candidate_ids=list(candidates),
+        evidence=[
+            PEvidence(
+                expression_id=f"{s}#00000",
+                source_id=s,
+                source_kind=SourceKind.DOCUMENT,
+                evidence_class=EvidenceClass.SELF_REPORT,
+                quote=f"原话 {s}",
+            )
+            for s in sources
+        ],
+    )
+
+
+def test_an_item_that_comes_to_stand_on_a_private_note_is_the_persons_own_round_after_round() -> None:
+    settings = Settings(target_name="张三")
+    with PersonaStore(":memory:") as store:
+        opened, kept = (parse_note(t, settings, f"记一下 {t}") for t in (NOTE_OPEN, NOTE_KEPT))
+        for note in (opened, kept):
+            store.put_source(note)
+        s1, s2 = opened.source.source_id, kept.source.source_id
+        store.set_note_tier(s1, COLLEAGUE)
+        store.replace_facet_items("9.3", [noted("pi_a", "9.3", [s1], "pc1")])
+        assert store.item_tiers() == {"pi_a": COLLEAGUE}  # the opened note opens a private facet's item
+        # Merged with a private note's words, the item continuing it (and the colleague tier written for it last
+        # round) turns the person's own, and stays so as it is merged again.
+        store.set_note_tier(s2, SELF)
+        store.replace_facet_items("9.3", [noted("pi_b", "9.3", [s1, s2], "pc1", "pc2")])
+        assert store.item_tiers() == {"pi_b": SELF}
+        store.replace_facet_items("9.3", [noted("pi_c", "9.3", [s1, s2], "pc1", "pc2", "pc3")])
+        assert store.item_tiers() == {"pi_c": SELF}
+        # The person's own choice for an item on an opened note is kept: the note only fills in.
+        store.replace_facet_items("2.1", [noted("pi_w", "2.1", [s1], "pw1")])
+        store.set_item_tier("pi_w", SELF)
+        store.replace_facet_items("2.1", [noted("pi_w2", "2.1", [s1], "pw1", "pw2")])
+        assert store.item_tiers()["pi_w2"] == SELF
+
+
+def test_an_item_opened_to_colleagues_does_not_show_them_the_private_note_it_quotes() -> None:
+    settings = Settings(target_name="张三")
+    with PersonaStore(":memory:") as store:
+        note = parse_note(NOTE_KEPT, settings, "记一下")
+        store.put_source(note)
+        sid = note.source.source_id
+        store.set_meta("built_at", "2026-01-01")
+        store.replace_facet_items("2.1", [noted("pi_n", "2.1", [sid], "pn")])
+        store.set_note_tier(sid, SELF)
+        store.set_item_tier("pi_n", COLLEAGUE)  # the person opened the item, not the note
+        for audience, quoted in (("colleague", False), ("self", True)):
+            llm = Recorder()
+            chat(store, llm, audience).reply([ChatTurn(role="user", content="他说起过什么")], persist=False)
+            seen = shown(llm)
+            assert "pi_n" in seen and (f"原话 {sid}" in seen) is quoted, audience
+            assert quoted or NOTE_KEPT not in seen
+
+
+def test_a_note_tier_is_set_all_at_once_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(target_name="张三")
+    with PersonaStore(":memory:") as store:
+        note = parse_note(NOTE_KEPT, settings, "记一下")
+        store.put_source(note)
+        sid = note.source.source_id
+        store.replace_facet_items("2.1", [noted("pi_a", "2.1", [sid], "pa"), noted("pi_b", "2.1", [sid], "pb")])
+        assert sorted(store.set_note_tier(sid, SELF)) == ["pi_a", "pi_b"]
+        assert store.item_tiers() == {"pi_a": SELF, "pi_b": SELF}
+
+        def broken(*args: Any, **kwargs: Any) -> list[PersonaItem]:
+            raise RuntimeError("read failed")
+
+        monkeypatch.setattr(store, "list_items", broken)
+        with pytest.raises(RuntimeError):
+            store.set_note_tier(sid, COLLEAGUE)
+        monkeypatch.undo()
+        assert store.note_tiers() == {sid: SELF} and store.item_tiers() == {"pi_a": SELF, "pi_b": SELF}

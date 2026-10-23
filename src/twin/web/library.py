@@ -453,14 +453,19 @@ class Libraries:
                     team.unlink(persona_id)
                     team.delete_person(person_id)
 
-    def twin_matches(self, identity: dict[str, Any]) -> list[dict[str, str]]:
+    def twin_matches(self, identity: dict[str, Any], managed: set[str] | None) -> list[dict[str, str]]:
         """Twins made by hand that the identity keeps and whose name a person of the library has, with no twin yet:
-        for them to say whether it is the same person."""
+        for them to say whether it is the same person. Only people the identity may make a twin of (``managed``, as
+        ``create_twin`` asks): a name alone does not let anyone speak for someone in others' meetings."""
         if self.registry is None:
             return []
         roster = self.team(TEAM).roster()
         linked = {twin for _, _, twin in roster if twin}
-        free = {name: person_id for person_id, name, twin in roster if not twin}
+        free = {
+            name: person_id
+            for person_id, name, twin in roster
+            if not twin and (managed is None or person_id in managed)
+        }
         found = []
         for entry in self.live_twins():
             persona_id = entry["id"]
@@ -1455,6 +1460,8 @@ class Libraries:
         the members they are: those the importer chose, else the member whose name the label is. A speaker not
         given to anyone waits to be settled like any other (``Team.unvoiced``)."""
         parsed = self.read_transcript(filename, data)
+        # Held to what an upload is: no more queued than ``max_pending`` and the disk's headroom kept.
+        self.admit(viewer, UploadBody(filename=filename, size=len(data)))
         team = self.team(owner)
         known = {person_id for person_id, _, _ in team.roster()}
         labels = list(dict.fromkeys(turn.speaker for turn in parsed.turns))
@@ -1881,7 +1888,7 @@ def register(
                     else [],
                 }
             )
-        return {"items": people, "matches": libraries.twin_matches(identity)}
+        return {"items": people, "matches": libraries.twin_matches(identity, managed)}
 
     @app.post("/api/library/people/{person_id}/same")
     def post_same(person_id: str, body: SameBody, request: Request) -> dict[str, bool]:
@@ -1893,8 +1900,12 @@ def register(
         entry = registry.entry(body.persona_id)
         if entry is None or not registry.accessible(entry, identity):
             raise HTTPException(404, "分身不存在")
-        match = next((m for m in libraries.twin_matches(identity) if m["persona_id"] == body.persona_id), None)
+        # Joining them makes the twin speak for the person: only whoever may make that person's twin may say so.
+        managed = libraries.managed(libraries.viewer(request))
+        match = next((m for m in libraries.twin_matches(identity, managed) if m["persona_id"] == body.persona_id), None)
         if match is None or match["person_id"] != person_id:
+            if managed is not None and person_id not in managed and libraries.team(TEAM).person(person_id):
+                raise HTTPException(403, "只有上传了 TA 所在录音的同事或管理员可以确认是不是同一个人")
             raise HTTPException(409, "这个分身和这个人对不上了，请刷新后再看")
         if body.same:
             if not libraries.team(TEAM).attach(person_id, body.persona_id):

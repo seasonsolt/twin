@@ -34,6 +34,22 @@ export function handleApiFailure(status: number, data: unknown) {
     window.dispatchEvent(new Event('twin-persona-stale'));
 }
 
+// Requests started inside ``keepingAlive`` (counted, as they may nest).
+let keptAlive = 0;
+
+/**
+ * Run ``start`` so that every request it starts before its first ``await`` is sent with ``keepalive``: it is still
+ * delivered when the page is closed right after (``pagehide``). Returns what ``start`` returns.
+ */
+export function keepingAlive<T>(start: () => T): T {
+  keptAlive += 1;
+  try {
+    return start();
+  } finally {
+    keptAlive -= 1;
+  }
+}
+
 export type ApiOptions = Omit<RequestInit, 'body'> & {
   json?: unknown;
   form?: FormData;
@@ -67,6 +83,9 @@ export async function api<T>(
   try {
     response = await fetch(withBase(path), {
       ...init,
+      ...(keptAlive > 0 && init.keepalive === undefined
+        ? { keepalive: true }
+        : {}),
       method,
       headers,
       body: form ?? (json !== undefined ? JSON.stringify(json) : undefined),

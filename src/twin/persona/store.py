@@ -35,7 +35,7 @@ from .kernel import (
     taxonomy_plan,
 )
 from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
-from .tiers import DEFAULT_TIERS, SELF, TIERS, Audience, Tier, carry_tiers, note_item_tier
+from .tiers import COLLEAGUE, DEFAULT_TIERS, SELF, TIERS, Audience, Tier, carry_tiers, note_item_tier
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p_sources (
@@ -592,6 +592,13 @@ class PersonaStore:
             ],
         )
 
+    def drop_ledger(self, source_ids: Sequence[str]) -> None:
+        """Delete every entry of these sources, reviewed or not, also those resting on no stored source (a
+        conversation's promises)."""
+        with self._tx() as db:
+            for source_id in source_ids:
+                self._drop_ledger(db, source_id, reviewed=True)
+
     @staticmethod
     def _drop_ledger(db: sqlite3.Connection, source_id: str, *, reviewed: bool) -> None:
         """Delete a source's entries (only the unreviewed ones unless ``reviewed``) and unlink entries that pointed
@@ -812,27 +819,31 @@ class PersonaStore:
         """Replace a facet's items, carrying the person's reviews over to the items that continue the reviewed ones
         (see ``carry_reviews``); reviews of items that disappear are dropped. Items the facet inherits from a split
         facet (``_migrate_taxonomy``) pass their reviews on the same way, once."""
-        old = self.list_items(facet_id, raw=True)
-        inherited = json.loads(self.get_meta(f"{INHERIT_META}{facet_id}") or "[]")
-        reviews = {
-            **{c["item"]["item_id"]: PReview.model_validate(c["review"]) for c in inherited if "review" in c},
-            **self.reviews(),
-        }
-        tiers = {
-            **{c["item"]["item_id"]: c["tier"] for c in inherited if c.get("tier") in TIERS},
-            **self.item_tiers(),
-        }
-        heirs = [*old, *(PersonaItem.model_validate(c["item"]) for c in inherited)]
-        carried = carry_reviews(heirs, items, reviews)
-        carried_tiers = carry_tiers(heirs, items, tiers)
-        # An item standing on a note the person chose a tier for takes it, unless they have since chosen for the item.
-        if notes := self.note_tiers():
-            carried_tiers = {
-                **{i.item_id: t for i in items if (t := note_item_tier(i, notes)) is not None},
-                **carried_tiers,
-            }
-        now = dt.datetime.now().isoformat(timespec="seconds")
+        # Read and written in one transaction, so a note's tier set meanwhile (``set_note_tier``) is not lost.
         with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = self.list_items(facet_id, raw=True)
+            inherited = json.loads(self.get_meta(f"{INHERIT_META}{facet_id}") or "[]")
+            reviews = {
+                **{c["item"]["item_id"]: PReview.model_validate(c["review"]) for c in inherited if "review" in c},
+                **self.reviews(),
+            }
+            tiers = {
+                **{c["item"]["item_id"]: c["tier"] for c in inherited if c.get("tier") in TIERS},
+                **self.item_tiers(),
+            }
+            heirs = [*old, *(PersonaItem.model_validate(c["item"]) for c in inherited)]
+            carried = carry_reviews(heirs, items, reviews)
+            carried_tiers = carry_tiers(heirs, items, tiers)
+            # An item standing on a note the person chose a tier for takes it, the stricter tier winning: a note kept to
+            # themself makes the item theirs whatever was carried (it now quotes the note), an opened note only fills in
+            # where nothing was. A tier written here reads as chosen next round, which the stricter rule keeps safe.
+            if notes := self.note_tiers():
+                for i in items:
+                    tier = note_item_tier(i, notes)
+                    if tier == SELF or (tier == COLLEAGUE and i.item_id not in carried_tiers):
+                        carried_tiers[i.item_id] = tier
+            now = dt.datetime.now().isoformat(timespec="seconds")
             db.execute("DELETE FROM p_meta WHERE key = ?", (f"{INHERIT_META}{facet_id}",))
             db.executemany("DELETE FROM p_reviews WHERE item_id = ?", [(o.item_id,) for o in old])
             db.executemany(
@@ -1052,16 +1063,20 @@ class PersonaStore:
         the items changed."""
         if tier not in TIERS:
             raise ValueError(tier)
+        changed: list[str] = []
+        # One transaction: a build replacing a facet's items meanwhile must not leave the note's tier half applied.
         with self._tx() as db:
+            db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
                 raise KeyError(source_id)
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"{NOTE_TIER_PREFIX}{source_id}", tier))
-        notes = self.note_tiers()
-        changed: list[str] = []
-        for item in self.list_items(include_rejected=True, raw=True):
-            if any(e.source_id == source_id for e in item.evidence):
-                self.set_item_tier(item.item_id, note_item_tier(item, notes))
-                changed.append(item.item_id)
+            notes = self.note_tiers()
+            now = dt.datetime.now().isoformat(timespec="seconds")
+            for item in self.list_items(include_rejected=True, raw=True):
+                if any(e.source_id == source_id for e in item.evidence):
+                    chosen = note_item_tier(item, notes) or tier
+                    db.execute("INSERT OR REPLACE INTO p_item_tiers VALUES (?, ?, ?)", (item.item_id, chosen, now))
+                    changed.append(item.item_id)
         return changed
 
     def items_signature(self) -> str:

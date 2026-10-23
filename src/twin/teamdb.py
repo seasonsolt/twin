@@ -546,17 +546,37 @@ class TeamDB:
         it must belong to a delegation, answer from the colleague tier, be the delegation's person's own, be a twin
         other than the person's, and be at most ``MAX_DELEGATES`` of the delegation's. Only a conversation the person
         has with their assistant themself can start a delegation (``create_delegation``), so a twin that was asked by
-        an assistant never asks another: one hop, held here and not left to the prompts."""
+        an assistant never asks another: one hop, held here and not left to the prompts.
+
+        A conversation id is indexed under one twin only. An id another twin's conversation already holds (a twin's
+        database copied from another's, or an id a client chose) is left as it is and not indexed for this twin:
+        neither renamed, brought back from deleted nor given another tier."""
         with self._tx() as db:
+            if self._taken(db, conversation_id, persona_id):
+                return
             self._check_delegate(db, conversation_id, persona_id, asker, audience, via, delegation_id)
             db.execute(
                 "INSERT INTO conversations "
                 "(id, persona_id, asker, audience, via, delegation_id, title, updated_at, asker_name) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at, "
-                "deleted_at = NULL",
+                "deleted_at = NULL WHERE conversations.persona_id = excluded.persona_id",
                 (conversation_id, persona_id, asker, audience, via, delegation_id, title, updated_at, asker_name),
             )
+
+    @staticmethod
+    def _taken(db: sqlite3.Connection, conversation_id: str, persona_id: str) -> bool:
+        """Whether another twin's conversation holds this id in the index (logged: it is not indexed for this one)."""
+        row = db.execute("SELECT persona_id FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        if row is None or row[0] == persona_id:
+            return False
+        logger.warning(
+            "conversation %s of twin %s is not indexed: twin %s's conversation has the same id",
+            conversation_id,
+            persona_id,
+            row[0],
+        )
+        return True
 
     @staticmethod
     def _check_delegate(
@@ -593,33 +613,50 @@ class TeamDB:
         ):
             raise DelegationRefused(f"一次最多问 {MAX_DELEGATES} 位同事")
 
-    def refresh_conversation(self, conversation_id: str, title: str, updated_at: str) -> None:
+    def refresh_conversation(
+        self, conversation_id: str, title: str, updated_at: str, *, persona_id: str | None = None
+    ) -> None:
+        """``persona_id``: only when the conversation is that twin's."""
         with self._tx() as db:
             db.execute(
-                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?", (title, updated_at, conversation_id)
+                "UPDATE conversations SET title = ?, updated_at = ? "
+                "WHERE id = ? AND persona_id = COALESCE(?, persona_id)",
+                (title, updated_at, conversation_id, persona_id),
             )
 
-    def delete_conversation(self, conversation_id: str) -> None:
-        """Mark a conversation deleted, and withdraw the handoffs in it that nobody has settled."""
+    def delete_conversation(self, conversation_id: str, *, persona_id: str | None = None) -> None:
+        """Mark a conversation deleted, and withdraw the handoffs in it that nobody has settled. ``persona_id``: only
+        when the conversation is that twin's, and only that twin's handoffs; left out, the twin the index has it
+        under."""
         with self._tx() as db:
+            if persona_id is None:
+                row = db.execute("SELECT persona_id FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+                persona_id = None if row is None else str(row[0])
             db.execute(
-                "UPDATE conversations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
-                (dt.datetime.now(dt.UTC).isoformat(), conversation_id),
+                "UPDATE conversations SET deleted_at = ? WHERE id = ? AND persona_id = COALESCE(?, persona_id) "
+                "AND deleted_at IS NULL",
+                (dt.datetime.now(dt.UTC).isoformat(), conversation_id, persona_id),
             )
-            self._withdraw(db, conversation_id)
+            self._withdraw(db, conversation_id, persona_id)
 
     @staticmethod
-    def _withdraw(db: sqlite3.Connection, conversation_id: str) -> int:
+    def _withdraw(db: sqlite3.Connection, conversation_id: str, persona_id: str | None) -> int:
+        """Withdraw the unsettled handoffs of one twin's conversation (of any twin's with that id when None: a
+        conversation the index does not have)."""
         marks = ",".join("?" * len(UNSETTLED))
         return db.execute(
-            f"UPDATE handoffs SET status = 'withdrawn' WHERE conversation_id = ? AND status IN ({marks})",
-            (conversation_id, *UNSETTLED),
+            "UPDATE handoffs SET status = 'withdrawn' "
+            f"WHERE conversation_id = ? AND persona_id = COALESCE(?, persona_id) AND status IN ({marks})",
+            (conversation_id, persona_id, *UNSETTLED),
         ).rowcount
 
-    def audience_of(self, conversation_id: str) -> Audience | None:
-        """The tier a conversation answers from; None when it is not indexed."""
+    def audience_of(self, conversation_id: str, *, persona_id: str | None = None) -> Audience | None:
+        """The tier a conversation answers from; None when it is not indexed (``persona_id``: for that twin)."""
         with self._lock:
-            row = self._db.execute("SELECT audience FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+            row = self._db.execute(
+                "SELECT audience FROM conversations WHERE id = ? AND persona_id = COALESCE(?, persona_id)",
+                (conversation_id, persona_id),
+            ).fetchone()
         return None if row is None else (SELF if row[0] == SELF else COLLEAGUE)
 
     def conversations(
@@ -700,7 +737,9 @@ class TeamDB:
         ]
 
     def forget_persona(self, persona_id: str) -> None:
-        """Drop everything indexed for a twin that is gone for good."""
+        """Drop everything indexed for a twin that is gone for good (its purge from the trash: nothing of it is kept).
+        Other twins' conversations stay; those its person's assistant asked in their name no longer belong to a
+        delegation, as the delegation goes."""
         with self._tx() as db:
             db.execute(
                 "DELETE FROM answer_checks WHERE conversation_id IN "
@@ -708,18 +747,23 @@ class TeamDB:
                 (persona_id,),
             )
             db.execute("DELETE FROM handoffs WHERE persona_id = ?", (persona_id,))
-            # What the person confirmed is taken back with them (what to do when someone leaves is left for later).
-            db.execute(
-                "UPDATE team_answers SET status = 'withdrawn', withdrawn_at = ? "
-                "WHERE persona_id = ? AND status != 'withdrawn'",
-                (_stamp(), persona_id),
-            )
+            # What the person confirmed goes with them, words and all (what to do when someone leaves and their answers
+            # should stay is left for later). Conversations that showed one keep their copy of the card; a card whose
+            # answer is gone is shown as it was.
             db.execute(
                 "DELETE FROM team_answer_vectors WHERE answer_id IN (SELECT id FROM team_answers WHERE persona_id = ?)",
                 (persona_id,),
             )
+            db.execute("DELETE FROM team_answers WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM facet_coverage WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM meta WHERE key = ?", (f"{COVERAGE_SIGNATURE}{persona_id}",))
+            # Colleagues' twins' conversations its delegations asked are theirs and stay, still marked as asked by the
+            # assistant, but point at no delegation that no longer exists.
+            db.execute(
+                "UPDATE conversations SET delegation_id = NULL WHERE persona_id != ? AND delegation_id IN "
+                "(SELECT id FROM delegations WHERE persona_id = ?)",
+                (persona_id, persona_id),
+            )
             db.execute("DELETE FROM delegations WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM lenses WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM conversations WHERE persona_id = ?", (persona_id,))
@@ -728,7 +772,8 @@ class TeamDB:
         """Bring the index of one twin in line with the conversations in its database (``rows``: id, asker, title,
         updated at): add the ones it lacks, as the colleague tier, which is what a conversation from before the
         index was; refresh titles and times; mark the ones that are gone as deleted. Conversations the twin's
-        database does not have are the index's to forget, never the other way round."""
+        database does not have are the index's to forget, never the other way round. One whose id another twin's
+        conversation holds in the index is left out (and logged), never taken from it."""
         wanted = {r[0]: r for r in rows}
         added = updated = removed = 0
         with self._tx() as db:
@@ -741,6 +786,8 @@ class TeamDB:
             for conversation_id, asker, title, updated_at in wanted.values():
                 current = known.get(conversation_id)
                 if current is None:
+                    if self._taken(db, conversation_id, persona_id):
+                        continue
                     db.execute(
                         "INSERT INTO conversations (id, persona_id, asker, audience, via, title, updated_at) "
                         "VALUES (?, ?, ?, 'colleague', 'direct', ?, ?)",
@@ -749,14 +796,19 @@ class TeamDB:
                     added += 1
                 elif current != (title, updated_at, None):
                     db.execute(
-                        "UPDATE conversations SET title = ?, updated_at = ?, deleted_at = NULL WHERE id = ?",
-                        (title, updated_at, conversation_id),
+                        "UPDATE conversations SET title = ?, updated_at = ?, deleted_at = NULL "
+                        "WHERE id = ? AND persona_id = ?",
+                        (title, updated_at, conversation_id, persona_id),
                     )
                     updated += 1
-            gone = [(dt.datetime.now(dt.UTC).isoformat(), i) for i, v in known.items() if i not in wanted and not v[2]]
-            db.executemany("UPDATE conversations SET deleted_at = ? WHERE id = ?", gone)
-            for _, conversation_id in gone:
-                self._withdraw(db, conversation_id)
+            gone = [
+                (dt.datetime.now(dt.UTC).isoformat(), i, persona_id)
+                for i, v in known.items()
+                if i not in wanted and not v[2]
+            ]
+            db.executemany("UPDATE conversations SET deleted_at = ? WHERE id = ? AND persona_id = ?", gone)
+            for _, conversation_id, _ in gone:
+                self._withdraw(db, conversation_id, persona_id)
             removed = len(gone)
             stamp = dt.datetime.now(dt.UTC).isoformat()
             db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (RECONCILED_AT, stamp))
@@ -766,7 +818,8 @@ class TeamDB:
     def rebuild_conversations(self, by_persona: Mapping[str, Sequence[tuple[str, str | None, str, str]]]) -> Reconciled:
         """Index the conversations of these twins again from their databases (``by_persona``: id, asker, title,
         updated at), dropping what the index held for them. The tier a conversation answers from is not in the
-        twin's database, so a conversation the index already knew keeps it and the others are the colleague tier."""
+        twin's database, so a conversation the index already knew keeps it and the others are the colleague tier. An
+        id another twin's conversation holds in the index stays that twin's (logged, not counted)."""
         added = removed = 0
         with self._tx() as db:
             for persona_id, rows in by_persona.items():
@@ -779,6 +832,8 @@ class TeamDB:
                 }
                 removed += db.execute("DELETE FROM conversations WHERE persona_id = ?", (persona_id,)).rowcount
                 for conversation_id, asker, title, updated_at in rows:
+                    if self._taken(db, conversation_id, persona_id):
+                        continue
                     audience, via, delegation_id, name = kept.get(conversation_id, (COLLEAGUE, "direct", None, ""))
                     db.execute(
                         "INSERT INTO conversations (id, persona_id, asker, audience, via, delegation_id, title, "
@@ -823,7 +878,10 @@ class TeamDB:
             if conversation_id is not None:
                 # What a delegate conversation hands on is the person's to start (``via="delegate"``, from the card
                 # they pressed), never a twin's own doing; and nothing but such a conversation is handed on as one.
-                kind_of = db.execute("SELECT via, asker FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+                kind_of = db.execute(
+                    "SELECT via, asker FROM conversations WHERE id = ? AND persona_id = ?",
+                    (conversation_id, persona_id),
+                ).fetchone()
                 if (kind_of is not None and (kind_of[0] == "delegate") != (via == "delegate")) or (
                     kind_of is None and via == "delegate"
                 ):
@@ -999,10 +1057,11 @@ class TeamDB:
         with self._tx() as db:
             db.execute("UPDATE handoffs SET ledger_id = ? WHERE id = ?", (ledger_id, handoff_id))
 
-    def withdraw_conversation(self, conversation_id: str) -> int:
-        """Withdraw the handoffs of a conversation that nobody has settled; how many."""
+    def withdraw_conversation(self, conversation_id: str, *, persona_id: str | None = None) -> int:
+        """Withdraw the handoffs of a conversation that nobody has settled (``persona_id``: only that twin's); how
+        many."""
         with self._tx() as db:
-            return self._withdraw(db, conversation_id)
+            return self._withdraw(db, conversation_id, persona_id)
 
     # ------------------------------------------------------------ verdicts on guessed answers
 
@@ -1111,13 +1170,15 @@ class TeamDB:
 
     def revise_team_answer(self, answer_id: str, title: str, body: str, now: dt.datetime | None = None) -> TeamAnswer:
         """The person put the answer right: it stands again from now, whatever doubt there was (a withdrawn one cannot
-        be revised)."""
+        be revised). Its vector was made from the old words, so it goes with them and the answer is embedded again."""
         with self._tx() as db:
             moved = db.execute(
                 "UPDATE team_answers SET title = ?, body = ?, status = 'valid', stale_note = '', judged = '', "
                 "confirmed_at = ? WHERE id = ? AND status != 'withdrawn'",
                 (title, body, _stamp(now), answer_id),
             ).rowcount
+            if moved:
+                db.execute("DELETE FROM team_answer_vectors WHERE answer_id = ?", (answer_id,))
         found = self.get_team_answer(answer_id)
         if not moved or found is None:
             raise KeyError(answer_id)

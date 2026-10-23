@@ -490,6 +490,61 @@ def test_a_facet_corrected_three_times_is_no_longer_used_until_it_is_opened_agai
     assert again.json()["name"] == "改了名字" and again.json()["stopped"] == []
 
 
+def test_a_facet_corrected_out_taken_out_and_put_back_starts_its_count_afresh(scene: Team) -> None:
+    lens_id = made(scene)
+    wang = scene.twins["wang"]
+    for _ in range(STOP_AFTER):
+        ask_lens(scene, SHEN, lens_id)
+    for use in scene.team.lens_uses(lens_id):
+        scene.team.correct_lens_use(use.id)
+    scene.as_(WANG)
+    assert [f["facet_id"] for f in lenses_of(scene)["lenses"][0]["stopped"]] == ["3.4"]
+    scene.as_(WANG)
+    taken_out = scene.web.patch(f"/api/persona/lenses/{lens_id}", json={"facets": ["2.3"]}, headers=wang.headers)
+    assert taken_out.status_code == 200 and taken_out.json()["stopped"] == []
+    put_back = scene.web.patch(f"/api/persona/lenses/{lens_id}", json={"facets": ["2.3", "3.4"]}, headers=wang.headers)
+    assert put_back.status_code == 200
+    assert put_back.json()["stopped"] == [] and put_back.json()["speaking"] == ["2.3", "3.4"]
+    assert ask_lens(scene, SHEN, lens_id).json()["lens"]["views"]
+
+
+def test_the_words_of_a_rejected_item_the_person_keeps_to_themself_stay_hidden(
+    scene: Team, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import twin.lenses
+    from twin.persona.items import PReview
+    from twin.persona.schema import ReviewStatus
+
+    with PersonaStore(scene.twins["wang"].path) as store:
+        store.set_review("pi_family", PReview(status=ReviewStatus.REJECTED, reviewed_at="2026-10-01"))
+        private = {
+            ev.expression_id
+            for i in store.list_items(include_rejected=True)
+            if i.item_id == "pi_family"
+            for ev in i.evidence
+        }
+    seen: list[Any] = []
+    speak, sample = twin.lenses.speak, twin.lenses.sample
+
+    def spy_speak(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs["hidden"])
+        return speak(*args, **kwargs)
+
+    def spy_sample(items: Any, facets: Any, hidden: Any = ()) -> Any:
+        seen.append(hidden)
+        return sample(items, facets, hidden)
+
+    monkeypatch.setattr(twin.lenses, "speak", spy_speak)
+    monkeypatch.setattr(twin.lenses, "sample", spy_sample)
+    lens_id = made(scene)
+    assert ask_lens(scene, SHEN, lens_id).status_code == 200
+    scene.as_(WANG)
+    shown = scene.web.post("/api/persona/lenses/preview", json={"facets": ["3.4"]}, headers=scene.twins["wang"].headers)
+    assert shown.status_code == 200
+    # Rejecting it does not open its words, in an answer or a preview.
+    assert len(seen) == 2 and private and all(private <= set(hidden.ids) for hidden in seen)
+
+
 def test_the_uses_of_one_facet_can_be_looked_at(scene: Team) -> None:
     lens_id = made(scene)
     wang = scene.twins["wang"]
@@ -531,6 +586,19 @@ def test_a_colleague_who_wants_the_persons_own_answer_asks_in_their_own_name_apa
         scene.web.post("/api/persona/lenses/ask-owner", json={"conversation_id": cid}, headers=wang.headers).status_code
         == 403
     )
+
+
+def test_asking_the_person_from_a_conversation_the_assistant_asked_in_ones_name_is_refused(scene: Team) -> None:
+    lens_id = made(scene)
+    wang = scene.twins["wang"]
+    cid = scene.conversation(SHEN, wang)
+    assert ask_lens(scene, SHEN, lens_id, conversation=cid).status_code == 200
+    with scene.team._tx() as db:  # asked by Shen's assistant in his name (代问)
+        db.execute("UPDATE conversations SET via = 'delegate' WHERE id = ?", (cid,))
+    scene.as_(SHEN)
+    refused = scene.web.post("/api/persona/lenses/ask-owner", json={"conversation_id": cid}, headers=wang.headers)
+    assert refused.status_code == 409 and "转给本人" in refused.json()["detail"]
+    assert scene.team.handoffs() == []
 
 
 # ------------------------------------------------------------------ the database

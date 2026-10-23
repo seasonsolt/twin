@@ -16,6 +16,7 @@ from typing import Literal
 
 from .dimensions import FACETS
 from .items import PersonaItem
+from .schema import ReviewStatus
 
 Tier = Literal["colleague", "self"]
 Audience = Literal["colleague", "self"]
@@ -60,12 +61,15 @@ def private_expressions(items: Iterable[PersonaItem], overrides: Mapping[str, st
     """Ids of the expressions only items of the person's own tier stand on. An item's evidence is the person's own
     words (or what others said to them), which the twin can also find as they are: leaving the item out while its
     quote stays retrievable would show a colleague the very thing the item keeps from them. An expression an item of
-    the colleague tier stands on too stays, as it is not only the person's private matter."""
+    the colleague tier stands on too stays, as it is not only the person's private matter. Pass the rejected items
+    too: rejecting an item of the person's own tier does not open its words, and a rejected item opens none."""
     shared: set[str] = set()
     private: set[str] = set()
     for item in items:
-        into = shared if item_tier(item, overrides) == COLLEAGUE else private
-        into.update(e.expression_id for e in item.evidence)
+        if item_tier(item, overrides) != COLLEAGUE:
+            private.update(e.expression_id for e in item.evidence)
+        elif item.review is not ReviewStatus.REJECTED:
+            shared.update(e.expression_id for e in item.evidence)
     return private - shared
 
 

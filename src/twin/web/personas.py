@@ -26,6 +26,7 @@ from ..assets import AssetStore
 from ..config import Settings
 from ..media.schema import default_avatar
 from ..persona import gate
+from ..persona.items import PersonaItem
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..persona.tiers import COLLEAGUE, SELF, Audience
 from ..util import private_directory
@@ -51,6 +52,9 @@ class ClaimBody(BaseModel):
     # The colleague's work e-mail or employee number; None or "" forgets it.
     claim: str | None = Field(default=None, max_length=254)
 
+
+# Ledger entries of a promise the person made to their assistant rest on the conversation (``said_commitment``).
+SAID_SOURCE_PREFIX = "said:"
 
 # How long to wait before fetching again a company profile photo that could not be fetched.
 PHOTO_RETRY_SECONDS = 600.0
@@ -101,6 +105,38 @@ VISITOR_ROUTES = [
 
 def visitor_route(method: str, path: str) -> bool:
     return any(method in methods.split("|") and pattern.fullmatch(path) for methods, pattern in VISITOR_ROUTES)
+
+
+def forget_departed(store: PersonaStore, email: str) -> bool:
+    """What a person who said "这不是我" kept in a twin as its person goes with them, so whoever takes it next never
+    reads it: the notes they kept to themself (``记一下``, a reply kept to themself), the memory made from those
+    notes, their own conversations with it and the promises they made to their assistant there. What the meetings say
+    of the real person stays. A snapshot is taken first; returns whether anything was removed (the profile is then
+    rebuilt from what remains)."""
+    notes = store.private_note_sources()
+    said = {e.source_id for e in store.list_ledger() if e.source_id.startswith(SAID_SOURCE_PREFIX)}
+    conversations = store.list_conversations(email)
+    if not (notes or said or conversations):
+        return False
+    store.snapshot("disown")
+    for source_id in sorted(notes):
+        store.delete_source(source_id)
+    # Items standing on those notes go now, not at the next build: the next person approved must not be answered from
+    # them in between. Items that also stand on meetings come back with that build.
+    standing: dict[str, list[PersonaItem]] = {}
+    for item in store.list_items(include_rejected=True, raw=True):
+        standing.setdefault(item.facet_id, []).append(item)
+    for facet_id, items in standing.items():
+        kept = [i for i in items if not any(e.source_id in notes for e in i.evidence)]
+        if len(kept) != len(items):
+            store.replace_facet_items(facet_id, kept)
+    if said:
+        store.drop_ledger(sorted(said))
+    while conversations:
+        for conversation in conversations:
+            store.delete_conversation(conversation["id"], email)
+        conversations = store.list_conversations(email)
+    return True
 
 
 class Personas:
@@ -585,6 +621,13 @@ class Personas:
                     entry.pop(key, None)
                 entry["public"] = False
                 self.save()
+                settings = self.settings_for(persona_id)
+                if settings.db_path.is_file():
+                    with PersonaStore(settings.db_path) as store:
+                        forgotten = forget_departed(store, identity["email"])
+                    context = self.apps.get(persona_id)
+                    if forgotten and context is not None:
+                        context.state.processing.queue()
                 return {"disowned": True}
 
         @app.delete("/api/personas/{persona_id}")

@@ -198,6 +198,8 @@ export function ChatThread({
   useEffect(() => {
     if (lensId && lenses.choices.length && !lens) setLensId(null);
   }, [lensId, lens, lenses.choices.length, setLensId]);
+  // A trial question and a question to a lens take no files: those added wait for an ordinary message.
+  const filesWait = trying || !!lens;
   const send = () => {
     if (chat.busy || chat.loading || chat.restoreFailed || !chat.draft.trim())
       return;
@@ -599,7 +601,16 @@ export function ChatThread({
           send();
         }}
       >
-        {chat.attachments.length > 0 && (
+        {chat.attachments.length > 0 && filesWait && (
+          <div className="mx-auto mb-2 max-w-3xl">
+            <Notice>
+              {trying ? '看同事会得到什么' : '向赋能提问'}
+              不带附件，已添加的 {chat.attachments.length}{' '}
+              个附件留到发普通消息时一起发送。
+            </Notice>
+          </div>
+        )}
+        {chat.attachments.length > 0 && !filesWait && (
           <div
             className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2"
             role="list"
@@ -649,7 +660,7 @@ export function ChatThread({
             {attachmentError}
           </Text>
         )}
-        {chat.attachments.length > 0 && (
+        {chat.attachments.length > 0 && !filesWait && (
           <Text size="xs" tone="tertiary" className="mx-auto mb-2 max-w-3xl">
             原文件仅在本次请求中处理，不进入长期资料；提取文字会发送给当前配置的聊天模型。后续追问需重新附加，回答和引用摘录会保存在聊天记录。
           </Text>
@@ -660,7 +671,9 @@ export function ChatThread({
             label="选择附件"
             accept={CHAT_ATTACHMENT_ACCEPT}
             multiple
-            disabled={chat.busy || chat.loading || chat.restoreFailed}
+            disabled={
+              chat.busy || chat.loading || chat.restoreFailed || filesWait
+            }
             onFiles={addAttachments}
           />
           <ChatInput
@@ -682,11 +695,19 @@ export function ChatThread({
             }
           />
           <Row gap={1} wrap>
-            <Tooltip label="TXT、PDF、Word、EPUB 等，最多 5 个，共 50 MiB">
+            <Tooltip
+              label={
+                filesWait
+                  ? '这类提问不带附件'
+                  : 'TXT、PDF、Word、EPUB 等，最多 5 个，共 50 MiB'
+              }
+            >
               <IconButton
                 shape="circle"
                 label="添加附件（TXT、PDF、Word、EPUB 等，最多 5 个，共 50 MiB）"
-                disabled={chat.busy || chat.loading || chat.restoreFailed}
+                disabled={
+                  chat.busy || chat.loading || chat.restoreFailed || filesWait
+                }
                 onClick={() => attachmentInput.current?.click()}
               >
                 <Plus className="size-5" aria-hidden />

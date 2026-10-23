@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, keepingAlive } from '../lib/api';
 
 describe('local API client', () => {
   it.each(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'])(
@@ -30,6 +30,20 @@ describe('local API client', () => {
     await api('/api/example', { method: 'POST', form });
     expect(fetcher.mock.calls[1][1].headers.has('Content-Type')).toBe(false);
     expect(fetcher.mock.calls[1][1].body).toBe(form);
+  });
+
+  it('keeps alive only the requests started inside keepingAlive', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', fetcher);
+    const started = keepingAlive(() =>
+      api('/api/example', { method: 'POST', json: {} }),
+    );
+    await api('/api/example', { method: 'POST', json: {} });
+    await started;
+    expect(fetcher.mock.calls.map(([, init]) => init.keepalive)).toEqual([
+      true,
+      undefined,
+    ]);
   });
 
   it('maps Chinese detail to a typed error and preserves its status', async () => {

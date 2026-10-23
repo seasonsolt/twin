@@ -309,7 +309,9 @@ def cited_view(
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
         elif (e := store.get_expression(ref)) is not None:
             if hidden is None:  # read once, and only when an answer cites someone's words
-                hidden = private_words(store.list_items(), store.item_tiers(), store.private_note_sources())
+                hidden = private_words(
+                    store.list_items(include_rejected=True), store.item_tiers(), store.private_note_sources()
+                )
             if ref in hidden:
                 continue
             day = e.date.isoformat() if e.date else None
@@ -1109,18 +1111,19 @@ def register(
         said, and nobody is asked."""
         assert delegations is not None
         identity = request.scope["twin_identity"]
-        # Asking takes the models' time: a place in the chat queue is held while the colleagues' twins answer.
-        ticket = jobs.admit_stream() if isinstance(asked, Asked) else None
         llm = backends.chat_llm() if isinstance(asked, Asked) else None
         embedder = backends.embedder() if isinstance(asked, Asked) else None
+        # Asking takes the models' time: a place in the chat queue is held while the colleagues' twins answer. Taken
+        # after the models are reached, so one that is not available leaves no place held.
+        ticket = jobs.admit_stream() if isinstance(asked, Asked) else None
         try:
             with open_store() as store:
                 append_user(store, body.conversation_id, email, message, index)
+            name = stored_identity(settings.db_path)[0] or settings.target_name
         except BaseException:
             if ticket is not None:
                 ticket.close()
             raise
-        name = stored_identity(settings.db_path)[0] or settings.target_name
 
         def put() -> dict[str, Any]:
             with open_store() as store:

@@ -84,7 +84,8 @@ def test_crud_persona_isolation_and_import(tmp_path: Path) -> None:
         assert web.post("/api/conversations", json=body, headers=scoped).json()["id"] == migrated
         saved = web.get(f"/api/conversations/{migrated}", headers=scoped).json()
         assert saved["title"] == "老问题" and len(saved["turns"]) == 2
-        assert saved["turns"][1]["reply"] == payload
+        # The text is kept; what the browser says the twin's turn was (what it cited, how it answered) is not.
+        assert saved["turns"][1]["content"] == "回答" and "reply" not in saved["turns"][1]
         assert saved["turns"][0]["timestamp"].startswith("2025-01-01")
         assert web.get("/api/conversations", headers=scoped).json()[0]["updated_at"].startswith("2025-01-01")
         assert web.delete(f"/api/conversations/{cid}", headers=HEADERS).status_code == 200

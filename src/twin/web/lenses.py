@@ -32,7 +32,7 @@ from ..lenses import (
 from ..persona import gate
 from ..persona.store import PersonaStore
 from ..persona.tiers import SELF
-from ..teamdb import Lens, LensUnavailable
+from ..teamdb import DelegationRefused, Lens, LensUnavailable
 from .backends import Backends, BackendUnavailable
 from .conversations import ConversationIndex, append_reply, append_user, owner, request_asker_name, request_audience
 from .handoffs import person
@@ -295,6 +295,9 @@ def register(
                 )
         except KeyError:
             raise HTTPException(404, "找不到这段对话") from None
+        except DelegationRefused as e:
+            # A conversation the colleague's assistant asked in their name is handed on from its own card.
+            raise HTTPException(409, str(e)) from e
         except sqlite3.Error as e:
             raise HTTPException(503, "团队库暂时读不了，请稍后重试") from e
         if made is None:

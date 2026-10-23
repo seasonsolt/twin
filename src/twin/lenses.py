@@ -405,15 +405,17 @@ class Lenses:
         facets: Sequence[str] | None = None,
         audience: LensAudience | None = None,
     ) -> Lens:
-        """Change what a lens opens or to whom. Opening a facet that was corrected out opens it afresh: the
-        corrections so far stop counting."""
+        """Change what a lens opens or to whom. Opening a facet that was corrected out, or that was taken out and is
+        put back, opens it afresh: the corrections so far stop counting."""
         lens = self._own(persona_id, lens_id)
         opened = None if facets is None else self._checked_facets(store, facets)
         forgiven = None
         if opened is not None:
             counts = self.team.corrections(lens.id)
             forgiven = dict(lens.forgiven)
-            for facet in stopped(lens, counts):
+            # Opened again: one corrected out, and one taken out and put back (whose corrections would otherwise
+            # still count against it).
+            for facet in [*stopped(lens, counts), *(f for f in opened if f not in lens.facets)]:
                 if facet in opened:
                     forgiven[facet] = counts.get(facet, 0)
         return self.team.update_lens(
@@ -502,7 +504,7 @@ class Lenses:
         tiers = store.item_tiers()
         verdicts = judge(items, tiers, self.today())
         facets = in_use(lens, verdicts, self.team.corrections(lens.id))
-        hidden = private_words(items, tiers, store.private_note_sources())
+        hidden = private_words(store.list_items(include_rejected=True), tiers, store.private_note_sources())
         visible = for_audience(_visible_items(store, settings, None), tiers, COLLEAGUE)
         vectors: tuple[list[str], np.ndarray] = ([], np.zeros((0, 0), dtype=np.float32))
         query: np.ndarray | None = None
@@ -523,7 +525,9 @@ class Lenses:
         """How a lens opening ``facets`` would read, nothing kept: the best-founded statements of the ones that pass."""
         passing = {v.facet_id for v in self.verdicts(store) if v.ok}
         items = for_audience(_visible_items(store, settings, None), store.item_tiers(), COLLEAGUE)
-        hidden = private_words(store.list_items(), store.item_tiers(), store.private_note_sources())
+        hidden = private_words(
+            store.list_items(include_rejected=True), store.item_tiers(), store.private_note_sources()
+        )
         return sample(items, [f for f in facets if f in passing], hidden)
 
 

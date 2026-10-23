@@ -484,3 +484,25 @@ def test_a_twin_that_fails_answers_that_it_could_not_and_the_others_are_still_as
     assert wang_card["state"] == "answered" and "能接受" in wang_card["answer"]
     assert "没能回答" in chen_card["answer"] and chen_card["state"] == "answered"
     assert final["reply"].startswith("已用你的名义问了王屿、陈一")
+
+
+def test_a_model_that_cannot_be_reached_holds_no_place_in_the_chat_queue(
+    scene: Team, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from twin.web import jobs
+    from twin.web.backends import Backends, BackendUnavailable
+
+    def down(self: Backends) -> Any:
+        raise BackendUnavailable("down")
+
+    monkeypatch.setattr(jobs, "MAX_PENDING_ANSWERS", 1)
+    with monkeypatch.context() as m:
+        m.setattr(Backends, "chat_llm", down)
+        lin = scene.twins["lin"]
+        conversation = scene.conversation(LIN, lin)
+        body = {"messages": [{"role": "user", "content": SAY}], "conversation_id": conversation}
+        # Twice: a place left held by the first would turn the second away as a full queue (429).
+        for _ in range(2):
+            response = scene.web.post("/api/persona/chat/stream", json=body, headers=lin.headers)
+            assert response.status_code == 503, response.text
+    assert tell(scene)[1]["reply"] == "已用你的名义问了王屿、陈一，本人看得到。"

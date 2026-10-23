@@ -416,8 +416,8 @@ def test_a_twin_taken_away_for_good_takes_its_team_answers_with_it(scene: Team) 
     make_team_answer(scene)
     lin = scene.twins["lin"]
     scene.team.forget_persona(lin.persona)
-    [gone] = scene.team.team_answers()
-    assert gone.status == "withdrawn" and scene.team.answer_vectors() == {}
+    # Gone for good, words and all: not kept as a withdrawn answer.
+    assert scene.team.team_answers() == [] and scene.team.answer_vectors() == {}
 
 
 # ------------------------------------------------------------------ the person says otherwise later
@@ -470,6 +470,42 @@ def test_what_the_person_says_later_that_does_not_agree_makes_the_answer_possibl
     assert scene.team.team_answers()[0].status == "valid" and scene.team.team_answers()[0].stale_note == ""
     _, quoted = scene.ask(ASKERS["zhou"], wang, "旧版 Word 模板导出还支持吗")
     assert quoted["team_answers"][0]["body"].endswith("10 月 31 日。")
+
+
+@pytest.mark.parametrize("kept_by", ["note", "item"])
+def test_what_the_person_keeps_to_themself_never_makes_an_answer_out_of_date(scene: Team, kept_by: str) -> None:
+    """The note that says otherwise is the person's own (a note kept private, or words only an item of their own
+    tier stands on): it is not looked at, so it is never quoted to colleagues on the card."""
+    make_team_answer(scene)
+    lin = scene.twins["lin"]
+    settings = Settings(db_path=lin.path)
+    scene.llm.verdicts["Contradiction"] = {"index": 1, "reason": "对不上"}
+    calls = len(scene.llm.structured_calls)
+    with PersonaStore(lin.path) as store:
+        parsed = parse_note("旧版 Word 模板其实 10 月底就停了，私下说说。", settings, "私人笔记")
+        store.put_source(parsed)
+        if kept_by == "note":
+            store.set_note_tier(parsed.source.source_id, "self")
+        else:
+            said = parsed.expressions[0]
+            base = item("pi_private", "2.1", "旧模板其实早停了", sources=1)
+            private = base.model_copy(
+                update={
+                    "evidence": [
+                        base.evidence[0].model_copy(
+                            update={"expression_id": said.expression_id, "source_id": said.source_id}
+                        )
+                    ]
+                }
+            )
+            store.replace_facet_items("2.1", [*store.list_items("2.1"), private])
+            store.set_item_tier("pi_private", "self")
+        index_persona(store, scene.embedder, settings)
+        answers = TeamAnswers(scene.team, lambda _: "林舟")
+        assert answers.check_stale(lin.persona, store, scene.llm, scene.embedder, settings, "林舟") == 0
+    [answer] = scene.team.team_answers()
+    assert answer.status == "valid" and "10 月底" not in answer.stale_note
+    assert not any("10 月底" in user for _, _, user in scene.llm.structured_calls[calls:])
 
 
 def test_something_that_does_not_contradict_it_leaves_the_answer_standing(scene: Team) -> None:

@@ -30,6 +30,7 @@ from .llm import LLM, LLMError
 from .persona.chat import EXPRESSIONS_NS
 from .persona.sources import ExpressionView
 from .persona.store import PersonaStore
+from .persona.tiers import private_words
 from .teamdb import Handoff, TeamAnswer, TeamDB
 from .usage import default_stage
 
@@ -317,13 +318,21 @@ class TeamAnswers:
 
     def _later(self, answer: TeamAnswer, store: PersonaStore, settings: Settings) -> list[Any]:
         """What the person said (their own words, dated) from the day they confirmed the answer, other than the reply
-        it was made from."""
+        it was made from. Never what they keep to themself (``private_words``: a note kept private, or words only
+        items of their own tier stand on): what is found here is shown to every colleague as the reason an answer may
+        be out of date."""
         since = self._since(answer)
         view = ExpressionView(store, settings)
+        hidden = private_words(
+            store.list_items(include_rejected=True), store.item_tiers(), store.private_note_sources()
+        )
         return [
             (e, view.sources[e.source_id].title)
             for e in view.select(target_only=True)
-            if e.date is not None and e.date >= since and e.source_id != answer.source_id
+            if e.date is not None
+            and e.date >= since
+            and e.source_id != answer.source_id
+            and e.expression_id not in hidden
         ]
 
     def sayings_signature(self, answer: TeamAnswer, store: PersonaStore, settings: Settings) -> str:

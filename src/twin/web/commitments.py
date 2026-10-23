@@ -29,7 +29,8 @@ from ..persona.ledger import (
 )
 from ..persona.schema import LedgerEntry, ReviewStatus
 from ..persona.store import PersonaStore, stored_identity
-from .ledger import entry_view
+from ..persona.tiers import SELF as SELF_TIER
+from .ledger import asked_in_conversation, entry_view
 from .personas import Personas
 
 
@@ -115,6 +116,10 @@ def register_all(app: FastAPI, registry: Personas) -> None:
             names[twin["id"]] = who
             with PersonaStore(path) as store:
                 entries = store.list_ledger()
+                # What someone asked the person for in a conversation is the person's alone, as the handoff it came
+                # from: a manager or administrator looking after the twin does not see it.
+                if registry.audience(twin, identity) != SELF_TIER:
+                    entries = [e for e in entries if not asked_in_conversation(e)]
                 sources = [s for s in store.list_sources() if is_meeting(s)]
                 waiting += sum(1 for s in sources if store.ledger_done(s.source_id) != LEDGER_VERSION)
             meetings.update(s.source_id for s in sources if not s.source_id.startswith(SOURCE_PREFIX))

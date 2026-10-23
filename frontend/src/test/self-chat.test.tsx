@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -373,6 +373,43 @@ it('is the assistant only in the person’s own twin, and offers to try a questi
   expect(sent.messages.map((m) => m.content)).toEqual(['我上周答应过谁什么']);
 });
 
+it('keeps files added for an ordinary message out of a trial question, and says so', async () => {
+  const person = userEvent.setup();
+  streamed.push(answer({ reply: '这个我回头答复你。' }));
+  mount();
+  const sheet = await list();
+  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await screen.findByText('仅你可见');
+  await person.upload(
+    screen.getByLabelText('选择附件'),
+    new File(['合同期限是一年。'], '合同.txt', { type: 'text/plain' }),
+  );
+  expect(screen.getByText('合同.txt')).toBeVisible();
+  await person.click(screen.getByRole('button', { name: '看同事会得到什么' }));
+  // The files wait: not shown as going with the question, and none can be added to it.
+  expect(screen.queryByText('合同.txt')).toBeNull();
+  expect(
+    screen.getByText(/看同事会得到什么不带附件，已添加的 1 个附件留到/u),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: /^添加附件/u })).toBeDisabled();
+  expect(screen.getByLabelText('选择附件')).toBeDisabled();
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '下周三你在吗？',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('这个我回头答复你。')).toBeVisible();
+  expect(
+    fetcher.mock.calls.some(
+      ([url]) => url === '/api/persona/chat/stream-with-files',
+    ),
+  ).toBe(false);
+  // Back to an ordinary message, they are there to go with it.
+  await person.click(screen.getByRole('button', { name: '看同事会得到什么' }));
+  expect(screen.getByText('合同.txt')).toBeVisible();
+  expect(screen.getByRole('button', { name: /^添加附件/u })).toBeEnabled();
+});
+
 it('shows what the assistant took down, with the choice of who may use it, and takes it back when asked', async () => {
   const person = userEvent.setup();
   streamed.push(
@@ -518,4 +555,42 @@ it('opens on the person’s own twin from ``?with=me``', async () => {
     '/chat?with=me',
   );
   await waitFor(() => expect(usePersonas.getState().id).toBe('p-wang'));
+});
+
+it('keeps to the assistant’s list while the page is still on its way to the person’s own twin', async () => {
+  const person = userEvent.setup();
+  // The page is on 林舟's twin (``default``), which is not theirs; the person's own is 王屿 here.
+  server.own.mine = { persona_id: 'p-wang', pending: 0 };
+  mount([
+    twin('default', '林舟'),
+    twin('p-wang', '王屿', { mine: true, approved: true }),
+  ]);
+  // Going to a twin takes a while: it arrives only when ``arrive`` is called.
+  let arrive = () => {};
+  usePersonas.setState({
+    switchTo: vi.fn(
+      (id: string) =>
+        new Promise<void>((resolve) => {
+          arrive = () => {
+            setPersonaId(id);
+            usePersonas.setState({ id });
+            resolve();
+          };
+        }),
+    ),
+  });
+  const sheet = await list();
+  const pinned = await within(sheet).findByRole('button', {
+    name: /^我的分身/u,
+  });
+  await person.click(pinned);
+  expect(pinned).toHaveAttribute('aria-pressed', 'true');
+  await act(async () => arrive());
+  expect(usePersonas.getState().id).toBe('p-wang');
+  expect(
+    await within(sheet).findByRole('button', { name: row('招聘面试的问题') }),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByRole('button', { name: /^我的分身/u }),
+  ).toHaveAttribute('aria-pressed', 'true');
 });

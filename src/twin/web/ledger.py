@@ -30,7 +30,9 @@ from ..persona.ledger import (
 )
 from ..persona.schema import LedgerEntry, LedgerKind, LedgerStatus, ReviewStatus
 from ..persona.store import PersonaStore, stored_identity
+from ..persona.tiers import SELF
 from .backends import Backends
+from .conversations import request_audience
 from .handoffs import person
 from .jobs import JobConflict, JobManager, Log
 
@@ -55,6 +57,17 @@ class LedgerReviewBody(BaseModel):
 
 class LedgerBuildBody(BaseModel):
     force: bool = False
+
+
+def asked_in_conversation(entry: LedgerEntry) -> bool:
+    """A promise someone asked the person for in a conversation with their twin (from a handoff): it holds the
+    asker's question and name, which are the person's alone to see, as the handoff is."""
+    return entry.origin == "conversation"
+
+
+def is_person(request: Request) -> bool:
+    """Whether the signed-in person is the one the twin is made for (``handoffs.person``, without refusing)."""
+    return request_audience(request) == SELF and not request.scope.get("twin_visitor")
 
 
 def entry_view(
@@ -87,8 +100,14 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
         ids = [s.source_id for s in store.list_sources() if is_meeting(s)]
         return len(ids), sum(1 for i in ids if store.ledger_done(i) != LEDGER_VERSION)
 
+    def shown(ledger: list[LedgerEntry], request: Request) -> list[LedgerEntry]:
+        """The entries this signed-in person may see: anyone but the person (a manager, an administrator) not the
+        ones asked for in conversations."""
+        return ledger if is_person(request) else [e for e in ledger if not asked_in_conversation(e)]
+
     @app.get("/api/persona/ledger")
     def list_ledger(
+        request: Request,
         kind: LedgerKind | None = None,
         owner: str | None = Query(default=None, max_length=80),
         status: LedgerStatus | None = None,
@@ -96,7 +115,7 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
     ) -> dict[str, Any]:
         """Entries in meeting order with their current status. ``status`` filters on the current status."""
         with open_store() as store:
-            ledger = store.list_ledger()
+            ledger = shown(store.list_ledger(), request)
             total, pending = meetings(store)
         live = [e for e in ledger if e.review is not ReviewStatus.REJECTED]
         by_id = {e.entry_id: e for e in live}
@@ -119,8 +138,9 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
         }
 
     @app.post("/api/persona/ledger/{entry_id}/review")
-    def review(entry_id: str, body: LedgerReviewBody) -> dict[str, Any]:
-        """Confirm, correct (``changes`` holds only the corrected fields), reject, or reset an entry to unreviewed."""
+    def review(entry_id: str, body: LedgerReviewBody, request: Request) -> dict[str, Any]:
+        """Confirm, correct (``changes`` holds only the corrected fields), reject, or reset an entry to unreviewed. One
+        asked for in a conversation only the person can."""
         changes = body.changes.model_dump(exclude_unset=True) if body.changes else {}
         if body.action == "edit" and not changes:
             raise HTTPException(400, "修改时请给出要改的内容")
@@ -130,11 +150,14 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
             raise HTTPException(400, "负责人和内容不能清空")
         changes.update({key: "" for key in ("counterpart", "condition") if key in changes and changes[key] is None})
         with open_store() as store:
+            found = store.get_ledger_entry(entry_id)
+            if found is not None and asked_in_conversation(found):
+                person(request)
             try:
                 revised = review_entry(store, entry_id, body.action, changes)
             except KeyError as e:
                 raise HTTPException(404, f"找不到账本条目 {entry_id}（可能已在重新整理时替换）") from e
-            ledger = [e for e in store.list_ledger() if e.review is not ReviewStatus.REJECTED]
+            ledger = [e for e in shown(store.list_ledger(), request) if e.review is not ReviewStatus.REJECTED]
         return entry_view(revised, ledger)
 
     class AcceptBody(BaseModel):
@@ -213,11 +236,13 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
     app.state.ledger_build = start_build
 
     @app.get("/api/persona/ledger/brief")
-    def get_brief(person: str = Query(min_length=1, max_length=80), as_of: dt.date | None = None) -> dict[str, Any]:
+    def get_brief(
+        request: Request, person: str = Query(min_length=1, max_length=80), as_of: dt.date | None = None
+    ) -> dict[str, Any]:
         """What to bring up with ``person``: their open commitments, what was promised to them, recent progress,
         their objections and the questions to ask, as of ``as_of`` (today when omitted)."""
         with open_store() as store:
-            ledger = [e for e in store.list_ledger() if e.review is not ReviewStatus.REJECTED]
+            ledger = [e for e in shown(store.list_ledger(), request) if e.review is not ReviewStatus.REJECTED]
         result = brief(ledger, person, as_of or dt.date.today())
 
         by_id = {e.entry_id: e for e in ledger}

@@ -2,7 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { MotionConfig } from 'motion/react';
 import { AppShell } from './components/layout/AppShell';
-import { useCanManage } from './stores/personas';
+import { useCanManage } from './stores/access';
 import { featureOn, useAuth, type Feature } from './stores/auth';
 import { AuthGate } from './features/auth/AuthGate';
 import {
@@ -73,12 +73,14 @@ export function App() {
     <MotionConfig reducedMotion="user">
       <TooltipProvider delayDuration={300}>
         <ConfirmProvider>
-          <AuthGate>
-            <HashRouter>
+          <HashRouter>
+            <AuthGate>
               <Suspense fallback={<Skeleton className="h-40" />}>
                 <Routes>
                   <Route element={<AppShell />}>
                     <Route index element={<Start />} />
+                    {/* The way in (finding their voice, then the twin made for them): AppShell frames it. */}
+                    <Route path="welcome" element={null} />
                     <Route path="team" element={<Home />} />
                     <Route path="twins" element={<Twins />} />
                     <Route path="library" element={<Library />} />
@@ -135,8 +137,8 @@ export function App() {
                   </Route>
                 </Routes>
               </Suspense>
-            </HashRouter>
-          </AuthGate>
+            </AuthGate>
+          </HashRouter>
           <ToastViewport />
         </ConfirmProvider>
       </TooltipProvider>

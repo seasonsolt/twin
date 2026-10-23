@@ -1126,6 +1126,27 @@ const handlers: Record<string, Handler> = {
       rows.sort((a, b) => b.occasions - a.occasions);
     return { items: rows.slice(0, limit), total: rows.length };
   },
+  // 员工 1b: what the twin made from a person's recognised voices has gathered of their commitments.
+  'GET /api/persona/ledger': reply({
+    entries: [
+      {
+        entry_id: 'l-retention',
+        kind: 'commitment',
+        owner: '赵晴',
+        what: '周五前按活跃用户重算留存口径',
+        meeting_title: '产品周会',
+        meeting_date: '2026-10-15',
+      },
+      {
+        entry_id: 'l-renewal',
+        kind: 'commitment',
+        owner: '赵晴',
+        what: '周四前给出续费方案',
+        meeting_title: '周一经营会',
+        meeting_date: '2026-10-12',
+      },
+    ],
+  }),
   'GET /api/persona/processing': reply({ state: 'idle' }),
   'GET /api/persona/work': reply({
     tasks: [

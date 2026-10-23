@@ -7,6 +7,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { AuthGate } from '../features/auth/AuthGate';
@@ -14,6 +15,7 @@ import { Login } from '../features/auth/Login';
 import { api } from '../lib/api';
 import { getPersonaId, setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
+import { useWelcome } from '../stores/welcome';
 import { usePersonas, type Persona } from '../stores/personas';
 import { isSourcesUrl, sourcesPage } from './personaApi';
 
@@ -144,9 +146,11 @@ async function requestCode(user: ReturnType<typeof userEvent.setup>) {
 it('logs in via email and a paste-friendly code without persisting credentials', async () => {
   const user = userEvent.setup();
   render(
-    <AuthGate>
-      <h1>应用</h1>
-    </AuthGate>,
+    <MemoryRouter initialEntries={['/chat']}>
+      <AuthGate>
+        <h1>应用</h1>
+      </AuthGate>
+    </MemoryRouter>,
   );
   const code = await requestCode(user);
   expect(code).toHaveAttribute('inputmode', 'numeric');
@@ -223,9 +227,11 @@ it('enables resend only after the 60-second countdown and restarts it', async ()
 it('returns to login on a mid-session 401 and clears the previous persona state', async () => {
   loggedIn = true;
   render(
-    <AuthGate>
-      <h1>应用</h1>
-    </AuthGate>,
+    <MemoryRouter initialEntries={['/chat']}>
+      <AuthGate>
+        <h1>应用</h1>
+      </AuthGate>
+    </MemoryRouter>,
   );
   await screen.findByRole('heading', { name: '应用' });
   loggedIn = false;
@@ -389,9 +395,11 @@ it("signs in with twin's own account and password", async () => {
   methods = { sso: null, password: true, email: false };
   const user = userEvent.setup();
   render(
-    <AuthGate>
-      <h1>应用</h1>
-    </AuthGate>,
+    <MemoryRouter initialEntries={['/chat']}>
+      <AuthGate>
+        <h1>应用</h1>
+      </AuthGate>
+    </MemoryRouter>,
   );
   expect(
     await screen.findByRole('heading', { name: '登录 twin' }),
@@ -417,7 +425,6 @@ it("signs in with twin's own account and password", async () => {
     password: 'secret-123',
   });
   expect(new Headers(sent[1][1].headers).get('X-Twin')).toBe('1');
-  expect(window.location.hash).toBe('#/team');
   expect(JSON.stringify(localStorage)).not.toContain('secret-123');
 });
 
@@ -436,25 +443,56 @@ it.each([0, 1, 2])(
     await user.type(code, '012345');
     await user.click(screen.getByRole('button', { name: '登录' }));
     // No twin needs setting up first; an account without one is offered one beside the team's recordings.
-    await screen.findByRole('heading', {
-      name: count ? '从一段会议录音开始' : '从团队会议录音开始',
-    });
-    if (!count)
-      expect(
-        screen.getByRole('heading', { name: '给自己建分身' }),
-      ).toBeVisible();
+    await screen.findByRole('heading', { name: '从一段会议录音开始' });
+    // Whether or not they have a twin, the start is the team's recordings: no card for making one of themselves.
+    expect(screen.queryByRole('region', { name: '给自己建分身' })).toBeNull();
     expect(window.location.hash).toBe('#/team');
   },
 );
+
+it('makes the sign-in an address of its own: signed out leads to it, signed in leaves it for the start page', async () => {
+  window.location.hash = '#/profile';
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '用邮箱登录' });
+  expect(window.location.hash).toBe('#/login');
+  const code = await requestCode(user);
+  await user.type(code, '012345');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  await screen.findByRole('heading', { name: '从一段会议录音开始' });
+  expect(window.location.hash).toBe('#/team');
+  // Signed in, the sign-in address is not a place to stay.
+  await act(async () => {
+    window.location.hash = '#/login';
+  });
+  await waitFor(() => expect(window.location.hash).toBe('#/team'));
+});
+
+it('signs out to the sign-in address and asks for it again from any page', async () => {
+  loggedIn = true;
+  window.location.hash = '#/chat';
+  render(<App />);
+  await screen.findByRole('button', { name: '账户' });
+  loggedIn = false;
+  await act(async () => {
+    await expect(api('/api/status')).rejects.toMatchObject({
+      code: 'login_required',
+    });
+  });
+  await screen.findByRole('heading', { name: '用邮箱登录' });
+  expect(window.location.hash).toBe('#/login');
+});
 
 it('clears a stale persona and selects the first owned twin rather than default', async () => {
   loggedIn = true;
   setPersonaId('p-deleted');
   usePersonas.setState({ id: 'p-deleted' });
   render(
-    <AuthGate>
-      <h1>应用</h1>
-    </AuthGate>,
+    <MemoryRouter initialEntries={['/chat']}>
+      <AuthGate>
+        <h1>应用</h1>
+      </AuthGate>
+    </MemoryRouter>,
   );
   await screen.findByRole('heading', { name: '应用' });
   expect(getPersonaId()).toBe(persona.id);
@@ -504,6 +542,13 @@ it('opens on a twin made for this person until they say it is all right', async 
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+  // The way in is an address of its own, with its second step current and no side bar around it.
+  expect(window.location.hash).toBe('#/welcome');
+  expect(
+    within(screen.getByRole('list', { name: '步骤' }))
+      .getByText('看看你的分身')
+      .closest('li'),
+  ).toHaveAttribute('aria-current', 'step');
   expect(screen.queryByRole('navigation')).toBeNull();
   await user.click(screen.getByRole('checkbox', { name: '同事能问我的分身' }));
   await user.click(screen.getByRole('button', { name: '没问题，开始用' }));
@@ -517,6 +562,46 @@ it('opens on a twin made for this person until they say it is all right', async 
       screen.queryByRole('heading', { name: '赵晴，你的分身已经建好了' }),
     ).toBeNull(),
   );
+  // Approved: on to the profile, not back to the way in.
+  await waitFor(() => expect(window.location.hash).toBe('#/profile'));
+  expect(
+    await screen.findByRole('navigation', { name: '主导航' }),
+  ).toBeVisible();
+});
+
+it('lets someone look at the twin made for them later, and goes on to the team without approving it', async () => {
+  loggedIn = true;
+  items = [
+    {
+      ...persona,
+      name: '赵晴',
+      mine: true,
+      made_by_other: true,
+      approved: false,
+    },
+  ];
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+  expect(window.location.hash).toBe('#/welcome');
+  await user.click(screen.getByRole('button', { name: '稍后再说' }));
+  await waitFor(() => expect(window.location.hash).toBe('#/team'));
+  expect(screen.getByRole('navigation', { name: '主导航' })).toBeVisible();
+  expect(
+    fetcher.mock.calls.some(([path]) => String(path).endsWith('/approve')),
+  ).toBe(false);
+  // Signing out starts the way in over.
+  expect(useWelcome.getState().claimDone).toBe(true);
+  useAuth.getState().clear();
+  expect(useWelcome.getState().claimDone).toBe(false);
+});
+
+it('leaves the way in for the team when there is nothing left on it', async () => {
+  loggedIn = true;
+  window.location.hash = '#/welcome';
+  render(<App />);
+  await screen.findByRole('navigation', { name: '主导航' });
+  expect(window.location.hash).toBe('#/team');
 });
 
 it('gives a twin made for the wrong address back with 这不是我', async () => {
@@ -643,10 +728,17 @@ it('looks for someone signed in with a work address in the meetings before an em
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole('heading', { name: '会议里可能有你' });
+  expect(window.location.hash).toBe('#/welcome');
+  expect(
+    within(screen.getByRole('list', { name: '步骤' }))
+      .getByText('认出你自己')
+      .closest('li'),
+  ).toHaveAttribute('aria-current', 'step');
   await user.click(
     await screen.findByRole('button', { name: '没开过会，先建空分身' }),
   );
   await screen.findByRole('form', { name: '新建分身' });
+  expect(window.location.hash).not.toBe('#/welcome');
 });
 
 it('a twin of the voices someone recognised leads back to them instead of 这不是我', async () => {

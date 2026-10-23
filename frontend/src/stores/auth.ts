@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
 import { usePersonas } from './personas';
+import { useWelcome } from './welcome';
 
 export interface Identity {
   email: string | null;
@@ -48,6 +49,7 @@ export const useAuth = create<{
     ++version;
     set({ identity: null });
     usePersonas.getState().reset();
+    useWelcome.getState().reset();
   },
   async login(signal) {
     const current = ++version;

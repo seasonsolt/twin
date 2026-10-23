@@ -10,11 +10,9 @@ import {
   Skeleton,
   Stack,
   Text,
-  ThemePicker,
 } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
-import { THEMES, useTheme } from '../../stores/theme';
 
 /** The ways the server signs people in (GET /api/auth/methods). */
 export interface LoginMethods {
@@ -33,9 +31,9 @@ const EMAIL_ONLY: LoginMethods = { sso: null, password: false, email: true };
 const local = (path: string | null | undefined) =>
   path && path.startsWith('/') && !path.startsWith('//') ? path : '';
 
-/** Start from the team once signed in: people are found in the recordings, not set up first. */
+/** Once signed in, ``#/login`` leads on to the team (people are found in the recordings, not set up first), so there
+ * is nothing to navigate here. */
 async function signedIn() {
-  window.location.hash = '#/team';
   await useAuth.getState().login();
 }
 
@@ -65,8 +63,6 @@ export function Login() {
   const start = local(methods?.sso?.start_url);
   const link = local(methods?.sso?.login_url);
   const sso = Boolean(start || link);
-  const own = Boolean(methods?.password || methods?.email);
-  const { theme, setTheme } = useTheme();
   return (
     <main className="auth-page bg-background">
       <AuthStage />
@@ -124,25 +120,16 @@ export function Login() {
                     用享佳统一身份登录
                   </LinkButton>
                 ))}
-              {sso && own && (
+              {sso && methods.email && (
                 <div className="auth-divider">
-                  <Button
-                    variant="ghost"
-                    aria-expanded={ownOpen}
-                    aria-controls={ownId}
-                    onClick={() => setOwnOpen((open) => !open)}
-                  >
-                    或用 twin 账号登录
-                    <ChevronDown
-                      aria-hidden
-                      className={`size-4 transition-transform ${ownOpen ? 'rotate-180' : ''}`}
-                    />
-                  </Button>
+                  <Text size="sm" tone="secondary">
+                    或用邮箱验证码
+                  </Text>
                 </div>
               )}
-              {(!sso || ownOpen) && (
-                <div id={ownId} className="space-y-4">
-                  {methods.password && <PasswordLogin primary={!sso} />}
+              {(!sso || methods.email) && (
+                <div className="space-y-4">
+                  {!sso && methods.password && <PasswordLogin primary />}
                   {methods.email && (
                     <EmailLogin
                       primary={!sso && !methods.password}
@@ -151,20 +138,35 @@ export function Login() {
                   )}
                 </div>
               )}
+              {sso && methods.password && (
+                <>
+                  <div className="auth-divider">
+                    <Button
+                      variant="ghost"
+                      aria-expanded={ownOpen}
+                      aria-controls={ownId}
+                      onClick={() => setOwnOpen((open) => !open)}
+                    >
+                      或用 twin 账号登录
+                      <ChevronDown
+                        aria-hidden
+                        className={`size-4 transition-transform ${ownOpen ? 'rotate-180' : ''}`}
+                      />
+                    </Button>
+                  </div>
+                  {ownOpen && (
+                    <div id={ownId}>
+                      <PasswordLogin primary={false} />
+                    </div>
+                  )}
+                </>
+              )}
             </Card>
             <Text size="sm" tone="secondary" align="center">
               登录遇到问题？请联系管理员
             </Text>
           </>
         )}
-        <div className="auth-themes">
-          <ThemePicker
-            value={theme}
-            options={THEMES}
-            onChange={setTheme}
-            named
-          />
-        </div>
       </section>
     </main>
   );

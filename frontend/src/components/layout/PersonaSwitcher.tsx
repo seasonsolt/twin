@@ -18,7 +18,8 @@ import {
   TextLink,
 } from '../ui';
 import { personaUrl } from '../../lib/persona';
-import { useCanManage, usePersonas, type Persona } from '../../stores/personas';
+import { useManagesCurrent } from '../../stores/access';
+import { usePersonas, type Persona } from '../../stores/personas';
 import { featureOn, useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
 import { useOpenSystem } from '../../features/admin/SystemDialog';
@@ -87,7 +88,7 @@ export function PersonaSwitcher({
     : items;
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
-  const canManage = useCanManage();
+  const canManage = useManagesCurrent();
   const openSystem = useOpenSystem();
   useEffect(() => {
     if (!open) return;

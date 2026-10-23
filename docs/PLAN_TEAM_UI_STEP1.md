@@ -57,14 +57,14 @@
 
 用到的接口：`auth/*`、`whoami`、`personas`、`library`、`library/people`、`library/review`、`library/uploads`。
 
-- [ ] **1. 侧栏导航项样式**：`components/ui/navigation.tsx` 只加“图标加文字加数字”的侧栏项，在 `pages/GalleryPageKit.tsx` 展示。页面暂不使用。
-- [ ] **2. 访客判定**：`useCanManage` 改成“管理员，或任一分身能管理”，见已定第 1 条；补测试，覆盖访客、管理员、本人。
-- [ ] **3. 上传状态提成全局（外观不变）**：`features/library/useUploads.ts` 的状态移进 store，`pages/Home.tsx`、`pages/Library.tsx` 改用它。为下一步侧栏上传和拖到任意处做准备。
-- [ ] **4. 新侧栏**：新建 `components/layout/Sidebar.tsx`，替换 `AppShell.tsx` 里的图标栏、`PersonaSwitcher` 头像和切换器、最近分身；`AppShell` 只留外壳。侧栏上传按钮和拖到任意处共用全局上传。访客只有“对话”。账户菜单原样搬过来。
-- [ ] **5. 按名字找人（⌘K）**：侧栏“找人”，只按名字搜 `library/people` 和 `personas`，选中后去对应的人。不做跨人检索。
-- [ ] **6. 后台任务小卡**：读录音库的排队、转写进度和各人整理进度；待处理数字只在录音变了时重取。
-- [ ] **7. 登录和认领成为路由**：`features/auth/AuthGate.tsx` 的条件渲染改成 `#/login`，登录后去 `#/team`；`AppShell` 里认领前读声纹和确认页（`MemberVoice`、`Claimed`）改成 `#/welcome`，确认后去成员页（成员页未上线前仍去档案页）。`features/auth/Login.tsx` 删配色选择，邮箱验证码直接展开；左侧品牌区不动。
-- [ ] **8. 首次进入文案**：`pages/Home.tsx` 空团队状态改文案，三步改成有序列表，删“给自己建分身”卡，复制邀请链接先复制站点地址。
+- [x] **1. 侧栏导航项样式**：`components/ui/navigation.tsx` 只加“图标加文字加数字”的侧栏项，在 `pages/GalleryPageKit.tsx` 展示。页面暂不使用。
+- [x] **2. 访客判定**：`useCanManage`（`stores/access.ts`）改成“管理员，或任一分身能管理”，见已定第 1 条；补测试，覆盖访客、管理员、本人。聊天依据里改记忆、分身菜单里的“档案”仍只看当前分身（`useManagesCurrent`）。访客也进不了团队类地址，一律去对话。
+- [x] **3. 上传状态提成全局（外观不变）**：`features/library/useUploads.ts` 的状态移进 store，`pages/Home.tsx`、`pages/Library.tsx` 改用它。为下一步侧栏上传和拖到任意处做准备。
+- [x] **4. 新侧栏**：新建 `components/layout/Sidebar.tsx`，替换 `AppShell.tsx` 里的图标栏、`PersonaSwitcher` 头像和切换器、最近分身；`AppShell` 只留外壳。侧栏上传按钮和拖到任意处共用全局上传。访客只有“对话”。账户菜单原样搬过来。
+- [x] **5. 按名字找人（⌘K）**：侧栏“找人”，只按名字搜 `library/people` 和 `personas`，选中后去对应的人。不做跨人检索。
+- [x] **6. 后台任务小卡**：读录音库的排队、转写进度和各人整理进度；待处理数字只在录音变了时重取。
+- [x] **7. 登录和认领成为路由**：`features/auth/AuthGate.tsx` 的条件渲染改成 `#/login`，登录后去 `#/team`；`AppShell` 里认领前读声纹和确认页（`MemberVoice`、`Claimed`）改成 `#/welcome`，确认后去成员页（成员页未上线前仍去档案页）。顶部是两步和“稍后再说”；认领一步的“稍后再说”让人先进应用，分身仍未确认，同事问不到它。`features/auth/Login.tsx` 删配色选择，邮箱验证码直接展开（密码登录仍在“或用 twin 账号登录”后）；左侧品牌区不动。受邀卡片等二·1 有了团队名再加。
+- [x] **8. 首次进入文案**：`pages/Home.tsx` 空团队状态改文案，三步改成有序列表，删“给自己建分身”卡，复制邀请链接先复制站点地址。
 
 验收：访客、管理员、本人各走一遍进门；没有分身、待认领分身两种情况，改成路由后去处不变；截图逐张看过。
 

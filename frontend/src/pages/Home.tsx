@@ -9,25 +9,35 @@ import {
   Heading,
   Notice,
   Page,
+  Row,
   Skeleton,
   Stack,
   StepNumber,
   Text,
   Toolbar,
+  toast,
 } from '../components/ui';
+import { basePath } from '../lib/base';
 import { usePolling } from '../lib/usePolling';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { useUploads } from '../features/library/useUploads';
 import { useTeam } from '../stores/team';
-import { NewTwinForm } from '../components/layout/NewTwin';
-import { usePersonas } from '../stores/personas';
 
 const STEPS: [string, string][] = [
-  ['转写，区分说话人', '每段录音只转写一次。'],
-  ['自动认人', '认得出的直接归位；新声音建成“未命名”，拿不准的请你听一下。'],
-  ['起名，生成分身', '之后的录音会自动补充到他的记忆里。'],
+  ['转写，分出每个人', '每段录音只转写一次。'],
+  ['认人', '认得出的直接归位，拿不准的放进待处理请你听一下。'],
+  ['每人一个分身', '之后的录音自动补进他的记忆。'],
 ];
+
+/** The site's address, to send to colleagues so they can sign in and recognise themselves in the meetings. */
+function copyInvite() {
+  const link = `${window.location.origin}${basePath()}/`;
+  void navigator.clipboard.writeText(link).then(
+    () => toast('邀请链接已复制，可以发给同事', 'success'),
+    () => toast(link, 'info', 15000),
+  );
+}
 
 /** The account's start page: the people found in its meeting recordings, what needs settling, and uploading. With
  * no recording yet, it is the way to the first one. */
@@ -70,24 +80,14 @@ export function Home() {
     />
   );
   const fresh = library !== null && library.recordings.length === 0;
-  // Someone without a twin of their own can start with one of themselves, beside the team's recordings.
-  const ownTwin = usePersonas((state) =>
-    state.items.some((item) => item.mine || (item.can_manage ?? true)),
-  );
-  useEffect(() => {
-    void usePersonas
-      .getState()
-      .refresh()
-      .catch(() => {});
-  }, []);
   const drop = (
     <FileDrop
       label="添加录音"
-      size={ownTwin ? 'lg' : 'md'}
+      size="lg"
       title="把会议录音拖到这里"
       inputLabel="选择录音文件"
       onFiles={(files) => void add(files)}
-      hint="音频或视频都可以，一次可以选多个。只有你的账号能看到。"
+      hint="音频、视频都行，一次可以选多个。团队里参会的人也能看到。"
     />
   );
   return (
@@ -112,48 +112,15 @@ export function Home() {
           <Skeleton className="h-64" />
         ) : fresh ? (
           <>
-            {ownTwin ? (
-              <>
-                <Stack as="header" gap={2}>
-                  <Heading level={2} size="display" align="center">
-                    从一段会议录音开始
-                  </Heading>
-                  <Text tone="secondary" align="center">
-                    不用先建档。上传后自动区分每个人、认出已知的人，新出现的人自动建档。
-                  </Text>
-                </Stack>
-                {drop}
-              </>
-            ) : (
-              <Grid columns={2}>
-                <Card as="section" aria-labelledby="start-self">
-                  <Stack gap={4}>
-                    <Stack gap={1}>
-                      <Heading id="start-self" level={2} size="title">
-                        给自己建分身
-                      </Heading>
-                      <Text size="sm" tone="secondary">
-                        它从你说过的话里学你怎么想、怎么说。
-                      </Text>
-                    </Stack>
-                    <NewTwinForm />
-                  </Stack>
-                </Card>
-                <Card as="section" aria-labelledby="start-team">
-                  <Stack gap={4}>
-                    <Stack gap={1}>
-                      <Heading id="start-team" level={2} size="title">
-                        从团队会议录音开始
-                      </Heading>
-                      <Text size="sm" tone="secondary">
-                        自动区分每个人、认出已知的人，新出现的人自动建档。
-                      </Text>
-                    </Stack>
-                    {drop}
-                  </Stack>
-                </Card>
-              </Grid>
-            )}
+            <Stack as="header" gap={2}>
+              <Heading level={2} size="display" align="center">
+                从一段会议录音开始
+              </Heading>
+              <Text tone="secondary" align="center">
+                不用先建档。传上来以后，系统分出每个人、认出已知的人，新出现的人自动建档。
+              </Text>
+            </Stack>
+            {drop}
             <UploadList
               picks={unfinished}
               uploading={uploading}
@@ -177,6 +144,19 @@ export function Home() {
                 </Card>
               ))}
             </Grid>
+            <Card as="section" aria-label="邀请同事" variant="outline">
+              <Row justify="between" wrap gap={4}>
+                <Stack gap={0}>
+                  <Text weight="semibold">请同事来认自己</Text>
+                  <Text size="sm" tone="secondary">
+                    他们登录后听几句就能确认哪段是自己，分身更准，你也少确认几次。
+                  </Text>
+                </Stack>
+                <Button variant="secondary" onClick={copyInvite}>
+                  复制邀请链接
+                </Button>
+              </Row>
+            </Card>
           </>
         ) : (
           <>

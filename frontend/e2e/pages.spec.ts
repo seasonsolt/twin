@@ -3,8 +3,8 @@ import { mockApi, newTwin, NOW, weekly } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
-/** Signed out, with the company sign-in and twin's own accounts offered. */
-async function signInWithSso(page: Page) {
+/** Signed out, with the company sign-in and twin's own accounts offered (`byEmail`: a code by e-mail, not a password). */
+async function signInWithSso(page: Page, byEmail = false) {
   await page.route('**/api/whoami', (route) =>
     route.fulfill({
       status: 401,
@@ -18,8 +18,8 @@ async function signInWithSso(page: Page) {
           start_url: '/auth/start?next=/twin/',
           login_url: '/login?next=/twin/',
         },
-        password: true,
-        email: false,
+        password: !byEmail,
+        email: byEmail,
       },
     }),
   );
@@ -152,6 +152,77 @@ const pages: {
     },
   },
   {
+    // 第 2 屏: nothing uploaded yet. The way to the first recording, what happens to it, and asking colleagues in.
+    name: 'first-run',
+    path: '/#/team',
+    ready: '把会议录音拖到这里',
+    setup: async (page) => {
+      await page.route('**/api/library', (route) =>
+        route.fulfill({
+          json: {
+            recordings: [],
+            pending: 0,
+            max_pending: 20,
+            asr: true,
+            capacity: {
+              free_bytes: 120 * 1024 ** 3,
+              arriving_bytes: 0,
+              arriving: 0,
+              headroom_bytes: 20 * 1024 ** 3,
+            },
+          },
+        }),
+      );
+      await page.route('**/api/library/people', (route) =>
+        route.fulfill({ json: { items: [] } }),
+      );
+      await page.route('**/api/library/review', (route) =>
+        route.fulfill({
+          json: { items: [], voices: [], fragments: [], unsorted: [] },
+        }),
+      );
+    },
+  },
+  {
+    // 第 3 屏, step 2: the twin made from the voices they recognised, to look at before colleagues can ask it.
+    name: 'welcome-claim',
+    path: '/#/chat',
+    ready: '赵晴，你的分身已经建好了',
+    setup: async (page) => {
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: 'sso:1001',
+            name: '赵晴',
+            address: 'zhaoqing@acme.cn',
+            admin: false,
+            auth_enabled: true,
+            provider: 'sso',
+          },
+        }),
+      );
+      await page.route('**/api/personas', (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: 'p-zhaoqing',
+              name: '赵晴',
+              avatar_url: null,
+              avatar_preset: 'wave',
+              sources: 3,
+              created_at: '2026-10-16T02:00:00Z',
+              is_default: false,
+              can_manage: true,
+              mine: true,
+              from_meetings: true,
+              approved: false,
+            },
+          ],
+        }),
+      );
+    },
+  },
+  {
     // A twin account with no twin yet, opening 工作: the workspace stays, with the new-twin card over it.
     name: 'work-no-twin',
     path: '/#/work',
@@ -198,6 +269,13 @@ const pages: {
     path: '/#/chat',
     ready: '用享佳统一身份登录',
     setup: signInWithSso,
+  },
+  {
+    // The company sign-in first; the e-mail code is right below it, already open.
+    name: 'login-sso-email',
+    path: '/#/chat',
+    ready: '或用邮箱验证码',
+    setup: (page) => signInWithSso(page, true),
   },
   // The other palettes, as picked on the sign-in page and remembered in this browser.
   ...(['blue', 'ink'] as const).map((theme) => ({

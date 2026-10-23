@@ -12,7 +12,7 @@ import {
 } from '../../components/ui';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
-import { useCanManage } from '../../stores/personas';
+import { useManagesCurrent } from '../../stores/access';
 import type { Citation } from './types';
 
 /** A card's heading: where the words come from, with the place in a file. */
@@ -205,7 +205,7 @@ export function Citations({
   note?: string;
 }) {
   // Only the person behind the twin can change what it remembers; a visitor just sees the evidence.
-  const editable = useCanManage();
+  const editable = useManagesCurrent();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   if (!cited.length) return null;

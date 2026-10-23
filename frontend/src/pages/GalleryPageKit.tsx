@@ -38,6 +38,7 @@ import {
   Clip,
   Disclosure,
   Field,
+  DropOverlay,
   FileDrop,
   Grid,
   Heading,
@@ -67,6 +68,7 @@ import {
   Stat,
   StatusDot,
   StepNumber,
+  Steps,
   Text,
   TextLink,
   ThemePicker,
@@ -93,6 +95,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [sheetWidth, setSheetWidth] = useState(280);
   const [aspect, setAspect] = useState('D2');
   const [visibleRows, setVisibleRows] = useState(3);
+  const [dragging, setDragging] = useState(false);
   return (
     <Stack gap={6}>
       <Section title="人格画像">
@@ -880,6 +883,24 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
       </Card>
 
       <Card className="space-y-5">
+        <Heading level={3}>步骤 Steps</Heading>
+        <Steps
+          label="示例步骤"
+          steps={['认出你自己', '看看你的分身']}
+          current={0}
+        />
+        <Steps
+          label="示例步骤（第二步）"
+          steps={['认出你自己', '看看你的分身']}
+          current={1}
+        />
+        <Heading level={3}>拖到页面任意处 DropOverlay</Heading>
+        <Checkbox
+          label="显示拖放提示"
+          checked={dragging}
+          onChange={(event) => setDragging(event.target.checked)}
+        />
+        {dragging && <DropOverlay title="松开即可上传" />}
         <Heading level={3}>文件拖放 FileDrop</Heading>
         <FileDrop
           label="添加录音示例"

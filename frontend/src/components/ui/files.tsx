@@ -181,3 +181,21 @@ export function FileDropSurface({
     </section>
   );
 }
+
+/**
+ * Covers the page while files are dragged over it, to say where they would land: a dashed frame and `title`. It
+ * takes no clicks or drops itself, so what lies under it still receives them.
+ */
+export function DropOverlay({ title }: { title: ReactNode }) {
+  return (
+    <div
+      role="status"
+      className="pointer-events-none fixed inset-0 z-50 grid place-items-center bg-canvas/80 p-6 backdrop-blur-sm"
+    >
+      <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-lg border-2 border-dashed border-accent bg-surface px-6 py-12 text-center shadow-elevation-2">
+        <Upload aria-hidden className="size-10 text-accent" />
+        <p className="text-lg font-medium">{title}</p>
+      </div>
+    </div>
+  );
+}

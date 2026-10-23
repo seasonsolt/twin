@@ -131,10 +131,3 @@ export const usePersonas = create<{
       );
   },
 }));
-
-// Someone else's public twin can only be talked to.
-export const useCanManage = () =>
-  usePersonas(
-    (state) =>
-      state.items.find((item) => item.id === state.id)?.can_manage ?? true,
-  );

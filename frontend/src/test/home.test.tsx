@@ -6,6 +6,7 @@ import { ConfirmProvider } from '../components/ui';
 import { Home } from '../pages/Home';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
+import { basePath } from '../lib/base';
 import { useAuth } from '../stores/auth';
 import { usePersonas } from '../stores/personas';
 
@@ -74,23 +75,53 @@ const show = (entry = '/') =>
     </MemoryRouter>,
   );
 
-it('starts an account without recordings or a twin from two cards: a twin of themselves, or the team’s recordings', async () => {
+it('starts an account without recordings from uploading one, with no card for making a twin of themselves', async () => {
   show();
-  const self = await screen.findByRole('region', { name: '给自己建分身' });
   expect(
-    within(self).getByRole('textbox', { name: '分身名字' }),
-  ).toBeInTheDocument();
+    await screen.findByRole('heading', { name: '从一段会议录音开始' }),
+  ).toBeVisible();
   expect(
-    within(self).getByText('下一步：加一段会议录音，勾出哪位是你。'),
-  ).toBeInTheDocument();
-  const team = screen.getByRole('region', { name: '从团队会议录音开始' });
+    screen.getByText(
+      '不用先建档。传上来以后，系统分出每个人、认出已知的人，新出现的人自动建档。',
+    ),
+  ).toBeVisible();
+  expect(screen.queryByRole('region', { name: '给自己建分身' })).toBeNull();
+  expect(screen.queryByRole('textbox', { name: '分身名字' })).toBeNull();
+  const drop = screen.getByRole('region', { name: '添加录音' });
+  expect(within(drop).getByText('把会议录音拖到这里')).toBeVisible();
+  expect(within(drop).getByRole('button', { name: '选择文件' })).toBeEnabled();
   expect(
-    within(team).getByRole('region', { name: '添加录音' }),
-  ).toBeInTheDocument();
-  expect(within(team).getByRole('button', { name: '选择文件' })).toBeEnabled();
+    within(drop).getByText(
+      '音频、视频都行，一次可以选多个。团队里参会的人也能看到。',
+    ),
+  ).toBeVisible();
+  // What happens next, in order.
+  const steps = screen.getByRole('list', { name: '接下来会发生什么' });
+  expect(steps.tagName).toBe('OL');
   expect(
-    screen.getByRole('list', { name: '接下来会发生什么' }).children,
-  ).toHaveLength(3);
+    within(steps)
+      .getAllByRole('listitem')
+      .map((step) => step.textContent),
+  ).toEqual([
+    '1转写，分出每个人每段录音只转写一次。',
+    '2认人认得出的直接归位，拿不准的放进待处理请你听一下。',
+    '3每人一个分身之后的录音自动补进他的记忆。',
+  ]);
+});
+
+it('copies the site address as the invitation to colleagues', async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+  show();
+  const invite = await screen.findByRole('region', { name: '邀请同事' });
+  expect(within(invite).getByText('请同事来认自己')).toBeVisible();
+  await userEvent.click(
+    within(invite).getByRole('button', { name: '复制邀请链接' }),
+  );
+  expect(writeText).toHaveBeenCalledTimes(1);
+  const [copied] = writeText.mock.calls[0] as unknown as [string];
+  expect(copied).toBe(`${window.location.origin}${basePath()}/`);
+  expect(copied).not.toContain('#');
 });
 
 it('starts an account that has its own twin from uploading a recording, not from another twin', async () => {
@@ -180,7 +211,7 @@ it('keeps the service status off the team page, even for administrators', async 
     identity: { email: 'a@example.com', admin: true, auth_enabled: true },
   });
   show();
-  await screen.findByRole('heading', { name: '从团队会议录音开始' });
+  await screen.findByRole('heading', { name: '从一段会议录音开始' });
   expect(screen.queryByText('GPU 服务')).toBeNull();
   expect(
     vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('admin')),

@@ -118,7 +118,9 @@ it('reads a sentence aloud, hears one sentence of each voice and says which is t
   const user = userEvent.setup();
   show(() => {});
   await screen.findByRole('heading', { name: '会议里可能有你' });
-  expect(screen.getByText(/管理员还没为你建分身/u)).toBeInTheDocument();
+  expect(screen.getByText(/听一句就够。确认是你之后/u)).toBeInTheDocument();
+  // Nothing is theirs yet: a way to start with a sentence about themselves instead, after “都不是你？”.
+  expect(screen.getByText('没开过会，先建空分身')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: '开始录音' }));
   await user.click(await screen.findByRole('button', { name: /说完了/u }));
   const list = await screen.findByRole('list', { name: '可能是你的声音' });
@@ -151,7 +153,22 @@ it('reads a sentence aloud, hears one sentence of each voice and says which is t
     screen.getByRole('button', { name: '已确认 1 段，看看我的分身' }),
   ).toBeEnabled();
   expect(screen.getByRole('button', { name: '撤回' })).toBeInTheDocument();
-  expect(screen.queryByText('一段都不是我')).toBeNull();
+  expect(screen.queryByText('写一句话介绍自己')).toBeNull();
+});
+
+it('offers “写一句话介绍自己” when none of the voices is theirs, which goes on to an empty twin', async () => {
+  const user = userEvent.setup();
+  const skipped = vi.fn();
+  voice = { ...empty, enrolled: true, items: [offer({})] };
+  show(skipped);
+  const note = (await screen.findByText(/都不是你？/u)).closest('p')!;
+  expect(note).toHaveTextContent(
+    '都不是你？写一句话介绍自己，或等你参加的会议传上来。',
+  );
+  await user.click(
+    within(note).getByRole('button', { name: '写一句话介绍自己' }),
+  );
+  expect(skipped).toHaveBeenCalledTimes(1);
 });
 
 it('goes on to an empty twin without a work address or when nothing is theirs', async () => {

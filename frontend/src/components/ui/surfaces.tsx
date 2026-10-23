@@ -739,6 +739,54 @@ export function StepNumber({
 }
 
 /**
+ * The steps of a short flow worked through in order, in a line: the ones before `current` are done (a tick), the
+ * current one is filled and named to assistive technology as the current step, the rest are only outlined.
+ */
+export function Steps({
+  label,
+  steps,
+  current,
+}: {
+  /** Names the list, such as "步骤". */
+  label: string;
+  steps: string[];
+  /** Index of the step under way. */
+  current: number;
+}) {
+  return (
+    <ol aria-label={label} className="flex items-center gap-3 text-sm">
+      {steps.map((step, index) => (
+        <li
+          key={step}
+          aria-current={index === current ? 'step' : undefined}
+          className={cn(
+            'flex items-center gap-3',
+            index === current ? 'font-medium' : 'text-secondary',
+          )}
+        >
+          {index > 0 && <span aria-hidden className="h-px w-6 bg-border" />}
+          <span className="flex items-center gap-1.5">
+            <StepNumber
+              size="sm"
+              state={
+                index < current
+                  ? 'done'
+                  : index === current
+                    ? undefined
+                    : 'pending'
+              }
+            >
+              {index + 1}
+            </StepNumber>
+            {step}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/**
  * A round "⋯" button that opens a short list of actions below it; choosing one closes the list. `className` places
  * the menu (for example absolute in a card's corner).
  */

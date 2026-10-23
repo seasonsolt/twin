@@ -17,7 +17,6 @@ import {
   Text,
   TextLink,
 } from '../components/ui';
-import { StageHeader } from '../components/layout/StageHeader';
 import { useRecorder } from '../features/assets/useRecorder';
 import { api, ApiError } from '../lib/api';
 import { withBase } from '../lib/base';
@@ -126,7 +125,8 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
     try {
       await usePersonas.getState().refresh();
       await usePersonas.getState().switchTo(personaId);
-      navigate('/profile');
+      // On the way in, the twin now waiting for them is the next step; the way in shows it without a navigation.
+      if (!onSkip) navigate('/profile');
     } finally {
       setBusy('');
     }
@@ -136,7 +136,8 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
   const recording =
     recorder.state === 'recording' || recorder.state === 'requesting';
   const title = '会议里可能有你';
-  const description = `${onSkip ? '管理员还没为你建分身。' : ''}听一句就够：确认是你之后，你的分身就从这些会议里认识你，不用另外上传资料。`;
+  const description =
+    '听一句就够。确认是你之后，你的分身就从这些会议里认识你，不用另外上传资料。';
   const content = !state ? (
     error ? (
       <Notice tone="danger" role="alert">
@@ -268,7 +269,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
         </ul>
       </Card>
       <Text size="sm" tone="secondary">
-        同一个人的几段声音合在一起，确认一次就够。点错了可以撤回。
+        同一个人的几段声音合在一起，确认一次就够；点错了可以撤回。
       </Text>
       {error && (
         <Text size="sm" tone="danger" role="alert">
@@ -277,9 +278,13 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
       )}
       <Row justify="between" wrap gap={3}>
         {onSkip && mine.length === 0 ? (
-          <TextLink size="sm" onClick={onSkip}>
-            一段都不是我
-          </TextLink>
+          <Text size="sm" tone="secondary">
+            都不是你？
+            <TextLink size="sm" onClick={onSkip}>
+              写一句话介绍自己
+            </TextLink>
+            ，或等你参加的会议传上来。
+          </Text>
         ) : (
           <span />
         )}
@@ -296,7 +301,8 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
       </Row>
     </>
   );
-  // Opened again from inside the app it is an ordinary page; before any twin, the whole screen.
+  // Opened again from inside the app it is an ordinary page; on the way in (``#/welcome``, which frames it) it is
+  // the first step.
   if (!onSkip)
     return (
       <Page title={title} description={description}>
@@ -304,19 +310,14 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
       </Page>
     );
   return (
-    <main className="entry-page min-h-dvh">
-      <StageHeader variant="brand" />
-      <section className="mx-auto max-w-2xl px-4 py-8">
-        <Stack gap={6}>
-          <Stack gap={2}>
-            <Heading level={2} size="title">
-              {title}
-            </Heading>
-            <Text tone="secondary">{description}</Text>
-          </Stack>
-          {content}
-        </Stack>
-      </section>
-    </main>
+    <Stack gap={5}>
+      <Stack gap={2}>
+        <Heading level={1} size="display">
+          {title}
+        </Heading>
+        <Text tone="secondary">{description}</Text>
+      </Stack>
+      {content}
+    </Stack>
   );
 }

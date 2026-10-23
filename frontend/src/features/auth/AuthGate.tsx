@@ -1,11 +1,17 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router';
 import { Button, Skeleton } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
 import { usePersonas } from '../../stores/personas';
 import { Login } from './Login';
 
+/**
+ * Everything behind signing in. Signed out, every address leads to ``#/login``; signed in, ``#/login`` leads to the
+ * team (where a guest, who may only talk to twins, is sent on to the chat). Needs a router around it.
+ */
 export function AuthGate({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
   const identity = useAuth((state) => state.identity);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState('');
@@ -53,5 +59,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <Button onClick={() => window.location.reload()}>重试</Button>
       </main>
     );
-  return identity ? children : <Login />;
+  if (!identity)
+    return pathname === '/login' ? <Login /> : <Navigate to="/login" replace />;
+  return pathname === '/login' ? <Navigate to="/team" replace /> : children;
 }

@@ -4,6 +4,10 @@ import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
 import type { ReviewLists } from '../features/library/teamCounts';
 
+/** The team's name where it is shown (the side bar, the way in). The backend has none yet: this stands in until the
+ * system settings hold one. */
+export const TEAM_NAME = '我的团队';
+
 /** What, in the recordings, people and the review queue follow: a transcript arriving, speakers settled, one
  * removed. Not progress, which moves on every poll while recordings wait. */
 export const recordingsKey = (recordings: Recording[]) =>

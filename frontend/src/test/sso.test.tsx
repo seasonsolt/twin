@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router';
 import { AuthGate } from '../features/auth/AuthGate';
 import { useAuth } from '../stores/auth';
 
@@ -42,9 +43,11 @@ it('shows its own sign-in page with the company sign-in instead of leaving for i
   );
   vi.stubGlobal('fetch', fetcher);
   render(
-    <AuthGate>
-      <h1>应用</h1>
-    </AuthGate>,
+    <MemoryRouter initialEntries={['/chat']}>
+      <AuthGate>
+        <h1>应用</h1>
+      </AuthGate>
+    </MemoryRouter>,
   );
   expect(
     await screen.findByRole('heading', { name: '登录 twin' }),

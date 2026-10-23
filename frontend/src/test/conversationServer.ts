@@ -25,6 +25,9 @@ export function conversationServer() {
       persona: string;
       /** The tier it answers from, where a test is about the person's own conversations. */
       audience?: 'self' | 'colleague';
+      /** Asked by the person's assistant in their name, or how many colleagues' twins it asked in this one. */
+      via?: 'direct' | 'delegate';
+      delegated?: number;
     }
   >();
   const json = (data: unknown, status = 200) =>
@@ -41,7 +44,10 @@ export function conversationServer() {
       const wanted = (id: string) =>
         (!only || id === only) && (id === mineId) === apart;
       const listed = [...rows.values()]
-        .filter((row) => wanted(row.persona))
+        // What the assistant asked in the person's name is listed with the assistant's own.
+        .filter(
+          (row) => wanted(row.persona) || (apart && row.via === 'delegate'),
+        )
         .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
       return json({
         mine: own.mine,
@@ -51,8 +57,9 @@ export function conversationServer() {
           title: row.title,
           preview: row.turns.at(-1)?.content || '',
           updated_at: row.updated_at,
-          via: 'direct',
+          via: row.via ?? 'direct',
           handoff: row.turns.at(-1)?.role === 'self' ? '本人已回' : null,
+          delegated: row.delegated ?? 0,
         })),
         tasks: offset ? [] : tasks.filter((task) => wanted(task.persona_id)),
         more: listed.length > offset + 50,

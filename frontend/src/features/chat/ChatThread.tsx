@@ -33,6 +33,9 @@ import {
 import { useSeesWhole } from '../../stores/access';
 import { useStatus } from '../../stores/status';
 import type { Persona } from '../../stores/personas';
+import { askOwner } from '../answers/askOwner';
+import { TeamAnswerCard } from '../answers/TeamAnswerCard';
+import { Delegation } from '../delegation/Delegation';
 import { useIdentity } from '../identity/useIdentity';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { SetupCard } from '../setup/SetupCard';
@@ -41,7 +44,7 @@ import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { useConversation } from './useConversation';
-import { handoffText } from './types';
+import { handoffText, type Turn } from './types';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -51,6 +54,14 @@ const CHAT_ATTACHMENT_SUFFIXES = new Set(
 );
 const MAX_CHAT_ATTACHMENT_COUNT = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+/** What the asker said before the twin's turn at `index`: the question a team answer card was given to. */
+function askedBefore(turns: Turn[], index: number): string {
+  for (let i = index - 1; i >= 0; i--) {
+    if (turns[i].role === 'user') return turns[i].content;
+  }
+  return '';
+}
 
 /**
  * One conversation with the twin: the notes above it (memory being organised, a new twin's setup), the messages with
@@ -292,7 +303,7 @@ export function ChatThread({
                 <MessageList
                   label="对话记录"
                   className="space-y-4"
-                  items={chat.turns.map((turn) => ({
+                  items={chat.turns.map((turn, index) => ({
                     id: turn.id,
                     text: turn.content,
                     content:
@@ -329,6 +340,21 @@ export function ChatThread({
                               </Text>
                             )
                           )}
+                          {turn.reply?.team_answers?.map((card) => (
+                            <TeamAnswerCard
+                              key={card.id}
+                              card={card}
+                              onAsk={
+                                turn.preview
+                                  ? undefined
+                                  : () =>
+                                      askOwner(
+                                        card.id,
+                                        askedBefore(chat.turns, index),
+                                      )
+                              }
+                            />
+                          ))}
                           <div
                             className={
                               turn.role === 'twin'
@@ -418,6 +444,9 @@ export function ChatThread({
                                     chat.setNoteTier(turn.id, tier)
                                   }
                                 />
+                              )}
+                              {turn.reply.delegation && (
+                                <Delegation note={turn.reply.delegation} />
                               )}
                               {turn.reply.commitment && (
                                 <Text size="xs" tone="secondary">
@@ -607,7 +636,7 @@ export function ChatThread({
               trying
                 ? '问一句，看同事会得到什么…'
                 : assistant
-                  ? '问问我的分身，或说“记一下……”'
+                  ? '问问我的分身，或说“记一下…”“帮我问问…”'
                   : `和${name}聊点什么…`
             }
           />

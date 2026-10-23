@@ -78,7 +78,7 @@ const bodyOf = (url: string, method?: string) =>
     )
     .map(([, init]) => JSON.parse(String(init?.body ?? 'null')) as unknown);
 
-function mount(items: Persona[] = personas) {
+function mount(items: Persona[] = personas, entry = '/chat') {
   useAuth.setState({
     identity: {
       email: 'me@example.com',
@@ -99,7 +99,7 @@ function mount(items: Persona[] = personas) {
   return render(
     <TooltipProvider>
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/chat']}>
+        <MemoryRouter initialEntries={[entry]}>
           <Chat />
         </MemoryRouter>
       </ConfirmProvider>
@@ -337,7 +337,7 @@ it('is the assistant only in the person’s own twin, and offers to try a questi
   await screen.findByText('仅你可见');
   expect(screen.getByRole('textbox', { name: '你说' })).toHaveAttribute(
     'placeholder',
-    '问问我的分身，或说“记一下……”',
+    '问问我的分身，或说“记一下…”“帮我问问…”',
   );
   // Asked as a colleague would be: the one question alone, marked, and what it left out named.
   const trial = screen.getByRole('button', { name: '看同事会得到什么' });
@@ -471,4 +471,39 @@ it('offers to fill in what the profile did not have, and speaks of the person as
   expect(screen.getByText('资料里没有')).toBeVisible();
   await person.click(screen.getByRole('button', { name: '补一句' }));
   expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue('记一下，');
+});
+
+it('marks what the assistant asked in the person’s name, and lists it apart with the assistant’s own conversations', async () => {
+  const person = userEvent.setup();
+  server.rows.get('c-qing')!.via = 'delegate';
+  server.rows.get('c-self')!.delegated = 2;
+  mount();
+  const sheet = await list();
+  // Among everyone's, it says who it was with and that the assistant asked.
+  expect(
+    await within(sheet).findByRole('button', {
+      name: /^评审定的接口\s*许清禾\s*·\s*助手代问/u,
+    }),
+  ).toBeVisible();
+  expect(within(sheet).queryByRole('region', { name: '问同事' })).toBeNull();
+  // With the assistant's own: its conversation says how many it asked, and what it asked is under 问同事.
+  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  expect(
+    await within(sheet).findByRole('button', {
+      name: /^我上周答应过谁什么\s*代问 2 人/u,
+    }),
+  ).toBeVisible();
+  const asked = within(sheet).getByRole('region', { name: '问同事' });
+  expect(
+    within(asked).getByRole('button', {
+      name: /^评审定的接口\s*许清禾\s*·\s*助手代问/u,
+    }),
+  ).toBeVisible();
+  expect(within(asked).queryByText('我上周答应过谁什么')).toBeNull();
+});
+
+it('opens a conversation of another twin from its address: the twin it is with, then the conversation', async () => {
+  mount(personas, '/chat?with=p-wang&open=c-wang');
+  expect(await screen.findByText('先问最近做的事。')).toBeVisible();
+  expect(usePersonas.getState().id).toBe('p-wang');
 });

@@ -61,6 +61,8 @@ export interface Session {
   who?: string;
   /** The twin it belongs to: opening it takes the page there. */
   personaId?: string;
+  /** A group of its own under a name (问同事), after the days. */
+  section?: string;
 }
 
 /** What a row says under its title, on one line: whom it is with, where what it handed to the person stands, and that
@@ -168,6 +170,11 @@ export function SessionList({
     `${row.title}\n${row.preview ?? ''}`.toLocaleLowerCase().includes(search),
   );
   const keyOf = (row: Pick<Session, 'kind' | 'id'>) => `${row.kind}:${row.id}`;
+  // Rows that belong to a section of their own (问同事) come after the days, under its name.
+  const plain = filtered.filter((row) => !row.section);
+  const sections = [
+    ...new Set(filtered.flatMap((row) => (row.section ? [row.section] : []))),
+  ];
   useLayoutEffect(() => {
     const list = scroll.current;
     if (!list) return;
@@ -198,6 +205,172 @@ export function SessionList({
     } finally {
       setSaving(false);
     }
+  };
+  const renderRow = (row: Session) => {
+    const key = keyOf(row);
+    const isCurrent = current !== null && keyOf(current) === key;
+    return (
+      <li key={key} className="history-entry" data-current={isCurrent}>
+        {editing === key ? (
+          <form
+            className="history-edit"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!title.trim() || saving || !onRename) return;
+              setSaving(true);
+              setFailure('');
+              void onRename(row, title.trim())
+                .then(() => setEditing(null))
+                .catch((error: unknown) =>
+                  setFailure(
+                    error instanceof Error ? error.message : '重命名失败',
+                  ),
+                )
+                .finally(() => setSaving(false));
+            }}
+          >
+            <Input
+              autoFocus
+              aria-label="对话标题"
+              maxLength={200}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              className="history-search"
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={saving}
+                onClick={() => setEditing(null)}
+              >
+                取消
+              </Button>
+              <Button
+                size="sm"
+                type="submit"
+                disabled={!title.trim() || saving}
+              >
+                保存
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <div className="history-entry-row">
+              <Button
+                variant="ghost"
+                className="history-select font-normal text-current hover:bg-transparent"
+                aria-current={isCurrent ? 'true' : undefined}
+                disabled={saving || busy}
+                onClick={() => {
+                  setFailure('');
+                  void Promise.resolve(onOpen(row)).then((opened) => {
+                    if (opened) {
+                      reset();
+                      if (!inline) onOpenChange(false);
+                    }
+                  });
+                }}
+              >
+                <span className="history-title">
+                  {row.title}
+                  {!!notes(row).length && (
+                    <span className="history-kind">
+                      {notes(row).map((note, index) => (
+                        <span key={note}>
+                          {index > 0 && ' · '}
+                          <span>{note}</span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </span>{' '}
+                <time dateTime={row.updated_at}>
+                  {row.running
+                    ? '在做'
+                    : relativeTime(row.updated_at, currentTime)}
+                </time>
+              </Button>
+              <IconButton
+                className="history-more text-current hover:bg-transparent"
+                label={`${row.title}的更多操作`}
+                aria-expanded={menu === key}
+                aria-haspopup="menu"
+                disabled={saving || row.running}
+                onClick={(event) => {
+                  menuTrigger.current = event.currentTarget;
+                  setMenu(menu === key ? null : key);
+                }}
+              >
+                <MoreHorizontal size={18} aria-hidden />
+              </IconButton>
+            </div>
+            {menu === key && (
+              <div
+                role="menu"
+                aria-label="对话操作"
+                className="history-menu"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setMenu(null);
+                    menuTrigger.current?.focus();
+                  } else if (
+                    ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+                  ) {
+                    event.preventDefault();
+                    const items = Array.from(
+                      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                        '[role="menuitem"]',
+                      ),
+                    );
+                    const index = items.indexOf(
+                      document.activeElement as HTMLButtonElement,
+                    );
+                    const next =
+                      event.key === 'Home'
+                        ? 0
+                        : event.key === 'End'
+                          ? items.length - 1
+                          : (index +
+                              (event.key === 'ArrowDown' ? 1 : -1) +
+                              items.length) %
+                            items.length;
+                    items[next]?.focus();
+                  }
+                }}
+              >
+                {onRename && row.kind === 'chat' && (
+                  <Button
+                    autoFocus
+                    variant="ghost"
+                    role="menuitem"
+                    onClick={() => {
+                      setEditing(key);
+                      setTitle(row.title);
+                      setMenu(null);
+                    }}
+                  >
+                    重命名
+                  </Button>
+                )}
+                <Button
+                  autoFocus={row.kind === 'task'}
+                  variant="ghost"
+                  role="menuitem"
+                  disabled={saving}
+                  onClick={() => void remove(row)}
+                >
+                  删除
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </li>
+    );
   };
   const content = (
     <div className="history-content">
@@ -310,7 +483,7 @@ export function SessionList({
               <p className="history-empty">没有找到匹配的对话</p>
             )}
             {groups.map((group) => {
-              const rows = filtered.filter(
+              const rows = plain.filter(
                 (row) =>
                   (dayGroup(row.updated_at, currentTime) === '今天'
                     ? '今天'
@@ -324,202 +497,25 @@ export function SessionList({
                     aria-label={group}
                   >
                     <h3 className="history-group-label">{group}</h3>
-                    <ul className="history-list">
-                      {rows.map((row) => {
-                        const key = keyOf(row);
-                        const isCurrent =
-                          current !== null && keyOf(current) === key;
-                        return (
-                          <li
-                            key={key}
-                            className="history-entry"
-                            data-current={isCurrent}
-                          >
-                            {editing === key ? (
-                              <form
-                                className="history-edit"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  if (!title.trim() || saving || !onRename)
-                                    return;
-                                  setSaving(true);
-                                  setFailure('');
-                                  void onRename(row, title.trim())
-                                    .then(() => setEditing(null))
-                                    .catch((error: unknown) =>
-                                      setFailure(
-                                        error instanceof Error
-                                          ? error.message
-                                          : '重命名失败',
-                                      ),
-                                    )
-                                    .finally(() => setSaving(false));
-                                }}
-                              >
-                                <Input
-                                  autoFocus
-                                  aria-label="对话标题"
-                                  maxLength={200}
-                                  value={title}
-                                  onChange={(event) =>
-                                    setTitle(event.target.value)
-                                  }
-                                  className="history-search"
-                                />
-                                <div className="mt-2 flex justify-end gap-2">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    disabled={saving}
-                                    onClick={() => setEditing(null)}
-                                  >
-                                    取消
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    type="submit"
-                                    disabled={!title.trim() || saving}
-                                  >
-                                    保存
-                                  </Button>
-                                </div>
-                              </form>
-                            ) : (
-                              <>
-                                <div className="history-entry-row">
-                                  <Button
-                                    variant="ghost"
-                                    className="history-select font-normal text-current hover:bg-transparent"
-                                    aria-current={
-                                      isCurrent ? 'true' : undefined
-                                    }
-                                    disabled={saving || busy}
-                                    onClick={() => {
-                                      setFailure('');
-                                      void Promise.resolve(onOpen(row)).then(
-                                        (opened) => {
-                                          if (opened) {
-                                            reset();
-                                            if (!inline) onOpenChange(false);
-                                          }
-                                        },
-                                      );
-                                    }}
-                                  >
-                                    <span className="history-title">
-                                      {row.title}
-                                      {!!notes(row).length && (
-                                        <span className="history-kind">
-                                          {notes(row).map((note, index) => (
-                                            <span key={note}>
-                                              {index > 0 && ' · '}
-                                              <span>{note}</span>
-                                            </span>
-                                          ))}
-                                        </span>
-                                      )}
-                                    </span>{' '}
-                                    <time dateTime={row.updated_at}>
-                                      {row.running
-                                        ? '在做'
-                                        : relativeTime(
-                                            row.updated_at,
-                                            currentTime,
-                                          )}
-                                    </time>
-                                  </Button>
-                                  <IconButton
-                                    className="history-more text-current hover:bg-transparent"
-                                    label={`${row.title}的更多操作`}
-                                    aria-expanded={menu === key}
-                                    aria-haspopup="menu"
-                                    disabled={saving || row.running}
-                                    onClick={(event) => {
-                                      menuTrigger.current = event.currentTarget;
-                                      setMenu(menu === key ? null : key);
-                                    }}
-                                  >
-                                    <MoreHorizontal size={18} aria-hidden />
-                                  </IconButton>
-                                </div>
-                                {menu === key && (
-                                  <div
-                                    role="menu"
-                                    aria-label="对话操作"
-                                    className="history-menu"
-                                    onKeyDown={(event) => {
-                                      if (event.key === 'Escape') {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        setMenu(null);
-                                        menuTrigger.current?.focus();
-                                      } else if (
-                                        [
-                                          'ArrowDown',
-                                          'ArrowUp',
-                                          'Home',
-                                          'End',
-                                        ].includes(event.key)
-                                      ) {
-                                        event.preventDefault();
-                                        const items = Array.from(
-                                          event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                                            '[role="menuitem"]',
-                                          ),
-                                        );
-                                        const index = items.indexOf(
-                                          document.activeElement as HTMLButtonElement,
-                                        );
-                                        const next =
-                                          event.key === 'Home'
-                                            ? 0
-                                            : event.key === 'End'
-                                              ? items.length - 1
-                                              : (index +
-                                                  (event.key === 'ArrowDown'
-                                                    ? 1
-                                                    : -1) +
-                                                  items.length) %
-                                                items.length;
-                                        items[next]?.focus();
-                                      }
-                                    }}
-                                  >
-                                    {onRename && row.kind === 'chat' && (
-                                      <Button
-                                        autoFocus
-                                        variant="ghost"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setEditing(key);
-                                          setTitle(row.title);
-                                          setMenu(null);
-                                        }}
-                                      >
-                                        重命名
-                                      </Button>
-                                    )}
-                                    <Button
-                                      autoFocus={row.kind === 'task'}
-                                      variant="ghost"
-                                      role="menuitem"
-                                      disabled={saving}
-                                      onClick={() => void remove(row)}
-                                    >
-                                      删除
-                                    </Button>
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
+                    <ul className="history-list">{rows.map(renderRow)}</ul>
                   </section>
                 )
               );
             })}
+            {sections.map((section) => (
+              <section
+                key={section}
+                className="history-group"
+                aria-label={section}
+              >
+                <h3 className="history-group-label">{section}</h3>
+                <ul className="history-list">
+                  {filtered
+                    .filter((row) => row.section === section)
+                    .map(renderRow)}
+                </ul>
+              </section>
+            ))}
             {loading && (
               <p role="status" className="history-empty">
                 正在加载…

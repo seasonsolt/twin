@@ -14,6 +14,11 @@ judgement of a colleague, an answer the profile does not hold), one handoff per 
 asked and where it stands, in seven states plus the moment the person's reply is being written back. The person's
 reply reaches the asker's conversation in three steps (``begin_reply``, a ``self`` turn in the twin's database that
 names the handoff and is written once, ``finish_reply``), so one that stopped halfway is finished at startup.
+
+The organisation's layer is here as well: team answers (what a person confirmed once, for every twin to quote as it
+stands, with the vector that finds them by meaning), the cache of how well each twin knows each facet (for finding
+who knows about a matter) and delegations (the person's assistant asking colleagues' twins in their name, one hop
+from the person, which ``create_delegation`` and ``record_conversation`` check as they write).
 """
 
 from __future__ import annotations
@@ -47,6 +52,10 @@ Outcome = Literal["replied", "accepted", "declined"]
 # ``self``: kept as the person's own only (chosen where a memory is written down, not yet in handoffs).
 ReplyTier = Literal["none", "colleague", "self"]
 HANDOFF_DAYS = 7
+# A team answer: in force, possibly out of date (the person said something different since), or taken back.
+AnswerStatus = Literal["valid", "stale", "withdrawn"]
+# How many colleagues' twins one delegation asks, at most.
+MAX_DELEGATES = 3
 # ``conversations(asked_by=...)`` left out: everyone's (None is a real value there, the asker of a service without
 # sign-in).
 _ANYONE = object()
@@ -110,17 +119,69 @@ _MIGRATIONS: tuple[str, ...] = (
         checked_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, turn));
     """,
+    # 3: team answers, and the vectors that find them by meaning.
+    """
+    CREATE TABLE team_answers (
+        id TEXT PRIMARY KEY,
+        persona_id TEXT NOT NULL,
+        owner TEXT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        handoff_id TEXT,
+        item_id TEXT,
+        source_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('valid', 'stale', 'withdrawn')),
+        stale_note TEXT NOT NULL DEFAULT '',
+        judged TEXT NOT NULL DEFAULT '',
+        confirmed_at TEXT NOT NULL,
+        withdrawn_at TEXT);
+    CREATE INDEX team_answers_persona ON team_answers(persona_id, status);
+    CREATE UNIQUE INDEX team_answers_handoff ON team_answers(handoff_id)
+        WHERE handoff_id IS NOT NULL AND status != 'withdrawn';
+    CREATE TABLE team_answer_vectors (
+        answer_id TEXT PRIMARY KEY REFERENCES team_answers(id) ON DELETE CASCADE,
+        model TEXT NOT NULL,
+        vector BLOB NOT NULL);
+    """,
+    # 4: how well each twin knows each facet, as colleagues may use its memories (a cache; deleting it loses nothing).
+    """
+    CREATE TABLE facet_coverage (
+        persona_id TEXT NOT NULL,
+        facet_id TEXT NOT NULL,
+        level INTEGER NOT NULL,
+        occasions INTEGER NOT NULL,
+        last_seen TEXT,
+        kernel TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (persona_id, facet_id));
+    """,
+    # 5: delegations, the person's assistant asking colleagues' twins in their name.
+    """
+    CREATE TABLE delegations (
+        id TEXT PRIMARY KEY,
+        initiator TEXT NOT NULL,
+        persona_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        question TEXT NOT NULL,
+        created_at TEXT NOT NULL);
+    CREATE INDEX delegations_conversation ON delegations(conversation_id);
+    """,
 )
 
 SNAPSHOT_DIR = "snapshots"
 SNAPSHOT_KEEP = 3
 # ``meta`` keys.
+COVERAGE_SIGNATURE = "coverage:signature:"
 RECONCILED_AT = "conversations:reconciled_at"
 INDEXED_LEGACY = "conversations:legacy_indexed"
 
 
 class NewerTeamError(RuntimeError):
     pass
+
+
+class DelegationRefused(RuntimeError):
+    """A write that would take delegation beyond one hop from the person (or past its limits); the message says why."""
 
 
 class HandoffUnavailable(RuntimeError):
@@ -179,6 +240,58 @@ class Handoff:
         return self.conversation_id is not None
 
 
+@dataclass(frozen=True)
+class TeamAnswer:
+    """What a person confirmed once, for every twin to quote as it stands."""
+
+    id: str
+    persona_id: str
+    owner: str | None
+    title: str
+    body: str
+    handoff_id: str | None
+    item_id: str | None
+    source_id: str | None
+    status: AnswerStatus
+    stale_note: str
+    # What the last check of "has the person said otherwise since" looked at, so that it is not judged again.
+    judged: str
+    confirmed_at: str
+    withdrawn_at: str | None
+
+
+_ANSWER_COLUMNS = (
+    "id, persona_id, owner, title, body, handoff_id, item_id, source_id, status, stale_note, judged, confirmed_at, "
+    "withdrawn_at"
+)
+
+
+@dataclass(frozen=True)
+class CoverageRow:
+    """How well one twin knows one facet, from the memories colleagues may use."""
+
+    persona_id: str
+    facet_id: str
+    level: int
+    occasions: int
+    last_seen: str | None
+    kernel: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class Delegation:
+    """The person's assistant asking colleagues' twins in their name: asked from the person's own conversation with
+    their assistant (``conversation_id``, of the twin ``persona_id``)."""
+
+    id: str
+    initiator: str
+    persona_id: str
+    conversation_id: str
+    question: str
+    created_at: str
+
+
 _HANDOFF_COLUMNS = (
     "id, persona_id, owner, conversation_id, turn, asker, asker_name, via, kind, question, context, ask, "
     "commit_what, commit_due, status, outcome, reply, reply_tier, reply_turn, ledger_id, group_key, created_at, "
@@ -188,6 +301,10 @@ _HANDOFF_COLUMNS = (
 
 def _handoff(row: Sequence[object]) -> Handoff:
     return Handoff(*row)  # type: ignore[arg-type]
+
+
+def _like(prefix: str) -> str:
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _stamp(now: dt.datetime | None = None) -> str:
@@ -305,6 +422,18 @@ class TeamDB:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
 
+    def delete_meta(self, key: str) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM meta WHERE key = ?", (key,))
+
+    def meta_keys(self, prefix: str) -> set[str]:
+        """The keys of the records that start with ``prefix``."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key FROM meta WHERE key LIKE ? ESCAPE '\\'", (_like(prefix) + "%",)
+            ).fetchall()
+        return {r[0] for r in rows}
+
     # ------------------------------------------------------------ conversation index
 
     def record_conversation(
@@ -321,8 +450,15 @@ class TeamDB:
         asker_name: str = "",
     ) -> None:
         """Index a conversation once, with the tier it answers from; a conversation already indexed keeps the tier it
-        was created with, whatever is asked now. ``asker_name``: what the person is called where they are shown."""
+        was created with, whatever is asked now. ``asker_name``: what the person is called where they are shown.
+
+        A conversation asked in the person's name by their assistant (``via="delegate"``) is checked as it is written:
+        it must belong to a delegation, answer from the colleague tier, be the delegation's person's own, be a twin
+        other than the person's, and be at most ``MAX_DELEGATES`` of the delegation's. Only a conversation the person
+        has with their assistant themself can start a delegation (``create_delegation``), so a twin that was asked by
+        an assistant never asks another: one hop, held here and not left to the prompts."""
         with self._tx() as db:
+            self._check_delegate(db, conversation_id, persona_id, asker, audience, via, delegation_id)
             db.execute(
                 "INSERT INTO conversations "
                 "(id, persona_id, asker, audience, via, delegation_id, title, updated_at, asker_name) "
@@ -331,6 +467,41 @@ class TeamDB:
                 "deleted_at = NULL",
                 (conversation_id, persona_id, asker, audience, via, delegation_id, title, updated_at, asker_name),
             )
+
+    @staticmethod
+    def _check_delegate(
+        db: sqlite3.Connection,
+        conversation_id: str,
+        persona_id: str,
+        asker: str | None,
+        audience: Audience,
+        via: Via,
+        delegation_id: str | None,
+    ) -> None:
+        if via != "delegate":
+            if delegation_id is not None:
+                raise DelegationRefused("不是代问的对话，不能属于某次代问")
+            return
+        row = (
+            db.execute("SELECT initiator, persona_id FROM delegations WHERE id = ?", (delegation_id,)).fetchone()
+            if delegation_id
+            else None
+        )
+        if row is None:
+            raise DelegationRefused("代问的对话要属于一次代问")
+        if audience != COLLEAGUE:
+            raise DelegationRefused("代问只按同事能用的记忆回答")
+        if asker != row[0]:
+            raise DelegationRefused("代问的对话归发起代问的人")
+        if persona_id == row[1]:
+            raise DelegationRefused("不能代问自己的分身")
+        if not db.execute("SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)).fetchone() and (
+            db.execute(
+                "SELECT COUNT(*) FROM conversations WHERE delegation_id = ? AND deleted_at IS NULL", (delegation_id,)
+            ).fetchone()[0]
+            >= MAX_DELEGATES
+        ):
+            raise DelegationRefused(f"一次最多问 {MAX_DELEGATES} 位同事")
 
     def refresh_conversation(self, conversation_id: str, title: str, updated_at: str) -> None:
         with self._tx() as db:
@@ -371,13 +542,17 @@ class TeamDB:
         asked_by: object = _ANYONE,
         self_tier_of: Collection[str] | None = None,
         not_self_tier_of: Collection[str] | None = None,
+        delegation_id: str | None = None,
+        via: Via | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[IndexedConversation]:
         """Indexed conversations, newest first. ``personas`` limits them to those twins (the ones not in the trash).
         ``asked_by`` limits them to one person's own, where None is the one without an account (no sign-in); leave it
         out for everyone's. ``self_tier_of``: only those of the self tier with one of these twins (the person's own
-        with their assistant); ``not_self_tier_of``: all but those. ``limit`` and ``offset`` page the list."""
+        with their assistant); ``not_self_tier_of``: all but those. ``delegation_id``: only those one delegation
+        asked; ``via``: only those asked directly, or only those the person's assistant asked in their name.
+        ``limit`` and ``offset`` page the list."""
         where = [] if include_deleted else ["deleted_at IS NULL"]
         params: list[object] = []
         if persona_id is not None:
@@ -400,8 +575,15 @@ class TeamDB:
         if not_self_tier_of:
             where.append(f"NOT (audience = 'self' AND persona_id IN ({','.join('?' * len(not_self_tier_of))}))")
             params.extend(not_self_tier_of)
+        if delegation_id is not None:
+            where.append("delegation_id = ?")
+            params.append(delegation_id)
+        if via is not None:
+            where.append("via = ?")
+            params.append(via)
         sql = "SELECT * FROM conversations" + (f" WHERE {' AND '.join(where)}" if where else "")
-        sql += " ORDER BY updated_at DESC, id"
+        # What one delegation asked is in the order it was asked; anything else, the newest first.
+        sql += " ORDER BY rowid" if delegation_id is not None else " ORDER BY updated_at DESC, id"
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
             params += [limit, offset]
@@ -436,6 +618,19 @@ class TeamDB:
                 (persona_id,),
             )
             db.execute("DELETE FROM handoffs WHERE persona_id = ?", (persona_id,))
+            # What the person confirmed is taken back with them (what to do when someone leaves is left for later).
+            db.execute(
+                "UPDATE team_answers SET status = 'withdrawn', withdrawn_at = ? "
+                "WHERE persona_id = ? AND status != 'withdrawn'",
+                (_stamp(), persona_id),
+            )
+            db.execute(
+                "DELETE FROM team_answer_vectors WHERE answer_id IN (SELECT id FROM team_answers WHERE persona_id = ?)",
+                (persona_id,),
+            )
+            db.execute("DELETE FROM facet_coverage WHERE persona_id = ?", (persona_id,))
+            db.execute("DELETE FROM meta WHERE key = ?", (f"{COVERAGE_SIGNATURE}{persona_id}",))
+            db.execute("DELETE FROM delegations WHERE persona_id = ?", (persona_id,))
             db.execute("DELETE FROM conversations WHERE persona_id = ?", (persona_id,))
 
     def reconcile_persona(self, persona_id: str, rows: Iterable[tuple[str, str | None, str, str]]) -> Reconciled:
@@ -535,6 +730,15 @@ class TeamDB:
         new_id = handoff_id or uuid.uuid4().hex[:16]
         with self._tx() as db:
             if conversation_id is not None:
+                # What a delegate conversation hands on is the person's to start (``via="delegate"``, from the card
+                # they pressed), never a twin's own doing; and nothing but such a conversation is handed on as one.
+                kind_of = db.execute("SELECT via, asker FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+                if (kind_of is not None and (kind_of[0] == "delegate") != (via == "delegate")) or (
+                    kind_of is None and via == "delegate"
+                ):
+                    raise DelegationRefused("代问的对话只能由发起人点“转给本人”才转交")
+                if via == "delegate" and kind_of is not None and kind_of[1] != asker:
+                    raise DelegationRefused("代问的转交以发起人的名义")
                 if (
                     turn is not None
                     and db.execute(
@@ -730,6 +934,263 @@ class TeamDB:
                 rows = self._db.execute(
                     "SELECT conversation_id, turn FROM answer_checks "
                     f"WHERE conversation_id IN ({','.join('?' * len(batch))})",
+                    batch,
+                ).fetchall()
+            found.update((r[0], int(r[1])) for r in rows)
+        return found
+
+    # ------------------------------------------------------------ team answers
+
+    def create_team_answer(
+        self,
+        *,
+        persona_id: str,
+        owner: str | None,
+        title: str,
+        body: str,
+        handoff_id: str | None = None,
+        source_id: str | None = None,
+        item_id: str | None = None,
+        answer_id: str | None = None,
+        now: dt.datetime | None = None,
+    ) -> TeamAnswer | None:
+        """Keep what a person confirmed as a team answer, in force from now. None when the handoff it comes from is
+        already a team answer that stands (one handoff, one answer)."""
+        new_id = answer_id or uuid.uuid4().hex[:16]
+        with self._tx() as db:
+            added = db.execute(
+                f"INSERT OR IGNORE INTO team_answers ({_ANSWER_COLUMNS}) VALUES ({','.join('?' * 13)})",
+                (
+                    new_id,
+                    persona_id,
+                    owner,
+                    title,
+                    body,
+                    handoff_id,
+                    item_id,
+                    source_id,
+                    "valid",
+                    "",
+                    "",
+                    _stamp(now),
+                    None,
+                ),
+            ).rowcount
+        return self.get_team_answer(new_id) if added else None
+
+    def get_team_answer(self, answer_id: str) -> TeamAnswer | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {_ANSWER_COLUMNS} FROM team_answers WHERE id = ?", (answer_id,)).fetchone()
+        return None if row is None else TeamAnswer(*row)
+
+    def team_answers(
+        self,
+        *,
+        persona_id: str | None = None,
+        statuses: Collection[str] | None = None,
+        personas: Collection[str] | None = None,
+    ) -> list[TeamAnswer]:
+        """Team answers, the newest confirmed first. ``personas`` limits them to those twins (the ones not in the
+        trash)."""
+        where: list[str] = []
+        params: list[object] = []
+        if persona_id is not None:
+            where.append("persona_id = ?")
+            params.append(persona_id)
+        if statuses is not None:
+            where.append(f"status IN ({','.join('?' * len(statuses))})" if statuses else "0")
+            params.extend(statuses)
+        if personas is not None:
+            where.append(f"persona_id IN ({','.join('?' * len(personas))})" if personas else "0")
+            params.extend(personas)
+        sql = f"SELECT {_ANSWER_COLUMNS} FROM team_answers" + (f" WHERE {' AND '.join(where)}" if where else "")
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY confirmed_at DESC, id", params).fetchall()
+        return [TeamAnswer(*r) for r in rows]
+
+    def answered_handoffs(self, persona_id: str) -> set[str]:
+        """Ids of the handoffs of a twin that are a team answer that stands."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT handoff_id FROM team_answers WHERE persona_id = ? AND handoff_id IS NOT NULL "
+                "AND status != 'withdrawn'",
+                (persona_id,),
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def revise_team_answer(self, answer_id: str, title: str, body: str, now: dt.datetime | None = None) -> TeamAnswer:
+        """The person put the answer right: it stands again from now, whatever doubt there was (a withdrawn one cannot
+        be revised)."""
+        with self._tx() as db:
+            moved = db.execute(
+                "UPDATE team_answers SET title = ?, body = ?, status = 'valid', stale_note = '', judged = '', "
+                "confirmed_at = ? WHERE id = ? AND status != 'withdrawn'",
+                (title, body, _stamp(now), answer_id),
+            ).rowcount
+        found = self.get_team_answer(answer_id)
+        if not moved or found is None:
+            raise KeyError(answer_id)
+        return found
+
+    def mark_team_answer_stale(self, answer_id: str, note: str, judged: str) -> bool:
+        """The person said something else since: the answer is shown as possibly out of date, with what they said."""
+        with self._tx() as db:
+            return (
+                db.execute(
+                    "UPDATE team_answers SET status = 'stale', stale_note = ?, judged = ? "
+                    "WHERE id = ? AND status != 'withdrawn'",
+                    (note, judged, answer_id),
+                ).rowcount
+                > 0
+            )
+
+    def keep_team_answer(self, answer_id: str, judged: str) -> TeamAnswer:
+        """仍然有效: the person looked at what they said since and the answer stands; those sayings are not raised
+        again."""
+        with self._tx() as db:
+            moved = db.execute(
+                "UPDATE team_answers SET status = 'valid', stale_note = '', judged = ? "
+                "WHERE id = ? AND status != 'withdrawn'",
+                (judged, answer_id),
+            ).rowcount
+        found = self.get_team_answer(answer_id)
+        if not moved or found is None:
+            raise KeyError(answer_id)
+        return found
+
+    def set_team_answer_judged(self, answer_id: str, judged: str) -> None:
+        with self._tx() as db:
+            db.execute("UPDATE team_answers SET judged = ? WHERE id = ?", (judged, answer_id))
+
+    def set_team_answer_item(self, answer_id: str, item_id: str) -> None:
+        with self._tx() as db:
+            db.execute("UPDATE team_answers SET item_id = ? WHERE id = ?", (item_id, answer_id))
+
+    def withdraw_team_answer(self, answer_id: str, now: dt.datetime | None = None) -> TeamAnswer:
+        """Take the answer back: it is no longer quoted. Conversations it already appeared in are not touched."""
+        with self._tx() as db:
+            moved = db.execute(
+                "UPDATE team_answers SET status = 'withdrawn', withdrawn_at = ? WHERE id = ? AND status != 'withdrawn'",
+                (_stamp(now), answer_id),
+            ).rowcount
+            db.execute("DELETE FROM team_answer_vectors WHERE answer_id = ?", (answer_id,))
+        found = self.get_team_answer(answer_id)
+        if found is None or not moved:
+            raise KeyError(answer_id)
+        return found
+
+    def put_answer_vector(self, answer_id: str, model: str, vector: bytes) -> None:
+        with self._tx() as db:
+            if db.execute("SELECT 1 FROM team_answers WHERE id = ? AND status != 'withdrawn'", (answer_id,)).fetchone():
+                db.execute("INSERT OR REPLACE INTO team_answer_vectors VALUES (?, ?, ?)", (answer_id, model, vector))
+
+    def answer_vectors(self, statuses: Collection[str] = ("valid", "stale")) -> dict[str, tuple[str, bytes]]:
+        """``answer id -> (model, vector)`` of the team answers in these states that have one."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT v.answer_id, v.model, v.vector FROM team_answer_vectors v JOIN team_answers a "
+                f"ON a.id = v.answer_id WHERE a.status IN ({','.join('?' * len(statuses))})",
+                tuple(statuses),
+            ).fetchall()
+        return {r[0]: (r[1], bytes(r[2])) for r in rows}
+
+    # ------------------------------------------------------------ how well each twin knows each facet
+
+    def replace_coverage(self, persona_id: str, rows: Iterable[CoverageRow]) -> None:
+        """Keep these as the twin's coverage, in place of what was cached for it."""
+        with self._tx() as db:
+            db.execute("DELETE FROM facet_coverage WHERE persona_id = ?", (persona_id,))
+            db.executemany(
+                "INSERT INTO facet_coverage VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(r.persona_id, r.facet_id, r.level, r.occasions, r.last_seen, r.kernel, r.updated_at) for r in rows],
+            )
+
+    def coverage(self, personas: Collection[str] | None = None) -> list[CoverageRow]:
+        where, params = "", []
+        if personas is not None:
+            where = f" WHERE persona_id IN ({','.join('?' * len(personas))})" if personas else " WHERE 0"
+            params = list(personas)
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM facet_coverage" + where, params).fetchall()
+        return [CoverageRow(*r) for r in rows]
+
+    def coverage_state(self) -> dict[str, tuple[str, str]]:
+        """``persona -> (kernel, updated at)`` of the twins that have a cached coverage."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT persona_id, MIN(kernel), MIN(updated_at) FROM facet_coverage GROUP BY persona_id"
+            ).fetchall()
+        return {r[0]: (r[1], r[2]) for r in rows}
+
+    def forget_coverage(self, persona_id: str | None = None) -> None:
+        """Drop the cached coverage (of one twin, or all), with the marks of what it was made from: the next question
+        makes it again."""
+        with self._tx() as db:
+            if persona_id is None:
+                db.execute("DELETE FROM facet_coverage")
+                db.execute("DELETE FROM meta WHERE key LIKE ?", (f"{COVERAGE_SIGNATURE}%",))
+            else:
+                db.execute("DELETE FROM facet_coverage WHERE persona_id = ?", (persona_id,))
+                db.execute("DELETE FROM meta WHERE key = ?", (f"{COVERAGE_SIGNATURE}{persona_id}",))
+
+    # ------------------------------------------------------------ delegations
+
+    def create_delegation(
+        self,
+        *,
+        initiator: str,
+        persona_id: str,
+        conversation_id: str,
+        question: str,
+        delegation_id: str | None = None,
+    ) -> Delegation:
+        """Record that the person's assistant asks colleagues' twins in their name, from the person's own conversation
+        with their assistant. Refused unless that conversation is the person's own, of the self tier, asked directly:
+        a conversation that was itself asked by an assistant (``via="delegate"``), or any colleague's, cannot start
+        another, which is what keeps delegation to one hop."""
+        new_id = delegation_id or uuid.uuid4().hex[:16]
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT persona_id, asker, audience, via, deleted_at FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row is None or row[4] is not None:
+                raise DelegationRefused("找不到这段对话")
+            if row[0] != persona_id or row[1] != initiator or row[2] != SELF or row[3] != "direct":
+                raise DelegationRefused("只有本人和自己的分身的对话可以发起代问")
+            db.execute(
+                "INSERT INTO delegations VALUES (?, ?, ?, ?, ?, ?)",
+                (new_id, initiator, persona_id, conversation_id, question, _stamp()),
+            )
+        found = self.get_delegation(new_id)
+        assert found is not None
+        return found
+
+    def get_delegation(self, delegation_id: str) -> Delegation | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM delegations WHERE id = ?", (delegation_id,)).fetchone()
+        return None if row is None else Delegation(*row)
+
+    def delegation_of(self, conversation_id: str) -> Delegation | None:
+        """The delegation a conversation (of the person with their assistant) started, if any."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM delegations WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+        return None if row is None else Delegation(*row)
+
+    def delegation_counts(self, conversation_ids: Collection[str]) -> dict[str, int]:
+        """How many colleagues' twins each of these conversations (the person's own with their assistant) asked."""
+        found: dict[str, int] = {}
+        ids = list(conversation_ids)
+        for start in range(0, len(ids), 400):
+            batch = ids[start : start + 400]
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT d.conversation_id, COUNT(c.id) FROM delegations d JOIN conversations c "
+                    "ON c.delegation_id = d.id AND c.deleted_at IS NULL "
+                    f"WHERE d.conversation_id IN ({','.join('?' * len(batch))}) GROUP BY d.conversation_id",
                     batch,
                 ).fetchall()
             found.update((r[0], int(r[1])) for r in rows)

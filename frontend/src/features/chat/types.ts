@@ -1,3 +1,6 @@
+import type { TeamAnswerCard } from '../answers/types';
+import type { DelegationNote } from '../delegation/types';
+
 export interface Citation {
   id: string;
   kind: 'item' | 'expression' | 'ledger' | 'file';
@@ -72,8 +75,12 @@ export interface ChatReply {
   completed_at?: string;
   /** Sent with the final answer when it left something to the person. */
   handoff?: HandoffLine;
+  /** The team's answers that match the question, shown as cards apart from what the twin says. */
+  team_answers?: TeamAnswerCard[];
   /** The person's own conversation: what was taken down, and the promise that was made. */
   note?: NoteCard;
+  /** The person's assistant asked colleagues' twins in their name (帮我问问…): which asking, and its own note on it. */
+  delegation?: DelegationNote;
   commitment?: PromiseLine;
   /** A trial question's answer: not part of the conversation, and what it left out. */
   preview?: { withheld: Withheld[] };

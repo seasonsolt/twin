@@ -28,7 +28,7 @@ import { MemberHeader } from '../features/members/MemberHeader';
 import { NoTwinMember } from '../features/members/NoTwinMember';
 import { AssetsTab } from '../features/profile/AssetsTab';
 import { EditIdentityDialog } from '../features/profile/EditIdentityDialog';
-import { MemoriesTab } from '../features/profile/MemoriesTab';
+import { MemoriesTab, type MemoryView } from '../features/profile/MemoriesTab';
 import { OverviewTab } from '../features/profile/OverviewTab';
 import { PersonaSettings } from '../features/profile/PersonaSettings';
 import { Ledger } from './Ledger';
@@ -75,8 +75,13 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
     available.find((id) => id === requested) ??
     renamed[requested] ??
     'overview';
-  const view =
-    requested === 'graph' || params.get('view') === 'graph' ? 'graph' : 'list';
+  const asked = params.get('view');
+  const view: MemoryView =
+    requested === 'graph' || asked === 'graph'
+      ? 'graph'
+      : asked === 'answers' && self
+        ? 'answers'
+        : 'list';
   const [settings, setSettings] = useState<string | null>(null);
   const [editing, setEditing] = usePersonaState(false);
   // An old link to the channels opens them over the page, then reads as the page's own link, so closing the dialog
@@ -191,11 +196,12 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                   <MemoriesTab
                     identity={identity}
                     view={view}
+                    answers={self}
                     onView={(next) =>
                       setParams(
-                        next === 'graph'
-                          ? { section: 'memories', view: 'graph' }
-                          : { section: 'memories' },
+                        next === 'list'
+                          ? { section: 'memories' }
+                          : { section: 'memories', view: next },
                         { replace: true },
                       )
                     }

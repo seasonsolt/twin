@@ -18,7 +18,7 @@ from ..persona.assistant import annotate_notes, annotate_promises, record_promis
 from ..persona.store import PersonaStore
 from ..persona.tiers import COLLEAGUE, SELF, Audience
 from ..persona.work import WorkStore, summary_view
-from ..teamdb import HandoffStatus, TeamDB
+from ..teamdb import HandoffStatus, TeamDB, Via
 from .personas import Personas
 
 logger = logging.getLogger(__name__)
@@ -73,11 +73,29 @@ class ConversationIndex:
         self.team, self.persona_id = team, persona_id
 
     def created(
-        self, store: PersonaStore, conversation_id: str, asker: str | None, audience: Audience, asker_name: str = ""
+        self,
+        store: PersonaStore,
+        conversation_id: str,
+        asker: str | None,
+        audience: Audience,
+        asker_name: str = "",
+        *,
+        via: Via = "direct",
+        delegation_id: str | None = None,
     ) -> None:
+        """Index a conversation just made. ``via`` and ``delegation_id``: it was asked by the person's assistant in
+        their name (``delegations``), which the team database checks as it writes it."""
         self._write(
             lambda team, head: team.record_conversation(
-                conversation_id, self.persona_id, asker, audience, head[1], head[2], asker_name=asker_name
+                conversation_id,
+                self.persona_id,
+                asker,
+                audience,
+                head[1],
+                head[2],
+                asker_name=asker_name,
+                via=via,
+                delegation_id=delegation_id,
             ),
             store,
             conversation_id,
@@ -270,7 +288,18 @@ def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
                 limit=EVERYONE_PAGE + 1,
                 offset=offset,
             )
-            states = team.handoff_states([r.id for r in rows])
+            page = rows[:EVERYONE_PAGE]
+            # What the assistant asked colleagues' twins in the person's name belongs with the assistant's own list
+            # (under 问同事); in the list of everything it is already among the rest.
+            if mine and offset == 0:
+                page += team.conversations(
+                    personas=[i for i in visible if i not in own],
+                    asked_by=email,
+                    via="delegate",
+                    limit=EVERYONE_PAGE,
+                )
+            states = team.handoff_states([r.id for r in page])
+            delegated = team.delegation_counts([r.id for r in page])
             team.expire_due()
             pending = sum(
                 1
@@ -281,7 +310,6 @@ def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
         except sqlite3.Error as e:
             logger.warning("could not read the index of conversations", exc_info=True)
             raise HTTPException(503, "对话列表暂时读不了，请稍后重试") from e
-        page = rows[:EVERYONE_PAGE]
         # What was last said, for finding a conversation by it: read from the twins' own databases, which hold the text.
         previews: dict[str, str] = {}
         for persona_id in {r.persona_id for r in page}:
@@ -300,6 +328,8 @@ def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
                 "updated_at": r.updated_at,
                 "via": r.via,
                 "handoff": (HANDOFF_TAGS[states[r.id]] or None) if r.id in states else None,
+                # How many colleagues' twins the person's assistant asked in this conversation (代问).
+                "delegated": delegated.get(r.id, 0),
             }
             for r in page
         ]

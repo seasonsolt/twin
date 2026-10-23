@@ -55,6 +55,7 @@ import {
   NavPill,
   SearchButton,
   SearchDialog,
+  AskDialog,
   StatusCard,
   TeamMark,
   Notice,
@@ -90,6 +91,8 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [side, setSide] = useState(false);
   const [who, setWho] = useState('');
   const [finding, setFinding] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [question, setQuestion] = useState('续约折扣谁能批');
   const [sample, setSample] = useState(true);
   const [mine, setMine] = useState('all');
   const [kind, setKind] = useState<'chat' | 'work'>('chat');
@@ -180,9 +183,75 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           <Stack gap={3}>
             <TeamMark name="示例团队" />
             <SearchButton
-              label="找人"
+              label="问一句、找人"
               shortcut="⌘K"
               onClick={() => setFinding(true)}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setAsking(true)}
+            >
+              问一句（分组结果）
+            </Button>
+            <AskDialog
+              open={asking}
+              onOpenChange={setAsking}
+              title="问一句、找人"
+              placeholder="问一件事，或输入名字"
+              query={question}
+              onQueryChange={setQuestion}
+              empty="团队里还没人谈过这件事，可以按名字找人"
+              hint="↑↓ 选择　↵ 去问"
+              sections={[
+                {
+                  id: 'answers',
+                  title: '团队答案',
+                  count: 1,
+                  cards: (
+                    <Card variant="outline" padding="md" as="div">
+                      <Text size="sm">
+                        15% 以内销售负责人自己定，超过 15% 报沈从批。
+                      </Text>
+                    </Card>
+                  ),
+                },
+                {
+                  id: 'people',
+                  title: '该问谁',
+                  count: 2,
+                  items: [
+                    {
+                      id: 'wang',
+                      label: '王屿',
+                      detail: '了解较多 · 熟悉领域的看法 · 7 场',
+                      sign: <LevelDots level={3} />,
+                      action: '问分身',
+                    },
+                    {
+                      id: 'chen',
+                      label: '陈一',
+                      detail: '提到过 · 拿手的事 · 2 场',
+                      sign: <LevelDots level={1} />,
+                      action: '问分身',
+                    },
+                  ],
+                },
+                {
+                  id: 'meetings',
+                  title: '会议',
+                  count: 1,
+                  items: [
+                    {
+                      id: 'review',
+                      label: '季度复盘 · 10/18',
+                      detail: '王屿：“续约这两家我都让到了 12%”',
+                      action: '看录音',
+                    },
+                  ],
+                },
+              ]}
+              onSelect={(item) => toast(`去${item.label}`)}
             />
             <SearchDialog
               open={finding}
@@ -695,13 +764,13 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             网络中断，已上传的部分会保留。
           </Notice>
           <Grid columns={2} gap={3}>
-            {(['raised', 'outline', 'note', 'soft', 'plain'] as const).map(
-              (variant) => (
-                <Card key={variant} variant={variant} padding="md">
-                  <Text size="sm">{variant}</Text>
-                </Card>
-              ),
-            )}
+            {(
+              ['raised', 'outline', 'dashed', 'note', 'soft', 'plain'] as const
+            ).map((variant) => (
+              <Card key={variant} variant={variant} padding="md">
+                <Text size="sm">{variant}</Text>
+              </Card>
+            ))}
           </Grid>
           <Row gap={3}>
             {(['sm', 'md', 'lg', 'xl'] as const).map((size) => (

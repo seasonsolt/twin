@@ -104,9 +104,9 @@ beforeEach(() => {
   );
 });
 afterEach(() => vi.restoreAllMocks());
-function show() {
+function show(address = '/library/r') {
   return render(
-    <MemoryRouter initialEntries={['/library/r']}>
+    <MemoryRouter initialEntries={[address]}>
       <Routes>
         <Route path="/library/:recordingId" element={<Recording />} />
       </Routes>
@@ -344,4 +344,25 @@ it('shows a transcript brought in as text by what each speaker said, with nothin
   expect(await screen.findByText(/林舟：/)).toBeVisible();
   // No times in the export: no clock in front of the lines.
   expect(screen.queryByText(/\[00:00\]/)).toBeNull();
+});
+
+it('opens the full transcript on the line a link from the search points at', async () => {
+  show('/library/r?line=1');
+  await screen.findByRole('heading', { name: 'S1 是谁？' });
+  // Open already, with the pointed line marked by its weight; the others are not.
+  const line = document.getElementById('line-1');
+  expect(line).toHaveTextContent('再看计划。');
+  expect(line?.closest('details')).toHaveAttribute('open');
+  expect(line?.className).toMatch(/font-bold/u);
+  expect(document.getElementById('line-2')?.className).not.toMatch(
+    /font-bold/u,
+  );
+});
+
+it('keeps the full transcript closed when no line is pointed at', async () => {
+  show('/library/r?line=nope');
+  await screen.findByRole('heading', { name: 'S1 是谁？' });
+  expect(
+    screen.getByText(/^完整转写稿/u).closest('details'),
+  ).not.toHaveAttribute('open');
 });

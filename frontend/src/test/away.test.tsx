@@ -1,6 +1,8 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { TooltipProvider } from '../components/ui';
 import { Away } from '../features/away/Away';
 import {
   AWAY_CHANGED,
@@ -45,6 +47,9 @@ const data = (overrides: Partial<AwayData> = {}): AwayData => ({
   answered: 0,
   shelved: [],
   settled: [],
+  groups: [],
+  often: [],
+  answers: { total: 0, stale: 0 },
   pending: 0,
   days: 7,
   ...overrides,
@@ -330,4 +335,200 @@ it('says why it could not load and loads again on request', async () => {
   );
   await user.click(screen.getByRole('button', { name: '重试加载' }));
   expect(await screen.findByText('没有等你决定的事。')).toBeVisible();
+});
+
+const mountAway = () =>
+  render(
+    <TooltipProvider>
+      <MemoryRouter>
+        <Away />
+      </MemoryRouter>
+    </TooltipProvider>,
+  );
+
+const asked = (
+  id: string,
+  asker: string,
+  question: string,
+  mode: Handoff['twin_mode'] = 'abstain',
+) =>
+  handoff({
+    id,
+    asker_name: asker,
+    question,
+    twin_mode: mode,
+    created_at: `2026-10-22T${id === 'a' ? '01:12' : id === 'b' ? '02:05' : '03:30'}:00+00:00`,
+  });
+const same = [
+  asked('a', '许清禾', '旧版 Word 模板导出，这次之后还支持吗？'),
+  asked('b', '陈一', '客户问旧模板还能不能导出，我该怎么回？'),
+  asked('c', '王屿', '销售那边听说旧模板要停用了，是真的吗？', 'grounded'),
+];
+
+it('puts the questions that ask the same thing on one card, with what each asked and what the twin did', async () => {
+  away = data({
+    waiting: [
+      ...same,
+      handoff({
+        id: 'z',
+        asker_name: '周宁',
+        question: '周报按项目写还是按人写？',
+      }),
+    ],
+    groups: [['a', 'b', 'c']],
+    pending: 4,
+  });
+  mountAway();
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  expect(within(card).getByText('3 人问同一件事')).toBeVisible();
+  // The server keeps UTC, the page shows the reader's own clock (Shanghai in the tests).
+  expect(within(card).getByText('最早 09:12')).toBeVisible();
+  expect(within(card).getByText(/客户问旧模板还能不能导出/u)).toBeVisible();
+  expect(within(card).getByText('09:12 · 未答')).toBeVisible();
+  expect(within(card).getByText('11:30 · 答了一半')).toBeVisible();
+  // The fourth is its own row, and the heading still counts all four.
+  expect(screen.getByText('等你决定 4')).toBeVisible();
+  expect(
+    screen.getByRole('listitem', { name: '周报按项目写还是按人写？' }),
+  ).toBeVisible();
+});
+
+it('answers them all at once, into each one’s own conversation, and can make the answer the team’s in the same step', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: same, groups: [['a', 'b', 'c']], pending: 3 });
+  fetcher.mockImplementation(async (url: string) => {
+    if (url === '/api/persona/handoffs') return json(away);
+    return json({
+      done: ['a', 'b', 'c'],
+      failed: [],
+      team_answer: null,
+      pending: 0,
+    });
+  });
+  mountAway();
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  const send = within(card).getByRole('button', { name: '回复 3 人' });
+  expect(send).toBeDisabled();
+  await user.type(
+    within(card).getByRole('textbox', { name: '以本人回复 3 人' }),
+    '支持到 12 月底。',
+  );
+  // The title is the first question, summed up, and can be changed.
+  await user.click(within(card).getByRole('button', { name: '改问法' }));
+  const title = within(card).getByRole('textbox', { name: '归纳的问法' });
+  await user.clear(title);
+  await user.type(title, '旧模板还支持吗？{Enter}');
+  await user.click(
+    within(card).getByRole('checkbox', { name: '同时设为团队答案' }),
+  );
+  await user.click(within(card).getByText('预览'));
+  const preview = within(card).getByRole('article', { name: '团队答案' });
+  expect(within(preview).getByText('旧模板还支持吗？')).toBeVisible();
+  expect(within(preview).getByText('支持到 12 月底。')).toBeVisible();
+  await user.click(send);
+  await waitFor(() =>
+    expect(posts()).toContainEqual([
+      '/api/persona/handoffs/reply-many',
+      {
+        ids: ['a', 'b', 'c'],
+        text: '支持到 12 月底。',
+        team_answer: { title: '旧模板还支持吗？', body: '支持到 12 月底。' },
+      },
+    ]),
+  );
+});
+
+it('takes them apart when they were not one matter, each as its own row to answer', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: same, groups: [['a', 'b', 'c']], pending: 3 });
+  mountAway();
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  await user.click(within(card).getByRole('button', { name: '拆开分别回' }));
+  expect(screen.queryByRole('article', { name: '同一件事' })).toBeNull();
+  expect(
+    screen.getByRole('article', { name: /旧版 Word 模板导出/u }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('listitem', { name: /客户问旧模板还能不能导出/u }),
+  ).toBeVisible();
+  expect(screen.getByText('等你决定 3')).toBeVisible();
+});
+
+it('still reloads when some of a group could not be answered, for the page to show what is left', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: same, groups: [['a', 'b', 'c']], pending: 3 });
+  fetcher.mockImplementation(async (url: string) =>
+    url === '/api/persona/handoffs'
+      ? json(away)
+      : json({
+          done: ['a', 'c'],
+          failed: [{ id: 'b', detail: '提问的人已经删掉了这段对话，不用回了' }],
+          pending: 0,
+        }),
+  );
+  mountAway();
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  await user.type(
+    within(card).getByRole('textbox', { name: '以本人回复 3 人' }),
+    '好。',
+  );
+  await user.click(within(card).getByRole('button', { name: '回复 3 人' }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/persona/handoffs'),
+    ).toHaveLength(2),
+  );
+});
+
+it('offers a reply the twin keeps giving as a team answer, with a title and words to change, or lets it go', async () => {
+  const user = userEvent.setup();
+  away = data({
+    often: [
+      {
+        handoff_id: 'h5',
+        title: '周报按项目写还是按人写？',
+        reply: '按项目写。',
+        askers: ['王屿', '周宁'],
+        uses: 2,
+        days: 7,
+      },
+    ],
+    answers: { total: 4, stale: 1 },
+  });
+  mountAway();
+  expect(await screen.findByText('常被问到')).toBeVisible();
+  const row = screen.getByText('周报按项目写还是按人写？').closest('li')!;
+  expect(row).toHaveTextContent('王屿、周宁 · 近 7 天 2 次');
+  await user.click(within(row).getByRole('button', { name: '设为团队答案' }));
+  const dialog = await screen.findByRole('dialog', { name: '设为团队答案' });
+  const body = within(dialog).getByRole('textbox', { name: '内容' });
+  expect(body).toHaveValue('按项目写。');
+  await user.clear(body);
+  await user.type(body, '按项目写，周五前发。');
+  await user.click(within(dialog).getByRole('button', { name: '设好' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual([
+      '/api/persona/team-answers',
+      {
+        handoff_id: 'h5',
+        title: '周报按项目写还是按人写？',
+        body: '按项目写，周五前发。',
+      },
+    ]),
+  );
+  await user.click(within(row).getByLabelText(/更多/u));
+  await user.click(await screen.findByRole('button', { name: '不用' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual([
+      '/api/persona/handoffs/h5/often/decline',
+      {},
+    ]),
+  );
+  // How many the person has set, and the way to them.
+  expect(screen.getByText('我的团队答案 4')).toBeVisible();
+  expect(screen.getByText('1 可能过期')).toBeVisible();
+  expect(screen.getByRole('link', { name: '查看 ›' })).toHaveAttribute(
+    'href',
+    expect.stringContaining('view=answers'),
+  );
 });

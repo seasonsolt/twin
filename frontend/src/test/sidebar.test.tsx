@@ -105,6 +105,7 @@ function Where() {
       在{location.pathname}
       {location.search}
       {location.state?.search ? `找${location.state.search}` : ''}
+      {location.state?.ask ? `问${location.state.ask}` : ''}
     </p>
   );
 }
@@ -118,6 +119,7 @@ const show = (entry: string) =>
             <Route element={<AppShell />}>
               <Route path="team" element={<Where />} />
               <Route path="library" element={<Where />} />
+              <Route path="library/:recordingId" element={<Where />} />
               <Route path="inbox" element={<Where />} />
               <Route path="team/:id" element={<Where />} />
               <Route path="team/twin/:twinId" element={<Where />} />
@@ -182,7 +184,7 @@ it('finds someone by name with ⌘K: each opens on their member page, a twin mad
   show('/chat');
   await screen.findByRole('link', { name: '团队（3）' });
   await user.keyboard('{Meta>}k{/Meta}');
-  const dialog = await screen.findByRole('dialog', { name: '找人' });
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
   const options = within(dialog).getAllByRole('option');
   // The team's people, then twins made without recordings.
   expect(options.map((option) => option.textContent)).toEqual([
@@ -194,14 +196,184 @@ it('finds someone by name with ⌘K: each opens on their member page, a twin mad
   await user.keyboard('{Enter}');
   expect(await screen.findByText('在/team/u-2')).toBeInTheDocument();
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: '找人' })).toBeNull(),
+    expect(screen.queryByRole('dialog', { name: '问一句、找人' })).toBeNull(),
   );
 
-  await user.click(screen.getByRole('button', { name: '找人' }));
-  const again = await screen.findByRole('dialog', { name: '找人' });
+  await user.click(screen.getByRole('button', { name: '问一句、找人' }));
+  const again = await screen.findByRole('dialog', { name: '问一句、找人' });
   await user.type(within(again).getByRole('combobox'), '本');
   await user.keyboard('{Enter}');
   expect(await screen.findByText('在/team/twin/p-self')).toBeInTheDocument();
+});
+
+const asked = (overrides: Record<string, unknown> = {}) => ({
+  team_answers: [
+    {
+      id: 'ta_1',
+      persona_id: 'p-shen',
+      owner_name: '沈从',
+      title: '续约折扣谁能批？',
+      body: '15% 以内销售负责人自己定，超过 15% 报沈从批，当天回复。',
+      confirmed_at: '2026-10-09T09:00:00+00:00',
+      status: 'valid',
+      stale_note: '',
+      partial: false,
+    },
+  ],
+  people: [
+    {
+      persona_id: 'p-wang',
+      name: '王屿',
+      level: 3,
+      label: '了解较多',
+      occasions: 7,
+      last_seen: '2026-10-18',
+      facets: ['熟悉领域的看法'],
+    },
+    {
+      persona_id: 'p-chen',
+      name: '陈一',
+      level: 1,
+      label: '提到过',
+      occasions: 2,
+      last_seen: '2026-10-01',
+      facets: ['拿手的事'],
+    },
+  ],
+  meetings: [
+    {
+      recording_id: 'rec_9',
+      title: '季度复盘',
+      date: '2026-10-18',
+      speaker: '王屿',
+      quote: '续约这两家我都让到了 12%',
+      start: 12,
+      line: 4,
+    },
+  ],
+  decision: true,
+  degraded: false,
+  ...overrides,
+});
+const askRequests = () =>
+  vi
+    .mocked(fetch)
+    .mock.calls.filter(([url]) => String(url).startsWith('/api/personas/ask'));
+
+it('puts a question to the whole team with ⌘K: the answer it has, whom to ask, the meetings; Enter opens a talk with the first', async () => {
+  usePersonas.setState({
+    id: 'default',
+    items: [twin({}), twin({ id: 'p-wang', name: '王屿', is_default: false })],
+  });
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).startsWith('/api/personas/ask')
+      ? json(asked())
+      : respond(String(url)),
+  );
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: '团队（3）' });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '续约折扣谁能批？');
+  // The team's answer first, as a card; then whom to ask, with how well they know it; then the meetings.
+  const answer = await within(dialog).findByRole('article', {
+    name: '团队答案',
+  });
+  expect(within(answer).getByText('沈从 10 月 9 日确认')).toBeVisible();
+  expect(within(answer).getByText(/超过 15% 报沈从批/u)).toBeVisible();
+  expect(within(answer).queryByRole('button')).toBeNull();
+  const people = within(dialog).getByRole('region', { name: '该问谁' });
+  expect(
+    within(people).getByText('具体要他拍板，他的分身会转给本人'),
+  ).toBeVisible();
+  const rows = within(dialog).getAllByRole('option');
+  expect(rows.map((row) => row.textContent)).toEqual([
+    '王屿了解较多 · 熟悉领域的看法 · 7 场问分身',
+    '陈一提到过 · 拿手的事 · 2 场问分身',
+    '季度复盘 · 10/18王屿：“续约这两家我都让到了 12%”看录音',
+  ]);
+  expect(askRequests()).toHaveLength(1);
+  expect(String(askRequests()[0][0])).toContain(
+    encodeURIComponent('续约折扣谁能批？'),
+  );
+  // Enter goes to the first: their twin, with the question already in the box.
+  await user.keyboard('{Enter}');
+  expect(
+    await screen.findByText('在/chat?with=p-wang问续约折扣谁能批？'),
+  ).toBeInTheDocument();
+});
+
+it('opens the recording of a meeting the question came up in', async () => {
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).startsWith('/api/personas/ask')
+      ? json(asked({ team_answers: [], people: [], decision: false }))
+      : respond(String(url)),
+  );
+  const user = userEvent.setup();
+  show('/team');
+  await screen.findByRole('link', { name: /^团队/u });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '续约折扣怎么让');
+  await user.click(
+    await within(dialog).findByRole('option', { name: /季度复盘/u }),
+  );
+  expect(
+    await screen.findByText('在/library/rec_9?line=4'),
+  ).toBeInTheDocument();
+});
+
+it('does not ask the team for a name that is just a person’s, and says when nobody has talked about a matter', async () => {
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).startsWith('/api/personas/ask')
+      ? json(asked({ team_answers: [], people: [], meetings: [] }))
+      : respond(String(url)),
+  );
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: /^团队/u });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '许清禾');
+  await new Promise((done) => setTimeout(done, 500));
+  expect(askRequests()).toHaveLength(0);
+  expect(within(dialog).getAllByRole('option')).toHaveLength(1);
+  await user.clear(within(dialog).getByRole('combobox'));
+  await user.type(within(dialog).getByRole('combobox'), '年会在哪办');
+  expect(
+    await within(dialog).findByText('团队里还没人谈过这件事，可以按名字找人'),
+  ).toBeVisible();
+  expect(askRequests()).toHaveLength(1);
+});
+
+it('says when only the meetings could be searched', async () => {
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).startsWith('/api/personas/ask')
+      ? json(asked({ team_answers: [], people: [], degraded: true }))
+      : respond(String(url)),
+  );
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: /^团队/u });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '续约折扣怎么让');
+  expect(
+    await within(dialog).findByText('向量模型没有配置好，只找到了会议'),
+  ).toBeVisible();
 });
 
 it('gives a guest the conversation alone: no counts, finding, uploading or background', async () => {
@@ -216,7 +388,7 @@ it('gives a guest the conversation alone: no counts, finding, uploading or backg
       .getAllByRole('link')
       .map((link) => link.textContent),
   ).toEqual(['对话']);
-  expect(screen.queryByRole('button', { name: '找人' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '问一句、找人' })).toBeNull();
   expect(screen.queryByRole('button', { name: '上传会议录音' })).toBeNull();
   expect(
     vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/library'),

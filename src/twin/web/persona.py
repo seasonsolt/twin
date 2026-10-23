@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import logging
 import math
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
@@ -13,7 +14,7 @@ from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -25,9 +26,10 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..config import Settings
+from ..delegations import Asked, Unclear
 from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
-from ..llm import LLM
+from ..llm import LLM, Effort
 from ..persona import gate
 from ..persona.assistant import note_text
 from ..persona.attachments import (
@@ -68,6 +70,7 @@ from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, p
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
 from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, for_audience, item_tier, private_words
+from ..teamanswers import prompt_line, question_of
 from ..usage import CallRow, collect_calls, model_tokens, transient_summary
 from . import assistant as assistant_routes
 from .assistant import keep_note, note_reply, person_only, trial_withheld
@@ -85,6 +88,8 @@ from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessin
 if TYPE_CHECKING:
     from .uploads import MediaIngestion
 
+logger = logging.getLogger(__name__)
+
 MAX_UPLOAD_BYTES = 1024**3
 MAX_UPLOAD_FILES = 500
 MAX_CHAT_TURNS = 40
@@ -101,6 +106,29 @@ NEEDS_ATTENTION = MEDIA_PENDING | {"failed", "needs_asr", "needs_speaker"}
 MAX_ATTENTION = 50
 
 Log = Callable[[str], None]
+
+
+class AssistantDelegation(Protocol):
+    """What the person's assistant needs to ask colleagues' twins for them (``web.delegation.Delegations``)."""
+
+    def parse(self, message: str, identity: dict[str, Any]) -> Asked | Unclear | None: ...
+
+    def refusal(self, store: PersonaStore, text: str) -> dict[str, Any]: ...
+
+    def ask(
+        self,
+        *,
+        persona_id: str,
+        store: PersonaStore,
+        identity: dict[str, Any],
+        asker_name: str,
+        conversation_id: str | None,
+        asked: Asked,
+        llm: LLM,
+        embedder: Embedder,
+        name: str,
+        effort: Effort = "medium",
+    ) -> dict[str, Any]: ...
 
 
 class NoteBody(BaseModel):
@@ -221,12 +249,23 @@ def run_chat(
             assistant=assistant,
         )
         owner_said = store.owner_replies(conversation_id, email) if conversation_id else []
-        reply = chat.reply(messages, owner_said=owner_said)
+        # Team answers that match the question are shown as cards of their own; the twin is told so.
+        cards = (
+            handoffs[0].answers.cards_for(
+                question_of([m.content for m in messages if m.role == "user"]), embedder, asker=email
+            )
+            if handoffs and handoffs[0].answers is not None
+            else []
+        )
+        reply = chat.reply(messages, owner_said=owner_said, team_answers=[prompt_line(c) for c in cards])
+        payload = chat_payload(store, reply, audience=audience)
+        if cards:
+            payload["team_answers"] = cards
         return append_reply(
             store,
             conversation_id,
             email,
-            chat_payload(store, reply, audience=audience),
+            payload,
             index,
             (handoffs[0], handoffs[1], audience) if handoffs else None,
             assistant=assistant,
@@ -413,17 +452,32 @@ def register(
     *,
     index: ConversationIndex,
     desk: HandoffDesk,
+    after_build: Callable[[PersonaStore, LLM, Embedder], None] | None = None,
+    delegations: AssistantDelegation | None = None,
 ) -> MediaIngestion:
     """``on_built(version)``: a build completed without any failure, from the library sources written at
     ``version`` (``gate.SYNCED``); a twin made from a recording library opens once that version is still wanted.
     ``on_spent(tokens)``: a build of such a twin ended (however it ended) after spending ``tokens`` model tokens,
     which count against the library's batch quota. ``index``: this twin's conversations in the team database;
-    ``desk``: its handoffs, what its answers leave to the person."""
+    ``desk``: its handoffs, what its answers leave to the person. ``after_build``: told, with the store, once a
+    build has made the memories and their vectors. ``delegations``: how the person's assistant asks colleagues' twins
+    for them (帮我问问…)."""
 
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
         with PersonaStore(settings.db_path) as store:
             yield store
+
+    def built(llm: LLM, embedder: Embedder) -> None:
+        """What the team does with a twin's memories once they are built (``after_build``). It never fails the build:
+        what goes wrong in it is logged."""
+        if after_build is None:
+            return
+        try:
+            with open_store() as store:
+                after_build(store, llm, embedder)
+        except Exception:
+            logger.warning("could not bring the team's view of the twin up to date after its build", exc_info=True)
 
     def automatic_build(log: Log) -> dict[str, Any]:
         with open_store() as store:
@@ -445,7 +499,9 @@ def register(
         rows: list[CallRow] = []
         try:
             with collect_calls() as rows:
-                result = run_persona_build(settings, backends.llm(), backends.embedder(), log)
+                llm, embedder = backends.llm(), backends.embedder()
+                result = run_persona_build(settings, llm, embedder, log)
+                built(llm, embedder)
             failed = result["failed_sources"]
             if result["merge_failed"]:
                 error = "部分记忆处理失败，请重新处理"
@@ -1026,6 +1082,86 @@ def register(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def delegate_response(
+        asked: Asked | Unclear,
+        message: str,
+        body: ChatBody,
+        request: Request,
+        email: str | None,
+        asker_name: str,
+    ) -> StreamingResponse:
+        """The person told their assistant to ask colleagues' twins (帮我问问…): it puts the question to them in the
+        person's name, each in a conversation of its own, and answers with who it asked. What cannot be carried out is
+        said, and nobody is asked."""
+        assert delegations is not None
+        identity = request.scope["twin_identity"]
+        # Asking takes the models' time: a place in the chat queue is held while the colleagues' twins answer.
+        ticket = jobs.admit_stream() if isinstance(asked, Asked) else None
+        llm = backends.chat_llm() if isinstance(asked, Asked) else None
+        embedder = backends.embedder() if isinstance(asked, Asked) else None
+        try:
+            with open_store() as store:
+                append_user(store, body.conversation_id, email, message, index)
+        except BaseException:
+            if ticket is not None:
+                ticket.close()
+            raise
+        name = stored_identity(settings.db_path)[0] or settings.target_name
+
+        def put() -> dict[str, Any]:
+            with open_store() as store:
+                if isinstance(asked, Asked) and llm is not None and embedder is not None:
+                    payload = delegations.ask(
+                        persona_id=desk.persona_id,
+                        store=store,
+                        identity=identity,
+                        asker_name=asker_name,
+                        conversation_id=body.conversation_id,
+                        asked=asked,
+                        llm=llm,
+                        embedder=embedder,
+                        name=name,
+                        effort=settings.effective_chat_llm.effort_extract,
+                    )
+                else:
+                    assert isinstance(asked, Unclear)
+                    payload = delegations.refusal(store, asked.reply)
+                payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
+                return append_reply(store, body.conversation_id, email, payload, index, assistant=True)
+
+        async def events() -> AsyncGenerator[str]:
+            yield ": connected\n\n"
+            work: asyncio.Future[dict[str, Any]] | None = None
+            try:
+                if ticket is not None:
+                    async with ticket.running():
+                        work = asyncio.ensure_future(off_loop(put))
+                        while not (await asyncio.wait({work}, timeout=10))[0]:
+                            yield ": heartbeat\n\n"
+                else:
+                    work = asyncio.ensure_future(off_loop(put))
+                    await work
+                final = work.result()
+            except HTTPException as e:
+                yield sse_event("error", {"detail": str(e.detail)})
+                return
+            except Exception:
+                logger.warning("could not ask colleagues' twins", exc_info=True)
+                yield sse_event("error", {"detail": "没能去问，请重试"})
+                return
+            finally:
+                if work is not None and not work.done():
+                    work.cancel()
+            yield sse_event("delta", {"text": final["reply"]})
+            yield sse_event("final", final)
+
+        return AdmittedStream(
+            events(),
+            ticket,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     def stream_chat_response(
         body: ChatBody, request: Request, attachment_passages: Sequence[AttachmentPassage] = ()
     ) -> StreamingResponse:
@@ -1045,6 +1181,13 @@ def register(
         assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
         if assistant and not attachment_passages and (note := note_text(messages[-1].content)) is not None:
             return note_response(note, messages[-1].content, body, email)
+        if (
+            assistant
+            and not attachment_passages
+            and delegations is not None
+            and (asked := delegations.parse(messages[-1].content, request.scope["twin_identity"])) is not None
+        ):
+            return delegate_response(asked, messages[-1].content, body, request, email, asker_name)
         with open_store() as store:
             profiled = store.has_items() or bool(attachment_passages)
         ticket: Ticket | None = None
@@ -1061,9 +1204,13 @@ def register(
             raise
 
         started_at = time.monotonic()
+        # The team's answers that match the question, found before the twin answers and shown apart from its words.
+        shown: list[dict[str, Any]] = []
 
         def save(store: PersonaStore, reply: ChatReply) -> dict[str, Any]:
             payload = chat_payload(store, reply, attachment_passages, audience)
+            if shown:
+                payload["team_answers"] = shown
             payload["elapsed_ms"] = max(0, round((time.monotonic() - started_at) * 1000))
             payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
             if preview:
@@ -1095,6 +1242,13 @@ def register(
                 return
             # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
             async with ticket.running():
+                if desk.answers is not None:
+                    asked = question_of([m.content for m in messages if m.role == "user"])
+                    shown.extend(
+                        await off_loop(
+                            partial(desk.answers.cards_for, asked, embedder, asker=None if preview else email)
+                        )
+                    )
                 with await open_store_off_loop(settings.db_path) as store:
                     # Off the loop: it checks the twin's memory gate, which reads the store.
                     chat = await off_loop(
@@ -1119,6 +1273,7 @@ def register(
                             attachments=attachment_passages,
                             persist=not attachment_passages and not preview,
                             owner_said=[] if preview else owner_said,
+                            team_answers=[prompt_line(c) for c in shown],
                         )
                     ) as replies:
                         async for result in replies:
@@ -1198,9 +1353,13 @@ def register(
         notice = f"已导入 {parsed.source.n_expressions} 条回答"
         try:
             llm, embedder = backends.llm(), backends.embedder()
-            job = jobs.submit(
-                "persona_build", "构建人格档案", lambda log: run_persona_build(settings, llm, embedder, log)
-            )
+
+            def build(log: Log) -> dict[str, Any]:
+                result = run_persona_build(settings, llm, embedder, log)
+                built(llm, embedder)
+                return result
+
+            job = jobs.submit("persona_build", "构建人格档案", build)
         except Exception as e:
             # Model not configured or another build running: the answers are saved, the build can start later.
             return {"round": "initial", "job_id": None, "notice": f"{notice}；构建没有自动开始：{e}"}

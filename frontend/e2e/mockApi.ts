@@ -527,9 +527,176 @@ const away = {
   answered: 12,
   shelved: [],
   settled: [],
+  groups: [],
+  often: [],
+  answers: { total: 0, stale: 0 },
   pending: 3,
   days: 7,
 };
+
+// 第 14 屏: three people asked the same thing in their own words, one card, and a reply the twin keeps giving.
+const sameMatter = (
+  id: string,
+  who: string,
+  question: string,
+  at: string,
+  mode: 'abstain' | 'grounded',
+) => ({
+  ...handoffRow,
+  id,
+  kind: 'decide',
+  asker_name: who,
+  question,
+  answer:
+    mode === 'abstain' ? null : '旧模板这次之后还能导出，具体到哪天要问林舟。',
+  twin_mode: mode,
+  created_at: at,
+  expires_at: '2026-10-24T09:00:00Z',
+  days_left: 5,
+});
+export const awayMerged = {
+  ...away,
+  waiting: [
+    sameMatter(
+      'hf-4',
+      '许清禾',
+      '旧版 Word 模板导出，这次之后还支持吗？',
+      '2026-10-17T01:12:00Z',
+      'abstain',
+    ),
+    sameMatter(
+      'hf-5',
+      '陈一',
+      '客户问旧模板还能不能导出，我该怎么回？',
+      '2026-10-17T02:05:00Z',
+      'abstain',
+    ),
+    sameMatter(
+      'hf-6',
+      '王屿',
+      '销售那边听说旧模板要停用了，是真的吗？',
+      '2026-10-17T03:30:00Z',
+      'grounded',
+    ),
+    {
+      ...handoffRow,
+      id: 'hf-3',
+      kind: 'evaluate',
+      kind_label: '涉及评价',
+      asker_name: '陈一',
+      question: '你觉得新来的实习生能不能独立负责导入模块？',
+      answer: null,
+      created_at: '2026-10-17T02:40:00Z',
+      expires_at: '2026-10-22T02:40:00Z',
+      days_left: 5,
+    },
+  ],
+  groups: [['hf-4', 'hf-5', 'hf-6']],
+  often: [
+    {
+      handoff_id: 'hf-9',
+      title: '周报按项目写还是按人写？',
+      reply: '按项目写，每个项目一句结论加下周要做的事。',
+      askers: ['王屿', '周宁'],
+      uses: 2,
+      days: 7,
+    },
+  ],
+  answers: { total: 4, stale: 1 },
+  guessed: [],
+  pending: 4,
+};
+
+// 第 15 屏: a colleague asks someone's twin; the team's answer is a card of its own, and a doubtful one is dashed.
+const teamAnswerCard = {
+  id: 'ta-1',
+  persona_id: 'default',
+  owner_name: '林舟',
+  title: '旧版 Word 模板导出，这次之后还支持吗？',
+  body: '旧版 Word 模板支持到 12 月 31 日，之后导出只保留新模板。客户要迁移的话，找陈一要转换脚本，旧文件一次就能转完。',
+  confirmed_at: '2026-10-22T09:00:00Z',
+  status: 'valid',
+  stale_note: '',
+  partial: false,
+};
+const teamReply = (reply: string, cards: unknown[]) => ({
+  reply,
+  citations: [],
+  confidence: 0.8,
+  abstain: false,
+  abstain_reason: '',
+  retrieved_ids: [],
+  mode: 'general',
+  verified: true,
+  elapsed_ms: 3100,
+  completed_at: '2026-10-17T01:30:08Z',
+  cited: [],
+  team_answers: cards,
+});
+const teamConversation = {
+  id: 'c-team',
+  title: '客户问旧模板还能导出吗',
+  audience: 'colleague',
+  turns: [
+    {
+      id: 't1',
+      role: 'user',
+      content: '客户问旧版 Word 模板还能导出吗？我该怎么回？',
+      timestamp: '2026-10-17T01:30:00Z',
+    },
+    {
+      id: 't2',
+      role: 'twin',
+      content: '我一般先发迁移说明，再约陈一帮客户转。',
+      timestamp: '2026-10-17T01:30:08Z',
+      reply: teamReply('我一般先发迁移说明，再约陈一帮客户转。', [
+        teamAnswerCard,
+      ]),
+    },
+    {
+      id: 't3',
+      role: 'user',
+      content: '那旧模板 12 月底就停了对吧？客户在催排期。',
+      timestamp: '2026-10-27T01:30:00Z',
+    },
+    {
+      id: 't4',
+      role: 'twin',
+      content: '这条可能变了，以林舟本人为准。',
+      timestamp: '2026-10-27T01:30:08Z',
+      reply: teamReply('这条可能变了，以林舟本人为准。', [
+        {
+          ...teamAnswerCard,
+          status: 'stale',
+          body: '旧模板支持到 12 月 31 日，之后只保留新模板。',
+          stale_note: '10 月 27 日「产品周会」里说：旧模板 10 月底就停了。',
+        },
+      ]),
+    },
+  ],
+};
+// 我设的团队答案: what the person made the team's.
+const myTeamAnswers = [
+  { ...teamAnswerCard, handoff_id: 'hf-4' },
+  {
+    ...teamAnswerCard,
+    id: 'ta-2',
+    title: '续约折扣谁能批？',
+    body: '15% 以内销售负责人自己定，超过 15% 报沈从批，当天回复。',
+    confirmed_at: '2026-10-09T09:00:00Z',
+    status: 'stale',
+    stale_note: '10 月 27 日「经营会」里说：超过 20% 才报沈总。',
+    handoff_id: 'hf-7',
+  },
+  {
+    ...teamAnswerCard,
+    id: 'ta-3',
+    title: '发布前要备哪些环境？',
+    body: '测试环境和回滚方案，周三前备好。',
+    confirmed_at: '2026-10-05T09:00:00Z',
+    handoff_id: 'hf-8',
+  },
+];
 
 const history = [
   {
@@ -668,8 +835,77 @@ const selfConversation = {
   ],
 };
 
+// 第 17 屏: the person told their assistant to ask two colleagues' twins; what came back.
+const delegationQuestion =
+  '旧模板延到明年 3 月，客户能接受吗？脚本还按 12 月做完吗？';
+const delegationConversation = {
+  id: 'c-deleg',
+  title: '旧模板延到 3 月行不行',
+  audience: 'self',
+  turns: [
+    {
+      id: 'd1',
+      role: 'user',
+      content: `帮我问问王屿和陈一：${delegationQuestion}`,
+      timestamp: '2026-10-17T02:40:00Z',
+    },
+    {
+      id: 'd2',
+      role: 'twin',
+      content: '已用你的名义问了王屿、陈一，本人看得到。',
+      timestamp: '2026-10-17T02:42:00Z',
+      reply: {
+        reply: '已用你的名义问了王屿、陈一，本人看得到。',
+        citations: [],
+        confidence: 1,
+        abstain: false,
+        abstain_reason: '',
+        retrieved_ids: [],
+        mode: 'general',
+        delegation: {
+          id: 'd-1',
+          summary: '客户能接受；脚本排期等陈一；合同那家等沈从。齐了再定。',
+        },
+      },
+    },
+  ],
+};
+const delegationView = {
+  id: 'd-1',
+  question: delegationQuestion,
+  limit: 3,
+  targets: [
+    {
+      persona_id: 'p-public',
+      name: '王屿',
+      conversation_id: 'c-deleg-wang',
+      state: 'answered',
+      answer: '能接受。两家大客户都说 3 月前不急，希望年底别动。',
+      mode: 'grounded',
+      ask: '',
+      team_answer: null,
+      handoff: null,
+      owner_reply: null,
+      also: [{ persona_id: 'p-shen', name: '沈从' }],
+    },
+    {
+      persona_id: 'p-chen',
+      name: '陈一',
+      conversation_id: 'c-deleg-chen',
+      state: 'needs_owner',
+      answer: '脚本做完七成。排期我回头答复你。',
+      mode: 'general',
+      ask: '脚本排期怎么定',
+      team_answer: null,
+      handoff: null,
+      owner_reply: null,
+      also: [],
+    },
+  ],
+};
+
 /** The signed-in person has taken their twin: what the page lists apart as 我的分身, and the twins around it. */
-export async function ownAssistant(page: Page) {
+export async function ownAssistant(page: Page, delegated = false) {
   await page.route(/\/api\/personas$/u, (route) =>
     route.fulfill({
       json: personas.map((twin) =>
@@ -695,6 +931,39 @@ export async function ownAssistant(page: Page) {
                   via: 'direct',
                   handoff: null,
                 },
+                // What the assistant asked in the person's name, apart under 问同事.
+                ...(delegated
+                  ? [
+                      {
+                        id: 'c-deleg',
+                        persona_id: 'default',
+                        title: delegationConversation.title,
+                        preview: '已用你的名义问了王屿、陈一，本人看得到。',
+                        updated_at: '2026-10-17T02:42:00Z',
+                        via: 'direct',
+                        handoff: null,
+                        delegated: 2,
+                      },
+                      {
+                        id: 'c-deleg-wang',
+                        persona_id: 'p-public',
+                        title: '旧模板延期客户能接受吗',
+                        preview: '能接受。两家大客户都说 3 月前不急。',
+                        updated_at: '2026-10-17T02:41:00Z',
+                        via: 'delegate',
+                        handoff: null,
+                      },
+                      {
+                        id: 'c-deleg-chen',
+                        persona_id: 'p-qinghe',
+                        title: '转换脚本还按 12 月做完吗',
+                        preview: '脚本做完七成。排期我回头答复你。',
+                        updated_at: '2026-10-17T02:40:00Z',
+                        via: 'delegate',
+                        handoff: null,
+                      },
+                    ]
+                  : []),
               ],
               tasks: [
                 {
@@ -1564,6 +1833,57 @@ const handlers: Record<string, Handler> = {
   'GET /api/personas/conversations': reply(everyone(null)),
   'GET /api/conversations/c-plan': reply(conversation),
   'GET /api/conversations/c-handoff': reply(handoffConversation),
+  'GET /api/conversations/c-team': reply(teamConversation),
+  'GET /api/conversations/c-deleg': reply(delegationConversation),
+  'GET /api/persona/delegations/d-1': reply(delegationView),
+  'GET /api/persona/team-answers': reply({ team_answers: myTeamAnswers }),
+  // 第 16 屏: one question to the whole team: the answer it has, whom to ask, the meetings.
+  'GET /api/personas/ask': reply({
+    team_answers: [
+      {
+        ...teamAnswerCard,
+        id: 'ta-9',
+        persona_id: 'p-qinghe',
+        owner_name: '许清禾',
+        title: '续约折扣谁能批？',
+        body: '15% 以内销售负责人自己定，超过 15% 报许清禾批，当天回复。',
+        confirmed_at: '2026-10-09T09:00:00Z',
+      },
+    ],
+    people: [
+      {
+        persona_id: 'p-public',
+        name: '王屿',
+        level: 3,
+        label: '了解较多',
+        occasions: 7,
+        last_seen: '2026-10-18',
+        facets: ['熟悉领域的看法'],
+      },
+      {
+        persona_id: 'p-qinghe',
+        name: '许清禾',
+        level: 2,
+        label: '了解一些',
+        occasions: 3,
+        last_seen: '2026-10-09',
+        facets: ['各领域立场'],
+      },
+    ],
+    meetings: [
+      {
+        recording_id: 'r-weekly',
+        title: '季度复盘',
+        date: '2026-10-18',
+        speaker: '王屿',
+        quote: '续约这两家我都让到了 12%，再往下就得找沈总……',
+        start: 312,
+        line: 2,
+      },
+    ],
+    decision: true,
+    degraded: false,
+  }),
   'GET /api/persona/coverage': reply(coverage),
   'GET /api/persona/items/summary': reply(itemSummary),
   'GET /api/persona/items': (url) => {

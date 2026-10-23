@@ -160,20 +160,32 @@ export function Chat() {
     );
   }, [dataRows, scope.kind]);
   // ``?with=`` opens the page on one twin: it is written to, and the list is narrowed to it.
+  // ``?open=`` with it opens that conversation of the twin (such as what the assistant asked in the person's name).
   const withParam = params.get('with');
+  const openParam = params.get('open');
+  const [opening, setOpening] = useState<Session | null>(null);
   useEffect(() => {
     if (!withParam) return;
     setScope({ kind: 'person', id: withParam });
     void switchTo(withParam);
+    if (openParam)
+      setOpening({
+        kind: 'chat',
+        id: openParam,
+        title: '',
+        updated_at: '',
+        personaId: withParam,
+      });
     setParams(
       (previous) => {
         const query = new URLSearchParams(previous);
         query.delete('with');
+        query.delete('open');
         return query;
       },
       { replace: true },
     );
-  }, [withParam, switchTo, setParams]);
+  }, [withParam, openParam, switchTo, setParams]);
   const playback = usePlayback({ active, chat, name, openStage });
   const { audio, capabilities, currentTurn, toggleReply, stopPlayback } =
     playback;
@@ -219,9 +231,22 @@ export function Chat() {
             title: row.title,
             updated_at: row.updated_at,
             preview: row.preview,
-            tag: row.handoff ?? undefined,
-            who: who(row.persona_id),
+            tag:
+              row.via === 'delegate'
+                ? '助手代问'
+                : row.delegated
+                  ? `代问 ${row.delegated} 人`
+                  : (row.handoff ?? undefined),
+            who:
+              row.via === 'delegate'
+                ? personName(row.persona_id) || undefined
+                : who(row.persona_id),
             personaId: row.persona_id,
+            // What the assistant asked is listed apart, with the assistant's own conversations.
+            section:
+              scope.kind === 'mine' && row.via === 'delegate'
+                ? '问同事'
+                : undefined,
           }))),
       ...(workOn ? dataRows.tasks : []).map((row): Session => ({
         kind: 'task',
@@ -256,7 +281,6 @@ export function Chat() {
     return loaded;
   };
   // A row of another twin's: the page goes to that twin first, then opens it there.
-  const [opening, setOpening] = useState<Session | null>(null);
   const openSession = async (session: Session) => {
     if (session.personaId && session.personaId !== personaId) {
       setOpening(session);

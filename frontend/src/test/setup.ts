@@ -6,6 +6,9 @@ import { afterEach, vi } from 'vitest';
 // findBy/waitFor wait for by default; they still go on as soon as what they wait for is there.
 configure({ asyncUtilTimeout: 5000 });
 
+// Times are shown where the reader is; the tests read them in the team's zone, as the screenshots do.
+process.env.TZ = 'Asia/Shanghai';
+
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn((query: string) => ({

@@ -4,21 +4,30 @@ import { personaUrl } from '../../lib/persona';
 import { usePersonaId } from '../../lib/usePersonaState';
 import { Memories } from '../../pages/Memories';
 import { usePersonas } from '../../stores/personas';
+import { MyAnswers } from '../answers/MyAnswers';
 import type { useIdentity } from '../identity/useIdentity';
 
 const MemoryGraphPanel = lazy(() => import('./graph/MemoryGraphPanel'));
 
-/** The 记忆 tab: where the memories came from (list, uploads) or how they connect (graph). */
+export type MemoryView = 'list' | 'graph' | 'answers';
+
+/**
+ * The 记忆 tab: where the memories came from (list, uploads), how they connect (graph), and, for the person themself,
+ * the answers they made the team's.
+ */
 export function MemoriesTab({
   identity,
   view,
   onView,
   onSpeakerCount,
+  answers = false,
 }: {
   identity: ReturnType<typeof useIdentity>;
-  view: 'list' | 'graph';
-  onView: (view: 'list' | 'graph') => void;
+  view: MemoryView;
+  onView: (view: MemoryView) => void;
   onSpeakerCount?: (count: number) => void;
+  /** The person's own page: the team answers they set are one of the views. */
+  answers?: boolean;
 }) {
   const personaId = usePersonaId();
   const current = usePersonas((state) =>
@@ -31,14 +40,23 @@ export function MemoriesTab({
           variant="filters"
           label="记忆的看法"
           value={view}
-          onValueChange={(next) => onView(next === 'graph' ? 'graph' : 'list')}
+          onValueChange={(next) =>
+            onView(
+              next === 'graph' || (next === 'answers' && answers)
+                ? next
+                : 'list',
+            )
+          }
           items={[
             { value: 'list', label: '列表' },
             { value: 'graph', label: '图谱' },
+            ...(answers ? [{ value: 'answers', label: '我设的团队答案' }] : []),
           ]}
         />
       </Row>
-      {view === 'graph' ? (
+      {view === 'answers' && answers ? (
+        <MyAnswers />
+      ) : view === 'graph' ? (
         <Suspense fallback={<Skeleton panel />}>
           <MemoryGraphPanel
             key={personaId}

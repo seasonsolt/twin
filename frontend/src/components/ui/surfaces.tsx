@@ -23,6 +23,8 @@ const cardVariants = {
   note: 'bg-note',
   /** Tinted, for something set back from the content around it. */
   soft: 'bg-soft',
+  /** Hairline dashes, for something that stands but may no longer be so. */
+  dashed: 'border border-dashed border-tertiary bg-surface',
   /** Danger zone. */
   danger: 'border border-danger/20 bg-surface shadow-card',
 };

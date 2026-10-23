@@ -20,7 +20,7 @@ import datetime as dt
 import hashlib
 import logging
 import sqlite3
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +39,7 @@ from .persona.sources import parse_answer
 from .persona.store import PersonaStore
 from .persona.tiers import COLLEAGUE
 from .persona.tiers import SELF as SELF_AUDIENCE
+from .teamanswers import TeamAnswerRefused, TeamAnswers, clean, merge_groups, summary_title
 from .teamdb import (
     HANDOFF_DAYS,
     Handoff,
@@ -48,7 +49,9 @@ from .teamdb import (
     IndexedConversation,
     Outcome,
     ReplyTier,
+    TeamAnswer,
     TeamDB,
+    Via,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,13 @@ STUCK_AFTER = dt.timedelta(seconds=30)
 LEGACY_PREFIX = "legacy-"
 LEGACY_STATUS: dict[str, HandoffStatus] = {"pending": "delivered", "answered": "replied", "dismissed": "dismissed"}
 REPLY_MAX_CHARS = 4000
+# At most this many questions answered with one reply.
+GROUP_MAX = 20
+# A reply the twin has used in this many answers (to different conversations) is offered as a team answer.
+OFTEN_USES = 2
+OFTEN_SHOWN = 5
+# ``meta`` key of a suggestion the person turned down.
+OFTEN_DECLINED = "answers:declined:"
 PENDING_ACCEPT: LedgerStatus = "pending_accept"
 
 
@@ -172,6 +182,12 @@ class Away:
     answered: int
     shelved: list[dict[str, Any]]
     settled: list[dict[str, Any]]
+    # The waiting handoffs that ask the same thing, as lists of their ids (a way of showing them, nothing more).
+    groups: list[list[str]]
+    # Replies the twin has given again and again, which the person may make team answers.
+    often: list[dict[str, Any]]
+    # The team answers the person has set: how many in force, how many possibly out of date.
+    answers: dict[str, int]
 
 
 class HandoffDesk:
@@ -190,9 +206,11 @@ class HandoffDesk:
         owner: Callable[[], str | None],
         name: Callable[[], str],
         on_turn: Callable[[PersonaStore, str], None] = lambda store, conversation_id: None,
+        answers: TeamAnswers | None = None,
     ) -> None:
         self.team, self.persona_id = team, persona_id
         self.store_path, self.owner, self.name, self.on_turn = store_path, owner, name, on_turn
+        self.answers = answers
 
     def reach(self, asker: str | None = None) -> Reach:
         """Whom a conversation's answer can hand what only the person can settle to: the person, once they have taken
@@ -221,6 +239,9 @@ class HandoffDesk:
         if self.team is None or conversation_id is None or audience != COLLEAGUE:
             return None
         if reply.get("owner_part") not in OWNER_PARTS or self.owner() is None or asker == self.owner():
+            return None
+        if reply.get("team_answers"):
+            # The question has the team's answer in front of it; the asker hands it on themself if it is not enough.
             return None
         seq = store.last_turn_seq(conversation_id, "twin")
         if seq is None:
@@ -278,6 +299,44 @@ class HandoffDesk:
             self.team.set_handoff_ledger(h.id, entry.entry_id)
         return entry
 
+    def hand_over(
+        self,
+        store: PersonaStore,
+        conversation_id: str,
+        asker: str | None,
+        asker_name: str,
+        ask: str,
+        *,
+        via: Via = "direct",
+    ) -> dict[str, Any] | None:
+        """Hand the question of a conversation's last twin turn to the person because the asker said so (a team
+        answer left them in doubt, or they pressed 转给本人 on a colleague's twin that could not settle it): one
+        handoff of what only the person can say. None when the twin has no person to hand to yet, the asker is the
+        person, or the turn was handed on already."""
+        if self.team is None or self.owner() is None or asker is None or asker == self.owner():
+            return None
+        seq = store.last_turn_seq(conversation_id, "twin")
+        if seq is None:
+            return None
+        question = store.question_before(conversation_id, seq)
+        if not question.strip():
+            return None
+        made = self.team.create_handoff(
+            persona_id=self.persona_id,
+            owner=self.owner(),
+            conversation_id=conversation_id,
+            turn=seq,
+            asker=asker,
+            asker_name=asker_name,
+            kind="missing",
+            question=question[:2000],
+            context=store.previous_user_turn(conversation_id, seq)[:500],
+            ask=ask[:300],
+            group_key=followup_id(question),
+            via=via,
+        )
+        return None if made is None else self.asker_view(made)
+
     def reconcile(self) -> int:
         """Make the handoffs of replies that left something to the person and have none (a stop between the twin's
         database and the team's), in recent conversations; how many were made."""
@@ -291,6 +350,8 @@ class HandoffDesk:
         made = 0
         with PersonaStore(self.store_path()) as store:
             for conversation_id, seq, reply in store.owner_part_turns(list(by_id)):
+                if reply.get("team_answers"):
+                    continue
                 conversation = by_id[conversation_id]
                 try:
                     if self._raise(store, conversation_id, seq, conversation.asker, conversation.asker_name, reply):
@@ -327,6 +388,24 @@ class HandoffDesk:
             seq = int(str(turn["id"]).rsplit(":", 1)[1])
             if turn["role"] == "twin" and seq in by_turn:
                 turn["handoff"] = self.asker_view(by_turn[seq])
+        return self.refresh_cards(conversation)
+
+    def refresh_cards(self, conversation: dict[str, Any]) -> dict[str, Any]:
+        """The team answers an answer showed are as they were when it was given, but for whether they are now
+        in doubt: the person said otherwise since, or put them right. One taken back stays as it was."""
+        if self.team is None:
+            return conversation
+        for turn in conversation["turns"]:
+            cards = (turn.get("reply") or {}).get("team_answers") or []
+            for shown in cards:
+                try:
+                    now = self.team.get_team_answer(shown["id"])
+                except sqlite3.Error:
+                    logger.warning("could not read team answer %s", shown.get("id"), exc_info=True)
+                    continue
+                if now is not None and now.status in ("valid", "stale"):
+                    shown["status"] = now.status
+                    shown["stale_note"] = now.stale_note if now.status == "stale" else ""
         return conversation
 
     # ------------------------------------------------------------ the person's side
@@ -339,6 +418,10 @@ class HandoffDesk:
             raise KeyError(handoff_id)
         return h
 
+    def handoff_of(self, handoff_id: str, owner: str | None) -> Handoff:
+        """The handoff, when it is this twin's and addressed to this person (KeyError otherwise)."""
+        return self._mine(handoff_id, owner)
+
     def reply(self, handoff_id: str, owner: str | None, text: str, *, remember: bool = True) -> Handoff:
         """The person's own reply: written into the asker's conversation as theirs, and kept as a memory unless
         ``remember`` is False."""
@@ -350,6 +433,78 @@ class HandoffDesk:
         if DRAFT_GAP in text:
             raise HandoffRefused("草稿里还有【请你定】没填，改完再发")
         return self._settle(handoff_id, text, "colleague" if remember else "none", "replied")
+
+    def reply_many(
+        self, handoff_ids: Sequence[str], owner: str | None, text: str, *, remember: bool = True
+    ) -> tuple[list[Handoff], list[tuple[str, str]]]:
+        """One reply to several handoffs that are one matter: it is written into each asker's own conversation as the
+        person's (each handoff stays its own, settled on its own), and kept as a memory once, for the first that is
+        settled, not once for each. Returns the ones settled and, for those that could not be, why (one the asker
+        deleted, or that was answered in the meantime, does not stop the others)."""
+        assert self.team is not None
+        text = text.strip()
+        ids = list(dict.fromkeys(handoff_ids))
+        if not 1 <= len(ids) <= GROUP_MAX:
+            raise HandoffRefused(f"一次最多回复 {GROUP_MAX} 条")
+        if not 1 <= len(text) <= REPLY_MAX_CHARS:
+            raise HandoffRefused(f"回复需要 1–{REPLY_MAX_CHARS} 个字")
+        if DRAFT_GAP in text:
+            raise HandoffRefused("草稿里还有【请你定】没填，改完再发")
+        for handoff_id in ids:
+            self._mine(handoff_id, owner)
+        done: list[Handoff] = []
+        failed: list[tuple[str, str]] = []
+        for handoff_id in ids:
+            try:
+                done.append(self._settle(handoff_id, text, "colleague" if remember and not done else "none", "replied"))
+            except HandoffRefused as e:
+                failed.append((handoff_id, str(e)))
+        return done, failed
+
+    def make_team_answer(
+        self, handoff_id: str, owner: str | None, title: str, body: str, embedder: Embedder | None
+    ) -> TeamAnswer:
+        """设为团队答案: the person's reply to this handoff, under a title that sums the question up, for every twin
+        of the team to quote as it stands. Only the person themself can (the web routes refuse anyone else), and the
+        reply is kept as a memory the colleagues may use, as every reply to a handoff is."""
+        assert self.team is not None and self.answers is not None
+        h = self._mine(handoff_id, owner)
+        if h.status != "replied" or not h.reply:
+            raise HandoffRefused("先回复，再设为团队答案")
+        try:
+            title, body = clean(title or summary_title(h.question), body or h.reply)
+        except TeamAnswerRefused as e:
+            raise HandoffRefused(str(e)) from None
+        with PersonaStore(self.store_path()) as store:
+            source_id = self._keep_in_memory(store, h)
+        made = self.team.create_team_answer(
+            persona_id=self.persona_id,
+            owner=owner or self.owner(),
+            title=title,
+            body=body,
+            handoff_id=h.id,
+            source_id=source_id,
+        )
+        if made is None:
+            raise HandoffRefused("这条已经设为团队答案了")
+        self.answers.embed_answer(made, embedder)
+        self.team.delete_meta(f"{OFTEN_DECLINED}{h.id}")
+        return made
+
+    def _keep_in_memory(self, store: PersonaStore, h: Handoff) -> str | None:
+        """The memory source a reply is kept as (made now when the reply was not kept); None for a question from before
+        handoffs, whose reply was kept the old way."""
+        if h.id.startswith(LEGACY_PREFIX):
+            return None
+        parsed = parse_answer(h.question, h.reply or "", self.name(), f"handoff:{h.id}", previous=h.context)
+        store.put_source(parsed)
+        return parsed.source.source_id
+
+    def decline_often(self, handoff_id: str, owner: str | None) -> None:
+        """不用: the suggestion to make this reply a team answer is not made again."""
+        assert self.team is not None
+        self._mine(handoff_id, owner)
+        self.team.set_meta(f"{OFTEN_DECLINED}{handoff_id}", _now().isoformat())
 
     def draft(self, handoff_id: str, owner: str | None, llm: LLM, embedder: Embedder, settings: Settings) -> str:
         """请分身起草: the words the person might answer with, from their own memory, for them to change and send.
@@ -675,9 +830,11 @@ class HandoffDesk:
     def view(self, h: Handoff, store: PersonaStore) -> dict[str, Any]:
         """A handoff as the person sees it."""
         answer = None
+        mode = None
         if h.conversation_id is not None and h.turn is not None:
             turn = store.conversation_turn(h.conversation_id, h.turn)
             answer = turn["content"] if turn else None
+            mode = ((turn or {}).get("reply") or {}).get("mode")
         commit = None
         if h.kind == "commit":
             entry = store.get_ledger_entry(h.ledger_id or ledger_id_for(h.id))
@@ -699,6 +856,8 @@ class HandoffDesk:
             "context": h.context,
             "ask": h.ask,
             "answer": answer,
+            # How the twin met it: it answered (grounded, general or guessed) or had nothing to say (abstain).
+            "twin_mode": mode,
             "source_known": h.source_known,
             "created_at": h.created_at,
             "expires_at": h.expires_at,
@@ -708,9 +867,10 @@ class HandoffDesk:
             "replied_at": h.replied_at,
         }
 
-    def away(self, owner: str | None) -> Away:
+    def away(self, owner: str | None, embedder: Embedder | None = None) -> Away:
         """The person's page for what happened while they were away: what waits for them, the answers the twin
-        guessed, how many it answered from the profile, and what was settled or put aside."""
+        guessed, how many it answered from the profile, and what was settled or put aside. ``embedder``: to tell which
+        waiting questions are one matter (``groups``); without one, only equal questions are."""
         assert self.team is not None
         self.team.expire_due()
         # A reply whose writing stopped halfway (the request failed) is finished the next time the person looks.
@@ -725,6 +885,9 @@ class HandoffDesk:
             waiting = [self.view(h, store) for h in mine if h.status == "delivered"]
             shelved = [self.view(h, store) for h in mine if h.status in ("dismissed", "expired")]
             settled = [self.view(h, store) for h in mine if h.status in ("replied", "accepted", "declined")]
+        groups = [
+            [h.id for h in group] for group in merge_groups([h for h in mine if self.visible(owner)(h)], embedder)
+        ]
         guessed: list[dict[str, Any]] = []
         sourced: list[dict[str, Any]] = []
         sourced_count = 0
@@ -754,7 +917,76 @@ class HandoffDesk:
             answered=len(replies),
             shelved=shelved,
             settled=settled[:SETTLED_SHOWN],
+            groups=[g for g in groups if len(g) > 1],
+            often=self._often(mine, conversations, replies),
+            answers=self._answers_count(),
         )
+
+    def _answers_count(self) -> dict[str, int]:
+        assert self.team is not None
+        mine = self.team.team_answers(persona_id=self.persona_id, statuses=("valid", "stale"))
+        return {"total": len(mine), "stale": sum(1 for a in mine if a.status == "stale")}
+
+    def _often(
+        self,
+        mine: Sequence[Handoff],
+        conversations: dict[str, IndexedConversation],
+        replies: Sequence[tuple[str, int, str, dict[str, Any], str, str]],
+    ) -> list[dict[str, Any]]:
+        """The person's replies the twin has used in answers to colleagues ``OFTEN_USES`` times or more since they
+        gave them, which they have not made team answers and have not turned down: the second way to a team answer.
+        A reply is used when an answer cites a memory that stands on it."""
+        assert self.team is not None
+        candidates = [
+            h
+            for h in mine
+            if h.status == "replied"
+            and h.reply
+            and h.reply_tier == "colleague"
+            and not h.id.startswith(LEGACY_PREFIX)
+            and h.replied_at
+        ]
+        if not candidates or not replies:
+            return []
+        taken = self.team.answered_handoffs(self.persona_id)
+        declined = self.team.meta_keys(OFTEN_DECLINED)
+        candidates = [h for h in candidates if h.id not in taken and f"{OFTEN_DECLINED}{h.id}" not in declined]
+        if not candidates:
+            return []
+        with PersonaStore(self.store_path()) as store:
+            support = store.item_support()
+        items_of: dict[str, set[str]] = {}
+        for item_id, _facet, expression_id in support:
+            items_of.setdefault(expression_id.rsplit("#", 1)[0], set()).add(item_id)
+        name = self.name()
+        found: list[dict[str, Any]] = []
+        for h in candidates:
+            source = parse_answer(h.question, h.reply or "", name, f"handoff:{h.id}", previous=h.context).source
+            cited = items_of.get(source.source_id)
+            if not cited:
+                continue
+            uses = [
+                (conversation_id, seq)
+                for conversation_id, seq, _content, reply, at, _question in replies
+                if at > (h.replied_at or "")
+                and conversation_id in conversations
+                and cited.intersection(reply.get("citations") or ())
+            ]
+            if len(uses) < OFTEN_USES:
+                continue
+            askers = list(dict.fromkeys(conversations[c].asker_name for c, _ in uses if conversations[c].asker_name))
+            found.append(
+                {
+                    "handoff_id": h.id,
+                    "title": summary_title(h.question),
+                    "reply": h.reply,
+                    "askers": askers[:3],
+                    "uses": len(uses),
+                    "days": AWAY_DAYS,
+                }
+            )
+        found.sort(key=lambda row: (-row["uses"], row["handoff_id"]))
+        return found[:OFTEN_SHOWN]
 
 
 def _unavailable(status: HandoffStatus | None) -> str:

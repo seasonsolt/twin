@@ -583,3 +583,185 @@ export function SearchDialog({
     </Dialog>
   );
 }
+
+export interface AskItem extends SearchItem {
+  /** What pressing it does, as a short phrase after the name (问分身, 看档案). */
+  action?: string;
+  /** A mark of how well something is known, or any small sign, after the name. */
+  sign?: ReactNode;
+}
+
+export interface AskSection {
+  id: string;
+  title: string;
+  /** How many there are, shown beside the title. */
+  count?: number;
+  /** Answers shown as they are, above the rows: not picked, only read. */
+  cards?: ReactNode;
+  items?: AskItem[];
+}
+
+/**
+ * Ask one question of the whole team and read the answers in sections, from the one that can be used as it stands to
+ * the one that has to be asked again. The field is the page's (`query`), because what it lists is found elsewhere
+ * (`sections`, which the page fills as the answer arrives); ↑↓ move over every row of every section, Enter picks.
+ * `busy` says the search is under way, `notice` that part of it could not be done, `empty` that nothing was found.
+ */
+export function AskDialog({
+  open,
+  onOpenChange,
+  title,
+  placeholder,
+  query,
+  onQueryChange,
+  sections,
+  onSelect,
+  empty,
+  busy = false,
+  notice,
+  hint,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  placeholder: string;
+  query: string;
+  onQueryChange: (query: string) => void;
+  sections: AskSection[];
+  onSelect: (item: AskItem) => void;
+  empty: string;
+  busy?: boolean;
+  notice?: string;
+  /** The keys, shown under the list on a desktop. */
+  hint?: string;
+}) {
+  const [at, setAt] = useState(0);
+  const listId = useId();
+  useEffect(() => {
+    if (open) setAt(0);
+  }, [open]);
+  const rows = sections.flatMap((section) => section.items ?? []);
+  const current = Math.min(at, rows.length - 1);
+  const shown = sections.filter(
+    (section) => section.cards || section.items?.length,
+  );
+  const pick = (item: AskItem | undefined) => {
+    if (!item) return;
+    onOpenChange(false);
+    onSelect(item);
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      className="search-dialog"
+    >
+      <div className="flex flex-col gap-3">
+        <Input
+          autoFocus
+          type="search"
+          role="combobox"
+          aria-label={title}
+          aria-expanded={rows.length > 0}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            current >= 0 ? `${listId}-${rows[current].id}` : undefined
+          }
+          placeholder={placeholder}
+          value={query}
+          onChange={(event) => {
+            onQueryChange(event.target.value);
+            setAt(0);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              const step = event.key === 'ArrowDown' ? 1 : -1;
+              setAt((current + step + rows.length) % Math.max(1, rows.length));
+            } else if (event.key === 'Enter') {
+              event.preventDefault();
+              pick(rows[current]);
+            }
+          }}
+        />
+        {notice && (
+          <p role="status" className="text-sm text-secondary">
+            {notice}
+          </p>
+        )}
+        <div id={listId} role="listbox" aria-label={title} className="contents">
+          {shown.map((section) => (
+            <section
+              key={section.id}
+              aria-label={section.title}
+              className="flex flex-col gap-1"
+            >
+              <h3 className="flex items-baseline gap-2 px-2 text-sm font-semibold text-secondary">
+                {section.title}
+                {section.count !== undefined && (
+                  <span className="font-normal">{section.count}</span>
+                )}
+              </h3>
+              {section.cards && (
+                <div className="flex flex-col gap-2">{section.cards}</div>
+              )}
+              {section.items?.map((item) => {
+                const index = rows.indexOf(item);
+                return (
+                  <div
+                    key={item.id}
+                    id={`${listId}-${item.id}`}
+                    role="option"
+                    aria-selected={index === current}
+                    onMouseEnter={() => setAt(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => pick(item)}
+                    className={cn(
+                      'flex min-h-11 cursor-pointer items-center gap-3 rounded-sm px-2 py-1',
+                      index === current && 'bg-soft',
+                    )}
+                  >
+                    {item.leading}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate font-medium">{item.label}</span>
+                      {item.detail && (
+                        <span className="truncate text-xs text-secondary">
+                          {item.detail}
+                        </span>
+                      )}
+                    </span>
+                    {item.sign}
+                    {item.action && (
+                      <span className="shrink-0 text-sm font-medium text-accent">
+                        {item.action}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </section>
+          ))}
+        </div>
+        {busy ? (
+          <p role="status" className="px-2 text-sm text-secondary">
+            正在找…
+          </p>
+        ) : (
+          !shown.length &&
+          query.trim().length >= 2 && (
+            <p role="status" className="px-2 py-3 text-sm text-secondary">
+              {empty}
+            </p>
+          )
+        )}
+        {hint && rows.length > 0 && (
+          <p aria-hidden className="text-xs text-secondary max-md:hidden">
+            {hint}
+          </p>
+        )}
+      </div>
+    </Dialog>
+  );
+}

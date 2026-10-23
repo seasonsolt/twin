@@ -1,14 +1,27 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { SearchDialog, type SearchItem } from '../ui';
+import {
+  AskDialog,
+  LevelDots,
+  Text,
+  type AskItem,
+  type AskSection,
+} from '../ui';
+import { TeamAnswerCard } from '../../features/answers/TeamAnswerCard';
+import { useAsk } from '../../features/ask/useAsk';
 import { memberPath, twinMemberPath } from '../../lib/members';
 import { usePersonas } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
 import { namedPeople } from '../../features/library/teamCounts';
 import { PersonaPortrait } from './PersonaSwitcher';
 
+/** How many people are listed by name: the first few before anything is typed, the best matches after. */
+const NAMES_SHOWN = 8;
+
 /**
- * Find someone by name from anywhere (⌘K): the team's people and the twins. Each opens on their member page, as
- * clicking them on the team page does.
+ * 问一句、找人 (⌘K): a name finds the person, a question is put to the whole team: the answers it already has, whom
+ * to ask and the meetings it came up in. A person picked from the name list opens on their member page, one picked
+ * from whom to ask opens a conversation with their twin with the question in the box.
  */
 export function FindPerson({
   open,
@@ -20,9 +33,13 @@ export function FindPerson({
   const navigate = useNavigate();
   const people = useTeam((state) => state.people);
   const twins = usePersonas((state) => state.items);
+  const [query, setQuery] = useState('');
+  useEffect(() => {
+    if (open) setQuery('');
+  }, [open]);
   const named = people ? namedPeople(people) : [];
   const linked = new Set(named.map((p) => p.persona_id).filter(Boolean));
-  const items: (SearchItem & { to: string })[] = [
+  const known: (AskItem & { to: string })[] = [
     ...named.map((person) => {
       const twin = twins.find((t) => t.id === person.persona_id);
       return {
@@ -44,18 +61,109 @@ export function FindPerson({
         to: twinMemberPath(twin.id),
       })),
   ];
+  const wanted = query.trim().toLocaleLowerCase();
+  const byName = known
+    .filter((item) => item.label.toLocaleLowerCase().includes(wanted))
+    .slice(0, NAMES_SHOWN);
+  // A name that is just a person's is found, not asked.
+  const justAName = byName.some(
+    (item) => item.label.toLocaleLowerCase() === wanted,
+  );
+  const { found, busy, error } = useAsk(query, open && !justAName);
+  const sections: AskSection[] = [
+    ...(byName.length ? [{ id: 'names', title: '找人', items: byName }] : []),
+    ...(found?.team_answers.length
+      ? [
+          {
+            id: 'answers',
+            title: '团队答案',
+            count: found.team_answers.length,
+            cards: found.team_answers.map((card) => (
+              <TeamAnswerCard key={card.id} card={card} />
+            )),
+          },
+        ]
+      : []),
+    ...(found?.people.length
+      ? [
+          {
+            id: 'people',
+            title: '该问谁',
+            count: found.people.length,
+            cards: found.decision && (
+              <Text size="xs" tone="secondary">
+                具体要他拍板，他的分身会转给本人
+              </Text>
+            ),
+            items: found.people.map((row) => {
+              const twin = twins.find((t) => t.id === row.persona_id);
+              return {
+                id: `ask-${row.persona_id}`,
+                label: row.name,
+                detail: [
+                  row.label,
+                  row.facets.join('、'),
+                  `${row.occasions} 场`,
+                ]
+                  .filter(Boolean)
+                  .join(' · '),
+                leading: twin && <PersonaPortrait persona={twin} />,
+                sign: <LevelDots level={row.level} />,
+                action: '问分身',
+              };
+            }),
+          },
+        ]
+      : []),
+    ...(found?.meetings.length
+      ? [
+          {
+            id: 'meetings',
+            title: '会议',
+            count: found.meetings.length,
+            items: found.meetings.map((hit) => ({
+              id: `meeting-${hit.line}-${hit.recording_id}`,
+              label: `${hit.title} · ${hit.date.slice(5).replace('-', '/')}`,
+              detail: `${hit.speaker ? `${hit.speaker}：` : ''}“${hit.quote}”`,
+              action: '看录音',
+            })),
+          },
+        ]
+      : []),
+  ];
+  const select = (item: AskItem) => {
+    const person = known.find((k) => k.id === item.id);
+    if (person) return void navigate(person.to);
+    if (item.id.startsWith('ask-'))
+      return void navigate(
+        `/chat?with=${encodeURIComponent(item.id.slice(4))}`,
+        {
+          state: { ask: query.trim() },
+        },
+      );
+    if (item.id.startsWith('meeting-')) {
+      const [, line, recording] = /^meeting-(\d+)-(.+)$/.exec(item.id) ?? [];
+      if (recording)
+        void navigate(`/library/${encodeURIComponent(recording)}?line=${line}`);
+    }
+  };
   return (
-    <SearchDialog
+    <AskDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="找人"
-      placeholder="输入名字"
-      empty="没有叫这个名字的人"
-      items={items}
-      onSelect={(item) => {
-        const found = items.find((i) => i.id === item.id);
-        if (found) void navigate(found.to);
-      }}
+      title="问一句、找人"
+      placeholder="问一件事，或输入名字"
+      query={query}
+      onQueryChange={setQuery}
+      sections={sections}
+      onSelect={select}
+      busy={busy}
+      notice={
+        error ||
+        (found?.degraded ? '向量模型没有配置好，只找到了会议' : undefined)
+      }
+      empty={justAName ? '' : '团队里还没人谈过这件事，可以按名字找人'}
+      hint="↑↓ 选择　↵ 去问"
     />
   );
 }

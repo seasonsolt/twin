@@ -27,6 +27,8 @@ export interface Handoff {
   ask: string;
   /** What the twin said, when the conversation is known. */
   answer: string | null;
+  /** How the twin met it: it answered (grounded, general, inferred) or had nothing to say (abstain). */
+  twin_mode?: 'grounded' | 'general' | 'inferred' | 'abstain' | null;
   /** False for a question from before handoffs: it can be kept as a memory, not written back. */
   source_known: boolean;
   created_at: string;
@@ -53,8 +55,23 @@ export interface AnsweredQuestion {
   at: string;
 }
 
+/** A reply the twin has given again and again, which the person may make a team answer. */
+export interface OftenReply {
+  handoff_id: string;
+  title: string;
+  reply: string;
+  askers: string[];
+  uses: number;
+  days: number;
+}
+
 export interface Away {
   waiting: Handoff[];
+  /** Waiting questions that ask the same thing, as lists of their ids (a way of showing them; each stays its own). */
+  groups: string[][];
+  often: OftenReply[];
+  /** The team answers the person has set, and how many of them may be out of date. */
+  answers: { total: number; stale: number };
   guessed: AnsweredQuestion[];
   sourced: AnsweredQuestion[];
   sourced_count: number;

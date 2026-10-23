@@ -204,7 +204,7 @@ export function Sidebar() {
       {canManage && (
         <>
           <SearchButton
-            label="找人"
+            label="问一句、找人"
             shortcut="⌘K"
             onClick={() => setFinding(true)}
           />

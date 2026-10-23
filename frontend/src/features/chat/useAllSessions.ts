@@ -12,6 +12,8 @@ export interface AllConversation {
   via: 'direct' | 'delegate';
   /** Where what it handed to the person stands, such as 等本人回复; nothing when it handed nothing. */
   handoff: string | null;
+  /** In the person's own conversation with their assistant: how many colleagues' twins it asked (代问). */
+  delegated?: number;
 }
 
 export interface AllTask {

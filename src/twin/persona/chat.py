@@ -298,6 +298,9 @@ class PersonaContext:
     owner_said: list[str] = field(default_factory=list)
     # The question asks the person for a promise, decision or judgement: the answer is checked before it is shown.
     owner_cue: bool = False
+    # Team answers (``teamanswers``) matching the question, as lines for the prompt: they are shown to the asker as
+    # cards of their own, above the reply.
+    team_answers: list[str] = field(default_factory=list)
 
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
@@ -618,6 +621,7 @@ class PersonaChat:
         persist: bool = True,
         today: dt.date | None = None,
         owner_said: Sequence[str] = (),
+        team_answers: Sequence[str] = (),
     ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
@@ -626,6 +630,7 @@ class PersonaChat:
         ctx = self._search(messages, as_of, today)
         ctx.today = today
         ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
+        ctx.team_answers = list(team_answers)
         self._attach_files(ctx, attachments)
         self._derive(messages, ctx)
         with default_stage("chat.answer"):
@@ -648,6 +653,7 @@ class PersonaChat:
         attachments: Sequence[AttachmentPassage] = (),
         persist: bool = True,
         owner_said: Sequence[str] = (),
+        team_answers: Sequence[str] = (),
     ) -> AsyncGenerator[str | ChatReply]:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
@@ -658,6 +664,7 @@ class PersonaChat:
             return
         ctx = await off_loop(partial(self._search, messages, as_of))
         ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
+        ctx.team_answers = list(team_answers)
         self._attach_files(ctx, attachments)
         await off_loop(partial(self._derive, messages, ctx))
         system, user = await off_loop(
@@ -1147,6 +1154,13 @@ OWNER_SAID_SECTION = """
 用户消息的【本人亲自答复】里是本人在这段对话里亲口说的话。它说了的事以它为准，盖过你之前说过的；对方再问到同一件事，\
 照它说，不再说转给本人，也不改它的意思。"""
 
+TEAM_ANSWER_SECTION = """
+
+## 团队答案
+用户消息的【团队答案】是团队里有人确认过的回答，已经原样放在你这条回复上方的卡片里给对方看了。不要改写、复述或重新概括它；\
+你的回复只补充卡片没有说的部分，或回答卡片之外的问题，需要时可以说“上面的团队答案里有”。这一句里能按它回答的部分，\
+不再说“资料里没有”，也不再说转给本人。带“可能已经变了”的，提醒对方以本人为准。"""
+
 STYLE_SECTION = """
 
 ## 答题风格
@@ -1190,8 +1204,9 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
         core = "（这个分身只按会上的记录回答，没有长期画像）"
     template = ASSISTANT_SYSTEM if ctx.assistant else CHAT_SYSTEM
     prompt = template.format(name=name, scope=scope, today=today, core=core, style=style, voice=voice, facets=facets)
+    team = TEAM_ANSWER_SECTION if ctx.team_answers else ""
     if ctx.assistant:
-        return prompt + (ASSISTANT_MEETING_SECTION if ctx.meeting_record else "") + _attachment_section(ctx)
+        return prompt + (ASSISTANT_MEETING_SECTION if ctx.meeting_record else "") + team + _attachment_section(ctx)
     if ctx.meeting_record:
         prompt += MEETING_RECORD_SECTION
     if ctx.reach == "owner":
@@ -1200,7 +1215,7 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
         prompt += UNCLAIMED_SECTION.format(name=name)
     if ctx.owner_said:
         prompt += OWNER_SAID_SECTION
-    return prompt + _attachment_section(ctx)
+    return prompt + team + _attachment_section(ctx)
 
 
 def _attachment_section(ctx: PersonaContext) -> str:
@@ -1353,6 +1368,8 @@ def chat_user_message(messages: Sequence[ChatTurn], ctx: PersonaContext) -> str:
             "【本人亲自答复】（本人在这段对话里亲口说的，最新的在后）",
             *(f"- 「{t.strip()}」" for t in ctx.owner_said),
         ]
+    if ctx.team_answers:
+        lines += ["", "【团队答案】（已经原样显示给对方，不要重复）", *ctx.team_answers]
     lines += ["", "【对话】"]
     for m in messages[-HISTORY_TURNS:]:
         who = "对方" if m.role == "user" else "你"

@@ -12,12 +12,14 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
-from ..handoffs import AWAY_DAYS, KIND_LABELS, STATUS_LABELS, HandoffDesk, HandoffRefused
+from ..embed import Embedder
+from ..handoffs import AWAY_DAYS, GROUP_MAX, KIND_LABELS, STATUS_LABELS, HandoffDesk, HandoffRefused
 from ..llm import LLMError
 from ..persona.store import PersonaStore
 from ..persona.tiers import SELF
+from ..teamanswers import BODY_MAX, TITLE_MAX, TeamAnswerRefused, TeamAnswers, clean, summary_title
 from ..teamdb import Handoff
-from .backends import Backends
+from .backends import Backends, BackendUnavailable
 from .conversations import owner, request_audience
 
 
@@ -37,6 +39,34 @@ class AcceptBody(BaseModel):
 class CorrectBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=4000)
+
+
+class AnswerBody(BaseModel):
+    """What to make a team answer of: its title (the question, summed up) and words. Left out, they are the first
+    question and the reply."""
+
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(default="", max_length=TITLE_MAX)
+    body: str = Field(default="", max_length=BODY_MAX)
+
+
+class ReplyManyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=GROUP_MAX)
+    text: str = Field(min_length=1, max_length=4000)
+    remember: bool = True
+    # 同时设为团队答案: the reply, once it is sent, for the whole team to quote.
+    team_answer: AnswerBody | None = None
+
+
+class MakeAnswerBody(AnswerBody):
+    handoff_id: str = Field(min_length=1, max_length=100)
+
+
+class ReviseBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=TITLE_MAX)
+    body: str = Field(min_length=1, max_length=BODY_MAX)
 
 
 def person(request: Request) -> str | None:
@@ -62,9 +92,18 @@ def register(
             queue_build()
         return {"handoff": view, "pending": desk.pending_count(me)}
 
-    def team_ready() -> None:
-        if desk.team is None:
+    def team_ready() -> TeamAnswers:
+        if desk.team is None or desk.answers is None:
             raise HTTPException(503, "团队库没有打开")
+        return desk.answers
+
+    def embedder_or_none() -> Embedder | None:
+        """The embedding model, when it is set up: what tells questions of one matter apart works without it, only less
+        well."""
+        try:
+            return backends.embedder()
+        except BackendUnavailable:
+            return None
 
     @app.get("/api/persona/handoffs")
     def list_handoffs(request: Request) -> dict[str, Any]:
@@ -72,7 +111,7 @@ def register(
         me = person(request)
         team_ready()
         try:
-            away = desk.away(me)
+            away = desk.away(me, embedder_or_none())
         except sqlite3.Error as e:
             raise HTTPException(503, "团队库暂时读不了，请稍后重试") from e
         return {
@@ -83,6 +122,9 @@ def register(
             "answered": away.answered,
             "shelved": away.shelved,
             "settled": away.settled,
+            "groups": away.groups,
+            "often": away.often,
+            "answers": away.answers,
             "pending": len(away.waiting),
             "days": AWAY_DAYS,
             "kind_labels": KIND_LABELS,
@@ -183,3 +225,108 @@ def register(
         except (KeyError, HandoffRefused) as e:
             raise refused(e) from e
         return settled(h, me, remembered=True)
+
+    @app.post("/api/persona/handoffs/reply-many")
+    def reply_many(body: ReplyManyBody, request: Request) -> dict[str, Any]:
+        """One reply to several questions that are one matter: each asker gets it in their own conversation as the
+        person's, each handoff is settled on its own. ``team_answer`` also makes it a team answer."""
+        me = person(request)
+        answers = team_ready()
+        try:
+            if body.team_answer is not None:
+                first = desk.handoff_of(body.ids[0], me)
+                clean(body.team_answer.title or summary_title(first.question), body.team_answer.body or body.text)
+            done, failed = desk.reply_many(body.ids, me, body.text, remember=body.remember)
+        except TeamAnswerRefused as e:
+            raise HTTPException(400, str(e)) from None
+        except (KeyError, HandoffRefused) as e:
+            raise refused(e) from e
+        if not done:
+            raise HTTPException(409, failed[0][1] if failed else "没有可以回复的")
+        made = None
+        if body.team_answer is not None:
+            try:
+                made = answers.view(
+                    desk.make_team_answer(
+                        done[0].id, me, body.team_answer.title, body.team_answer.body or body.text, embedder_or_none()
+                    )
+                )
+            except (KeyError, HandoffRefused) as e:
+                # The replies are sent; only the team answer did not come out, which the person can set again.
+                failed.append((done[0].id, str(e)))
+        if body.remember or made is not None:
+            queue_build()
+        return {
+            "done": [h.id for h in done],
+            "failed": [{"id": i, "detail": d} for i, d in failed],
+            "team_answer": made,
+            "pending": desk.pending_count(me),
+        }
+
+    @app.post("/api/persona/team-answers", status_code=201)
+    def make_team_answer(body: MakeAnswerBody, request: Request) -> dict[str, Any]:
+        """设为团队答案: the person's reply to a handoff, for the whole team to quote as it stands."""
+        me = person(request)
+        answers = team_ready()
+        try:
+            made = desk.make_team_answer(body.handoff_id, me, body.title, body.body, embedder_or_none())
+        except (KeyError, HandoffRefused) as e:
+            raise refused(e) from e
+        queue_build()
+        return {"team_answer": answers.view(made)}
+
+    @app.post("/api/persona/handoffs/{handoff_id}/often/decline")
+    def decline_often(handoff_id: str, request: Request) -> dict[str, bool]:
+        """不用: do not offer to make this reply a team answer again."""
+        me = person(request)
+        team_ready()
+        try:
+            desk.decline_often(handoff_id, me)
+        except KeyError as e:
+            raise refused(e) from e
+        return {"declined": True}
+
+    @app.get("/api/persona/team-answers")
+    def list_team_answers(request: Request) -> dict[str, Any]:
+        """The team answers the person set, in force or possibly out of date first."""
+        person(request)
+        answers = team_ready()
+        mine = answers.team.team_answers(persona_id=desk.persona_id, statuses=("valid", "stale"))
+        mine.sort(key=lambda a: (a.status != "stale", a.confirmed_at))
+        return {"team_answers": [answers.view(a) for a in mine]}
+
+    def answer_change(answers: TeamAnswers, change: Callable[[], Any]) -> dict[str, Any]:
+        try:
+            return {"team_answer": answers.view(change())}
+        except KeyError:
+            raise HTTPException(404, "找不到这条团队答案，请刷新后重试") from None
+        except TeamAnswerRefused as e:
+            raise HTTPException(409, str(e)) from None
+
+    @app.patch("/api/persona/team-answers/{answer_id}")
+    def revise_team_answer(answer_id: str, body: ReviseBody, request: Request) -> dict[str, Any]:
+        """The person puts the answer right: it stands again, with the new words, from today."""
+        me = person(request)
+        answers = team_ready()
+        return answer_change(
+            answers, lambda: answers.revise(answer_id, desk.persona_id, me, body.title, body.body, embedder_or_none())
+        )
+
+    @app.post("/api/persona/team-answers/{answer_id}/keep")
+    def keep_team_answer(answer_id: str, request: Request) -> dict[str, Any]:
+        """仍然有效: what the person said since does not change the answer."""
+        me = person(request)
+        answers = team_ready()
+
+        def keep() -> Any:
+            with PersonaStore(settings.db_path) as store:
+                return answers.keep(answer_id, desk.persona_id, me, store, settings)
+
+        return answer_change(answers, keep)
+
+    @app.post("/api/persona/team-answers/{answer_id}/withdraw")
+    def withdraw_team_answer(answer_id: str, request: Request) -> dict[str, Any]:
+        """撤回: nobody's twin quotes the answer any more; conversations it already appeared in stay as they were."""
+        me = person(request)
+        answers = team_ready()
+        return answer_change(answers, lambda: answers.withdraw(answer_id, desk.persona_id, me))

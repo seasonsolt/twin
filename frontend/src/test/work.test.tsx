@@ -368,7 +368,7 @@ it('gives a visitor of a public twin the conversation alone, and nothing to mana
     expect(
       screen.queryByRole('button', { name: '上传会议录音' }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '找人' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '问一句、找人' })).toBeNull();
   } finally {
     usePersonas.setState(previous);
   }

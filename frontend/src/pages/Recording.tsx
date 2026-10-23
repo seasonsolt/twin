@@ -467,6 +467,10 @@ export function Recording() {
   const linked: string | null =
     params.get('speaker') ?? location.state?.speaker ?? null;
   const [reopened, setReopened] = useState<string | null>(linked);
+  // A line of the transcript a link points at (from 问一句、找人): the transcript opens on it.
+  const lineParam = params.get('line');
+  const pointedLine =
+    lineParam !== null && /^\d+$/.test(lineParam) ? Number(lineParam) : null;
   // They said the only speaker given to them is not them: the recording is no longer theirs to see.
   const [left, setLeft] = useState(false);
   const base = `/api/library/recordings/${encodeURIComponent(recordingId)}`;
@@ -494,6 +498,14 @@ export function Recording() {
   useEffect(() => {
     void load();
   }, [load]);
+  // The transcript is open on the line the link points at: bring it to the middle once the page has it.
+  const hasDetail = detail !== null;
+  useEffect(() => {
+    if (hasDetail && pointedLine !== null)
+      document
+        .getElementById(`line-${pointedLine}`)
+        ?.scrollIntoView?.({ block: 'center' });
+  }, [hasDetail, pointedLine]);
 
   const decide = async (speaker: Speaker, decision: Decision) => {
     if (!detail) return;
@@ -564,10 +576,19 @@ export function Recording() {
       : speakerId;
   };
   const transcript = detail && (
-    <Disclosure summary={`完整转写稿（${detail.segments.length} 段）`}>
+    <Disclosure
+      summary={`完整转写稿（${detail.segments.length} 段）`}
+      defaultOpen={pointedLine !== null}
+    >
       <Stack as="ol" gap={1}>
         {detail.segments.map((s, i) => (
-          <Text as="li" key={i} size="sm">
+          <Text
+            as="li"
+            key={i}
+            id={`line-${i}`}
+            size="sm"
+            weight={i === pointedLine ? 'bold' : 'inherit'}
+          >
             <Text as="span" size="inherit" tone="secondary">
               {detail.timed === false ? '' : `[${clock(s.start)}] `}
               {who(s.speaker)}：

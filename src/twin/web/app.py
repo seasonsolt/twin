@@ -22,6 +22,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from ..channels.wecom import WeComHub
 from ..config import Settings
 from ..egress import egress_status
+from ..finder import Finder, refresh_coverage
 from ..handoffs import HandoffDesk, run_all
 from ..media.tts import SpeechSynthesizer
 from ..persona import gate
@@ -29,14 +30,18 @@ from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..teamanswers import TeamAnswers
 from ..teamdb import TeamDB, team_path
 from ..usage import UsageLedger, UsageRecorder, install_default
-from . import assets, gpu, library, media, persona, system, voice
+from . import ask as ask_routes
+from . import assets, gpu, library, media, persona, system, team_answers, voice
+from . import delegation as delegation_routes
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
 from .commitments import register_all as register_all_commitments
-from .conversations import ConversationIndex
+from .conversations import ConversationIndex, request_asker_name
 from .conversations import register_all as register_all_conversations
+from .delegation import Delegations
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
 
@@ -322,8 +327,22 @@ def create_app(
     team = TeamDB(team_path(settings.db_path.parent))
     app.state.team = team
 
+    def twin_name(persona_id: str) -> str:
+        """What a twin is called, for the cards that name whose answer it is."""
+        path = registry.db_path_of(persona_id)
+        return (stored_identity(path)[0] if path.is_file() else None) or "本人"
+
+    def twins_in_use() -> list[str]:
+        """The twins that are not in the trash or being removed: only their team answers are quoted."""
+        with registry.lock:
+            return [p["id"] for p in registry.data["personas"] if not p.get("deleted_at")]
+
+    answers = TeamAnswers(team, twin_name, lambda: [i for i in twins_in_use() if i not in registry.removing])
+    finder = Finder(team)
+
     def twin_purged(persona_id: str) -> None:
         team.forget_persona(persona_id)
+        finder.forget(persona_id)
         libraries.twin_purged(persona_id)
 
     registry.on_purged = twin_purged
@@ -338,8 +357,10 @@ def create_app(
             owner=lambda: (registry.entry(persona_id) or {}).get("member"),
             name=lambda: stored_identity(resolved.db_path)[0] or resolved.target_name,
             on_turn=ConversationIndex(team, persona_id).touched,
+            answers=answers,
         )
 
+    delegations = Delegations(registry, team, backends, desk_for, answers, twin_name)
     desks: list[HandoffDesk] = []
     for entry in registry.data["personas"]:
         if not entry.get("deleted_at"):
@@ -529,6 +550,15 @@ def create_app(
                 raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}（服务重启后任务记录会清空）")
             return snapshot
 
+        desk = desk_for(persona_id)
+
+        def team_refresh(store: PersonaStore, llm: Any, embedder: Any) -> None:
+            """After the twin's memories were built: what colleagues may use of them is counted again, for finding who
+            knows a matter, and the team answers the person set are checked against what they said since."""
+            refresh_coverage(team, persona_id, store)
+            finder.forget(persona_id)
+            answers.check_stale(persona_id, store, llm, embedder, resolved, desk.name())
+
         ingestion = persona.register(
             context,
             resolved,
@@ -538,8 +568,11 @@ def create_app(
             on_built=lambda version: libraries.built(persona_id, version),
             on_spent=lambda tokens: libraries.spent_building(persona_id, tokens),
             index=ConversationIndex(team, persona_id),
-            desk=desk_for(persona_id),
+            desk=desk,
+            after_build=team_refresh,
+            delegations=delegations,
         )
+        delegation_routes.register(context, delegations, desk, backends, request_asker_name)
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(
             context,
@@ -559,6 +592,8 @@ def create_app(
     register_all_conversations(app, registry, team)
     register_all_commitments(app, registry)
     libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits, team)
+    ask_routes.register(app, registry, finder, answers, backends, libraries)
+    team_answers.register_all(app, registry, team, desk_for, twin_name)
     voice.register(app, settings, libraries, registry)
     system.register(app, system_settings, monitor, libraries, registry, usage)
     previous_lifespan = app.router.lifespan_context

@@ -6,6 +6,7 @@ The tables live in ``settings.db_path`` under a ``p_`` prefix.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import shutil
@@ -98,6 +99,8 @@ TAXONOMY_META = "taxonomy:facets"
 INHERIT_META = "taxonomy:inherit:"
 # ``p_meta`` keys of the tier the person chose for a note they asked to be remembered (``set_note_tier``).
 NOTE_TIER_PREFIX = "note_tier:"
+# The namespace of the item vectors (``persona.chat.ITEMS_NS``), which the store cannot import.
+ITEMS_NAMESPACE = "items"
 # A facet's merged batches (``profile.MergeCache``).
 MERGE_CACHE_PREFIX = "merge_batch:"
 SNAPSHOT_KEEP = 3
@@ -1043,6 +1046,23 @@ class PersonaStore:
                 self.set_item_tier(item.item_id, note_item_tier(item, notes))
                 changed.append(item.item_id)
         return changed
+
+    def items_signature(self) -> str:
+        """A short mark of what the items, the person's reviews and tiers, and the item vectors are now, read without
+        decoding any item: another mark means a cache made from them (``finder``) is out of date. Not a hash of every
+        byte: what can change them (the build, a review, a tier) changes it."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT (SELECT COUNT(*) || '/' || COALESCE(SUM(length(json)), 0) FROM p_items), "
+                "(SELECT COALESCE(group_concat(item_id || ':' || COALESCE(status, ''), ','), '') "
+                "FROM (SELECT item_id, json_extract(json, '$.status') AS status FROM p_reviews ORDER BY item_id)), "
+                "(SELECT COALESCE(group_concat(item_id || '=' || tier, ','), '') "
+                "FROM (SELECT item_id, tier FROM p_item_tiers ORDER BY item_id)), "
+                "(SELECT COALESCE(group_concat(key || '=' || value, ','), '') FROM "
+                "(SELECT key, value FROM p_meta WHERE key LIKE ? OR key IN (?, ?) ORDER BY key))",
+                (f"{NOTE_TIER_PREFIX}%", f"embedder:{ITEMS_NAMESPACE}", "built_at"),
+            ).fetchone()
+        return hashlib.sha256("|".join(str(c) for c in rows).encode()).hexdigest()[:16]
 
     def get_meta(self, key: str) -> str | None:
         with self._lock:

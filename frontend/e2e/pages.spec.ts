@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  awayMerged,
   mockApi,
   newTwin,
   NOW,
@@ -107,6 +108,16 @@ const pages: {
       ),
   },
   {
+    // 第 15 屏: the team's answer as a card of its own above what the twin says, and a doubtful one dashed.
+    name: 'chat-team-answer',
+    path: '/#/chat',
+    ready: '这条可能变了，以林舟本人为准。',
+    setup: (page) =>
+      page.addInitScript(() =>
+        localStorage.setItem('twin.current.conversation', 'c-team'),
+      ),
+  },
+  {
     // A colleague talking to someone else's public twin: a line under the box says its person reads the answers.
     name: 'chat-colleague',
     path: '/#/chat',
@@ -199,6 +210,22 @@ const pages: {
     name: 'member-away',
     path: '/#/team/u-linzhou?section=away',
     ready: '分身推测 2',
+  },
+  // 第 14 屏: three people asked the same thing, one card; a reply the twin keeps giving; the answers set so far.
+  {
+    name: 'member-away-merged',
+    path: '/#/team/u-linzhou?section=away',
+    ready: '3 人问同一件事',
+    setup: (page) =>
+      page.route('**/api/persona/handoffs', (route) =>
+        route.fulfill({ json: awayMerged }),
+      ),
+  },
+  // 我设的团队答案: what the person made the team's, one of them possibly out of date.
+  {
+    name: 'member-team-answers',
+    path: '/#/team/u-linzhou?section=memories&view=answers',
+    ready: '续约折扣谁能批？',
   },
   {
     name: 'member-assets',
@@ -526,6 +553,28 @@ test('fill in what the twin does not know', async ({ page }, info) => {
   expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
 });
 
+test('ask the whole team with ⌘K', async ({ page }, info) => {
+  // The side bar holds the search, and a phone has none (the phones' navigation is not part of this design).
+  test.skip(info.project.name === 'mobile', 'no side bar on a phone');
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/team');
+  await expect(page.getByText('全部录音（').first()).toBeVisible();
+  // 第 16 屏: the answer the team already has, whom to ask, and the meetings it came up in.
+  await page.keyboard.press('ControlOrMeta+k');
+  const dialog = page.getByRole('dialog', { name: '问一句、找人' });
+  await dialog.getByRole('combobox').fill('续约折扣谁能批');
+  await expect(dialog.getByRole('region', { name: '该问谁' })).toBeVisible();
+  await expect(dialog.getByRole('region', { name: '会议' })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`ask-team-${info.project.name}.png`);
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
 test('recording controls', async ({ page }) => {
   const missing: string[] = [];
   await mockApi(page, missing);
@@ -639,6 +688,32 @@ test('the person’s own assistant, set apart above the conversations', async ({
   await expect(tiers.getByRole('radio', { name: '只有我' })).toBeChecked();
   await expect(page.getByText('仅你可见').first()).toBeVisible();
   await expect(page).toHaveScreenshot(`chat-self-${info.project.name}.png`);
+  expect(missing).toEqual([]);
+});
+
+test('the assistant asks colleagues’ twins in the person’s name', async ({
+  page,
+}, info) => {
+  const missing: string[] = [];
+  await page.clock.setFixedTime(NOW);
+  await page.addInitScript(() =>
+    localStorage.setItem('twin.current.conversation', 'c-deleg'),
+  );
+  await mockApi(page, missing);
+  await ownAssistant(page, true);
+  await page.goto('/#/chat');
+  // 第 17 屏: a card for each twin that was asked, what one could not settle, and the assistant's own note.
+  await expect(page.getByText('我的归纳 · 非原话')).toBeVisible();
+  // The list of the assistant's own has what it asked under 问同事 (a phone has the list behind a button).
+  if (info.project.name !== 'mobile') {
+    await page.getByRole('button', { name: /^我的分身/ }).click();
+    await expect(page.getByRole('region', { name: '问同事' })).toBeVisible();
+  }
+  await expect(page.getByRole('button', { name: '转给本人' })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(
+    `chat-delegation-${info.project.name}.png`,
+  );
   expect(missing).toEqual([]);
 });
 

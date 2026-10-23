@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api } from '../../lib/api';
 import {
   Badge,
@@ -9,9 +10,12 @@ import {
   Skeleton,
   Stack,
   Text,
+  TextLink,
   toast,
 } from '../../components/ui';
 import { Guessed } from './Guessed';
+import { Merged } from './Merged';
+import { Often } from './Often';
 import { useAway, type Handoff } from './useAway';
 import { Waiting, when } from './Waiting';
 
@@ -70,6 +74,7 @@ function Done({
  */
 export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
   const own = useAway(!away);
+  const [apart, setApart] = useState<Set<string>>(new Set());
   const { data, error, reload } = away ?? own;
   if (error)
     return (
@@ -84,6 +89,15 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
     );
   if (!data) return <Skeleton className="h-40" />;
   const aside = [...data.shelved, ...data.settled];
+  const waiting = new Map(data.waiting.map((item) => [item.id, item]));
+  // Questions that ask the same thing share a card, unless the person took them apart.
+  const merged = new Map<string, string[]>();
+  for (const ids of data.groups ?? []) {
+    const key = ids.join();
+    if (!apart.has(key) && ids.every((id) => waiting.has(id)))
+      ids.forEach((id) => merged.set(id, ids));
+  }
+  const shown = new Set<string[]>();
   return (
     <Stack gap={5}>
       <Stack gap={3}>
@@ -102,17 +116,45 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
           </Text>
         ) : (
           <Stack as="ul" gap={0}>
-            {data.waiting.map((item, index) => (
-              <Waiting
-                key={item.id}
-                item={item}
-                startOpen={index === 0}
-                onDone={reload}
-              />
-            ))}
+            {data.waiting.map((item, index) => {
+              const ids = merged.get(item.id);
+              if (!ids)
+                return (
+                  <Waiting
+                    key={item.id}
+                    item={item}
+                    startOpen={index === 0}
+                    onDone={reload}
+                  />
+                );
+              if (shown.has(ids)) return null;
+              shown.add(ids);
+              return (
+                <Merged
+                  key={ids.join()}
+                  items={ids.flatMap((id) => waiting.get(id) ?? [])}
+                  onSplit={() =>
+                    setApart((previous) => new Set(previous).add(ids.join()))
+                  }
+                  onDone={reload}
+                />
+              );
+            })}
           </Stack>
         )}
       </Stack>
+      {(data.often?.length ?? 0) > 0 && (
+        <Stack gap={3}>
+          <Heading level={2} size="section">
+            常被问到
+          </Heading>
+          <Stack as="ul" gap={0}>
+            {data.often.map((item) => (
+              <Often key={item.handoff_id} item={item} onDone={reload} />
+            ))}
+          </Stack>
+        </Stack>
+      )}
       {data.guessed.length > 0 && (
         <Stack gap={3}>
           <Heading level={2} size="section">
@@ -146,6 +188,15 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
             ))}
           </Stack>
         </Disclosure>
+      )}
+      {data.answers && data.answers.total > 0 && (
+        <Row gap={2} wrap>
+          <Text weight="bold">我的团队答案 {data.answers.total}</Text>
+          {data.answers.stale > 0 && (
+            <Badge tone="warning">{data.answers.stale} 可能过期</Badge>
+          )}
+          <TextLink to="?section=memories&view=answers">查看 ›</TextLink>
+        </Row>
       )}
       {aside.length > 0 && (
         <Disclosure summary={`已处理 ${aside.length}`} variant="plain">

@@ -220,7 +220,9 @@ it('keeps the side bar about the team, and switches among many twins from the ch
   expect(
     within(aside).queryByRole('button', { name: /^切换/u }),
   ).not.toBeInTheDocument();
-  expect(within(aside).getByRole('button', { name: '找人' })).toBeVisible();
+  expect(
+    within(aside).getByRole('button', { name: '问一句、找人' }),
+  ).toBeVisible();
   expect(
     within(aside).getByRole('button', { name: '上传会议录音' }),
   ).toBeVisible();

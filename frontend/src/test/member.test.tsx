@@ -16,6 +16,7 @@ vi.mock('motion/react', async (original) => ({
 let items: Persona[];
 let people: Record<string, unknown>[];
 let handoffs: Record<string, unknown>[];
+let team_answers: Record<string, unknown>[];
 let fetcher: ReturnType<typeof vi.fn>;
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
@@ -68,6 +69,7 @@ beforeEach(() => {
   items = [twin({ id: 'default', name: '本人', is_default: true }), twin({})];
   people = [];
   handoffs = [];
+  team_answers = [];
   setPersonaId('friend');
   usePersonas.setState({ id: 'friend', items, pendingId: null });
   useAuth.setState({ identity: null });
@@ -163,9 +165,13 @@ beforeEach(() => {
       return json({ total: 0, conflicts: 0, dimensions: [] });
     if (path === '/api/persona/handoffs/count')
       return json({ pending: handoffs.length });
+    if (path === '/api/persona/team-answers') return json({ team_answers });
     if (path === '/api/persona/handoffs')
       return json({
         waiting: handoffs,
+        groups: [],
+        often: [],
+        answers: { total: team_answers.length, stale: 0 },
         guessed: [],
         sourced: [],
         sourced_count: 0,
@@ -744,4 +750,57 @@ it('leaves the old addresses for the team when there is no twin at all', async (
   window.location.hash = '#/profile';
   render(<App />);
   await waitFor(() => expect(window.location.hash).toBe('#/team'));
+});
+
+it('lets the person themselves look through the answers they made the team’s, among their memories', async () => {
+  useAuth.setState({
+    identity: {
+      email: 'me@example.test',
+      name: '我',
+      admin: false,
+      auth_enabled: true,
+    },
+  });
+  items = [twin({ id: 'friend', name: '我', mine: true, approved: true })];
+  usePersonas.setState({ items });
+  team_answers = [
+    {
+      id: 'ta_1',
+      persona_id: 'friend',
+      owner_name: '我',
+      title: '旧版 Word 模板还支持吗？',
+      body: '支持到 12 月 31 日。',
+      confirmed_at: '2026-10-22T09:00:00+00:00',
+      status: 'valid',
+      stale_note: '',
+      partial: false,
+      handoff_id: 'h1',
+    },
+  ];
+  window.location.hash = '#/team/twin/friend?section=memories&view=answers';
+  render(<App />);
+  expect(await screen.findByText('旧版 Word 模板还支持吗？')).toBeVisible();
+  const views = screen.getByRole('group', { name: '记忆的看法' });
+  expect(
+    within(views)
+      .getAllByRole('button')
+      .map((button) => button.textContent),
+  ).toEqual(['列表', '图谱', '我设的团队答案']);
+  expect(
+    within(views).getByRole('button', { name: '我设的团队答案' }),
+  ).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('keeps the team answers to the person themselves: an administrator looking after the twin sees the list only', async () => {
+  window.location.hash = '#/team/twin/friend?section=memories&view=answers';
+  render(<App />);
+  const views = await screen.findByRole('group', { name: '记忆的看法' });
+  expect(
+    within(views)
+      .getAllByRole('button')
+      .map((button) => button.textContent),
+  ).toEqual(['列表', '图谱']);
+  expect(
+    fetcher.mock.calls.some(([path]) => path === '/api/persona/team-answers'),
+  ).toBe(false);
 });

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { WorkRedirect } from '../App';
 import { CURRENT_CHAT_KEY } from '../features/chat/useConversation';
+import type { TeamAnswerCard } from '../features/answers/types';
 import type { Turn } from '../features/chat/types';
 import type { WorkTask } from '../features/work/types';
 import { setPersonaId } from '../lib/persona';
@@ -471,4 +472,130 @@ it('asks again while the person’s answer is awaited, and shows it under the an
   } finally {
     vi.useRealTimers();
   }
+});
+
+const answerCard = (
+  overrides: Partial<TeamAnswerCard> = {},
+): TeamAnswerCard => ({
+  id: 'ta_1',
+  persona_id: 'p_lin',
+  owner_name: '林舟',
+  title: '旧版 Word 模板导出，这次之后还支持吗？',
+  body: '旧版 Word 模板支持到 12 月 31 日，之后导出只保留新模板。',
+  confirmed_at: '2026-10-22T09:00:00+00:00',
+  status: 'valid',
+  stale_note: '',
+  partial: false,
+  ...overrides,
+});
+
+it('shows a team answer as a card of its own above what the twin said, who confirmed it and when, never who asked', async () => {
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    {
+      ...turns[1],
+      reply: { ...reply, team_answers: [answerCard()] },
+    },
+  ];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  const card = await screen.findByRole('article', { name: '团队答案' });
+  expect(within(card).getByText('林舟 10 月 22 日确认')).toBeVisible();
+  expect(within(card).getByText(/支持到 12 月 31 日/u)).toBeVisible();
+  expect(within(card).queryByText('可能过期')).toBeNull();
+  // The twin's own words stand apart from the card.
+  const twin = screen.getByRole('article', { name: '分身回复' });
+  expect(within(twin).getByText('先收钱，再说扩张。')).toBeVisible();
+  expect(
+    card.compareDocumentPosition(screen.getByText('先收钱，再说扩张。')),
+  ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+});
+
+it('hands the asker’s question to the person who confirmed the answer, once, in the asker’s name', async () => {
+  const user = userEvent.setup();
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    { ...turns[1], reply: { ...reply, team_answers: [answerCard()] } },
+  ];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  const card = await screen.findByRole('article', { name: '团队答案' });
+  await user.click(
+    within(card).getByRole('button', { name: '还有疑问，问林舟' }),
+  );
+  expect(
+    await within(card).findByText('已转给林舟本人 · 等回复'),
+  ).toBeVisible();
+  expect(within(card).queryByRole('button')).toBeNull();
+  const asks = fetcher.mock.calls.filter(([url]) =>
+    String(url).endsWith('/team-answers/ta_1/ask'),
+  );
+  expect(asks).toHaveLength(1);
+  expect(JSON.parse(String(asks[0][1].body))).toEqual({
+    question: '怎么看扩张？',
+  });
+});
+
+it('dashes a team answer the person has since said otherwise to, says what and when, and asks the person themself', async () => {
+  const user = userEvent.setup();
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    {
+      ...turns[1],
+      reply: {
+        ...reply,
+        team_answers: [
+          answerCard({
+            status: 'stale',
+            stale_note: '10 月 27 日「周会」里说：旧模板 10 月底就停了',
+          }),
+        ],
+      },
+    },
+  ];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  const card = await screen.findByRole('article', { name: '团队答案' });
+  expect(within(card).getByText('可能过期')).toBeVisible();
+  expect(within(card).getByText(/10 月底就停了/u)).toBeVisible();
+  expect(
+    within(card).queryByRole('button', { name: '还有疑问，问林舟' }),
+  ).toBeNull();
+  await user.click(within(card).getByRole('button', { name: '问林舟本人' }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        String(url).endsWith('/team-answers/ta_1/ask'),
+      ),
+    ).toBe(true),
+  );
+});
+
+it('tells the asker when the question could not be handed on, and lets them try again', async () => {
+  const user = userEvent.setup();
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    { ...turns[1], reply: { ...reply, team_answers: [answerCard()] } },
+  ];
+  const respond = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) =>
+    String(url).endsWith('/ask')
+      ? json({ detail: '林舟还没认领分身，请直接联系本人' }, 409)
+      : respond(url, init),
+  );
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  const card = await screen.findByRole('article', { name: '团队答案' });
+  await user.click(
+    within(card).getByRole('button', { name: '还有疑问，问林舟' }),
+  );
+  expect(await within(card).findByRole('alert')).toHaveTextContent(
+    '还没认领分身',
+  );
+  expect(
+    within(card).getByRole('button', { name: '还有疑问，问林舟' }),
+  ).toBeEnabled();
 });

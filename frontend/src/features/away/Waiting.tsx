@@ -17,9 +17,23 @@ import {
 } from '../../components/ui';
 import type { Handoff } from './useAway';
 
+/** The time of day of a moment, where the reader is (the server keeps UTC). */
+export function clock(iso: string) {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime())
+    ? ''
+    : at.toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      });
+}
+
 export function when(iso: string) {
-  const match = /^\d{4}-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso);
-  return match ? `${Number(match[1])}月${Number(match[2])}日 ${match[3]}` : '';
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime())
+    ? ''
+    : `${at.getMonth() + 1}月${at.getDate()}日 ${clock(iso)}`;
 }
 
 function dayText(iso: string) {

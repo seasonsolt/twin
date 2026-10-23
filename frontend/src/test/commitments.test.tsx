@@ -110,3 +110,67 @@ it('shows the commitments of the person chosen in the page itself, with the way 
   ]);
   expect(screen.queryByText('承诺账本')).toBeNull();
 });
+
+it('lists everyone together on request, and changes an entry in the ledger that keeps it', async () => {
+  const together = {
+    ...ledger,
+    entries: [
+      {
+        ...entry,
+        owner: '林舟',
+        counterpart: '',
+        review: 'unreviewed',
+        persona_id: 'p-2',
+        persona_name: '林舟',
+        meeting: 'rec_1',
+      } as LedgerEntry,
+    ],
+    people: ['林舟'],
+    twins: [
+      { id: 'p-1', name: '林舟' },
+      { id: 'p-2', name: '许清禾' },
+    ],
+  };
+  const calls: { url: string; persona: string | null; body?: string }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        persona: new Headers(init?.headers).get('X-Twin-Persona'),
+        body: typeof init?.body === 'string' ? init.body : undefined,
+      });
+      if (url.startsWith('/api/personas/commitments')) return json(together);
+      if (url.includes('/review')) return json(together.entries[0]);
+      return json({});
+    }),
+  );
+  render(
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/commitments?who=all']}>
+          <Commitments />
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
+  );
+  expect(screen.getByRole('button', { name: '全部' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // Whose twin is chosen no longer matters, and a list of several people has no ledger to build or brief to read.
+  expect(screen.queryByRole('button', { name: /切换分身/ })).toBeNull();
+  const meeting = await screen.findByRole('region', { name: '10月12日经营会' });
+  expect(
+    calls.filter((call) => call.url.startsWith('/api/persona/ledger')),
+  ).toEqual([]);
+  expect(screen.queryByRole('tab', { name: '见面前' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /整理/ })).toBeNull();
+  within(meeting).getByRole('button', { name: '确认' }).click();
+  await vi.waitFor(() =>
+    expect(calls.find((call) => call.url.includes('/review'))).toMatchObject({
+      url: '/api/persona/ledger/e1/review',
+      persona: 'p-2',
+    }),
+  );
+});

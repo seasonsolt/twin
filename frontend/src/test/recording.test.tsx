@@ -293,3 +293,55 @@ it('lets someone in a colleague’s meeting read it and say a speaker given to t
   await screen.findByText('已经告诉上传的同事');
   expect(posted).toEqual(['/api/library/recordings/r/speakers/S2/not-me']);
 });
+
+it('shows a transcript brought in as text by what each speaker said, with nothing to play and no times', async () => {
+  const lines = [
+    { start: 0, end: 0, speaker: 'Kevin', text: '合同这周能签吗' },
+    { start: 0, end: 0, speaker: '林舟', text: '我周五前给您答复。' },
+    { start: 0, end: 0, speaker: 'Kevin', text: '好的，谢谢' },
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/recordings/r')
+        return json({
+          id: 'r',
+          filename: '客户访谈.txt',
+          kind: 'transcript',
+          timed: false,
+          created_at: '2026-10-11T08:00:00Z',
+          duration_s: null,
+          status: 'ready',
+          transcript_id: 't',
+          revision: 0,
+          speakers: [
+            ...['Kevin', '林舟'].map((id) => ({
+              id,
+              seconds: 5,
+              decision: id === '林舟' ? 'confirmed' : 'none',
+              person_id: id === '林舟' ? 'p0' : null,
+              rejected: [],
+              sample: false,
+              auto: false,
+              candidates: [],
+              near: false,
+              samples: 0,
+            })),
+          ],
+          segments: lines,
+        });
+      throw new Error(url);
+    }),
+  );
+  show();
+  const current = await screen.findByRole('region', { name: 'Kevin 是谁？' });
+  // How much someone said is how many times they spoke, and a line or two of it stands where the sound would.
+  expect(within(current).getByText('2 段')).toBeVisible();
+  expect(within(current).getByText('「合同这周能签吗」')).toBeVisible();
+  expect(current.querySelector('audio')).toBeNull();
+  await userEvent.click(screen.getByText(/^完整转写稿/));
+  expect(await screen.findByText(/林舟：/)).toBeVisible();
+  // No times in the export: no clock in front of the lines.
+  expect(screen.queryByText(/\[00:00\]/)).toBeNull();
+});

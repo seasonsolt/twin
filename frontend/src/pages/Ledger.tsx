@@ -401,11 +401,14 @@ function EditDialog({
 
 function Entries({
   data,
+  everyone,
   onReview,
   onEdit,
   onTake,
 }: {
   data: LedgerData;
+  /** The list holds several people's ledgers: nobody is "我自己". */
+  everyone: boolean;
   onReview: (
     entry: LedgerEntry,
     action: 'confirm' | 'reject' | 'reset',
@@ -426,9 +429,11 @@ function Entries({
   );
   const meetings = new Map<string, LedgerEntry[]>();
   for (const entry of rows) {
-    const group = meetings.get(entry.source_id) ?? [];
+    // A meeting several people were in has an entry in each of their ledgers, under their own source.
+    const key = entry.meeting ?? entry.source_id;
+    const group = meetings.get(key) ?? [];
     group.push(entry);
-    meetings.set(entry.source_id, group);
+    meetings.set(key, group);
   }
   const groups = [...meetings.values()].reverse();
   return (
@@ -449,7 +454,7 @@ function Entries({
           onChange={setPerson}
           options={[
             ['', '所有人'],
-            [SELF, '我自己'],
+            ...(everyone ? [] : [[SELF, '我自己'] as [string, string]]),
             ...[...data.people]
               .sort(byName)
               .map((name): [string, string] => [name, name]),
@@ -477,7 +482,7 @@ function Entries({
       {!rows.length && <p className="text-secondary">没有符合条件的条目。</p>}
       {groups.map((group) => (
         <section
-          key={group[0].source_id}
+          key={group[0].meeting ?? group[0].source_id}
           aria-label={`${day(group[0].meeting_date)}${group[0].meeting_title}`}
           className="space-y-3"
         >
@@ -603,7 +608,7 @@ function Brief({ people, version }: { people: string[]; version: number }) {
 /** The commitments of the twin in view, from the meetings it was in: filters by kind, person and state, the
  * entries with their quotes, and what to bring up before meeting someone. Opened under a member, or on its own
  * (``/commitments``) for whoever is chosen there. */
-export function Ledger() {
+export function Ledger({ everyone = false }: { everyone?: boolean }) {
   const personaId = usePersonaId();
   const confirm = useConfirm();
   const [data, setData] = usePersonaState<LedgerData | null>(null);
@@ -614,10 +619,10 @@ export function Ledger() {
     async (signal?: AbortSignal) => {
       try {
         const next = await api<LedgerData>(
-          '/api/persona/ledger?include_rejected=true',
-          {
-            signal,
-          },
+          everyone
+            ? '/api/personas/commitments?include_rejected=true'
+            : '/api/persona/ledger?include_rejected=true',
+          { signal },
         );
         setData(next);
         setError('');
@@ -627,7 +632,7 @@ export function Ledger() {
         setError(failure instanceof Error ? failure.message : '加载失败');
       }
     },
-    [setData, setError],
+    [setData, setError, everyone],
   );
   useEffect(() => {
     const controller = new AbortController();
@@ -637,7 +642,7 @@ export function Ledger() {
   const job = useJob<LedgerBuildResult>({
     kind: 'ledger_build',
     storageKey: 'twin.next.job.ledgerBuild',
-    active: true,
+    active: !everyone,
     onDone: (done, { restored }) => {
       void load();
       if (!restored && done.result)
@@ -647,14 +652,26 @@ export function Ledger() {
         );
     },
   });
+  // An entry is changed in the ledger it is kept in, whoever's page it is shown on.
+  const whose = (entry: LedgerEntry): Record<string, string> =>
+    entry.persona_id ? { 'X-Twin-Persona': entry.persona_id } : {};
   const review = async (
     entry: LedgerEntry,
     action: 'confirm' | 'reject' | 'reset' | 'edit',
     changes?: LedgerChanges,
   ) => {
+    // In the team's list the owner of a promise is named; in the ledger it came from, the person is 本人.
+    const sent =
+      changes?.owner && changes.owner === entry.persona_name
+        ? { ...changes, owner: SELF }
+        : changes;
     await api<LedgerEntry>(
       `/api/persona/ledger/${encodeURIComponent(entry.entry_id)}/review`,
-      { method: 'POST', json: { action, ...(changes ? { changes } : {}) } },
+      {
+        method: 'POST',
+        json: { action, ...(sent ? { changes: sent } : {}) },
+        headers: whose(entry),
+      },
     );
     await load();
   };
@@ -669,7 +686,7 @@ export function Ledger() {
   const onTake = (entry: LedgerEntry, action: 'accept' | 'decline') => {
     void api(
       `/api/persona/ledger/${encodeURIComponent(entry.entry_id)}/${action}`,
-      { method: 'POST', json: {} },
+      { method: 'POST', json: {}, headers: whose(entry) },
     )
       .then(async () => {
         await load();
@@ -710,36 +727,51 @@ export function Ledger() {
             <p role="status">
               {meetings.total
                 ? `共 ${meetings.total} 场会议${meetings.pending ? `，${meetings.pending} 场还没整理` : '，都已整理'}${unreviewed ? `；${unreviewed} 条待确认` : ''}`
-                : '还没有会议。添加有你和别人发言的录音或会议记录，并选出哪位是你。'}
+                : everyone
+                  ? '还没有会议。'
+                  : '还没有会议。添加有你和别人发言的录音或会议记录，并选出哪位是你。'}
             </p>
-            <div className="flex flex-wrap gap-2">
-              {meetings.pending > 0 && (
-                <Button
-                  loading={job.busy}
-                  onClick={() =>
-                    void job.start('/api/persona/ledger/build', {})
-                  }
-                >
-                  整理 {meetings.pending} 场新会议
-                </Button>
-              )}
-              {meetings.total > 0 && meetings.pending === 0 && (
-                <Button
-                  variant="secondary"
-                  disabled={job.busy}
-                  onClick={() => void rebuild()}
-                >
-                  重新整理全部
-                </Button>
-              )}
-            </div>
+            {!everyone && (
+              <div className="flex flex-wrap gap-2">
+                {meetings.pending > 0 && (
+                  <Button
+                    loading={job.busy}
+                    onClick={() =>
+                      void job.start('/api/persona/ledger/build', {})
+                    }
+                  >
+                    整理 {meetings.pending} 场新会议
+                  </Button>
+                )}
+                {meetings.total > 0 && meetings.pending === 0 && (
+                  <Button
+                    variant="secondary"
+                    disabled={job.busy}
+                    onClick={() => void rebuild()}
+                  >
+                    重新整理全部
+                  </Button>
+                )}
+              </div>
+            )}
           </Card>
         )}
-        <JobProgress
-          state={job}
-          onRetry={() => void job.start('/api/persona/ledger/build', {})}
-        />
-        {data && data.entries.length > 0 && (
+        {!everyone && (
+          <JobProgress
+            state={job}
+            onRetry={() => void job.start('/api/persona/ledger/build', {})}
+          />
+        )}
+        {data && data.entries.length > 0 && everyone && (
+          <Entries
+            data={data}
+            everyone
+            onReview={onReview}
+            onEdit={setEditing}
+            onTake={onTake}
+          />
+        )}
+        {data && data.entries.length > 0 && !everyone && (
           <Tabs
             items={[
               {
@@ -748,6 +780,7 @@ export function Ledger() {
                 content: (
                   <Entries
                     data={data}
+                    everyone={false}
                     onReview={onReview}
                     onEdit={setEditing}
                     onTake={onTake}
@@ -771,7 +804,9 @@ export function Ledger() {
               title="账本还是空的"
               body={
                 meetings.pending
-                  ? '点上面的按钮，从会议里整理出决定和承诺。'
+                  ? everyone
+                    ? '先在各人的承诺里整理会议。'
+                    : '点上面的按钮，从会议里整理出决定和承诺。'
                   : '已整理的会议里没有找到决定或承诺。'
               }
             />

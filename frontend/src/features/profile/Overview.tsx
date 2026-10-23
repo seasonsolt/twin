@@ -23,6 +23,7 @@ import { ItemRow } from './ItemRow';
 import { useItemSearch } from './useItemSearch';
 import { useProfile } from './useProfile';
 import { MemoryUpdating } from '../memories/BuildProgress';
+import { FillDialog, type FillScope } from '../fill/FillDialog';
 import { useStatus } from '../../stores/status';
 import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
 
@@ -254,12 +255,15 @@ function Aspect({
   facets,
   levelLabels,
   profile,
+  onFill,
 }: {
   id: string;
   total: number;
   facets: Facet[];
   levelLabels: string[];
   profile: Profile;
+  /** Opens 补一补 for this aspect; absent where the viewer is not the person. */
+  onFill?: (scope: FillScope) => void;
 }) {
   const personaId = usePersonaId();
   const layer = layerOf(id);
@@ -276,6 +280,15 @@ function Aspect({
             {levelLabels[level]}
             {total > 0 && ` · ${total} 条`}
           </Text>
+          {onFill && level <= 1 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onFill({ dimension: id })}
+            >
+              补一补
+            </Button>
+          )}
         </Row>
         <Text size="sm" tone="secondary">
           {blurbs[id]}
@@ -347,6 +360,8 @@ export function Overview() {
   const [text, setText] = useState('');
   const [showConflicts, setShowConflicts] = useState(false);
   const [chosen, setChosen] = usePersonaState<string | null>(null);
+  // 补一补 is open: for what the twin knows least, or for one aspect.
+  const [filling, setFilling] = useState<FillScope | null>(null);
   const search = useItemSearch(text);
   const selected =
     chosen ?? aspects.find((aspect) => aspect.total > 0)?.id ?? order[0];
@@ -448,9 +463,11 @@ export function Overview() {
                 {text}
               </TextLink>
             ))}
-            <TextLink href="#/questionnaire" size="sm">
-              回答几个问题
-            </TextLink>
+            {profile.canTier && (
+              <Button size="sm" onClick={() => setFilling({})}>
+                补一补
+              </Button>
+            )}
           </Row>
         )}
       </Card>
@@ -524,11 +541,21 @@ export function Overview() {
                 facets={facetsOf(selected)}
                 levelLabels={levelNames}
                 profile={profile}
+                onFill={profile.canTier ? setFilling : undefined}
               />
             </SideTabs>
           )}
         </Card>
       )}
+      <FillDialog
+        open={filling !== null}
+        onOpenChange={(open) => !open && setFilling(null)}
+        scope={filling ?? undefined}
+        onKept={() => {
+          void refreshSummary();
+          void refreshCoverage();
+        }}
+      />
     </div>
   );
 }

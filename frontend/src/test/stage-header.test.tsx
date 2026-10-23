@@ -11,7 +11,6 @@ import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
-import { Questionnaire } from '../pages/Questionnaire';
 import { Login } from '../features/auth/Login';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
@@ -95,8 +94,6 @@ beforeEach(() => {
       return json({ total: 0, conflicts: 0, dimensions: [] });
     if (path.startsWith('/api/persona/items'))
       return json({ items: [], total: 0 });
-    if (path.startsWith('/api/questionnaire'))
-      return json({ questions: [], answers: {}, round: 'initial' });
     if (path === '/api/me/assets')
       return json({
         portrait: null,
@@ -129,7 +126,6 @@ function mount(page: React.ReactNode, route: string) {
 it.each([
   ['chat', Chat],
   ['memories', Memories],
-  ['questionnaire', Questionnaire],
 ] as const)(
   'shows the current name and round portrait on %s, with a working switcher',
   async (route, Page) => {

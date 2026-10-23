@@ -23,12 +23,19 @@ import {
   Text,
   TextLink,
   Toolbar,
+  toast,
   useConfirm,
   type Tone,
 } from '../components/ui';
 import { api } from '../lib/api';
 import { useMobile } from '../lib/useMobile';
+import { useTeam } from '../stores/team';
 import { usePolling } from '../lib/usePolling';
+import {
+  ImportTranscript,
+  TRANSCRIPT_ACCEPT,
+  isTranscript,
+} from '../features/library/ImportTranscript';
 import { UploadList } from '../features/library/UploadList';
 import { useUploads } from '../features/library/useUploads';
 
@@ -36,7 +43,8 @@ export interface Recording {
   id: string;
   filename: string;
   size: number;
-  kind: 'audio' | 'video';
+  // A transcript brought in as text has no sound: it cannot be played, and it keeps no voiceprints.
+  kind: 'audio' | 'video' | 'transcript';
   status: 'queued' | 'transcribing' | 'ready' | 'failed';
   error: string;
   duration_s: number | null;
@@ -128,6 +136,9 @@ export function Library() {
   const [error, setError] = useState('');
   const confirm = useConfirm();
   const input = useRef<HTMLInputElement>(null);
+  const transcriptInput = useRef<HTMLInputElement>(null);
+  // Transcripts chosen or dropped, brought in one at a time.
+  const [transcripts, setTranscripts] = useState<File[]>([]);
   const [filter, setFilter] = useState('all');
   const [recollection, setRecollection] = useState<Recollection | null>(null);
   const [picking, setPicking] = useState(false);
@@ -169,6 +180,12 @@ export function Library() {
       : 0;
   usePolling(load, interval);
 
+  // Recordings upload; a transcript is read and looked at first, in a dialog of its own.
+  const take = (files: File[]) => {
+    const texts = files.filter(isTranscript);
+    if (texts.length) setTranscripts((current) => [...current, ...texts]);
+    void add(files.filter((file) => !isTranscript(file)));
+  };
   const retry = async (recording: Recording) => {
     try {
       await api(`/api/library/recordings/${recording.id}/retry`, {
@@ -264,38 +281,48 @@ export function Library() {
     );
   const filtered = recordings.filter((r) => matches[filter](r) && found(r));
   return (
-    <FileDropSurface onFiles={(files) => void add(files)}>
+    <FileDropSurface onFiles={take}>
       <Page
         stackHeaderOnMobile
         title="录音库"
         titleSize="display"
         actions={
           <>
-            {offered.length > 0 && (
-              <ActionMenu
-                label="更多"
-                items={[
-                  {
-                    label: `用新版转写重新采集（${offered.length}）`,
-                    onSelect: () => {
-                      setPicked(new Set(offered.map((r) => r.id)));
-                      setPicking(true);
-                    },
-                  },
-                ]}
-              />
-            )}
+            <ActionMenu
+              label="更多"
+              items={[
+                {
+                  label: '导入转写稿',
+                  onSelect: () => transcriptInput.current?.click(),
+                },
+                ...(offered.length > 0
+                  ? [
+                      {
+                        label: `用新版转写重新采集（${offered.length}）`,
+                        onSelect: () => {
+                          setPicked(new Set(offered.map((r) => r.id)));
+                          setPicking(true);
+                        },
+                      },
+                    ]
+                  : []),
+              ]}
+            />
             {mobile && (
               <Button onClick={() => input.current?.click()}>上传录音</Button>
             )}
           </>
         }
       >
+        <FileInput ref={input} label="选择录音文件" multiple onFiles={take} />
         <FileInput
-          ref={input}
-          label="选择录音文件"
+          ref={transcriptInput}
+          label="选择转写稿"
+          accept={TRANSCRIPT_ACCEPT}
           multiple
-          onFiles={(files) => void add(files)}
+          onFiles={(files) =>
+            setTranscripts((current) => [...current, ...files])
+          }
         />
         {error && (
           <Text role="alert" tone="danger">
@@ -388,7 +415,10 @@ export function Library() {
                               'zh-CN',
                               { month: 'long', day: 'numeric' },
                             ),
-                        minutes(recording.duration_s),
+                        recording.kind === 'transcript' &&
+                        recording.duration_s !== null
+                          ? `约 ${minutes(recording.duration_s)}`
+                          : minutes(recording.duration_s),
                         ready ? `${recording.speakers} 位说话人` : '',
                         proofreadLabel[recording.proofread ?? ''],
                       ]
@@ -401,6 +431,9 @@ export function Library() {
                               names={recording.people}
                               unknown={editable ? recording.unsettled : 0}
                             />
+                          )}
+                          {recording.kind === 'transcript' && (
+                            <Badge>转写稿</Badge>
                           )}
                           {label && <Badge tone={label[1]}>{label[0]}</Badge>}
                           {recollectingIds.has(recording.id) && (
@@ -487,6 +520,23 @@ export function Library() {
           </Card>
         )}
       </Page>
+      <ImportTranscript
+        file={transcripts[0] ?? null}
+        onClose={() => setTranscripts((current) => current.slice(1))}
+        onImported={(result) => {
+          setTranscripts((current) => current.slice(1));
+          void load();
+          void useTeam.getState().refresh(true);
+          toast(
+            result.new === false
+              ? '这份转写稿已经导入过'
+              : result.unsettled
+                ? `导入了，还有 ${result.unsettled} 位说话人要认`
+                : '导入了，说话人都认出来了',
+            'success',
+          );
+        }}
+      />
       <Dialog
         open={picking}
         onOpenChange={setPicking}

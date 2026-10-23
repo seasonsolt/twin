@@ -94,7 +94,7 @@ it('uploads several recordings to the account library one after another', async 
     .upload(screen.getByLabelText('选择录音文件'), [
       new File(['abc'], '一.m4a'),
       new File(['def'], '二.wav'),
-      new File(['x'], '笔记.txt'),
+      new File(['x'], '头像.png'),
     ]);
   await waitFor(() => expect(order).toEqual(['一.m4a', '二.wav']));
   expect(screen.getByText('已跳过 1 个不是音视频的文件')).toBeInTheDocument();

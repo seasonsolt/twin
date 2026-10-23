@@ -52,6 +52,12 @@ const pages: {
     path: '/#/commitments',
     ready: '周五前按活跃用户重算留存口径',
   },
+  // 承诺 · 全部: every twin's ledger as one list.
+  {
+    name: 'commitments-all',
+    path: '/#/commitments?who=all',
+    ready: '周三前补齐渠道数据',
+  },
   { name: 'library', path: '/#/library', ready: '2026-10-15 产品周会.m4a' },
   {
     name: 'recording',
@@ -469,6 +475,53 @@ test('transcript claim', async ({ page }, info) => {
   await expect(page).toHaveScreenshot(
     `transcript-claim-${info.project.name}.png`,
   );
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
+test('import transcript', async ({ page }, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/library');
+  await expect(page.getByText('2026-10-11 客户访谈.txt')).toBeVisible();
+  // 第 19 屏: the file is read first, and shown with who each speaker would be.
+  await page.getByLabel('选择转写稿').setInputFiles({
+    name: '运营周会-10月18日.docx',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('x'),
+  });
+  const dialog = page.getByRole('dialog', { name: '导入转写稿' });
+  await expect(dialog.getByText('✓ 林舟')).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(
+    `import-transcript-${info.project.name}.png`,
+  );
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
+test('fill in what the twin does not know', async ({ page }, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/team/u-linzhou');
+  await page.getByRole('button', { name: '补一补' }).first().click();
+  // 第 18 屏: a question, the answer read into drafts to choose a tier for, and what keeping them is worth.
+  const dialog = page.getByRole('dialog', { name: '补一补' });
+  await dialog
+    .getByRole('textbox', { name: '你的回答' })
+    .fill(
+      '在推知识库检索改版，月底前要把命中率提上去。另外在带两个新人熟悉评审。',
+    );
+  await dialog.getByRole('button', { name: '整理' }).click();
+  await expect(dialog.getByText('整理成 2 条')).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`fill-in-${info.project.name}.png`);
   expect(errors, 'page errors').toEqual([]);
   expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
 });

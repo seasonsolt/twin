@@ -28,7 +28,7 @@ import subprocess
 import threading
 import uuid
 import wave
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Literal
@@ -234,7 +234,8 @@ class Recording(BaseModel):
     sha256: str
     filename: str
     size: int
-    kind: Literal["audio", "video"]
+    # ``transcript``: a meeting transcript brought in as text (``Library.add_transcript``): no sound, no voiceprints.
+    kind: Literal["audio", "video", "transcript"]
     status: RecordingStatus
     error: str = ""
     duration_s: float | None = None
@@ -272,6 +273,9 @@ class Transcript(BaseModel):
     speakers: list[Speaker]
     # The transcription service that made it (``collector.asr_version``); None when it did not say.
     asr: str | None = None
+    # Whether the segments carry the times they were said at. False for a transcript brought in as text whose export
+    # gave none: every segment then sits at 0 and the speakers' seconds are estimated from their words.
+    timed: bool = True
 
 
 class Cleaned(BaseModel):
@@ -313,6 +317,9 @@ def _interrupted(exc: BaseException | None) -> bool:
 # The folder of the team's library under ``data/library``.
 TEAM = "team"
 
+# How much a person says in a second, to size the speakers of a transcript that is not timed (``add_transcript``).
+CHARS_PER_SECOND = 4.0
+
 
 def owner_key(email: str | None) -> str:
     """The library folder of an account. Without login every visitor is the same local owner; e-mail addresses
@@ -352,6 +359,20 @@ def _file_once(path: Path, content: BaseModel, unverified: str) -> bool:
         return True
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _segments_of(turns: Sequence[tuple[str, str, float | None]], timed: bool) -> list[Segment]:
+    """The turns of a transcript as segments: each lasts until the next begins when the export timed them (from the
+    first turn, the last for as long as it takes to say), else all of them sit at 0."""
+    if not timed:
+        return [Segment(start=0.0, end=0.0, text=text, speaker=speaker) for speaker, text, _ in turns]
+    first = min(clock for _, _, clock in turns if clock is not None)
+    starts = [max(0.0, (clock or 0.0) - first) for _, _, clock in turns]
+    segments = []
+    for i, (speaker, text, _) in enumerate(turns):
+        end = starts[i + 1] if i + 1 < len(turns) else starts[i] + len(text) / CHARS_PER_SECOND
+        segments.append(Segment(start=starts[i], end=max(end, starts[i]), text=text, speaker=speaker))
+    return segments
 
 
 class Library:
@@ -498,6 +519,76 @@ class Library:
                 status="queued",
                 created_at=now,
                 updated_at=now,
+                uploader=uploader,
+            )
+            data = recording.model_dump()
+            with self._db() as db:
+                db.execute(
+                    f"INSERT INTO recordings ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
+                    tuple(data.values()),
+                )
+            return recording, True
+
+    def add_transcript(
+        self,
+        filename: str,
+        turns: Sequence[tuple[str, str, float | None]],
+        *,
+        sha: str,
+        size: int,
+        uploader: str | None = None,
+        date: str | None = None,
+    ) -> tuple[Recording, bool]:
+        """File a meeting transcript brought in as text, ``(speaker, words, seconds in or None)`` for each turn, as a
+        recording that is ready at once: it has no sound to transcribe or play and no voiceprints, so its speakers
+        are told apart by their names, and nothing is proofread or asked of the model. The same file brought in
+        again (by anyone, under any name) is the recording there already. ``date``: the day of the meeting, as
+        ``YYYY-MM-DD``. Returns the recording and whether it is new."""
+        with self.lock:
+            with self._db() as db:
+                row = db.execute("SELECT * FROM recordings WHERE sha256 = ?", (sha,)).fetchone()
+            if row:
+                return Recording.model_validate(dict(row)), False
+            recording_id = "rec_" + sha[:20]
+            timed = bool(turns) and all(clock is not None for _, _, clock in turns)
+            segments = _segments_of(turns, timed)
+            seconds: dict[str, float] = {}
+            for segment in segments:
+                length = segment.end - segment.start if timed else len(segment.text) / CHARS_PER_SECOND
+                seconds[segment.speaker] = seconds.get(segment.speaker, 0.0) + length
+            duration = segments[-1].end if timed and segments else 0.0
+            folder = self.folder(recording_id)
+            private_directory(folder)
+            folder.chmod(0o700)
+            now = _now()
+            transcript = Transcript(
+                id=uuid.uuid4().hex[:12],
+                recording_id=recording_id,
+                created_at=now,
+                duration_s=duration,
+                segments=segments,
+                speakers=[Speaker(id=name, seconds=round(total, 1)) for name, total in seconds.items()],
+                timed=timed,
+            )
+            self.write_transcript(folder, transcript)
+            recording = Recording(
+                id=recording_id,
+                sha256=sha,
+                filename=filename,
+                size=size,
+                kind="transcript",
+                status="ready",
+                duration_s=duration if timed else None,
+                creation_time=date,
+                transcribed_s=duration,
+                transcript_id=transcript.id,
+                speakers=len(transcript.speakers),
+                segments=len(segments),
+                created_at=now,
+                updated_at=now,
+                # Words are the transcript's own: nothing is proofread, and the speakers are named by it.
+                proofread=transcript.id,
+                named=transcript.id,
                 uploader=uploader,
             )
             data = recording.model_dump()
@@ -750,6 +841,7 @@ class Library:
             recording
             for recording in sorted(self.list(), key=lambda r: (r.created_at, r.id))
             if recording.status == "ready"
+            and recording.kind != "transcript"
             and recording.transcript_id is not None
             and recollect_scope(CollectorVersion(recording.asr, current.attribution, current.cleanup), current) == "asr"
         )

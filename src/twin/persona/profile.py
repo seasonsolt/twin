@@ -220,6 +220,12 @@ def chunks_for(store: PersonaStore, source: Source, allowed: frozenset[str], set
     return _chunk(source, expression_view(store, settings, source_id=source.source_id, target_only=True), allowed)
 
 
+def chunks_of(source: Source, entries: Sequence[Expression], allowed: frozenset[str]) -> list[Chunk]:
+    """The chunks ``entries`` would be cut into as the person's own words of ``source``, which need not be stored:
+    for reading what the person just said before it is kept."""
+    return _chunk(source, entries, allowed)
+
+
 def corpus_chunks(
     store: PersonaStore, sources: Sequence[Source], allowed: frozenset[str], settings: Settings
 ) -> list[Chunk]:

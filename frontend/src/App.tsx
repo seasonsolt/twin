@@ -23,11 +23,6 @@ const ProfileRedirect = lazy(() =>
     default: module.ProfileRedirect,
   })),
 );
-const Questionnaire = lazy(() =>
-  import('./pages/Questionnaire').then((module) => ({
-    default: module.Questionnaire,
-  })),
-);
 const Commitments = lazy(() =>
   import('./pages/Commitments').then((module) => ({
     default: module.Commitments,
@@ -134,7 +129,8 @@ export function App() {
                     />
                     <Route path="persona" element={<ProfileRedirect />} />
                     <Route path="identity" element={<ProfileRedirect />} />
-                    <Route path="questionnaire" element={<Questionnaire />} />
+                    {/* The fixed questions became 补一补, on the member page. */}
+                    <Route path="questionnaire" element={<ProfileRedirect />} />
                     <Route path="gallery" element={<Gallery />} />
                     <Route path="*" element={<Navigate to="/chat" replace />} />
                   </Route>

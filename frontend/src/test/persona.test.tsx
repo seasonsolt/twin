@@ -197,10 +197,9 @@ it('groups by plain topics, hides internal ids/metrics, caps suggestions and lin
   expect(screen.queryByText('2.1')).not.toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   expect(screen.getAllByRole('link', { name: /^多写写你/ })).toHaveLength(5);
-  expect(screen.getByRole('link', { name: '回答几个问题' })).toHaveAttribute(
-    'href',
-    '#/questionnaire',
-  );
+  // The fixed questions are gone: 补一补 asks about what is least known, and only the person is asked.
+  expect(screen.queryByRole('link', { name: '回答几个问题' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '补一补' })).toBeNull();
   await choose(article(), '依据');
   expect(article().getByText('我会先听听')).toBeInTheDocument();
 });

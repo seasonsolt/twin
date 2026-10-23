@@ -246,9 +246,10 @@ class Reviews:
         with self.library.read() as db:
             rows = db.execute(
                 "SELECT DISTINCT a.recording_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
-                "AND r.transcript_id = a.transcript_id WHERE r.status = 'ready' AND a.decision = 'confirmed' "
-                "AND NOT EXISTS (SELECT 1 FROM reviewed v WHERE v.recording_id = a.recording_id "
-                "AND v.transcript_id = a.transcript_id AND v.speaker_id = a.speaker_id "
+                "AND r.transcript_id = a.transcript_id WHERE r.status = 'ready' AND r.kind != 'transcript' "
+                "AND a.decision = 'confirmed' AND NOT EXISTS (SELECT 1 FROM reviewed v "
+                "WHERE v.recording_id = a.recording_id AND v.transcript_id = a.transcript_id "
+                "AND v.speaker_id = a.speaker_id "
                 "AND (v.error = '' OR v.created_at > ?)) ORDER BY r.created_at",
                 (retry,),
             ).fetchall()

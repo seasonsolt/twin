@@ -77,6 +77,8 @@ class _Message:
     date: dt.date | None
     speaker: str
     text: str
+    # Seconds into the meeting, for a turn a transcript timed.
+    clock: float | None = None
 
 
 PSEUDONYM_PREFIX = "他人"
@@ -117,6 +119,7 @@ class ExpressionView:
         sources, self.corpus = store.read_corpus()
         self.sources = {s.source_id: s for s in sources}
         self._swap: Callable[[str], str] | None = None
+        self._restore: Callable[[str], str] | None = None
         if not settings.pseudonymize_others:
             return
         protected = {
@@ -140,6 +143,19 @@ class ExpressionView:
         pattern = re.compile(r"他人[0-9A-F]{4}|" + "|".join(re.escape(n) for n in names if n))
         codes = {n: pseudonym(n) for n in others - protected}
         self._swap = lambda text: pattern.sub(lambda m: codes.get(m.group(0), m.group(0)), text)
+        names_of = {code: name for name, code in codes.items()}
+        self._restore = lambda text: re.sub(
+            rf"{PSEUDONYM_PREFIX}[0-9A-F]{{4}}", lambda m: names_of.get(m.group(0), m.group(0)), text
+        )
+
+    def mask(self, text: str) -> str:
+        """``text`` as the model is shown it: the names of the other people in the corpus replaced by their codes."""
+        return self._swap(text) if self._swap else text
+
+    def restore(self, text: str) -> str:
+        """``text`` the model wrote about what it was shown through ``mask``, with the names put back, for the
+        person to read."""
+        return self._restore(text) if self._restore else text
 
     def select(
         self,
@@ -299,6 +315,19 @@ def _speaker(value: str) -> str:
     return unicodedata.normalize("NFKC", value.strip())
 
 
+def _turn_clock(line: str) -> float | None:
+    """The time a timed turn starts at, in seconds: ``1:02:03`` is hours, minutes and seconds, ``12:30`` minutes and
+    seconds."""
+    found = re.search(_CLOCK, line)
+    if found is None:
+        return None
+    parts = [float(part.replace(",", ".")) for part in found[0].split(":")]
+    seconds = 0.0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds
+
+
 def _timed_turn(line: str) -> tuple[str, str] | None:
     """The speaker and words of a transcript line that starts a timed turn (the words may follow on later lines)."""
     m = _CLOCK_AFTER.match(line) or _CLOCK_BEFORE.match(line)
@@ -330,7 +359,7 @@ def _text_to_messages(
         elif m := _HEADER.match(line):
             messages.append(_Message(_date(m["y"], m["m"], m["d"]), _speaker(m["speaker"]), ""))
         elif speaker_lines and (turn := _timed_turn(line)):
-            messages.append(_Message(default_date, *turn))
+            messages.append(_Message(default_date, *turn, clock=_turn_clock(line)))
         elif ((speaker_lines and not timed) or not messages) and (m := _PLAIN.match(line)):
             messages.append(_Message(default_date, _speaker(m["speaker"]), m["text"]))
         elif messages:
@@ -432,6 +461,48 @@ def parse_interview(path_name: str, raw: str, settings: Settings, date: dt.date 
     attributed = attribute(parsed.source, parsed.expressions, settings, names)
     attributed.skipped_lines = parsed.skipped_lines
     return attributed
+
+
+# ---------------------------------------------------------------- meeting transcripts for the team's library
+
+
+@dataclass(frozen=True)
+class Turn:
+    """One turn of a meeting transcript: who spoke, what was said, and when it began when the export timed it."""
+
+    speaker: str
+    text: str
+    clock: float | None
+
+
+@dataclass(frozen=True)
+class TurnsFile:
+    title: str
+    date: dt.date | None
+    turns: list[Turn]
+    skipped: int
+
+
+# Someone speaks again in a conversation; a text whose "label: words" lines never repeat a label is no conversation.
+MIN_TURNS = 3
+
+
+def parse_turns(name: str, data: bytes) -> TurnsFile:
+    """The turns of a meeting transcript file, as 飞书妙记, 通义听悟 and 腾讯会议 export them (a speaker, often a time,
+    and the words, on one line or the next) and as plain ``speaker：words`` lines. The speakers are the labels as
+    written, for whoever imports it to say who they are (a name, or ``发言人1``). ``ValueError`` when the file is
+    no transcript of several turns."""
+    raw = extract_text(name, data)
+    stem = Path(name).stem
+    lines = raw.splitlines()
+    date = date_from_name(stem) or next((day for line in lines[:12] if (day := parse_date(line)) is not None), None)
+    timed = sum(bool(_timed_turn(line)) for line in lines) >= MIN_TRANSCRIPT_HEADERS
+    messages, skipped = _text_to_messages(raw, date, speaker_lines=True, timed=timed)
+    turns = [Turn(m.speaker, m.text.strip(), m.clock) for m in messages if m.text.strip()]
+    speakers = {t.speaker for t in turns}
+    if len(turns) < MIN_TURNS or len(turns) <= len(speakers):
+        raise ValueError("没有找到按说话人分段的发言，请确认这是会议转写稿")
+    return TurnsFile(stem, date, turns, len(skipped))
 
 
 # ---------------------------------------------------------------- document
@@ -668,11 +739,18 @@ ANSWER_CHANNEL = "回答分身答不上的问题"
 
 
 def parse_answer(
-    question: str, answer: str, name: str, origin: str, *, previous: str = "", date: dt.date | None = None
+    question: str,
+    answer: str,
+    name: str,
+    origin: str,
+    *,
+    previous: str = "",
+    date: dt.date | None = None,
+    channel: str = ANSWER_CHANNEL,
 ) -> ParsedSource:
     """The person's own answer to a question the twin could not answer: one expression in their words, the question
     (after ``previous``, the asker's turn before it, when there was one) as its context. ``origin`` names the question
-    it answers."""
+    it answers; ``channel`` where it was answered."""
     answer = answer.strip()
     if not 1 <= len(answer) <= 20000:
         raise ValueError("回答需要 1–20000 个字")
@@ -690,7 +768,7 @@ def parse_answer(
         context=f"有人先问：{' '.join(previous.split())[:300]}；接着问：{asked[:500]}"
         if previous.strip()
         else f"有人问：{asked[:500]}",
-        channel=ANSWER_CHANNEL,
+        channel=channel,
     )
     title = f"回答：{asked if len(asked) <= 40 else asked[:39] + '…'}"
     return ParsedSource(_source(SourceKind.INTERVIEW, title, origin, source_id, [expression]), [expression])

@@ -22,7 +22,6 @@ import {
 import { conversationServer } from './conversationServer';
 import { useReplyAudio } from '../features/chat/useReplyAudio';
 import { useReplyVideos, videoUrl } from '../features/chat/useReplyVideos';
-import { useQuestionnaire } from '../features/questionnaire/useQuestionnaire';
 import { api } from '../lib/api';
 import { useIdentity } from '../features/identity/useIdentity';
 import { uploadMedia } from '../lib/mediaUpload';
@@ -134,13 +133,6 @@ beforeEach(() => {
         headers: { 'Content-Type': 'text/event-stream' },
       });
     }
-    if (path.startsWith('/api/persona/questionnaire'))
-      return json({
-        questions: [],
-        sections: [],
-        answers: {},
-        updated_at: null,
-      });
     if (path === '/api/persona/state') return json({ stale: false });
     if (path === '/api/media/capabilities')
       return json({ available: false, video: { available: false } });
@@ -372,20 +364,6 @@ it('isolates upload resume records and captures the persona through a switch dur
   expect(localStorage.getItem(personaKey('twin:media-uploads', B))).toBe('[]');
 });
 
-function Questions() {
-  const questions = useQuestionnaire('initial');
-  return (
-    <>
-      <p>{questions.loading ? 'loading' : 'ready'}</p>
-      <button onClick={() => questions.change('q01', '原分身的答案')}>
-        写答案
-      </button>
-    </>
-  );
-}
-function QuestionContext() {
-  return <Questions />;
-}
 function AudioReply() {
   const audio = useReplyAudio(true);
   return (
@@ -468,31 +446,6 @@ it('can switch when browser storage is unavailable', async () => {
   });
   await expect(usePersonas.getState().switchTo(B)).resolves.toBeUndefined();
   expect(getPersonaId()).toBe(B);
-});
-
-it('keeps deferred questionnaire leave-page writes attributed to their original persona', async () => {
-  render(<QuestionContext />);
-  await screen.findByText('ready');
-  fireEvent.click(screen.getByRole('button', { name: '写答案' }));
-  await act(async () => usePersonas.getState().switchTo(B));
-  await waitFor(() =>
-    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(
-      true,
-    ),
-  );
-  const write = fetcher.mock.calls.find(
-    ([, init]) => init?.method === 'PUT',
-  )![1];
-  expect(selected(write)).toBe('default');
-  expect(JSON.parse(write!.body as string).answers.q01).toBe('原分身的答案');
-  expect(
-    fetcher.mock.calls
-      .filter(
-        ([path, init]) =>
-          path.includes('questionnaire') && init?.method !== 'PUT',
-      )
-      .some(([, init]) => selected(init) === B),
-  ).toBe(true);
 });
 
 it('keeps the chat page and layout mounted through prefetch and its timeout, with immediate switcher feedback', async () => {

@@ -39,7 +39,7 @@ flowchart TB
 | --- | --- | --- |
 | L0 | 0 工具 · 1 契约 · 2 后端与配置 · 3 存储 | `util` `assets` `persona.lexical` · `persona.schema/items/dimensions/tiers` `media.schema` · `llm` `embed` `config` `websearch` `media.tts/asr` · `persona.store` `teamdb`（团队库） |
 | L1 | 4 | `persona.sources` `persona.questionnaire` `persona.quotes` |
-| L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） `persona.transcripts`（转写稿认领本人） `persona.office`（Word/Excel 交付） `persona.assistant`（本人档助手：第二人称提示词、“记一下”、本人说了的承诺） |
+| L2 | 5 | `persona.profile` `persona.coverage` `persona.ledger`（承诺账本） `persona.followups`（弃权回流） `persona.transcripts`（转写稿认领本人） `persona.office`（Word/Excel 交付） `persona.assistant`（本人档助手：第二人称提示词、“记一下”、本人说了的承诺） `persona.fill`（补一补：挑问题、把回答读成草稿、按选的档存） |
 | L3 | 6 | `persona.chat` |
 | L4 | 7 | `media.*`（脚本、语音文本、流式、渲染、视频、音视频入库、认人）`service` `handoffs`（转交：回答里要本人定的部分、本人回复写回提问人的会话） `persona.work`（工作模式：Deep Agents 干活、交付文件） |
 | 评测 | 8 | `evals.*` `media.check` |

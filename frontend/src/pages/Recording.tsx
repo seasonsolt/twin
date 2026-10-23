@@ -113,6 +113,8 @@ export interface TwinMatch {
 }
 interface Detail extends Omit<RecordingRow, 'speakers' | 'segments'> {
   transcript_id: string | null;
+  // False for a transcript brought in as text whose export gave no times: its segments carry none.
+  timed?: boolean;
   revision: number;
   // The viewer was identified in it and only reads it; ``mine`` are the speakers given to them.
   can_edit?: boolean;
@@ -186,6 +188,7 @@ export function sampleWindows(segments: Detail['segments'], speakerId: string) {
 function SpeakerCard({
   recordingId,
   speaker,
+  said,
   people,
   segments,
   busy,
@@ -195,6 +198,8 @@ function SpeakerCard({
 }: {
   recordingId: string;
   speaker: Speaker;
+  /** How much they said, in the words the page uses for it. */
+  said: string;
   people: Person[];
   segments: Detail['segments'];
   busy: boolean;
@@ -247,7 +252,7 @@ function SpeakerCard({
               {speaker.id} 是谁？
             </Heading>
             <Text size="sm" tone="secondary">
-              说了 {span(speaker.seconds)}
+              {said}
             </Text>
           </Row>
           <Text size="sm" tone="tertiary">
@@ -288,9 +293,19 @@ function SpeakerCard({
               )}
             </>
           ) : (
-            <Text size="sm" tone="secondary">
-              这位说话人没有可试听的片段，可参考完整转写稿。
-            </Text>
+            <>
+              <Text size="sm" tone="secondary">
+                这位说话人没有可试听的片段，可参考完整转写稿。
+              </Text>
+              {segments
+                .filter((s) => s.speaker === speaker.id && s.text.trim())
+                .slice(0, 3)
+                .map((s, i) => (
+                  <Text key={i} size="sm" tone="secondary">
+                    「{s.text}」
+                  </Text>
+                ))}
+            </>
           )}
         </Card>
         <Stack gap={3}>
@@ -537,6 +552,11 @@ export function Recording() {
   };
 
   const names = new Map(people.map((p) => [p.id, p.name]));
+  // A transcript has no sound to measure: how much someone said is how many times they spoke.
+  const said = (speaker: Speaker) =>
+    detail?.kind === 'transcript'
+      ? `${detail.segments.filter((s) => s.speaker === speaker.id).length} 段`
+      : `说了 ${span(speaker.seconds)}`;
   const who = (speakerId: string) => {
     const speaker = detail?.speakers.find((s) => s.id === speakerId);
     return speaker?.decision === 'confirmed' && speaker.person_id
@@ -549,7 +569,8 @@ export function Recording() {
         {detail.segments.map((s, i) => (
           <Text as="li" key={i} size="sm">
             <Text as="span" size="inherit" tone="secondary">
-              [{clock(s.start)}] {who(s.speaker)}：
+              {detail.timed === false ? '' : `[${clock(s.start)}] `}
+              {who(s.speaker)}：
             </Text>
             {s.text}
           </Text>
@@ -666,7 +687,7 @@ export function Recording() {
                               ? '不在名单里'
                               : '还没确认'
                       }
-                      meta={`${s.id} · 说了 ${span(s.seconds)}`}
+                      meta={`${s.id} · ${said(s)}`}
                       trailing={
                         mine ? (
                           <>
@@ -698,6 +719,7 @@ export function Recording() {
               key={`${current.id}-${detail.revision}`}
               recordingId={detail.id}
               speaker={current}
+              said={said(current)}
               people={people}
               segments={detail.segments}
               busy={busy}
@@ -727,7 +749,7 @@ export function Recording() {
                     variant="dashed"
                     title={
                       <Text size="sm" tone="secondary">
-                        {s.id} · 说了 {span(s.seconds)} ·{' '}
+                        {s.id} · {said(s)} ·{' '}
                         {s.candidates.length ? '有候选人' : '没认出来'}
                       </Text>
                     }
@@ -756,7 +778,7 @@ export function Recording() {
                             ? '几个人混在一起'
                             : '不在名单里'
                       }
-                      meta={`${s.id} · 说了 ${span(s.seconds)}`}
+                      meta={`${s.id} · ${said(s)}`}
                       trailing={
                         <>
                           <Badge>

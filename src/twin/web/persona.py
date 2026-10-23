@@ -373,6 +373,7 @@ GATED_PATHS = (
     "/api/persona/followups",
     "/api/persona/handoffs",
     "/api/persona/answers",
+    "/api/persona/fill",
     "/api/persona/ledger",
 )
 
@@ -478,6 +479,9 @@ def register(
 
     ingestion = uploads.register(app, settings, jobs, queue_build, backends.llm)
     assistant_routes.register(app, settings, queue_build, ingestion.lock, open_store)
+    from . import fill as fill_routes
+
+    fill_routes.register(app, settings, backends, queue_build, ingestion.lock, open_store)
     from . import claims
 
     claims.register(app, settings, ingestion)

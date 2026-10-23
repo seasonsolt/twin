@@ -34,6 +34,7 @@ from ..usage import UsageLedger, UsageRecorder, install_default
 from . import assets, gpu, library, media, persona, system, voice
 from .auth import Auth, AuthMiddleware, forwarded_prefix
 from .backends import Backends, BackendUnavailable, EmbedderFactory, LLMFactory, WorkModelFactory
+from .commitments import register_all as register_all_commitments
 from .conversations import ConversationIndex
 from .conversations import register_all as register_all_conversations
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
@@ -556,6 +557,7 @@ def create_app(
     registry.make_app = persona_app
     registry.register(app)
     register_all_conversations(app, registry, team)
+    register_all_commitments(app, registry)
     libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits, team)
     voice.register(app, settings, libraries, registry)
     system.register(app, system_settings, monitor, libraries, registry, usage)

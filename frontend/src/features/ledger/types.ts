@@ -39,6 +39,10 @@ export interface LedgerEntry {
   /** Read from a meeting, or asked of the person in a conversation (waiting as 待你接受 until they take it). */
   origin?: 'meeting' | 'conversation';
   handoff_id?: string | null;
+  /** In the team's list: whose ledger keeps the entry, and the meeting it is from (the same in every ledger of it). */
+  persona_id?: string;
+  persona_name?: string;
+  meeting?: string;
 }
 
 export interface LedgerData {
@@ -48,6 +52,8 @@ export interface LedgerData {
   status_labels: Record<LedgerStatus, string>;
   meetings: { total: number; pending: number };
   job_id: string | null;
+  /** The ledgers a list of everyone's is made of. */
+  twins?: { id: string; name: string }[];
 }
 
 export interface LedgerBrief {

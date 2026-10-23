@@ -1,23 +1,38 @@
-import { Page } from '../components/ui';
+import { useSearchParams } from 'react-router';
+import { Chip, Page, Row } from '../components/ui';
 import { PersonPicker } from '../features/chat/PersonPicker';
 import { usePersonaId } from '../lib/usePersonaState';
 import { usePersonas } from '../stores/personas';
 import { Ledger } from './Ledger';
 
-/** The commitments of one person's twin: choose whose, and the ledger is theirs. The member page holds the same
- * ledger for the twin it is about. */
+/** The commitments of one person's twin: choose whose, and the ledger is theirs; or all of them together, a meeting
+ * several people were in counted once. The member page holds the same ledger for the twin it is about. */
 export function Commitments() {
   const id = usePersonaId();
   const persona = usePersonas((state) => state.items.find((p) => p.id === id));
+  const [params, setParams] = useSearchParams();
+  const everyone = params.get('who') === 'all';
   return (
     <Page
       title="承诺"
       titleSize="display"
       actions={
-        <PersonPicker persona={persona} name={persona?.name ?? '选人'} />
+        <Row gap={2}>
+          <div className="shrink-0">
+            <Chip
+              pressed={everyone}
+              onClick={() => setParams(everyone ? {} : { who: 'all' })}
+            >
+              全部
+            </Chip>
+          </div>
+          {!everyone && (
+            <PersonPicker persona={persona} name={persona?.name ?? '选人'} />
+          )}
+        </Row>
       }
     >
-      <Ledger />
+      <Ledger key={everyone ? 'all' : id} everyone={everyone} />
     </Page>
   );
 }

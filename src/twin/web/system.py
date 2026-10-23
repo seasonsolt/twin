@@ -56,7 +56,11 @@ MAX_HOURS = 24 * 30
 # Pages an administrator may switch off for everyone. Chat is the twin itself and always stays.
 Feature = Literal["work", "ledger"]
 FEATURES: dict[Feature, str] = {"work": "工作", "ledger": "承诺账本"}
-FEATURE_PATHS: dict[str, Feature] = {"/api/persona/work": "work", "/api/persona/ledger": "ledger"}
+FEATURE_PATHS: dict[str, Feature] = {
+    "/api/persona/work": "work",
+    "/api/persona/ledger": "ledger",
+    "/api/personas/commitments": "ledger",
+}
 ModelSection = Literal["llm", "chat_llm", "embed"]
 MODEL_SECTIONS: tuple[ModelSection, ...] = ("llm", "chat_llm", "embed")
 MODEL_FIELDS = ("base_url", "model")

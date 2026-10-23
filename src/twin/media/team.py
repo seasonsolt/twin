@@ -207,7 +207,7 @@ class TwinSource(BaseModel):
     """What a twin's source made from one recording holds; the web layer stores it as a persona source."""
 
     source_id: str
-    kind: Literal["audio", "video"]
+    kind: Literal["audio", "video", "transcript"]
     title: str
     origin: str
     duration_s: float | None
@@ -1964,7 +1964,9 @@ class Team:
         lines = [
             (
                 who(i, segment),
-                f"[{timestamp(segment.start)}] {' '.join(segment.text.split())}" if segment.text.strip() else "",
+                (f"[{timestamp(segment.start)}] " if transcript.timed else "") + " ".join(segment.text.split())
+                if segment.text.strip()
+                else "",
                 owners[i] == person_id,
             )
             for i, segment in enumerate(transcript.segments)

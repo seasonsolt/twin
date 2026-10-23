@@ -25,20 +25,22 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import logging
 import math
 import shutil
 import threading
 import time
+import unicodedata
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from ..config import Settings
@@ -54,7 +56,7 @@ from ..media.schema import AVATAR_GENDERS, default_avatar
 from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
 from ..persona import gate
 from ..persona.schema import ParsedSource, Source, SourceKind
-from ..persona.sources import parse_media
+from ..persona.sources import TurnsFile, is_generic_speaker, parse_media, parse_turns
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
 from ..teamdb import TeamDB
 from ..usage import CallRow, collect_calls, model_tokens
@@ -180,6 +182,32 @@ class VoiceBody(BaseModel):
     new_person: str | None = Field(default=None, max_length=40)
     # Keep the longest speakers as the person's voice samples; off for fragments, too short to recognise anyone by.
     sample: bool = True
+
+
+# The largest transcript file taken as text; a meeting's words are far below it.
+MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024
+SAMPLE_CHARS = 40
+
+
+class SpeakerChoice(BaseModel):
+    """Who a speaker of an imported transcript is: someone in the team, or nobody in it (``outsider``). Neither
+    leaves the speaker undecided, even where the name is a member's."""
+
+    person_id: str | None = Field(default=None, max_length=100)
+    outsider: bool = False
+
+
+class TranscriptBody(BaseModel):
+    title: str | None = Field(default=None, max_length=100)
+    date: dt.date | None = None
+    # By the label the transcript writes the speaker as. A speaker not listed is the member of that name, if there is
+    # one, and undecided otherwise.
+    speakers: dict[str, SpeakerChoice] = Field(default_factory=dict, max_length=500)
+
+
+def name_key(value: str) -> str:
+    """A name as it is compared: width, case and spacing ignored."""
+    return unicodedata.normalize("NFKC", " ".join(value.split())).casefold()
 
 
 class Libraries:
@@ -793,6 +821,8 @@ class Libraries:
     def proofread_state(self, library: Library, recording: Recording, waiting: set[str]) -> str:
         """``done`` (corrections filed), ``failed`` (the model was asked and gave none), ``waiting`` (someone is
         identified and proofreading is still to come) or empty."""
+        if recording.kind == "transcript":
+            return ""  # Its words are the transcript's own: nothing is proofread.
         path = library.clean_path(recording)
         if path is not None and path.is_file():
             return "done"
@@ -934,15 +964,17 @@ class Libraries:
         waiting = {r.id for r in library.unproofread()}
         speakers = self.team(owner).speakers(recording)
         people = self.people_of(viewer)
+        heard = recording.kind != "transcript"
         return {
             **view(recording),
             "proofread": self.proofread_state(library, recording, waiting),
+            "timed": transcript.timed if transcript else True,
             "can_edit": access.edit,
             "mine": [s.id for s in speakers if s.decision == "confirmed" and s.person_id in people],
             "speakers": [
                 {
                     **s.model_dump(exclude=set() if access.edit else {"candidates", "rejected", "near"}),
-                    "samples": len(sample_windows(analysis, s.id)) if analysis else 0,
+                    "samples": len(sample_windows(analysis, s.id)) if analysis and heard else 0,
                 }
                 for s in speakers
             ],
@@ -965,6 +997,8 @@ class Libraries:
         transcript = library.transcript(recording) if recording else None
         if recording is None or transcript is None:
             raise HTTPException(404, "找不到这段录音")
+        if recording.kind == "transcript":
+            raise HTTPException(404, "转写稿没有声音可以试听")
         windows = sample_windows(Analysis(segments=transcript.segments, speakers=transcript.speakers), speaker_id)
         if not 0 <= index < len(windows):
             raise HTTPException(404, "没有这段试听")
@@ -1160,6 +1194,112 @@ class Libraries:
                 self.running.pop(owner, None)
             self.kick(owner)
 
+    # ------------------------------------------------------------ transcripts brought in as text
+
+    @staticmethod
+    def read_transcript(filename: str, data: bytes) -> TurnsFile:
+        try:
+            return parse_turns(filename, data)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+    def members_named(self, owner: str, labels: Iterable[str]) -> dict[str, tuple[str, str]]:
+        """The member each label is the name of, ``(id, name)``: written as the member's name (width, case and spacing
+        aside) and of nobody else. A label such as ``发言人1`` names no one."""
+        by_name: dict[str, list[tuple[str, str]]] = {}
+        for person_id, name, _ in self.team(owner).roster():
+            by_name.setdefault(name_key(name), []).append((person_id, name))
+        found: dict[str, tuple[str, str]] = {}
+        for label in labels:
+            hits = [] if is_generic_speaker(label) else by_name.get(name_key(label), [])
+            if len(hits) == 1:
+                found[label] = hits[0]
+        return found
+
+    def transcript_preview(self, owner: str, filename: str, data: bytes) -> dict[str, Any]:
+        """What importing the file would bring in, to look at first: the title and day, and each speaker with how
+        much they say, a line of it, and the member the name is, if any. Nothing is stored."""
+        parsed = self.read_transcript(filename, data)
+        found = self.members_named(owner, {turn.speaker for turn in parsed.turns})
+        counts: dict[str, int] = {}
+        sample: dict[str, str] = {}
+        for turn in parsed.turns:
+            counts[turn.speaker] = counts.get(turn.speaker, 0) + 1
+            line = " ".join(turn.text.split())
+            sample.setdefault(turn.speaker, line if len(line) <= SAMPLE_CHARS else line[: SAMPLE_CHARS - 1] + "…")
+        timed = all(turn.clock is not None for turn in parsed.turns)
+        clocks = [turn.clock for turn in parsed.turns if turn.clock is not None]
+        return {
+            "title": parsed.title,
+            "date": parsed.date.isoformat() if parsed.date else None,
+            "turns": len(parsed.turns),
+            "minutes": round((max(clocks) - min(clocks)) / 60) if timed and clocks else None,
+            "speakers": [
+                {
+                    "label": label,
+                    "segments": count,
+                    "sample": sample[label],
+                    "generic": is_generic_speaker(label),
+                    "person": {"id": found[label][0], "name": found[label][1]} if label in found else None,
+                }
+                for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            ],
+        }
+
+    def import_transcript(
+        self, owner: str, viewer: Viewer, filename: str, data: bytes, body: TranscriptBody
+    ) -> dict[str, Any]:
+        """File the transcript as a recording of the team's library that is ready at once, and give its speakers to
+        the members they are: those the importer chose, else the member whose name the label is. A speaker not
+        given to anyone waits to be settled like any other (``Team.unvoiced``)."""
+        parsed = self.read_transcript(filename, data)
+        team = self.team(owner)
+        known = {person_id for person_id, _, _ in team.roster()}
+        labels = list(dict.fromkeys(turn.speaker for turn in parsed.turns))
+        for label, choice in body.speakers.items():
+            if label not in labels:
+                raise HTTPException(400, f"转写稿里没有叫「{label}」的说话人")
+            if choice.person_id and (choice.outsider or choice.person_id not in known):
+                raise HTTPException(400, "找不到这个人")
+        title = " ".join((body.title or parsed.title).split()) or parsed.title
+        suffix = Path(filename).suffix.lower()
+        name = title if title.lower().endswith(suffix) else title + suffix
+        day = body.date or parsed.date
+        sha = hashlib.sha256(data).hexdigest()
+        library = self.library(owner)
+        recording, new = library.add_transcript(
+            name,
+            [(turn.speaker, turn.text, turn.clock) for turn in parsed.turns],
+            sha=sha,
+            size=len(data),
+            uploader=viewer.key,
+            date=day.isoformat() if day else None,
+        )
+        if not new:
+            return self.filed(viewer, recording, False)
+        found = self.members_named(owner, labels)
+        decided = 0
+        revision = recording.revision
+        assert recording.transcript_id is not None
+        for label in labels:
+            chosen = body.speakers.get(label)
+            person_id = chosen.person_id if chosen else (found[label][0] if label in found else None)
+            outsider = bool(chosen and chosen.outsider)
+            if not person_id and not outsider:
+                continue
+            revision = team.decide(
+                recording.id,
+                recording.transcript_id,
+                revision,
+                label,
+                "confirm" if person_id else "unknown",
+                person_id,
+            )
+            decided += 1
+        self.changed(owner)
+        settled = library.get(recording.id) or recording
+        return {**self.filed(viewer, settled, True), "decided": decided, "unsettled": len(labels) - decided}
+
     def capacity(self) -> dict[str, int]:
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         arriving = count = 0
@@ -1300,6 +1440,37 @@ def register(
         lambda request, upload_id: libraries.finish(libraries.viewer(request), upload_id),
         admit=lambda request, uploads, body: libraries.admit(libraries.viewer(request), body),
     )
+
+    async def transcript_file(file: UploadFile) -> tuple[str, bytes]:
+        name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not name or name.startswith("."):
+            raise HTTPException(400, "文件名无效")
+        data = await file.read(MAX_TRANSCRIPT_BYTES + 1)
+        if len(data) > MAX_TRANSCRIPT_BYTES:
+            raise HTTPException(413, "转写稿太大，请选择 20 MB 以内的文件")
+        if not data:
+            raise HTTPException(400, "这个文件是空的")
+        return name, data
+
+    @app.post("/api/library/transcripts/preview")
+    async def preview_transcript(request: Request, file: Annotated[UploadFile, File()]) -> dict[str, Any]:
+        """What a transcript file holds and who its speakers would be, before anything is brought in."""
+        name, data = await transcript_file(file)
+        return await run_in_threadpool(libraries.transcript_preview, libraries.owner(request), name, data)
+
+    @app.post("/api/library/transcripts", status_code=201)
+    async def import_transcript(
+        request: Request, file: Annotated[UploadFile, File()], payload: Annotated[str, Form()] = "{}"
+    ) -> dict[str, Any]:
+        """Bring a transcript in as a recording that has no sound: its speakers are given to the members they are
+        named for or the importer chose, and the rest wait to be settled."""
+        try:
+            body = TranscriptBody.model_validate_json(payload)
+        except ValidationError:
+            raise HTTPException(400, "导入内容格式无效") from None
+        name, data = await transcript_file(file)
+        owner, viewer = libraries.owner(request), libraries.viewer(request)
+        return await run_in_threadpool(libraries.import_transcript, owner, viewer, name, data, body)
 
     @app.post("/api/library/recordings/{recording_id}/retry", status_code=202)
     def retry(recording_id: str, request: Request) -> dict[str, Any]:

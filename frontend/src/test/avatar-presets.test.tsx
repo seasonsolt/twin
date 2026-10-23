@@ -69,7 +69,7 @@ it.each(Object.entries(presets))(
       );
     }
     expect(
-      view.container.querySelector('[data-mouth] ellipse[fill="#E8826B"]'),
+      view.container.querySelector('[data-mouth] ellipse[fill="#C9776A"]'),
     ).not.toBeNull();
     view.rerender(<Avatar preset={id} mouthLevel={0} />);
     expect(view.container.querySelector('[data-mouth] > g')).toHaveAttribute(

@@ -1,76 +1,89 @@
 import { Eyes, Mouth, type ArtProps } from './animation';
 import { Suit } from './attire';
+import { Face } from './face';
 
 export function Silver({ blink, mouth }: ArtProps) {
   return (
     <>
-      <rect width="220" height="220" fill="#CDD5E1" />
-      <Suit neck="#E7AE8F" jacket="#3D4F6B" lapel="#2F3F57" shirt="#F4EFEA" />
-      <g fill="#FBF8F2" stroke="#D8D2C8" strokeWidth="1">
-        <circle cx="98" cy="171" r="3.2" />
-        <circle cx="104" cy="175" r="3.2" />
-        <circle cx="110" cy="176.5" r="3.2" />
-        <circle cx="116" cy="175" r="3.2" />
-        <circle cx="122" cy="171" r="3.2" />
+      <rect width="220" height="220" fill="#CDD4DE" />
+      <path
+        d="M70 92 C64 124 68 146 78 152 L142 152 C152 146 156 124 150 92Z"
+        fill="#A9AEB7"
+      />
+      <Suit neck="#DDB295" jacket="#33435C" lapel="#27354A" shirt="#F1ECE6" />
+      <g fill="#F7F4EE" stroke="#D3CCC1" strokeWidth=".8">
+        <circle cx="99" cy="159" r="2.6" />
+        <circle cx="104" cy="163" r="2.6" />
+        <circle cx="110" cy="164.5" r="2.6" />
+        <circle cx="116" cy="163" r="2.6" />
+        <circle cx="121" cy="159" r="2.6" />
       </g>
-      <ellipse cx="110" cy="106" rx="52" ry="58" fill="#F5CDB2" />
+      <Face skin="#EEC6AC" shade="#DDB295" deep="#CFA286" jaw="soft" />
       <path
-        d="M54 118 C40 70 70 36 112 38 C154 40 182 72 164 118 C160 96 152 82 138 74 C120 82 96 82 78 76 C66 86 58 100 54 118Z"
-        fill="#D9DBE0"
+        d="M72 104 C66 62 88 42 112 42 C138 42 156 62 148 104 C144 86 138 74 128 68 C112 64 96 70 86 64 C80 76 74 88 72 104Z"
+        fill="#BCC0C7"
       />
       <path
-        d="M72 60 C90 48 120 46 140 56"
-        stroke="#F2F3F6"
-        strokeWidth="4"
+        d="M74 92 C70 116 72 140 80 152 L90 150 C82 132 80 112 80 96Z M146 92 C150 116 148 140 140 152 L130 150 C138 132 140 112 140 96Z"
+        fill="#BCC0C7"
+      />
+      <path
+        d="M90 58 C104 50 122 48 138 56"
+        stroke="#D6D9DE"
+        strokeWidth="1.6"
         fill="none"
         strokeLinecap="round"
       />
       <path
-        d="M77 98 Q87 94 98 97"
-        stroke="#8C8794"
-        strokeWidth="3.5"
+        d="M86 88 Q93 85.5 100 87"
+        stroke="#8A8590"
+        strokeWidth="2"
         fill="none"
         strokeLinecap="round"
       />
       <path
-        d="M122 97 Q133 94 143 98"
-        stroke="#8C8794"
-        strokeWidth="3.5"
+        d="M120 87 Q127 85.5 134 88"
+        stroke="#8A8590"
+        strokeWidth="2"
         fill="none"
         strokeLinecap="round"
       />
-      <Eyes blink={blink} y={110.5}>
-        <ellipse cx="88" cy="110.5" rx="4" ry="5" fill="#3A2B2E" />
-        <ellipse cx="132" cy="110.5" rx="4" ry="5" fill="#3A2B2E" />
-        <circle cx="89.3" cy="108.7" r="1.3" fill="#fff" />
-        <circle cx="133.3" cy="108.7" r="1.3" fill="#fff" />
+      <Eyes blink={blink} y={98}>
+        <path d="M87 98 Q93 93.6 99 98 Q93 101 87 98Z" fill="#33282A" />
+        <path d="M121 98 Q127 93.6 133 98 Q127 101 121 98Z" fill="#33282A" />
+        <path
+          d="M86 97.5 Q93 92.5 100 97 M120 97 Q127 92.5 134 97.5"
+          stroke="#33282A"
+          strokeWidth="1.3"
+          fill="none"
+          strokeLinecap="round"
+        />
       </Eyes>
       <path
-        d="M80 120 Q84 122 88 120 M132 120 Q136 122 140 120"
-        stroke="#D99A84"
-        strokeWidth="1.5"
+        d="M87 104 Q93 106 99 104 M121 104 Q127 106 133 104"
+        stroke="#D4A68C"
+        strokeWidth="1.1"
         fill="none"
         strokeLinecap="round"
       />
       <path
-        d="M107 120 Q110 127 114 125"
-        stroke="#D2937A"
-        strokeWidth="3"
+        d="M110 104 L107 119 Q110 121 113 119"
+        stroke="#C69A80"
+        strokeWidth="1.8"
         fill="none"
         strokeLinecap="round"
+        strokeLinejoin="round"
       />
-      <Mouth level={mouth} y={141.5} color="#A3434A">
+      <Mouth level={mouth} y={132} color="#8A4548">
         <path
           className="mouth"
-          d="M99 140 Q110 147 121 140"
-          stroke="#A3434A"
-          strokeWidth="3.5"
+          d="M102 131 Q110 134 118 131"
+          stroke="#9C5458"
+          strokeWidth="2.6"
           fill="none"
           strokeLinecap="round"
         />
       </Mouth>
-      <circle cx="58" cy="124" r="3.5" fill="#FBF8F2" />
-      <circle cx="162" cy="124" r="3.5" fill="#FBF8F2" />
     </>
   );
 }

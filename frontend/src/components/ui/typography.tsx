@@ -73,6 +73,7 @@ export function Heading({
   id,
   ref,
   tabIndex,
+  title,
   className,
   children,
 }: {
@@ -86,6 +87,8 @@ export function Heading({
   id?: string;
   ref?: Ref<HTMLHeadingElement>;
   tabIndex?: number;
+  /** What the heading leaves unsaid, on hover: a rule or a reason that need not take room on the page. */
+  title?: string;
   /** Layout only (margins, flex). Size, colour and weight come from the props. */
   className?: string;
   children: ReactNode;
@@ -96,6 +99,7 @@ export function Heading({
       id={id}
       ref={ref}
       tabIndex={tabIndex}
+      title={title}
       className={cn(
         weights[weight],
         headingSizes[size ?? defaultHeading[level]],
@@ -119,6 +123,8 @@ type TextProps<T extends ElementType> = {
   truncate?: boolean;
   /** Long unbroken strings (file names, ids) wrap anywhere. */
   breakAll?: boolean;
+  /** Long text shows its first two lines; the whole of it is the hover title and stays for screen readers. */
+  twoLines?: boolean;
   /** Layout only (margins, flex). Size, colour and weight come from the props. */
   className?: string;
   children?: ReactNode;
@@ -136,6 +142,7 @@ export function Text<T extends ElementType = 'p'>({
   align = 'start',
   truncate = false,
   breakAll = false,
+  twoLines = false,
   className,
   children,
   ...props
@@ -152,8 +159,14 @@ export function Text<T extends ElementType = 'p'>({
         align === 'end' && 'text-right',
         truncate && 'truncate',
         breakAll && 'break-all',
+        twoLines && 'line-clamp-2',
         className,
       )}
+      title={
+        twoLines && typeof children === 'string'
+          ? children
+          : (props as { title?: string }).title
+      }
     >
       {children}
     </Tag>

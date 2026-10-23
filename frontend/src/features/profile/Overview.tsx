@@ -230,19 +230,12 @@ function Surest({ revision }: { revision: unknown }) {
   if (!top.length) return null;
   return (
     <Stack gap={2}>
-      <Text size="sm" weight="medium">
-        最有把握的几点
-      </Text>
       <Stack as="ol" gap={2} aria-label="最有把握的几点">
         {top.map((item) => (
           <Row as="li" key={item.item_id} gap={2} align="baseline">
             <LevelDots level={3} max={1} layer={layerOf(item.dimension_id)} />
-            <Text size="sm" className="min-w-0 break-words">
+            <Text size="sm" twoLines className="min-w-0 break-words">
               {item.statement}
-              <Text as="span" size="xs" tone="tertiary">
-                {' '}
-                · {topics[item.dimension_id] ?? item.dimension_name}
-              </Text>
             </Text>
           </Row>
         ))}
@@ -295,10 +288,6 @@ function Aspect({
           <Heading level={4} size="section">
             {topics[id]}
           </Heading>
-          <Text as="span" size="sm" tone="secondary">
-            {levelLabels[level]}
-            {total > 0 && ` · ${total} 条`}
-          </Text>
           {onFill && level <= 1 && (
             <Button
               variant="ghost"
@@ -309,9 +298,12 @@ function Aspect({
             </Button>
           )}
         </Row>
-        <Text size="sm" tone="secondary">
-          {blurbs[id]}
-        </Text>
+        {/* An empty aspect says what it waits to learn; one with memories shows them instead. */}
+        {total === 0 && (
+          <Text size="sm" tone="secondary">
+            {blurbs[id]}
+          </Text>
+        )}
       </Stack>
       {named.length > 0 && (
         <Row as="ul" gap={2} wrap aria-label={`${topics[id]}包括`}>
@@ -423,7 +415,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             profile.coverage?.facets.find(
               (facet) => facet.facet_id === suggestion.facet_id,
             )?.dimension_id ?? `D${suggestion.facet_id.split('.')[0]}`;
-          return suggestions[dimension];
+          return topics[dimension];
         })
         .filter(Boolean),
     ),
@@ -464,30 +456,15 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             <Stack gap={4} grow>
               <Stack gap={1}>
                 <Heading level={3}>我了解到的他</Heading>
-                {empty ? (
+                {empty && (
                   <EmptyState
                     title="还不够了解你"
                     body="添加一些记忆，让我慢慢认识你。"
                   >
                     <TextLink to="?section=memories">添加记忆</TextLink>
                   </EmptyState>
-                ) : (
-                  <Text size="sm" tone="secondary">
-                    共 {total}{' '}
-                    条记忆，回答时都会用到。哪条不对，在下面改掉或删掉。
-                  </Text>
                 )}
               </Stack>
-              <Row gap={4} wrap aria-hidden>
-                {layers.map((group) => (
-                  <Row key={group.layer} gap={2}>
-                    <LevelDots level={1} max={1} layer={group.layer} />
-                    <Text as="span" size="xs" tone="secondary">
-                      {group.label}
-                    </Text>
-                  </Row>
-                ))}
-              </Row>
               {!empty && <Surest key={personaId} revision={profile.summary} />}
             </Stack>
           </Toolbar>
@@ -503,20 +480,19 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             </Button>
           </p>
         )}
-        {(wanted.length > 0 || profile.summary) && (
+        {wanted.length > 0 && (
           <Row gap={3} wrap>
             <Text as="span" size="sm" tone="secondary">
-              这几个方面分身还不了解，或只提到过：
+              了解得还少：{wanted.join('、')}
             </Text>
-            {wanted.map((text) => (
-              <TextLink key={text} to="?section=memories" size="sm">
-                {text}
-              </TextLink>
-            ))}
-            {profile.canTier && (
+            {profile.canTier ? (
               <Button size="sm" onClick={() => setFilling({})}>
                 补一补
               </Button>
+            ) : (
+              <TextLink to="?section=memories" size="sm">
+                添加记忆
+              </TextLink>
             )}
           </Row>
         )}
@@ -529,7 +505,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
               <Input
                 type="search"
                 aria-label="搜索记忆"
-                placeholder="搜一件事，比如：怎么看加班"
+                placeholder="搜记忆"
                 value={text}
                 maxLength={200}
                 onChange={(event) => setText(event.target.value)}

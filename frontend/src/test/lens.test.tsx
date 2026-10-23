@@ -171,7 +171,7 @@ it('offers to publish when there is no lens, and only the aspects with a well-fo
   await user.click(await screen.findByRole('button', { name: '发布赋能' }));
   const panel = await screen.findByRole('dialog', { name: '发布赋能' });
   // One tick an aspect, for those with a well-founded facet, with how well the twin knows it and the check mark.
-  const group = within(panel).getByRole('group', { name: '开放哪些方面' });
+  const group = within(panel).getByRole('group', { name: '开放的方面' });
   expect(within(group).getAllByRole('checkbox')).toHaveLength(2);
   expect(
     within(group).getByRole('checkbox', { name: /擅长什么/u }),
@@ -182,7 +182,7 @@ it('offers to publish when there is no lens, and only the aspects with a well-fo
   expect(within(group).queryByText(/常见取舍|追问习惯/u)).toBeNull();
   expect(within(group).getAllByText('✓')).toHaveLength(2);
   // The others are one folded line, with why in a few words once opened.
-  await user.click(within(group).getByText('另有 2 个方面还不能开放'));
+  await user.click(within(group).getByText('2 个暂不能开放'));
   // The layer fades in: wait for it to be seen.
   await waitFor(() =>
     expect(
@@ -200,9 +200,13 @@ it('offers to publish when there is no lens, and only the aspects with a well-fo
   await user.click(
     within(group).getByRole('checkbox', { name: /怎么做决定/u }),
   );
+  const said = await within(panel).findByText('让价换条件，不单方面降');
+  expect(said).toBeVisible();
+  // The preview is the statements alone, two lines each, the whole on hover: the basis is the colleague's to open.
+  expect(said).toHaveAttribute('title', '让价换条件，不单方面降');
   expect(
-    await within(panel).findByText('让价换条件，不单方面降'),
-  ).toBeVisible();
+    within(within(panel).getByLabelText('预览')).queryByText('依据'),
+  ).toBeNull();
   // An aspect opens all its facets.
   expect(sent('/lenses/preview')).toHaveLength(1);
   expect(JSON.parse(String(sent('/lenses/preview')[0][1].body))).toEqual({
@@ -274,7 +278,10 @@ it('shows a published lens, what it was used for and not by whom, and corrects a
   expect(await screen.findByText('王屿 · 大客户谈判')).toBeVisible();
   expect(screen.getByText('已发布')).toBeVisible();
   expect(screen.getByText('全团队 · 1 个方面 · 本周 12 次')).toBeVisible();
-  expect(screen.getByText('不显示提问人')).toBeVisible();
+  expect(screen.getByRole('heading', { name: '最近被用在哪' })).toHaveAttribute(
+    'title',
+    '只记问题和赋能说的话，不记谁问的',
+  );
   const first = (await screen.findByText(/客户嫌报价高/u)).closest('li')!;
   expect(first).toHaveTextContent(
     '→ 先问清预算是谁定的；让价换条件，不单方面降',
@@ -292,9 +299,13 @@ it('holds, resumes and takes a lens back only after asking', async () => {
   list = { ...list, lenses: [lens()] };
   mount();
   await screen.findByText('王屿 · 大客户谈判');
+  // One action on the row; holding and taking back wait behind ⋯.
+  expect(screen.getByRole('button', { name: '调整范围' })).toBeVisible();
+  await user.click(screen.getByLabelText('更多：大客户谈判'));
   await user.click(screen.getByRole('button', { name: '暂停' }));
   await waitFor(() => expect(sent('/lenses/l1/pause')).toHaveLength(1));
   list = { ...list, lenses: [lens({ status: 'paused' })] };
+  await user.click(screen.getByLabelText('更多：大客户谈判'));
   await user.click(screen.getByRole('button', { name: '撤回' }));
   const ask = await screen.findByRole('dialog');
   expect(ask).toHaveTextContent('撤回后不能恢复');
@@ -315,9 +326,7 @@ it('says a facet was corrected out and shows only the uses that touched it', asy
   };
   uses = [use('u1')];
   mount();
-  expect(
-    await screen.findByText(/“常见取舍”被纠正 3 次，已停用/u),
-  ).toBeVisible();
+  expect(await screen.findByText(/“常见取舍”已停用/u)).toBeVisible();
   await user.click(screen.getByText('去看看 →'));
   await waitFor(() =>
     expect(

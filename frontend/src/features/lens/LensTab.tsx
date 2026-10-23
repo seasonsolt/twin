@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../lib/api';
 import {
+  ActionMenu,
   Badge,
   Button,
   EmptyState,
@@ -79,35 +80,34 @@ function LensBlock({
         <Text as="span" size="sm" tone="secondary">
           {who} · {opened.length} 个方面 · 本周 {lens.uses_week} 次
         </Text>
-        <Row gap={2} as="div">
+        <Row gap={1} as="div">
           <Button size="sm" variant="secondary" onClick={onAdjust}>
             调整范围
           </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() =>
-              void (paused ? act('resume', '已恢复') : act('pause', '已暂停'))
-            }
-          >
-            {paused ? '恢复' : '暂停'}
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() =>
-              void confirm({
-                title: '撤回这个赋能？',
-                body: '同事马上不能再用，撤回后不能恢复；已经问过的对话不变。',
-                confirmLabel: '撤回',
-                tone: 'danger',
-              }).then((ok) => {
-                if (ok) void act('withdraw', '已撤回');
-              })
-            }
-          >
-            撤回
-          </Button>
+          <ActionMenu
+            label={`更多：${lens.name}`}
+            items={[
+              {
+                label: paused ? '恢复' : '暂停',
+                onSelect: () =>
+                  void (paused
+                    ? act('resume', '已恢复')
+                    : act('pause', '已暂停')),
+              },
+              {
+                label: '撤回',
+                onSelect: () =>
+                  void confirm({
+                    title: '撤回这个赋能？',
+                    body: '同事马上不能再用，撤回后不能恢复；已经问过的对话不变。',
+                    confirmLabel: '撤回',
+                    tone: 'danger',
+                  }).then((ok) => {
+                    if (ok) void act('withdraw', '已撤回');
+                  }),
+              },
+            ]}
+          />
         </Row>
       </Row>
       {lens.stopped.map((stopped) => (
@@ -120,13 +120,12 @@ function LensBlock({
             </TextLink>
           }
         >
-          “{stopped.name}”被纠正 {stopAfter} 次，已停用
+          <span title={`被纠正 ${stopAfter} 次`}>“{stopped.name}”已停用</span>
         </Notice>
       ))}
       {idle.length > 0 && (
         <Text size="sm" tone="secondary">
-          {idle.map((name) => `“${name}”`).join('、')}
-          暂时不满足条件，没有在用。
+          {idle.map((name) => `“${name}”`).join('、')}暂未启用
         </Text>
       )}
       <LensUses

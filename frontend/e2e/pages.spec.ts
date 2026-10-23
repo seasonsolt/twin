@@ -235,7 +235,11 @@ const pages: {
     viewport: true,
   },
   // 第 5 屏: a member's page, from the team table (林舟, whose twin is the one in view).
-  { name: 'member', path: '/#/team/u-linzhou', ready: '最有把握的几点' },
+  {
+    name: 'member',
+    path: '/#/team/u-linzhou',
+    ready: '在意团队成员能按时下班',
+  },
   // Someone else's page, seen by whoever looks after the twin: each aspect ends with the way to ask her for more.
   {
     name: 'member-ask',

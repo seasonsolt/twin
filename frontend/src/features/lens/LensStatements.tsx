@@ -7,18 +7,27 @@ function dayOf(iso: string | null): string {
   return match ? `${Number(match[1])} 月 ${Number(match[2])} 日` : '';
 }
 
-/** What a lens says, one statement to a block, each with the words it stands on folded under 依据. */
-export function LensStatements({ views }: { views: LensStatement[] }) {
+/** What a lens says, one statement to a block, each with the words it stands on folded under 依据. `brief` is a
+ * preview's: only the first two lines of each statement. */
+export function LensStatements({
+  views,
+  brief = false,
+}: {
+  views: LensStatement[];
+  brief?: boolean;
+}) {
   return (
     <Stack as="ul" gap={3}>
       {views.map((view) => (
         <li key={`${view.facet_id}-${view.text}`}>
           <Stack gap={1}>
-            <Text>{view.text}</Text>
-            <Text size="xs" tone="secondary">
-              {view.facet}
-            </Text>
-            {view.basis.length > 0 && (
+            <Text twoLines={brief}>{view.text}</Text>
+            {!brief && (
+              <Text size="xs" tone="secondary">
+                {view.facet}
+              </Text>
+            )}
+            {!brief && view.basis.length > 0 && (
               <Disclosure variant="plain" summary="依据">
                 <Stack as="ul" gap={2}>
                   {view.basis.map((basis) => (

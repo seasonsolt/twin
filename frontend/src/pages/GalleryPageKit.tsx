@@ -485,6 +485,10 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             <Text size="xs" tone="tertiary">
               xs · 12px 角注
             </Text>
+            <Text size="sm" twoLines className="max-w-md">
+              twoLines ·
+              长文本只显示前两行，完整内容在悬停提示里：说明、记忆条目、预览这类可能很长的数据用它，列表一行不被一段话撑开，用户的注意力留在要做决定的那几个字上。
+            </Text>
             <Text size="sm" tone="danger" role="alert">
               tone 只取语义颜色：secondary / tertiary / accent / success /
               warning / danger / info

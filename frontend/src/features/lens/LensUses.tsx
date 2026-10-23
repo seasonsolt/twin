@@ -76,10 +76,13 @@ export function LensUses({
   return (
     <Stack gap={2}>
       <Row gap={2} wrap>
-        <Heading level={3} size="section">
+        <Heading
+          level={3}
+          size="section"
+          title="只记问题和赋能说的话，不记谁问的"
+        >
           最近被用在哪
         </Heading>
-        <Badge title="只记问题和赋能说的话">不显示提问人</Badge>
         {facet && <TextLink onClick={() => onFacet(null)}>看全部</TextLink>}
       </Row>
       {error && (

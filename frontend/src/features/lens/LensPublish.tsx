@@ -190,13 +190,13 @@ export function LensPublish({
             onChange={(event) => setName(event.target.value)}
           />
         </Field>
-        <Stack gap={2} role="group" aria-label="开放哪些方面">
+        <Stack gap={2} role="group" aria-label="开放的方面">
           <Heading level={3} size="item">
-            开放哪些方面
+            开放的方面
           </Heading>
           {openable.length === 0 && (
             <Text size="sm" tone="secondary">
-              还没有哪个方面够格开放。
+              暂无可开放的方面
             </Text>
           )}
           {openable.map((aspect) => (
@@ -213,7 +213,7 @@ export function LensPublish({
               variant="plain"
               summary={
                 <Text as="span" size="sm" tone="secondary">
-                  另有 {blocked.length} 个方面还不能开放
+                  {blocked.length} 个暂不能开放
                 </Text>
               }
             >
@@ -260,7 +260,7 @@ export function LensPublish({
                   {person} · {name.trim() || '赋能'}
                 </Text>
               </Row>
-              <LensStatements views={views} />
+              <LensStatements views={views} brief />
               <Text size="xs" tone="tertiary">
                 根据{person}说过的话推测
               </Text>

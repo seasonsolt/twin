@@ -196,7 +196,12 @@ it('groups by plain topics, hides internal ids/metrics, caps suggestions and lin
   expect(screen.queryByText('internal')).not.toBeInTheDocument();
   expect(screen.queryByText('2.1')).not.toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
-  expect(screen.getAllByRole('link', { name: /^多写写你/ })).toHaveLength(5);
+  // What is known too little is said once, in a line, with one way to add to it.
+  expect(
+    screen.getByText(/^了解得还少：/).textContent?.split('、'),
+  ).toHaveLength(5);
+  expect(screen.getByRole('link', { name: '添加记忆' })).toBeVisible();
+  expect(screen.queryByRole('link', { name: /^多写写你/ })).toBeNull();
   // The fixed questions are gone: 补一补 asks about what is least known, and only the person is asked.
   expect(screen.queryByRole('link', { name: '回答几个问题' })).toBeNull();
   expect(screen.queryByRole('button', { name: '补一补' })).toBeNull();
@@ -301,11 +306,8 @@ it('lays out all nine aspects in three layers, counts non-rejected items, and op
   expect(
     screen.getByRole('img', { name: '九个方面里已了解 3 个' }),
   ).toBeVisible();
-  expect(
-    screen.getByText(
-      '共 10 条记忆，回答时都会用到。哪条不对，在下面改掉或删掉。',
-    ),
-  ).toBeVisible();
+  // The count is on the 记忆 tab already: the overview does not say it again, nor how memories are used.
+  expect(screen.queryByText(/条记忆/u)).toBeNull();
   expect(screen.getByRole('tablist', { name: '九个方面' })).toHaveClass(
     'overflow-x-auto',
   );
@@ -575,7 +577,9 @@ it('shows how far a library update has gone in place of the refused profile, the
       data: { ...useStatus.getState().data!, memory_updating: false },
     }),
   );
-  expect(await screen.findByText(/共 1/u)).toBeInTheDocument();
+  expect(
+    await screen.findByRole('heading', { name: '我了解到的他' }),
+  ).toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
 });
 
@@ -622,8 +626,11 @@ it('names how well an aspect and its facets are known in four levels, with a tic
   const user = userEvent.setup();
   await user.click(await screen.findByRole('tab', { name: '看重什么 3' }));
   const panel = await screen.findByRole('tabpanel', { name: '看重什么 3' });
-  // The aspect is the rounded mean of its facets (3, 1, 2 and 3): 了解较多 (2.25 rounds to 2, so 了解一些).
-  expect(await within(panel).findByText(/了解一些 · 3 条/u)).toBeVisible();
+  // How well the aspect is known shows once, as dots beside its name in the list: the panel does not say it again.
+  expect(
+    await within(panel).findByRole('img', { name: '了解较多 ✓' }),
+  ).toBeInTheDocument();
+  expect(within(panel).queryByText(/了解一些|3 条/u)).toBeNull();
   expect(
     within(panel).getByRole('img', { name: '了解较多 ✓' }),
   ).toBeInTheDocument();

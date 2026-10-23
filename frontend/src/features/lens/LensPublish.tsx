@@ -18,14 +18,22 @@ import {
 } from '../../components/ui';
 import { useTeam } from '../../stores/team';
 import { LensStatements } from './LensStatements';
-import type { FacetVerdict, Lens, LensList, LensStatement } from './types';
+import {
+  aspectsOf,
+  type Aspect,
+  type Lens,
+  type LensList,
+  type LensStatement,
+} from './types';
 
 const NAME_MAX = 20;
 
 /**
- * 发布赋能, a layer beside the page: a name, the facets to open (only those well founded can be ticked; the rest are
- * folded under 还不能开放 with why), whom it is for, and a preview of how it reads. With `lens` it adjusts one that is
- * published: a facet that was corrected out shows 已停用, and ticking it opens it afresh.
+ * 发布赋能, a layer beside the page: a name, the aspects to open (one tick each; only those with a well-founded facet
+ * can be ticked, the rest are one folded line), whom it is for, and a preview of how it reads. An aspect opens all its
+ * facets: the lens speaks from those well founded and the others join as the twin learns them. With `lens` it adjusts
+ * one that is published: an aspect with a facet corrected out shows 已停用 and keeps that facet out; ticking the aspect
+ * again (off, then on) opens it afresh.
  */
 export function LensPublish({
   open,
@@ -47,17 +55,30 @@ export function LensPublish({
   lens?: Lens;
 }) {
   const people = useTeam((state) => state.people);
-  const stopped = useMemo(
+  const aspects = useMemo(() => aspectsOf(data.facets), [data.facets]);
+  // Facets corrected out, and the aspects they belong to.
+  const off = useMemo(
     () => new Set(lens?.stopped.map((s) => s.facet_id) ?? []),
     [lens],
   );
+  const stopped = useMemo(
+    () =>
+      new Set(
+        aspects
+          .filter((a) => a.facets.some((f) => off.has(f.facet_id)))
+          .map((a) => a.id),
+      ),
+    [aspects, off],
+  );
+  // Aspects ticked here: opened afresh, so what was corrected out of them is opened again.
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
   const [name, setName] = useState(lens?.name ?? '');
   const [chosen, setChosen] = useState<Set<string>>(
     () =>
       new Set(
         (lens?.facets ?? [])
-          .map((f) => f.facet_id)
-          .filter((id) => !stopped.has(id)),
+          .filter((f) => !lens?.stopped.some((s) => s.facet_id === f.facet_id))
+          .map((f) => f.dimension_id),
       ),
   );
   const [scope, setScope] = useState<'team' | 'people'>(
@@ -69,14 +90,18 @@ export function LensPublish({
   const [views, setViews] = useState<LensStatement[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const openable = data.facets.filter((facet) => facet.ok);
-  const blocked = data.facets.filter((facet) => !facet.ok);
+  const openable = aspects.filter((aspect) => aspect.ok);
+  const blocked = aspects.filter((aspect) => !aspect.ok);
   const colleagues = (people ?? []).filter(
     (p) => p.persona_id && p.persona_id !== twinId,
   );
-  const picked = [...chosen].filter((id) =>
-    openable.some((facet) => facet.facet_id === id),
-  );
+  const picked = openable
+    .filter((aspect) => chosen.has(aspect.id))
+    .flatMap((aspect) =>
+      aspect.facets
+        .filter((facet) => fresh.has(aspect.id) || !off.has(facet.facet_id))
+        .map((facet) => facet.facet_id),
+    );
   // How it would read, for the facets ticked; asked again a moment after the ticks change.
   const pickedKey = picked.join();
   useEffect(() => {
@@ -101,13 +126,16 @@ export function LensPublish({
       window.clearTimeout(timer);
     };
   }, [open, pickedKey]);
-  const toggle = (id: string, on: boolean) =>
-    setChosen((now) => {
+  const toggle = (id: string, on: boolean) => {
+    const flip = (now: Set<string>) => {
       const next = new Set(now);
       if (on) next.add(id);
       else next.delete(id);
       return next;
-    });
+    };
+    setChosen(flip);
+    setFresh(flip);
+  };
   const toggleTwin = (id: string, on: boolean) =>
     setTwins((now) => {
       const next = new Set(now);
@@ -168,32 +196,27 @@ export function LensPublish({
               还没有哪个方面够格开放。
             </Text>
           )}
-          {openable.map((facet) => (
-            <FacetChoice
-              key={facet.facet_id}
-              facet={facet}
-              checked={chosen.has(facet.facet_id)}
-              stopped={stopped.has(facet.facet_id)}
-              onChange={(on) => toggle(facet.facet_id, on)}
+          {openable.map((aspect) => (
+            <AspectChoice
+              key={aspect.id}
+              aspect={aspect}
+              checked={chosen.has(aspect.id)}
+              stopped={stopped.has(aspect.id)}
+              onChange={(on) => toggle(aspect.id, on)}
             />
           ))}
           {blocked.length > 0 && (
             <Disclosure
               variant="plain"
-              summary={`还不能开放 ${blocked.length}`}
+              summary={
+                <Text as="span" size="sm" tone="secondary">
+                  另有 {blocked.length} 个方面还不能开放
+                </Text>
+              }
             >
-              <Stack as="ul" gap={2}>
-                {blocked.map((facet) => (
-                  <li key={facet.facet_id}>
-                    <Text size="sm">
-                      {facet.dimension} › {facet.name}
-                    </Text>
-                    <Text size="xs" tone="secondary">
-                      {facet.reasons.join('、')}
-                    </Text>
-                  </li>
-                ))}
-              </Stack>
+              <Text size="sm" tone="secondary">
+                {blocked.map((a) => `${a.name}：${a.reason}`).join('；')}
+              </Text>
             </Disclosure>
           )}
         </Stack>
@@ -263,26 +286,26 @@ export function LensPublish({
   );
 }
 
-/** A facet that can be opened: its place in the aspects, how well the twin knows it, and the tick. */
-function FacetChoice({
-  facet,
+/** An aspect that can be opened: how well the twin knows its best facet, and the tick. */
+function AspectChoice({
+  aspect,
   checked,
   stopped,
   onChange,
 }: {
-  facet: FacetVerdict;
+  aspect: Aspect;
   checked: boolean;
   stopped: boolean;
   onChange: (on: boolean) => void;
 }) {
   return (
     <Checkbox
-      label={`${facet.dimension} › ${facet.name}`}
+      label={aspect.name}
       checked={checked}
       onChange={(event) => onChange(event.target.checked)}
     >
-      <LevelDots level={facet.level} label={facet.label} />
-      {facet.checked && <Badge tone="success">✓</Badge>}
+      <LevelDots level={aspect.level} label={aspect.label} />
+      {aspect.checked && <Badge tone="success">✓</Badge>}
       {stopped && <Badge tone="warning">已停用</Badge>}
     </Checkbox>
   );

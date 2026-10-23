@@ -53,6 +53,16 @@ function LensBlock({
     }
   };
   const paused = lens.status === 'paused';
+  // The aspects it opens, and those of them none of whose facets it speaks from (none corrected out either).
+  const opened = [...new Set(lens.facets.map((f) => f.dimension))];
+  const off = new Set(lens.stopped.map((s) => s.facet_id));
+  const idle = opened.filter((aspect) =>
+    lens.facets
+      .filter((f) => f.dimension === aspect)
+      .every(
+        (f) => !lens.speaking.includes(f.facet_id) && !off.has(f.facet_id),
+      ),
+  );
   const who =
     lens.audience.scope === 'team'
       ? '全团队'
@@ -67,7 +77,7 @@ function LensBlock({
           {paused ? '已暂停' : '已发布'}
         </Badge>
         <Text as="span" size="sm" tone="secondary">
-          {who} · {lens.facets.length} 个方面 · 本周 {lens.uses_week} 次
+          {who} · {opened.length} 个方面 · 本周 {lens.uses_week} 次
         </Text>
         <Row gap={2} as="div">
           <Button size="sm" variant="secondary" onClick={onAdjust}>
@@ -113,12 +123,9 @@ function LensBlock({
           “{stopped.name}”被纠正 {stopAfter} 次，已停用
         </Notice>
       ))}
-      {lens.failing.length > 0 && (
+      {idle.length > 0 && (
         <Text size="sm" tone="secondary">
-          {lens.facets
-            .filter((f) => lens.failing.includes(f.facet_id))
-            .map((f) => `“${f.name}”`)
-            .join('、')}
+          {idle.map((name) => `“${name}”`).join('、')}
           暂时不满足条件，没有在用。
         </Text>
       )}

@@ -620,8 +620,8 @@ test('publish a lens', async ({ page }, info) => {
   await page.getByRole('button', { name: '发布赋能' }).click();
   const dialog = page.getByRole('dialog', { name: '发布赋能' });
   await dialog.getByRole('textbox', { name: '名字' }).fill('大客户谈判');
-  await dialog.getByRole('checkbox', { name: /依据偏好/ }).check();
-  await dialog.getByRole('checkbox', { name: /做事的原则/ }).check();
+  await dialog.getByRole('checkbox', { name: /怎么做决定/ }).check();
+  await dialog.getByRole('checkbox', { name: /擅长什么/ }).check();
   await expect(dialog.getByRole('region', { name: '预览' })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot(`lens-publish-${info.project.name}.png`);

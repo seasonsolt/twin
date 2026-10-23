@@ -45,40 +45,32 @@ def reasons(items: list[PersonaItem], tiers: dict[str, str] | None = None) -> di
 # ------------------------------------------------------------------ which facets can be opened
 
 
-def test_a_facet_is_opened_only_when_every_part_of_the_bar_is_met() -> None:
+def test_a_facet_is_opened_when_the_twin_knows_it_well_and_nothing_contradicts() -> None:
     found = reasons(
         [
             ready("a", "3.4", TRADE),
-            # Two occasions: the twin's own level can be reached with two, the lens asks for three.
-            item("b", "3.3", BASIS, sources=2, behavior=True, kinds=OTHER_KINDS),
-            # Three occasions, but what others said of the person.
-            ready("c", "5.1", "拿手的是大客户谈判", own_words=False),
-            # One kind of source only.
-            item("d", "3.1", "宁可慢一点也不冒险", sources=3, behavior=True),
             # Contradicted.
             ready("e", "2.1", "先交付再谈价值", conflict="说的和做的不一样"),
         ]
     )
     assert found["3.4"] == ()
-    assert found["3.3"] == ("场合不足 3 个",)
-    assert "多是别人的话" in found["5.1"]
-    assert found["3.1"] == ("来源只有一种",)
     assert "内容有矛盾" in found["2.1"]
     # A facet the twin hardly knows is not a good deal known, either.
-    assert "了解还不够多" in reasons([item("f", "4.1", "先画流程图", sources=1)])["4.1"]
+    assert reasons([item("f", "4.1", "先画流程图", sources=1)])["4.1"] == ("了解还不够多",)
     # A facet nothing is known of cannot be opened either.
     assert found["4.2"] == ("还没有记忆",)
 
 
-def test_own_words_have_to_be_most_of_what_a_facet_stands_on() -> None:
-    mixed = ready("a", "3.4", TRADE)
-    # Half of the evidence is others' words: not "mostly" the person's own.
-    mixed = mixed.model_copy(
-        update={"evidence": [e.model_copy(update={"own_words": n % 2 == 0}) for n, e in enumerate(mixed.evidence)]}
-    )
-    assert "多是别人的话" not in reasons([mixed])["3.4"]  # two of three are their own
-    half = mixed.model_copy(update={"evidence": mixed.evidence[:2]})
-    assert "多是别人的话" in reasons([half])["3.4"]  # one of two
+def test_occasions_own_words_and_kinds_of_source_count_once_through_the_level() -> None:
+    # Fewer occasions, others' words, one kind of source: each weighs on the level and is never a reason of its own.
+    thin = [
+        item("b", "3.3", BASIS, sources=2, behavior=True, kinds=OTHER_KINDS),
+        ready("c", "5.1", "拿手的是大客户谈判", own_words=False),
+        item("d", "3.1", "宁可慢一点也不冒险", sources=3, behavior=True),
+    ]
+    for verdict in judge(thin, {}, dt.date(2026, 10, 1)):
+        if verdict.facet_id in ("3.3", "5.1", "3.1"):
+            assert verdict.reasons == (() if verdict.level >= 3 else ("了解还不够多",))
 
 
 def test_only_judgement_is_offered_never_experience_speech_or_life() -> None:
@@ -126,8 +118,8 @@ def scene(team: Team) -> Team:
             ready("pi_trade", "3.4", TRADE),
             ready("pi_basis", "3.3", BASIS),
             ready("pi_principle", "2.3", PRINCIPLE),
-            # Not well founded yet: two occasions only.
-            item("pi_new", "4.2", "遇到新事先拆成三件小事", sources=2, behavior=True, kinds=OTHER_KINDS),
+            # Not well founded yet: said once.
+            item("pi_new", "4.2", "遇到新事先拆成三件小事", sources=1),
             # The person's own.
             ready("pi_family", "9.3", "周末陪家人，不接工作电话"),
         ],
@@ -186,16 +178,17 @@ def test_the_page_lists_every_facet_with_whether_it_can_be_opened_and_why_not(sc
         and by_facet["3.4"]["label"] == "了解较多"
         and by_facet["3.4"]["dimension"] == "怎么做决定"
     )
-    assert not by_facet["4.2"]["ok"] and by_facet["4.2"]["reasons"] == ["场合不足 3 个"]
+    assert not by_facet["4.2"]["ok"] and by_facet["4.2"]["reasons"] == ["了解还不够多"]
     # Life is not a facet a lens can open at all.
     assert "9.3" not in by_facet
 
 
 def test_a_facet_that_does_not_pass_cannot_be_opened_and_the_refusal_names_it(scene: Team) -> None:
-    refused = publish(scene, ["3.4", "4.2"])
+    # How they think: no facet of it passes, so the aspect cannot be opened, and the refusal names the aspect.
+    refused = publish(scene, ["3.4", "4.1", "4.2", "4.3", "4.4"])
     assert refused.status_code == 400
-    assert "追问习惯" in refused.json()["detail"] and "场合不足" in refused.json()["detail"]
-    assert "常见取舍" not in refused.json()["detail"]
+    assert "怎么思考" in refused.json()["detail"] and "了解还不够多" in refused.json()["detail"]
+    assert "怎么做决定" not in refused.json()["detail"]
     # A facet outside judgement, and nothing at all.
     assert publish(scene, ["9.3"]).status_code == 400
     assert publish(scene, []).status_code == 400
@@ -238,6 +231,17 @@ def test_a_published_lens_is_seen_with_what_it_opens_and_who_it_is_for(scene: Te
     assert [f["name"] for f in lens["facets"]] == ["做事的原则", "常见取舍"]
     assert lens["speaking"] == ["2.3", "3.4"] and lens["stopped"] == [] and lens["uses_week"] == 0
     assert lens["audience"] == {"scope": "people", "twins": [scene.twins["shen"].persona]}
+
+
+def test_an_aspect_opens_with_the_facets_that_pass_and_the_others_wait(scene: Team) -> None:
+    decide = [f for f in LENS_FACETS if f.startswith("3.")]
+    response = publish(scene, decide)
+    assert response.status_code == 201, response.text
+    lens = response.json()
+    # The whole aspect is opened; it speaks only from what is well founded, the rest join as the twin learns them.
+    assert [f["facet_id"] for f in lens["facets"]] == decide
+    assert {f["dimension_id"] for f in lens["facets"]} == {"D3"}
+    assert lens["speaking"] == ["3.3", "3.4"]
 
 
 def test_a_preview_reads_like_the_lens_and_keeps_nothing(scene: Team) -> None:

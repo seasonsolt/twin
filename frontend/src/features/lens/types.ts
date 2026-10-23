@@ -15,6 +15,57 @@ export interface FacetVerdict {
   reasons: string[];
 }
 
+/** One of the four aspects a lens opens whole: it can be opened when a facet of it is well founded. */
+export interface Aspect {
+  id: string;
+  name: string;
+  facets: FacetVerdict[];
+  ok: boolean;
+  /** How well the twin knows its best facet. */
+  level: number;
+  label: string;
+  checked: boolean;
+  /** Why it cannot be opened yet, in a few words; empty when it can. */
+  reason: string;
+}
+
+// The reason an aspect shows when no facet of it passes: what to do about it first.
+const REASON_ORDER = [
+  '内容有矛盾',
+  '了解还不够多',
+  '只有本人能用',
+  '还没有记忆',
+];
+
+/** The facets grouped into their aspects, in the order they come. */
+export function aspectsOf(facets: FacetVerdict[]): Aspect[] {
+  const groups = new Map<string, FacetVerdict[]>();
+  for (const facet of facets)
+    groups.set(facet.dimension_id, [
+      ...(groups.get(facet.dimension_id) ?? []),
+      facet,
+    ]);
+  return [...groups.entries()].map(([id, members]) => {
+    const passing = members.filter((f) => f.ok);
+    const best = [...(passing.length ? passing : members)].sort(
+      (a, b) => b.level - a.level,
+    )[0];
+    const reasons = new Set(members.flatMap((f) => f.reasons));
+    return {
+      id,
+      name: members[0].dimension,
+      facets: members,
+      ok: passing.length > 0,
+      level: best.level,
+      label: best.label,
+      checked: passing.some((f) => f.checked),
+      reason: passing.length
+        ? ''
+        : (REASON_ORDER.find((r) => reasons.has(r)) ?? [...reasons][0] ?? ''),
+    };
+  });
+}
+
 export type LensStatus = 'active' | 'paused' | 'withdrawn';
 
 /** Whom a lens is for: everyone, or the people named by their twin. */
@@ -30,7 +81,13 @@ export interface Lens {
   status: LensStatus;
   published_at: string;
   audience: LensAudience;
-  facets: { facet_id: string; name: string }[];
+  /** Every facet of the aspects it opens, with the aspect it belongs to. */
+  facets: {
+    facet_id: string;
+    name: string;
+    dimension_id: string;
+    dimension: string;
+  }[];
   /** The opened facets it speaks from now. */
   speaking: string[];
   /** Opened, and no longer well founded (a contradiction, a memory made private). */

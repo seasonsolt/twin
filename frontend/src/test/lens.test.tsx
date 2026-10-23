@@ -38,7 +38,7 @@ const facet = (
 ): FacetVerdict => ({
   facet_id: id,
   name,
-  dimension_id: 'D3',
+  dimension_id: `D${id.split('.')[0]}`,
   dimension,
   level: 3,
   label: '了解较多',
@@ -57,13 +57,13 @@ const facets = [
     ok: false,
     level: 2,
     label: '了解一些',
-    reasons: ['场合不足 3 个'],
+    reasons: ['了解还不够多'],
   }),
   facet('2.3', '做事的原则', '看重什么', {
     ok: false,
-    level: 1,
-    label: '提到过',
-    reasons: ['多是别人的话', '来源只有一种'],
+    level: 0,
+    label: '还不了解',
+    reasons: ['还没有记忆'],
   }),
 ];
 const lens = (extra: Partial<Lens> = {}): Lens => ({
@@ -73,8 +73,18 @@ const lens = (extra: Partial<Lens> = {}): Lens => ({
   published_at: '2026-10-20T09:00:00+00:00',
   audience: { scope: 'team', twins: [] },
   facets: [
-    { facet_id: '3.4', name: '常见取舍' },
-    { facet_id: '3.3', name: '依据偏好' },
+    {
+      facet_id: '3.4',
+      name: '常见取舍',
+      dimension_id: 'D3',
+      dimension: '怎么做决定',
+    },
+    {
+      facet_id: '3.3',
+      name: '依据偏好',
+      dimension_id: 'D3',
+      dimension: '怎么做决定',
+    },
   ],
   speaking: ['3.4', '3.3'],
   failing: [],
@@ -155,33 +165,30 @@ const mount = () =>
     </TooltipProvider>,
   );
 
-it('offers to publish when there is no lens, and only the facets that are well founded can be ticked', async () => {
+it('offers to publish when there is no lens, and only the aspects with a well-founded facet can be ticked', async () => {
   const user = userEvent.setup();
   mount();
   await user.click(await screen.findByRole('button', { name: '发布赋能' }));
   const panel = await screen.findByRole('dialog', { name: '发布赋能' });
-  // What is well founded can be ticked, with where it sits and how well the twin knows it, and the check mark.
+  // One tick an aspect, for those with a well-founded facet, with how well the twin knows it and the check mark.
   const group = within(panel).getByRole('group', { name: '开放哪些方面' });
+  expect(within(group).getAllByRole('checkbox')).toHaveLength(2);
   expect(
-    within(group).getByRole('checkbox', { name: /擅长什么 › 拿手的事/u }),
+    within(group).getByRole('checkbox', { name: /擅长什么/u }),
   ).toBeEnabled();
   expect(
-    within(group).getByRole('checkbox', { name: /常见取舍/u }),
+    within(group).getByRole('checkbox', { name: /怎么做决定/u }),
   ).toBeEnabled();
-  expect(
-    within(group).queryByRole('checkbox', { name: /追问习惯/u }),
-  ).toBeNull();
-  expect(
-    within(group).queryByRole('checkbox', { name: /做事的原则/u }),
-  ).toBeNull();
+  expect(within(group).queryByText(/常见取舍|追问习惯/u)).toBeNull();
   expect(within(group).getAllByText('✓')).toHaveLength(2);
-  // The others are folded with why not.
-  await user.click(within(group).getByText('还不能开放 2'));
+  // The others are one folded line, with why in a few words once opened.
+  await user.click(within(group).getByText('另有 2 个方面还不能开放'));
   // The layer fades in: wait for it to be seen.
   await waitFor(() =>
-    expect(within(group).getByText('场合不足 3 个')).toBeVisible(),
+    expect(
+      within(group).getByText('怎么思考：了解还不够多；看重什么：还没有记忆'),
+    ).toBeVisible(),
   );
-  expect(within(group).getByText('多是别人的话、来源只有一种')).toBeVisible();
   // Nothing can be published without a name and a facet.
   const publish = within(panel).getByRole('button', { name: '发布给全团队' });
   expect(publish).toBeDisabled();
@@ -190,19 +197,22 @@ it('offers to publish when there is no lens, and only the facets that are well f
     '大客户谈判',
   );
   expect(publish).toBeDisabled();
-  await user.click(within(group).getByRole('checkbox', { name: /常见取舍/u }));
+  await user.click(
+    within(group).getByRole('checkbox', { name: /怎么做决定/u }),
+  );
   expect(
     await within(panel).findByText('让价换条件，不单方面降'),
   ).toBeVisible();
+  // An aspect opens all its facets.
   expect(sent('/lenses/preview')).toHaveLength(1);
   expect(JSON.parse(String(sent('/lenses/preview')[0][1].body))).toEqual({
-    facets: ['3.4'],
+    facets: ['3.4', '3.3'],
   });
   await user.click(publish);
   await waitFor(() => expect(sent('/api/persona/lenses')).toHaveLength(1));
   expect(JSON.parse(String(sent('/api/persona/lenses')[0][1].body))).toEqual({
     name: '大客户谈判',
-    facets: ['3.4'],
+    facets: ['3.4', '3.3'],
     audience: { scope: 'team', twins: [] },
   });
 });
@@ -213,7 +223,9 @@ it('publishes to named people, never to the person themself, and needs at least 
   await user.click(await screen.findByRole('button', { name: '发布赋能' }));
   const panel = await screen.findByRole('dialog', { name: '发布赋能' });
   await user.type(within(panel).getByRole('textbox', { name: '名字' }), '谈判');
-  await user.click(within(panel).getByRole('checkbox', { name: /常见取舍/u }));
+  await user.click(
+    within(panel).getByRole('checkbox', { name: /怎么做决定/u }),
+  );
   await user.click(within(panel).getByRole('radio', { name: '指定的人' }));
   expect(within(panel).queryByRole('checkbox', { name: '王屿' })).toBeNull();
   expect(
@@ -236,16 +248,18 @@ it('says what the server refused with and keeps the panel open', async () => {
     if (url === '/api/persona/lenses' && (init?.method ?? 'GET') === 'GET')
       return json(list);
     if (url === '/api/persona/lenses/preview') return json({ views: [] });
-    return json({ detail: '还不能开放：常见取舍（来源只有一种）' }, 400);
+    return json({ detail: '还不能开放：怎么做决定（了解还不够多）' }, 400);
   });
   mount();
   await user.click(await screen.findByRole('button', { name: '发布赋能' }));
   const panel = await screen.findByRole('dialog', { name: '发布赋能' });
   await user.type(within(panel).getByRole('textbox', { name: '名字' }), '谈判');
-  await user.click(within(panel).getByRole('checkbox', { name: /常见取舍/u }));
+  await user.click(
+    within(panel).getByRole('checkbox', { name: /怎么做决定/u }),
+  );
   await user.click(within(panel).getByRole('button', { name: '发布给全团队' }));
   expect(await within(panel).findByRole('alert')).toHaveTextContent(
-    '来源只有一种',
+    '了解还不够多',
   );
 });
 
@@ -259,7 +273,7 @@ it('shows a published lens, what it was used for and not by whom, and corrects a
   mount();
   expect(await screen.findByText('王屿 · 大客户谈判')).toBeVisible();
   expect(screen.getByText('已发布')).toBeVisible();
-  expect(screen.getByText('全团队 · 2 个方面 · 本周 12 次')).toBeVisible();
+  expect(screen.getByText('全团队 · 1 个方面 · 本周 12 次')).toBeVisible();
   expect(screen.getByText('不显示提问人')).toBeVisible();
   const first = (await screen.findByText(/客户嫌报价高/u)).closest('li')!;
   expect(first).toHaveTextContent(
@@ -314,7 +328,7 @@ it('says a facet was corrected out and shows only the uses that touched it', asy
   );
 });
 
-it('adjusts the scope: a facet that was corrected out is unticked and says so, ticking it opens it afresh', async () => {
+it('adjusts the scope: an aspect with a facet corrected out says so and keeps it out until it is ticked again', async () => {
   const user = userEvent.setup();
   list = {
     ...list,
@@ -328,18 +342,39 @@ it('adjusts the scope: a facet that was corrected out is unticked and says so, t
   mount();
   await user.click(await screen.findByRole('button', { name: '调整范围' }));
   const panel = await screen.findByRole('dialog', { name: '调整范围' });
-  const stopped = within(panel).getByRole('checkbox', { name: /常见取舍/u });
-  expect(stopped).not.toBeChecked();
+  const decide = within(panel).getByRole('checkbox', { name: /怎么做决定/u });
+  expect(decide).toBeChecked();
   expect(within(panel).getByText('已停用')).toBeInTheDocument();
+  // Saved as it is: the facet corrected out stays out.
+  await user.click(within(panel).getByRole('button', { name: '保存' }));
+  await waitFor(() => expect(sent('/lenses/l1', 'PATCH')).toHaveLength(1));
   expect(
-    within(panel).getByRole('checkbox', { name: /依据偏好/u }),
-  ).toBeChecked();
-  await user.click(stopped);
+    JSON.parse(String(sent('/lenses/l1', 'PATCH')[0][1].body)).facets,
+  ).toEqual(['3.3']);
+});
+
+it('opens an aspect afresh when it is ticked again, the facet corrected out with it', async () => {
+  const user = userEvent.setup();
+  list = {
+    ...list,
+    lenses: [
+      lens({
+        speaking: ['3.3'],
+        stopped: [{ facet_id: '3.4', name: '常见取舍', corrected: 3 }],
+      }),
+    ],
+  };
+  mount();
+  await user.click(await screen.findByRole('button', { name: '调整范围' }));
+  const panel = await screen.findByRole('dialog', { name: '调整范围' });
+  const decide = within(panel).getByRole('checkbox', { name: /怎么做决定/u });
+  await user.click(decide);
+  await user.click(decide);
   await user.click(within(panel).getByRole('button', { name: '保存' }));
   await waitFor(() => expect(sent('/lenses/l1', 'PATCH')).toHaveLength(1));
   expect(JSON.parse(String(sent('/lenses/l1', 'PATCH')[0][1].body))).toEqual({
     name: '大客户谈判',
-    facets: ['3.3', '3.4'],
+    facets: ['3.4', '3.3'],
     audience: { scope: 'team', twins: [] },
   });
 });

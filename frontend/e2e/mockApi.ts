@@ -725,7 +725,7 @@ const lensFacet = (
 ) => ({
   facet_id,
   name,
-  dimension_id: 'D3',
+  dimension_id: `D${facet_id.split('.')[0]}`,
   dimension,
   level: 3,
   label: '了解较多',
@@ -737,53 +737,62 @@ const lensFacet = (
   ...more,
 });
 export const lensFacets = [
-  lensFacet('5.1', '拿手的事', '擅长什么', {
-    checked: true,
-    checked_label: '回答经过检查',
-  }),
-  lensFacet('3.4', '常见取舍', '怎么做决定'),
-  lensFacet('3.3', '依据偏好', '怎么做决定', {
-    checked: true,
-    checked_label: '回答经过检查',
-  }),
-  lensFacet('4.2', '追问习惯', '怎么思考'),
-  lensFacet('2.3', '做事的原则', '看重什么'),
   lensFacet('2.1', '核心价值排序', '看重什么', {
     ok: false,
     level: 2,
     label: '了解一些',
     occasions: 2,
-    reasons: ['场合不足 3 个'],
+    reasons: ['了解还不够多'],
+  }),
+  lensFacet('2.3', '做事的原则', '看重什么', {
+    ok: false,
+    level: 0,
+    label: '还不了解',
+    occasions: 0,
+    reasons: ['还没有记忆'],
   }),
   lensFacet('3.1', '风险偏好', '怎么做决定', {
     ok: false,
     level: 1,
     label: '提到过',
     occasions: 1,
-    reasons: ['多是别人的话', '来源只有一种'],
+    reasons: ['了解还不够多'],
   }),
+  lensFacet('3.3', '依据偏好', '怎么做决定', {
+    checked: true,
+    checked_label: '回答经过检查',
+  }),
+  lensFacet('3.4', '常见取舍', '怎么做决定'),
+  lensFacet('4.2', '追问习惯', '怎么思考'),
   lensFacet('4.4', '对不确定性的处理', '怎么思考', {
     ok: false,
     level: 2,
     label: '了解一些',
-    reasons: ['内容有矛盾'],
+    reasons: ['了解还不够多', '内容有矛盾'],
+  }),
+  lensFacet('5.1', '拿手的事', '擅长什么', {
+    checked: true,
+    checked_label: '回答经过检查',
   }),
 ];
+const lensFacetOf = (facet_id: string) => {
+  const found = lensFacets.find((f) => f.facet_id === facet_id)!;
+  return {
+    facet_id,
+    name: found.name,
+    dimension_id: found.dimension_id,
+    dimension: found.dimension,
+  };
+};
 const lens = {
   id: 'l-1',
   name: '大客户谈判',
   status: 'active',
   published_at: '2026-10-12T09:00:00Z',
   audience: { scope: 'team', twins: [] },
-  facets: [
-    { facet_id: '5.1', name: '拿手的事' },
-    { facet_id: '3.4', name: '常见取舍' },
-    { facet_id: '3.3', name: '依据偏好' },
-    { facet_id: '4.2', name: '追问习惯' },
-    { facet_id: '2.3', name: '做事的原则' },
-  ],
-  speaking: ['5.1', '3.3', '4.2', '2.3'],
-  failing: [],
+  facets: ['3.1', '3.3', '3.4', '4.2', '4.4', '5.1'].map(lensFacetOf),
+  speaking: ['3.3', '4.2', '5.1'],
+  failing: ['3.1', '4.4'],
   stopped: [{ facet_id: '3.4', name: '常见取舍', corrected: 3 }],
   uses_week: 12,
 };

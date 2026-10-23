@@ -1,11 +1,12 @@
-"""Lenses: a person lends their judgement to colleagues, one facet at a time.
+"""Lenses: a person lends their judgement to colleagues, one aspect at a time.
 
-A lens is published by the person themself (``web.lenses`` refuses everyone else, managers included). It names the
-facets of what they value, how they decide, how they think and what they are good at that it opens, and to whom. A
-facet can be opened only when the memories colleagues may use of it are well founded, which is judged facet by facet
-(``judge``) and not by a total: the twin knows a good deal of it (level 3 of ``persona.coverage``), on at least three
-different occasions, mostly from the person's own words, from more than one kind of source, with nothing in it that
-contradicts. The person's own tier never counts: what they keep to themself cannot be lent.
+A lens is published by the person themself (``web.lenses`` refuses everyone else, managers included). It opens some of
+four aspects, what they value, how they decide, how they think and what they are good at, and says to whom. An aspect
+opens all its facets; it can be opened when at least one of them is well founded, and a lens speaks only from the facets
+that are, so the others join as the twin comes to know them. A facet is well founded when the twin knows a good deal of
+it (level 3 of ``persona.coverage``, which already asks for several occasions, the person's own words and more than one
+kind of source) and nothing in it contradicts (``judge``). The person's own tier never counts: what they keep to
+themself cannot be lent.
 
 A lens answers with what the opened facets hold and nothing it makes up: the statements closest to the question, each
 with the words it stands on, said to be inferred from what the person said and not their opinion. What it does not
@@ -48,8 +49,8 @@ from .teamdb import Lens, LensUnavailable, LensUse, TeamDB
 # they speak and their life are never lent.
 LENS_DIMENSIONS: tuple[str, ...] = ("D2", "D3", "D4", "D5")
 LENS_FACETS: tuple[str, ...] = tuple(f.facet_id for f in FACETS if f.dimension_id in LENS_DIMENSIONS)
-# Different occasions a facet must stand on, and corrections of one facet after which it is no longer used.
-MIN_OCCASIONS = 3
+ASPECT_NAMES: dict[str, str] = {d.dimension_id: d.name for d in DIMENSIONS if d.dimension_id in LENS_DIMENSIONS}
+# Corrections of one facet after which it is no longer used.
 STOP_AFTER = 3
 NAME_MAX = 20
 NAME_MIN = 1
@@ -144,9 +145,8 @@ def judge(
     held: Collection[str] = (),
 ) -> list[FacetVerdict]:
     """Every facet a lens may open, with whether it can be, from the memories colleagues may use (``items`` with the
-    tiers the person set). The twin's own level is a precondition, not the whole: three occasions, mostly the person's
-    own words, more than one kind of source and no contradiction are asked besides. ``held``: facets that are not
-    offered at all this time."""
+    tiers the person set): the twin knows a good deal of it and nothing in it contradicts, one reason for each that
+    fails. ``held``: facets that are not offered at all this time."""
     day = as_of or dt.date.today()
     usable = for_audience(items, tiers, COLLEAGUE)
     everything: dict[str, int] = {}
@@ -167,15 +167,9 @@ def judge(
         if not own:
             reasons.append("只有本人能用" if everything.get(facet_id) else "还没有记忆")
         else:
-            evidence = [e for i in own for e in i.evidence]
+            # The level already weighs the occasions, the person's own words and the kinds of source.
             if covered.level < 3:
                 reasons.append("了解还不够多")
-            if covered.occasions < MIN_OCCASIONS:
-                reasons.append(f"场合不足 {MIN_OCCASIONS} 个")
-            if sum(e.own_words for e in evidence) * 2 <= len(evidence):
-                reasons.append("多是别人的话")
-            if len(covered.source_kinds) < 2:
-                reasons.append("来源只有一种")
             if covered.conflicts:
                 reasons.append("内容有矛盾")
         out.append(
@@ -372,18 +366,19 @@ class Lenses:
         return lens
 
     def _checked_facets(self, store: PersonaStore, facets: Sequence[str]) -> list[str]:
-        """The facets to open, in the taxonomy's order; refused when one is not a facet a lens may open or does not
-        pass."""
+        """The facets to open, in the taxonomy's order; refused when one is not a facet a lens may open, or when no
+        facet of an aspect they belong to passes (the others of a passing aspect wait until they do)."""
         chosen = list(dict.fromkeys(facets))
         if not chosen:
             raise LensRefused("请至少开放一个方面")
         unknown = [f for f in chosen if f not in LENS_FACETS]
         if unknown:
             raise LensRefused("这个方面不能开放：赋能只借看重什么、怎么做决定、怎么思考和擅长什么")
-        verdicts = {v.facet_id: v for v in self.verdicts(store)}
-        failing = [verdicts[f] for f in chosen if not verdicts[f].ok]
+        passing = {v.facet_id for v in self.verdicts(store) if v.ok}
+        aspects = list(dict.fromkeys(FACET_BY_ID[f].dimension_id for f in chosen))
+        failing = [d for d in aspects if not any(FACET_BY_ID[f].dimension_id == d for f in chosen if f in passing)]
         if failing:
-            raise LensRefused("还不能开放：" + "；".join(f"{v.name}（{'、'.join(v.reasons)}）" for v in failing))
+            raise LensRefused("还不能开放：" + "、".join(ASPECT_NAMES[d] for d in failing) + "（了解还不够多）")
         return [f for f in LENS_FACETS if f in chosen]
 
     def publish(
@@ -459,7 +454,15 @@ class Lenses:
             "status": lens.status,
             "published_at": lens.published_at,
             "audience": {"scope": audience.scope, "twins": list(audience.twins)},
-            "facets": [{"facet_id": f, "name": FACET_BY_ID[f].name} for f in lens.facets],
+            "facets": [
+                {
+                    "facet_id": f,
+                    "name": FACET_BY_ID[f].name,
+                    "dimension_id": FACET_BY_ID[f].dimension_id,
+                    "dimension": ASPECT_NAMES[FACET_BY_ID[f].dimension_id],
+                }
+                for f in lens.facets
+            ],
             "speaking": speaking,
             # Opened, and no longer passing (a contradiction, a tier changed): not used until they pass again.
             "failing": [f for f in lens.facets if f not in speaking and f not in off],

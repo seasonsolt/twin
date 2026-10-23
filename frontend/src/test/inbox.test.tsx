@@ -638,9 +638,15 @@ it('asks for the first page of each list, counts the rest from the totals, and a
   const user = userEvent.setup();
   view();
   const list = await screen.findByRole('list', { name: '新的声音' });
-  expect(asked()[0]).toBe(
+  // Once, opened cold: the library arriving first is no change for the page to load again for.
+  expect(asked()).toEqual([
     '/api/library/review?voices=20&enough=20&strangers=20&items=10&unsorted=10&suspects=10',
-  );
+  ]);
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => url === '/api/library/people'),
+  ).toHaveLength(1);
   expect(within(list).getAllByRole('listitem')).toHaveLength(20);
   // Counted from the totals, not from the twenty loaded; the person still to ask about is among them.
   const kinds = screen.getByRole('group', { name: '类别' });

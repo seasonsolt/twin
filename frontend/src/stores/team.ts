@@ -72,11 +72,13 @@ export const useTeam = create<Team>((set, get) => {
       const library = await api<LibraryState>('/api/library');
       const key = libraryKey(library);
       const changed = key !== seen;
+      // The first library seen is no change to follow: a page open now loads people and the queue as it opens.
+      const first = seen === '';
       seen = key;
       set((state) => ({
         library,
         error: '',
-        version: changed ? state.version + 1 : state.version,
+        version: changed && !first ? state.version + 1 : state.version,
       }));
       if (changed && !get().pages) await follow().catch(() => {});
     } catch (failure) {

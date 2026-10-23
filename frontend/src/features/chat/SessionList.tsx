@@ -12,8 +12,10 @@ import {
   SquarePen,
 } from 'lucide-react';
 import {
+  Badge,
   Button,
   ChatAction,
+  Chip,
   Dialog,
   IconButton,
   Input,
@@ -55,6 +57,34 @@ export interface Session {
   tag?: string;
   /** A task still being worked on: it says so instead of a time, and cannot be deleted yet. */
   running?: boolean;
+  /** Whom it is with, named after the title where the list spans people. */
+  who?: string;
+  /** The twin it belongs to: opening it takes the page there. */
+  personaId?: string;
+}
+
+/** What a row says under its title, on one line: whom it is with, where what it handed to the person stands, and that
+ * it is a task. */
+const notes = (row: Session) =>
+  [
+    row.who,
+    row.tag,
+    row.kind === 'task' ? (row.running ? '任务 · 在做' : '任务') : '',
+  ].filter((note): note is string => !!note);
+
+/** A choice among the people and kinds the list can be narrowed to. */
+export interface SessionFilter {
+  id: string;
+  label: string;
+}
+
+/** The person's own assistant, set above the list: its conversations are theirs alone. */
+export interface PinnedSessions {
+  label: string;
+  /** How many wait for the person's decision. */
+  waiting?: number;
+  selected: boolean;
+  onSelect(): void;
 }
 
 /**
@@ -84,6 +114,10 @@ export function SessionList({
   presence,
   busy = false,
   newLabel = '新对话',
+  filters,
+  filter,
+  onFilter,
+  pinned,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -112,6 +146,11 @@ export function SessionList({
   busy?: boolean;
   /** What starting a fresh one is called: 新对话, or 新任务 where the page is on tasks. */
   newLabel?: string;
+  /** What the list can be narrowed to (全部, a person, 任务), and the one chosen. */
+  filters?: SessionFilter[];
+  filter?: string;
+  onFilter?(id: string): void;
+  pinned?: PinnedSessions;
 }) {
   const [menu, setMenu] = useState<string | null>(null);
   const menuTrigger = useRef<HTMLButtonElement | null>(null);
@@ -162,7 +201,7 @@ export function SessionList({
   };
   const content = (
     <div className="history-content">
-      {inline && (
+      {inline && heading && (
         <Row gap={1}>
           <div className="min-w-0 flex-1">{heading}</div>
           <IconButton label="收起对话列表" onClick={() => onOpenChange(false)}>
@@ -201,7 +240,41 @@ export function SessionList({
             <Search size={18} aria-hidden />
           </IconButton>
         )}
+        {inline && !heading && (
+          <IconButton label="收起对话列表" onClick={() => onOpenChange(false)}>
+            <PanelLeftClose size={18} aria-hidden />
+          </IconButton>
+        )}
       </Row>
+      {filters && filters.length > 1 && (
+        <div role="group" aria-label="对话范围" className="history-filters">
+          {filters.map((option) => (
+            <Chip
+              key={option.id}
+              pressed={option.id === filter}
+              onClick={() => onFilter?.(option.id)}
+            >
+              {option.label}
+            </Chip>
+          ))}
+        </div>
+      )}
+      {pinned && (
+        <Button
+          variant="ghost"
+          className="history-pinned font-normal"
+          aria-pressed={pinned.selected}
+          disabled={saving || busy}
+          onClick={pinned.onSelect}
+        >
+          <span className="history-title">{pinned.label}</span>
+          {!!pinned.waiting && (
+            <Badge tone="warning" title={`${pinned.waiting} 条等你决定`}>
+              {pinned.waiting}
+            </Badge>
+          )}
+        </Button>
+      )}
       {searchOpen && (
         <Input
           autoFocus={inline}
@@ -335,14 +408,14 @@ export function SessionList({
                                   >
                                     <span className="history-title">
                                       {row.title}
-                                      {row.tag && (
+                                      {!!notes(row).length && (
                                         <span className="history-kind">
-                                          {row.tag}
-                                        </span>
-                                      )}
-                                      {row.kind === 'task' && (
-                                        <span className="history-kind">
-                                          {row.running ? '任务 · 在做' : '任务'}
+                                          {notes(row).map((note, index) => (
+                                            <span key={note}>
+                                              {index > 0 && ' · '}
+                                              <span>{note}</span>
+                                            </span>
+                                          ))}
                                         </span>
                                       )}
                                     </span>{' '}

@@ -1,6 +1,20 @@
 import type { ChatReply, Turn } from '../features/chat/types';
 
+/** A task as the list across twins gives it. */
+export interface ListedTask {
+  task_id: string;
+  persona_id: string;
+  title: string;
+  status: 'idle' | 'running' | 'failed';
+  updated_at: string;
+}
+
 export function conversationServer() {
+  // The person's own twin, set by a test that has one; the tasks listed with the conversations.
+  const own: { mine: { persona_id: string | null; pending: number } | null } = {
+    mine: null,
+  };
+  const tasks: ListedTask[] = [];
   const rows = new Map<
     string,
     {
@@ -9,6 +23,8 @@ export function conversationServer() {
       turns: Turn[];
       updated_at: string;
       persona: string;
+      /** The tier it answers from, where a test is about the person's own conversations. */
+      audience?: 'self' | 'colleague';
     }
   >();
   const json = (data: unknown, status = 200) =>
@@ -16,6 +32,32 @@ export function conversationServer() {
   const respond = (path: string, init?: RequestInit): Response | undefined => {
     const persona =
       new Headers(init?.headers).get('X-Twin-Persona') || 'default';
+    if (path.startsWith('/api/personas/conversations')) {
+      const query = new URL(path, 'http://localhost').searchParams;
+      const offset = Number(query.get('offset') || 0);
+      const only = query.get('with');
+      const apart = query.get('mine') === 'true';
+      const mineId = own.mine?.persona_id ?? null;
+      const wanted = (id: string) =>
+        (!only || id === only) && (id === mineId) === apart;
+      const listed = [...rows.values()]
+        .filter((row) => wanted(row.persona))
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      return json({
+        mine: own.mine,
+        conversations: listed.slice(offset, offset + 50).map((row) => ({
+          id: row.id,
+          persona_id: row.persona,
+          title: row.title,
+          preview: row.turns.at(-1)?.content || '',
+          updated_at: row.updated_at,
+          via: 'direct',
+          handoff: row.turns.at(-1)?.role === 'self' ? '本人已回' : null,
+        })),
+        tasks: offset ? [] : tasks.filter((task) => wanted(task.persona_id)),
+        more: listed.length > offset + 50,
+      });
+    }
     if (path === '/api/conversations' && init?.method === 'POST') {
       const body = JSON.parse((init.body as string) || '{}');
       const id = body.migration_id || crypto.randomUUID();
@@ -86,5 +128,5 @@ export function conversationServer() {
     );
     row.updated_at = new Date().toISOString();
   };
-  return { rows, respond, append };
+  return { rows, respond, append, tasks, own };
 }

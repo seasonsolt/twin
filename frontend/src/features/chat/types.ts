@@ -29,6 +29,32 @@ export interface HandoffLine {
   owner_name: string;
 }
 
+/** Who may use what the person asked their assistant to remember (``记一下``): ``none`` is not keeping it. */
+export type NoteTier = 'none' | 'colleague' | 'self';
+
+/** A note the assistant took down, shown under its reply with the tier it has now. */
+export interface NoteCard {
+  /** The memory source it is kept as; what the tier is changed by. */
+  id: string;
+  text: string;
+  tier: NoteTier;
+}
+
+/** A promise the person said they make, which stands in their commitments from the moment it is said. */
+export interface PromiseLine {
+  entry_id: string;
+  what: string;
+  to: string;
+  due: string | null;
+}
+
+/** What a trial question (看同事会得到什么) left out: what the person keeps from colleagues that it would have used. */
+export interface Withheld {
+  id: string;
+  facet: string;
+  text: string;
+}
+
 export interface ChatReply {
   reply: string;
   citations: string[];
@@ -46,6 +72,11 @@ export interface ChatReply {
   completed_at?: string;
   /** Sent with the final answer when it left something to the person. */
   handoff?: HandoffLine;
+  /** The person's own conversation: what was taken down, and the promise that was made. */
+  note?: NoteCard;
+  commitment?: PromiseLine;
+  /** A trial question's answer: not part of the conversation, and what it left out. */
+  preview?: { withheld: Withheld[] };
 }
 
 export type Speaker = 'user' | 'twin';
@@ -62,6 +93,8 @@ export interface Turn {
   handoff_id?: string;
   /** Where what this answer left to the person stands. */
   handoff?: HandoffLine;
+  /** A trial question (看同事会得到什么) or its answer: shown where it was asked, never saved or sent on. */
+  preview?: boolean;
 }
 
 /** Whether the person has yet to answer what this turn left to them. */
@@ -83,9 +116,10 @@ export function handoffText(line: HandoffLine) {
   return `已转给${line.owner_name}本人 · ${where[line.status]}`;
 }
 
-/** The turns of the conversation as it is shown and sent: the asker's and the twin's. */
+/** The turns of the conversation as it is shown and sent: the asker's and the twin's, not the person's own replies
+ * and not a trial question. */
 export const spoken = (turn: Turn): turn is Turn & { role: Speaker } =>
-  turn.role !== 'self';
+  turn.role !== 'self' && !turn.preview;
 
 /**
  * The conversation as the server has it now, folded into the one on screen: the state of each handoff, and the

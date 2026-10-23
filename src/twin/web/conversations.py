@@ -14,9 +14,12 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..config import Settings
 from ..handoffs import HandoffDesk
+from ..persona.assistant import annotate_notes, annotate_promises, record_promise
 from ..persona.store import PersonaStore
 from ..persona.tiers import COLLEAGUE, SELF, Audience
-from ..teamdb import TeamDB
+from ..persona.work import WorkStore, summary_view
+from ..teamdb import HandoffStatus, TeamDB
+from .personas import Personas
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +148,15 @@ def append_reply(
     payload: dict[str, Any],
     index: ConversationIndex | None = None,
     handoffs: tuple[HandoffDesk, str, Audience] | None = None,
+    *,
+    assistant: bool = False,
 ) -> dict[str, Any]:
     """Save the twin's reply in the conversation. ``handoffs``: the desk, what the asker is called and the tier the
     conversation answers from, to hand on what the reply left to the person; where it did, the payload says how the
-    handoff stands (it is not saved with the reply: the state changes, and the conversation reads it afresh)."""
+    handoff stands (it is not saved with the reply: the state changes, and the conversation reads it afresh).
+    ``assistant``: the conversation is the person's own, where a promise they said they make goes into their ledger."""
+    if assistant:
+        record_promise(store, conversation_id, payload)
     if conversation_id is not None:
         # Deletion while a reply is running must not recreate the conversation.
         with suppress(KeyError):
@@ -184,15 +192,18 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
             index.created(
                 store, conversation_id, owner(request), request_audience(request), request_asker_name(request)
             )
-        return {"id": conversation_id}
+        return {"id": conversation_id, "audience": index.audience(conversation_id, request_audience(request))}
 
     @app.get("/api/conversations/{conversation_id}")
     def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
         with PersonaStore(settings.db_path) as store:
             try:
-                return desk.annotate(store.get_conversation(conversation_id, owner(request)))
+                conversation = desk.annotate(store.get_conversation(conversation_id, owner(request)))
             except KeyError:
                 raise HTTPException(404, "找不到这段对话") from None
+            audience = index.audience(conversation_id, request_audience(request))
+            # ``audience`` is the tier it answers from: the person's own conversation is with their assistant.
+            return {**annotate_promises(store, annotate_notes(store, conversation)), "audience": audience}
 
     @app.patch("/api/conversations/{conversation_id}")
     def rename_conversation(conversation_id: str, body: RenameBody, request: Request) -> dict[str, bool]:
@@ -209,3 +220,107 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
                 raise HTTPException(404, "找不到这段对话")
         index.deleted(conversation_id)
         return {"deleted": True}
+
+
+# What the all-conversations list shows of how a handoff stands, beside the conversation it came from.
+HANDOFF_TAGS: dict[HandoffStatus, str] = {
+    "delivered": "等本人回复",
+    "writing": "等本人回复",
+    "replied": "本人已回",
+    "accepted": "本人已答应",
+    "declined": "本人没接",
+    "dismissed": "本人不答",
+    "expired": "本人没回",
+    "withdrawn": "",
+}
+EVERYONE_PAGE = 50
+
+
+def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
+    """``GET /api/personas/conversations``: the signed-in person's own conversations with every twin they can see, in
+    one list (the index of the team database), with the tasks they gave them. It is their own and nobody's else: what
+    other people asked their twin is not in it. Their conversations with the twin of which they are the person are
+    set apart (``mine``): the assistant's, which no one else has."""
+
+    @app.get("/api/personas/conversations")
+    def everyone(
+        request: Request,
+        offset: int = Query(default=0, ge=0),
+        with_persona: str | None = Query(default=None, alias="with"),
+        mine: bool = False,
+    ) -> dict[str, Any]:
+        """``with``: only that twin's. ``mine``: only those with the person's own twin; otherwise those are left out,
+        since they are not conversations with someone else. Tasks come with the first page."""
+        identity = request.scope["twin_identity"]
+        email = identity["email"]
+        with registry.lock:
+            visible = {e["id"]: dict(e) for e in registry.data["personas"] if registry.visible(e, identity)}
+        own = {e["id"] for e in registry.own_twins(identity)}
+        ids = [i for i in visible if i in own] if mine else list(visible)
+        if with_persona is not None:
+            ids = [i for i in ids if i == with_persona]
+        try:
+            # A conversation with one's own twin that the colleague tier answered (from before the index knew the
+            # difference, or with the twin not yet said to be all right) is an ordinary one.
+            rows = team.conversations(
+                personas=ids,
+                asked_by=email,
+                self_tier_of=own if mine else None,
+                not_self_tier_of=None if mine else own,
+                limit=EVERYONE_PAGE + 1,
+                offset=offset,
+            )
+            states = team.handoff_states([r.id for r in rows])
+            team.expire_due()
+            pending = sum(
+                1
+                for persona_id in own
+                for h in team.handoffs(persona_id=persona_id, statuses=("delivered",))
+                if h.owner is None or h.owner == email
+            )
+        except sqlite3.Error as e:
+            logger.warning("could not read the index of conversations", exc_info=True)
+            raise HTTPException(503, "对话列表暂时读不了，请稍后重试") from e
+        page = rows[:EVERYONE_PAGE]
+        # What was last said, for finding a conversation by it: read from the twins' own databases, which hold the text.
+        previews: dict[str, str] = {}
+        for persona_id in {r.persona_id for r in page}:
+            path = registry.db_path_of(persona_id)
+            if path.is_file():
+                with PersonaStore(path) as store:
+                    previews.update(
+                        store.conversation_previews([r.id for r in page if r.persona_id == persona_id], email)
+                    )
+        conversations = [
+            {
+                "id": r.id,
+                "persona_id": r.persona_id,
+                "title": r.title,
+                "preview": previews.get(r.id, ""),
+                "updated_at": r.updated_at,
+                "via": r.via,
+                "handoff": (HANDOFF_TAGS[states[r.id]] or None) if r.id in states else None,
+            }
+            for r in page
+        ]
+        tasks: list[dict[str, Any]] = []
+        if offset == 0:
+            for persona_id in ids:
+                entry = visible[persona_id]
+                path = registry.db_path_of(persona_id)
+                work = WorkStore(path)
+                if not work.root.is_dir():
+                    continue
+                visitor = not registry.accessible(entry, identity)
+                tasks += [
+                    {**summary_view(t), "persona_id": persona_id}
+                    for t in work.list_tasks(email, visitor)
+                    if (t.audience == SELF and persona_id in own) == mine
+                ]
+            tasks.sort(key=lambda t: t["updated_at"], reverse=True)
+        return {
+            "mine": {"persona_id": next(iter(sorted(own)), None), "pending": pending} if own else None,
+            "conversations": conversations,
+            "tasks": tasks[:EVERYONE_PAGE],
+            "more": len(rows) > EVERYONE_PAGE,
+        }

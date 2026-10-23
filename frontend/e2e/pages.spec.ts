@@ -1,5 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi, newTwin, NOW, personas, weekly } from './mockApi';
+import {
+  mockApi,
+  newTwin,
+  NOW,
+  ownAssistant,
+  personas,
+  weekly,
+} from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
 // the page's data has arrived, so the shot never catches a loading skeleton.
@@ -558,6 +565,30 @@ test('chat presentation controls', async ({ page }, info) => {
   expect(missing).toEqual([]);
 });
 
+test('the person’s own assistant, set apart above the conversations', async ({
+  page,
+}, info) => {
+  const missing: string[] = [];
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await ownAssistant(page);
+  await page.goto('/#/chat');
+  if (info.project.name === 'mobile')
+    await page.getByRole('button', { name: '对话列表' }).click();
+  // Only the person has it: it is chosen from the pinned row, and its list is its own.
+  await page.getByRole('button', { name: /^我的分身/ }).click();
+  await page
+    .getByRole('button', { name: /^我上周答应过谁什么(?!的更多操作)/ })
+    .click();
+  if (info.project.name === 'mobile')
+    await expect(page.getByRole('dialog', { name: '对话记录' })).toBeHidden();
+  const tiers = page.getByRole('radiogroup', { name: '谁能用这条记忆' });
+  await expect(tiers.getByRole('radio', { name: '只有我' })).toBeChecked();
+  await expect(page.getByText('仅你可见').first()).toBeVisible();
+  await expect(page).toHaveScreenshot(`chat-self-${info.project.name}.png`);
+  expect(missing).toEqual([]);
+});
+
 test('a task in the conversation list', async ({ page }, info) => {
   const missing: string[] = [];
   await page.clock.setFixedTime(NOW);
@@ -568,7 +599,9 @@ test('a task in the conversation list', async ({ page }, info) => {
     await page.getByRole('button', { name: '对话列表' }).click();
   // Tasks sit among the conversations, marked as tasks.
   await page
-    .getByRole('button', { name: /^按我的口吻写一份本周周报\s*任务/ })
+    .getByRole('button', {
+      name: /^按我的口吻写一份本周周报\s*林舟\s*·\s*任务/,
+    })
     .click();
   await expect(page.getByText('周报写好了', { exact: false })).toBeVisible();
   await expect(page.getByRole('link', { name: /周报\.docx/ })).toBeVisible();

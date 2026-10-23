@@ -159,6 +159,7 @@ export function WorkThread({
   persona,
   layout,
   modeSwitch,
+  target,
 }: {
   active: boolean;
   work: Work;
@@ -166,6 +167,8 @@ export function WorkThread({
   persona?: Persona;
   layout: ComposerLayout;
   modeSwitch?: ReactNode;
+  /** Whom the instruction goes to, with the way to change it, beside the box. */
+  target?: ReactNode;
 }) {
   const { end, composer, composerHeight } = layout;
   const { task, current, draft, setDraft, sending, running } = work;
@@ -319,6 +322,7 @@ export function WorkThread({
             }
           />
           <Row gap={1}>
+            {target}
             {modeSwitch}
             <div className="flex-1" />
             {running && (

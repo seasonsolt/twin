@@ -152,7 +152,12 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                 ]
               : undefined
           }
-          primary={{ label: `和${name}聊天`, onClick: () => navigate('/chat') }}
+          primary={{
+            // Their own twin is their assistant, which only they have.
+            label:
+              twin.mine && twin.approved ? '问问我的分身' : `和${name}聊天`,
+            onClick: () => navigate('/chat'),
+          }}
         />
         {canManage && (
           <Tabs

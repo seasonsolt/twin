@@ -532,6 +532,176 @@ const history = [
   },
 ];
 
+/** 第 6 屏: everything the person has talked about across twins, from the team's index, newest first. */
+const everyone = (mine: { persona_id: string; pending: number } | null) => ({
+  mine,
+  conversations: [
+    {
+      id: 'c-plan',
+      persona_id: 'default',
+      title: '下周发布怎么安排',
+      preview: history[0].preview,
+      updated_at: history[0].updated_at,
+      via: 'direct',
+      handoff: null,
+    },
+    {
+      id: 'c-api',
+      persona_id: 'p-qinghe',
+      title: '评审定的接口',
+      preview: '接口先按 v2 评审的结论来。',
+      updated_at: '2026-10-16T08:00:00Z',
+      via: 'direct',
+      handoff: null,
+    },
+    {
+      id: 'c-hiring',
+      persona_id: 'default',
+      title: '招聘面试的问题',
+      preview: history[1].preview,
+      updated_at: history[1].updated_at,
+      via: 'direct',
+      handoff: null,
+    },
+  ],
+  tasks: [
+    {
+      task_id: 'w_000000000001',
+      persona_id: 'default',
+      title: '按我的口吻写一份本周周报',
+      status: 'idle',
+      updated_at: '2026-10-17T01:20:00Z',
+    },
+    {
+      task_id: 'w_000000000002',
+      persona_id: 'default',
+      title: '把最近会上答应别人的事整理成 Excel',
+      status: 'idle',
+      updated_at: '2026-10-15T08:00:00Z',
+    },
+  ],
+  more: false,
+});
+
+/** 第 11 屏: the person's own conversation with their assistant, and what it took down. */
+const selfConversation = {
+  id: 'c-self',
+  title: '我上周答应过谁什么',
+  audience: 'self',
+  turns: [
+    {
+      id: 's1',
+      role: 'user',
+      content: '我上周答应过谁什么？',
+      timestamp: '2026-10-17T01:00:00Z',
+    },
+    {
+      id: 's2',
+      role: 'twin',
+      content:
+        '三件：给许清禾重算留存口径（已交）；下周二前和王屿定发布时间；帮陈一看导入方案。后两件还开着。',
+      timestamp: '2026-10-17T01:00:08Z',
+      reply: {
+        reply:
+          '三件：给许清禾重算留存口径（已交）；下周二前和王屿定发布时间；帮陈一看导入方案。后两件还开着。',
+        citations: ['i-1'],
+        confidence: 0.85,
+        abstain: false,
+        abstain_reason: '',
+        retrieved_ids: ['i-1'],
+        mode: 'grounded',
+        elapsed_ms: 3100,
+        completed_at: '2026-10-17T01:00:08Z',
+        cited: [
+          {
+            id: 'i-1',
+            kind: 'item',
+            text: '答应别人的事一定按时给回复',
+            facet: '做事的原则',
+            date: '2026-10-15',
+          },
+        ],
+      },
+    },
+    {
+      id: 's3',
+      role: 'user',
+      content: '记一下，下周三我请假陪家人复查。',
+      timestamp: '2026-10-17T01:12:00Z',
+    },
+    {
+      id: 's4',
+      role: 'twin',
+      content: '记下了，先设为只有你能用。',
+      timestamp: '2026-10-17T01:12:01Z',
+      reply: {
+        reply: '记下了，先设为只有你能用。',
+        citations: [],
+        confidence: 1,
+        abstain: false,
+        abstain_reason: '',
+        retrieved_ids: [],
+        mode: 'general',
+        note: {
+          id: 'src_note',
+          text: '下周三请假，陪家人复查',
+          tier: 'self',
+        },
+      },
+    },
+  ],
+};
+
+/** The signed-in person has taken their twin: what the page lists apart as 我的分身, and the twins around it. */
+export async function ownAssistant(page: Page) {
+  await page.route(/\/api\/personas$/u, (route) =>
+    route.fulfill({
+      json: personas.map((twin) =>
+        twin.id === 'default' ? { ...twin, mine: true, approved: true } : twin,
+      ),
+    }),
+  );
+  await page.route(/\/api\/personas\/conversations/u, (route) => {
+    const mine = new URL(route.request().url()).searchParams.get('mine');
+    const own = { persona_id: 'default', pending: 3 };
+    return route.fulfill({
+      json:
+        mine === 'true'
+          ? {
+              mine: own,
+              conversations: [
+                {
+                  id: 'c-self',
+                  persona_id: 'default',
+                  title: selfConversation.title,
+                  preview: '记下了，先设为只有你能用。',
+                  updated_at: '2026-10-17T01:12:01Z',
+                  via: 'direct',
+                  handoff: null,
+                },
+              ],
+              tasks: [
+                {
+                  task_id: 'w_000000000003',
+                  persona_id: 'default',
+                  title: '起草发布方案',
+                  status: 'idle',
+                  updated_at: '2026-10-16T08:00:00Z',
+                },
+              ],
+              more: false,
+            }
+          : {
+              ...everyone(own),
+              conversations: everyone(own).conversations.slice(1),
+            },
+    });
+  });
+  await page.route(/\/api\/conversations\/c-self$/u, (route) =>
+    route.fulfill({ json: selfConversation }),
+  );
+}
+
 const dimensions = [
   ['D1', '经历与身份', 6],
   ['D2', '看重什么', 12],
@@ -1338,6 +1508,7 @@ const handlers: Record<string, Handler> = {
   }),
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/conversations': reply(history),
+  'GET /api/personas/conversations': reply(everyone(null)),
   'GET /api/conversations/c-plan': reply(conversation),
   'GET /api/conversations/c-handoff': reply(handoffConversation),
   'GET /api/persona/coverage': reply(coverage),

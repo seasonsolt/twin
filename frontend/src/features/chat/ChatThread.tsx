@@ -37,6 +37,7 @@ import { useIdentity } from '../identity/useIdentity';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { SetupCard } from '../setup/SetupCard';
 import { MessageText } from './MessageText';
+import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { useConversation } from './useConversation';
@@ -66,6 +67,9 @@ export function ChatThread({
   canManage,
   layout,
   modeSwitch,
+  target,
+  assistant = false,
+  trial,
 }: {
   active: boolean;
   chat: ReturnType<typeof useConversation>;
@@ -76,6 +80,12 @@ export function ChatThread({
   canManage: boolean;
   layout: ComposerLayout;
   modeSwitch?: ReactNode;
+  /** Whom the message goes to, with the way to change it, beside the box. */
+  target?: ReactNode;
+  /** The person's own conversation with their assistant: it speaks to them, and takes down what they tell it. */
+  assistant?: boolean;
+  /** 看同事会得到什么 on or off; given only where the person can ask it. */
+  trial?: { on: boolean; onChange(on: boolean): void };
 }) {
   const personaId = usePersonaId();
   // The person behind a twin reads what it says in their name; theirs to know, said once under the box.
@@ -160,6 +170,7 @@ export function ChatThread({
   const lastAnswer = [...chat.turns]
     .reverse()
     .find((turn) => turn.role === 'twin')?.id;
+  const trying = !!trial?.on;
   const send = () => {
     if (chat.busy || chat.loading || chat.restoreFailed || !chat.draft.trim())
       return;
@@ -168,7 +179,7 @@ export function ChatThread({
     setAttachmentError('');
     void refreshState();
     pinNext.current = true;
-    void chat.send();
+    void chat.send(chat.draft, !!trial?.on);
   };
   const addAttachments = (files: File[]) => {
     if (!files.length) return;
@@ -256,7 +267,7 @@ export function ChatThread({
                           weight="bold"
                           align="center"
                         >
-                          和{name}聊聊
+                          {assistant ? '我的分身' : `和${name}聊聊`}
                         </Heading>
                         {identity.data?.about && (
                           <Text tone="secondary" align="center">
@@ -306,10 +317,17 @@ export function ChatThread({
                           }
                           data-pin={turn.role === 'user' ? turn.id : undefined}
                         >
-                          {marked && turn.role === 'twin' && (
+                          {turn.preview ? (
                             <Text as="span" size="xs" tone="secondary">
-                              {name}的分身
+                              {turn.role === 'user' ? '试问' : '同事会得到'}
                             </Text>
+                          ) : (
+                            marked &&
+                            turn.role === 'twin' && (
+                              <Text as="span" size="xs" tone="secondary">
+                                {name}的分身
+                              </Text>
+                            )
                           )}
                           <div
                             className={
@@ -332,6 +350,8 @@ export function ChatThread({
                               <ReplyLine
                                 reply={turn.reply}
                                 editable={canManage}
+                                own={assistant && !turn.preview}
+                                plain={!!turn.reply.note}
                               >
                                 <div
                                   role="group"
@@ -391,6 +411,54 @@ export function ChatThread({
                                   {handoffText(turn.handoff)}
                                 </Text>
                               )}
+                              {turn.reply.note && (
+                                <NoteCard
+                                  note={turn.reply.note}
+                                  onTier={(tier) =>
+                                    chat.setNoteTier(turn.id, tier)
+                                  }
+                                />
+                              )}
+                              {turn.reply.commitment && (
+                                <Text size="xs" tone="secondary">
+                                  已记入承诺：{turn.reply.commitment.what}
+                                  {turn.reply.commitment.due
+                                    ? ` · ${turn.reply.commitment.due}前`
+                                    : ''}{' '}
+                                  <TextLink
+                                    onClick={() => {
+                                      void chat
+                                        .undoPromise(turn.id)
+                                        .catch(() =>
+                                          toast('没能撤销，请重试', 'danger'),
+                                        );
+                                    }}
+                                  >
+                                    撤销
+                                  </TextLink>
+                                </Text>
+                              )}
+                              {!!turn.reply.preview?.withheld.length && (
+                                <Row gap={2} wrap aria-label="没给同事的">
+                                  {turn.reply.preview.withheld.map((item) => (
+                                    <Badge key={item.id} title={item.text}>
+                                      未用 · {item.facet}
+                                    </Badge>
+                                  ))}
+                                </Row>
+                              )}
+                              {assistant &&
+                                !turn.preview &&
+                                turn.reply.abstain &&
+                                turn.id === lastAnswer && (
+                                  <Text size="xs" tone="secondary">
+                                    <TextLink
+                                      onClick={() => chat.setDraft('记一下，')}
+                                    >
+                                      补一句
+                                    </TextLink>
+                                  </Text>
+                                )}
                               {capabilities?.available &&
                                 audio.id === turn.id && (
                                   <progress
@@ -535,9 +603,15 @@ export function ChatThread({
             value={chat.draft}
             onChange={(event) => chat.setDraft(event.target.value)}
             onSend={send}
-            placeholder={`和${name}聊点什么…`}
+            placeholder={
+              trying
+                ? '问一句，看同事会得到什么…'
+                : assistant
+                  ? '问问我的分身，或说“记一下……”'
+                  : `和${name}聊点什么…`
+            }
           />
-          <Row gap={1}>
+          <Row gap={1} wrap>
             <Tooltip label="TXT、PDF、Word、EPUB 等，最多 5 个，共 50 MiB">
               <IconButton
                 shape="circle"
@@ -548,7 +622,16 @@ export function ChatThread({
                 <Plus className="size-5" aria-hidden />
               </IconButton>
             </Tooltip>
+            {target}
             {modeSwitch}
+            {trial && (
+              <Chip
+                pressed={trial.on}
+                onClick={() => trial.onChange(!trial.on)}
+              >
+                看同事会得到什么
+              </Chip>
+            )}
             <div className="flex-1" />
             <ChatAction
               type="submit"
@@ -563,7 +646,7 @@ export function ChatThread({
             </ChatAction>
           </Row>
         </ChatSurface>
-        {seen && (
+        {seen && !assistant && (
           <Text
             size="xs"
             tone="tertiary"

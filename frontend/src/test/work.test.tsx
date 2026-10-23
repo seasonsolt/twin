@@ -84,8 +84,21 @@ beforeEach(() => {
       return json({ stopping: true }, 202);
     }
     if (url === '/api/persona/work') return json({ tasks });
-    // The conversation page also holds the chat side: nothing said there yet.
+    // The conversation page also holds the chat side: nothing said there yet. Its list is of everything, tasks too.
     if (url.startsWith('/api/conversations')) return json([]);
+    if (url.startsWith('/api/personas/conversations'))
+      return json({
+        mine: null,
+        conversations: [],
+        tasks: (tasks as WorkTask[]).map((row) => ({
+          task_id: row.task_id,
+          persona_id: 'default',
+          title: row.title,
+          status: row.status,
+          updated_at: row.updated_at,
+        })),
+        more: false,
+      });
     if (url === `/api/persona/work/${task.task_id}` && method === 'DELETE') {
       tasks = [];
       return json({ deleted: true });
@@ -290,11 +303,10 @@ it('deletes a task from the task list after confirming, and says why a task did 
   expect(await screen.findByRole('alert')).toHaveTextContent('没做成');
   await user.click(screen.getByRole('button', { name: '对话列表' }));
   const sheet = await screen.findByRole('dialog', { name: '对话记录' });
-  expect(
-    within(sheet).getByRole('button', { name: /^写周报任务/u }),
-  ).toHaveAttribute('aria-current', 'true');
+  const row = within(sheet).getByRole('button', { name: /^写周报任务/u });
+  expect(row).toHaveAttribute('aria-current', 'true');
   // A task is deleted from its "…" like a conversation, and it is said in the list to be a task.
-  expect(within(sheet).getByText('任务')).toBeVisible();
+  expect(within(row).getByText('任务')).toBeVisible();
   await user.click(
     within(sheet).getByRole('button', { name: '写周报的更多操作' }),
   );

@@ -52,7 +52,12 @@ def test_crud_persona_isolation_and_import(tmp_path: Path) -> None:
     app = create_app(settings)
     with TestClient(app, base_url="http://localhost") as web:
         cid = web.post("/api/conversations", headers=HEADERS).json()["id"]
-        assert web.get(f"/api/conversations/{cid}").json() == {"id": cid, "title": "新对话", "turns": []}
+        assert web.get(f"/api/conversations/{cid}").json() == {
+            "id": cid,
+            "title": "新对话",
+            "turns": [],
+            "audience": "self",
+        }
         assert web.patch(f"/api/conversations/{cid}", json={"title": "  新标题  "}, headers=HEADERS).status_code == 200
         assert web.get("/api/conversations").json()[0]["title"] == "新标题"
         assert web.patch(f"/api/conversations/{cid}", json={"title": "  "}, headers=HEADERS).status_code == 400

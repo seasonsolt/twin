@@ -531,6 +531,8 @@ it('lets the person themselves see what the twin could not answer, counted on th
       .map((tab) => tab.textContent),
   ).toEqual(['档案', '记忆12', '你不在时1', '承诺', '形象和声音']);
   expect(screen.getByText('（你）', { exact: false })).toBeVisible();
+  // Their own twin is their assistant, which only they have: they ask it, not talk to it.
+  expect(screen.getByRole('button', { name: '问问我的分身' })).toBeVisible();
   expect(
     await screen.findByRole('button', { name: '账户（1 条待决定）' }),
   ).toBeVisible();

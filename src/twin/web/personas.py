@@ -172,6 +172,24 @@ class Personas:
         self.check_live(persona_id)
         return self._settings(persona_id)
 
+    def db_path_of(self, persona_id: str) -> Path:
+        """Where a twin's database is, without reading anything of it."""
+        return self._settings(persona_id, read_name=False).db_path
+
+    def own_twins(self, identity: dict[str, Any]) -> list[dict[str, Any]]:
+        """The twins the signed-in person is the person of: made for them, taken by them and said to be all right.
+        None without accounts, where nobody is known to be the person."""
+        if not identity.get("auth_enabled"):
+            return []
+        with self.lock:
+            return [
+                dict(entry)
+                for entry in self.data["personas"]
+                if not entry.get("deleted_at")
+                and entry["id"] not in self.removing
+                and self.audience(entry, identity) == SELF
+            ]
+
     def _settings(self, persona_id: str, *, read_name: bool = True) -> Settings:
         """A persona's settings; without ``read_name``, its stored name is not read and ``target_name`` falls back
         to 本人."""
@@ -620,5 +638,7 @@ class PersonaMiddleware:
                     return None
             context = registry.application(persona_id)
             scope["twin_audience"] = registry.audience(registry.entry(persona_id), identity)
+            # The person the twin is made for, known to be who is asking: only where there are accounts to know it by.
+            scope["twin_person"] = bool(identity.get("auth_enabled")) and scope["twin_audience"] == SELF
             registry.enter(persona_id)
             return context, persona_id

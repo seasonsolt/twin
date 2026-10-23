@@ -151,6 +151,10 @@ class ChatDraft(BaseModel):
         description="owner_part 为 commit 时：对方要本人答应的事，直接写事情本身，如“周五前给沈从一版发布方案”",
     )
     commit_due: str = Field(default="", description="owner_part 为 commit 时：对方要的截止日期 YYYY-MM-DD；没说留空")
+    # Only in the person's own conversation (the assistant, ``persona.assistant``): a promise they say they make.
+    promise_what: str = Field(default="", description="本人在这句话里说他答应了的事，直接写事情本身；没有留空")
+    promise_to: str = Field(default="", description="本人答应的对象；没说留空")
+    promise_due: str = Field(default="", description="本人答应的截止日期 YYYY-MM-DD；没说留空")
 
     @model_validator(mode="before")
     @classmethod
@@ -191,6 +195,10 @@ class ChatReply(BaseModel):
     owner_ask: str = ""
     commit_what: str = ""
     commit_due: dt.date | None = None
+    # A promise the person said they make, to their own assistant (``persona.assistant``).
+    promise_what: str = ""
+    promise_to: str = ""
+    promise_due: dt.date | None = None
 
     @model_validator(mode="before")
     @classmethod

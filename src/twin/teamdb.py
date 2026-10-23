@@ -47,6 +47,9 @@ Outcome = Literal["replied", "accepted", "declined"]
 # ``self``: kept as the person's own only (chosen where a memory is written down, not yet in handoffs).
 ReplyTier = Literal["none", "colleague", "self"]
 HANDOFF_DAYS = 7
+# ``conversations(asked_by=...)`` left out: everyone's (None is a real value there, the asker of a service without
+# sign-in).
+_ANYONE = object()
 # A handoff that has not been settled and whose conversation is deleted is withdrawn.
 UNSETTLED: tuple[HandoffStatus, ...] = ("delivered", "writing", "dismissed", "expired")
 
@@ -365,8 +368,16 @@ class TeamDB:
         asker: str | None = None,
         personas: Collection[str] | None = None,
         include_deleted: bool = False,
+        asked_by: object = _ANYONE,
+        self_tier_of: Collection[str] | None = None,
+        not_self_tier_of: Collection[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[IndexedConversation]:
-        """Indexed conversations, newest first. ``personas`` limits them to those twins (the ones not in the trash)."""
+        """Indexed conversations, newest first. ``personas`` limits them to those twins (the ones not in the trash).
+        ``asked_by`` limits them to one person's own, where None is the one without an account (no sign-in); leave it
+        out for everyone's. ``self_tier_of``: only those of the self tier with one of these twins (the person's own
+        with their assistant); ``not_self_tier_of``: all but those. ``limit`` and ``offset`` page the list."""
         where = [] if include_deleted else ["deleted_at IS NULL"]
         params: list[object] = []
         if persona_id is not None:
@@ -378,11 +389,26 @@ class TeamDB:
         if asker is not None:
             where.append("asker = ?")
             params.append(asker)
+        if asked_by is not _ANYONE:
+            where.append("asker IS ?")
+            params.append(asked_by)
+        if self_tier_of is not None:
+            where.append(
+                f"(audience = 'self' AND persona_id IN ({','.join('?' * len(self_tier_of))}))" if self_tier_of else "0"
+            )
+            params.extend(self_tier_of)
+        if not_self_tier_of:
+            where.append(f"NOT (audience = 'self' AND persona_id IN ({','.join('?' * len(not_self_tier_of))}))")
+            params.extend(not_self_tier_of)
         sql = "SELECT * FROM conversations" + (f" WHERE {' AND '.join(where)}" if where else "")
+        sql += " ORDER BY updated_at DESC, id"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params += [limit, offset]
         with self._lock:
             self._db.row_factory = sqlite3.Row
             try:
-                rows = self._db.execute(sql + " ORDER BY updated_at DESC, id", params).fetchall()
+                rows = self._db.execute(sql, params).fetchall()
             finally:
                 self._db.row_factory = None
         return [
@@ -591,6 +617,22 @@ class TeamDB:
         found = [_handoff(r) for r in rows]
         waiting = sorted((h for h in found if h.status == "delivered"), key=lambda h: (h.expires_at, h.id))
         return waiting + [h for h in found if h.status != "delivered"]
+
+    def handoff_states(self, conversation_ids: Collection[str]) -> dict[str, HandoffStatus]:
+        """Where what a conversation's answers left to the person stands, for the conversations that have such a thing:
+        the newest handoff of each (the person's verdicts on guessed answers are not handed anything on)."""
+        found: dict[str, HandoffStatus] = {}
+        ids = list(conversation_ids)
+        for start in range(0, len(ids), 400):
+            batch = ids[start : start + 400]
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT conversation_id, status FROM handoffs WHERE kind != 'inferred' "
+                    f"AND conversation_id IN ({','.join('?' * len(batch))}) ORDER BY created_at, id",
+                    batch,
+                ).fetchall()
+            found.update((r[0], r[1]) for r in rows)
+        return found
 
     def count_handoffs(self, persona_id: str, status: HandoffStatus = "delivered") -> int:
         with self._lock:

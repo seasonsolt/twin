@@ -34,7 +34,7 @@ from .kernel import (
     taxonomy_plan,
 )
 from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
-from .tiers import DEFAULT_TIERS, SELF, TIERS, Audience, Tier, carry_tiers
+from .tiers import DEFAULT_TIERS, SELF, TIERS, Audience, Tier, carry_tiers, note_item_tier
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p_sources (
@@ -96,6 +96,8 @@ SNAPSHOT_DIR = "kernel-snapshots"
 TAXONOMY_META = "taxonomy:facets"
 # Reviewed items a facet inherits from a split, consumed when the facet is next re-merged.
 INHERIT_META = "taxonomy:inherit:"
+# ``p_meta`` keys of the tier the person chose for a note they asked to be remembered (``set_note_tier``).
+NOTE_TIER_PREFIX = "note_tier:"
 # A facet's merged batches (``profile.MergeCache``).
 MERGE_CACHE_PREFIX = "merge_batch:"
 SNAPSHOT_KEEP = 3
@@ -505,12 +507,13 @@ class PersonaStore:
             if deleted:
                 self._sources_changed(db)
                 db.execute(
-                    "DELETE FROM p_meta WHERE key IN (?, ?, ?, ?)",
+                    "DELETE FROM p_meta WHERE key IN (?, ?, ?, ?, ?)",
                     (
                         f"source_pending:{source_id}",
                         f"source_error:{source_id}",
                         f"ledger_done:{source_id}",
                         f"{CLAIM_PREFIX}{source_id}",
+                        f"{NOTE_TIER_PREFIX}{source_id}",
                     ),
                 )
                 self._drop_ledger(db, source_id, reviewed=True)
@@ -802,6 +805,12 @@ class PersonaStore:
         heirs = [*old, *(PersonaItem.model_validate(c["item"]) for c in inherited)]
         carried = carry_reviews(heirs, items, reviews)
         carried_tiers = carry_tiers(heirs, items, tiers)
+        # An item standing on a note the person chose a tier for takes it, unless they have since chosen for the item.
+        if notes := self.note_tiers():
+            carried_tiers = {
+                **{i.item_id: t for i in items if (t := note_item_tier(i, notes)) is not None},
+                **carried_tiers,
+            }
         now = dt.datetime.now().isoformat(timespec="seconds")
         with self._tx() as db:
             db.execute("DELETE FROM p_meta WHERE key = ?", (f"{INHERIT_META}{facet_id}",))
@@ -1003,6 +1012,37 @@ class PersonaStore:
                     "INSERT OR REPLACE INTO p_item_tiers VALUES (?, ?, ?)",
                     (item_id, tier, dt.datetime.now().isoformat(timespec="seconds")),
                 )
+
+    def note_tiers(self) -> dict[str, Tier]:
+        """The tier the person chose for each note they asked to be remembered, by source id."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key, value FROM p_meta WHERE key LIKE ?", (f"{NOTE_TIER_PREFIX}%",)
+            ).fetchall()
+        return {r[0][len(NOTE_TIER_PREFIX) :]: r[1] for r in rows if r[1] in TIERS}
+
+    def private_note_sources(self) -> set[str]:
+        """Sources of notes the person kept to themself: nothing of them reaches a conversation of the colleague tier,
+        before an item stands on them or after."""
+        return {source_id for source_id, tier in self.note_tiers().items() if tier == SELF}
+
+    def set_note_tier(self, source_id: str, tier: Tier) -> list[str]:
+        """Record the tier of a note (a source the person asked to be remembered) and put it on the items already
+        standing on it; items made from it later take it as they are made (``replace_facet_items``). Returns the ids of
+        the items changed."""
+        if tier not in TIERS:
+            raise ValueError(tier)
+        with self._tx() as db:
+            if db.execute("SELECT 1 FROM p_sources WHERE source_id = ?", (source_id,)).fetchone() is None:
+                raise KeyError(source_id)
+            db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (f"{NOTE_TIER_PREFIX}{source_id}", tier))
+        notes = self.note_tiers()
+        changed: list[str] = []
+        for item in self.list_items(include_rejected=True, raw=True):
+            if any(e.source_id == source_id for e in item.evidence):
+                self.set_item_tier(item.item_id, note_item_tier(item, notes))
+                changed.append(item.item_id)
+        return changed
 
     def get_meta(self, key: str) -> str | None:
         with self._lock:
@@ -1274,6 +1314,22 @@ class PersonaStore:
             }
             for r in rows
         ]
+
+    def conversation_previews(self, conversation_ids: Sequence[str], owner: str | None) -> dict[str, str]:
+        """What was last said in each of these conversations of ``owner`` (none of anyone else's), cut short."""
+        found: dict[str, str] = {}
+        ids = list(conversation_ids)
+        for start in range(0, len(ids), 400):
+            batch = ids[start : start + 400]
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT c.id, (SELECT content FROM conversation_turns WHERE conversation_id = c.id "
+                    "ORDER BY seq DESC LIMIT 1) FROM conversations c "
+                    f"WHERE c.owner IS ? AND c.id IN ({','.join('?' * len(batch))})",
+                    (owner, *batch),
+                ).fetchall()
+            found.update((r[0], (r[1] or "")[:120]) for r in rows)
+        return found
 
     def get_conversation(self, conversation_id: str, owner: str | None) -> dict[str, Any]:
         with self._lock:

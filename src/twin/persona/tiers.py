@@ -10,7 +10,8 @@ and not the words only such items stand on (``private_expressions``).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Literal
 
 from .dimensions import FACETS
@@ -66,6 +67,37 @@ def private_expressions(items: Iterable[PersonaItem], overrides: Mapping[str, st
         into = shared if item_tier(item, overrides) == COLLEAGUE else private
         into.update(e.expression_id for e in item.evidence)
     return private - shared
+
+
+@dataclass(frozen=True)
+class PrivateWords:
+    """The words a conversation of the colleague tier may not be shown: expressions only the person's own items stand
+    on (``private_expressions``), and every expression of a note the person kept to themself (``note_tier``), found
+    or not yet standing under any item. An expression's id starts with its source's id."""
+
+    ids: frozenset[str] = frozenset()
+    sources: frozenset[str] = frozenset()
+
+    def __contains__(self, ref: object) -> bool:
+        return isinstance(ref, str) and (ref in self.ids or ref.split("#", 1)[0] in self.sources)
+
+    def __bool__(self) -> bool:
+        return bool(self.ids or self.sources)
+
+
+def private_words(
+    items: Iterable[PersonaItem], overrides: Mapping[str, str], private_sources: Collection[str] = ()
+) -> PrivateWords:
+    return PrivateWords(frozenset(private_expressions(items, overrides)), frozenset(private_sources))
+
+
+def note_item_tier(item: PersonaItem, notes: Mapping[str, str]) -> Tier | None:
+    """The tier the notes an item stands on give it: the person's own if any of them was kept to themself, the
+    colleague tier if they all were opened, None where it stands on no note (its facet's default then)."""
+    chosen = {notes[e.source_id] for e in item.evidence if e.source_id in notes}
+    if SELF in chosen:
+        return SELF
+    return COLLEAGUE if COLLEAGUE in chosen else None
 
 
 def carry_tiers(old: list[PersonaItem], new: list[PersonaItem], tiers: Mapping[str, str]) -> dict[str, Tier]:

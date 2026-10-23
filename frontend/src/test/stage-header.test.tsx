@@ -145,12 +145,17 @@ it.each([
     const header = await screen.findByRole('banner', {
       name: route === 'chat' ? '小林的聊天' : '小林的舞台',
     });
-    await waitFor(() => expect(header.querySelector('img')).not.toBeNull());
+    // A conversation picks the twin beside its box; the other pages in their header.
+    const place =
+      route === 'chat'
+        ? screen.getByRole('form', { name: '消息输入' })
+        : header;
+    await waitFor(() => expect(place.querySelector('img')).not.toBeNull());
     expect(header).toHaveClass(
       route === 'chat' ? 'chat-topbar' : 'stage-header',
     );
     expect(within(header).getByRole('heading', { name: '小林' })).toBeVisible();
-    expect(header.querySelector('img')?.src).toContain('persona=p-stage');
+    expect(place.querySelector('img')?.src).toContain('persona=p-stage');
     expect(
       header.querySelectorAll(
         '[aria-hidden].stage-sun, [aria-hidden].stage-coral',
@@ -161,7 +166,7 @@ it.each([
       // The voice and the portrait are behind the header's "…".
       expect(within(header).getByLabelText('更多：语音、形象')).toBeVisible();
     }
-    fireEvent.click(within(header).getByRole('button', { name: /^切换分身/ }));
+    fireEvent.click(within(place).getByRole('button', { name: /^切换分身/ }));
     const sheet = await screen.findByRole('dialog', { name: '切换分身' });
     expect(within(sheet).getByText('小林').closest('button')).toHaveClass(
       'bg-primary',

@@ -13,6 +13,7 @@ import {
   waiting,
   withHandoffs,
   type ChatReply,
+  type NoteTier,
   type Turn,
 } from './types';
 
@@ -27,10 +28,13 @@ export interface ConversationSummary {
   /** The last word is the person's own reply to what the twin handed them. */
   owner_replied?: boolean;
 }
+/** Which tier of memory a conversation answers from: ``self`` is the person's own, with their assistant. */
+export type Audience = 'self' | 'colleague';
 interface Conversation {
   id: string;
   title: string;
   turns: Turn[];
+  audience?: Audience;
 }
 function stored(key: string) {
   try {
@@ -120,6 +124,7 @@ export function useConversation(active: boolean) {
     () => prefetched?.turns ?? loadLegacy(legacyKey),
   );
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [audience, setAudience] = useState<Audience | null>(null);
   const id = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -137,6 +142,7 @@ export function useConversation(active: boolean) {
   const request = useRef<AbortController | null>(null);
   const historyRequest = useRef<AbortController | null>(null);
   const failed = useRef<string | null>(null);
+  const failedTrial = useRef(false);
   const selectId = useCallback(
     (value: string | null) => {
       id.current = value;
@@ -192,6 +198,7 @@ export function useConversation(active: boolean) {
     const saved = stored(currentKey);
     id.current = null;
     setConversationId(null);
+    setAudience(null);
     const cached = saved
       ? peekEssential<Conversation>(
           `/api/conversations/${encodeURIComponent(saved)}`,
@@ -224,6 +231,7 @@ export function useConversation(active: boolean) {
           );
           if (!controller.signal.aborted) {
             selectId(conversation.id);
+            setAudience(conversation.audience ?? null);
             setTurns(conversation.turns);
             if (imported) void refreshHistory();
           }
@@ -231,6 +239,7 @@ export function useConversation(active: boolean) {
           if (!controller.signal.aborted) {
             if (error instanceof ApiError && error.status === 404) {
               selectId(null);
+              setAudience(null);
               setTurns([]);
             } else {
               setRestoreFailed(true);
@@ -244,6 +253,7 @@ export function useConversation(active: boolean) {
     } else {
       id.current = null;
       setConversationId(null);
+      setAudience(null);
       setTurns([]);
       setLoading(false);
     }
@@ -262,7 +272,8 @@ export function useConversation(active: boolean) {
     personaId,
   ]);
 
-  const send = async (text = draft) => {
+  /** ``trial``: ask as a colleague would be answered (看同事会得到什么), and keep nothing of it. */
+  const send = async (text = draft, trial = false) => {
     text = text.trim();
     if (
       !text ||
@@ -281,6 +292,7 @@ export function useConversation(active: boolean) {
       role: 'user',
       content: text,
       timestamp: new Date().toISOString(),
+      ...(trial ? { preview: true } : {}),
     };
     const pending = [...turns, user];
     setTurns(pending);
@@ -289,50 +301,62 @@ export function useConversation(active: boolean) {
     setError('');
     setNewest(null);
     try {
-      if (!id.current) {
-        const created = await api<{ id: string }>('/api/conversations', {
-          method: 'POST',
-          json: {},
-          headers: headers(),
-          signal: controller.signal,
-        });
+      if (!id.current && !trial) {
+        const created = await api<{ id: string; audience?: Audience }>(
+          '/api/conversations',
+          {
+            method: 'POST',
+            json: {},
+            headers: headers(),
+            signal: controller.signal,
+          },
+        );
         if (controller.signal.aborted || !mounted.current) return;
         selectId(created.id);
+        setAudience(created.audience ?? null);
       }
-      const payload = {
-        conversation_id: id.current,
-        messages: pending
-          .filter(spoken)
-          .slice(-40)
-          .map(({ role, content }) => ({ role, content })),
-      };
-      const response = attachments.length
-        ? await (() => {
-            const form = new FormData();
-            form.append('payload', JSON.stringify(payload));
-            attachments.forEach((file) =>
-              form.append('files', file, file.name),
-            );
-            return api<Response>('/api/persona/chat/stream-with-files', {
+      const payload = trial
+        ? {
+            conversation_id: id.current,
+            messages: [{ role: 'user', content: text }],
+            preview: true,
+          }
+        : {
+            conversation_id: id.current,
+            messages: pending
+              .filter(spoken)
+              .slice(-40)
+              .map(({ role, content }) => ({ role, content })),
+          };
+      const response =
+        attachments.length && !trial
+          ? await (() => {
+              const form = new FormData();
+              form.append('payload', JSON.stringify(payload));
+              attachments.forEach((file) =>
+                form.append('files', file, file.name),
+              );
+              return api<Response>('/api/persona/chat/stream-with-files', {
+                method: 'POST',
+                form,
+                headers: headers(),
+                signal: controller.signal,
+                responseType: 'stream',
+              });
+            })()
+          : await api<Response>('/api/persona/chat/stream', {
               method: 'POST',
-              form,
+              json: payload,
               headers: headers(),
               signal: controller.signal,
               responseType: 'stream',
             });
-          })()
-        : await api<Response>('/api/persona/chat/stream', {
-            method: 'POST',
-            json: payload,
-            headers: headers(),
-            signal: controller.signal,
-            responseType: 'stream',
-          });
       const twin: Turn = {
         id: crypto.randomUUID(),
         role: 'twin',
         content: '',
         timestamp: new Date().toISOString(),
+        ...(trial ? { preview: true } : {}),
       };
       let finished = false;
       for await (const { event, data } of readSSE(
@@ -352,8 +376,10 @@ export function useConversation(active: boolean) {
           setTurns([...pending, { ...twin }]);
           setNewest(twin.id);
           failed.current = null;
-          setAttachments([]);
-          void refreshHistory();
+          if (!trial) {
+            setAttachments([]);
+            void refreshHistory();
+          }
           break;
         } else if (event === 'error' || event === 'stale') {
           // A stale answer was written while the twin's memory changed: not saved, so it is not shown either.
@@ -369,6 +395,7 @@ export function useConversation(active: boolean) {
         setNewest(null);
         setDraft(text);
         failed.current = text;
+        failedTrial.current = trial;
         setError(message(error));
         if (error instanceof ApiError && error.status === 404) selectId(null);
       }
@@ -399,6 +426,7 @@ export function useConversation(active: boolean) {
     request.current?.abort();
     request.current = null;
     selectId(null);
+    setAudience(null);
     setTurns([]);
     setDraft('');
     setAttachments([]);
@@ -426,6 +454,7 @@ export function useConversation(active: boolean) {
       );
       if (controller.signal.aborted || !mounted.current) return false;
       selectId(conversation.id);
+      setAudience(conversation.audience ?? null);
       setTurns(conversation.turns);
       setRestoreFailed(false);
       setDraft('');
@@ -461,9 +490,50 @@ export function useConversation(active: boolean) {
     if (id.current === nextId) clear();
     void refreshHistory();
   };
+  /** Say who may use a note the assistant took down: ``none`` is not keeping it. Rejects when it could not be changed. */
+  const setNoteTier = async (turnId: string, tier: NoteTier) => {
+    const note = turns.find((turn) => turn.id === turnId)?.reply?.note;
+    if (!note) return;
+    await api(`/api/persona/notes/${encodeURIComponent(note.id)}/tier`, {
+      method: 'PUT',
+      json: { tier },
+      headers: headers(),
+    });
+    if (!mounted.current || personaId !== getPersonaId()) return;
+    setTurns((rows) =>
+      rows.map((turn) =>
+        turn.id === turnId && turn.reply?.note
+          ? {
+              ...turn,
+              reply: { ...turn.reply, note: { ...turn.reply.note, tier } },
+            }
+          : turn,
+      ),
+    );
+  };
+  /** Take back a promise the assistant wrote into the commitments from what the person said. */
+  const undoPromise = async (turnId: string) => {
+    const promise = turns.find((turn) => turn.id === turnId)?.reply?.commitment;
+    if (!promise) return;
+    await api(
+      `/api/persona/ledger/${encodeURIComponent(promise.entry_id)}/review`,
+      { method: 'POST', json: { action: 'reject' }, headers: headers() },
+    );
+    if (!mounted.current || personaId !== getPersonaId()) return;
+    setTurns((rows) =>
+      rows.map((turn) =>
+        turn.id === turnId && turn.reply
+          ? { ...turn, reply: { ...turn.reply, commitment: undefined } }
+          : turn,
+      ),
+    );
+  };
   return {
     turns,
     conversationId,
+    audience,
+    setNoteTier,
+    undoPromise,
     draft,
     setDraft,
     attachments,
@@ -484,7 +554,7 @@ export function useConversation(active: boolean) {
     rename,
     remove,
     retry: () => {
-      if (failed.current) void send(failed.current);
+      if (failed.current) void send(failed.current, failedTrial.current);
       else if (restoreFailed) setRestoreVersion((value) => value + 1);
     },
   };

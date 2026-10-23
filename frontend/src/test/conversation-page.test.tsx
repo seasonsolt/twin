@@ -152,6 +152,13 @@ beforeEach(() => {
     updated_at: '2026-10-20T09:00:00',
     persona: 'default',
   });
+  server.tasks.push({
+    task_id: task.task_id,
+    persona_id: 'default',
+    title: task.title,
+    status: 'idle',
+    updated_at: task.updated_at,
+  });
   fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     const saved = server.respond(url, init);
     if (saved) return saved;
@@ -173,15 +180,17 @@ it('lists conversations and tasks together, newest first, and a task says it is 
   mount();
   const list = await screen.findByRole('region', { name: '和林舟的对话' });
   const rows = await within(list).findAllByRole('listitem');
+  // Each says whom it is with, after its title.
   expect(rows.map((row) => row.textContent)).toEqual([
-    expect.stringMatching(/^写周报任务/u),
-    expect.stringMatching(/^下周发布怎么安排(?!的更多操作)/u),
+    expect.stringMatching(/^写周报林舟 · 任务/u),
+    expect.stringMatching(/^下周发布怎么安排林舟(?!的更多操作)/u),
   ]);
   expect(within(rows[1]).queryByText('任务')).toBeNull();
 });
 
 it('names a fresh start after the kind of message, and marks a task still being done', async () => {
   const user = userEvent.setup();
+  server.tasks[0].status = 'running';
   fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
     const saved = server.respond(url, init);
     if (saved) return saved;
@@ -218,7 +227,9 @@ it('opens a task from the list in the same page and goes back to a conversation,
   expect(screen.getByTestId('where')).toHaveTextContent('/chat?mode=task');
   expect(screen.getByLabelText('要做的事')).toHaveValue('顺便问一句');
   expect(screen.getByRole('radio', { name: '交代任务' })).toBeChecked();
-  await user.click(within(list).getByRole('button', { name: /^写周报任务/u }));
+  await user.click(
+    within(list).getByRole('button', { name: /^写周报\s*林舟\s*·\s*任务/u }),
+  );
   expect(await screen.findByText('周报写好了。')).toBeVisible();
   expect(screen.getByRole('link', { name: /周报\.docx/u })).toHaveAttribute(
     'href',
@@ -262,26 +273,21 @@ it('leads the old work address to the conversation on tasks, or on plain chat wh
   expect(await screen.findByLabelText('你说')).toBeVisible();
 });
 
-it('picks the twin in one place, whether the list is open or folded away', async () => {
+it('picks the twin in one place, beside the box a message is written in, whether the list is open or folded away', async () => {
   const user = userEvent.setup();
   const view = mount();
   const picks = () => screen.getAllByRole('button', { name: /^切换分身/ });
-  await screen.findByRole('region', { name: '和林舟的对话' });
+  const list = await screen.findByRole('region', { name: '和林舟的对话' });
   expect(picks()).toHaveLength(1);
+  expect(within(list).queryByRole('button', { name: /^切换分身/ })).toBeNull();
   expect(
-    within(screen.getByRole('region', { name: '和林舟的对话' })).getByRole(
-      'button',
-      { name: /^切换分身/ },
-    ),
+    within(screen.getByRole('form', { name: '消息输入' })).getByRole('button', {
+      name: /^切换分身/,
+    }),
   ).toBeVisible();
   await user.click(screen.getByRole('button', { name: '收起对话列表' }));
   expect(screen.queryByRole('region', { name: '和林舟的对话' })).toBeNull();
   expect(picks()).toHaveLength(1);
-  expect(
-    within(screen.getByRole('banner')).getByRole('button', {
-      name: /^切换分身/,
-    }),
-  ).toBeVisible();
   view.unmount();
   media('(max-width: 767px)');
   mount();

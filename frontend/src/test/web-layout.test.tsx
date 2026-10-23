@@ -192,8 +192,10 @@ it('starts with a collapsed sheet on tablet, with an accessible expand control',
     .click(screen.getByRole('button', { name: '展开对话列表' }));
   const sheet = screen.getByRole('region', { name: '和小林的对话' });
   expect(within(sheet).getByRole('button', { name: '新对话' })).toBeVisible();
+  // The twin is picked beside the box a message is written in, not in the list.
+  expect(within(sheet).queryByRole('button', { name: /^切换分身/ })).toBeNull();
   expect(
-    within(sheet).getByRole('button', { name: '切换分身（当前：小林）' }),
+    screen.getByRole('button', { name: '切换分身（当前：小林）' }),
   ).toBeVisible();
 });
 

@@ -29,6 +29,7 @@ from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
 from ..llm import LLM
 from ..persona import gate
+from ..persona.assistant import note_text
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
     MAX_CHAT_ATTACHMENT_COUNT,
@@ -66,8 +67,10 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
-from ..persona.tiers import COLLEAGUE, SELF, Audience, Tier, for_audience, item_tier, private_expressions
+from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, for_audience, item_tier, private_words
 from ..usage import CallRow, collect_calls, model_tokens, transient_summary
+from . import assistant as assistant_routes
+from .assistant import keep_note, note_reply, person_only, trial_withheld
 from .backends import Backends, BackendUnavailable
 from .conversations import (
     ConversationIndex,
@@ -119,6 +122,9 @@ class ReviewBody(BaseModel):
 class ChatBody(BaseModel):
     messages: list[ChatTurn] = Field(min_length=1, max_length=MAX_CHAT_TURNS)
     conversation_id: str | None = Field(default=None, max_length=100)
+    # 看同事会得到什么: answer the last message as a colleague would be answered, and keep nothing of it. Only the
+    # person themself can ask for it.
+    preview: bool = False
 
 
 class TierBody(BaseModel):
@@ -197,8 +203,10 @@ def run_chat(
     audience: Audience = SELF,
     index: ConversationIndex | None = None,
     handoffs: tuple[HandoffDesk, str] | None = None,
+    assistant: bool = False,
 ) -> dict[str, Any]:
-    """``handoffs``: the desk and what the asker is called, to hand on what the reply leaves to the person."""
+    """``handoffs``: the desk and what the asker is called, to hand on what the reply leaves to the person.
+    ``assistant``: the conversation is the person's own with their assistant (``persona.assistant``)."""
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
         # The ledger is the person's own: only a conversation of the tier that may use everything has it.
@@ -210,6 +218,7 @@ def run_chat(
             ledger=audience == SELF,
             audience=audience,
             reach=handoffs[0].reach(email) if handoffs else "none",
+            assistant=assistant,
         )
         owner_said = store.owner_replies(conversation_id, email) if conversation_id else []
         reply = chat.reply(messages, owner_said=owner_said)
@@ -220,6 +229,7 @@ def run_chat(
             chat_payload(store, reply, audience=audience),
             index,
             (handoffs[0], handoffs[1], audience) if handoffs else None,
+            assistant=assistant,
         )
 
 
@@ -252,7 +262,7 @@ def cited_view(
     """What each cited id says, for the 依据 under an answer; ids gone since (or rejected items) are left out, and so
     are items of a tier the conversation's audience may not use, whatever the answer cited."""
     items = for_citation(store, store.get_items(list(citations)), audience)
-    hidden: set[str] | None = set() if audience == SELF else None
+    hidden: PrivateWords | None = PrivateWords() if audience == SELF else None
     cited: list[dict[str, Any]] = []
     for ref in citations:
         if (item := items.get(ref)) is not None and item.review is not ReviewStatus.REJECTED:
@@ -260,7 +270,7 @@ def cited_view(
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
         elif (e := store.get_expression(ref)) is not None:
             if hidden is None:  # read once, and only when an answer cites someone's words
-                hidden = private_expressions(store.list_items(), store.item_tiers())
+                hidden = private_words(store.list_items(), store.item_tiers(), store.private_note_sources())
             if ref in hidden:
                 continue
             day = e.date.isoformat() if e.date else None
@@ -467,6 +477,7 @@ def register(
     from . import uploads
 
     ingestion = uploads.register(app, settings, jobs, queue_build, backends.llm)
+    assistant_routes.register(app, settings, queue_build, ingestion.lock, open_store)
     from . import claims
 
     claims.register(app, settings, ingestion)
@@ -628,10 +639,11 @@ def register(
         return {**source_view(parsed.source), "new": new}
 
     @app.get("/api/persona/sources/{source_id}/text", response_class=PlainTextResponse)
-    def source_text(source_id: str) -> str:
+    def source_text(source_id: str, request: Request) -> str:
         with open_store() as store:
             source = store.get_source(source_id)
-            if source is None:
+            # A note the person kept to themself is not for those who manage the twin either.
+            if source is None or (request_audience(request) != SELF and source_id in store.private_note_sources()):
                 raise HTTPException(404, "找不到这条记忆")
             expressions = expression_view(store, settings, source_id=source_id)
             speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.AUDIO, SourceKind.VIDEO}
@@ -643,6 +655,7 @@ def register(
 
     @app.get("/api/persona/sources")
     def list_sources(
+        request: Request,
         limit: Annotated[int, Query(ge=0, le=MAX_PAGE_SIZE)] = PAGE_SIZE,
         offset: Annotated[int, Query(ge=0)] = 0,
         status: Annotated[list[str] | None, Query()] = None,
@@ -655,6 +668,9 @@ def register(
         running = processing.view()["state"] == "running"
         with open_store() as store:
             sources = store.list_sources()
+            if request_audience(request) != SELF:
+                private = store.private_note_sources()
+                sources = [s for s in sources if s.source_id not in private]
             memories = source_memories(store, sources)
             statuses = store.source_statuses(sources, {sid: m.items_supported for sid, m in memories.items()})
             progress = store.build_progress() if running else None
@@ -933,6 +949,8 @@ def register(
 
     @app.post("/api/persona/chat", status_code=202)
     def start_chat(body: ChatBody, request: Request) -> Any:
+        if body.preview:
+            raise HTTPException(400, "试问请用流式聊天")
         messages = validate_chat(body)
         email = owner(request)
         audience = index.audience(body.conversation_id, request_audience(request))
@@ -955,11 +973,54 @@ def register(
             "chat",
             "和分身聊天",
             lambda log: run_chat(
-                settings, llm, embedder, messages, log, body.conversation_id, email, audience, index, asker
+                settings,
+                llm,
+                embedder,
+                messages,
+                log,
+                body.conversation_id,
+                email,
+                audience,
+                index,
+                asker,
+                audience == SELF and bool(request.scope.get("twin_person")),
             ),
             prepare=accept,
         )
         return {"job_id": job.job_id}
+
+    def note_response(note: str, message: str, body: ChatBody, email: str | None) -> StreamingResponse:
+        """The person asked the assistant to remember something (``记一下``): it is kept as a note, in the tier that is
+        theirs alone until they choose, and answered at once; nothing is asked of the model, so nothing is lost to a
+        reply that did not take it down."""
+
+        def keep() -> dict[str, Any]:
+            with open_store() as store:
+                append_user(store, body.conversation_id, email, message, index)
+                payload = chat_payload(store, note_reply(), audience=SELF)
+                payload["note"] = keep_note(store, settings, note)
+                payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
+                return append_reply(store, body.conversation_id, email, payload, index)
+
+        async def events() -> AsyncGenerator[str]:
+            yield ": connected\n\n"
+            try:
+                final = await off_loop(keep)
+            except HTTPException as e:
+                yield sse_event("error", {"detail": str(e.detail)})
+                return
+            except Exception:
+                yield sse_event("error", {"detail": "没能记下，请重试"})
+                return
+            await off_loop(queue_build)
+            yield sse_event("delta", {"text": final["reply"]})
+            yield sse_event("final", final)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def stream_chat_response(
         body: ChatBody, request: Request, attachment_passages: Sequence[AttachmentPassage] = ()
@@ -971,6 +1032,15 @@ def register(
         audience = index.audience(body.conversation_id, request_audience(request))
         asker_name = request_asker_name(request)
         ledger = audience == SELF and not request.scope.get("twin_visitor")
+        preview = body.preview
+        if preview:
+            # 看同事会得到什么: the last message alone, answered from the colleague tier, with nothing saved.
+            person_only(request)
+            audience, ledger, messages = COLLEAGUE, False, messages[-1:]
+        # The person's own conversation is answered by their assistant, which also takes down notes and promises.
+        assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
+        if assistant and not attachment_passages and (note := note_text(messages[-1].content)) is not None:
+            return note_response(note, messages[-1].content, body, email)
         with open_store() as store:
             profiled = store.has_items() or bool(attachment_passages)
         ticket: Ticket | None = None
@@ -978,8 +1048,9 @@ def register(
             llm, embedder = backends.chat_llm(), backends.embedder()
             ticket = jobs.admit_stream()
         try:
-            with open_store() as store:
-                append_user(store, body.conversation_id, email, messages[-1].content, index)
+            if not preview:
+                with open_store() as store:
+                    append_user(store, body.conversation_id, email, messages[-1].content, index)
         except BaseException:
             if ticket is not None:
                 ticket.close()
@@ -991,11 +1062,24 @@ def register(
             payload = chat_payload(store, reply, attachment_passages, audience)
             payload["elapsed_ms"] = max(0, round((time.monotonic() - started_at) * 1000))
             payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
-            return append_reply(store, body.conversation_id, email, payload, index, (desk, asker_name, audience))
+            if preview:
+                payload["preview"] = {"withheld": trial_withheld(store, llm, embedder, settings, messages[-1].content)}
+                return payload
+            return append_reply(
+                store,
+                body.conversation_id,
+                email,
+                payload,
+                index,
+                (desk, asker_name, audience),
+                assistant=assistant,
+            )
 
         def unbuilt() -> tuple[str, dict[str, Any]]:
             with open_store() as store:
                 reply = no_profile_reply(store)
+                if preview:
+                    return reply.reply, chat_payload(store, reply, audience=COLLEAGUE)
                 return reply.reply, save(store, reply)
 
         # The store is opened, read and written off the event loop, which other requests share.
@@ -1018,7 +1102,8 @@ def register(
                             settings,
                             ledger=ledger,
                             audience=audience,
-                            reach=desk.reach(email),
+                            reach=desk.reach(None if preview else email),
+                            assistant=assistant,
                         )
                     )
                     # What the person answered themself in this conversation settles it; read here, from what the
@@ -1028,8 +1113,8 @@ def register(
                         chat.stream_reply(
                             messages,
                             attachments=attachment_passages,
-                            persist=not attachment_passages,
-                            owner_said=owner_said,
+                            persist=not attachment_passages and not preview,
+                            owner_said=[] if preview else owner_said,
                         )
                     ) as replies:
                         async for result in replies:

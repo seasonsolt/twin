@@ -12,14 +12,16 @@ import {
   TooltipProvider,
 } from './components/ui';
 
-const Twins = lazy(() =>
-  import('./pages/Twins').then((module) => ({ default: module.Twins })),
-);
 const Chat = lazy(() =>
   import('./pages/Chat').then((module) => ({ default: module.Chat })),
 );
-const Profile = lazy(() =>
-  import('./pages/Profile').then((module) => ({ default: module.Profile })),
+const Member = lazy(() =>
+  import('./pages/Member').then((module) => ({ default: module.Member })),
+);
+const ProfileRedirect = lazy(() =>
+  import('./pages/ProfileRedirect').then((module) => ({
+    default: module.ProfileRedirect,
+  })),
 );
 const Questionnaire = lazy(() =>
   import('./pages/Questionnaire').then((module) => ({
@@ -82,7 +84,12 @@ export function App() {
                     {/* The way in (finding their voice, then the twin made for them): AppShell frames it. */}
                     <Route path="welcome" element={null} />
                     <Route path="team" element={<Home />} />
-                    <Route path="twins" element={<Twins />} />
+                    <Route path="team/twin/:twinId" element={<Member />} />
+                    <Route path="team/:id" element={<Member />} />
+                    <Route
+                      path="twins"
+                      element={<Navigate to="/team" replace />}
+                    />
                     <Route path="library" element={<Library />} />
                     <Route path="voice" element={<MemberVoice />} />
                     <Route
@@ -98,7 +105,8 @@ export function App() {
                         </FeaturePage>
                       }
                     />
-                    <Route path="profile" element={<Profile />} />
+                    {/* The old profile addresses lead to the member page of the twin in view. */}
+                    <Route path="profile" element={<ProfileRedirect />} />
                     <Route
                       path="ledger"
                       element={
@@ -109,28 +117,15 @@ export function App() {
                     />
                     <Route
                       path="memories"
-                      element={
-                        <Navigate to="/profile?section=memories" replace />
-                      }
+                      element={<ProfileRedirect section="memories" />}
                     />
-                    <Route
-                      path="about"
-                      element={<Navigate to="/profile" replace />}
-                    />
+                    <Route path="about" element={<ProfileRedirect />} />
                     <Route
                       path="sources"
-                      element={
-                        <Navigate to="/profile?section=memories" replace />
-                      }
+                      element={<ProfileRedirect section="memories" />}
                     />
-                    <Route
-                      path="persona"
-                      element={<Navigate to="/profile" replace />}
-                    />
-                    <Route
-                      path="identity"
-                      element={<Navigate to="/profile" replace />}
-                    />
+                    <Route path="persona" element={<ProfileRedirect />} />
+                    <Route path="identity" element={<ProfileRedirect />} />
                     <Route path="questionnaire" element={<Questionnaire />} />
                     <Route path="gallery" element={<Gallery />} />
                     <Route path="*" element={<Navigate to="/chat" replace />} />

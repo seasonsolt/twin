@@ -394,14 +394,6 @@
 .text-accent {
   color: var(--accent-ink);
 }
-.about-portrait [role='img'],
-.about-portrait img,
-.about-portrait svg {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
-}
 .persona-name {
   font-family: var(--font-persona);
   font-weight: 400;
@@ -409,37 +401,6 @@
 .stage-global-switch {
   display: block;
   pointer-events: auto;
-}
-.profile-intro {
-  max-width: 80%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.profile-section-nav {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  justify-content: safe center;
-  overflow-x: auto;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--canvas);
-}
-.profile-section-nav a {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 16px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  border-radius: 999px;
-}
-.profile-section-nav a[aria-selected='true'] {
-  background: var(--text-primary);
-  color: var(--canvas);
 }
 .profile-page {
   max-width: 1120px;
@@ -612,13 +573,6 @@
   border-radius: 20px 20px 0 0;
 }
 @media (max-width: 767px) {
-  .profile-section-nav {
-    gap: 4px;
-    padding: 8px;
-  }
-  .profile-section-nav a {
-    padding-inline: 12px;
-  }
   .memory-graph-panel {
     height: 65vh;
     height: 65dvh;
@@ -627,22 +581,6 @@
     max-width: 55%;
     text-align: right;
   }
-}
-.twins-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
-  gap: 24px;
-}
-.twin-card {
-  min-width: 0;
-}
-.twin-card[data-current='true'] {
-  outline: 2px solid var(--accent);
-}
-.twin-card .persona-portrait {
-  width: 96px;
-  height: 96px;
-  font-size: 40px;
 }
 .chat-page {
   display: flex;
@@ -1410,8 +1348,6 @@
   .stage-circle:is(button):hover {
     box-shadow: 0 0 0 4px rgb(243 245 248 / 0.35);
   }
-  .twin-card-select:hover,
-  .twin-card-create:hover,
   .stage-all:hover {
     background: var(--soft);
   }
@@ -1476,8 +1412,7 @@
     max-width: 760px;
   }
   .memories-page,
-  .about-page,
-  .twins-page {
+  .about-page {
     max-width: 768px;
     margin-inline: auto;
   }
@@ -1656,16 +1591,14 @@
     border-top-color: transparent;
   }
   .memories-page,
-  .about-page,
-  .twins-page {
+  .about-page {
     max-width: 1184px;
   }
   .page-content {
     padding: 32px;
   }
   .memories-page > .stage-header,
-  .about-page > .stage-header,
-  .twins-page > .stage-header {
+  .about-page > .stage-header {
     margin: 32px 32px 0;
   }
   .memories-page > .stage-header {

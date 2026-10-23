@@ -1,0 +1,164 @@
+import { useId, useState } from 'react';
+import {
+  ActionMenu,
+  Badge,
+  Button,
+  Field,
+  ListRow,
+  Row,
+  Stack,
+  Text,
+  Textarea,
+  toast,
+} from '../../components/ui';
+import { EvidenceList } from './ItemCard';
+import { secondhand, type ProfileItem, type ReviewStatus } from './types';
+
+/**
+ * What the twin remembers, as one line: the memory, when it applies and how many occasions it rests on. 改 opens
+ * the field to correct it; the evidence, removing it and putting the extracted wording back are under “⋯”.
+ */
+export function ItemRow({
+  item,
+  pending,
+  onReview,
+  kindLabels,
+}: {
+  item: ProfileItem;
+  pending: boolean;
+  onReview: (
+    item: ProfileItem,
+    status: ReviewStatus,
+    statement?: string,
+  ) => Promise<boolean>;
+  kindLabels: Record<string, string>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.statement);
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const occasions = new Set(item.evidence.map((e) => e.source_id)).size;
+  const edit = () => {
+    setDraft(item.statement);
+    setEditing(true);
+  };
+  return (
+    <ListRow
+      as="article"
+      variant="divided"
+      aria-label={item.statement}
+      title={
+        <Text weight="regular" className="whitespace-pre-wrap break-words">
+          {item.statement}
+        </Text>
+      }
+      meta={
+        <Row gap={2} wrap>
+          <Text as="span" size="sm" tone="secondary">
+            {[item.applies_when, occasions > 0 ? `${occasions} 处依据` : '']
+              .filter(Boolean)
+              .join(' · ')}
+          </Text>
+          {item.review === 'edited' && <Badge tone="info">你改过</Badge>}
+          {secondhand(item) && <Badge>只有别人的说法</Badge>}
+          {item.conflict && <Badge tone="warning">有矛盾</Badge>}
+        </Row>
+      }
+      trailing={
+        !editing && (
+          <>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={pending}
+              aria-label={`改这条：${item.statement}`}
+              onClick={edit}
+            >
+              改
+            </Button>
+            <ActionMenu
+              label={`更多：${item.statement}`}
+              items={[
+                {
+                  label: open ? '收起依据' : '依据',
+                  onSelect: () => setOpen(!open),
+                },
+                {
+                  label: '删掉',
+                  disabled: pending,
+                  onSelect: () => void onReview(item, 'rejected'),
+                },
+                ...(item.review === 'edited'
+                  ? [
+                      {
+                        label: '恢复原样',
+                        disabled: pending,
+                        onSelect: () => void onReview(item, 'unreviewed'),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          </>
+        )
+      }
+    >
+      {open && (
+        <Stack gap={2}>
+          {item.extracted_statement && (
+            <Text size="sm" tone="secondary">
+              原提炼：{item.extracted_statement}
+            </Text>
+          )}
+          {item.conflict && (
+            <Text size="sm" tone="warning">
+              矛盾：{item.conflict}
+            </Text>
+          )}
+          <EvidenceList item={item} kindLabels={kindLabels} />
+        </Stack>
+      )}
+      {editing && (
+        <Stack
+          as="form"
+          gap={2}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const text = draft.trim();
+            if (!text) {
+              toast('表述不能为空', 'warning');
+              return;
+            }
+            void onReview(item, 'edited', text).then((ok) => {
+              if (ok) setEditing(false);
+            });
+          }}
+        >
+          <Field id={`${id}-statement`} label="修改表述">
+            <Textarea
+              id={`${id}-statement`}
+              value={draft}
+              maxLength={1000}
+              autoFocus
+              disabled={pending}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </Field>
+          <Row gap={2}>
+            <Button type="submit" size="sm" loading={pending}>
+              保存修改
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => setEditing(false)}
+            >
+              取消
+            </Button>
+          </Row>
+        </Stack>
+      )}
+    </ListRow>
+  );
+}

@@ -135,7 +135,15 @@ it('gives a guest, who only meets twins made public, the conversation alone', as
   expect(screen.getByText('聊天页')).toBeVisible();
   expect(screen.queryByRole('button', { name: '找人' })).toBeNull();
   expect(screen.queryByRole('button', { name: '上传会议录音' })).toBeNull();
-  // The places of the team are not a guest's, by address either.
-  window.location.hash = '#/library';
-  await waitFor(() => expect(window.location.hash).toBe('#/chat'));
+  // The places of the team are not a guest's, by address either: nor its members' pages, nor the old profile.
+  for (const address of [
+    '#/library',
+    '#/team/twin/p-pub',
+    '#/team/u-1',
+    '#/profile',
+    '#/twins',
+  ]) {
+    window.location.hash = address;
+    await waitFor(() => expect(window.location.hash).toBe('#/chat'));
+  }
 });

@@ -179,12 +179,12 @@ it.each(['user', 'memories'])(
   },
 );
 it.each(['persona', 'identity'])(
-  'redirects legacy %s to Profile',
+  'redirects legacy %s to the member page of the twin in view',
   async (route) => {
     identity.name_source = 'user';
     window.location.hash = `#/${route}`;
     render(<App />);
-    await screen.findByRole('heading', { name: '人格' });
-    expect(window.location.hash).toBe('#/profile');
+    await screen.findByRole('tab', { name: '档案' });
+    expect(window.location.hash).toMatch(/^#\/team\/twin\/[^/?]+$/u);
   },
 );

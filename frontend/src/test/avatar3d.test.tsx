@@ -6,9 +6,8 @@ import {
   screen,
 } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
-import { MemoryRouter } from 'react-router';
 import { ConfirmProvider } from '../components/ui';
-import { Profile } from '../pages/Profile';
+import { MemberAt, showTwins } from './member';
 import { AvatarComparison } from '../features/avatar/AvatarComparison';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
@@ -561,11 +560,10 @@ it.each([
         resolve = done;
       }),
     );
+    showTwins();
     renderView(
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/profile?section=assets']}>
-          <Profile />
-        </MemoryRouter>
+        <MemberAt path="/team/twin/default?section=assets" />
       </ConfirmProvider>,
     );
     await load();

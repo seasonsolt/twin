@@ -1,17 +1,7 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { create } from 'zustand';
-import {
-  Button,
-  Card,
-  Dialog,
-  Field,
-  Heading,
-  Input,
-  Row,
-  Stack,
-  Text,
-} from '../ui';
+import { Button, Dialog, Field, Input, Row, Stack, Text } from '../ui';
 import { useMobile } from '../../lib/useMobile';
 import { api } from '../../lib/api';
 import { usePersonas, type Persona } from '../../stores/personas';
@@ -127,106 +117,6 @@ export function NewTwinForm({
         下一步：加一段会议录音，勾出哪位是你。
       </Text>
     </Stack>
-  );
-}
-
-export function NewTwin({
-  initialOpen = false,
-  children = '新建分身',
-  variant = 'button',
-  onOpenChange,
-}: {
-  initialOpen?: boolean;
-  /** The trigger's content. */
-  children?: ReactNode;
-  /**
-   * button: a primary button, opening a small card over the work in view. card: the dashed tile in the twins grid,
-   * which turns into the form in place (nothing there to keep in view).
-   */
-  variant?: 'button' | 'card';
-  onOpenChange?: (open: boolean) => void;
-}) {
-  const trigger = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(initialOpen);
-  const mobile = useMobile();
-  const returnFocus = useRef(false);
-  const headingId = useId();
-  // The tile comes back after 取消: focus goes back to it.
-  useEffect(() => {
-    if (!open && returnFocus.current) {
-      returnFocus.current = false;
-      trigger.current?.focus();
-    }
-  }, [open]);
-  const changeOpen = (value: boolean) => {
-    setOpen(value);
-    onOpenChange?.(value);
-  };
-  const triggerProps = {
-    ref: trigger,
-    'aria-expanded': open,
-    onClick: () => changeOpen(true),
-  };
-  if (variant === 'card')
-    return open ? (
-      <Card as="section" padding="lg" aria-labelledby={headingId}>
-        <Stack gap={4}>
-          <Heading id={headingId} level={2} size="title">
-            新建分身
-          </Heading>
-          <NewTwinForm
-            onCreated={() => changeOpen(false)}
-            onCancel={() => {
-              returnFocus.current = true;
-              changeOpen(false);
-            }}
-          />
-        </Stack>
-      </Card>
-    ) : (
-      <Card
-        as="div"
-        variant="outline"
-        padding="none"
-        className="twin-card twin-card-create overflow-hidden border-2 border-dashed border-primary bg-transparent"
-      >
-        <Button
-          {...triggerProps}
-          variant="ghost"
-          aria-label="新建分身"
-          className="h-full min-h-60 w-full flex-col gap-4 p-6 text-primary hover:bg-transparent"
-        >
-          {children}
-        </Button>
-      </Card>
-    );
-  return (
-    <>
-      <Button
-        {...triggerProps}
-        aria-haspopup="dialog"
-        size="lg"
-        aria-label="新建分身"
-      >
-        {children}
-      </Button>
-      {/* Over work in view: a card in the middle of the page, from the bottom edge on a phone. The page behind is only
-          dimmed and is there again when it closes. */}
-      <Dialog
-        open={open}
-        onOpenChange={changeOpen}
-        title="新建分身"
-        variant={mobile ? 'sheet' : 'center'}
-        className="new-twin"
-        inPlace
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          trigger.current?.focus();
-        }}
-      >
-        <NewTwinForm onCreated={() => changeOpen(false)} />
-      </Dialog>
-    </>
   );
 }
 

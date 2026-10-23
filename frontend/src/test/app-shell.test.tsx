@@ -3,7 +3,8 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
-import { Profile } from '../pages/Profile';
+import { Member } from '../pages/Member';
+import { memberTwin, showTwins } from './member';
 import { useStatus, type Status } from '../stores/status';
 import { useAuth } from '../stores/auth';
 import {
@@ -53,7 +54,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
                 : path.startsWith('/api/persona/items')
                   ? itemsPage(path, [])
                   : path === '/api/personas'
-                    ? []
+                    ? [memberTwin()]
                     : path.startsWith('/api/persona/coverage')
                       ? { facets: [], suggestions: [], kind_labels: {} }
                       : path === '/api/status'
@@ -72,13 +73,14 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       ),
     ),
   );
+  showTwins();
   const rendered = render(
     <TooltipProvider>
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/profile']}>
+        <MemoryRouter initialEntries={['/team/twin/default']}>
           <Routes>
             <Route element={<AppShell />}>
-              <Route path="profile" element={<Profile />} />
+              <Route path="team/twin/:twinId" element={<Member />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -93,14 +95,18 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     const header = within(rendered.container.querySelector('header')!);
     expect(header.getByRole('heading', { name: '身份测试人' })).toBeVisible();
     expect(
-      header.queryByText(/mock-model|example.test|remote-provider|外部/),
+      header.queryByText(/mock-model|example.test|remote-provider|外部 ·/),
     ).not.toBeInTheDocument();
     expect(screen.queryByText('大模型：example.test')).toBeNull();
-    await act(async () => screen.getByRole('button', { name: '设置' }).click());
-    const settings = await screen.findByRole('dialog', { name: '分身设置' });
     await act(async () =>
-      within(settings).getByRole('button', { name: '外部服务' }).click(),
+      screen.getByLabelText('身份测试人的更多操作').click(),
     );
+    await act(async () =>
+      screen.getByRole('button', { name: '外部服务' }).click(),
+    );
+    const settings = await screen.findByRole('dialog', { name: '分身设置' });
+    // The dialog fades in from opacity 0, even with reduced motion.
+    await waitFor(() => expect(settings).toBeVisible());
     expect(
       await within(settings).findByText('大模型：example.test'),
     ).toBeVisible();
@@ -116,13 +122,15 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     expect(
       screen.queryByText(/localhost|local-provider/),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '人格' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '档案' })).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: '主导航' }).querySelectorAll('a'),
     ).toHaveLength(5);
     for (const label of ['团队', '对话', '录音库', '待处理', '承诺']) {
       // The wide side bar: icon on the left, the words beside it, named by those words.
-      const link = screen.getByRole('link', { name: label });
+      const link = within(
+        screen.getByRole('navigation', { name: '主导航' }),
+      ).getByRole('link', { name: label });
       expect(link).toHaveClass('w-full', 'rounded-md');
       expect(within(link).getByText(label)).toBeVisible();
       expect(within(link).getByText(label)).not.toHaveClass('sr-only');

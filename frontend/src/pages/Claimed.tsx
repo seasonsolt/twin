@@ -16,6 +16,7 @@ import {
   useConfirm,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { twinMemberPath } from '../lib/members';
 import { usePersonas, useTrial, type Persona } from '../stores/personas';
 import { useWelcome } from '../stores/welcome';
 import type { LedgerData, LedgerEntry } from '../features/ledger/types';
@@ -93,7 +94,7 @@ export function Claimed({ persona }: { persona: Persona }) {
       });
       startTrial(null);
       // Passed before the twin stops waiting, so the way in does not send them back to this step.
-      useWelcome.getState().finishClaim('/profile');
+      useWelcome.getState().finishClaim(twinMemberPath(persona.id));
     });
   const disown = async () => {
     if (

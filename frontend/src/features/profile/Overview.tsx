@@ -19,7 +19,7 @@ import {
 } from '../../components/ui';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import type { ItemQuery } from './types';
-import { ItemCard } from './ItemCard';
+import { ItemRow } from './ItemRow';
 import { useItemSearch } from './useItemSearch';
 import { useProfile } from './useProfile';
 import { MemoryUpdating } from '../memories/BuildProgress';
@@ -70,7 +70,9 @@ const layers: { label: string; layer: AspectLayer; ids: string[] }[] = [
 const order = layers.flatMap((group) => group.ids);
 const layerOf = (id: string) =>
   layers.find((group) => group.ids.includes(id))?.layer ?? 'core';
-const fallbackLevels = ['还不了解', '已了解一些', '了解较多', '回答经过检查'];
+// How well something is known, in words: the server counts four levels, and the third, once answers hold up when
+// checked, carries a tick.
+const levelNames = ['还不了解', '了解一些', '了解较多', '了解较多 ✓'];
 
 const COLLAPSED = 5;
 const TOP = 3;
@@ -94,7 +96,7 @@ function ItemList({ query, profile }: { query: ItemQuery; profile: Profile }) {
         </p>
       )}
       {shown.map((item) => (
-        <ItemCard
+        <ItemRow
           key={item.item_id}
           item={item}
           pending={profile.pending.has(item.item_id)}
@@ -159,7 +161,7 @@ function SearchResults({
         </Text>
       )}
       {search.items.map((item) => (
-        <ItemCard
+        <ItemRow
           key={item.item_id}
           item={item}
           pending={profile.pending.has(item.item_id)}
@@ -293,9 +295,7 @@ function Aspect({
       ) : (
         <Card variant="soft" padding="md" className="space-y-2">
           <Text size="sm">还不了解这一面。</Text>
-          <TextLink href="#/profile?section=memories">
-            {suggestions[id]}
-          </TextLink>
+          <TextLink to="?section=memories">{suggestions[id]}</TextLink>
         </Card>
       )}
     </Stack>
@@ -326,9 +326,6 @@ export function Overview() {
     (profile.coverage?.facets ?? []).filter(
       (facet) => facet.dimension_id === id,
     );
-  const levelLabels = fallbackLevels.map(
-    (label, level) => profile.coverage?.level_labels?.[level] || label,
-  );
   const aspects = order.map((id) => {
     const total = counts.get(id) ?? 0;
     return { id, total, level: aspectLevel(facetsOf(id), total) };
@@ -396,9 +393,7 @@ export function Overview() {
                     title="还不够了解你"
                     body="添加一些记忆，让我慢慢认识你。"
                   >
-                    <TextLink href="#/profile?section=memories">
-                      添加记忆
-                    </TextLink>
+                    <TextLink to="?section=memories">添加记忆</TextLink>
                   </EmptyState>
                 ) : (
                   <Text size="sm" tone="secondary">
@@ -438,7 +433,7 @@ export function Overview() {
               还想多了解：
             </Text>
             {wanted.map((text) => (
-              <TextLink key={text} href="#/profile?section=memories" size="sm">
+              <TextLink key={text} to="?section=memories" size="sm">
                 {text}
               </TextLink>
             ))}
@@ -516,7 +511,7 @@ export function Overview() {
                 id={selected}
                 total={counts.get(selected) ?? 0}
                 facets={facetsOf(selected)}
-                levelLabels={levelLabels}
+                levelLabels={levelNames}
                 profile={profile}
               />
             </SideTabs>

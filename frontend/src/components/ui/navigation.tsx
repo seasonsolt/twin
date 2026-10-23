@@ -357,6 +357,8 @@ export interface AccountMenuItem {
   onSelect: () => void;
   /** Something there needs the user: a red dot on the item and on the account button, and these words. */
   alert?: string;
+  /** How many things wait there, as a number at the end of the item. */
+  count?: number;
   danger?: boolean;
   disabled?: boolean;
 }
@@ -372,10 +374,13 @@ export function AccountMenu({
   groups,
   error,
   theme,
+  count = 0,
   layout = 'rail',
 }: {
   /** rail: the round avatar alone; sidebar: a full-width row with the name and the second line beside it. */
   layout?: 'rail' | 'sidebar';
+  /** How many things wait for the person themselves: a number on the account row. */
+  count?: number;
   name: string;
   /** A second line under the name: the role or how they signed in. */
   detail?: string;
@@ -407,7 +412,13 @@ export function AccountMenu({
         <button
           ref={trigger}
           type="button"
-          aria-label={alert ? `账户（${alert}）` : '账户'}
+          aria-label={
+            alert
+              ? `账户（${alert}）`
+              : count > 0
+                ? `账户（${count} 条待回答）`
+                : '账户'
+          }
           className={cn(
             'relative focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
             layout === 'sidebar'
@@ -433,6 +444,14 @@ export function AccountMenu({
                   {detail}
                 </span>
               )}
+            </span>
+          )}
+          {layout === 'sidebar' && count > 0 && (
+            <span
+              aria-hidden
+              className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-xs font-bold text-on-accent"
+            >
+              {count}
             </span>
           )}
         </button>
@@ -495,6 +514,9 @@ export function AccountMenu({
                     <item.icon aria-hidden className="size-4 shrink-0" />
                   )}
                   <span className="flex-1">{item.label}</span>
+                  {item.count ? (
+                    <span className="text-xs text-secondary">{item.count}</span>
+                  ) : null}
                   {item.alert && (
                     <span className="flex items-center gap-1.5 text-xs text-secondary">
                       <span

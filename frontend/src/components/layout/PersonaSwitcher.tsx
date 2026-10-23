@@ -31,7 +31,7 @@ export function PersonaPortrait({ persona }: { persona?: Persona }) {
   const url = persona?.avatar_url
     ? personaUrl(persona.avatar_url, persona.id)
     : undefined;
-  // The wrapper carries the size (48px, 96px on a twin card via .twin-card .persona-portrait).
+  // The wrapper carries the size (48px).
   return (
     <span className="persona-portrait block size-12 shrink-0">
       {url && failed !== url ? (
@@ -236,7 +236,7 @@ export function PersonaSwitcher({
                 : []),
               { to: '/team', title: '团队' },
               { to: '/library', title: '录音库' },
-              { to: '/twins', title: '全部分身' },
+              { to: '/team', title: '全部分身' },
             ].map(({ to, title }) => (
               <TextLink
                 key={to}

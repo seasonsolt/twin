@@ -562,8 +562,8 @@ it('opens on a twin made for this person until they say it is all right', async 
       screen.queryByRole('heading', { name: '赵晴，你的分身已经建好了' }),
     ).toBeNull(),
   );
-  // Approved: on to the profile, not back to the way in.
-  await waitFor(() => expect(window.location.hash).toBe('#/profile'));
+  // Approved: on to the member page of their twin, not back to the way in.
+  await waitFor(() => expect(window.location.hash).toBe('#/team/twin/p-first'));
   expect(
     await screen.findByRole('navigation', { name: '主导航' }),
   ).toBeVisible();

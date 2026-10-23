@@ -221,7 +221,16 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               layout="sidebar"
               name="周石言"
               detail="管理员"
+              count={3}
               groups={[
+                [
+                  {
+                    key: 'away',
+                    label: '你不在时',
+                    count: 3,
+                    onSelect: () => toast('你不在时'),
+                  },
+                ],
                 [
                   {
                     key: 'logout',

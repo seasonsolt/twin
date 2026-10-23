@@ -308,7 +308,7 @@ it('retries through the existing endpoint and moves the recording into processin
 it('renders neither queue when there are no actions or background work', async () => {
   state.recordings = [recording({})];
   show();
-  await screen.findByRole('tab', { name: /人物/u });
+  await screen.findByRole('tab', { name: /成员/u });
   expect(screen.queryByText(/项待处理/u)).toBeNull();
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
 });
@@ -376,4 +376,29 @@ it('polls the library while recordings wait but asks for people and the review q
   } finally {
     vi.useRealTimers();
   }
+});
+
+it('keeps signing out and the palette on the team page of a phone, where there is no side bar', async () => {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: query === '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+  useAuth.setState({
+    identity: {
+      email: 'zhang@example.com',
+      admin: false,
+      auth_enabled: true,
+    },
+  });
+  state.recordings = [recording({ people: ['张总'] })];
+  show();
+  await userEvent.click(await screen.findByRole('button', { name: '账户' }));
+  const menu = await screen.findByRole('dialog', { name: '账户' });
+  expect(
+    within(menu).getByRole('button', { name: '退出登录' }),
+  ).toBeInTheDocument();
 });

@@ -44,8 +44,8 @@ export function AppShell() {
   const outlet = useOutlet();
   // Account-level pages: not about the current twin, so no twin check or twin tabs.
   const twinLevel =
-    location.pathname === '/twins' ||
     location.pathname === '/team' ||
+    location.pathname.startsWith('/team/') ||
     location.pathname === '/library' ||
     location.pathname.startsWith('/library/') ||
     location.pathname === '/voice';

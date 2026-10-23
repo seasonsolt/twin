@@ -17,7 +17,9 @@ import {
   Toolbar,
   toast,
 } from '../components/ui';
+import { SidebarAccount } from '../components/layout/Sidebar';
 import { basePath } from '../lib/base';
+import { useMobile } from '../lib/useMobile';
 import { usePolling } from '../lib/usePolling';
 import { Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
@@ -49,6 +51,7 @@ export function Home() {
   const error = useTeam((state) => state.error);
   const version = useTeam((state) => state.version);
   const input = useRef<HTMLInputElement>(null);
+  const mobile = useMobile();
   const load = useCallback(() => useTeam.getState().refresh(true), []);
   const poll = useCallback(() => useTeam.getState().refresh(), []);
   // This page loads people and the review queue itself: the side bar takes them from here rather than asking twice.
@@ -184,6 +187,8 @@ export function Home() {
             />
           </>
         )}
+        {/* The side bar, and the account in it, is not there on a phone: sign-out and the palette are here. */}
+        {mobile && library && <SidebarAccount />}
       </Page>
     </div>
   );

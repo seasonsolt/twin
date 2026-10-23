@@ -7,7 +7,8 @@ import type { ReviewUnit, UnitFix } from '../features/library/MixedSpeaker';
 import { Team } from '../features/library/Team';
 import { Recording, type Person, type Speaker } from '../pages/Recording';
 import type { Recording as LibraryRecording } from '../pages/Library';
-import { usePersonas } from '../stores/personas';
+import { useNewTwinCard } from '../components/layout/NewTwin';
+import { usePersonas, type Persona } from '../stores/personas';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -49,6 +50,7 @@ beforeEach(() => {
   revision = 3;
   people = [person({}), person({ id: 'per_2', name: '李总' })];
   puts = [];
+  usePersonas.setState({ items: [] });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -159,7 +161,7 @@ it('pages people on scroll, searches the whole roster, and keeps the expanded li
   const view = render(teamView());
   await screen.findByText('人物01', { selector: 'p' });
   // One row per person under the table's header row.
-  const panel = () => within(screen.getByRole('tabpanel', { name: /人物/u }));
+  const panel = () => within(screen.getByRole('tabpanel', { name: /成员/u }));
   expect(panel().getAllByRole('row')).toHaveLength(19);
   expect(
     screen.queryByText('人物41', { selector: 'p' }),
@@ -428,7 +430,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     'href',
     '/library/rec_9?speaker=S1',
   );
-  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
+  await userEvent.click(screen.getByRole('tab', { name: /成员/u }));
   const row = screen.getByText('张总', { selector: 'p' }).closest('tr')!;
   expect(within(row).getByText('没有分身')).toBeInTheDocument();
   await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
@@ -452,6 +454,11 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
   expect(
     screen.queryByRole('button', { name: '聊天' }),
   ).not.toBeInTheDocument();
+  // Nothing to talk to yet: the row offers their page instead.
+  const updating = screen.getByText('张总', { selector: 'p' }).closest('tr')!;
+  expect(
+    within(updating).getByRole('button', { name: '查看', hidden: true }),
+  ).toBeInTheDocument();
   expect(created).toEqual([{ claim: 'zhang@acme.cn' }]);
 });
 
@@ -522,14 +529,14 @@ it('lists new voices apart and names them before a twin can be made', async () =
   await waitFor(() => expect(patches).toEqual([{ name: '李总' }]));
   // Named, they can have twins like anyone else.
   await screen.findByText('现在没有需要你处理的事。');
-  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
+  await userEvent.click(screen.getByRole('tab', { name: /成员/u }));
   expect(
     await screen.findAllByRole('button', { name: '生成分身' }),
   ).toHaveLength(2);
   expect(screen.queryByText(/项待处理/u)).toBeNull();
 });
 
-it('edits a person name and gender and opens the profile of their twin', async () => {
+it('edits a person name and gender and opens the member page of their twin', async () => {
   const patches: unknown[] = [];
   const switched: string[] = [];
   people = [person({ persona_id: 'p-1' })];
@@ -571,7 +578,7 @@ it('edits a person name and gender and opens the profile of their twin', async (
       <ConfirmProvider>
         <Routes>
           <Route path="/team" element={<Team version={0} recordings={[]} />} />
-          <Route path="/profile" element={<p>档案页</p>} />
+          <Route path="/team/:id" element={<p>成员页</p>} />
         </Routes>
       </ConfirmProvider>
     </MemoryRouter>,
@@ -600,9 +607,10 @@ it('edits a person name and gender and opens the profile of their twin', async (
     await screen.findByText('张总监', { selector: 'p' }),
   ).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  await userEvent.click(screen.getByRole('link', { name: '张总监的档案' }));
-  expect(await screen.findByText('档案页')).toBeInTheDocument();
-  expect(switched).toEqual(['p-1']);
+  await userEvent.click(screen.getByRole('link', { name: '张总监的成员页' }));
+  expect(await screen.findByText('成员页')).toBeInTheDocument();
+  // The member page switches to the twin itself: the roster only goes there.
+  expect(switched).toEqual([]);
 });
 
 it('stays where the owner is working after settling a voice, instead of jumping to the top', async () => {
@@ -846,7 +854,7 @@ it('keeps uploads in the quiet processing group with progress and a stop action'
   expect(stop).toHaveBeenCalledOnce();
 });
 
-it('searches people locally, opens an untwinned header for editing, and keeps deletion in its menu', async () => {
+it('searches people locally, edits them from the menu, and keeps deletion there', async () => {
   const calls: string[] = [];
   const originalFetch = fetch;
   vi.stubGlobal(
@@ -865,14 +873,17 @@ it('searches people locally, opens an untwinned header for editing, and keeps de
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  await screen.findByRole('button', { name: '编辑张总' });
+  await screen.findByRole('link', { name: '张总的成员页' });
   const beforeSearch = calls.length;
   await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '李');
-  expect(screen.queryByRole('button', { name: '编辑张总' })).toBeNull();
-  expect(screen.getByRole('button', { name: '编辑李总' })).toBeInTheDocument();
-  expect(screen.getByRole('tab', { name: /人物.*2/u })).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: '张总的成员页' })).toBeNull();
+  expect(
+    screen.getByRole('link', { name: '李总的成员页' }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: /成员.*2/u })).toBeInTheDocument();
   expect(calls).toHaveLength(beforeSearch);
-  await userEvent.click(screen.getByRole('button', { name: '编辑李总' }));
+  await userEvent.click(screen.getByLabelText('李总的更多操作'));
+  await userEvent.click(screen.getByRole('button', { name: '编辑名字和性别' }));
   expect(
     await screen.findByRole('dialog', { name: '编辑「李总」' }),
   ).toBeInTheDocument();
@@ -939,7 +950,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
   expect(
     within(tasks).getByText('wang@acme.cn 说这不是 TA'),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
+  await userEvent.click(screen.getByRole('tab', { name: /成员/u }));
   await userEvent.click(
     screen.getByRole('button', { name: '按邮箱或工号建分身（3）' }),
   );
@@ -1063,7 +1074,7 @@ it('puts what someone said is not them first, and lets an administrator merge tw
   await waitFor(() =>
     expect(screen.queryByText('张总 和 张总（2）')).toBeNull(),
   );
-  await user.click(screen.getByRole('tab', { name: /人物/u }));
+  await user.click(screen.getByRole('tab', { name: /成员/u }));
   expect(screen.queryByText('王五', { selector: 'p' })).toBeNull();
 });
 
@@ -1228,7 +1239,7 @@ it('opens a voice at its own speaker, next to the samples of who it may be', asy
   expect(
     within(row).getByRole('button', { name: '听李总确认过的声音' }),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('tab', { name: /人物/u }));
+  await userEvent.click(screen.getByRole('tab', { name: /成员/u }));
   expect(
     within(screen.getByRole('tabpanel')).getAllByRole('button', {
       name: /确认过的声音/u,
@@ -1271,7 +1282,7 @@ it('asks about recordings only as the server lists them, so an older list never 
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  await screen.findByRole('tab', { name: /人物/u });
+  await screen.findByRole('tab', { name: /成员/u });
   expect(screen.queryByText('还有人没认')).toBeNull();
   expect(screen.queryByText(/项待处理/u)).toBeNull();
 });
@@ -1967,6 +1978,7 @@ it('spot-checks what voice alone gave a person, least sure first, and takes a vo
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_1/voice') return json(voice);
       if (url === '/api/personas') return json([]);
+      if (url === '/api/personas/trash') return json([]);
       calls.push({
         url,
         method: init?.method,
@@ -2033,4 +2045,153 @@ it('spot-checks what voice alone gave a person, least sure first, and takes a vo
     (await screen.findAllByText('已移除，1 段发言退回待处理')).length,
   ).toBeGreaterThan(0);
   expect(await within(layer).findByText(/还没有声音样本/u)).toBeVisible();
+});
+
+const twinOf = (change: Partial<Persona>): Persona => ({
+  id: 'p-1',
+  name: '张总',
+  avatar_url: null,
+  sources: 1,
+  created_at: '',
+  is_default: false,
+  can_manage: true,
+  ...change,
+});
+
+it('lists twins made by hand and public ones in the same table, each opening its member page', async () => {
+  const switched: string[] = [];
+  people = [person({ persona_id: 'p-1' })];
+  usePersonas.setState({
+    items: [
+      twinOf({}),
+      twinOf({ id: 'p-own', name: '我的助手', owner: 'me@acme.cn' }),
+      twinOf({
+        id: 'p-pub',
+        name: '王总',
+        owner: 'wang@acme.cn',
+        public: true,
+        can_manage: false,
+      }),
+    ],
+    switchTo: async (id: string) => {
+      switched.push(id);
+    },
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter initialEntries={['/team']}>
+      <ConfirmProvider>
+        <Routes>
+          <Route path="/team" element={<Team version={0} recordings={[]} />} />
+          <Route path="/team/twin/:twinId" element={<p>分身成员页</p>} />
+          <Route path="/chat" element={<p>聊天页</p>} />
+        </Routes>
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  const own = await screen.findByRole('link', { name: '我的助手的成员页' });
+  expect(own).toHaveAttribute('href', '/team/twin/p-own');
+  expect(screen.getByRole('link', { name: '张总的成员页' })).toHaveAttribute(
+    'href',
+    '/team/per_1',
+  );
+  const row = screen.getByText('王总', { selector: 'p' }).closest('tr')!;
+  expect(within(row).getByText('wang@acme.cn')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^全部 3$/u })).toBeInTheDocument();
+  // Someone else's public twin is for talking to: no menu of things to manage.
+  expect(within(row).queryByLabelText('王总的更多操作')).toBeNull();
+  await userEvent.click(within(row).getByRole('button', { name: '聊天' }));
+  expect(await screen.findByText('聊天页')).toBeInTheDocument();
+  expect(switched).toEqual(['p-pub']);
+});
+
+it('lets a twin made by hand be found by name and filtered with the rest', async () => {
+  people = [person({ persona_id: 'p-1' })];
+  usePersonas.setState({
+    items: [twinOf({}), twinOf({ id: 'p-own', name: '我的助手' })],
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  await screen.findByRole('link', { name: '我的助手的成员页' });
+  await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '助手');
+  expect(screen.queryByRole('link', { name: '张总的成员页' })).toBeNull();
+  expect(
+    screen.getByRole('link', { name: '我的助手的成员页' }),
+  ).toBeInTheDocument();
+});
+
+it('brings a deleted twin back from the 已删除 tab, and shows the tab only while something is there', async () => {
+  const restored: string[] = [];
+  let trash = [
+    {
+      id: 'p-gone',
+      name: '旧分身',
+      deleted_at: '2026-10-10T02:00:00Z',
+      expires_at: '2026-10-17T02:00:00Z',
+    },
+  ];
+  const refresh = vi.fn(async () => {});
+  usePersonas.setState({ items: [], refresh });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      if (url === '/api/personas/trash') return json(trash);
+      if (url === '/api/personas/p-gone/restore' && init?.method === 'POST') {
+        restored.push(url);
+        trash = [];
+        return json({});
+      }
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+        <ToastViewport />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await userEvent.click(await screen.findByRole('tab', { name: /已删除.*1/u }));
+  expect(await screen.findByText('旧分身')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '恢复旧分身' }));
+  await waitFor(() => expect(restored).toHaveLength(1));
+  expect(refresh).toHaveBeenCalled();
+  expect(await screen.findByText('没有已删除的分身。')).toBeInTheDocument();
+  expect(await screen.findByText('已恢复「旧分身」')).toBeInTheDocument();
+});
+
+it('keeps the 已删除 tab away while nothing is deleted, and offers 新建分身 among the additions', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url === '/api/library/review') return json(emptyReview);
+      if (url === '/api/personas/trash') return json([]);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  await screen.findByRole('link', { name: '张总的成员页' });
+  expect(screen.queryByRole('tab', { name: /已删除/u })).toBeNull();
+  await userEvent.click(screen.getByText('添加'));
+  await userEvent.click(screen.getByRole('button', { name: '新建分身' }));
+  expect(useNewTwinCard.getState().open).toBe(true);
+  useNewTwinCard.getState().set(false);
 });

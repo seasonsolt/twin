@@ -30,15 +30,39 @@ const personas = [
     is_default: false,
     can_manage: true,
   },
+  // A twin made by hand, which no recording belongs to: a row of the team table like the others.
   {
-    id: 'p-shiyan',
-    name: '周石言',
+    id: 'p-helper',
+    name: '备忘助手',
     avatar_url: null,
     avatar_preset: 'stone',
     sources: 3,
     created_at: '2026-09-20T02:00:00Z',
     is_default: false,
     can_manage: true,
+  },
+  // Someone else's public twin: to talk to, nothing to manage.
+  {
+    id: 'p-public',
+    name: '王屿',
+    avatar_url: null,
+    avatar_preset: 'bun',
+    sources: 9,
+    created_at: '2026-09-25T02:00:00Z',
+    is_default: false,
+    can_manage: false,
+    public: true,
+    owner: 'wang.yu@example.com',
+  },
+];
+
+/** A twin deleted in the last days, which can still be brought back. */
+const trash = [
+  {
+    id: 'p-old',
+    name: '旧版助手',
+    deleted_at: '2026-10-14T02:00:00Z',
+    expires_at: '2026-10-21T02:00:00Z',
   },
 ];
 
@@ -943,8 +967,27 @@ const handlers: Record<string, Handler> = {
   'GET /api/admin/system': reply(system),
   'GET /api/admin/system/components': reply(components),
   'GET /api/personas': reply(personas),
+  'GET /api/personas/trash': reply(trash),
   'GET /api/status': reply(status),
-  'GET /api/identity': reply(identity),
+  // Each twin is asked for by its own header: the ones with a name of their own.
+  'GET /api/identity': (_url, route) => {
+    const asked = route.request().headers()['x-twin-persona'];
+    return asked === 'p-helper'
+      ? {
+          ...identity,
+          name: '备忘助手',
+          about: '记下我随手想到的事。',
+          avatar_preset: 'stone',
+        }
+      : asked === 'p-public'
+        ? {
+            ...identity,
+            name: '王屿',
+            about: '做增长的，爱跑步。',
+            avatar_preset: 'bun',
+          }
+        : identity;
+  },
   'GET /api/media/capabilities': reply(capabilities),
   'GET /api/library': reply({
     recordings,
@@ -1110,6 +1153,12 @@ const handlers: Record<string, Handler> = {
     ...recordings.find((r) => r.id === 'r-broken'),
     status: 'queued',
     error: '',
+  }),
+  'GET /api/me/assets': reply({
+    portrait: null,
+    voice: null,
+    speech_clone: false,
+    video: false,
   }),
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/conversations': reply(history),

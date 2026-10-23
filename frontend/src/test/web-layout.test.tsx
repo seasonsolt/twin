@@ -1,11 +1,11 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { readFileSync } from 'node:fs';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
-import { NewTwin } from '../components/layout/NewTwin';
+import { NewTwinHost, useNewTwinCard } from '../components/layout/NewTwin';
 import { Login } from '../features/auth/Login';
 import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
@@ -114,10 +114,9 @@ it('anchors the quick portrait switcher as a popover and restores focus on Escap
 });
 
 it('makes a new twin in a small card where the person is, showing its first character as it is named', async () => {
-  mount(<NewTwin />);
+  mount(<NewTwinHost />);
   const user = userEvent.setup();
-  const trigger = screen.getByRole('button', { name: '新建分身' });
-  await user.click(trigger);
+  act(() => useNewTwinCard.getState().set(true));
   const dialog = screen.getByRole('dialog', { name: '新建分身' });
   expect(dialog).toHaveClass('new-twin');
   expect(dialog).not.toHaveClass('inset-0');
@@ -131,7 +130,6 @@ it('makes a new twin in a small card where the person is, showing its first char
   await waitFor(() =>
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
   );
-  expect(trigger).toHaveFocus();
 });
 
 it('keeps the sheet, optional stage and scrolling conversation separate with the composer inside the thread', async () => {

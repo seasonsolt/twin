@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { toast } from '../components/ui';
 import { Followups, type Followup } from '../features/followups/Followups';
+import { FOLLOWUPS_CHANGED } from '../features/followups/useFollowups';
 
 vi.mock('../components/ui', async (original) => ({
   ...(await original<typeof import('../components/ui')>()),
@@ -74,61 +75,81 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetcher);
 });
 
-it('lists pending questions with what they followed and why the twin stopped', async () => {
+it('lists what is waiting one line a question, with how often it was asked and what the twin still cannot answer', async () => {
   render(<Followups />);
-  const price = await screen.findByRole('article', {
+  expect(
+    await screen.findByRole('heading', { name: '待你回答 2' }),
+  ).toBeVisible();
+  const price = await screen.findByRole('listitem', {
     name: '你怎么看远岚的报价？',
   });
-  expect(price).toHaveTextContent('接着「上周经营会你在吗」问：');
-  expect(price).toHaveTextContent('被问了 3 次，最近 10月14日 16:24');
-  expect(price).toHaveTextContent('分身没回答的原因：资料里没有');
+  expect(price).toHaveTextContent('被问 3 次 · 10月14日 16:24');
+  // The reason and the earlier question wait for the reply, not the line.
+  expect(price).not.toHaveTextContent('资料里没有');
+  expect(price).not.toHaveTextContent('上周经营会你在吗');
   expect(
-    within(screen.getByRole('article', { name: '你几点睡？' })).getByText(
-      '回答过，分身还是答不上，可以再补充',
+    within(screen.getByRole('listitem', { name: '你几点睡？' })).getByText(
+      '还答不上',
     ),
   ).toBeInTheDocument();
-  expect(screen.getByText('已回答 1 个')).toBeInTheDocument();
-  expect(screen.getByText('之后又被问了 2 次')).toBeInTheDocument();
-  expect(
-    within(price).getByRole('button', { name: '记为我的回答' }),
-  ).toBeDisabled();
+  expect(screen.getByText('已回答 1')).toBeInTheDocument();
+  expect(screen.getByText('不用回答 1')).toBeInTheDocument();
 });
 
-it('keeps the answer in the person’s words and reloads the queue', async () => {
+it('opens the field on 回复 and keeps the answer in the person’s words', async () => {
   const user = userEvent.setup();
   render(<Followups />);
-  const price = await screen.findByRole('article', {
+  const price = await screen.findByRole('listitem', {
     name: '你怎么看远岚的报价？',
   });
+  expect(within(price).queryByRole('textbox')).toBeNull();
+  await user.click(within(price).getByRole('button', { name: '回复' }));
+  expect(within(price).getByText('接着「上周经营会你在吗」问')).toBeVisible();
+  expect(within(price).getByRole('button', { name: '记下' })).toBeDisabled();
   await user.type(
     within(price).getByRole('textbox', { name: '你的回答' }),
     '  报价只认实施费打包。 ',
   );
-  await user.click(within(price).getByRole('button', { name: '记为我的回答' }));
+  await user.click(within(price).getByRole('button', { name: '记下' }));
   await waitFor(() =>
     expect(
-      screen.queryByRole('article', { name: '你怎么看远岚的报价？' }),
+      screen.queryByRole('listitem', { name: '你怎么看远岚的报价？' }),
     ).not.toBeInTheDocument(),
   );
   expect(posts()).toEqual([
     ['/api/persona/followups/f1/answer', { text: '报价只认实施费打包。' }],
   ]);
   expect(toast).toHaveBeenCalledWith('已记下，正在整理成记忆', 'success');
-  expect(screen.getByText('已回答 2 个')).toBeInTheDocument();
+  expect(screen.getByText('已回答 2')).toBeInTheDocument();
 });
 
-it('sets a question aside and puts one back', async () => {
+it('closes the field again on 取消 without asking anything', async () => {
   const user = userEvent.setup();
   render(<Followups />);
-  const sleep = await screen.findByRole('article', { name: '你几点睡？' });
+  const price = await screen.findByRole('listitem', {
+    name: '你怎么看远岚的报价？',
+  });
+  await user.click(within(price).getByRole('button', { name: '回复' }));
+  await user.click(within(price).getByRole('button', { name: '取消' }));
+  expect(within(price).queryByRole('textbox')).toBeNull();
+  expect(within(price).getByRole('button', { name: '回复' })).toBeVisible();
+  expect(posts()).toEqual([]);
+});
+
+it('sets a question aside from “⋯” and puts one back', async () => {
+  const user = userEvent.setup();
+  render(<Followups />);
+  const sleep = await screen.findByRole('listitem', { name: '你几点睡？' });
+  await user.click(within(sleep).getByLabelText('更多：你几点睡？'));
   await user.click(within(sleep).getByRole('button', { name: '不用回答' }));
   await waitFor(() =>
     expect(
-      screen.queryByRole('article', { name: '你几点睡？' }),
+      screen.queryByRole('listitem', { name: '你几点睡？' }),
     ).not.toBeInTheDocument(),
   );
-  await user.click(screen.getByText('不用回答 2 个'));
-  const [first] = screen.getAllByRole('button', { name: '放回待回答' });
+  await user.click(screen.getByText('不用回答 2'));
+  expect(screen.getByText('之后又被问了 2 次')).toBeInTheDocument();
+  const [first] = screen.getAllByRole('button', { name: '放回' });
   await user.click(first);
   await waitFor(() => expect(posts()).toHaveLength(2));
   expect(posts()).toEqual([
@@ -137,28 +158,18 @@ it('sets a question aside and puts one back', async () => {
   ]);
 });
 
-it('says so when nothing is waiting', async () => {
-  items = [];
-  render(<Followups />);
-  expect(await screen.findByText('没有待回答的问题')).toBeInTheDocument();
-});
-
-it('quietly shows only waiting questions, and leaves once none is waiting', async () => {
+it('says so when nothing is waiting, and tells the page when the questions change', async () => {
+  const changed = vi.fn();
+  window.addEventListener(FOLLOWUPS_CHANGED, changed);
+  items = [item({ followup_id: 'f9', question: '你喜欢茶还是咖啡？' })];
   const user = userEvent.setup();
-  const view = render(<Followups quiet />);
-  expect(
-    await screen.findByRole('heading', { name: '待你回答 2 个' }),
-  ).toBeVisible();
-  expect(screen.queryByText('已回答 1 个')).toBeNull();
-  expect(screen.queryByText(/不用回答 \d 个/)).toBeNull();
-  for (const name of ['你怎么看远岚的报价？', '你几点睡？']) {
-    const question = await screen.findByRole('article', { name });
-    await user.click(
-      within(question).getByRole('button', { name: '不用回答' }),
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole('article', { name })).toBeNull(),
-    );
-  }
-  await waitFor(() => expect(view.container).toBeEmptyDOMElement());
+  render(<Followups />);
+  const only = await screen.findByRole('listitem', {
+    name: '你喜欢茶还是咖啡？',
+  });
+  await user.click(within(only).getByLabelText('更多：你喜欢茶还是咖啡？'));
+  await user.click(within(only).getByRole('button', { name: '不用回答' }));
+  expect(await screen.findByText('没有待回答的问题。')).toBeInTheDocument();
+  expect(changed).toHaveBeenCalled();
+  window.removeEventListener(FOLLOWUPS_CHANGED, changed);
 });

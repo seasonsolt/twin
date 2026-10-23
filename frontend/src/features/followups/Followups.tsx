@@ -1,44 +1,30 @@
-import { useCallback, useEffect, useState } from 'react';
-import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
+import { useState } from 'react';
 import { api } from '../../lib/api';
 import {
+  ActionMenu,
   Badge,
   Button,
-  Card,
-  EmptyState,
+  Disclosure,
   Heading,
+  ListRow,
   Row,
   Skeleton,
+  Stack,
   Text,
   Textarea,
   toast,
 } from '../../components/ui';
+import { useFollowups, type Followup } from './useFollowups';
 
-export interface Followup {
-  followup_id: string;
-  question: string;
-  previous: string;
-  reason: string;
-  asked: number;
-  first_at: string;
-  last_at: string;
-  status: 'pending' | 'answered' | 'dismissed';
-  handled_at: string | null;
-  asked_since: number;
-  source_id: string | null;
-  unresolved: boolean;
-}
-
-interface FollowupList {
-  items: Followup[];
-  pending: number;
-}
+export type { Followup } from './useFollowups';
 
 function when(iso: string) {
   const match = /^\d{4}-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso);
   return match ? `${Number(match[1])}月${Number(match[2])}日 ${match[3]}` : '';
 }
 
+/** One question waiting for the person: asked again and again, the twin could not answer. 回复 opens the field for
+ * their own words; “⋯” sets it aside. */
 function Question({
   item,
   onDone,
@@ -46,6 +32,7 @@ function Question({
   item: Followup;
   onDone: () => Promise<void>;
 }) {
+  const [replying, setReplying] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -64,212 +51,213 @@ function Question({
     }
   };
   const base = `/api/persona/followups/${encodeURIComponent(item.followup_id)}`;
+  const dismiss = () =>
+    run(
+      () =>
+        api(`${base}/status`, {
+          method: 'POST',
+          json: { status: 'dismissed' },
+        }),
+      '已放到一边，分身遇到这个问题仍会说要问你本人',
+    );
   return (
-    <Card>
-      <article aria-labelledby={`${id}-question`} className="space-y-3">
-        {item.previous && (
-          <Text size="sm" tone="secondary">
-            接着「{item.previous}」问：
-          </Text>
-        )}
-        <h3 id={`${id}-question`} className="font-medium">
-          {item.question}
-        </h3>
+    <ListRow
+      variant="divided"
+      aria-label={item.question}
+      title={item.question}
+      meta={
         <Row gap={2} wrap>
           <Text as="span" size="sm" tone="secondary">
-            {item.asked > 1 ? `被问了 ${item.asked} 次，最近` : '问于'}{' '}
+            {item.asked > 1 ? `被问 ${item.asked} 次 · ` : ''}
             {when(item.last_at)}
           </Text>
-          {item.unresolved && (
-            <Badge tone="warning">回答过，分身还是答不上，可以再补充</Badge>
-          )}
+          {item.unresolved && <Badge tone="warning">还答不上</Badge>}
         </Row>
-        {item.reason && (
-          <Text size="sm" tone="tertiary">
-            分身没回答的原因：{item.reason}
-          </Text>
-        )}
-        <label htmlFor={id} className="sr-only">
-          你的回答
-        </label>
-        <Textarea
-          id={id}
-          value={text}
-          placeholder="用你自己的话回答，会作为你的原话记下来"
-          onChange={(event) => setText(event.target.value)}
-        />
-        {error && (
-          <Text role="alert" size="sm" tone="danger">
-            {error}
-          </Text>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            loading={busy}
-            disabled={!text.trim()}
-            onClick={() =>
-              void run(
-                () =>
-                  api(`${base}/answer`, {
-                    method: 'POST',
-                    json: { text: text.trim() },
-                  }),
-                '已记下，正在整理成记忆',
-              )
-            }
-          >
-            记为我的回答
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() =>
-              void run(
-                () =>
-                  api(`${base}/status`, {
-                    method: 'POST',
-                    json: { status: 'dismissed' },
-                  }),
-                '已放到一边，分身遇到这个问题仍会说要问你本人',
-              )
-            }
-          >
-            不用回答
-          </Button>
-        </div>
-      </article>
-    </Card>
+      }
+      trailing={
+        !replying && (
+          <>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => setReplying(true)}
+            >
+              回复
+            </Button>
+            <ActionMenu
+              label={`更多：${item.question}`}
+              items={[
+                {
+                  label: '不用回答',
+                  disabled: busy,
+                  onSelect: () => void dismiss(),
+                },
+              ]}
+            />
+          </>
+        )
+      }
+    >
+      {replying && (
+        <Stack gap={2}>
+          {item.previous && (
+            <Text size="sm" tone="secondary">
+              接着「{item.previous}」问
+            </Text>
+          )}
+          <label htmlFor={id} className="sr-only">
+            你的回答
+          </label>
+          <Textarea
+            id={id}
+            autoFocus
+            value={text}
+            placeholder="用你自己的话回答，会作为你的原话记下来"
+            onChange={(event) => setText(event.target.value)}
+          />
+          {error && (
+            <Text role="alert" size="sm" tone="danger">
+              {error}
+            </Text>
+          )}
+          <Row gap={2} justify="end">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setReplying(false)}
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              loading={busy}
+              disabled={!text.trim()}
+              onClick={() =>
+                void run(
+                  () =>
+                    api(`${base}/answer`, {
+                      method: 'POST',
+                      json: { text: text.trim() },
+                    }),
+                  '已记下，正在整理成记忆',
+                )
+              }
+            >
+              记下
+            </Button>
+          </Row>
+        </Stack>
+      )}
+      {!replying && error && (
+        <Text role="alert" size="sm" tone="danger">
+          {error}
+        </Text>
+      )}
+    </ListRow>
   );
 }
 
 /**
- * Questions the twin could not answer. `quiet` is for a page about something else: nothing at all unless a question
- * is waiting, then a card with just the waiting ones (the full list, with what was answered or set aside, lives in the twin's settings).
+ * 你不在时: the questions the twin could not answer, for the person themselves. One line a question; 回复 opens the
+ * field for their words and “⋯” sets the question aside. What was answered or set aside waits below, folded, and a
+ * question set aside can be put back. `away` is the list when the page already asks for it (to count it in the tab).
  */
-export function Followups({ quiet = false }: { quiet?: boolean }) {
-  const personaId = usePersonaId();
-  const [data, setData] = usePersonaState<FollowupList | null>(null);
-  const [error, setError] = usePersonaState('');
-  const load = useCallback(
-    async (signal?: AbortSignal) => {
-      try {
-        setData(await api<FollowupList>('/api/persona/followups', { signal }));
-        setError('');
-      } catch (failure) {
-        if (signal?.aborted) return;
-        setError(failure instanceof Error ? failure.message : '加载失败');
-      }
-    },
-    [setData, setError],
-  );
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load, personaId]);
-  if (
-    quiet &&
-    (error || !data?.items?.some((item) => item.status === 'pending'))
-  )
-    return null;
+export function Followups({
+  away,
+}: {
+  away?: ReturnType<typeof useFollowups>;
+}) {
+  const own = useFollowups(!away);
+  const { data, error, reload } = away ?? own;
   if (error)
     return (
-      <div role="alert" className="space-y-2 text-danger">
-        <p>{error}</p>
-        <Button variant="secondary" onClick={() => void load()}>
-          重试加载
-        </Button>
-      </div>
+      <Stack gap={2} role="alert">
+        <Text tone="danger">{error}</Text>
+        <Row>
+          <Button variant="secondary" onClick={() => void reload()}>
+            重试加载
+          </Button>
+        </Row>
+      </Stack>
     );
   if (!data) return <Skeleton className="h-40" />;
-  const pending = data.items.filter((item) => item.status === 'pending');
-  const answered = data.items.filter((item) => item.status === 'answered');
-  const dismissed = data.items.filter((item) => item.status === 'dismissed');
-  const list = (
-    <div className="space-y-4">
-      <Text size="sm" tone="secondary">
-        别人问分身、分身答不上来的问题会出现在这里。你回答一次，分身以后就能用你的原话回答。
-      </Text>
-      {!pending.length && !quiet && (
-        <EmptyState
-          title="没有待回答的问题"
-          body="分身答不上来时，问题会自动出现在这里。"
-        />
+  const all = data.items ?? [];
+  const pending = all.filter((item) => item.status === 'pending');
+  const answered = all.filter((item) => item.status === 'answered');
+  const dismissed = all.filter((item) => item.status === 'dismissed');
+  return (
+    <Stack gap={4}>
+      <Heading level={2} size="section">
+        待你回答 {pending.length}
+      </Heading>
+      {pending.length === 0 ? (
+        <Text size="sm" tone="secondary">
+          没有待回答的问题。
+        </Text>
+      ) : (
+        <Stack as="ul" gap={0}>
+          {pending.map((item) => (
+            <Question key={item.followup_id} item={item} onDone={reload} />
+          ))}
+        </Stack>
       )}
-      {pending.map((item) => (
-        <Question key={item.followup_id} item={item} onDone={() => load()} />
-      ))}
-      {!quiet && answered.length > 0 && (
-        <details className="space-y-2">
-          <summary className="cursor-pointer text-secondary">
-            已回答 {answered.length} 个
-          </summary>
-          <ul className="space-y-1 pt-2">
+      {answered.length > 0 && (
+        <Disclosure summary={`已回答 ${answered.length}`} variant="plain">
+          <Stack as="ul" gap={0}>
             {answered.map((item) => (
-              <Text as="li" key={item.followup_id} size="sm">
-                {item.question}
-                {item.handled_at && (
-                  <Text as="span" size="inherit" tone="tertiary">
-                    （{when(item.handled_at)} 回答，可以在「记忆」里查看或删除）
-                  </Text>
-                )}
-              </Text>
+              <ListRow
+                key={item.followup_id}
+                variant="divided"
+                title={item.question}
+                meta={item.handled_at ? when(item.handled_at) : undefined}
+              />
             ))}
-          </ul>
-        </details>
+          </Stack>
+        </Disclosure>
       )}
-      {!quiet && dismissed.length > 0 && (
-        <details className="space-y-2">
-          <summary className="cursor-pointer text-secondary">
-            不用回答 {dismissed.length} 个
-          </summary>
-          <ul className="space-y-2 pt-2">
+      {dismissed.length > 0 && (
+        <Disclosure summary={`不用回答 ${dismissed.length}`} variant="plain">
+          <Stack as="ul" gap={0}>
             {dismissed.map((item) => (
-              <Row as="li" key={item.followup_id} gap={2} wrap>
-                <Text as="span" size="sm">
-                  {item.question}
-                </Text>
-                {item.asked_since > 0 && (
-                  <Text as="span" size="sm" tone="tertiary">
-                    之后又被问了 {item.asked_since} 次
-                  </Text>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    void api(
-                      `/api/persona/followups/${encodeURIComponent(item.followup_id)}/status`,
-                      { method: 'POST', json: { status: 'pending' } },
-                    )
-                      .then(() => load())
-                      .catch((failure: unknown) =>
-                        toast(
-                          failure instanceof Error
-                            ? failure.message
-                            : '操作失败',
-                          'danger',
-                        ),
+              <ListRow
+                key={item.followup_id}
+                variant="divided"
+                title={item.question}
+                meta={
+                  item.asked_since > 0
+                    ? `之后又被问了 ${item.asked_since} 次`
+                    : undefined
+                }
+                trailing={
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      void api(
+                        `/api/persona/followups/${encodeURIComponent(item.followup_id)}/status`,
+                        { method: 'POST', json: { status: 'pending' } },
                       )
-                  }
-                >
-                  放回待回答
-                </Button>
-              </Row>
+                        .then(() => reload())
+                        .catch((failure: unknown) =>
+                          toast(
+                            failure instanceof Error
+                              ? failure.message
+                              : '操作失败',
+                            'danger',
+                          ),
+                        )
+                    }
+                  >
+                    放回
+                  </Button>
+                }
+              />
             ))}
-          </ul>
-        </details>
+          </Stack>
+        </Disclosure>
       )}
-    </div>
-  );
-  return quiet ? (
-    <Card padding="roomy" aria-label="待你回答" className="space-y-3">
-      <Heading level={3}>待你回答 {pending.length} 个</Heading>
-      {list}
-    </Card>
-  ) : (
-    list
+    </Stack>
   );
 }

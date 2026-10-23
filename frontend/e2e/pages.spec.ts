@@ -89,7 +89,8 @@ const pages: {
         await page.route(path, (route) => route.fulfill({ json }));
     },
   },
-  { name: 'twins', path: '/#/twins', ready: '周石言' },
+  // 第 4 屏: the twins deleted in the last days, to bring back.
+  { name: 'team-deleted', path: '/#/team?tab=trash', ready: '旧版助手' },
   { name: 'work', path: '/#/work', ready: '按我的口吻写一份本周周报' },
   {
     name: 'system',
@@ -115,12 +116,34 @@ const pages: {
     ready: '全部升级（1 个分身）',
     viewport: true,
   },
-  { name: 'profile', path: '/#/profile', ready: '最有把握的几点' },
+  // 第 5 屏: a member's page, from the team table (林舟, whose twin is the one in view).
+  { name: 'member', path: '/#/team/u-linzhou', ready: '最有把握的几点' },
   {
-    name: 'memories',
-    path: '/#/profile?section=memories',
+    name: 'member-memories',
+    path: '/#/team/u-linzhou?section=memories',
     ready: '发布流程笔记.md',
   },
+  // 第 10 屏, step one: the questions the twin could not answer, for the person themselves.
+  {
+    name: 'member-away',
+    path: '/#/team/u-linzhou?section=away',
+    ready: '你怎么看远程办公？',
+  },
+  {
+    name: 'member-assets',
+    path: '/#/team/u-linzhou?section=assets',
+    ready: '预置音色',
+  },
+  // A twin made by hand, which no recording belongs to, at its own address.
+  {
+    name: 'member-twin',
+    path: '/#/team/twin/p-helper',
+    ready: '记下我随手想到的事。',
+  },
+  // Someone someone else made public: its name and the way to talk to it.
+  { name: 'member-public', path: '/#/team/twin/p-public', ready: '和王屿聊天' },
+  // Someone found in the recordings who has no twin yet: the meetings they spoke in.
+  { name: 'member-no-twin', path: '/#/team/u-shiyan', ready: '参加过的录音' },
   {
     // 员工 1b: signed in through the company login with no twin made for them.
     name: 'member-voice',
@@ -291,12 +314,6 @@ const pages: {
     },
   })),
   {
-    // A new twin, opened from the twins page or a member's first sign-in.
-    name: 'twins-create',
-    path: '/#/twins?create=1',
-    ready: '创建并开始',
-  },
-  {
     name: 'team-ink',
     path: '/#/team',
     ready: '全部录音（',
@@ -354,7 +371,7 @@ test('team continues the roster when its last rows scroll into view', async ({
     }),
   );
   await page.goto('/#/team');
-  const panel = page.getByRole('tabpanel', { name: /人物/u });
+  const panel = page.getByRole('tabpanel', { name: /成员/u });
   // The people's rows of the team table, below its header row.
   const rows = panel
     .getByRole('row')
@@ -363,8 +380,9 @@ test('team continues the roster when its last rows scroll into view', async ({
   await expect(rows).toHaveCount(18);
   await more.scrollIntoViewIfNeeded();
   await expect(rows).toHaveCount(36);
+  // The 41 people and the twins no recording belongs to (four, in the mock).
   await more.scrollIntoViewIfNeeded();
-  await expect(rows).toHaveCount(41);
+  await expect(rows).toHaveCount(45);
   await expect(more).toHaveCount(0);
   expect(errors, 'page errors').toEqual([]);
   expect(missing, 'requests without a mock').toEqual([]);
@@ -376,7 +394,7 @@ test('transcript claim', async ({ page }, info) => {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.clock.setFixedTime(NOW);
   await mockApi(page, missing);
-  await page.goto('/#/profile?section=memories');
+  await page.goto('/#/team/u-linzhou?section=memories');
   await page
     .getByRole('button', { name: '有 3 份文字记录需要确认哪位是你' })
     .click();

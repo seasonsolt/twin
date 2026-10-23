@@ -21,6 +21,17 @@ export const namedPeople = (people: Person[]) =>
       !p.auto && (p.can_manage !== false || p.persona_id || p.self_claimed),
   );
 
+/** Twins no recording belongs to (made by hand, or someone else's public twin): rows of the team table like the
+ * people found in the meetings. */
+export const looseTwins = (people: Person[], twins: Persona[]) => {
+  const linked = new Set(people.map((p) => p.persona_id));
+  return twins.filter((twin) => !linked.has(twin.id));
+};
+
+/** How many rows the team table has: the people and the twins no recording belongs to. */
+export const memberCount = (people: Person[], twins: Persona[]) =>
+  namedPeople(people).length + looseTwins(people, twins).length;
+
 /** New voices waiting for a name, among those the viewer may settle (recordings they uploaded, or all for an
  * administrator). */
 export const unnamedPeople = (people: Person[]) =>

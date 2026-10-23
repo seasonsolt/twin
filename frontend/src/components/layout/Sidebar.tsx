@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import {
   BookUser,
   Briefcase,
@@ -7,6 +7,7 @@ import {
   ListChecks,
   LogOut,
   MessageCircle,
+  MessageCircleQuestion,
   Mic,
   Settings2,
   Upload,
@@ -24,12 +25,18 @@ import {
   TeamMark,
   ThemePicker,
 } from '../ui';
-import { useCanManage } from '../../stores/access';
+import { useCanManage, useSelfTwin } from '../../stores/access';
 import { usePersonas } from '../../stores/personas';
 import { TEAM_NAME, useTeam } from '../../stores/team';
+import { api } from '../../lib/api';
+import { twinMemberPath } from '../../lib/members';
 import { usePolling } from '../../lib/usePolling';
+import {
+  FOLLOWUPS_CHANGED,
+  type FollowupList,
+} from '../../features/followups/useFollowups';
 import { useUploads } from '../../features/library/useUploads';
-import { namedPeople, waitingCount } from '../../features/library/teamCounts';
+import { memberCount, waitingCount } from '../../features/library/teamCounts';
 import { FindPerson } from './FindPerson';
 import { accountLabel, featureOn, useAuth } from '../../stores/auth';
 import { THEMES, useTheme } from '../../stores/theme';
@@ -134,7 +141,7 @@ export function Sidebar() {
   const jobs =
     sending.length + transcribing.length + queued.length + organising.length;
   usePolling(refresh, !canManage ? 0 : jobs ? 3000 : 30000);
-  const members = people ? namedPeople(people).length : undefined;
+  const members = people ? memberCount(people, twins) : undefined;
   const waiting =
     people && review ? waitingCount({ people, review, recordings, twins }) : 0;
   // How far the piece of work under way has got: the file being sent, else the recording being transcribed.
@@ -163,7 +170,9 @@ export function Sidebar() {
           title: '团队',
           icon: Users,
           count: members,
-          active: location.pathname === '/team' && !todo,
+          active:
+            (location.pathname === '/team' && !todo) ||
+            location.pathname.startsWith('/team/'),
         },
         { to: '/chat', title: '对话', icon: MessageCircle },
         { to: '/library', title: '录音库', icon: Mic },
@@ -236,10 +245,42 @@ export function Sidebar() {
   );
 }
 
+/** How many questions wait for the person in their own twin's 你不在时 (none for someone without such a twin). */
+function useWaiting(twinId: string | undefined) {
+  const [count, setCount] = useState(0);
+  const load = useCallback(async () => {
+    if (!twinId) {
+      setCount(0);
+      return;
+    }
+    try {
+      const list = await api<FollowupList>('/api/persona/followups', {
+        headers: { 'X-Twin-Persona': twinId },
+      });
+      setCount(
+        (list.items ?? []).filter((item) => item.status === 'pending').length,
+      );
+    } catch {
+      // A count that cannot be had is no count: the account stays as it is.
+    }
+  }, [twinId]);
+  useEffect(() => {
+    void load();
+    const changed = () => void load();
+    window.addEventListener(FOLLOWUPS_CHANGED, changed);
+    return () => window.removeEventListener(FOLLOWUPS_CHANGED, changed);
+  }, [load]);
+  usePolling(load, twinId ? 60000 : 0);
+  return twinId ? count : 0;
+}
+
 /** The account menu at the foot of the side bar: who is signed in, the palette, the system settings for an
  * administrator (a red dot when a switched-on service is failing), and signing out. */
-function SidebarAccount() {
+export function SidebarAccount() {
   const identity = useAuth((state) => state.identity);
+  const navigate = useNavigate();
+  const self = useSelfTwin();
+  const waiting = useWaiting(self?.can_manage === false ? undefined : self?.id);
   const openSystem = useOpenSystem();
   const down = useSystem((state) => failing(state.data).length);
   const { theme, setTheme } = useTheme();
@@ -253,11 +294,24 @@ function SidebarAccount() {
         layout="sidebar"
         name={accountLabel(identity) || '本机'}
         detail={identity.admin ? '管理员' : undefined}
+        count={waiting}
         error={error}
         theme={
           <ThemePicker value={theme} options={THEMES} onChange={setTheme} />
         }
         groups={[
+          self && waiting > 0
+            ? [
+                {
+                  key: 'away',
+                  label: '你不在时',
+                  icon: MessageCircleQuestion,
+                  count: waiting,
+                  onSelect: () =>
+                    void navigate(twinMemberPath(self.id, 'away')),
+                },
+              ]
+            : [],
           identity.admin
             ? [
                 {

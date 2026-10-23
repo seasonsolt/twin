@@ -12,6 +12,41 @@ import {
 import { useMotionPreset } from '../../design/motion';
 import { secondhand, type ProfileItem, type ReviewStatus } from './types';
 
+/** The occasions behind a memory: when, where from, and what was said. */
+export function EvidenceList({
+  item,
+  kindLabels,
+}: {
+  item: ProfileItem;
+  kindLabels: Record<string, string>;
+}) {
+  return (
+    <Text
+      as="ul"
+      size="sm"
+      aria-label="条目证据"
+      className="space-y-3 border-l-2 border-border pl-3"
+    >
+      {item.evidence.map((evidence, i) => (
+        <li key={`${evidence.expression_id}-${i}`}>
+          <Text size="xs" tone="tertiary">
+            {[
+              evidence.date,
+              kindLabels[evidence.source_kind] ?? evidence.source_kind,
+              evidence.own_words ? '原话' : '他人记述',
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </Text>
+          <blockquote className="whitespace-pre-wrap break-words">
+            {evidence.quote}
+          </blockquote>
+        </li>
+      ))}
+    </Text>
+  );
+}
+
 /** What the twin remembers, ready to use: the person corrects a wrong one or removes it, never confirms. */
 export function ItemCard({
   item,
@@ -88,29 +123,7 @@ export function ItemCard({
             transition={transition}
             className="overflow-hidden"
           >
-            <Text
-              as="ul"
-              size="sm"
-              aria-label="条目证据"
-              className="space-y-3 border-l-2 border-border pl-3"
-            >
-              {item.evidence.map((evidence, i) => (
-                <li key={`${evidence.expression_id}-${i}`}>
-                  <Text size="xs" tone="tertiary">
-                    {[
-                      evidence.date,
-                      kindLabels[evidence.source_kind] ?? evidence.source_kind,
-                      evidence.own_words ? '原话' : '他人记述',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </Text>
-                  <blockquote className="whitespace-pre-wrap break-words">
-                    {evidence.quote}
-                  </blockquote>
-                </li>
-              ))}
-            </Text>
+            <EvidenceList item={item} kindLabels={kindLabels} />
           </motion.div>
         )}
       </AnimatePresence>

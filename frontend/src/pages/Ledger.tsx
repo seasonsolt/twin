@@ -578,8 +578,8 @@ function Brief({ people, version }: { people: string[]; version: number }) {
   );
 }
 
-export function Ledger() {
-  const active = useLocation().pathname === '/ledger';
+export function Ledger({ embedded = false }: { embedded?: boolean }) {
+  const active = useLocation().pathname === '/ledger' || embedded;
   const personaId = usePersonaId();
   const confirm = useConfirm();
   const [data, setData] = usePersonaState<LedgerData | null>(null);
@@ -656,14 +656,16 @@ export function Ledger() {
     data?.entries.filter((entry) => entry.review === 'unreviewed').length ?? 0;
   return (
     <div>
-      <StageHeader />
-      <div className="page-content space-y-6">
-        <header className="space-y-2">
-          <Heading level={2}>承诺账本</Heading>
-          <Text size="sm" tone="secondary">
-            从会议里记下的决定、承诺、异议和进展。每条都附着会上的原话，确认后再拿去跟进。
-          </Text>
-        </header>
+      {!embedded && <StageHeader />}
+      <div className={embedded ? 'space-y-6' : 'page-content space-y-6'}>
+        {!embedded && (
+          <header className="space-y-2">
+            <Heading level={2}>承诺账本</Heading>
+            <Text size="sm" tone="secondary">
+              从会议里记下的决定、承诺、异议和进展。每条都附着会上的原话，确认后再拿去跟进。
+            </Text>
+          </header>
+        )}
         {error && (
           <div role="alert" className="space-y-2 text-danger">
             <p>{error}</p>

@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import {
   render,
   screen,
@@ -5,12 +6,11 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { Profile } from '../pages/Profile';
 import { ConfirmProvider, ToastViewport } from '../components/ui';
 import { AvatarPicker } from '../features/avatar/AvatarPicker';
 import { usePersonas } from '../stores/personas';
+import { MemberAt, showTwins } from './member';
 import { useStatus, type Status } from '../stores/status';
 import {
   isItemSummaryUrl,
@@ -110,20 +110,20 @@ beforeEach(() => {
   );
   vi.stubGlobal('fetch', fetcher);
 });
-const setup = () =>
-  render(
+const setup = () => {
+  showTwins();
+  return render(
     <ConfirmProvider>
-      <MemoryRouter initialEntries={['/profile']}>
-        <Profile />
-      </MemoryRouter>
+      <MemberAt />
     </ConfirmProvider>,
   );
+};
 
 // External services are a setting of the twin, out of the way of its persona.
 async function openServices() {
-  fireEvent.click(screen.getByRole('button', { name: '设置' }));
+  fireEvent.click(await screen.findByLabelText(`${identity.name}的更多操作`));
+  fireEvent.click(screen.getByRole('button', { name: '外部服务' }));
   const settings = await screen.findByRole('dialog', { name: '分身设置' });
-  fireEvent.click(within(settings).getByRole('button', { name: '外部服务' }));
   // The dialog fades in from opacity 0, even with reduced motion.
   await waitFor(() => expect(settings).toBeVisible());
   return settings;
@@ -139,8 +139,12 @@ it('edits name/about in a dialog and saves with X-Twin, previews a closed-mouth 
   expect(screen.queryByText(/localhost/)).not.toBeInTheDocument();
   fireEvent.keyDown(settings, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  const avatar = await screen.findByRole('img', { name: '插画形象：栗' });
+  const avatar = await screen.findByRole('img', {
+    name: '插画形象：栗',
+    hidden: true,
+  });
   expect(avatar).toHaveAttribute('data-mouth-level', '0');
+  fireEvent.click(screen.getByLabelText(`${identity.name}的更多操作`));
   fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByDisplayValue(identity.name);
   expect(screen.getByLabelText('介绍一下自己')).toHaveValue(identity.about);
@@ -186,7 +190,7 @@ it('saves a persona-scoped illustrated choice with loading feedback and updates 
   setup();
   render(<ToastViewport />);
   await screen.findByRole('heading', { name: identity.name });
-  fireEvent.click(screen.getByRole('tab', { name: '形象和声音' }));
+  await userEvent.click(screen.getByRole('tab', { name: '形象和声音' }));
   fireEvent.click(screen.getByRole('button', { name: '选择澜' }));
   expect(screen.getByRole('button', { name: '选择澜' })).toBeDisabled();
   expect(screen.getByText('保存中…')).toBeVisible();
@@ -203,6 +207,7 @@ it('saves a persona-scoped illustrated choice with loading feedback and updates 
     expect(
       within(screen.getByRole('banner')).getByRole('img', {
         name: '插画形象：澜',
+        hidden: true,
       }),
     ).toBeVisible(),
   );
@@ -304,7 +309,7 @@ it('keeps identity editable when the preview fails and supports retry', async ()
   failAvatar = true;
   setup();
   await screen.findByRole('heading', { name: identity.name });
-  fireEvent.click(screen.getByRole('tab', { name: '形象和声音' }));
+  await userEvent.click(screen.getByRole('tab', { name: '形象和声音' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('预览暂不可用');
   failAvatar = false;
   fireEvent.click(screen.getByRole('button', { name: '重试预览' }));
@@ -312,9 +317,11 @@ it('keeps identity editable when the preview fails and supports retry', async ()
     expect(
       within(screen.getByRole('banner')).getByRole('img', {
         name: '插画形象：栗',
+        hidden: true,
       }),
     ).toBeVisible(),
   );
+  fireEvent.click(screen.getByLabelText(`${identity.name}的更多操作`));
   fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByDisplayValue(identity.name);
   await waitFor(() => expect(screen.getByLabelText('名字')).toBeVisible());
@@ -322,6 +329,7 @@ it('keeps identity editable when the preview fails and supports retry', async ()
 it('retries identity failures and aborts reads on unmount', async () => {
   failIdentity = true;
   const view = setup();
+  fireEvent.click(await screen.findByLabelText(/的更多操作$/u));
   fireEvent.click(screen.getByRole('button', { name: '编辑' }));
   await screen.findByText('身份暂不可用');
   failIdentity = false;

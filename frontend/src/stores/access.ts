@@ -23,3 +23,23 @@ export const useManagesCurrent = () =>
     (state) =>
       state.items.find((item) => item.id === state.id)?.can_manage ?? true,
   );
+
+/** Whether a twin is its viewer's own: the one they took on signing in (made for them, or found by their voice). On
+ * a machine without sign-in there is one person, and the first twin is theirs. Only they answer for it when it can
+ * not (``features/followups``); an administrator looking after it is not it. */
+export const isSelf = (twin: Persona | undefined, signInOff: boolean) =>
+  !!twin && (!!twin.mine || (signInOff && twin.is_default));
+
+export const useIsSelf = (twin: Persona | undefined) =>
+  isSelf(
+    twin,
+    useAuth((state) => state.identity?.auth_enabled === false),
+  );
+
+/** The signed-in person's own twin, if they have one. */
+export const useSelfTwin = () => {
+  const signInOff = useAuth((state) => state.identity?.auth_enabled === false);
+  return usePersonas((state) =>
+    state.items.find((item) => isSelf(item, signInOff)),
+  );
+};

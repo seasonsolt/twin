@@ -118,9 +118,9 @@ const show = (entry: string) =>
             <Route element={<AppShell />}>
               <Route path="team" element={<Where />} />
               <Route path="library" element={<Where />} />
-              <Route path="twins" element={<Where />} />
+              <Route path="team/:id" element={<Where />} />
+              <Route path="team/twin/:twinId" element={<Where />} />
               <Route path="chat" element={<Where />} />
-              <Route path="profile" element={<Where />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -172,14 +172,14 @@ it('shows what runs in the background only while something does', async () => {
   ).toHaveAttribute('aria-valuenow', '150');
 });
 
-it('finds someone by name with ⌘K: a twin opens on its profile, someone without one on the team page', async () => {
+it('finds someone by name with ⌘K: each opens on their member page, a twin made by hand on its own address', async () => {
   usePersonas.setState({
     id: 'default',
     items: [twin({}), twin({ id: 'p-self', name: '本人', is_default: false })],
   });
   const user = userEvent.setup();
   show('/chat');
-  await screen.findByRole('link', { name: '团队（2）' });
+  await screen.findByRole('link', { name: '团队（3）' });
   await user.keyboard('{Meta>}k{/Meta}');
   const dialog = await screen.findByRole('dialog', { name: '找人' });
   const options = within(dialog).getAllByRole('option');
@@ -191,7 +191,7 @@ it('finds someone by name with ⌘K: a twin opens on its profile, someone withou
   ]);
   await user.type(within(dialog).getByRole('combobox'), '许');
   await user.keyboard('{Enter}');
-  expect(await screen.findByText('在/team找许清禾')).toBeInTheDocument();
+  expect(await screen.findByText('在/team/u-2')).toBeInTheDocument();
   await waitFor(() =>
     expect(screen.queryByRole('dialog', { name: '找人' })).toBeNull(),
   );
@@ -200,8 +200,7 @@ it('finds someone by name with ⌘K: a twin opens on its profile, someone withou
   const again = await screen.findByRole('dialog', { name: '找人' });
   await user.type(within(again).getByRole('combobox'), '本');
   await user.keyboard('{Enter}');
-  expect(await screen.findByText('在/profile')).toBeInTheDocument();
-  expect(usePersonas.getState().id).toBe('p-self');
+  expect(await screen.findByText('在/team/twin/p-self')).toBeInTheDocument();
 });
 
 it('gives a guest the conversation alone: no counts, finding, uploading or background', async () => {

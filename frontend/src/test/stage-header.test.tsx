@@ -9,7 +9,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { StageHeader } from '../components/layout/StageHeader';
-import { Profile } from '../pages/Profile';
 import { Chat } from '../pages/Chat';
 import { Memories } from '../pages/Memories';
 import { Questionnaire } from '../pages/Questionnaire';
@@ -130,7 +129,6 @@ function mount(page: React.ReactNode, route: string) {
 it.each([
   ['chat', Chat],
   ['memories', Memories],
-  ['profile', Profile],
   ['questionnaire', Questionnaire],
 ] as const)(
   'shows the current name and round portrait on %s, with a working switcher',
@@ -175,7 +173,7 @@ it.each([
     ).toBeEnabled();
     expect(
       within(sheet).getByRole('link', { name: '全部分身' }),
-    ).toHaveAttribute('href', '/twins');
+    ).toHaveAttribute('href', '/team');
     expect(within(sheet).queryByRole('button', { name: '管理' })).toBeNull();
     view.unmount();
   },

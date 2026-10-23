@@ -6,14 +6,12 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { PersonaSwitcher } from '../components/layout/PersonaSwitcher';
-import { Twins } from '../pages/Twins';
 import { ConfirmProvider } from '../components/ui';
 import type { Turn } from '../features/chat/types';
 import {
@@ -187,68 +185,6 @@ it('lists avatars and memory counts, switches without reload, persists and sends
   expect(localStorage.getItem('twin:persona')).toBe(B);
   await api('/api/status');
   expect(selected(fetcher.mock.calls.at(-1)![1])).toBe(B);
-});
-
-function twinsPage() {
-  return render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/twins']}>
-        <Twins />
-      </MemoryRouter>
-    </ConfirmProvider>,
-  );
-}
-
-it('renames through the persona identity endpoint and preserves its introduction', async () => {
-  const user = userEvent.setup();
-  twinsPage();
-  await user.click(await screen.findByLabelText('管理朋友'));
-  expect(screen.getAllByRole('button', { name: '删除' })).toHaveLength(1);
-  await user.click(
-    within(screen.getByLabelText('管理朋友').closest('article')!).getByRole(
-      'button',
-      { name: '重命名' },
-    ),
-  );
-  const input = screen.getByRole('textbox', { name: '分身名字' });
-  await user.clear(input);
-  await user.type(input, '新朋友');
-  await user.click(screen.getByRole('button', { name: '保存名字' }));
-  await screen.findByRole('button', { name: '和新朋友聊天' });
-  const saved = fetcher.mock.calls.find(
-    ([path, init]) => path === '/api/identity' && init?.method === 'PUT',
-  )![1];
-  expect(selected(saved)).toBe(B);
-  expect(JSON.parse(saved!.body as string)).toEqual({
-    name: '新朋友',
-    about: '保留介绍',
-  });
-});
-
-it('requires delete confirmation and purges only the deleted persona browser records', async () => {
-  const user = userEvent.setup();
-  sessionStorage.setItem(personaKey(CHAT_KEY, B), 'private');
-  sessionStorage.setItem(CHAT_KEY, 'default history');
-  twinsPage();
-  await user.click(await screen.findByLabelText('管理朋友'));
-  await user.click(screen.getByRole('button', { name: '删除' }));
-  let dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
-  await user.click(within(dialog).getByRole('button', { name: '取消' }));
-  expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(
-    false,
-  );
-  await waitFor(() =>
-    expect(
-      screen.queryByRole('dialog', { name: '删除「朋友」？' }),
-    ).not.toBeInTheDocument(),
-  );
-  await user.click(screen.getByLabelText('管理朋友'));
-  await user.click(screen.getByRole('button', { name: '删除' }));
-  dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
-  await user.click(within(dialog).getByRole('button', { name: '删除分身' }));
-  await waitFor(() => expect(items).toHaveLength(1));
-  expect(sessionStorage.getItem(personaKey(CHAT_KEY, B))).toBeNull();
-  expect(sessionStorage.getItem(CHAT_KEY)).toBe('default history');
 });
 
 it('creates a twin from the switcher in place and sets it up in its chat', async () => {

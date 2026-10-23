@@ -21,6 +21,7 @@ import {
   Disclosure,
   Field,
   Input,
+  ListRow,
   LoadMore,
   Notice,
   Radio,
@@ -38,13 +39,16 @@ import {
   type Tone,
   useConfirm,
 } from '../../components/ui';
-import { Avatar } from '../avatar/Avatar';
+import { PersonFace } from './PersonFace';
 import { api } from '../../lib/api';
 import { byName } from '../../lib/names';
 import { basePath, withBase } from '../../lib/base';
 import { usePolling } from '../../lib/usePolling';
+import { memberPath, twinMemberPath } from '../../lib/members';
+import { useAuth } from '../../stores/auth';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
+import { useNewTwinCard } from '../../components/layout/NewTwin';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, Speaker } from '../../pages/Recording';
 import type { Pick } from './useUploads';
@@ -53,6 +57,7 @@ import { PersonVoice } from './PersonVoice';
 import { BuildMeter } from '../memories/BuildProgress';
 import {
   disownedPeople,
+  looseTwins,
   namedPeople,
   similarPairs,
   unnamedPeople,
@@ -115,6 +120,14 @@ interface Review {
   suspects?: SuspectSpeaker[];
   // How long people speak in these recordings, and how much of it is settled.
   heard?: { settled: number; total: number };
+}
+
+/** A twin deleted in the last days, which can still be brought back. */
+interface Trashed {
+  id: string;
+  name: string;
+  deleted_at: string;
+  expires_at: string;
 }
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */
@@ -618,7 +631,7 @@ function EditPerson({
  * The work e-mail or employee number of the person a twin is made for: when they sign in with the company account
  * it names, the twin becomes theirs. Asked when the twin is made, and changeable until they have taken it.
  */
-function WorkClaim({
+export function WorkClaim({
   person,
   twin,
   busy,
@@ -900,6 +913,11 @@ function AddPerson({
   );
 }
 
+/** A row of the team table: someone found in the meetings, or a twin no meeting belongs to. */
+type TeamEntry = { key: string; name: string; state: TwinState } & (
+  { person: Person } | { twin: Persona }
+);
+
 /** Where a person's twin stands, as the team table's filter and status column name it. */
 type TwinState = 'ready' | 'updating' | 'none' | 'own' | 'elsewhere';
 const twinState = (person: Person): TwinState =>
@@ -929,6 +947,7 @@ function personRow({
   twin,
   busy,
   onOpen,
+  onMember,
   onEdit,
   onAddress,
   onRemove,
@@ -937,7 +956,10 @@ function personRow({
   person: Person;
   twin?: Persona;
   busy: boolean;
-  onOpen: (personaId: string, page: '/chat' | '/profile') => void;
+  /** Talk to their twin: switch to it and open the chat. */
+  onOpen: (personaId: string) => void;
+  /** Their page: the recordings they are in, and their twin if they have one. */
+  onMember: () => void;
   onEdit: () => void;
   onAddress: () => void;
   onRemove: () => void;
@@ -956,14 +978,12 @@ function personRow({
   return [
     <IdentityLink
       key="who"
-      to={person.persona_id ? '/profile' : undefined}
-      label={person.persona_id ? `${person.name}的档案` : `编辑${person.name}`}
-      onClick={() =>
-        person.persona_id ? onOpen(person.persona_id, '/profile') : onEdit()
-      }
+      to={memberPath(person.id)}
+      label={`${person.name}的成员页`}
+      onClick={onMember}
     >
       <AvatarFrame>
-        <PersonFace person={person} twin={twin} />
+        <PersonFace name={person.name} twin={twin} />
       </AvatarFrame>
       <Stack gap={0} grow>
         <Text weight="semibold" truncate>
@@ -1006,7 +1026,7 @@ function personRow({
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => onOpen(person.persona_id!, '/chat')}
+          onClick={() => onOpen(person.persona_id!)}
         >
           聊天
         </Button>
@@ -1019,7 +1039,11 @@ function personRow({
         >
           生成分身
         </Button>
-      ) : null}
+      ) : (
+        <Button size="sm" variant="secondary" onClick={onMember}>
+          查看
+        </Button>
+      )}
       {person.can_manage !== false && (
         <ActionMenu
           label={`${person.name}的更多操作`}
@@ -1043,6 +1067,56 @@ function personRow({
           ]}
         />
       )}
+    </Row>,
+  ];
+}
+
+/** A twin no recording belongs to (made by hand, or someone else's public one), as a row of the same table: it is
+ * there to talk to and to open. */
+function twinRow({
+  twin,
+  me,
+  onOpen,
+  onMember,
+}: {
+  twin: Persona;
+  /** The signed-in person's address, so only other people's twins name their owner. */
+  me?: string | null;
+  onOpen: (personaId: string) => void;
+  onMember: () => void;
+}): ReactNode[] {
+  return [
+    <IdentityLink
+      key="who"
+      to={twinMemberPath(twin.id)}
+      label={`${twin.name}的成员页`}
+      onClick={onMember}
+    >
+      <AvatarFrame>
+        <PersonFace name={twin.name} twin={twin} />
+      </AvatarFrame>
+      <Stack gap={0} grow>
+        <Text weight="semibold" truncate>
+          {twin.name}
+        </Text>
+        {twin.owner && twin.owner !== me && (
+          <Text size="sm" tone="secondary" truncate title={twin.owner}>
+            {twin.owner}
+          </Text>
+        )}
+      </Stack>
+    </IdentityLink>,
+    <Text key="heard" size="sm" tone="secondary">
+      —
+    </Text>,
+    <Row key="twin" gap={2}>
+      <StatusDot tone={TWIN_STATES.ready.tone} />
+      <Text size="sm">{TWIN_STATES.ready.label}</Text>
+    </Row>,
+    <Row key="act" gap={1} justify="end">
+      <Button size="sm" variant="secondary" onClick={() => onOpen(twin.id)}>
+        聊天
+      </Button>
     </Row>,
   ];
 }
@@ -1106,6 +1180,20 @@ export function Team({
   const refreshPersonas = usePersonas((state) => state.refresh);
   const switchTo = usePersonas((state) => state.switchTo);
   const twins = usePersonas((state) => state.items);
+  const identity = useAuth((state) => state.identity);
+  const newTwin = useNewTwinCard((state) => state.set);
+  const [trash, setTrash] = useState<Trashed[]>([]);
+  const loadTrash = useCallback(async () => {
+    try {
+      const entries = await api<Trashed[]>('/api/personas/trash');
+      if (Array.isArray(entries)) setTrash(entries);
+    } catch {
+      // The deleted twins are a side matter: the roster does not wait for them.
+    }
+  }, []);
+  useEffect(() => {
+    void loadTrash();
+  }, [loadTrash]);
 
   const load = useCallback(async () => {
     const current = ++loadVersion.current;
@@ -1177,6 +1265,15 @@ export function Team({
     await load();
     setBusy(false);
   };
+  const restore = (entry: Trashed) =>
+    act(async () => {
+      await api(`/api/personas/${encodeURIComponent(entry.id)}/restore`, {
+        method: 'POST',
+      });
+      await refreshPersonas();
+      await loadTrash();
+      toast(`已恢复「${entry.name}」`, 'success');
+    });
   const add = async (value: string) => {
     await api('/api/library/people', { method: 'POST', json: { name: value } });
     await load();
@@ -1303,9 +1400,10 @@ export function Team({
       else if (recognised)
         toast(`又按声音认出了 ${recognised} 位说话人，不用再问`, 'success');
     }, task);
-  const open = async (personaId: string, page: '/chat' | '/profile') => {
+  // Talking to someone's twin: switch to it, then its chat.
+  const chat = async (personaId: string) => {
     await switchTo(personaId);
-    void navigate(page);
+    void navigate('/chat');
   };
 
   const unnamed = unnamedPeople(people ?? []);
@@ -1314,10 +1412,29 @@ export function Team({
   // ones keep the server's order by name.
   const named =
     people && namedPeople(people).sort((a, b) => b.seconds - a.seconds);
-  const matchingPeople = named?.filter(
-    (person) =>
-      (!filter || twinState(person) === filter) &&
-      person.name
+  // Twins no recording belongs to (made by hand, someone else's public one) are rows of the same table, after the
+  // people found in the meetings.
+  const loose = people
+    ? looseTwins(people, twins).sort((a, b) => byName(a.name, b.name))
+    : [];
+  const entries: TeamEntry[] | null = named && [
+    ...named.map((person) => ({
+      key: `person-${person.id}`,
+      name: person.name,
+      state: twinState(person),
+      person,
+    })),
+    ...loose.map((twin) => ({
+      key: `twin-${twin.id}`,
+      name: twin.name,
+      state: 'ready' as const,
+      twin,
+    })),
+  ];
+  const matchingPeople = entries?.filter(
+    (entry) =>
+      (!filter || entry.state === filter) &&
+      entry.name
         .toLocaleLowerCase()
         .includes(search.trim().toLocaleLowerCase()),
   );
@@ -1414,8 +1531,12 @@ export function Team({
     fragments: fragments.length ? 1 : 0,
   };
   const openCategories = CATEGORIES.filter((c) => counts[c.id] > 0);
-  const tab: 'people' | 'todo' =
-    params.get('tab') === 'todo' || returnedFrom ? 'todo' : 'people';
+  const tab: 'people' | 'todo' | 'trash' =
+    params.get('tab') === 'todo' || returnedFrom
+      ? 'todo'
+      : params.get('tab') === 'trash'
+        ? 'trash'
+        : 'people';
   const asked =
     params.get('cat') ?? (returnedFrom ? categoryOf(returnedFrom) : undefined);
   // The kind in the address, or the first that still has something, when it was settled in full.
@@ -1918,12 +2039,12 @@ export function Team({
           正在加载人物…
         </Text>
       )}
-      {named && named.length === 0 && (
+      {entries && entries.length === 0 && (
         <Text size="sm" tone="secondary">
           录音转写后，认出来的人会出现在这里；也可以打开录音，确认说话人是谁。
         </Text>
       )}
-      {named && named.length > 0 && (
+      {entries && entries.length > 0 && (
         <Row gap={2} wrap>
           <Input
             aria-label="找人"
@@ -1938,8 +2059,8 @@ export function Team({
           <Row gap={2} wrap role="group" aria-label="按分身状态筛选">
             {([null, ...TWIN_FILTERS] as const).map((state) => {
               const count = state
-                ? named.filter((p) => twinState(p) === state).length
-                : named.length;
+                ? entries.filter((e) => e.state === state).length
+                : entries.length;
               return (
                 (!state || count > 0) && (
                   <Chip
@@ -1963,17 +2084,25 @@ export function Team({
           caption="成员"
           headers={['成员', '录音', '分身', '操作']}
           scroll={false}
-          rows={matchingPeople.slice(0, peopleShown).map((person) =>
-            personRow({
-              person,
-              twin: twinOf(person),
-              busy,
-              onOpen: (personaId, page) => void open(personaId, page),
-              onEdit: () => setEditing(person),
-              onAddress: () => setAddressing(person),
-              onRemove: () => void remove(person),
-              onVoice: () => setHearing(person),
-            }),
+          rows={matchingPeople.slice(0, peopleShown).map((entry) =>
+            'person' in entry
+              ? personRow({
+                  person: entry.person,
+                  twin: twinOf(entry.person),
+                  busy,
+                  onOpen: (personaId) => void chat(personaId),
+                  onMember: () => void navigate(memberPath(entry.person.id)),
+                  onEdit: () => setEditing(entry.person),
+                  onAddress: () => setAddressing(entry.person),
+                  onRemove: () => void remove(entry.person),
+                  onVoice: () => setHearing(entry.person),
+                })
+              : twinRow({
+                  twin: entry.twin,
+                  me: identity?.email,
+                  onOpen: (personaId) => void chat(personaId),
+                  onMember: () => void navigate(twinMemberPath(entry.twin.id)),
+                }),
           )}
         />
       )}
@@ -2002,6 +2131,34 @@ export function Team({
       </Row>
     </Stack>
   );
+  const trashTab =
+    trash.length === 0 ? (
+      <Text size="sm" tone="secondary">
+        没有已删除的分身。
+      </Text>
+    ) : (
+      <Stack as="ul" gap={0}>
+        {trash.map((entry) => (
+          <ListRow
+            key={entry.id}
+            variant="divided"
+            title={entry.name}
+            meta={`${new Date(entry.expires_at).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}到期`}
+            trailing={
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                aria-label={`恢复${entry.name}`}
+                onClick={() => void restore(entry)}
+              >
+                恢复
+              </Button>
+            }
+          />
+        ))}
+      </Stack>
+    );
   const todoTab = reviewError ? (
     <Notice
       tone="danger"
@@ -2104,7 +2261,10 @@ export function Team({
         label="团队"
         value={tab}
         onValueChange={(value) =>
-          go({ tab: value === 'todo' ? 'todo' : null, cat: null })
+          go({
+            tab: value === 'todo' || value === 'trash' ? value : null,
+            cat: null,
+          })
         }
         actions={
           tab === 'people' ? (
@@ -2113,6 +2273,7 @@ export function Team({
               label="添加"
               items={[
                 { label: '添加人物', onSelect: () => setAdding(true) },
+                { label: '新建分身', onSelect: () => newTwin(true) },
                 ...(toAddress.length > 0
                   ? [
                       {
@@ -2123,7 +2284,7 @@ export function Team({
                   : []),
               ]}
             />
-          ) : (
+          ) : tab === 'todo' ? (
             heard &&
             heard.total > 0 && (
               <div className="w-64">
@@ -2135,16 +2296,16 @@ export function Team({
                 />
               </div>
             )
-          )
+          ) : undefined
         }
         items={[
           {
             value: 'people',
             label: (
               <Row gap={2} as="div">
-                人物
+                成员
                 <Text as="span" size="sm" tone="inherit">
-                  {named?.length ?? 0}
+                  {entries?.length ?? 0}
                 </Text>
               </Row>
             ),
@@ -2160,6 +2321,25 @@ export function Team({
             ),
             content: todoTab,
           },
+          // Nothing deleted, nothing to bring back: the tab is there while there is, or while it is open.
+          ...(trash.length > 0 || tab === 'trash'
+            ? [
+                {
+                  value: 'trash',
+                  label: (
+                    <Row gap={2} as="div">
+                      已删除
+                      {trash.length > 0 && (
+                        <Text as="span" size="sm" tone="inherit">
+                          {trash.length}
+                        </Text>
+                      )}
+                    </Row>
+                  ),
+                  content: trashTab,
+                },
+              ]
+            : []),
         ]}
       />
       <AddPerson open={adding} onClose={() => setAdding(false)} onAdd={add} />
@@ -2197,15 +2377,5 @@ export function Team({
         onChanged={load}
       />
     </>
-  );
-}
-
-/** The twin's portrait or illustration; the first character of the name before there is a twin. */
-function PersonFace({ person, twin }: { person: Person; twin?: Persona }) {
-  if (!twin) return <>{Array.from(person.name)[0]}</>;
-  return twin.avatar_url ? (
-    <img src={twin.avatar_url} alt="" className="size-full object-cover" />
-  ) : (
-    <Avatar preset={twin.avatar_preset} blinking={false} />
   );
 }

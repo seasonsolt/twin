@@ -17,7 +17,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Overview } from '../features/profile/Overview';
 import { setPersonaId } from '../lib/persona';
 import { usePersonas } from '../stores/personas';
-import { Profile } from '../pages/Profile';
+import { MemberAt, showTwins } from './member';
 import { ConfirmProvider, toast } from '../components/ui';
 
 vi.mock('../components/ui', async (original) => ({
@@ -124,19 +124,26 @@ afterEach(() => {
   setPersonaId('default');
   usePersonas.setState({ id: 'default', items: [], pendingId: null });
 });
-const mount = () =>
-  render(
+const mount = () => {
+  showTwins();
+  return render(
     <ConfirmProvider>
-      <MemoryRouter initialEntries={['/profile']}>
-        <Profile />
-      </MemoryRouter>
+      <MemberAt />
     </ConfirmProvider>,
   );
+};
+// What a memory's row keeps under “⋯”: its evidence, removing it, putting its first wording back.
+const choose = async (card: ReturnType<typeof within>, name: string) => {
+  await userEvent.click(card.getByLabelText(/^更多：/u));
+  await userEvent.click(card.getByRole('button', { name }));
+};
 const mountOverview = () =>
   render(
-    <ConfirmProvider>
-      <Overview />
-    </ConfirmProvider>,
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Overview />
+      </ConfirmProvider>
+    </MemoryRouter>,
   );
 const article = () => within(screen.getByRole('article'));
 // A tab loads its items after it mounts, and switching tabs mounts the new one, so wait for its cards.
@@ -192,18 +199,17 @@ it('groups by plain topics, hides internal ids/metrics, caps suggestions and lin
     'href',
     '#/questionnaire',
   );
-  fireEvent.click(article().getByRole('button', { name: '依据 · 展开' }));
+  await choose(article(), '依据');
   expect(article().getByText('我会先听听')).toBeInTheDocument();
 });
 it('removes a memory with X-Twin once saved, and keeps it when saving fails', async () => {
-  const user = userEvent.setup();
   mount();
   await screen.findByRole('article');
-  await user.click(article().getByRole('button', { name: '删掉' }));
+  await choose(article(), '删掉');
   await act(async () => resolveReview(json({ detail: '保存失败' }, 500)));
   expect(toast).toHaveBeenCalledWith('保存失败', 'danger');
   expect(screen.getByRole('article')).toBeVisible();
-  await user.click(article().getByRole('button', { name: '删掉' }));
+  await choose(article(), '删掉');
   const options = fetcher.mock.calls
     .filter(([url]) => String(url).endsWith('/review'))
     .at(-1)![1] as RequestInit;
@@ -219,7 +225,7 @@ it('edits inline, retains failed drafts, saves new wording, and can go back to t
   const user = userEvent.setup();
   mount();
   await screen.findByRole('article');
-  await user.click(article().getByRole('button', { name: '改一下' }));
+  await user.click(article().getByRole('button', { name: /^改这条/u }));
   const input = article().getByLabelText('修改表述');
   fireEvent.change(input, { target: { value: '先核对事实' } });
   await user.click(article().getByRole('button', { name: '保存修改' }));
@@ -228,9 +234,10 @@ it('edits inline, retains failed drafts, saves new wording, and can go back to t
   await user.click(article().getByRole('button', { name: '保存修改' }));
   await complete('edited', '先核对事实');
   expect(article().getByText('你改过')).toBeVisible();
-  expect(article().getByText('原提炼：先听大家的意见')).toBeVisible();
   expect(article().queryByLabelText('修改表述')).not.toBeInTheDocument();
-  await user.click(article().getByRole('button', { name: '恢复原样' }));
+  await choose(article(), '依据');
+  expect(article().getByText('原提炼：先听大家的意见')).toBeVisible();
+  await choose(article(), '恢复原样');
   await complete('unreviewed');
   expect(article().queryByText('你改过')).toBeNull();
   expect(
@@ -240,7 +247,7 @@ it('edits inline, retains failed drafts, saves new wording, and can go back to t
 it('aborts outstanding reads and reviews on unmount', async () => {
   const view = mount();
   await screen.findByRole('article');
-  fireEvent.click(article().getByRole('button', { name: '删掉' }));
+  await choose(article(), '删掉');
   const options = fetcher.mock.calls.find(([url]) =>
     url.endsWith('/review'),
   )![1] as RequestInit;
@@ -365,7 +372,7 @@ it('finds memories by search, and corrects or removes them right in the results'
     new Headers((search[1] as RequestInit).headers).get('X-Twin-Persona'),
   ).toBe('default');
   const card = within(within(results).getByRole('article'));
-  await user.click(card.getByRole('button', { name: '改一下' }));
+  await user.click(card.getByRole('button', { name: /^改这条/u }));
   fireEvent.change(card.getByLabelText('修改表述'), {
     target: { value: '加班要看情况' },
   });
@@ -374,11 +381,7 @@ it('finds memories by search, and corrects or removes them right in the results'
   expect(
     within(results).getByRole('article', { name: '加班要看情况' }),
   ).toBeVisible();
-  await user.click(
-    within(within(results).getByRole('article')).getByRole('button', {
-      name: '删掉',
-    }),
-  );
+  await choose(within(within(results).getByRole('article')), '删掉');
   await complete('rejected', '加班要看情况', rows.at(-1));
   await waitFor(() =>
     expect(within(results).queryByRole('article')).toBeNull(),
@@ -402,7 +405,7 @@ it('offers a look at memories whose evidence disagrees, without making it a chor
   await waitFor(() =>
     expect(within(list).getAllByRole('article')).toHaveLength(1),
   );
-  expect(within(list).getByText('矛盾：说的和做的不一样')).toBeVisible();
+  expect(within(list).getByText('有矛盾')).toBeVisible();
   expect(
     fetcher.mock.calls.some(([url]) => String(url).includes('conflict=true')),
   ).toBe(true);
@@ -421,7 +424,7 @@ it('preserves the selected tab and expansion through editing and removal', async
     await screen.findByRole('button', { name: '展开其余 2 条' }),
   );
   const card = within(screen.getByRole('article', { name: target.statement }));
-  await user.click(card.getByRole('button', { name: '改一下' }));
+  await user.click(card.getByRole('button', { name: /^改这条/u }));
   fireEvent.change(card.getByLabelText('修改表述'), {
     target: { value: '新的表述' },
   });
@@ -433,11 +436,9 @@ it('preserves the selected tab and expansion through editing and removal', async
     'aria-expanded',
     'true',
   );
-  await user.click(
-    within(screen.getByRole('article', { name: '新的表述' })).getByRole(
-      'button',
-      { name: '删掉' },
-    ),
+  await choose(
+    within(screen.getByRole('article', { name: '新的表述' })),
+    '删掉',
   );
   await complete('rejected', target.statement, target);
   expect(selected).toHaveAttribute('aria-selected', 'true');
@@ -480,7 +481,7 @@ it('keeps the surest points in step with a correction', async () => {
   const surest = await screen.findByRole('list', { name: '最有把握的几点' });
   expect(within(surest).getByText('先听大家的意见')).toBeVisible();
   const card = within(await screen.findByRole('article'));
-  await user.click(card.getByRole('button', { name: '改一下' }));
+  await user.click(card.getByRole('button', { name: /^改这条/u }));
   fireEvent.change(card.getByLabelText('修改表述'), {
     target: { value: '先听一圈再拍板' },
   });
@@ -575,4 +576,44 @@ it('shows how far a library update has gone in place of the refused profile, the
   );
   expect(await screen.findByText(/共 1/u)).toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+});
+
+it('names how well an aspect and its facets are known in the shorter words, with a tick on the third level', async () => {
+  rows = dimensionItems('D2', 3);
+  const original = fetcher.getMockImplementation()! as (
+    url: string,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((url: string) =>
+    url === '/api/persona/coverage'
+      ? Promise.resolve(
+          json({
+            kind_labels: {},
+            level_labels: { 1: '已了解一些', 2: '了解较多', 3: '回答经过检查' },
+            facets: [
+              {
+                facet_id: '2.1',
+                dimension_id: 'D2',
+                name: '核心价值',
+                level: 3,
+              },
+              { facet_id: '2.2', dimension_id: 'D2', name: '底线', level: 1 },
+            ],
+            suggestions: [],
+          }),
+        )
+      : original(url),
+  );
+  mountOverview();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('tab', { name: '看重什么 3' }));
+  const panel = await screen.findByRole('tabpanel', { name: '看重什么 3' });
+  // The aspect is the rounded mean of its facets (3 and 1): 了解较多.
+  expect(await within(panel).findByText(/了解较多 · 3 条/u)).toBeVisible();
+  expect(
+    within(panel).getByRole('img', { name: '了解较多 ✓' }),
+  ).toBeInTheDocument();
+  expect(
+    within(panel).getByRole('img', { name: '了解一些' }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/回答经过检查|已了解一些/u)).toBeNull();
 });

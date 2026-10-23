@@ -37,6 +37,8 @@ interface Team {
    */
   refresh: (fresh?: boolean) => Promise<void>;
   absorb: (change: { people?: Person[]; review?: ReviewLists }) => void;
+  /** Ask for the people alone (a twin was made for one of them), leaving the heavy review queue as it is. */
+  refreshPeople: () => Promise<void>;
   /** Mark the team page open; the function returned marks it closed. */
   attach: () => () => void;
 }
@@ -96,6 +98,10 @@ export const useTeam = create<Team>((set, get) => {
       return next;
     },
     absorb: (change) => set(change),
+    refreshPeople: async () => {
+      const folks = await api<{ items?: Person[] }>('/api/library/people');
+      set({ people: folks.items ?? [] });
+    },
     attach: () => {
       set((state) => ({ pages: state.pages + 1 }));
       return () => {

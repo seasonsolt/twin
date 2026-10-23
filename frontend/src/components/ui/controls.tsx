@@ -470,3 +470,72 @@ export function Slider({
     </label>
   );
 }
+
+/**
+ * Two or three ways to take one thing, side by side, one chosen (such as what a message is: 问答 or 交代任务). Radio
+ * buttons in a group named `label`, so the arrow keys move between them.
+ */
+export function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: T;
+  options: readonly { id: T; label: string }[];
+  onChange: (value: T) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="inline-flex shrink-0 gap-0.5 rounded-full bg-soft p-0.5"
+    >
+      {options.map((option) => {
+        const chosen = option.id === value;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            role="radio"
+            aria-checked={chosen}
+            tabIndex={chosen ? 0 : -1}
+            disabled={disabled}
+            onClick={() => onChange(option.id)}
+            onKeyDown={(event) => {
+              const step =
+                event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                  ? 1
+                  : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                    ? -1
+                    : 0;
+              if (!step) return;
+              event.preventDefault();
+              const index = options.findIndex((item) => item.id === value);
+              const next =
+                options[(index + step + options.length) % options.length];
+              onChange(next.id);
+              const group = event.currentTarget.parentElement;
+              requestAnimationFrame(() =>
+                group
+                  ?.querySelector<HTMLElement>('[aria-checked="true"]')
+                  ?.focus(),
+              );
+            }}
+            className={cn(
+              'min-h-8 rounded-full px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50',
+              chosen
+                ? 'bg-surface text-primary shadow-elevation-1'
+                : 'text-secondary hover:text-primary',
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

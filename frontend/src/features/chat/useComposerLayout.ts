@@ -6,6 +6,11 @@ import {
   type RefObject,
 } from 'react';
 
+export type ComposerLayout = Pick<
+  ReturnType<typeof useComposerLayout>,
+  'end' | 'composer' | 'composerHeight'
+>;
+
 /** The conversation layout chat and work share: the pinned composer's height (the thread leaves room for it),
  * the phone keyboard's inset, and the end of the thread to scroll to. The height is also written to `page` (the
  * conversation's root element) as `--composer-height`, which the thread's bottom padding in tokens.css reads. */

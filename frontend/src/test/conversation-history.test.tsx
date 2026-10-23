@@ -14,7 +14,7 @@ import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
 import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
-import { dayGroup, relativeTime } from '../features/chat/ConversationHistory';
+import { dayGroup, relativeTime } from '../features/chat/SessionList';
 import { setPersonaId } from '../lib/persona';
 import { useStatus } from '../stores/status';
 import { conversationServer } from './conversationServer';
@@ -122,13 +122,11 @@ it('creates on first send, sends the id, starts fresh without deleting, and reop
   expect(
     screen.queryByRole('button', { name: '让本人说这句' }),
   ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /^依据 · / }));
-  const evidence = await screen.findByRole('dialog', { name: '回答依据' });
-  await waitFor(() =>
-    expect(within(evidence).getByText('保存的依据')).toBeVisible(),
-  );
-  fireEvent.click(within(evidence).getByRole('button', { name: '关闭' }));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // What the answer rests on opens right under it, one layer, with no dialog.
+  fireEvent.click(screen.getByRole('button', { name: /^有本人资料支持/ }));
+  const evidence = await screen.findByRole('list', { name: '回答依据' });
+  expect(within(evidence).getByText('保存的依据')).toBeVisible();
+  expect(screen.queryByRole('dialog')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '新对话' }));
   expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeNull();
   expect(server.rows.size).toBe(1);

@@ -249,3 +249,9 @@
     background: rgb(255 244 234 / 0.12);
   }
 }
+.history-kind {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}

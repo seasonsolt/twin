@@ -1215,6 +1215,35 @@ const handlers: Record<string, Handler> = {
       },
     ],
   }),
+  // A task done: the ask, what came back and the file made.
+  'GET /api/persona/work/w_000000000001': reply({
+    task_id: 'w_000000000001',
+    title: '按我的口吻写一份本周周报',
+    status: 'idle',
+    error: null,
+    job_id: null,
+    created_at: '2026-10-17T01:10:00Z',
+    updated_at: '2026-10-17T01:20:00Z',
+    turns: [
+      {
+        role: 'user',
+        content: '按我的口吻写一份本周周报',
+        at: '2026-10-17T01:10:00Z',
+        steps: [],
+        files: [],
+      },
+      {
+        role: 'assistant',
+        content: '周报写好了：本周发布排期定在下周二，大文件导入再测一轮。',
+        at: '2026-10-17T01:20:00Z',
+        steps: ['回想：本周的会议', '写 Word：周报.docx'],
+        files: ['周报.docx'],
+      },
+    ],
+    files: [{ path: '周报.docx', size: 37337 }],
+    progress: [],
+    stopping: false,
+  }),
   'GET /api/persona/followups': reply({
     pending: 1,
     items: [

@@ -19,7 +19,7 @@ import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { conversationServer } from './conversationServer';
 import { Citations } from '../features/chat/Citations';
 import { MessageText } from '../features/chat/MessageText';
-import { ReplyBasis, ReplyDetails } from '../features/chat/ReplyDetails';
+import { ReplyBasis, ReplyLine } from '../features/chat/ReplyDetails';
 import type { ChatReply } from '../features/chat/types';
 
 vi.mock('motion/react', async (original) => {
@@ -269,7 +269,7 @@ it('keeps a selected file for retry when the reply stream fails', async () => {
   expect(retriedFile.size).toBe(file.size);
 });
 
-it('shows when the reply was made beside it, and what it rests on behind 处理详情', async () => {
+it('shows when the reply was made beside it, and what it rests on one click under it', async () => {
   mount();
   await submit();
 
@@ -298,20 +298,23 @@ it('shows when the reply was made beside it, and what it rests on behind 处理�
   });
 
   const article = screen.getByRole('article', { name: '分身回复' });
-  // The kind of answer and when it was made are read with it; what it rests on waits behind 处理详情.
-  expect(within(article).getByText('有本人资料支持')).toBeVisible();
+  // The kind of answer and when it was made are read with it; what it rests on opens from the badge, in place.
+  const badge = within(article).getByRole('button', {
+    name: /^有本人资料支持/,
+  });
+  expect(badge).toBeVisible();
+  expect(badge).toHaveAttribute('aria-expanded', 'false');
   expect(article).toHaveTextContent(/生成用时 2\.4 秒 · \d{2}:\d{2} 完成/);
-  const summary = within(article).getByText('处理详情');
-  const disclosure = summary.closest('details')!;
-  expect(disclosure).not.toHaveAttribute('open');
-  expect(disclosure).not.toHaveTextContent('生成用时');
-  await userEvent.setup().click(summary);
-  expect(disclosure).toHaveAttribute('open');
-  expect(
-    within(disclosure).getByRole('button', {
-      name: /^依据 · 访谈 · .*等 2 处$/,
-    }),
-  ).toBeVisible();
+  expect(within(article).queryByRole('list', { name: '回答依据' })).toBeNull();
+  await userEvent.setup().click(badge);
+  expect(badge).toHaveAttribute('aria-expanded', 'true');
+  const evidence = within(article).getByRole('list', { name: '回答依据' });
+  expect(within(evidence).getByText('先听听')).toBeVisible();
+  expect(within(evidence).getByText('合同期限是一年。')).toBeVisible();
+  // One layer: no dialog, no second disclosure.
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await userEvent.setup().click(badge);
+  expect(within(article).queryByRole('list', { name: '回答依据' })).toBeNull();
 });
 
 it('explains an abstaining reply without implying all source material is missing', () => {
@@ -336,7 +339,7 @@ it('explains an abstaining reply without implying all source material is missing
   expect(screen.queryByRole('button', { name: /^依据/ })).toBeNull();
 });
 
-it('labels nothing under an unchecked reply and keeps reasons in its details', async () => {
+it('labels nothing under an unchecked reply and keeps the reason of an abstention behind its badge', async () => {
   const unchecked: ChatReply = {
     reply: '早上好，今天想聊什么？',
     citations: [],
@@ -349,15 +352,13 @@ it('labels nothing under an unchecked reply and keeps reasons in its details', a
     elapsed_ms: 800,
     completed_at: '2026-10-18T08:23:00.000Z',
   };
-  const { unmount } = render(
-    <>
-      <ReplyBasis reply={unchecked} />
-      <ReplyDetails reply={unchecked} />
-    </>,
-  );
+  const { unmount } = render(<ReplyLine reply={unchecked} />);
   // A greeting the model sent without metadata is not 资料不足, and not a general opinion either.
   expect(screen.queryByRole('group', { name: '回答依据摘要' })).toBeNull();
-  await userEvent.setup().click(screen.getByText('处理详情'));
+  // Only a way to see why there is nothing to check, with no label of its own.
+  const why = screen.getByRole('button', { name: '处理详情' });
+  expect(screen.queryByText('这条回答没有附带依据说明，无法核对')).toBeNull();
+  await userEvent.setup().click(why);
   expect(screen.getByText('这条回答没有附带依据说明，无法核对')).toBeVisible();
   unmount();
 
@@ -368,18 +369,16 @@ it('labels nothing under an unchecked reply and keeps reasons in its details', a
     mode: 'abstain',
     verified: true,
   };
-  render(
-    <>
-      <ReplyBasis reply={abstained} />
-      <ReplyDetails reply={abstained} />
-    </>,
-  );
+  render(<ReplyLine reply={abstained} />);
   const basis = screen.getByRole('group', { name: '回答依据摘要' });
-  expect(within(basis).getByText('资料不足，需要问本人')).toBeVisible();
+  const badge = within(basis).getByRole('button', {
+    name: /^资料不足，需要问本人/,
+  });
   expect(basis).not.toHaveTextContent('老家在哪');
+  await userEvent.setup().click(badge);
   expect(
     screen.getByText('没有作答的原因：回复没有给出所问内容：老家在哪'),
-  ).toBeInTheDocument();
+  ).toBeVisible();
 });
 
 it.each([false, true])(
@@ -417,6 +416,7 @@ it.each([false, true])(
     expect(
       screen.queryByRole('button', { name: '播放或暂停当前句' }),
     ).toBeNull();
+    await userEvent.setup().click(screen.getByLabelText('更多：语音、形象'));
     await userEvent.setup().click(screen.getByRole('button', { name: '形象' }));
     expect(
       screen.queryByRole('button', { name: '播放或暂停当前句' }) !== null,
@@ -498,13 +498,19 @@ it('streams progressively, hides thinking on the first delta, then replaces text
     within(abstention).getByRole('button', { name: '让测试人说这句' }),
   ).toBeVisible();
   expect(within(abstention).getByText('资料不足，需要问本人')).toBeVisible();
-  await userEvent.setup().click(within(abstention).getByText('处理详情'));
+  await userEvent
+    .setup()
+    .click(
+      within(abstention).getByRole('button', { name: /^资料不足，需要问本人/ }),
+    );
+  expect(within(abstention).getByText('先听听')).toBeVisible();
   expect(
-    within(abstention).getByRole('button', { name: /^依据 · 访谈/ }),
+    within(abstention).getByText('没有作答的原因：证据不足'),
   ).toBeVisible();
   expect(screen.queryByText(/置信度|%/)).not.toBeInTheDocument();
   expect(screen.queryByText(/资料截至/)).not.toBeInTheDocument();
   expect(document.querySelector('input[type="date"]')).toBeNull();
+  await userEvent.setup().click(screen.getByLabelText('更多：语音、形象'));
   expect(screen.getByRole('button', { name: '语音' })).toBeEnabled();
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   expect(conversations.rows.has(localStorage.getItem(CURRENT_CHAT_KEY)!)).toBe(
@@ -544,7 +550,7 @@ it('replaces draft text with guarded final text, attaches citations and starts v
   expect(screen.getByLabelText('分身回复')).toHaveTextContent('修正后的回复');
   expect(screen.queryByText('不正确的初稿')).not.toBeInTheDocument();
   expect(
-    screen.getByRole('button', { name: /^依据 · 访谈/ }),
+    screen.getByRole('button', { name: /^有本人资料支持/ }),
   ).toBeInTheDocument();
   expect(sessionStorage.getItem(CHAT_KEY)).toBeNull();
   expect(localStorage.getItem(CURRENT_CHAT_KEY)).toBeTruthy();
@@ -945,14 +951,14 @@ it.each([true, false])(
     const row = screen.getByRole('group', { name: '回复媒体' });
     const play = await screen.findByRole('button', { name: '让测试人说这句' });
     const basis = screen.getByRole('group', { name: '回答依据摘要' });
-    await userEvent.setup().click(within(row).getByText('处理详情'));
-    const citations = screen.getByRole('button', { name: /^依据 · 访谈/ });
+    const citations = within(basis).getByRole('button', {
+      name: /^有本人资料支持/,
+    });
     expect(bubble.querySelector('button')).toBeNull();
-    // Under the bubble, one line: what kind of answer it is, then the voice and the details (its evidence) at the end.
+    // Under the bubble, one line: what kind of answer it is, then the voice and the copy button at the end.
     expect(row.parentElement?.parentElement).toBe(article);
     expect(row.parentElement).toContainElement(basis);
     expect(row).toContainElement(play);
-    expect(row).toContainElement(citations);
     expect(row).toHaveClass('ml-auto', 'items-center');
     expect(play).toHaveClass('min-h-11', 'min-w-11');
     expect(bubble.querySelectorAll('p')).toHaveLength(2);
@@ -962,10 +968,7 @@ it.each([true, false])(
     expect(conversation).not.toHaveClass('justify-end');
     await userEvent.setup().click(citations);
     expect(
-      within(screen.getByRole('dialog', { name: '回答依据' })).getByRole(
-        'list',
-        { name: '回答依据' },
-      ),
+      within(article).getByRole('list', { name: '回答依据' }),
     ).toBeVisible();
   },
 );
@@ -1114,14 +1117,13 @@ it('keeps the portrait closed initially, toggles it and remembers the choice', a
     screen.queryByRole('complementary', { name: '测试人的形象' }),
   ).toBeNull();
   const user = userEvent.setup();
+  await user.click(screen.getByLabelText('更多：语音、形象'));
   await user.click(screen.getByRole('button', { name: '形象' }));
   expect(
     screen.getByRole('complementary', { name: '测试人的形象' }),
   ).toBeVisible();
-  expect(screen.getByRole('button', { name: '形象' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  // The menu entry says what it does next.
+  expect(screen.getByRole('button', { name: '收起形象' })).toBeInTheDocument();
   expect(JSON.parse(localStorage.getItem('twin:chat-layout')!)).toMatchObject({
     stage: true,
   });
@@ -1131,10 +1133,10 @@ it('keeps the portrait closed initially, toggles it and remembers the choice', a
     screen.getByRole('complementary', { name: '测试人的形象' }),
   ).toBeVisible();
   await user.click(screen.getByRole('button', { name: '关闭形象' }));
-  expect(screen.getByRole('button', { name: '形象' })).toHaveAttribute(
-    'aria-pressed',
-    'false',
-  );
+  expect(
+    screen.queryByRole('complementary', { name: '测试人的形象' }),
+  ).toBeNull();
+  expect(screen.getByRole('button', { name: '形象' })).toBeInTheDocument();
 });
 
 it('puts attachment limits in the accessible tooltip, not in a permanent hint', async () => {

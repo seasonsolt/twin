@@ -174,36 +174,6 @@
     opacity: 1;
   }
 }
-.reply-details-compact {
-  position: relative;
-}
-.reply-details-compact > summary {
-  width: var(--spacing-9);
-  justify-content: center;
-  cursor: pointer;
-  list-style: none;
-}
-.reply-details-compact > summary::-webkit-details-marker {
-  display: none;
-}
-.reply-details-compact[open] > .reply-details-content {
-  @apply rounded-md;
-  position: absolute;
-  z-index: 30;
-  right: 0;
-  top: 100%;
-  width: var(--spacing-chat-sheet);
-  max-width: 80vw;
-  padding: var(--spacing-3);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: var(--elevation-2);
-}
-/* Too little room below inside the message list (the last answer, right above the composer): open upward. */
-.reply-details-compact[open][data-placement='top'] > .reply-details-content {
-  top: auto;
-  bottom: 100%;
-}
 .conversation-sheet-history {
   display: flex;
   flex: 1;

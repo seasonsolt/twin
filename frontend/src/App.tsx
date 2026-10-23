@@ -31,9 +31,6 @@ const Questionnaire = lazy(() =>
 const Ledger = lazy(() =>
   import('./pages/Ledger').then((module) => ({ default: module.Ledger })),
 );
-const Work = lazy(() =>
-  import('./pages/Work').then((module) => ({ default: module.Work })),
-);
 const Library = lazy(() =>
   import('./pages/Library').then((module) => ({ default: module.Library })),
 );
@@ -70,6 +67,13 @@ function FeaturePage({
   return on ? children : <Navigate to="/chat" replace />;
 }
 
+// Work is a kind of message in the conversation now: the old address opens the conversation on it (or plain, where
+// work is switched off).
+export function WorkRedirect() {
+  const on = useAuth((state) => featureOn(state.identity, 'work'));
+  return <Navigate to={on ? '/chat?mode=task' : '/chat'} replace />;
+}
+
 export function App() {
   return (
     <MotionConfig reducedMotion="user">
@@ -97,14 +101,7 @@ export function App() {
                       element={<Recording />}
                     />
                     <Route path="chat" element={<Chat />} />
-                    <Route
-                      path="work"
-                      element={
-                        <FeaturePage feature="work">
-                          <Work />
-                        </FeaturePage>
-                      }
-                    />
+                    <Route path="work" element={<WorkRedirect />} />
                     {/* The old profile addresses lead to the member page of the twin in view. */}
                     <Route path="profile" element={<ProfileRedirect />} />
                     <Route

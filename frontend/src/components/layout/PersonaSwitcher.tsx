@@ -20,7 +20,7 @@ import {
 import { personaUrl } from '../../lib/persona';
 import { useManagesCurrent } from '../../stores/access';
 import { usePersonas, type Persona } from '../../stores/personas';
-import { featureOn, useAuth } from '../../stores/auth';
+import { useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
 import { useOpenSystem } from '../../features/admin/SystemDialog';
 import { PresetSvg } from '../../features/avatar/presets';
@@ -231,15 +231,12 @@ export function PersonaSwitcher({
             {/* The twin's own pages are reached from here: the side bar is about the team. */}
             {[
               ...(canManage ? [{ to: '/profile', title: '档案' }] : []),
-              ...(featureOn(identity, 'work')
-                ? [{ to: '/work', title: '工作' }]
-                : []),
               { to: '/team', title: '团队' },
               { to: '/library', title: '录音库' },
               { to: '/team', title: '全部分身' },
             ].map(({ to, title }) => (
               <TextLink
-                key={to}
+                key={title}
                 to={to}
                 onClick={() => {
                   navigating.current = true;

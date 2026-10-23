@@ -440,9 +440,9 @@ test('reply details', async ({ page }, info) => {
   await expect(
     page.getByText('我会先把发布时间定在下周二').first(),
   ).toBeVisible();
-  // When the answer was made is beside it; what it rests on opens from the "…" at its end.
-  await page.locator('summary', { hasText: '处理详情' }).last().click();
-  await expect(page.getByRole('button', { name: /^依据 · / })).toBeVisible();
+  // When the answer was made is beside it; what it rests on opens from its badge, right under the answer.
+  await page.getByRole('button', { name: /^有本人资料支持/ }).click();
+  await expect(page.getByRole('list', { name: '回答依据' })).toBeVisible();
   await expect(page).toHaveScreenshot(
     `chat-reply-details-${info.project.name}.png`,
   );
@@ -471,7 +471,7 @@ test('chat presentation controls', async ({ page }, info) => {
     await expect(active).toHaveCSS('background-color', 'rgb(255, 255, 255)');
     await page.getByRole('button', { name: '收起对话列表' }).click();
     await expect(
-      page.getByRole('heading', { name: '林舟 / 下周发布怎么安排' }),
+      page.getByRole('heading', { level: 1, name: '下周发布怎么安排' }),
     ).toBeVisible();
     // With the list folded away, the twin is still switched from its portrait in the header.
     await expect(
@@ -482,9 +482,9 @@ test('chat presentation controls', async ({ page }, info) => {
       page.getByRole('button', { name: '展开对话列表' }),
     ).toBeVisible();
   }
-  await page
-    .getByRole('button', { name: mobile ? '打开形象' : '形象', exact: true })
-    .click();
+  // The voice and the portrait are behind the header's "…".
+  await page.getByLabel('更多：语音、形象').click();
+  await page.getByRole('button', { name: '形象', exact: true }).click();
   await expect(
     page.getByRole('complementary', { name: '林舟的形象' }),
   ).toBeVisible();
@@ -497,5 +497,23 @@ test('chat presentation controls', async ({ page }, info) => {
   if (!mobile) await page.getByRole('button', { name: '收起对话列表' }).click();
   await expect(page.getByRole('heading', { name: '和林舟聊聊' })).toBeVisible();
   await expect(page).toHaveScreenshot(`chat-empty-${info.project.name}.png`);
+  expect(missing).toEqual([]);
+});
+
+test('a task in the conversation list', async ({ page }, info) => {
+  const missing: string[] = [];
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/chat?mode=task');
+  await expect(page.getByRole('radio', { name: '交代任务' })).toBeChecked();
+  if (info.project.name === 'mobile')
+    await page.getByRole('button', { name: '对话列表' }).click();
+  // Tasks sit among the conversations, marked as tasks.
+  await page
+    .getByRole('button', { name: /^按我的口吻写一份本周周报\s*任务/ })
+    .click();
+  await expect(page.getByText('周报写好了', { exact: false })).toBeVisible();
+  await expect(page.getByRole('link', { name: /周报\.docx/ })).toBeVisible();
+  await expect(page).toHaveScreenshot(`work-task-${info.project.name}.png`);
   expect(missing).toEqual([]);
 });

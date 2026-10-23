@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
   BookUser,
-  Briefcase,
   Inbox,
   ListChecks,
   LogOut,
@@ -44,15 +43,16 @@ import { THEMES, useTheme } from '../../stores/theme';
 /** The phone's bottom tabs; the wide side bar has its own entries (below). */
 const navItems = [
   { route: 'chat', title: '聊天', icon: MessageCircle, visitor: true },
-  { route: 'work', title: '工作', icon: Briefcase, visitor: true },
   { route: 'profile', title: '档案', icon: BookUser, visitor: false },
   { route: 'ledger', title: '承诺账本', icon: ListChecks, visitor: false },
 ];
 
-/** What a guest, who may only talk to the twins, can open. */
-export const visitorRoutes = new Set(
-  navItems.filter((item) => item.visitor).map((item) => item.route),
-);
+/** What a guest, who may only talk to the twins, can open: the conversation, and the old address of work, which
+ * leads into it. */
+export const visitorRoutes = new Set([
+  ...navItems.filter((item) => item.visitor).map((item) => item.route),
+  'work',
+]);
 
 function useNavItems() {
   const canManage = useCanManage();
@@ -61,9 +61,7 @@ function useNavItems() {
   return navItems.filter(
     (item) =>
       (canManage || item.visitor) &&
-      (item.route !== 'work' && item.route !== 'ledger'
-        ? true
-        : featureOn(identity, item.route)),
+      (item.route !== 'ledger' ? true : featureOn(identity, item.route)),
   );
 }
 

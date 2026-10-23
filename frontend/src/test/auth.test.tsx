@@ -303,9 +303,7 @@ it('shows the full signed-in email in the account popover and logs out', async (
   );
   expect(account).toHaveFocus();
   await user.click(account);
-  await user.click(
-    screen.getByRole('heading', { name: `${persona.name} / 新对话` }),
-  );
+  await user.click(screen.getByRole('heading', { level: 1, name: '新对话' }));
   await waitFor(() =>
     expect(screen.queryByRole('dialog', { name: '账户' })).toBeNull(),
   );

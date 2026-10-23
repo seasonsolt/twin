@@ -158,9 +158,8 @@ it.each([
     ).toHaveLength(route === 'chat' ? 0 : 2);
     if (route === 'chat') {
       expect(view.container.querySelector('.chat-stage')).toBeNull();
-      expect(
-        within(header).getByRole('button', { name: '打开形象' }),
-      ).toHaveAttribute('aria-pressed', 'false');
+      // The voice and the portrait are behind the header's "…".
+      expect(within(header).getByLabelText('更多：语音、形象')).toBeVisible();
     }
     fireEvent.click(within(header).getByRole('button', { name: /^切换分身/ }));
     const sheet = await screen.findByRole('dialog', { name: '切换分身' });

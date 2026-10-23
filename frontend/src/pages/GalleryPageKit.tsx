@@ -31,6 +31,7 @@ import {
   ActionMenu,
   AvatarFrame,
   Badge,
+  BadgeToggle,
   Button,
   Card,
   Checkbox,
@@ -61,6 +62,7 @@ import {
   Radio,
   Row,
   Section,
+  Segmented,
   Select,
   SettingsDialog,
   Dialog,
@@ -89,6 +91,8 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [finding, setFinding] = useState(false);
   const [sample, setSample] = useState(true);
   const [mine, setMine] = useState('all');
+  const [kind, setKind] = useState<'chat' | 'work'>('chat');
+  const [basisOpen, setBasisOpen] = useState(false);
   const [filters, setFilters] = useState(['决定']);
   const [settings, setSettings] = useState(false);
   const [section, setSection] = useState('monitor');
@@ -623,6 +627,26 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               </Chip>
             ))}
             <Chip>只读标签</Chip>
+          </Row>
+          <Row gap={3} wrap>
+            <Segmented
+              label="这条消息是"
+              value={kind}
+              disabled={disabled}
+              options={[
+                { id: 'chat', label: '问答' },
+                { id: 'work', label: '交代任务' },
+              ]}
+              onChange={setKind}
+            />
+            <BadgeToggle
+              tone="success"
+              open={basisOpen}
+              disabled={disabled}
+              onClick={() => setBasisOpen(!basisOpen)}
+            >
+              有本人资料支持 · 2
+            </BadgeToggle>
           </Row>
         </Card>
 

@@ -165,7 +165,10 @@ it('switches twins while staying on the chat', async () => {
   expect(usePersonas.getState().id).toBe(B);
   expect(window.location.hash).toBe('#/chat');
   expect(
-    await screen.findByRole('heading', { name: '朋友 / 新对话' }),
+    await screen.findByRole('banner', { name: '朋友的聊天' }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('heading', { level: 1, name: '新对话' }),
   ).toBeVisible();
   expect(
     screen.getByRole('button', { name: /^切换分身/ }).querySelector('img'),

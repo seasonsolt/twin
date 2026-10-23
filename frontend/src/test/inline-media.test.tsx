@@ -272,10 +272,16 @@ it.each(['grounded', 'general', 'inferred', 'abstain'] as const)(
     expect(article.querySelector('.twin-bubble')).not.toBeNull();
     expect(within(article).getByText('先听听').tagName).toBe('STRONG');
     expect(article).not.toHaveClass('text-secondary');
-    // What the answer rests on opens from the "…" at the end of the line under it.
-    fireEvent.click(within(article).getByText('处理详情'));
+    // What the answer rests on opens from its badge, right under the answer.
+    fireEvent.click(
+      within(
+        within(article).getByRole('group', { name: '回答依据摘要' }),
+      ).getByRole('button'),
+    );
     expect(
-      within(article).getByRole('button', { name: /^依据 · 价值观$/ }),
+      within(within(article).getByRole('list', { name: '回答依据' })).getByText(
+        '引用资料',
+      ),
     ).toBeVisible();
     expect(article).toHaveClass('min-w-0');
     expect(article.querySelector('img, video')).toBeNull();
@@ -445,9 +451,7 @@ it.each([375, 390, 768, 1024, 1199, 1200, 1280, 1440])(
     expect(
       screen.queryByRole('complementary', { name: '本人的形象' }),
     ).toBeNull();
-    fireEvent.click(
-      screen.getByRole('button', { name: width < 768 ? '打开形象' : '形象' }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: '形象' }));
     const stage = screen.getByRole('banner', { name: '本人的舞台' });
     expect(stage).toHaveAttribute('data-desktop', String(width >= 1200));
     fireEvent.focus(screen.getByRole('textbox', { name: '你说' }));

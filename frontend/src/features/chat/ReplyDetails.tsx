@@ -1,6 +1,14 @@
-import { ChevronDown, MoreHorizontal } from 'lucide-react';
-import { Badge, Row, Text, type Tone } from '../../components/ui';
-import { Citations } from './Citations';
+import { useId, useState, type ReactNode } from 'react';
+import { MoreHorizontal } from 'lucide-react';
+import {
+  Badge,
+  BadgeToggle,
+  IconButton,
+  Row,
+  Text,
+  type Tone,
+} from '../../components/ui';
+import { CitationList } from './Citations';
 import type { ChatReply } from './types';
 
 type Mode = NonNullable<ChatReply['mode']>;
@@ -33,22 +41,50 @@ export function replyMode(reply: ChatReply) {
   return modes[reply.mode ?? (reply.abstain ? 'abstain' : 'grounded')];
 }
 
+/** Whether an answer has anything to open under it: the memories and words it rests on, or why it did not answer. */
+const hasDetails = (reply: ChatReply) =>
+  !!reply.cited?.length ||
+  !!(reply.abstain && reply.abstain_reason) ||
+  reply.verified === false;
+
 /**
- * The line under an answer: what kind of answer it is. A grounded answer without evidence to show says only that it
- * drew on the profile; an answer nothing could be checked against shows no label at all. What it rests on, and why an
- * answer abstained, are told in its details.
+ * The badge under an answer: what kind of answer it is. A grounded answer without evidence to show says only that it
+ * drew on the profile; an answer nothing could be checked against shows no label at all. With ``onToggle`` and
+ * something behind it (what it rests on, why it abstained), the badge is the button that opens it right under the
+ * answer.
  */
-export function ReplyBasis({ reply }: { reply: ChatReply }) {
+export function ReplyBasis({
+  reply,
+  open = false,
+  onToggle,
+  controls,
+}: {
+  reply: ChatReply;
+  open?: boolean;
+  onToggle?: () => void;
+  /** The id of what the badge opens, for assistive technology. */
+  controls?: string;
+}) {
   const cited = reply.cited ?? [];
   if (reply.verified === false) return null;
   const mode = replyMode(reply);
   const grounded = (reply.mode ?? 'grounded') === 'grounded' && !reply.abstain;
+  const bare = grounded && !cited.length;
+  const label = bare ? '结合档案资料' : mode.label;
   return (
     <Row gap={2} wrap role="group" aria-label="回答依据摘要">
-      {grounded && !cited.length ? (
-        <Badge>结合档案资料</Badge>
+      {onToggle && hasDetails(reply) ? (
+        <BadgeToggle
+          tone={bare ? 'neutral' : mode.tone}
+          open={open}
+          aria-controls={open ? controls : undefined}
+          onClick={onToggle}
+        >
+          {label}
+          {cited.length > 0 && <span> · {cited.length}</span>}
+        </BadgeToggle>
       ) : (
-        <Badge tone={mode.tone}>{mode.label}</Badge>
+        <Badge tone={bare ? 'neutral' : mode.tone}>{label}</Badge>
       )}
     </Row>
   );
@@ -62,32 +98,6 @@ function formatElapsed(milliseconds: number) {
   }
   const totalSeconds = Math.floor(milliseconds / 1000);
   return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
-}
-
-/** The nearest ancestor that scrolls vertically, whose visible box the opened details must fit in. */
-function scrollParent(element: HTMLElement): HTMLElement | null {
-  for (let node = element.parentElement; node; node = node.parentElement) {
-    if (/auto|scroll/u.test(getComputedStyle(node).overflowY)) return node;
-  }
-  return null;
-}
-
-/** Open the compact details upward when the space below the button, inside its scrolling list, is too short and
- * the space above is not, then bring the whole of it into view: the last answer sits right above the composer. */
-export function placeDetails(details: HTMLDetailsElement) {
-  delete details.dataset.placement;
-  if (!details.open) return;
-  const content = details.querySelector<HTMLElement>('.reply-details-content');
-  if (!content) return;
-  const frame = scrollParent(details)?.getBoundingClientRect() ?? {
-    top: 0,
-    bottom: window.innerHeight,
-  };
-  const anchor = details.getBoundingClientRect();
-  const height = content.getBoundingClientRect().height;
-  if (anchor.bottom + height > frame.bottom && anchor.top - height >= frame.top)
-    details.dataset.placement = 'top';
-  content.scrollIntoView?.({ block: 'nearest' });
 }
 
 /** When the answer was finished and how long it took, beside the line under it; nothing for an older reply that
@@ -116,60 +126,85 @@ export function ReplyTime({ reply }: { reply: ChatReply }) {
   );
 }
 
-/** What the answer rests on, for whoever wants to check: closed, and quieter than the answer. Opening the evidence
- * shows the original words in a layer at the right edge, where a memory that went wrong can be corrected. */
+/**
+ * What the answer rests on, opened under it by its badge: the original words one layer down, where a memory that went
+ * wrong can be corrected, and why it did not answer when it did not.
+ */
 export function ReplyDetails({
   reply,
-  compact = false,
+  id,
+  editable = false,
 }: {
   reply: ChatReply;
-  compact?: boolean;
+  id?: string;
+  /** Whether the viewer may correct a memory the answer drew on. */
+  editable?: boolean;
 }) {
   const cited = reply.cited ?? [];
   return (
-    <details
-      className={
-        compact ? 'reply-details reply-details-compact' : 'reply-details'
-      }
-      onToggle={(event) => {
-        if (compact) placeDetails(event.currentTarget);
-      }}
+    <Text
+      as="div"
+      id={id}
+      size="sm"
+      tone="secondary"
+      className="reply-details-content space-y-2 border-l-2 border-accent/40 py-1 pl-3"
     >
-      <Text
-        as="summary"
-        size="xs"
-        tone="tertiary"
-        className="inline-flex min-h-11 items-center gap-1"
-      >
-        {compact ? (
-          <>
-            <span className="sr-only">处理详情</span>
+      {cited.length > 0 && (
+        <>
+          <p>{replyMode(reply).note}</p>
+          <CitationList cited={cited} editable={editable} />
+        </>
+      )}
+      {reply.verified === false && <p>这条回答没有附带依据说明，无法核对</p>}
+      {reply.abstain && reply.abstain_reason && (
+        <p>没有作答的原因：{reply.abstain_reason}</p>
+      )}
+    </Text>
+  );
+}
+
+/**
+ * The line under a twin's answer and what opens from it: the badge (opening what the answer rests on), when it was
+ * made, and the actions given as children (speaking it, copying it).
+ */
+export function ReplyLine({
+  reply,
+  editable,
+  children,
+}: {
+  reply: ChatReply;
+  editable?: boolean;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <>
+      <div className="reply-actions mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        {reply.verified === false ? (
+          // Nothing to say about what kind of answer it is, so no badge: only a way to see why.
+          <IconButton
+            label="处理详情"
+            aria-expanded={open}
+            aria-controls={open ? id : undefined}
+            onClick={() => setOpen(!open)}
+          >
             <MoreHorizontal size={18} aria-hidden />
-          </>
+          </IconButton>
         ) : (
-          <>
-            处理详情 <ChevronDown size={14} aria-hidden />
-          </>
+          <ReplyBasis
+            reply={reply}
+            open={open}
+            onToggle={() => setOpen(!open)}
+            controls={id}
+          />
         )}
-      </Text>
-      <Text
-        as="div"
-        size="xs"
-        tone="secondary"
-        className="reply-details-content space-y-1 border-l-2 border-accent/40 py-2 pl-3"
-      >
-        {cited.length > 0 ? (
-          <p>
-            <Citations cited={cited} note={replyMode(reply).note} />
-          </p>
-        ) : (
-          <p>未引用可展示的档案或附件依据</p>
-        )}
-        {reply.verified === false && <p>这条回答没有附带依据说明，无法核对</p>}
-        {reply.abstain && reply.abstain_reason && (
-          <p>没有作答的原因：{reply.abstain_reason}</p>
-        )}
-      </Text>
-    </details>
+        <ReplyTime reply={reply} />
+        {children}
+      </div>
+      {open && hasDetails(reply) && (
+        <ReplyDetails reply={reply} id={id} editable={editable} />
+      )}
+    </>
   );
 }

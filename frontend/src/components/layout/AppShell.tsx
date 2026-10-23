@@ -33,7 +33,7 @@ const Welcome = lazy(() =>
 );
 
 // Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
-const conversationRoutes = new Set(['/chat', '/work']);
+const conversationRoutes = new Set(['/chat']);
 
 export function AppShell() {
   const personaId = usePersonaId();

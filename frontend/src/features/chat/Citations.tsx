@@ -192,6 +192,28 @@ export function citationSummary(cited: Citation[]) {
   return `依据 · ${citationSource(cited[0])}${cited.length > 1 ? ` 等 ${cited.length} 处` : ''}`;
 }
 
+/** What an answer rests on, one card per memory or passage; for whoever may correct it, a memory can be changed or
+ * removed right on its card. */
+export function CitationList({
+  cited,
+  editable = false,
+}: {
+  cited: Citation[];
+  editable?: boolean;
+}) {
+  return (
+    <Stack as="ul" gap={2} aria-label="回答依据">
+      {cited.map((citation) => (
+        <CitationCard
+          key={citation.id}
+          citation={citation}
+          editable={editable}
+        />
+      ))}
+    </Stack>
+  );
+}
+
 /**
  * What an answer rests on, as one line under it; clicking it opens the original words in a layer at the right edge,
  * where a memory that went wrong can be corrected. Closing it returns to the conversation where it was.
@@ -238,15 +260,7 @@ export function Citations({
               {note}
             </Text>
           )}
-          <Stack as="ul" gap={2} aria-label="回答依据">
-            {cited.map((citation) => (
-              <CitationCard
-                key={citation.id}
-                citation={citation}
-                editable={editable}
-              />
-            ))}
-          </Stack>
+          <CitationList cited={cited} editable={editable} />
         </Stack>
       </Dialog>
     </>

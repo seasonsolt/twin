@@ -92,6 +92,34 @@ export function Badge({
   );
 }
 
+/** A Badge that opens something under it (what an answer rests on): a button with a caret, `open` says whether it is. */
+export function BadgeToggle({
+  tone = 'neutral',
+  open,
+  className,
+  children,
+  ...props
+}: Omit<ComponentProps<'button'>, 'type'> & { tone?: Tone; open: boolean }) {
+  return (
+    <button
+      {...props}
+      type="button"
+      aria-expanded={open}
+      className={cn(
+        'inline-flex min-h-8 items-center gap-1 rounded-full border border-current/15 bg-current/5 px-2.5 py-0.5 text-xs font-medium hover:bg-current/10',
+        toneClasses[tone],
+        className,
+      )}
+    >
+      {children}
+      <ChevronDown
+        aria-hidden
+        className={cn('size-3.5 shrink-0', open && 'rotate-180')}
+      />
+    </button>
+  );
+}
+
 /**
  * A progress bar. `value` counts up to `max` (100 by default, so a plain percent works); null means it is working
  * without a known end. `size="sm"` is the thin bar for a step inside a list.

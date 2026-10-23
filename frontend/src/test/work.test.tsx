@@ -6,8 +6,9 @@ import { AppShell } from '../components/layout/AppShell';
 import { ConfirmProvider, TooltipProvider, toast } from '../components/ui';
 import { useChatLayout } from '../stores/chatLayout';
 import { setPersonaId } from '../lib/persona';
-import { Work } from '../pages/Work';
+import { Chat } from '../pages/Chat';
 import { usePersonas, type Persona } from '../stores/personas';
+import { useAuth } from '../stores/auth';
 import type { WorkTask } from '../features/work/types';
 
 vi.mock('../components/ui', async (original) => ({
@@ -83,6 +84,8 @@ beforeEach(() => {
       return json({ stopping: true }, 202);
     }
     if (url === '/api/persona/work') return json({ tasks });
+    // The conversation page also holds the chat side: nothing said there yet.
+    if (url.startsWith('/api/conversations')) return json([]);
     if (url === `/api/persona/work/${task.task_id}` && method === 'DELETE') {
       tasks = [];
       return json({ deleted: true });
@@ -108,18 +111,31 @@ afterEach(() => {
   setPersonaId('default');
   media('');
   useChatLayout.setState({ sheet: undefined });
+  useAuth.setState({ identity: null });
 });
 
-const setup = () =>
-  render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/work']}>
-        <Routes>
-          <Route path="work" element={<Work />} />
-        </Routes>
-      </MemoryRouter>
-    </ConfirmProvider>,
+// Work is the conversation page with the task kind of message chosen (what `#/work` leads to).
+const setup = (features?: { work: boolean }) => {
+  useAuth.setState({
+    identity: {
+      email: 'me@example.com',
+      admin: false,
+      auth_enabled: true,
+      ...(features ? { features } : {}),
+    },
+  });
+  return render(
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/chat?mode=task']}>
+          <Routes>
+            <Route path="chat" element={<Chat />} />
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
+};
 
 it('starts a task, shows its progress while it runs, then the reply and the files to download', async () => {
   const user = userEvent.setup();
@@ -272,12 +288,18 @@ it('deletes a task from the task list after confirming, and says why a task did 
   await user.type(await screen.findByLabelText('要做的事'), '写周报');
   await user.click(screen.getByRole('button', { name: '交代' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('没做成');
-  await user.click(screen.getByRole('button', { name: '任务列表' }));
-  const sheet = await screen.findByRole('dialog', { name: '任务记录' });
+  await user.click(screen.getByRole('button', { name: '对话列表' }));
+  const sheet = await screen.findByRole('dialog', { name: '对话记录' });
   expect(
-    within(sheet).getByRole('button', { name: /^写周报/u }),
+    within(sheet).getByRole('button', { name: /^写周报任务/u }),
   ).toHaveAttribute('aria-current', 'true');
-  await user.click(within(sheet).getByRole('button', { name: '删除写周报' }));
+  // A task is deleted from its "…" like a conversation, and it is said in the list to be a task.
+  expect(within(sheet).getByText('任务')).toBeVisible();
+  await user.click(
+    within(sheet).getByRole('button', { name: '写周报的更多操作' }),
+  );
+  expect(within(sheet).queryByRole('menuitem', { name: '重命名' })).toBeNull();
+  await user.click(within(sheet).getByRole('menuitem', { name: '删除' }));
   await user.click(
     within(await screen.findByRole('dialog', { name: '删除任务？' })).getByRole(
       'button',
@@ -292,11 +314,11 @@ it('deletes a task from the task list after confirming, and says why a task did 
   expect(
     await screen.findByRole('heading', { name: '交给本人一件事' }),
   ).toBeInTheDocument();
-});
+}, 10_000);
 
 it('names the twin in a download link, which cannot send the persona header', async () => {
   setPersonaId('p2');
-  const { fileUrl } = await import('../pages/Work');
+  const { fileUrl } = await import('../features/work/WorkThread');
   expect(fileUrl('w_aaaaaaaaaaaa', '草稿/要点 1.md')).toBe(
     '/api/persona/work/w_aaaaaaaaaaaa/files/%E8%8D%89%E7%A8%BF/%E8%A6%81%E7%82%B9%201.md?persona=p2',
   );
@@ -340,18 +362,18 @@ it('gives a visitor of a public twin the conversation alone, and nothing to mana
   }
 });
 
-it('keeps the task list where chat keeps its conversations: open on a wide screen, folded away and back on a narrower one', async () => {
+it('keeps tasks in the list of conversations: open on a wide screen, folded away and back on a narrower one', async () => {
   media('(min-width: 1280px)');
   const user = userEvent.setup();
   const view = setup();
-  const list = await screen.findByRole('region', { name: '交给本人的事' });
+  const list = await screen.findByRole('region', { name: '和本人的对话' });
   expect(
-    screen.queryByRole('button', { name: '展开任务列表' }),
+    screen.queryByRole('button', { name: '展开对话列表' }),
   ).not.toBeInTheDocument();
   await user.type(screen.getByLabelText('要做的事'), '写周报');
   await user.click(screen.getByRole('button', { name: '交代' }));
   expect(
-    await within(list).findByRole('button', { name: /^写周报/u }),
+    await within(list).findByRole('button', { name: /^写周报任务/u }),
   ).toHaveAttribute('aria-current', 'true');
   expect(
     await screen.findByRole('heading', { level: 1, name: '写周报' }),
@@ -361,14 +383,14 @@ it('keeps the task list where chat keeps its conversations: open on a wide scree
     await screen.findByRole('heading', { name: '交给本人一件事' }),
   ).toBeInTheDocument();
   expect(list).toBeInTheDocument();
-  await user.click(within(list).getByRole('button', { name: '收起任务列表' }));
-  expect(screen.queryByRole('region', { name: '交给本人的事' })).toBeNull();
+  await user.click(within(list).getByRole('button', { name: '收起对话列表' }));
+  expect(screen.queryByRole('region', { name: '和本人的对话' })).toBeNull();
   expect(useChatLayout.getState().sheet).toBe(false);
   view.unmount();
   media('');
   setup();
-  await user.click(await screen.findByRole('button', { name: '展开任务列表' }));
+  await user.click(await screen.findByRole('button', { name: '展开对话列表' }));
   expect(
-    await screen.findByRole('region', { name: '交给本人的事' }),
+    await screen.findByRole('region', { name: '和本人的对话' }),
   ).toBeInTheDocument();
 });

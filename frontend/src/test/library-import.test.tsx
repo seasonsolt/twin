@@ -103,7 +103,7 @@ beforeEach(() => {
       }
       if (
         url.startsWith('/api/library/people') ||
-        url === '/api/library/review'
+        url.startsWith('/api/library/review')
       )
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);

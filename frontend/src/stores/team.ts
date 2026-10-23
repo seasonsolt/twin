@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { useAuth } from './auth';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
-import type { ReviewLists } from '../features/library/teamCounts';
+import { reviewPath, type ReviewLists } from '../features/library/teamCounts';
 
 /** What the side bar calls the team until an administrator has named it in the system settings. */
 export const TEAM_NAME = '我的团队';
@@ -62,7 +62,8 @@ export const useTeam = create<Team>((set, get) => {
   const follow = async () => {
     const [people, review] = await Promise.all([
       api<{ items: Person[] }>('/api/library/people').then((r) => r.items),
-      api<ReviewLists>('/api/library/review'),
+      // The side bar only counts: none of the paged lists, only how many each holds.
+      api<ReviewLists>(reviewPath()),
     ]);
     set({ people, review });
   };

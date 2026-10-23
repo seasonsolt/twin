@@ -137,7 +137,7 @@ beforeEach(() => {
         asr: true,
       });
     if (path === '/api/library/people') return json({ items: [] });
-    if (path === '/api/library/review')
+    if (path.startsWith('/api/library/review'))
       return json({ items: [], voices: [], fragments: [], unsorted: [] });
     if (path === '/api/personas/trash') return json([]);
     return json({ stale: false });

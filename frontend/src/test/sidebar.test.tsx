@@ -86,7 +86,7 @@ beforeEach(() => {
     vi.fn(async (url: string) => {
       if (url === '/api/library') return json(library);
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices, fragments: [], unsorted: [] });
       if (url === '/api/personas') return json(usePersonas.getState().items);
       return json({});
@@ -151,6 +151,47 @@ it('counts the team and what waits as the team page does, and marks the tab in v
       .map((link) => link.textContent),
   ).toEqual(['团队2', '对话', '录音库', '待处理3', '承诺']);
   expect(screen.getByText('我的团队')).toBeVisible();
+});
+
+it('asks the queue only how much waits, and counts from its totals', async () => {
+  const asked: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library') return json(library);
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) {
+        asked.push(url);
+        return json({
+          items: [],
+          voices: [],
+          fragments: [],
+          unsorted: [],
+          suspects: [],
+          totals: {
+            voices: { count: 3, seconds: 90 },
+            enough: { count: 1, seconds: 600 },
+            strangers: { count: 0, seconds: 0 },
+            items: { count: 0 },
+            unsorted: { count: 2 },
+            suspects: { count: 5 },
+          },
+        });
+      }
+      if (url === '/api/personas') return json(usePersonas.getState().items);
+      return json({});
+    }),
+  );
+  show('/chat');
+  const nav = await screen.findByRole('navigation', { name: '主导航' });
+  // The unnamed voice, four voices, two recordings to settle one by one and the failed recording; suspect
+  // speakers can wait.
+  expect(
+    await within(nav).findByRole('link', { name: '待处理（8）' }),
+  ).toBeVisible();
+  expect(asked).toEqual([
+    '/api/library/review?voices=0&enough=0&strangers=0&items=0&unsorted=0&suspects=0',
+  ]);
 });
 
 it('shows what runs in the background only while something does', async () => {

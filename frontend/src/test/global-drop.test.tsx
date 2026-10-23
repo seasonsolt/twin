@@ -67,7 +67,7 @@ beforeEach(() => {
           },
         });
       if (url === '/api/library/people') return json({ items: [] });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json(usePersonas.getState().items);
       return json({});

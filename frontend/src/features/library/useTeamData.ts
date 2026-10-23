@@ -7,6 +7,7 @@ import type { Person, TwinMatch } from '../../pages/Recording';
 import { usePersonas } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
 import type { SuspectSpeaker } from './MixedSpeaker';
+import { reviewPath, type Paged } from './teamCounts';
 import type {
   Fragment,
   Review,
@@ -24,13 +25,16 @@ import type {
  *
  * ``version`` moves when a recording changes in a way people and the review queue follow (a transcript arriving,
  * speakers settled, one removed); ``onReload`` asks the page's library to load again after a recording changed.
+ * ``first`` is how many of each paged list of the queue the page shows (none by default: only how many there are).
  */
 export function useTeamData({
   version,
   onReload,
+  first,
 }: {
   version: number;
   onReload?: () => Promise<void>;
+  first?: Partial<Record<Paged, number>>;
 }) {
   const [people, setPeople] = useState<Person[] | null>(null);
   const [matches, setMatches] = useState<TwinMatch[]>([]);
@@ -45,54 +49,72 @@ export function useTeamData({
   const [reviewError, setReviewError] = useState('');
   const [reviewReady, setReviewReady] = useState(false);
   const [busy, setBusy] = useState(false);
-  const loadVersion = useRef(0);
+  const [totals, setTotals] = useState<Review['totals']>();
+  // Each answer is shown only if no newer request of its kind was made meanwhile.
+  const peopleVersion = useRef(0);
+  const reviewVersion = useRef(0);
   const refreshPersonas = usePersonas((state) => state.refresh);
 
-  const load = useCallback(async () => {
-    const current = ++loadVersion.current;
-    await Promise.all([
-      api<{ items: Person[]; matches?: TwinMatch[] }>('/api/library/people')
-        .then((folks) => {
-          if (current !== loadVersion.current) return;
-          setPeople(folks.items);
-          setMatches(folks.matches ?? []);
-          // The side bar counts the same people and tasks: it takes them from here rather than asking again.
-          useTeam.getState().absorb({ people: folks.items });
-          setPeopleError('');
-        })
-        .catch((failure: unknown) => {
-          if (current === loadVersion.current)
-            setPeopleError(
-              failure instanceof Error ? failure.message : '无法加载人物',
-            );
-        }),
-      api<Review>('/api/library/review')
-        .then((queue) => {
-          if (current !== loadVersion.current) return;
-          useTeam.getState().absorb({ review: queue });
-          setWaiting(queue.items);
-          setVoices(queue.voices);
-          setFragments(queue.fragments);
-          setUnsorted(queue.unsorted);
-          setSuspects(queue.suspects ?? []);
-          setHeard(queue.heard);
-          setReviewError('');
-          setReviewReady(true);
-        })
-        .catch((failure: unknown) => {
-          if (current === loadVersion.current)
-            setReviewError(
-              failure instanceof Error ? failure.message : '无法加载待处理事项',
-            );
-        }),
-    ]);
+  // As many of each list as the page shows, from the start; asked for again when it shows more.
+  const reviewUrl = reviewPath(first);
+  const loadPeople = useCallback(async () => {
+    const current = ++peopleVersion.current;
+    try {
+      const folks = await api<{ items: Person[]; matches?: TwinMatch[] }>(
+        '/api/library/people',
+      );
+      if (current !== peopleVersion.current) return;
+      setPeople(folks.items);
+      setMatches(folks.matches ?? []);
+      // The side bar counts the same people and tasks: it takes them from here rather than asking again.
+      useTeam.getState().absorb({ people: folks.items });
+      setPeopleError('');
+    } catch (failure) {
+      if (current === peopleVersion.current)
+        setPeopleError(
+          failure instanceof Error ? failure.message : '无法加载人物',
+        );
+    }
   }, []);
+  const loadReview = useCallback(async () => {
+    const current = ++reviewVersion.current;
+    try {
+      const queue = await api<Review>(reviewUrl);
+      if (current !== reviewVersion.current) return;
+      useTeam.getState().absorb({ review: queue });
+      setWaiting(queue.items);
+      setVoices(queue.voices);
+      setFragments(queue.fragments);
+      setUnsorted(queue.unsorted);
+      setSuspects(queue.suspects ?? []);
+      setHeard(queue.heard);
+      setTotals(queue.totals);
+      setReviewError('');
+      setReviewReady(true);
+    } catch (failure) {
+      if (current === reviewVersion.current)
+        setReviewError(
+          failure instanceof Error ? failure.message : '无法加载待处理事项',
+        );
+    }
+  }, [reviewUrl]);
+  const load = useCallback(
+    async () => void (await Promise.all([loadPeople(), loadReview()])),
+    [loadPeople, loadReview],
+  );
   useEffect(() => {
-    void load();
+    void loadPeople();
     return () => {
-      loadVersion.current += 1;
+      peopleVersion.current += 1;
     };
-  }, [load, version]);
+  }, [loadPeople, version]);
+  // Also when more of a list is asked for: the server answers from its cached reading, people are not read again.
+  useEffect(() => {
+    void loadReview();
+    return () => {
+      reviewVersion.current += 1;
+    };
+  }, [loadReview, version]);
   const updating = !!people?.some((p) => p.updating);
   // A twin's memory takes minutes to rebuild: every few seconds would only load the server, many pages at once.
   usePolling(load, updating ? 15000 : 0);
@@ -267,6 +289,7 @@ export function useTeamData({
     unsorted,
     suspects,
     heard,
+    totals,
     reviewError,
     reviewReady,
     error,

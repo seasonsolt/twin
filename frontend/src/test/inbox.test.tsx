@@ -88,6 +88,39 @@ const settle = (members: { speaker_id: string }[]) => {
   );
   server.fragments = server.fragments.filter((m) => !gone.has(m.speaker_id));
 };
+/** The queue as the server cuts it (``review_queue.page``): the first so many of each list asked for, and how many
+ * each holds in all. */
+const page = (url: string) => {
+  const limits = new URL(url, 'http://localhost').searchParams;
+  const cut = <T,>(name: string, rows: T[]) =>
+    limits.has(name) ? rows.slice(0, Number(limits.get(name))) : rows;
+  const is = (v: Server['voices'][number], flag: 'enough' | 'stranger') =>
+    Boolean((v as Record<string, unknown>)[flag]);
+  const groups = {
+    voices: server.voices.filter((v) => !is(v, 'enough') && !is(v, 'stranger')),
+    enough: server.voices.filter((v) => is(v, 'enough') && !is(v, 'stranger')),
+    strangers: server.voices.filter((v) => is(v, 'stranger')),
+  };
+  const totals: Record<string, { count: number; seconds?: number }> = {
+    items: { count: server.items.length },
+    unsorted: { count: server.unsorted.length },
+    suspects: { count: server.suspects.length },
+  };
+  for (const [name, rows] of Object.entries(groups))
+    totals[name] = {
+      count: rows.length,
+      seconds: rows.reduce((sum, v) => sum + v.seconds, 0),
+    };
+  return {
+    items: cut('items', server.items),
+    voices: Object.entries(groups).flatMap(([name, rows]) => cut(name, rows)),
+    fragments: server.fragments,
+    unsorted: cut('unsorted', server.unsorted),
+    suspects: cut('suspects', server.suspects),
+    heard: server.heard,
+    totals,
+  };
+};
 const posted = (url: string) => server.posts.filter((call) => call.url === url);
 
 beforeEach(() => {
@@ -113,16 +146,9 @@ beforeEach(() => {
       if (method !== 'GET') server.posts.push({ url, method, body });
       if (url === '/api/library') return json(library());
       if (url === '/api/library/people') return json({ items: server.people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return server.review === 200
-          ? json({
-              items: server.items,
-              voices: server.voices,
-              fragments: server.fragments,
-              unsorted: server.unsorted,
-              suspects: server.suspects,
-              heard: server.heard,
-            })
+          ? json(page(url))
           : json({ detail: '复核暂时失败' }, server.review);
       if (url === '/api/library/voices' && method === 'POST') {
         settle(body!.members as { speaker_id: string }[]);
@@ -589,6 +615,100 @@ it('shows twenty new voices at first and more on request, with what the rest add
   expect(within(list).getAllByRole('listitem')).toHaveLength(27);
 });
 
+it('asks for the first page of each list, counts the rest from the totals, and asks for more from the start', async () => {
+  server.voices = Array.from({ length: 25 }, (_, i) =>
+    voice(`v${i}`, {
+      members: [member(`rec_${i}`, `S${i}`, 1200 - i * 10)],
+      seconds: 1200 - i * 10,
+    }),
+  );
+  // A new unnamed person, heard less than every voice: asked about last.
+  server.people = [person({}), fresh({ id: 'per_new', seconds: 30 })];
+  server.unsorted = Array.from({ length: 13 }, (_, i) => ({
+    recording_id: `old_${i}`,
+    filename: `旧会${i}.m4a`,
+    speakers: 2,
+    total: 2,
+  }));
+  const asked = () =>
+    vi
+      .mocked(fetch)
+      .mock.calls.map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/library/review'));
+  const user = userEvent.setup();
+  view();
+  const list = await screen.findByRole('list', { name: '新的声音' });
+  expect(asked()[0]).toBe(
+    '/api/library/review?voices=20&enough=20&strangers=20&items=10&unsorted=10&suspects=10',
+  );
+  expect(within(list).getAllByRole('listitem')).toHaveLength(20);
+  // Counted from the totals, not from the twenty loaded; the person still to ask about is among them.
+  const kinds = screen.getByRole('group', { name: '类别' });
+  expect(
+    within(kinds)
+      .getAllByRole('button')
+      .map((b) => b.textContent),
+  ).toEqual(['新的声音26', '还没认人13']);
+  expect(screen.getByText(/还有 6 个说得更少（共 \d+ 分钟）/u)).toBeVisible();
+  // Five voices still to load come before the new person: they are not shown past the last voice loaded.
+  expect(screen.queryByText('未命名 1')).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: '再显示 6 个' }));
+  await waitFor(() =>
+    expect(within(list).getAllByRole('listitem')).toHaveLength(26),
+  );
+  expect(asked().at(-1)).toContain('voices=40&');
+  expect(within(list).getAllByRole('listitem')[25]).toHaveTextContent(
+    '未命名 1',
+  );
+
+  await user.click(within(kinds).getByRole('button', { name: /还没认人/u }));
+  expect(screen.getAllByRole('link', { name: '试听并确认' })).toHaveLength(10);
+  expect(screen.getByText('已显示 10 / 13')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '再显示 3 个' }));
+  await waitFor(() =>
+    expect(screen.getAllByRole('link', { name: '试听并确认' })).toHaveLength(
+      13,
+    ),
+  );
+  expect(asked().at(-1)).toContain('unsorted=20');
+});
+
+it('asks for as many more voices as wait to be taken back, a page at a time, so a page stays open', async () => {
+  const user = clock();
+  server.voices = Array.from({ length: 30 }, (_, i) =>
+    voice(`v${i}`, {
+      members: [member(`rec_${i}`, `S${i}`, 1200 - i * 10)],
+      seconds: 1200 - i * 10,
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+  );
+  view();
+  const list = await screen.findByRole('list', { name: '新的声音' });
+  await user.click(
+    within(within(list).getAllByRole('listitem')[0]).getByRole('button', {
+      name: /张总/u,
+    }),
+  );
+  // One answer waits to be taken back: it still comes with the queue, so the next page is asked for with it.
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.map(([url]) => String(url))
+        .filter((url) => url.startsWith('/api/library/review'))
+        .at(-1),
+    ).toContain('voices=40&'),
+  );
+  await waitFor(() =>
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .filter((row) => !row.textContent?.includes('撤销')),
+    ).toHaveLength(20),
+  );
+});
+
 it('shows why the queue failed to load, and lets the owner try again', async () => {
   server.review = 500;
   view();
@@ -609,7 +729,7 @@ it('says it is loading, not that nothing waits, until the queue has come', async
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === '/api/library/review') await gate;
+      if (url.startsWith('/api/library/review')) await gate;
       return real(url, init);
     }),
   );
@@ -824,7 +944,7 @@ it('hears a confirmed voice again piece by piece under 有空再看, and gives w
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === '/api/library/review') {
+      if (url.startsWith('/api/library/review')) {
         server.suspects = summary().open ? [summary()] : [];
         return real(url, init);
       }
@@ -1054,7 +1174,9 @@ it('takes the whole run of seventy answers from the keyboard alone, and tells th
   // The queue was loaded again once the run was told, not after each answer.
   const loads = vi
     .mocked(fetch)
-    .mock.calls.filter(([url]) => url === '/api/library/review').length;
+    .mock.calls.filter(([url]) =>
+      String(url).startsWith('/api/library/review'),
+    ).length;
   expect(loads).toBeLessThan(10);
 });
 
@@ -1172,7 +1294,7 @@ it('ignores an older failure of the queue after a newer load has come', async ()
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: RequestInit) =>
-      url === '/api/library/review' && ++reviews === 1
+      url.startsWith('/api/library/review') && ++reviews === 1
         ? older
         : real(url, init),
     ),

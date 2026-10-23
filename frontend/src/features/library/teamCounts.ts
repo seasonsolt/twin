@@ -3,6 +3,28 @@ import type { Recording } from '../../pages/Library';
 import type { Person } from '../../pages/Recording';
 import type { Persona } from '../../stores/personas';
 
+/** The lists of the review queue that come a page at a time (``review_queue.page``): voices by when they are
+ * asked, speakers someone said are not them, recordings settled one by one, and suspect confirmed speakers. */
+export type Paged =
+  'voices' | 'enough' | 'strangers' | 'items' | 'unsorted' | 'suspects';
+
+/** How many each paged list holds in all, and how long its voices speak; a list without one came whole. */
+export type ReviewTotals = Partial<
+  Record<Paged, { count: number; seconds?: number }>
+>;
+
+/** The review queue with the first so many of each paged list (none unless asked for): asking again with more keeps
+ * every list of one reading, so nothing is skipped or shown twice when a decision reorders them. */
+export const reviewPath = (first: Partial<Record<Paged, number>> = {}) =>
+  `/api/library/review?${new URLSearchParams({
+    voices: String(first.voices ?? 0),
+    enough: String(first.enough ?? 0),
+    strangers: String(first.strangers ?? 0),
+    items: String(first.items ?? 0),
+    unsorted: String(first.unsorted ?? 0),
+    suspects: String(first.suspects ?? 0),
+  } satisfies Record<Paged, string>).toString()}`;
+
 /** The review queue's lists, as far as counting needs them (``/api/library/review``). */
 export interface ReviewLists {
   items: unknown[];
@@ -11,7 +33,15 @@ export interface ReviewLists {
   unsorted: unknown[];
   // Confirmed speakers some of whose speech sounds like someone else: optional, so never counted as waiting.
   suspects?: unknown[];
+  totals?: ReviewTotals;
 }
+
+/** How many a paged list holds in all: its total, else (it came whole) as many as came. */
+export const inAll = (
+  review: Pick<ReviewLists, 'totals'>,
+  list: Paged,
+  loaded: number,
+) => review.totals?.[list]?.count ?? loaded;
 
 /** The team's roster as the page shows it: the people the viewer looks after or can talk to, not the voices still
  * waiting for a name. */
@@ -66,11 +96,15 @@ export function waitingCount({
 }) {
   return (
     unnamedPeople(people).length +
-    review.voices.length +
+    (review.totals
+      ? inAll(review, 'voices', 0) +
+        inAll(review, 'enough', 0) +
+        inAll(review, 'strangers', 0)
+      : review.voices.length) +
     (review.fragments.length ? 1 : 0) +
     similarPairs(people).length +
-    review.items.length +
-    review.unsorted.length +
+    inAll(review, 'items', review.items.length) +
+    inAll(review, 'unsorted', review.unsorted.length) +
     recordings.filter((r) => r.status === 'failed').length +
     disownedPeople(namedPeople(people), twins).length
   );

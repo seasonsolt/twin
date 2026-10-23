@@ -153,7 +153,7 @@ it('pages people on scroll, searches the whole roster, and keeps the expanded li
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -237,7 +237,7 @@ it('creates a twin for a confirmed person and shows when its memory is updating'
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({
           items: [],
           voices: [
@@ -362,7 +362,7 @@ it('edits a person name and gender and opens the member page of their twin', asy
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_1' && init?.method === 'PATCH') {
         patches.push(JSON.parse(String(init.body)));
@@ -421,7 +421,7 @@ it('searches people locally, edits them from the menu, and keeps deletion there'
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push(url);
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       return originalFetch(url, init);
     }),
@@ -489,7 +489,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json(usePersonas.getState().items);
       sent.push([url, init?.method, JSON.parse(String(init?.body))]);
@@ -542,7 +542,7 @@ it('shows a person who found themselves by voice as having their own twin', asyn
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json([]);
       throw new Error(url);
@@ -569,7 +569,7 @@ it('lets the voice each person was confirmed with be heard from their row', asyn
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -594,7 +594,7 @@ it('keeps off the roster people the viewer neither looks after nor can talk to',
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -627,7 +627,7 @@ it('asks about recordings only as the server lists them, so an older list never 
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/personas') return json([]);
       throw new Error(url);
@@ -684,7 +684,7 @@ it('lists people heard longest first', async () => {
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);
     }),
@@ -715,7 +715,7 @@ it('adds a person by hand from a small dialog, and keeps the people list where i
         return json({ id: 'per_5' }, 201);
       }
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       throw new Error(url);
     }),
@@ -775,7 +775,7 @@ it('spot-checks what voice alone gave a person, least sure first, and takes a vo
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review')
+      if (url.startsWith('/api/library/review'))
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (url === '/api/library/people/per_1/voice') return json(voice);
       if (url === '/api/personas') return json([]);
@@ -882,7 +882,7 @@ it('lists twins made by hand and public ones in the same table, each opening its
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -922,7 +922,7 @@ it('lets a twin made by hand be found by name and filtered with the rest', async
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -951,7 +951,7 @@ it('brings a deleted twin back from the 已删除 tab, and shows the tab only wh
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       if (url === '/api/personas/trash') return json(trash);
       if (url === '/api/personas/p-gone/restore' && init?.method === 'POST') {
         restored.push(url);
@@ -983,7 +983,7 @@ it('keeps the 已删除 tab away while nothing is deleted, and offers 新建分�
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       if (url === '/api/personas/trash') return json([]);
       throw new Error(url);
     }),
@@ -1015,7 +1015,7 @@ it('names the latest meeting of each person in its own column, and a line about 
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -1050,7 +1050,7 @@ it('lets someone talk to a public twin of a person from the table, though the tw
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/library/people') return json({ items: people });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       throw new Error(url);
     }),
   );
@@ -1082,7 +1082,7 @@ it('asks whoever keeps a twin made by hand whether it is the person of the same 
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library/people')
         return json({ items: people, matches });
-      if (url === '/api/library/review') return json(emptyReview);
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
       if (url === '/api/library/people/per_9/same') {
         answers.push(JSON.parse(String(init?.body)));
         return json({ same: true });
@@ -1143,7 +1143,7 @@ it('says where a twin whose update waits stands, and builds it again from its ro
   const base = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
     const path = String(url);
-    if (path === '/api/library/review') return json(emptyReview);
+    if (path.startsWith('/api/library/review')) return json(emptyReview);
     if (path.endsWith('/rebuild')) {
       rebuilt.push(path);
       return json({ ok: true });

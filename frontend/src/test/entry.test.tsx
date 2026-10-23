@@ -67,7 +67,10 @@ beforeEach(() => {
             headroom_bytes: 0,
           },
         });
-      if (path === '/api/library/people' || path === '/api/library/review')
+      if (
+        path === '/api/library/people' ||
+        path.startsWith('/api/library/review')
+      )
         return json({ items: [], voices: [], fragments: [], unsorted: [] });
       if (path === '/api/identity')
         return json({ name: '林舟', about: '', aliases: [], egress: [] });

@@ -2,6 +2,7 @@
 // shapes the server sends, the kinds of thing, and the words for them.
 import type { SuspectSpeaker } from './MixedSpeaker';
 import type { Speaker } from '../../pages/Recording';
+import type { ReviewTotals } from './teamCounts';
 
 export interface Waiting extends Speaker {
   recording_id: string;
@@ -59,6 +60,8 @@ export interface Review {
   suspects?: SuspectSpeaker[];
   // How long people speak in these recordings, and how much of it is settled.
   heard?: { settled: number; total: number };
+  // How many each paged list holds in all (``reviewPath``).
+  totals?: ReviewTotals;
 }
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */

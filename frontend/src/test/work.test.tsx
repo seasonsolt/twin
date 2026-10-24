@@ -40,6 +40,7 @@ const turn = (role: 'user' | 'assistant', content: string, extra = {}) => ({
 });
 
 let task: WorkTask;
+let tasks: unknown[];
 let fetcher: ReturnType<typeof vi.fn>;
 const calls = (method: string) =>
   fetcher.mock.calls
@@ -64,7 +65,7 @@ beforeEach(() => {
     progress: ['回想：本周的事'],
     stopping: false,
   };
-  let tasks: unknown[] = [];
+  tasks = [];
   fetcher = vi.fn(async (url: string, options?: RequestInit) => {
     const method = options?.method ?? 'GET';
     if (url === '/api/persona/work' && method === 'POST') {
@@ -378,7 +379,7 @@ it('keeps tasks in the list of conversations: open on a wide screen, folded away
   media('(min-width: 1280px)');
   const user = userEvent.setup();
   const view = setup();
-  const list = await screen.findByRole('region', { name: '和本人的对话' });
+  const list = await screen.findByRole('region', { name: '对话列表' });
   expect(
     screen.queryByRole('button', { name: '展开对话列表' }),
   ).not.toBeInTheDocument();
@@ -396,13 +397,97 @@ it('keeps tasks in the list of conversations: open on a wide screen, folded away
   ).toBeInTheDocument();
   expect(list).toBeInTheDocument();
   await user.click(within(list).getByRole('button', { name: '收起对话列表' }));
-  expect(screen.queryByRole('region', { name: '和本人的对话' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '对话列表' })).toBeNull();
   expect(useChatLayout.getState().sheet).toBe(false);
   view.unmount();
   media('');
   setup();
   await user.click(await screen.findByRole('button', { name: '展开对话列表' }));
   expect(
-    await screen.findByRole('region', { name: '和本人的对话' }),
+    await screen.findByRole('region', { name: '对话列表' }),
   ).toBeInTheDocument();
+});
+
+/** The task list has the task and the page is wide enough to show it. */
+const withListedTask = () => {
+  media('(min-width: 1280px)');
+  task = { ...task, status: 'idle', progress: [] };
+  tasks = [{ ...task, turns: 1 }];
+};
+const openedTask = (answer: (url: string) => Response | undefined) => {
+  const base = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+    const mine =
+      url === `/api/persona/work/${task.task_id}` &&
+      (options?.method ?? 'GET') === 'GET'
+        ? answer(url)
+        : undefined;
+    return mine ?? base(url, options);
+  });
+};
+
+it('says why a task could not be opened and reads it again on request, instead of waiting for it for good', async () => {
+  withListedTask();
+  let down = true;
+  openedTask(() =>
+    down ? json({ detail: '任务暂时读不了' }, 500) : undefined,
+  );
+  const user = userEvent.setup();
+  setup();
+  const list = await screen.findByRole('region', { name: '对话列表' });
+  await user.click(
+    await within(list).findByRole('button', { name: /^写周报任务/u }),
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent('任务暂时读不了');
+  expect(screen.queryByText('正在加载任务…')).toBeNull();
+  down = false;
+  await user.click(screen.getByRole('button', { name: '重试' }));
+  expect(
+    await screen.findByRole('article', { name: '你说' }),
+  ).toHaveTextContent('写周报');
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('goes back to a new task, and says so, when the task opened is gone', async () => {
+  withListedTask();
+  openedTask(() => json({ detail: '找不到这个任务' }, 404));
+  const user = userEvent.setup();
+  setup();
+  const list = await screen.findByRole('region', { name: '对话列表' });
+  await user.click(
+    await within(list).findByRole('button', { name: /^写周报任务/u }),
+  );
+  expect(
+    await screen.findByRole('heading', { name: '交给本人一件事' }),
+  ).toBeInTheDocument();
+  expect(toast).toHaveBeenCalledWith('找不到这个任务，可能已被删除', 'danger');
+  expect(screen.queryByText('正在加载任务…')).toBeNull();
+});
+
+it('starts a new task when the person comes back to tasks from chat, not the one opened last', async () => {
+  withListedTask();
+  const user = userEvent.setup();
+  setup();
+  const list = await screen.findByRole('region', { name: '对话列表' });
+  await user.click(
+    await within(list).findByRole('button', { name: /^写周报任务/u }),
+  );
+  expect(
+    await screen.findByRole('heading', { level: 1, name: '写周报' }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole('radio', { name: '问答' }));
+  await user.click(screen.getByRole('radio', { name: '交代任务' }));
+  expect(
+    await screen.findByRole('heading', { name: '交给本人一件事' }),
+  ).toBeInTheDocument();
+  // What is said now is a new task, not a follow-up to the old one.
+  await user.type(screen.getByLabelText('要做的事'), '再写一份');
+  await user.click(screen.getByRole('button', { name: '交代' }));
+  expect(calls('POST').at(-1)).toEqual([
+    '/api/persona/work',
+    { text: '再写一份' },
+  ]);
 });

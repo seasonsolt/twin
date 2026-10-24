@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import {
   usePersonaId,
   usePersonaState as useState,
@@ -19,7 +19,9 @@ export function useWork(enabled: boolean) {
   const [tasks, setTasks] = useState<WorkSummary[] | null>(null);
   const [current, setCurrent] = useState<string | null>(null);
   const [task, setTask] = useState<WorkTask | null>(null);
+  // Why the task opened could not be read (shown where it should be), and a count that asks for it again.
   const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -27,11 +29,10 @@ export function useWork(enabled: boolean) {
     try {
       const data = await api<{ tasks: WorkSummary[] }>('/api/persona/work');
       setTasks(data.tasks);
-      setError('');
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '加载失败');
+    } catch {
+      // The list of the page asks the index and says if it cannot; this one only tells it when to ask again.
     }
-  }, [setTasks, setError]);
+  }, [setTasks]);
 
   const loadTask = useCallback(
     async (taskId: string) => {
@@ -49,14 +50,24 @@ export function useWork(enabled: boolean) {
   }, [enabled, loadTasks, personaId]);
 
   useEffect(() => {
+    setError('');
     if (current === null) {
       setTask(null);
       return;
     }
-    void loadTask(current).catch((failure: unknown) =>
-      setError(failure instanceof Error ? failure.message : '加载失败'),
-    );
-  }, [current, loadTask, setTask, setError]);
+    // Another task than the one on screen: not shown while this one is read.
+    setTask((shown) => (shown?.task_id === current ? shown : null));
+    void loadTask(current).catch((failure: unknown) => {
+      if (failure instanceof ApiError && failure.status === 404) {
+        // Deleted meanwhile (from another page or another device): back to a new task, not an endless wait.
+        setCurrent(null);
+        toast('找不到这个任务，可能已被删除', 'danger');
+        void loadTasks();
+        return;
+      }
+      setError(failure instanceof Error ? failure.message : '加载失败');
+    });
+  }, [current, attempt, loadTask, loadTasks, setCurrent, setTask, setError]);
 
   const running = task?.status === 'running';
   const taskId = task?.task_id;
@@ -107,7 +118,7 @@ export function useWork(enabled: boolean) {
     }
   };
 
-  const remove = async (row: WorkSummary) => {
+  const remove = async (row: Pick<WorkSummary, 'task_id' | 'title'>) => {
     const ok = await confirm({
       title: '删除任务？',
       body: `“${row.title}”和做出来的文件都会删掉，不能恢复。`,
@@ -140,6 +151,8 @@ export function useWork(enabled: boolean) {
     stop,
     remove,
     reload: loadTasks,
+    /** Read the open task again after it could not be. */
+    retry: () => setAttempt((count) => count + 1),
   };
 }
 

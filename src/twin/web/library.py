@@ -1857,7 +1857,8 @@ def register(
             state = synced.get(person.persona_id or "")
             updating = bool(opens and state and state[0] != state[1])
             heard = person.recording_id in visible
-            talks = bool(entry and not theirs and registry is not None and registry.visible(entry, identity))
+            listed = bool(entry and registry is not None and registry.visible(entry, identity))
+            talks = bool(listed and not theirs)
             people.append(
                 {
                     **person.model_dump(exclude={"account"}),
@@ -1866,6 +1867,9 @@ def register(
                     "persona_id": person.persona_id if opens else None,
                     # The twin the viewer may talk to: theirs to manage, or one made public.
                     "talk": person.persona_id if talks else None,
+                    # The twin where the viewer's own list of twins has it, whether or not it is theirs to open or
+                    # talk to (a person's own twin found by voice is neither): so that no twin has two rows.
+                    "twin_id": person.persona_id if listed else None,
                     # Their introduction's first line, where the twin is one the viewer may talk to or look after.
                     "about": self_introduction(registry, person.persona_id) if talks or opens else None,
                     "updating": updating,

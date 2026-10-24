@@ -111,7 +111,7 @@ def delegate(db: TeamDB, conversation: str, persona: str, delegation: str, **cha
 
 def test_only_the_persons_own_conversation_with_their_assistant_can_start_a_delegation(db: TeamDB) -> None:
     made = db.create_delegation(initiator=LIN, persona_id="p-me", conversation_id="mine", question="问")
-    assert db.get_delegation(made.id) == made and db.delegation_of("mine") == made
+    assert db.get_delegation(made.id) == made and made.conversation_id == "mine"
     # A colleague's conversation, someone else's, one of another twin's, or one that is not there starts nothing.
     db.record_conversation("theirs", "p-you", "x@xjjk.com", "colleague", "t", "2026-10-22T09:00:00+00:00")
     db.record_conversation("mine-else", "p-me", "x@xjjk.com", "self", "t", "2026-10-22T09:00:00+00:00")
@@ -388,7 +388,7 @@ def test_a_twin_that_was_asked_this_way_does_not_ask_others_and_nobody_else_can_
     assert "delegation" not in colleague and len(scene.team.conversations(persona_id=lin.persona)) >= 1
     # The administrator looking after the twin is a colleague to it too.
     _, manager = tell(scene, "帮我问问陈一：旧模板怎么办", who=ADMIN)
-    assert "delegation" not in manager and scene.team.delegation_of(conversation) is None
+    assert "delegation" not in manager and scene.team.delegation_counts([conversation]) == {}
     assert len([d for d in scene.team.conversations() if d.via == "delegate"]) == 2
 
 

@@ -38,8 +38,6 @@ import { usePersonas, type Persona } from '../../stores/personas';
 import { useNewTwinCard } from '../../components/layout/NewTwin';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, TwinMatch } from '../../pages/Recording';
-import type { Pick } from './useUploads';
-import { PersonClip } from './PersonClip';
 import { PersonVoice } from './PersonVoice';
 import { WorkClaim } from './WorkClaim';
 import { BuildMeter } from '../memories/BuildProgress';
@@ -118,9 +116,6 @@ function EditPerson({
               />
             ))}
           </Row>
-          <Text size="sm" tone="secondary">
-            分身的插画形象会换成对应性别的一款。
-          </Text>
         </Stack>
         <Row gap={2} justify="end">
           <Button type="button" variant="ghost" onClick={onClose}>
@@ -206,7 +201,7 @@ function BatchClaim({
       open={open}
       onOpenChange={(value) => !value && onClose()}
       title="为同事建分身"
-      body="填同事企业账号的邮箱或工号。系统先用会议为 TA 建好分身，TA 用企业账号一登录就归到自己名下；TA 看过并点“没问题”之前，分身不对同事回答。"
+      body="填邮箱或工号，不知道就空着。"
     >
       <form
         className="space-y-5"
@@ -235,7 +230,7 @@ function BatchClaim({
                     id={id}
                     autoComplete="off"
                     maxLength={254}
-                    placeholder="邮箱或工号，不知道就空着"
+                    placeholder="邮箱或工号"
                     value={claims[person.id] ?? ''}
                     disabled={busy}
                     onChange={(event) =>
@@ -250,9 +245,6 @@ function BatchClaim({
             );
           })}
         </Stack>
-        <Text size="sm" tone="secondary">
-          不知道的先空着，以后在这里补。填错了也不要紧：对方登录后点“这不是我”，分身会退回给你。
-        </Text>
         <Row gap={2} justify="end">
           <Button type="button" variant="ghost" onClick={onClose}>
             取消
@@ -487,12 +479,11 @@ function personRow({
         <ClaimLine twin={twin} about={person.about} />
       </Stack>
     </IdentityLink>,
-    <Row key="heard" gap={2}>
-      <Text size="sm" tone="secondary">
-        {person.speakers} 段 · {minutes(person.seconds)}
-      </Text>
-      <PersonClip person={person} icon />
-    </Row>,
+    <Text key="heard" size="sm" tone="secondary">
+      {person.speakers > 0
+        ? `${person.speakers} 段 · ${minutes(person.seconds)}`
+        : '—'}
+    </Text>,
     <Stack key="twin" gap={1}>
       <Row gap={2}>
         <StatusDot tone={TWIN_STATES[state].tone} />
@@ -514,16 +505,10 @@ function personRow({
           <BuildMeter processing={person.build} />
         </div>
       )}
-      {checks > 0 ? (
-        <TextLink size="sm" onClick={onVoice}>
-          {checks} 段可抽查
-        </TextLink>
-      ) : (
-        lacking && (
-          <Text size="sm" tone="secondary">
-            {lacking}
-          </Text>
-        )
+      {lacking && (
+        <Text size="sm" tone="secondary">
+          {lacking}
+        </Text>
       )}
     </Stack>,
     <Recent key="recent" person={person} />,
@@ -536,8 +521,7 @@ function personRow({
         >
           聊天
         </Button>
-      ) : (state === 'held' || state === 'stalled') &&
-        person.can_manage !== false ? (
+      ) : (state === 'held' || state === 'stalled') && person.persona_id ? (
         <Button
           size="sm"
           variant="secondary"
@@ -568,12 +552,21 @@ function personRow({
             ...(state === 'behind' && person.held
               ? [{ label: '立即整理', disabled: busy, onSelect: onRebuild }]
               : []),
-            { label: '编辑名字和性别', disabled: busy, onSelect: onEdit },
-            { label: '声线和抽查', disabled: busy, onSelect: onVoice },
+            { label: '编辑', disabled: busy, onSelect: onEdit },
+            // Nothing was heard of someone made by hand: no voice to hear or check.
+            ...(person.speakers > 0
+              ? [
+                  {
+                    label: checks > 0 ? `抽查声线（${checks}）` : '抽查声线',
+                    disabled: busy,
+                    onSelect: onVoice,
+                  },
+                ]
+              : []),
             ...(person.persona_id && twin?.claimed === false
               ? [
                   {
-                    label: '企业邮箱或工号',
+                    label: '设企业账号',
                     disabled: busy,
                     onSelect: onAddress,
                   },
@@ -656,13 +649,29 @@ function twinRow({
         <ActionMenu
           label={`${twin.name}是不是会议里的人`}
           items={[
-            { label: '是会议里的人', onSelect: () => onSame(match, true) },
-            { label: '不是同一个人', onSelect: () => onSame(match, false) },
+            { label: '是同一人', onSelect: () => onSame(match, true) },
+            { label: '不是同一人', onSelect: () => onSame(match, false) },
           ]}
         />
       )}
     </Row>,
   ];
+}
+
+/** The old address of the inbox, a tab of the team page (``?tab=todo``), leads to ``/inbox``; anything else shows
+ * what is inside. It is kept apart from the roster so a page around it can lead there before it has loaded. */
+export function LegacyTodo({ children }: { children: ReactNode }) {
+  const [params] = useSearchParams();
+  const location = useLocation();
+  if (params.get('tab') !== 'todo') return children;
+  const cat = params.get('cat');
+  return (
+    <Navigate
+      to={`/inbox${cat ? `?cat=${encodeURIComponent(cat)}` : ''}`}
+      replace
+      state={location.state}
+    />
+  );
 }
 
 /**
@@ -673,33 +682,26 @@ export function Team(props: {
   version: number;
   recordings: Recording[];
   onReload?: () => Promise<void>;
-  uploads?: Pick[];
+  /** Show nothing while no one is there to list and nothing was deleted: a page around it has the empty state. */
+  quietWhenEmpty?: boolean;
 }) {
-  const [params] = useSearchParams();
-  const location = useLocation();
-  if (params.get('tab') === 'todo') {
-    const cat = params.get('cat');
-    return (
-      <Navigate
-        to={`/inbox${cat ? `?cat=${encodeURIComponent(cat)}` : ''}`}
-        replace
-        state={location.state}
-      />
-    );
-  }
-  return <Roster {...props} />;
+  return (
+    <LegacyTodo>
+      <Roster {...props} />
+    </LegacyTodo>
+  );
 }
 
 function Roster({
   version,
   recordings,
   onReload,
-  uploads = [],
+  quietWhenEmpty = false,
 }: {
   version: number;
   recordings: Recording[];
   onReload?: () => Promise<void>;
-  uploads?: Pick[];
+  quietWhenEmpty?: boolean;
 }) {
   const {
     people,
@@ -737,6 +739,10 @@ function Roster({
   const twins = usePersonas((state) => state.items);
   const identity = useAuth((state) => state.identity);
   const newTwin = useNewTwinCard((state) => state.set);
+  // What an action on a row could not do reaches the person where they are, not at the top of a long table.
+  useEffect(() => {
+    if (error) toast(error, 'danger', 8000);
+  }, [error]);
   const [trash, setTrash] = useState<Trashed[]>([]);
   const loadTrash = useCallback(async () => {
     try {
@@ -821,28 +827,23 @@ function Roster({
       twin,
     })),
   ];
+  // A filter nobody is in any more (the last one retried is updating now) lets go instead of showing nothing.
+  const filterGone =
+    !!filter && !!entries && !entries.some((entry) => entry.state === filter);
+  useEffect(() => {
+    if (filterGone) setFilter(null);
+  }, [filterGone]);
+  const activeFilter = filterGone ? null : filter;
   const matchingPeople = entries?.filter(
     (entry) =>
-      (!filter || entry.state === filter) &&
+      (!activeFilter || entry.state === activeFilter) &&
       entry.name
         .toLocaleLowerCase()
         .includes(search.trim().toLocaleLowerCase()),
   );
-  const arriving = recordings.filter(
-    (r) => r.status === 'queued' || r.status === 'transcribing',
-  );
-  // Twins catching up with the recordings, held while the automatic rebuild is switched off, or whose update
-  // stopped without completing.
-  const updatingTwins = people?.filter((p) => p.updating) ?? [];
-  const organising = updatingTwins.filter((p) => !stalledBuild(p) && !p.held);
-  const paused = updatingTwins.filter((p) => p.held);
-  const unfinished = updatingTwins.filter((p) => stalledBuild(p));
   const twinOf = (person: Person) =>
     twins.find((t) => t.id === person.persona_id);
   const toAddress = named?.filter((p) => unaddressed(p, twinOf(p))) ?? [];
-  const proofreading = recordings.filter(
-    (r) => r.status === 'ready' && r.proofread === 'waiting',
-  );
   const tab: 'people' | 'trash' =
     params.get('tab') === 'trash' ? 'trash' : 'people';
   // The tab lives in the address, so a reload or the back button returns to it; other parameters stay.
@@ -857,12 +858,6 @@ function Roster({
       },
       { replace: true },
     );
-  const pending =
-    arriving.length +
-    updatingTwins.length +
-    proofreading.length +
-    uploads.length;
-
   const peopleTab = (
     <Stack gap={5}>
       {people === null && !peopleError && (
@@ -896,7 +891,7 @@ function Roster({
                 (!state || count > 0) && (
                   <Chip
                     key={state ?? 'all'}
-                    pressed={filter === state}
+                    pressed={activeFilter === state}
                     onClick={() => {
                       setFilter(state);
                       setPeopleShown(PEOPLE_PER_PAGE);
@@ -909,6 +904,11 @@ function Roster({
             })}
           </Row>
         </Row>
+      )}
+      {entries && entries.length > 0 && matchingPeople?.length === 0 && (
+        <Text size="sm" tone="secondary">
+          没有符合的人
+        </Text>
       )}
       {matchingPeople && matchingPeople.length > 0 && (
         <Table
@@ -950,21 +950,7 @@ function Roster({
           onLoadMore={() => setPeopleShown((count) => count + PEOPLE_PER_PAGE)}
         />
       )}
-      <Row gap={3} justify="between" wrap>
-        <Text size="sm" tone="secondary">
-          {[
-            organising.length > 0 &&
-              `${organising.map((p) => p.name).join('、')} · 整理记忆中，完成后可以聊`,
-            paused.length > 0 &&
-              `${paused.map((p) => p.name).join('、')} · 记忆整理已暂停`,
-            unfinished.length > 0 &&
-              `${unfinished.map((p) => p.name).join('、')} · 记忆更新没完成`,
-            pending > updatingTwins.length &&
-              `${pending - updatingTwins.length} 项录音正在处理`,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </Text>
+      <Row gap={3} justify="end" wrap>
         <TextLink to="/library">全部录音（{recordings.length}）</TextLink>
       </Row>
     </Stack>
@@ -981,7 +967,7 @@ function Roster({
             key={entry.id}
             variant="divided"
             title={entry.name}
-            meta={`${new Date(entry.expires_at).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}到期`}
+            meta={`${new Date(entry.expires_at).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}前可恢复`}
             trailing={
               <Button
                 variant="secondary"
@@ -997,11 +983,20 @@ function Roster({
         ))}
       </Stack>
     );
+  if (
+    quietWhenEmpty &&
+    tab === 'people' &&
+    trash.length === 0 &&
+    !error &&
+    !peopleError &&
+    (!entries || entries.length === 0)
+  )
+    return null;
   return (
     <>
-      {(error || peopleError) && (
+      {peopleError && (
         <Text role="alert" tone="danger">
-          {error || peopleError}
+          {peopleError}
         </Text>
       )}
       <Tabs
@@ -1019,7 +1014,7 @@ function Roster({
                 ...(toAddress.length > 0
                   ? [
                       {
-                        label: `按邮箱或工号建分身（${toAddress.length}）`,
+                        label: `批量建分身（${toAddress.length}）`,
                         onSelect: () => setBatching(true),
                       },
                     ]
@@ -1031,14 +1026,7 @@ function Roster({
         items={[
           {
             value: 'people',
-            label: (
-              <Row gap={2} as="div">
-                成员
-                <Text as="span" size="sm" tone="inherit">
-                  {entries?.length ?? 0}
-                </Text>
-              </Row>
-            ),
+            label: '成员',
             content: peopleTab,
           },
           // Nothing deleted, nothing to bring back: the tab is there while there is, or while it is open.

@@ -219,6 +219,7 @@ def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(w
     [person] = uploader.get("/api/library/people").json()["items"]
     assert person["name"] == "张三" and person["self_claimed"] is True and person["persona_id"] is None
     assert uploader.get("/api/personas").json() == []
+    assert person["twin_id"] is None  # not in their list of twins either, so no second row to tell apart
     assert uploader.get("/api/persona/state", headers={"X-Twin-Persona": pid}).status_code == 404
     assert uploader.post(f"/api/library/people/{person['id']}/persona", headers=CSRF).status_code == 409
     renamed = uploader.patch(f"/api/library/people/{person['id']}", json={"name": "张三丰", "gender": "male"})
@@ -229,6 +230,9 @@ def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(w
     as_(web, MEMBER)
     [twin] = web.get("/api/personas").json()
     assert twin["name"] == "张三" and twin["avatar_preset"] == look
+    # Their own twin is in their list of twins; the person row names it, though it is theirs only by voice.
+    [mine] = [p for p in web.get("/api/library/people").json()["items"] if p["name"] == "张三丰"]
+    assert (mine["self_claimed"], mine["persona_id"], mine["talk"], mine["twin_id"]) == (True, None, None, pid)
 
     # Only once 张三 says it is all right do colleagues get to ask it.
     approved = web.post(f"/api/personas/{pid}/approve", json={"public": True}, headers=CSRF).json()

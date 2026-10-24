@@ -393,9 +393,7 @@ it('edits a person name and gender and opens the member page of their twin', asy
   ).toBeInTheDocument();
   await userEvent.click(within(row).getByLabelText('张总的更多操作'));
   expect(within(row).queryByRole('button', { name: '删除' })).toBeNull();
-  await userEvent.click(
-    within(row).getByRole('button', { name: '编辑名字和性别' }),
-  );
+  await userEvent.click(within(row).getByRole('button', { name: '编辑' }));
   const dialog = await screen.findByRole('dialog', { name: '编辑「张总」' });
   await userEvent.clear(within(dialog).getByLabelText('名字'));
   await userEvent.type(within(dialog).getByLabelText('名字'), '张总监');
@@ -440,10 +438,9 @@ it('searches people locally, edits them from the menu, and keeps deletion there'
   expect(
     screen.getByRole('link', { name: '李总的成员页' }),
   ).toBeInTheDocument();
-  expect(screen.getByRole('tab', { name: /成员.*2/u })).toBeInTheDocument();
   expect(calls).toHaveLength(beforeSearch);
   await userEvent.click(screen.getByLabelText('李总的更多操作'));
-  await userEvent.click(screen.getByRole('button', { name: '编辑名字和性别' }));
+  await userEvent.click(screen.getByRole('button', { name: '编辑' }));
   expect(
     await screen.findByRole('dialog', { name: '编辑「李总」' }),
   ).toBeInTheDocument();
@@ -451,6 +448,11 @@ it('searches people locally, edits them from the menu, and keeps deletion there'
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await userEvent.click(screen.getByLabelText('李总的更多操作'));
   expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
+  // Nobody of that name: the table says so instead of going blank.
+  await userEvent.clear(screen.getByRole('textbox', { name: '找人' }));
+  await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '赵');
+  expect(await screen.findByText('没有符合的人')).toBeInTheDocument();
+  expect(screen.queryByRole('table')).toBeNull();
 });
 
 it('makes twins for several colleagues by e-mail or employee number, and shows one handed back', async () => {
@@ -501,7 +503,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
   render(teamView());
   await userEvent.click(await screen.findByText('添加'));
   await userEvent.click(
-    screen.getByRole('button', { name: '按邮箱或工号建分身（3）' }),
+    screen.getByRole('button', { name: '批量建分身（3）' }),
   );
   const dialog = await screen.findByRole('dialog', { name: '为同事建分身' });
   expect(
@@ -564,7 +566,7 @@ it('shows a person who found themselves by voice as having their own twin', asyn
   expect(within(row).queryByRole('link', { name: '张总的档案' })).toBeNull();
 });
 
-it('lets the voice each person was confirmed with be heard from their row', async () => {
+it('keeps listening to a person out of their row, which has one thing to do and the menu', async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -576,13 +578,35 @@ it('lets the voice each person was confirmed with be heard from their row', asyn
   render(teamView());
   await screen.findByText('张总', { selector: 'p' });
   expect(
-    within(screen.getByRole('tabpanel')).getAllByRole('button', {
+    within(screen.getByRole('tabpanel')).queryByRole('button', {
       name: /确认过的声音/u,
     }),
-  ).toHaveLength(2);
-  expect(
-    screen.getByRole('button', { name: '听张总确认过的声音' }),
-  ).toBeInTheDocument();
+  ).toBeNull();
+  expect(screen.queryByText(/段可抽查/u)).toBeNull();
+  await userEvent.click(screen.getByLabelText('张总的更多操作'));
+  const row = screen.getByRole('link', { name: '张总的成员页' }).closest('tr')!;
+  expect(within(row).getByRole('button', { name: '抽查声线' })).toBeVisible();
+});
+
+it('has no voice to check for someone only a twin was made for, and writes no recordings of them', async () => {
+  people = [person({ speakers: 0, seconds: 0 })];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const row = (
+    await screen.findByRole('link', { name: '张总的成员页' })
+  ).closest('tr')!;
+  expect(within(row).queryByText(/段 ·/u)).toBeNull();
+  expect(within(row).queryByText(/分钟/u)).toBeNull();
+  await userEvent.click(within(row).getByLabelText('张总的更多操作'));
+  expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '抽查声线' })).toBeNull();
 });
 
 it('keeps off the roster people the viewer neither looks after nor can talk to', async () => {
@@ -804,7 +828,8 @@ it('spot-checks what voice alone gave a person, least sure first, and takes a vo
       </ConfirmProvider>
     </MemoryRouter>,
   );
-  await user.click(await screen.findByRole('button', { name: '2 段可抽查' }));
+  await user.click(await screen.findByLabelText('张总的更多操作'));
+  await user.click(screen.getByRole('button', { name: '抽查声线（2）' }));
   const layer = await screen.findByRole('dialog', { name: '张总的声音' });
   const listed = await within(layer).findByRole('list', {
     name: '可抽查的发言',
@@ -971,6 +996,8 @@ it('brings a deleted twin back from the 已删除 tab, and shows the tab only wh
   );
   await userEvent.click(await screen.findByRole('tab', { name: /已删除.*1/u }));
   expect(await screen.findByText('旧分身')).toBeInTheDocument();
+  // What the date means is said with it.
+  expect(screen.getByText(/月\d+日前可恢复/u)).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '恢复旧分身' }));
   await waitFor(() => expect(restored).toHaveLength(1));
   expect(refresh).toHaveBeenCalled();
@@ -1070,6 +1097,52 @@ it('lets someone talk to a public twin of a person from the table, though the tw
   expect(switched).toEqual(['p-pub']);
 });
 
+it("lists a colleague's public twin and a twin that is one's own by voice once, as the person they belong to", async () => {
+  people = [
+    person({
+      persona_id: null,
+      talk: 'p-pub',
+      twin_id: 'p-pub',
+      twin_elsewhere: true,
+      can_manage: false,
+    }),
+    person({
+      id: 'per_2',
+      name: '李总',
+      persona_id: null,
+      twin_id: 'p-voice',
+      self_claimed: true,
+      can_manage: false,
+    }),
+  ];
+  usePersonas.setState({
+    items: [
+      twinOf({
+        id: 'p-pub',
+        name: '张总',
+        owner: 'wang@acme.cn',
+        public: true,
+      }),
+      twinOf({ id: 'p-voice', name: '李总' }),
+    ],
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const table = await screen.findByRole('table', { name: '成员' });
+  expect(
+    within(table).getAllByRole('link', { name: /的成员页$/u }),
+  ).toHaveLength(2);
+  expect(within(table).getAllByText('张总')).toHaveLength(1);
+  expect(within(table).getAllByText('李总')).toHaveLength(1);
+});
+
 it('asks whoever keeps a twin made by hand whether it is the person of the same name in the meetings', async () => {
   people = [person({ id: 'per_9', name: '王总', persona_id: null })];
   const matches = [{ persona_id: 'p-own', person_id: 'per_9', name: '王总' }];
@@ -1100,7 +1173,7 @@ it('asks whoever keeps a twin made by hand whether it is the person of the same 
   expect(row).not.toBeNull();
   expect(within(row!).getByText('会议里有同名的人')).toBeVisible();
   await userEvent.click(within(row!).getByLabelText('王总是不是会议里的人'));
-  await userEvent.click(screen.getByRole('button', { name: '是会议里的人' }));
+  await userEvent.click(screen.getByRole('button', { name: '是同一人' }));
   await waitFor(() =>
     expect(answers).toEqual([{ persona_id: 'p-own', same: true }]),
   );
@@ -1178,4 +1251,123 @@ it('says where a twin whose update waits stands, and builds it again from its ro
       '/api/library/people/per_1/rebuild',
     ]),
   );
+});
+
+it('lets go of a filter nobody is in any more, and offers the retry to whoever can open the twin though not manage the person', async () => {
+  const stalled = {
+    state: 'idle',
+    step: '',
+    done: 0,
+    total: 0,
+    last_error: '模型限流，整理中断',
+    retry_at: null,
+  } as unknown as NonNullable<Person['build']>;
+  people = [
+    person({
+      id: 'per_1',
+      name: '张总',
+      persona_id: 'p-1',
+      updating: true,
+      build: stalled,
+      can_manage: false,
+    }),
+    person({ id: 'per_2', name: '李总', persona_id: 'p-2' }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  const view = (version: number) => (
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={version} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>
+  );
+  const { rerender } = render(view(0));
+  const row = (
+    await screen.findByRole('link', { name: '张总的成员页' })
+  ).closest('tr')!;
+  expect(within(row).getByRole('button', { name: '重试' })).toBeEnabled();
+  await userEvent.click(screen.getByRole('button', { name: /^更新没完成/u }));
+  expect(screen.queryByRole('link', { name: '李总的成员页' })).toBeNull();
+  // Retried: it is updating now, and the filter that held only it has nobody left.
+  people = [{ ...people[0]!, build: null }, people[1]!];
+  rerender(view(1));
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: /^更新没完成/u })).toBeNull(),
+  );
+  expect(screen.getByRole('button', { name: /^全部/u })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(
+    await screen.findByRole('link', { name: '李总的成员页' }),
+  ).toBeInTheDocument();
+});
+
+it('says that an action on a row failed where the person is, not at the top of the table', async () => {
+  const stalled = {
+    state: 'idle',
+    step: '',
+    done: 0,
+    total: 0,
+    last_error: '模型限流，整理中断',
+    retry_at: null,
+  } as unknown as NonNullable<Person['build']>;
+  people = [person({ persona_id: 'p-1', updating: true, build: stalled })];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/personas/trash') return json([]);
+      if (init?.method === 'POST')
+        return json({ detail: '已经在整理了，稍后再试' }, 409);
+      throw new Error(url);
+    }),
+  );
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team version={0} recordings={[]} />
+        <ToastViewport />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await userEvent.click(await screen.findByRole('button', { name: '重试' }));
+  expect(
+    (await screen.findAllByText('已经在整理了，稍后再试')).length,
+  ).toBeGreaterThan(0);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('shows nothing, for the page around it, while no one is on the team and nothing was deleted', async () => {
+  people = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/personas/trash') return json([]);
+      throw new Error(url);
+    }),
+  );
+  const { container } = render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Team quietWhenEmpty version={0} recordings={[]} />
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() =>
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toContain(
+      '/api/personas/trash',
+    ),
+  );
+  expect(container).toBeEmptyDOMElement();
 });

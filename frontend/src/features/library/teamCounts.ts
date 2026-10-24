@@ -52,10 +52,13 @@ export const namedPeople = (people: Person[]) =>
       (p.can_manage !== false || p.persona_id || p.talk || p.self_claimed),
   );
 
-/** Twins no recording belongs to (made by hand, or someone else's public twin): rows of the team table like the
- * people found in the meetings. */
+/** Twins no person belongs to: rows of the team table like the people found in the meetings. A twin the viewer
+ * only talks to (a colleague's public one), or that is their own by voice, belongs to a person who has the row
+ * already, though they do not open it: ``twin_id`` names it for them. */
 export const looseTwins = (people: Person[], twins: Persona[]) => {
-  const linked = new Set(people.map((p) => p.persona_id));
+  const linked = new Set(
+    people.flatMap((p) => [p.persona_id, p.talk, p.twin_id]),
+  );
   return twins.filter((twin) => !linked.has(twin.id));
 };
 

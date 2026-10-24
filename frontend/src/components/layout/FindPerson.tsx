@@ -6,7 +6,7 @@ import { useAsk } from '../../features/ask/useAsk';
 import { memberPath, twinMemberPath } from '../../lib/members';
 import { usePersonas } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
-import { namedPeople } from '../../features/library/teamCounts';
+import { looseTwins, namedPeople } from '../../features/library/teamCounts';
 import { PersonaPortrait } from './PersonaSwitcher';
 
 /** How many people are listed by name: the first few before anything is typed, the best matches after. */
@@ -32,10 +32,11 @@ export function FindPerson({
     if (open) setQuery('');
   }, [open]);
   const named = people ? namedPeople(people) : [];
-  const linked = new Set(named.map((p) => p.persona_id).filter(Boolean));
   const known: (AskItem & { to: string })[] = [
     ...named.map((person) => {
-      const twin = twins.find((t) => t.id === person.persona_id);
+      const twin = twins.find(
+        (t) => t.id === (person.persona_id ?? person.talk ?? person.twin_id),
+      );
       return {
         id: `person-${person.id}`,
         label: person.name,
@@ -46,15 +47,13 @@ export function FindPerson({
       };
     }),
     // Twins made without recordings (yourself, someone added by hand) are people to find too.
-    ...twins
-      .filter((twin) => !linked.has(twin.id))
-      .map((twin) => ({
-        id: `twin-${twin.id}`,
-        label: twin.name,
-        action: '看档案',
-        leading: <PersonaPortrait persona={twin} />,
-        to: twinMemberPath(twin.id),
-      })),
+    ...looseTwins(people ?? [], twins).map((twin) => ({
+      id: `twin-${twin.id}`,
+      label: twin.name,
+      action: '看档案',
+      leading: <PersonaPortrait persona={twin} />,
+      to: twinMemberPath(twin.id),
+    })),
   ];
   const wanted = query.trim().toLocaleLowerCase();
   const byName = known

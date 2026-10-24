@@ -150,10 +150,30 @@ def test_rebuild_keeps_the_tier_of_conversations_it_knew(tmp_path: Path) -> None
         team.record_conversation("mine", "p1", "me@x.com", "self", "我的", STAMP)
         team.record_conversation("stale", "p1", "me@x.com", "self", "没了", STAMP)
         team.record_conversation("elsewhere", "p9", None, "self", "不动", STAMP)
+        # A question waits in each; the one in a conversation the twin no longer has is taken back, as reconciling does.
+        waiting = {
+            conversation: team.create_handoff(
+                persona_id=persona,
+                owner="me@x.com",
+                conversation_id=conversation,
+                turn=1,
+                asker="a@x.com",
+                asker_name="a",
+                kind="decide",
+                question="要不要做",
+            )
+            for conversation, persona in (("mine", "p1"), ("stale", "p1"), ("elsewhere", "p9"))
+        }
         done = team.rebuild_conversations({"p1": [("mine", "me@x.com", "我的", STAMP), ("new", None, "新的", STAMP)]})
         assert (done.added, done.removed) == (2, 2)
         assert (team.audience_of("mine"), team.audience_of("new")) == ("self", "colleague")
         assert team.audience_of("stale") is None and team.audience_of("elsewhere") == "self"
+        statuses = {
+            conversation: team.get_handoff(handoff.id).status  # type: ignore[union-attr]
+            for conversation, handoff in waiting.items()
+            if handoff is not None
+        }
+        assert statuses == {"mine": "delivered", "stale": "withdrawn", "elsewhere": "delivered"}
 
 
 def test_the_command_line_reconciles_and_rebuilds_the_index(tmp_path: Path) -> None:

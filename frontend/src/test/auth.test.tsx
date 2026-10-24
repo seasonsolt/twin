@@ -697,6 +697,8 @@ it('shows what the twin gathered and lets its person try it out in chat first', 
   expect(screen.queryByText('别人的事')).toBeNull();
   expect(screen.getByText('看数据先问口径')).toBeInTheDocument();
   expect(screen.getByText('2 处原话支持')).toBeInTheDocument();
+  // The choice made before trying it out is still theirs when they come back.
+  await user.click(screen.getByRole('checkbox', { name: '同事能问我的分身' }));
   await user.click(screen.getByRole('button', { name: '这周还欠谁什么？' }));
   expect(
     await screen.findByText('试聊中：你点“没问题”之前，同事问不到它。'),
@@ -707,7 +709,13 @@ it('shows what the twin gathered and lets its person try it out in chat first', 
     ),
   );
   await user.click(screen.getByRole('button', { name: '回去确认' }));
-  await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+  await screen.findByRole('heading', {
+    level: 1,
+    name: '赵晴，你的分身已经建好了',
+  });
+  expect(
+    screen.getByRole('checkbox', { name: '同事能问我的分身' }),
+  ).not.toBeChecked();
 });
 
 it('says what the twin gathered is on its way while its memory is rebuilt, and shows it once done', async () => {
@@ -798,9 +806,7 @@ it('looks for someone signed in with a work address in the meetings before an em
       .getByText('认出你自己')
       .closest('li'),
   ).toHaveAttribute('aria-current', 'step');
-  await user.click(
-    await screen.findByRole('button', { name: '没开过会，先建空分身' }),
-  );
+  await user.click(await screen.findByRole('button', { name: '先建空分身' }));
   await screen.findByRole('form', { name: '新建分身' });
   expect(window.location.hash).not.toBe('#/welcome');
 });

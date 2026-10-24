@@ -267,6 +267,55 @@ def test_old_conversations_are_indexed_at_startup_as_colleague_tier_and_open_as_
         assert [c["id"] for c in again.get("/api/conversations", headers=scene.headers).json()] == [old]
 
 
+def restart(scene: Scene) -> TestClient:
+    settings = scene.web.app.state.personas.settings  # type: ignore[attr-defined]
+    app = create_app(settings, llm_factory=lambda: scene.recorder, embedder_factory=HashingEmbedder)
+    return TestClient(app, base_url="http://localhost")
+
+
+def test_a_twin_made_for_oneself_before_twins_were_taken_is_its_makers_own_after_an_upgrade(scene: Scene) -> None:
+    with restart(scene) as again:
+        again.cookies.set("twin_session", scene.cookies["person"])
+        [twin] = again.get("/api/personas").json()
+        assert twin["mine"] and twin["approved"] and not twin["made_by_other"]
+        scene.recorder.seen.clear()
+        conversation = again.post("/api/conversations", json={}, headers=scene.headers).json()["id"]
+        body = {"messages": [{"role": "user", "content": QUESTION}], "conversation_id": conversation}
+        assert again.post("/api/persona/chat/stream", json=body, headers=scene.headers).status_code == 200
+        assert FAMILY in scene.shown()
+        # Made for a colleague after all: whoever made it looks after it again, the colleague takes it.
+        claimed = again.put(f"/api/personas/{scene.persona}/claim", json={"claim": VISITOR}, headers=CSRF)
+        assert claimed.status_code == 200, claimed.text
+        [twin] = again.get("/api/personas").json()
+        assert not twin.get("mine") and twin["claim"] == VISITOR and not twin["claimed"]
+    with restart(scene) as third:  # given to someone: never adopted again
+        third.cookies.set("twin_session", scene.cookies["person"])
+        assert not third.get("/api/personas").json()[0].get("mine")
+
+
+def test_a_twin_made_for_someone_is_not_adopted_by_its_maker(scene: Scene) -> None:
+    scene.as_("person")
+    assert scene.web.put(f"/api/personas/{scene.persona}/claim", json={"claim": VISITOR}, headers=CSRF).is_success
+    with restart(scene) as again:
+        again.cookies.set("twin_session", scene.cookies["person"])
+        assert not again.get("/api/personas").json()[0].get("mine")
+
+
+def test_old_records_that_do_not_read_do_not_keep_the_service_from_starting(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable(*_: Any) -> None:
+        raise ValueError("an old record that does not read")
+
+    monkeypatch.setattr(TeamDB, "reconcile_persona", unreadable)
+    monkeypatch.setattr("twin.handoffs.HandoffDesk.migrate_followups", unreadable)
+    monkeypatch.setattr(TeamDB, "expire_due", unreadable)
+    with restart(scene) as again:
+        again.cookies.set("twin_session", scene.cookies["admin"])
+        assert again.get("/api/whoami").status_code == 200
+        assert again.get("/api/personas").status_code == 200
+
+
 def test_the_person_alone_can_change_a_tier_and_sees_it_in_their_memory(scene: Scene) -> None:
     web = scene.web
     scene.take()

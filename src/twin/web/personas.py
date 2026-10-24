@@ -184,6 +184,35 @@ class Personas:
         private_directory(self.root)
         AssetStore.write(self.path, json.dumps(self.data, ensure_ascii=False).encode())
 
+    def adopt_own(self) -> list[str]:
+        """Twins people made for themselves before a twin had to be taken to be one's own: whoever made it is its
+        person, taken and said to be all right as of when they made it (``made_for_self``). Only a twin made by a
+        signed-in person for nobody else (no e-mail or employee number given or turned down, no one has taken it)
+        and not made from a recording library. Returns the ids adopted; run once at startup, before the old
+        待你回答 become handoffs, which go to the person."""
+        adopted = []
+        with self.lock:
+            for entry in self.data["personas"]:
+                if (
+                    entry.get("owner")
+                    and not entry.get("deleted_at")
+                    and not entry.get("member")
+                    and "claim" not in entry
+                    and "claim_rejected" not in entry
+                    and not gate.linked(self.db_path_of(entry["id"]))
+                ):
+                    entry.update(
+                        member=entry["owner"],
+                        claimed_at=entry["created_at"],
+                        approved_at=entry["created_at"],
+                        made_for_self=True,
+                    )
+                    adopted.append(entry["id"])
+            if adopted:
+                self.save()
+                logger.info("自建的分身 %s 归建它的人本人所有", "、".join(adopted))
+        return adopted
+
     def purge_trash(self) -> list[Path]:
         """Forget personas deleted a week ago (under ``lock``); returns their directories, which the caller removes
         with ``remove_trash`` after letting go of ``lock``, as deleting many files can take long."""
@@ -593,6 +622,12 @@ class Personas:
                 identity = request.scope["twin_identity"]
                 self.check_owner(persona_id, identity)
                 entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
+                if entry.get("made_for_self") and entry.get("member") == entry.get("owner") and key:
+                    if entry["owner"] == identity["email"] and key in claim_keys(identity):
+                        return self.view(entry, identity)  # Theirs already.
+                    # Adopted as its maker's own (``adopt_own``), but made for someone else after all.
+                    for stale in ("member", "claimed_at", "approved_at", "made_for_self"):
+                        entry.pop(stale, None)
                 if entry.get("member"):
                     raise HTTPException(409, "本人已经认领了这个分身")
                 if key and any(

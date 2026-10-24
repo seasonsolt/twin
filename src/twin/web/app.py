@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterable
@@ -30,7 +31,7 @@ from ..persona import gate
 from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.profile import pending_chunks
-from ..persona.store import PersonaStore, stored_avatar, stored_identity
+from ..persona.store import NewerStoreError, PersonaStore, stored_avatar, stored_identity
 from ..teamanswers import TeamAnswers
 from ..teamdb import TeamDB, team_path
 from ..usage import UsageLedger, UsageRecorder, install_default
@@ -46,6 +47,8 @@ from .conversations import register_all as register_all_conversations
 from .delegation import Delegations
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).with_name("static")
 # `git archive` writes the commit into this file (export-subst in .gitattributes); a checkout keeps the placeholder.
@@ -399,16 +402,27 @@ def create_app(
         )
 
     delegations = Delegations(registry, team, backends, desk_for, answers, twin_name)
+    registry.adopt_own()
     desks: list[HandoffDesk] = []
     for entry in registry.data["personas"]:
         if not entry.get("deleted_at"):
-            path = registry.settings_for(entry["id"]).db_path
+            path = registry.db_path_of(entry["id"])
             if path.is_file():
-                with PersonaStore(path) as store:
-                    # What the twin's database has and the team's index lacks (conversations from before the index,
-                    # or a write that did not make it) is added, as the colleague tier.
-                    team.reconcile_persona(entry["id"], store.conversation_rows())
-                desks.append(desk_for(entry["id"]))
+                # One twin whose database can not be brought up to date is logged and left as it is: the others, and
+                # the service, still start. Data written by a newer release still stops this one from starting.
+                try:
+                    with PersonaStore(path) as store:
+                        # What the twin's database has and the team's index lacks (conversations from before the
+                        # index, or a write that did not make it) is added, as the colleague tier.
+                        team.reconcile_persona(entry["id"], store.conversation_rows())
+                except NewerStoreError:
+                    raise
+                except Exception:
+                    logger.exception("could not index the conversations of twin %s at startup", entry["id"])
+                try:
+                    desks.append(desk_for(entry["id"]))
+                except Exception:
+                    logger.exception("could not bring the handoffs of twin %s up to date at startup", entry["id"])
     # The old 待你回答 become handoffs (once), replies that stopped halfway are finished, and handoffs that did not
     # make it into the team database are made.
     run_all(desks)

@@ -1064,12 +1064,17 @@ def run_all(desks: Iterable[HandoffDesk]) -> None:
     """At startup, for each twin: the old questions made handoffs (once), replies that stopped halfway finished,
     handoffs that did not make it into the team database made, and the ones nobody answered in time expired."""
     desks = list(desks)
+    # Whatever goes wrong with one twin (a database that will not open, an old record that does not read) is logged
+    # and left for the next start: it never keeps the service, or the other twins' handoffs, from starting.
     for desk in desks:
         try:
             desk.migrate_followups()
             desk.redo_writing()
             desk.reconcile()
-        except (sqlite3.Error, OSError):
+        except Exception:
             logger.warning("could not bring the handoffs of twin %s up to date", desk.persona_id, exc_info=True)
     if desks and desks[0].team is not None:
-        desks[0].team.expire_due()
+        try:
+            desks[0].team.expire_due()
+        except Exception:
+            logger.warning("could not expire the handoffs nobody answered in time", exc_info=True)

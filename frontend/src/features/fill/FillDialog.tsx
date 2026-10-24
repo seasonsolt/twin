@@ -50,6 +50,9 @@ const CHOICES: { id: Choice; label: string }[] = [
 export interface FillScope {
   facet?: string;
   dimension?: string;
+  /** The aspect to ask about when what the twin knows least has nothing to ask: its facets the person keeps to
+   * themself are not asked unprompted, but the aspect was shown as wanting more. */
+  otherwise?: string;
 }
 
 /**
@@ -86,16 +89,23 @@ export function FillDialog({
     const query = new URLSearchParams();
     if (scope?.facet) query.set('facet', scope.facet);
     if (scope?.dimension) query.set('dimension', scope.dimension);
+    const fetchQuestions = (path: URLSearchParams) =>
+      api<{ questions: Question[] }>(
+        `/api/persona/fill${path.size ? `?${path}` : ''}`,
+        { signal: controller.signal },
+      );
     setQuestions(null);
     setIndex(0);
     setAnswer('');
     setDrafts(null);
     setError('');
     kept.current = 0;
-    void api<{ questions: Question[] }>(
-      `/api/persona/fill${query.size ? `?${query}` : ''}`,
-      { signal: controller.signal },
-    )
+    void fetchQuestions(query)
+      .then((reply) =>
+        reply.questions.length || query.size || !scope?.otherwise
+          ? reply
+          : fetchQuestions(new URLSearchParams({ dimension: scope.otherwise })),
+      )
       .then((reply) => setQuestions(reply.questions))
       .catch((failure: unknown) => {
         if (controller.signal.aborted) return;
@@ -103,7 +113,7 @@ export function FillDialog({
         setError(failure instanceof Error ? failure.message : '加载失败');
       });
     return () => controller.abort();
-  }, [open, scope?.facet, scope?.dimension]);
+  }, [open, scope?.facet, scope?.dimension, scope?.otherwise]);
 
   const items = (list: Draft[], picked: Choice[]) =>
     list.map((draft, i) => ({
@@ -154,18 +164,22 @@ export function FillDialog({
     }
   };
 
+  // However the sitting ends (the last question, 关闭, Esc), what was stored is told once and the page reads it again.
+  const finish = () => {
+    onOpenChange(false);
+    if (kept.current > 0) {
+      toast(`存了 ${kept.current} 条，分身正在整理`, 'success');
+      onKept();
+    }
+    kept.current = 0;
+  };
+
   const next = () => {
     setAnswer('');
     setDrafts(null);
     setError('');
     if (questions && index + 1 < questions.length) setIndex(index + 1);
-    else {
-      onOpenChange(false);
-      if (kept.current > 0) {
-        toast(`存了 ${kept.current} 条，分身正在整理`, 'success');
-        onKept();
-      }
-    }
+    else finish();
   };
 
   const keep = async () => {
@@ -189,7 +203,11 @@ export function FillDialog({
   const total = questions?.length ?? 0;
   const raised = worth.filter((change) => change.after > change.before);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="补一补">
+    <Dialog
+      open={open}
+      onOpenChange={(opened) => (opened ? onOpenChange(true) : finish())}
+      title="补一补"
+    >
       {questions === null ? (
         <Skeleton className="h-40" />
       ) : !question ? (
@@ -198,7 +216,7 @@ export function FillDialog({
             {error || '暂时没有要补的，分身对你已经了解得不错。'}
           </Text>
           <Row justify="end">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button variant="ghost" onClick={finish}>
               关闭
             </Button>
           </Row>

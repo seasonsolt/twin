@@ -6,7 +6,9 @@
 # /data/twin/data, /data/twin/home       data and backups, owned by the service user
 #
 # Every step before the switch is side-effect free for the running service. After the switch a failed health
-# check points `current` back at the previous release and restarts it.
+# check points `current` back at the previous release and restarts it, unless the new release migrates a database
+# further than the previous one reads: then the previous code could not start on the migrated data, so the switch
+# stays and the deploy stops with how to go back from the backup made before it (README.md#回退).
 set -euo pipefail
 
 ROOT="${TWIN_DEPLOY_ROOT:-/data/twin}"
@@ -73,8 +75,36 @@ fi
 as_owner "$target/.venv/bin/twin" --help >/dev/null || die "新版本无法启动 twin 命令"
 
 # 2. Snapshot the data with the code that wrote it; migrations of the new release snapshot again on start.
+backup=""
 if [[ -x "$ROOT/current/.venv/bin/twin" ]]; then
-    twin_cli "$ROOT/current/.venv/bin/twin" --config "$ROOT/twin.toml" ops backup --reason deploy
+    said=$(twin_cli "$ROOT/current/.venv/bin/twin" --config "$ROOT/twin.toml" ops backup --reason deploy)
+    echo "$said"
+    backup=${said#*备份完成：}
+fi
+
+# How many migrations each database of a release knows (a twin's, the team's): a release that knows more than the
+# live one migrates the data on start one way.
+migrations() {
+    as_owner "$1/.venv/bin/python" -c '
+import importlib
+counts = []
+for name in ("twin.persona.store", "twin.teamdb"):
+    try:
+        counts.append(len(importlib.import_module(name)._MIGRATIONS))
+    except (ImportError, AttributeError):
+        counts.append(0)
+print(*counts)'
+}
+one_way=""
+if [[ -x "$ROOT/current/.venv/bin/python" ]]; then
+    read -r -a before <<<"$(migrations "$ROOT/current")"
+    read -r -a after <<<"$(migrations "$target")"
+    for i in "${!after[@]}"; do
+        if ((after[i] > ${before[i]:-0})); then
+            one_way=1
+        fi
+    done
+    [[ -n "$one_way" ]] && echo "新版本会升级数据库结构（${before[*]} → ${after[*]}），升级后旧版本无法打开数据"
 fi
 
 # 3. System files: only reload what changed.
@@ -104,8 +134,10 @@ switch_to() {
     systemctl restart "$SERVICE"
 }
 healthy() {
-    local page status
-    for _ in $(seq 1 60); do
+    # A release that migrates the data snapshots every twin's database before it serves: give it longer.
+    local page status seconds=60
+    [[ -n "$one_way" ]] && seconds=900
+    for _ in $(seq 1 "$seconds"); do
         page=$(curl --silent --max-time 3 "http://127.0.0.1:$PORT/" || true)
         status=$(curl --silent --output /dev/null --max-time 3 --write-out '%{http_code}' \
             "http://127.0.0.1:$PORT/api/whoami" || true)
@@ -130,6 +162,10 @@ through_nginx() {
 switch_to "$target"
 if ! healthy || ! through_nginx; then
     journalctl -u "$SERVICE" -n 40 --no-pager >&2 || true
+    if [[ -n "$one_way" ]]; then
+        # The previous code can not open the migrated data: switching back would leave nothing running at all.
+        die "新版本健康检查失败。它已升级数据库结构，旧版本 $(basename "$previous") 打不开升级后的数据，所以没有自动回退，服务停在新版本上。先看上面的日志；要回到旧版本，按 deploy/daw/README.md 的“回退”一节用部署前的备份 ${backup:-（没有找到）} 恢复"
+    fi
     if [[ -n "$previous" && -d "$previous" ]]; then
         switch_to "$previous"
         healthy && die "新版本健康检查失败，已回到 $(basename "$previous")"

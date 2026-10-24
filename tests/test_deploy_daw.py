@@ -75,6 +75,21 @@ def test_scripts_parse() -> None:
         subprocess.run(["bash", "-n", str(script)], check=True)
 
 
+def test_a_release_that_migrates_the_data_one_way_is_not_switched_back() -> None:
+    deploy = (DAW / "deploy.sh").read_text()
+    probe = re.search(r"migrations\(\) \{\n.*?-c '\n(.*?)'\n\}", deploy, re.S)
+    assert probe, "deploy.sh counts each database's migrations"
+    from twin import teamdb
+    from twin.persona import store
+
+    counted = subprocess.run([sys.executable, "-c", probe[1]], capture_output=True, text=True, check=True)
+    assert counted.stdout.split() == [str(len(store._MIGRATIONS)), str(len(teamdb._MIGRATIONS))]
+    # Past a one-way migration, a failed check stops with the backup to go back from, never the previous code.
+    failed = deploy[deploy.index('switch_to "$target"') :]
+    assert failed.index('if [[ -n "$one_way" ]]') < failed.index('switch_to "$previous"')
+    assert "${backup:-" in failed
+
+
 def test_port_prefix_and_host_agree_across_files() -> None:
     service = (DAW / "twin.service").read_text()
     nginx = (DAW / "nginx-twin.conf").read_text()

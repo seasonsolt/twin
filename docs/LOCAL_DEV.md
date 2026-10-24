@@ -138,14 +138,18 @@ uv run twin --config ./twin.toml compute status
 
 ## 回退记忆内核
 
-数据库迁移前、细项编号迁移前，以及每次按新内核重新整理前，都会把该分身的数据库快照到同目录的 `kernel-snapshots/`（0600，每个分身保留最近 3 份）。只回到旧代码、不恢复快照时，带细项迁移的版本（2026-10-19 起）会跳过它不认识的细项，其余档案照常可用；更早的版本请恢复快照。新内核效果不理想时：
+数据库迁移前、细项编号迁移前，以及每次按新内核重新整理前，都会把该分身的数据库快照到同目录的 `kernel-snapshots/`（0600，每个分身保留最近 3 份；迁移前的快照名以 `-schema<旧版本号>.db` 结尾）。
+
+只换了提示词或细项、没有迁移数据库结构时，可以只回到旧代码：带细项迁移的版本（2026-10-19 起）会跳过它不认识的细项，其余档案照常可用；更早的版本请恢复快照。迁移过结构时（启动日志或 `uv run twin kernel status` 的 schema 比旧版本大），旧代码打不开升级后的数据库，连 `twin kernel` 命令也会报“数据库由更新版本的 twin 写入”，所以要**先用当前代码把每个分身都恢复到迁移前的快照，再切回旧代码**：
 
 ```bash
-uv run twin kernel snapshots                                   # 列出快照
-git switch --detach <上一个稳定版提交>                          # 先回到旧代码，否则启动后会再次升级
-uv run twin kernel restore <快照文件> --persona default --yes   # 停止网页后执行；覆盖前会再快照一次当前数据
+uv run twin kernel snapshots                                   # 列出每个分身的快照
+uv run twin kernel restore <快照文件> --persona <分身> --yes    # 停止网页后执行，每个分身一次；覆盖前会再快照一次当前数据
+git switch --detach <上一个稳定版提交>                          # 恢复完所有分身后再回到旧代码，否则启动后会再次升级
 ./scripts/local-up.sh --no-update
 ```
+
+恢复后，迁移之后写下的对话和资料不在旧版本里（恢复前的数据另存为 `kernel-snapshots/` 里的 `-before-restore.db`）。团队库 `data/team/` 旧版本用不到，原样留着即可；再升级时已有的内容不会重复导入。
 
 确认新稳定版修好后，`git switch stable` 再运行 `./scripts/local-up.sh` 回到自动更新。
 

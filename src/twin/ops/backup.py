@@ -99,7 +99,8 @@ def backup(paths: TwinPaths, data: Path, config: Path, reason: str = "daily") ->
 
 
 # Every deploy (``deploy/daw/deploy.sh``) backs up before switching versions; a failed health check rolls the code
-# back by itself, so these only matter for undoing a recent bad deploy by hand. Keep the newest ten.
+# back by itself unless the new release migrated the data, so these matter for undoing a recent bad deploy by hand
+# (deploy/daw/README.md#回退). Keep the newest ten.
 DEPLOY_KEEP = 10
 
 

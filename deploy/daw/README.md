@@ -8,7 +8,8 @@ twin 挂在 audio-studio 的域名下，用它的登录；转写和文字向量�
 确认该提交在 `main` 上的检查已通过、`stable` 能快进过去，列出发布的提交和记忆内核是否变化，再推送 `stable`。
 推送 `stable` 触发 `.cnb.yml` 的 `deploy-daw`（检查已在 `main` 上跑过，不再重跑）：`git archive` 打包 →
 腾讯云 TAT 分片上传 → 在 daw 上以 root 运行 `deploy/daw/deploy.sh`。脚本先备份数据，再切换 `current`；新版本
-健康检查失败会自动回到上一版。最后 `deploy/daw/check_live.py` 读 https://daw.xjjk.com/twin/ 的 `X-Twin-Release`
+健康检查失败会自动回到上一版；新版本升级了数据库结构时（日志里有“新版本会升级数据库结构”），旧版本打不开
+升级后的数据，脚本不再自动回退，健康检查最多等 15 分钟，失败时停在新版本上，见下文“回退”。最后 `deploy/daw/check_live.py` 读 https://daw.xjjk.com/twin/ 的 `X-Twin-Release`
 响应头（`git archive` 写进 `src/twin/web/RELEASE` 的提交号），不是本次提交就标红，上传中途退出这类“绿了但没切换”
 的情况因此也会显示失败。部署备份只保留最近 10 份，更早的在下一次备份时删除；录音库录音和分身的原件、
 试听片段、声音候选等写完不再改的文件用硬链接，不重复占盘（与线上同盘，不能代替异地备份）。
@@ -87,6 +88,28 @@ audio-studio 的 nginx server 块需要一次性加入 `include /etc/nginx/snipp
 向量服务停了或隧道断了，聊天退回只按关键词检索，照常回答；记忆整理的向量化那一步会失败，服务恢复后下一次整理接着做。
 换向量模型后，各分身在网页启动时发现旧向量并自动重新向量化。显卡与转写（有时还有语言模型）共用，向量服务常驻约
 1.6 GB 显存，每次请求后归还临时显存。
+
+## 回退
+
+只换回旧代码：新版本没有升级数据库结构时，把 `current` 指回上一版即可（`ln -sfn /data/twin/releases/<上一版> /data/twin/current`，
+再 `systemctl restart twin`）。升级过结构的版本（部署日志里有“新版本会升级数据库结构”）上线后，旧版本启动时会报
+“数据库由更新版本的 twin 写入（schema …），当前版本只支持到 …”，必须连数据一起回到部署前的备份。部署后新写的数据
+（对话、你不在时、上传的资料）不会带回旧版本；它们留在挪开的目录里，确认不再需要后再删。在 daw 上以 root 执行：
+
+```bash
+systemctl stop twin
+ls /data/twin/home/backups/          # 部署前那份以 -deploy 结尾，部署日志“备份完成：”后面就是它
+mv /data/twin/data /data/twin/data.upgraded-$(date +%Y%m%d%H%M%S)
+cp -a /data/twin/home/backups/<时间>-deploy/data /data/twin/data
+ln -sfn /data/twin/releases/<上一版> /data/twin/current
+systemctl start twin
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8770/api/whoami   # 200 或 401 即正常
+```
+
+`cp -a` 保留属主 ubuntu 和 0700/0600 权限；备份里录音这类文件和线上共用硬链接，复制出来会多占一份空间，先用
+`df -h /data` 确认够用。不要用 `twin ops restore`：它检查的是 `twin ops` 自己装的用户服务，不认 `twin.service`。
+`releases/` 只留最近 3 个版本，上一版不在时先按“发布”重新部署那个提交。回退后 `stable` 仍是新版本，修好前不要再
+发布或重跑 `deploy-daw`，否则会再次升级。
 
 ## 排查
 

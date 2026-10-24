@@ -61,13 +61,16 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const memories = useMemoryCount(twin.id, canManage);
   const memoryUpdating = useStatus((state) => state.data?.memory_updating);
   // Where the twin stands is said as the team table says it. A twin the page can be opened on is one that can be
-  // talked to, so the kinds that are about not having one one (own, elsewhere, none) read as ready.
+  // talked to, so the kinds that are about not having one (own, elsewhere, none) say only whether it is being
+  // rebuilt, as they did before.
   const found = person ? twinState(person) : 'ready';
   const standing =
-    found === 'ready' && memoryUpdating
-      ? 'updating'
-      : found === 'none' || found === 'own' || found === 'elsewhere'
-        ? 'ready'
+    found === 'none' || found === 'own' || found === 'elsewhere'
+      ? person?.updating || memoryUpdating
+        ? 'updating'
+        : 'ready'
+      : found === 'ready' && memoryUpdating
+        ? 'updating'
         : found;
   const away = useAway(self && canManage);
   const waiting = away.data?.pending;

@@ -37,7 +37,7 @@ export const useWelcome = create<{
   finishVoice: (done = true) =>
     set({ voiceDone: done, again: false, after: '/' }),
   hearAgain: () => set({ voiceDone: false, again: true, after: '/' }),
-  finishClaim: (after = '/') => set({ claimDone: true, after }),
+  finishClaim: (after = '/') => set({ claimDone: true, after, shared: true }),
   reopenClaim: () => set({ claimDone: false }),
   setShared: (shared) => set({ shared }),
   reset: () =>

@@ -96,6 +96,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
     const controller = new AbortController();
     api<VoiceState>('/api/library/voice', { signal: controller.signal })
       .then((found) => {
+        if (controller.signal.aborted) return;
         if (found.available || found.enrolled) setState(found);
         else leave();
       })

@@ -778,6 +778,14 @@ it('says where a twin stands as the team table does', async () => {
   expect(screen.queryByText('整理中')).toBeNull();
 });
 
+it('still says a twin is being rebuilt when its person claimed it by voice', async () => {
+  people = [person({ self_claimed: true, updating: true })];
+  window.location.hash = '#/team/per_1';
+  render(<App />);
+  expect(await screen.findByText('整理中')).toBeVisible();
+  expect(screen.queryByText('本人已认领')).toBeNull();
+});
+
 it('counts the memories on the tab as the profile does, not as the whole server does', async () => {
   // The server-wide count also holds what only the twin’s person may use.
   useStatus.setState({

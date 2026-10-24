@@ -18,6 +18,7 @@ import {
   Notice,
   PlainButton,
   Row,
+  Select,
   Spacer,
   Text,
   TextLink,
@@ -31,6 +32,7 @@ import {
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
 import { useSeesWhole } from '../../stores/access';
+import { featureOn, useAuth } from '../../stores/auth';
 import { useStatus } from '../../stores/status';
 import type { Persona } from '../../stores/personas';
 import { askOwner } from '../answers/askOwner';
@@ -46,7 +48,7 @@ import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { useConversation } from './useConversation';
-import { handoffText, promiseTaken, type Turn } from './types';
+import { handoffText, promiseTaken, type ChatReply, type Turn } from './types';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -55,6 +57,8 @@ const CHAT_ATTACHMENT_SUFFIXES = new Set(
   'txt md pdf docx epub html htm csv json srt vtt'.split(' '),
 );
 const MAX_CHAT_ATTACHMENT_COUNT = 5;
+// More lenses than this are chosen from a list, not laid out as a chip each.
+const MAX_LENS_CHIPS = 2;
 const MAX_CHAT_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 /** What the asker said before the twin's turn at `index`: the question a team answer card was given to. */
@@ -64,6 +68,19 @@ function askedBefore(turns: Turn[], index: number): string {
   }
   return '';
 }
+
+/**
+ * Whether a reply is no answer of the twin's memory, so that "how it rests on what the twin knows" is not said under
+ * it: what the assistant took down, a lens's statements, what it asked colleagues, and an answer that is the team's
+ * confirmed one (shown as its card).
+ */
+const unlabelled = (reply: ChatReply) =>
+  !!reply.note ||
+  !!reply.lens ||
+  !!reply.delegation ||
+  (!!reply.team_answers?.length &&
+    reply.mode === 'general' &&
+    !reply.cited?.length);
 
 /**
  * One conversation with the twin: the notes above it (memory being organised, a new twin's setup), the messages with
@@ -103,6 +120,8 @@ export function ChatThread({
   const personaId = usePersonaId();
   // The person behind a twin reads what it says in their name; theirs to know, said once under the box.
   const seen = !useSeesWhole(persona) && persona?.claimed !== false;
+  // Commitments are listed in a page an administrator can switch off; where it is off, they are not spoken of either.
+  const ledgerOn = useAuth((auth) => featureOn(auth.identity, 'ledger'));
   const identity = useIdentity(active);
   const { audio, video, capabilities, toggleReply, speaking } = playback;
   const status = useStatus((state) => state.data);
@@ -183,6 +202,12 @@ export function ChatThread({
   const lastAnswer = [...chat.turns]
     .reverse()
     .find((turn) => turn.role === 'twin')?.id;
+  // The handoffs whose reply stands in the conversation: the line under the answer does not say it a second time.
+  const repliedHere = new Set(
+    chat.turns.flatMap((turn) =>
+      turn.role === 'self' && turn.handoff_id ? [turn.handoff_id] : [],
+    ),
+  );
   const trying = !!trial?.on;
   // The lenses the person behind this twin published for colleagues, to ask in place of the twin; the one chosen
   // answers the next question.
@@ -209,6 +234,17 @@ export function ChatThread({
     void refreshState();
     pinNext.current = true;
     void chat.send(chat.draft, !!trial?.on, lens?.id ?? null);
+  };
+  // The words the assistant needs to take something down, put in the box, with the cursor after them.
+  const addNote = () => {
+    const start = '记一下，';
+    chat.setDraft(start);
+    window.requestAnimationFrame(() => {
+      const box = document.getElementById('chat-input');
+      if (!(box instanceof HTMLTextAreaElement)) return;
+      box.focus();
+      box.setSelectionRange(start.length, start.length);
+    });
   };
   const addAttachments = (files: File[]) => {
     if (!files.length) return;
@@ -329,14 +365,12 @@ export function ChatThread({
                         <ChatMessage speaker="self" aria-label="本人回复">
                           <Row gap={2}>
                             <Badge tone="info">本人</Badge>
-                            <Text as="span" size="xs" tone="secondary">
-                              {name}
-                            </Text>
                           </Row>
                           <div className="min-w-0">
                             <MessageText text={turn.content} plain />
                           </div>
-                          {promiseTaken(chat.turns, turn.handoff_id) &&
+                          {ledgerOn &&
+                            promiseTaken(chat.turns, turn.handoff_id) &&
                             (persona?.can_manage ? (
                               <TextLink size="xs" to="/commitments">
                                 已记为承诺 ›
@@ -418,66 +452,81 @@ export function ChatThread({
                                 reply={turn.reply}
                                 editable={canManage}
                                 own={assistant && !turn.preview}
-                                plain={!!turn.reply.note || !!turn.reply.lens}
+                                plain={unlabelled(turn.reply)}
                               >
-                                <div
-                                  role="group"
-                                  aria-label="回复媒体"
-                                  className="answer-controls ml-auto flex items-center"
-                                >
-                                  {capabilities?.available && (
-                                    <PlainButton
-                                      shape="circle"
-                                      className="reply-play min-h-11 min-w-11"
-                                      aria-label={
-                                        speaking(turn.id)
-                                          ? '正在说这句，点击暂停'
-                                          : `让${name}说这句`
-                                      }
-                                      aria-busy={
-                                        audio.id === turn.id && audio.loading
-                                      }
-                                      data-speaking={speaking(turn.id)}
-                                      data-generating={
-                                        video.videos[turn.id]?.status ===
-                                        'generating'
-                                      }
-                                      onClick={() => toggleReply(turn)}
-                                    >
-                                      <span
-                                        className="reply-play-visual"
-                                        aria-hidden
-                                      >
-                                        {speaking(turn.id) ? (
-                                          <span className="speaking-bars">
-                                            <i />
-                                            <i />
-                                            <i />
-                                          </span>
-                                        ) : (
-                                          <Play size={16} />
-                                        )}
-                                      </span>
-                                    </PlainButton>
-                                  )}
-                                  <IconButton
-                                    label="复制"
-                                    onClick={() => {
-                                      void navigator.clipboard
-                                        .writeText(turn.content)
-                                        .then(() => toast('已复制'))
-                                        .catch(() => toast('复制失败，请重试'));
-                                    }}
+                                {(capabilities?.available ||
+                                  !unlabelled(turn.reply)) && (
+                                  <div
+                                    role="group"
+                                    aria-label="回复媒体"
+                                    className="answer-controls ml-auto flex items-center"
                                   >
-                                    <Copy size={16} aria-hidden />
-                                  </IconButton>
-                                </div>
+                                    {capabilities?.available && (
+                                      <PlainButton
+                                        shape="circle"
+                                        className="reply-play min-h-11 min-w-11"
+                                        aria-label={
+                                          speaking(turn.id)
+                                            ? '正在说这句，点击暂停'
+                                            : `让${name}说这句`
+                                        }
+                                        aria-busy={
+                                          audio.id === turn.id && audio.loading
+                                        }
+                                        data-speaking={speaking(turn.id)}
+                                        data-generating={
+                                          video.videos[turn.id]?.status ===
+                                          'generating'
+                                        }
+                                        onClick={() => toggleReply(turn)}
+                                      >
+                                        <span
+                                          className="reply-play-visual"
+                                          aria-hidden
+                                        >
+                                          {speaking(turn.id) ? (
+                                            <span className="speaking-bars">
+                                              <i />
+                                              <i />
+                                              <i />
+                                            </span>
+                                          ) : (
+                                            <Play size={16} />
+                                          )}
+                                        </span>
+                                      </PlainButton>
+                                    )}
+                                    {!unlabelled(turn.reply) && (
+                                      <IconButton
+                                        label="复制"
+                                        onClick={() => {
+                                          void navigator.clipboard
+                                            .writeText(turn.content)
+                                            .then(() => toast('已复制'))
+                                            .catch(() =>
+                                              toast('复制失败，请重试'),
+                                            );
+                                        }}
+                                      >
+                                        <Copy size={16} aria-hidden />
+                                      </IconButton>
+                                    )}
+                                  </div>
+                                )}
                               </ReplyLine>
-                              {turn.handoff && (
-                                <Text role="status" size="xs" tone="secondary">
-                                  {handoffText(turn.handoff)}
-                                </Text>
-                              )}
+                              {turn.handoff &&
+                                !(
+                                  turn.handoff.status === 'replied' &&
+                                  repliedHere.has(turn.handoff.id)
+                                ) && (
+                                  <Text
+                                    role="status"
+                                    size="xs"
+                                    tone="secondary"
+                                  >
+                                    {handoffText(turn.handoff)}
+                                  </Text>
+                                )}
                               {turn.reply.note && (
                                 <NoteCard
                                   note={turn.reply.note}
@@ -489,7 +538,7 @@ export function ChatThread({
                               {turn.reply.delegation && (
                                 <Delegation note={turn.reply.delegation} />
                               )}
-                              {turn.reply.commitment && (
+                              {ledgerOn && turn.reply.commitment && (
                                 <Text size="xs" tone="secondary">
                                   已记入承诺：{turn.reply.commitment.what}
                                   {turn.reply.commitment.due
@@ -522,9 +571,7 @@ export function ChatThread({
                                 turn.reply.abstain &&
                                 turn.id === lastAnswer && (
                                   <Text size="xs" tone="secondary">
-                                    <TextLink
-                                      onClick={() => chat.setDraft('记一下，')}
-                                    >
+                                    <TextLink onClick={addNote}>
                                       补一句
                                     </TextLink>
                                   </Text>
@@ -575,7 +622,7 @@ export function ChatThread({
                       size="sm"
                       onClick={() => {
                         void refreshState();
-                        chat.retry();
+                        chat.retry(lens?.id ?? null);
                       }}
                       disabled={chat.busy}
                     >
@@ -604,7 +651,7 @@ export function ChatThread({
         {chat.attachments.length > 0 && filesWait && (
           <div className="mx-auto mb-2 max-w-3xl">
             <Notice>
-              {trying ? '看同事会得到什么' : '向赋能提问'}
+              {trying ? '试问' : '向赋能提问'}
               不带附件，已添加的 {chat.attachments.length}{' '}
               个附件留到发普通消息时一起发送。
             </Notice>
@@ -716,24 +763,42 @@ export function ChatThread({
             {target}
             {modeSwitch}
             {trial && (
-              <Chip
-                pressed={trial.on}
-                onClick={() => trial.onChange(!trial.on)}
-              >
-                看同事会得到什么
-              </Chip>
+              <Tooltip label="看同事问同一句会得到什么，不留记录">
+                <Chip
+                  pressed={trial.on}
+                  onClick={() => trial.onChange(!trial.on)}
+                >
+                  试问
+                </Chip>
+              </Tooltip>
             )}
-            {lenses.choices.map((choice) => (
-              <Chip
-                key={choice.id}
-                pressed={choice.id === lensId}
-                onClick={() =>
-                  setLensId(choice.id === lensId ? null : choice.id)
-                }
+            {lenses.choices.length > MAX_LENS_CHIPS ? (
+              // Many are published: one choice, not a chip for each.
+              <Select
+                aria-label="向赋能提问"
+                value={lensId ?? ''}
+                onChange={(event) => setLensId(event.target.value || null)}
               >
-                赋能 · {choice.name}
-              </Chip>
-            ))}
+                <option value="">不用赋能</option>
+                {lenses.choices.map((choice) => (
+                  <option key={choice.id} value={choice.id}>
+                    赋能 · {choice.name}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              lenses.choices.map((choice) => (
+                <Chip
+                  key={choice.id}
+                  pressed={choice.id === lensId}
+                  onClick={() =>
+                    setLensId(choice.id === lensId ? null : choice.id)
+                  }
+                >
+                  赋能 · {choice.name}
+                </Chip>
+              ))
+            )}
             <div className="flex-1" />
             <ChatAction
               type="submit"

@@ -111,6 +111,13 @@ export interface Turn {
 export const waiting = (turn: Turn) =>
   turn.handoff?.status === 'delivered' || turn.handoff?.status === 'writing';
 
+/** Whether what this turn left to the person could still change, though they have answered it or it ran out: they may
+ * reply to one that expired or was put back, and take a promise on afterwards in the commitments. */
+export const settling = (turn: Turn) =>
+  turn.handoff?.status === 'expired' ||
+  turn.handoff?.status === 'dismissed' ||
+  (turn.handoff?.status === 'replied' && turn.handoff.kind === 'commit');
+
 /** Whether the person took on, as a commitment, what the handoff a reply of theirs answers asked them to promise. */
 export const promiseTaken = (turns: Turn[], handoffId: string | undefined) =>
   !!handoffId &&
@@ -161,11 +168,22 @@ export function withHandoffs(local: Turn[], remote: Turn[]): Turn[] {
   );
   const shown = new Set(local.map((turn) => turn.handoff_id));
   const out: Turn[] = [];
+  let changed = false;
   for (const turn of local) {
     const line = turn.handoff && lines.get(turn.handoff.id);
-    out.push(line ? { ...turn, handoff: line } : turn);
+    if (line && !sameLine(line, turn.handoff)) {
+      out.push({ ...turn, handoff: line });
+      changed = true;
+    } else out.push(turn);
     const reply = turn.handoff && said.get(turn.handoff.id);
-    if (reply && !shown.has(reply.handoff_id)) out.push(reply);
+    if (reply && !shown.has(reply.handoff_id)) {
+      out.push(reply);
+      changed = true;
+    }
   }
-  return out;
+  // Nothing new: the same turns, so what depends on them (such as the scroll) is left alone.
+  return changed ? out : local;
 }
+
+const sameLine = (a: HandoffLine, b: HandoffLine | undefined) =>
+  !!b && (Object.keys(a) as (keyof HandoffLine)[]).every((k) => a[k] === b[k]);

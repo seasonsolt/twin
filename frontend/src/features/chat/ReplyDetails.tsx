@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import {
   Badge,
@@ -45,7 +45,7 @@ const ownModes: Record<Mode, { label: string; tone: Tone; note: string }> = {
     note: '这条回答来自下面这些资料。',
   },
   inferred: {
-    label: '根据你的资料推测',
+    label: '按资料推测',
     tone: 'warning',
     note: '你没有直接说过这件事，回答是根据下面的资料推测的。',
   },
@@ -172,9 +172,15 @@ export function ReplyDetails({
   own?: boolean;
 }) {
   const cited = reply.cited ?? [];
+  const node = useRef<HTMLDivElement>(null);
+  // Opened under an answer near the foot of the page, it is brought into view rather than left below the edge.
+  useEffect(() => {
+    node.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
   return (
     <Text
       as="div"
+      ref={node}
       id={id}
       size="sm"
       tone="secondary"
@@ -217,7 +223,7 @@ export function ReplyLine({
   const id = useId();
   return (
     <>
-      <div className="reply-actions mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      <div className="reply-actions mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 empty:hidden">
         {plain ? null : reply.verified === false ? (
           // Nothing to say about what kind of answer it is, so no badge: only a way to see why.
           <IconButton

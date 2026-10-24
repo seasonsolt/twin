@@ -179,7 +179,7 @@ afterEach(() => {
 
 it('lists conversations and tasks together, newest first, and a task says it is one', async () => {
   mount();
-  const list = await screen.findByRole('region', { name: '和林舟的对话' });
+  const list = await screen.findByRole('region', { name: '对话列表' });
   const rows = await within(list).findAllByRole('listitem');
   // Each says whom it is with, after its title.
   expect(rows.map((row) => row.textContent)).toEqual([
@@ -202,7 +202,7 @@ it('names a fresh start after the kind of message, and marks a task still being 
     return json({ stale: false });
   });
   mount();
-  const list = await screen.findByRole('region', { name: '和林舟的对话' });
+  const list = await screen.findByRole('region', { name: '对话列表' });
   expect(await within(list).findByText('任务 · 在做')).toBeVisible();
   expect(within(list).getByRole('button', { name: '新对话' })).toBeVisible();
   await user.click(screen.getByRole('radio', { name: '交代任务' }));
@@ -213,7 +213,7 @@ it('names a fresh start after the kind of message, and marks a task still being 
 it('opens a task from the list in the same page and goes back to a conversation, with a draft kept when the kind of message changes', async () => {
   const user = userEvent.setup();
   mount();
-  const list = await screen.findByRole('region', { name: '和林舟的对话' });
+  const list = await screen.findByRole('region', { name: '对话列表' });
   await user.click(
     await within(list).findByRole('button', {
       name: /^下周发布怎么安排(?!的更多操作)/u,
@@ -254,9 +254,11 @@ it('shows no choice of kind, and no task request, where work is switched off', a
   expect(await screen.findByLabelText('你说')).toBeVisible();
   expect(screen.queryByRole('radiogroup', { name: '这条消息是' })).toBeNull();
   expect(screen.queryByLabelText('要做的事')).toBeNull();
-  await waitFor(() => expect(requested('/api/conversations')).toBe(true));
+  await waitFor(() =>
+    expect(requested('/api/personas/conversations')).toBe(true),
+  );
   expect(requested('/api/persona/work')).toBe(false);
-  const list = screen.getByRole('region', { name: '和林舟的对话' });
+  const list = screen.getByRole('region', { name: '对话列表' });
   expect(within(list).queryByText('任务')).toBeNull();
 });
 
@@ -278,7 +280,7 @@ it('picks the twin in one place, beside the box a message is written in, whether
   const user = userEvent.setup();
   const view = mount();
   const picks = () => screen.getAllByRole('button', { name: /^切换分身/ });
-  const list = await screen.findByRole('region', { name: '和林舟的对话' });
+  const list = await screen.findByRole('region', { name: '对话列表' });
   expect(picks()).toHaveLength(1);
   expect(within(list).queryByRole('button', { name: /^切换分身/ })).toBeNull();
   expect(
@@ -287,7 +289,7 @@ it('picks the twin in one place, beside the box a message is written in, whether
     }),
   ).toBeVisible();
   await user.click(screen.getByRole('button', { name: '收起对话列表' }));
-  expect(screen.queryByRole('region', { name: '和林舟的对话' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '对话列表' })).toBeNull();
   expect(picks()).toHaveLength(1);
   view.unmount();
   media('(max-width: 767px)');
@@ -323,7 +325,7 @@ it('opens what an answer rests on under it, where the person behind the twin can
 it('renames a conversation from its menu, and a task has no rename', async () => {
   const user = userEvent.setup();
   mount();
-  const list = await screen.findByRole('region', { name: '和林舟的对话' });
+  const list = await screen.findByRole('region', { name: '对话列表' });
   await user.click(
     await within(list).findByRole('button', { name: '写周报的更多操作' }),
   );
@@ -411,9 +413,9 @@ it('shows what the person answered themself as theirs, apart from the twin’s a
   expect(within(mine).getByText('周五前给你方案')).toBeVisible();
   const twin = screen.getByRole('article', { name: '分身回复' });
   expect(within(twin).getByText('林舟的分身')).toBeVisible();
-  expect(within(twin).getByRole('status')).toHaveTextContent(
-    '已转给林舟本人 · 已回复',
-  );
+  // Her words stand right under it: the line under the answer does not say "replied" a second time.
+  expect(within(twin).queryByRole('status')).toBeNull();
+  expect(within(mine).queryByText('林舟')).toBeNull();
 });
 
 it('shows under the person’s reply that the promise they took on is in the commitments, a link for those who see them', async () => {
@@ -473,7 +475,8 @@ it('does not send the person’s words back as part of what was said, and folds 
   const merged = withHandoffs(waiting, remote);
   expect(merged.map((turn) => turn.role)).toEqual(['user', 'twin', 'self']);
   expect(merged[1].handoff?.status).toBe('replied');
-  expect(withHandoffs(merged, remote)).toEqual(merged);
+  // Nothing new in it: the very same turns come back, so the page is not moved for nothing.
+  expect(withHandoffs(merged, remote)).toBe(merged);
   const unsaved: Turn = { ...turns[0], id: 'u9', content: '还没存的一句' };
   expect(withHandoffs([...waiting, unsaved], remote).at(-1)).toBe(unsaved);
 });
@@ -502,10 +505,93 @@ it('asks again while the person’s answer is awaited, and shows it under the an
     expect(
       await screen.findByRole('article', { name: '本人回复' }),
     ).toHaveTextContent('周五前给你方案');
-    expect(screen.getByRole('status')).toHaveTextContent(
-      '已转给林舟本人 · 已回复',
-    );
+    expect(screen.queryByRole('status')).toBeNull();
   } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('asks now and then after the person has answered or the question ran out, for a promise taken on or a late reply', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  try {
+    // They answered in words; the promise is taken on later, in the commitments.
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      { ...turns[1], handoff: handed() },
+      own,
+    ];
+    localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+    const view = mount();
+    const mine = await screen.findByRole('article', { name: '本人回复' });
+    expect(within(mine).queryByText(/已记为承诺/u)).toBeNull();
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      {
+        ...turns[1],
+        handoff: { ...handed(), status: 'accepted', status_label: '已接受' },
+      },
+      own,
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+    expect(
+      within(
+        await screen.findByRole('article', { name: '本人回复' }),
+      ).getByText('已记为承诺'),
+    ).toBeVisible();
+    view.unmount();
+    // It ran out, and the person answered after all.
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      {
+        ...turns[1],
+        handoff: { ...handed(), status: 'expired', status_label: '已过期' },
+      },
+    ];
+    mount();
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '已转给林舟本人 · 已过期',
+    );
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      { ...turns[1], handoff: handed() },
+      own,
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+    expect(
+      await screen.findByRole('article', { name: '本人回复' }),
+    ).toHaveTextContent('周五前给你方案');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('leaves the page where the person reads it when asking again brings nothing new', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const scroll = vi.fn();
+  Element.prototype.scrollIntoView = scroll;
+  try {
+    server.rows.get('c1')!.turns = [
+      turns[0],
+      { ...turns[1], handoff: handed('delivered') },
+    ];
+    localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+    mount();
+    await screen.findByRole('status');
+    const asked = () =>
+      fetcher.mock.calls.filter(([url]) => url === '/api/conversations/c1')
+        .length;
+    const before = { asked: asked(), scrolled: scroll.mock.calls.length };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(asked()).toBeGreaterThan(before.asked);
+    expect(scroll.mock.calls.length).toBe(before.scrolled);
+  } finally {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
     vi.useRealTimers();
   }
 });
@@ -634,4 +720,27 @@ it('tells the asker when the question could not be handed on, and lets them try 
   expect(
     within(card).getByRole('button', { name: '还有疑问，问林舟' }),
   ).toBeEnabled();
+});
+
+it('does not say a team answer was a general one under the card, which is the person’s own confirmed word', async () => {
+  server.rows.get('c1')!.turns = [
+    turns[0],
+    {
+      ...turns[1],
+      content: '团队里已经有确认过的答案，见上面的团队答案。',
+      reply: {
+        ...reply,
+        mode: 'general',
+        cited: [],
+        reply: '团队里已经有确认过的答案，见上面的团队答案。',
+        team_answers: [answerCard()],
+      },
+    },
+  ];
+  localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
+  mount();
+  await screen.findByRole('article', { name: '团队答案' });
+  const twin = screen.getByRole('article', { name: '分身回复' });
+  expect(within(twin).getByText(/见上面的团队答案/u)).toBeVisible();
+  expect(within(twin).queryByText('通用建议，不代表本人观点')).toBeNull();
 });

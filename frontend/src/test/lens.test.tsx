@@ -14,7 +14,8 @@ import {
   type LensList,
   type LensUse,
 } from '../features/lens/types';
-import { setPersonaId } from '../lib/persona';
+import { personaKey, setPersonaId } from '../lib/persona';
+import { CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { Chat } from '../pages/Chat';
 import { useAuth } from '../stores/auth';
 import { useChatLayout } from '../stores/chatLayout';
@@ -655,4 +656,31 @@ it('shows why when the lens could not be asked any more, and no longer offers it
     calls.mock.calls.filter(([url]) => url === '/api/persona/lenses/available')
       .length,
   ).toBeGreaterThan(0);
+  // A lens that is gone says nothing of the conversation: it is still the one the next message goes into.
+  expect(localStorage.getItem(personaKey(CURRENT_CHAT_KEY))).toBeTruthy();
+});
+
+it('offers many lenses as one choice, not a chip for each', async () => {
+  sessionStorage.clear();
+  localStorage.clear();
+  useChatLayout.setState({ sheet: undefined, stage: undefined });
+  useStatus.setState({ data: null, error: null });
+  const user = userEvent.setup();
+  chatWith([
+    ...offered,
+    { ...offered[0], id: 'l2', name: '招聘面试' },
+    { ...offered[0], id: 'l3', name: '排期取舍' },
+  ]);
+  const choice = await screen.findByRole('combobox', { name: '向赋能提问' });
+  expect(screen.queryByRole('button', { name: /^赋能/u })).toBeNull();
+  await user.selectOptions(choice, 'l2');
+  expect(screen.getByRole('textbox', { name: '你说' })).toHaveAttribute(
+    'placeholder',
+    '向王屿的赋能提问…',
+  );
+  await user.selectOptions(choice, '');
+  expect(screen.getByRole('textbox', { name: '你说' })).toHaveAttribute(
+    'placeholder',
+    '和王屿聊点什么…',
+  );
 });

@@ -247,6 +247,34 @@ it('finds someone by name with ⌘K: each opens on their member page, a twin mad
   expect(await screen.findByText('在/team/twin/p-self')).toBeInTheDocument();
 });
 
+it("finds a colleague's public twin once, as the person it belongs to, and counts it once", async () => {
+  people = [
+    person({ id: 'u-1', name: '林舟', persona_id: 'default' }),
+    person({
+      id: 'u-2',
+      name: '许清禾',
+      persona_id: null,
+      talk: 'p-pub',
+      twin_id: 'p-pub',
+      can_manage: false,
+    }),
+  ];
+  usePersonas.setState({
+    id: 'default',
+    items: [twin({}), twin({ id: 'p-pub', name: '许清禾', is_default: false })],
+  });
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: '团队（2）' });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  expect(
+    within(dialog)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual(['林舟看档案', '许清禾看档案']);
+});
+
 const asked = (overrides: Record<string, unknown> = {}) => ({
   team_answers: [
     {

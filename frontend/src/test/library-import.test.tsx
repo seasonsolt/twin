@@ -312,7 +312,8 @@ it('brings in several transcripts one after another, from the page menu too', as
     new File(['x'], '二.txt'),
   ]);
   let dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
-  expect(within(dialog).getByText('一.docx')).toBeVisible();
+  // In the document, not “visible”: the dialog fades in, and a slow machine is still at its first frame.
+  expect(within(dialog).getByText('一.docx')).toBeInTheDocument();
   await user.click(within(dialog).getByRole('button', { name: '取消' }));
   // The second is read when the first is let go.
   await waitFor(() =>
@@ -336,5 +337,5 @@ it('brings in several transcripts one after another, from the page menu too', as
     new File(['x'], '四.vtt'),
   ]);
   dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
-  expect(within(dialog).getByText('三.srt')).toBeVisible();
+  expect(within(dialog).getByText('三.srt')).toBeInTheDocument();
 });

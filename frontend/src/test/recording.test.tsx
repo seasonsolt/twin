@@ -310,7 +310,7 @@ it('lets someone in a colleague’s meeting read it and say a speaker given to t
     }),
   );
   show();
-  await screen.findByText(/你参加了这场会/u);
+  await screen.findByText(/你参加的会/u);
   expect(screen.queryByRole('region', { name: /是谁？/u })).toBeNull();
   const list = screen.getByRole('region', { name: '说话人' });
   expect(within(list).getByText('林舟')).toBeInTheDocument();
@@ -336,8 +336,9 @@ it('shows a transcript brought in as text by what each speaker said, with nothin
           filename: '客户访谈.txt',
           kind: 'transcript',
           timed: false,
-          created_at: '2026-10-11T08:00:00Z',
-          duration_s: null,
+          created_at: '2026-10-24T08:00:00Z',
+          creation_time: '2026-10-11',
+          duration_s: 2400,
           status: 'ready',
           transcript_id: 't',
           revision: 0,
@@ -366,6 +367,15 @@ it('shows a transcript brought in as text by what each speaker said, with nothin
   expect(within(current).getByText('2 段')).toBeVisible();
   expect(within(current).getByText('「合同这周能签吗」')).toBeVisible();
   expect(current.querySelector('audio')).toBeNull();
+  // The lines stand for the clip: no apology for the missing clip, and no voiceprint to offer to keep.
+  expect(within(current).queryByText(/没有可试听的片段/u)).toBeNull();
+  expect(
+    within(current).queryByLabelText('声音清楚，用作这个人的声纹样本'),
+  ).toBeNull();
+  // Its day is the one it was given, and its length is about, as the library says.
+  expect(screen.getByText(/10月11日 · 约 40 分钟/u)).toBeVisible();
+  // A name that is its own label is said once.
+  expect(screen.getByText('1 段')).toBeVisible();
   await userEvent.click(screen.getByText(/^完整转写稿/));
   expect(await screen.findByText(/林舟：/)).toBeVisible();
   // No times in the export: no clock in front of the lines.

@@ -37,7 +37,7 @@ import { api, ApiError } from '../lib/api';
 import { sortByName } from '../lib/names';
 import { withBase } from '../lib/base';
 import { heard, useListening } from '../stores/listening';
-import type { Recording as RecordingRow } from './Library';
+import { madeOn, type Recording as RecordingRow } from './Library';
 import type { Processing } from '../features/memories/BuildProgress';
 
 export interface Candidate {
@@ -204,6 +204,7 @@ function SpeakerCard({
   now,
   elsewhere = 0,
   denoised,
+  transcript: fromTranscript,
   onDecide,
 }: {
   recordingId: string;
@@ -220,6 +221,8 @@ function SpeakerCard({
   elsewhere?: number;
   /** The recording has a denoised copy, so the original can be chosen instead. */
   denoised: boolean;
+  /** A transcript has no sound: no clip to hear, and no voiceprint to keep. */
+  transcript: boolean;
   onDecide: (decision: Decision) => void;
 }) {
   const id = useId();
@@ -330,9 +333,11 @@ function SpeakerCard({
             </>
           ) : (
             <>
-              <Text size="sm" tone="secondary">
-                这位说话人没有可试听的片段，可参考完整转写稿。
-              </Text>
+              {!fromTranscript && (
+                <Text size="sm" tone="secondary">
+                  这位说话人没有可试听的片段，可参考完整转写稿。
+                </Text>
+              )}
               {segments
                 .filter((s) => s.speaker === speaker.id && s.text.trim())
                 .slice(0, 3)
@@ -468,6 +473,7 @@ function SpeakerCard({
       >
         <Button
           disabled={busy || !selectedName}
+          title="只有确认过的发言才会进入这个人的分身"
           onClick={() =>
             onDecide(
               person === 'new'
@@ -478,12 +484,14 @@ function SpeakerCard({
         >
           {selectedName ? `确认是${selectedName}` : '先选一个人'}
         </Button>
-        <Checkbox
-          label="声音清楚，用作这个人的声纹样本"
-          checked={sample}
-          disabled={busy}
-          onChange={(event) => setSample(event.target.checked)}
-        />
+        {!fromTranscript && (
+          <Checkbox
+            label="声音清楚，用作这个人的声纹样本"
+            checked={sample}
+            disabled={busy}
+            onChange={(event) => setSample(event.target.checked)}
+          />
+        )}
       </DecisionBar>
     </Card>
   );
@@ -561,9 +569,19 @@ export function Recording() {
         location.state?.inboxTask &&
         ['confirm', 'unknown', 'mixed'].includes(decision.action)
       ) {
-        void navigate('/inbox', {
-          state: { resolvedInboxTask: location.state.inboxTask },
-        });
+        // Back to where it was opened from: the voices one by one, with the run kept, or the list.
+        void navigate(
+          {
+            pathname: '/inbox',
+            search: location.state.inboxView === 'focus' ? '?view=focus' : '',
+          },
+          {
+            state: {
+              resolvedInboxTask: location.state.inboxTask,
+              inboxAnswered: location.state.inboxAnswered,
+            },
+          },
+        );
         return;
       }
     } catch (failure) {
@@ -605,6 +623,20 @@ export function Recording() {
     detail?.kind === 'transcript'
       ? `${detail.segments.filter((s) => s.speaker === speaker.id).length} 段`
       : `说了 ${span(speaker.seconds)}`;
+  // What a settled speaker is called in a list, and what the line under it adds: the speaker's own label and how
+  // much they said (a transcript's label is a name already, said once).
+  const titleOf = (speaker: Speaker) =>
+    speaker.decision === 'confirmed'
+      ? (names.get(speaker.person_id ?? '') ?? speaker.id)
+      : speaker.decision === 'mixed'
+        ? '几个人混在一起'
+        : speaker.decision === 'unknown'
+          ? '不在名单里'
+          : '还没确认';
+  const metaOf = (speaker: Speaker) =>
+    titleOf(speaker) === speaker.id
+      ? said(speaker)
+      : `${speaker.id} · ${said(speaker)}`;
   const who = (speakerId: string) => {
     const speaker = detail?.speakers.find((s) => s.id === speakerId);
     return speaker?.decision === 'confirmed' && speaker.person_id
@@ -664,13 +696,11 @@ export function Recording() {
       description={
         detail
           ? [
-              Number.isNaN(Date.parse(detail.created_at))
+              madeOn(detail),
+              detail.duration_s == null
                 ? ''
-                : new Date(detail.created_at).toLocaleDateString('zh-CN', {
-                    month: 'long',
-                    day: 'numeric',
-                  }),
-              detail.duration_s == null ? '' : span(detail.duration_s),
+                : // The length of a transcript is where its last line is: about, as the library says.
+                  `${detail.kind === 'transcript' ? '约 ' : ''}${span(detail.duration_s)}`,
               `${detail.speakers.length} 位说话人`,
             ]
               .filter(Boolean)
@@ -694,9 +724,6 @@ export function Recording() {
         )
       }
     >
-      <Text size="xs" tone="tertiary">
-        只有确认过的发言才会进入这个人的分身。
-      </Text>
       {error && (
         <Text role="alert" tone="danger">
           {error}
@@ -719,7 +746,7 @@ export function Recording() {
       ) : detail.can_edit === false ? (
         <>
           <Text size="sm" tone="secondary">
-            这段录音由上传的同事整理，你参加了这场会，可以查看。标成你的发言如果不是你，点「不是我」。
+            你参加的会，标成你的不是你就点「不是我」。
           </Text>
           <Section title="说话人">
             <Card>
@@ -735,16 +762,8 @@ export function Recording() {
                           {Array.from(names.get(s.person_id ?? '') ?? s.id)[0]}
                         </AvatarFrame>
                       }
-                      title={
-                        s.decision === 'confirmed'
-                          ? (names.get(s.person_id ?? '') ?? s.id)
-                          : s.decision === 'mixed'
-                            ? '几个人混在一起'
-                            : s.decision === 'unknown'
-                              ? '不在名单里'
-                              : '还没确认'
-                      }
-                      meta={`${s.id} · ${said(s)}`}
+                      title={titleOf(s)}
+                      meta={metaOf(s)}
                       trailing={
                         mine ? (
                           <>
@@ -797,6 +816,7 @@ export function Recording() {
                   : 0
               }
               denoised={detail.denoised === true}
+              transcript={detail.kind === 'transcript'}
               onDecide={(decision) => void decide(current, decision)}
             />
           ) : (
@@ -839,14 +859,8 @@ export function Recording() {
                           {Array.from(names.get(s.person_id ?? '') ?? s.id)[0]}
                         </AvatarFrame>
                       }
-                      title={
-                        s.decision === 'confirmed'
-                          ? (names.get(s.person_id ?? '') ?? s.id)
-                          : s.decision === 'mixed'
-                            ? '几个人混在一起'
-                            : '不在名单里'
-                      }
-                      meta={`${s.id} · ${said(s)}`}
+                      title={titleOf(s)}
+                      meta={metaOf(s)}
                       trailing={
                         <>
                           <Badge>

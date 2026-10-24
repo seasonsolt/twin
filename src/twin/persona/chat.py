@@ -78,7 +78,7 @@ UNCLAIMED_CUE = "请直接联系本人"
 # person's say. Words common in other senses (你定期, 前给我们, 给我一个例子, commitment) are left out or bounded.
 OWNER_CUE = re.compile(
     r"答应|承诺|你保证|能保证|能不能保证|能否保证|拍板|批准|审批|同意我|你来定|你定(?![期义位制做])|准话|评价|评一下|靠谱吗|靠不靠谱|能不能独立|能否独立|"
-    r"(?<=[一二三四五六日天末底号点晚])前给我(?!们)|给我一版|给我一份|"
+    r"(?<=[一二三四五六日天末底号点晚])前给我(?!们)|给我一版|"
     r"(?<![A-Za-z])(?:commit|promise|approve)(?![A-Za-z])",
     re.IGNORECASE,
 )

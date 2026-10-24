@@ -717,6 +717,30 @@ it('does not lose the words the person wrote when the twin’s draft takes their
   expect(within(card).queryByRole('button', { name: '换回我写的' })).toBeNull();
 });
 
+it('drafting again over an untouched draft still gives back the words the person first wrote', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: [handoff({})], pending: 1 });
+  fetcher.mockImplementation(async (url: string) =>
+    url === '/api/persona/handoffs'
+      ? json(away)
+      : json({ text: '这次先改。【请你定：测试补不补】' }),
+  );
+  render(<Away />);
+  const card = await screen.findByRole('article', {
+    name: /需求评审里那组接口/u,
+  });
+  const box = within(card).getByRole('textbox');
+  await user.type(box, '我的想法是下版本再改。');
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  await waitFor(() =>
+    expect(box).toHaveValue('这次先改。【请你定：测试补不补】'),
+  );
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+  await user.click(within(card).getByRole('button', { name: '换回我写的' }));
+  expect(box).toHaveValue('我的想法是下版本再改。');
+});
+
 it('reads the list again when the question was answered meanwhile, and says so', async () => {
   const user = userEvent.setup();
   away = data({ waiting: [handoff({})], pending: 1 });

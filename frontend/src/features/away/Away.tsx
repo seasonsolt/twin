@@ -60,35 +60,37 @@ function Done({
         .filter(Boolean)
         .join(' · ')}
       trailing={
-        <>
-          {back && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => post('restore', '已放回')}
-            >
-              放回
-            </Button>
-          )}
-          {owed && (
-            <>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => post('accept', '已接下，记进承诺')}
-              >
-                接下
-              </Button>
+        (back || owed) && (
+          <>
+            {back && (
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => post('decline', '已回绝')}
+                onClick={() => post('restore', '已放回')}
               >
-                不接
+                放回
               </Button>
-            </>
-          )}
-        </>
+            )}
+            {owed && (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => post('accept', '已接下，记进承诺')}
+                >
+                  接下
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => post('decline', '已回绝')}
+                >
+                  不接
+                </Button>
+              </>
+            )}
+          </>
+        )
       }
     />
   );

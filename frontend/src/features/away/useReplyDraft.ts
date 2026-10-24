@@ -12,6 +12,7 @@ export function useReplyDraft(
 ) {
   const [text, setText] = useState('');
   const [kept, setKept] = useState<string | null>(null);
+  const [made, setMade] = useState('');
   const [drafting, setDrafting] = useState(false);
   const draft = async () => {
     setDrafting(true);
@@ -21,7 +22,9 @@ export function useReplyDraft(
         method: 'POST',
         json: {},
       });
-      setKept(text.trim() ? text : null);
+      // Drafting again over an untouched draft leaves the words it first replaced as they were.
+      if (text !== made) setKept(text.trim() ? text : null);
+      setMade(drafted.text);
       setText(drafted.text);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '起草失败');

@@ -831,9 +831,11 @@ class TeamDB:
                     )
                 }
                 removed += db.execute("DELETE FROM conversations WHERE persona_id = ?", (persona_id,)).rowcount
+                indexed = set()
                 for conversation_id, asker, title, updated_at in rows:
                     if self._taken(db, conversation_id, persona_id):
                         continue
+                    indexed.add(conversation_id)
                     audience, via, delegation_id, name = kept.get(conversation_id, (COLLEAGUE, "direct", None, ""))
                     db.execute(
                         "INSERT INTO conversations (id, persona_id, asker, audience, via, delegation_id, title, "
@@ -841,6 +843,9 @@ class TeamDB:
                         (conversation_id, persona_id, asker, audience, via, delegation_id, title, updated_at, name),
                     )
                     added += 1
+                # What the twin no longer has is no longer asked about: its handoffs wait for no one (as in reconcile).
+                for conversation_id in kept.keys() - indexed:
+                    self._withdraw(db, conversation_id, persona_id)
         self.set_meta(RECONCILED_AT, dt.datetime.now(dt.UTC).isoformat())
         return Reconciled(added=added, removed=removed)
 
@@ -986,13 +991,6 @@ class TeamDB:
                 ).fetchall()
             found.update((r[0], r[1]) for r in rows)
         return found
-
-    def count_handoffs(self, persona_id: str, status: HandoffStatus = "delivered") -> int:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT COUNT(*) FROM handoffs WHERE persona_id = ? AND status = ?", (persona_id, status)
-            ).fetchone()
-        return int(row[0])
 
     def expire_due(self, now: dt.datetime | None = None) -> int:
         """Mark the handoffs nobody answered in time as expired; the person can still answer or put them back."""
@@ -1214,10 +1212,6 @@ class TeamDB:
         with self._tx() as db:
             db.execute("UPDATE team_answers SET judged = ? WHERE id = ?", (judged, answer_id))
 
-    def set_team_answer_item(self, answer_id: str, item_id: str) -> None:
-        with self._tx() as db:
-            db.execute("UPDATE team_answers SET item_id = ? WHERE id = ?", (item_id, answer_id))
-
     def withdraw_team_answer(self, answer_id: str, now: dt.datetime | None = None) -> TeamAnswer:
         """Take the answer back: it is no longer quoted. Conversations it already appeared in are not touched."""
         with self._tx() as db:
@@ -1321,15 +1315,6 @@ class TeamDB:
     def get_delegation(self, delegation_id: str) -> Delegation | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM delegations WHERE id = ?", (delegation_id,)).fetchone()
-        return None if row is None else Delegation(*row)
-
-    def delegation_of(self, conversation_id: str) -> Delegation | None:
-        """The delegation a conversation (of the person with their assistant) started, if any."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM delegations WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
-                (conversation_id,),
-            ).fetchone()
         return None if row is None else Delegation(*row)
 
     def delegation_counts(self, conversation_ids: Collection[str]) -> dict[str, int]:

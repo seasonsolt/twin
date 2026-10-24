@@ -39,11 +39,8 @@ export function MixedList({
         <TaskRow
           key={`mixed-${m.recording_id}-${m.speaker_id}`}
           leading={mark('info')}
-          title={`${m.name} · ${m.filename} · ${m.speaker_id}`}
-          meta={`${Math.round(m.share * 100)}% 不像${m.name}（${span(m.open_seconds)}），已自动排除`}
-          hint={
-            m.likely_name ? `多数像${m.likely_name}` : '多数不像团队里的任何人'
-          }
+          title={`${m.name} · ${m.filename}`}
+          meta={`${Math.round(m.share * 100)}% 不像 · ${span(m.open_seconds)}`}
           actions={
             <Button
               variant="secondary"
@@ -51,7 +48,7 @@ export function MixedList({
               disabled={busy}
               onClick={() => onReview(m)}
             >
-              听一听，决定是谁
+              去听
             </Button>
           }
         />
@@ -60,8 +57,18 @@ export function MixedList({
   );
 }
 
-/** Recordings whose speakers have no voiceprint to group by: settled in the recording itself. */
-export function UnsortedList({ items }: { items: Unsorted[] }) {
+/** Recordings whose speakers have no voiceprint to group by: settled in the recording itself. A transcript brought in
+ * as text has no sound to hear: it is read and confirmed. */
+export function UnsortedList({
+  items,
+  recordings,
+}: {
+  items: Unsorted[];
+  recordings: Pick<Recording, 'id' | 'kind'>[];
+}) {
+  const silent = new Set(
+    recordings.filter((r) => r.kind === 'transcript').map((r) => r.id),
+  );
   return (
     <Stack as="ul" gap={0} aria-label="还没认人">
       {items.map((u) => (
@@ -82,7 +89,7 @@ export function UnsortedList({ items }: { items: Unsorted[] }) {
               variant="secondary"
               size="sm"
             >
-              试听并确认
+              {silent.has(u.recording_id) ? '确认' : '试听并确认'}
             </RouteButton>
           }
         />
@@ -186,7 +193,7 @@ export function DisputedList({ items }: { items: Waiting[] }) {
           id={rowId(`speaker-${w.recording_id}-${w.id}`)}
           leading={mark('warning')}
           title={`${w.filename} · ${w.id}`}
-          meta="原来标成的人说这不是 TA"
+          meta={span(w.seconds)}
           actions={
             <RouteButton
               to={recordingPath(w.recording_id, w.id)}
@@ -285,7 +292,7 @@ export function FragmentsRow({
                 size="sm"
                 onClick={() => onGive(person, members)}
               >
-                {members.length} 段像{person.name}：都是{person.name}
+                归给{person.name}（{members.length}）
               </Button>
             ))}
             <Button variant="secondary" size="sm" onClick={onAside}>

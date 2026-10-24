@@ -1,5 +1,5 @@
 import { useState, type Ref } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, type NavigateFunction } from 'react-router';
 import {
   ActionMenu,
   Badge,
@@ -58,7 +58,7 @@ export function voiceFacts(item: VoiceItem) {
   const title =
     facts?.title ?? (item.kind === 'person' ? item.person.name : '');
   const meta = [
-    `${item.recordings} 段 · 共说了 ${span(item.seconds)}`,
+    `${item.recordings} 段 · ${span(item.seconds)}`,
     facts?.quote && `「${facts.quote}」`,
   ]
     .filter(Boolean)
@@ -66,12 +66,39 @@ export function voiceFacts(item: VoiceItem) {
   return { facts, title, meta };
 }
 
+/** The menu entry that opens the recording being heard, which settles that one alone: it says which of the voice's
+ * recordings it is, and the recording says how many more wait. `back` is what the page remembers to come back to. */
+export function openRecording(
+  item: VoiceItem,
+  members: Heard[],
+  heard: number,
+  navigate: NavigateFunction,
+  back: Record<string, unknown> = {},
+) {
+  const current = members[heard % members.length];
+  return {
+    label:
+      members.length > 1
+        ? `打开第 ${(heard % members.length) + 1} 段`
+        : '打开录音',
+    onSelect: () =>
+      void navigate(recordingPath(current.recording_id, current.speaker_id), {
+        state: {
+          inboxTask: item.id,
+          // Only a voice heard in several recordings is settled across them; a person is one speaker's.
+          voiceRecordings: item.kind === 'voice' ? item.recordings : undefined,
+          ...back,
+        },
+      }),
+  };
+}
+
 /** A name to type for a voice that is none of the answers offered; Enter answers. */
 export function NameField({
   label,
   known,
   autoFocus,
-  placeholder = '这是谁，输入名字',
+  placeholder = '输入名字',
   inputRef,
   onName,
 }: {
@@ -104,9 +131,7 @@ export function NameField({
         className="min-w-0 flex-1"
         onChange={(event) => setName(event.target.value)}
       />
-      <Button type="submit" disabled={!name.trim()}>
-        确认
-      </Button>
+      {name.trim() && <Button type="submit">确认</Button>}
     </Row>
   );
 }
@@ -130,6 +155,8 @@ export function VoiceRow({
   const options: Option[] = facts?.options ?? [];
   const current = members.length ? members[heard % members.length] : undefined;
   const typing = options.length === 0 || asking;
+  // Rows often share a title: the time they speak tells them apart to a screen reader.
+  const named = `${title}（${span(item.seconds)}）`;
   return (
     <TaskRow
       id={rowId(item.id)}
@@ -159,7 +186,6 @@ export function VoiceRow({
         </Row>
       }
       meta={meta}
-      hint={facts?.hint || undefined}
       actionsWidth={typing ? 'field' : 'auto'}
       actions={
         <>
@@ -181,7 +207,7 @@ export function VoiceRow({
             ))}
             {typing && (
               <NameField
-                label={`${title}，是谁`}
+                label={`${named}，是谁`}
                 known={known}
                 autoFocus={asking}
                 onName={(name) => onAnswer(item, answerFor(name, known))}
@@ -189,7 +215,7 @@ export function VoiceRow({
             )}
           </Row>
           <ActionMenu
-            label={`更多：${title}`}
+            label={`更多：${named}`}
             items={[
               ...(!typing
                 ? [{ label: '其他人', onSelect: () => setAsking(true) }]
@@ -203,28 +229,7 @@ export function VoiceRow({
                   ]
                 : []),
               ...(current
-                ? [
-                    {
-                      // The recording being heard, which settles that one alone: it says how many more wait.
-                      label:
-                        members.length > 1
-                          ? `打开第 ${(heard % members.length) + 1} 段`
-                          : '打开录音',
-                      onSelect: () =>
-                        void navigate(
-                          recordingPath(
-                            current.recording_id,
-                            current.speaker_id,
-                          ),
-                          {
-                            state: {
-                              inboxTask: item.id,
-                              voiceRecordings: item.recordings,
-                            },
-                          },
-                        ),
-                    },
-                  ]
+                ? [openRecording(item, members, heard, navigate)]
                 : []),
               {
                 label: '不在团队里',

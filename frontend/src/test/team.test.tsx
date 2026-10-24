@@ -538,6 +538,45 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
   ).toHaveValue('');
 });
 
+it('keeps the dialog and what was typed when the e-mail of a twin to make is not saved', async () => {
+  let taken = true;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review'))
+        return json({ items: [], voices: [], fragments: [], unsorted: [] });
+      if (url === '/api/personas') return json({ items: [], default: null });
+      if (url === '/api/library/people/per_1/persona')
+        return taken
+          ? json({ detail: '这个邮箱或工号已经用在另一个分身上' }, 409)
+          : json({ persona_id: 'p-1', new: true });
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const row = (await screen.findByText('张总', { selector: 'p' })).closest(
+    'tr',
+  )!;
+  await userEvent.click(within(row).getByRole('button', { name: '生成分身' }));
+  const dialog = await screen.findByRole('dialog', { name: '为张总建分身' });
+  const field = within(dialog).getByRole('textbox', {
+    name: /企业邮箱或工号/u,
+  });
+  await userEvent.type(field, 'taken@acme.cn');
+  await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    '这个邮箱或工号已经用在另一个分身上',
+  );
+  expect(field).toHaveValue('taken@acme.cn');
+  // Another try that goes through closes it.
+  taken = false;
+  await userEvent.click(within(dialog).getByRole('button', { name: '建好' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: '为张总建分身' })).toBeNull(),
+  );
+});
+
 it('shows a person who found themselves by voice as having their own twin', async () => {
   people = [person({ self_claimed: true }), people[1]!];
   vi.stubGlobal(

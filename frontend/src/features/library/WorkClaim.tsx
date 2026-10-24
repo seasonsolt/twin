@@ -18,7 +18,7 @@ export function WorkClaim({
   person: Person | null;
   twin?: Persona;
   busy: boolean;
-  /** Why saving failed: said here, where the person is looking, not on the page behind. */
+  /** Why saving failed: said here, where the owner is looking, with what was typed still in the field. */
   error?: string;
   onClose: () => void;
   onSave: (claim: string) => void;
@@ -67,7 +67,7 @@ export function WorkClaim({
           />
         </Field>
         {error && (
-          <Text size="sm" tone="danger" role="alert">
+          <Text role="alert" size="sm" tone="danger">
             {error}
           </Text>
         )}

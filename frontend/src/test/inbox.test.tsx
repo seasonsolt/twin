@@ -67,6 +67,9 @@ interface Server {
   posts: { url: string; method?: string; body?: Record<string, unknown> }[];
   /** Answers to review requests: a status other than 200 fails them. */
   review: number;
+  /** Answers to settling voices, and to saving a work e-mail: a status other than 200 fails them. */
+  voicesStatus: number;
+  claim: number;
 }
 let server: Server;
 const library = (): LibraryState => ({
@@ -134,6 +137,8 @@ beforeEach(() => {
     recordings: [],
     posts: [],
     review: 200,
+    voicesStatus: 200,
+    claim: 200,
   };
   usePersonas.setState({ items: [] });
   vi.stubGlobal(
@@ -151,6 +156,11 @@ beforeEach(() => {
           ? json(page(url))
           : json({ detail: '复核暂时失败' }, server.review);
       if (url === '/api/library/voices' && method === 'POST') {
+        if (server.voicesStatus !== 200)
+          return json(
+            { detail: '这个声音刚被别人处理过了' },
+            server.voicesStatus,
+          );
         settle(body!.members as { speaker_id: string }[]);
         return json({ recognised: 0 });
       }
@@ -179,6 +189,13 @@ beforeEach(() => {
         );
         return json({});
       }
+      if (/^\/api\/personas\/[^/]+\/claim$/u.test(url) && method === 'PUT')
+        return server.claim === 200
+          ? json({})
+          : json(
+              { detail: '这个邮箱或工号已经用在另一个分身上' },
+              server.claim,
+            );
       if (url === '/api/personas') return json([]);
       throw new Error(`${method} ${url}`);
     }),
@@ -296,6 +313,11 @@ it('offers every name a voice may be as a button, the surest in the lead, and te
       candidates: [{ person_id: 'per_2', name: '李总', score: 0.66 }],
       tier: 'mid',
     }),
+    voice('maybe', {
+      members: [member('rec_5', 'S5', 50)],
+      seconds: 50,
+      candidates: [{ person_id: 'per_2', name: '李总', score: 0.5 }],
+    }),
   ];
   view();
   const list = await screen.findByRole('list', { name: '新的声音' });
@@ -321,8 +343,14 @@ it('offers every name a voice may be as a button, the surest in the lead, and te
   expect(
     within(row('多半是李总')).getByRole('button', { name: '归给李总' }),
   ).toHaveClass('bg-accent');
+  // One name it may be without being sure says so, and its button is no main action.
+  expect(
+    within(row('可能是李总')).getByRole('button', { name: '归给李总' }),
+  ).not.toHaveClass('bg-accent');
   // Every voice has its recording one step away and a way to name anyone else.
-  expect(within(called).getByLabelText('更多：会上被叫作宋明')).toBeVisible();
+  expect(
+    within(called).getByLabelText(/^更多：会上被叫作宋明（\d+ 分钟）$/u),
+  ).toBeVisible();
 });
 
 it('turns a settled row into what was done with 撤销, and tells the server only after a few seconds', async () => {
@@ -491,14 +519,17 @@ it('adds a new person for a name the meeting called, or one typed, and settles a
     await screen.findByRole('button', { name: '新建成员：宋明' }),
   );
   // An unnamed person is named in the row, among known people offered as the owner types.
-  const first = screen.getByLabelText('未命名 1，是谁');
+  const first = screen.getByLabelText(/^未命名 1（.+），是谁$/u);
   const offered = document.getElementById(first.getAttribute('list')!)!;
   expect(
     Array.from(offered.querySelectorAll('option')).map((o) => o.value),
   ).toEqual(['张总']);
   await user.type(first, '王屿{Enter}');
-  await user.type(screen.getByLabelText('未命名 2，是谁'), '张总{Enter}');
-  await user.click(screen.getByLabelText('更多：未命名 3'));
+  await user.type(
+    screen.getByLabelText(/^未命名 2（.+），是谁$/u),
+    '张总{Enter}',
+  );
+  await user.click(screen.getByLabelText(/^更多：未命名 3/u));
   await user.click(screen.getByRole('button', { name: '不在团队里' }));
   await later();
   await waitFor(() => expect(server.posts).toHaveLength(4));
@@ -545,7 +576,7 @@ it('sends the owner to the next row after an answer, so a run of answers is a ru
   await user.keyboard('{Enter}');
   // The third has no names to offer: the field for one is where the keys go.
   await waitFor(() =>
-    expect(screen.getByLabelText('没听过的声音，是谁')).toHaveFocus(),
+    expect(screen.getByLabelText(/^没听过的声音（.+），是谁$/u)).toHaveFocus(),
   );
 });
 
@@ -605,7 +636,7 @@ it('settles a voice of several people apart, and short voices with whom they sou
   await user.click(screen.getByRole('button', { name: /^零碎片段\s*1$/u }));
   expect(screen.getByText('2 段录音里有 3 段很短的声音')).toBeVisible();
   await user.click(
-    await screen.findByRole('button', { name: '2 段像张总：都是张总' }),
+    await screen.findByRole('button', { name: '归给张总（2）' }),
   );
   expect(await screen.findByText('已归给张总')).toBeVisible();
   await later();
@@ -750,6 +781,48 @@ it('asks for as many more voices as wait to be taken back, a page at a time, so 
         .filter((row) => !row.textContent?.includes('撤销')),
     ).toHaveLength(20),
   );
+  // Opened, asked once more for the page, and told once the answer is told: settling it does not ask for the first
+  // page again.
+  const reviews = () =>
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/library/review'),
+      );
+  await later();
+  await waitFor(() => expect(posted('/api/library/voices')).toHaveLength(1));
+  await later(3000);
+  expect(reviews()).toHaveLength(3);
+  expect(String(reviews().at(-1)![0])).toContain('voices=40&');
+});
+
+it('does not ask for the queue again for answers waiting to be taken back when it is all loaded, until they are told', async () => {
+  const user = clock();
+  server.voices = Array.from({ length: 4 }, (_, i) =>
+    voice(`v${i}`, {
+      members: [member(`rec_${i}`, `S${i}`, 600 - i)],
+      seconds: 600 - i,
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+  );
+  view();
+  const list = await screen.findByRole('list', { name: '新的声音' });
+  const reviews = () =>
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/library/review'),
+      );
+  expect(reviews()).toHaveLength(1);
+  for (let i = 0; i < 3; i++)
+    await user.click(
+      within(list).getAllByRole('button', { name: '归给张总' })[0],
+    );
+  expect(reviews()).toHaveLength(1);
+  await later();
+  await waitFor(() => expect(posted('/api/library/voices')).toHaveLength(3));
+  await later(3000);
+  expect(reviews()).toHaveLength(2);
 });
 
 it('shows why the queue failed to load, and lets the owner try again', async () => {
@@ -881,7 +954,7 @@ it('returns from settling a speaker in its recording to the kind it belongs to, 
   await waitFor(() => expect(reviewed).toBe(true));
   // Back in the inbox, on the new voices that are left, with the keys on the first one's field.
   await waitFor(() =>
-    expect(screen.getByLabelText('未命名 1，是谁')).toHaveFocus(),
+    expect(screen.getByLabelText(/^未命名 1（.+），是谁$/u)).toHaveFocus(),
   );
   expect(screen.queryByRole('list', { name: '有人说不是自己' })).toBeNull();
 });
@@ -1025,11 +1098,9 @@ it('hears a confirmed voice again piece by piece under 有空再看, and gives w
     await screen.findByRole('button', { name: /^有空再看\s*1$/u }),
   );
   const tasks = await screen.findByRole('list', { name: '有空再看' });
-  expect(tasks).toHaveTextContent('75% 不像张总（15 秒），已自动排除');
-  expect(tasks).toHaveTextContent('多数像李总');
-  await user.click(
-    within(tasks).getByRole('button', { name: '听一听，决定是谁' }),
-  );
+  expect(tasks).toHaveTextContent('张总 · 周会.m4a');
+  expect(tasks).toHaveTextContent('75% 不像 · 15 秒');
+  await user.click(within(tasks).getByRole('button', { name: '去听' }));
   const side = await screen.findByRole('dialog', { name: '周会.m4a · S8' });
   const pieces = await within(side).findByRole('list', { name: '代表片段' });
   expect(within(pieces).getAllByRole('listitem')).toHaveLength(3);
@@ -1057,7 +1128,7 @@ it('hears a confirmed voice again piece by piece under 有空再看, and gives w
       action: 'exclude',
     }),
   );
-  await waitFor(() => expect(screen.queryByText(/不像张总（/u)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/75% 不像/u)).toBeNull());
 });
 
 it('shows the progress of the voices answered in the one-by-one view', async () => {
@@ -1383,8 +1454,189 @@ it('ignores an older failure of the queue after a newer load has come', async ()
   expect(screen.getByText('现在没有需要你处理的事。')).toBeVisible();
 });
 
-/** A recording whose second speaker is the voice ``b`` of the queue, settled from its own page. */
-const settleInRecording = () => {
+it('keeps the dialog and what was typed when the e-mail or employee number is not saved, and closes it when it is', async () => {
+  const user = userEvent.setup();
+  server.people = [person({ persona_id: 'p-1' })];
+  usePersonas.setState({
+    items: [
+      twinOf({ claimed: false, claim: 'old@x.cn', claim_rejected: 'old@x.cn' }),
+    ],
+  });
+  server.claim = 409;
+  view('/inbox?cat=disowned');
+  await user.click(
+    await screen.findByRole('button', { name: '换个邮箱或工号' }),
+  );
+  const dialog = await screen.findByRole('dialog', {
+    name: '张总的企业邮箱或工号',
+  });
+  const field = within(dialog).getByLabelText('企业邮箱或工号');
+  await user.clear(field);
+  await user.type(field, 'taken@x.cn');
+  await user.click(within(dialog).getByRole('button', { name: '保存' }));
+  // Said where the owner is looking, with the dialog still open on what was typed.
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    '这个邮箱或工号已经用在另一个分身上',
+  );
+  expect(posted('/api/personas/p-1/claim')[0]).toMatchObject({
+    method: 'PUT',
+    body: { claim: 'taken@x.cn' },
+  });
+  expect(dialog).toBeInTheDocument();
+  expect(field).toHaveValue('taken@x.cn');
+  // Another try that is saved closes it.
+  server.claim = 200;
+  await user.click(within(dialog).getByRole('button', { name: '保存' }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('dialog', { name: '张总的企业邮箱或工号' }),
+    ).toBeNull(),
+  );
+  expect(posted('/api/personas/p-1/claim')).toHaveLength(2);
+});
+
+it('does not ask a transcript brought in as text to be heard', async () => {
+  server.recordings = [
+    { id: 'rec_t', filename: '纪要.txt', kind: 'transcript', status: 'ready' },
+    { id: 'rec_a', filename: '周会.m4a', kind: 'audio', status: 'ready' },
+  ];
+  server.unsorted = [
+    { recording_id: 'rec_t', filename: '纪要.txt', speakers: 2, total: 2 },
+    { recording_id: 'rec_a', filename: '周会.m4a', speakers: 1, total: 3 },
+  ];
+  view('/inbox?cat=unsorted');
+  const tasks = await screen.findByRole('list', { name: '还没认人' });
+  const rows = within(tasks).getAllByRole('listitem');
+  expect(within(rows[0]).getByRole('link', { name: '确认' })).toHaveAttribute(
+    'href',
+    '/library/rec_t',
+  );
+  expect(
+    within(rows[1]).getByRole('link', { name: '试听并确认' }),
+  ).toHaveAttribute('href', '/library/rec_a');
+});
+
+it('shows on the page why an answer was not kept while the owner is still there', async () => {
+  const user = clock();
+  server.voices = [
+    voice('a', {
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+  ];
+  server.voicesStatus = 409;
+  view();
+  await user.click(await screen.findByRole('button', { name: '归给张总' }));
+  await later();
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '这个声音刚被别人处理过了',
+  );
+  expect(screen.queryByText(/刚才的答案没有记下/u)).toBeNull();
+});
+
+it('says on its own that an answer given before the page was left was not kept', async () => {
+  const user = clock();
+  server.voices = [
+    voice('a', {
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+  ];
+  server.voicesStatus = 409;
+  // The page that told it is gone, so the notice cannot be on it.
+  render(<ToastViewport />);
+  const shown = view();
+  await user.click(await screen.findByRole('button', { name: '归给张总' }));
+  shown.unmount();
+  expect(
+    (await screen.findAllByText('刚才的答案没有记下：这个声音刚被别人处理过了'))
+      .length,
+  ).toBeGreaterThan(0);
+});
+
+const sureVoice = (id: string, speaker: string, extra = {}) =>
+  voice(id, {
+    members: [member('rec_1', speaker, 300)],
+    candidates: [
+      { person_id: 'per_1', name: '张总', score: 0.9, sure: true },
+      { person_id: 'per_2', name: '李总', score: 0.3 },
+    ],
+    ...extra,
+  });
+
+it('answers the sure name with Enter and hears the previous recording with ←, in the one-by-one view', async () => {
+  const user = clock();
+  server.voices = [
+    voice('a', {
+      seconds: 600,
+      members: [member('rec_1', 'S1', 300), member('rec_2', 'S3', 300)],
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+    sureVoice('b', 'S2', { seconds: 100 }),
+  ];
+  view('/inbox?view=focus');
+  const heard = await screen.findByRole('region', { name: '这个声音' });
+  expect(heard.querySelector('audio')).toHaveAttribute(
+    'src',
+    '/api/library/recordings/rec_1/speakers/S1/samples/0',
+  );
+  // From the first recording back to the last.
+  await user.keyboard('{ArrowLeft}');
+  expect(heard.querySelector('audio')).toHaveAttribute(
+    'src',
+    '/api/library/recordings/rec_2/speakers/S3/samples/0',
+  );
+  await user.keyboard('{ArrowRight}');
+  expect(heard.querySelector('audio')).toHaveAttribute(
+    'src',
+    '/api/library/recordings/rec_1/speakers/S1/samples/0',
+  );
+  // Nothing is sure for the first voice: Enter leaves it be. Then 1 answers it, and Enter the sure name of the next.
+  await user.keyboard('{Enter}');
+  expect(screen.getByText('1 / 2')).toBeVisible();
+  await user.keyboard('1');
+  expect(await screen.findByText('2 / 2')).toBeVisible();
+  await user.keyboard('{Enter}');
+  expect(await screen.findByText('新的声音都处理完了')).toBeVisible();
+  expect(screen.getByText('已归给张总')).toBeVisible();
+});
+
+it('tells the keys of the one-by-one view, Enter among them', async () => {
+  const user = userEvent.setup();
+  server.voices = [voice('a')];
+  view('/inbox?view=focus');
+  await user.hover(await screen.findByRole('button', { name: '快捷键' }));
+  expect(await screen.findAllByText(/Enter 确认/u)).not.toHaveLength(0);
+});
+
+it('keeps the voice in front, and a name half typed, while new recordings change what the voices are', async () => {
+  const user = userEvent.setup();
+  server.voices = [
+    voice('a', { seconds: 300, members: [member('rec_1', 'S1', 300)] }),
+    voice('b', { seconds: 200, members: [member('rec_2', 'S2', 200)] }),
+  ];
+  view('/inbox?view=focus');
+  await screen.findByText('1 / 2');
+  const field = screen.getByLabelText('都不是，输入名字');
+  await user.type(field, '王');
+  // A recording now has the first voice in it too, and a third voice, heard in two recordings, outranks both.
+  server.voices = [
+    voice('c', {
+      seconds: 900,
+      members: [member('rec_5', 'S5', 450), member('rec_6', 'S6', 450)],
+    }),
+    voice('a2', {
+      seconds: 400,
+      members: [member('rec_1', 'S1', 300), member('rec_9', 'S9', 100)],
+    }),
+    voice('b', { seconds: 200, members: [member('rec_2', 'S2', 200)] }),
+  ];
+  act(() => useTeam.setState((state) => ({ version: state.version + 1 })));
+  await waitFor(() => expect(screen.getByText('1 / 3')).toBeVisible());
+  expect(screen.getByText('rec_1.m4a')).toBeVisible();
+  expect(screen.getByLabelText('都不是，输入名字')).toHaveValue('王');
+  expect(screen.queryByText('rec_5.m4a')).toBeNull();
+});
+
+const recordingStub = () => {
   const real = fetch;
   vi.stubGlobal(
     'fetch',
@@ -1411,6 +1663,99 @@ const settleInRecording = () => {
   );
 };
 
+it('names which recording of a voice heard in several it opens, in the list and in the one-by-one view, and says how many more wait there', async () => {
+  const user = userEvent.setup();
+  server.voices = [
+    voice('a', {
+      members: [member('rec_2', 'S3', 200), member('rec_1', 'S2', 300)],
+      seconds: 500,
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+  ];
+  recordingStub();
+  const shown = view();
+  await user.click(await screen.findByLabelText(/^更多：/u));
+  await user.click(screen.getByRole('button', { name: '换一段（1/2）' }));
+  await user.click(screen.getByLabelText(/^更多：/u));
+  // The one heard now is the second: the menu says so.
+  expect(screen.getByRole('button', { name: '打开第 2 段' })).toBeVisible();
+  await user.keyboard('{Escape}');
+  shown.unmount();
+
+  view('/inbox?view=focus');
+  const heard = await screen.findByRole('region', { name: '这个声音' });
+  await user.keyboard('{ArrowRight}');
+  expect(heard.querySelector('audio')).toHaveAttribute(
+    'src',
+    '/api/library/recordings/rec_1/speakers/S2/samples/0',
+  );
+  await user.click(screen.getByLabelText('更多'));
+  await user.click(screen.getByRole('button', { name: '打开第 2 段' }));
+  expect(
+    await screen.findByRole('heading', { name: 'S2 是谁？' }),
+  ).toBeVisible();
+  expect(screen.getByText(/这个声音还出现在另外 1\s+段录音里/u)).toBeVisible();
+});
+
+it('does not say an unnamed person is heard elsewhere: only a voice heard in several recordings is settled across them', async () => {
+  const user = userEvent.setup();
+  server.people = [
+    person({}),
+    fresh({ id: 'new', speakers: 3, recording_id: 'rec_1', speaker_id: 'S2' }),
+  ];
+  recordingStub();
+  view();
+  await user.click(await screen.findByLabelText(/^更多：未命名 1/u));
+  await user.click(screen.getByRole('button', { name: '打开录音' }));
+  expect(
+    await screen.findByRole('heading', { name: 'S2 是谁？' }),
+  ).toBeVisible();
+  expect(screen.queryByText(/这个声音还出现在另外/u)).toBeNull();
+});
+
+it('plays the voices as recorded, in the list and in the one-by-one view, when the owner chose the original', async () => {
+  const { useListening } = await import('../stores/listening');
+  useListening.setState({ original: true });
+  try {
+    server.voices = [sureVoice('a', 'S1')];
+    const shown = view();
+    const list = await screen.findByRole('list', { name: '新的声音' });
+    expect(list.querySelector('audio')).toHaveAttribute(
+      'src',
+      '/api/library/recordings/rec_1/speakers/S1/samples/0?original=true',
+    );
+    shown.unmount();
+    view('/inbox?view=focus');
+    const heard = await screen.findByRole('region', { name: '这个声音' });
+    expect(heard.querySelector('audio')).toHaveAttribute(
+      'src',
+      '/api/library/recordings/rec_1/speakers/S1/samples/0?original=true',
+    );
+  } finally {
+    useListening.setState({ original: false });
+  }
+});
+
+it('leads the old team address to the inbox through the page the team address really is', async () => {
+  const { Home } = await import('../pages/Home');
+  server.recordings = [
+    { id: 'f', filename: '周会.m4a', status: 'failed', error: '识别失败' },
+  ];
+  render(
+    <MemoryRouter initialEntries={['/team?tab=todo&cat=failed']}>
+      <TooltipProvider>
+        <ConfirmProvider>
+          <Routes>
+            <Route path="/team" element={<Home />} />
+            <Route path="/inbox" element={<Where />} />
+          </Routes>
+        </ConfirmProvider>
+      </TooltipProvider>
+    </MemoryRouter>,
+  );
+  expect(await screen.findByText('在/inbox?cat=failed')).toBeVisible();
+});
+
 it('returns from a recording opened in the one-by-one view to that view, with the run kept', async () => {
   const user = clock();
   server.voices = [
@@ -1426,12 +1771,12 @@ it('returns from a recording opened in the one-by-one view to that view, with th
     }),
     voice('c', { seconds: 200, members: [member('rec_1', 'S3', 200)] }),
   ];
-  settleInRecording();
+  recordingStub();
   view('/inbox?view=focus');
   expect(await screen.findByText('1 / 3')).toBeVisible();
   await user.click(screen.getByRole('button', { name: '是张总' }));
   expect(await screen.findByText('2 / 3')).toBeVisible();
-  await user.click(screen.getByLabelText(/^更多：/u));
+  await user.click(screen.getByLabelText('更多'));
   await user.click(screen.getByRole('button', { name: '打开录音' }));
   const card = (
     await screen.findByRole('heading', { name: 'S2 是谁？' })
@@ -1457,7 +1802,7 @@ it('puts the keys on the row after the one settled in its recording, not the fir
     }),
     voice('c', { seconds: 200, members: [member('rec_1', 'S3', 200)] }),
   ];
-  settleInRecording();
+  recordingStub();
   view();
   const user = userEvent.setup();
   await screen.findByRole('list', { name: '新的声音' });
@@ -1470,6 +1815,6 @@ it('puts the keys on the row after the one settled in its recording, not the fir
   await user.click(screen.getByRole('button', { name: '确认是张总' }));
   // The third has no names to offer: the field for one is where the keys go.
   await waitFor(() =>
-    expect(screen.getByLabelText('没听过的声音，是谁')).toHaveFocus(),
+    expect(screen.getByLabelText(/^没听过的声音（.+），是谁$/u)).toHaveFocus(),
   );
 });

@@ -112,9 +112,10 @@ export function Inbox() {
   const { uploading } = useUploads(() => void reload());
   const [voicesShown, setVoicesShown] = useState(VOICES_PER_PAGE);
   const [pages, setPages] = useState<Partial<Record<Shown, number>>>({});
-  // Voices answered here but not yet settled on the server, in each group: they still come with the queue, so as
-  // many more are asked for to keep a page of open ones.
-  const [held, setHeld] = useState<Record<'main' | Folded, number>>({
+  // Voices answered here but not yet settled on the server, in each group, still come with the queue: while the
+  // server has more, as many more are asked for to keep a page of open ones. Only ever more, so settling them (they
+  // are gone from the queue) does not ask again.
+  const [extra, setExtra] = useState<Record<'main' | Folded, number>>({
     main: 0,
     enough: 0,
     stranger: 0,
@@ -123,9 +124,9 @@ export function Inbox() {
     version,
     onReload: reload,
     first: {
-      voices: whole(voicesShown + held.main),
-      enough: whole((pages.enough ?? VOICES_PER_PAGE) + held.enough),
-      strangers: whole((pages.stranger ?? VOICES_PER_PAGE) + held.stranger),
+      voices: whole(voicesShown + extra.main),
+      enough: whole((pages.enough ?? VOICES_PER_PAGE) + extra.enough),
+      strangers: whole((pages.stranger ?? VOICES_PER_PAGE) + extra.stranger),
       items: pages.disputed ?? TASKS_PER_PAGE,
       unsorted: pages.unsorted ?? TASKS_PER_PAGE,
       suspects: pages.mixed ?? TASKS_PER_PAGE,
@@ -162,6 +163,12 @@ export function Inbox() {
       useTeam.setState((state) => ({ version: state.version + 1 }));
   }, [load]);
   const deferred = useDeferred({ settle });
+  // An answer told to the server after the page was left has no page to show it failed: it says so on its own.
+  const told = (run: () => Promise<string>) => async () => {
+    const failed = await run();
+    if (failed && !here.current)
+      toast(`刚才的答案没有记下：${failed}`, 'danger', 8000);
+  };
   const confirm = useConfirm();
   const navigate = useNavigate();
   const location = useLocation();
@@ -169,6 +176,12 @@ export function Inbox() {
   const twins = usePersonas((state) => state.items);
   const [reviewing, setReviewing] = useState<SuspectSpeaker | null>(null);
   const [addressing, setAddressing] = useState<Person | null>(null);
+  // Why the e-mail or employee number was not saved: the dialog stays open with it, and what was typed.
+  const [claimError, setClaimError] = useState('');
+  const address = (person: Person | null) => {
+    setClaimError('');
+    setAddressing(person);
+  };
   // The row that takes the keyboard next, after one is settled.
   const [focusRow, setFocusRow] = useState<string | null>(null);
   // Voices answered here, for “3 / 69”; one settled in its recording and come back from is one more.
@@ -240,10 +253,28 @@ export function Inbox() {
     heldIn('enough'),
     heldIn('stranger'),
   ];
+  const [moreMain, moreEnough, moreStranger] = [
+    unloaded('main').count > 0,
+    unloaded('enough').count > 0,
+    unloaded('stranger').count > 0,
+  ];
   useEffect(
     () =>
-      setHeld({ main: heldMain, enough: heldEnough, stranger: heldStranger }),
-    [heldMain, heldEnough, heldStranger],
+      setExtra((now) => {
+        const next = {
+          main: moreMain ? Math.max(now.main, heldMain) : now.main,
+          enough: moreEnough ? Math.max(now.enough, heldEnough) : now.enough,
+          stranger: moreStranger
+            ? Math.max(now.stranger, heldStranger)
+            : now.stranger,
+        };
+        return next.main === now.main &&
+          next.enough === now.enough &&
+          next.stranger === now.stranger
+          ? now
+          : next;
+      }),
+    [heldMain, heldEnough, heldStranger, moreMain, moreEnough, moreStranger],
   );
   // New people (all loaded with the people) among the voices: one ranked after the last voice loaded may yet be
   // passed by a voice still to load, so none is shown past that voice until the rest are.
@@ -386,14 +417,18 @@ export function Inbox() {
 
   const answer = (item: VoiceItem, how: Answer) => {
     const label = labelOf(how);
-    deferred.defer(item.id, label, () =>
-      item.kind === 'voice'
-        ? data.decideVoice(item.voice.members, decisionOf(how), false)
-        : how.to === 'person'
-          ? data.resolve(item.person, how.person, false)
-          : how.to === 'new'
-            ? data.rename(item.person, how.name, false)
-            : data.resolve(item.person, null, false),
+    deferred.defer(
+      item.id,
+      label,
+      told(() =>
+        item.kind === 'voice'
+          ? data.decideVoice(item.voice.members, decisionOf(how), false)
+          : how.to === 'person'
+            ? data.resolve(item.person, how.person, false)
+            : how.to === 'new'
+              ? data.rename(item.person, how.name, false)
+              : data.resolve(item.person, null, false),
+      ),
     );
     setAnswered((n) => n + 1);
     const index = order.indexOf(item.id);
@@ -412,11 +447,15 @@ export function Inbox() {
     person: { person_id: string; name: string },
     members: Fragment[],
   ) =>
-    deferred.defer('fragments', `已归给${person.name}`, () =>
-      data.decideVoice(
-        members,
-        { action: 'confirm', person_id: person.person_id, sample: false },
-        false,
+    deferred.defer(
+      'fragments',
+      `已归给${person.name}`,
+      told(() =>
+        data.decideVoice(
+          members,
+          { action: 'confirm', person_id: person.person_id, sample: false },
+          false,
+        ),
       ),
     );
   const removeRecording = async (recording: (typeof failed)[number]) => {
@@ -536,12 +575,7 @@ export function Inbox() {
             onLoadMore={() => setVoicesShown((n) => n + VOICES_PER_PAGE)}
           />
         )}
-        {folded(
-          `${enoughCount} 个像已经够建分身的人`,
-          enough,
-          enoughCount,
-          'enough',
-        )}
+        {folded(`已够建分身 ${enoughCount}`, enough, enoughCount, 'enough')}
         {folded(
           `${strangerCount} 个像你标过不认识的`,
           strangers,
@@ -572,7 +606,10 @@ export function Inbox() {
   else if (id === 'unsorted')
     body = (
       <Stack gap={4}>
-        <UnsortedList items={unsorted.slice(0, page('unsorted'))} />
+        <UnsortedList
+          items={unsorted.slice(0, page('unsorted'))}
+          recordings={recordings}
+        />
         {more('unsorted', counts.unsorted)}
       </Stack>
     );
@@ -612,14 +649,14 @@ export function Inbox() {
             deferred.defer(
               `similar-${a.id}-${b.id}`,
               `已合并${a.name}和${b.name}`,
-              () => data.merge(a, b, false),
+              told(() => data.merge(a, b, false)),
             )
           }
           onApart={(a, b) =>
             deferred.defer(
               `similar-${a.id}-${b.id}`,
               `${a.name}和${b.name}不是同一个人`,
-              () => data.apart(a, b, false),
+              told(() => data.apart(a, b, false)),
             )
           }
         />
@@ -640,7 +677,7 @@ export function Inbox() {
           people={disowned.slice(0, page('disowned'))}
           twinOf={twinOf}
           busy={busy}
-          onAddress={setAddressing}
+          onAddress={address}
         />
         {more('disowned', disowned.length)}
       </Stack>
@@ -656,8 +693,12 @@ export function Inbox() {
             fragments={fragments}
             onGive={giveFragments}
             onAside={() =>
-              deferred.defer('fragments', '已放一边', () =>
-                data.decideVoice(fragments, { action: 'unknown' }, false),
+              deferred.defer(
+                'fragments',
+                '已放一边',
+                told(() =>
+                  data.decideVoice(fragments, { action: 'unknown' }, false),
+                ),
               )
             }
           />
@@ -799,11 +840,16 @@ export function Inbox() {
         person={addressing}
         twin={twins.find((t) => t.id === addressing?.persona_id)}
         busy={busy}
-        onClose={() => setAddressing(null)}
-        onSave={(claim) =>
-          addressing &&
-          void data.saveClaim(addressing, claim).then(() => setAddressing(null))
-        }
+        error={claimError}
+        onClose={() => address(null)}
+        onSave={(claim) => {
+          if (!addressing) return;
+          setClaimError('');
+          void data.saveClaim(addressing, claim).then((failed) => {
+            if (failed) setClaimError(failed);
+            else address(null);
+          });
+        }}
       />
       <MixedSpeaker
         suspect={reviewing}

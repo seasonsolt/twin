@@ -52,7 +52,13 @@ def test_a_twin_made_by_hand_is_a_person_of_the_team_whose_twin_only_its_maker_k
 ) -> None:
     persona = make_twin(web, UPLOADER, "新同事")
     row = people(as_(web, UPLOADER))["新同事"]
-    assert (row["persona_id"], row["talk"], row["speakers"], row["last_meeting"]) == (persona, persona, 0, None)
+    assert (row["persona_id"], row["talk"], row["twin_id"], row["speakers"], row["last_meeting"]) == (
+        persona,
+        persona,
+        persona,
+        0,
+        None,
+    )
     assert row["can_manage"] is True and not row["auto"]
     assert len([p for p in web.get("/api/library/people").json()["items"] if p["name"] == "新同事"]) == 1
     # It is not a twin the library builds or follows: nothing waits for recordings.
@@ -70,6 +76,7 @@ def test_a_twin_made_by_hand_is_a_person_of_the_team_whose_twin_only_its_maker_k
     # Another colleague sees the person, but the twin is private and not theirs to rename or delete.
     other = people(as_(web, OTHER))["新同事"]
     assert (other["persona_id"], other["talk"], other["can_manage"], other["about"]) == (None, None, False, None)
+    assert other["twin_id"] is None  # not in their list of twins
     assert web.patch(f"/api/library/people/{row['id']}", json={"name": "改名"}, headers=CSRF).status_code == 403
     assert web.delete(f"/api/library/people/{row['id']}", headers=CSRF).status_code == 403
     # Made public, they can talk to it, still without keeping it.
@@ -81,7 +88,7 @@ def test_a_twin_made_by_hand_is_a_person_of_the_team_whose_twin_only_its_maker_k
         True,
         False,
     )
-    assert other["about"] == "产品负责人"
+    assert other["about"] == "产品负责人" and other["twin_id"] == persona  # now in their list, named by the row
     # An administrator keeps every twin.
     assert people(as_(web, ADMIN))["新同事"]["can_manage"] is True
 

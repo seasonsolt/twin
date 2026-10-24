@@ -106,6 +106,8 @@ export interface Person {
   last_meeting?: { recording_id: string; title: string; date: string } | null;
   // The twin the viewer may talk to: one they look after, or one made public.
   talk?: string | null;
+  // Their twin as the viewer's own list of twins has it, whether or not it is theirs to open or talk to.
+  twin_id?: string | null;
   // The first line of their introduction (their position, for one who wrote it that way).
   about?: string | null;
 }

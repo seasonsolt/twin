@@ -71,7 +71,7 @@ const pages: {
     // Someone identified in a colleague's meeting reads it, and may say a speaker given to them is not them.
     name: 'recording-attendee',
     path: '/#/library/r-weekly',
-    ready: '你参加了这场会',
+    ready: '你参加的会',
     setup: (page) =>
       page.route('**/api/library/recordings/r-weekly', (route) =>
         route.fulfill({
@@ -758,8 +758,11 @@ test('the person’s own assistant, set apart above the conversations', async ({
   await page.goto('/#/chat');
   if (info.project.name === 'mobile')
     await page.getByRole('button', { name: '对话列表' }).click();
-  // Only the person has it: it is chosen from the pinned row, and its list is its own.
-  await page.getByRole('button', { name: /^我的分身/ }).click();
+  // Only the person has it: the page opens on its list, chosen in the pinned row, and the list is its own.
+  await expect(page.getByRole('button', { name: /^我的分身/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await page
     .getByRole('button', { name: /^我上周答应过谁什么(?!的更多操作)/ })
     .click();
@@ -785,11 +788,10 @@ test('the assistant asks colleagues’ twins in the person’s name', async ({
   await page.goto('/#/chat');
   // 第 17 屏: a card for each twin that was asked, what one could not settle, and the assistant's own note.
   await expect(page.getByText('我的归纳 · 非原话')).toBeVisible();
-  // The list of the assistant's own has what it asked under 问同事 (a phone has the list behind a button).
-  if (info.project.name !== 'mobile') {
-    await page.getByRole('button', { name: /^我的分身/ }).click();
+  // The page opens on the assistant's own list, which has what it asked under 问同事 (a phone has the list behind a
+  // button).
+  if (info.project.name !== 'mobile')
     await expect(page.getByRole('region', { name: '问同事' })).toBeVisible();
-  }
   await expect(page.getByRole('button', { name: '转给本人' })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot(

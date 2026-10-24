@@ -78,13 +78,17 @@ const bodyOf = (url: string, method?: string) =>
     )
     .map(([, init]) => JSON.parse(String(init?.body ?? 'null')) as unknown);
 
-function mount(items: Persona[] = personas, entry = '/chat') {
+function mount(
+  items: Persona[] = personas,
+  entry = '/chat',
+  features: { work: boolean; ledger?: boolean } = { work: true },
+) {
   useAuth.setState({
     identity: {
       email: 'me@example.com',
       admin: false,
       auth_enabled: true,
-      features: { work: true },
+      features,
     },
   });
   usePersonas.setState({
@@ -191,25 +195,25 @@ afterEach(() => {
 
 /** A row's button: its title, not the “…” of its menu. */
 const row = (title: string) => new RegExp(`^${title}(?!的更多操作)`, 'u');
-const list = () => screen.findByRole('region', { name: /的对话$/u });
+const list = () => screen.findByRole('region', { name: '对话列表' });
+/** On the person’s own twin the page opens on the assistant’s list; this goes on to everyone’s. */
+async function everyone(sheet: HTMLElement) {
+  const pinned = await within(sheet).findByRole('button', {
+    name: /^我的分身/u,
+  });
+  await waitFor(() => expect(pinned).toHaveAttribute('aria-pressed', 'true'));
+  await userEvent.click(pinned);
+  await waitFor(() => expect(pinned).toHaveAttribute('aria-pressed', 'false'));
+}
 
-it('sets the assistant apart above everyone’s conversations, with how many wait for the person, and keeps its list to itself', async () => {
+it('opens on the assistant’s list on the person’s own twin, with how many wait for the person, and leaves it for everyone’s', async () => {
   const person = userEvent.setup();
   mount();
   const sheet = await list();
-  // Everyone's conversations, none of the assistant's among them.
-  expect(
-    await within(sheet).findByRole('button', { name: row('评审定的接口') }),
-  ).toBeVisible();
-  expect(
-    within(sheet).getByRole('button', { name: row('招聘面试的问题') }),
-  ).toBeVisible();
-  expect(
-    within(sheet).queryByRole('button', { name: row('我上周答应过谁什么') }),
-  ).toBeNull();
-  const pinned = within(sheet).getByRole('button', { name: /^我的分身/u });
-  expect(within(pinned).getByTitle('2 条等你决定')).toHaveTextContent('2');
-  await person.click(pinned);
+  const pinned = await within(sheet).findByRole('button', {
+    name: /^我的分身/u,
+  });
+  // The twin the page is on is the person’s own: the conversations had here are the assistant’s, and they are listed.
   expect(
     await within(sheet).findByRole('button', {
       name: row('我上周答应过谁什么'),
@@ -219,6 +223,7 @@ it('sets the assistant apart above everyone’s conversations, with how many wai
     within(sheet).queryByRole('button', { name: row('评审定的接口') }),
   ).toBeNull();
   expect(pinned).toHaveAttribute('aria-pressed', 'true');
+  expect(within(pinned).getByTitle('2 条等你决定')).toHaveTextContent('2');
   // Asked for the person's own list, and only it.
   expect(
     fetcher.mock.calls.some(
@@ -226,9 +231,60 @@ it('sets the assistant apart above everyone’s conversations, with how many wai
     ),
   ).toBe(true);
   expect(screen.getByText('仅你可见')).toBeVisible();
+  // Everyone's conversations: none of the assistant's among them.
   await person.click(pinned);
   expect(
     await within(sheet).findByRole('button', { name: row('评审定的接口') }),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByRole('button', { name: row('招聘面试的问题') }),
+  ).toBeVisible();
+  expect(
+    within(sheet).queryByRole('button', { name: row('我上周答应过谁什么') }),
+  ).toBeNull();
+  expect(pinned).toHaveAttribute('aria-pressed', 'false');
+  await person.click(pinned);
+  expect(
+    await within(sheet).findByRole('button', {
+      name: row('我上周答应过谁什么'),
+    }),
+  ).toBeVisible();
+});
+
+it('follows the twin the page is on: a list narrowed to one person is dropped for another twin, and the assistant’s list comes with the person’s own', async () => {
+  const person = userEvent.setup();
+  mount();
+  const sheet = await list();
+  await everyone(sheet);
+  const scope = within(sheet).getByRole('group', { name: '对话范围' });
+  await person.click(within(scope).getByRole('button', { name: '王屿' }));
+  expect(within(scope).getByRole('button', { name: '王屿' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // Another twin to write to: not the list of the person it was narrowed to.
+  await act(async () => {
+    await usePersonas.getState().switchTo('p-qing');
+  });
+  await waitFor(() =>
+    expect(within(scope).getByRole('button', { name: '全部' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    ),
+  );
+  // And back on their own: the assistant’s.
+  await act(async () => {
+    await usePersonas.getState().switchTo('default');
+  });
+  await waitFor(() =>
+    expect(
+      within(sheet).getByRole('button', { name: /^我的分身/u }),
+    ).toHaveAttribute('aria-pressed', 'true'),
+  );
+  expect(
+    await within(sheet).findByRole('button', {
+      name: row('我上周答应过谁什么'),
+    }),
   ).toBeVisible();
 });
 
@@ -241,13 +297,14 @@ it('has no assistant to set apart for someone who is not the person of any twin'
     within(sheet).queryByRole('button', { name: /^我的分身/u }),
   ).toBeNull();
   expect(screen.queryByText('仅你可见')).toBeNull();
-  expect(screen.queryByRole('button', { name: '看同事会得到什么' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '试问' })).toBeNull();
 });
 
 it('narrows the list to a person or to the tasks, and says whom each row is with', async () => {
   const person = userEvent.setup();
   mount();
   const sheet = await list();
+  await everyone(sheet);
   const rows = await within(sheet).findAllByRole('listitem');
   expect(rows.map((row) => row.textContent)).toEqual([
     expect.stringMatching(/^评审定的接口许清禾/u),
@@ -296,6 +353,7 @@ it('goes to another twin to open its conversation, and writes to the twin it ope
   const person = userEvent.setup();
   mount();
   const sheet = await list();
+  await everyone(sheet);
   await person.click(
     await within(sheet).findByRole('button', { name: row('评审定的接口') }),
   );
@@ -313,7 +371,7 @@ it('goes to another twin to open its conversation, and writes to the twin it ope
     ),
   ).toBe(true);
   // Not the person's own twin: nothing of the assistant is offered.
-  expect(screen.queryByRole('button', { name: '看同事会得到什么' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '试问' })).toBeNull();
 });
 
 it('is the assistant only in the person’s own twin, and offers to try a question as a colleague would be answered', async () => {
@@ -332,15 +390,14 @@ it('is the assistant only in the person’s own twin, and offers to try a questi
     }),
   );
   mount();
-  const sheet = await list();
-  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await list();
   await screen.findByText('仅你可见');
   expect(screen.getByRole('textbox', { name: '你说' })).toHaveAttribute(
     'placeholder',
     '问问我的分身，或说“记一下…”“帮我问问…”',
   );
   // Asked as a colleague would be: the one question alone, marked, and what it left out named.
-  const trial = screen.getByRole('button', { name: '看同事会得到什么' });
+  const trial = screen.getByRole('button', { name: '试问' });
   await person.click(trial);
   expect(trial).toHaveAttribute('aria-pressed', 'true');
   await person.type(
@@ -354,7 +411,7 @@ it('is the assistant only in the person’s own twin, and offers to try a questi
     messages: [{ role: 'user', content: '下周三你在吗？' }],
   });
   expect(screen.getByText('同事会得到')).toBeVisible();
-  expect(screen.getByText('试问')).toBeVisible();
+  expect(screen.getAllByText('试问')).toHaveLength(2);
   expect(screen.getByText('未用 · 家庭')).toBeVisible();
   // No conversation was made of it, and it is not sent on as part of what was said.
   expect(server.rows.size).toBe(3);
@@ -377,19 +434,18 @@ it('keeps files added for an ordinary message out of a trial question, and says 
   const person = userEvent.setup();
   streamed.push(answer({ reply: '这个我回头答复你。' }));
   mount();
-  const sheet = await list();
-  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await list();
   await screen.findByText('仅你可见');
   await person.upload(
     screen.getByLabelText('选择附件'),
     new File(['合同期限是一年。'], '合同.txt', { type: 'text/plain' }),
   );
   expect(screen.getByText('合同.txt')).toBeVisible();
-  await person.click(screen.getByRole('button', { name: '看同事会得到什么' }));
+  await person.click(screen.getByRole('button', { name: '试问' }));
   // The files wait: not shown as going with the question, and none can be added to it.
   expect(screen.queryByText('合同.txt')).toBeNull();
   expect(
-    screen.getByText(/看同事会得到什么不带附件，已添加的 1 个附件留到/u),
+    screen.getByText(/试问不带附件，已添加的 1 个附件留到/u),
   ).toBeVisible();
   expect(screen.getByRole('button', { name: /^添加附件/u })).toBeDisabled();
   expect(screen.getByLabelText('选择附件')).toBeDisabled();
@@ -405,7 +461,7 @@ it('keeps files added for an ordinary message out of a trial question, and says 
     ),
   ).toBe(false);
   // Back to an ordinary message, they are there to go with it.
-  await person.click(screen.getByRole('button', { name: '看同事会得到什么' }));
+  await person.click(screen.getByRole('button', { name: '试问' }));
   expect(screen.getByText('合同.txt')).toBeVisible();
   expect(screen.getByRole('button', { name: /^添加附件/u })).toBeEnabled();
 });
@@ -419,8 +475,7 @@ it('shows what the assistant took down, with the choice of who may use it, and t
     }),
   );
   mount();
-  const sheet = await list();
-  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await list();
   await screen.findByText('仅你可见');
   await person.type(
     screen.getByRole('textbox', { name: '你说' }),
@@ -433,6 +488,12 @@ it('shows what the assistant took down, with the choice of who may use it, and t
     name: '谁能用这条记忆',
   });
   expect(within(tiers).getByRole('radio', { name: '只有我' })).toBeChecked();
+  // In the order of the page where the same choice is made for what was asked while they were away.
+  expect(
+    within(tiers)
+      .getAllByRole('radio')
+      .map((radio) => radio.getAttribute('aria-label') ?? radio.textContent),
+  ).toEqual(['同事能用', '只有我', '不存']);
   await person.click(within(tiers).getByRole('radio', { name: '同事能用' }));
   await waitFor(() =>
     expect(
@@ -443,9 +504,9 @@ it('shows what the assistant took down, with the choice of who may use it, and t
     { tier: 'colleague' },
   ]);
   await person.click(within(tiers).getByRole('radio', { name: '不存' }));
-  await waitFor(() =>
-    expect(within(tiers).getByRole('radio', { name: '不存' })).toBeChecked(),
-  );
+  // Taken back, it is gone: nothing is left to choose, so no choice that would only fail.
+  expect(await within(card).findByText('已不存')).toBeVisible();
+  expect(within(card).queryByRole('radiogroup')).toBeNull();
   expect(bodyOf('/api/persona/notes/src_n1/tier', 'PUT').at(-1)).toEqual({
     tier: 'none',
   });
@@ -465,8 +526,7 @@ it('says a promise the person made was written into their commitments, and takes
     }),
   );
   mount();
-  const sheet = await list();
-  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await list();
   await screen.findByText('仅你可见');
   await person.type(
     screen.getByRole('textbox', { name: '你说' }),
@@ -494,8 +554,7 @@ it('offers to fill in what the profile did not have, and speaks of the person as
     }),
   );
   mount();
-  const sheet = await list();
-  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await list();
   await screen.findByText('仅你可见');
   await person.type(
     screen.getByRole('textbox', { name: '你说' }),
@@ -507,7 +566,79 @@ it('offers to fill in what the profile did not have, and speaks of the person as
   expect(screen.queryByText('资料不足，需要问本人')).toBeNull();
   expect(screen.getByText('资料里没有')).toBeVisible();
   await person.click(screen.getByRole('button', { name: '补一句' }));
-  expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue('记一下，');
+  const box = screen.getByRole('textbox', { name: '你说' });
+  expect(box).toHaveValue('记一下，');
+  // The words are meant to be gone on from: the box has the cursor, after them.
+  await waitFor(() => expect(box).toHaveFocus());
+  expect((box as HTMLTextAreaElement).selectionStart).toBe('记一下，'.length);
+});
+
+it('says nothing of a promise written into the commitments where that page is switched off', async () => {
+  const person = userEvent.setup();
+  streamed.push(
+    answer({
+      reply: '记下了：周五前给王屿发布方案。',
+      commitment: {
+        entry_id: 'le_1',
+        what: '周五前给王屿发布方案',
+        to: '王屿',
+        due: null,
+      },
+    }),
+  );
+  mount(personas, '/chat', { work: true, ledger: false });
+  await list();
+  await screen.findByText('仅你可见');
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '我答应王屿周五前给方案',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  expect(
+    await screen.findByText('记下了：周五前给王屿发布方案。'),
+  ).toBeVisible();
+  expect(screen.queryByText(/已记入承诺/u)).toBeNull();
+  expect(screen.queryByRole('button', { name: '撤销' })).toBeNull();
+});
+
+it('puts no "how it answered" badge or copy button under what the assistant asked colleagues, but keeps them under an answer', async () => {
+  const person = userEvent.setup();
+  const original = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) =>
+    url === '/api/persona/delegations/d1'
+      ? json({ id: 'd1', question: '问', targets: [], limit: 3 })
+      : original(url, init),
+  );
+  streamed.push(
+    answer({
+      reply: '已向许清禾提了问题。',
+      delegation: { id: 'd1', summary: '' },
+    }),
+    answer({ reply: '三件。' }),
+  );
+  mount();
+  await list();
+  await screen.findByText('仅你可见');
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '帮我问问许清禾',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  const asked = await screen.findByText('已向许清禾提了问题。');
+  const message = asked.closest('article')!;
+  expect(within(message).queryByText('通用回答')).toBeNull();
+  expect(within(message).queryByRole('button', { name: '复制' })).toBeNull();
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '我上周答应过谁什么',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  const answered = (await screen.findByText('三件。')).closest('article')!;
+  expect(within(answered).getByText('通用回答')).toBeVisible();
+  expect(within(answered).getByRole('button', { name: '复制' })).toBeVisible();
 });
 
 it('marks what the assistant asked in the person’s name, and lists it apart with the assistant’s own conversations', async () => {
@@ -516,6 +647,7 @@ it('marks what the assistant asked in the person’s name, and lists it apart wi
   server.rows.get('c-self')!.delegated = 2;
   mount();
   const sheet = await list();
+  await everyone(sheet);
   // Among everyone's, it says who it was with and that the assistant asked.
   expect(
     await within(sheet).findByRole('button', {
@@ -545,8 +677,9 @@ it('opens a conversation of another twin from its address: the twin it is with, 
   expect(usePersonas.getState().id).toBe('p-wang');
 });
 
-it('opens on the person’s own twin from ``?with=me``', async () => {
+it('opens on the person’s own twin from ``?with=me``, with the assistant’s list', async () => {
   // The page starts on another twin (``default``); the person's own is 王屿 here.
+  server.own.mine = { persona_id: 'p-wang', pending: 0 };
   mount(
     [
       twin('default', '林舟'),
@@ -555,6 +688,219 @@ it('opens on the person’s own twin from ``?with=me``', async () => {
     '/chat?with=me',
   );
   await waitFor(() => expect(usePersonas.getState().id).toBe('p-wang'));
+  const sheet = await list();
+  // Their conversations with it are the assistant's: they are listed, and the pinned choice is on.
+  expect(
+    await within(sheet).findByRole('button', { name: row('招聘面试的问题') }),
+  ).toBeVisible();
+  expect(
+    within(sheet).queryByRole('button', { name: row('评审定的接口') }),
+  ).toBeNull();
+  expect(
+    within(sheet).getByRole('button', { name: /^我的分身/u }),
+  ).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('goes nowhere on ``?with=me`` for someone with no twin of their own, and waits for the twins to be known', async () => {
+  // No twin is theirs: the page stays where it is, on everyone's.
+  server.own.mine = null;
+  mount([twin('default', '林舟'), personas[1]], '/chat?with=me');
+  const sheet = await list();
+  await within(sheet).findByRole('button', { name: row('评审定的接口') });
+  expect(usePersonas.getState().id).toBe('default');
+  expect(usePersonas.getState().switchTo).not.toHaveBeenCalled();
+  expect(within(sheet).getByRole('button', { name: '全部' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+});
+
+it('waits for the twins to be known before ``?with=me`` goes to the person’s own', async () => {
+  server.own.mine = { persona_id: 'p-wang', pending: 0 };
+  mount([], '/chat?with=me');
+  await list();
+  expect(usePersonas.getState().switchTo).not.toHaveBeenCalled();
+  act(() =>
+    usePersonas.setState({
+      items: [
+        twin('default', '林舟'),
+        twin('p-wang', '王屿', { mine: true, approved: true }),
+      ],
+    }),
+  );
+  await waitFor(() => expect(usePersonas.getState().id).toBe('p-wang'));
+});
+
+it('pages the assistant’s list from where its own conversations end, not counting what it asked colleagues', async () => {
+  const person = userEvent.setup();
+  server.paging.size = 1;
+  server.rows.set('c-self-2', {
+    id: 'c-self-2',
+    title: '更早问过的事',
+    turns: [user('u9', '更早问过的事'), said('t9', answer({ reply: '嗯。' }))],
+    updated_at: '2026-10-18T09:00:00',
+    persona: 'default',
+    audience: 'self',
+  });
+  server.rows.get('c-qing')!.via = 'delegate';
+  mount();
+  const sheet = await list();
+  expect(
+    await within(sheet).findByRole('button', {
+      name: row('我上周答应过谁什么'),
+    }),
+  ).toBeVisible();
+  expect(within(sheet).getByRole('region', { name: '问同事' })).toBeVisible();
+  await person.click(within(sheet).getByRole('button', { name: '显示更多' }));
+  expect(
+    await within(sheet).findByRole('button', { name: row('更早问过的事') }),
+  ).toBeVisible();
+  expect(
+    fetcher.mock.calls.some(
+      ([url]) => url === '/api/personas/conversations?offset=1&mine=true',
+    ),
+  ).toBe(true);
+  expect(within(sheet).queryByRole('button', { name: '显示更多' })).toBeNull();
+});
+
+it('shows more tasks than a page holds from the task list', async () => {
+  const person = userEvent.setup();
+  server.paging.size = 1;
+  server.tasks.push({
+    task_id: 'w_cccccccccccc',
+    persona_id: 'p-qing',
+    title: '整理会议纪要',
+    status: 'idle',
+    updated_at: '2026-10-19T08:00:00',
+  });
+  mount();
+  const sheet = await list();
+  await everyone(sheet);
+  await person.click(within(sheet).getByRole('button', { name: '任务' }));
+  expect(
+    await within(sheet).findByRole('button', { name: row('整理周报') }),
+  ).toBeVisible();
+  expect(
+    within(sheet).queryByRole('button', { name: row('整理会议纪要') }),
+  ).toBeNull();
+  await person.click(within(sheet).getByRole('button', { name: '显示更多' }));
+  expect(
+    await within(sheet).findByRole('button', { name: row('整理会议纪要') }),
+  ).toBeVisible();
+  expect(
+    fetcher.mock.calls.some(
+      ([url]) => url === '/api/personas/conversations?task_offset=1',
+    ),
+  ).toBe(true);
+  // The first of them stays where it was.
+  expect(
+    within(sheet).getByRole('button', { name: row('整理周报') }),
+  ).toBeVisible();
+});
+
+it('renames and deletes another twin’s conversation and task as that twin, and the list follows', async () => {
+  const person = userEvent.setup();
+  mount();
+  const sheet = await list();
+  await everyone(sheet);
+  const headerOf = (url: string, method: string) =>
+    new Headers(
+      fetcher.mock.calls.find(
+        ([path, init]) => path === url && init?.method === method,
+      )?.[1]?.headers,
+    ).get('X-Twin-Persona');
+  await person.click(
+    await within(sheet).findByRole('button', {
+      name: '评审定的接口的更多操作',
+    }),
+  );
+  await person.click(within(sheet).getByRole('menuitem', { name: '重命名' }));
+  const box = within(sheet).getByRole('textbox', { name: '对话标题' });
+  await person.clear(box);
+  await person.type(box, '接口评审结论');
+  await person.click(within(sheet).getByRole('button', { name: '保存' }));
+  expect(
+    await within(sheet).findByRole('button', { name: row('接口评审结论') }),
+  ).toBeVisible();
+  expect(headerOf('/api/conversations/c-qing', 'PATCH')).toBe('p-qing');
+  expect(bodyOf('/api/conversations/c-qing', 'PATCH')).toEqual([
+    { title: '接口评审结论' },
+  ]);
+  await person.click(
+    within(sheet).getByRole('button', { name: '接口评审结论的更多操作' }),
+  );
+  await person.click(within(sheet).getByRole('menuitem', { name: '删除' }));
+  await person.click(
+    within(await screen.findByRole('dialog', { name: '删除对话？' })).getByRole(
+      'button',
+      { name: '删除' },
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      within(sheet).queryByRole('button', { name: row('接口评审结论') }),
+    ).toBeNull(),
+  );
+  expect(headerOf('/api/conversations/c-qing', 'DELETE')).toBe('p-qing');
+  // A task of theirs: deleted on its own twin too.
+  await within(sheet).findByRole('button', { name: row('整理周报') });
+  await person.click(
+    within(sheet).getByRole('button', { name: '整理周报的更多操作' }),
+  );
+  await person.click(within(sheet).getByRole('menuitem', { name: '删除' }));
+  server.tasks.length = 0;
+  await person.click(
+    within(await screen.findByRole('dialog', { name: '删除任务？' })).getByRole(
+      'button',
+      { name: '删除' },
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      within(sheet).queryByRole('button', { name: row('整理周报') }),
+    ).toBeNull(),
+  );
+  expect(headerOf('/api/persona/work/w_bbbbbbbbbbbb', 'DELETE')).toBe('p-qing');
+});
+
+it('asks for the list again when a conversation of the twin in view is renamed, whichever page of the list it is on', async () => {
+  const person = userEvent.setup();
+  server.paging.size = 1;
+  server.rows.set('c-self-2', {
+    id: 'c-self-2',
+    title: '更早问过的事',
+    turns: [user('u9', '更早问过的事'), said('t9', answer({ reply: '嗯。' }))],
+    updated_at: '2026-10-18T09:00:00',
+    persona: 'default',
+    audience: 'self',
+  });
+  mount();
+  const sheet = await list();
+  await person.click(
+    await within(sheet).findByRole('button', { name: '显示更多' }),
+  );
+  await within(sheet).findByRole('button', { name: row('更早问过的事') });
+  await person.click(
+    within(sheet).getByRole('button', { name: '更早问过的事的更多操作' }),
+  );
+  await person.click(within(sheet).getByRole('menuitem', { name: '重命名' }));
+  const box = within(sheet).getByRole('textbox', { name: '对话标题' });
+  await person.clear(box);
+  await person.type(box, '换了个说法');
+  await person.click(within(sheet).getByRole('button', { name: '保存' }));
+  // The list was asked for again: from its first page, where the old title is no longer, and the new one is found
+  // where the conversation is.
+  await waitFor(() =>
+    expect(
+      within(sheet).queryByRole('button', { name: row('更早问过的事') }),
+    ).toBeNull(),
+  );
+  await person.click(
+    await within(sheet).findByRole('button', { name: '显示更多' }),
+  );
+  expect(
+    await within(sheet).findByRole('button', { name: row('换了个说法') }),
+  ).toBeVisible();
 });
 
 it('keeps to the assistant’s list while the page is still on its way to the person’s own twin', async () => {

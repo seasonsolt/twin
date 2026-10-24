@@ -35,7 +35,13 @@ interface Everyone {
   conversations: AllConversation[];
   tasks: AllTask[];
   more: boolean;
+  /** Where the next page of conversations begins (what the first page adds apart is not counted). */
+  next: number;
+  moreTasks: boolean;
 }
+
+/** What the server sends: the same, with the tasks' own "more" under its wire name. */
+type Reply = Partial<Omit<Everyone, 'moreTasks'>> & { more_tasks?: boolean };
 
 /** Which of them the list is of: everyone's, one twin's (``with``), or the person's own with their own twin. */
 export interface SessionScope {
@@ -43,9 +49,10 @@ export interface SessionScope {
   with?: string;
 }
 
-const query = (scope: SessionScope, offset: number) => {
+const query = (scope: SessionScope, offset: number, taskOffset: number) => {
   const params = new URLSearchParams();
   if (offset) params.set('offset', String(offset));
+  if (taskOffset) params.set('task_offset', String(taskOffset));
   if (scope.mine) params.set('mine', 'true');
   if (scope.with) params.set('with', scope.with);
   const text = params.toString();
@@ -66,16 +73,17 @@ export function useAllSessions(
   const [error, setError] = useState('');
   const request = useRef<AbortController | null>(null);
   const { mine, with: only } = scope;
+  // ``offset``: the next conversations; ``taskOffset``: the next tasks, which come without conversations.
   const load = useCallback(
-    async (offset = 0) => {
+    async (offset = 0, taskOffset = 0) => {
       request.current?.abort();
       const controller = new AbortController();
       request.current = controller;
       setLoading(true);
       setError('');
       try {
-        const reply = await api<Partial<Everyone> | null>(
-          query({ mine, with: only }, offset),
+        const reply = await api<Reply | null>(
+          query({ mine, with: only }, offset, taskOffset),
           { signal: controller.signal },
         );
         if (controller.signal.aborted) return;
@@ -86,19 +94,24 @@ export function useAllSessions(
           conversations: reply.conversations,
           tasks: Array.isArray(reply.tasks) ? reply.tasks : [],
           more: !!reply.more,
+          next: reply.next ?? reply.conversations.length,
+          moreTasks: !!reply.more_tasks,
         };
-        setData((previous) =>
-          offset && previous
-            ? {
-                ...page,
-                conversations: [
-                  ...previous.conversations,
-                  ...page.conversations,
-                ],
-                tasks: previous.tasks,
-              }
-            : page,
-        );
+        setData((previous) => {
+          if (!previous || (!offset && !taskOffset)) return page;
+          if (taskOffset)
+            return {
+              ...previous,
+              tasks: [...previous.tasks, ...page.tasks],
+              moreTasks: page.moreTasks,
+            };
+          return {
+            ...page,
+            conversations: [...previous.conversations, ...page.conversations],
+            tasks: previous.tasks,
+            moreTasks: previous.moreTasks,
+          };
+        });
       } catch (failure) {
         if (controller.signal.aborted) return;
         setError(failure instanceof Error ? failure.message : '无法加载对话');
@@ -114,12 +127,14 @@ export function useAllSessions(
     return () => request.current?.abort();
     // ``revision`` is only a reason to ask again.
   }, [enabled, load, revision]);
-  const count = data?.conversations.length ?? 0;
+  const next = data?.next ?? 0;
+  const taskCount = data?.tasks.length ?? 0;
   return {
     data,
     loading,
     error,
     reload: () => load(),
-    more: () => load(count),
+    more: () => load(next),
+    moreTasks: () => load(0, taskCount),
   };
 }

@@ -92,6 +92,7 @@
   gap: 6px;
 }
 .history-entry {
+  position: relative;
   border: 0;
   border-radius: 12px;
   background: rgb(255 255 255 / 0.6);
@@ -116,6 +117,8 @@
   min-width: 0;
   flex: 1;
   padding: 10px 0 10px 12px;
+  border-radius: 12px;
+  color: inherit;
   text-align: left;
 }
 .history-title {
@@ -131,23 +134,35 @@
   font-size: 12px;
 }
 .history-more {
-  display: grid;
-  place-items: center;
   flex-shrink: 0;
   width: 44px;
   height: 44px;
+  color: inherit;
 }
+.history-more:hover,
+.history-more[aria-expanded='true'] {
+  background: var(--soft);
+  color: var(--text-primary);
+}
+/* A small list under the "⋯", over the rows below it, like the other "⋯" menus (ActionMenu). */
 .history-menu {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 0 8px 8px;
+  position: absolute;
+  top: calc(100% - 4px);
+  right: 4px;
+  z-index: 10;
+  display: grid;
+  min-width: 7rem;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--elevation-2);
 }
 .history-menu button {
-  min-height: 44px;
+  justify-content: flex-start;
+  min-height: 40px;
   padding: 0 12px;
   border-radius: 8px;
-  background: var(--canvas);
   color: var(--text-primary);
 }
 .history-menu button:last-child {

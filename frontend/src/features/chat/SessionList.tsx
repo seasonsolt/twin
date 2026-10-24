@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -19,6 +20,7 @@ import {
   Dialog,
   IconButton,
   Input,
+  PlainButton,
   Row,
 } from '../../components/ui';
 import './history.css';
@@ -153,6 +155,8 @@ export function SessionList({
 }) {
   const [menu, setMenu] = useState<string | null>(null);
   const menuTrigger = useRef<HTMLButtonElement | null>(null);
+  // Only a menu opened from the keyboard moves the focus into it; one opened by pointer leaves it on the "⋯".
+  const [menuByKey, setMenuByKey] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [query, setQuery] = useState('');
@@ -187,6 +191,16 @@ export function SessionList({
       list.removeEventListener('scroll', update);
     };
   }, [open, inline, sessions, loading, query, menu, editing]);
+  // The menu floats over the rows below it: pressing anywhere outside its row closes it.
+  useEffect(() => {
+    if (!menu) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target as Element | null)?.closest?.('[data-menu-open]'))
+        setMenu(null);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [menu]);
   const reset = () => {
     setMenu(null);
     setEditing(null);
@@ -207,7 +221,12 @@ export function SessionList({
     const key = keyOf(row);
     const isCurrent = current !== null && keyOf(current) === key;
     return (
-      <li key={key} className="history-entry" data-current={isCurrent}>
+      <li
+        key={key}
+        className="history-entry"
+        data-current={isCurrent}
+        data-menu-open={menu === key || undefined}
+      >
         {editing === key ? (
           <form
             className="history-edit"
@@ -255,9 +274,8 @@ export function SessionList({
         ) : (
           <>
             <div className="history-entry-row">
-              <Button
-                variant="ghost"
-                className="history-select font-normal text-current hover:bg-transparent"
+              <PlainButton
+                className="history-select"
                 aria-current={isCurrent ? 'true' : undefined}
                 disabled={saving || busy}
                 onClick={() => {
@@ -288,20 +306,22 @@ export function SessionList({
                     ? '在做'
                     : relativeTime(row.updated_at, currentTime)}
                 </time>
-              </Button>
-              <IconButton
-                className="history-more text-current hover:bg-transparent"
-                label={`${row.title}的更多操作`}
+              </PlainButton>
+              <PlainButton
+                shape="circle"
+                className="history-more"
+                aria-label={`${row.title}的更多操作`}
                 aria-expanded={menu === key}
                 aria-haspopup="menu"
                 disabled={saving || row.running}
                 onClick={(event) => {
                   menuTrigger.current = event.currentTarget;
+                  setMenuByKey(event.detail === 0);
                   setMenu(menu === key ? null : key);
                 }}
               >
                 <MoreHorizontal size={18} aria-hidden />
-              </IconButton>
+              </PlainButton>
             </div>
             {menu === key && (
               <div
@@ -341,7 +361,7 @@ export function SessionList({
               >
                 {onRename && row.kind === 'chat' && (
                   <Button
-                    autoFocus
+                    autoFocus={menuByKey}
                     variant="ghost"
                     role="menuitem"
                     onClick={() => {
@@ -354,7 +374,7 @@ export function SessionList({
                   </Button>
                 )}
                 <Button
-                  autoFocus={row.kind === 'task'}
+                  autoFocus={menuByKey && row.kind === 'task'}
                   variant="ghost"
                   role="menuitem"
                   disabled={saving}

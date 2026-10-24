@@ -408,6 +408,13 @@ it('supports keyboard overflow actions and restores focus after closing the shee
   await user.keyboard('{Escape}');
   expect(within(sheet).queryByRole('menu')).toBeNull();
   expect(more).toHaveFocus();
+  // Opened by pointer, the menu leaves the focus on the "⋯"; pressing outside its row closes it.
+  await user.click(more);
+  expect(within(sheet).getByRole('menu')).toBeVisible();
+  expect(more).toHaveFocus();
+  await user.click(within(sheet).getByRole('heading', { name: '今天' }));
+  expect(within(sheet).queryByRole('menu')).toBeNull();
+  more.focus();
   await user.keyboard('{Escape}');
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(trigger).toHaveFocus();

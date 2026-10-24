@@ -596,7 +596,7 @@ def create_app(
             after_build=team_refresh,
             delegations=delegations,
         )
-        delegation_routes.register(context, delegations, desk, backends, request_asker_name)
+        delegation_routes.register(context, delegations, desk, backends, request_asker_name, scoped_jobs)
         lens_routes.register(
             context,
             resolved,

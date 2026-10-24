@@ -48,6 +48,9 @@ def test_the_cue_names_and_question_are_read_from_how_the_person_says_it() -> No
     # Anything else is an ordinary message to the assistant.
     for message in ("我上周答应过谁什么", "王屿怎么看旧模板？", "问问王屿", "记一下，帮我问问王屿的事"):
         assert parse(message, KNOWN) is None
+    # A question for the assistant that happens to start the same way is not an errand to a colleague.
+    for message in ("帮我问一下，下周的会几点开？", "帮我问问看我上周答应过谁什么"):
+        assert parse(message, KNOWN) is None, message
 
 
 def test_what_cannot_be_carried_out_is_said_and_nobody_is_asked() -> None:
@@ -223,6 +226,7 @@ def test_the_assistant_asks_in_the_persons_name_one_conversation_each_and_says_w
     assert final["reply"] == "已用你的名义问了王屿、陈一，本人看得到。"
     # The assistant's own note on what came back is kept apart, with the delegation it belongs to.
     assert final["delegation"]["summary"] == "客户能接受；脚本排期等陈一；合同那家等沈从。"
+    assert final["delegation"]["asked"] == 2
     [made] = [scene.team.get_delegation(final["delegation"]["id"])]
     assert made is not None and (made.initiator, made.persona_id, made.conversation_id) == (LIN, lin.persona, mine)
     assert made.question == QUESTION
@@ -506,3 +510,39 @@ def test_a_model_that_cannot_be_reached_holds_no_place_in_the_chat_queue(
             response = scene.web.post("/api/persona/chat/stream", json=body, headers=lin.headers)
             assert response.status_code == 503, response.text
     assert tell(scene)[1]["reply"] == "已用你的名义问了王屿、陈一，本人看得到。"
+
+
+def test_asking_one_more_twin_holds_a_place_in_the_chat_queue_like_the_first_asking(
+    scene: Team, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from twin.web import jobs
+
+    _, final = tell(scene)
+    delegation = final["delegation"]["id"]
+    scene.as_(LIN)
+    headers = scene.twins["lin"].headers
+    ask = f"/api/persona/delegations/{delegation}/ask"
+    held: list[int] = []
+    original = jobs.JobManager.admit_stream
+
+    def watching(self: jobs.JobManager) -> Any:
+        ticket = original(self)
+        held.append(self._streams[0])
+        return ticket
+
+    # One place in all: the twin is asked while it is held, and it is given back for the next asking.
+    monkeypatch.setattr(jobs, "MAX_PENDING_ANSWERS", 1)
+    monkeypatch.setattr(jobs.JobManager, "admit_stream", watching)
+    added = scene.web.post(ask, json={"persona_id": scene.twins["shen"].persona}, headers=headers)
+    assert added.status_code == 200, added.text
+    assert held == [1]
+
+    # A full queue turns it away before anyone is asked.
+    def full(self: jobs.JobManager) -> Any:
+        raise jobs.TooManyJobs("聊天排队太多，请稍后再试")
+
+    monkeypatch.setattr(jobs.JobManager, "admit_stream", full)
+    before = len(scene.team.conversations(delegation_id=delegation))
+    turned_away = scene.web.post(ask, json={"persona_id": scene.twins["chen"].persona}, headers=headers)
+    assert turned_away.status_code == 429, turned_away.text
+    assert len(scene.team.conversations(delegation_id=delegation)) == before

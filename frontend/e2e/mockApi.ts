@@ -1102,6 +1102,7 @@ const delegationConversation = {
         delegation: {
           id: 'd-1',
           summary: '客户能接受；脚本排期等陈一；合同那家等沈从。齐了再定。',
+          asked: 2,
         },
       },
     },

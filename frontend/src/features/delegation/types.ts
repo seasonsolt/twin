@@ -36,4 +36,6 @@ export interface DelegationView {
 export interface DelegationNote {
   id: string;
   summary: string;
+  /** How many twins it was written about; more cards than that, and it is out of date. */
+  asked?: number;
 }

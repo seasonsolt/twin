@@ -38,7 +38,7 @@ const asked = (targets: DelegationTarget[]): DelegationView => ({
   targets,
   limit: 3,
 });
-const note = { id: 'd1', summary: '客户能接受；脚本排期等陈一。' };
+const note = { id: 'd1', summary: '客户能接受；脚本排期等陈一。', asked: 2 };
 
 let view: DelegationView;
 let fetcher: ReturnType<typeof vi.fn>;
@@ -90,7 +90,9 @@ it('shows a card for each twin that was asked, then the assistant’s own note m
     '/chat?with=p-wang&open=c-wang',
   );
   const chen = screen.getByRole('article', { name: '陈一的分身的回答' });
-  expect(within(chen).getByText('要陈一本人定')).toBeVisible();
+  expect(within(chen).getByText('要本人定')).toBeVisible();
+  // Said once: the badge, then the two buttons, with no question that says it again.
+  expect(within(chen).queryByText(/本人吗/u)).toBeNull();
   const mine = screen.getByLabelText('我的归纳');
   expect(within(mine).getByText('我的归纳 · 非原话')).toBeVisible();
   expect(within(mine).getByText('客户能接受；脚本排期等陈一。')).toBeVisible();
@@ -137,6 +139,8 @@ it('shows what the colleague wrote back as theirs, on the card', async () => {
   expect(within(chen).getByText('本人已回')).toBeVisible();
   const reply = within(chen).getByLabelText('陈一本人');
   expect(within(reply).getByText('排期下周三前给你。')).toBeVisible();
+  // The note still says 等陈一: out of date once he has answered.
+  expect(screen.queryByLabelText('我的归纳')).toBeNull();
 });
 
 it('lets the asker leave a question where it is', async () => {
@@ -182,6 +186,8 @@ it('offers to ask someone an answer sends the asker to, and asks them when the p
     await screen.findByRole('article', { name: '沈从的分身的回答' }),
   ).toBeVisible();
   expect(screen.queryByRole('button', { name: /也问问/u })).toBeNull();
+  // The note was written about the two first asked: with a third card it is out of date, and the cards say it.
+  expect(screen.queryByLabelText('我的归纳')).toBeNull();
 });
 
 it('shows a team answer the twin’s person had confirmed as it stands, and says when the answers cannot be read', async () => {

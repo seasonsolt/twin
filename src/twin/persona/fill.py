@@ -169,30 +169,60 @@ def draft(store: PersonaStore, llm: LLM, settings: Settings, name: str, ask: Ask
     return drafts[:MAX_DRAFTS]
 
 
-def _source_of(ask_text: str, name: str, ask_id: str, kept: Kept, today: dt.date) -> ParsedSource:
-    digest = hashlib.sha256(f"{kept.facet_id}\x1f{kept.statement}".encode()).hexdigest()[:10]
-    return parse_answer(ask_text, kept.statement, name, f"{ORIGIN}{ask_id}:{digest}", date=today, channel="补一补")
-
-
-def _expected(parsed: ParsedSource, kept: Kept, today: dt.date) -> PersonaItem:
-    """The item a kept conclusion becomes, as far as coverage can tell: the person's own words, on this day."""
-    source = parsed.source
-    return PersonaItem(
-        item_id=f"fill_{source.source_id}",
-        facet_id=kept.facet_id,
-        statement=kept.statement,
-        evidence=[
-            PEvidence(
-                expression_id=parsed.expressions[0].expression_id,
-                source_id=source.source_id,
-                source_kind=SourceKind.INTERVIEW,
-                evidence_class=EvidenceClass.SELF_REPORT,
-                date=today,
-                quote=kept.statement,
-                own_words=True,
+def _notes_of(
+    ask_text: str, name: str, ask_id: str, kept: Sequence[Kept], today: dt.date
+) -> list[tuple[Choice, ParsedSource, list[Kept]]]:
+    """The sources the conclusions that are kept are stored as: one answer is one occasion of the person's own words, so
+    its conclusions share a source, an expression each. Only a tier is kept per source, so the conclusions the person
+    chose another tier for are a source of their own."""
+    notes: list[tuple[Choice, ParsedSource, list[Kept]]] = []
+    for choice in ("colleague", "self"):
+        group = [k for k in kept if k.choice == choice]
+        if not group:
+            continue
+        digest = hashlib.sha256("\x1e".join(f"{k.facet_id}\x1f{k.statement}" for k in group).encode()).hexdigest()[:10]
+        whole = parse_answer(
+            ask_text,
+            "\n".join(k.statement for k in group),
+            name,
+            f"{ORIGIN}{ask_id}:{choice}:{digest}",
+            date=today,
+            channel="补一补",
+        )
+        source_id = whole.source.source_id
+        expressions = [
+            whole.expressions[0].model_copy(
+                update={"expression_id": f"{source_id}#{idx:05d}", "idx": idx, "text": k.statement}
             )
-        ],
-    )
+            for idx, k in enumerate(group)
+        ]
+        source = whole.source.model_copy(update={"n_expressions": len(expressions), "n_target": len(expressions)})
+        notes.append((choice, ParsedSource(source, expressions), group))
+    return notes
+
+
+def _expected(parsed: ParsedSource, group: Sequence[Kept], today: dt.date) -> list[PersonaItem]:
+    """The items the conclusions of a source become, as far as coverage can tell: the person's own words that day."""
+    source = parsed.source
+    return [
+        PersonaItem(
+            item_id=f"fill_{expression.expression_id}",
+            facet_id=kept.facet_id,
+            statement=kept.statement,
+            evidence=[
+                PEvidence(
+                    expression_id=expression.expression_id,
+                    source_id=source.source_id,
+                    source_kind=SourceKind.INTERVIEW,
+                    evidence_class=EvidenceClass.SELF_REPORT,
+                    date=today,
+                    quote=kept.statement,
+                    own_words=True,
+                )
+            ],
+        )
+        for expression, kept in zip(parsed.expressions, group, strict=True)
+    ]
 
 
 def changes(
@@ -208,7 +238,11 @@ def changes(
     today = today or dt.date.today()
     chosen = [k for k in kept if k.choice != "none"]
     facets = list(dict.fromkeys([ask.facet_id, *(k.facet_id for k in chosen)]))
-    added = [_expected(_source_of(ask.text, name, ask.question_id, k, today), k, today) for k in chosen]
+    added = [
+        item
+        for _, parsed, group in _notes_of(ask.text, name, ask.question_id, chosen, today)
+        for item in _expected(parsed, group, today)
+    ]
     found: list[Change] = []
     for facet in facets:
         own = [i for i in items if i.facet_id == facet]
@@ -219,15 +253,12 @@ def changes(
 
 
 def keep(store: PersonaStore, ask: Ask, name: str, kept: Sequence[Kept], today: dt.date | None = None) -> list[str]:
-    """Store the conclusions the person chose to keep, each as a source in its tier; returns the ids of the sources.
-    The next build makes their memories."""
+    """Store the conclusions the person chose to keep as one source in the tier chosen (one for each tier, when they
+    chose both); returns the ids of the sources. The next build makes their memories."""
     today = today or dt.date.today()
     stored: list[str] = []
-    for conclusion in kept:
-        if conclusion.choice == "none":
-            continue
-        parsed = _source_of(ask.text, name, ask.question_id, conclusion, today)
+    for choice, parsed, _ in _notes_of(ask.text, name, ask.question_id, kept, today):
         store.put_source(parsed)
-        store.set_note_tier(parsed.source.source_id, SELF if conclusion.choice == "self" else COLLEAGUE)
+        store.set_note_tier(parsed.source.source_id, SELF if choice == "self" else COLLEAGUE)
         stored.append(parsed.source.source_id)
     return stored

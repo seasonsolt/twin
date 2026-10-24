@@ -43,6 +43,7 @@ export function LevelDots({
     <span
       role={label ? 'img' : undefined}
       aria-label={label}
+      title={label}
       aria-hidden={label ? undefined : true}
       className="inline-flex shrink-0 items-center gap-1"
     >

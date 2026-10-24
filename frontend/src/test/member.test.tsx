@@ -930,9 +930,9 @@ it('lets the person themselves look through the answers they made the team’s, 
     within(views)
       .getAllByRole('button')
       .map((button) => button.textContent),
-  ).toEqual(['列表', '图谱', '我设的团队答案']);
+  ).toEqual(['列表', '图谱', '我的团队答案']);
   expect(
-    within(views).getByRole('button', { name: '我设的团队答案' }),
+    within(views).getByRole('button', { name: '我的团队答案' }),
   ).toHaveAttribute('aria-pressed', 'true');
 });
 

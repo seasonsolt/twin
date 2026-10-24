@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
   AspectRing,
@@ -19,8 +19,10 @@ import {
   toast,
   type AspectLayer,
 } from '../../components/ui';
+import { api } from '../../lib/api';
 import { basePath } from '../../lib/base';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
+import { usePolling } from '../../lib/usePolling';
 import type { ItemQuery } from './types';
 import { ItemRow } from './ItemRow';
 import { useItemSearch } from './useItemSearch';
@@ -41,18 +43,6 @@ export const topics: Record<string, string> = {
   D8: '最近在关注',
   D9: '生活与喜好',
 };
-const suggestions: Record<string, string> = {
-  D1: '多写写你的经历与身份',
-  D2: '多写写你看重什么',
-  D3: '多写写你怎么做决定',
-  D4: '多写写你怎么思考',
-  D5: '多写写你擅长什么',
-  D6: '多写写你平时怎么说话',
-  D7: '多写写你怎样和人相处',
-  D8: '多写写你最近在关注什么',
-  D9: '多写写你的生活与喜好',
-};
-
 /** What each aspect covers, in a line, so an empty one still says what it is waiting to learn. */
 const blurbs: Record<string, string> = {
   D1: '现在的身份、重要的经历，和常讲给别人听的故事',
@@ -122,14 +112,19 @@ function ItemList({ query, profile }: { query: ItemQuery; profile: Profile }) {
           <Button
             variant="ghost"
             aria-expanded={expanded}
+            aria-label={
+              expanded
+                ? `再看 ${Math.min(remaining, ITEM_PAGE_SIZE)} 条，还有 ${remaining} 条`
+                : undefined
+            }
             onClick={() => {
               if (expanded) page.loadMore();
               else setExpanded(true);
             }}
           >
             {expanded
-              ? `再看 ${Math.min(remaining, ITEM_PAGE_SIZE)} 条（还有 ${remaining} 条）`
-              : `展开其余 ${remaining} 条`}
+              ? `再看 ${Math.min(remaining, ITEM_PAGE_SIZE)} 条`
+              : `再看 ${remaining} 条`}
           </Button>
         )}
         {expanded && (
@@ -328,11 +323,8 @@ function Aspect({
           profile={profile}
         />
       ) : (
-        <Card variant="soft" padding="md" className="space-y-2">
+        <Card variant="soft" padding="md">
           <Text size="sm">还不了解这一面。</Text>
-          {!ask && (
-            <TextLink to="?section=memories">{suggestions[id]}</TextLink>
-          )}
         </Card>
       )}
       {ask && (
@@ -367,6 +359,24 @@ export function Overview({ ask }: { ask?: AskPerson }) {
     }
     wasUpdating.current = updating;
   }, [updating, refreshSummary, refreshCoverage]);
+  // What 补一补 stored becomes memories only when the build that follows is done: until then the page waits, and
+  // reads the counts and levels again once the build is idle.
+  const [building, setBuilding] = usePersonaState(false);
+  const settle = useCallback(async () => {
+    try {
+      const view = await api<{ state: string }>('/api/persona/processing', {
+        headers: { 'X-Twin-Persona': personaId },
+      });
+      if (view.state !== 'idle') return;
+      setBuilding(false);
+      void refreshSummary();
+      void refreshCoverage();
+      void useStatus.getState().refresh();
+    } catch {
+      // The next poll tries again.
+    }
+  }, [personaId, setBuilding, refreshSummary, refreshCoverage]);
+  usePolling(settle, building ? 3000 : 0);
   const counts = new Map(
     (profile.summary?.dimensions ?? []).map((row) => [
       row.dimension_id,
@@ -407,19 +417,20 @@ export function Overview({ ask }: { ask?: AskPerson }) {
   const search = useItemSearch(text);
   const selected =
     chosen ?? aspects.find((aspect) => aspect.total > 0)?.id ?? order[0];
-  const wanted = [
+  // The aspects the twin most wants to know more of, in the order it would collect them.
+  const wantedIds = [
     ...new Set(
       (profile.coverage?.suggestions ?? [])
-        .map((suggestion) => {
-          const dimension =
+        .map(
+          (suggestion) =>
             profile.coverage?.facets.find(
               (facet) => facet.facet_id === suggestion.facet_id,
-            )?.dimension_id ?? `D${suggestion.facet_id.split('.')[0]}`;
-          return topics[dimension];
-        })
-        .filter(Boolean),
+            )?.dimension_id ?? `D${suggestion.facet_id.split('.')[0]}`,
+        )
+        .filter((id) => id in topics),
     ),
   ].slice(0, 5);
+  const wanted = wantedIds.map((id) => topics[id]);
   const empty = !!profile.summary && total === 0;
   return (
     <div className="about-knowledge space-y-4 md:space-y-6">
@@ -455,13 +466,22 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             </AspectRing>
             <Stack gap={4} grow>
               <Stack gap={1}>
-                <Heading level={3}>我了解到的他</Heading>
+                <Heading level={3}>
+                  {profile.canTier ? '我了解到的你' : '我了解到的他'}
+                </Heading>
                 {empty && (
                   <EmptyState
-                    title="还不够了解你"
-                    body="添加一些记忆，让我慢慢认识你。"
+                    title={profile.canTier ? '还不够了解你' : '还不够了解他'}
+                    body={
+                      profile.canTier
+                        ? '回答几个问题，或添加一些记忆，让我慢慢认识你。'
+                        : '添加一些记忆，让我慢慢认识他。'
+                    }
                   >
-                    <TextLink to="?section=memories">添加记忆</TextLink>
+                    {/* The person is offered 补一补 just below; anyone else adds the memories. */}
+                    {!profile.canTier && (
+                      <TextLink to="?section=memories">添加记忆</TextLink>
+                    )}
                   </EmptyState>
                 )}
               </Stack>
@@ -480,19 +500,25 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             </Button>
           </p>
         )}
-        {wanted.length > 0 && (
+        {wanted.length > 0 && (!empty || profile.canTier) && (
           <Row gap={3} wrap>
             <Text as="span" size="sm" tone="secondary">
               了解得还少：{wanted.join('、')}
             </Text>
             {profile.canTier ? (
-              <Button size="sm" onClick={() => setFilling({})}>
+              <Button
+                size="sm"
+                onClick={() => setFilling({ otherwise: wantedIds[0] })}
+              >
                 补一补
               </Button>
             ) : (
-              <TextLink to="?section=memories" size="sm">
-                添加记忆
-              </TextLink>
+              // Where someone can be asked, each aspect below says so; otherwise the memories are added here.
+              !ask && (
+                <TextLink to="?section=memories" size="sm">
+                  添加记忆
+                </TextLink>
+              )
             )}
           </Row>
         )}
@@ -518,7 +544,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
                   aria-pressed={showConflicts}
                   onClick={() => setShowConflicts(!showConflicts)}
                 >
-                  有矛盾的 {conflicts} 条
+                  看矛盾 {conflicts} 条
                 </Button>
               )}
             </Row>
@@ -553,7 +579,11 @@ export function Overview({ ask }: { ask?: AskPerson }) {
                             {aspect.total}
                           </Text>
                         )}
-                        <LevelDots level={aspect.level} layer={group.layer} />
+                        <LevelDots
+                          level={aspect.level}
+                          layer={group.layer}
+                          label={levelNames[aspect.level]}
+                        />
                       </Row>
                     ),
                   };
@@ -578,10 +608,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         open={filling !== null}
         onOpenChange={(open) => !open && setFilling(null)}
         scope={filling ?? undefined}
-        onKept={() => {
-          void refreshSummary();
-          void refreshCoverage();
-        }}
+        onKept={() => setBuilding(true)}
       />
     </div>
   );

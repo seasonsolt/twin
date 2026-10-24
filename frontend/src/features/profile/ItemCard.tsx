@@ -10,7 +10,13 @@ import {
   toast,
 } from '../../components/ui';
 import { useMotionPreset } from '../../design/motion';
-import { secondhand, type ProfileItem, type ReviewStatus } from './types';
+import {
+  secondhand,
+  TIER_LABELS,
+  type ProfileItem,
+  type ReviewStatus,
+  type Tier,
+} from './types';
 
 /** The occasions behind a memory: when, where from, and what was said. */
 export function EvidenceList({
@@ -52,6 +58,7 @@ export function ItemCard({
   item,
   pending,
   onReview,
+  onTier,
   kindLabels,
 }: {
   item: ProfileItem;
@@ -61,6 +68,8 @@ export function ItemCard({
     status: ReviewStatus,
     statement?: string,
   ) => Promise<boolean>;
+  /** Only the person behind the twin says who may use a memory; a private one is marked for everyone who can say. */
+  onTier?: (item: ProfileItem, tier: Tier | null) => Promise<boolean>;
   kindLabels: Record<string, string>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -78,10 +87,13 @@ export function ItemCard({
       aria-label={item.statement}
       className="space-y-3"
     >
-      {(item.review === 'edited' || secondhand(item)) && (
+      {(item.tier === 'self' ||
+        item.review === 'edited' ||
+        secondhand(item)) && (
         <div className="flex flex-wrap gap-2">
+          {item.tier === 'self' && <Badge>{TIER_LABELS.self}</Badge>}
           {item.review === 'edited' && <Badge tone="info">你改过</Badge>}
-          {secondhand(item) && <Badge>只有别人的说法</Badge>}
+          {secondhand(item) && <Badge>只有别人说</Badge>}
         </div>
       )}
       <Text className="whitespace-pre-wrap break-words">{item.statement}</Text>
@@ -188,6 +200,28 @@ export function ItemCard({
           >
             删掉
           </Button>
+          {onTier && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() =>
+                void onTier(item, item.tier === 'self' ? 'colleague' : 'self')
+              }
+            >
+              {item.tier === 'self' ? '设为同事能用' : '设为只有本人'}
+            </Button>
+          )}
+          {onTier && item.tier_changed && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => void onTier(item, null)}
+            >
+              恢复默认
+            </Button>
+          )}
           {item.review === 'edited' && (
             <Button
               size="sm"

@@ -454,7 +454,7 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
               </li>
             ))}
             <li>● 本人说过或改过 · 实心发光</li>
-            <li>○ 只有别人的说法 · 较暗空心</li>
+            <li>○ 只有别人说 · 较暗空心</li>
             <li style={{ color: palette['--graph-danger'] }}>◎ 存在矛盾</li>
             <li>□ 资料来源</li>
           </ul>
@@ -488,6 +488,11 @@ export default function MemoryGraphPanel({ twin }: { twin: GraphTwin }) {
             pending={profile.pending.has(item.item_id)}
             onReview={(row, status, statement) =>
               profile.review(row, status, statement, reviewed)
+            }
+            onTier={
+              profile.canTier
+                ? (row, tier) => profile.tier(row, tier, reviewed)
+                : undefined
             }
             kindLabels={profile.coverage?.kind_labels ?? {}}
           />

@@ -114,9 +114,6 @@ export function PersonaSettings({
       {section === 'services' && <ExternalServices />}
       {section === 'delete' && (
         <Stack gap={3} align="start">
-          <Text size="sm" tone="secondary">
-            删除后 7 天内可以在团队页的「已删除」里恢复。
-          </Text>
           {current?.is_default ? (
             <Text tone="secondary">默认分身不能删除</Text>
           ) : (

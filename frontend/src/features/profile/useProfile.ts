@@ -168,15 +168,20 @@ export function useProfile(active: boolean) {
         setPending(new Set(started));
     }
   };
-  /** Say who may use a memory; the list shows it at once and goes back if saving fails. */
-  const tier = async (item: ProfileItem, next: Tier, list: ReviewedList) => {
+  /** Say who may use a memory, or with null go back to its facet's default; the list shows a choice at once and goes
+   * back if saving fails. */
+  const tier = async (
+    item: ProfileItem,
+    next: Tier | null,
+    list: ReviewedList,
+  ) => {
     if (!alive.current || reviewing.current.has(item.item_id)) return false;
     const request = new AbortController();
     const started = reviewing.current;
     mutations.current.add(request);
     started.add(item.item_id);
     setPending(new Set(started));
-    list.replace({ ...item, tier: next, tier_changed: true });
+    if (next) list.replace({ ...item, tier: next, tier_changed: true });
     try {
       const saved = await api<ProfileItem>(
         `/api/persona/items/${encodeURIComponent(item.item_id)}/tier`,
@@ -192,7 +197,11 @@ export function useProfile(active: boolean) {
       toast(
         next === 'self'
           ? '之后只有你自己的对话会用它'
-          : '之后同事问到时也会用它',
+          : next === 'colleague'
+            ? '之后同事问到时也会用它'
+            : saved.tier === 'self'
+              ? '回到默认：只有你自己的对话会用它'
+              : '回到默认：同事问到时也会用它',
         'success',
       );
       return true;

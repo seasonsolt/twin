@@ -178,7 +178,7 @@ it.each(['user', 'memories'])(
       expect(screen.queryByRole('region', { name: /认识你$/ })).toBeNull();
   },
 );
-it.each(['persona', 'identity'])(
+it.each(['persona', 'identity', 'questionnaire'])(
   'redirects legacy %s to the member page of the twin in view',
   async (route) => {
     identity.name_source = 'user';

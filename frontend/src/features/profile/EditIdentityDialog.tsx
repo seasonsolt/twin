@@ -15,12 +15,7 @@ export function EditIdentityDialog({
 }) {
   const personaId = usePersonaId();
   return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="名字与介绍"
-      body="修改这个分身的名字和一句话介绍。"
-    >
+    <Dialog open={open} onOpenChange={onOpenChange} title="名字与介绍">
       {identity.loading && <Skeleton className="h-40" />}
       {identity.error && (
         <Row gap={2} wrap role="alert">

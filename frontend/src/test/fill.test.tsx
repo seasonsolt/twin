@@ -184,3 +184,123 @@ it('says so when there is nothing left to ask', async () => {
   const none = await screen.findByText(/暂时没有要补的/);
   await waitFor(() => expect(none).toBeVisible());
 });
+
+const failing = (url: string, status: number, detail: string) => {
+  const fetcher = vi.mocked(fetch);
+  const original = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (input, init) =>
+    String(input) === url
+      ? new Response(JSON.stringify({ detail }), { status })
+      : original(input, init),
+  );
+};
+
+async function answered(
+  user: ReturnType<typeof userEvent.setup>,
+  asked = /最近有什么事占了你比较多的时间/,
+) {
+  const dialog = await screen.findByRole('dialog', { name: '补一补' });
+  await waitFor(() => expect(within(dialog).getByText(asked)).toBeVisible());
+  await user.type(
+    within(dialog).getByRole('textbox', { name: '你的回答' }),
+    '在推知识库检索改版。',
+  );
+  return dialog;
+}
+
+it('shows why an answer could not be read, and why it could not be kept', async () => {
+  const user = userEvent.setup();
+  failing('/api/persona/fill/draft', 502, '暂时没能整理这段回答，请重试');
+  open();
+  const dialog = await answered(user);
+  await user.click(within(dialog).getByRole('button', { name: '整理' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    '暂时没能整理这段回答，请重试',
+  );
+});
+
+it('says why keeping failed and keeps the conclusions to try again', async () => {
+  const user = userEvent.setup();
+  failing('/api/persona/fill/keep', 409, '记忆正在更新，请稍后再试');
+  const { onKept, onOpenChange } = open();
+  const dialog = await answered(user);
+  await user.click(within(dialog).getByRole('button', { name: '整理' }));
+  await within(dialog).findByText('整理成 2 条');
+  await user.click(within(dialog).getByRole('button', { name: '存进记忆' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    '记忆正在更新，请稍后再试',
+  );
+  expect(within(dialog).getByText(FIRST)).toBeVisible();
+  expect(onKept).not.toHaveBeenCalled();
+  expect(onOpenChange).not.toHaveBeenCalled();
+});
+
+it('tells the page what was stored when the dialog is closed before the last question', async () => {
+  const user = userEvent.setup();
+  const fetcher = vi.mocked(fetch);
+  const original = fetcher.getMockImplementation()!;
+  const asked = (id: string) => ({
+    id,
+    text: `问题 ${id}`,
+    facet: '8.1',
+    facet_name: '近期重点',
+    level: 0,
+    level_label: '还不了解',
+  });
+  fetcher.mockImplementation(async (input, init) =>
+    String(input).startsWith('/api/persona/fill?')
+      ? json({ questions: [asked('q17'), asked('q18'), asked('q19')] })
+      : original(input, init),
+  );
+  const { onKept, onOpenChange } = open();
+  const dialog = await answered(user, /问题 q17/);
+  await user.click(within(dialog).getByRole('button', { name: '整理' }));
+  await within(dialog).findByText('整理成 2 条');
+  await user.click(within(dialog).getByRole('button', { name: '存进记忆' }));
+  await within(dialog).findByText('第 2 题，共 3 题');
+  expect(onKept).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: /关闭|Close/ }));
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect(onKept).toHaveBeenCalledTimes(1);
+});
+
+it('does not tell the page anything when the dialog is closed with nothing stored', async () => {
+  const user = userEvent.setup();
+  const { onKept, onOpenChange } = open();
+  await screen.findByRole('dialog', { name: '补一补' });
+  await user.keyboard('{Escape}');
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect(onKept).not.toHaveBeenCalled();
+});
+
+it('asks about the aspect shown as wanting more when what the twin knows least has nothing to ask', async () => {
+  vi.mocked(fetch).mockImplementation(async (input) =>
+    String(input) === '/api/persona/fill'
+      ? json({ questions: [] })
+      : String(input) === '/api/persona/fill?dimension=D9'
+        ? json({
+            questions: [
+              {
+                id: 'q30',
+                text: '平时有什么爱好？',
+                facet: '9.1',
+                facet_name: '兴趣爱好',
+                level: 0,
+                level_label: '还不了解',
+              },
+            ],
+          })
+        : json({}),
+  );
+  render(
+    <TooltipProvider>
+      <FillDialog
+        open
+        onOpenChange={vi.fn()}
+        scope={{ otherwise: 'D9' }}
+        onKept={vi.fn()}
+      />
+    </TooltipProvider>,
+  );
+  expect(await screen.findByText('平时有什么爱好？')).toBeInTheDocument();
+});

@@ -1,6 +1,7 @@
 """Web routes of the questions the twin could not answer (``/api/persona/followups...``): the queue, the person's
 answers, which become new memories, and setting a question aside. Kept for one more period: the page now reads the
-handoffs (``web.handoffs``), which these questions became, and a change made here is followed there."""
+handoffs (``web.handoffs``), which these questions became, and a change made here is followed there. As there, they
+are the person's alone."""
 
 from __future__ import annotations
 
@@ -8,13 +9,14 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..handoffs import HandoffDesk
 from ..persona.followups import answer_followup, list_followups, set_followup
 from ..persona.store import PersonaStore, stored_identity
+from .handoffs import person
 
 
 class AnswerBody(BaseModel):
@@ -27,14 +29,16 @@ class FollowupStatusBody(BaseModel):
 
 def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None], desk: HandoffDesk) -> None:
     @app.get("/api/persona/followups")
-    def list_all() -> dict[str, Any]:
+    def list_all(request: Request) -> dict[str, Any]:
+        person(request)
         with PersonaStore(settings.db_path) as store:
             items = list_followups(store)
         return {"items": [asdict(f) for f in items], "pending": sum(1 for f in items if f.status == "pending")}
 
     @app.post("/api/persona/followups/{followup_id}/answer")
-    def answer(followup_id: str, body: AnswerBody) -> dict[str, Any]:
+    def answer(followup_id: str, body: AnswerBody, request: Request) -> dict[str, Any]:
         """Keep the answer as a new memory in the person's own words, then process it like any new memory."""
+        person(request)
         name = stored_identity(settings.db_path)[0] or settings.target_name
         with PersonaStore(settings.db_path) as store:
             try:
@@ -48,7 +52,8 @@ def register(app: FastAPI, settings: Settings, queue_build: Callable[[], None], 
         return {"followup": asdict(followup), "source_id": source.source_id, "source_title": source.title}
 
     @app.post("/api/persona/followups/{followup_id}/status")
-    def set_status(followup_id: str, body: FollowupStatusBody) -> dict[str, Any]:
+    def set_status(followup_id: str, body: FollowupStatusBody, request: Request) -> dict[str, Any]:
+        person(request)
         with PersonaStore(settings.db_path) as store:
             try:
                 changed = asdict(set_followup(store, followup_id, body.status))

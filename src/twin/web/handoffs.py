@@ -254,6 +254,7 @@ def register(
         if not done:
             raise HTTPException(409, failed[0][1] if failed else "没有可以回复的")
         made = None
+        team_answer_error: str | None = None
         if body.team_answer is not None:
             try:
                 made = answers.view(
@@ -263,13 +264,15 @@ def register(
                 )
             except (KeyError, HandoffRefused) as e:
                 # The replies are sent; only the team answer did not come out, which the person can set again.
-                failed.append((done[0].id, str(e)))
+                team_answer_error = str(e) if not isinstance(e, KeyError) else "找不到这条回复，请刷新后重试"
         if kept(body) or made is not None:
             queue_build()
         return {
             "done": [h.id for h in done],
             "failed": [{"id": i, "detail": d} for i, d in failed],
             "team_answer": made,
+            # Why the team answer was not made (the replies went out all the same); None when it was, or not asked for.
+            "team_answer_error": team_answer_error,
             "pending": desk.pending_count(me),
         }
 
@@ -302,7 +305,9 @@ def register(
         person(request)
         answers = team_ready()
         mine = answers.team.team_answers(persona_id=desk.persona_id, statuses=("valid", "stale"))
-        mine.sort(key=lambda a: (a.status != "stale", a.confirmed_at))
+        # Those that may be out of date first; each group the newest confirmed first.
+        mine.sort(key=lambda a: a.confirmed_at, reverse=True)
+        mine.sort(key=lambda a: a.status != "stale")
         return {"team_answers": [answers.view(a) for a in mine]}
 
     def answer_change(answers: TeamAnswers, change: Callable[[], Any]) -> dict[str, Any]:

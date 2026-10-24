@@ -42,6 +42,7 @@ from .persona.tiers import SELF as SELF_AUDIENCE
 from .teamanswers import TeamAnswerRefused, TeamAnswers, clean, merge_groups, summary_title
 from .teamdb import (
     HANDOFF_DAYS,
+    DelegationRefused,
     Handoff,
     HandoffKind,
     HandoffStatus,
@@ -248,6 +249,10 @@ class HandoffDesk:
             return None
         try:
             made = self._raise(store, conversation_id, seq, asker, asker_name, reply)
+        except DelegationRefused:
+            # A conversation the person's assistant asked in their name (``via="delegate"``) hands on only when its
+            # starter presses 转给本人 on the card; a follow-up asked in it is answered like any, handing nothing on.
+            return None
         except sqlite3.Error:
             logger.warning("could not make a handoff for conversation %s", conversation_id, exc_info=True)
             return None
@@ -534,8 +539,9 @@ class HandoffDesk:
         self.team.set_meta(f"{OFTEN_DECLINED}{handoff_id}", _now().isoformat())
 
     def draft(self, handoff_id: str, owner: str | None, llm: LLM, embedder: Embedder, settings: Settings) -> str:
-        """请分身起草: the words the person might answer with, from their own memory, for them to change and send.
-        Nothing is sent or kept; what only they can settle is left as a gap for them to fill."""
+        """请分身起草: the words the person might answer with, from what the twin may tell colleagues (it is sent to
+        one), for them to change and send. Nothing is sent or kept; what only they can settle is left as a gap for
+        them to fill."""
         h = self._mine(handoff_id, owner)
         if h.status not in ("delivered", "dismissed", "expired"):
             raise HandoffRefused(_unavailable(h.status))
@@ -571,7 +577,8 @@ class HandoffDesk:
 
     def accept(self, handoff_id: str, owner: str | None, due: dt.date | None = None) -> Handoff:
         """Take on the commitment a handoff asks for (on a new date if ``due``); the asker is told in the
-        conversation. A handoff already answered in words only has the commitment taken."""
+        conversation. A handoff already answered in words only has the commitment taken, and so has one whose
+        conversation the asker deleted (there is nobody left to tell)."""
         team = self.team
         assert team is not None
         h = self._mine(handoff_id, owner)
@@ -590,6 +597,9 @@ class HandoffDesk:
                     "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
                 }
             )
+            if h.status == "withdrawn":
+                store.put_ledger_entry(taken)
+                return h
             if h.status == "replied":
                 # The handoff moves first: of two requests at once, only the one that moved it writes the ledger.
                 moved = self._guard(lambda: team.set_handoff_status(h.id, "accepted", ("replied",)))
@@ -600,7 +610,8 @@ class HandoffDesk:
         )
 
     def decline(self, handoff_id: str, owner: str | None) -> Handoff:
-        """Turn down the commitment a handoff asks for; the asker is told in the conversation."""
+        """Turn down the commitment a handoff asks for; the asker is told in the conversation (not when they deleted it:
+        then only the commitment is turned down)."""
         team = self.team
         assert team is not None
         h = self._mine(handoff_id, owner)
@@ -617,6 +628,9 @@ class HandoffDesk:
                     "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
                 }
             )
+            if h.status == "withdrawn":
+                store.put_ledger_entry(declined)
+                return h
             if h.status == "replied":
                 moved = self._guard(lambda: team.set_handoff_status(h.id, "declined", ("replied",)))
                 store.put_ledger_entry(declined)

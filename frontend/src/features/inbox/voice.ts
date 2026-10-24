@@ -36,11 +36,12 @@ export interface Option {
 /** What a voice is called in the list, which answers it offers and what is worth saying about it. */
 export interface VoiceFacts {
   title: string;
+  /** What the voice is called where the names offered stand right below (one at a time): the same, without saying
+   * them twice. */
+  lead: string;
   options: Option[];
   /** The leading candidate was heard in a recording that already has them: may be one person split in two. */
   split: boolean;
-  /** One more line (the name already has enough speech for a twin). */
-  hint: string;
   /** What was said that names the voice. */
   quote: string;
 }
@@ -71,9 +72,26 @@ export function describeVoice(voice: Voice): VoiceFacts {
           ? likely.sure
             ? `像${likely.name}`
             : `多半是${likely.name}`
-          : `像${offered.map((c) => c.name).join('，也像')}`;
+          : offered.length === 1
+            ? `可能是${likely.name}`
+            : `像${offered.map((c) => c.name).join('，也像')}`;
+  // Without the names: what the meeting called the voice if nobody in the team is that name, else how sure it is.
+  const lead = likely?.called
+    ? sure
+      ? '会上点过名，声音也像'
+      : '会上被点过名'
+    : newName || !likely
+      ? title
+      : sure
+        ? likely.sure
+          ? '声音很像下面这位'
+          : '多半是下面这位'
+        : offered.length === 1
+          ? '可能是下面这位'
+          : '像下面几位之一';
   return {
     title,
+    lead,
     options: [
       ...(newName
         ? [{ id: 'new', name: newName, added: true, sure: false }]
@@ -86,10 +104,6 @@ export function describeVoice(voice: Voice): VoiceFacts {
       })),
     ],
     split: Boolean(likely?.split),
-    hint:
-      voice.enough && likely
-        ? `${likely.name}已经够建分身了，可以先处理别的`
-        : '',
     quote: voice.called && voice.quote ? voice.quote : '',
   };
 }

@@ -123,7 +123,9 @@ def test_the_persons_chat_answers_from_the_ledger_entries_the_question_is_about(
         assert again.confidence == 0.9 and "本人已确认" in recorder.prompts[-1]
 
 
-def test_the_command_line_chat_is_the_persons_own_with_the_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_command_line_chat_is_the_persons_own_with_the_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`twin persona chat` is the person at their own terminal: their tier and their promises, unlike a colleague."""
     from typer.testing import CliRunner
 
@@ -134,7 +136,9 @@ def test_the_command_line_chat_is_the_persons_own_with_the_ledger(tmp_path: Path
     settings = Settings(db_path=tmp_path / "twin.db", target_name="合成人物")
     seed(settings.db_path)
     with PersonaStore(settings.db_path) as store:
-        private = PersonaItem(item_id="pi_family", facet_id="9.3", statement="他家里的事 PRIVATE-FAMILY-5d", evidence=[])
+        private = PersonaItem(
+            item_id="pi_family", facet_id="9.3", statement="他家里的事 PRIVATE-FAMILY-5d", evidence=[]
+        )
         store.replace_facet_items("9.3", [private])
     recorder = Recorder()
     monkeypatch.setattr(cli, "_settings", lambda ctx: settings)

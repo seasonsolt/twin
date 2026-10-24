@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -653,4 +654,23 @@ it('shows transcribing as the bar alone, and says a transcript has no sound to d
   const ask = await screen.findByRole('dialog', { name: '删除「访谈.txt」？' });
   expect(within(ask).getByText('导入的转写稿会删除，不能恢复')).toBeVisible();
   expect(within(ask).queryByText(/试听文件/u)).toBeNull();
+});
+
+it('says so when the library cannot be refreshed, over the list already shown', async () => {
+  state.recordings = [recording({ id: 'a', filename: '周会.m4a' })];
+  let down = false;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (down && url === '/api/library')
+        return json({ detail: '连不上服务' }, 503);
+      return json(url === '/api/library' ? state : {});
+    }),
+  );
+  show();
+  expect(await screen.findByText('周会.m4a')).toBeVisible();
+  down = true;
+  await act(() => useTeam.getState().refresh(true));
+  expect(await screen.findByRole('alert')).toHaveTextContent('连不上服务');
+  expect(screen.getByText('周会.m4a')).toBeVisible();
 });

@@ -159,7 +159,8 @@ export function Library() {
   const library = useTeam((state) => state.library);
   const loadError = useTeam((state) => state.error);
   const [problem, setProblem] = useState('');
-  const error = problem || (library ? '' : loadError);
+  // A failed refresh shows even over a list already on screen, as the page's own poll always did.
+  const error = problem || loadError;
   const confirm = useConfirm();
   const input = useRef<HTMLInputElement>(null);
   const transcriptInput = useRef<HTMLInputElement>(null);

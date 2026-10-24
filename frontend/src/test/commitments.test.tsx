@@ -175,6 +175,49 @@ it('lists everyone together on request, and changes an entry in the ledger that 
   );
 });
 
+it('sends the person from an empty list of everyone’s to the twin that has meetings to read', async () => {
+  const empty = {
+    ...ledger,
+    entries: [],
+    people: [],
+    meetings: { total: 2, pending: 1 },
+    twins: [
+      { id: 'p-1', name: '林舟', pending: 0 },
+      { id: 'p-2', name: '许清禾', pending: 1 },
+    ],
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      json(url.startsWith('/api/personas/commitments') ? empty : ledger),
+    ),
+  );
+  const switchTo = vi.fn(async (id: string) => {
+    usePersonas.setState({ id });
+  });
+  usePersonas.setState({ switchTo });
+  render(
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/commitments?who=all']}>
+          <Commitments />
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
+  );
+  expect(await screen.findByText('选一位，去整理会议。')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '林舟' })).toBeNull();
+  screen.getByRole('button', { name: '许清禾' }).click();
+  // The list is left for that twin's own commitments, where the meetings are read.
+  await vi.waitFor(() =>
+    expect(screen.getByRole('button', { name: '全部' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    ),
+  );
+  expect(switchTo).toHaveBeenCalledWith('p-2');
+});
+
 it('says there is nothing yet when the account has no twin, instead of asking for one', () => {
   usePersonas.setState({ id: '', items: [] });
   render(

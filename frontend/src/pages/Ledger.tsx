@@ -26,6 +26,7 @@ import {
   useConfirm,
   type Tone,
 } from '../components/ui';
+import { useIsSelf } from '../stores/access';
 import { usePersonas } from '../stores/personas';
 import { AWAY_CHANGED } from '../features/away/useAway';
 import { JobProgress } from '../features/jobs/JobProgress';
@@ -667,8 +668,9 @@ export function Ledger({
   const persona = usePersonas((state) =>
     state.items.find((item) => item.id === personaId),
   );
-  // Somebody else's ledger is told by their name, not as "我".
-  const who = !everyone && persona && !persona.mine ? persona.name : '';
+  // Somebody else's ledger is told by their name, not as "我": it is the viewer's own when the twin is theirs.
+  const self = useIsSelf(persona);
+  const who = !everyone && persona && !self ? persona.name : '';
   const confirm = useConfirm();
   const [data, setData] = usePersonaState<LedgerData | null>(null);
   const [error, setError] = usePersonaState('');

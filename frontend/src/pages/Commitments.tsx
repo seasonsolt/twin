@@ -45,8 +45,8 @@ export function Commitments() {
         key={everyone ? 'all' : id}
         everyone={everyone}
         onOpen={(twinId) => {
-          void switchTo(twinId);
-          setParams({});
+          // Leave the list once the twin is in view, so the one left is not read in between.
+          void switchTo(twinId).then(() => setParams({}));
         }}
       />
     </Page>

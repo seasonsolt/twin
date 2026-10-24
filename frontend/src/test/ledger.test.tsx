@@ -4,7 +4,8 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider, toast } from '../components/ui';
 import { Ledger } from '../pages/Ledger';
-import { usePersonas } from '../stores/personas';
+import { useAuth } from '../stores/auth';
+import { usePersonas, type Persona } from '../stores/personas';
 import { setPersonaId } from '../lib/persona';
 import type {
   LedgerBrief,
@@ -402,8 +403,11 @@ it('marks a quote that is not the exact words, and explains it on hover', async 
   ).toBeGreaterThan(0);
 });
 
-it('speaks of the ledger’s owner by name when someone else is looking at it', async () => {
+const viewing = (twin: Partial<Persona>, signedIn = true) => {
   setPersonaId('p-1');
+  useAuth.setState({
+    identity: { email: 'a@b.c', admin: true, auth_enabled: signedIn },
+  });
   usePersonas.setState({
     id: 'p-1',
     items: [
@@ -414,10 +418,20 @@ it('speaks of the ledger’s owner by name when someone else is looking at it', 
         sources: 1,
         created_at: '',
         is_default: false,
+        ...twin,
       },
     ],
   });
   ledger.entries[0] = entry({ owner: '本人', counterpart: '老王' });
+};
+const stopViewing = () => {
+  setPersonaId('default');
+  useAuth.setState({ identity: null });
+  usePersonas.setState({ id: '', items: [] });
+};
+
+it('speaks of the ledger’s owner by name when someone else is looking at it', async () => {
+  viewing({});
   try {
     const user = userEvent.setup();
     setup();
@@ -433,7 +447,28 @@ it('speaks of the ledger’s owner by name when someone else is looking at it', 
       await screen.findByText('写「本人」表示林舟自己'),
     ).toBeInTheDocument();
   } finally {
-    usePersonas.setState({ id: '', items: [] });
+    stopViewing();
+  }
+});
+
+it.each([
+  ['the twin its person took', { mine: true }, true],
+  [
+    'the first twin on a machine with nobody signed in',
+    { is_default: true },
+    false,
+  ],
+])('keeps saying 我 in %s ledger', async (_, twin, signedIn) => {
+  viewing(twin, signedIn);
+  try {
+    setup();
+    const promise = await screen.findByRole('article', {
+      name: '承诺：周五前给我一版新报价方案',
+    });
+    expect(within(promise).getByText('本人 → 老王')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '我自己' })).toBeInTheDocument();
+  } finally {
+    stopViewing();
   }
 });
 

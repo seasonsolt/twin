@@ -32,6 +32,10 @@ _BETWEEN = re.compile(r"^[\s、，,和与及跟同]+")
 _AFTER = re.compile(r"^(?:的分身|本人|他们|俩|两位|三位)?[\s：:，,]*")
 _TOKEN = re.compile(r"^[^\s：:，,、]{1,12}")
 _COLON = re.compile(r"[：:]")
+_SENTENCE_MARKS = re.compile(r"[?？!！。.]")
+# The longest a Chinese name is taken to be when no one by that name is known; a name in letters can be longer.
+NAME_CHARS = 4
+LATIN_NAME_CHARS = 12
 # A colon this near the front ends the list of whom to ask.
 ADDRESS_CHARS = 40
 MIN_QUESTION_CHARS = 2
@@ -54,6 +58,13 @@ class Unclear:
     """The person asked in the way of ``CUE`` but not in a way that can be carried out; ``reply`` says why, to them."""
 
     reply: str
+
+
+def _name_like(token: str) -> bool:
+    """Whether words that follow the cue could be the name of a colleague: short, and not a sentence."""
+    if _SENTENCE_MARKS.search(token):
+        return False
+    return len(token) <= (LATIN_NAME_CHARS if token.isascii() else NAME_CHARS)
 
 
 def parse(message: str, known: Mapping[str, Sequence[str]], own: Collection[str] = ()) -> Asked | Unclear | None:
@@ -93,6 +104,9 @@ def parse(message: str, known: Mapping[str, Sequence[str]], own: Collection[str]
             return Unclear("要问谁？说出同事的名字，比如“帮我问问王屿：……”。")
         if token.group(0) in own:
             return Unclear("这是你自己的分身，不用代问。")
+        if not (colon and colon.start() <= ADDRESS_CHARS) and not _name_like(token.group(0)):
+            # 帮我问一下，下周的会几点开？ asks the assistant something: what follows is no name of anyone.
+            return None
         return Unclear(f"团队里没有找到「{token.group(0)}」，或者他的分身还没有开放给同事问。")
     if len(names) > MAX_DELEGATES:
         return Unclear(f"一次最多问 {MAX_DELEGATES} 位同事，你说了 {len(names)} 位。")

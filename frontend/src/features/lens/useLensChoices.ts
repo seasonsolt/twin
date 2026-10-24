@@ -32,5 +32,6 @@ export function useLensChoices(enabled: boolean) {
     void load(controller.signal);
     return () => controller.abort();
   }, [enabled, load, personaId, setChoices]);
-  return { choices, reload: () => load() };
+  const reload = useCallback(() => load(), [load]);
+  return { choices, reload };
 }

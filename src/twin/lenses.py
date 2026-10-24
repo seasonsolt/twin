@@ -141,12 +141,10 @@ def judge(
     items: Sequence[PersonaItem],
     tiers: Mapping[str, str],
     as_of: dt.date | None = None,
-    *,
-    held: Collection[str] = (),
 ) -> list[FacetVerdict]:
     """Every facet a lens may open, with whether it can be, from the memories colleagues may use (``items`` with the
     tiers the person set): the twin knows a good deal of it and nothing in it contradicts, one reason for each that
-    fails. ``held``: facets that are not offered at all this time."""
+    fails."""
     day = as_of or dt.date.today()
     usable = for_audience(items, tiers, COLLEAGUE)
     everything: dict[str, int] = {}
@@ -158,8 +156,6 @@ def judge(
     out: list[FacetVerdict] = []
     dimensions = {d.dimension_id: d.name for d in DIMENSIONS}
     for facet_id in LENS_FACETS:
-        if facet_id in held:
-            continue
         facet = FACET_BY_ID[facet_id]
         own = by_facet.get(facet_id, [])
         covered = facet_coverage(facet_id, own, day, True)
@@ -399,18 +395,21 @@ class Lenses:
         name: str | None = None,
         facets: Sequence[str] | None = None,
         audience: LensAudience | None = None,
+        reopen: Collection[str] = (),
     ) -> Lens:
-        """Change what a lens opens or to whom. Opening a facet that was corrected out, or that was taken out and is
-        put back, opens it afresh: the corrections so far stop counting."""
+        """Change what a lens opens or to whom. A facet that was corrected out stays out, however often the lens is
+        saved, until the person opens it afresh (``reopen``); one that was taken out and is put back also opens afresh.
+        Either way the corrections so far stop counting."""
         lens = self._own(persona_id, lens_id)
         opened = None if facets is None else self._checked_facets(store, facets)
         forgiven = None
         if opened is not None:
             counts = self.team.corrections(lens.id)
             forgiven = dict(lens.forgiven)
-            # Opened again: one corrected out, and one taken out and put back (whose corrections would otherwise
-            # still count against it).
-            for facet in [*stopped(lens, counts), *(f for f in opened if f not in lens.facets)]:
+            # Opened again: one corrected out that the person opens afresh, and one taken out and put back (whose
+            # corrections would otherwise still count against it).
+            again = [f for f in stopped(lens, counts) if f in reopen]
+            for facet in [*again, *(f for f in opened if f not in lens.facets)]:
                 if facet in opened:
                     forgiven[facet] = counts.get(facet, 0)
         return self.team.update_lens(
@@ -429,6 +428,12 @@ class Lenses:
 
     def withdraw(self, persona_id: str, lens_id: str) -> Lens:
         return self.team.set_lens_status(self._own(persona_id, lens_id).id, "withdrawn", self._clock())
+
+    def withdraw_all(self, persona_id: str) -> None:
+        """Take back every lens of a twin whose person said "这不是我": a lens is its person's own judgement lent out,
+        and whoever claims the twin next has not lent it."""
+        for lens in self.team.lenses(persona_id=persona_id, statuses=("active", "paused")):
+            self.team.set_lens_status(lens.id, "withdrawn", self._clock())
 
     def correct(self, persona_id: str, lens_id: str, use_id: str) -> LensUse:
         lens = self._own(persona_id, lens_id)

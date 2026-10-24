@@ -196,8 +196,9 @@ export function ChatThread({
     if (failed && lensId) void reloadLenses();
   }, [failed, lensId, reloadLenses]);
   useEffect(() => {
-    if (lensId && lenses.choices.length && !lens) setLensId(null);
-  }, [lensId, lens, lenses.choices.length, setLensId]);
+    // Also when none is offered any more: a lens that comes back later is not asked until it is chosen again.
+    if (lensId && !lens) setLensId(null);
+  }, [lensId, lens, setLensId]);
   // A trial question and a question to a lens take no files: those added wait for an ordinary message.
   const filesWait = trying || !!lens;
   const send = () => {

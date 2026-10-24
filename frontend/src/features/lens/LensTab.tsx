@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import {
   ActionMenu,
   Badge,
@@ -51,6 +51,9 @@ function LensBlock({
       await onChanged();
     } catch (failure) {
       toast(message(failure, '操作失败'), 'danger');
+      // The lens is not as this page shows it (taken back elsewhere): read it again.
+      if (failure instanceof ApiError && [404, 409].includes(failure.status))
+        await onChanged();
     }
   };
   const paused = lens.status === 'paused';
@@ -143,13 +146,7 @@ function LensBlock({
  * 赋能, for the person alone: a lens lends their judgement to colleagues, facet by facet. With none published it
  * offers to publish one; otherwise each lens is managed here, with what it was used for. `person` is their name.
  */
-export function LensTab({
-  person,
-  twinId,
-}: {
-  person: string;
-  twinId: string;
-}) {
+export function LensTab({ person }: { person: string }) {
   const { data, error, reload } = useLenses();
   const [publishing, setPublishing] = useState(false);
   const [adjusting, setAdjusting] = useState<Lens | null>(null);
@@ -171,7 +168,6 @@ export function LensTab({
         <LensPublish
           open
           person={person}
-          twinId={twinId}
           data={list}
           onClose={() => setPublishing(false)}
           onDone={reload}
@@ -181,7 +177,6 @@ export function LensTab({
         <LensPublish
           open
           person={person}
-          twinId={twinId}
           data={list}
           lens={adjusting}
           onClose={() => setAdjusting(null)}

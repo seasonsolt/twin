@@ -32,6 +32,7 @@ from ..usage import default_stage
 from .assistant import person_only
 from .backends import Backends
 from .conversations import ConversationIndex, append_reply
+from .jobs import JobManager
 from .persona import chat_payload
 from .personas import Personas
 
@@ -175,9 +176,11 @@ class Delegations:
         ids = [known[n][0] for n in asked.names]
         done = self._ask_all(delegation, ids, identity, asker_name, llm, embedder, cards)
         payload = self._payload(store, refusal_reply(asked_text([n for n, _ in done])))
+        # The note is on the answers as they came; ``asked`` lets the page tell when more has come since.
         payload["delegation"] = {
             "id": delegation.id,
             "summary": self._summarise(llm, name, asked.question, done, effort),
+            "asked": len(done),
         }
         return payload
 
@@ -433,6 +436,7 @@ def register(
     desk: HandoffDesk,
     backends: Backends,
     asker_name: Callable[[Request], str],
+    jobs: JobManager,
 ) -> None:
     """The person's routes for reading and deciding about what their assistant asked (``/api/persona/delegations``)."""
 
@@ -478,12 +482,14 @@ def register(
 
     @app.post("/api/persona/delegations/{delegation_id}/ask")
     def ask_also(delegation_id: str, body: AlsoBody, request: Request) -> dict[str, Any]:
-        """也问问某某的分身: the same question to one more twin."""
+        """也问问某某的分身: the same question to one more twin. It takes a place in the chat queue while that twin
+        answers, as the first asking does (429 when the queue is full)."""
         identity, delegation = mine(request, delegation_id)
+        llm, embedder = backends.chat_llm(), backends.embedder()
         try:
-            delegations.ask_also(
-                delegation, body.persona_id, identity, asker_name(request), backends.chat_llm(), backends.embedder()
-            )
+            # Taken after the models are reached, so one that is not available leaves no place held.
+            with jobs.admit_stream() as ticket, ticket.holding():
+                delegations.ask_also(delegation, body.persona_id, identity, asker_name(request), llm, embedder)
         except KeyError:
             raise HTTPException(404, "找不到这位同事") from None
         return shown(identity, delegation)

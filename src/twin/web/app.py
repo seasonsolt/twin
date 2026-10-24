@@ -363,6 +363,17 @@ def create_app(
                 if p.get("member") == account and not p.get("deleted_at") and p["id"] not in registry.removing
             }
 
+    def claimed_twins() -> list[dict[str, str]]:
+        """The twins colleagues have taken, with what each is called: whom a lens can be meant for (the account that
+        took one is not shown)."""
+        with registry.lock:
+            taken = [
+                p["id"]
+                for p in registry.data["personas"]
+                if p.get("member") and not p.get("deleted_at") and p["id"] not in registry.removing
+            ]
+        return [{"id": persona_id, "name": twin_name(persona_id)} for persona_id in taken]
+
     def twin_purged(persona_id: str) -> None:
         team.forget_persona(persona_id)
         finder.forget(persona_id)
@@ -372,6 +383,7 @@ def create_app(
     registry.on_conversation_deleted = lambda persona_id, conversation_id: ConversationIndex(team, persona_id).deleted(
         conversation_id
     )
+    registry.on_disowned = lenses.withdraw_all
 
     def desk_for(persona_id: str) -> HandoffDesk:
         """The handoffs of one twin: where its database is, who it is made for now, what it is called."""
@@ -599,7 +611,7 @@ def create_app(
             after_build=team_refresh,
             delegations=delegations,
         )
-        delegation_routes.register(context, delegations, desk, backends, request_asker_name)
+        delegation_routes.register(context, delegations, desk, backends, request_asker_name, scoped_jobs)
         lens_routes.register(
             context,
             resolved,
@@ -609,6 +621,7 @@ def create_app(
             ConversationIndex(team, persona_id),
             persona_id,
             member_twins,
+            claimed_twins,
         )
         assets.register(context, resolved, on_voice=ingestion.rescore)
         media.register(

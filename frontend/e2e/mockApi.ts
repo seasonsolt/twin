@@ -796,7 +796,15 @@ const lens = {
   stopped: [{ facet_id: '3.4', name: '常见取舍', corrected: 3 }],
   uses_week: 12,
 };
-export const lensList = { lenses: [lens], facets: lensFacets, stop_after: 3 };
+export const lensList = {
+  lenses: [lens],
+  facets: lensFacets,
+  stop_after: 3,
+  colleagues: [
+    { id: 'p-shen', name: '沈从' },
+    { id: 'p-chen', name: '陈一' },
+  ],
+};
 const lensUses = [
   {
     id: 'lu-1',
@@ -1103,6 +1111,7 @@ const delegationConversation = {
         delegation: {
           id: 'd-1',
           summary: '客户能接受；脚本排期等陈一；合同那家等沈从。齐了再定。',
+          asked: 2,
         },
       },
     },

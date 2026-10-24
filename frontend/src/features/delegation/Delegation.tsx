@@ -31,9 +31,9 @@ function standing(target: DelegationTarget): {
 } {
   switch (target.state) {
     case 'needs_owner':
-      return { label: `要${target.name}本人定`, tone: 'warning' };
+      return { label: '要本人定', tone: 'warning' };
     case 'skipped':
-      return { label: `要${target.name}本人定`, tone: 'neutral' };
+      return { label: '要本人定', tone: 'neutral' };
     case 'handed':
       return { label: '等本人回复', tone: 'info' };
     case 'replied':
@@ -110,9 +110,6 @@ function Answer({
         )}
         {target.state === 'needs_owner' && (
           <Row gap={2} wrap>
-            <Text size="sm" tone="secondary">
-              转给{target.name}本人吗？
-            </Text>
             <Button size="sm" disabled={busy} onClick={onForward}>
               转给本人
             </Button>
@@ -193,6 +190,14 @@ export function Delegation({ note }: { note: DelegationNote }) {
       </Text>
     );
   if (!view) return <Skeleton className="h-24" />;
+  // The note was written when the question went out: once another twin was asked, or a person answered, the cards say
+  // more than it does, and it is left out.
+  const current =
+    note.summary !== '' &&
+    view.targets.length <= (note.asked ?? view.targets.length) &&
+    view.targets.every(
+      (target) => target.state !== 'handed' && target.state !== 'replied',
+    );
   return (
     <Stack gap={3}>
       {view.targets.map((target) => (
@@ -213,7 +218,7 @@ export function Delegation({ note }: { note: DelegationNote }) {
           onAlso={(persona) => void act('ask', { persona_id: persona })}
         />
       ))}
-      {note.summary && (
+      {current && (
         <Card variant="soft" padding="md" as="div" aria-label="我的归纳">
           <Stack gap={1}>
             <Text size="xs" tone="secondary">

@@ -164,6 +164,8 @@ class Personas:
         self.on_purged: Callable[[str], None] = lambda _: None
         # A twin's conversation was deleted behind the conversation routes (its person gave the twin back).
         self.on_conversation_deleted: Callable[[str, str], None] = lambda _, __: None
+        # Whoever a twin was taken by said "这不是我": what they lent out of it is not for the next person to carry on.
+        self.on_disowned: Callable[[str], None] = lambda _: None
         with self.lock:
             if not self.path.exists():
                 self.data: dict[str, Any] = {
@@ -627,6 +629,7 @@ class Personas:
                     entry.pop(key, None)
                 entry["public"] = False
                 self.save()
+                self.on_disowned(persona_id)
                 settings = self.settings_for(persona_id)
                 if settings.db_path.is_file():
                     with PersonaStore(settings.db_path) as store:

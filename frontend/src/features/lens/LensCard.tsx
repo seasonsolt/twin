@@ -32,6 +32,15 @@ export function LensCard({
     );
   };
   const owner = card.owner_name;
+  const pointed = card.empty || card.settled_by_person;
+  const asks = pointed && !!onAskOwner;
+  const hint = !pointed
+    ? ''
+    : card.settled_by_person
+      ? `具体怎么定：未开放${asks ? '' : `，可直接问${owner}`}。`
+      : asks
+        ? ''
+        : `可直接问${owner}。`;
   return (
     <Card variant="outline" padding="md" as="article" aria-label="赋能">
       <Stack gap={3}>
@@ -46,11 +55,10 @@ export function LensCard({
         ) : (
           <LensStatements views={card.views} />
         )}
-        {(card.empty || card.settled_by_person) && (
+        {/* With the button below, who to ask is said there once; without it, here. */}
+        {hint && (
           <Text size="sm" tone="secondary">
-            {card.empty
-              ? `可直接问${owner}。`
-              : `具体怎么定：未开放，可直接问${owner}。`}
+            {hint}
           </Text>
         )}
         {error && (

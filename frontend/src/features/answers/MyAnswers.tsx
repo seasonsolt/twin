@@ -144,7 +144,7 @@ export function MyAnswers() {
   if (!answers.length)
     return (
       <EmptyState title="还没有团队答案">
-        回复同事的问题时勾选“同时设为团队答案”。
+        几个人问同一件事时，回复可同时设为团队答案；常被问到的回复也能设。
       </EmptyState>
     );
   return (
@@ -204,7 +204,7 @@ export function MyAnswers() {
               </>
             }
           >
-            <Text size="sm" tone="secondary">
+            <Text size="sm" tone="secondary" twoLines>
               {answer.body}
             </Text>
             {answer.status === 'stale' && answer.stale_note && (

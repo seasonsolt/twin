@@ -387,6 +387,65 @@ def test_still_in_doubt_the_asker_can_ask_the_person_who_confirmed_it_in_their_o
     assert scene.web.post(f"/api/personas/team-answers/{card['id']}/ask", json={}, headers=CSRF).status_code == 404
 
 
+def test_asking_the_person_again_while_they_have_not_answered_is_told_where_the_first_went(scene: Team) -> None:
+    lin, wang = scene.twins["lin"], scene.twins["wang"]
+    make_team_answer(scene)
+    _, final = scene.ask(ASKERS["zhou"], wang, "旧版 Word 模板导出还支持吗")
+    [card] = final["team_answers"]
+
+    def press() -> dict[str, Any]:
+        scene.as_(ASKERS["zhou"])
+        pressed = scene.web.post(
+            f"/api/personas/team-answers/{card['id']}/ask", json={"question": "12 月以后呢？"}, headers=CSRF
+        )
+        assert pressed.status_code == 200, pressed.text
+        return pressed.json()  # type: ignore[no-any-return]
+
+    first = press()
+    before = len(scene.team.handoffs(persona_id=lin.persona))
+    conversations = len(scene.team.conversations(persona_id=lin.persona))
+    # The page was loaded again and the button is back: the same conversation, nothing new for the person.
+    again = press()
+    assert again["conversation_id"] == first["conversation_id"] and again["handoff"]["id"] == first["handoff"]["id"]
+    assert len(scene.team.handoffs(persona_id=lin.persona)) == before
+    assert len(scene.team.conversations(persona_id=lin.persona)) == conversations
+    assert [w["question"] for w in scene.page(lin)["waiting"]] == ["12 月以后呢？"]
+    # Once the person has answered, a new question is a new handoff.
+    [made] = scene.team.handoffs(persona_id=lin.persona, statuses=("delivered",))
+    scene.as_(LIN)
+    assert (
+        scene.web.post(
+            f"/api/persona/handoffs/{made.id}/reply", json={"text": "还能。"}, headers=lin.headers
+        ).status_code
+        == 200
+    )
+    later = press()
+    assert later["conversation_id"] != first["conversation_id"]
+
+
+def test_a_twin_the_asker_cannot_open_is_not_asked_for_them(scene: Team) -> None:
+    lin, wang = scene.twins["lin"], scene.twins["wang"]
+    make_team_answer(scene)
+    _, final = scene.ask(ASKERS["zhou"], wang, "旧版 Word 模板导出还支持吗")
+    [card] = final["team_answers"]
+    scene.as_(LIN)
+    assert (
+        scene.web.post(f"/api/personas/{lin.persona}/approve", json={"public": False}, headers=CSRF).status_code == 200
+    )
+    handoffs, conversations = len(scene.team.handoffs()), len(scene.team.conversations(persona_id=lin.persona))
+    scene.as_(ASKERS["zhou"])
+    refused = scene.web.post(f"/api/personas/team-answers/{card['id']}/ask", json={}, headers=CSRF)
+    assert refused.status_code == 409 and "直接联系" in refused.json()["detail"]
+    # Nothing was opened where the reply could not be read, and nothing was handed to the person.
+    assert len(scene.team.handoffs()) == handoffs
+    assert len(scene.team.conversations(persona_id=lin.persona)) == conversations
+    # Opened again, it is asked as usual.
+    scene.as_(LIN)
+    scene.web.post(f"/api/personas/{lin.persona}/approve", json={"public": True}, headers=CSRF)
+    scene.as_(ASKERS["zhou"])
+    assert scene.web.post(f"/api/personas/team-answers/{card['id']}/ask", json={}, headers=CSRF).status_code == 200
+
+
 # ------------------------------------------------------------------ taken back
 
 

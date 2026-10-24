@@ -410,6 +410,40 @@ def test_cli_snapshots_and_restore(tmp_path: Path) -> None:
     assert any(p.name.endswith("before-restore.db") for p in storage.list_snapshots(db))
 
 
+def test_restoring_one_twin_does_not_upgrade_the_twins_restored_before_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Going back to an older release restores every twin's snapshot from before the upgrade, one twin at a time: the
+    twins restored first stay at the old schema, which the older code can open."""
+    from twin.web.jobs import JobManager, describe_error
+    from twin.web.personas import Personas
+
+    config = tmp_path / "twin.toml"
+    config.write_text('db_path = "twin.db"\n')
+    registry = Personas(Settings(db_path=tmp_path / "twin.db"), JobManager(1, describe_error))
+    twins = [registry.create(name, {"email": "user:a", "admin": True})["id"] for name in ("甲", "乙")]
+    paths = [registry.db_path_of(persona_id) for persona_id in twins]
+    saved = []
+    for path in paths:
+        with PersonaStore(path) as store:
+            saved.append(store.snapshot("before-upgrade"))
+    old = len(storage._MIGRATIONS)
+    monkeypatch.setattr(storage, "_MIGRATIONS", (*storage._MIGRATIONS, "CREATE TABLE extra (id);"))
+    for path in paths:
+        PersonaStore(path).close()
+    runner = CliRunner()
+    for persona_id, snapshot in zip(twins, saved, strict=True):
+        restored = runner.invoke(
+            app, ["--config", str(config), "kernel", "restore", str(snapshot), "--persona", persona_id, "--yes"]
+        )
+        assert restored.exit_code == 0, restored.output
+    listed = runner.invoke(app, ["--config", str(config), "kernel", "snapshots"])
+    assert listed.exit_code == 0, listed.output
+    for path in paths:
+        with sqlite3.connect(path) as db:
+            assert db.execute("PRAGMA user_version").fetchone() == (old,)
+
+
 def test_reviews_survive_a_prompt_upgrade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A new prompt re-extracts every chunk, so every candidate id changes; the person's reviews still follow the
     traits, matched by the expressions they quote and their wording."""

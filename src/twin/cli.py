@@ -932,6 +932,20 @@ def _kernel_personas(settings: Settings) -> list[tuple[str, Settings]]:
     ]
 
 
+def _kernel_databases(settings: Settings) -> list[tuple[str, Path]]:
+    """Where each twin's database is, without opening any: opening one migrates it, so restoring one twin's snapshot
+    must not bring the twins restored before it back up to this version's schema."""
+    from .web.jobs import JobManager, describe_error
+    from .web.personas import Personas
+
+    registry = Personas(settings, JobManager(settings.max_workers, describe_error))
+    return [
+        (entry["id"], registry.db_path_of(entry["id"]))
+        for entry in registry.data["personas"]
+        if not entry.get("deleted_at")
+    ]
+
+
 @kernel_app.command("status")
 def kernel_status(ctx: typer.Context) -> None:
     with _errors():
@@ -952,8 +966,8 @@ def kernel_snapshots(ctx: typer.Context) -> None:
     from .persona.store import list_snapshots
 
     with _errors():
-        for persona_id, settings in _kernel_personas(_settings(ctx)):
-            found = list_snapshots(settings.db_path)
+        for persona_id, db_path in _kernel_databases(_settings(ctx)):
+            found = list_snapshots(db_path)
             _say(f"分身 {persona_id}：{'无快照' if not found else ''}")
             for path in reversed(found):
                 _say(f"  {path}（{path.stat().st_size / 1024**2:.1f} MiB）")
@@ -969,16 +983,17 @@ def kernel_restore(
     """用快照覆盖分身数据；覆盖前自动再快照一次当前数据。"""
     from .persona.store import restore_snapshot
 
-    selected = [resolved for pid, resolved in _kernel_personas(_settings(ctx)) if pid == persona]
+    selected = [db_path for pid, db_path in _kernel_databases(_settings(ctx)) if pid == persona]
     if not selected:
         raise _fail("分身不存在")
     if not yes:
         raise _fail("恢复会覆盖该分身的当前数据：先停止网页（Ctrl-C 或 twin ops stop），再加 --yes")
     with _errors():
-        before = restore_snapshot(snapshot, selected[0].db_path)
+        before = restore_snapshot(snapshot, selected[0])
     _say(f"已恢复分身 {persona}" + (f"；恢复前的数据另存为 {before}" if before else ""))
     _say(
-        "用当前代码启动会再次按新内核整理；要继续用旧内核，先切回旧版本代码（如 git switch --detach <旧版本>）再启动。"
+        "用当前代码启动会再次按新内核整理、升级数据库；要回到旧版本，先把每个分身都恢复到旧版本的快照，"
+        "再切回旧版本代码（如 git switch --detach <旧版本>）启动。"
     )
 
 

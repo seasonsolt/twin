@@ -16,8 +16,8 @@ from pydantic import BaseModel
 
 from twin.config import AuthSettings, Settings, SMTPSettings
 from twin.embed import HashingEmbedder
-from twin.llm import FakeLLM
-from twin.persona import fill
+from twin.llm import FakeLLM, LLMError
+from twin.persona import fill, gate
 from twin.persona.coverage import coverage_report
 from twin.persona.dimensions import FACETS
 from twin.persona.items import PersonaItem, PEvidence
@@ -156,6 +156,25 @@ def test_keeping_the_drafts_raises_what_the_twin_knows_and_each_goes_in_the_tier
     assert len(store.list_sources()) == 2
 
 
+def test_the_conclusions_of_one_answer_are_one_occasion_not_one_for_each(store: PersonaStore, tmp_path: Path) -> None:
+    consented = consented_facets(store)
+    (ask,) = fill.questions_for([], consented, facet="8.1")
+    two = [fill.Kept("8.1", FIRST, "colleague"), fill.Kept("8.1", "月底前要把命中率提到八成", "colleague")]
+    # Said once, in one answer: mentioned, not "a few occasions" known.
+    (change,) = [c for c in fill.changes([], consented, ask, "林舟", two) if c.facet_id == "8.1"]
+    assert (change.before, change.after) == (0, 1)
+    # Stored the same way: one source with an expression for each conclusion, in the tier chosen.
+    stored = fill.keep(store, ask, "林舟", two)
+    (source,) = store.list_sources()
+    assert stored == [source.source_id] and source.n_expressions == 2
+    assert [e.text for e in store.list_expressions(source.source_id)] == [k.statement for k in two]
+    assert store.note_tiers() == {source.source_id: COLLEAGUE}
+    # Keeping them again is the same source; one of them in another tier is a source of its own.
+    assert fill.keep(store, ask, "林舟", two) == stored and len(store.list_sources()) == 1
+    fill.keep(store, ask, "林舟", [two[0], fill.Kept("8.1", two[1].statement, "self")])
+    assert len(store.list_sources()) == 3
+
+
 def test_an_answer_on_a_second_occasion_of_another_kind_counts_with_what_was_known_before() -> None:
     consented = frozenset(f.facet_id for f in FACETS)
     (ask,) = fill.questions_for([], consented, facet="8.1")
@@ -258,3 +277,79 @@ def test_the_person_is_asked_reads_the_answer_and_keeps_it_while_a_colleague_can
         web.post("/api/persona/fill/keep", json={**body, "items": items}, headers=theirs),
     ):
         assert response.status_code == 403
+
+
+MANAGER = "zhangxun@xjjk.com"
+
+
+def made_for_person(web: TestClient) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """A twin the person has taken and said is all right, with the headers to ask it and a question's body."""
+    login(web, PERSON)
+    persona = web.post("/api/personas", json={"name": "林舟"}, headers=CSRF).json()["id"]
+    assert web.put(f"/api/personas/{persona}/claim", json={"claim": PERSON}, headers=CSRF).status_code == 200
+    assert [p["mine"] for p in web.get("/api/personas").json()] == [True]  # Taken: made for them
+    assert web.post(f"/api/personas/{persona}/approve", json={"public": True}, headers=CSRF).status_code == 200
+    mine = {**CSRF, "X-Twin-Persona": persona}
+    (question,) = web.get("/api/persona/fill?facet=8.1", headers=mine).json()["questions"]
+    return persona, mine, {"question": question["id"], "facet": "8.1"}
+
+
+def test_whoever_only_looks_after_the_twin_has_no_part_in_what_it_learns_of_its_person(web: TestClient) -> None:
+    persona, _, body = made_for_person(web)
+    items = [{"facet": "8.1", "statement": FIRST, "choice": "colleague"}]
+    # The manager of the twin is a colleague to its person: nothing is asked, read or kept for them.
+    login(web, MANAGER)
+    theirs = {**CSRF, "X-Twin-Persona": persona}
+    web.app.state.queued.reset_mock()  # type: ignore[attr-defined]
+    for response in (
+        web.get("/api/persona/fill", headers=theirs),
+        web.post("/api/persona/fill/draft", json={**body, "answer": ANSWER}, headers=theirs),
+        web.post("/api/persona/fill/preview", json={**body, "items": items}, headers=theirs),
+        web.post("/api/persona/fill/keep", json={**body, "items": items}, headers=theirs),
+    ):
+        assert response.status_code == 403
+    assert not web.app.state.queued.called  # type: ignore[attr-defined]
+
+
+def test_an_answer_the_model_cannot_read_says_so_without_what_the_backend_said(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, mine, body = made_for_person(web)
+
+    def unreachable(*_: Any, **__: Any) -> list[fill.Draft]:
+        raise LLMError("https://secret.internal/v1 refused the key sk-123")
+
+    monkeypatch.setattr(fill, "draft", unreachable)
+    failed = web.post("/api/persona/fill/draft", json={**body, "answer": ANSWER}, headers=mine)
+    assert failed.status_code == 502
+    assert "secret" not in failed.text and "sk-123" not in failed.text
+
+
+def test_an_answer_that_is_empty_or_too_long_is_refused(web: TestClient) -> None:
+    _, mine, body = made_for_person(web)
+    for answer in ("  ", "字" * (fill.MAX_ANSWER_CHARS + 1)):
+        refused = web.post("/api/persona/fill/draft", json={**body, "answer": answer}, headers=mine)
+        assert refused.status_code in (400, 422)
+    # Conclusions that are too many, or from a facet there is none of, are refused too.
+    many = [{"facet": "8.1", "statement": f"第{i}条", "choice": "colleague"} for i in range(fill.MAX_DRAFTS + 1)]
+    assert web.post("/api/persona/fill/keep", json={**body, "items": many}, headers=mine).status_code in (400, 422)
+    unknown = [{"facet": "99.9", "statement": FIRST, "choice": "colleague"}]
+    assert web.post("/api/persona/fill/keep", json={**body, "items": unknown}, headers=mine).status_code == 400
+
+
+def test_nothing_of_the_memory_is_read_or_kept_while_a_twin_made_from_recordings_is_rebuilt(
+    web: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, mine, body = made_for_person(web)
+
+    def rebuilding(*_: Any) -> int:
+        raise gate.MemoryUpdating
+
+    monkeypatch.setattr(gate, "version_at", rebuilding)
+    items = [{"facet": "8.1", "statement": FIRST, "choice": "colleague"}]
+    for response in (
+        web.get("/api/persona/fill", headers=mine),
+        web.post("/api/persona/fill/draft", json={**body, "answer": ANSWER}, headers=mine),
+        web.post("/api/persona/fill/keep", json={**body, "items": items}, headers=mine),
+    ):
+        assert response.status_code == 409 and response.json()["code"] == "memory_updating"

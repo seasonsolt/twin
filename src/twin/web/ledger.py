@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
-from ..handoffs import HandoffDesk, HandoffRefused
+from ..handoffs import PENDING_ACCEPT, HandoffDesk, HandoffRefused
 from ..persona.ledger import (
     KIND_LABELS,
     LEDGER_VERSION,
@@ -148,11 +148,17 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
             raise HTTPException(400, "只有修改时才能附带要改的内容")
         if any(key in changes and changes[key] is None for key in ("owner", "what")):
             raise HTTPException(400, "负责人和内容不能清空")
+        if changes.get("status") == PENDING_ACCEPT:
+            raise HTTPException(400, "待你接受只在别人请你答应一件事时出现，不能手动设置")
         changes.update({key: "" for key in ("counterpart", "condition") if key in changes and changes[key] is None})
         with open_store() as store:
             found = store.get_ledger_entry(entry_id)
             if found is not None and asked_in_conversation(found):
                 person(request)
+            if found is not None and found.status == PENDING_ACCEPT:
+                # Taken or turned down on the handoff it came from (接下 / 不接), which answers the asker: here it
+                # would leave the asker without an answer, or a turned-down promise waiting to be taken again.
+                raise HTTPException(409, "这件事要用“接下”或“不接”回复，不能在这里改")
             try:
                 revised = review_entry(store, entry_id, body.action, changes)
             except KeyError as e:

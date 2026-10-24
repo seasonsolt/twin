@@ -64,6 +64,8 @@ class AdjustBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=80)
     facets: list[str] | None = Field(default=None, max_length=len(LENS_FACETS) + 10)
+    # Facets corrected out that the person opens afresh; one corrected out and not named here stays out.
+    reopen: list[str] = Field(default_factory=list, max_length=len(LENS_FACETS) + 10)
     audience: AudienceBody | None = None
 
 
@@ -116,6 +118,7 @@ def register(
     index: ConversationIndex,
     persona_id: str,
     member_twins: Callable[[str | None], Collection[str]],
+    claimed_twins: Callable[[], list[dict[str, str]]],
 ) -> None:
     def team_ready() -> None:
         if desk.team is None:
@@ -142,7 +145,8 @@ def register(
 
     @app.get("/api/persona/lenses")
     def list_lenses(request: Request) -> dict[str, Any]:
-        """Their lenses, newest first, and what each facet a lens may open stands at."""
+        """Their lenses, newest first, what each facet a lens may open stands at, and the colleagues' twins a lens
+        can be meant for (by the twin they have taken, which is how a lens knows who may use it)."""
         person(request)
         team_ready()
         with PersonaStore(settings.db_path) as store:
@@ -152,6 +156,7 @@ def register(
             "lenses": [v for v in listed if v["status"] != "withdrawn"],
             "facets": [v.view() for v in verdicts],
             "stop_after": STOP_AFTER,
+            "colleagues": [t for t in claimed_twins() if t["id"] != persona_id],
         }
 
     @app.post("/api/persona/lenses/preview")
@@ -178,7 +183,7 @@ def register(
 
     @app.patch("/api/persona/lenses/{lens_id}")
     def adjust(lens_id: str, body: AdjustBody, request: Request) -> dict[str, Any]:
-        """Change the name, the facets (opening one that was corrected out opens it afresh) or whom it is for."""
+        """Change the name, the facets (one corrected out stays out unless named in ``reopen``) or whom it is for."""
         person(request)
         team_ready()
         try:
@@ -190,6 +195,7 @@ def register(
                     name=body.name,
                     facets=body.facets,
                     audience=body.audience.audience() if body.audience else None,
+                    reopen=body.reopen,
                 )
                 return lenses.view(lens, store)
         except (KeyError, LensUnavailable, LensRefused) as e:
@@ -253,30 +259,28 @@ def register(
 
     @app.get("/api/persona/lenses/available")
     def available(request: Request) -> dict[str, Any]:
-        """The lenses a colleague can ask here: name and what each speaks from."""
+        """The lenses a colleague can ask here: name and what each speaks from. One that speaks from nothing now (every
+        facet it opens corrected out or no longer passing) is not offered: it could only answer that it has nothing."""
         found = viewer_lenses(request)
         if not found:
             return {"lenses": []}
         name = desk.name()
         with PersonaStore(settings.db_path) as store:
             verdicts = lenses.verdicts(store)
-            counts = {lens.id: lenses.team.corrections(lens.id) for lens in found}
-            return {
-                "lenses": [
+        names = {v.facet_id: v.name for v in verdicts}
+        offered = []
+        for lens in found:
+            speaking = in_use(lens, verdicts, lenses.team.corrections(lens.id))
+            if speaking:
+                offered.append(
                     {
                         "id": lens.id,
                         "name": lens.name,
                         "owner_name": name,
-                        "facets": [
-                            {"facet_id": f, "name": v.name}
-                            for f in in_use(lens, verdicts, counts[lens.id])
-                            for v in verdicts
-                            if v.facet_id == f
-                        ],
+                        "facets": [{"facet_id": f, "name": names[f]} for f in speaking],
                     }
-                    for lens in found
-                ]
-            }
+                )
+        return {"lenses": offered}
 
     @app.post("/api/persona/lenses/ask-owner")
     def ask_owner(body: AskOwnerBody, request: Request) -> dict[str, Any]:

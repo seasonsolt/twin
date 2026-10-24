@@ -300,6 +300,20 @@ def test_a_lens_speaks_only_from_the_facets_that_are_open(scene: Team) -> None:
     assert life["lens"]["views"] == [] and "陪家人" not in life["reply"]
 
 
+def test_a_lens_can_be_meant_for_a_colleague_whose_twin_is_private(scene: Team) -> None:
+    quiet = scene.add_twin("zhou", "zhou@xjjk.com", "周一", public=False)
+    listed = lenses_of(scene)["colleagues"]
+    # Every twin a colleague has taken, private ones too, and not the person's own; no account is shown.
+    assert {c["id"]: c["name"] for c in listed} == {
+        scene.twins["shen"].persona: "沈从",
+        scene.twins["chen"].persona: "陈一",
+        quiet.persona: "周一",
+    }
+    assert all(set(c) == {"id", "name"} for c in listed)
+    named = made(scene, audience={"scope": "people", "twins": [quiet.persona]})
+    assert ask_lens(scene, SHEN, named).status_code == 404
+
+
 def test_a_lens_can_be_asked_by_everyone_or_only_by_the_people_it_names(scene: Team) -> None:
     named = made(scene, audience={"scope": "people", "twins": [scene.twins["shen"].persona]})
     assert ask_lens(scene, SHEN, named).status_code == 200
@@ -401,6 +415,9 @@ def test_a_facet_that_stops_passing_stops_being_used(scene: Team) -> None:
     scene.as_(WANG)
     scene.web.put("/api/persona/items/pi_principle/tier", json={"tier": "self"}, headers=wang.headers)
     assert lenses_of(scene)["lenses"][0]["speaking"] == []
+    # A lens that speaks from nothing is not offered to colleagues: it could only say it has nothing.
+    scene.as_(SHEN)
+    assert scene.web.get("/api/persona/lenses/available", headers=wang.headers).json() == {"lenses": []}
 
 
 def test_a_twin_that_answers_as_a_meeting_record_is_judged_like_any_other(scene: Team) -> None:
@@ -484,7 +501,9 @@ def test_a_facet_corrected_three_times_is_no_longer_used_until_it_is_opened_agai
     assert ask_lens(scene, SHEN, lens_id).json()["lens"]["views"] == []
     # Opening it again starts the count afresh.
     scene.as_(WANG)
-    reopened = scene.web.patch(f"/api/persona/lenses/{lens_id}", json={"facets": ["2.3", "3.4"]}, headers=wang.headers)
+    reopened = scene.web.patch(
+        f"/api/persona/lenses/{lens_id}", json={"facets": ["2.3", "3.4"], "reopen": ["3.4"]}, headers=wang.headers
+    )
     assert reopened.status_code == 200 and reopened.json()["stopped"] == []
     assert reopened.json()["speaking"] == ["2.3", "3.4"]
     assert ask_lens(scene, SHEN, lens_id).json()["lens"]["views"]
@@ -492,6 +511,35 @@ def test_a_facet_corrected_three_times_is_no_longer_used_until_it_is_opened_agai
     scene.as_(WANG)
     again = scene.web.patch(f"/api/persona/lenses/{lens_id}", json={"name": "改了名字"}, headers=wang.headers)
     assert again.json()["name"] == "改了名字" and again.json()["stopped"] == []
+
+
+def test_a_facet_corrected_out_stays_out_however_often_the_scope_is_saved_until_it_is_opened_afresh(
+    scene: Team,
+) -> None:
+    lens_id = made(scene)
+    wang = scene.twins["wang"]
+    for _ in range(STOP_AFTER):
+        ask_lens(scene, SHEN, lens_id)
+    for use in scene.team.lens_uses(lens_id):
+        scene.team.correct_lens_use(use.id)
+    stopped = [{"facet_id": "3.4", "name": "常见取舍", "corrected": STOP_AFTER}]
+    for _ in range(3):
+        scene.as_(WANG)
+        saved = scene.web.patch(
+            f"/api/persona/lenses/{lens_id}",
+            json={"name": "大客户谈判", "facets": ["2.3", "3.4"]},
+            headers=wang.headers,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["stopped"] == stopped and saved.json()["speaking"] == ["2.3"]
+        assert [f["facet_id"] for f in saved.json()["facets"]] == ["2.3", "3.4"]
+    assert ask_lens(scene, SHEN, lens_id).json()["lens"]["views"] == []
+    # Named in ``reopen`` it is opened afresh, and the count starts again.
+    scene.as_(WANG)
+    reopened = scene.web.patch(
+        f"/api/persona/lenses/{lens_id}", json={"facets": ["2.3", "3.4"], "reopen": ["3.4"]}, headers=wang.headers
+    )
+    assert reopened.json()["stopped"] == [] and reopened.json()["speaking"] == ["2.3", "3.4"]
 
 
 def test_a_facet_corrected_out_taken_out_and_put_back_starts_its_count_afresh(scene: Team) -> None:
@@ -510,6 +558,35 @@ def test_a_facet_corrected_out_taken_out_and_put_back_starts_its_count_afresh(sc
     assert put_back.status_code == 200
     assert put_back.json()["stopped"] == [] and put_back.json()["speaking"] == ["2.3", "3.4"]
     assert ask_lens(scene, SHEN, lens_id).json()["lens"]["views"]
+
+
+def test_a_lens_is_taken_back_when_its_person_says_it_is_not_them_and_the_next_one_does_not_inherit_it(
+    scene: Team,
+) -> None:
+    lens_id = made(scene)
+    held = made(scene, ["2.3"], name="另一个赋能")
+    scene.as_(WANG)
+    scene.web.post(f"/api/persona/lenses/{held}/pause", headers=scene.twins["wang"].headers)
+    assert ask_lens(scene, SHEN, lens_id).status_code == 200
+    scene.as_(WANG)
+    assert scene.web.post(f"/api/personas/{scene.twins['wang'].persona}/disown", headers=CSRF).status_code == 200
+    assert {lens.status for lens in scene.team.lenses(persona_id=scene.twins["wang"].persona)} == {"withdrawn"}
+    # The administrator gives it to someone else, who takes it: nothing the first person lent is lent now.
+    successor = "next@xjjk.com"
+    scene.login(successor)
+    scene.as_(ADMIN)
+    claim = scene.web.put(f"/api/personas/{scene.twins['wang'].persona}/claim", json={"claim": successor}, headers=CSRF)
+    assert claim.status_code == 200
+    scene.as_(successor)
+    scene.web.get("/api/personas")
+    approved = scene.web.post(
+        f"/api/personas/{scene.twins['wang'].persona}/approve", json={"public": True}, headers=CSRF
+    )
+    assert approved.status_code == 200
+    scene.as_(SHEN)
+    available = scene.web.get("/api/persona/lenses/available", headers=scene.twins["wang"].headers)
+    assert available.json() == {"lenses": []}
+    assert ask_lens(scene, SHEN, lens_id).status_code == 404
 
 
 def test_the_words_of_a_rejected_item_the_person_keeps_to_themself_stay_hidden(

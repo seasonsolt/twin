@@ -39,7 +39,7 @@ export function ItemRow({
     status: ReviewStatus,
     statement?: string,
   ) => Promise<boolean>;
-  onTier?: (item: ProfileItem, tier: Tier) => Promise<boolean>;
+  onTier?: (item: ProfileItem, tier: Tier | null) => Promise<boolean>;
   kindLabels: Record<string, string>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -70,7 +70,7 @@ export function ItemRow({
           </Text>
           {item.tier === 'self' && <Badge>{TIER_LABELS.self}</Badge>}
           {item.review === 'edited' && <Badge tone="info">你改过</Badge>}
-          {secondhand(item) && <Badge>只有别人的说法</Badge>}
+          {secondhand(item) && <Badge>只有别人说</Badge>}
           {item.conflict && <Badge tone="warning">有矛盾</Badge>}
         </Row>
       }
@@ -84,7 +84,7 @@ export function ItemRow({
               aria-label={`改这条：${item.statement}`}
               onClick={edit}
             >
-              改
+              改一下
             </Button>
             <ActionMenu
               label={`更多：${item.statement}`}
@@ -111,6 +111,15 @@ export function ItemRow({
                             item,
                             item.tier === 'self' ? 'colleague' : 'self',
                           ),
+                      },
+                    ]
+                  : []),
+                ...(onTier && item.tier_changed
+                  ? [
+                      {
+                        label: '恢复默认',
+                        disabled: pending,
+                        onSelect: () => void onTier(item, null),
                       },
                     ]
                   : []),

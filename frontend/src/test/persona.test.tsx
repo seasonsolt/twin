@@ -14,6 +14,7 @@ vi.mock('motion/react', async (original) => ({
   useReducedMotion: () => true,
 }));
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { ItemCard } from '../features/profile/ItemCard';
 import { Overview } from '../features/profile/Overview';
 import { setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
@@ -181,9 +182,9 @@ it('marks only what is worth knowing: an edit, or a memory resting on what other
   await cards(3);
   const card = (name: string) => within(screen.getByRole('article', { name }));
   expect(card('本人说过的').queryByText('你改过')).toBeNull();
-  expect(card('本人说过的').queryByText('只有别人的说法')).toBeNull();
+  expect(card('本人说过的').queryByText('只有别人说')).toBeNull();
   expect(card('改过的').getByText('你改过')).toBeVisible();
-  expect(card('别人说的').getByText('只有别人的说法')).toBeVisible();
+  expect(card('别人说的').getByText('只有别人说')).toBeVisible();
   // Nothing waits for a confirmation.
   expect(screen.queryByText(/待确认|已确认/)).toBeNull();
   expect(screen.queryByRole('button', { name: /^对$|全部确认/ })).toBeNull();
@@ -192,7 +193,7 @@ it('marks only what is worth knowing: an edit, or a memory resting on what other
 it('groups by plain topics, hides internal ids/metrics, caps suggestions and links optional questions', async () => {
   mount();
   await screen.findByRole('article');
-  expect(screen.getByRole('tab', { name: '看重什么 1' })).toBeVisible();
+  expect(screen.getByRole('tab', { name: /^看重什么 1/u })).toBeVisible();
   expect(screen.queryByText('internal')).not.toBeInTheDocument();
   expect(screen.queryByText('2.1')).not.toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
@@ -283,7 +284,7 @@ it('lays out all nine aspects in three layers, counts non-rejected items, and op
     ...dimensionItems('D9', 3, 'rejected'),
   ];
   mountOverview();
-  const tab = await screen.findByRole('tab', { name: '看重什么 7' });
+  const tab = await screen.findByRole('tab', { name: /^看重什么 7/u });
   expect(tab).toHaveAttribute('aria-selected', 'true');
   expect(
     screen
@@ -300,9 +301,9 @@ it('lays out all nine aspects in three layers, counts non-rejected items, and op
     '最近在关注',
     '生活与喜好',
   ]);
-  expect(screen.getByRole('tab', { name: '经历与身份 2' })).toBeVisible();
-  expect(screen.getByRole('tab', { name: '怎么做决定 1' })).toBeVisible();
-  expect(screen.getByRole('tab', { name: '生活与喜好' })).toBeVisible();
+  expect(screen.getByRole('tab', { name: /^经历与身份 2/u })).toBeVisible();
+  expect(screen.getByRole('tab', { name: /^怎么做决定 1/u })).toBeVisible();
+  expect(screen.getByRole('tab', { name: /^生活与喜好/u })).toBeVisible();
   expect(
     screen.getByRole('img', { name: '九个方面里已了解 3 个' }),
   ).toBeVisible();
@@ -312,12 +313,11 @@ it('lays out all nine aspects in three layers, counts non-rejected items, and op
     'overflow-x-auto',
   );
   const user = userEvent.setup();
-  await user.click(screen.getByRole('tab', { name: '生活与喜好' }));
-  const panel = screen.getByRole('tabpanel', { name: '生活与喜好' });
+  await user.click(screen.getByRole('tab', { name: /^生活与喜好/u }));
+  const panel = screen.getByRole('tabpanel', { name: /^生活与喜好/u });
   expect(within(panel).getByText('还不了解这一面。')).toBeVisible();
-  expect(
-    within(panel).getByRole('link', { name: '多写写你的生活与喜好' }),
-  ).toBeVisible();
+  // One way to add to it, not two: the person has 补一补 beside the name, anyone else the line above.
+  expect(within(panel).queryByRole('link')).toBeNull();
   expect(within(panel).queryByRole('article')).toBeNull();
 });
 
@@ -325,28 +325,24 @@ it('keeps server order, shows five items, and resets expansion after switching t
   rows = [...dimensionItems('D2', 7), ...dimensionItems('D1', 1, 'confirmed')];
   mountOverview();
   const user = userEvent.setup();
-  await user.click(await screen.findByRole('tab', { name: '看重什么 7' }));
+  await user.click(await screen.findByRole('tab', { name: /^看重什么 7/u }));
   await cards(5);
   expect(
     screen
       .getAllByRole('article')
       .map((card) => card.getAttribute('aria-label')),
   ).toEqual(rows.slice(0, 5).map((row) => row.statement));
-  await user.click(
-    await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
+  await user.click(await screen.findByRole('button', { name: '再看 2 条' }));
   expect(screen.getAllByRole('article')).toHaveLength(7);
   await user.click(screen.getByRole('button', { name: '收起' }));
   expect(screen.getAllByRole('article')).toHaveLength(5);
-  await user.click(
-    await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
-  await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
+  await user.click(await screen.findByRole('button', { name: '再看 2 条' }));
+  await user.click(screen.getByRole('tab', { name: /^经历与身份 1/u }));
   await cards(1);
-  expect(screen.queryByRole('button', { name: /展开其余/ })).toBeNull();
-  await user.click(screen.getByRole('tab', { name: '看重什么 7' }));
+  expect(screen.queryByRole('button', { name: /^再看 \d+ 条/ })).toBeNull();
+  await user.click(screen.getByRole('tab', { name: /^看重什么 7/u }));
   await cards(5);
-  expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '再看 2 条' })).toBeVisible();
 });
 
 it('finds memories by search, and corrects or removes them right in the results', async () => {
@@ -362,7 +358,7 @@ it('finds memories by search, and corrects or removes them right in the results'
   ];
   mountOverview();
   const user = userEvent.setup();
-  await screen.findByRole('tab', { name: '看重什么 7' });
+  await screen.findByRole('tab', { name: /^看重什么 7/u });
   await user.type(screen.getByLabelText('搜索记忆'), '到点');
   const results = await screen.findByRole('region', { name: '搜索结果' });
   await waitFor(() =>
@@ -401,7 +397,7 @@ it('offers a look at memories whose evidence disagrees, without making it a chor
   ];
   mountOverview();
   const user = userEvent.setup();
-  const toggle = await screen.findByRole('button', { name: '有矛盾的 1 条' });
+  const toggle = await screen.findByRole('button', { name: '看矛盾 1 条' });
   expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await user.click(toggle);
   const list = await screen.findByRole('region', { name: '有矛盾的记忆' });
@@ -421,11 +417,9 @@ it('preserves the selected tab and expansion through editing and removal', async
   const target = rows[7];
   mountOverview();
   const user = userEvent.setup();
-  const selected = await screen.findByRole('tab', { name: '看重什么 7' });
+  const selected = await screen.findByRole('tab', { name: /^看重什么 7/u });
   await user.click(selected);
-  await user.click(
-    await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
+  await user.click(await screen.findByRole('button', { name: '再看 2 条' }));
   const card = within(screen.getByRole('article', { name: target.statement }));
   await user.click(card.getByRole('button', { name: /^改这条/u }));
   fireEvent.change(card.getByLabelText('修改表述'), {
@@ -456,26 +450,24 @@ it('preserves the selected tab and expansion through editing and removal', async
 it('resets the tab and expansion when switching twins', async () => {
   rows = [...dimensionItems('D1', 1), ...dimensionItems('D2', 7)];
   mountOverview();
-  await screen.findByRole('tab', { name: '看重什么 7' });
+  await screen.findByRole('tab', { name: /^看重什么 7/u });
   const user = userEvent.setup();
-  await user.click(
-    await screen.findByRole('button', { name: '展开其余 2 条' }),
-  );
+  await user.click(await screen.findByRole('button', { name: '再看 2 条' }));
   expect(screen.getAllByRole('article')).toHaveLength(7);
-  await user.click(screen.getByRole('tab', { name: '经历与身份 1' }));
+  await user.click(screen.getByRole('tab', { name: /^经历与身份 1/u }));
   await cards(1);
   act(() => {
     setPersonaId('friend');
     usePersonas.setState({ id: 'friend' });
   });
   await waitFor(() =>
-    expect(screen.getByRole('tab', { name: '看重什么 7' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: /^看重什么 7/u })).toHaveAttribute(
       'aria-selected',
       'true',
     ),
   );
   await cards(5);
-  expect(screen.getByRole('button', { name: '展开其余 2 条' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '再看 2 条' })).toBeVisible();
 });
 
 it('keeps the surest points in step with a correction', async () => {
@@ -512,14 +504,14 @@ it.each([
     rows = [...dimensionItems('D2', 2), ...dimensionItems('D4', 1)];
     mountOverview();
     const user = userEvent.setup();
-    const first = await screen.findByRole('tab', { name: '看重什么 2' });
+    const first = await screen.findByRole('tab', { name: /^看重什么 2/u });
     expect(screen.getByRole('tablist', { name: '九个方面' })).toHaveAttribute(
       'aria-orientation',
       orientation,
     );
     first.focus();
     await user.keyboard(`{${key}}`);
-    expect(screen.getByRole('tab', { name: '怎么思考 1' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: /^怎么思考 1/u })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -624,9 +616,15 @@ it('names how well an aspect and its facets are known in four levels, with a tic
   );
   mountOverview();
   const user = userEvent.setup();
-  await user.click(await screen.findByRole('tab', { name: '看重什么 3' }));
-  const panel = await screen.findByRole('tabpanel', { name: '看重什么 3' });
-  // How well the aspect is known shows once, as dots beside its name in the list: the panel does not say it again.
+  // How well the aspect is known shows once, as dots beside its name in the list (named for reading and for
+  // hovering): the panel does not say it again.
+  const tab = await screen.findByRole('tab', { name: /^看重什么 3/u });
+  expect(within(tab).getByRole('img', { name: '了解一些' })).toHaveAttribute(
+    'title',
+    '了解一些',
+  );
+  await user.click(tab);
+  const panel = await screen.findByRole('tabpanel', { name: /^看重什么 3/u });
   expect(
     await within(panel).findByRole('img', { name: '了解较多 ✓' }),
   ).toBeInTheDocument();
@@ -821,4 +819,204 @@ it('opens 补一补 on the aspect a colleague asked for, for the person', async 
       ([url]) => url === '/api/persona/fill?dimension=D3',
     ),
   ).toBe(true);
+});
+
+it('has one way to add to an empty profile: the person is offered 补一补, anyone else adding memories', async () => {
+  rows = [];
+  const view = mountOverview();
+  expect(
+    await screen.findByRole('heading', { name: '我了解到的他' }),
+  ).toBeVisible();
+  expect(screen.getByText('还不够了解他')).toBeVisible();
+  expect(screen.getAllByRole('link', { name: '添加记忆' })).toHaveLength(1);
+  expect(screen.queryByText(/^了解得还少/u)).toBeNull();
+  view.unmount();
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  mountOverview();
+  expect(
+    await screen.findByRole('heading', { name: '我了解到的你' }),
+  ).toBeVisible();
+  expect(screen.getByText('还不够了解你')).toBeVisible();
+  expect(screen.queryByRole('link', { name: '添加记忆' })).toBeNull();
+  expect(screen.getByText(/^了解得还少/u)).toBeVisible();
+  expect(screen.getAllByRole('button', { name: '补一补' })).toHaveLength(1);
+});
+
+it('asks nothing of the viewer where an aspect says who to ask, and the person has only 补一补 for an empty aspect', async () => {
+  useAuth.setState({
+    identity: { email: 'boss@example.test', admin: true, auth_enabled: true },
+  });
+  showTwins([memberTwin({ claim: 'lin@example.test' })]);
+  const view = render(
+    <ConfirmProvider>
+      <MemberAt />
+    </ConfirmProvider>,
+  );
+  await screen.findByRole('article');
+  expect(screen.getByText(/^了解得还少/u)).toBeVisible();
+  expect(screen.queryByRole('link', { name: '添加记忆' })).toBeNull();
+  expect(screen.getByRole('button', { name: '请小林补充 ›' })).toBeVisible();
+  view.unmount();
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  mountOverview();
+  await userEvent.click(
+    await screen.findByRole('tab', { name: /^生活与喜好/u }),
+  );
+  const panel = screen.getByRole('tabpanel', { name: /^生活与喜好/u });
+  expect(within(panel).getByRole('button', { name: '补一补' })).toBeVisible();
+  expect(within(panel).queryByRole('link')).toBeNull();
+});
+
+it('reads the profile again once the build after 补一补 is done', async () => {
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  const summaries = () =>
+    fetcher.mock.calls.filter(([url]) => isItemSummaryUrl(String(url))).length;
+  const base = fetcher.getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((url: string) => {
+    if (url === '/api/persona/fill')
+      return Promise.resolve(
+        json({
+          questions: [
+            {
+              id: 'q17',
+              text: '最近有什么事占了你比较多的时间？',
+              facet: '8.1',
+              facet_name: '近期重点',
+              level: 0,
+              level_label: '还不了解',
+            },
+          ],
+        }),
+      );
+    if (url === '/api/persona/fill/draft')
+      return Promise.resolve(
+        json({
+          drafts: [
+            {
+              facet: '8.1',
+              facet_name: '近期重点',
+              statement: '在推检索改版',
+              tier: 'colleague',
+            },
+          ],
+          changes: [],
+        }),
+      );
+    if (url === '/api/persona/fill/keep')
+      return Promise.resolve(json({ saved: 1, changes: [] }));
+    if (url === '/api/persona/processing')
+      return Promise.resolve(json({ state: 'idle' }));
+    return base(url);
+  });
+  mountOverview();
+  const user = userEvent.setup();
+  await user.click(
+    (await screen.findAllByRole('button', { name: '补一补' }))[0],
+  );
+  const dialog = await screen.findByRole('dialog', { name: '补一补' });
+  await user.type(
+    await within(dialog).findByRole('textbox', { name: '你的回答' }),
+    '在推检索改版',
+  );
+  await user.click(within(dialog).getByRole('button', { name: '整理' }));
+  await user.click(
+    await within(dialog).findByRole('button', { name: '存进记忆' }),
+  );
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // What was kept is only made into memories by the build that follows: nothing to read yet ...
+  const before = summaries();
+  expect(before).toBeGreaterThan(0);
+  expect(
+    fetcher.mock.calls.some(([url]) => url === '/api/persona/processing'),
+  ).toBe(false);
+  // ... until the page has seen it done.
+  await waitFor(() => expect(summaries()).toBeGreaterThan(before), {
+    timeout: 6000,
+  });
+  const polled = () =>
+    fetcher.mock.calls.filter(([url]) => url === '/api/persona/processing')
+      .length;
+  expect(polled()).toBe(1);
+}, 15000);
+
+it('lets the person put a memory back to the default of its kind, and offers it only for one they changed', async () => {
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  rows = [
+    {
+      ...item,
+      item_id: 'a',
+      statement: '孩子的事',
+      tier: 'colleague',
+      tier_changed: true,
+    },
+    { ...item, item_id: 'b', statement: '工作上的做法', tier: 'colleague' },
+  ];
+  withTier(() => {
+    rows = rows.map((row) =>
+      row.item_id === 'a' ? { ...row, tier: 'self', tier_changed: false } : row,
+    );
+    return json(rows[0]);
+  });
+  mountOverview();
+  await cards(2);
+  const card = (name: string) => within(screen.getByRole('article', { name }));
+  await userEvent.click(card('工作上的做法').getByLabelText(/^更多：/u));
+  expect(
+    card('工作上的做法').queryByRole('button', { name: '恢复默认' }),
+  ).toBeNull();
+  await userEvent.keyboard('{Escape}');
+  await choose(card('孩子的事'), '恢复默认');
+  const put = fetcher.mock.calls.find(([url]) =>
+    String(url).endsWith('/tier'),
+  )!;
+  expect(put[1]).toMatchObject({
+    method: 'PUT',
+    body: JSON.stringify({ tier: null }),
+  });
+  await waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      '回到默认：只有你自己的对话会用它',
+      'success',
+    ),
+  );
+  expect(card('孩子的事').getByText('只有本人能用')).toBeVisible();
+});
+
+it('marks a memory only the person may use on the card the graph opens, and lets them say who may use it', async () => {
+  const onTier = vi.fn(() => Promise.resolve(true));
+  const view = render(
+    <ItemCard
+      item={{ ...item, tier: 'self', tier_changed: true }}
+      pending={false}
+      onReview={() => Promise.resolve(true)}
+      onTier={onTier}
+      kindLabels={{}}
+    />,
+  );
+  expect(screen.getByText('只有本人能用')).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: '设为同事能用' }));
+  expect(onTier).toHaveBeenLastCalledWith(expect.anything(), 'colleague');
+  await userEvent.click(screen.getByRole('button', { name: '恢复默认' }));
+  expect(onTier).toHaveBeenLastCalledWith(expect.anything(), null);
+  view.unmount();
+  // Anyone else cannot say, and sees nothing to say it with.
+  render(
+    <ItemCard
+      item={{ ...item, tier: 'colleague' }}
+      pending={false}
+      onReview={() => Promise.resolve(true)}
+      kindLabels={{}}
+    />,
+  );
+  expect(screen.queryByRole('button', { name: /设为/u })).toBeNull();
 });

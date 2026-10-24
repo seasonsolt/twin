@@ -718,6 +718,12 @@ function Roster({
   const [filter, setFilter] = useState<TwinState | null>(null);
   const [editing, setEditing] = useState<Person | null>(null);
   const [addressing, setAddressing] = useState<Person | null>(null);
+  // Why the e-mail or employee number was not saved: the dialog stays open with it, and what was typed.
+  const [claimError, setClaimError] = useState('');
+  const address = (person: Person | null) => {
+    setClaimError('');
+    setAddressing(person);
+  };
   const [batching, setBatching] = useState(false);
   const [adding, setAdding] = useState(false);
   const [peopleShown, setPeopleShown] = useState(PEOPLE_PER_PAGE);
@@ -924,7 +930,7 @@ function Roster({
                   onOpen: (personaId) => void chat(personaId),
                   onMember: () => void navigate(memberPath(entry.person.id)),
                   onEdit: () => setEditing(entry.person),
-                  onAddress: () => setAddressing(entry.person),
+                  onAddress: () => address(entry.person),
                   onRemove: () => void remove(entry.person),
                   onVoice: () => setHearing(entry.person),
                   onRebuild: () => void rebuild(entry.person),
@@ -1077,11 +1083,16 @@ function Roster({
         person={addressing}
         twin={twins.find((t) => t.id === addressing?.persona_id)}
         busy={busy}
-        onClose={() => setAddressing(null)}
-        onSave={(claim) =>
-          addressing &&
-          void saveClaim(addressing, claim).then(() => setAddressing(null))
-        }
+        error={claimError}
+        onClose={() => address(null)}
+        onSave={(claim) => {
+          if (!addressing) return;
+          setClaimError('');
+          void saveClaim(addressing, claim).then((failed) => {
+            if (failed) setClaimError(failed);
+            else address(null);
+          });
+        }}
       />
       <EditPerson
         person={editing}

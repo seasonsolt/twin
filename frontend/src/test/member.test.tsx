@@ -7,6 +7,7 @@ import { personaKey, setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import { useWelcome } from '../stores/welcome';
 import { isSourcesUrl, sourcesPage } from './personaApi';
 
 vi.mock('motion/react', async (original) => ({
@@ -74,6 +75,7 @@ beforeEach(() => {
   usePersonas.setState({ id: 'friend', items, pendingId: null });
   useAuth.setState({ identity: null });
   useStatus.setState({ data: null, error: null });
+  useWelcome.getState().reset();
   window.location.hash = '#/team/twin/friend';
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
   fetcher = vi.fn(async (path: string, init?: RequestInit) => {
@@ -162,7 +164,7 @@ beforeEach(() => {
       );
     if (path === '/api/persona/processing') return json({ state: 'idle' });
     if (path === '/api/persona/items/summary')
-      return json({ total: 0, conflicts: 0, dimensions: [] });
+      return json({ total: 12, conflicts: 0, dimensions: [] });
     if (path === '/api/persona/handoffs/count')
       return json({ pending: handoffs.length });
     if (path === '/api/persona/team-answers') return json({ team_answers });
@@ -711,6 +713,114 @@ it('shows someone without a twin by the recordings they spoke in, and makes a tw
   expect(
     await screen.findByRole('button', { name: '和新同事聊天' }),
   ).toBeVisible();
+});
+
+it.each([
+  ['本人已认领', { self_claimed: true }],
+  ['同事建了分身', { twin_elsewhere: true }],
+])(
+  'says %s of someone whose twin is not the viewer’s to make, and offers no way to make one',
+  async (state, change) => {
+    people = [
+      person({
+        id: 'per_2',
+        name: '新同事',
+        persona_id: null,
+        speakers: 2,
+        ...change,
+      }),
+    ];
+    window.location.hash = '#/team/per_2';
+    render(<App />);
+    expect(
+      await screen.findByRole('heading', { level: 1, name: '新同事' }),
+    ).toBeVisible();
+    expect(screen.getByText(state)).toBeVisible();
+    expect(screen.queryByRole('button', { name: '生成分身' })).toBeNull();
+    expect(screen.getByRole('link', { name: '周会.m4a' })).toBeVisible();
+  },
+);
+
+it('says why making a twin failed inside the window it was asked in', async () => {
+  people = [
+    person({ id: 'per_2', name: '新同事', persona_id: null, speakers: 2 }),
+  ];
+  const original = fetcher.getMockImplementation()! as (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/library/people/per_2/persona' && init?.method === 'POST')
+      return Promise.resolve(json({ detail: '已经有同事为 TA 建了分身' }, 409));
+    return original(path, init);
+  });
+  window.location.hash = '#/team/per_2';
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: '生成分身' }));
+  const dialog = await screen.findByRole('dialog', { name: '为新同事建分身' });
+  await user.click(within(dialog).getByRole('button', { name: '建好' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    '已经有同事为 TA 建了分身',
+  );
+});
+
+it('says where a twin stands as the team table does', async () => {
+  people = [
+    person({
+      updating: true,
+      build: { state: 'idle', last_error: '模型限流' },
+    }),
+  ];
+  window.location.hash = '#/team/per_1';
+  render(<App />);
+  expect(await screen.findByText('更新没完成')).toBeVisible();
+  expect(screen.queryByText('整理中')).toBeNull();
+});
+
+it('counts the memories on the tab as the profile does, not as the whole server does', async () => {
+  // The server-wide count also holds what only the twin’s person may use.
+  useStatus.setState({
+    data: {
+      target_name: '朋友',
+      counts: { sources: 1, items: 40 },
+      llm: { provider: '', model: '' },
+      embed: { provider: '' },
+      egress: [],
+    },
+    error: null,
+  });
+  render(<App />);
+  const nav = await screen.findByRole('tablist', { name: '档案章节' });
+  expect(await within(nav).findByRole('tab', { name: '记忆12' })).toBeVisible();
+});
+
+it('leads the person back to the twin step they left for later', async () => {
+  useAuth.setState({
+    identity: {
+      email: 'me@example.test',
+      name: '我',
+      admin: false,
+      auth_enabled: true,
+    },
+  });
+  items = [
+    twin({
+      id: 'friend',
+      name: '我',
+      mine: true,
+      approved: false,
+      from_meetings: true,
+    }),
+  ];
+  usePersonas.setState({ items });
+  useWelcome.getState().finishClaim();
+  window.location.hash = '#/team/twin/friend';
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: '去确认' }));
+  expect(useWelcome.getState().claimDone).toBe(false);
+  await waitFor(() => expect(window.location.hash).toBe('#/welcome'));
 });
 
 it('goes back to the team from an address that names nobody', async () => {

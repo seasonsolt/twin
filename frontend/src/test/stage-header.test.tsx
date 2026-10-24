@@ -193,7 +193,7 @@ it.each([true, false])(
       })),
     );
     mount(<Memories />, '/memories');
-    await screen.findByText('2 条 · 2 小时录音');
+    await screen.findByText('2 份资料 · 2 小时录音');
     expect(screen.getByRole('heading', { name: '他记得的事' })).toBeVisible();
     expect(screen.getByText(/段录音需要确认哪位是你/)).toHaveClass(
       'speaker-banner',

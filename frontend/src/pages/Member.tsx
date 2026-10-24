@@ -8,6 +8,8 @@ import {
 } from 'react-router';
 import {
   Badge,
+  Button,
+  Notice,
   Page,
   Row,
   Skeleton,
@@ -26,8 +28,10 @@ import { Away } from '../features/away/Away';
 import { LensTab } from '../features/lens/LensTab';
 import { useAway } from '../features/away/useAway';
 import { PersonFace } from '../features/library/PersonFace';
+import { TWIN_STATES, twinState } from '../features/library/Team';
 import { MemberHeader } from '../features/members/MemberHeader';
 import { NoTwinMember } from '../features/members/NoTwinMember';
+import { useMemoryCount } from '../features/members/useMemoryCount';
 import { AssetsTab } from '../features/profile/AssetsTab';
 import { EditIdentityDialog } from '../features/profile/EditIdentityDialog';
 import { MemoriesTab, type MemoryView } from '../features/profile/MemoriesTab';
@@ -37,9 +41,10 @@ import { Ledger } from './Ledger';
 import type { Person } from './Recording';
 import { useIsSelf } from '../stores/access';
 import { featureOn, useAuth } from '../stores/auth';
-import { usePersonas, type Persona } from '../stores/personas';
+import { awaitsApproval, usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 import { useTeam } from '../stores/team';
+import { useWelcome } from '../stores/welcome';
 
 type Section = 'overview' | 'memories' | 'away' | 'ledger' | 'lens' | 'assets';
 
@@ -53,9 +58,17 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const canManage = twin.can_manage !== false;
   const self = useIsSelf(twin);
   const ledgerOn = useAuth((state) => featureOn(state.identity, 'ledger'));
-  const memories = useStatus((state) => state.data?.counts?.items);
+  const memories = useMemoryCount(twin.id, canManage);
   const memoryUpdating = useStatus((state) => state.data?.memory_updating);
-  const updating = !!person?.updating || !!memoryUpdating;
+  // Where the twin stands is said as the team table says it. A twin the page can be opened on is one that can be
+  // talked to, so the kinds that are about not having one one (own, elsewhere, none) read as ready.
+  const found = person ? twinState(person) : 'ready';
+  const standing =
+    found === 'ready' && memoryUpdating
+      ? 'updating'
+      : found === 'none' || found === 'own' || found === 'elsewhere'
+        ? 'ready'
+        : found;
   const away = useAway(self && canManage);
   const waiting = away.data?.pending;
   const available: Section[] = [
@@ -130,11 +143,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
               }
             />
           }
-          status={
-            updating
-              ? { label: '整理中', tone: 'warning' }
-              : { label: '可以聊', tone: 'success' }
-          }
+          status={TWIN_STATES[standing]}
           badge={twin.public && canManage ? <Badge>公开</Badge> : undefined}
           menu={
             canManage
@@ -168,6 +177,23 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
             onClick: () => navigate('/chat'),
           }}
         />
+        {self && awaitsApproval(twin) && (
+          // They left the twin step for later: until they say it is all right, colleagues cannot ask it, and
+          // what they see here is the part colleagues would.
+          <Notice
+            tone="info"
+            actions={
+              <Button
+                variant="secondary"
+                onClick={() => useWelcome.getState().reopenClaim()}
+              >
+                去确认
+              </Button>
+            }
+          >
+            分身还没确认，同事问不到它。
+          </Notice>
+        )}
         {canManage && (
           <Tabs
             label="档案章节"

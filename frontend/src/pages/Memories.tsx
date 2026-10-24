@@ -787,7 +787,7 @@ export function Memories({
           )}
           {!embedded && (
             <Text tone="secondary" className="mt-2">
-              {summary.total} 条 · {Number(recordingHours.toFixed(1))} 小时录音
+              {`${summary.total} 份资料 · ${Number(recordingHours.toFixed(1))} 小时录音`}
             </Text>
           )}
           <Text size="sm" tone="secondary" className="my-2">

@@ -301,7 +301,9 @@ class Personas:
         with PersonaStore(settings.db_path) as store:
             sources = store.count_sources()
         return {
-            **entry,
+            # ``photo`` is the company's address of the profile picture, kept to know which one the twin wears; the
+            # page is given the twin's own picture (``avatar_url``).
+            **{k: v for k, v in entry.items() if k != "photo"},
             "name": name or settings.target_name,
             "avatar_url": f"/api/media/avatar-image?persona={persona_id}"
             if portrait or settings.avatar.image_path

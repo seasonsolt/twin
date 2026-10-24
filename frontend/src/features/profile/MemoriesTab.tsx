@@ -50,7 +50,7 @@ export function MemoriesTab({
           items={[
             { value: 'list', label: '列表' },
             { value: 'graph', label: '图谱' },
-            ...(answers ? [{ value: 'answers', label: '我设的团队答案' }] : []),
+            ...(answers ? [{ value: 'answers', label: '我的团队答案' }] : []),
           ]}
         />
       </Row>

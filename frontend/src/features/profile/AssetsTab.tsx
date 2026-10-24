@@ -1,12 +1,5 @@
 import { useCallback, useState } from 'react';
-import {
-  AvatarFrame,
-  Button,
-  Heading,
-  Row,
-  Stack,
-  Text,
-} from '../../components/ui';
+import { AvatarFrame, Button, Row, Stack, Text } from '../../components/ui';
 import { usePersonaId } from '../../lib/usePersonaState';
 import { AvatarPicker } from '../avatar/AvatarPicker';
 import { AvatarPreview } from '../avatar/AvatarPreview';
@@ -34,9 +27,6 @@ export function AssetsTab({
   const capabilities = identity.capabilities;
   return (
     <Stack gap={4}>
-      <Heading level={2} size="section">
-        形象和声音
-      </Heading>
       <Row gap={4}>
         {capabilities &&
           (capabilities.avatar_image ||

@@ -342,6 +342,21 @@ def test_a_matter_the_team_has_no_answer_to_is_answered_as_before(scene: Team) -
     assert "## 团队答案" not in scene.llm.systems[-1]
 
 
+def test_the_question_box_returns_the_team_answers_to_everyone_but_the_person_who_confirmed_them(scene: Team) -> None:
+    _, made = make_team_answer(scene)
+    question = "旧版 Word 模板导出还支持吗"
+    scene.as_(ASKERS["xu"])
+    found = scene.web.get("/api/personas/ask", params={"q": question}, headers=CSRF)
+    assert found.status_code == 200, found.text
+    [card] = found.json()["team_answers"]
+    assert card["id"] == made["id"] and card["body"] == ANSWER and card["owner_name"] == "林舟"
+    assert "asker" not in card and card["status"] == "valid"
+    # The person's own question does not bring their own answer back to them.
+    scene.as_(LIN)
+    own = scene.web.get("/api/personas/ask", params={"q": question}, headers=CSRF)
+    assert own.status_code == 200 and own.json()["team_answers"] == []
+
+
 def test_the_person_asking_their_own_assistant_is_not_shown_their_own_answer(scene: Team) -> None:
     lin = scene.twins["lin"]
     make_team_answer(scene)

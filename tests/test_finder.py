@@ -18,6 +18,7 @@ from teamkit import ADMIN, CSRF, Team, TopicEmbedder, Twin, item, make_web
 
 from twin.config import Settings
 from twin.finder import Finder, TwinRef, asks_for_decision, coverage_rows, eligible, refresh_coverage
+from twin.media.library import TEAM, Cleaned
 from twin.persona.chat import index_persona
 from twin.persona.items import PersonaItem
 from twin.persona.store import PersonaStore
@@ -295,6 +296,36 @@ def test_without_the_embedding_model_the_meetings_are_still_found_by_words(web: 
     assert detail.json()["segments"][meeting["line"]]["text"].startswith("超过 15%")
     # Only the meetings the asker may read: someone not in it and not its uploader finds nothing.
     assert ask(web, "xu@xjjk.com", "续约折扣超过 15% 怎么办")["meetings"] == []
+
+
+def test_a_recording_proofread_after_it_was_searched_is_found_and_quoted_as_proofread(web: Team) -> None:
+    team_of_four(web)
+    web.as_(ADMIN)
+    imported = web.web.post(
+        "/api/library/transcripts",
+        headers=CSRF,
+        files={
+            "file": (
+                "经营会.txt",
+                "王屿：超过 15% 的续约折扣都报给我\n沈从：当天给答复\n王屿：好的\n沈从：继续\n".encode(),
+                "text/plain",
+            )
+        },
+        data={"payload": json.dumps({"title": "经营会", "date": "2026-10-09"})},
+    )
+    assert imported.status_code == 201, imported.text
+    [before] = ask(web, ADMIN, "续约折扣超过 15% 怎么办")["meetings"]
+    assert "折扣" in before["quote"]
+    # The proofreading is filed under the same transcript: the words change, the id does not.
+    library = web.web.app.state.libraries.library(TEAM)  # type: ignore[attr-defined]
+    recording = library.get(before["recording_id"])
+    transcript = library.transcript(recording)
+    assert recording is not None and transcript is not None
+    corrected = [s.model_copy(update={"text": s.text.replace("折扣", "优惠")}) for s in transcript.segments]
+    cleaned = Cleaned(transcript_id=transcript.id, created_at="2026-10-10", segments=corrected)
+    assert library.write_cleaned(recording, cleaned)
+    [after] = ask(web, ADMIN, "续约折扣超过 15% 怎么办")["meetings"]
+    assert "优惠" in after["quote"] and "折扣" not in after["quote"]
 
 
 @pytest.mark.parametrize(

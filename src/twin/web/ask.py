@@ -46,15 +46,26 @@ class MeetingSearch:
     def __init__(self, libraries: Libraries) -> None:
         self.libraries = libraries
         self._lock = threading.RLock()
-        self._lines: dict[tuple[str, str], list[tuple[float, str, str]]] = {}
-        self._mark: tuple[tuple[str, str], ...] = ()
+        self._lines: dict[tuple[str, str, int], list[tuple[float, str, str]]] = {}
+        self._mark: tuple[tuple[str, str, int], ...] = ()
         self._index: BM25 | None = None
 
     def _library(self) -> Library:
         return self.libraries.library(TEAM)
 
+    @staticmethod
+    def _version(library: Library, recording: Recording) -> tuple[str, str, int]:
+        """What the lines of a recording depend on: its transcript, and the proofreading filed for it (which changes
+        the words and leaves the transcript's id as it is), as the time that file was written; 0 while there is none."""
+        path = library.clean_path(recording)
+        try:
+            filed = path.stat().st_mtime_ns if path is not None else 0
+        except OSError:
+            filed = 0
+        return recording.id, recording.transcript_id or "", filed
+
     def _read(self, library: Library, recording: Recording) -> list[tuple[float, str, str]]:
-        key = (recording.id, recording.transcript_id or "")
+        key = self._version(library, recording)
         found = self._lines.get(key)
         if found is None:
             try:
@@ -68,7 +79,7 @@ class MeetingSearch:
 
     def _bm25(self, library: Library) -> BM25:
         recordings = [r for r in library.list() if r.status == "ready" and r.transcript_id]
-        mark = tuple(sorted((r.id, r.transcript_id or "") for r in recordings))
+        mark = tuple(sorted(self._version(library, r) for r in recordings))
         with self._lock:
             if self._index is not None and mark == self._mark:
                 return self._index

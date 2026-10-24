@@ -348,6 +348,54 @@ it('puts a question to the whole team with ⌘K: the answer it has, whom to ask,
   ).toBeInTheDocument();
 });
 
+it('keeps the answer to the question before on the page while the next one is on its way', async () => {
+  usePersonas.setState({
+    id: 'default',
+    items: [twin({}), twin({ id: 'p-wang', name: '王屿', is_default: false })],
+  });
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  let release: (value: Response) => void = () => {};
+  let calls = 0;
+  vi.mocked(fetch).mockImplementation(async (url) => {
+    if (!String(url).startsWith('/api/personas/ask'))
+      return respond(String(url));
+    calls += 1;
+    return calls === 1
+      ? json(asked())
+      : new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+  });
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: '团队（3）' });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '续约折扣谁能批？');
+  expect(
+    await within(dialog).findByRole('article', { name: '团队答案' }),
+  ).toBeVisible();
+  // One more word: what was found stays (so the box does not jump) and says it is looking again.
+  await user.type(within(dialog).getByRole('combobox'), '今天');
+  expect(await within(dialog).findByText('正在找…')).toBeVisible();
+  expect(
+    within(dialog).getByRole('article', { name: '团队答案' }),
+  ).toBeVisible();
+  // The second question is asked after the pause, and answered later.
+  await waitFor(() => expect(calls).toBe(2));
+  expect(
+    within(dialog).getByRole('article', { name: '团队答案' }),
+  ).toBeVisible();
+  release(json(asked({ team_answers: [] })));
+  await waitFor(() =>
+    expect(
+      within(dialog).queryByRole('article', { name: '团队答案' }),
+    ).toBeNull(),
+  );
+});
+
 it('opens the recording of a meeting the question came up in', async () => {
   const respond = vi.mocked(fetch).getMockImplementation() as (
     url: string,

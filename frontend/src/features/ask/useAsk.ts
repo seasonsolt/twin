@@ -47,7 +47,8 @@ const MIN_CHARS = 2;
 /**
  * What the team makes of a question typed in the search: the answers it already has, whom to ask and the meetings it
  * came up in. Asked once the typing stops; a newer question drops the one still under way. `enabled` is false when
- * the question needs no asking (a name that is just found).
+ * the question needs no asking (a name that is just found). The answer to the question before stays in `found` until
+ * the next one arrives (`busy` says it is on its way), so that the list does not empty and fill at every pause.
  */
 export function useAsk(query: string, enabled: boolean) {
   const [found, setFound] = useState<Found | null>(null);
@@ -56,7 +57,11 @@ export function useAsk(query: string, enabled: boolean) {
   const wanted = query.trim();
   const worth = enabled && wanted.length >= MIN_CHARS;
   useEffect(() => {
-    if (!worth) return;
+    if (!worth) {
+      // Nothing is asked: what an earlier question found is not shown beside the next one.
+      setFound(null);
+      return;
+    }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setAsking(wanted);
@@ -80,7 +85,7 @@ export function useAsk(query: string, enabled: boolean) {
     };
   }, [worth, wanted]);
   return {
-    found: worth && found?.query === wanted ? found : null,
+    found: worth && !error ? found : null,
     busy: worth && (asking === wanted || found?.query !== wanted) && !error,
     error: worth ? error : '',
   };

@@ -123,6 +123,17 @@ it('puts the whole of text cut short in its hover, however it is made up', () =>
   );
 });
 
+it('keeps the title a caller gave when the text cut short has no words of its own to show', () => {
+  render(
+    <TooltipProvider>
+      <Text twoLines title="全文在这里">
+        <em />
+      </Text>
+    </TooltipProvider>,
+  );
+  expect(document.querySelector('p')).toHaveAttribute('title', '全文在这里');
+});
+
 it('lists a stopped upload as waiting to be added again, not as failed', () => {
   render(
     <MemoryRouter>

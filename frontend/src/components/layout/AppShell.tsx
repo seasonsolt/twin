@@ -36,7 +36,7 @@ const Welcome = lazy(() =>
 // Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
 const conversationRoutes = new Set(['/chat']);
 // Pages about the twin in view that only its own people may open (a colleague's public twin is for talking to).
-const twinPages = new Set(['/profile', '/commitments']);
+const twinPages = new Set(['/commitments']);
 // Pages that say themselves that there is no twin yet, in place of the new-twin card.
 const ownEmpty = new Set(['/commitments']);
 
@@ -90,7 +90,7 @@ export function AppShell() {
     if (waiting && !claimDone && waiting.id !== personaId)
       void usePersonas.getState().switchTo(waiting.id);
   }, [waiting, claimDone, personaId]);
-  // The pages about one twin (档案, 承诺) are for a twin the person looks after: standing on a colleague's public twin
+  // The page about one twin's commitments is for a twin the person looks after: standing on a colleague's public twin
   // from the conversation, they go on to one of their own rather than to an error.
   const manages = useManagesCurrent();
   const pageOfOwnTwin = twinPages.has(location.pathname);

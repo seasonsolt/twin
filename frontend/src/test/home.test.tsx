@@ -10,6 +10,7 @@ import { basePath } from '../lib/base';
 import { useAuth } from '../stores/auth';
 import { usePersonas } from '../stores/personas';
 import { useTeam } from '../stores/team';
+import { resetUploads, useUploadStore } from '../stores/uploads';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -65,7 +66,10 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetUploads();
+});
 
 const show = (entry = '/') =>
   render(
@@ -191,6 +195,18 @@ it('shows the team and the way to upload more, with what waits left to the inbox
   );
   expect(screen.queryByRole('tab', { name: /待处理/u })).toBeNull();
   expect(screen.queryByRole('region', { name: '正在处理' })).toBeNull();
+});
+
+it('lists a stopped upload beside the failed ones to be added again, and does not count it among what is being processed', async () => {
+  state.recordings = [recording({ id: 'rec_2', status: 'transcribing' })];
+  useUploadStore.setState({
+    picks: [{ file: new File(['a'], '周会二.m4a'), stopped: true }],
+  });
+  show();
+  expect(await screen.findByRole('heading', { name: '团队' })).toBeVisible();
+  const list = screen.getByRole('region', { name: '上传进度' });
+  expect(within(list).getByText('已停止，再选一次接着传')).toBeVisible();
+  expect(screen.queryByRole('progressbar', { name: '周会二.m4a' })).toBeNull();
 });
 
 it('marks a twin 整理中 when a rebuild starts with no recording changing, as one started at start-up', async () => {

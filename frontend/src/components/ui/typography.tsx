@@ -178,7 +178,8 @@ export function Text<T extends ElementType = 'p'>({
         className,
       )}
       title={
-        twoLines ? plainText(children) : (props as { title?: string }).title
+        (twoLines ? plainText(children) : undefined) ??
+        (props as { title?: string }).title
       }
     >
       {children}

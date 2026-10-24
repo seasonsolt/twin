@@ -20,7 +20,6 @@ import { useAuth } from '../stores/auth';
 import { useChatLayout } from '../stores/chatLayout';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
-import { useTeam } from '../stores/team';
 import { conversationServer } from './conversationServer';
 
 vi.mock('motion/react', async (original) => ({
@@ -119,14 +118,15 @@ const sent = (suffix: string, method = 'POST') =>
 beforeEach(() => {
   setPersonaId('default');
   usePersonas.setState({ id: 'default', items: [] });
-  useTeam.setState({
-    people: [
-      { id: 'pe1', name: '沈从', persona_id: null, talk: 'p-shen' },
-      { id: 'pe2', name: '陈一', persona_id: null, talk: 'p-chen' },
-      { id: 'pe3', name: '王屿', persona_id: 'default' },
-    ] as never,
-  });
-  list = { lenses: [], facets, stop_after: 3 };
+  list = {
+    lenses: [],
+    facets,
+    stop_after: 3,
+    colleagues: [
+      { id: 'p-shen', name: '沈从' },
+      { id: 'p-chen', name: '陈一' },
+    ],
+  };
   uses = [];
   fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
@@ -153,14 +153,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   setPersonaId('default');
-  useTeam.setState({ people: null });
 });
 
 const mount = () =>
   render(
     <TooltipProvider>
       <ConfirmProvider>
-        <LensTab person="王屿" twinId="default" />
+        <LensTab person="王屿" />
       </ConfirmProvider>
     </TooltipProvider>,
   );
@@ -221,7 +220,7 @@ it('offers to publish when there is no lens, and only the aspects with a well-fo
   });
 });
 
-it('publishes to named people, never to the person themself, and needs at least one', async () => {
+it('publishes to named people, chosen from the twins colleagues have taken, and needs at least one', async () => {
   const user = userEvent.setup();
   mount();
   await user.click(await screen.findByRole('button', { name: '发布赋能' }));
@@ -272,7 +271,11 @@ it('shows a published lens, what it was used for and not by whom, and corrects a
   list = { ...list, lenses: [lens()] };
   uses = [
     use('u1'),
-    use('u2', { question: '渠道商要独家代理，答应吗？', said: '' }),
+    use('u2', {
+      question: '渠道商要独家代理，答应吗？',
+      said: '',
+      facets: [],
+    }),
   ];
   mount();
   expect(await screen.findByText('王屿 · 大客户谈判')).toBeVisible();
@@ -290,6 +293,8 @@ it('shows a published lens, what it was used for and not by whom, and corrects a
   expect(
     screen.getByText('渠道商要独家代理，答应吗？').closest('li'),
   ).toHaveTextContent('未回答');
+  // Nothing was said there, so there is nothing to correct.
+  expect(screen.queryByRole('button', { name: /^纠正：渠道商/u })).toBeNull();
   await user.click(within(first).getByRole('button', { name: /^纠正/u }));
   await waitFor(() => expect(sent('/uses/u1/correct')).toHaveLength(1));
 });
@@ -311,6 +316,31 @@ it('holds, resumes and takes a lens back only after asking', async () => {
   expect(ask).toHaveTextContent('撤回后不能恢复');
   await user.click(within(ask).getByRole('button', { name: '撤回' }));
   await waitFor(() => expect(sent('/lenses/l1/withdraw')).toHaveLength(1));
+});
+
+it('reads the lenses again when one cannot be changed because it is gone', async () => {
+  const user = userEvent.setup();
+  list = { ...list, lenses: [lens()] };
+  mount();
+  await screen.findByText('王屿 · 大客户谈判');
+  const loads = () =>
+    fetcher.mock.calls.filter(
+      ([url, init]) =>
+        url === '/api/persona/lenses' && (init?.method ?? 'GET') === 'GET',
+    ).length;
+  const before = loads();
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    if (url === '/api/persona/lenses/l1/pause')
+      return json({ detail: '这个赋能已经撤回了' }, 409);
+    if (url === '/api/persona/lenses' && method === 'GET')
+      return json({ ...list, lenses: [] });
+    return json({ uses: [] });
+  });
+  await user.click(screen.getByLabelText('更多：大客户谈判'));
+  await user.click(screen.getByRole('button', { name: '暂停' }));
+  expect(await screen.findByText('还没有赋能')).toBeVisible();
+  expect(loads()).toBeGreaterThan(before);
 });
 
 it('says a facet was corrected out and shows only the uses that touched it', async () => {
@@ -357,9 +387,21 @@ it('adjusts the scope: an aspect with a facet corrected out says so and keeps it
   // Saved as it is: the facet corrected out stays out.
   await user.click(within(panel).getByRole('button', { name: '保存' }));
   await waitFor(() => expect(sent('/lenses/l1', 'PATCH')).toHaveLength(1));
+  expect(JSON.parse(String(sent('/lenses/l1', 'PATCH')[0][1].body))).toEqual({
+    name: '大客户谈判',
+    facets: ['3.4', '3.3'],
+    reopen: [],
+    audience: { scope: 'team', twins: [] },
+  });
+  // And again, as the server now has it: nothing was opened afresh the second time either.
+  await user.click(await screen.findByRole('button', { name: '调整范围' }));
+  const again = await screen.findByRole('dialog', { name: '调整范围' });
+  expect(within(again).getByText('已停用')).toBeInTheDocument();
+  await user.click(within(again).getByRole('button', { name: '保存' }));
+  await waitFor(() => expect(sent('/lenses/l1', 'PATCH')).toHaveLength(2));
   expect(
-    JSON.parse(String(sent('/lenses/l1', 'PATCH')[0][1].body)).facets,
-  ).toEqual(['3.3']);
+    JSON.parse(String(sent('/lenses/l1', 'PATCH')[1][1].body)),
+  ).toMatchObject({ facets: ['3.4', '3.3'], reopen: [] });
 });
 
 it('opens an aspect afresh when it is ticked again, the facet corrected out with it', async () => {
@@ -384,6 +426,7 @@ it('opens an aspect afresh when it is ticked again, the facet corrected out with
   expect(JSON.parse(String(sent('/lenses/l1', 'PATCH')[0][1].body))).toEqual({
     name: '大客户谈判',
     facets: ['3.4', '3.3'],
+    reopen: ['3.4'],
     audience: { scope: 'team', twins: [] },
   });
 });
@@ -437,14 +480,19 @@ it('points at the person where the matter is theirs to settle or the lens has no
   const { rerender } = render(
     <LensCard card={card({ settled_by_person: true })} onAskOwner={ask} />,
   );
-  expect(screen.getByText('具体怎么定：未开放，可直接问王屿。')).toBeVisible();
+  // With the button, who to ask is said by the button alone.
+  expect(screen.getByText('具体怎么定：未开放。')).toBeVisible();
   await user.click(screen.getByRole('button', { name: '问王屿本人' }));
   expect(ask).toHaveBeenCalledTimes(1);
   rerender(
     <LensCard card={card({ views: [], empty: true })} onAskOwner={ask} />,
   );
   expect(screen.getByText('没有能回答的内容。')).toBeVisible();
-  expect(screen.getByText('可直接问王屿。')).toBeVisible();
+  expect(screen.getByRole('button', { name: '问王屿本人' })).toBeVisible();
+  expect(screen.queryByText(/可直接问/u)).toBeNull();
+  // Without it (already handed over), the words say it.
+  rerender(<LensCard card={card({ settled_by_person: true })} />);
+  expect(screen.getByText('具体怎么定：未开放，可直接问王屿。')).toBeVisible();
   // Where it settles itself there is nothing to ask.
   rerender(<LensCard card={card()} onAskOwner={ask} />);
   expect(screen.queryByRole('button', { name: '问王屿本人' })).toBeNull();
@@ -495,12 +543,16 @@ const answerReply = (extra: Partial<ChatReply> = {}): ChatReply => ({
   ...extra,
 });
 
-function chatWith(lenses: unknown, onAsk?: (body: unknown) => Response) {
+function chatWith(
+  lenses: unknown | (() => unknown),
+  onAsk?: (body: unknown) => Response,
+) {
   const server = conversationServer();
   const calls = vi.fn(async (url: string, init?: RequestInit) => {
     const saved = server.respond(url, init);
     if (saved) return saved;
-    if (url === '/api/persona/lenses/available') return json({ lenses });
+    if (url === '/api/persona/lenses/available')
+      return json({ lenses: typeof lenses === 'function' ? lenses() : lenses });
     if (url === '/api/persona/lenses/l1/ask') {
       const body = JSON.parse(String(init?.body)) as {
         question: string;
@@ -601,7 +653,7 @@ it('lets a colleague ask a lens of the twin in view, and shows its answer in the
   expect(box).toHaveAttribute('placeholder', '向王屿的赋能提问…');
   await user.type(box, '客户嫌报价高，预算是谁定的？');
   await user.click(screen.getByRole('button', { name: '发送' }));
-  const asked = await screen.findByText('具体怎么定：未开放，可直接问王屿。');
+  const asked = await screen.findByText('具体怎么定：未开放。');
   expect(asked).toBeVisible();
   expect(
     screen.getByText('根据王屿说过的话推测，不代表王屿的意见'),
@@ -632,17 +684,20 @@ it('offers nothing when the twin has no lens for the viewer', async () => {
   expect(screen.queryByRole('button', { name: /^赋能/u })).toBeNull();
 });
 
-it('shows why when the lens could not be asked any more, and no longer offers it', async () => {
+it('shows why when the lens could not be asked any more, and no longer offers it or asks it later', async () => {
   sessionStorage.clear();
   localStorage.clear();
   useChatLayout.setState({ sheet: undefined, stage: undefined });
   useStatus.setState({ data: null, error: null });
   const user = userEvent.setup();
   let held = false;
-  const { calls } = chatWith(offered, () => {
-    held = true;
-    return json({ detail: '这个赋能现在不能用' }, 404);
-  });
+  const { calls } = chatWith(
+    () => (held ? [] : offered),
+    () => {
+      held = true;
+      return json({ detail: '这个赋能现在不能用' }, 404);
+    },
+  );
   const chip = await screen.findByRole('button', { name: '赋能 · 大客户谈判' });
   await user.click(chip);
   await user.type(screen.getByRole('textbox', { name: '你说' }), '问个问题');
@@ -651,8 +706,22 @@ it('shows why when the lens could not be asked any more, and no longer offers it
     '这个赋能现在不能用',
   );
   expect(held).toBe(true);
-  expect(
+  // It is asked for again, comes back empty, and the chip and the choice are gone.
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('button', { name: '赋能 · 大客户谈判' }),
+    ).toBeNull(),
+  );
+  expect(screen.getByRole('textbox', { name: '你说' })).toHaveAttribute(
+    'placeholder',
+    '和王屿聊点什么…',
+  );
+  // And it does not go on asking for it.
+  const loads = () =>
     calls.mock.calls.filter(([url]) => url === '/api/persona/lenses/available')
-      .length,
-  ).toBeGreaterThan(0);
+      .length;
+  const settled = loads();
+  expect(settled).toBeGreaterThan(1);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(loads()).toBe(settled);
 });

@@ -101,6 +101,8 @@ export interface LensList {
   lenses: Lens[];
   facets: FacetVerdict[];
   stop_after: number;
+  /** The twins colleagues have taken, whom a lens can be meant for. */
+  colleagues: { id: string; name: string }[];
 }
 
 /** What a lens was asked and said: never who asked. */

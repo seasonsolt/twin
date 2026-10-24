@@ -19,7 +19,8 @@ const SHOWN = 5;
 
 /**
  * 最近被用在哪: what the lens was asked and said, newest first, never who asked. 纠正 says what it said there was
- * wrong; a facet corrected enough times stops being used. `facet` narrows the list to the uses that touched it.
+ * wrong, and only where it spoke from some facet (a use that answered nothing leaves nothing to count against); a
+ * facet corrected enough times stops being used. `facet` narrows the list to the uses that touched it.
  */
 export function LensUses({
   lensId,
@@ -120,7 +121,7 @@ export function LensUses({
                 </Text>
                 {use.corrected ? (
                   <Badge>已纠正</Badge>
-                ) : (
+                ) : use.facets.length === 0 ? null : (
                   <Button
                     size="sm"
                     variant="secondary"

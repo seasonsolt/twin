@@ -19,7 +19,10 @@ import { Often } from './Often';
 import { useAway, type Handoff } from './useAway';
 import { Waiting, when } from './Waiting';
 
-/** A handoff put aside or settled, folded away; one put aside can be put back. */
+/**
+ * A handoff put aside or settled, folded away; one put aside can be put back. A promise the person answered in words
+ * and has not yet taken still can be taken (接下) or turned down (不接) here.
+ */
 function Done({
   item,
   onDone,
@@ -28,6 +31,22 @@ function Done({
   onDone: () => Promise<void>;
 }) {
   const back = item.status === 'dismissed' || item.status === 'expired';
+  const owed = item.status === 'replied' && item.commit?.pending === true;
+  const post = (action: string, done: string) =>
+    void api(`/api/persona/handoffs/${encodeURIComponent(item.id)}/${action}`, {
+      method: 'POST',
+      json: {},
+    })
+      .then(() => {
+        toast(done, 'success');
+        return onDone();
+      })
+      .catch((failure: unknown) =>
+        toast(
+          failure instanceof Error ? failure.message : '操作失败',
+          'danger',
+        ),
+      );
   return (
     <ListRow
       variant="divided"
@@ -35,32 +54,41 @@ function Done({
       meta={[
         item.asker_name,
         item.status_label,
+        owed && '待接下',
         when(item.replied_at ?? item.created_at),
       ]
         .filter(Boolean)
         .join(' · ')}
       trailing={
-        back && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() =>
-              void api(
-                `/api/persona/handoffs/${encodeURIComponent(item.id)}/restore`,
-                { method: 'POST', json: {} },
-              )
-                .then(() => onDone())
-                .catch((failure: unknown) =>
-                  toast(
-                    failure instanceof Error ? failure.message : '操作失败',
-                    'danger',
-                  ),
-                )
-            }
-          >
-            放回
-          </Button>
-        )
+        <>
+          {back && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => post('restore', '已放回')}
+            >
+              放回
+            </Button>
+          )}
+          {owed && (
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => post('accept', '已接下，记进承诺')}
+              >
+                接下
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => post('decline', '已回绝')}
+              >
+                不接
+              </Button>
+            </>
+          )}
+        </>
       }
     />
   );
@@ -90,20 +118,28 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
   if (!data) return <Skeleton className="h-40" />;
   const aside = [...data.shelved, ...data.settled];
   const waiting = new Map(data.waiting.map((item) => [item.id, item]));
-  // Questions that ask the same thing share a card, unless the person took them apart.
-  const merged = new Map<string, string[]>();
+  // Questions that ask the same thing share a card, unless the person took them apart. A group is known by its
+  // earliest question, which stays when others join it, so a reply being written is not lost to the page asking again.
+  const merged = new Map<string, { ids: string[]; anchor: string }>();
   for (const ids of data.groups ?? []) {
-    const key = ids.join();
-    if (!apart.has(key) && ids.every((id) => waiting.has(id)))
-      ids.forEach((id) => merged.set(id, ids));
+    if (!ids.every((id) => waiting.has(id))) continue;
+    const anchor = ids.reduce((first, id) => {
+      const a = waiting.get(first)!;
+      const b = waiting.get(id)!;
+      return b.created_at < a.created_at ? id : first;
+    }, ids[0]);
+    if (!apart.has(anchor)) {
+      const group = { ids, anchor };
+      ids.forEach((id) => merged.set(id, group));
+    }
   }
-  const shown = new Set<string[]>();
+  const shown = new Set<string>();
   return (
     <Stack gap={5}>
       <Stack gap={3}>
         <Row gap={3} wrap>
           <Heading level={2} size="section">
-            等你决定 {data.waiting.length}
+            等你决定
           </Heading>
           <Text size="xs" tone="secondary" className="ml-auto">
             近 {data.days} 天 · 答了 {data.answered} 问
@@ -117,8 +153,8 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
         ) : (
           <Stack as="ul" gap={0}>
             {data.waiting.map((item, index) => {
-              const ids = merged.get(item.id);
-              if (!ids)
+              const group = merged.get(item.id);
+              if (!group)
                 return (
                   <Waiting
                     key={item.id}
@@ -127,14 +163,14 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
                     onDone={reload}
                   />
                 );
-              if (shown.has(ids)) return null;
-              shown.add(ids);
+              if (shown.has(group.anchor)) return null;
+              shown.add(group.anchor);
               return (
                 <Merged
-                  key={ids.join()}
-                  items={ids.flatMap((id) => waiting.get(id) ?? [])}
+                  key={group.anchor}
+                  items={group.ids.flatMap((id) => waiting.get(id) ?? [])}
                   onSplit={() =>
-                    setApart((previous) => new Set(previous).add(ids.join()))
+                    setApart((previous) => new Set(previous).add(group.anchor))
                   }
                   onDone={reload}
                 />
@@ -189,6 +225,21 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
           </Stack>
         </Disclosure>
       )}
+      {aside.length > 0 && (
+        <Disclosure
+          summary={`已处理 ${aside.length}`}
+          variant="plain"
+          defaultOpen={aside.some(
+            (item) => item.status === 'replied' && item.commit?.pending,
+          )}
+        >
+          <Stack as="ul" gap={0}>
+            {aside.map((item) => (
+              <Done key={item.id} item={item} onDone={reload} />
+            ))}
+          </Stack>
+        </Disclosure>
+      )}
       {data.answers && data.answers.total > 0 && (
         <Row gap={2} wrap>
           <Text weight="bold">我的团队答案 {data.answers.total}</Text>
@@ -197,15 +248,6 @@ export function Away({ away }: { away?: ReturnType<typeof useAway> }) {
           )}
           <TextLink to="?section=memories&view=answers">查看 ›</TextLink>
         </Row>
-      )}
-      {aside.length > 0 && (
-        <Disclosure summary={`已处理 ${aside.length}`} variant="plain">
-          <Stack as="ul" gap={0}>
-            {aside.map((item) => (
-              <Done key={item.id} item={item} onDone={reload} />
-            ))}
-          </Stack>
-        </Disclosure>
       )}
     </Stack>
   );

@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { TooltipProvider } from '../components/ui';
+import { ToastViewport, TooltipProvider } from '../components/ui';
 import { Away } from '../features/away/Away';
 import {
   AWAY_CHANGED,
@@ -100,13 +100,15 @@ it('opens the first question with the twin’s answer and a box for the person�
     pending: 2,
   });
   render(<Away />);
-  expect(await screen.findByText('等你决定 2')).toBeVisible();
+  expect(await screen.findByText('等你决定')).toBeVisible();
   expect(screen.getByText('近 7 天 · 答了 12 问')).toBeVisible();
   const card = screen.getByRole('article', {
     name: /需求评审里那组接口/u,
   });
   expect(within(card).getByText('还剩 2 天', { exact: false })).toBeVisible();
+  // The first is opened with what the twin said; the others are folded until they are opened.
   expect(within(card).getByText('分身的回答')).toBeVisible();
+  expect(within(card).getByText('这个我先看看安排。')).toBeVisible();
   const row = screen.getByRole('listitem', {
     name: '你觉得新来的实习生能不能独立负责导入模块？',
   });
@@ -132,9 +134,9 @@ it('opens the first question with the twin’s answer and a box for the person�
   window.removeEventListener(AWAY_CHANGED, changed);
   // Another can be opened, and set aside from its “⋯”.
   await user.click(within(row).getByRole('button', { name: '回复' }));
-  expect(
-    await screen.findByRole('article', { name: /新来的实习生/u }),
-  ).toBeVisible();
+  const second = await screen.findByRole('article', { name: /新来的实习生/u });
+  expect(second).toBeVisible();
+  expect(within(second).getByText('这个我先看看安排。')).not.toBeVisible();
 });
 
 it('lets the person choose who may use a reply as a memory when they send it', async () => {
@@ -148,12 +150,12 @@ it('lets the person choose who may use a reply as a memory when they send it', a
     name: '谁能用这条记忆',
   });
   // Colleagues may use it unless the person says otherwise.
-  expect(within(choice).getByRole('radio', { name: '同事能用' })).toBeChecked();
+  expect(within(choice).getByRole('radio', { name: '按默认' })).toBeChecked();
   expect(
     within(choice)
       .getAllByRole('radio')
       .map((radio) => radio.textContent),
-  ).toEqual(['同事能用', '只有我', '不存']);
+  ).toEqual(['按默认', '只有我', '不存']);
   await user.click(within(choice).getByRole('radio', { name: '只有我' }));
   await user.type(within(card).getByRole('textbox'), '这是我自己的看法。');
   await user.click(within(card).getByRole('button', { name: '发送' }));
@@ -433,7 +435,7 @@ it('puts the questions that ask the same thing on one card, with what each asked
   expect(within(card).getByText('09:12 · 未答')).toBeVisible();
   expect(within(card).getByText('11:30 · 答了一半')).toBeVisible();
   // The fourth is its own row, and the heading still counts all four.
-  expect(screen.getByText('等你决定 4')).toBeVisible();
+  expect(screen.getByText('等你决定')).toBeVisible();
   expect(
     screen.getByRole('listitem', { name: '周报按项目写还是按人写？' }),
   ).toBeVisible();
@@ -506,7 +508,7 @@ it('answers them all in the tier chosen, and a team answer is always for colleag
   await user.click(
     within(card).getByRole('checkbox', { name: '同时设为团队答案' }),
   );
-  expect(within(card).getByRole('radio', { name: '同事能用' })).toBeChecked();
+  expect(within(card).getByRole('radio', { name: '按默认' })).toBeChecked();
   expect(within(card).getByRole('radio', { name: '只有我' })).toBeDisabled();
 });
 
@@ -523,7 +525,7 @@ it('takes them apart when they were not one matter, each as its own row to answe
   expect(
     screen.getByRole('listitem', { name: /客户问旧模板还能不能导出/u }),
   ).toBeVisible();
-  expect(screen.getByText('等你决定 3')).toBeVisible();
+  expect(screen.getByText('等你决定')).toBeVisible();
 });
 
 it('still reloads when some of a group could not be answered, for the page to show what is left', async () => {
@@ -602,5 +604,236 @@ it('offers a reply the twin keeps giving as a team answer, with a title and word
   expect(screen.getByRole('link', { name: '查看 ›' })).toHaveAttribute(
     'href',
     expect.stringContaining('view=answers'),
+  );
+});
+
+const view = (d: AwayData, reload = async () => {}) => (
+  <TooltipProvider>
+    <MemoryRouter>
+      <ToastViewport />
+      <Away away={{ data: d, error: '', reload }} />
+    </MemoryRouter>
+  </TooltipProvider>
+);
+
+it('keeps what is being written to a group when another colleague asks the same thing, and keeps it taken apart', async () => {
+  const user = userEvent.setup();
+  const two = data({ waiting: same.slice(0, 2), groups: [['a', 'b']] });
+  const three = data({ waiting: same, groups: [['a', 'b', 'c']] });
+  const { rerender } = render(view(two));
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  await user.type(
+    within(card).getByRole('textbox', { name: '以本人回复 2 人' }),
+    '先写一半',
+  );
+  // The page asks again and a third colleague is in the group: the same card, the words still in it.
+  rerender(view(three));
+  const wider = screen.getByRole('article', { name: '同一件事' });
+  expect(wider).toBe(card);
+  expect(within(wider).getByText('3 人问同一件事')).toBeVisible();
+  expect(
+    within(wider).getByRole('textbox', { name: /以本人回复/u }),
+  ).toHaveValue('先写一半');
+  // Taken apart, it stays so when the group grows.
+  await user.click(within(wider).getByRole('button', { name: '拆开分别回' }));
+  expect(screen.queryByRole('article', { name: '同一件事' })).toBeNull();
+  rerender(
+    view(
+      data({
+        waiting: [...same, asked('d', '周宁', '旧模板还能用吗？')],
+        groups: [['a', 'b', 'c', 'd']],
+      }),
+    ),
+  );
+  expect(screen.queryByRole('article', { name: '同一件事' })).toBeNull();
+});
+
+it('tells the person why putting a folded question aside failed', async () => {
+  const user = userEvent.setup();
+  away = data({
+    waiting: [
+      handoff({}),
+      handoff({
+        id: 'h2',
+        asker_name: '陈一',
+        question: '这次发布要不要加测试环境？',
+      }),
+    ],
+    pending: 2,
+  });
+  fetcher.mockImplementation(async (_url: string, init?: RequestInit) =>
+    init?.method === 'POST'
+      ? json({ detail: '团队库暂时读不了，请稍后重试' }, 503)
+      : json(away),
+  );
+  render(
+    <>
+      <ToastViewport />
+      <Away />
+    </>,
+  );
+  const row = await screen.findByRole('listitem', {
+    name: '这次发布要不要加测试环境？',
+  });
+  await user.click(within(row).getByLabelText(/更多/u));
+  await user.click(within(row).getByRole('button', { name: '不答' }));
+  expect(await screen.findByText('团队库暂时读不了，请稍后重试')).toBeVisible();
+});
+
+it('does not lose the words the person wrote when the twin’s draft takes their place, and gives them back', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: [handoff({})], pending: 1 });
+  fetcher.mockImplementation(async (url: string) =>
+    url === '/api/persona/handoffs'
+      ? json(away)
+      : json({ text: '这次先改。【请你定：测试补不补】' }),
+  );
+  render(<Away />);
+  const card = await screen.findByRole('article', {
+    name: /需求评审里那组接口/u,
+  });
+  const box = within(card).getByRole('textbox');
+  // Nothing of theirs is replaced when the box is empty: there is nothing to give back.
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  await waitFor(() =>
+    expect(box).toHaveValue('这次先改。【请你定：测试补不补】'),
+  );
+  expect(within(card).queryByRole('button', { name: '换回我写的' })).toBeNull();
+  // Words of their own, and then the draft: they can be had back, until the draft is changed.
+  await user.clear(box);
+  await user.type(box, '我的想法是下版本再改。');
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  await waitFor(() =>
+    expect(box).toHaveValue('这次先改。【请你定：测试补不补】'),
+  );
+  await user.click(within(card).getByRole('button', { name: '换回我写的' }));
+  expect(box).toHaveValue('我的想法是下版本再改。');
+  expect(within(card).queryByRole('button', { name: '换回我写的' })).toBeNull();
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  await waitFor(() =>
+    expect(box).toHaveValue('这次先改。【请你定：测试补不补】'),
+  );
+  await user.type(box, '再加一句');
+  expect(within(card).queryByRole('button', { name: '换回我写的' })).toBeNull();
+});
+
+it('reads the list again when the question was answered meanwhile, and says so', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: [handoff({})], pending: 1 });
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/persona/handoffs') return json(away);
+    away = data({
+      settled: [
+        handoff({ status: 'replied', status_label: '已回复', days_left: null }),
+      ],
+    });
+    return init?.method === 'POST'
+      ? json({ detail: '这条已经回复过了' }, 409)
+      : json({});
+  });
+  render(<Away />);
+  const card = await screen.findByRole('article', {
+    name: /需求评审里那组接口/u,
+  });
+  await user.type(within(card).getByRole('textbox'), '先改。');
+  await user.click(within(card).getByRole('button', { name: '发送' }));
+  // The card goes at once, not at the next poll.
+  expect(await screen.findByText('没有等你决定的事。')).toBeVisible();
+  expect(screen.getByText('已处理 1')).toBeVisible();
+});
+
+it('tells which of the replies went out and whether the team answer came out, apart', async () => {
+  const user = userEvent.setup();
+  away = data({ waiting: same, groups: [['a', 'b', 'c']], pending: 3 });
+  fetcher.mockImplementation(async (url: string) =>
+    url === '/api/persona/handoffs'
+      ? json(away)
+      : json({
+          done: ['a', 'b', 'c'],
+          failed: [],
+          team_answer: null,
+          team_answer_error: '这条已经设为团队答案了',
+          pending: 0,
+        }),
+  );
+  render(view(away));
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  await user.type(
+    within(card).getByRole('textbox', { name: /以本人回复/u }),
+    '好。',
+  );
+  await user.click(
+    within(card).getByRole('checkbox', { name: '同时设为团队答案' }),
+  );
+  await user.click(within(card).getByRole('button', { name: '回复 3 人' }));
+  expect(
+    await screen.findByText(
+      '已回复 3 人，团队答案没设成：这条已经设为团队答案了',
+    ),
+  ).toBeVisible();
+});
+
+it('lets a promise answered in words be taken or turned down from what was settled', async () => {
+  const user = userEvent.setup();
+  const promised = handoff({
+    id: 'h7',
+    kind: 'commit',
+    kind_label: '要你答应',
+    status: 'replied',
+    status_label: '已回复',
+    question: '周五前给我一版发布方案。',
+    replied_at: '2026-10-22T10:00:00+00:00',
+    days_left: null,
+    commit: {
+      entry_id: 'e7',
+      what: '周五前给一版发布方案',
+      due: null,
+      pending: true,
+    },
+  });
+  away = data({
+    settled: [
+      promised,
+      {
+        ...promised,
+        id: 'h8',
+        question: '周六前给我一版测试计划。',
+        commit: { ...promised.commit!, pending: false },
+      },
+    ],
+  });
+  render(<Away />);
+  // Opened for them, as there is something to do in it.
+  const row = (await screen.findByText(/周五前给我一版发布方案/u)).closest(
+    'li',
+  )!;
+  expect(row).toHaveTextContent('待接下');
+  const other = screen.getByText(/周六前给我一版测试计划/u).closest('li')!;
+  expect(within(other).queryByRole('button', { name: '接下' })).toBeNull();
+  await user.click(within(row).getByRole('button', { name: '接下' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual(['/api/persona/handoffs/h7/accept', {}]),
+  );
+  await user.click(within(row).getByRole('button', { name: '不接' }));
+  await waitFor(() =>
+    expect(posts()).toContainEqual(['/api/persona/handoffs/h7/decline', {}]),
+  );
+});
+
+it('ends with the line of the team answers the person has set, below what was settled', async () => {
+  away = data({
+    settled: [
+      handoff({ status: 'replied', status_label: '已回复', days_left: null }),
+    ],
+    answers: { total: 2, stale: 0 },
+  });
+  render(
+    <MemoryRouter>
+      <Away />
+    </MemoryRouter>,
+  );
+  const line = await screen.findByText('我的团队答案 2');
+  expect(screen.getByText('已处理 1').compareDocumentPosition(line)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
   );
 });

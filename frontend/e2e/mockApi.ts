@@ -1873,7 +1873,7 @@ const handlers: Record<string, Handler> = {
       free_bytes: 120 * 1024 ** 3,
       arriving_bytes: 0,
       arriving: 0,
-      headroom_bytes: 20 * 1024 ** 3,
+      headroom_bytes: 50 * 1024 ** 3,
     },
   }),
   // 第 19 屏: a transcript file read before it is brought in; two names are members', two are not.

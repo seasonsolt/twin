@@ -915,6 +915,8 @@ function auditText(entry: AuditEntry, params: SystemState['params']) {
         : `${after}${param?.unit ?? ''}`;
     return `把${param?.label ?? entry.param ?? '参数'}改为 ${value}`;
   }
+  if (entry.action === 'team_name' && entry.name)
+    return entry.name[1] ? `把团队名改为 ${entry.name[1]}` : '清除了团队名';
   if (entry.action === 'kernel')
     return `升级了 ${entry.personas?.length ?? 0} 个分身的记忆内核`;
   if (entry.action === 'ledger')

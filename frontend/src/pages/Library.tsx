@@ -52,6 +52,8 @@ export interface Recording {
   speakers: number;
   segments: number;
   created_at: string;
+  // Who uploaded it (an account key), if known.
+  uploader?: string | null;
   // Who the speakers were recognised as, and how many still wait for the owner.
   people: string[];
   unsettled: number;

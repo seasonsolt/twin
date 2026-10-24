@@ -1,5 +1,12 @@
 import { useEffect } from 'react';
-import { KeyValue, Meter, Section, Skeleton, Stack } from '../../components/ui';
+import {
+  Button,
+  KeyValue,
+  Notice,
+  Section,
+  Skeleton,
+  Stack,
+} from '../../components/ui';
 import type { LibraryState } from '../../pages/Library';
 import { useTeam } from '../../stores/team';
 
@@ -14,12 +21,29 @@ export const libraryRoom = (library: LibraryState) =>
       library.capacity.headroom_bytes,
   );
 
+/** Members whose own waiting recordings have reached the cap: ``max_pending`` limits each member, while
+ * ``library.pending`` counts everyone's that the administrator sees. */
+export function membersAtLimit(library: LibraryState) {
+  if (library.max_pending <= 0) return 0;
+  const waiting = new Map<string, number>();
+  for (const recording of library.recordings)
+    if (
+      recording.uploader &&
+      (recording.status === 'queued' || recording.status === 'transcribing')
+    )
+      waiting.set(
+        recording.uploader,
+        (waiting.get(recording.uploader) ?? 0) + 1,
+      );
+  return [...waiting.values()].filter((n) => n >= library.max_pending).length;
+}
+
 /** What the section's entry in the menu says when there is no more room. */
 export function libraryStatus(library: LibraryState | null) {
   // A library that has not said how much room there is says nothing about running out of it.
   if (!library?.capacity) return undefined;
-  if (library.max_pending > 0 && library.pending >= library.max_pending)
-    return { label: '队列已满', tone: 'danger' as const };
+  if (membersAtLimit(library) > 0)
+    return { label: '有人排满', tone: 'danger' as const };
   if (libraryRoom(library) <= 0)
     return { label: '空间不足', tone: 'danger' as const };
   return undefined;
@@ -28,25 +52,49 @@ export function libraryStatus(library: LibraryState | null) {
 /** The recording library's capacity, as the library reports it (``/api/library``). */
 export function LibraryCapacity() {
   const library = useTeam((state) => state.library);
+  const error = useTeam((state) => state.error);
   useEffect(() => {
     void useTeam.getState().refresh(true);
   }, []);
-  if (!library?.capacity) return <Skeleton className="h-32" />;
+  if (!library?.capacity)
+    return error ? (
+      <Notice
+        tone="danger"
+        role="alert"
+        actions={
+          <Button
+            variant="secondary"
+            onClick={() => void useTeam.getState().refresh(true)}
+          >
+            重试
+          </Button>
+        }
+      >
+        {error}
+      </Notice>
+    ) : (
+      <Skeleton className="h-32" />
+    );
   const { capacity } = library;
+  const full = membersAtLimit(library);
   return (
     <Stack gap={4}>
       <Section level={4} title="排队转写">
-        <Meter
-          label={`排队 ${library.pending} / ${library.max_pending}`}
-          value={library.pending}
-          max={Math.max(library.max_pending, 1)}
+        <KeyValue
+          items={[
+            ['全队排队', `${library.pending} 条`],
+            ['每人上限', `${library.max_pending} 条`],
+            ...(full > 0
+              ? ([['已排满', `${full} 位成员`]] as [string, string][])
+              : []),
+          ]}
         />
       </Section>
       <Section level={4} title="磁盘">
         <KeyValue
           items={[
             ['还能放', `约 ${gb(libraryRoom(library))}`],
-            ['留出的空间', gb(capacity.headroom_bytes)],
+            ['安全余量', gb(capacity.headroom_bytes)],
             ...(capacity.arriving > 0
               ? ([
                   [

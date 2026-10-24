@@ -120,7 +120,8 @@ export function useTeamData({
   usePolling(load, updating ? 15000 : 0);
 
   /** Do something, show what went wrong, then load again (``reload: false`` leaves that to the caller, for a run of
-   * many that need loading once at the end). */
+   * many that need loading once at the end). Gives what went wrong, empty when it worked, for the caller that must
+   * know (a dialog that stays open, a page already left). */
   const act = useCallback(
     async (
       work: () => Promise<unknown>,
@@ -128,13 +129,16 @@ export function useTeamData({
     ) => {
       setBusy(true);
       setError('');
+      let failed = '';
       try {
         await work();
       } catch (failure) {
-        setError(failure instanceof Error ? failure.message : '操作失败');
+        failed = failure instanceof Error ? failure.message : '操作失败';
+        setError(failed);
       }
       if (reload) await load();
       setBusy(false);
+      return failed;
     },
     [load],
   );

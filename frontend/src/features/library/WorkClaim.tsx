@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Dialog, Field, Input, Row } from '../../components/ui';
+import { Button, Dialog, Field, Input, Row, Text } from '../../components/ui';
 import type { Person } from '../../pages/Recording';
 import type { Persona } from '../../stores/personas';
 
@@ -11,12 +11,15 @@ export function WorkClaim({
   person,
   twin,
   busy,
+  error,
   onClose,
   onSave,
 }: {
   person: Person | null;
   twin?: Persona;
   busy: boolean;
+  /** Why saving failed: said here, where the owner is looking, with what was typed still in the field. */
+  error?: string;
   onClose: () => void;
   onSave: (claim: string) => void;
 }) {
@@ -63,6 +66,11 @@ export function WorkClaim({
             onChange={(event) => setClaim(event.target.value)}
           />
         </Field>
+        {error && (
+          <Text role="alert" size="sm" tone="danger">
+            {error}
+          </Text>
+        )}
         <Row gap={2} justify="end">
           <Button type="button" variant="ghost" onClick={onClose}>
             取消

@@ -257,6 +257,9 @@ def test_the_assistant_asks_in_the_persons_name_one_conversation_each_and_says_w
         scene.web.get("/api/personas/conversations", params={"mine": "true", "offset": 50}).json()["conversations"]
         == []
     )
+    # What it asked is appended to the first page and is not part of the paging: the next page begins after the
+    # assistant's own conversation alone.
+    assert scene.web.get("/api/personas/conversations", params={"mine": "true"}).json()["next"] == 1
 
 
 def test_the_twins_answer_from_what_colleagues_may_use_as_they_would_if_the_person_had_asked_themself(

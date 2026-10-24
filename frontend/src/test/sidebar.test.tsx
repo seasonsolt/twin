@@ -3,15 +3,17 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppShell } from '../components/layout/AppShell';
+import { SidebarAccount } from '../components/layout/Sidebar';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
 import { useAuth } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
+import { useSystem } from '../stores/system';
 
-const json = (value: unknown) =>
-  new Response(JSON.stringify(value), { status: 200 });
+const json = (value: unknown, status = 200) =>
+  new Response(JSON.stringify(value), { status });
 const recording = (change: Partial<Recording>): Recording => ({
   id: 'rec_1',
   filename: '周会.m4a',
@@ -208,12 +210,75 @@ it('shows what runs in the background only while something does', async () => {
   const { useTeam } = await import('../stores/team');
   await useTeam.getState().refresh(true);
   show('/chat');
-  const card = await screen.findByRole('link', { name: /^后台 4 项/ });
+  const card = await screen.findByRole('link', { name: /^后台/ });
   expect(card).toHaveAttribute('href', '/library');
   expect(card).toHaveTextContent('1 项转写中 · 2 项排队 · 1 人整理中');
   expect(
     within(card).getByRole('progressbar', { name: '当前一项的进度' }),
   ).toHaveAttribute('aria-valuenow', '150');
+});
+
+it('leads the background card to where its work can be seen, and nowhere when the person is already there', async () => {
+  people = [person({ updating: true, persona_id: 'default' })];
+  const view = show('/chat');
+  // Only someone being organised: that shows on the team page, not in the library.
+  const card = await screen.findByRole('link', { name: /^后台/ });
+  expect(card).toHaveAttribute('href', '/team');
+  expect(card).toHaveTextContent('1 人整理中');
+  view.unmount();
+  show('/team');
+  await screen.findByRole('link', { name: /^团队/ });
+  await screen.findByText('1 人整理中');
+  expect(screen.queryByRole('link', { name: /^后台/ })).toBeNull();
+  expect(screen.getByText('1 人整理中')).toBeVisible();
+});
+
+it('puts a number on the account for what waits for the person, with the name read after the button', async () => {
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url) === '/api/persona/handoffs/count'
+      ? json({ pending: 3 })
+      : respond(String(url)),
+  );
+  useAuth.setState({
+    identity: { email: null, name: '许清禾', admin: false, auth_enabled: true },
+  });
+  usePersonas.setState({
+    id: 'default',
+    items: [twin({ mine: true, approved: true })],
+  });
+  show('/chat');
+  const account = await screen.findByRole('button', {
+    name: '账户（3 条待决定）',
+  });
+  expect(account).toHaveAccessibleDescription('许清禾');
+  expect(within(account).getByTitle('3 条等你决定')).toBeInTheDocument();
+});
+
+it('marks the account of an administrator whose automatic rebuild is switched off', async () => {
+  useAuth.setState({
+    identity: { email: null, admin: true, auth_enabled: false },
+  });
+  useSystem.setState({
+    data: {
+      services: [],
+      params: [{ key: 'library.auto_build', value: false }],
+    } as never,
+  });
+  try {
+    render(
+      <MemoryRouter>
+        <SidebarAccount />
+      </MemoryRouter>,
+    );
+    expect(
+      await screen.findByRole('button', { name: '账户（记忆自动整理已暂停）' }),
+    ).toBeVisible();
+  } finally {
+    useSystem.setState({ data: null });
+  }
 });
 
 it('finds someone by name with ⌘K: each opens on their member page, a twin made by hand on its own address', async () => {
@@ -230,7 +295,7 @@ it('finds someone by name with ⌘K: each opens on their member page, a twin mad
   // The team's people, then twins made without recordings.
   expect(options.map((option) => option.textContent)).toEqual([
     '林舟看档案',
-    '许清禾没有分身',
+    '许清禾没有分身看档案',
     '本人看档案',
   ]);
   await user.type(within(dialog).getByRole('combobox'), '许');
@@ -327,10 +392,16 @@ it('puts a question to the whole team with ⌘K: the answer it has, whom to ask,
   expect(within(answer).getByText('沈从 10 月 9 日确认')).toBeVisible();
   expect(within(answer).getByText(/超过 15% 报沈从批/u)).toBeVisible();
   expect(within(answer).queryByRole('button')).toBeNull();
-  const people = within(dialog).getByRole('region', { name: '该问谁' });
+  const people = within(dialog).getByRole('region', { name: /^该问谁/u });
+  expect(within(people).getByText('要拍板的，分身会转给本人')).toBeVisible();
+  // The answer is read, not picked: it stands outside the lists, and the card does not say again what its heading says.
+  expect(within(answer).queryByText('团队答案')).toBeNull();
+  expect(answer.closest('[role="listbox"]')).toBeNull();
   expect(
-    within(people).getByText('具体要他拍板，他的分身会转给本人'),
-  ).toBeVisible();
+    within(dialog)
+      .getAllByRole('listbox')
+      .map((list) => list.getAttribute('aria-labelledby')),
+  ).toHaveLength(2);
   const rows = within(dialog).getAllByRole('option');
   expect(rows.map((row) => row.textContent)).toEqual([
     '王屿了解较多 · 熟悉领域的看法 · 7 场问分身',
@@ -413,8 +484,57 @@ it('says when only the meetings could be searched', async () => {
   const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
   await user.type(within(dialog).getByRole('combobox'), '续约折扣怎么让');
   expect(
-    await within(dialog).findByText('向量模型没有配置好，只找到了会议'),
+    await within(dialog).findByText(
+      '向量模型暂时不可用，团队答案和该问谁没能查，只按字面找了会议',
+    ),
   ).toBeVisible();
+  // The meetings were found, so nothing is said about nobody having found anything.
+  expect(within(dialog).queryByText(/还没人谈过/u)).toBeNull();
+});
+
+it('says nothing of the team when the meetings searched were empty and the vectors down', async () => {
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).startsWith('/api/personas/ask')
+      ? json(
+          asked({
+            team_answers: [],
+            people: [],
+            meetings: [],
+            degraded: true,
+          }),
+        )
+      : respond(String(url)),
+  );
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: /^团队/u });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '年会在哪办');
+  expect(await within(dialog).findByText('会议里也没找到')).toBeVisible();
+  expect(within(dialog).queryByText(/还没人谈过/u)).toBeNull();
+});
+
+it('gives the failure alone, not that nobody has talked about the matter, when the team could not be asked', async () => {
+  const respond = vi.mocked(fetch).getMockImplementation() as (
+    url: string,
+  ) => Promise<Response>;
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).startsWith('/api/personas/ask')
+      ? json({ detail: '服务暂时不可用' }, 503)
+      : respond(String(url)),
+  );
+  const user = userEvent.setup();
+  show('/chat');
+  await screen.findByRole('link', { name: /^团队/u });
+  await user.keyboard('{Meta>}k{/Meta}');
+  const dialog = await screen.findByRole('dialog', { name: '问一句、找人' });
+  await user.type(within(dialog).getByRole('combobox'), '年会在哪办');
+  expect(await within(dialog).findByText('服务暂时不可用')).toBeVisible();
+  expect(within(dialog).queryByText(/还没人谈过/u)).toBeNull();
 });
 
 it('does not count for the person what an earlier twin of theirs had waiting, answered late', async () => {

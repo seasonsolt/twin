@@ -298,20 +298,19 @@ export function StatusCard({
   detail,
   progress,
 }: {
-  to: string;
+  /** Where the card leads; none when the person is already there, and then it only reports. */
+  to?: string;
   title: string;
+  /** What following the card does (shown only with `to`). */
   action: string;
   detail?: string;
   progress?: { value: number | null; max: number; label: string };
 }) {
-  return (
-    <Link
-      to={to}
-      className="flex flex-col gap-1.5 rounded-md border border-border bg-surface px-3 py-2.5 text-primary hover:border-tertiary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-    >
+  const body = (
+    <>
       <span className="flex justify-between gap-2 text-xs">
         <span className="font-medium">{title}</span>
-        <span className="text-secondary">{action} ›</span>
+        {to && <span className="text-secondary">{action} ›</span>}
       </span>
       {detail && <span className="text-xs text-secondary">{detail}</span>}
       {progress && (
@@ -323,7 +322,19 @@ export function StatusCard({
           label={progress.label}
         />
       )}
+    </>
+  );
+  const frame =
+    'flex flex-col gap-1.5 rounded-md border border-border bg-surface px-3 py-2.5 text-primary';
+  return to ? (
+    <Link
+      to={to}
+      className={`${frame} hover:border-tertiary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent`}
+    >
+      {body}
     </Link>
+  ) : (
+    <div className={frame}>{body}</div>
   );
 }
 
@@ -901,7 +912,10 @@ export function ActionMenu({
             variant="ghost"
             disabled={item.disabled}
             onClick={(event) => {
-              event.currentTarget.closest('details')?.removeAttribute('open');
+              const menu = event.currentTarget.closest('details');
+              menu?.removeAttribute('open');
+              // The button that had the focus is hidden now: the focus goes back to the "⋯" it came from.
+              menu?.querySelector('summary')?.focus();
               item.onSelect();
             }}
           >

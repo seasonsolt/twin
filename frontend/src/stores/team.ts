@@ -53,6 +53,8 @@ interface Team {
 let inflight: Promise<void> | null = null;
 let lastLoad = 0;
 let seen = '';
+// Counts the times the team was emptied: an answer that left before it is no longer the team's to take.
+let generation = 0;
 // Two callers polling at once (the side bar and the team page) share one request.
 const MIN_GAP_MS = 1500;
 
@@ -60,16 +62,19 @@ const MIN_GAP_MS = 1500;
  * is the heaviest view the server computes, so it is asked for only when the recordings change. */
 export const useTeam = create<Team>((set, get) => {
   const follow = async () => {
+    const mine = generation;
     const [people, review] = await Promise.all([
       api<{ items: Person[] }>('/api/library/people').then((r) => r.items),
       // The side bar only counts: none of the paged lists, only how many each holds.
       api<ReviewLists>(reviewPath()),
     ]);
-    set({ people, review });
+    if (mine === generation) set({ people, review });
   };
   const load = async () => {
+    const mine = generation;
     try {
       const library = await api<LibraryState>('/api/library');
+      if (mine !== generation) return;
       const key = libraryKey(library);
       const changed = key !== seen;
       // The first library seen is no change to follow: a page open now loads people and the queue as it opens.
@@ -82,9 +87,10 @@ export const useTeam = create<Team>((set, get) => {
       }));
       if (changed && !get().pages) await follow().catch(() => {});
     } catch (failure) {
-      set({
-        error: failure instanceof Error ? failure.message : '无法加载录音',
-      });
+      if (mine === generation)
+        set({
+          error: failure instanceof Error ? failure.message : '无法加载录音',
+        });
     }
   };
   return {
@@ -123,8 +129,10 @@ export const useTeam = create<Team>((set, get) => {
   };
 });
 
-/** Back to nothing loaded, as on a fresh load (tests start each case from here). */
+/** Back to nothing loaded, as on a fresh load: when someone signs out (the roster and counts are not for the next
+ * person to see), and where tests start each case from. */
 export function resetTeam() {
+  ++generation;
   inflight = null;
   lastLoad = 0;
   seen = '';
@@ -134,6 +142,9 @@ export function resetTeam() {
     version: 0,
     people: null,
     review: null,
-    pages: 0,
   });
 }
+
+useAuth.subscribe((state, before) => {
+  if (before.identity && !state.identity) resetTeam();
+});

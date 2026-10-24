@@ -34,6 +34,7 @@ import { AWAY_CHANGED } from '../../features/away/useAway';
 import { useUploads } from '../../features/library/useUploads';
 import { memberCount, waitingCount } from '../../features/library/teamCounts';
 import { FindPerson } from './FindPerson';
+import { useTakeFiles } from './useTakeFiles';
 import {
   accountLabel,
   featureOn,
@@ -114,9 +115,10 @@ export function Sidebar() {
   const people = useTeam((state) => state.people);
   const review = useTeam((state) => state.review);
   const refresh = useCallback(() => useTeam.getState().refresh(), []);
-  const { add, unfinished } = useUploads(
+  const { unfinished } = useUploads(
     () => void useTeam.getState().refresh(true),
   );
+  const take = useTakeFiles();
   useEffect(() => {
     const load = () => void refreshPersonas().catch(() => {});
     load();
@@ -143,7 +145,8 @@ export function Sidebar() {
   }, [canManage]);
 
   const recordings = library?.recordings ?? [];
-  const sending = unfinished.filter((pick) => !pick.error);
+  // A file stopped by the person is waiting to be added again, not under way and not a failure.
+  const sending = unfinished.filter((pick) => !pick.error && !pick.stopped);
   const unsent = unfinished.filter((pick) => pick.error);
   const transcribing = recordings.filter((r) => r.status === 'transcribing');
   const queued = recordings.filter((r) => r.status === 'queued');
@@ -166,6 +169,15 @@ export function Sidebar() {
           max: transcribing[0].duration_s ?? 1,
         }
       : undefined;
+  // Where the card leads: the library holds what is being sent and transcribed, the team page who is being organised.
+  const place =
+    organising.length &&
+    !sending.length &&
+    !transcribing.length &&
+    !queued.length &&
+    !unsent.length
+      ? '/team'
+      : '/library';
   const background = [
     sending.length && `${sending.length} 项上传中`,
     transcribing.length && `${transcribing.length} 项转写中`,
@@ -217,12 +229,7 @@ export function Sidebar() {
             <Upload aria-hidden className="size-5" />
             上传会议录音
           </Button>
-          <FileInput
-            ref={input}
-            label="选择录音文件"
-            multiple
-            onFiles={(files) => void add(files)}
-          />
+          <FileInput ref={input} label="选择录音文件" multiple onFiles={take} />
           <FindPerson open={finding} onOpenChange={setFinding} />
         </>
       )}
@@ -243,8 +250,14 @@ export function Sidebar() {
       <div className="flex-1" />
       {background.length > 0 && (
         <StatusCard
-          to="/library"
-          title={`后台 ${jobs + unsent.length} 项`}
+          // Already there, it has nowhere to lead.
+          to={
+            location.pathname === place ||
+            location.pathname.startsWith(`${place}/`)
+              ? undefined
+              : place
+          }
+          title="后台"
           action="查看"
           detail={background.join(' · ')}
           progress={progress && { ...progress, label: '当前一项的进度' }}

@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import {
-  AskDialog,
-  LevelDots,
-  Text,
-  type AskItem,
-  type AskSection,
-} from '../ui';
+import { AskDialog, LevelDots, type AskItem, type AskSection } from '../ui';
 import { TeamAnswerCard } from '../../features/answers/TeamAnswerCard';
 import { useAsk } from '../../features/ask/useAsk';
 import { memberPath, twinMemberPath } from '../../lib/members';
@@ -45,7 +39,8 @@ export function FindPerson({
       return {
         id: `person-${person.id}`,
         label: person.name,
-        detail: twin ? '看档案' : '没有分身',
+        detail: twin ? undefined : '没有分身',
+        action: '看档案',
         leading: twin && <PersonaPortrait persona={twin} />,
         to: memberPath(person.id),
       };
@@ -56,7 +51,7 @@ export function FindPerson({
       .map((twin) => ({
         id: `twin-${twin.id}`,
         label: twin.name,
-        detail: '看档案',
+        action: '看档案',
         leading: <PersonaPortrait persona={twin} />,
         to: twinMemberPath(twin.id),
       })),
@@ -79,7 +74,7 @@ export function FindPerson({
             title: '团队答案',
             count: found.team_answers.length,
             cards: found.team_answers.map((card) => (
-              <TeamAnswerCard key={card.id} card={card} />
+              <TeamAnswerCard key={card.id} card={card} labelled={false} />
             )),
           },
         ]
@@ -90,11 +85,7 @@ export function FindPerson({
             id: 'people',
             title: '该问谁',
             count: found.people.length,
-            cards: found.decision && (
-              <Text size="xs" tone="secondary">
-                具体要他拍板，他的分身会转给本人
-              </Text>
-            ),
+            note: found.decision ? '要拍板的，分身会转给本人' : undefined,
             items: found.people.map((row) => {
               const twin = twins.find((t) => t.id === row.persona_id);
               return {
@@ -160,10 +151,19 @@ export function FindPerson({
       busy={busy}
       notice={
         error ||
-        (found?.degraded ? '向量模型没有配置好，只找到了会议' : undefined)
+        (found?.degraded
+          ? '向量模型暂时不可用，团队答案和该问谁没能查，只按字面找了会议'
+          : undefined)
       }
-      empty={justAName ? '' : '团队里还没人谈过这件事，可以按名字找人'}
-      hint="↑↓ 选择　↵ 去问"
+      // Nothing is said about the team when it could not be asked: no answer found is not an answer.
+      empty={
+        justAName || error
+          ? ''
+          : found?.degraded
+            ? '会议里也没找到'
+            : '团队里还没人谈过这件事，可以按名字找人'
+      }
+      hint="↑↓ 选择　↵ 打开"
     />
   );
 }

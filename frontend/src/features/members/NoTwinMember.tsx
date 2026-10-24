@@ -12,6 +12,7 @@ import type { Person } from '../../pages/Recording';
 import { usePersonas } from '../../stores/personas';
 import { useTeam } from '../../stores/team';
 import { PersonFace } from '../library/PersonFace';
+import { TWIN_STATES, twinState } from '../library/Team';
 import { WorkClaim } from '../library/WorkClaim';
 import { MemberHeader } from './MemberHeader';
 
@@ -22,7 +23,9 @@ const day = (iso: string) => {
     : `${date.getMonth() + 1}月${date.getDate()}日`;
 };
 
-/** Someone found in the meetings who has no twin: the recordings they spoke in, and the way to make one. */
+/** Someone found in the meetings whose twin the viewer cannot open: the recordings they spoke in, and, only while no
+ * twin exists for them, the way to make one. A twin of their own voices, or one a colleague keeps, is not the viewer's
+ * to make again (the server refuses), so the page says whose it is and offers nothing. */
 export function NoTwinMember({ person }: { person: Person }) {
   const library = useTeam((state) => state.library);
   const recordings = (library?.recordings ?? []).filter((recording) =>
@@ -51,27 +54,28 @@ export function NoTwinMember({ person }: { person: Person }) {
       setBusy(false);
     }
   };
-  const canMake = person.can_manage !== false && person.speakers > 0;
+  // The same word as the team table's.
+  const state = twinState(person);
+  const canMake =
+    state === 'none' && person.can_manage !== false && person.speakers > 0;
   return (
     <Page>
       <MemberHeader
         name={person.name}
         face={<PersonFace name={person.name} />}
-        status={{
-          label: person.twin_elsewhere ? '同事建了分身' : '没有分身',
-          tone: 'neutral',
-        }}
+        status={TWIN_STATES[state]}
         primary={
           canMake
-            ? { label: '生成分身', onClick: () => setClaiming(true) }
+            ? {
+                label: '生成分身',
+                onClick: () => {
+                  setError('');
+                  setClaiming(true);
+                },
+              }
             : undefined
         }
       />
-      {error && (
-        <Text role="alert" tone="danger">
-          {error}
-        </Text>
-      )}
       <Stack as="section" gap={3} aria-label="参加过的录音">
         <Heading level={2} size="section">
           参加过的录音
@@ -100,6 +104,7 @@ export function NoTwinMember({ person }: { person: Person }) {
       <WorkClaim
         person={claiming ? person : null}
         busy={busy}
+        error={error}
         onClose={() => setClaiming(false)}
         onSave={(claim) => void make(claim)}
       />

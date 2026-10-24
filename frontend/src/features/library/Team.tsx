@@ -362,7 +362,7 @@ const retryClock = (at: string) =>
 /** Where a person's twin stands, as the team table's filter and status column name it. ``behind``: new recordings
  * wait while it answers from the memory it has; ``held``: the administrator switched the automatic rebuild off;
  * ``stalled``: its update stopped without completing. */
-type TwinState =
+export type TwinState =
   | 'ready'
   | 'behind'
   | 'updating'
@@ -371,7 +371,7 @@ type TwinState =
   | 'none'
   | 'own'
   | 'elsewhere';
-const twinState = (person: Person): TwinState =>
+export const twinState = (person: Person): TwinState =>
   person.self_claimed
     ? 'own'
     : person.twin_elsewhere && !person.talk
@@ -387,7 +387,7 @@ const twinState = (person: Person): TwinState =>
                 ? 'updating'
                 : 'ready'
         : 'none';
-const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
+export const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
   ready: { label: '可以聊', tone: 'success' },
   behind: { label: '有新录音', tone: 'neutral' },
   updating: { label: '整理中', tone: 'warning' },

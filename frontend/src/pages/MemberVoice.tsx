@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Mic, Square } from 'lucide-react';
+import { CircleHelp, Mic, Square } from 'lucide-react';
 import {
   Badge,
   Button,
   Card,
   ClipButton,
   Heading,
+  IconButton,
   ListRow,
   Notice,
-  Page,
   PlainButton,
   Row,
   Skeleton,
   Stack,
   Text,
   TextLink,
+  Tooltip,
+  toast,
 } from '../components/ui';
 import { useRecorder } from '../features/assets/useRecorder';
 import { api, ApiError } from '../lib/api';
@@ -42,6 +44,9 @@ export interface VoiceState {
   persona_id: string | null;
 }
 
+// Said on hover: what happens to the recording.
+const PRIVACY = '录音只用来在同事传的会议里找像你的声音，比对完就删掉。';
+
 const day = (date: string | null) => {
   const found = date?.match(/^\d{4}-(\d{2})-(\d{2})/u);
   return found ? `${Number(found[1])} 月 ${Number(found[2])} 日` : null;
@@ -51,7 +56,8 @@ const day = (date: string | null) => {
  * 员工 1b: someone signed in through the company login, with no twin made for them, finds their voice in the
  * meetings colleagues uploaded. They read a sentence aloud, hear one sentence of each voice like theirs and say
  * "是我" or "不是"; the twin made from what they confirm is theirs. ``onSkip`` leads on to an empty twin; without
- * it (opened again later) the page only adds voices to the twin.
+ * it (heard again by someone who has a twin) the page only adds voices to the twin, and when there is nothing to
+ * hear leaves for where they came from.
  */
 export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
   const [state, setState] = useState<VoiceState | null>(null);
@@ -59,6 +65,15 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
   const [error, setError] = useState('');
   const recorder = useRecorder();
   const navigate = useNavigate();
+  // Nothing to hear: on the way in the empty twin is next; heard again, they go back to where they were and are told.
+  const leave = useCallback(() => {
+    if (onSkip) {
+      onSkip();
+      return;
+    }
+    toast('会议里还没有可听的声音');
+    useWelcome.getState().finishVoice();
+  }, [onSkip]);
 
   const act = useCallback(
     async (key: string, work: () => Promise<VoiceState>) => {
@@ -81,16 +96,17 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
     const controller = new AbortController();
     api<VoiceState>('/api/library/voice', { signal: controller.signal })
       .then((found) => {
+        if (controller.signal.aborted) return;
         if (found.available || found.enrolled) setState(found);
-        else onSkip?.();
+        else leave();
       })
       .catch((failure: unknown) => {
         if (controller.signal.aborted) return;
-        if (failure instanceof ApiError && failure.status === 404) onSkip?.();
+        if (failure instanceof ApiError && failure.status === 404) leave();
         else setError(failure instanceof Error ? failure.message : '加载失败');
       });
     return () => controller.abort();
-  }, [onSkip]);
+  }, [leave]);
 
   const { file, reset } = recorder;
   useEffect(() => {
@@ -138,9 +154,6 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
   const mine = state?.items.filter((item) => item.state === 'mine') ?? [];
   const recording =
     recorder.state === 'recording' || recorder.state === 'requesting';
-  const title = '会议里可能有你';
-  const description =
-    '听一句就够。确认是你之后，你的分身就从这些会议里认识你，不用另外上传资料。';
   const content = !state ? (
     error ? (
       <Notice tone="danger" role="alert">
@@ -153,10 +166,14 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
     <Card variant="outline">
       <Stack gap={4}>
         <Stack gap={1}>
-          <Text weight="semibold">先读一句话，让我们听听你的声音</Text>
-          <Text size="sm" tone="secondary">
-            十秒左右就够，比如介绍一下自己最近在忙什么。录音只用来在同事传的会议里找像你的声音，比对完就删掉。
-          </Text>
+          <Row gap={2}>
+            <Text weight="semibold">先读一句话，十秒左右</Text>
+            <Tooltip label={PRIVACY}>
+              <IconButton label={`说明：${PRIVACY}`} shape="circle">
+                <CircleHelp className="size-4" aria-hidden />
+              </IconButton>
+            </Tooltip>
+          </Row>
         </Stack>
         {(recorder.error || error) && (
           <Text size="sm" tone="danger" role="alert">
@@ -183,7 +200,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
             </Button>
           )}
           {onSkip && !recording && busy !== 'enroll' && (
-            <PlainButton onClick={onSkip}>没开过会，先建空分身</PlainButton>
+            <PlainButton onClick={onSkip}>先建空分身</PlainButton>
           )}
         </Row>
       </Stack>
@@ -200,7 +217,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
           >
             重新录一句
           </Button>
-          {onSkip && <Button onClick={onSkip}>先建一个空分身</Button>}
+          {onSkip && <Button onClick={onSkip}>先建空分身</Button>}
         </Row>
       }
     >
@@ -229,7 +246,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
                 item.title,
                 day(item.date),
                 item.unsure
-                  ? '声音较像，拿不准'
+                  ? '拿不准'
                   : item.more > 0
                     ? `另有 ${item.more} 段`
                     : null,
@@ -241,6 +258,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
                   <>
                     <Badge tone="success">✓ 是我</Badge>
                     <PlainButton
+                      aria-label={`撤回：${item.quote}`}
                       disabled={!!busy}
                       onClick={() => void takeBack(item)}
                     >
@@ -250,6 +268,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
                 ) : (
                   <>
                     <Button
+                      aria-label={`是我：${item.quote}`}
                       variant={item.unsure ? 'secondary' : 'primary'}
                       loading={busy === item.id}
                       disabled={!!busy}
@@ -258,6 +277,7 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
                       是我
                     </Button>
                     <Button
+                      aria-label={`不是：${item.quote}`}
                       variant="secondary"
                       disabled={!!busy}
                       onClick={() => void answer(item, 'not')}
@@ -271,55 +291,42 @@ export function MemberVoice({ onSkip }: { onSkip?: () => void }) {
           ))}
         </ul>
       </Card>
-      <Text size="sm" tone="secondary">
-        同一个人的几段声音合在一起，确认一次就够；点错了可以撤回。
-      </Text>
       {error && (
         <Text size="sm" tone="danger" role="alert">
           {error}
         </Text>
       )}
       <Row justify="between" wrap gap={3}>
-        {onSkip && mine.length === 0 ? (
+        {mine.length > 0 ? (
+          <Badge tone="success">已确认 {mine.length} 段</Badge>
+        ) : onSkip ? (
           <Text size="sm" tone="secondary">
             都不是你？
             <TextLink size="sm" onClick={onSkip}>
-              写一句话介绍自己
+              先建空分身
             </TextLink>
-            ，或等你参加的会议传上来。
           </Text>
         ) : (
           <span />
         )}
-        <Button
-          size="lg"
-          disabled={!state.persona_id || !!busy}
-          loading={busy === 'open'}
-          onClick={() => state.persona_id && void openTwin(state.persona_id)}
-        >
-          {mine.length
-            ? `已确认 ${mine.length} 段，看看我的分身`
-            : '确认之后就能看分身'}
-        </Button>
+        {state.persona_id && (
+          <Button
+            size="lg"
+            disabled={!!busy}
+            loading={busy === 'open'}
+            onClick={() => state.persona_id && void openTwin(state.persona_id)}
+          >
+            看看分身
+          </Button>
+        )}
       </Row>
     </>
   );
-  // Opened again from inside the app it is an ordinary page; on the way in (``#/welcome``, which frames it) it is
-  // the first step.
-  if (!onSkip)
-    return (
-      <Page title={title} description={description}>
-        {content}
-      </Page>
-    );
   return (
     <Stack gap={5}>
-      <Stack gap={2}>
-        <Heading level={1} size="display">
-          {title}
-        </Heading>
-        <Text tone="secondary">{description}</Text>
-      </Stack>
+      <Heading level={1} size="display">
+        会议里可能有你
+      </Heading>
       {content}
     </Stack>
   );

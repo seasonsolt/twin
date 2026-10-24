@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { CircleHelp } from 'lucide-react';
 import {
-  Badge,
   Button,
   Card,
   Checkbox,
   Chip,
   Grid,
   Heading,
+  IconButton,
   PlainButton,
   Row,
   Stack,
   Text,
   TextLink,
+  Tooltip,
   useConfirm,
 } from '../components/ui';
 import { api, ApiError } from '../lib/api';
@@ -30,6 +32,9 @@ const QUESTIONS = [
 ];
 // The memory is being rebuilt from changed recordings: nothing is missing, it is on its way.
 const WAIT = '正在整理，好了自动显示。';
+// Said once, on hover: how the twin answers, and what stays the person's to change.
+const RULES =
+  '按你的说法回答，拿不准就说回头问你，不替你拍板。你点“没问题”之前，它不对同事回答；以后可以在档案里改。';
 
 /** What the twin has gathered so far: the person's commitments from the meetings, and how it sees them. While its
  * memory is being rebuilt neither can be read (``updating``): the page says so and looks again now and then. */
@@ -86,7 +91,9 @@ function useGathered(persona: Persona) {
  */
 export function Claimed({ persona }: { persona: Persona }) {
   const { commitments, items, updating } = useGathered(persona);
-  const [shared, setShared] = useState(true);
+  // Held outside the page: trying the twin out in chat leaves it, and coming back must not undo the choice.
+  const shared = useWelcome((state) => state.shared);
+  const setShared = useWelcome((state) => state.setShared);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const confirm = useConfirm();
@@ -135,17 +142,9 @@ export function Claimed({ persona }: { persona: Persona }) {
   };
   return (
     <Stack gap={6}>
-      <Stack gap={2} align="start">
-        <Badge tone="success">已归到你名下</Badge>
-        <Heading level={2} size="title">
-          {persona.name}，你的分身已经建好了
-        </Heading>
-        <Text tone="secondary">
-          {persona.made_by_other
-            ? `同事按你的企业邮箱或工号为你建了分身，你用企业账号一登录就认领了。下面是它从 ${persona.sources} 段会议里整理出的你，还在继续整理。`
-            : `它从你认出自己声音的 ${persona.sources} 段会议里认识你，还在继续整理。看过觉得没问题，同事就能问它了。`}
-        </Text>
-      </Stack>
+      <Heading level={1} size="title">
+        {persona.name}，你的分身已经建好了
+      </Heading>
       <Grid columns={2} gap={4}>
         <Card variant="outline">
           <Stack gap={3}>
@@ -212,22 +211,23 @@ export function Claimed({ persona }: { persona: Persona }) {
               </Chip>
             ))}
           </Row>
-          <Text size="sm" tone="secondary">
-            试聊时同事还问不到它。哪条不对，点完“没问题”在档案里点开就能改。
-          </Text>
         </Stack>
       </Card>
       <Card variant="outline">
         <Stack gap={4}>
-          <Checkbox
-            label="同事能问我的分身"
-            checked={shared}
-            disabled={busy}
-            onChange={(event) => setShared(event.target.checked)}
-          />
-          <Text size="sm" tone="secondary">
-            按你的说法回答，拿不准就说回头问你，不替你拍板。你点“没问题”之前，它不对同事回答；以后可以在档案里改。
-          </Text>
+          <Row gap={2}>
+            <Checkbox
+              label="同事能问我的分身"
+              checked={shared}
+              disabled={busy}
+              onChange={(event) => setShared(event.target.checked)}
+            />
+            <Tooltip label={RULES}>
+              <IconButton label={`说明：${RULES}`} shape="circle">
+                <CircleHelp className="size-4" aria-hidden />
+              </IconButton>
+            </Tooltip>
+          </Row>
           {error && (
             <Text size="sm" tone="danger" role="alert">
               {error}

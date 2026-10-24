@@ -1,12 +1,21 @@
 import { useState } from 'react';
-import { Badge, Button, Card, Row, Stack, Text } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Row,
+  Stack,
+  Text,
+  TextLink,
+} from '../../components/ui';
+import { askedPath, type Asked } from './askOwner';
 import { confirmedText, type TeamAnswerCard as Data } from './types';
 
 /**
  * What a person confirmed once, shown as it is: the question it answers, the words, whose it is and the day. It
  * stands apart from what the twin says. Once the person has said something else since, it is dashed and says what
- * and when, and the way on is to ask them (还有疑问 → 问某某本人). `onAsk` hands the asker's question to the person in
- * the asker's name and rejects with why it could not.
+ * and when. The way on, when it is not enough, is to ask them (问某某本人). `onAsk` hands the asker's question to the
+ * person in the asker's name, says where their reply will come, and rejects with why it could not.
  */
 export function TeamAnswerCard({
   card,
@@ -14,11 +23,12 @@ export function TeamAnswerCard({
   labelled = true,
 }: {
   card: Data;
-  onAsk?: () => Promise<void>;
+  onAsk?: () => Promise<Asked | void>;
   /** Say 团队答案 on the card; a list already headed so turns it off. */
   labelled?: boolean;
 }) {
   const [state, setState] = useState<'idle' | 'asking' | 'asked'>('idle');
+  const [where, setWhere] = useState('');
   const [error, setError] = useState('');
   const stale = card.status === 'stale';
   const ask = () => {
@@ -26,7 +36,10 @@ export function TeamAnswerCard({
     setState('asking');
     setError('');
     onAsk().then(
-      () => setState('asked'),
+      (asked) => {
+        setWhere(asked?.conversation_id ? askedPath(asked) : '');
+        setState('asked');
+      },
       (failure: unknown) => {
         setError(failure instanceof Error ? failure.message : '没能转出去');
         setState('idle');
@@ -64,9 +77,16 @@ export function TeamAnswerCard({
         )}
         {onAsk &&
           (state === 'asked' ? (
-            <Text role="status" size="xs" tone="secondary">
-              已转给{card.owner_name}本人 · 等回复
-            </Text>
+            <Row gap={2} wrap>
+              <Text role="status" size="xs" tone="secondary">
+                已转给{card.owner_name}本人 · 等回复
+              </Text>
+              {where && (
+                <TextLink to={where} size="xs">
+                  去看 ›
+                </TextLink>
+              )}
+            </Row>
           ) : (
             <Row>
               <Button
@@ -75,9 +95,7 @@ export function TeamAnswerCard({
                 loading={state === 'asking'}
                 onClick={ask}
               >
-                {stale
-                  ? `问${card.owner_name}本人`
-                  : `还有疑问，问${card.owner_name}`}
+                问{card.owner_name}本人
               </Button>
             </Row>
           ))}

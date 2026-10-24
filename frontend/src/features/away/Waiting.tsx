@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { ApiError, api } from '../../lib/api';
 import {
   ActionMenu,
   AvatarFrame,
@@ -17,6 +17,7 @@ import {
 } from '../../components/ui';
 import { ReplyTierChoice, type ReplyTier } from './ReplyTier';
 import type { Handoff } from './useAway';
+import { useReplyDraft } from './useReplyDraft';
 
 /** The time of day of a moment, where the reader is (the server keeps UTC). */
 export function clock(iso: string) {
@@ -75,14 +76,15 @@ export function Waiting({
   startOpen?: boolean;
 }) {
   const [open, setOpen] = useState(startOpen);
-  const [text, setText] = useState('');
   const [moving, setMoving] = useState(false);
   const [due, setDue] = useState(item.commit?.due ?? '');
   const [tier, setTier] = useState<ReplyTier>('colleague');
   const [busy, setBusy] = useState(false);
-  const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState('');
   const base = `/api/persona/handoffs/${encodeURIComponent(item.id)}`;
+  /** The twin's draft of the person's answer goes into the box, for them to change; nothing is sent. */
+  const { text, edit, clear, drafting, draft, replaced, restore } =
+    useReplyDraft(`${base}/draft`, setError);
   const run = async (
     request: () => Promise<unknown>,
     done: string,
@@ -96,29 +98,18 @@ export function Waiting({
       after?.();
       await onDone();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '保存失败');
+      const message = failure instanceof Error ? failure.message : '保存失败';
+      setError(message);
+      // A row folded away has no place for it.
+      if (!open) toast(message, 'danger');
+      // Answered or being written back meanwhile: the list is out of date, so it is read again.
+      if (failure instanceof ApiError && failure.status === 409) await onDone();
     } finally {
       setBusy(false);
     }
   };
   const post = (action: string, json: object = {}) =>
     api(`${base}/${action}`, { method: 'POST', json });
-  /** The twin's draft of the person's answer goes into the box, for them to change; nothing is sent. */
-  const draft = async () => {
-    setDrafting(true);
-    setError('');
-    try {
-      const drafted = await api<{ text: string }>(`${base}/draft`, {
-        method: 'POST',
-        json: {},
-      });
-      setText(drafted.text);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '起草失败');
-    } finally {
-      setDrafting(false);
-    }
-  };
   const dismiss = (
     <ActionMenu
       label={`更多：${item.question}`}
@@ -174,7 +165,11 @@ export function Waiting({
           </Text>
         )}
         {item.answer && (
-          <Disclosure summary="分身的回答" variant="plain">
+          <Disclosure
+            summary="分身的回答"
+            variant="plain"
+            defaultOpen={startOpen}
+          >
             <Text tone="secondary">{item.answer}</Text>
           </Disclosure>
         )}
@@ -250,7 +245,7 @@ export function Waiting({
                 ? `发到${item.asker_name}的对话`
                 : '用你自己的话回答，会作为你的原话记下来'
             }
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => edit(event.target.value)}
           />
           {error && (
             <Text role="alert" size="sm" tone="danger">
@@ -275,6 +270,16 @@ export function Waiting({
               >
                 请分身起草
               </Button>
+              {replaced && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={restore}
+                >
+                  换回我写的
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="ghost"
@@ -296,7 +301,7 @@ export function Waiting({
                       : tier === 'none'
                         ? '已发送'
                         : '已发送，正在整理成记忆',
-                    () => setText(''),
+                    clear,
                   )
                 }
               >

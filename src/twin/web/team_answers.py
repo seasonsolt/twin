@@ -1,15 +1,18 @@
 """``POST /api/personas/team-answers/{id}/ask``: the asker is not satisfied with a team answer and asks the person who
 gave it.
 
-The card under a twin's reply has 还有疑问，问某某. Pressing it opens a conversation of the asker's with the person's
+The card under a twin's reply has 问某某本人. Pressing it opens a conversation of the asker's with the person's
 twin, in the asker's name, that holds their question and one answer of the twin's, which says the question was handed
 on, and makes the handoff of it: the person finds it on their 你不在时 page as any colleague's question, and their reply
 comes back into that conversation. It is the asker who decides to bother the person; nothing here happens on its own.
+Asking twice about the same thing, while the person has not answered, is one handoff: the second press is told where
+the first one went.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable
 
 import anyio
@@ -17,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..handoffs import HandoffDesk
+from ..persona.followups import followup_id
 from ..persona.store import PersonaStore
 from ..persona.tiers import COLLEAGUE
 from ..teamanswers import card
@@ -38,7 +42,14 @@ def register_all(
     desk_for: Callable[[str], HandoffDesk],
     name_of: Callable[[str], str],
 ) -> None:
+    # Two presses at once are told apart by looking at what the first one made, so they go one after the other.
+    one_at_a_time = threading.Lock()
+
     def ask_owner(request: Request, answer_id: str, question: str) -> dict[str, object]:
+        with one_at_a_time:
+            return _ask_owner(request, answer_id, question)
+
+    def _ask_owner(request: Request, answer_id: str, question: str) -> dict[str, object]:
         identity = request.scope["twin_identity"]
         asker = identity["email"]
         answer = team.get_team_answer(answer_id)
@@ -53,8 +64,29 @@ def register_all(
             raise HTTPException(409, f"{name}还没认领分身，请直接联系本人")
         if asker is None or member == asker:
             raise HTTPException(400, "这是你自己确认的答案")
+        if not registry.visible(entry, identity):
+            # The conversation would be in a twin the asker cannot open: the person's reply could not reach them.
+            raise HTTPException(409, f"{name}的分身没有对你开放，请直接联系本人")
         desk = desk_for(answer.persona_id)
         asked = " ".join((question or answer.title).split())
+        try:
+            waiting = next(
+                (
+                    h
+                    for h in team.handoffs(persona_id=answer.persona_id, statuses=("delivered", "writing"))
+                    if h.asker == asker and h.conversation_id is not None and h.group_key == followup_id(asked)
+                ),
+                None,
+            )
+        except sqlite3.Error as e:
+            raise HTTPException(503, "团队库暂时读不了，请稍后重试") from e
+        if waiting is not None:
+            # Pressed before (the page was reloaded since, or in another window): it is on its way already.
+            return {
+                "persona_id": answer.persona_id,
+                "conversation_id": waiting.conversation_id,
+                "handoff": desk.asker_view(waiting),
+            }
         reply = f"团队答案你还有疑问，已转给{name}本人，等他回复。"
         payload = {
             "reply": reply,

@@ -549,6 +549,15 @@ it('shows a team answer as a card of its own above what the twin said, who confi
 
 it('hands the asker’s question to the person who confirmed the answer, once, in the asker’s name', async () => {
   const user = userEvent.setup();
+  const respond = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) =>
+    String(url).endsWith('/team-answers/ta_1/ask')
+      ? json({ persona_id: 'p-lin', conversation_id: 'c9', handoff: {} })
+      : respond(url, init),
+  );
   server.rows.get('c1')!.turns = [
     turns[0],
     { ...turns[1], reply: { ...reply, team_answers: [answerCard()] } },
@@ -556,13 +565,16 @@ it('hands the asker’s question to the person who confirmed the answer, once, i
   localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
   mount();
   const card = await screen.findByRole('article', { name: '团队答案' });
-  await user.click(
-    within(card).getByRole('button', { name: '还有疑问，问林舟' }),
-  );
+  await user.click(within(card).getByRole('button', { name: '问林舟本人' }));
   expect(
     await within(card).findByText('已转给林舟本人 · 等回复'),
   ).toBeVisible();
   expect(within(card).queryByRole('button')).toBeNull();
+  // Where the reply will come, so that it can be looked for.
+  expect(within(card).getByRole('link', { name: '去看 ›' })).toHaveAttribute(
+    'href',
+    '/chat?with=p-lin&open=c9',
+  );
   const asks = fetcher.mock.calls.filter(([url]) =>
     String(url).endsWith('/team-answers/ta_1/ask'),
   );
@@ -594,9 +606,6 @@ it('dashes a team answer the person has since said otherwise to, says what and w
   const card = await screen.findByRole('article', { name: '团队答案' });
   expect(within(card).getByText('可能过期')).toBeVisible();
   expect(within(card).getByText(/10 月底就停了/u)).toBeVisible();
-  expect(
-    within(card).queryByRole('button', { name: '还有疑问，问林舟' }),
-  ).toBeNull();
   await user.click(within(card).getByRole('button', { name: '问林舟本人' }));
   await waitFor(() =>
     expect(
@@ -625,13 +634,11 @@ it('tells the asker when the question could not be handed on, and lets them try 
   localStorage.setItem(CURRENT_CHAT_KEY, 'c1');
   mount();
   const card = await screen.findByRole('article', { name: '团队答案' });
-  await user.click(
-    within(card).getByRole('button', { name: '还有疑问，问林舟' }),
-  );
+  await user.click(within(card).getByRole('button', { name: '问林舟本人' }));
   expect(await within(card).findByRole('alert')).toHaveTextContent(
     '还没认领分身',
   );
   expect(
-    within(card).getByRole('button', { name: '还有疑问，问林舟' }),
+    within(card).getByRole('button', { name: '问林舟本人' }),
   ).toBeEnabled();
 });

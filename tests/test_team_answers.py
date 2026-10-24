@@ -17,6 +17,7 @@ import pytest
 from teamkit import ADMIN, CSRF, Team, TopicEmbedder, item, make_web
 
 from twin.config import Settings
+from twin.handoffs import HandoffDesk, HandoffRefused
 from twin.persona.chat import index_persona
 from twin.persona.sources import parse_note
 from twin.persona.store import PersonaStore
@@ -198,6 +199,30 @@ def make_team_answer(scene: Team) -> tuple[dict[str, str], dict[str, Any]]:
     return conversations, made  # type: ignore[return-value]
 
 
+def test_a_team_answer_that_did_not_come_out_is_told_apart_from_replies_that_did_not_go_out(
+    scene: Team, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lin = scene.twins["lin"]
+    three_ask(scene)
+    group = scene.page(lin)["groups"][0]
+
+    def refuse(*_: Any, **__: Any) -> Any:
+        raise HandoffRefused("这条已经设为团队答案了")
+
+    monkeypatch.setattr(HandoffDesk, "make_team_answer", refuse)
+    scene.as_(LIN)
+    sent = scene.web.post(
+        "/api/persona/handoffs/reply-many",
+        json={"ids": group, "text": ANSWER, "team_answer": {"title": "旧版 Word 模板还支持吗？"}},
+        headers=lin.headers,
+    )
+    assert sent.status_code == 200, sent.text
+    body = sent.json()
+    # Every reply went out; only the team answer is missing, and that is said on its own.
+    assert set(body["done"]) == set(group) and body["failed"] == [] and body["team_answer"] is None
+    assert body["team_answer_error"] == "这条已经设为团队答案了"
+
+
 def test_a_reply_can_be_made_a_team_answer_in_the_same_step_under_the_persons_name(scene: Team) -> None:
     lin = scene.twins["lin"]
     _, made = make_team_answer(scene)
@@ -317,6 +342,21 @@ def test_a_matter_the_team_has_no_answer_to_is_answered_as_before(scene: Team) -
     assert "## 团队答案" not in scene.llm.systems[-1]
 
 
+def test_the_question_box_returns_the_team_answers_to_everyone_but_the_person_who_confirmed_them(scene: Team) -> None:
+    _, made = make_team_answer(scene)
+    question = "旧版 Word 模板导出还支持吗"
+    scene.as_(ASKERS["xu"])
+    found = scene.web.get("/api/personas/ask", params={"q": question}, headers=CSRF)
+    assert found.status_code == 200, found.text
+    [card] = found.json()["team_answers"]
+    assert card["id"] == made["id"] and card["body"] == ANSWER and card["owner_name"] == "林舟"
+    assert "asker" not in card and card["status"] == "valid"
+    # The person's own question does not bring their own answer back to them.
+    scene.as_(LIN)
+    own = scene.web.get("/api/personas/ask", params={"q": question}, headers=CSRF)
+    assert own.status_code == 200 and own.json()["team_answers"] == []
+
+
 def test_the_person_asking_their_own_assistant_is_not_shown_their_own_answer(scene: Team) -> None:
     lin = scene.twins["lin"]
     make_team_answer(scene)
@@ -360,6 +400,65 @@ def test_still_in_doubt_the_asker_can_ask_the_person_who_confirmed_it_in_their_o
     scene.web.post(f"/api/persona/team-answers/{card['id']}/withdraw", headers=lin.headers)
     scene.as_(ASKERS["zhou"])
     assert scene.web.post(f"/api/personas/team-answers/{card['id']}/ask", json={}, headers=CSRF).status_code == 404
+
+
+def test_asking_the_person_again_while_they_have_not_answered_is_told_where_the_first_went(scene: Team) -> None:
+    lin, wang = scene.twins["lin"], scene.twins["wang"]
+    make_team_answer(scene)
+    _, final = scene.ask(ASKERS["zhou"], wang, "旧版 Word 模板导出还支持吗")
+    [card] = final["team_answers"]
+
+    def press() -> dict[str, Any]:
+        scene.as_(ASKERS["zhou"])
+        pressed = scene.web.post(
+            f"/api/personas/team-answers/{card['id']}/ask", json={"question": "12 月以后呢？"}, headers=CSRF
+        )
+        assert pressed.status_code == 200, pressed.text
+        return pressed.json()  # type: ignore[no-any-return]
+
+    first = press()
+    before = len(scene.team.handoffs(persona_id=lin.persona))
+    conversations = len(scene.team.conversations(persona_id=lin.persona))
+    # The page was loaded again and the button is back: the same conversation, nothing new for the person.
+    again = press()
+    assert again["conversation_id"] == first["conversation_id"] and again["handoff"]["id"] == first["handoff"]["id"]
+    assert len(scene.team.handoffs(persona_id=lin.persona)) == before
+    assert len(scene.team.conversations(persona_id=lin.persona)) == conversations
+    assert [w["question"] for w in scene.page(lin)["waiting"]] == ["12 月以后呢？"]
+    # Once the person has answered, a new question is a new handoff.
+    [made] = scene.team.handoffs(persona_id=lin.persona, statuses=("delivered",))
+    scene.as_(LIN)
+    assert (
+        scene.web.post(
+            f"/api/persona/handoffs/{made.id}/reply", json={"text": "还能。"}, headers=lin.headers
+        ).status_code
+        == 200
+    )
+    later = press()
+    assert later["conversation_id"] != first["conversation_id"]
+
+
+def test_a_twin_the_asker_cannot_open_is_not_asked_for_them(scene: Team) -> None:
+    lin, wang = scene.twins["lin"], scene.twins["wang"]
+    make_team_answer(scene)
+    _, final = scene.ask(ASKERS["zhou"], wang, "旧版 Word 模板导出还支持吗")
+    [card] = final["team_answers"]
+    scene.as_(LIN)
+    assert (
+        scene.web.post(f"/api/personas/{lin.persona}/approve", json={"public": False}, headers=CSRF).status_code == 200
+    )
+    handoffs, conversations = len(scene.team.handoffs()), len(scene.team.conversations(persona_id=lin.persona))
+    scene.as_(ASKERS["zhou"])
+    refused = scene.web.post(f"/api/personas/team-answers/{card['id']}/ask", json={}, headers=CSRF)
+    assert refused.status_code == 409 and "直接联系" in refused.json()["detail"]
+    # Nothing was opened where the reply could not be read, and nothing was handed to the person.
+    assert len(scene.team.handoffs()) == handoffs
+    assert len(scene.team.conversations(persona_id=lin.persona)) == conversations
+    # Opened again, it is asked as usual.
+    scene.as_(LIN)
+    scene.web.post(f"/api/personas/{lin.persona}/approve", json={"public": True}, headers=CSRF)
+    scene.as_(ASKERS["zhou"])
+    assert scene.web.post(f"/api/personas/team-answers/{card['id']}/ask", json={}, headers=CSRF).status_code == 200
 
 
 # ------------------------------------------------------------------ taken back
@@ -438,6 +537,8 @@ def stale_check(scene: Team, said: str, *, index: int) -> int:
 def test_what_the_person_says_later_that_does_not_agree_makes_the_answer_possibly_out_of_date(scene: Team) -> None:
     lin, wang = scene.twins["lin"], scene.twins["wang"]
     _, made = make_team_answer(scene)
+    earlier, quoted = scene.ask(ASKERS["chen"], wang, "旧版 Word 模板导出还支持吗")
+    assert quoted["team_answers"][0]["status"] == "valid"
 
     assert stale_check(scene, "旧版 Word 模板其实 10 月底就停了，导出只剩新模板。", index=1) == 1
     [answer] = scene.team.team_answers()
@@ -450,14 +551,20 @@ def test_what_the_person_says_later_that_does_not_agree_makes_the_answer_possibl
     assert card["status"] == "stale" and "10 月底" in card["stale_note"]
     assert "可能已经变了" in prompt_line(card)
     # A conversation that already had the card shows it in doubt from then on.
-    conversation, _ = scene.ask(ASKERS["chen"], wang, "旧版 Word 模板导出还支持吗")
-    del conversation
+    card_turn = next(t for t in scene.turns(ASKERS["chen"], wang, earlier) if t["role"] == "twin")
+    [shown] = card_turn["reply"]["team_answers"]
+    assert shown["status"] == "stale" and "10 月底" in shown["stale_note"]
 
     # It is not judged again unless more is said; the person's two ways out: it stands, or they correct it.
     calls = len(scene.llm.structured_calls)
     scene.as_(LIN)
     kept = scene.web.post(f"/api/persona/team-answers/{made['id']}/keep", headers=lin.headers)
     assert kept.status_code == 200 and kept.json()["team_answer"]["status"] == "valid"
+    back = next(t for t in scene.turns(ASKERS["chen"], wang, earlier) if t["role"] == "twin")
+    assert (
+        back["reply"]["team_answers"][0]["status"] == "valid" and back["reply"]["team_answers"][0]["stale_note"] == ""
+    )
+    scene.as_(LIN)
     assert stale_check(scene, "旧版 Word 模板其实 10 月底就停了，导出只剩新模板。", index=1) == 0
     assert len(scene.llm.structured_calls) == calls and scene.team.team_answers()[0].status == "valid"
 
@@ -605,3 +712,33 @@ def test_the_teams_database_holds_the_new_tables_and_only_by_appended_migrations
     with sqlite3.connect(tmp_path / "team.db") as raw:
         names = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"team_answers", "team_answer_vectors", "facet_coverage", "delegations"} <= names
+
+
+def test_the_persons_team_answers_list_those_in_doubt_first_and_the_rest_the_newest_first(scene: Team) -> None:
+    lin = scene.twins["lin"]
+    scene.llm.plan["排期"] = {"reply": "这个得问林舟。", "meta": {"owner_part": "decide", "owner_ask": "排期"}}
+    scene.llm.plan[REPORT]["meta"]["mode"] = "abstain"
+    _, oldest = make_team_answer(scene)
+    made = [oldest]
+    for question in (REPORT, "排期延到几号？"):
+        scene.ask(ASKERS["xu"], lin, question)
+        [waiting] = scene.team.handoffs(persona_id=lin.persona, statuses=("delivered",))
+        scene.as_(LIN)
+        assert (
+            scene.web.post(
+                f"/api/persona/handoffs/{waiting.id}/reply", json={"text": "按项目写。"}, headers=lin.headers
+            ).status_code
+            == 200
+        )
+        created = scene.web.post("/api/persona/team-answers", json={"handoff_id": waiting.id}, headers=lin.headers)
+        assert created.status_code == 201, created.text
+        made.append(created.json()["team_answer"])
+    # Days apart, so the order does not rest on the clock; the middle one is in doubt.
+    with scene.team._tx() as db:
+        for days, answer in zip((3, 2, 1), made, strict=True):
+            when = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).isoformat()
+            db.execute("UPDATE team_answers SET confirmed_at = ? WHERE id = ?", (when, answer["id"]))
+        db.execute("UPDATE team_answers SET status = 'stale' WHERE id = ?", (made[1]["id"],))
+    scene.as_(LIN)
+    listed = scene.web.get("/api/persona/team-answers", headers=lin.headers).json()["team_answers"]
+    assert [a["id"] for a in listed] == [made[1]["id"], made[2]["id"], made[0]["id"]]

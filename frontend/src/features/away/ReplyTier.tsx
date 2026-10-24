@@ -4,14 +4,14 @@ import { Segmented } from '../../components/ui';
 export type ReplyTier = 'colleague' | 'self' | 'none';
 
 const KEPT = [
-  { id: 'colleague', label: '同事能用' },
+  { id: 'colleague', label: '按默认' },
   { id: 'self', label: '只有我' },
 ] as const satisfies readonly { id: ReplyTier; label: string }[];
 const ALL = [...KEPT, { id: 'none', label: '不存' }] as const;
 
 /**
- * The tier a reply is kept in when the person sends it: 同事能用 (the default), 只有我, or 不存, which only writes it
- * into the asker's conversation. A reply with nothing to be written into (the old questions) is always kept, so it has
+ * The tier a reply is kept in when the person sends it: 按默认 (the default: as its facet is, which a colleague may use
+ * unless it is a private one such as the family's), 只有我, or 不存, which only writes it into the asker's conversation. A reply with nothing to be written into (the old questions) is always kept, so it has
  * no 不存.
  */
 export function ReplyTierChoice({

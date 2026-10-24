@@ -46,13 +46,17 @@ export function Guessed({
       variant="divided"
       title={
         <Stack gap={0}>
-          <Text as="span" weight="regular">
+          <Text weight="regular" twoLines={!correcting}>
             <Text as="span" tone="secondary">
               {item.asker_name}问：
             </Text>
             {item.question}
           </Text>
-          <Text as="span" weight="regular">
+          <Text
+            weight="regular"
+            twoLines={!correcting}
+            title={`${item.asker_name}问：${item.question}\n分身答：${item.answer}`}
+          >
             <Text as="span" tone="secondary">
               分身答：
             </Text>

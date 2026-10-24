@@ -642,7 +642,7 @@ export const awayMerged = {
       days: 7,
     },
   ],
-  answers: { total: 4, stale: 1 },
+  answers: { total: 3, stale: 1 },
   guessed: [],
   pending: 4,
 };
@@ -912,9 +912,9 @@ export const lensChoices = {
     },
   ],
 };
-// 我设的团队答案: what the person made the team's.
+// 我设的团队答案: what the person made the team's, as the server lists them: those possibly out of date first, then
+// the newest confirmed first.
 const myTeamAnswers = [
-  { ...teamAnswerCard, handoff_id: 'hf-4' },
   {
     ...teamAnswerCard,
     id: 'ta-2',
@@ -925,6 +925,7 @@ const myTeamAnswers = [
     stale_note: '10 月 27 日「经营会」里说：超过 20% 才报沈总。',
     handoff_id: 'hf-7',
   },
+  { ...teamAnswerCard, handoff_id: 'hf-4' },
   {
     ...teamAnswerCard,
     id: 'ta-3',

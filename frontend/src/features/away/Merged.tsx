@@ -20,6 +20,7 @@ import { TeamAnswerCard } from '../answers/TeamAnswerCard';
 import { ReplyTierChoice, type ReplyTier } from './ReplyTier';
 import { useStatus } from '../../stores/status';
 import type { Handoff } from './useAway';
+import { useReplyDraft } from './useReplyDraft';
 import { Initial, clock } from './Waiting';
 
 /** What the twin did with the question, in a word. */
@@ -48,31 +49,19 @@ export function Merged({
   const me = useStatus((state) => state.data?.target_name) ?? '我';
   const [title, setTitle] = useState(items[0].question.slice(0, 80));
   const [renaming, setRenaming] = useState(false);
-  const [text, setText] = useState('');
   const [team, setTeam] = useState(false);
   const [tier, setTier] = useState<ReplyTier>('colleague');
   const [busy, setBusy] = useState(false);
-  const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState('');
+  const { text, edit, clear, drafting, draft, replaced, restore } =
+    useReplyDraft(
+      `/api/persona/handoffs/${encodeURIComponent(items[0].id)}/draft`,
+      setError,
+    );
   const earliest = items.reduce(
     (first, item) => (item.created_at < first ? item.created_at : first),
     items[0].created_at,
   );
-  const draft = async () => {
-    setDrafting(true);
-    setError('');
-    try {
-      const drafted = await api<{ text: string }>(
-        `/api/persona/handoffs/${encodeURIComponent(items[0].id)}/draft`,
-        { method: 'POST', json: {} },
-      );
-      setText(drafted.text);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '起草失败');
-    } finally {
-      setDrafting(false);
-    }
-  };
   const send = async () => {
     setBusy(true);
     setError('');
@@ -80,6 +69,7 @@ export function Merged({
       const sent = await api<{
         done: string[];
         failed: { id: string; detail: string }[];
+        team_answer_error?: string | null;
       }>('/api/persona/handoffs/reply-many', {
         method: 'POST',
         json: {
@@ -92,15 +82,22 @@ export function Merged({
             : {}),
         },
       });
+      // The replies and the team answer are told apart: one can fail without the other.
+      const gaps = [
+        sent.failed.length ? `${sent.failed.length} 人没发出去` : '',
+        team && sent.team_answer_error
+          ? `团队答案没设成：${sent.team_answer_error}`
+          : '',
+      ].filter(Boolean);
       toast(
-        sent.failed.length
-          ? `已回复 ${sent.done.length} 人，${sent.failed.length} 人没发出去`
+        gaps.length
+          ? `已回复 ${sent.done.length} 人，${gaps.join('，')}`
           : team
             ? `已回复 ${sent.done.length} 人，并设为团队答案`
             : `已回复 ${sent.done.length} 人`,
-        sent.failed.length ? 'warning' : 'success',
+        gaps.length ? 'warning' : 'success',
       );
-      setText('');
+      clear();
       await onDone();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '发送失败');
@@ -174,7 +171,7 @@ export function Merged({
           id={`merged-${items[0].id}`}
           value={text}
           placeholder={`以本人回复 ${items.length} 人，各发到各自的对话`}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => edit(event.target.value)}
         />
         <Row gap={3} wrap>
           <ReplyTierChoice
@@ -227,6 +224,11 @@ export function Merged({
           >
             请分身起草
           </Button>
+          {replaced && (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={restore}>
+              换回我写的
+            </Button>
+          )}
           <Button
             size="sm"
             variant="secondary"

@@ -737,7 +737,7 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
             </Button>
           </div>
         )}
-        {rebuilding && <MemoryUpdating />}
+        {rebuilding && <MemoryUpdating text="记忆更新中，整理完成后列出" />}
         {!data && !error && !rebuilding && <Skeleton className="h-40" />}
         {meetings && (
           <Card className="flex flex-wrap items-center justify-between gap-3">

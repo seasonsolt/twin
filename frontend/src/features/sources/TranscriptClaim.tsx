@@ -219,10 +219,12 @@ export function TranscriptClaim({ onChanged }: { onChanged?: () => void }) {
       )}
       {roster.names.length > 0 && (
         <Stack as="section" gap={3} aria-label="说话人名单">
-          <Heading level={3}>哪些名字是你</Heading>
-          <Text size="sm" tone="secondary">
-            这些名字出现在待确认的文字记录里，按说话多少排序。勾选你自己（可以多选）；没勾的名字会记为别人，以后不再询问。
-          </Text>
+          <Heading
+            level={3}
+            title="勾选你自己，可以多选；没勾的名字会记为别人，以后不再询问"
+          >
+            哪些名字是你
+          </Heading>
           <Stack as="ul" gap={2}>
             {roster.names.map((row) => (
               <ListRow

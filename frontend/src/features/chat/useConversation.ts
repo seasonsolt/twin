@@ -118,6 +118,11 @@ export function useConversation(active: boolean) {
   );
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [audience, setAudience] = useState<Audience | null>(null);
+  // What the conversation open is called, as it was read or renamed here: the list may not hold it (another page of
+  // it, or another list than the conversation's own).
+  const [conversationTitle, setConversationTitle] = useState<string | null>(
+    null,
+  );
   const id = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -167,6 +172,7 @@ export function useConversation(active: boolean) {
     id.current = null;
     setConversationId(null);
     setAudience(null);
+    setConversationTitle(null);
     const cached = saved
       ? peekEssential<Conversation>(
           `/api/conversations/${encodeURIComponent(saved)}`,
@@ -199,6 +205,7 @@ export function useConversation(active: boolean) {
           if (!controller.signal.aborted) {
             selectId(conversation.id);
             setAudience(conversation.audience ?? null);
+            setConversationTitle(conversation.title ?? null);
             setTurns(conversation.turns);
             if (imported) markWritten();
           }
@@ -207,6 +214,7 @@ export function useConversation(active: boolean) {
             if (error instanceof ApiError && error.status === 404) {
               selectId(null);
               setAudience(null);
+              setConversationTitle(null);
               setTurns([]);
             } else {
               setRestoreFailed(true);
@@ -221,6 +229,7 @@ export function useConversation(active: boolean) {
       id.current = null;
       setConversationId(null);
       setAudience(null);
+      setConversationTitle(null);
       setTurns([]);
       setLoading(false);
     }
@@ -428,6 +437,7 @@ export function useConversation(active: boolean) {
     request.current = null;
     selectId(null);
     setAudience(null);
+    setConversationTitle(null);
     setTurns([]);
     setDraft('');
     setAttachments([]);
@@ -457,6 +467,7 @@ export function useConversation(active: boolean) {
       if (controller.signal.aborted || !mounted.current) return false;
       selectId(conversation.id);
       setAudience(conversation.audience ?? null);
+      setConversationTitle(conversation.title ?? null);
       setTurns(conversation.turns);
       setRestoreFailed(false);
       setDraft('');
@@ -478,7 +489,9 @@ export function useConversation(active: boolean) {
       json: { title },
       headers: headers(),
     });
-    if (mounted.current && personaId === getPersonaId()) markWritten();
+    if (!mounted.current || personaId !== getPersonaId()) return;
+    if (id.current === nextId) setConversationTitle(title);
+    markWritten();
   };
   const remove = async (nextId: string) => {
     await api(`/api/conversations/${encodeURIComponent(nextId)}`, {
@@ -549,6 +562,7 @@ export function useConversation(active: boolean) {
     turns,
     conversationId,
     audience,
+    conversationTitle,
     setNoteTier,
     undoPromise,
     askLensOwner,

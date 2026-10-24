@@ -364,7 +364,9 @@ export function Chat() {
   const remove = async (session: Session) => {
     if (!foreign(session)) {
       if (session.kind === 'task') {
+        // The task may be past what the page itself reads, so the list is asked again either way.
         await work.remove({ task_id: session.id, title: session.title });
+        void everything.reload();
         return;
       }
       const ok = await confirm({
@@ -496,9 +498,10 @@ export function Chat() {
       ? work.current === null
         ? '新任务'
         : (work.task?.title ?? '')
-      : (sessions.find(
-          (row) => row.kind === 'chat' && row.id === chat.conversationId,
-        )?.title ?? '新对话');
+      : (dataRows?.conversations.find((row) => row.id === chat.conversationId)
+          ?.title ??
+        chat.conversationTitle ??
+        '新对话');
   const modeSwitch = workOn ? (
     <Segmented
       label="这条消息是"

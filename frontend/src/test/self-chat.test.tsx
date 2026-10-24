@@ -398,6 +398,11 @@ it('is the assistant only in the person’s own twin, and offers to try a questi
   );
   // Asked as a colleague would be: the one question alone, marked, and what it left out named.
   const trial = screen.getByRole('button', { name: '试问' });
+  // The short word says what it does when the pointer rests on it.
+  await person.hover(trial);
+  expect(await screen.findByRole('tooltip')).toHaveTextContent(
+    '看同事问同一句会得到什么',
+  );
   await person.click(trial);
   expect(trial).toHaveAttribute('aria-pressed', 'true');
   await person.type(
@@ -673,7 +678,12 @@ it('marks what the assistant asked in the person’s name, and lists it apart wi
 
 it('opens a conversation of another twin from its address: the twin it is with, then the conversation', async () => {
   mount(personas, '/chat?with=p-wang&open=c-wang');
-  expect(await screen.findByText('先问最近做的事。')).toBeVisible();
+  // In the conversation itself: the list holds the same words as a preview, hidden.
+  expect(
+    await within(await screen.findByTestId('chat-messages')).findByText(
+      '先问最近做的事。',
+    ),
+  ).toBeVisible();
   expect(usePersonas.getState().id).toBe('p-wang');
 });
 
@@ -861,6 +871,71 @@ it('renames and deletes another twin’s conversation and task as that twin, and
     ).toBeNull(),
   );
   expect(headerOf('/api/persona/work/w_bbbbbbbbbbbb', 'DELETE')).toBe('p-qing');
+});
+
+it('keeps naming the conversation that is open when the list is of others, and when it is renamed', async () => {
+  const person = userEvent.setup();
+  mount();
+  const sheet = await list();
+  await person.click(
+    await within(sheet).findByRole('button', {
+      name: row('我上周答应过谁什么'),
+    }),
+  );
+  const heading = await screen.findByRole('heading', {
+    level: 1,
+    name: '我上周答应过谁什么',
+  });
+  // Everyone's list does not hold the assistant's conversations: the one open is called what it is all the same.
+  await everyone(sheet);
+  expect(
+    within(sheet).queryByRole('button', { name: row('我上周答应过谁什么') }),
+  ).toBeNull();
+  expect(heading).toHaveTextContent('我上周答应过谁什么');
+  await person.click(within(sheet).getByRole('button', { name: /^我的分身/u }));
+  await person.click(
+    await within(sheet).findByRole('button', {
+      name: '我上周答应过谁什么的更多操作',
+    }),
+  );
+  await person.click(within(sheet).getByRole('menuitem', { name: '重命名' }));
+  const box = within(sheet).getByRole('textbox', { name: '对话标题' });
+  await person.clear(box);
+  await person.type(box, '答应过的事');
+  await person.click(within(sheet).getByRole('button', { name: '保存' }));
+  await waitFor(() => expect(heading).toHaveTextContent('答应过的事'));
+});
+
+it('asks for the list again when a task of the twin in view is deleted, though the page did not read it itself', async () => {
+  const person = userEvent.setup();
+  server.tasks.push({
+    task_id: 'w_dddddddddddd',
+    persona_id: 'default',
+    title: '汇总访谈',
+    status: 'idle',
+    updated_at: '2026-10-20T07:00:00',
+  });
+  mount();
+  const sheet = await list();
+  await person.click(
+    await within(sheet).findByRole('button', { name: '汇总访谈的更多操作' }),
+  );
+  await person.click(within(sheet).getByRole('menuitem', { name: '删除' }));
+  server.tasks.splice(
+    server.tasks.findIndex((task) => task.task_id === 'w_dddddddddddd'),
+    1,
+  );
+  await person.click(
+    within(await screen.findByRole('dialog', { name: '删除任务？' })).getByRole(
+      'button',
+      { name: '删除' },
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      within(sheet).queryByRole('button', { name: row('汇总访谈') }),
+    ).toBeNull(),
+  );
 });
 
 it('asks for the list again when a conversation of the twin in view is renamed, whichever page of the list it is on', async () => {

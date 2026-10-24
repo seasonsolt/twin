@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -10,6 +11,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { Library, type LibraryState, type Recording } from '../pages/Library';
+import { resetTeam, useTeam } from '../stores/team';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -35,6 +37,7 @@ const recording = (change: Partial<Recording>): Recording => ({
 });
 let state: LibraryState;
 beforeEach(() => {
+  resetTeam();
   localStorage.clear();
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
   state = {
@@ -185,11 +188,15 @@ it('shows failures with a retry and asks before deleting', async () => {
   });
   vi.stubGlobal('fetch', fetcher);
   show();
-  expect(
-    await screen.findByText('语音识别失败，请检查转写服务后重试'),
-  ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '重试' }));
+  // One state for the row: the retry, with the reason a hover away, not a badge and a red line beside it.
+  const retry = await screen.findByRole('button', { name: '重试' });
+  expect(retry).toHaveAttribute('title', '语音识别失败，请检查转写服务后重试');
+  expect(screen.queryByText('语音识别失败，请检查转写服务后重试')).toBeNull();
+  expect(screen.queryByText('失败')).toBeNull();
+  await userEvent.click(retry);
   expect(await screen.findByText('排队')).toBeInTheDocument();
+  // The side bar counts from the same library: it follows at once, not at its next poll.
+  expect(useTeam.getState().library?.recordings[0].status).toBe('queued');
   await userEvent.click(screen.getByLabelText('更多：周会.m4a'));
   await userEvent.click(screen.getByRole('button', { name: '删除' }));
   await userEvent.click(
@@ -343,8 +350,10 @@ it('filters locally with counts, including proofreading in processing, and shows
     screen.getByRole('progressbar', { name: '转写.m4a转写进度' }),
   ).toHaveAttribute('aria-valuenow', '1500');
   await userEvent.click(within(group).getByRole('button', { name: '失败 1' }));
-  expect(screen.getByText('识别失败')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '重试' })).toHaveAttribute(
+    'title',
+    '识别失败',
+  );
   expect(vi.mocked(fetch).mock.calls).toHaveLength(calls);
 });
 
@@ -589,4 +598,79 @@ it('offers to collect one recording again from its own menu, after asking', asyn
   });
   await user.click(within(ask).getByRole('button', { name: '重新采集' }));
   await waitFor(() => expect(posts).toEqual([{ recordings: ['a'] }]));
+});
+
+it('dates a row by when it was recorded, which an imported transcript sets, else by when it was added', async () => {
+  state.recordings = [
+    recording({
+      id: 'a',
+      filename: '客户访谈.txt',
+      kind: 'transcript',
+      created_at: '2026-10-24T08:00:00+00:00',
+      creation_time: '2026-10-18',
+    }),
+    recording({
+      id: 'b',
+      filename: '周会.m4a',
+      created_at: '2026-10-24T08:00:00+00:00',
+      creation_time: null,
+    }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => json(state)),
+  );
+  show();
+  const day = async (name: string) =>
+    within((await screen.findByText(name)).closest('li')!);
+  expect((await day('客户访谈.txt')).getByText(/10月18日/u)).toBeVisible();
+  expect((await day('周会.m4a')).getByText(/10月24日/u)).toBeVisible();
+});
+
+it('shows transcribing as the bar alone, and says a transcript has no sound to delete', async () => {
+  const user = userEvent.setup();
+  state.recordings = [
+    recording({
+      id: 'a',
+      filename: '转写.m4a',
+      status: 'transcribing',
+      transcribed_s: 1500,
+    }),
+    recording({ id: 'b', filename: '访谈.txt', kind: 'transcript' }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => json(state)),
+  );
+  show();
+  const transcribing = within(
+    (await screen.findByText('转写.m4a')).closest('li')!,
+  );
+  expect(transcribing.getByRole('progressbar')).toBeVisible();
+  expect(transcribing.queryByText('转写中')).toBeNull();
+  const menu = screen.getByLabelText('更多：访谈.txt').closest('details')!;
+  await user.click(screen.getByLabelText('更多：访谈.txt'));
+  await user.click(within(menu).getByRole('button', { name: '删除' }));
+  const ask = await screen.findByRole('dialog', { name: '删除「访谈.txt」？' });
+  expect(within(ask).getByText('导入的转写稿会删除，不能恢复')).toBeVisible();
+  expect(within(ask).queryByText(/试听文件/u)).toBeNull();
+});
+
+it('says so when the library cannot be refreshed, over the list already shown', async () => {
+  state.recordings = [recording({ id: 'a', filename: '周会.m4a' })];
+  let down = false;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (down && url === '/api/library')
+        return json({ detail: '连不上服务' }, 503);
+      return json(url === '/api/library' ? state : {});
+    }),
+  );
+  show();
+  expect(await screen.findByText('周会.m4a')).toBeVisible();
+  down = true;
+  await act(() => useTeam.getState().refresh(true));
+  expect(await screen.findByRole('alert')).toHaveTextContent('连不上服务');
+  expect(screen.getByText('周会.m4a')).toBeVisible();
 });

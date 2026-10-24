@@ -104,7 +104,12 @@ export function BuildMeter({ processing }: { processing?: Processing | null }) {
  * A twin made from the recording library while its memory catches up with changed recordings: it cannot answer
  * yet, and the bar shows how far the update has gone.
  */
-export function MemoryUpdating() {
+export function MemoryUpdating({
+  text = '记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。',
+}: {
+  /** What the line says: the twin cannot answer yet, by default; a page that lists things says what it waits to list. */
+  text?: string;
+}) {
   const personaId = usePersonaId();
   const [processing, setProcessing] = useState<{
     personaId: string;
@@ -128,7 +133,7 @@ export function MemoryUpdating() {
   return (
     <Stack gap={2} role="status" aria-live="polite">
       <Text size="sm" tone="secondary">
-        记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。
+        {text}
       </Text>
       {view && <BuildMeter processing={view} />}
     </Stack>

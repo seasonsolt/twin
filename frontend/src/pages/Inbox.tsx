@@ -92,6 +92,10 @@ function copyInvite() {
   );
 }
 
+/** The rows of the list as they stood when the page was left for a recording (the page is gone by the time its
+ * answer is back). */
+let left: string[] = [];
+
 /**
  * What waits for the owner (``/inbox``): the new voices of the recordings, and the other things the team's library
  * cannot settle by itself, a kind of thing at a time. A list, or the new voices one by one with the keyboard. What
@@ -167,8 +171,15 @@ export function Inbox() {
   const [addressing, setAddressing] = useState<Person | null>(null);
   // The row that takes the keyboard next, after one is settled.
   const [focusRow, setFocusRow] = useState<string | null>(null);
-  // Voices answered here, for “3 / 69”.
-  const [answered, setAnswered] = useState(0);
+  // Voices answered here, for “3 / 69”; one settled in its recording and come back from is one more.
+  const [answered, setAnswered] = useState<number>(
+    () =>
+      (location.state?.inboxAnswered ?? 0) +
+      (location.state?.resolvedInboxTask &&
+      categoryOf(location.state.resolvedInboxTask) === 'voice'
+        ? 1
+        : 0),
+  );
 
   const named = useMemo(() => namedPeople(people ?? []), [people]);
   const known = useMemo(() => (people ?? []).filter((p) => !p.auto), [people]);
@@ -307,7 +318,24 @@ export function Inbox() {
     [setParams],
   );
 
-  // Back from settling a speaker in its recording: the kind it was part of, and the keyboard in its first row.
+  // The rows the keyboard walks through, as they stand.
+  const order = [...main.slice(0, voicesShown), ...enough, ...strangers].map(
+    (item) => item.id,
+  );
+  // Where they stood when the page was left for a recording, for the keyboard to land after the one settled there.
+  const standing = useRef(order);
+  // Taken as the page opens: leaving it again (or a development double mount) writes the variable anew.
+  const [stood] = useState(() => left);
+  useEffect(() => {
+    standing.current = order;
+  });
+  useEffect(
+    () => () => {
+      left = standing.current;
+    },
+    [],
+  );
+  // Back from settling a speaker in its recording: the kind it was part of, and the keyboard on the row after it.
   const returned: string | undefined = location.state?.resolvedInboxTask;
   useEffect(() => {
     if (!returned) return;
@@ -316,17 +344,34 @@ export function Inbox() {
   }, [returned, params, go]);
   useEffect(() => {
     if (!returned || !reviewReady || busy) return;
-    setFocusRow(category?.id === 'voice' ? (main[0]?.id ?? null) : null);
+    const at = stood.indexOf(returned);
+    const standingNow = (id: string) => id !== returned && order.includes(id);
+    const next =
+      at < 0
+        ? undefined
+        : (stood.slice(at + 1).find(standingNow) ??
+          [...stood.slice(0, at)].reverse().find(standingNow));
+    setFocusRow(
+      category?.id === 'voice' ? (next ?? main[0]?.id ?? null) : null,
+    );
+
     void navigate(`${location.pathname}${location.search}`, {
       replace: true,
       state: null,
     });
-  }, [returned, reviewReady, busy, category, main, navigate, location]);
+  }, [
+    returned,
+    reviewReady,
+    busy,
+    category,
+    main,
+    order,
+    stood,
+    navigate,
+    location,
+  ]);
 
   // The keyboard goes where the settled row was, so a run of answers is a run of keys.
-  const order = [...main.slice(0, voicesShown), ...enough, ...strangers].map(
-    (item) => item.id,
-  );
   useEffect(() => {
     if (!focusRow) return;
     const row = document.getElementById(rowId(focusRow));
@@ -723,6 +768,7 @@ export function Inbox() {
           items={open}
           people={people ?? []}
           last={lastVoice}
+          answered={answered}
           onAnswer={answer}
           onUndo={undo}
           onList={() => go({ view: null })}

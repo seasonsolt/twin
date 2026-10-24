@@ -233,9 +233,9 @@ it('says a twin whose memory is being rebuilt is on its way, not that its ledger
       }),
     );
     show('/commitments');
-    expect(
-      await screen.findByText(/记忆更新中：录音的说话人归属刚有变化/u),
-    ).toBeVisible();
+    // The ledger lists what it will have, not answers: one short line.
+    expect(await screen.findByText('记忆更新中，整理完成后列出')).toBeVisible();
+    expect(screen.queryByText(/就能回答/u)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('button', { name: '重试加载' })).toBeNull();
     rebuilding = false;

@@ -53,6 +53,7 @@ export function InboxFocus({
   items,
   people,
   last,
+  answered,
   onAnswer,
   onUndo,
   onList,
@@ -63,6 +64,8 @@ export function InboxFocus({
   people: Person[];
   /** The latest answer still to be taken back. */
   last?: { id: string; label: string };
+  /** How many voices were answered in this run, kept when a recording is opened and settled there. */
+  answered: number;
   onAnswer: (item: VoiceItem, answer: Answer) => void;
   onUndo: (id: string) => void;
   onList: () => void;
@@ -290,6 +293,9 @@ export function InboxFocus({
                           state: {
                             inboxTask: item.id,
                             voiceRecordings: item.recordings,
+                            // Back to this run, not the list.
+                            inboxView: 'focus',
+                            inboxAnswered: answered,
                           },
                         },
                       ),

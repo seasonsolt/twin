@@ -1382,3 +1382,94 @@ it('ignores an older failure of the queue after a newer load has come', async ()
   expect(screen.queryByRole('alert')).toBeNull();
   expect(screen.getByText('现在没有需要你处理的事。')).toBeVisible();
 });
+
+/** A recording whose second speaker is the voice ``b`` of the queue, settled from its own page. */
+const settleInRecording = () => {
+  const real = fetch;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/recordings/rec_1')
+        return json({
+          id: 'rec_1',
+          filename: '周会.m4a',
+          status: 'ready',
+          transcript_id: 't1',
+          revision: 3,
+          speakers: [speaker({}), speaker({ id: 'S2' })],
+          segments: [
+            { start: 0, end: 4, text: '先看预算。', speaker: 'S1' },
+            { start: 4, end: 9, text: '我反对压缩研发。', speaker: 'S2' },
+          ],
+        });
+      if (url.startsWith('/api/library/recordings/rec_1/speakers/')) {
+        server.voices = server.voices.filter((v) => v.id !== 'b');
+        return json({ revision: 4, person_id: 'per_1' });
+      }
+      return real(url, init);
+    }),
+  );
+};
+
+it('returns from a recording opened in the one-by-one view to that view, with the run kept', async () => {
+  const user = clock();
+  server.voices = [
+    voice('a', {
+      seconds: 400,
+      members: [member('rec_1', 'S1', 400)],
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+    voice('b', {
+      seconds: 300,
+      members: [member('rec_1', 'S2', 300)],
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+    voice('c', { seconds: 200, members: [member('rec_1', 'S3', 200)] }),
+  ];
+  settleInRecording();
+  view('/inbox?view=focus');
+  expect(await screen.findByText('1 / 3')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '是张总' }));
+  expect(await screen.findByText('2 / 3')).toBeVisible();
+  await user.click(screen.getByLabelText(/^更多：/u));
+  await user.click(screen.getByRole('button', { name: '打开录音' }));
+  const card = (
+    await screen.findByRole('heading', { name: 'S2 是谁？' })
+  ).closest('section')!;
+  await user.selectOptions(within(card).getByLabelText('这是谁'), 'per_1');
+  await user.click(screen.getByRole('button', { name: '确认是张总' }));
+  // Still the voices one by one, on the next, with the two answered counted.
+  expect(await screen.findByText('3 / 3')).toBeVisible();
+  expect(screen.getByRole('heading', { name: '这是谁？' })).toBeVisible();
+});
+
+it('puts the keys on the row after the one settled in its recording, not the first', async () => {
+  server.voices = [
+    voice('a', {
+      seconds: 400,
+      members: [member('rec_1', 'S1', 400)],
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+    voice('b', {
+      seconds: 300,
+      members: [member('rec_1', 'S2', 300)],
+      candidates: [{ person_id: 'per_1', name: '张总', score: 0.7 }],
+    }),
+    voice('c', { seconds: 200, members: [member('rec_1', 'S3', 200)] }),
+  ];
+  settleInRecording();
+  view();
+  const user = userEvent.setup();
+  await screen.findByRole('list', { name: '新的声音' });
+  await user.click((await screen.findAllByLabelText(/^更多：/u))[1]);
+  await user.click(screen.getAllByRole('button', { name: '打开录音' })[1]);
+  const card = (
+    await screen.findByRole('heading', { name: 'S2 是谁？' })
+  ).closest('section')!;
+  await user.selectOptions(within(card).getByLabelText('这是谁'), 'per_1');
+  await user.click(screen.getByRole('button', { name: '确认是张总' }));
+  // The third has no names to offer: the field for one is where the keys go.
+  await waitFor(() =>
+    expect(screen.getByLabelText('没听过的声音，是谁')).toHaveFocus(),
+  );
+});

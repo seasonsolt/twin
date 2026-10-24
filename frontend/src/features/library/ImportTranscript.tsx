@@ -37,13 +37,10 @@ export const isTranscript = (file: File) =>
 interface Preview {
   title: string;
   date: string | null;
-  turns: number;
-  minutes: number | null;
   speakers: {
     label: string;
     segments: number;
     sample: string;
-    generic: boolean;
     person: { id: string; name: string } | null;
   }[];
 }
@@ -53,7 +50,8 @@ interface Imported {
   decided?: number;
   unsettled?: number;
 }
-/** The choice for a speaker the name did not settle: a member, nobody in the team, or not yet (the empty string). */
+/** The choice for a speaker: a member, nobody in the team, or (where no name settled it) not yet, the empty string.
+ * A speaker whose name is a member's is that member until the importer changes it. */
 const OUTSIDER = 'outsider';
 
 const form = (file: File, payload?: unknown) => {
@@ -176,45 +174,71 @@ export function ImportTranscript({
               </Field>
             </Row>
             <Stack gap={0} as="ul" aria-label="说话人">
-              {preview.speakers.map((speaker) => (
-                <ListRow
-                  key={speaker.label}
-                  variant="divided"
-                  title={
-                    <Text as="span" weight="medium">
-                      {speaker.label}
-                    </Text>
-                  }
-                  meta={`${speaker.segments} 段${speaker.person ? '' : `：“${speaker.sample}”`}`}
-                  trailing={
-                    speaker.person ? (
-                      <Text as="span" size="sm" tone="success">
-                        ✓ {speaker.person.name}
+              {preview.speakers.map((speaker) => {
+                // The name settled it, until the importer says the speaker is someone else (a client who shares
+                // a member's name).
+                const named = speaker.person !== null;
+                const changing = speaker.label in choices;
+                return (
+                  <ListRow
+                    key={speaker.label}
+                    variant="divided"
+                    title={
+                      <Text as="span" weight="medium">
+                        {speaker.label}
                       </Text>
-                    ) : (
-                      <Select
-                        aria-label={`${speaker.label} 是谁`}
-                        value={choices[speaker.label] ?? ''}
-                        disabled={busy}
-                        onChange={(event) =>
-                          setChoices({
-                            ...choices,
-                            [speaker.label]: event.target.value,
-                          })
-                        }
-                      >
-                        <option value="">选是谁</option>
-                        {members.map((person) => (
-                          <option key={person.id} value={person.id}>
-                            {person.name}
-                          </option>
-                        ))}
-                        <option value={OUTSIDER}>不是团队成员</option>
-                      </Select>
-                    )
-                  }
-                />
-              ))}
+                    }
+                    meta={`${speaker.segments} 段${named && !changing ? '' : `：“${speaker.sample}”`}`}
+                    trailing={
+                      speaker.person && !changing ? (
+                        <>
+                          <Text as="span" size="sm" tone="success">
+                            ✓ {speaker.person.name}
+                          </Text>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`改 ${speaker.label}`}
+                            disabled={busy}
+                            onClick={() =>
+                              setChoices({
+                                ...choices,
+                                [speaker.label]: speaker.person?.id ?? '',
+                              })
+                            }
+                          >
+                            改
+                          </Button>
+                        </>
+                      ) : (
+                        <Select
+                          aria-label={`${speaker.label} 是谁`}
+                          value={choices[speaker.label] ?? ''}
+                          disabled={busy}
+                          onChange={(event) =>
+                            setChoices({
+                              ...choices,
+                              [speaker.label]: event.target.value,
+                            })
+                          }
+                        >
+                          {!named && <option value="">选是谁</option>}
+                          {(speaker.person &&
+                          !members.some((m) => m.id === speaker.person?.id)
+                            ? [...members, speaker.person]
+                            : members
+                          ).map((person) => (
+                            <option key={person.id} value={person.id}>
+                              {person.name}
+                            </option>
+                          ))}
+                          <option value={OUTSIDER}>不是团队成员</option>
+                        </Select>
+                      )
+                    }
+                  />
+                );
+              })}
             </Stack>
             <Text size="sm" tone="tertiary">
               没有声音：不能试听，不留声纹

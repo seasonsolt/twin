@@ -103,8 +103,6 @@ export const CATEGORIES: {
   label: string;
   tone: 'warning' | 'danger' | 'info';
   help: string;
-  /** Nothing goes wrong while it waits: listed apart, and not counted among what is waiting for the owner. */
-  optional?: boolean;
 }[] = [
   {
     id: 'voice',
@@ -153,7 +151,6 @@ export const CATEGORIES: {
     label: '有空再看',
     tone: 'info',
     help: '大部分不像当初确认的人，不像的片段已自动排除，不影响分身；有空时听几段，补认给真正说话的人',
-    optional: true,
   },
 ];
 

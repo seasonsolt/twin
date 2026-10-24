@@ -82,15 +82,15 @@ def test_the_preview_says_who_each_speaker_would_be_and_stores_nothing(client: T
     shown = preview(client, "运营周会-2026-10-18.txt", EXPORT)
     assert shown.status_code == 200, shown.text
     body = shown.json()
-    assert (body["title"], body["date"], body["turns"], body["minutes"]) == ("运营周会-2026-10-18", "2026-10-18", 7, 3)
+    assert (body["title"], body["date"]) == ("运营周会-2026-10-18", "2026-10-18")
     by_label = {s["label"]: s for s in body["speakers"]}
     assert [s["label"] for s in body["speakers"]] == ["林舟", "说话人 3", "Kevin", "许清禾"]  # the most said first
     assert by_label["林舟"]["segments"] == 3 and by_label["林舟"]["person"] == {"id": lin.id, "name": "林舟"}
     assert by_label["许清禾"]["person"]["name"] == "许清禾"
     # A label that names nobody is shown with a line of what it said; so is a name nobody in the team has.
-    assert by_label["说话人 3"]["generic"] and by_label["说话人 3"]["person"] is None
+    assert by_label["说话人 3"]["person"] is None
     assert by_label["说话人 3"]["sample"] == "下周把渠道数据拉一下" and by_label["说话人 3"]["segments"] == 2
-    assert by_label["Kevin"]["person"] is None and not by_label["Kevin"]["generic"]
+    assert by_label["Kevin"]["person"] is None
     assert client.get("/api/library").json()["recordings"] == []
     # Not a transcript: a text without turns, a file type that holds no text.
     assert preview(client, "说明.txt", "只是一段说明文字。\n没有人在说话。").status_code == 400
@@ -222,10 +222,16 @@ def test_a_transcript_is_refused_like_an_upload_when_the_disk_or_the_queue_is_fu
     monkeypatch.setattr("twin.web.library.shutil.disk_usage", lambda _: usage(100, 90, 10))
     refused = bring_in(client, "站会.txt", PLAIN)
     assert refused.status_code == 507 and "磁盘空间不足" in refused.json()["detail"]
+    # The preview says so too, before the importer has filled in anything.
+    looked = preview(client, "站会.txt", PLAIN)
+    assert looked.status_code == 507 and "磁盘空间不足" in looked.json()["detail"]
     monkeypatch.setattr("twin.web.library.shutil.disk_usage", lambda _: usage(10**12, 0, 10**12))
     monkeypatch.setattr("twin.media.library.Library.pending", lambda *_: 20)  # the member's queue is full
     full = bring_in(client, "站会.txt", PLAIN)
     assert full.status_code == 409 and "排队" in full.json()["detail"]
+    # It does not wait to be transcribed itself: the words say whose files the queue holds.
+    assert "再导入转写稿" in full.json()["detail"] and "请等前面的转写完成" not in full.json()["detail"]
+    assert preview(client, "站会.txt", PLAIN).status_code == 409
     assert client.get("/api/library").json()["recordings"] == []
     monkeypatch.setattr("twin.media.library.Library.pending", lambda *_: 0)
     assert bring_in(client, "站会.txt", PLAIN).status_code == 201

@@ -53,6 +53,8 @@ export interface Recording {
   speakers: number;
   segments: number;
   created_at: string;
+  // When it was recorded (an imported transcript: the day the importer gave), when the file says; else null.
+  creation_time?: string | null;
   // Who the speakers were recognised as, and how many still wait for the owner.
   people: string[];
   unsettled: number;
@@ -100,16 +102,14 @@ export interface LibraryState {
   /** Twins being rebuilt; ``revision`` moves whenever a rebuild starts or finishes. */
   twins?: { updating: number; revision: number };
 }
-const statusLabel: Record<Recording['status'], [string, Tone]> = {
-  queued: ['排队', 'neutral'],
-  transcribing: ['转写中', 'info'],
-  ready: ['已转写', 'success'],
-  failed: ['失败', 'danger'],
-};
-/** What a recording is, apart from a transcribed one whose speakers are named (those say it in the row itself). */
+/**
+ * What a row says about itself beyond its title: one thing. Transcribing is the bar, failing is the retry, and a
+ * transcribed one says it in the speakers it shows; what is left to name is a recording waiting its turn, or one the
+ * viewer only attended.
+ */
 function stateLabel(recording: Recording): [string, Tone] | null {
   if (recording.can_edit === false) return ['你参加的', 'neutral'];
-  return recording.status === 'ready' ? null : statusLabel[recording.status];
+  return recording.status === 'queued' ? ['排队', 'neutral'] : null;
 }
 const proofreadLabel: Record<Proofread, string> = {
   done: '已校对',
@@ -135,10 +135,33 @@ export function quotaNotice(quota: Quota): string {
 }
 const minutes = (seconds: number | null) =>
   seconds === null ? '' : `${Math.max(1, Math.round(seconds / 60))} 分钟`;
+/** The day it was made, as a row and its page both say it: when it was recorded (an imported transcript: the day
+ * the importer gave), else the day it was added. A bare date is that day wherever the browser is. */
+export function madeOn(
+  recording: Pick<Recording, 'creation_time' | 'created_at'>,
+): string {
+  for (const text of [recording.creation_time, recording.created_at]) {
+    if (!text) continue;
+    const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    const date = day
+      ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]))
+      : new Date(text);
+    if (!Number.isNaN(date.getTime()))
+      return date.toLocaleDateString('zh-CN', {
+        month: 'long',
+        day: 'numeric',
+      });
+  }
+  return '';
+}
 
 export function Library() {
-  const [library, setLibrary] = useState<LibraryState | null>(null);
-  const [error, setError] = useState('');
+  // The library the side bar counts from too: a change made here shows there at once, and one request serves both.
+  const library = useTeam((state) => state.library);
+  const loadError = useTeam((state) => state.error);
+  const [problem, setProblem] = useState('');
+  // A failed refresh shows even over a list already on screen, as the page's own poll always did.
+  const error = problem || loadError;
   const confirm = useConfirm();
   const input = useRef<HTMLInputElement>(null);
   const transcriptInput = useRef<HTMLInputElement>(null);
@@ -156,20 +179,21 @@ export function Library() {
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
-  const load = useCallback(async () => {
-    try {
-      const [state, again] = await Promise.all([
-        api<LibraryState>('/api/library'),
-        // Only an offer: the library works the same without it.
-        api<Recollection>('/api/library/recollect').catch(() => null),
-      ]);
-      setLibrary(state);
-      setRecollection(Array.isArray(again?.recordings) ? again : null);
-      setError('');
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '无法加载录音库');
-    }
+  // What can be collected again is only an offer: the library works the same without it.
+  const loadOffer = useCallback(async () => {
+    const again = await api<Recollection>('/api/library/recollect').catch(
+      () => null,
+    );
+    setRecollection(Array.isArray(again?.recordings) ? again : null);
   }, []);
+  // After a change the page makes: asked again at once, for the side bar's counts as much as for this list.
+  const load = useCallback(async () => {
+    await Promise.all([useTeam.getState().refresh(true), loadOffer()]);
+  }, [loadOffer]);
+  // Polling shares the side bar's request when it asked a moment ago.
+  const follow = useCallback(async () => {
+    await Promise.all([useTeam.getState().refresh(), loadOffer()]);
+  }, [loadOffer]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -190,7 +214,7 @@ export function Library() {
         ? 60000
         : 3000
       : 0;
-  usePolling(load, interval);
+  usePolling(follow, interval);
 
   // Recordings upload; a transcript is read and looked at first, in a dialog of its own.
   const take = (files: File[]) => {
@@ -199,16 +223,18 @@ export function Library() {
     void add(files.filter((file) => !isTranscript(file)));
   };
   const retry = async (recording: Recording) => {
+    setProblem('');
     try {
       await api(`/api/library/recordings/${recording.id}/retry`, {
         method: 'POST',
       });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '重试失败');
+      setProblem(failure instanceof Error ? failure.message : '重试失败');
     }
     await load();
   };
   const recollect = async (ids: string[]) => {
+    setProblem('');
     try {
       await api('/api/library/recollect', {
         method: 'POST',
@@ -216,7 +242,7 @@ export function Library() {
       });
       setPicking(false);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '操作失败');
+      setProblem(failure instanceof Error ? failure.message : '操作失败');
     }
     await load();
   };
@@ -239,13 +265,14 @@ export function Library() {
       }))
     )
       return;
+    setProblem('');
     try {
       await api(
         `/api/library/recordings/${encodeURIComponent(recording.id)}/rollback`,
         { method: 'POST' },
       );
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '回退失败');
+      setProblem(failure instanceof Error ? failure.message : '回退失败');
     }
     await load();
   };
@@ -253,18 +280,23 @@ export function Library() {
     if (
       !(await confirm({
         title: `删除「${recording.filename}」？`,
-        body: '转写结果和试听文件会一起删除，不能恢复',
+        // A transcript has no sound to delete with it.
+        body:
+          recording.kind === 'transcript'
+            ? '导入的转写稿会删除，不能恢复'
+            : '转写结果和试听文件会一起删除，不能恢复',
         confirmLabel: '删除录音',
         tone: 'danger',
       }))
     )
       return;
+    setProblem('');
     try {
       await api(`/api/library/recordings/${recording.id}`, {
         method: 'DELETE',
       });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '删除失败');
+      setProblem(failure instanceof Error ? failure.message : '删除失败');
     }
     await load();
   };
@@ -398,6 +430,7 @@ export function Library() {
                 {filtered.map((recording) => {
                   const label = stateLabel(recording);
                   const ready = recording.status === 'ready';
+                  const failed = recording.status === 'failed';
                   const editable = recording.can_edit !== false;
                   return (
                     <ListRow
@@ -421,12 +454,7 @@ export function Library() {
                         )
                       }
                       meta={[
-                        Number.isNaN(Date.parse(recording.created_at))
-                          ? ''
-                          : new Date(recording.created_at).toLocaleDateString(
-                              'zh-CN',
-                              { month: 'long', day: 'numeric' },
-                            ),
+                        madeOn(recording),
                         recording.kind === 'transcript' &&
                         recording.duration_s !== null
                           ? `约 ${minutes(recording.duration_s)}`
@@ -453,15 +481,19 @@ export function Library() {
                           {recollectingIds.has(recording.id) && (
                             <Badge>重新采集中</Badge>
                           )}
-                          {ready && editable && !recording.unsettled && (
-                            <Text as="span" size="sm" tone="success">
-                              都认出来了
-                            </Text>
-                          )}
-                          {recording.status === 'failed' && editable && (
+                          {ready &&
+                            editable &&
+                            !recording.unsettled &&
+                            !recollectingIds.has(recording.id) && (
+                              <Text as="span" size="sm" tone="success">
+                                都认出来了
+                              </Text>
+                            )}
+                          {failed && editable && (
                             <Button
                               variant="secondary"
                               size="sm"
+                              title={recording.error || undefined}
                               onClick={() => void retry(recording)}
                             >
                               重试
@@ -521,7 +553,7 @@ export function Library() {
                           max={recording.duration_s ?? 100}
                         />
                       )}
-                      {recording.error && (
+                      {recording.error && !(failed && editable) && (
                         <Text size="sm" tone="danger">
                           {recording.error}
                         </Text>
@@ -540,7 +572,6 @@ export function Library() {
         onImported={(result) => {
           setTranscripts((current) => current.slice(1));
           void load();
-          void useTeam.getState().refresh(true);
           toast(
             result.new === false
               ? '这份转写稿已经导入过'

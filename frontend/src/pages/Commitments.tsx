@@ -38,7 +38,11 @@ export function Commitments() {
             </Chip>
           </div>
           {!everyone && (
-            <PersonPicker persona={persona} name={persona?.name ?? '选人'} />
+            <PersonPicker
+              managed
+              persona={persona}
+              name={persona?.name ?? '选人'}
+            />
           )}
         </Row>
       }

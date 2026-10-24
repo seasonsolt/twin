@@ -16,6 +16,7 @@ export function PersonPicker({
   name,
   compact = false,
   inline = false,
+  managed = false,
 }: {
   persona?: Persona;
   name: string;
@@ -23,9 +24,12 @@ export function PersonPicker({
   compact?: boolean;
   /** Part of a line of controls (the composer's), not a field of its own. */
   inline?: boolean;
+  /** Only the twins the person looks after are offered. */
+  managed?: boolean;
 }) {
   return (
     <PersonaSwitcher
+      managed={managed}
       label={`切换分身（当前：${name}）`}
       className={
         compact

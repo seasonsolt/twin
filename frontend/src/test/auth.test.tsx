@@ -883,3 +883,93 @@ it('takes 回去再听一遍 to the first step of the way in, with no empty twin
   await user.click(screen.getByRole('button', { name: '稍后再说' }));
   await screen.findByRole('heading', { name: '我的分身，你的分身已经建好了' });
 });
+
+const noVoices = () => {
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (path: string, init: RequestInit) =>
+    path === '/api/library/voice'
+      ? json({ available: true, enrolled: false, items: [], persona_id: null })
+      : base(path, init),
+  );
+};
+const colleague = (change: Partial<Persona> = {}): Persona => ({
+  ...persona,
+  id: 'p-pub',
+  name: '同事',
+  owner: 'other@xjjk.com',
+  public: true,
+  can_manage: false,
+  ...change,
+});
+
+it('sends a company account that has no twin of its own, with only colleagues’ public twins to talk to, to finding itself first', async () => {
+  loggedIn = true;
+  whoami = { ...member, address: 'me@xjjk.com' };
+  items = [colleague()];
+  noVoices();
+  window.location.hash = '#/chat';
+  render(<App />);
+  await screen.findByRole('heading', { name: '会议里可能有你' });
+  expect(window.location.hash).toBe('#/welcome');
+  // Passing the step leaves them with the conversation alone, as for any guest.
+  await userEvent.click(screen.getByRole('button', { name: '稍后再说' }));
+  await waitFor(() => expect(window.location.hash).toBe('#/chat'));
+});
+
+it('does not take the twin back to the one waiting for a go-ahead once that step is left for later', async () => {
+  loggedIn = true;
+  items = [
+    {
+      ...persona,
+      name: '赵晴',
+      mine: true,
+      made_by_other: true,
+      approved: false,
+    },
+    { ...persona, id: 'p-other', name: '陈默', is_default: false },
+  ];
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '赵晴，你的分身已经建好了' });
+  await user.click(screen.getByRole('button', { name: '稍后再说' }));
+  await screen.findByRole('navigation', { name: '主导航' });
+  // Looking at a colleague's twin: it stays so, instead of being pulled back to the waiting one.
+  await act(() => usePersonas.getState().switchTo('p-other'));
+  await waitFor(() => expect(usePersonas.getState().id).toBe('p-other'));
+  await new Promise((done) => setTimeout(done, 1000));
+  expect(usePersonas.getState().id).toBe('p-other');
+}, 10000);
+
+it('takes the commitments page to a twin its person looks after, and offers no other', async () => {
+  loggedIn = true;
+  items = [colleague(), persona];
+  window.location.hash = '#/commitments';
+  setPersonaId('p-pub');
+  render(<App />);
+  await waitFor(() => expect(usePersonas.getState().id).toBe('p-first'));
+  await userEvent.click(
+    await screen.findByRole('button', { name: /^切换分身/u }),
+  );
+  const choices = await screen.findByRole('dialog', { name: '切换分身' });
+  expect(within(choices).getByText('我的分身')).toBeVisible();
+  expect(within(choices).queryByText('同事')).toBeNull();
+});
+
+it('leaves nothing of the one who signed out for the next to see: uploads, roster and counts', async () => {
+  const { useUploadStore } = await import('../stores/uploads');
+  const { useTeam } = await import('../stores/team');
+  useAuth.setState({ identity: { ...member, name: '甲' } as never });
+  useUploadStore.setState({
+    picks: [{ file: new File(['a'], '甲的会议.m4a'), error: '上传失败' }],
+    notice: '甲的提示',
+  });
+  useTeam.setState({ people: [], library: { recordings: [] } as never });
+  useAuth.getState().clear();
+  expect(useUploadStore.getState().picks).toEqual([]);
+  expect(useUploadStore.getState().notice).toBe('');
+  expect(useTeam.getState().people).toBeNull();
+  expect(useTeam.getState().library).toBeNull();
+});

@@ -21,17 +21,14 @@ import { SidebarAccount } from '../components/layout/Sidebar';
 import { basePath } from '../lib/base';
 import { useMobile } from '../lib/useMobile';
 import { usePolling } from '../lib/usePolling';
-import { Team } from '../features/library/Team';
+import { LegacyTodo, Team } from '../features/library/Team';
 import { UploadList } from '../features/library/UploadList';
 import { useLibraryFeed } from '../features/library/useLibraryFeed';
 import { useUploads } from '../features/library/useUploads';
+import { useAuth } from '../stores/auth';
 import { useTeam } from '../stores/team';
 
-const STEPS: [string, string][] = [
-  ['转写，分出每个人', '每段录音只转写一次。'],
-  ['认人', '认得出的直接归位，拿不准的放进待处理请你听一下。'],
-  ['每人一个分身', '之后的录音自动补进他的记忆。'],
-];
+const STEPS = ['转写分人', '认人', '建分身'];
 
 /** The site's address, to send to colleagues so they can sign in and recognise themselves in the meetings. */
 function copyInvite() {
@@ -42,9 +39,18 @@ function copyInvite() {
   );
 }
 
-/** The account's start page: the people found in its meeting recordings, what needs settling, and uploading. With
- * no recording yet, it is the way to the first one. */
+/** The account's start page: the people found in its meeting recordings, and uploading. With no recording yet, it
+ * is the way to the first one, with whoever is on the team already (twins made by hand) below. The old address of
+ * the inbox leads there at once, without waiting for the library. */
 export function Home() {
+  return (
+    <LegacyTodo>
+      <TeamPage />
+    </LegacyTodo>
+  );
+}
+
+function TeamPage() {
   const { library, error, version, load, poll } = useLibraryFeed();
   const input = useRef<HTMLInputElement>(null);
   const mobile = useMobile();
@@ -52,6 +58,11 @@ export function Home() {
     () => void load(),
   );
   const busy = uploading || !!library?.pending;
+  // Colleagues recognise themselves in the meetings by signing in with the company account.
+  const inviting = useAuth(
+    (state) =>
+      !!state.identity?.auth_enabled && state.identity.provider === 'sso',
+  );
   // Uploads and transcription move by the second; waiting proofreads only need to leave 正在处理 eventually.
   const interval = busy
     ? 3000
@@ -86,7 +97,7 @@ export function Home() {
       title="把会议录音拖到这里"
       inputLabel="选择录音文件"
       onFiles={(files) => void add(files)}
-      hint="音频、视频都行，一次可以选多个。团队里参会的人也能看到。"
+      hint="音频、视频，可多选"
     />
   );
   return (
@@ -102,22 +113,15 @@ export function Home() {
             {notice}
           </Text>
         )}
-        {library && !library.asr && (
-          <Notice>
-            还没有配置能区分说话人的转写服务（asr-funasr），录音会先排队，配置后自动开始转写。
-          </Notice>
-        )}
+        {library && !library.asr && <Notice>转写服务未配置，录音先排队</Notice>}
         {!library ? (
           <Skeleton className="h-64" />
         ) : fresh ? (
           <>
             <Stack as="header" gap={2}>
-              <Heading level={2} size="display" align="center">
+              <Heading level={1} size="display" align="center">
                 从一段会议录音开始
               </Heading>
-              <Text tone="secondary" align="center">
-                不用先建档。传上来以后，系统分出每个人、认出已知的人，新出现的人自动建档。
-              </Text>
             </Stack>
             {drop}
             <UploadList
@@ -126,7 +130,7 @@ export function Home() {
               onStop={stop}
             />
             <Grid as="ol" columns={3} aria-label="接下来会发生什么">
-              {STEPS.map(([title, body], i) => (
+              {STEPS.map((title, i) => (
                 <Card
                   as="li"
                   key={title}
@@ -137,30 +141,31 @@ export function Home() {
                   <Text as="span" weight="semibold">
                     {title}
                   </Text>
-                  <Text as="span" size="sm" tone="secondary">
-                    {body}
-                  </Text>
                 </Card>
               ))}
             </Grid>
-            <Card as="section" aria-label="邀请同事" variant="outline">
-              <Row justify="between" wrap gap={4}>
-                <Stack gap={0}>
-                  <Text weight="semibold">请同事来认自己</Text>
-                  <Text size="sm" tone="secondary">
-                    他们登录后听几句就能确认哪段是自己，分身更准，你也少确认几次。
-                  </Text>
-                </Stack>
-                <Button variant="secondary" onClick={copyInvite}>
-                  复制邀请链接
-                </Button>
-              </Row>
-            </Card>
+            {inviting && (
+              <Card as="section" aria-label="邀请同事" variant="outline">
+                <Row justify="between" wrap gap={4}>
+                  <Text weight="semibold">请同事登录认自己</Text>
+                  <Button variant="secondary" onClick={copyInvite}>
+                    复制邀请链接
+                  </Button>
+                </Row>
+              </Card>
+            )}
+            {/* Twins made by hand, and the deleted ones to bring back, are there before any recording is. */}
+            <Team
+              quietWhenEmpty
+              version={version}
+              recordings={library.recordings}
+              onReload={load}
+            />
           </>
         ) : (
           <>
             <Toolbar as="header" gap={4} align="end">
-              <Heading level={2} size="display">
+              <Heading level={1} size="display">
                 团队
               </Heading>
               {/* The side bar has the button; a phone has no side bar. */}
@@ -181,7 +186,6 @@ export function Home() {
               version={version}
               recordings={library.recordings}
               onReload={load}
-              uploads={unfinished.filter((pick) => !pick.error)}
             />
           </>
         )}

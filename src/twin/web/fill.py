@@ -74,7 +74,10 @@ def register(
     def kept_of(items: list[KeptBody]) -> list[fill.Kept]:
         if any(i.facet not in FACET_BY_ID for i in items):
             raise HTTPException(400, "没有这个方面")
-        return [fill.Kept(i.facet, " ".join(i.statement.split()), i.choice) for i in items]
+        kept = [fill.Kept(i.facet, " ".join(i.statement.split()), i.choice) for i in items]
+        if any(not k.statement for k in kept):
+            raise HTTPException(400, "结论不能是空的")
+        return kept
 
     def worth(store: PersonaStore, ask: fill.Ask, kept: list[fill.Kept]) -> list[dict[str, Any]]:
         name = stored_identity(settings.db_path)[0] or settings.target_name

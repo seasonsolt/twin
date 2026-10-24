@@ -333,6 +333,8 @@ def test_an_answer_that_is_empty_or_too_long_is_refused(web: TestClient) -> None
     # Conclusions that are too many, or from a facet there is none of, are refused too.
     many = [{"facet": "8.1", "statement": f"第{i}条", "choice": "colleague"} for i in range(fill.MAX_DRAFTS + 1)]
     assert web.post("/api/persona/fill/keep", json={**body, "items": many}, headers=mine).status_code in (400, 422)
+    blank = [{"facet": "8.1", "statement": "  \n ", "choice": "colleague"}]
+    assert web.post("/api/persona/fill/keep", json={**body, "items": blank}, headers=mine).status_code == 400
     unknown = [{"facet": "99.9", "statement": FIRST, "choice": "colleague"}]
     assert web.post("/api/persona/fill/keep", json={**body, "items": unknown}, headers=mine).status_code == 400
 

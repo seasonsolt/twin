@@ -55,6 +55,8 @@ export interface Recording {
   created_at: string;
   // When it was recorded (an imported transcript: the day the importer gave), when the file says; else null.
   creation_time?: string | null;
+  // Who uploaded it (an account key), if known.
+  uploader?: string | null;
   // Who the speakers were recognised as, and how many still wait for the owner.
   people: string[];
   unsettled: number;

@@ -343,7 +343,12 @@ def test_admin_switches_work_and_ledger_off_but_never_chat(tmp_path: Path) -> No
     }
     client.put("/api/admin/system/features/ledger", json={"enabled": False}, headers=CSRF)
     assert client.get("/api/whoami").json()["features"] == {"work": False, "ledger": False}
-    for path in ("/api/persona/work", "/api/persona/work/t1/stop", "/api/persona/ledger/brief"):
+    for path in (
+        "/api/persona/work",
+        "/api/persona/work/t1/stop",
+        "/api/persona/ledger/brief",
+        "/api/personas/commitments",
+    ):
         refused = client.get(path) if "stop" not in path else client.post(path, headers=CSRF)
         assert refused.status_code == 403 and refused.json()["code"] == "feature_off", path
     assert client.get("/api/persona/work").json()["detail"] == "管理员已关闭工作"
@@ -489,6 +494,7 @@ def test_members_cannot_see_or_upgrade_components(tmp_path: Path, monkeypatch: p
     with TestClient(application, base_url="http://localhost", headers=CSRF) as client:
         assert client.get("/api/admin/system/components").status_code == 403
         assert client.post("/api/admin/system/components/kernel").status_code == 403
+        assert client.put("/api/admin/system/team", json={"name": "x"}).status_code == 403
         assert client.put("/api/admin/system/params/library.max_pending", json={"value": 2}).status_code == 403
 
 

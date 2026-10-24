@@ -77,6 +77,7 @@ export interface AuditEntry {
   param?: string;
   value?: [boolean | number, boolean | number];
   personas?: string[];
+  name?: [string | null, string | null];
 }
 
 /** A twin.toml value an administrator may change here, effective at once. */

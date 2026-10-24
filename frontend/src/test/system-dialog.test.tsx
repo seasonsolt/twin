@@ -79,9 +79,13 @@ let library: LibraryState;
 let components: Components;
 let puts: { url: string; body: unknown }[];
 let posts: { url: string; body: unknown }[];
+let teamRefusal: string;
+let libraryFails: boolean;
 beforeEach(() => {
   puts = [];
   posts = [];
+  teamRefusal = '';
+  libraryFails = false;
   useSystem.setState({
     data: null,
     error: '',
@@ -256,7 +260,12 @@ beforeEach(() => {
         };
         return json({ queued: ['default'], ...components });
       }
-      if (url === '/api/library') return json(library);
+      if (url === '/api/library')
+        return libraryFails
+          ? new Response(JSON.stringify({ detail: '录音库暂时读不出来' }), {
+              status: 500,
+            })
+          : json(library);
       if (url === '/api/admin/system/components') return json(components);
       if (init?.method === 'PUT') {
         const body: unknown = JSON.parse(String(init.body));
@@ -285,6 +294,10 @@ beforeEach(() => {
               },
             },
           };
+        if (url === '/api/admin/system/team' && teamRefusal)
+          return new Response(JSON.stringify({ detail: teamRefusal }), {
+            status: 400,
+          });
         if (url === '/api/admin/system/team')
           state = {
             ...state,
@@ -675,6 +688,24 @@ it('changes a parameter at once, refuses what is not a number, and goes back to 
   );
 });
 
+const waiting = (uploader: string, n: number, from = 0) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `${uploader}-${from + i}`,
+    filename: `${uploader}-${from + i}.m4a`,
+    size: 1,
+    kind: 'audio' as const,
+    status: 'queued' as const,
+    error: '',
+    duration_s: null,
+    transcribed_s: 0,
+    speakers: 0,
+    segments: 0,
+    created_at: '2026-10-18T02:00:00+00:00',
+    people: [],
+    unsettled: 0,
+    uploader,
+  }));
+
 it('shows how much room the recordings have, from the library itself', async () => {
   show('library');
   const dialog = await screen.findByRole('dialog', { name: '系统' });
@@ -682,22 +713,70 @@ it('shows how much room the recordings have, from the library itself', async () 
   expect(
     within(dialog).getByRole('button', { name: /录音库容量/, current: 'page' }),
   ).toBeInTheDocument();
-  expect(
-    await within(dialog).findByRole('progressbar', { name: '排队 3 / 20' }),
-  ).toHaveAttribute('aria-valuenow', '3');
+  // The whole team's queue, beside the cap each member has.
+  expect(await within(dialog).findByText('3 条')).toBeInTheDocument();
+  expect(within(dialog).getByText('20 条')).toBeInTheDocument();
   // What is free, less what is arriving and what is kept back.
   expect(within(dialog).getByText('约 58.0 GB')).toBeInTheDocument();
+  expect(within(dialog).getByText('安全余量')).toBeInTheDocument();
   expect(within(dialog).getByText('2 项 · 2.0 GB')).toBeInTheDocument();
 });
 
-it('flags the library in the menu only once its queue or disk is full', async () => {
-  library = { ...library, pending: 20 };
+it('flags the queue only when one member has filled their own, not when the team adds up to the cap', async () => {
+  // Twenty waiting in all, but none of the four members has more than five.
+  library = {
+    ...library,
+    recordings: ['a', 'b', 'c', 'd'].flatMap((who) => waiting(who, 5)),
+    pending: 20,
+  };
   show('library');
   const dialog = await screen.findByRole('dialog', { name: '系统' });
-  await within(dialog).findByRole('progressbar', { name: '排队 20 / 20' });
+  await within(dialog).findByText('每人上限');
   expect(
-    within(dialog).getByRole('button', { name: /录音库容量.*队列已满/ }),
+    within(dialog).getByRole('button', { name: '录音库容量' }),
   ).toBeInTheDocument();
+  expect(within(dialog).queryByText(/有人排满/)).toBeNull();
+});
+
+it('flags the queue in the menu when a member has filled their own', async () => {
+  library = {
+    ...library,
+    recordings: waiting('a', 20),
+    pending: 20,
+  };
+  show('library');
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  await within(dialog).findByText('1 位成员');
+  expect(
+    within(dialog).getByRole('button', { name: /录音库容量.*有人排满/ }),
+  ).toBeInTheDocument();
+});
+
+it('flags the library in the menu when the disk has no room left', async () => {
+  library = {
+    ...library,
+    capacity: { ...library.capacity, free_bytes: 21 * 1024 ** 3 },
+  };
+  show('library');
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  await within(dialog).findByText('约 0.0 GB');
+  expect(
+    within(dialog).getByRole('button', { name: /录音库容量.*空间不足/ }),
+  ).toBeInTheDocument();
+});
+
+it('says why the library capacity cannot be shown, and reads it again on retry', async () => {
+  const user = userEvent.setup();
+  libraryFails = true;
+  show('library');
+  const dialog = await screen.findByRole('dialog', { name: '系统' });
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    '录音库暂时读不出来',
+  );
+  libraryFails = false;
+  await user.click(within(dialog).getByRole('button', { name: '重试' }));
+  expect(await within(dialog).findByText('3 条')).toBeInTheDocument();
+  expect(within(dialog).queryByRole('alert')).toBeNull();
 });
 
 it('names the team in the settings, and the side bar and the way in follow at once', async () => {
@@ -729,4 +808,38 @@ it('names the team in the settings, and the side bar and the way in follow at on
     url: '/api/admin/system/team',
     body: { name: '' },
   });
+});
+
+it('shows what the server said when the team name is refused', async () => {
+  const user = userEvent.setup();
+  teamRefusal = '团队名不能含控制字符';
+  show('team');
+  await user.type(await screen.findByRole('textbox', { name: '团队名' }), 'x');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '团队名不能含控制字符',
+  );
+});
+
+it('says in the recent changes what the team was renamed to', async () => {
+  state = {
+    ...state,
+    audit: [
+      {
+        at: '2026-10-18T03:00:00+00:00',
+        by: 'zhangxun',
+        action: 'team_name',
+        name: ['产品部', null],
+      },
+      {
+        at: '2026-10-18T02:00:00+00:00',
+        by: 'zhangxun',
+        action: 'team_name',
+        name: [null, '产品部'],
+      },
+    ],
+  };
+  show('tokens');
+  expect(await screen.findByText(/把团队名改为 产品部/)).toBeInTheDocument();
+  expect(screen.getByText(/清除了团队名/)).toBeInTheDocument();
 });

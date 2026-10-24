@@ -77,7 +77,7 @@ class ConversationIndex:
     """One twin's conversations in the team database (``teamdb``): written right after the twin's own database, and
     mended at startup if a write did not make it, so a failure here never fails the conversation."""
 
-    def __init__(self, team: TeamDB | None, persona_id: str) -> None:
+    def __init__(self, team: TeamDB, persona_id: str) -> None:
         self.team, self.persona_id = team, persona_id
 
     def created(
@@ -119,8 +119,6 @@ class ConversationIndex:
         )
 
     def deleted(self, conversation_id: str) -> None:
-        if self.team is None:
-            return
         try:
             self.team.delete_conversation(conversation_id, persona_id=self.persona_id)
         except sqlite3.Error:
@@ -132,8 +130,6 @@ class ConversationIndex:
         not know, or any failure to read it, is the colleague tier."""
         if conversation_id is None:
             return current
-        if self.team is None:
-            return current
         try:
             stored = self.team.audience_of(conversation_id, persona_id=self.persona_id)
         except sqlite3.Error:
@@ -142,8 +138,6 @@ class ConversationIndex:
         return SELF if stored == SELF and current == SELF else COLLEAGUE
 
     def _write(self, write: Any, store: PersonaStore, conversation_id: str) -> None:
-        if self.team is None:
-            return
         head = store.conversation_head(conversation_id)
         if head is None:
             return
@@ -276,9 +270,11 @@ def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
         offset: int = Query(default=0, ge=0),
         with_persona: str | None = Query(default=None, alias="with"),
         mine: bool = False,
+        task_offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         """``with``: only that twin's. ``mine``: only those with the person's own twin; otherwise those are left out,
-        since they are not conversations with someone else. Tasks come with the first page."""
+        since they are not conversations with someone else. Tasks come with the first page; ``task_offset`` asks for
+        the next ones instead (and no conversations)."""
         identity = request.scope["twin_identity"]
         email = identity["email"]
         with registry.lock:
@@ -287,21 +283,25 @@ def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
         ids = [i for i in visible if i in own] if mine else list(visible)
         if with_persona is not None:
             ids = [i for i in ids if i == with_persona]
+        rows: list[Any] = []
         try:
-            # A conversation with one's own twin that the colleague tier answered (from before the index knew the
-            # difference, or with the twin not yet said to be all right) is an ordinary one.
-            rows = team.conversations(
-                personas=ids,
-                asked_by=email,
-                self_tier_of=own if mine else None,
-                not_self_tier_of=None if mine else own,
-                limit=EVERYONE_PAGE + 1,
-                offset=offset,
-            )
+            if not task_offset:
+                # A conversation with one's own twin that the colleague tier answered (from before the index knew the
+                # difference, or with the twin not yet said to be all right) is an ordinary one.
+                rows = team.conversations(
+                    personas=ids,
+                    asked_by=email,
+                    self_tier_of=own if mine else None,
+                    not_self_tier_of=None if mine else own,
+                    limit=EVERYONE_PAGE + 1,
+                    offset=offset,
+                )
             page = rows[:EVERYONE_PAGE]
+            # Where the next page of conversations begins: the ones added below are not part of the paging.
+            next_offset = offset + len(page)
             # What the assistant asked colleagues' twins in the person's name belongs with the assistant's own list
             # (under 问同事); in the list of everything it is already among the rest.
-            if mine and offset == 0:
+            if mine and offset == 0 and not task_offset:
                 page += team.conversations(
                     personas=[i for i in visible if i not in own],
                     asked_by=email,
@@ -361,6 +361,8 @@ def register_all(app: FastAPI, registry: Personas, team: TeamDB) -> None:
         return {
             "mine": {"persona_id": next(iter(sorted(own)), None), "pending": pending} if own else None,
             "conversations": conversations,
-            "tasks": tasks[:EVERYONE_PAGE],
+            "tasks": tasks[task_offset : task_offset + EVERYONE_PAGE],
             "more": len(rows) > EVERYONE_PAGE,
+            "next": next_offset,
+            "more_tasks": len(tasks) > task_offset + EVERYONE_PAGE,
         }

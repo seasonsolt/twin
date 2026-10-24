@@ -137,7 +137,7 @@ it('makes a new twin in a small card where the person is, showing its first char
 it('keeps the sheet, optional stage and scrolling conversation separate with the composer inside the thread', async () => {
   const view = mount(<Chat />);
   expect(view.container.querySelector('.chat-stage')).toBeNull();
-  const sheet = screen.getByRole('region', { name: '和小林的对话' });
+  const sheet = screen.getByRole('region', { name: '对话列表' });
   expect(sheet.closest('.chat-surface-sheet')).not.toBeNull();
   await userEvent.setup().click(screen.getByRole('button', { name: '形象' }));
   const stage = screen.getByRole('banner', { name: '小林的舞台' });
@@ -192,7 +192,7 @@ it('starts with a collapsed sheet on tablet, with an accessible expand control',
   await userEvent
     .setup()
     .click(screen.getByRole('button', { name: '展开对话列表' }));
-  const sheet = screen.getByRole('region', { name: '和小林的对话' });
+  const sheet = screen.getByRole('region', { name: '对话列表' });
   expect(within(sheet).getByRole('button', { name: '新对话' })).toBeVisible();
   // The twin is picked beside the box a message is written in, not in the list.
   expect(within(sheet).queryByRole('button', { name: /^切换分身/ })).toBeNull();

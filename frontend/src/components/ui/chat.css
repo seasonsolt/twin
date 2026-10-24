@@ -282,17 +282,17 @@
   border: 0;
   overflow: visible;
 }
-.chat-redesign[data-empty='true'] .chat-thread {
+.chat-page.chat-redesign[data-empty='true'] .chat-thread {
   justify-content: safe center;
-  padding-bottom: 8dvh;
+  padding-bottom: 12dvh;
 }
 /* Centred while it fits; taller content (a new twin's setup card) scrolls from its top instead of being cut off. */
-.chat-redesign[data-empty='true'] .chat-scroll {
+.chat-page.chat-redesign[data-empty='true'] .chat-scroll {
   flex: 0 1 auto;
   overflow-y: auto;
 }
-.chat-redesign[data-empty='true'] .chat-scroll > .chat-column-grid,
-.chat-redesign[data-empty='true'] .chat-conversation {
+.chat-page.chat-redesign[data-empty='true'] .chat-scroll > .chat-column-grid,
+.chat-page.chat-redesign[data-empty='true'] .chat-conversation {
   min-height: 0;
 }
 .chat-redesign .stage-space {
@@ -344,11 +344,11 @@
   .chat-redesign .chat-composer {
     padding-bottom: var(--spacing-2);
   }
-  .chat-redesign[data-empty='true'] .chat-thread {
+  .chat-page.chat-redesign[data-empty='true'] .chat-thread {
     padding-bottom: 0;
     justify-content: flex-start;
   }
-  .chat-redesign[data-empty='true'] .chat-scroll {
+  .chat-page.chat-redesign[data-empty='true'] .chat-scroll {
     flex: 1;
     display: grid;
     align-items: safe center;

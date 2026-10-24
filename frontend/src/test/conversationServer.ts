@@ -15,6 +15,8 @@ export function conversationServer() {
     mine: null,
   };
   const tasks: ListedTask[] = [];
+  // How many the list gives at a time (the real one: 50); a test about paging makes it small.
+  const paging = { size: 50 };
   const rows = new Map<
     string,
     {
@@ -40,18 +42,32 @@ export function conversationServer() {
       const offset = Number(query.get('offset') || 0);
       const only = query.get('with');
       const apart = query.get('mine') === 'true';
+      const taskOffset = Number(query.get('task_offset') || 0);
       const mineId = own.mine?.persona_id ?? null;
       const wanted = (id: string) =>
         (!only || id === only) && (id === mineId) === apart;
+      const byRecent = (a: { updated_at: string }, b: { updated_at: string }) =>
+        b.updated_at.localeCompare(a.updated_at);
       const listed = [...rows.values()]
-        // What the assistant asked in the person's name is listed with the assistant's own.
-        .filter(
-          (row) => wanted(row.persona) || (apart && row.via === 'delegate'),
-        )
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+        .filter((row) => wanted(row.persona))
+        .sort(byRecent);
+      const shown = taskOffset
+        ? []
+        : listed.slice(offset, offset + paging.size);
+      // What the assistant asked in the person's name comes with the first page of the assistant's own list, and is
+      // not counted in the paging.
+      const asked =
+        apart && !offset && !taskOffset
+          ? [...rows.values()]
+              .filter((row) => row.via === 'delegate' && !wanted(row.persona))
+              .sort(byRecent)
+          : [];
+      const listedTasks = tasks
+        .filter((task) => wanted(task.persona_id))
+        .sort(byRecent);
       return json({
         mine: own.mine,
-        conversations: listed.slice(offset, offset + 50).map((row) => ({
+        conversations: [...shown, ...asked].map((row) => ({
           id: row.id,
           persona_id: row.persona,
           title: row.title,
@@ -61,8 +77,12 @@ export function conversationServer() {
           handoff: row.turns.at(-1)?.role === 'self' ? '本人已回' : null,
           delegated: row.delegated ?? 0,
         })),
-        tasks: offset ? [] : tasks.filter((task) => wanted(task.persona_id)),
-        more: listed.length > offset + 50,
+        tasks: offset
+          ? []
+          : listedTasks.slice(taskOffset, taskOffset + paging.size),
+        more: !taskOffset && listed.length > offset + paging.size,
+        next: offset + shown.length,
+        more_tasks: listedTasks.length > taskOffset + paging.size,
       });
     }
     if (path === '/api/conversations' && init?.method === 'POST') {
@@ -135,5 +155,5 @@ export function conversationServer() {
     );
     row.updated_at = new Date().toISOString();
   };
-  return { rows, respond, append, tasks, own };
+  return { rows, respond, append, tasks, own, paging };
 }

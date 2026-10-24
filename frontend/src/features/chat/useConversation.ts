@@ -9,6 +9,7 @@ import { getPersonaId, personaKey } from '../../lib/persona';
 import { usePolling } from '../../lib/usePolling';
 import { readSSE } from '../../lib/sse';
 import {
+  settling,
   spoken,
   waiting,
   withHandoffs,
@@ -20,15 +21,6 @@ import {
 
 export const CHAT_KEY = 'twin.next.chat';
 export const CURRENT_CHAT_KEY = 'twin.current.conversation';
-export interface ConversationSummary {
-  id: string;
-  title: string;
-  updated_at: string;
-  turns: number;
-  preview: string;
-  /** The last word is the person's own reply to what the twin handed them. */
-  owner_replied?: boolean;
-}
 /** Which tier of memory a conversation answers from: ``self`` is the person's own, with their assistant. */
 export type Audience = 'self' | 'colleague';
 interface Conversation {
@@ -126,6 +118,11 @@ export function useConversation(active: boolean) {
   );
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [audience, setAudience] = useState<Audience | null>(null);
+  // What the conversation open is called, as it was read or renamed here: the list may not hold it (another page of
+  // it, or another list than the conversation's own).
+  const [conversationTitle, setConversationTitle] = useState<string | null>(
+    null,
+  );
   const id = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -134,14 +131,13 @@ export function useConversation(active: boolean) {
   const [restoreFailed, setRestoreFailed] = useState(false);
   const [restoreVersion, setRestoreVersion] = useState(0);
   const [error, setError] = useState('');
-  const [historyError, setHistoryError] = useState('');
-  const [history, setHistory] = useState<ConversationSummary[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
+  // Why a conversation of the list could not be opened.
+  const [openError, setOpenError] = useState('');
+  // Counts what was written to the person's conversations (made, answered, renamed, deleted), for the list to ask again.
+  const [written, setWritten] = useState(0);
   const [newest, setNewest] = useState<string | null>(null);
   const mounted = useRef(false);
   const request = useRef<AbortController | null>(null);
-  const historyRequest = useRef<AbortController | null>(null);
   const failed = useRef<string | null>(null);
   const failedTrial = useRef(false);
   const failedLens = useRef<string | null>(null);
@@ -153,33 +149,9 @@ export function useConversation(active: boolean) {
     },
     [currentKey],
   );
-  const refreshHistory = useCallback(
-    async (offset = 0) => {
-      historyRequest.current?.abort();
-      const controller = new AbortController();
-      historyRequest.current = controller;
-      setHistoryLoading(true);
-      setHistoryError('');
-      try {
-        const rows = await api<ConversationSummary[]>(
-          `/api/conversations?offset=${offset}`,
-          {
-            headers: headers(),
-            signal: controller.signal,
-          },
-        );
-        if (controller.signal.aborted || !mounted.current) return;
-        setHistory((previous) => (offset ? [...previous, ...rows] : rows));
-        setHasMore(rows.length === 50);
-      } catch (error) {
-        if (!controller.signal.aborted && mounted.current)
-          setHistoryError(message(error));
-      } finally {
-        if (!controller.signal.aborted && mounted.current)
-          setHistoryLoading(false);
-      }
-    },
-    [headers],
+  const markWritten = useCallback(
+    () => setWritten((count) => count + 1),
+    [setWritten],
   );
   useEffect(() => {
     mounted.current = active;
@@ -193,7 +165,6 @@ export function useConversation(active: boolean) {
       mounted.current = false;
       controller.abort();
       request.current?.abort();
-      historyRequest.current?.abort();
     };
     window.addEventListener('twin-persona-switch', stop);
     const legacy = loadLegacy(legacyKey);
@@ -201,6 +172,7 @@ export function useConversation(active: boolean) {
     id.current = null;
     setConversationId(null);
     setAudience(null);
+    setConversationTitle(null);
     const cached = saved
       ? peekEssential<Conversation>(
           `/api/conversations/${encodeURIComponent(saved)}`,
@@ -215,7 +187,6 @@ export function useConversation(active: boolean) {
     setError('');
     setRestoreFailed(false);
     setNewest(null);
-    setHistory([]);
     if (saved || legacy.length) {
       setLoading(!cached);
       void (async () => {
@@ -234,14 +205,16 @@ export function useConversation(active: boolean) {
           if (!controller.signal.aborted) {
             selectId(conversation.id);
             setAudience(conversation.audience ?? null);
+            setConversationTitle(conversation.title ?? null);
             setTurns(conversation.turns);
-            if (imported) void refreshHistory();
+            if (imported) markWritten();
           }
         } catch (error) {
           if (!controller.signal.aborted) {
             if (error instanceof ApiError && error.status === 404) {
               selectId(null);
               setAudience(null);
+              setConversationTitle(null);
               setTurns([]);
             } else {
               setRestoreFailed(true);
@@ -256,6 +229,7 @@ export function useConversation(active: boolean) {
       id.current = null;
       setConversationId(null);
       setAudience(null);
+      setConversationTitle(null);
       setTurns([]);
       setLoading(false);
     }
@@ -270,7 +244,7 @@ export function useConversation(active: boolean) {
     headers,
     selectId,
     restoreVersion,
-    refreshHistory,
+    markWritten,
     personaId,
   ]);
 
@@ -343,7 +317,7 @@ export function useConversation(active: boolean) {
         setTurns([...pending, answer]);
         setNewest(answer.id);
         failed.current = null;
-        void refreshHistory();
+        markWritten();
         return;
       }
       const payload = trial
@@ -409,7 +383,7 @@ export function useConversation(active: boolean) {
           failed.current = null;
           if (!trial) {
             setAttachments([]);
-            void refreshHistory();
+            markWritten();
           }
           break;
         } else if (event === 'error' || event === 'stale') {
@@ -429,7 +403,9 @@ export function useConversation(active: boolean) {
         failedTrial.current = trial;
         failedLens.current = lens;
         setError(message(error));
-        if (error instanceof ApiError && error.status === 404) selectId(null);
+        // A lens that is no longer there is also a 404, and says nothing of the conversation.
+        if (error instanceof ApiError && error.status === 404 && !lens)
+          selectId(null);
       }
     } finally {
       if (request.current === controller) request.current = null;
@@ -439,6 +415,8 @@ export function useConversation(active: boolean) {
   // What an answer left to the person is theirs to settle, when they can: until then the conversation is asked again
   // for where it stands, and for their reply, which then appears under the answer.
   const waitingFor = conversationId && !busy && turns.some(waiting);
+  // Once they have, it may still change (a late reply, a promise taken on): looked at now and then.
+  const settlingFor = conversationId && !busy && turns.some(settling);
   const follow = useCallback(async () => {
     const current = id.current;
     if (!current || !mounted.current || personaId !== getPersonaId()) return;
@@ -453,12 +431,13 @@ export function useConversation(active: boolean) {
       // The next look will do.
     }
   }, [headers, personaId, setTurns]);
-  usePolling(follow, waitingFor ? 20000 : 0);
+  usePolling(follow, waitingFor ? 20000 : settlingFor ? 60000 : 0);
   const clear = () => {
     request.current?.abort();
     request.current = null;
     selectId(null);
     setAudience(null);
+    setConversationTitle(null);
     setTurns([]);
     setDraft('');
     setAttachments([]);
@@ -476,6 +455,7 @@ export function useConversation(active: boolean) {
     setBusy(false);
     setLoading(true);
     setError('');
+    setOpenError('');
     try {
       const conversation = await api<Conversation>(
         `/api/conversations/${encodeURIComponent(nextId)}`,
@@ -487,6 +467,7 @@ export function useConversation(active: boolean) {
       if (controller.signal.aborted || !mounted.current) return false;
       selectId(conversation.id);
       setAudience(conversation.audience ?? null);
+      setConversationTitle(conversation.title ?? null);
       setTurns(conversation.turns);
       setRestoreFailed(false);
       setDraft('');
@@ -496,7 +477,7 @@ export function useConversation(active: boolean) {
       return true;
     } catch (error) {
       if (!controller.signal.aborted && mounted.current)
-        setHistoryError(message(error));
+        setOpenError(message(error));
       return false;
     } finally {
       if (!controller.signal.aborted && mounted.current) setLoading(false);
@@ -508,10 +489,9 @@ export function useConversation(active: boolean) {
       json: { title },
       headers: headers(),
     });
-    if (mounted.current && personaId === getPersonaId())
-      setHistory((rows) =>
-        rows.map((row) => (row.id === nextId ? { ...row, title } : row)),
-      );
+    if (!mounted.current || personaId !== getPersonaId()) return;
+    if (id.current === nextId) setConversationTitle(title);
+    markWritten();
   };
   const remove = async (nextId: string) => {
     await api(`/api/conversations/${encodeURIComponent(nextId)}`, {
@@ -520,7 +500,7 @@ export function useConversation(active: boolean) {
     });
     if (!mounted.current || personaId !== getPersonaId()) return;
     if (id.current === nextId) clear();
-    void refreshHistory();
+    markWritten();
   };
   /** Say who may use a note the assistant took down: ``none`` is not keeping it. Rejects when it could not be changed. */
   const setNoteTier = async (turnId: string, tier: NoteTier) => {
@@ -582,6 +562,7 @@ export function useConversation(active: boolean) {
     turns,
     conversationId,
     audience,
+    conversationTitle,
     setNoteTier,
     undoPromise,
     askLensOwner,
@@ -596,17 +577,15 @@ export function useConversation(active: boolean) {
     newest,
     send,
     clear,
-    history,
-    historyError,
-    historyLoading,
-    hasMore,
-    refreshHistory,
+    openError,
+    clearOpenError: () => setOpenError(''),
+    written,
     resume,
     rename,
     remove,
-    retry: () => {
-      if (failed.current)
-        void send(failed.current, failedTrial.current, failedLens.current);
+    /** ``lens``: the one the composer has chosen now, which the retry goes to (not the one that failed). */
+    retry: (lens: string | null = failedLens.current) => {
+      if (failed.current) void send(failed.current, failedTrial.current, lens);
       else if (restoreFailed) setRestoreVersion((value) => value + 1);
     },
   };

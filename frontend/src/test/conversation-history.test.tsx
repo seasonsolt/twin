@@ -165,7 +165,7 @@ it.each(['desktop', 'tablet', 'mobile'])(
     fireEvent.click(screen.getByRole('button', { name: '新对话' }));
     const panel =
       viewport !== 'mobile'
-        ? screen.getByRole('region', { name: '和本人的对话' })
+        ? screen.getByRole('region', { name: '对话列表' })
         : await history();
     expect(panel).toHaveClass(
       viewport !== 'mobile' ? 'conversation-sheet-history' : 'history-sheet',
@@ -254,7 +254,7 @@ it.each([false, true])(
     mount();
     await send();
     const panel = desktop
-      ? screen.getByRole('region', { name: '和本人的对话' })
+      ? screen.getByRole('region', { name: '对话列表' })
       : await history();
     const user = userEvent.setup();
     await user.click(
@@ -376,7 +376,7 @@ it('shows a fade only while more rows are below the internal scroll position', a
   );
   mount();
   await send();
-  const region = screen.getByRole('region', { name: '和本人的对话' });
+  const region = screen.getByRole('region', { name: '对话列表' });
   const list = region.querySelector('.history-scroll')!;
   const frame = region.querySelector('.history-list-frame')!;
   expect(frame).toHaveAttribute('data-fade', 'false');

@@ -20,7 +20,6 @@ import {
   IconButton,
   Input,
   Row,
-  Text,
 } from '../../components/ui';
 import './history.css';
 
@@ -113,7 +112,6 @@ export function SessionList({
   returnFocus,
   now = clock,
   heading,
-  presence,
   busy = false,
   newLabel = '新对话',
   filters,
@@ -143,7 +141,6 @@ export function SessionList({
   returnFocus?: RefObject<HTMLElement | null>;
   now?: () => Date;
   heading?: ReactNode;
-  presence?: string;
   /** Opening one is under way: the rows wait. */
   busy?: boolean;
   /** What starting a fresh one is called: 新对话, or 新任务 where the page is on tasks. */
@@ -382,11 +379,6 @@ export function SessionList({
           </IconButton>
         </Row>
       )}
-      {inline && presence && (
-        <Text size="xs" tone="tertiary" className="px-3">
-          {presence}
-        </Text>
-      )}
       <Row gap={1}>
         <div className="min-w-0 flex-1">
           <ChatAction
@@ -533,10 +525,7 @@ export function SessionList({
   );
   if (inline)
     return (
-      <section
-        className="conversation-sheet-history"
-        aria-label={`和${name}的对话`}
-      >
+      <section className="conversation-sheet-history" aria-label="对话列表">
         {content}
       </section>
     );

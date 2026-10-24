@@ -88,23 +88,10 @@ export function Chat() {
   const setStageOpen = (value: boolean) => setChoice('stage', value);
   const openStage = useCallback(() => setChoice('stage', true), [setChoice]);
   const [historyOpen, setHistoryOpen] = usePersonaState(false);
-  const { refreshHistory } = chat;
-  useEffect(() => {
-    if (active) void refreshHistory();
-  }, [active, refreshHistory]);
   useEffect(() => {
     if (!mobile) setHistoryOpen(false);
   }, [mobile, setHistoryOpen]);
   const historyTrigger = useRef<HTMLElement | null>(null);
-  const openHistory = () => {
-    historyTrigger.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    setHistoryOpen(true);
-    void chat.refreshHistory();
-    if (workOn) void work.reload();
-  };
   const status = useStatus((state) => state.data);
   const persona = usePersonas((state) =>
     state.items.find((item) => item.id === state.id),
@@ -125,12 +112,10 @@ export function Chat() {
     !!persona?.mine && !!persona.approved && chat.audience !== 'colleague';
   const [trialOn, setTrialOn] = usePersonaState(false);
   const [scope, setScope] = useState<Scope>({ kind: 'all' });
-  const revision = [
-    chat.history.map((row) => `${row.id}:${row.updated_at}:${row.title}`),
-    (work.tasks ?? []).map((row) => `${row.task_id}:${row.updated_at}`),
-  ]
-    .map((rows) => rows.join())
-    .join('|');
+  // What makes the list ask again: a conversation written, renamed or deleted here, or a task changed.
+  const revision = `${chat.written}|${(work.tasks ?? [])
+    .map((row) => `${row.task_id}:${row.updated_at}`)
+    .join()}`;
   const everything = useAllSessions(
     active,
     {
@@ -139,6 +124,15 @@ export function Chat() {
     },
     revision,
   );
+  const openHistory = () => {
+    historyTrigger.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setHistoryOpen(true);
+    void everything.reload();
+    if (workOn) void work.reload();
+  };
   const own = everything.data?.mine ?? null;
   const ownId = own?.persona_id ?? null;
   // The twin the page is on its way to for the assistant's list (「我的分身」 chosen from another twin's page).
@@ -146,9 +140,39 @@ export function Chat() {
   // Choosing another twin to write to leaves the assistant's list behind; going to the person's own is not that.
   useEffect(() => {
     if (scope.kind !== 'mine' || ownId === personaId) return;
-    if (ownId !== null && goingToOwn.current === ownId) return;
+    if (
+      goingToOwn.current !== null &&
+      (ownId === null || goingToOwn.current === ownId)
+    )
+      return;
     setScope({ kind: 'all' });
   }, [scope.kind, ownId, personaId]);
+  // The list goes with the twin the page is on: on the person's own, the assistant's conversations are the ones
+  // being had, and they are not among all; on another, a list narrowed to someone else's is not of this one.
+  const pendingId = usePersonas((state) => state.pendingId);
+  const listed = !!everything.data;
+  const followed = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !listed ||
+      !persona ||
+      pendingId !== null ||
+      usePersonas.getState().pendingId !== null ||
+      followed.current === personaId
+    )
+      return;
+    followed.current = personaId;
+    const onOwn = personaId === ownId && !!persona.approved;
+    setScope((current) => {
+      if (onOwn)
+        return current.kind === 'all' || current.kind === 'person'
+          ? { kind: 'mine' }
+          : current;
+      return current.kind === 'person' && current.id !== personaId
+        ? { kind: 'all' }
+        : current;
+    });
+  }, [listed, persona, pendingId, personaId, ownId]);
   // The people a conversation was had with, newest first, as the list's chips; kept while one is chosen.
   const [known, setKnown] = useState<string[]>([]);
   const dataRows = everything.data;
@@ -170,14 +194,34 @@ export function Chat() {
   const withParam = params.get('with');
   const openParam = params.get('open');
   const [opening, setOpening] = useState<Session | null>(null);
+  // The assistant's list, on the person's own twin: the page goes to that twin, and drops the list if it does not get
+  // there (another twin was chosen meanwhile).
+  const showOwn = useCallback(
+    (target: string) => {
+      setScope({ kind: 'mine' });
+      goingToOwn.current = target;
+      void switchTo(target).finally(() => {
+        if (goingToOwn.current === target) goingToOwn.current = null;
+        // Another twin was chosen meanwhile, or the switch did not happen: not the assistant's list.
+        if (getPersonaId() !== target)
+          setScope((current) =>
+            current.kind === 'mine' ? { kind: 'all' } : current,
+          );
+      });
+    },
+    [switchTo],
+  );
   useEffect(() => {
     if (!withParam) return;
     if (withParam === 'me' && !people.length) return;
-    const target =
-      withParam === 'me' ? people.find((item) => item.mine)?.id : withParam;
+    const mine = people.find((item) => item.mine && item.approved)?.id;
+    const target = withParam === 'me' ? mine : withParam;
     if (target) {
-      setScope({ kind: 'person', id: target });
-      void switchTo(target);
+      if (target === mine) showOwn(target);
+      else {
+        setScope({ kind: 'person', id: target });
+        void switchTo(target);
+      }
       if (openParam)
         setOpening({
           kind: 'chat',
@@ -196,7 +240,7 @@ export function Chat() {
       },
       { replace: true },
     );
-  }, [withParam, openParam, people, switchTo, setParams]);
+  }, [withParam, openParam, people, switchTo, showOwn, setParams]);
   const playback = usePlayback({ active, chat, name, openStage });
   const { audio, capabilities, currentTurn, toggleReply, stopPlayback } =
     playback;
@@ -209,8 +253,12 @@ export function Chat() {
   };
   const setMode = (next: Mode, carryDraft = true) => {
     if (next === mode) return;
+    // Reading aloud goes on in the chat, where it can be stopped; the tasks have no way to.
+    if (next === 'work') stopPlayback();
     // What was typed goes along when the person switches: the words are the same, only what they are for changes.
     if (carryDraft && next === 'work') {
+      // Chosen by the person, it is a new task they are about to give, not the last one opened.
+      work.setCurrent(null);
       if (chat.draft) work.setDraft(chat.draft);
       chat.setDraft('');
     } else if (carryDraft) {
@@ -280,6 +328,7 @@ export function Chat() {
         : null;
   const openHere = async (session: Session) => {
     if (session.kind === 'task') {
+      stopPlayback();
       work.setCurrent(session.id);
       setMode('work', false);
       return true;
@@ -315,8 +364,9 @@ export function Chat() {
   const remove = async (session: Session) => {
     if (!foreign(session)) {
       if (session.kind === 'task') {
-        const row = work.tasks?.find((task) => task.task_id === session.id);
-        if (row) await work.remove(row);
+        // The task may be past what the page itself reads, so the list is asked again either way.
+        await work.remove({ task_id: session.id, title: session.title });
+        void everything.reload();
         return;
       }
       const ok = await confirm({
@@ -396,12 +446,20 @@ export function Chat() {
       sessions={sessions}
       current={openId}
       loading={everything.loading && !everything.data}
-      error={everything.error || chat.historyError}
-      hasMore={!!everything.data?.more && scope.kind !== 'task'}
-      onMore={() => void everything.more()}
+      error={everything.error || chat.openError}
+      hasMore={
+        scope.kind === 'task'
+          ? !!everything.data?.moreTasks
+          : !!everything.data?.more
+      }
+      onMore={() =>
+        void (scope.kind === 'task'
+          ? everything.moreTasks()
+          : everything.more())
+      }
       onRetry={() => {
+        chat.clearOpenError();
         void everything.reload();
-        void chat.refreshHistory();
         if (workOn) void work.reload();
       }}
       onOpen={openSession}
@@ -410,7 +468,6 @@ export function Chat() {
       onDelete={remove}
       name={name}
       inline={!mobile}
-      presence={presence || undefined}
       filters={filters}
       filter={chosen}
       onFilter={(id) =>
@@ -425,20 +482,8 @@ export function Chat() {
               waiting: own?.pending,
               selected: scope.kind === 'mine',
               onSelect: () => {
-                if (scope.kind === 'mine') {
-                  setScope({ kind: 'all' });
-                  return;
-                }
-                setScope({ kind: 'mine' });
-                goingToOwn.current = ownId;
-                void switchTo(ownId).finally(() => {
-                  if (goingToOwn.current === ownId) goingToOwn.current = null;
-                  // Another twin was chosen meanwhile, or the switch did not happen: not the assistant's list.
-                  if (getPersonaId() !== ownId)
-                    setScope((current) =>
-                      current.kind === 'mine' ? { kind: 'all' } : current,
-                    );
-                });
+                if (scope.kind === 'mine') setScope({ kind: 'all' });
+                else showOwn(ownId);
               },
             }
           : undefined
@@ -453,10 +498,9 @@ export function Chat() {
       ? work.current === null
         ? '新任务'
         : (work.task?.title ?? '')
-      : (sessions.find(
-          (row) => row.kind === 'chat' && row.id === chat.conversationId,
-        )?.title ??
-        chat.history.find((entry) => entry.id === chat.conversationId)?.title ??
+      : (dataRows?.conversations.find((row) => row.id === chat.conversationId)
+          ?.title ??
+        chat.conversationTitle ??
         '新对话');
   const modeSwitch = workOn ? (
     <Segmented

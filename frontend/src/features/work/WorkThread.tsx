@@ -9,6 +9,7 @@ import {
 import { PersonaFade } from '../../components/motion/PersonaFade';
 import { PersonaPortrait } from '../../components/layout/PersonaSwitcher';
 import {
+  Button,
   Card,
   ChatAction,
   ChatIdentity,
@@ -227,8 +228,7 @@ export function WorkThread({
                       交给{name}一件事
                     </Heading>
                     <Text tone="secondary" align="center">
-                      聊天是问答；这里交代要做的事，做完把 Word 或 Excel
-                      文件交给你。做的过程中可以随时插话或叫停。
+                      做完把 Word 或 Excel 文件交给你，做的过程中可以插话。
                     </Text>
                     <Row gap={2} wrap justify="center">
                       {STARTERS.map((starter) => (
@@ -245,10 +245,27 @@ export function WorkThread({
                     </Row>
                   </ChatSurface>
                 )}
-                {current !== null && !task && (
+                {current !== null && !task && !work.error && (
                   <Text role="status" size="sm" tone="secondary">
                     正在加载任务…
                   </Text>
+                )}
+                {current !== null && !task && work.error && (
+                  <Notice
+                    tone="danger"
+                    role="alert"
+                    actions={
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={work.retry}
+                      >
+                        重试
+                      </Button>
+                    }
+                  >
+                    没能打开这个任务：{work.error}
+                  </Notice>
                 )}
                 {task && (
                   <div className="space-y-4">
@@ -317,7 +334,7 @@ export function WorkThread({
               running
                 ? '插一句，下一步就会看到'
                 : current === null
-                  ? `交给${name}一件事…`
+                  ? '比如：整理成 Excel…'
                   : '接着说，或者让我改一改'
             }
           />

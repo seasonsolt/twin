@@ -27,6 +27,7 @@ from twin.persona.store import PersonaStore
 from twin.persona.work import WorkStore
 from twin.teamdb import TeamDB
 from twin.web import create_app
+from twin.web.conversations import EVERYONE_PAGE
 from twin.web.jobs import PersonaProcessing
 
 CSRF = {"X-Twin": "1"}
@@ -275,6 +276,22 @@ def test_tasks_come_with_the_list_and_the_ones_with_the_persons_own_twin_stay_wi
     apart = scene.listing(mine="true")
     assert [(t["task_id"], t["persona_id"]) for t in apart["tasks"]] == [(with_own.task_id, scene.persona)]
     assert scene.listing(offset=1)["tasks"] == []  # they come with the first page
+
+
+def test_more_tasks_than_a_page_are_asked_for_by_their_own_offset_without_the_conversations(scene: Scene) -> None:
+    scene.take()
+    other = scene.other_twin()
+    scene.as_("person")
+    kept = scene.conversation(other)
+    store = WorkStore(scene.root / "personas" / other / "twin.db")
+    titles = [store.create(f"任务 {n}", PERSON, True, "colleague").task_id for n in range(EVERYONE_PAGE + 3)]
+    first = scene.listing()
+    assert len(first["tasks"]) == EVERYONE_PAGE and first["more_tasks"] is True
+    assert [c["id"] for c in first["conversations"]] == [kept] and first["next"] == 1
+    rest = scene.listing(task_offset=EVERYONE_PAGE)
+    assert rest["more_tasks"] is False and rest["conversations"] == [] and rest["more"] is False
+    seen = [t["task_id"] for t in first["tasks"]] + [t["task_id"] for t in rest["tasks"]]
+    assert sorted(seen) == sorted(titles) and len(set(seen)) == len(titles)
 
 
 def test_what_a_conversation_handed_to_the_person_shows_beside_it_and_the_person_sees_how_many_wait(

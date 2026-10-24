@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -14,6 +15,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import { useChatLayout } from '../stores/chatLayout';
 import { Chat } from '../pages/Chat';
+import { useAuth } from '../stores/auth';
 import { useStatus } from '../stores/status';
 import { CHAT_KEY, CURRENT_CHAT_KEY } from '../features/chat/useConversation';
 import { conversationServer } from './conversationServer';
@@ -1032,11 +1034,11 @@ it('collapses and expands the sheet, preserves the draft and remembers the choic
   });
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: '展开对话列表' }));
-  expect(screen.getByRole('region', { name: '和测试人的对话' })).toBeVisible();
+  expect(screen.getByRole('region', { name: '对话列表' })).toBeVisible();
   await user.click(screen.getByRole('button', { name: '搜索对话' }));
   expect(screen.getByRole('searchbox', { name: '搜索对话' })).toHaveFocus();
   await user.click(screen.getByRole('button', { name: '收起对话列表' }));
-  expect(screen.queryByRole('region', { name: '和测试人的对话' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '对话列表' })).toBeNull();
   expect(screen.getByRole('textbox', { name: '你说' })).toHaveValue(
     '还没发出的想法',
   );
@@ -1061,7 +1063,7 @@ it('resizes the sheet by dragging or with the keyboard, within limits, and remem
   const handle = screen.getByRole('separator', { name: '调整对话列表宽度' });
   const sheet = () =>
     screen
-      .getByRole('region', { name: '和测试人的对话' })
+      .getByRole('region', { name: '对话列表' })
       .closest('.chat-surface-sheet') as HTMLElement;
   expect(handle).toHaveAttribute('aria-valuenow', '280');
   expect(sheet().style.getPropertyValue('--chat-sheet-width')).toBe('');
@@ -1191,9 +1193,7 @@ it('honours choices without writable localStorage', async () => {
     await userEvent
       .setup()
       .click(screen.getByRole('button', { name: '展开对话列表' }));
-    expect(
-      screen.getByRole('region', { name: '和测试人的对话' }),
-    ).toBeVisible();
+    expect(screen.getByRole('region', { name: '对话列表' })).toBeVisible();
   } finally {
     write.mockRestore();
   }
@@ -1217,5 +1217,136 @@ it('uses the remembered collapsed choice even on a wide screen', () => {
   useChatLayout.setState({ sheet: false });
   mount();
   expect(screen.getByRole('button', { name: '展开对话列表' })).toBeVisible();
-  expect(screen.queryByRole('region', { name: '和测试人的对话' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '对话列表' })).toBeNull();
+});
+
+const twoAnswers = () =>
+  sessionStorage.setItem(
+    CHAT_KEY,
+    JSON.stringify([
+      {
+        id: 'older',
+        role: 'twin',
+        content: '较早的回答',
+        reply: { ...reply, reply: '较早的回答' },
+        timestamp: '2025-01-01T12:00:00Z',
+      },
+      {
+        id: 'last',
+        role: 'twin',
+        content: '最近的回答',
+        reply: { ...reply, reply: '最近的回答' },
+        timestamp: '2025-01-01T12:01:00Z',
+      },
+    ]),
+  );
+const hangAudio = () => {
+  const original = fetchMock.getMockImplementation()! as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+    url === '/api/media/audio'
+      ? new Promise<Response>(() => {})
+      : original(url, init),
+  );
+};
+const spoken = () =>
+  fetchMock.mock.calls
+    .filter(([url]) => url === '/api/media/audio')
+    .map(([, init]) => JSON.parse(String(init.body)).answer.reply as string);
+
+it('reads the latest answer aloud from the menu', async () => {
+  twoAnswers();
+  hangAudio();
+  const user = userEvent.setup();
+  mount();
+  await screen.findAllByRole('article', { name: '分身回复' });
+  await user.click(screen.getByLabelText('更多：语音、形象'));
+  await user.click(screen.getByRole('button', { name: '语音' }));
+  await waitFor(() => expect(spoken()).toEqual(['最近的回答']));
+});
+
+it('has nothing to read aloud from the menu before there is an answer, or where there is no voice', async () => {
+  const user = userEvent.setup();
+  mount();
+  await screen.findByLabelText('你说');
+  await user.click(screen.getByLabelText('更多：语音、形象'));
+  expect(screen.getByRole('button', { name: '语音' })).toBeDisabled();
+  await user.keyboard('{Escape}');
+  cleanup();
+  sessionStorage.clear();
+  localStorage.clear();
+  twoAnswers();
+  const original = fetchMock.getMockImplementation()! as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+    url === '/api/media/capabilities'
+      ? Promise.resolve(json({ available: false, video: { available: false } }))
+      : original(url, init),
+  );
+  mount();
+  await screen.findAllByRole('article', { name: '分身回复' });
+  await user.click(screen.getByLabelText('更多：语音、形象'));
+  expect(screen.getByRole('button', { name: '语音' })).toBeDisabled();
+});
+
+it('stops reading aloud when the person goes on to give a task, which has no way to stop it', async () => {
+  useAuth.setState({
+    identity: {
+      email: 'me@example.com',
+      admin: false,
+      auth_enabled: true,
+      features: { work: true },
+    },
+  });
+  try {
+    twoAnswers();
+    hangAudio();
+    const user = userEvent.setup();
+    mount();
+    const answers = await screen.findAllByRole('article', { name: '分身回复' });
+    await user.click(
+      within(answers[1]).getByRole('button', { name: '让测试人说这句' }),
+    );
+    expect(
+      await within(answers[1]).findByRole('button', {
+        name: '正在说这句，点击暂停',
+      }),
+    ).toBeVisible();
+    await user.click(screen.getByRole('radio', { name: '交代任务' }));
+    await user.click(screen.getByRole('radio', { name: '问答' }));
+    const back = await screen.findAllByRole('article', { name: '分身回复' });
+    expect(
+      await within(back[1]).findByRole('button', { name: '让测试人说这句' }),
+    ).toBeVisible();
+  } finally {
+    useAuth.setState({ identity: null });
+  }
+});
+
+it('brings what an answer rests on into view when it is opened', async () => {
+  const scroll = vi.fn();
+  Element.prototype.scrollIntoView = scroll;
+  try {
+    mount();
+    await submit();
+    await act(async () => {
+      streamController.enqueue(encode('final', reply));
+      streamController.close();
+    });
+    const answer = await screen.findByLabelText('分身回复');
+    scroll.mockClear();
+    await userEvent
+      .setup()
+      .click(
+        within(answer).getByRole('button', { name: /^资料不足，需要问本人/ }),
+      );
+    expect(within(answer).getByText('先听听')).toBeVisible();
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+  } finally {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+  }
 });

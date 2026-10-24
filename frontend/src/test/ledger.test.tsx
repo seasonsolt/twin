@@ -452,7 +452,7 @@ it('speaks of the ledger’s owner by name when someone else is looking at it', 
 });
 
 it.each([
-  ['the twin its person took', { mine: true }, true],
+  ['the twin its person took', { mine: true, approved: true }, true],
   [
     'the first twin on a machine with nobody signed in',
     { is_default: true },

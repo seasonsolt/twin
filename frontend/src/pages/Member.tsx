@@ -180,7 +180,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
             onClick: () => navigate('/chat'),
           }}
         />
-        {self && awaitsApproval(twin) && (
+        {awaitsApproval(twin) && (
           // They left the twin step for later: until they say it is all right, colleagues cannot ask it, and
           // what they see here is the part colleagues would.
           <Notice

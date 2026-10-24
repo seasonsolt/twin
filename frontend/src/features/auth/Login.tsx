@@ -117,11 +117,6 @@ export function Login() {
                   </span>
                 </span>
                 <Stack gap={1} align="center">
-                  {(sso || methods.password) && (
-                    <Text size="sm" tone="secondary">
-                      欢迎回来
-                    </Text>
-                  )}
                   <Heading level={1} size="title">
                     {sso || methods.password ? '登录 twin' : '用邮箱登录'}
                   </Heading>

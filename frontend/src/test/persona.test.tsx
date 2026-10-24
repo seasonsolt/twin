@@ -483,6 +483,11 @@ it('keeps the surest points in step with a correction', async () => {
   const user = userEvent.setup();
   const surest = await screen.findByRole('list', { name: '最有把握的几点' });
   expect(within(surest).getByText('先听大家的意见')).toBeVisible();
+  // Cut to two lines when long, the whole of it is the hover.
+  expect(within(surest).getByText('先听大家的意见')).toHaveAttribute(
+    'title',
+    '先听大家的意见',
+  );
   const card = within(await screen.findByRole('article'));
   await user.click(card.getByRole('button', { name: /^改这条/u }));
   fireEvent.change(card.getByLabelText('修改表述'), {

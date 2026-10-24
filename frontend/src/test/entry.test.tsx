@@ -174,6 +174,22 @@ it('opens what waits and the commitments at their own addresses, and leads the o
   expect(window.location.hash).toBe('#/commitments');
 });
 
+it('leads the commitments and the old ledger address to the conversation once an administrator has switched them off', async () => {
+  whoami = {
+    email: 'admin@example.test',
+    admin: true,
+    auth_enabled: true,
+    features: { ledger: false },
+  };
+  await signIn();
+  expect(await entries()).toEqual(['团队', '对话', '录音库', '待处理']);
+  for (const address of ['#/commitments', '#/ledger']) {
+    window.location.hash = address;
+    await waitFor(() => expect(window.location.hash).toBe('#/chat'));
+    expect(await screen.findByText('聊天页')).toBeVisible();
+  }
+});
+
 it('keeps the side bar where it is while the next place waits for its twin', async () => {
   whoami = { email: 'admin@example.test', admin: true, auth_enabled: true };
   await signIn();

@@ -599,6 +599,8 @@ export interface AskSection {
   /** Answers shown as they are, above the rows: not picked, only read. */
   cards?: ReactNode;
   items?: AskItem[];
+  /** One line under the section. */
+  note?: string;
 }
 
 /**
@@ -645,6 +647,10 @@ export function AskDialog({
   const shown = sections.filter(
     (section) => section.cards || section.items?.length,
   );
+  // Each section's rows are a list of their own: the heading and the answers above them are not options.
+  const lists = shown
+    .filter((section) => section.items?.length)
+    .map((section) => `${listId}-${section.id}`);
   const pick = (item: AskItem | undefined) => {
     if (!item) return;
     onOpenChange(false);
@@ -664,7 +670,7 @@ export function AskDialog({
           role="combobox"
           aria-label={title}
           aria-expanded={rows.length > 0}
-          aria-controls={listId}
+          aria-controls={lists.join(' ') || undefined}
           aria-autocomplete="list"
           aria-activedescendant={
             current >= 0 ? `${listId}-${rows[current].id}` : undefined
@@ -691,65 +697,81 @@ export function AskDialog({
             {notice}
           </p>
         )}
-        <div id={listId} role="listbox" aria-label={title} className="contents">
-          {shown.map((section) => (
-            <section
-              key={section.id}
-              aria-label={section.title}
-              className="flex flex-col gap-1"
+        {shown.map((section) => (
+          <section
+            key={section.id}
+            aria-labelledby={`${listId}-${section.id}-title`}
+            className="flex flex-col gap-1"
+          >
+            <h3
+              id={`${listId}-${section.id}-title`}
+              className="flex items-baseline gap-2 px-2 text-sm font-semibold text-secondary"
             >
-              <h3 className="flex items-baseline gap-2 px-2 text-sm font-semibold text-secondary">
-                {section.title}
-                {section.count !== undefined && (
-                  <span className="font-normal">{section.count}</span>
-                )}
-              </h3>
-              {section.cards && (
-                <div className="flex flex-col gap-2">{section.cards}</div>
+              {section.title}
+              {section.count !== undefined && (
+                <span className="font-normal">{section.count}</span>
               )}
-              {section.items?.map((item) => {
-                const index = rows.indexOf(item);
-                return (
-                  <div
-                    key={item.id}
-                    id={`${listId}-${item.id}`}
-                    role="option"
-                    aria-selected={index === current}
-                    onMouseEnter={() => setAt(index)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => pick(item)}
-                    className={cn(
-                      'flex min-h-11 cursor-pointer items-center gap-3 rounded-sm px-2 py-1',
-                      index === current && 'bg-soft',
-                    )}
-                  >
-                    {item.leading}
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate font-medium">{item.label}</span>
-                      {item.detail && (
-                        <span className="truncate text-xs text-secondary">
-                          {item.detail}
+            </h3>
+            {section.cards && (
+              <div className="flex flex-col gap-2">{section.cards}</div>
+            )}
+            {section.items?.length ? (
+              <div
+                id={`${listId}-${section.id}`}
+                role="listbox"
+                aria-labelledby={`${listId}-${section.id}-title`}
+                className="flex flex-col gap-1"
+              >
+                {section.items.map((item) => {
+                  const index = rows.indexOf(item);
+                  return (
+                    <div
+                      key={item.id}
+                      id={`${listId}-${item.id}`}
+                      role="option"
+                      aria-selected={index === current}
+                      onMouseEnter={() => setAt(index)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => pick(item)}
+                      className={cn(
+                        'flex min-h-11 cursor-pointer items-center gap-3 rounded-sm px-2 py-1',
+                        index === current && 'bg-soft',
+                      )}
+                    >
+                      {item.leading}
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate font-medium">
+                          {item.label}
+                        </span>
+                        {item.detail && (
+                          <span className="truncate text-xs text-secondary">
+                            {item.detail}
+                          </span>
+                        )}
+                      </span>
+                      {item.sign}
+                      {item.action && (
+                        <span className="shrink-0 text-sm font-medium text-accent">
+                          {item.action}
                         </span>
                       )}
-                    </span>
-                    {item.sign}
-                    {item.action && (
-                      <span className="shrink-0 text-sm font-medium text-accent">
-                        {item.action}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </section>
-          ))}
-        </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {section.note && (
+              <p className="px-2 text-xs text-secondary">{section.note}</p>
+            )}
+          </section>
+        ))}
         {busy ? (
           <p role="status" className="px-2 text-sm text-secondary">
             正在找…
           </p>
         ) : (
           !shown.length &&
+          empty &&
           query.trim().length >= 2 && (
             <p role="status" className="px-2 py-3 text-sm text-secondary">
               {empty}

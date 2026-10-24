@@ -1,11 +1,14 @@
 import { create } from 'zustand';
 import { isMedia, uploadMedia, type UploadProgress } from '../lib/mediaUpload';
+import { useAuth } from './auth';
 
 export interface Pick {
   file: File;
   progress?: UploadProgress;
   error?: string;
   done?: boolean;
+  /** Stopped before it was filed: listed to be added again, not counted as under way. */
+  stopped?: boolean;
 }
 
 // Library recordings only feed memories: their sound may be made smaller before it is sent.
@@ -22,10 +25,16 @@ interface Uploads {
   picks: Pick[];
   uploading: boolean;
   notice: string;
+  /** Transcripts picked or dropped outside the library, waiting for its page to bring them in. */
+  transcripts: File[];
   /** Bumped after each file is filed or fails: pages showing the library reload then. */
   changes: number;
   add: (files: File[]) => Promise<void>;
-  /** What had not started stays listed, to be added again; a started file resumes where it was. */
+  /** Leave transcripts for the library's import dialog to take. */
+  holdTranscripts: (files: File[]) => void;
+  /** The transcripts left for it, now its own. */
+  takeTranscripts: () => File[];
+  /** What had not started stays listed as stopped, to be added again; a started file resumes where it was. */
   stop: () => void;
 }
 
@@ -92,11 +101,14 @@ export const useUploadStore = create<Uploads>((set, get) => {
     picks: [],
     uploading: false,
     notice: '',
+    transcripts: [],
     changes: 0,
     add: async (files) => {
       const media = files.filter(isMedia);
       const skipped = files.length - media.length;
-      set({ notice: skipped ? `已跳过 ${skipped} 个不是音视频的文件` : '' });
+      // Cleared first so that the same words said again are a change to those listening.
+      set({ notice: '' });
+      if (skipped) set({ notice: `已跳过 ${skipped} 个不是音视频的文件` });
       // A file already waiting or uploading is not sent twice.
       const fresh = media.filter(
         (file) =>
@@ -116,14 +128,27 @@ export const useUploadStore = create<Uploads>((set, get) => {
       });
       if (!running) await run();
     },
+    holdTranscripts: (files) =>
+      set((state) => ({ transcripts: [...state.transcripts, ...files] })),
+    takeTranscripts: () => {
+      const files = get().transcripts;
+      if (files.length) set({ transcripts: [] });
+      return files;
+    },
     stop: () => {
       queue = [];
       controller?.abort();
+      set((state) => ({
+        picks: state.picks.map((p) =>
+          p.done || p.error ? p : { ...p, stopped: true },
+        ),
+      }));
     },
   };
 });
 
-/** Back to no uploads at all, as on a fresh load (tests start each case from here). */
+/** Back to no uploads at all, as on a fresh load: when someone signs out (what they were sending is not for the next
+ * person to see, and stops), and where tests start each case from. */
 export function resetUploads() {
   controller?.abort();
   queue = [];
@@ -134,6 +159,11 @@ export function resetUploads() {
     picks: [],
     uploading: false,
     notice: '',
+    transcripts: [],
     changes: 0,
   });
 }
+
+useAuth.subscribe((state, before) => {
+  if (before.identity && !state.identity) resetUploads();
+});

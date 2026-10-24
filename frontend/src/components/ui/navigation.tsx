@@ -33,6 +33,9 @@ export function Tabs({
     label: ReactNode;
     content?: ReactNode;
     disabled?: boolean;
+    /** Once opened, stays in place while another tab is shown (hidden), so what was written in it is still there on
+     * coming back. The others are made anew each time. */
+    keep?: boolean;
   }[];
   defaultValue?: string;
   scrollable?: boolean;
@@ -52,6 +55,10 @@ export function Tabs({
       items[0]?.value);
   const { reduced, transition } = useMotionPreset('layout');
   const id = useId();
+  // The tabs that keep their content are kept from the first time they are shown.
+  const [opened, setOpened] = useState<string[]>([]);
+  if (value !== undefined && !opened.includes(value))
+    setOpened([...opened, value]);
   const change = (next: string) => {
     setValue(next);
     onValueChange?.(next);
@@ -117,11 +124,20 @@ export function Tabs({
           </TabsPrimitive.List>
           {actions}
         </div>
-        {items.map((item) => (
-          <TabsPrimitive.Content key={item.value} value={item.value}>
-            {item.content}
-          </TabsPrimitive.Content>
-        ))}
+        {items.map((item) => {
+          const kept = item.keep && opened.includes(item.value);
+          return (
+            <TabsPrimitive.Content
+              key={item.value}
+              value={item.value}
+              // Mounted all the time, so it is hidden here when another tab is shown.
+              forceMount={kept ? true : undefined}
+              {...(kept ? { hidden: item.value !== value } : {})}
+            >
+              {item.content}
+            </TabsPrimitive.Content>
+          );
+        })}
       </TabsPrimitive.Root>
     </LayoutScope>
   );
@@ -395,6 +411,7 @@ export function AccountMenu({
   const filled = groups.filter((group) => group.length > 0);
   const alert = filled.flat().find((item) => item.alert)?.alert;
   const initial = Array.from(name.trim() || '?')[0].toUpperCase();
+  const who = useId();
   const avatar = (size: string) => (
     <span
       aria-hidden
@@ -419,6 +436,8 @@ export function AccountMenu({
                 ? `账户（${count} 条待决定）`
                 : '账户'
           }
+          // The name beside the avatar is who is signed in: read out after what the button is.
+          aria-describedby={layout === 'sidebar' ? who : undefined}
           className={cn(
             'relative focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
             layout === 'sidebar'
@@ -437,7 +456,7 @@ export function AccountMenu({
             )}
           </span>
           {layout === 'sidebar' && (
-            <span aria-hidden className="min-w-0 flex-1 leading-tight">
+            <span id={who} className="min-w-0 flex-1 leading-tight">
               <span className="block truncate font-medium">{name}</span>
               {detail && (
                 <span className="block truncate text-xs text-secondary">
@@ -449,6 +468,7 @@ export function AccountMenu({
           {layout === 'sidebar' && count > 0 && (
             <span
               aria-hidden
+              title={`${count} 条等你决定`}
               className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-xs font-bold text-on-accent"
             >
               {count}

@@ -471,6 +471,25 @@ export function Slider({
   );
 }
 
+/** Put the focus on the chosen option of the group named `group` once it shows `chosen`. The group may be made anew by
+ * the change (a page that swaps one conversation for another carries its own), so it is looked for again by name
+ * rather than kept by reference, for a few frames until it is there. */
+function focusChosen(group: string, chosen: string, frames = 30) {
+  requestAnimationFrame(() => {
+    const target = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[role="radiogroup"] [aria-checked="true"]',
+      ),
+    ).find(
+      (option) =>
+        option.textContent === chosen &&
+        option.parentElement?.getAttribute('aria-label') === group,
+    );
+    if (target) target.focus();
+    else if (frames > 0) focusChosen(group, chosen, frames - 1);
+  });
+}
+
 /**
  * Two or three ways to take one thing, side by side, one chosen (such as what a message is: 问答 or 交代任务). Radio
  * buttons in a group named `label`, so the arrow keys move between them.
@@ -518,12 +537,7 @@ export function Segmented<T extends string>({
               const next =
                 options[(index + step + options.length) % options.length];
               onChange(next.id);
-              const group = event.currentTarget.parentElement;
-              requestAnimationFrame(() =>
-                group
-                  ?.querySelector<HTMLElement>('[aria-checked="true"]')
-                  ?.focus(),
-              );
+              focusChosen(label, next.label);
             }}
             className={cn(
               'min-h-8 rounded-full px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50',

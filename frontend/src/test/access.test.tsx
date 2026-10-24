@@ -1,6 +1,6 @@
 import { renderHook } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import { useCanManage, useManagesCurrent } from '../stores/access';
+import { isSelf, useCanManage, useManagesCurrent } from '../stores/access';
 import { useAuth, type Identity } from '../stores/auth';
 import { usePersonas, type Persona } from '../stores/personas';
 
@@ -59,4 +59,17 @@ it('does not make a guest of someone with no twin yet, who is offered to make on
 it('counts a twin from an older server, which does not say, as one to manage', () => {
   set(false, 'p-1', [twin({})]);
   expect(renderHook(() => useCanManage()).result.current).toBe(true);
+});
+
+it('counts a twin as its viewer’s own, whose away and lens tabs are theirs, only once they said it is all right', () => {
+  // Taken but never confirmed (the confirming step does not come for a twin they made themselves): the server counts
+  // them among the colleagues, so what is the person’s own is not theirs to open yet.
+  expect(isSelf(twin({ mine: true }), false)).toBe(false);
+  expect(isSelf(twin({ mine: true, approved: false }), false)).toBe(false);
+  expect(isSelf(twin({ mine: true, approved: true }), false)).toBe(true);
+  expect(isSelf(twin({ mine: false, approved: true }), false)).toBe(false);
+  // With no sign-in there is one person, and the first twin is theirs.
+  expect(isSelf(twin({ is_default: true }), true)).toBe(true);
+  expect(isSelf(twin({ is_default: false }), true)).toBe(false);
+  expect(isSelf(undefined, true)).toBe(false);
 });

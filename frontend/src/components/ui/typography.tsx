@@ -1,4 +1,10 @@
-import type { ComponentProps, ElementType, ReactNode, Ref } from 'react';
+import {
+  isValidElement,
+  type ComponentProps,
+  type ElementType,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/utils';
 
@@ -114,6 +120,15 @@ export function Heading({
   );
 }
 
+/** The words of some content as one string: the hover title of text cut short, so the whole of it can be read. */
+function plainText(node: ReactNode): string | undefined {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(plainText).join('') || undefined;
+  if (isValidElement<{ children?: ReactNode }>(node))
+    return plainText(node.props.children);
+  return undefined;
+}
+
 type TextProps<T extends ElementType> = {
   as?: T;
   size?: TextSize;
@@ -163,9 +178,8 @@ export function Text<T extends ElementType = 'p'>({
         className,
       )}
       title={
-        twoLines && typeof children === 'string'
-          ? children
-          : (props as { title?: string }).title
+        (twoLines ? plainText(children) : undefined) ??
+        (props as { title?: string }).title
       }
     >
       {children}

@@ -11,9 +11,12 @@ import { confirmedText, type TeamAnswerCard as Data } from './types';
 export function TeamAnswerCard({
   card,
   onAsk,
+  labelled = true,
 }: {
   card: Data;
   onAsk?: () => Promise<void>;
+  /** Say 团队答案 on the card; a list already headed so turns it off. */
+  labelled?: boolean;
 }) {
   const [state, setState] = useState<'idle' | 'asking' | 'asked'>('idle');
   const [error, setError] = useState('');
@@ -39,7 +42,7 @@ export function TeamAnswerCard({
     >
       <Stack gap={2}>
         <Row gap={2} wrap>
-          <Badge tone="info">团队答案</Badge>
+          {labelled && <Badge tone="info">团队答案</Badge>}
           {stale && <Badge tone="warning">可能过期</Badge>}
           <Text as="span" size="xs" tone="secondary">
             {confirmedText(card)}

@@ -10,6 +10,7 @@ import {
 } from '../components/ui';
 import { uploadMedia } from '../lib/mediaUpload';
 import { useAuth } from '../stores/auth';
+import { useUploadStore } from '../stores/uploads';
 import { usePersonas, type Persona } from '../stores/personas';
 
 vi.mock('../lib/mediaUpload', async (original) => ({
@@ -78,11 +79,11 @@ afterEach(() => {
   useAuth.setState({ identity: null });
 });
 
-const show = () =>
+const show = (entry = '/team') =>
   render(
     <TooltipProvider>
       <ConfirmProvider>
-        <MemoryRouter initialEntries={['/team']}>
+        <MemoryRouter initialEntries={[entry]}>
           <Routes>
             <Route element={<AppShell />}>
               <Route
@@ -105,7 +106,7 @@ const show = () =>
   );
 
 it('takes a recording dropped anywhere on the page into the uploads the side bar shows', async () => {
-  show();
+  show('/chat');
   await screen.findByRole('link', { name: '对话' });
   const nav = screen.getByRole('navigation', { name: '主导航' });
   expect(screen.queryByText('松开即可上传会议录音')).toBeNull();
@@ -115,8 +116,32 @@ it('takes a recording dropped anywhere on the page into the uploads the side bar
   expect(screen.queryByText('松开即可上传会议录音')).toBeNull();
   expect(uploadMedia).toHaveBeenCalledTimes(1);
   expect(vi.mocked(uploadMedia).mock.calls[0]![0]).toBe(recording);
-  expect(await screen.findByText(/^后台 1 项/u)).toBeVisible();
+  expect(await screen.findByText('1 项上传中')).toBeVisible();
   await act(async () => finish());
+});
+
+it('draws nothing over a page whose own drop area shows where the files go, and still takes a drop beside it', async () => {
+  show();
+  await screen.findByRole('region', { name: '这一页自己的拖放区' });
+  const nav = screen.getByRole('navigation', { name: '主导航' });
+  fireEvent.dragEnter(nav, carrying(recording));
+  expect(screen.queryByText('松开即可上传会议录音')).toBeNull();
+  fireEvent.drop(nav, carrying(recording));
+  expect(uploadMedia).toHaveBeenCalledTimes(1);
+  await act(async () => finish());
+});
+
+it('hands a transcript dropped outside the library to its import dialog instead of skipping it', async () => {
+  show('/chat');
+  await screen.findByRole('link', { name: '对话' });
+  const transcript = new File(['x'], '周会纪要.docx');
+  fireEvent.drop(
+    screen.getByRole('navigation', { name: '主导航' }),
+    carrying(transcript),
+  );
+  expect(useUploadStore.getState().transcripts).toEqual([transcript]);
+  expect(uploadMedia).not.toHaveBeenCalled();
+  expect(screen.queryByText(/已跳过/u)).toBeNull();
 });
 
 it('says so when what was dropped is not a recording, and uploads nothing', async () => {

@@ -173,7 +173,7 @@ export function Home() {
               {mobile && picker}
             </Toolbar>
             <UploadList
-              picks={unfinished.filter((pick) => pick.error)}
+              picks={unfinished.filter((pick) => pick.error || pick.stopped)}
               uploading={false}
               onStop={stop}
             />
@@ -181,7 +181,9 @@ export function Home() {
               version={version}
               recordings={library.recordings}
               onReload={load}
-              uploads={unfinished.filter((pick) => !pick.error)}
+              uploads={unfinished.filter(
+                (pick) => !pick.error && !pick.stopped,
+              )}
             />
           </>
         )}

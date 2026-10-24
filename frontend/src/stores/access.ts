@@ -24,11 +24,13 @@ export const useManagesCurrent = () =>
       state.items.find((item) => item.id === state.id)?.can_manage ?? true,
   );
 
-/** Whether a twin is its viewer's own: the one they took on signing in (made for them, or found by their voice). On
- * a machine without sign-in there is one person, and the first twin is theirs. Only they answer for it when it can
- * not (``features/away``); an administrator looking after it is not it. */
+/** Whether a twin is its viewer's own: the one they took on signing in (made for them, or found by their voice) and
+ * said is all right; until then the server counts them among the colleagues and keeps what is the person's own from
+ * them. On a machine without sign-in there is one person, and the first twin is theirs. Only they answer for it when
+ * it can not (``features/away``); an administrator looking after it is not it. */
 export const isSelf = (twin: Persona | undefined, signInOff: boolean) =>
-  !!twin && (!!twin.mine || (signInOff && twin.is_default));
+  !!twin &&
+  ((!!twin.mine && !!twin.approved) || (signInOff && twin.is_default));
 
 export const useIsSelf = (twin: Persona | undefined) =>
   isSelf(

@@ -87,6 +87,7 @@ export function FileDrop({
     <section
       aria-label={label}
       aria-disabled={disabled || undefined}
+      data-drop-area=""
       onClick={(event) => {
         if (
           disabled ||

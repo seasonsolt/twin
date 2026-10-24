@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '../components/ui';
 import { Library, type LibraryState, type Recording } from '../pages/Library';
 import { useTeam } from '../stores/team';
+import { useUploadStore } from '../stores/uploads';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -172,6 +173,14 @@ it('reads a transcript first, then brings it in with the speakers the importer c
   expect(row.getByText('转写稿')).toBeVisible();
   expect(row.getByText(/约 40 分钟/)).toBeVisible();
   expect(row.getByText('都认出来了')).toBeVisible();
+});
+
+it('opens the import dialog for a transcript chosen elsewhere in the app, once, when the library opens', async () => {
+  useUploadStore.getState().holdTranscripts([new File(['x'], '妙记.docx')]);
+  show();
+  const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
+  await within(dialog).findByDisplayValue('运营周会-10月18日');
+  expect(useUploadStore.getState().transcripts).toEqual([]);
 });
 
 it('leaves speakers undecided when nobody is chosen, and says so when the file is no transcript', async () => {

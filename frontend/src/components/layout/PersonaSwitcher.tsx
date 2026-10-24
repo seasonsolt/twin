@@ -57,6 +57,7 @@ export function PersonaSwitcher({
   open: controlledOpen,
   onOpenChange,
   returnFocus,
+  managed = false,
 }: {
   stage?: boolean;
   trigger?: ReactNode;
@@ -65,6 +66,8 @@ export function PersonaSwitcher({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   returnFocus?: RefObject<HTMLButtonElement | null>;
+  /** Offer only the twins the person looks after, for a page that is of no use on a colleague's public twin. */
+  managed?: boolean;
 }) {
   const mobile = useMobile();
   const button = useRef<HTMLButtonElement>(null);
@@ -80,12 +83,15 @@ export function PersonaSwitcher({
   const [query, setQuery] = useState('');
   const { id, pendingId, items, refresh, switchTo } = usePersonas();
   // A long team list gets a filter instead of scrolling past everyone.
-  const searchable = items.length > SEARCH_FROM;
+  const choices = managed
+    ? items.filter((persona) => persona.can_manage !== false)
+    : items;
+  const searchable = choices.length > SEARCH_FROM;
   const shown = query.trim()
-    ? items.filter((persona) =>
+    ? choices.filter((persona) =>
         persona.name.toLowerCase().includes(query.trim().toLowerCase()),
       )
-    : items;
+    : choices;
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   const canManage = useManagesCurrent();

@@ -18,7 +18,7 @@ import {
 import { PageTransition } from '../motion';
 import { useMobile } from '../../lib/useMobile';
 import { api, ApiError } from '../../lib/api';
-import { useCanManage } from '../../stores/access';
+import { useCanManage, useManagesCurrent } from '../../stores/access';
 import { awaitsApproval, usePersonas, useTrial } from '../../stores/personas';
 import { useWelcome } from '../../stores/welcome';
 import { BottomTabs, Sidebar, visitorRoutes } from './Sidebar';
@@ -35,6 +35,8 @@ const Welcome = lazy(() =>
 
 // Pages laid out as a conversation (stage, thread, pinned composer), full width and without a page transition.
 const conversationRoutes = new Set(['/chat']);
+// Pages about the twin in view that only its own people may open (a colleague's public twin is for talking to).
+const twinPages = new Set(['/commitments']);
 // Pages that say themselves that there is no twin yet, in place of the new-twin card.
 const ownEmpty = new Set(['/commitments']);
 
@@ -83,10 +85,25 @@ export function AppShell() {
   // Trying it out in chat first: the page asking for the go-ahead steps aside there, and only there.
   const trying =
     !!waiting && trial.id === waiting.id && location.pathname === '/chat';
+  // Until the go-ahead step is passed (or left for later): after that the person is free to look at any twin.
   useEffect(() => {
-    if (waiting && waiting.id !== personaId)
+    if (waiting && !claimDone && waiting.id !== personaId)
       void usePersonas.getState().switchTo(waiting.id);
-  }, [waiting, personaId]);
+  }, [waiting, claimDone, personaId]);
+  // The page about one twin's commitments is for a twin the person looks after: standing on a colleague's public twin
+  // from the conversation, they go on to one of their own rather than to an error.
+  const manages = useManagesCurrent();
+  const pageOfOwnTwin = twinPages.has(location.pathname);
+  const own = usePersonas(
+    (state) =>
+      state.items.find(
+        (item) => item.can_manage !== false && (item.is_default || item.mine),
+      ) ?? state.items.find((item) => item.can_manage !== false),
+  );
+  useEffect(() => {
+    if (canManage && !manages && pageOfOwnTwin && own)
+      void usePersonas.getState().switchTo(own.id);
+  }, [canManage, manages, pageOfOwnTwin, own]);
   // A company account that has not found itself yet starts at the way in whatever address it came by (the invitation
   // is the site's own), so whether there is a twin at all is asked on the team's pages too.
   const finding = !!address && !voiceDone;
@@ -130,6 +147,10 @@ export function AppShell() {
   // The way in comes before the app: a twin made for this person first, else finding their voice in the meetings.
   if (waiting && !claimDone && !trying && location.pathname !== '/gallery')
     return onWelcome ? welcome('claim') : <Navigate to="/welcome" replace />;
+  // A company account with no twin of its own yet, whether the list is empty or holds only twins others made public
+  // (those are all it can talk to), finds itself first.
+  if ((noPersona || !canManage) && finding)
+    return onWelcome ? welcome('voice') : <Navigate to="/welcome" replace />;
   // A guest, who may only talk to twins, has the conversation alone: the team's places are not theirs by address
   // either.
   if (
@@ -138,8 +159,6 @@ export function AppShell() {
     !visitorRoutes.has(location.pathname.slice(1))
   )
     return <Navigate to="/chat" replace />;
-  if (noPersona && finding)
-    return onWelcome ? welcome('voice') : <Navigate to="/welcome" replace />;
   // Nothing left to do on the way in: on to the app.
   if (onWelcome)
     return checked ? (
@@ -205,14 +224,9 @@ export function AppShell() {
                 <div className="mx-auto w-full max-w-md px-4 py-12">
                   <Card as="section" aria-labelledby="no-twin-title">
                     <Stack gap={4}>
-                      <Stack gap={2}>
-                        <Heading id="no-twin-title" level={1} size="title">
-                          先新建一个分身
-                        </Heading>
-                        <Text tone="secondary">
-                          还没有人为你建分身。先建一个，再加一段会议录音，它就会慢慢认识你。
-                        </Text>
-                      </Stack>
+                      <Heading id="no-twin-title" level={1} size="title">
+                        先新建一个分身
+                      </Heading>
                       <NewTwinForm />
                       {address && (
                         <TextLink

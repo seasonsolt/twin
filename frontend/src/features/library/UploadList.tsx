@@ -28,6 +28,13 @@ export function UploadList({
                 {pick.error}
               </Text>
             </Text>
+          ) : pick.stopped ? (
+            <Text size="sm">
+              {pick.file.name}：
+              <Text as="span" size="inherit" tone="secondary">
+                已停止，再选一次接着传
+              </Text>
+            </Text>
           ) : (
             <Meter
               label={

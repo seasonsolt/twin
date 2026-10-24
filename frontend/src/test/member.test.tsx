@@ -735,6 +735,8 @@ it('leads the old profile addresses to the member page of the twin in view, on t
     ['#/about', '#/team/twin/friend'],
     ['#/persona', '#/team/twin/friend'],
     ['#/identity', '#/team/twin/friend'],
+    // The fixed questions became 补一补, on the member page.
+    ['#/questionnaire', '#/team/twin/friend'],
     [
       '#/profile?section=memories&view=graph',
       '#/team/twin/friend?section=memories&view=graph',

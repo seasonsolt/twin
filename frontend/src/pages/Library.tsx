@@ -30,6 +30,7 @@ import {
 import { api } from '../lib/api';
 import { useMobile } from '../lib/useMobile';
 import { useTeam } from '../stores/team';
+import { useUploadStore } from '../stores/uploads';
 import { usePolling } from '../lib/usePolling';
 import {
   ImportTranscript,
@@ -143,6 +144,13 @@ export function Library() {
   const transcriptInput = useRef<HTMLInputElement>(null);
   // Transcripts chosen or dropped, brought in one at a time.
   const [transcripts, setTranscripts] = useState<File[]>([]);
+  // Transcripts picked or dropped elsewhere in the app come here to be looked at.
+  const held = useUploadStore((state) => state.transcripts);
+  useEffect(() => {
+    if (!held.length) return;
+    const texts = useUploadStore.getState().takeTranscripts();
+    if (texts.length) setTranscripts((current) => [...current, ...texts]);
+  }, [held]);
   const [filter, setFilter] = useState('all');
   const [recollection, setRecollection] = useState<Recollection | null>(null);
   const [picking, setPicking] = useState(false);

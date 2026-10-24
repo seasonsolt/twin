@@ -228,6 +228,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                 ? [
                     {
                       value: 'away',
+                      keep: true,
                       label: (
                         <Row gap={2} as="div">
                           你不在时

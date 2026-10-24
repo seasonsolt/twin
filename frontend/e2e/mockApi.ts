@@ -1880,38 +1880,42 @@ const handlers: Record<string, Handler> = {
   'POST /api/library/transcripts/preview': reply({
     title: '运营周会-10月18日',
     date: '2026-10-18',
-    turns: 34,
-    minutes: 40,
     speakers: [
       {
         label: '林舟',
         segments: 23,
         sample: '大家好，今天过一下渠道数据。',
-        generic: false,
         person: { id: 'u-linzhou', name: '林舟' },
       },
       {
         label: '许清禾',
         segments: 17,
         sample: '我这边周三前补齐。',
-        generic: false,
         person: { id: 'u-qinghe', name: '许清禾' },
       },
       {
         label: '说话人 3',
         segments: 6,
         sample: '下周把渠道数据拉一下',
-        generic: true,
         person: null,
       },
       {
         label: 'Kevin',
         segments: 4,
         sample: '合同这周能签吗',
-        generic: false,
         person: null,
       },
     ],
+  }),
+  // Bringing it in: filed as a transcript with the two speakers the names did not settle left to settle.
+  'POST /api/library/transcripts': reply({
+    id: 'r-transcript',
+    filename: '运营周会-10月18日.docx',
+    kind: 'transcript',
+    status: 'ready',
+    new: true,
+    decided: 2,
+    unsettled: 2,
   }),
   'GET /api/library/people': reply({ items: people, matches: [] }),
   // 需求评审 was transcribed by an older service: the library offers to collect it again.

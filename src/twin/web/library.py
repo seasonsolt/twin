@@ -1423,10 +1423,12 @@ class Libraries:
                 found[label] = hits[0]
         return found
 
-    def transcript_preview(self, owner: str, filename: str, data: bytes) -> dict[str, Any]:
+    def transcript_preview(self, owner: str, viewer: Viewer, filename: str, data: bytes) -> dict[str, Any]:
         """What importing the file would bring in, to look at first: the title and day, and each speaker with how
-        much they say, a line of it, and the member the name is, if any. Nothing is stored."""
+        much they say, a line of it, and the member the name is, if any. Nothing is stored. A file the import would
+        refuse (the queue or the disk is full) is refused here, before the importer has filled anything in."""
         parsed = self.read_transcript(filename, data)
+        self.admit(viewer, UploadBody(filename=filename, size=len(data)), transcript=True)
         found = self.members_named(owner, {turn.speaker for turn in parsed.turns})
         counts: dict[str, int] = {}
         sample: dict[str, str] = {}
@@ -1434,19 +1436,14 @@ class Libraries:
             counts[turn.speaker] = counts.get(turn.speaker, 0) + 1
             line = " ".join(turn.text.split())
             sample.setdefault(turn.speaker, line if len(line) <= SAMPLE_CHARS else line[: SAMPLE_CHARS - 1] + "…")
-        timed = all(turn.clock is not None for turn in parsed.turns)
-        clocks = [turn.clock for turn in parsed.turns if turn.clock is not None]
         return {
             "title": parsed.title,
             "date": parsed.date.isoformat() if parsed.date else None,
-            "turns": len(parsed.turns),
-            "minutes": round((max(clocks) - min(clocks)) / 60) if timed and clocks else None,
             "speakers": [
                 {
                     "label": label,
                     "segments": count,
                     "sample": sample[label],
-                    "generic": is_generic_speaker(label),
                     "person": {"id": found[label][0], "name": found[label][1]} if label in found else None,
                 }
                 for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
@@ -1461,7 +1458,7 @@ class Libraries:
         given to anyone waits to be settled like any other (``Team.unvoiced``)."""
         parsed = self.read_transcript(filename, data)
         # Held to what an upload is: no more queued than ``max_pending`` and the disk's headroom kept.
-        self.admit(viewer, UploadBody(filename=filename, size=len(data)))
+        self.admit(viewer, UploadBody(filename=filename, size=len(data)), transcript=True)
         team = self.team(owner)
         known = {person_id for person_id, _, _ in team.roster()}
         labels = list(dict.fromkeys(turn.speaker for turn in parsed.turns))
@@ -1523,14 +1520,19 @@ class Libraries:
             "headroom_bytes": int(self.settings.library.headroom_gb * GIB),
         }
 
-    def admit(self, viewer: Viewer, body: UploadBody) -> None:
+    def admit(self, viewer: Viewer, body: UploadBody, transcript: bool = False) -> None:
         """Refuse an upload that would leave less than the headroom free once every upload still arriving is in,
         or that would queue more than ``max_pending`` of the member's recordings. Transcription decodes one
-        recording at a time, and a second only with room for its audio above the headroom (``kick``)."""
+        recording at a time, and a second only with room for its audio above the headroom (``kick``). A transcript
+        is held to the same rules but is not transcribed itself: what it waits for is the member's other files."""
         library = self.library(TEAM)
         waiting = library.pending(viewer.key) + self.uploads(viewer).arriving()[0]
         limit = self.settings.library.max_pending
         if waiting >= limit:
+            if transcript:
+                raise HTTPException(
+                    409, f"你已有 {waiting} 个文件在排队转写（上限 {limit} 个），等它们转完再导入转写稿"
+                )
             raise HTTPException(409, f"最多同时排队 {limit} 个文件，请等前面的转写完成后再添加")
         capacity = self.capacity()
         left = capacity["free_bytes"] - capacity["arriving_bytes"] - body.size
@@ -1685,7 +1687,9 @@ def register(
     async def preview_transcript(request: Request, file: Annotated[UploadFile, File()]) -> dict[str, Any]:
         """What a transcript file holds and who its speakers would be, before anything is brought in."""
         name, data = await transcript_file(file)
-        return await run_in_threadpool(libraries.transcript_preview, libraries.owner(request), name, data)
+        return await run_in_threadpool(
+            libraries.transcript_preview, libraries.owner(request), libraries.viewer(request), name, data
+        )
 
     @app.post("/api/library/transcripts", status_code=201)
     async def import_transcript(

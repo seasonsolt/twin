@@ -150,6 +150,36 @@ def test_the_command_line_chat_is_the_persons_own_with_the_ledger(
     assert "承诺账本" in prompt and "PRIVATE-FAMILY-5d" in prompt
 
 
+def test_the_survey_the_twin_answers_at_the_persons_terminal_is_given_their_own_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`twin survey ask` is the person measuring their own twin: it answers from their tier, not a colleague's."""
+    from typer.testing import CliRunner
+
+    from twin import cli
+    from twin.evals import survey
+
+    config = tmp_path / "twin.toml"
+    config.write_text('target_name = "合成人物"\n', encoding="utf-8")
+    settings = Settings(db_path=tmp_path / "twin.db", target_name="合成人物")
+    seed(settings.db_path)
+    asked: list[str] = []
+
+    def answer(twin: PersonaChat, instrument: survey.Instrument, **kwargs: Any) -> survey.Sheet:
+        asked.append(twin.audience)
+        return survey.Sheet(instrument=instrument.version, created=TODAY, items=[])
+
+    monkeypatch.setattr(cli, "_settings", lambda ctx: settings)
+    monkeypatch.setattr(cli, "_llm", lambda settings, **kwargs: Recorder().llm)
+    monkeypatch.setattr(cli, "_embedder", lambda settings: HashingEmbedder())
+    monkeypatch.setattr(survey, "screen_leakage", lambda *args: {})
+    monkeypatch.setattr(survey, "ask_survey", answer)
+    out = tmp_path / "sheet.json"
+    result = CliRunner().invoke(cli.app, ["--config", str(config), "survey", "ask", "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert asked == ["self"]
+
+
 def test_without_the_ledger_flag_the_chat_never_sees_it(tmp_path: Path) -> None:
     seed(tmp_path / "twin.db")
     recorder = Recorder()

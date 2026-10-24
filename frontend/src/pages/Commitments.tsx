@@ -14,13 +14,11 @@ export function Commitments() {
   const [params, setParams] = useSearchParams();
   const everyone = params.get('who') === 'all';
   const noTwin = useNoTwin();
+  const switchTo = usePersonas((state) => state.switchTo);
   if (noTwin)
     return (
       <Page title="承诺" titleSize="display">
-        <EmptyState
-          title="还没有承诺"
-          body="有了分身、整理过会议后，这里会列出谁答应了什么。"
-        />
+        <EmptyState title="还没有承诺" />
       </Page>
     );
   return (
@@ -43,7 +41,14 @@ export function Commitments() {
         </Row>
       }
     >
-      <Ledger key={everyone ? 'all' : id} everyone={everyone} />
+      <Ledger
+        key={everyone ? 'all' : id}
+        everyone={everyone}
+        onOpen={(twinId) => {
+          void switchTo(twinId);
+          setParams({});
+        }}
+      />
     </Page>
   );
 }

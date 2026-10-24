@@ -2,8 +2,10 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { ConfirmProvider, toast } from '../components/ui';
+import { ConfirmProvider, TooltipProvider, toast } from '../components/ui';
 import { Ledger } from '../pages/Ledger';
+import { usePersonas } from '../stores/personas';
+import { setPersonaId } from '../lib/persona';
 import type {
   LedgerBrief,
   LedgerData,
@@ -129,7 +131,11 @@ beforeEach(() => {
       };
       return json(ledger.entries[0]);
     }
-    if (url.startsWith('/api/persona/ledger')) return json(ledger);
+    if (
+      url.startsWith('/api/persona/ledger') ||
+      url.startsWith('/api/personas/commitments')
+    )
+      return json(ledger);
     if (url === '/api/jobs/job1')
       return json({
         job_id: 'job1',
@@ -143,15 +149,17 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetcher);
 });
 
-const setup = () =>
+const setup = (page = <Ledger />) =>
   render(
-    <ConfirmProvider>
-      <MemoryRouter initialEntries={['/ledger']}>
-        <Routes>
-          <Route path="ledger" element={<Ledger />} />
-        </Routes>
-      </MemoryRouter>
-    </ConfirmProvider>,
+    <TooltipProvider>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/ledger']}>
+          <Routes>
+            <Route path="ledger" element={page} />
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
+    </TooltipProvider>,
   );
 
 it('groups entries by meeting with their status, quote and review actions', async () => {
@@ -168,10 +176,18 @@ it('groups entries by meeting with their status, quote and review actions', asyn
   const objection = within(meeting).getByRole('article', {
     name: '异议：实施费单列像变相涨价',
   });
-  expect(within(objection).getByText('把握不大，请核对')).toBeInTheDocument();
+  expect(within(objection).getByText('待核对')).toBeInTheDocument();
   expect(
     within(objection).queryByRole('button', { name: '复制确认消息' }),
   ).not.toBeInTheDocument();
+  // The meeting is said once, in its heading, not again before every quote under it.
+  expect(promise).toHaveTextContent('其他人1：「我周五前给您一版新报价方案」');
+  expect(promise).not.toHaveTextContent('经营会');
+  // One main action in sight; the rest are behind "更多".
+  expect(within(promise).getByRole('button', { name: '确认' })).toBeVisible();
+  expect(
+    within(promise).getByRole('button', { name: '驳回' }),
+  ).not.toBeVisible();
   expect(screen.getByRole('status')).toHaveTextContent(
     '共 1 场会议，都已整理；2 条待确认',
   );
@@ -182,8 +198,9 @@ it('groups entries by meeting with their status, quote and review actions', asyn
       ['/api/persona/ledger/e1/review', { action: 'confirm' }],
     ]),
   );
+  await user.click(await within(promise).findByLabelText('更多'));
   expect(
-    await within(meeting).findByRole('button', { name: '撤销已确认' }),
+    await within(promise).findByRole('button', { name: '撤销已确认' }),
   ).toBeInTheDocument();
 });
 
@@ -191,7 +208,13 @@ it('copies the confirmation message for the owner', async () => {
   const user = userEvent.setup();
   const writeText = vi.spyOn(navigator.clipboard, 'writeText');
   setup();
-  await user.click(await screen.findByRole('button', { name: '复制确认消息' }));
+  const promise = await screen.findByRole('article', {
+    name: '承诺：周五前给我一版新报价方案',
+  });
+  await user.click(within(promise).getByLabelText('更多'));
+  await user.click(
+    within(promise).getByRole('button', { name: '复制确认消息' }),
+  );
   expect(writeText).toHaveBeenCalledWith(
     ledger.entries[0].confirmation_message,
   );
@@ -209,8 +232,13 @@ it('sends only the corrected fields when an entry is edited', async () => {
   const promise = await screen.findByRole('article', {
     name: '承诺：周五前给我一版新报价方案',
   });
+  await user.click(within(promise).getByLabelText('更多'));
   await user.click(within(promise).getByRole('button', { name: '修改' }));
   const dialog = await screen.findByRole('dialog', { name: '修改这一条' });
+  // 待你接受 is what a promise asked for in a conversation waits as, not a state to choose by hand.
+  expect(
+    within(dialog).queryByRole('option', { name: '待你接受' }),
+  ).not.toBeInTheDocument();
   const due = within(dialog).getByLabelText('截止日期');
   await user.clear(due);
   await user.type(due, '2026-10-17');
@@ -332,4 +360,99 @@ it('lets the person take or turn down a promise someone asked for in a conversat
   await waitFor(() =>
     expect(posts()).toContainEqual(['/api/persona/ledger/h1/decline', {}]),
   );
+});
+
+it('gives a promise that was turned down no way to be asked again', async () => {
+  ledger.entries = [
+    entry({
+      entry_id: 'h1',
+      source_id: 'handoff:h1',
+      speaker: '沈从',
+      owner: '本人',
+      what: '周五前给沈从一版发布方案',
+      status: 'pending_accept',
+      current_status: 'pending_accept',
+      current_status_label: '待你接受',
+      confirmation_message: null,
+      origin: 'conversation',
+      handoff_id: 'h1',
+      review: 'rejected',
+    }),
+  ];
+  ledger.people = [];
+  const user = userEvent.setup();
+  setup();
+  await user.click(await screen.findByRole('checkbox', { name: '显示已驳回' }));
+  const declined = await screen.findByRole('article', {
+    name: '承诺：周五前给沈从一版发布方案',
+  });
+  expect(within(declined).getByText('已驳回')).toBeInTheDocument();
+  expect(within(declined).queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('marks a quote that is not the exact words, and explains it on hover', async () => {
+  const user = userEvent.setup();
+  ledger.entries = [entry({ quote_exact: false })];
+  setup();
+  const badge = await screen.findByText('非原话');
+  expect(screen.queryByText(/没有找到逐字原话/u)).not.toBeInTheDocument();
+  await user.hover(badge);
+  expect(
+    (await screen.findAllByText('没有找到逐字原话，显示整句')).length,
+  ).toBeGreaterThan(0);
+});
+
+it('speaks of the ledger’s owner by name when someone else is looking at it', async () => {
+  setPersonaId('p-1');
+  usePersonas.setState({
+    id: 'p-1',
+    items: [
+      {
+        id: 'p-1',
+        name: '林舟',
+        avatar_url: null,
+        sources: 1,
+        created_at: '',
+        is_default: false,
+      },
+    ],
+  });
+  ledger.entries[0] = entry({ owner: '本人', counterpart: '老王' });
+  try {
+    const user = userEvent.setup();
+    setup();
+    const promise = await screen.findByRole('article', {
+      name: '承诺：周五前给我一版新报价方案',
+    });
+    expect(within(promise).getByText('林舟 → 老王')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '林舟' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '我自己' })).toBeNull();
+    await user.click(within(promise).getByLabelText('更多'));
+    await user.click(within(promise).getByRole('button', { name: '修改' }));
+    expect(
+      await screen.findByText('写「本人」表示林舟自己'),
+    ).toBeInTheDocument();
+  } finally {
+    usePersonas.setState({ id: '', items: [] });
+  }
+});
+
+it('names the twins whose meetings are still to be read when everyone’s list has nothing yet', async () => {
+  const user = userEvent.setup();
+  const opened: string[] = [];
+  ledger = {
+    ...ledger,
+    entries: [],
+    people: [],
+    meetings: { total: 2, pending: 1 },
+    twins: [
+      { id: 'p-1', name: '林舟', pending: 1 },
+      { id: 'p-2', name: '许清禾', pending: 0 },
+    ],
+  };
+  setup(<Ledger everyone onOpen={(id) => opened.push(id)} />);
+  expect(await screen.findByText('选一位，去整理会议。')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '许清禾' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: '林舟' }));
+  expect(opened).toEqual(['p-1']);
 });

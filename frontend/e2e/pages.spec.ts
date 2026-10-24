@@ -337,7 +337,7 @@ const pages: {
     },
   },
   {
-    // 第 2 屏: nothing uploaded yet. The way to the first recording, what happens to it, and asking colleagues in.
+    // 第 2 屏: nothing uploaded yet. The way to the first recording, what happens to it, and the twins already on the team (the invitation only shows to a company sign-in).
     name: 'first-run',
     path: '/#/team',
     ready: '把会议录音拖到这里',

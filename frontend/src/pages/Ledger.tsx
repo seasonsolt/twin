@@ -20,10 +20,14 @@ import {
   Tabs,
   Text,
   Textarea,
+  Tooltip,
+  ActionMenu,
   toast,
   useConfirm,
   type Tone,
 } from '../components/ui';
+import { useIsSelf } from '../stores/access';
+import { usePersonas } from '../stores/personas';
 import { AWAY_CHANGED } from '../features/away/useAway';
 import { JobProgress } from '../features/jobs/JobProgress';
 import { MemoryUpdating } from '../features/memories/BuildProgress';
@@ -54,6 +58,11 @@ const reviewLabels = {
   edited: '已修改',
   rejected: '已驳回',
 };
+
+/** "本人" in a ledger is whoever it belongs to: by name when the person looking at it is somebody else. */
+function called(value: string, who: string) {
+  return value === SELF && who ? who : value;
+}
 
 function day(iso: string | null) {
   if (!iso) return '';
@@ -94,12 +103,14 @@ function FilterSelect({
   );
 }
 
-function Facts({ entry }: { entry: LedgerEntry }) {
+function Facts({ entry, who }: { entry: LedgerEntry; who: string }) {
   const facts: [string, ReactNode][] = [];
   if (entry.owner)
     facts.push([
       '负责人',
-      entry.counterpart ? `${entry.owner} → ${entry.counterpart}` : entry.owner,
+      entry.counterpart
+        ? `${called(entry.owner, who)} → ${called(entry.counterpart, who)}`
+        : called(entry.owner, who),
     ]);
   if (entry.due || entry.due_text)
     facts.push([
@@ -113,7 +124,16 @@ function Facts({ entry }: { entry: LedgerEntry }) {
   return <KeyValue items={facts} layout="inline" />;
 }
 
-function Quote({ entry }: { entry: LedgerEntry }) {
+function Quote({
+  entry,
+  who,
+  meeting,
+}: {
+  entry: LedgerEntry;
+  who: string;
+  /** Say which meeting it is from: not where the entries are already under their meeting's heading. */
+  meeting: boolean;
+}) {
   return (
     <Text
       as="blockquote"
@@ -122,12 +142,17 @@ function Quote({ entry }: { entry: LedgerEntry }) {
       className="border-l-2 border-border pl-3"
     >
       <span className="text-tertiary">
-        {day(entry.meeting_date)} {entry.meeting_title} · {entry.speaker}：
+        {meeting && `${day(entry.meeting_date)} ${entry.meeting_title} · `}
+        {called(entry.speaker, who)}：
       </span>
       「{entry.quote}」
       {!entry.quote_exact && (
-        <span className="ml-1 text-warning">
-          （没有找到逐字原话，显示整句）
+        <span className="ml-1">
+          <Tooltip label="没有找到逐字原话，显示整句">
+            <Badge tone="warning" tabIndex={0}>
+              非原话
+            </Badge>
+          </Tooltip>
         </span>
       )}
     </Text>
@@ -136,11 +161,17 @@ function Quote({ entry }: { entry: LedgerEntry }) {
 
 function EntryCard({
   entry,
+  who,
+  meeting = true,
   onReview,
   onEdit,
   onTake,
 }: {
   entry: LedgerEntry;
+  /** The name the ledger's "本人" goes by for the one looking at it, when that is somebody else. */
+  who: string;
+  /** Say which meeting the quote is from (off under the meeting's own heading). */
+  meeting?: boolean;
   onReview?: (
     entry: LedgerEntry,
     action: 'confirm' | 'reject' | 'reset',
@@ -150,8 +181,46 @@ function EntryCard({
   onTake?: (entry: LedgerEntry, action: 'accept' | 'decline') => void;
 }) {
   const rejected = entry.review === 'rejected';
-  const asked =
-    !!onTake && entry.current_status === 'pending_accept' && !rejected;
+  // Waiting for the person to answer the one who asked, or answered no: it is changed only by answering, not here.
+  const answering = entry.status === 'pending_accept';
+  const asked = !!onTake && answering && !rejected;
+  const copy = () => {
+    void navigator.clipboard.writeText(entry.confirmation_message ?? '').then(
+      () => toast('确认消息已复制，可以发给对方', 'success'),
+      () => toast(entry.confirmation_message ?? '', 'info', 15000),
+    );
+  };
+  // One main action, the others behind "⋯": confirm what is unchecked, undo a rejection, else correct.
+  const main =
+    onReview && entry.review === 'unreviewed' ? (
+      <Button size="sm" onClick={() => onReview(entry, 'confirm')}>
+        确认
+      </Button>
+    ) : onReview && rejected ? (
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() => onReview(entry, 'reset')}
+      >
+        撤销{reviewLabels.rejected}
+      </Button>
+    ) : onEdit ? (
+      <Button size="sm" variant="secondary" onClick={() => onEdit(entry)}>
+        修改
+      </Button>
+    ) : null;
+  const more: { label: string; onSelect: () => void }[] = [];
+  if (onEdit && !rejected && entry.review === 'unreviewed')
+    more.push({ label: '修改', onSelect: () => onEdit(entry) });
+  if (onReview && entry.review === 'unreviewed')
+    more.push({ label: '驳回', onSelect: () => onReview(entry, 'reject') });
+  if (onReview && entry.review !== 'unreviewed' && !rejected)
+    more.push({
+      label: `撤销${reviewLabels[entry.review]}`,
+      onSelect: () => onReview(entry, 'reset'),
+    });
+  if ((onReview || onEdit) && entry.confirmation_message && !rejected)
+    more.push({ label: '复制确认消息', onSelect: copy });
   return (
     <Card className={cn('space-y-3', rejected && 'opacity-60')}>
       <article
@@ -171,14 +240,18 @@ function EntryCard({
             </Badge>
           )}
           {entry.review === 'unreviewed' && entry.confidence < 0.6 && (
-            <Badge tone="warning">把握不大，请核对</Badge>
+            <Tooltip label="把握不大，请核对">
+              <Badge tone="warning" tabIndex={0}>
+                待核对
+              </Badge>
+            </Tooltip>
           )}
         </div>
         <p className={cn('font-medium', rejected && 'line-through')}>
           {entry.what}
         </p>
-        <Facts entry={entry} />
-        <Quote entry={entry} />
+        <Facts entry={entry} who={who} />
+        <Quote entry={entry} who={who} meeting={meeting} />
         {asked && (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => onTake(entry, 'accept')}>
@@ -193,57 +266,10 @@ function EntryCard({
             </Button>
           </div>
         )}
-        {!asked && (onReview || onEdit) && (
-          <div className="flex flex-wrap gap-2">
-            {onReview && entry.review === 'unreviewed' && (
-              <Button size="sm" onClick={() => onReview(entry, 'confirm')}>
-                确认
-              </Button>
-            )}
-            {onEdit && !rejected && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => onEdit(entry)}
-              >
-                修改
-              </Button>
-            )}
-            {onReview && entry.review === 'unreviewed' && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => onReview(entry, 'reject')}
-              >
-                驳回
-              </Button>
-            )}
-            {onReview && entry.review !== 'unreviewed' && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => onReview(entry, 'reset')}
-              >
-                撤销{reviewLabels[entry.review]}
-              </Button>
-            )}
-            {entry.confirmation_message && !rejected && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  void navigator.clipboard
-                    .writeText(entry.confirmation_message ?? '')
-                    .then(
-                      () => toast('确认消息已复制，可以发给对方', 'success'),
-                      () =>
-                        toast(entry.confirmation_message ?? '', 'info', 15000),
-                    );
-                }}
-              >
-                复制确认消息
-              </Button>
-            )}
+        {!answering && (main || more.length > 0) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {main}
+            {more.length > 0 && <ActionMenu label="更多" items={more} />}
           </div>
         )}
       </article>
@@ -254,11 +280,15 @@ function EntryCard({
 function EditDialog({
   entry,
   statusLabels,
+  who,
+  everyone,
   onClose,
   onSave,
 }: {
   entry: LedgerEntry | null;
   statusLabels: Record<LedgerStatus, string>;
+  who: string;
+  everyone: boolean;
   onClose: () => void;
   onSave: (entry: LedgerEntry, changes: LedgerChanges) => Promise<void>;
 }) {
@@ -319,7 +349,10 @@ function EditDialog({
   };
   const statusOptions: [string, string][] = [
     ['', '按会议记录推断'],
-    ...(Object.entries(statusLabels) as [string, string][]),
+    // 待你接受 is the state of a promise asked for in a conversation until it is taken or turned down, not a choice.
+    ...(Object.entries(statusLabels).filter(
+      ([status]) => status !== 'pending_accept',
+    ) as [string, string][]),
   ];
   return (
     <Dialog
@@ -345,7 +378,7 @@ function EditDialog({
         <Field
           id="ledger-owner"
           label="负责人"
-          help={`写「${SELF}」表示你自己`}
+          help={everyone ? undefined : `写「${SELF}」表示${who || '你'}自己`}
         >
           <Input
             id="ledger-owner"
@@ -404,6 +437,7 @@ function EditDialog({
 function Entries({
   data,
   everyone,
+  who,
   onReview,
   onEdit,
   onTake,
@@ -411,6 +445,8 @@ function Entries({
   data: LedgerData;
   /** The list holds several people's ledgers: nobody is "我自己". */
   everyone: boolean;
+  /** The name "我自己" goes by for the one looking at somebody else's ledger. */
+  who: string;
   onReview: (
     entry: LedgerEntry,
     action: 'confirm' | 'reject' | 'reset',
@@ -456,7 +492,7 @@ function Entries({
           onChange={setPerson}
           options={[
             ['', '所有人'],
-            ...(everyone ? [] : [[SELF, '我自己'] as [string, string]]),
+            ...(everyone ? [] : [[SELF, who || '我自己'] as [string, string]]),
             ...[...data.people]
               .sort(byName)
               .map((name): [string, string] => [name, name]),
@@ -495,6 +531,8 @@ function Entries({
             <EntryCard
               key={entry.entry_id}
               entry={entry}
+              who={who}
+              meeting={false}
               onReview={onReview}
               onEdit={onEdit}
               onTake={onTake}
@@ -506,7 +544,15 @@ function Entries({
   );
 }
 
-function Brief({ people, version }: { people: string[]; version: number }) {
+function Brief({
+  people,
+  version,
+  who,
+}: {
+  people: string[];
+  version: number;
+  who: string;
+}) {
   const [person, setPerson] = useState(people[0] ?? '');
   const [asOf, setAsOf] = useState(today());
   const [brief, setBrief] = useState<LedgerBrief | null>(null);
@@ -539,7 +585,7 @@ function Brief({ people, version }: { people: string[]; version: number }) {
   const sections: [string, LedgerEntry[], string][] = brief
     ? [
         [`${brief.person}答应的事`, brief.theirs, '没有未完成的承诺'],
-        [`我答应${brief.person}的事`, brief.mine, '没有'],
+        [`${who || '我'}答应${brief.person}的事`, brief.mine, '没有'],
         ['最近进展', brief.progress, '没有进展记录'],
         [`${brief.person}提过的顾虑`, brief.objections, '没有'],
       ]
@@ -594,7 +640,7 @@ function Brief({ people, version }: { people: string[]; version: number }) {
               <Heading level={3}>{title}</Heading>
               {entries.length ? (
                 entries.map((entry) => (
-                  <EntryCard key={entry.entry_id} entry={entry} />
+                  <EntryCard key={entry.entry_id} entry={entry} who={who} />
                 ))
               ) : (
                 <p className="text-secondary">{empty}</p>
@@ -610,8 +656,21 @@ function Brief({ people, version }: { people: string[]; version: number }) {
 /** The commitments of the twin in view, from the meetings it was in: filters by kind, person and state, the
  * entries with their quotes, and what to bring up before meeting someone. Opened under a member, or on its own
  * (``/commitments``) for whoever is chosen there. */
-export function Ledger({ everyone = false }: { everyone?: boolean }) {
+export function Ledger({
+  everyone = false,
+  onOpen,
+}: {
+  everyone?: boolean;
+  /** In the list of everyone's: open one person's own commitments (to read the meetings not yet read there). */
+  onOpen?: (twinId: string) => void;
+}) {
   const personaId = usePersonaId();
+  const persona = usePersonas((state) =>
+    state.items.find((item) => item.id === personaId),
+  );
+  // Somebody else's ledger is told by their name, not as "我": it is the viewer's own when the twin is theirs.
+  const self = useIsSelf(persona);
+  const who = !everyone && persona && !self ? persona.name : '';
   const confirm = useConfirm();
   const [data, setData] = usePersonaState<LedgerData | null>(null);
   const [error, setError] = usePersonaState('');
@@ -724,6 +783,8 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
     ? `${organising.map((twin) => twin.name).join('、')}整理中，完成后列出`
     : '';
   const meetings = data?.meetings;
+  // In the list of everyone's: whose ledgers have meetings not read yet.
+  const unread = (data?.twins ?? []).filter((twin) => (twin.pending ?? 0) > 0);
   const unreviewed =
     data?.entries.filter((entry) => entry.review === 'unreviewed').length ?? 0;
   return (
@@ -746,7 +807,7 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
                 ? `共 ${meetings.total} 场会议${meetings.pending ? `，${meetings.pending} 场还没整理` : '，都已整理'}${unreviewed ? `；${unreviewed} 条待确认` : ''}${organisingLine ? `；${organisingLine}` : ''}`
                 : everyone
                   ? organisingLine || '还没有会议。'
-                  : '还没有会议。添加有你和别人发言的录音或会议记录，并选出哪位是你。'}
+                  : `还没有会议。添加有${who || '你'}和别人发言的录音或会议记录，并选出哪位是${who || '你'}。`}
             </p>
             {!everyone && (
               <div className="flex flex-wrap gap-2">
@@ -783,6 +844,7 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
           <Entries
             data={data}
             everyone
+            who=""
             onReview={onReview}
             onEdit={setEditing}
             onTake={onTake}
@@ -798,6 +860,7 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
                   <Entries
                     data={data}
                     everyone={false}
+                    who={who}
                     onReview={onReview}
                     onEdit={setEditing}
                     onTake={onTake}
@@ -807,7 +870,9 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
               {
                 value: 'brief',
                 label: '见面前',
-                content: <Brief people={data.people} version={version} />,
+                content: (
+                  <Brief people={data.people} version={version} who={who} />
+                ),
               },
             ]}
           />
@@ -822,11 +887,27 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
               body={
                 meetings.pending
                   ? everyone
-                    ? '先在各人的承诺里整理会议。'
+                    ? unread.length && onOpen
+                      ? '选一位，去整理会议。'
+                      : '先在各人的承诺里整理会议。'
                     : '点上面的按钮，从会议里整理出决定和承诺。'
                   : '已整理的会议里没有找到决定或承诺。'
               }
-            />
+            >
+              {everyone && onOpen && (
+                <div className="flex flex-wrap justify-center gap-2">
+                  {unread.map((twin) => (
+                    <Button
+                      key={twin.id}
+                      variant="secondary"
+                      onClick={() => onOpen(twin.id)}
+                    >
+                      {twin.name}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </EmptyState>
           )}
       </div>
       <EditDialog
@@ -834,6 +915,8 @@ export function Ledger({ everyone = false }: { everyone?: boolean }) {
         statusLabels={
           data?.status_labels ?? ({} as Record<LedgerStatus, string>)
         }
+        who={who}
+        everyone={everyone}
         onClose={() => setEditing(null)}
         onSave={(entry, changes) => review(entry, 'edit', changes)}
       />

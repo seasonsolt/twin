@@ -808,6 +808,28 @@ def test_turning_a_promise_down_and_taking_one_from_the_ledger(scene: Scene) -> 
     assert scene.web.post(f"/api/persona/ledger/{entry_id}/decline", headers=scene.headers).status_code == 403
 
 
+def test_a_promise_asked_for_is_answered_by_taking_or_turning_it_down_not_by_editing_its_state(scene: Scene) -> None:
+    scene.asked("shen", PROMISE)
+    scene.asked("xu", PROMISE)
+    first, second = scene.team.handoffs(persona_id=scene.persona)
+    declined_id, waiting_id = ledger_id_for(first.id), ledger_id_for(second.id)
+    assert scene.post(first.id, "decline").status_code == 200
+    review = lambda entry_id, body: scene.web.post(  # noqa: E731
+        f"/api/persona/ledger/{entry_id}/review", json=body, headers=scene.headers
+    )
+    # Taking back the "不接" would put 接下 / 不接 on a promise whose asker was already told no; both fail there.
+    undone = review(declined_id, {"action": "reset"})
+    assert undone.status_code == 409 and "接下" in undone.json()["detail"]
+    # Nor can the state "待你接受" be set by hand on any entry, or the one waiting be confirmed away from its asker.
+    assert review(waiting_id, {"action": "edit", "changes": {"status": "pending_accept"}}).status_code == 400
+    assert review(waiting_id, {"action": "reject"}).status_code == 409
+    with PersonaStore(scene.path) as store:
+        assert store.get_ledger_entry(declined_id).review.value == "rejected"  # type: ignore[union-attr]
+        waiting = store.get_ledger_entry(waiting_id)
+        assert waiting is not None and waiting.review.value == "unreviewed" and waiting.status == "pending_accept"
+    assert scene.web.post(f"/api/persona/ledger/{waiting_id}/accept", json={}, headers=scene.headers).status_code == 200
+
+
 def test_a_promise_answered_in_words_can_still_be_taken_in_the_ledger_without_a_second_turn(scene: Scene) -> None:
     conversation, _ = scene.asked("shen", PROMISE)
     [made] = scene.team.handoffs(persona_id=scene.persona)

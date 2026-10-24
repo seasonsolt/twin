@@ -20,6 +20,7 @@ from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.persona.items import PersonaItem, PEvidence
 from twin.persona.schema import EvidenceClass, SourceKind
+from twin.persona.sources import parse_note
 from twin.persona.store import PersonaStore
 from twin.teamdb import TeamDB
 from twin.web import create_app
@@ -305,6 +306,36 @@ def test_the_person_alone_can_change_a_tier_and_sees_it_in_their_memory(scene: S
     review = {"status": "rejected", "statement": None, "note": ""}
     assert web.post("/api/persona/items/pi_family/review", json=review, headers=scene.headers).status_code == 404
     assert FAMILY not in web.get("/api/persona/items?q=原话", headers=scene.headers).text
+
+
+def test_an_item_opened_to_colleagues_shows_them_neither_the_private_note_it_quotes_nor_its_title(
+    scene: Scene, tmp_path: Path
+) -> None:
+    web = scene.web
+    scene.take()
+    note = parse_note("PRIVATE-NOTE-77c", Settings(target_name="张三"), "记一下 私事")
+    sid = note.source.source_id
+    kept = item("pi_note", "2.1", "note").model_copy(deep=True)
+    kept.evidence = [kept.evidence[0].model_copy(update={"expression_id": f"{sid}#00000", "source_id": sid})]
+    kept.evidence[0].quote = "PRIVATE-NOTE-77c"
+    with PersonaStore(tmp_path / "personas" / scene.persona / "twin.db") as store:
+        store.put_source(note)
+        store.replace_facet_items("2.1", [item("pi_work", "2.1", WORK), kept])
+        store.set_note_tier(sid, "self")
+        store.set_item_tier("pi_note", "colleague")  # the person opened the item, not the note
+    paths = ("/api/persona/items?with_sources=true", "/api/persona/items/search?q=PRIVATE-NOTE-77c")
+    for who, sees in (("person", True), ("admin", False)):
+        scene.as_(who)
+        for path in paths:
+            body = web.get(path, headers=scene.headers)
+            found = {i["item_id"]: i for i in body.json()["items"]}
+            assert "pi_note" in found, (who, path)
+            assert ("PRIVATE-NOTE-77c" in body.text) is sees, (who, path)
+            if "with_sources" in path:
+                assert (sid in body.json()["sources"]) is sees, (who, path)
+            assert bool(found["pi_note"]["evidence"]) is sees, (who, path)
+            if "with_sources" in path:
+                assert found["pi_work"]["evidence"], who
 
 
 def test_the_job_path_answers_a_manager_from_the_colleague_tier_too(scene: Scene) -> None:

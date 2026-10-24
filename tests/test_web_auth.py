@@ -707,6 +707,7 @@ def test_a_taken_twin_wears_the_company_profile_photo(sso: tuple[TestClient, Fak
     assert (worn(web, persona) or {}).get("source") == "sso"
     [mine] = web.get("/api/personas").json()
     assert mine["avatar_url"] == f"/api/media/avatar-image?persona={persona}"
+    assert "photo" not in mine and "/a.png" not in web.get("/api/personas").text  # the company's address stays here
     image = web.get(mine["avatar_url"])
     assert image.status_code == 200 and Image.open(io.BytesIO(image.content)).getpixel((0, 0)) == (0, 0, 128)
     web.get("/api/personas")

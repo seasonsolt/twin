@@ -200,6 +200,25 @@ def test_cumulative_throttled_stream_and_history(tmp_path: Path, monkeypatch: py
     asyncio.run(check())
 
 
+def test_a_wecom_answer_is_given_from_the_colleague_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whoever writes to the bot is a colleague: never the person's own tier, with no promises ledger."""
+    asked: list[tuple[str, bool]] = []
+
+    async def stream(self: PersonaChat, messages: Sequence[ChatTurn]) -> AsyncIterator[str | ChatReply]:
+        asked.append((self.audience, self.ledger))
+        yield reply()
+
+    monkeypatch.setattr(PersonaChat, "stream_reply", stream)
+
+    async def check() -> None:
+        async with running(tmp_path, monkeypatch) as (_, peer):
+            await peer.send(message())
+            await peer.receive("aibot_respond_msg")
+            assert asked == [("colleague", False)]
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize(
     ("body", "question"),
     [

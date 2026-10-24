@@ -15,6 +15,8 @@ from twin.config import ApiSettings, EmbedSettings, LLMSettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.persona.chat import PersonaChat
+from twin.persona.items import PersonaItem, PEvidence
+from twin.persona.schema import EvidenceClass, SourceKind
 from twin.persona.store import PersonaStore
 
 
@@ -212,6 +214,44 @@ def test_cli_remote_requires_opt_in(token: str, tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(cli, "_serve", lambda *args, **kwargs: served.append((args, kwargs)))
     result = CliRunner().invoke(cli.app, [*args, "--allow-remote", "--allow-host", "twin.example"])
     assert result.exit_code == 0 and served and token not in result.output
+
+
+def test_the_service_answers_from_the_colleague_tier_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The HTTP service has no signed-in person: what the person keeps to themself never reaches its prompt."""
+    settings = Settings(
+        db_path=tmp_path / "twin.db", llm=LLMSettings(model="offline", base_url="http://127.0.0.1:8000/v1")
+    )
+    shown: list[str] = []
+
+    def handle(system: str, user: str, schema: object) -> dict[str, object]:
+        shown.extend((system, user))
+        return {"reply": "我回答了。", "citations": [], "confidence": 0.9, "mode": "grounded"}
+
+    def item(item_id: str, facet: str, marker: str) -> PersonaItem:
+        return PersonaItem(
+            item_id=item_id,
+            facet_id=facet,
+            statement=f"他说起过{marker}",
+            evidence=[
+                PEvidence(
+                    expression_id=f"e_{item_id}",
+                    source_id="s1",
+                    source_kind=SourceKind.CHAT,
+                    evidence_class=EvidenceClass.SELF_REPORT,
+                    quote=f"原话{marker}",
+                )
+            ],
+        )
+
+    with PersonaStore(settings.db_path) as store:
+        store.set_meta("built_at", "2026-01-01")
+        store.replace_facet_items("2.1", [item("pi_work", "2.1", "ALPHA-WORK-1f")])
+        store.replace_facet_items("9.3", [item("pi_family", "9.3", "SECRET-FAMILY-9a")])
+    monkeypatch.setattr(api, "make_llm", lambda *_: FakeLLM(handle))
+    monkeypatch.setattr(api, "make_embedder", lambda _: HashingEmbedder())
+    api.ServiceBackend(settings).ask("他家里和工作是怎么看的？", None)
+    text = "\n".join(shown)
+    assert "ALPHA-WORK-1f" in text and "SECRET-FAMILY-9a" not in text
 
 
 def test_default_backends_construct_once_and_close_request_stores(

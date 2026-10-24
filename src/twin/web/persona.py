@@ -870,8 +870,18 @@ def register(
         job = processing.start()
         return {"job_id": job.job_id}
 
-    def item_view(i: Any, tiers: dict[str, Tier]) -> dict[str, Any]:
+    def hidden_words(store: PersonaStore, request: Request) -> PrivateWords:
+        """The words the viewer may not be shown in an item's evidence: the notes the person kept to themself, for a
+        viewer of the colleague tier (an item opened to colleagues may still quote one), none for the person. An item
+        a colleague can see is of their tier, so no other words of it are private."""
+        if request_audience(request) == SELF:
+            return PrivateWords()
+        return PrivateWords(sources=frozenset(store.private_note_sources()))
+
+    def item_view(i: PersonaItem, tiers: dict[str, Tier], hidden: PrivateWords) -> dict[str, Any]:
         facet = FACET_BY_ID[i.facet_id]
+        if hidden and any(e.expression_id in hidden for e in i.evidence):
+            i = i.model_copy(update={"evidence": [e for e in i.evidence if e.expression_id not in hidden]})
         return {
             **i.model_dump(mode="json"),
             "facet_name": facet.name,
@@ -917,9 +927,11 @@ def register(
                 audience=request_audience(request),
             )
             tiers = store.item_tiers()
-            result: dict[str, Any] = {"items": [item_view(i, tiers) for i in items], "total": total}
+            hidden = hidden_words(store, request)
+            views = [item_view(i, tiers, hidden) for i in items]
+            result: dict[str, Any] = {"items": views, "total": total}
             if with_sources:
-                cited = sorted({e.source_id for i in items for e in i.evidence if e.source_id})
+                cited = sorted({e["source_id"] for v in views for e in v["evidence"] if e["source_id"]})
                 result["sources"] = {
                     sid: {"title": source.title, "first_date": source.first_date, "kind": source.kind.value}
                     for sid in cited
@@ -946,7 +958,8 @@ def register(
             except (BackendUnavailable, EmbedError, ValueError):
                 found = search_items(store, None, query, limit, audience)
             tiers = store.item_tiers()
-        return {"items": [item_view(i, tiers) for i in found], "total": len(found)}
+            hidden = hidden_words(store, request)
+        return {"items": [item_view(i, tiers, hidden) for i in found], "total": len(found)}
 
     @app.get("/api/persona/items/summary")
     def items_summary(request: Request) -> dict[str, Any]:
@@ -991,7 +1004,7 @@ def register(
                 raise HTTPException(404, f"找不到档案条目 {item_id}（可能已在重新构建时合并）") from e
             item = store.get_item(item_id)
             assert item is not None
-            return item_view(item, store.item_tiers())
+            return item_view(item, store.item_tiers(), hidden_words(store, request))
 
     @app.put("/api/persona/items/{item_id}/tier")
     def set_item_tier(item_id: str, body: TierBody, request: Request) -> dict[str, Any]:
@@ -1004,7 +1017,7 @@ def register(
             store.set_item_tier(item_id, body.tier)
             item = store.get_item(item_id)
             assert item is not None
-            return item_view(item, store.item_tiers())
+            return item_view(item, store.item_tiers(), hidden_words(store, request))
 
     @app.get("/api/persona/coverage")
     def get_coverage(request: Request, as_of: str | None = None) -> dict[str, Any]:

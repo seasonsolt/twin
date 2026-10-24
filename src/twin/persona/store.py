@@ -836,12 +836,23 @@ class PersonaStore:
             carried = carry_reviews(heirs, items, reviews)
             carried_tiers = carry_tiers(heirs, items, tiers)
             # An item standing on a note the person chose a tier for takes it, the stricter tier winning: a note kept to
-            # themself makes the item theirs whatever was carried (it now quotes the note), an opened note only fills in
-            # where nothing was. A tier written here reads as chosen next round, which the stricter rule keeps safe.
+            # themself makes the item theirs whatever was carried, unless the person opened the item itself while it
+            # already stood on every such note (their choice, made knowing what it quotes; the quote stays hidden from
+            # colleagues by source). An item that has come to stand on a private note it did not before is theirs: it
+            # was opened without that. An opened note only fills in where nothing was. A tier written here reads as
+            # chosen next round, which the stricter rule keeps safe.
             if notes := self.note_tiers():
+                opened_on = {
+                    e.source_id for o in heirs if tiers.get(o.item_id) == COLLEAGUE for e in o.evidence if e.source_id
+                }
                 for i in items:
                     tier = note_item_tier(i, notes)
-                    if tier == SELF or (tier == COLLEAGUE and i.item_id not in carried_tiers):
+                    if tier == SELF:
+                        private = {e.source_id for e in i.evidence if notes.get(e.source_id) == SELF}
+                        if carried_tiers.get(i.item_id) == COLLEAGUE and private <= opened_on:
+                            continue
+                        carried_tiers[i.item_id] = SELF
+                    elif tier == COLLEAGUE and i.item_id not in carried_tiers:
                         carried_tiers[i.item_id] = tier
             now = dt.datetime.now().isoformat(timespec="seconds")
             db.execute("DELETE FROM p_meta WHERE key = ?", (f"{INHERIT_META}{facet_id}",))

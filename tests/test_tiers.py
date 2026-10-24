@@ -447,6 +447,26 @@ def test_an_item_opened_to_colleagues_does_not_show_them_the_private_note_it_quo
             assert quoted or NOTE_KEPT not in seen
 
 
+def test_an_item_the_person_opened_on_a_private_note_stays_open_when_merged_again() -> None:
+    settings = Settings(target_name="张三")
+    with PersonaStore(":memory:") as store:
+        kept, other = (parse_note(t, settings, f"记一下 {t}") for t in (NOTE_KEPT, NOTE_OPEN))
+        for note in (kept, other):
+            store.put_source(note)
+        s1, s2 = kept.source.source_id, other.source.source_id
+        store.set_note_tier(s1, SELF)
+        store.set_note_tier(s2, SELF)
+        store.replace_facet_items("2.1", [noted("pi_n", "2.1", [s1], "pn")])
+        assert store.item_tiers() == {"pi_n": SELF}
+        store.set_item_tier("pi_n", COLLEAGUE)  # the person opened the item, not the note
+        # Merged again with more evidence from the same note, the item stays open ...
+        store.replace_facet_items("2.1", [noted("pi_n2", "2.1", [s1], "pn", "pn2")])
+        assert store.item_tiers() == {"pi_n2": COLLEAGUE}
+        # ... but one that has come to stand on another private note was not opened with that, and is theirs.
+        store.replace_facet_items("2.1", [noted("pi_n3", "2.1", [s1, s2], "pn", "pn2", "pn3")])
+        assert store.item_tiers() == {"pi_n3": SELF}
+
+
 def test_a_note_tier_is_set_all_at_once_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(target_name="张三")
     with PersonaStore(":memory:") as store:

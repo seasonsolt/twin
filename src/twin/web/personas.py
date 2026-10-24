@@ -11,6 +11,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -107,12 +108,12 @@ def visitor_route(method: str, path: str) -> bool:
     return any(method in methods.split("|") and pattern.fullmatch(path) for methods, pattern in VISITOR_ROUTES)
 
 
-def forget_departed(store: PersonaStore, email: str) -> bool:
+def forget_departed(store: PersonaStore, email: str, deleted: Callable[[str], None] = lambda _: None) -> bool:
     """What a person who said "这不是我" kept in a twin as its person goes with them, so whoever takes it next never
     reads it: the notes they kept to themself (``记一下``, a reply kept to themself), the memory made from those
     notes, their own conversations with it and the promises they made to their assistant there. What the meetings say
-    of the real person stays. A snapshot is taken first; returns whether anything was removed (the profile is then
-    rebuilt from what remains)."""
+    of the real person stays. A snapshot is taken first; ``deleted`` is told the id of each conversation removed (the
+    team index marks it too); returns whether anything was removed (the profile is then rebuilt from what remains)."""
     notes = store.private_note_sources()
     said = {e.source_id for e in store.list_ledger() if e.source_id.startswith(SAID_SOURCE_PREFIX)}
     conversations = store.list_conversations(email)
@@ -134,7 +135,8 @@ def forget_departed(store: PersonaStore, email: str) -> bool:
         store.drop_ledger(sorted(said))
     while conversations:
         for conversation in conversations:
-            store.delete_conversation(conversation["id"], email)
+            if store.delete_conversation(conversation["id"], email):
+                deleted(conversation["id"])
         conversations = store.list_conversations(email)
     return True
 
@@ -160,6 +162,8 @@ class Personas:
         self.on_restored: Callable[[str], None] = lambda _: None
         # A twin in the trash was forgotten for good (a week after it was deleted).
         self.on_purged: Callable[[str], None] = lambda _: None
+        # A twin's conversation was deleted behind the conversation routes (its person gave the twin back).
+        self.on_conversation_deleted: Callable[[str, str], None] = lambda _, __: None
         with self.lock:
             if not self.path.exists():
                 self.data: dict[str, Any] = {
@@ -297,7 +301,9 @@ class Personas:
         with PersonaStore(settings.db_path) as store:
             sources = store.count_sources()
         return {
-            **entry,
+            # ``photo`` is the company's address of the profile picture, kept to know which one the twin wears; the
+            # page is given the twin's own picture (``avatar_url``).
+            **{k: v for k, v in entry.items() if k != "photo"},
             "name": name or settings.target_name,
             "avatar_url": f"/api/media/avatar-image?persona={persona_id}"
             if portrait or settings.avatar.image_path
@@ -624,7 +630,9 @@ class Personas:
                 settings = self.settings_for(persona_id)
                 if settings.db_path.is_file():
                     with PersonaStore(settings.db_path) as store:
-                        forgotten = forget_departed(store, identity["email"])
+                        forgotten = forget_departed(
+                            store, identity["email"], partial(self.on_conversation_deleted, persona_id)
+                        )
                     context = self.apps.get(persona_id)
                     if forgotten and context is not None:
                         context.state.processing.queue()

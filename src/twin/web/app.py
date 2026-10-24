@@ -369,6 +369,9 @@ def create_app(
         libraries.twin_purged(persona_id)
 
     registry.on_purged = twin_purged
+    registry.on_conversation_deleted = lambda persona_id, conversation_id: ConversationIndex(team, persona_id).deleted(
+        conversation_id
+    )
 
     def desk_for(persona_id: str) -> HandoffDesk:
         """The handoffs of one twin: where its database is, who it is made for now, what it is called."""

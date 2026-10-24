@@ -568,7 +568,10 @@ def test_what_a_person_kept_in_a_twin_that_is_not_theirs_goes_with_them_when_the
         store.replace_facet_items("9.3", [noted])
     assert NOTE in scene.web.get(f"/api/persona/sources/{note_id}/text", headers=headers).text
 
+    indexed = team(scene.web)
+    assert [c.id for c in indexed.conversations(persona_id=made)] == [mine]
     assert scene.web.post(f"/api/personas/{made}/disown", headers=CSRF).json() == {"disowned": True}
+    assert indexed.conversations(persona_id=made) == []  # the index forgets them now, not at the next start
     with PersonaStore(path) as store:
         assert store.get_source(note_id) is None and store.note_tiers() == {}
         assert store.list_ledger() == []

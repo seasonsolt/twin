@@ -18,7 +18,8 @@ from twin.media.library import Library
 from twin.media.team import SOURCE_PREFIX
 from twin.persona import gate
 from twin.persona import ledger as lg
-from twin.persona.schema import ReviewStatus
+from twin.persona.schema import ReviewStatus, Source, SourceKind
+from twin.persona.sources import parse_media
 from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.jobs import PersonaProcessing
@@ -60,6 +61,27 @@ def seed(path: Path, entries: list[lg.LedgerEntry]) -> None:
     with PersonaStore(path) as store:
         for e in entries:
             store.put_ledger_entry(e)
+
+
+def read_meeting(path: Path, source_id: str, name: str, done: bool = False) -> None:
+    """A recording the twin of ``name`` was in and the other person spoke in, read for its ledger or not yet."""
+    source = Source(
+        source_id=source_id,
+        kind=SourceKind.AUDIO,
+        title="周一经营会",
+        origin="meeting.m4a",
+        imported_at="now",
+        n_expressions=0,
+        n_target=0,
+        creation_time="2026-10-12T09:00:00",
+        media_status="ready",
+        text_state="raw",
+    )
+    lines = [(name, "[00:00] 我周五前给华澜新报价方案。", True), ("其他人1", "[00:01] 好的，周五等你。", False)]
+    with PersonaStore(path) as store:
+        store.put_source(parse_media(source, lines))
+        if done:
+            store.replace_ledger_source(source_id, [], lg.LEDGER_VERSION)
 
 
 def keep(path: Path, name: str) -> None:
@@ -135,6 +157,26 @@ def test_a_meeting_in_two_ledgers_is_counted_once_and_told_by_name(web: TestClie
     assert all(lg.SELF not in (r["owner"], r["speaker"], r["counterpart"]) for r in rows)
     assert everyone.json()["people"] == ["林舟", "许清禾"] or everyone.json()["people"] == ["许清禾", "林舟"]
     assert {t["name"] for t in everyone.json()["twins"]} == {"林舟", "许清禾"}
+
+
+def test_a_meeting_not_yet_read_is_counted_once_however_many_twins_were_in_it(web: TestClient, tmp_path: Path) -> None:
+    lin, lin_db = twin(web, tmp_path, "林舟")
+    xu, xu_db = twin(web, tmp_path, "许清禾")
+    read_meeting(lin_db, library_source("aaaaaaaaaaaa"), "林舟")
+    read_meeting(xu_db, library_source("bbbbbbbbbbbb"), "许清禾")
+    # One recording both were in: one meeting, and it is not read yet.
+    data = web.get("/api/personas/commitments").json()
+    assert data["meetings"] == {"total": 1, "pending": 1}
+    assert {t["id"]: t["pending"] for t in data["twins"]} == {lin: 1, xu: 1}
+    # Read for one of them only, it is still a meeting waiting, and the list says whose ledger has it to do.
+    read_meeting(lin_db, library_source("aaaaaaaaaaaa"), "林舟", done=True)
+    data = web.get("/api/personas/commitments").json()
+    assert data["meetings"] == {"total": 1, "pending": 1}
+    assert {t["id"]: t["pending"] for t in data["twins"]} == {lin: 0, xu: 1}
+    read_meeting(xu_db, library_source("bbbbbbbbbbbb"), "许清禾", done=True)
+    data = web.get("/api/personas/commitments").json()
+    assert data["meetings"] == {"total": 1, "pending": 0}
+    assert {t["pending"] for t in data["twins"]} == {0}
 
 
 def test_a_twin_whose_memory_is_being_rebuilt_is_left_out_until_it_is_done(web: TestClient, tmp_path: Path) -> None:

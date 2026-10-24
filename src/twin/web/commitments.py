@@ -34,12 +34,17 @@ from .ledger import asked_in_conversation, entry_view
 from .personas import Personas
 
 
-def meeting_of(entry: LedgerEntry) -> str:
-    """The meeting an entry was read from, the same for every twin that was in it: a recording's id for what the
+def meeting_id(source_id: str) -> str:
+    """The meeting a source was read from, the same for every twin that was in it: a recording's id for what the
     library made (its source ids differ per twin, with the person's own lines), else the source itself."""
-    if entry.source_id.startswith(SOURCE_PREFIX):
-        return entry.source_id[len(SOURCE_PREFIX) :].rsplit("_", 1)[0]
-    return entry.source_id
+    if source_id.startswith(SOURCE_PREFIX):
+        return source_id[len(SOURCE_PREFIX) :].rsplit("_", 1)[0]
+    return source_id
+
+
+def meeting_of(entry: LedgerEntry) -> str:
+    """The meeting an entry was read from (``meeting_id``)."""
+    return meeting_id(entry.source_id)
 
 
 def line_of(entry: LedgerEntry) -> str:
@@ -98,7 +103,9 @@ def register_all(app: FastAPI, registry: Personas) -> None:
         ledgers: list[tuple[str, str, list[LedgerEntry]]] = []
         names: dict[str, str] = {}
         meetings: set[str] = set()
-        waiting = 0
+        # A meeting is not yet read once for any twin that was in it, counted once like the meetings themselves.
+        waiting: set[str] = set()
+        unread: dict[str, int] = {}
         updating: list[dict[str, str]] = []
         for twin in looked_after:
             path = registry.db_path_of(twin["id"])
@@ -121,13 +128,10 @@ def register_all(app: FastAPI, registry: Personas) -> None:
                 if registry.audience(twin, identity) != SELF_TIER:
                     entries = [e for e in entries if not asked_in_conversation(e)]
                 sources = [s for s in store.list_sources() if is_meeting(s)]
-                waiting += sum(1 for s in sources if store.ledger_done(s.source_id) != LEDGER_VERSION)
-            meetings.update(s.source_id for s in sources if not s.source_id.startswith(SOURCE_PREFIX))
-            meetings.update(
-                s.source_id[len(SOURCE_PREFIX) :].rsplit("_", 1)[0]
-                for s in sources
-                if s.source_id.startswith(SOURCE_PREFIX)
-            )
+                todo = {meeting_id(s.source_id) for s in sources if store.ledger_done(s.source_id) != LEDGER_VERSION}
+            waiting |= todo
+            unread[twin["id"]] = len(todo)
+            meetings.update(meeting_id(s.source_id) for s in sources)
             ledgers.append((twin["id"], who, entries))
         merged = merge(ledgers)
         shown = [
@@ -147,8 +151,10 @@ def register_all(app: FastAPI, registry: Personas) -> None:
             "people": [name for name in people(listed) if name != UNKNOWN_OWNER],
             "kind_labels": KIND_LABELS,
             "status_labels": STATUS_LABELS,
-            "meetings": {"total": len(meetings), "pending": waiting},
-            "twins": [{"id": persona_id, "name": who} for persona_id, who in names.items()],
+            "meetings": {"total": len(meetings), "pending": len(waiting)},
+            "twins": [
+                {"id": persona_id, "name": who, "pending": unread[persona_id]} for persona_id, who in names.items()
+            ],
             "updating": updating,
             "job_id": None,
         }

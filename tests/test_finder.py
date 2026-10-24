@@ -295,3 +295,36 @@ def test_without_the_embedding_model_the_meetings_are_still_found_by_words(web: 
     assert detail.json()["segments"][meeting["line"]]["text"].startswith("超过 15%")
     # Only the meetings the asker may read: someone not in it and not its uploader finds nothing.
     assert ask(web, "xu@xjjk.com", "续约折扣超过 15% 怎么办")["meetings"] == []
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "你之前给我发的那份文档在哪",
+        "能给我一个例子吗",
+        "你定期开周会吗",
+        "这个方案保证质量的关键是什么",
+        "commitment 这个词什么意思",
+        "我们组的 approver 是谁",
+        "上周五前给我们讲的那个流程是什么",
+    ],
+)
+def test_ordinary_questions_with_a_word_that_is_a_cue_in_another_sense_do_not_ask_for_the_persons_say(
+    question: str,
+) -> None:
+    assert asks_for_decision(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "周五前给我一版发布方案",
+        "你能保证周五交付吗",
+        "这个你定吧",
+        "你答应吗",
+        "please approve the discount",
+        "要不要拍板批准这个折扣",
+    ],
+)
+def test_a_request_for_a_promise_a_decision_or_a_straight_answer_does(question: str) -> None:
+    assert asks_for_decision(question) is True

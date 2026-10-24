@@ -6,6 +6,7 @@ the asker's own conversation, once, as the person's turn."""
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import threading
@@ -22,10 +23,11 @@ from pydantic import BaseModel
 from twin.config import AuthSettings, Settings, SMTPSettings
 from twin.embed import HashingEmbedder
 from twin.handoffs import HandoffDesk, HandoffRefused, ledger_id_for, run_all
-from twin.llm import FakeLLM
+from twin.llm import FakeLLM, LLMError
+from twin.persona.chat import PersonaChat
 from twin.persona.followups import followup_id
 from twin.persona.items import PersonaItem, PEvidence
-from twin.persona.schema import ChatReply, EvidenceClass, SourceKind
+from twin.persona.schema import ChatReply, ChatTurn, EvidenceClass, SourceKind
 from twin.persona.store import PersonaStore
 from twin.teamdb import HandoffUnavailable, TeamDB
 from twin.web import create_app
@@ -40,6 +42,8 @@ DECISION = "大文件导入这次上不上？"
 GUESS = "要是发布延期一周，你能接受吗？"
 FACT = "发布定在哪天？"
 QUOTED = "你答应的话：「他说过周五一定交」对吗？"
+HOLD = "这周值班表的事你看着办吧"  # no word that is a cue by itself: only the rewrite sees what it asks for
+COMMON = "你答应过团队的那个功能进展到哪了"  # has a cue word, but asks how a thing stands, not for a promise
 
 
 def item(item_id: str, facet: str, marker: str) -> PersonaItem:
@@ -66,6 +70,7 @@ class Scripted(FakeLLM):
     PLAN: ClassVar[dict[str, dict[str, Any]]] = {
         PROMISE: {
             "reply": "这个我先看看安排，回头给你准话。",
+            "cue": True,
             "meta": {
                 "owner_part": "commit",
                 "owner_ask": "周五前给一版发布方案",
@@ -79,7 +84,17 @@ class Scripted(FakeLLM):
         },
         GUESS: {"reply": "能接受。", "meta": {"mode": "inferred", "citations": ["pi_work"]}},
         FACT: {"reply": "发布定在周二。", "meta": {"mode": "grounded", "citations": ["pi_work"]}},
-        QUOTED: {"reply": "他说「周五一定交的事我没说过」，所以我先不答应。", "meta": {"owner_part": "commit"}},
+        QUOTED: {
+            "reply": "他说「周五一定交的事我没说过」，所以我先不答应。",
+            "cue": True,
+            "meta": {"owner_part": "commit"},
+        },
+        HOLD: {
+            "reply": "值班表在群公告里，这周三之前会更新。",
+            "cue": True,
+            "meta": {"owner_part": "decide", "owner_ask": "这周谁值班"},
+        },
+        COMMON: {"reply": "那个功能已经做完七成，下周开始联调。", "meta": {}},
     }
 
     def __init__(self) -> None:
@@ -87,6 +102,8 @@ class Scripted(FakeLLM):
         self.seen: list[str] = []
         self.systems: list[str] = []
         self.drafts: list[tuple[str, str]] = []
+        # The retrieval rewrite fails (the model is down); the cue words decide what it would have.
+        self.rewrite_fails = False
 
     def plan(self, user: str) -> dict[str, Any]:
         question = user.rsplit("对方：", 1)[-1]
@@ -102,6 +119,10 @@ class Scripted(FakeLLM):
         if schema.__name__ == "Drafted":
             self.drafts.append((system, user))
             return {"reply": "方案周五前给你。【请你定：大文件导入这次上不上】"}
+        if schema.__name__ == "Aspects":
+            if self.rewrite_fails:
+                raise LLMError("rewrite is down")
+            return {"owner_cue": bool(self.plan(user).get("cue"))}
         if schema.__name__ != "ChatDraft":
             return {}
         plan = self.plan(user)
@@ -827,8 +848,8 @@ def test_a_promise_answered_in_words_is_taken_or_turned_down_once_when_both_are_
 # ------------------------------------------------------------------ checking before showing
 
 
+@pytest.mark.rewrite
 def test_an_answer_to_a_request_for_a_promise_is_shown_only_after_its_quotes_are_checked(scene: Scene) -> None:
-    conversation = scene.conversation()
     scene.as_("shen")
     shown, final = scene.deltas(scene.conversation(), QUOTED)
     # The invented quote lost its marks before anything was shown, in one piece.
@@ -838,7 +859,67 @@ def test_an_answer_to_a_request_for_a_promise_is_shown_only_after_its_quotes_are
     # Everything else is shown as it is written: in pieces.
     pieces, plain = scene.deltas(scene.conversation(), FACT)
     assert len(pieces) > 1 and "".join(pieces).rstrip() == plain["reply"]
-    del conversation
+
+
+@pytest.mark.rewrite
+def test_the_rewrite_decides_what_is_held_back_and_a_cue_word_only_when_it_fails(scene: Scene) -> None:
+    scene.as_("shen")
+    # The rewrite saw a request for the person's say in a question that has no cue word: held back all the same.
+    shown, final = scene.deltas(scene.conversation(), HOLD)
+    assert shown == [final["reply"]] and final["owner_part"] == "decide"
+    # The rewrite saw none in a question that has a cue word: the rewrite decides, and it is shown as written.
+    pieces, plain = scene.deltas(scene.conversation(), COMMON)
+    assert len(pieces) > 1 and "".join(pieces).rstrip() == plain["reply"]
+    # Without the rewrite the cue words stand in for it.
+    scene.llm.rewrite_fails = True
+    held, promised = scene.deltas(scene.conversation(), PROMISE)
+    assert held == [promised["reply"]]
+    held, status = scene.deltas(scene.conversation(), COMMON)
+    assert held == [status["reply"]]
+    pieces, plain = scene.deltas(scene.conversation(), FACT)
+    assert len(pieces) > 1 and "".join(pieces).rstrip() == plain["reply"]
+
+
+@pytest.mark.rewrite
+def test_what_is_held_back_for_a_twin_nobody_has_taken_says_to_ask_the_person_in_the_one_piece(
+    web: tuple[TestClient, Scripted], tmp_path: Path
+) -> None:
+    scene = Scene(*web, tmp_path, take=False)
+    scene.as_("shen")
+    shown, final = scene.deltas(scene.conversation(), HOLD)
+    assert shown == [final["reply"]] and "请直接联系本人" in shown[0]
+
+
+def chat_of(scene: Scene, llm: Any, store: PersonaStore) -> PersonaChat:
+    return PersonaChat(store, llm, HashingEmbedder(), Settings(db_path=scene.path), reach="owner")
+
+
+def streamed(chat: PersonaChat, question: str) -> list[Any]:
+    async def run() -> list[Any]:
+        return [x async for x in chat.stream_reply([ChatTurn(role="user", content=question)], persist=False)]
+
+    return asyncio.run(run())
+
+
+@pytest.mark.rewrite
+def test_an_answer_held_back_is_shown_once_by_a_model_that_cannot_stream(scene: Scene) -> None:
+    class Whole(Scripted):
+        stream = None  # type: ignore[assignment]
+
+    with PersonaStore(scene.path) as store:
+        events = streamed(chat_of(scene, Whole(), store), HOLD)
+    assert [type(e).__name__ for e in events] == ["str", "ChatReply"] and events[0] == events[1].reply
+
+
+@pytest.mark.rewrite
+def test_an_answer_held_back_when_the_twins_memory_changed_under_it_is_not_shown_at_all(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with PersonaStore(scene.path) as store:
+        chat = chat_of(scene, Scripted(), store)
+        monkeypatch.setattr("twin.persona.chat.gate.current", lambda *_: False)
+        events = streamed(chat, HOLD)
+    assert [type(e).__name__ for e in events] == ["ChatReply"] and chat.stale
 
 
 # ------------------------------------------------------------------ guessed answers and what has a source

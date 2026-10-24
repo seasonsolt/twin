@@ -74,10 +74,12 @@ UNCLAIMED_NOTE = "{name}还没认领分身，请直接联系本人。"
 UNCLAIMED_CUE = "请直接联系本人"
 # A question that asks the person for a promise, a decision, a judgement or a straight answer is held back until its
 # quotes are checked (``PersonaChat.stream_reply``). The retrieval rewrite decides it; these words decide it when
-# that call fails.
+# that call fails, and tell ``finder`` and ``lenses`` (which have no model to ask) whether a question wants the
+# person's say. Words common in other senses (你定期, 前给我们, 给我一个例子, commitment) are left out or bounded.
 OWNER_CUE = re.compile(
-    r"答应|承诺|保证|拍板|批准|审批|同意我|你来定|你定|准话|评价|评一下|靠谱吗|靠不靠谱|能不能独立|能否独立|前给我|之前给我|给我一版|给我一个|"
-    r"commit|promise|approve",
+    r"答应|承诺|你保证|能保证|能不能保证|能否保证|拍板|批准|审批|同意我|你来定|你定(?![期义位制做])|准话|评价|评一下|靠谱吗|靠不靠谱|能不能独立|能否独立|"
+    r"(?<=[一二三四五六日天末底号点晚])前给我(?!们)|给我一版|给我一份|"
+    r"(?<![A-Za-z])(?:commit|promise|approve)(?![A-Za-z])",
     re.IGNORECASE,
 )
 # What the person answered themself in the conversation, kept to the newest few.
@@ -763,11 +765,14 @@ class PersonaChat:
         try:
             with default_stage("chat.rewrite"):
                 found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
+            owner_cue = found.owner_cue
         except LLMError:
+            # Nothing decided it: the words do.
             found = Rewrite()
+            owner_cue = bool(OWNER_CUE.search(messages[-1].content))
         ctx = self.retrieve(query, as_of, found.hints, found.alternatives, today)
         ctx.reach = self.reach
-        ctx.owner_cue = found.owner_cue or bool(OWNER_CUE.search(messages[-1].content))
+        ctx.owner_cue = owner_cue
         return ctx
 
     def _derive(self, messages: Sequence[ChatTurn], ctx: PersonaContext) -> None:

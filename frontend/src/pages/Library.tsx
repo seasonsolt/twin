@@ -542,7 +542,9 @@ export function Library() {
                               </Button>
                             ))}
                           {ready && recording.unsettled > 0 && editable && (
+                            // Secondary: the header's 上传录音 is the page's one main button.
                             <RouteButton
+                              variant="secondary"
                               size="sm"
                               to={`/library/${encodeURIComponent(recording.id)}`}
                             >

@@ -798,7 +798,17 @@ def test_deadline_final_precedes_slow_cleanup(tmp_path: Path, monkeypatch: pytes
     closed = []
 
     async def check() -> None:
-        started, apologised = asyncio.Event(), asyncio.Event()
+        started, apologised, cleanup_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        wait = asyncio.wait
+
+        async def expire_started_answer(tasks: Any, **options: Any) -> Any:
+            if options.get("timeout") == 1:
+                # The deadline under test is an active answer's, not its worker-thread/model startup time.
+                # Expire the real wait only once the stream is running; leave the connection's waits alone.
+                async with asyncio.timeout(10):
+                    await started.wait()
+                options["timeout"] = 0
+            return await wait(tasks, **options)
 
         async def stream(self: PersonaChat, messages: Sequence[ChatTurn]) -> AsyncIterator[str | ChatReply]:
             try:
@@ -809,15 +819,23 @@ def test_deadline_final_precedes_slow_cleanup(tmp_path: Path, monkeypatch: pytes
                 # A cleanup that ends only after the apology arrived: waiting for it first would never send one.
                 await apologised.wait()
                 closed.append(True)
+                cleanup_done.set()
                 raise
 
         monkeypatch.setattr(PersonaChat, "stream_reply", stream)
-        # Long enough for the stream to start on a loaded machine, so the deadline cancels the stream itself.
+        monkeypatch.setattr(asyncio, "wait", expire_started_answer)
         async with running(tmp_path, monkeypatch, answer_timeout=1) as (_, peer):
             await peer.send(message())
-            frames = await peer.receive("aibot_respond_msg")
-            assert started.is_set() and frames[-1][1]["body"]["stream"]["content"] == APOLOGY and not closed
-            apologised.set()
+            try:
+                async with asyncio.timeout(10):
+                    await started.wait()
+                frames = await peer.receive("aibot_respond_msg")
+                assert started.is_set() and frames[-1][1]["body"]["stream"]["content"] == APOLOGY and not closed
+            finally:
+                # Release even a failed assertion, so a regression waiting for cleanup cannot hang teardown.
+                apologised.set()
+            async with asyncio.timeout(2):
+                await cleanup_done.wait()
         assert closed == [True]
 
     asyncio.run(check())

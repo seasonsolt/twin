@@ -1,18 +1,14 @@
-import { VolumeX } from 'lucide-react';
 import {
   Badge,
   Button,
-  ClipButton,
   Dialog,
-  IconButton,
   ListRow,
   Row,
   Section,
   Stack,
   Text,
 } from '../../components/ui';
-import { useHeard } from '../../stores/listening';
-import { clip } from './PersonVoice';
+import { GoneBadge, SampleClip } from './PersonVoice';
 
 /** One of the two voice samples of a clash (``ClashSample``). */
 export interface ClashSample {
@@ -59,7 +55,6 @@ export function VoiceClashes({
   onRemove: (sample: ClashSample) => void;
   onApart: (clash: VoiceClash) => void;
 }) {
-  const hear = useHeard();
   return (
     <Dialog
       open={open}
@@ -120,24 +115,13 @@ export function VoiceClashes({
                     key={sample.id}
                     variant="divided"
                     leading={
-                      sample.gone ? (
-                        <IconButton
-                          label={`${sample.name}的这段声线听不到`}
-                          shape="circle"
-                          variant="secondary"
-                          disabled
-                        >
-                          <VolumeX aria-hidden className="size-4" />
-                        </IconButton>
-                      ) : (
-                        <ClipButton
-                          size="md"
-                          label={`听${sample.name}的声线（${sample.filename}）`}
-                          src={hear(
-                            clip(sample.recording_id, sample.speaker_id),
-                          )}
-                        />
-                      )
+                      <SampleClip
+                        gone={sample.gone}
+                        name={sample.name}
+                        label={`听${sample.name}的声线（${sample.filename}）`}
+                        recordingId={sample.recording_id}
+                        speakerId={sample.speaker_id}
+                      />
                     }
                     title={
                       <Row gap={2}>
@@ -145,12 +129,7 @@ export function VoiceClashes({
                           {sample.name}
                         </Text>
                         {sample.gone ? (
-                          <Badge
-                            tone="warning"
-                            title="录音重新转写过，这段声线已对不上原来的说话人"
-                          >
-                            听不到
-                          </Badge>
+                          <GoneBadge />
                         ) : (
                           sample.unlike_own && (
                             <Badge tone="warning">更像对方</Badge>

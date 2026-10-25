@@ -124,7 +124,7 @@ def test_new_attribution_rules_decide_again_only_what_the_voice_decided(
             ).fetchall()
         return {row[0]: (row[1], row[2], row[3]) for row in found}
 
-    assert rows() == {"S1": (zhang.id, 1, "attribution-v2"), "S2": (li.id, 1, "attribution-v2"), "S3": (li.id, 0, None)}
+    assert rows() == {"S1": (zhang.id, 1, "attribution-v3"), "S2": (li.id, 1, "attribution-v3"), "S3": (li.id, 0, None)}
 
     # New rules that decide these speakers the same way: only the versions change, and no twin closes.
     monkeypatch.setattr(team_module, "ATTRIBUTION_VERSION", "attribution-v3")

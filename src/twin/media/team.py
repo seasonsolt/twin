@@ -196,6 +196,8 @@ class VoiceSample(BaseModel):
     # Speakers it gave the person by voice alone that still stand, and those the owner gave otherwise.
     claims: int = 0
     corrected: int = 0
+    # Taken from another transcript than the recording's current one, or its speaker is gone: it cannot be heard.
+    gone: bool = False
 
 
 class ClashSample(BaseModel):
@@ -210,8 +212,8 @@ class ClashSample(BaseModel):
     seconds: float
     # More like the other person's sample than like any of the person's own other samples: likely given wrongly.
     unlike_own: bool = False
-    # Its speaker is gone from the recording's transcript (transcribed again since): it cannot be heard, and the
-    # voices it was taken from were split another way since, so it is as likely given wrongly.
+    # Taken from another transcript than the recording's current one, or its speaker is gone (``Team._heard``): it
+    # cannot be heard, and the voices it was taken from were split another way since, so it is as suspect.
     gone: bool = False
 
 
@@ -634,22 +636,27 @@ class Team:
                 "WHERE v.person_id = ? AND v.active = 1 ORDER BY v.id",
                 (person_id,),
             ).fetchall()
-        return [
-            VoiceSample(
-                id=row["id"],
-                recording_id=row["recording_id"],
-                filename=row["filename"],
-                transcript_id=row["transcript_id"],
-                speaker_id=row["speaker_id"],
-                seconds=round(self._seconds(row["recording_id"], row["speaker_id"]), 1),
-                source=row["source"],
-                created_at=row["created_at"],
-                claims=row["claims"],
-                corrected=row["corrected"],
+        found = []
+        for row in rows:
+            if recordings is not None and row["recording_id"] not in recordings:
+                continue
+            speaker = self._heard(row["recording_id"], row["transcript_id"], row["speaker_id"])
+            found.append(
+                VoiceSample(
+                    id=row["id"],
+                    recording_id=row["recording_id"],
+                    filename=row["filename"],
+                    transcript_id=row["transcript_id"],
+                    speaker_id=row["speaker_id"],
+                    seconds=round(speaker.seconds, 1) if speaker else 0.0,
+                    source=row["source"],
+                    created_at=row["created_at"],
+                    claims=row["claims"],
+                    corrected=row["corrected"],
+                    gone=speaker is None,
+                )
             )
-            for row in rows
-            if recordings is None or row["recording_id"] in recordings
-        ]
+        return found
 
     def remove_sample(self, person_id: str, sample_id: int) -> int | None:
         """The owner says one of the person's samples does not stand for them: it no longer recognises anyone, and
@@ -1672,7 +1679,8 @@ class Team:
         taken by voice alone."""
         with self.library.read() as db:
             rows = db.execute(
-                "SELECT v.id, v.person_id, p.name, v.recording_id, v.speaker_id, v.embedding, r.filename "
+                "SELECT v.id, v.person_id, p.name, v.recording_id, v.transcript_id, v.speaker_id, v.embedding, "
+                "r.filename "
                 "FROM voiceprints v JOIN people p ON p.id = v.person_id JOIN recordings r ON r.id = v.recording_id "
                 "WHERE v.active = 1 ORDER BY v.id"
             ).fetchall()
@@ -1708,15 +1716,7 @@ class Team:
 
         def sample(index: int, score: float) -> ClashSample:
             row = rows[index]
-            recording = self.library.get(row["recording_id"])
-            speaker = next(
-                (
-                    s
-                    for s in (self.library.speakers(recording) if recording else None) or ()
-                    if s.id == row["speaker_id"]
-                ),
-                None,
-            )
+            speaker = self._heard(row["recording_id"], row["transcript_id"], row["speaker_id"])
             own = [
                 float(alike[index, k])
                 for k in range(len(rows))
@@ -1895,6 +1895,15 @@ class Team:
             chosen = samples[: int(SAMPLE_CAP)] if SAMPLE_PICK < 2 else _unlike(samples, int(SAMPLE_CAP))
             kept += [(person_id, name, vector) for _, (person_id, name, vector, _) in chosen]
         return _Stacked(kept)
+
+    def _heard(self, recording_id: str, transcript_id: str, speaker_id: str) -> Speaker | None:
+        """The speaker a voice sample was taken from, as heard in the recording now: None when the recording has
+        another transcript (its speakers are numbered anew, so the same number may be someone else) or no such
+        speaker."""
+        recording = self.library.get(recording_id)
+        if recording is None or recording.transcript_id != transcript_id:
+            return None
+        return next((s for s in self.library.speakers(recording) or () if s.id == speaker_id), None)
 
     def _seconds(self, recording_id: str, speaker_id: str) -> float:
         """How long the speaker a sample was taken from spoke; 0 when unknown."""

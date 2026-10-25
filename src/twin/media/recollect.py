@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from .ingest import CommandTranscriber, Progress, Segment, flac_seconds
 from .library import Library, Recording, Transcript, TranscriptionError, TranscriptionInterrupted, _interrupted
-from .team import Team, segment_owners
+from .team import Team, cosine, segment_owners
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,13 @@ CARRY = 0.8
 NOTICE = 0.2
 # A decision about one segment carries to a new segment lying at least this much within the old one.
 SEGMENT_CARRY = 0.5
+# A voice sample left on an older transcript moves to the speaker of the current one most like it, from this
+# similarity, once that speaker is given to the sample's person; otherwise it stops standing (``settle_samples``). On
+# daw two thirds of the samples were left behind this way, and they were far more alike to other people's than samples
+# of the current transcripts (median 0.49 against 0.16): kept, they matched voices to several people at once and held
+# them back. Moving the ones this alike and retiring the rest let voice alone take 225 waiting speakers, while 715 of
+# 825 decisions it had taken came out the same.
+SAMPLE_MOVE = 0.9
 
 
 class Unsettled(BaseModel):
@@ -61,6 +68,8 @@ class Report(BaseModel):
     fixes_lost: list[int] = []
     # Voice samples moved to the new speaker they now stand on, and their rows before and after (for ``rollback``).
     samples_moved: list[tuple[int, int]] = []
+    # Voice samples of the old transcript that stopped standing, finding no new speaker (``settle_samples``).
+    samples_retired: list[int] = []
     # Seconds of speech of each person in the recording, before and after.
     seconds: dict[str, tuple[float, float]] = {}
 
@@ -193,7 +202,14 @@ def run(library: Library, recording_id: str, transcriber: CommandTranscriber, pr
     report = _switch(library, recording, old, new)
     library.heard_asr(new.asr)
     Team(library).classify(recording_id)
+    # The samples no owner's decision carried over move to the speakers voice alone gave their person, or stop.
+    settle_samples(library, {recording_id})
     with library.transaction() as db:
+        if row := db.execute(
+            "SELECT report FROM recollections WHERE recording_id = ? AND new_transcript = ?", (recording_id, new.id)
+        ).fetchone():
+            settled = Report.model_validate_json(row[0])
+            report.samples_moved, report.samples_retired = settled.samples_moved, settled.samples_retired
         after = _speech(new, db, recording_id)
         report.seconds = {
             person: (round(report.seconds.get(person, (0.0, 0.0))[0], 1), round(after.get(person, 0.0), 1))
@@ -315,7 +331,7 @@ def _move_samples(
 ) -> None:
     """A voice sample taken from an old speaker moves to the new speaker that took its decision (the one covering most
     of it), with that speaker's voiceprint, so later decisions about the new speaker govern it. A sample whose speaker
-    has no successor stays as it is: it is still a voice the owner confirmed, in the same voiceprint space."""
+    has no successor here is left to ``settle_samples``, which moves it once voice alone gave its person a speaker."""
     for row in db.execute(
         "SELECT id, person_id, speaker_id, created_at, source, corrected FROM voiceprints WHERE recording_id = ? "
         "AND transcript_id = ? AND active = 1",
@@ -349,6 +365,100 @@ def _move_samples(
         assert cursor.lastrowid is not None
         db.execute("UPDATE attributions SET sample = ? WHERE sample = ?", (cursor.lastrowid, row["id"]))
         report.samples_moved.append((int(row["id"]), int(cursor.lastrowid)))
+
+
+def settle_samples(library: Library, recordings: set[str] | None = None) -> tuple[int, int]:
+    """Voice samples still standing on an older transcript of their recording (``recordings``: only theirs) move
+    to the speaker of the current transcript most like them, at least ``SAMPLE_MOVE`` alike and given to the same
+    person, by the owner or by voice; the others stop standing. Such a sample cannot be heard (its speaker is numbered
+    anew) and was measured by an older service. The decisions it took stay: they are made again under the current
+    rules (``collector``). What moved or stopped is added to the transcription again that left it (``rollback``).
+    Returns how many moved and how many stopped."""
+    with library.read() as db:
+        rows = db.execute(
+            "SELECT v.id, v.person_id, v.recording_id, v.transcript_id, v.embedding, v.created_at, v.source, "
+            "v.corrected FROM voiceprints v JOIN recordings r ON r.id = v.recording_id "
+            "WHERE v.active = 1 AND r.transcript_id IS NOT NULL AND v.transcript_id <> r.transcript_id ORDER BY v.id"
+        ).fetchall()
+    left: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        if recordings is None or row["recording_id"] in recordings:
+            left.setdefault(row["recording_id"], []).append(row)
+    moved = retired = 0
+    for recording_id, samples in left.items():
+        recording = library.get(recording_id)
+        speakers = library.speakers(recording) if recording else None
+        if recording is None or not speakers:
+            # Its current transcript cannot be read: nothing tells where the samples went, so they wait.
+            continue
+        with library.transaction() as db:
+            current = db.execute("SELECT transcript_id FROM recordings WHERE id = ?", (recording_id,)).fetchone()
+            if current is None or current[0] != recording.transcript_id:
+                continue
+            given = {
+                r["speaker_id"]: r["person_id"]
+                for r in db.execute(
+                    "SELECT speaker_id, person_id FROM attributions WHERE recording_id = ? AND transcript_id = ? "
+                    "AND decision = 'confirmed'",
+                    (recording_id, recording.transcript_id),
+                )
+            }
+            standing = {
+                (r["person_id"], r["speaker_id"]): r["id"]
+                for r in db.execute(
+                    "SELECT id, person_id, speaker_id FROM voiceprints WHERE recording_id = ? AND transcript_id = ? "
+                    "AND active = 1",
+                    (recording_id, recording.transcript_id),
+                )
+            }
+            found = db.execute(
+                "SELECT report FROM recollections WHERE recording_id = ? AND new_transcript = ? AND rolled_back = 0",
+                (recording_id, recording.transcript_id),
+            ).fetchone()
+            report = Report.model_validate_json(found[0]) if found else None
+            for row in samples:
+                vector = json.loads(row["embedding"])
+                scored = [(cosine(vector, s.embedding), s) for s in speakers if s.embedding]
+                score, heir = max(scored, key=lambda pair: pair[0], default=(0.0, None))
+                db.execute("UPDATE voiceprints SET active = 0 WHERE id = ?", (row["id"],))
+                # Only the transcript before this one can be gone back to.
+                trail = report if report is not None and row["transcript_id"] == report.old_transcript else None
+                if heir is None or score < SAMPLE_MOVE or given.get(heir.id) != row["person_id"]:
+                    retired += 1
+                    if trail is not None:
+                        trail.samples_retired.append(int(row["id"]))
+                    continue
+                into = standing.get((row["person_id"], heir.id))
+                if into is None:
+                    # The same sample on the current transcript: how it was taken and its track record go with it.
+                    cursor = db.execute(
+                        "INSERT INTO voiceprints (person_id, recording_id, transcript_id, speaker_id, embedding, "
+                        "active, created_at, source, corrected) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                        (
+                            row["person_id"],
+                            recording_id,
+                            recording.transcript_id,
+                            heir.id,
+                            json.dumps(heir.embedding),
+                            row["created_at"],
+                            row["source"],
+                            row["corrected"],
+                        ),
+                    )
+                    assert cursor.lastrowid is not None
+                    into = standing[(row["person_id"], heir.id)] = int(cursor.lastrowid)
+                db.execute("UPDATE attributions SET sample = ? WHERE sample = ?", (into, row["id"]))
+                moved += 1
+                if trail is not None:
+                    trail.samples_moved.append((int(row["id"]), into))
+            if report is not None:
+                db.execute(
+                    "UPDATE recollections SET report = ? WHERE recording_id = ? AND new_transcript = ?",
+                    (report.model_dump_json(), recording_id, recording.transcript_id),
+                )
+    if moved or retired:
+        logger.info("voice samples left on older transcripts: %d moved, %d retired", moved, retired)
+    return moved, retired
 
 
 def rollback(library: Library, recording_id: str) -> bool:
@@ -390,6 +500,8 @@ def rollback(library: Library, recording_id: str) -> bool:
                 (after, before),
             )
             db.execute("UPDATE attributions SET sample = ? WHERE sample = ?", (before, after))
+        for before in report.samples_retired if report else ():
+            db.execute("UPDATE voiceprints SET active = 1 WHERE id = ?", (before,))
         db.execute(
             "UPDATE recordings SET transcript_id = ?, previous = NULL, asr = ?, speakers = ?, segments = ?, "
             "revision = revision + 1, updated_at = ? WHERE id = ?",

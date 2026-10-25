@@ -251,3 +251,90 @@ def test_the_owner_asks_and_goes_back_through_the_library(tmp_path: Path, monkey
         back = web.post(f"/api/library/recordings/{meeting}/rollback", headers=HEADERS)
         assert back.status_code == 200 and back.json()["previous"] is None
         assert web.post(f"/api/library/recordings/{meeting}/rollback", headers=HEADERS).status_code == 409
+
+
+class Resplit(CommandTranscriber):
+    """A newer service whose speakers each straddle two old ones: no owner's decision carries over."""
+
+    def __init__(self) -> None:
+        super().__init__("unused")
+
+    def transcribe(self, audio: Path, duration: float, progress: Progress) -> list[Segment]:
+        self.asr = "1.4.1/overlap"
+        self.speakers = [
+            Speaker(id="N1", seconds=30, embedding=[0.99, 0.1, 0.0]),  # 张总's voice
+            Speaker(id="N2", seconds=30, embedding=[0.5, 0.5, 0.7]),  # Like nobody's sample
+        ]
+        return [segment(0, 8, "N1"), segment(8, 10, "N2"), segment(10, 13, "N1"), segment(13, 20, "N2")]
+
+
+def test_samples_left_behind_move_to_the_speaker_voice_gave_their_person_or_stop(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    meeting = recording(
+        library,
+        "2026-03-02 周会.m4a",
+        [segment(0, 10, "S1"), segment(10, 20, "S2")],
+        [
+            Speaker(id="S1", seconds=10, embedding=[1.0, 0.0, 0.0]),
+            Speaker(id="S2", seconds=10, embedding=[0.0, 1.0, 0.0]),
+        ],
+    )
+    playback(library, meeting)
+    zhang, li = team.add_person("张总"), team.add_person("李总")
+    decide(team, meeting, "S1", "confirm", zhang.id, sample=True)
+    decide(team, meeting, "S2", "confirm", li.id, sample=True)
+    old = library.get(meeting)
+    assert old is not None and old.transcript_id is not None
+
+    def standing() -> list[tuple[str, str, str]]:
+        with library.read() as db:
+            rows = db.execute(
+                "SELECT person_id, transcript_id, speaker_id FROM voiceprints WHERE active = 1 ORDER BY person_id"
+            ).fetchall()
+        return [tuple(r) for r in rows]
+
+    recollect.ask(library, [meeting])
+    report = recollect.run(library, meeting, Resplit(), lambda done, total: None)
+    now = library.get(meeting)
+    assert now is not None and report.carried == 0
+    view = {s.id: (s.decision, s.person_id, s.auto) for s in team.speakers(now)}
+    assert view["N1"] == ("confirmed", zhang.id, True)
+    # 张总's sample stands on N1, which voice gave him; 李总's is like no speaker of the new transcript and stops.
+    assert standing() == sorted([(zhang.id, now.transcript_id, "N1")])
+    assert len(report.samples_moved) == 1 and len(report.samples_retired) == 1
+    (_, stored, _), *_ = recollect.reports(library)
+    assert stored.samples_moved == report.samples_moved and stored.samples_retired == report.samples_retired
+    assert [s.gone for s in team.samples(zhang.id)] == [False]
+    assert recollect.settle_samples(library) == (0, 0)  # Nothing left behind any more.
+
+    # Back to the old transcript: both samples stand on it again.
+    assert recollect.rollback(library, meeting)
+    assert standing() == sorted([(zhang.id, old.transcript_id, "S1"), (li.id, old.transcript_id, "S2")])
+
+    # A sample left on a transcript the recording no longer has cannot be heard, until it is settled.
+    with library.transaction() as db:
+        db.execute("UPDATE voiceprints SET transcript_id = 'gone' WHERE person_id = ? AND active = 1", (li.id,))
+    assert [s.gone for s in team.samples(li.id)] == [True]
+    assert recollect.settle_samples(library) == (1, 0)  # S2 is still 李总's, and still his voice.
+    assert [s.gone for s in team.samples(li.id)] == [False]
+
+
+def test_samples_left_behind_by_earlier_versions_are_settled_at_start_up(tmp_path: Path) -> None:
+    library, _, meeting, zhang, _ = decided_library(tmp_path)
+    # 张总's sample was left on a transcript the recording no longer has, as before samples were settled.
+    with library.transaction() as db:
+        db.execute("UPDATE voiceprints SET transcript_id = 'older' WHERE person_id = ?", (zhang,))
+
+    def standing() -> list[tuple[str, str]]:
+        with Library(tmp_path / "library" / "team").read() as db:
+            rows = db.execute("SELECT transcript_id, speaker_id FROM voiceprints WHERE active = 1").fetchall()
+        return [tuple(r) for r in rows]
+
+    found = library.get(meeting)
+    assert found is not None and standing() == [("older", "S1")]
+    settings = Settings(db_path=tmp_path / "twin.db")
+    app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)
+    with TestClient(app, base_url="http://localhost"):
+        # S1 is still 张总's in the current transcript and still his voice: the sample moves there.
+        until(lambda: standing() == [(found.transcript_id, "S1")])

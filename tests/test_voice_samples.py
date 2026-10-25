@@ -63,7 +63,7 @@ def test_a_voice_the_owner_could_not_name_is_a_rival(tmp_path: Path, monkeypatch
         "decision": "confirmed",
         "person_id": zhang,
         "auto": 1,
-        "version": "attribution-v2",
+        "version": "attribution-v3",
         "tier": "high",
         "score": 0.729,
         "lead": 0.625,

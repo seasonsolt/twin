@@ -614,13 +614,15 @@ class Libraries:
         self.kick(owner)
 
     def _settle(self, owners: list[str]) -> None:
-        """Classify recordings transcribed before a crash (or before automatic classification existed), and decide
-        again what was decided by voice under other rules (``media.collector``); judge again the stretches left out
-        under other review rules and leave the suspect stretches of confirmed speakers out of their twins
-        (``Reviews.settle``); then bring every waiting twin in line. Recordings a newer transcription service would
-        transcribe anew are only counted: the owner decides whether to."""
+        """Move voice samples left on older transcripts to their current speakers, or retire them
+        (``recollect.settle_samples``); classify recordings transcribed before a crash (or before automatic
+        classification existed), and decide again what was decided by voice under other rules (``media.collector``);
+        judge again the stretches left out under other review rules and leave the suspect stretches of confirmed
+        speakers out of their twins (``Reviews.settle``); then bring every waiting twin in line. Recordings a newer
+        transcription service would transcribe anew are only counted: the owner decides whether to."""
         for owner in owners:
             try:
+                recollect.settle_samples(self.library(owner))
                 self.team(owner).classify_all()
                 reviews = Reviews(self.library(owner))
                 reviews.refresh()

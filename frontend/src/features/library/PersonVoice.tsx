@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
+import { VolumeX } from 'lucide-react';
 import {
   ActionMenu,
+  Badge,
   Button,
   ClipButton,
   Dialog,
+  IconButton,
   ListRow,
   Notice,
+  Row,
   Section,
   Stack,
   Text,
@@ -44,6 +48,8 @@ export interface VoiceSample {
   // Speakers it gave the person by voice alone that still stand, and those the owner gave otherwise.
   claims: number;
   corrected: number;
+  // Taken from an older transcript of the recording, or its speaker is gone: it cannot be heard.
+  gone: boolean;
 }
 
 interface PersonVoiceState {
@@ -63,6 +69,51 @@ export const clip = (recordingId: string, speakerId: string) =>
   withBase(
     `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speakerId)}/samples/0`,
   );
+/**
+ * A voice sample's clip, or, for one taken from an older transcript of its recording (whose speakers are numbered
+ * anew, so the clip would be someone else), a muted button in its place.
+ */
+export function SampleClip({
+  gone,
+  name,
+  label,
+  recordingId,
+  speakerId,
+}: {
+  gone: boolean;
+  name: string;
+  label: string;
+  recordingId: string;
+  speakerId: string;
+}) {
+  const hear = useHeard();
+  return gone ? (
+    <IconButton
+      label={`${name}的这段声线听不到`}
+      shape="circle"
+      variant="secondary"
+      disabled
+    >
+      <VolumeX aria-hidden className="size-4" />
+    </IconButton>
+  ) : (
+    <ClipButton
+      size="md"
+      label={label}
+      src={hear(clip(recordingId, speakerId))}
+    />
+  );
+}
+
+/** Says a voice sample cannot be heard (``SampleClip``). */
+export function GoneBadge() {
+  return (
+    <Badge tone="warning" title="录音重新转写过，这段声线已对不上原来的说话人">
+      听不到
+    </Badge>
+  );
+}
+
 /** How sure voice alone was, in words: the lead over whoever came second. */
 const sureness = (check: Check) =>
   check.lead === null
@@ -294,16 +345,21 @@ export function PersonVoice({
                     key={sample.id}
                     variant="divided"
                     leading={
-                      <ClipButton
-                        size="md"
+                      <SampleClip
+                        gone={sample.gone}
+                        name={name}
                         label={`听这段声线（${sample.filename}）`}
-                        src={hear(clip(sample.recording_id, sample.speaker_id))}
+                        recordingId={sample.recording_id}
+                        speakerId={sample.speaker_id}
                       />
                     }
                     title={
-                      <Text truncate title={sample.filename}>
-                        {sample.filename}
-                      </Text>
+                      <Row gap={2}>
+                        <Text truncate title={sample.filename}>
+                          {sample.filename}
+                        </Text>
+                        {sample.gone && <GoneBadge />}
+                      </Row>
                     }
                     meta={[
                       sample.source ? SOURCES[sample.source] : '',

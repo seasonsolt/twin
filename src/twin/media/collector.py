@@ -24,7 +24,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 # Bump when ``Team.classify`` would decide speakers differently: every automatic decision is then made again.
-ATTRIBUTION_VERSION = "attribution-v2"
+# v3: voice samples left on older transcripts moved to their current speakers or retired (``recollect.settle_samples``).
+ATTRIBUTION_VERSION = "attribution-v3"
 # Bump when ``Reviews.settle`` would leave other stretches out: every automatic exclusion is then judged again.
 CLEANUP_VERSION = "cleanup-v1"
 # What rows without a recorded version were made by.

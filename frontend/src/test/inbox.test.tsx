@@ -268,7 +268,7 @@ it('lists only the kinds that have something, new voices first, longest speaking
     within(kinds)
       .getAllByRole('button')
       .map((b) => b.textContent),
-  ).toEqual(['新的声音3']);
+  ).toEqual(['新的声音2']);
   expect(
     screen.getByRole('progressbar', { name: '已认出的发言' }),
   ).toHaveAttribute('aria-valuenow', '900');

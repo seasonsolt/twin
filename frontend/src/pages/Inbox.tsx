@@ -324,6 +324,9 @@ export function Inbox() {
     disowned: disowned.length,
     fragments: fragments.length && live('fragments') ? 1 : 0,
   };
+  // The tab counts what the side bar does (``waitingCount``): voices surely heard enough already, or like ones the
+  // owner could not name, stay listed, folded away, but are not counted.
+  const shown: Record<Category, number> = { ...counts, voice: mainCount };
   // A kind stays in the tabs while a row of it waits to be taken back.
   const present = CATEGORIES.filter(
     (c) => counts[c.id] > 0 || settledHere(c.id) > 0,
@@ -843,7 +846,7 @@ export function Inbox() {
                 <Row gap={2} as="div" title={c.help}>
                   {c.label}
                   <Text as="span" size="sm" tone="inherit">
-                    {counts[c.id]}
+                    {shown[c.id]}
                   </Text>
                 </Row>
               ),

@@ -306,8 +306,9 @@ it('deletes a task from the task list after confirming, and says why a task did 
   const sheet = await screen.findByRole('dialog', { name: '对话记录' });
   const row = within(sheet).getByRole('button', { name: /^写周报任务/u });
   expect(row).toHaveAttribute('aria-current', 'true');
-  // A task is deleted from its "…" like a conversation, and it is said in the list to be a task.
-  expect(within(row).getByText('任务')).toBeVisible();
+  // A task is deleted from its "…" like a conversation, and it is said in the list to be a task (once the sheet has
+  // slid in).
+  await waitFor(() => expect(within(row).getByText('任务')).toBeVisible());
   await user.click(
     within(sheet).getByRole('button', { name: '写周报的更多操作' }),
   );

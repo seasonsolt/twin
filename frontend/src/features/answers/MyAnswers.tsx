@@ -189,6 +189,7 @@ export function MyAnswers() {
                       : []),
                     {
                       label: '撤回',
+                      danger: true,
                       onSelect: () =>
                         void confirm({
                           title: '撤回这条团队答案？',

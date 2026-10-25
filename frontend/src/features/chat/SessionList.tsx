@@ -13,6 +13,7 @@ import {
   SquarePen,
 } from 'lucide-react';
 import {
+  AvatarFrame,
   Badge,
   Button,
   ChatAction,
@@ -23,6 +24,8 @@ import {
   PlainButton,
   Row,
 } from '../../components/ui';
+import { PersonFace } from '../library/PersonFace';
+import { usePersonas } from '../../stores/personas';
 import './history.css';
 
 const groups = ['今天', '更早'] as const;
@@ -74,6 +77,20 @@ const notes = (row: Session) =>
     row.tag,
     row.kind === 'task' ? (row.running ? '任务 · 在做' : '任务') : '',
   ].filter((note): note is string => !!note);
+
+/** The face of whom a row is with, where the list spans people; the first character of the name until the twin is
+ * listed. */
+function RowFace({ row }: { row: Session }) {
+  const twin = usePersonas((state) =>
+    state.items.find((item) => item.id === row.personaId),
+  );
+  if (!row.who) return null;
+  return (
+    <AvatarFrame size="sm">
+      <PersonFace name={row.who} twin={twin} />
+    </AvatarFrame>
+  );
+}
 
 /** A choice among the people and kinds the list can be narrowed to. */
 export interface SessionFilter {
@@ -288,6 +305,7 @@ export function SessionList({
                   });
                 }}
               >
+                <RowFace row={row} />
                 <span className="history-title">
                   {row.title}
                   {!!notes(row).length && (

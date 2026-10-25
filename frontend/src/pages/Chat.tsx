@@ -3,6 +3,7 @@ import { useLocation, useSearchParams } from 'react-router';
 import { PanelLeft, SquarePen, X } from 'lucide-react';
 import {
   ActionMenu,
+  AvatarFrame,
   Badge,
   ChatSurface,
   Heading,
@@ -15,6 +16,7 @@ import {
 } from '../components/ui';
 import { ChatStage } from '../features/chat/ChatStage';
 import { ChatThread } from '../features/chat/ChatThread';
+import { PersonFace } from '../features/library/PersonFace';
 import { PersonPicker } from '../features/chat/PersonPicker';
 import {
   SessionList,
@@ -595,6 +597,10 @@ export function Chat() {
                   <PanelLeft size={18} aria-hidden />
                 </IconButton>
               )}
+              {/* Whom this is with, face first; 我的分身 is the person's own. */}
+              <AvatarFrame size="sm">
+                <PersonFace name={name} twin={persona} />
+              </AvatarFrame>
               {runsTwins ? (
                 <TextLink to={twinMemberPath(personaId)} weight="medium">
                   {assistant ? '我的分身' : name}

@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import {
   Activity,
+  AudioLines,
+  IdCard,
   KeyRound,
   LogOut,
   Mic,
+  Pencil,
   Plus,
   Settings2,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import {
   AspectRing,
@@ -827,7 +831,36 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               label="更多操作示例"
               items={[
                 { label: '重命名', onSelect: () => toast('重命名') },
-                { label: '删除', onSelect: () => toast('删除') },
+                { label: '删除', danger: true, onSelect: () => toast('删除') },
+              ]}
+            />
+            {/* A row's menu: icons to scan by, a count, a quiet status, and the destructive one set apart. */}
+            <ActionMenu
+              label="成员行菜单示例"
+              items={[
+                {
+                  label: '编辑资料',
+                  icon: Pencil,
+                  onSelect: () => toast('编辑资料'),
+                },
+                {
+                  label: '抽查声线',
+                  icon: AudioLines,
+                  count: 1,
+                  onSelect: () => toast('抽查声线'),
+                },
+                {
+                  label: '绑定企业账号',
+                  icon: IdCard,
+                  status: '未绑定',
+                  onSelect: () => toast('绑定企业账号'),
+                },
+                {
+                  label: '删除成员',
+                  icon: Trash2,
+                  danger: true,
+                  onSelect: () => toast('删除成员'),
+                },
               ]}
             />
             <ThemePicker

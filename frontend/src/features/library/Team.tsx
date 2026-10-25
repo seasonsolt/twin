@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { AudioLines, IdCard, Pencil, Trash2 } from 'lucide-react';
 import {
   Navigate,
   useLocation,
@@ -556,12 +557,19 @@ function personRow({
             ...(state === 'behind' && person.held
               ? [{ label: '立即整理', disabled: busy, onSelect: onRebuild }]
               : []),
-            { label: '编辑', disabled: busy, onSelect: onEdit },
+            {
+              label: '编辑资料',
+              icon: Pencil,
+              disabled: busy,
+              onSelect: onEdit,
+            },
             // Nothing was heard of someone made by hand: no voice to hear or check.
             ...(person.speakers > 0
               ? [
                   {
-                    label: checks > 0 ? `抽查声线（${checks}）` : '抽查声线',
+                    label: '抽查声线',
+                    icon: AudioLines,
+                    count: checks,
                     disabled: busy,
                     onSelect: onVoice,
                   },
@@ -570,7 +578,10 @@ function personRow({
             ...(person.persona_id && twin?.claimed === false
               ? [
                   {
-                    label: '设企业账号',
+                    label: '绑定企业账号',
+                    icon: IdCard,
+                    // Given one nobody has signed in with yet, it waits for them; none given, it is not bound.
+                    status: twin.claim ? '待认领' : '未绑定',
                     disabled: busy,
                     onSelect: onAddress,
                   },
@@ -579,7 +590,15 @@ function personRow({
             ...(!person.persona_id &&
             !person.self_claimed &&
             !person.twin_elsewhere
-              ? [{ label: '删除', disabled: busy, onSelect: onRemove }]
+              ? [
+                  {
+                    label: '删除成员',
+                    icon: Trash2,
+                    danger: true,
+                    disabled: busy,
+                    onSelect: onRemove,
+                  },
+                ]
               : []),
           ]}
         />

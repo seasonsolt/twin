@@ -6,11 +6,17 @@ import {
 } from 'react';
 import { motion } from 'motion/react';
 import { Link } from 'react-router';
-import { Check, ChevronDown, Inbox, MoreHorizontal } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Inbox,
+  MoreHorizontal,
+  type LucideIcon,
+} from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { Pressable } from '../motion';
 import { cn } from '../../lib/utils';
-import { Button, buttonClasses, toneClasses, type Tone } from './controls';
+import { buttonClasses, toneClasses, type Tone } from './controls';
 
 const cardVariants = {
   /** Content inside an existing card, with padding but no second surface. */
@@ -869,9 +875,72 @@ export function Steps({
   );
 }
 
+/** One action in an `ActionMenu`. */
+export interface ActionItem {
+  label: string;
+  onSelect: () => void;
+  disabled?: boolean;
+  /** A leading icon, where it helps the eye find the item among the others. */
+  icon?: LucideIcon;
+  /** How many wait there (抽查声线 1): a small badge on the right. Nothing when 0. */
+  count?: number;
+  /** A quiet word on the right about where it stands (未绑定). */
+  status?: string;
+  /** Deletes or takes something back: set apart at the end, after a divider, in the danger colour. */
+  danger?: boolean;
+}
+
+function ActionMenuItem({ item }: { item: ActionItem }) {
+  const Icon = item.icon;
+  return (
+    <button
+      type="button"
+      disabled={item.disabled}
+      // Read as one phrase: 抽查声线 2, 绑定企业账号 未绑定.
+      aria-label={
+        item.status || item.count
+          ? [item.label, item.status, item.count || '']
+              .filter(Boolean)
+              .join(' ')
+          : undefined
+      }
+      className={cn(
+        'flex min-h-9 w-full items-center gap-2 rounded-sm px-3 text-left text-sm whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50',
+        item.danger
+          ? 'text-danger hover:bg-danger/10'
+          : 'text-primary hover:bg-surface-raised',
+      )}
+      onClick={(event) => {
+        const menu = event.currentTarget.closest('details');
+        menu?.removeAttribute('open');
+        // The button that had the focus is hidden now: the focus goes back to the "⋯" it came from.
+        menu?.querySelector('summary')?.focus();
+        item.onSelect();
+      }}
+    >
+      {Icon && (
+        <Icon
+          aria-hidden
+          className={cn('size-4 shrink-0', !item.danger && 'text-secondary')}
+        />
+      )}
+      <span className="flex-1">{item.label}</span>
+      {item.status && (
+        <span className="text-xs text-tertiary">{item.status}</span>
+      )}
+      {!!item.count && (
+        <span className="grid min-w-5 place-items-center rounded-full bg-accent px-1.5 text-xs font-semibold text-on-accent">
+          {item.count}
+        </span>
+      )}
+    </button>
+  );
+}
+
 /**
- * A round "⋯" button that opens a short list of actions below it; choosing one closes the list. `className` places
- * the menu (for example absolute in a card's corner).
+ * A round "⋯" button that opens a short list of actions below it; choosing one closes the list. Destructive items
+ * (`danger`) come last, after a divider, whatever their place in `items`. `className` places the menu (for example
+ * absolute in a card's corner).
  */
 export function ActionMenu({
   label,
@@ -880,11 +949,13 @@ export function ActionMenu({
   text,
 }: {
   label: string;
-  items: { label: string; onSelect: () => void; disabled?: boolean }[];
+  items: ActionItem[];
   className?: string;
   /** Words on the button (a secondary button with a caret, such as “添加”) instead of the round “⋯”. */
   text?: string;
 }) {
+  const ordinary = items.filter((item) => !item.danger);
+  const destructive = items.filter((item) => item.danger);
   return (
     <details className={cn('relative', className)}>
       <summary
@@ -906,21 +977,14 @@ export function ActionMenu({
         )}
       </summary>
       <div className="absolute right-0 z-10 grid min-w-28 rounded-lg border border-border bg-surface p-1 shadow-elevation-2">
-        {items.map((item) => (
-          <Button
-            key={item.label}
-            variant="ghost"
-            disabled={item.disabled}
-            onClick={(event) => {
-              const menu = event.currentTarget.closest('details');
-              menu?.removeAttribute('open');
-              // The button that had the focus is hidden now: the focus goes back to the "⋯" it came from.
-              menu?.querySelector('summary')?.focus();
-              item.onSelect();
-            }}
-          >
-            {item.label}
-          </Button>
+        {ordinary.map((item) => (
+          <ActionMenuItem key={item.label} item={item} />
+        ))}
+        {ordinary.length > 0 && destructive.length > 0 && (
+          <hr aria-hidden className="my-1 border-border" />
+        )}
+        {destructive.map((item) => (
+          <ActionMenuItem key={item.label} item={item} />
         ))}
       </div>
     </details>

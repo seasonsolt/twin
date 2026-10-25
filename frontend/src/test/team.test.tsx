@@ -399,8 +399,8 @@ it('edits a person name and gender and opens the member page of their twin', asy
     within(row).getByRole('img', { name: '插画形象：石', hidden: true }),
   ).toBeInTheDocument();
   await userEvent.click(within(row).getByLabelText('张总的更多操作'));
-  expect(within(row).queryByRole('button', { name: '删除' })).toBeNull();
-  await userEvent.click(within(row).getByRole('button', { name: '编辑' }));
+  expect(within(row).queryByRole('button', { name: '删除成员' })).toBeNull();
+  await userEvent.click(within(row).getByRole('button', { name: '编辑资料' }));
   const dialog = await screen.findByRole('dialog', { name: '编辑「张总」' });
   await userEvent.clear(within(dialog).getByLabelText('名字'));
   await userEvent.type(within(dialog).getByLabelText('名字'), '张总监');
@@ -447,14 +447,17 @@ it('searches people locally, edits them from the menu, and keeps deletion there'
   ).toBeInTheDocument();
   expect(calls).toHaveLength(beforeSearch);
   await userEvent.click(screen.getByLabelText('李总的更多操作'));
-  await userEvent.click(screen.getByRole('button', { name: '编辑' }));
+  await userEvent.click(screen.getByRole('button', { name: '编辑资料' }));
   expect(
     await screen.findByRole('dialog', { name: '编辑「李总」' }),
   ).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '取消' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await userEvent.click(screen.getByLabelText('李总的更多操作'));
-  expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
+  // Deleting is set apart, last, in the danger colour.
+  const remove = screen.getByRole('button', { name: '删除成员' });
+  expect(remove).toHaveClass('text-danger');
+  expect(remove.previousElementSibling?.tagName).toBe('HR');
   // Nobody of that name: the table says so instead of going blank.
   await userEvent.clear(screen.getByRole('textbox', { name: '找人' }));
   await userEvent.type(screen.getByRole('textbox', { name: '找人' }), '赵');
@@ -508,6 +511,19 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
     }),
   );
   render(teamView());
+  // A twin not taken yet can be bound to an account from its row, which says it is not.
+  const li = (
+    await screen.findByRole('link', { name: '李总的成员页' })
+  ).closest('tr')!;
+  expect(
+    within(li).getByRole('button', { name: '绑定企业账号 未绑定' }),
+  ).toBeInTheDocument();
+  const zhang = screen
+    .getByRole('link', { name: '张总的成员页' })
+    .closest('tr')!;
+  expect(
+    within(zhang).queryByRole('button', { name: /绑定企业账号/u }),
+  ).toBeNull();
   await userEvent.click(await screen.findByText('添加'));
   await userEvent.click(
     screen.getByRole('button', { name: '批量建分身（3）' }),
@@ -651,8 +667,8 @@ it('has no voice to check for someone only a twin was made for, and writes no re
   expect(within(row).queryByText(/段 ·/u)).toBeNull();
   expect(within(row).queryByText(/分钟/u)).toBeNull();
   await userEvent.click(within(row).getByLabelText('张总的更多操作'));
-  expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '抽查声线' })).toBeNull();
+  expect(screen.getByRole('button', { name: '编辑资料' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /抽查声线/u })).toBeNull();
 });
 
 it('keeps off the roster people the viewer neither looks after nor can talk to', async () => {
@@ -875,7 +891,8 @@ it('spot-checks what voice alone gave a person, least sure first, and takes a vo
     </MemoryRouter>,
   );
   await user.click(await screen.findByLabelText('张总的更多操作'));
-  await user.click(screen.getByRole('button', { name: '抽查声线（2）' }));
+  // How many wait is a badge on the item, not words in its name.
+  await user.click(screen.getByRole('button', { name: '抽查声线 2' }));
   const layer = await screen.findByRole('dialog', { name: '张总的声音' });
   const listed = await within(layer).findByRole('list', {
     name: '可抽查的发言',

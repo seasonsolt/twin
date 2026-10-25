@@ -99,6 +99,7 @@ function LensBlock({
               },
               {
                 label: '撤回',
+                danger: true,
                 onSelect: () =>
                   void confirm({
                     title: '撤回这个赋能？',

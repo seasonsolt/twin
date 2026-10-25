@@ -583,6 +583,7 @@ export function Library() {
                                   : []),
                                 {
                                   label: '删除',
+                                  danger: true,
                                   disabled: recording.status === 'transcribing',
                                   onSelect: () => void remove(recording),
                                 },

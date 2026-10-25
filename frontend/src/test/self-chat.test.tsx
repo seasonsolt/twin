@@ -678,12 +678,12 @@ it('marks what the assistant asked in the person’s name, and lists it apart wi
 
 it('opens a conversation of another twin from its address: the twin it is with, then the conversation', async () => {
   mount(personas, '/chat?with=p-wang&open=c-wang');
-  // In the conversation itself: the list holds the same words as a preview, hidden.
-  expect(
-    await within(await screen.findByTestId('chat-messages')).findByText(
-      '先问最近做的事。',
-    ),
-  ).toBeVisible();
+  // In the conversation itself: the list holds the same words as a preview, hidden. The page fades in on the twin
+  // it switched to, so the words are visible once the fade is over.
+  const said = await within(
+    await screen.findByTestId('chat-messages'),
+  ).findByText('先问最近做的事。');
+  await waitFor(() => expect(said).toBeVisible());
   expect(usePersonas.getState().id).toBe('p-wang');
 });
 
@@ -1014,4 +1014,21 @@ it('keeps to the assistant’s list while the page is still on its way to the pe
   expect(
     within(sheet).getByRole('button', { name: /^我的分身/u }),
   ).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('leads the top bar with the face of whom the conversation is with, the person’s own on their assistant', async () => {
+  mount([
+    twin('default', '林舟', {
+      mine: true,
+      approved: true,
+      avatar_url: '/api/personas/default/avatar',
+    }),
+    personas[1],
+  ]);
+  await list();
+  const bar = (await screen.findByText('仅你可见')).closest('.chat-topbar')!;
+  expect(bar.querySelector('img')).toHaveAttribute(
+    'src',
+    '/api/personas/default/avatar',
+  );
 });

@@ -95,6 +95,7 @@ export function ItemRow({
                 },
                 {
                   label: '删掉',
+                  danger: true,
                   disabled: pending,
                   onSelect: () => void onReview(item, 'rejected'),
                 },

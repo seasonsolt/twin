@@ -10,6 +10,7 @@ import {
   Text,
   TextLink,
   Toolbar,
+  type ActionItem,
   type Tone,
 } from '../../components/ui';
 
@@ -38,7 +39,7 @@ export function MemberHeader({
   face: ReactNode;
   status: MemberStatus;
   badge?: ReactNode;
-  menu?: { label: string; onSelect: () => void; disabled?: boolean }[];
+  menu?: ActionItem[];
   /** The one thing to do next: talk to their twin, or make one. */
   primary?: { label: string; onClick: () => void };
 }) {

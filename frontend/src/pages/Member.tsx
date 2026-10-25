@@ -167,6 +167,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                     : [
                         {
                           label: '删除分身',
+                          danger: true,
                           onSelect: () => setSettings('delete'),
                         },
                       ]),

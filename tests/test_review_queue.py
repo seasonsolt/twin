@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
@@ -308,3 +309,71 @@ def test_batched_summary_scores_match_scalar_and_defer_boundaries() -> None:
     for scores in ([0.0, MARGIN], [STRANGER, 0.0], [0.0, 0.8, 0.8]):
         samples = np.array([[score * (1 + 1e-9), 0.0] for score in scores])
         assert _summary_scores([blob], samples, np.arange(len(scores)), len(scores), 0) == {}
+
+
+def test_peek_answers_with_the_last_reading_at_once_and_works_out_the_current_one_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = Library(tmp_path / "library")
+    rec = meeting(library)
+    queue = ReviewQueue(library)
+    started, resume = threading.Event(), threading.Event()
+    calls = 0
+    build = queue._build
+
+    def paused(scope: set[str]) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            started.set()
+            assert resume.wait(5)
+        return build(scope)
+
+    monkeypatch.setattr(queue, "_build", paused)
+    try:
+        assert queue.peek({rec}) is None  # Nothing to answer with yet: ``get`` makes the first reading.
+        before = queue.get({rec})
+        assert queue.peek({rec}) == (before, True)
+        assert calls == 1
+        Team(library).add_person("新同事")
+        # The earlier reading comes back without waiting for the new one, which starts in the background, once.
+        assert queue.peek({rec}) == (before, False)
+        assert started.wait(5)
+        assert queue.peek({rec}) == (before, False)
+        assert calls == 2
+        resume.set()
+        expected = original_queue(library, {rec})
+        for _ in range(500):
+            found = queue.peek({rec})
+            if found is not None and found[1]:
+                break
+            time.sleep(0.01)
+        assert queue.peek({rec}) == (expected, True)
+        assert queue.get({rec}) == expected
+        assert calls == 2
+        # The answer is a copy: changing it leaves the kept reading as it was.
+        found = queue.peek({rec})
+        assert found is not None
+        found[0]["heard"]["total"] = -1
+        assert queue.peek({rec}) == (expected, True)
+    finally:
+        resume.set()
+        queue.close()
+
+
+def test_peek_never_answers_with_a_reading_of_a_replaced_database(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    rec = meeting(library)
+    with sqlite3.connect(library.db_path) as db:
+        db.execute("PRAGMA journal_mode=DELETE")
+    queue = ReviewQueue(library)
+    try:
+        assert queue.get({rec})["fragments"]
+        other = Library(tmp_path / "other")
+        with sqlite3.connect(other.db_path) as db:
+            db.execute("PRAGMA journal_mode=DELETE")
+        other.db_path.replace(library.db_path)
+        assert queue.peek({rec}) is None
+        assert queue.get({rec})["voices"] == []
+    finally:
+        queue.close()

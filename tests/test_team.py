@@ -1359,6 +1359,24 @@ def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path
     more = web.get("/api/library/review?voices=4&unsorted=2").json()
     assert more["voices"] == whole["voices"] and more["unsorted"] == whole["unsorted"]
     assert web.get("/api/library/review?voices=-1").status_code == 400
+    assert whole["stale"] is False
+
+
+def test_a_stale_review_comes_at_once_and_the_current_one_after_it(web: TestClient, tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60))
+    second = voices(library, "二.m4a", ([0.0, 1.0, 0.0], 40))
+    # Nothing read yet: the first answer is worked out, current.
+    first = web.get("/api/library/review?stale=true").json()
+    assert first["stale"] is False and [v["seconds"] for v in first["voices"]] == [60, 40]
+    assert web.get("/api/library/review?stale=true").json() == first
+    decide(Team(library), second, "S1", "unknown")
+    # The library changed: the earlier reading comes at once, marked; asked without ``stale``, the current one.
+    earlier = web.get("/api/library/review?stale=true").json()
+    assert earlier == {**first, "stale": True}
+    current = web.get("/api/library/review").json()
+    assert current["stale"] is False and [v["seconds"] for v in current["voices"]] == [60]
+    assert web.get("/api/library/review?stale=true").json() == current
 
 
 def test_a_voice_is_settled_once_through_the_page(web: TestClient, tmp_path: Path) -> None:

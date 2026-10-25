@@ -292,12 +292,17 @@ class Libraries:
         """A member's own corner of the team's library: their uploads still arriving and their voice."""
         return self.library(TEAM).root / "members" / key
 
-    def review(self, owner: str, editable: set[str]) -> dict[str, Any]:
+    def review(self, owner: str, editable: set[str], stale: bool = False) -> tuple[dict[str, Any], bool]:
+        """The review queue of these recordings, and whether it is an earlier reading: with ``stale``, the latest
+        one at once while the current one is worked out (``ReviewQueue.peek``)."""
         with self.lock:
             if owner not in self.review_queues:
                 self.review_queues[owner] = ReviewQueue(self.library(owner))
             queue = self.review_queues[owner]
-        return queue.get(editable)
+        if stale and (found := queue.peek(editable)) is not None:
+            reading, current = found
+            return reading, not current
+        return queue.get(editable), False
 
     def uploads(self, viewer: Viewer) -> Uploads:
         return Uploads(self.member(viewer.key))
@@ -1824,6 +1829,7 @@ def register(
         items: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
         unsorted: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
         suspects: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        stale: bool = False,
     ) -> dict[str, Any]:
         """What the viewer settles about the recordings they decide about: speakers someone said are not them
         (``items``), undecided speakers grouped by voice across recordings so each colleague is asked about once
@@ -1831,7 +1837,9 @@ def register(
         speakers have no voiceprint to group by, settled one by one (``unsorted``), with how much of their speech
         is settled (``heard``). All from one reading, so the page never infers a task from an older list of
         recordings. Each list is the first so many asked for (``review_queue.page``; all without a number), with how
-        many it holds in all (``totals``): the page shows a few of each and asks for more as the owner scrolls."""
+        many it holds in all (``totals``): the page shows a few of each and asks for more as the owner scrolls.
+        With ``stale`` the latest reading comes at once, marked ``stale`` when the library changed since: the page
+        shows it and asks again without ``stale`` for the current one, which is meanwhile worked out."""
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
         limits = {
             "voices": voices,
@@ -1841,7 +1849,8 @@ def register(
             "unsorted": unsorted,
             "suspects": suspects,
         }
-        return page(libraries.review(libraries.owner(request), editable), limits)
+        reading, earlier = libraries.review(libraries.owner(request), editable, stale)
+        return {**page(reading, limits), "stale": earlier}
 
     @app.post("/api/library/voices")
     def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:

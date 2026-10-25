@@ -62,6 +62,8 @@ export interface Review {
   heard?: { settled: number; total: number };
   // How many each paged list holds in all (``reviewPath``).
   totals?: ReviewTotals;
+  // A reading from before the library last changed (asked for with ``stale``); the current one is on its way.
+  stale?: boolean;
 }
 
 /** What settling a voice tells the server: who it is, or that nobody known speaks there. */

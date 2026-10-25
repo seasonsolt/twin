@@ -700,6 +700,44 @@ it('keeps fragments for the owner to put aside together', async () => {
   expect(await screen.findByText('现在没有需要你处理的事。')).toBeVisible();
 });
 
+it('shows the earlier queue the server kept at once, then the current one in its place', async () => {
+  server.voices = [
+    voice('v_old', { members: [member('rec_1', 'S1', 300)], seconds: 300 }),
+  ];
+  const real = fetch;
+  let release = () => {};
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.startsWith('/api/library/review')) return real(url, init);
+      const answer = (await (await real(url, init)).json()) as Record<
+        string,
+        unknown
+      >;
+      if (url.endsWith('&stale=true')) return json({ ...answer, stale: true });
+      await current;
+      return json({ ...answer, voices: [], totals: undefined });
+    }),
+  );
+  view();
+  // The earlier reading is shown while the current one is worked out.
+  const list = await screen.findByRole('list', { name: '新的声音' });
+  expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+  const asked = vi
+    .mocked(fetch)
+    .mock.calls.map(([url]) => String(url))
+    .filter((url) => url.startsWith('/api/library/review'));
+  expect(asked.map((url) => url.endsWith('&stale=true'))).toEqual([
+    true,
+    false,
+  ]);
+  release();
+  expect(await screen.findByText('现在没有需要你处理的事。')).toBeVisible();
+});
+
 it('shows twenty new voices at first and more on request, with what the rest add up to', async () => {
   server.voices = Array.from({ length: 27 }, (_, i) =>
     voice(`v${i}`, {
@@ -740,7 +778,7 @@ it('asks for the first page of each list, counts the rest from the totals, and a
   const list = await screen.findByRole('list', { name: '新的声音' });
   // Once, opened cold: the library arriving first is no change for the page to load again for.
   expect(asked()).toEqual([
-    '/api/library/review?voices=20&enough=20&strangers=20&items=10&unsorted=10&suspects=10',
+    '/api/library/review?voices=20&enough=20&strangers=20&items=10&unsorted=10&suspects=10&stale=true',
   ]);
   expect(
     vi

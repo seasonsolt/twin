@@ -76,28 +76,37 @@ export function useTeamData({
         );
     }
   }, []);
-  const loadReview = useCallback(async () => {
-    const current = ++reviewVersion.current;
-    try {
-      const queue = await api<Review>(reviewUrl);
-      if (current !== reviewVersion.current) return;
-      useTeam.getState().absorb({ review: queue });
-      setWaiting(queue.items);
-      setVoices(queue.voices);
-      setFragments(queue.fragments);
-      setUnsorted(queue.unsorted);
-      setSuspects(queue.suspects ?? []);
-      setHeard(queue.heard);
-      setTotals(queue.totals);
-      setReviewError('');
-      setReviewReady(true);
-    } catch (failure) {
-      if (current === reviewVersion.current)
-        setReviewError(
-          failure instanceof Error ? failure.message : '无法加载待处理事项',
+  // ``stale``: the server's latest reading at once, even from before the library last changed, then the current
+  // one: on a large library working the queue out takes many seconds, and background jobs change it often.
+  const loadReview = useCallback(
+    async (stale = false) => {
+      const current = ++reviewVersion.current;
+      try {
+        const queue = await api<Review>(
+          stale ? `${reviewUrl}&stale=true` : reviewUrl,
         );
-    }
-  }, [reviewUrl]);
+        if (current !== reviewVersion.current) return;
+        useTeam.getState().absorb({ review: queue });
+        setWaiting(queue.items);
+        setVoices(queue.voices);
+        setFragments(queue.fragments);
+        setUnsorted(queue.unsorted);
+        setSuspects(queue.suspects ?? []);
+        setHeard(queue.heard);
+        setTotals(queue.totals);
+        setReviewError('');
+        setReviewReady(true);
+        if (queue.stale) await loadReview();
+      } catch (failure) {
+        if (current === reviewVersion.current)
+          setReviewError(
+            failure instanceof Error ? failure.message : '无法加载待处理事项',
+          );
+      }
+    },
+    [reviewUrl],
+  );
+  // After an answer of the owner's: the current queue, never one from before it.
   const load = useCallback(
     async () => void (await Promise.all([loadPeople(), loadReview()])),
     [loadPeople, loadReview],
@@ -110,7 +119,7 @@ export function useTeamData({
   }, [loadPeople, version]);
   // Also when more of a list is asked for: the server answers from its cached reading, people are not read again.
   useEffect(() => {
-    void loadReview();
+    void loadReview(true);
     return () => {
       reviewVersion.current += 1;
     };

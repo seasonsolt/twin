@@ -58,7 +58,8 @@ const span = (seconds: number) =>
   seconds < 60
     ? `${Math.round(seconds)} 秒`
     : `${Math.round(seconds / 60)} 分钟`;
-const clip = (recordingId: string, speakerId: string) =>
+/** A speaker's clip, as heard beside their voice sample. */
+export const clip = (recordingId: string, speakerId: string) =>
   withBase(
     `/api/library/recordings/${encodeURIComponent(recordingId)}/speakers/${encodeURIComponent(speakerId)}/samples/0`,
   );

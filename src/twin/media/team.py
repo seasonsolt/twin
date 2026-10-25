@@ -56,6 +56,11 @@ SURE = 0.75
 # Two speakers of one recording this alike are one person the diarization split in two: split halves on the pilot
 # library were 0.73-0.85 alike, different people of one meeting never this alike.
 SPLIT = 0.75
+# Voice samples of two people this alike, from different recordings, are shown to an administrator to hear side by
+# side (``Team.voice_clashes``): on daw, samples of two people confirmed in one recording were never this alike, while
+# 11 pairs of named people had samples this alike across recordings (29 samples, 17 of them more like the other person
+# than like their own other samples) and held back most voices close to someone yet not leading the runner-up.
+SAMPLE_CLASH = 0.85
 # Candidates closer than this are shown together as "close, tell them apart".
 NEAR = 0.05
 # A speaker is taken to be someone without asking only this close to the person's samples, this much closer than to
@@ -191,6 +196,29 @@ class VoiceSample(BaseModel):
     # Speakers it gave the person by voice alone that still stand, and those the owner gave otherwise.
     claims: int = 0
     corrected: int = 0
+
+
+class ClashSample(BaseModel):
+    """One of the two voice samples of a clash (``Team.voice_clashes``)."""
+
+    id: int
+    person_id: str
+    name: str
+    recording_id: str
+    filename: str
+    speaker_id: str
+    seconds: float
+    # More like the other person's sample than like any of the person's own other samples: likely given wrongly.
+    unlike_own: bool = False
+
+
+class VoiceClash(BaseModel):
+    """Voice samples of two people that sound nearly alike: one person known twice, or a sample given wrongly."""
+
+    score: float
+    # Both were confirmed by the owner in one recording: two people, so one of the samples is wrong.
+    together: bool
+    samples: list[ClashSample]
 
 
 class Candidate(BaseModel):
@@ -1633,6 +1661,83 @@ class Team:
             # Everyone who spoke with them calls them by the kept name now.
             self._bump(db, {into})
             self._forget(db, person_id)
+
+    def voice_clashes(self) -> list[VoiceClash]:
+        """Pairs of people with voice samples from different recordings at least ``SAMPLE_CLASH`` alike, the most
+        alike first; for each pair, its most alike two samples, unless an administrator said they are both right
+        (``samples_apart``). Such samples make every voice like either person lead the other by too little to be
+        taken by voice alone."""
+        with self.library.read() as db:
+            rows = db.execute(
+                "SELECT v.id, v.person_id, p.name, v.recording_id, v.speaker_id, v.embedding, r.filename "
+                "FROM voiceprints v JOIN people p ON p.id = v.person_id JOIN recordings r ON r.id = v.recording_id "
+                "WHERE v.active = 1 ORDER BY v.id"
+            ).fetchall()
+            apart = {(int(a), int(b)) for a, b in db.execute("SELECT sample_id, other_id FROM sample_apart")}
+            together: dict[str, set[str]] = {}
+            for person_id, recording_id in db.execute(
+                "SELECT a.person_id, a.recording_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
+                "AND r.transcript_id = a.transcript_id WHERE a.decision = 'confirmed' AND a.auto = 0"
+            ):
+                together.setdefault(person_id, set()).add(recording_id)
+        vectors = []
+        for row in rows:
+            text = row["embedding"]
+            if text not in self._parsed:
+                self._parsed[text] = _Print(json.loads(text))
+            vectors.append(_array(self._parsed[text]))
+        if len({len(v) for v in vectors}) != 1:
+            return []
+        alike = np.stack(vectors) @ np.stack(vectors).T
+        persons = [row["person_id"] for row in rows]
+        recordings = [row["recording_id"] for row in rows]
+        best: dict[tuple[str, str], tuple[float, int, int]] = {}
+        for i, j in zip(*np.nonzero(np.triu(alike >= SAMPLE_CLASH, 1)), strict=True):
+            i, j = int(i), int(j)
+            if persons[i] == persons[j] or recordings[i] == recordings[j]:
+                continue
+            if (min(rows[i]["id"], rows[j]["id"]), max(rows[i]["id"], rows[j]["id"])) in apart:
+                continue
+            pair = (min(persons[i], persons[j]), max(persons[i], persons[j]))
+            score = float(alike[i, j])
+            if pair not in best or score > best[pair][0]:
+                best[pair] = (score, i, j)
+
+        def sample(index: int, score: float) -> ClashSample:
+            row = rows[index]
+            own = [
+                float(alike[index, k])
+                for k in range(len(rows))
+                if k != index and persons[k] == persons[index] and recordings[k] != recordings[index]
+            ]
+            return ClashSample(
+                id=row["id"],
+                person_id=row["person_id"],
+                name=row["name"],
+                recording_id=row["recording_id"],
+                filename=row["filename"],
+                speaker_id=row["speaker_id"],
+                seconds=round(self._seconds(row["recording_id"], row["speaker_id"]), 1),
+                unlike_own=bool(own) and max(own) < score,
+            )
+
+        clashes = [
+            VoiceClash(
+                score=round(score, 3),
+                together=bool(together.get(persons[i], set()) & together.get(persons[j], set())),
+                samples=[sample(i, score), sample(j, score)],
+            )
+            for score, i, j in best.values()
+        ]
+        return sorted(clashes, key=lambda c: -c.score)
+
+    def samples_apart(self, sample_id: int, other_id: int) -> None:
+        """An administrator heard two clashing voice samples and both are right: not shown again."""
+        with self.library.transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO sample_apart (sample_id, other_id, created_at) VALUES (?, ?, ?)",
+                (min(sample_id, other_id), max(sample_id, other_id), _now()),
+            )
 
     def similar(self) -> list[tuple[str, str]]:
         """Pairs of people who may be one (``media.merge`` found them under the same name in two libraries)."""

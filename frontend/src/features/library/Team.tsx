@@ -18,6 +18,7 @@ import {
   Input,
   ListRow,
   LoadMore,
+  Notice,
   Radio,
   Row,
   Stack,
@@ -40,6 +41,11 @@ import { useNewTwinCard } from '../../components/layout/NewTwin';
 import type { Recording } from '../../pages/Library';
 import type { Gender, Person, TwinMatch } from '../../pages/Recording';
 import { PersonVoice } from './PersonVoice';
+import {
+  VoiceClashes,
+  type ClashSample,
+  type VoiceClash,
+} from './VoiceClashes';
 import { WorkClaim } from './WorkClaim';
 import { BuildMeter } from '../memories/BuildProgress';
 import { minutes } from './review';
@@ -748,6 +754,7 @@ function Roster({
     load,
     saveClaim,
     rebuild,
+    merge,
   } = useTeamData({ version, onReload });
   const [hearing, setHearing] = useState<Person | null>(null);
   const [search, setSearch] = useState('');
@@ -778,6 +785,72 @@ function Roster({
   const twins = usePersonas((state) => state.items);
   const identity = useAuth((state) => state.identity);
   const newTwin = useNewTwinCard((state) => state.set);
+  // Administrators hear people whose voice samples sound nearly alike (a sample given wrongly, or one person twice).
+  const admin = !!identity?.admin;
+  const [clashes, setClashes] = useState<VoiceClash[]>([]);
+  const [checkingClashes, setCheckingClashes] = useState(false);
+  const loadClashes = useCallback(async () => {
+    if (!admin) return;
+    try {
+      const found = await api<VoiceClash[]>('/api/library/voice-clashes');
+      if (Array.isArray(found)) setClashes(found);
+    } catch {
+      // A side matter: the roster does not wait for it.
+    }
+  }, [admin]);
+  useEffect(() => {
+    void loadClashes();
+  }, [loadClashes, version]);
+  const mergeClash = async (clash: VoiceClash) => {
+    const [a, b] = clash.samples.map((s) =>
+      people?.find((p) => p.id === s.person_id),
+    );
+    if (!a || !b) return;
+    const failed = await merge(a, b);
+    if (!failed) toast(`已合并${a.name}和${b.name}`, 'success');
+    await loadClashes();
+  };
+  const removeClashSample = async (sample: ClashSample) => {
+    if (
+      !(await confirm({
+        title: `移除${sample.name}的这段声线？`,
+        body: '靠它认出的发言会退回待处理，再按声音重新认一遍',
+        confirmLabel: '移除',
+        tone: 'danger',
+      }))
+    )
+      return;
+    const result: { done?: { returned: number; recognised: number } } = {};
+    await act(async () => {
+      result.done = await api<{ returned: number; recognised: number }>(
+        '/api/library/voice-clashes/remove',
+        { method: 'POST', json: { sample_id: sample.id } },
+      );
+    });
+    if (result.done) {
+      const { returned, recognised } = result.done;
+      toast(
+        recognised
+          ? `已移除，新认出 ${recognised} 段`
+          : returned
+            ? `已移除，${returned} 段退回待处理`
+            : '已移除',
+        'success',
+      );
+    }
+    await loadClashes();
+  };
+  const apartClash = async (clash: VoiceClash) => {
+    await act(
+      () =>
+        api('/api/library/voice-clashes/apart', {
+          method: 'POST',
+          json: { samples: clash.samples.map((s) => s.id) },
+        }),
+      { reload: false },
+    );
+    await loadClashes();
+  };
   // What an action on a row could not do reaches the person where they are, not at the top of a long table.
   useEffect(() => {
     if (error) toast(error, 'danger', 8000);
@@ -896,6 +969,22 @@ function Roster({
     );
   const peopleTab = (
     <Stack gap={5}>
+      {admin && clashes.length > 0 && (
+        <Notice
+          tone="info"
+          actions={
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setCheckingClashes(true)}
+            >
+              核对
+            </Button>
+          }
+        >
+          {clashes.length} 对成员的声线几乎一样
+        </Notice>
+      )}
       {people === null && !peopleError && (
         <Text role="status" tone="secondary">
           正在加载人物…
@@ -1122,6 +1211,15 @@ function Roster({
         person={hearing}
         onClose={() => setHearing(null)}
         onChanged={load}
+      />
+      <VoiceClashes
+        open={checkingClashes}
+        clashes={clashes}
+        busy={busy}
+        onClose={() => setCheckingClashes(false)}
+        onMerge={(clash) => void mergeClash(clash)}
+        onRemove={(sample) => void removeClashSample(sample)}
+        onApart={(clash) => void apartClash(clash)}
       />
     </>
   );

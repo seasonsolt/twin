@@ -1293,6 +1293,46 @@ def test_a_person_s_voice_is_checked_and_a_sample_removed_through_the_page(web: 
     assert web.get(f"/api/library/people/{zhang.id}/voice").json() == {"samples": [], "checks": []}
 
 
+def test_voice_samples_of_two_people_that_sound_alike_are_shown_until_heard(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library" / "team")
+    team = Team(library)
+    zhang, li = team.add_person("张三"), team.add_person("李四")
+    first = voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60))
+    second = voices(library, "二.m4a", ([0.99, 0.1, 0.0], 60))  # Given to 李四, though it sounds like 张三.
+    third = voices(library, "三.m4a", ([0.0, 1.0, 0.0], 60))
+    decide(team, first, "S1", "confirm", zhang.id, sample=True)
+    decide(team, second, "S1", "confirm", li.id, sample=True)
+    decide(team, third, "S1", "confirm", li.id, sample=True)
+    [clash] = team.voice_clashes()
+    assert clash.score >= 0.85 and not clash.together
+    by_person = {s.person_id: s for s in clash.samples}
+    assert (by_person[li.id].recording_id, by_person[li.id].unlike_own) == (second, True)
+    # 张三 has no other sample to compare with: nothing says which of the two is wrong on his side.
+    assert (by_person[zhang.id].name, by_person[zhang.id].unlike_own) == ("张三", False)
+
+    # Both confirmed by the owner in one meeting: two people, so a sample is wrong rather than one person twice.
+    both = voices(library, "四.m4a", ([0.0, 0.0, 1.0], 30), ([0.0, 0.7, 0.7], 30))
+    decide(team, both, "S1", "confirm", zhang.id)
+    decide(team, both, "S2", "confirm", li.id)
+    [clash] = team.voice_clashes()
+    assert clash.together
+
+    # Heard and both right: not shown again, until another sample of theirs clashes.
+    team.samples_apart(*(s.id for s in clash.samples))
+    assert team.voice_clashes() == []
+    fifth = voices(library, "五.m4a", ([0.98, 0.0, 0.1], 60))
+    decide(team, fifth, "S1", "confirm", li.id, sample=True)
+    [again] = team.voice_clashes()
+    assert {s.recording_id for s in again.samples} == {first, fifth}
+
+    # A sample taken away, or the two taken for one person, ends the clash.
+    team.remove_sample(li.id, next(s.id for s in again.samples if s.person_id == li.id))
+    assert team.voice_clashes() == []
+    decide(team, fifth, "S1", "clear")
+    team.merge(li.id, zhang.id)
+    assert team.voice_clashes() == []
+
+
 def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60), ([0.0, 1.0, 0.0], 40), ([0.0, 0.0, 1.0], 20))

@@ -270,6 +270,55 @@ def test_an_administrator_merges_or_keeps_apart(web: TestClient, tmp_path: Path)
     assert team.speakers(library.get(rec))[0].person_id == one.id  # type: ignore[arg-type]
 
 
+def test_an_administrator_hears_clashing_voice_samples_and_takes_the_wrong_one_away(
+    web: TestClient, tmp_path: Path
+) -> None:
+    library = team_of(tmp_path)
+    team = Team(library)
+    zhang, li = team.add_person("张三"), team.add_person("李四")
+    recs = [
+        uploaded(
+            library,
+            recording(
+                library,
+                f"{name}.m4a",
+                [Segment(start=0, end=5, text="我先说。", speaker="S1")],
+                [Speaker(id="S1", seconds=60, embedding=vector)],
+            ),
+            "2001",
+        )
+        for name, vector in (
+            ("一", [1.0, 0.0, 0.0]),
+            ("二", [0.99, 0.1, 0.0]),
+            ("三", [0.0, 1.0, 0.0]),
+            ("四", [0.98, 0.05, 0.0]),
+        )
+    ]
+    for rec, person in zip(recs[:3], (zhang, li, li), strict=True):
+        found = library.get(rec)
+        assert found and found.transcript_id
+        team.decide(rec, found.transcript_id, found.revision, "S1", "confirm", person.id, True)
+    # 张三 and the sample wrongly given to 李四 are as alike to the fourth voice: voice alone leaves it to the owner.
+    assert team.classify(recs[3]) == 0
+
+    as_(web, UPLOADER)
+    assert web.get("/api/library/voice-clashes").status_code == 403
+    assert web.post("/api/library/voice-clashes/remove", json={"sample_id": 1}, headers=CSRF).status_code == 403
+    assert web.post("/api/library/voice-clashes/apart", json={"samples": [1, 2]}, headers=CSRF).status_code == 403
+
+    as_(web, ADMIN)
+    [clash] = web.get("/api/library/voice-clashes").json()
+    wrong = next(s for s in clash["samples"] if s["unlike_own"])
+    assert (wrong["person_id"], wrong["recording_id"], clash["together"]) == (li.id, recs[1], False)
+    gone = web.post("/api/library/voice-clashes/remove", json={"sample_id": wrong["id"]}, headers=CSRF)
+    assert gone.status_code == 200 and gone.json()["recognised"] >= 1
+    # Without the wrong sample, the fourth voice is 张三's by voice alone.
+    assert team.speakers(library.get(recs[3]))[0].person_id == zhang.id  # type: ignore[arg-type]
+    assert web.get("/api/library/voice-clashes").json() == []
+    again = web.post("/api/library/voice-clashes/remove", json={"sample_id": wrong["id"]}, headers=CSRF)
+    assert again.status_code == 404
+
+
 def test_twins_of_old_libraries_follow_the_teams_and_are_rebuilt(web: TestClient, tmp_path: Path) -> None:
     root = tmp_path / "library"
     old = old_library(root, WANG, "2026-01-01", ["张三"], ["周会.m4a"])

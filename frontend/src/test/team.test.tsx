@@ -8,6 +8,7 @@ import { Recording, type Person, type Speaker } from '../pages/Recording';
 import type { Recording as LibraryRecording } from '../pages/Library';
 import { useNewTwinCard } from '../components/layout/NewTwin';
 import { usePersonas, type Persona } from '../stores/personas';
+import { useAuth } from '../stores/auth';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -90,7 +91,10 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  useAuth.setState({ identity: null });
+});
 
 const emptyReview = { items: [], voices: [], fragments: [], unsorted: [] };
 /** Where the page went: the chat names the twin it opens on. */
@@ -1460,4 +1464,115 @@ it('shows nothing, for the page around it, while no one is on the team and nothi
     ),
   );
   expect(container).toBeEmptyDOMElement();
+});
+
+it('shows an administrator people whose voice samples sound alike, to hear them and take the wrong one away', async () => {
+  useAuth.setState({
+    identity: { email: 'admin@example.com', admin: true, auth_enabled: true },
+  });
+  const sample = (id: number, who: Person, wrong = false) => ({
+    id,
+    person_id: who.id,
+    name: who.name,
+    recording_id: `rec_${id}`,
+    filename: `rec_${id}.m4a`,
+    speaker_id: 'S1',
+    seconds: 300,
+    unlike_own: wrong,
+  });
+  const [zhang, li] = people;
+  const wang = person({ id: 'per_3', name: '王总' });
+  people = [zhang, li, wang];
+  let clashes = [
+    {
+      score: 0.93,
+      together: false,
+      samples: [sample(1, zhang), sample(2, li, true)],
+    },
+    {
+      score: 0.88,
+      together: true,
+      samples: [sample(3, zhang), sample(4, wang)],
+    },
+  ];
+  const posts: { url: string; body: unknown }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/library/voice-clashes') return json(clashes);
+      if (url === '/api/library/voice-clashes/remove') {
+        posts.push({ url, body: JSON.parse(String(init?.body)) });
+        clashes = clashes.slice(1);
+        return json({ returned: 2, recognised: 3 });
+      }
+      if (url === '/api/library/voice-clashes/apart') {
+        posts.push({ url, body: JSON.parse(String(init?.body)) });
+        clashes = [];
+        return json({ apart: true });
+      }
+      if (url === '/api/personas/trash') return json([]);
+      throw new Error(url);
+    }),
+  );
+  const user = userEvent.setup();
+  render(teamView());
+  expect(await screen.findByText('2 对成员的声线几乎一样')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '核对' }));
+  const layer = await screen.findByRole('dialog', { name: '核对声线' });
+  const pair = within(layer).getByRole('list', { name: '张总 和 李总的声线' });
+  const rows = within(pair).getAllByRole('listitem');
+  // The sample more like the other person than like their own is the likely mistake.
+  expect(within(rows[1]).getByText('更像对方')).toBeVisible();
+  expect(within(rows[0]).queryByText('更像对方')).toBeNull();
+  expect(
+    within(rows[1]).getByRole('button', { name: '听李总的声线（rec_2.m4a）' }),
+  ).toBeVisible();
+  // Two people heard in one meeting are not one person: no merging them.
+  expect(within(layer).getAllByRole('button', { name: '合并' })).toHaveLength(
+    1,
+  );
+
+  await user.click(within(rows[1]).getByRole('button', { name: '移除这段' }));
+  await user.click(await screen.findByRole('button', { name: '移除' }));
+  await waitFor(() =>
+    expect(posts[0]).toEqual({
+      url: '/api/library/voice-clashes/remove',
+      body: { sample_id: 2 },
+    }),
+  );
+  expect(await screen.findByText('1 对成员的声线几乎一样')).toBeVisible();
+  // The layer stays open on the next pair once the confirmation closed.
+  const still = await screen.findByRole('dialog', { name: '核对声线' });
+  await user.click(
+    await within(still).findByRole('button', { name: '都没错' }),
+  );
+  await waitFor(() =>
+    expect(posts[1]).toEqual({
+      url: '/api/library/voice-clashes/apart',
+      body: { samples: [3, 4] },
+    }),
+  );
+  expect(await within(still).findByText('都核对完了')).toBeVisible();
+  expect(screen.queryByText(/对成员的声线几乎一样/u)).toBeNull();
+});
+
+it('shows nobody but an administrator voice samples that sound alike', async () => {
+  useAuth.setState({
+    identity: { email: 'member@example.com', admin: false, auth_enabled: true },
+  });
+  const fetch = vi.fn(async (url: string) => {
+    if (url === '/api/library/people') return json({ items: people });
+    if (url.startsWith('/api/library/review')) return json(emptyReview);
+    if (url === '/api/personas/trash') return json([]);
+    throw new Error(url);
+  });
+  vi.stubGlobal('fetch', fetch);
+  render(teamView());
+  await screen.findByText('张总', { selector: 'p' });
+  expect(
+    fetch.mock.calls.some(([url]) => url === '/api/library/voice-clashes'),
+  ).toBe(false);
+  expect(screen.queryByText(/声线几乎一样/u)).toBeNull();
 });

@@ -152,6 +152,14 @@ class ApartBody(BaseModel):
     other: str
 
 
+class SamplesApartBody(BaseModel):
+    samples: tuple[int, int]
+
+
+class ClashRemoveBody(BaseModel):
+    sample_id: int
+
+
 class ResolveBody(BaseModel):
     # The known person the unnamed voice is; ``None`` for nobody known.
     into: str | None = None
@@ -2009,6 +2017,41 @@ def register(
             raise HTTPException(403, "只有管理员可以处理")
         libraries.team(libraries.owner(request)).keep_apart(person_id, body.other)
         return {"apart": True}
+
+    @app.get("/api/library/voice-clashes")
+    def get_voice_clashes(request: Request) -> list[dict[str, Any]]:
+        """Voice samples of two people that sound nearly alike, for an administrator to hear
+        (``Team.voice_clashes``)."""
+        if not libraries.viewer(request).admin:
+            raise HTTPException(403, "只有管理员可以核对声线")
+        return [c.model_dump() for c in libraries.team(libraries.owner(request)).voice_clashes()]
+
+    @app.post("/api/library/voice-clashes/apart")
+    def voice_clash_apart(body: SamplesApartBody, request: Request) -> dict[str, bool]:
+        """An administrator heard two clashing voice samples and both are right."""
+        if not libraries.viewer(request).admin:
+            raise HTTPException(403, "只有管理员可以核对声线")
+        libraries.team(libraries.owner(request)).samples_apart(*body.samples)
+        return {"apart": True}
+
+    @app.post("/api/library/voice-clashes/remove")
+    def voice_clash_remove(body: ClashRemoveBody, request: Request) -> dict[str, int]:
+        """An administrator heard which of two clashing voice samples is someone else: it stops standing for its
+        person, and the voices it held back are classified again (``Team.classify_all``)."""
+        owner = libraries.owner(request)
+        if not libraries.viewer(request).admin:
+            raise HTTPException(403, "只有管理员可以核对声线")
+        team = libraries.team(owner)
+        with team.library.read() as db:
+            row = db.execute(
+                "SELECT person_id FROM voiceprints WHERE id = ? AND active = 1", (body.sample_id,)
+            ).fetchone()
+        back = team.remove_sample(row[0], body.sample_id) if row else None
+        if back is None:
+            raise HTTPException(404, "找不到这段声线")
+        recognised = team.classify_all()
+        libraries.changed(owner)
+        return {"returned": back, "recognised": recognised}
 
     @app.delete("/api/library/people/{person_id}")
     def delete_person(person_id: str, request: Request) -> dict[str, bool]:

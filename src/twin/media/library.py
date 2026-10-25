@@ -142,6 +142,14 @@ CREATE TABLE IF NOT EXISTS attributions (
     suggest TEXT,
     PRIMARY KEY (recording_id, transcript_id, speaker_id)
 );
+-- Two voice samples of different people that sound alike (``Team.voice_clashes``) and an administrator said are both
+-- right: the pair is not shown again. Kept by sample, so a new sample of either person that clashes is shown.
+CREATE TABLE IF NOT EXISTS sample_apart (
+    sample_id INTEGER NOT NULL,
+    other_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (sample_id, other_id)
+);
 -- Two people who may be one, for an administrator to merge or keep apart (``media.merge``).
 CREATE TABLE IF NOT EXISTS similar_people (
     person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,

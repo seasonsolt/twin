@@ -1931,6 +1931,35 @@ const handlers: Record<string, Handler> = {
     unsettled: 2,
   }),
   'GET /api/library/people': reply({ items: people, matches: [] }),
+  // A sample of 许清禾's sounds like 林舟: the team page offers the administrator to hear the two side by side.
+  'GET /api/library/voice-clashes': reply([
+    {
+      score: 0.91,
+      together: true,
+      samples: [
+        {
+          id: 1,
+          person_id: 'u-linzhou',
+          name: '林舟',
+          recording_id: 'r-weekly',
+          filename: '2026-10-15 产品周会.m4a',
+          speaker_id: 'S1',
+          seconds: 1260,
+          unlike_own: false,
+        },
+        {
+          id: 2,
+          person_id: 'u-qinghe',
+          name: '许清禾',
+          recording_id: 'r-review',
+          filename: '2026-10-12 需求评审.mp4',
+          speaker_id: 'S2',
+          seconds: 540,
+          unlike_own: true,
+        },
+      ],
+    },
+  ]),
   // 需求评审 was transcribed by an older service: the library offers to collect it again.
   'GET /api/library/recollect': reply({
     service: '1.4.1/overlap',

@@ -361,6 +361,10 @@ const pages: {
       await page.route('**/api/library/people', (route) =>
         route.fulfill({ json: { items: [] } }),
       );
+      // Nobody heard yet: no voice samples to sound alike.
+      await page.route('**/api/library/voice-clashes', (route) =>
+        route.fulfill({ json: [] }),
+      );
       // The side bar asks for the queue a page at a time (with a query): nothing waits there either.
       await page.route(/\/api\/library\/review(\?.*)?$/, (route) =>
         route.fulfill({
@@ -560,6 +564,24 @@ test('transcript claim', async ({ page }, info) => {
   await expect(page).toHaveScreenshot(
     `transcript-claim-${info.project.name}.png`,
   );
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
+test('hear two people whose voice samples sound alike', async ({
+  page,
+}, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/team');
+  await page.getByRole('button', { name: '核对', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '核对声线' });
+  await expect(dialog.getByText('更像对方')).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`voice-clashes-${info.project.name}.png`);
   expect(errors, 'page errors').toEqual([]);
   expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
 });

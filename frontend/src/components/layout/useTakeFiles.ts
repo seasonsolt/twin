@@ -4,7 +4,7 @@ import { isTranscript } from '../../features/library/ImportTranscript';
 import { useUploadStore } from '../../stores/uploads';
 
 /**
- * What the side bar's button and a drop anywhere do with the files they are given: recordings join the app's uploads,
+ * What a drop anywhere does with the files it is given: recordings join the app's uploads,
  * a transcript goes to the library, whose page looks at it before it is brought in.
  */
 export function useTakeFiles() {

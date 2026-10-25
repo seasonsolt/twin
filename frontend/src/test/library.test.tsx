@@ -478,8 +478,10 @@ it('takes files from the picker and dropped on the page, with the upload button 
   await screen.findByText('还没有录音');
   // Any file can be picked (some Windows machines grey .m4a out of a filtered picker); the page skips what is not media.
   expect(screen.getByLabelText('选择录音文件')).not.toHaveAttribute('accept');
-  // The side bar uploads; the page has no second button for it.
-  expect(screen.queryByRole('button', { name: '上传录音' })).toBeNull();
+  // Uploading is this page's: its button opens the picker, on a wide screen as on a phone.
+  const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
+  await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
+  expect(click).toHaveBeenCalledOnce();
   fireEvent.drop(screen.getByRole('region', { name: '拖放上传录音' }), {
     dataTransfer: {
       files: [new File(['abc'], '拖入.m4a', { type: 'audio/mp4' })],
@@ -618,7 +620,7 @@ it('offers recordings a newer transcription would collect again, and goes back t
   );
 });
 
-it('keeps an upload button on a phone, where there is no side bar', async () => {
+it('keeps the upload button on a phone', async () => {
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({

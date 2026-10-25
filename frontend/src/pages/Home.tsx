@@ -168,7 +168,7 @@ function TeamPage() {
               <Heading level={1} size="display">
                 团队
               </Heading>
-              {/* The side bar has the button; a phone has no side bar. */}
+              {/* On a desktop the library has the button and files dropped anywhere are taken; a phone keeps it here. */}
               {mobile && (
                 <Button onClick={() => input.current?.click()}>
                   <Upload aria-hidden className="size-5" />

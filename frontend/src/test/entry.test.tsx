@@ -118,7 +118,6 @@ it('lets an administrator in at the team, with every place to work in', async ()
   expect(await entries()).toEqual(['团队', '对话', '录音库', '待处理', '承诺']);
   expect(window.location.hash).toBe('#/team');
   expect(screen.getByRole('button', { name: '问一句、找人' })).toBeVisible();
-  expect(screen.getByRole('button', { name: '上传会议录音' })).toBeVisible();
 });
 
 it('lets the person behind a twin in at the team, with the same places', async () => {

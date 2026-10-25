@@ -9,15 +9,12 @@ import {
   MessageCircleQuestion,
   Mic,
   Settings2,
-  Upload,
   Users,
 } from 'lucide-react';
 import { failing, useSystem } from '../../stores/system';
 import { useOpenSystem } from '../../features/admin/SystemDialog';
 import {
   AccountMenu,
-  Button,
-  FileInput,
   NavPill,
   SearchButton,
   StatusCard,
@@ -34,7 +31,6 @@ import { AWAY_CHANGED } from '../../features/away/useAway';
 import { useUploads } from '../../features/library/useUploads';
 import { memberCount, waitingCount } from '../../features/library/teamCounts';
 import { FindPerson } from './FindPerson';
-import { useTakeFiles } from './useTakeFiles';
 import {
   accountLabel,
   featureOn,
@@ -100,7 +96,7 @@ export function BottomTabs() {
   );
 }
 
-/** The side bar: whose space it is, finding someone, uploading, the places to work in and how much waits there,
+/** The side bar: whose space it is, finding someone, the places to work in and how much waits there,
  * and what runs in the background. A guest, who may only talk to the twins, has the conversation alone. */
 export function Sidebar() {
   const refreshPersonas = usePersonas((state) => state.refresh);
@@ -110,7 +106,6 @@ export function Sidebar() {
   const teamName = useTeamName();
   const location = useLocation();
   const [finding, setFinding] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
   const library = useTeam((state) => state.library);
   const people = useTeam((state) => state.people);
   const review = useTeam((state) => state.review);
@@ -118,7 +113,6 @@ export function Sidebar() {
   const { unfinished } = useUploads(
     () => void useTeam.getState().refresh(true),
   );
-  const take = useTakeFiles();
   useEffect(() => {
     const load = () => void refreshPersonas().catch(() => {});
     load();
@@ -220,16 +214,6 @@ export function Sidebar() {
             shortcut="⌘K"
             onClick={() => setFinding(true)}
           />
-          <Button
-            variant={location.pathname === '/chat' ? 'secondary' : 'primary'}
-            size="lg"
-            className="w-full"
-            onClick={() => input.current?.click()}
-          >
-            <Upload aria-hidden className="size-5" />
-            上传会议录音
-          </Button>
-          <FileInput ref={input} label="选择录音文件" multiple onFiles={take} />
           <FindPerson open={finding} onOpenChange={setFinding} />
         </>
       )}

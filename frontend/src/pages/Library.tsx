@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Upload } from 'lucide-react';
 import {
   ActionMenu,
   AvatarStack,
@@ -28,7 +29,6 @@ import {
   type Tone,
 } from '../components/ui';
 import { api } from '../lib/api';
-import { useMobile } from '../lib/useMobile';
 import { useTeam } from '../stores/team';
 import { useUploadStore } from '../stores/uploads';
 import { usePolling } from '../lib/usePolling';
@@ -325,7 +325,6 @@ export function Library() {
     await load();
   };
 
-  const mobile = useMobile();
   const [search, setSearch] = useState('');
   const recordings = library?.recordings ?? [];
   const recollectingIds = new Set(recollecting.map((r) => r.id));
@@ -376,9 +375,11 @@ export function Library() {
                   : []),
               ]}
             />
-            {mobile && (
-              <Button onClick={() => input.current?.click()}>上传录音</Button>
-            )}
+            {/* Uploading lives here, with the recordings; dropping a file anywhere still adds it. */}
+            <Button onClick={() => input.current?.click()}>
+              <Upload aria-hidden className="size-5" />
+              上传录音
+            </Button>
           </>
         }
       >

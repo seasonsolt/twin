@@ -7,7 +7,7 @@ const carriesFiles = (event: DragEvent) =>
   !!event.dataTransfer?.types.includes('Files');
 
 /**
- * Recordings can be dropped anywhere on the page: they join the app's uploads, the same ones the side bar's button
+ * Recordings can be dropped anywhere on the page: they join the app's uploads, the same ones the library's button
  * starts. A drop area of a page that takes the files itself (it calls ``preventDefault``) keeps them, and the
  * overlay steps aside there.
  */

@@ -151,7 +151,7 @@ it.each([768, 1024, 1280, 1440])(
     const nav = await screen.findByRole('navigation', { name: '主导航' });
     expect(within(nav).getAllByRole('link')).toHaveLength(5);
     expect(view.container.querySelector('.nav-sidebar')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '上传会议录音' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '问一句、找人' })).toBeVisible();
     expect(
       screen.queryByRole('button', { name: /收起侧栏|展开侧栏/ }),
     ).not.toBeInTheDocument();

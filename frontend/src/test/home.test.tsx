@@ -273,7 +273,7 @@ it('shows the team and the way to upload more, with what waits left to the inbox
   ];
   show();
   expect(await screen.findByRole('heading', { name: '团队' })).toBeVisible();
-  // Uploading is the side bar's button, said once.
+  // Uploading is the library's button; the team page has none on a wide screen.
   expect(screen.queryByRole('button', { name: '上传会议录音' })).toBeNull();
   // The people come first; what waits for the owner is the inbox's, not a tab of this page.
   const people_ = await screen.findByRole('tabpanel');

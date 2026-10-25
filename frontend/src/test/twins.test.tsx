@@ -223,9 +223,10 @@ it('keeps the side bar about the team, and switches among many twins from the ch
   expect(
     within(aside).getByRole('button', { name: '问一句、找人' }),
   ).toBeVisible();
+  // Uploading is the library's, not on every page.
   expect(
-    within(aside).getByRole('button', { name: '上传会议录音' }),
-  ).toBeVisible();
+    within(aside).queryByRole('button', { name: /上传/u }),
+  ).not.toBeInTheDocument();
   expect(within(aside).getByRole('button', { name: '账户' })).toHaveTextContent(
     account.email,
   );

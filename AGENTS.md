@@ -68,5 +68,10 @@
 ## 开发约定
 
 - 检查：改动过程中和提交前运行 `uv run python scripts/check.py`，只跑受影响的测试（pytest-testmon 按代码改动挑选；改了前端时才跑前端检查和构建）。只有改了界面（`frontend/src`）或用户能感知的业务流程时，提交前再跑一次 `uv run python scripts/check.py --full`（含关键页面截图对比，需要 Docker）；只改评测、文档、算力包、脚本或测试时，增量检查通过即可提交，全量交给 CI。改了前端时一起提交 `src/twin/web/static`。
+- **测试流程（本机由很多工作区和会话共用，按这套来）**：
+  - 测试和构建只走 `check.py`，不要直接跑 `pytest -n auto`、整套 vitest 或 `pnpm build`。调试时只跑那一个测试文件。
+  - 排队和限流：测试、构建、截图每步占本机一个名额（默认 2 个，`TWIN_CHECK_SLOTS`），满了排队；每步最多“核数 ÷ 名额”个进程（`TWIN_CHECK_WORKERS`），低优先级运行。直接跑 vitest 默认也只用一半核。
+  - 不重复做：前端源码和构建产物都没变时跳过构建；前端类型检查、lint 带缓存。
+  - **编解码测试不在本机跑**：会调用真实 ffmpeg/ffprobe 的测试必须标 `@pytest.mark.codec`。`check.py` 在本机跳过它们，交给 y15（`TWIN_CODEC_HOST`，设为空则在本机跑）：`--full` 跑全部；增量检查只跑改动影响到的，同样的代码在 y15 通过过就不再跑；连不上 y15 时增量检查只提示，`--full` 判失败。本机跑 `check.py` 时，没标 `codec` 的测试一旦调用 ffmpeg/ffprobe 就会失败并提示加标记。能用假数据测清楚的流程不要调用真编解码；同步到 y15 的只有 git 不忽略的代码，不含 `frontend/`、`data/`、`.env`、`twin.toml`。CI 照常全跑。
 - 密钥只放在环境变量或 `.env` 里，配置文件只写变量名。`twin.toml`、`.env`、`data/` 不入 git。
 - 不要提交密钥、本机路径、个人资料或会议内容。

@@ -70,6 +70,7 @@ def finish(client: TestClient, data: bytes, name: str = "录音.wav") -> dict[st
     return dict(response.json())
 
 
+@pytest.mark.codec
 def test_chunk_resume_finish_limits_and_csrf(client: TestClient, tmp_path: Path) -> None:
     data = wav_bytes()
     uid = create(client, data)
@@ -133,6 +134,7 @@ def test_cleanup_and_disk_resume(client: TestClient, tmp_path: Path) -> None:
     assert uploads.load(response.json()["id"])["size"] == MAX_MEDIA_SIZE
 
 
+@pytest.mark.codec
 def test_a_slow_chunk_does_not_hold_up_other_uploads(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     slow, other = create(client, b"x" * 4), create(client, b"y" * 4)
     started, release = threading.Event(), threading.Event()
@@ -163,6 +165,7 @@ def test_a_slow_chunk_does_not_hold_up_other_uploads(client: TestClient, monkeyp
     assert client.get(f"/api/uploads/{slow}", headers=HEADERS).json()["offset"] == 4
 
 
+@pytest.mark.codec
 def test_dedupe_retry_transcript_and_delete(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -237,6 +240,7 @@ def test_command_progress_from_stderr(tmp_path: Path) -> None:
     assert 25 in progress and 50 in progress and progress == sorted(progress)
 
 
+@pytest.mark.codec
 def test_http_silence_chunks_and_offsets(tmp_path: Path) -> None:
     audio = tmp_path / "tone.wav"
     with wave.open(str(audio), "wb") as wav:
@@ -265,6 +269,7 @@ def test_http_silence_chunks_and_offsets(tmp_path: Path) -> None:
     assert silence_chunks(audio, 60)[-1][1] == 60  # hard cut when no later silence
 
 
+@pytest.mark.codec
 def test_http_ingestion_requires_confirmation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     class Recognizer:
         name, identity, capabilities = "fake", "fake", ASRCapabilities()
@@ -310,6 +315,7 @@ def test_transcript_paragraphs_and_timestamps() -> None:
         transcript_text("空.wav", 1, None, [])
 
 
+@pytest.mark.codec
 def test_single_media_worker_and_job_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = JobManager(4, describe_error)
     settings = Settings(db_path=tmp_path / "twin.db", asr=ASRSettings(provider="command", command="unused"))
@@ -355,6 +361,7 @@ def test_no_asr_still_saved_without_ffmpeg(client: TestClient, monkeypatch: pyte
     assert client.get("/api/persona/sources").json()["items"][0]["status"] == "needs_asr"
 
 
+@pytest.mark.codec
 def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     started, release = threading.Event(), threading.Event()
     calls = 0
@@ -386,6 +393,7 @@ def test_deleted_job_cannot_overwrite_reuploaded_source(client: TestClient, monk
 
 
 @pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.codec
 def test_transcript_is_proofread_before_speakers_are_claimed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
 ) -> None:
@@ -480,6 +488,7 @@ def test_sweep_removes_abandoned_uploads_and_orphan_parts(tmp_path: Path) -> Non
     assert Uploads(tmp_path / "none").sweep() == 0
 
 
+@pytest.mark.codec
 def test_audio_decodes_again_from_the_original(tmp_path: Path) -> None:
     from twin.media.ingest import readable_wav
 

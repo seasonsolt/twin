@@ -6,8 +6,8 @@
   "packageManager": "pnpm@10.32.1",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint . && prettier --check .",
+    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc.tsbuildinfo",
+    "lint": "eslint --cache --cache-location node_modules/.cache/eslint/ . && prettier --check --cache .",
     "test": "vitest run",
     "build": "vite build",
     "screenshots": "../scripts/screenshots.sh",

@@ -64,6 +64,7 @@ def meeting(library: Library, seconds: int = 60) -> str:
     return recording_id
 
 
+@pytest.mark.codec
 def test_a_whole_denoised_copy_is_what_people_hear(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     first, second = meeting(library), meeting(library)
@@ -85,6 +86,7 @@ def test_a_whole_denoised_copy_is_what_people_hear(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("service", [Quieter(seconds=30), Quieter(fail=True)])
+@pytest.mark.codec
 def test_a_copy_that_cannot_be_made_whole_is_noted_and_tried_later(tmp_path: Path, service: Quieter) -> None:
     library = Library(tmp_path / "library" / "team")
     recording_id = meeting(library)
@@ -101,6 +103,7 @@ def test_a_copy_that_cannot_be_made_whole_is_noted_and_tried_later(tmp_path: Pat
     assert [r.id for r in denoise.waiting(library)] == [recording_id]
 
 
+@pytest.mark.codec
 def test_the_library_denoises_when_idle_and_plays_the_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     library = Library(tmp_path / "library" / "team")
     recording_id = meeting(library)
@@ -119,6 +122,7 @@ def test_the_library_denoises_when_idle_and_plays_the_copy(tmp_path: Path, monke
         assert set(frames(original.content)) == {0} and set(frames(heard.content)) != {0}
 
 
+@pytest.mark.codec
 def test_a_service_that_cannot_denoise_is_not_asked_to(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     library = Library(tmp_path / "library" / "team")
     recording_id = meeting(library)

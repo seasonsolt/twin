@@ -29,5 +29,7 @@ export default defineConfig({
     restoreMocks: true,
     // Room for the longer waits in src/test/setup.ts, several of which a test may make in a row.
     testTimeout: 20000,
+    // Half the cores on a shared machine (scripts/check.py passes its own share); CI keeps all of its own.
+    maxWorkers: process.env.CI ? undefined : '50%',
   },
 });

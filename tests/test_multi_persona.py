@@ -379,6 +379,7 @@ def test_builds_share_capacity_without_sharing_status() -> None:
         b.close()
 
 
+@pytest.mark.codec
 def test_uploads_and_ingestion_jobs_keep_their_persona(web: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     release, started = threading.Event(), threading.Event()
     a, b = create(web, "甲"), create(web, "乙")

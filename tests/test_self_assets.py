@@ -263,6 +263,7 @@ def test_upload_copy_uses_bounded_chunks_and_stops_at_limit() -> None:
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
+@pytest.mark.codec
 def test_voice_processing_short_rejection_trim_reference_and_reset(tmp_path: Path) -> None:
     voice_dir = tmp_path / "voices"
     with client(tmp_path, tts=TTSSettings(voice_dir=voice_dir)) as web:
@@ -295,6 +296,7 @@ def test_voice_processing_short_rejection_trim_reference_and_reset(tmp_path: Pat
         assert not list((tmp_path / "assets").glob("*.upload"))
 
 
+@pytest.mark.codec
 def test_voice_validation_and_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("twin.web.assets.VOICE_LIMIT", 100)
     with client(tmp_path) as web:

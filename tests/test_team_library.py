@@ -52,6 +52,7 @@ def detail(web: TestClient, rec: str) -> Any:
     return web.get(f"/api/library/recordings/{rec}")
 
 
+@pytest.mark.codec
 def test_uploader_admin_attendee_and_everyone_else(web: TestClient, tmp_path: Path) -> None:
     library = team_of(tmp_path)
     rec, zhang = zhang_was_there(library)
@@ -89,6 +90,7 @@ def test_uploader_admin_attendee_and_everyone_else(web: TestClient, tmp_path: Pa
     assert web.delete(f"/api/library/people/{zhang}", headers=CSRF).status_code == 403
 
 
+@pytest.mark.codec
 def test_not_me_undoes_the_speaker_and_waits_for_the_uploader(web: TestClient, tmp_path: Path) -> None:
     library = team_of(tmp_path)
     rec, zhang = zhang_was_there(library)
@@ -124,6 +126,7 @@ def test_not_me_undoes_the_speaker_and_waits_for_the_uploader(web: TestClient, t
     assert all(item["id"] != "S1" for item in web.get("/api/library/review").json()["items"])
 
 
+@pytest.mark.codec
 def test_the_same_meeting_uploaded_twice_stays_the_first_uploaders(web: TestClient, tmp_path: Path) -> None:
     first = upload(as_(web, UPLOADER), wav_bytes())
     assert first.status_code == 200 and first.json()["new"] is True and first.json()["mine"] is True
@@ -221,6 +224,7 @@ def test_old_libraries_merge_into_the_teams_once(tmp_path: Path) -> None:
     assert len(team.list()) == 3 and len(Team(team).people()) == 3
 
 
+@pytest.mark.codec
 def test_people_with_the_same_twin_address_are_one(tmp_path: Path) -> None:
     root = tmp_path / "library"
     old_library(root, WANG, "2026-01-01", ["张三"], ["周会.m4a"])
@@ -347,6 +351,7 @@ def test_twins_of_old_libraries_follow_the_teams_and_are_rebuilt(web: TestClient
         assert [e.text for e in store.list_expressions() if e.is_target] == ["[00:00] 周会.m4a：我先说。"]
 
 
+@pytest.mark.codec
 def test_a_person_of_the_default_twin_can_be_deleted_once_that_empty_twin_is_deleted(
     web: TestClient, tmp_path: Path
 ) -> None:
@@ -370,6 +375,7 @@ def test_a_person_of_the_default_twin_can_be_deleted_once_that_empty_twin_is_del
     assert zhang not in {p["id"] for p in web.get("/api/library/people").json()["items"]}
 
 
+@pytest.mark.codec
 def test_a_person_whose_twin_was_deleted_can_be_deleted(web: TestClient, tmp_path: Path) -> None:
     library = team_of(tmp_path)
     _, zhang = zhang_was_there(library)

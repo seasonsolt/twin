@@ -343,6 +343,7 @@ def test_held_work_goes_on_when_the_quota_frees_up_without_anyone_looking(
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_a_retried_recording_waits_for_the_quota_before_proofreading(
     web: TestClient, tmp_path: Path, model: Model
 ) -> None:

@@ -93,6 +93,7 @@ def test_a_twin_made_by_hand_is_a_person_of_the_team_whose_twin_only_its_maker_k
     assert people(as_(web, ADMIN))["新同事"]["can_manage"] is True
 
 
+@pytest.mark.codec
 def test_a_twin_renamed_renames_the_person_made_for_it_unless_the_meetings_have_that_person(
     web: TestClient, tmp_path: Path
 ) -> None:
@@ -118,6 +119,7 @@ def test_a_twin_without_a_name_yet_is_not_a_person(web: TestClient) -> None:
     assert [p["name"] for p in web.get("/api/library/people").json()["items"]] == []
 
 
+@pytest.mark.codec
 def test_a_twin_named_like_a_person_is_joined_only_when_its_keeper_says_they_are_the_same(
     web: TestClient, tmp_path: Path
 ) -> None:
@@ -145,6 +147,7 @@ def test_a_twin_named_like_a_person_is_joined_only_when_its_keeper_says_they_are
     assert Team(team_library(tmp_path)).synced() == []  # the library still does not build it
 
 
+@pytest.mark.codec
 def test_a_twin_of_the_same_name_is_not_joined_by_someone_who_may_not_make_that_persons_twin(
     web: TestClient, tmp_path: Path
 ) -> None:
@@ -160,6 +163,7 @@ def test_a_twin_of_the_same_name_is_not_joined_by_someone_who_may_not_make_that_
     assert made.status_code == 200 and made.json()["new"] is True
 
 
+@pytest.mark.codec
 def test_a_twin_said_not_to_be_the_person_stays_a_twin_of_its_own_and_is_not_asked_about_again(
     web: TestClient, tmp_path: Path
 ) -> None:
@@ -178,6 +182,7 @@ def test_a_twin_said_not_to_be_the_person_stays_a_twin_of_its_own_and_is_not_ask
     )
 
 
+@pytest.mark.codec
 def test_each_person_shows_the_latest_meeting_among_those_the_viewer_may_see(web: TestClient, tmp_path: Path) -> None:
     zhang = heard_zhang(tmp_path)
     for cookie in (UPLOADER, ADMIN):
@@ -192,6 +197,7 @@ def test_each_person_shows_the_latest_meeting_among_those_the_viewer_may_see(web
     assert people(as_(web, OTHER))["张三"]["last_meeting"] is None
 
 
+@pytest.mark.codec
 def test_a_twin_forgotten_for_good_takes_its_person_and_its_conversations_unless_meetings_have_the_person(
     web: TestClient, tmp_path: Path
 ) -> None:

@@ -526,6 +526,7 @@ def remote():
     return module
 
 
+@pytest.mark.codec
 def test_remote_client_round_trip(script, remote, tmp_path, capfd, monkeypatch):
     class FakeEngine:
         device = "cuda"
@@ -612,6 +613,7 @@ def test_remote_client_round_trip(script, remote, tmp_path, capfd, monkeypatch):
         remote.transcribe("https://example.com", {"audio": str(audio)})
 
 
+@pytest.mark.codec
 def test_remote_command_contract(tmp_path):
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"x")
@@ -658,6 +660,7 @@ def test_a_recording_waits_for_a_restarting_service(script, remote, tmp_path, mo
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+@pytest.mark.codec
 def test_remote_uploads_wav_as_lossless_flac(script, remote, tmp_path):
     audio = tmp_path / "audio.wav"
     with wave.open(str(audio), "wb") as out:

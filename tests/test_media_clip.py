@@ -183,6 +183,7 @@ def test_invalid_font_and_excessive_text_fail_before_synthesis(
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+@pytest.mark.codec
 def test_real_ffmpeg_clip(
     font: Path,
     tmp_path: Path,
@@ -225,6 +226,7 @@ def test_real_ffmpeg_clip(
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 @pytest.mark.parametrize("has_lipsync", [False, True])
+@pytest.mark.codec
 def test_unknown_duration_and_lipsync(
     font: Path,
     tmp_path: Path,

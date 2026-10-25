@@ -295,6 +295,7 @@ def test_success_validation(dependencies: None, change: str, tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg required")
+@pytest.mark.codec
 def test_real_postprocess_metadata_and_contract(tmp_path: Path) -> None:
     raw = tmp_path / "raw.mp4"
     subprocess.run(

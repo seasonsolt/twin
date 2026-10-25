@@ -229,6 +229,7 @@ def test_an_older_service_is_asked_stretch_by_stretch_and_a_failure_waits(
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+@pytest.mark.codec
 def test_the_team_page_hears_settles_and_plays_suspect_stretches(tmp_path: Path) -> None:
     settings = Settings(db_path=tmp_path / "data" / "twin.db")
     app = create_app(settings, llm_factory=lambda: FakeLLM(lambda *_: {"items": []}), embedder_factory=HashingEmbedder)

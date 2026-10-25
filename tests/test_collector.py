@@ -52,6 +52,7 @@ SPEAKERS = [{"id": "S1", "seconds": 1, "embedding": [1.0, 0.0]}]
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_each_transcript_records_the_service_that_made_it(tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     recordings = []

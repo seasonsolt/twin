@@ -27,3 +27,4 @@ docs/paper/refs/
 
 # Playwright screenshot diffs (baselines in frontend/e2e/__screenshots__ are committed)
 frontend/e2e/.results/
+*.tsbuildinfo

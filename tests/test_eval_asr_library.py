@@ -81,6 +81,7 @@ def test_spoken_by_counts_the_target_and_only_the_others() -> None:
     assert spoken_by(reference, [(16, 18)], "A") == (0.0, 0.0)
 
 
+@pytest.mark.codec
 def test_the_library_flow_is_scored_stage_by_stage(tmp_path: Path) -> None:
     sessions = load_sessions(write_session(tmp_path))
     service = Service()
@@ -109,6 +110,7 @@ def test_the_library_flow_is_scored_stage_by_stage(tmp_path: Path) -> None:
     assert not card["gate"]["passed"]
 
 
+@pytest.mark.codec
 def test_benchmark_writes_a_private_scorecard(tmp_path: Path, monkeypatch: object) -> None:
     manifest = write_session(tmp_path)
     out = tmp_path / "out"
@@ -138,6 +140,7 @@ def test_overrides_name_known_thresholds_and_are_put_back() -> None:
     assert before == team.AUTO
 
 
+@pytest.mark.codec
 def test_the_middle_tier_waits_for_one_key_or_goes_into_the_twin(tmp_path: Path) -> None:
     sessions = load_sessions(write_session(tmp_path))
     # Not sure enough to take S1 alone, but A leads everyone else by far: the middle tier.

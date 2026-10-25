@@ -1192,6 +1192,7 @@ def test_an_answer_streamed_while_the_memory_changes_is_marked_and_not_saved(
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
+@pytest.mark.codec
 def test_speakers_can_be_heard_at_several_moments(web: TestClient, tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     rec = meeting(library)

@@ -336,6 +336,7 @@ def test_voice_window_prefers_loud_consistent_audio(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("with_reference", [False, True])
+@pytest.mark.codec
 def test_ingestion_sends_diarization_and_persona_reference(tmp_path: Path, with_reference: bool) -> None:
     payload = {
         "ok": True,
@@ -401,6 +402,7 @@ def upload(client: TestClient, data: bytes, persona: str = "default") -> dict[st
     return dict(result)
 
 
+@pytest.mark.codec
 def test_confirm_rebuild_adopt_and_persona_media_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     image = tmp_path / "face.png"
     Image.new("RGB", (800, 1000), "red").save(image)
@@ -590,6 +592,7 @@ def test_command_voiceprint_contract(tmp_path: Path) -> None:
     assert CommandTranscriber("exit 1").embed(voice) is None
 
 
+@pytest.mark.codec
 def test_saving_a_voice_rescores_recordings_without_transcribing_again(tmp_path: Path) -> None:
     calls = tmp_path / "calls.txt"
     payload = {
@@ -631,6 +634,7 @@ def test_saving_a_voice_rescores_recordings_without_transcribing_again(tmp_path:
     assert calls.read_text().split() == ["transcribe", "transcribe", "embed"]
 
 
+@pytest.mark.codec
 def test_a_sample_decoded_again_holds_up_only_its_recording(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class Transcriber:
         diarizes = True
@@ -680,6 +684,7 @@ def test_a_sample_decoded_again_holds_up_only_its_recording(tmp_path: Path, monk
 
 
 @pytest.mark.parametrize("confirmed", [False, True])
+@pytest.mark.codec
 def test_start_up_cuts_samples_before_dropping_kept_audio(tmp_path: Path, confirmed: bool) -> None:
     folder = tmp_path / "media-sources" / ("a" * 64)
     folder.mkdir(parents=True)

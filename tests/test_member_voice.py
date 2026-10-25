@@ -155,6 +155,7 @@ def open_twin(web: TestClient, persona_id: str) -> bool:
     return web.get("/api/status", headers={"X-Twin-Persona": persona_id}).json().get("memory_updating") is False
 
 
+@pytest.mark.codec
 def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(web: TestClient, tmp_path: Path) -> None:
     library = team_library(tmp_path)
     rec = meeting(library)
@@ -240,6 +241,7 @@ def test_a_colleague_hears_one_sentence_says_it_is_them_and_the_twin_is_theirs(w
     assert [p["id"] for p in as_(web, OTHER).get("/api/personas").json()] == [pid]
 
 
+@pytest.mark.codec
 def test_taking_back_clears_the_voice_and_it_is_not_offered_again(web: TestClient, tmp_path: Path) -> None:
     library = team_library(tmp_path)
     rec = meeting(library)
@@ -254,6 +256,7 @@ def test_taking_back_clears_the_voice_and_it_is_not_offered_again(web: TestClien
     assert web.get("/api/library/voice").json()["items"] == []
 
 
+@pytest.mark.codec
 def test_not_me_is_kept_to_oneself_and_the_same_meeting_is_offered_once(web: TestClient, tmp_path: Path) -> None:
     first = second = team_library(tmp_path)
     meeting(first)
@@ -278,6 +281,7 @@ def test_not_me_is_kept_to_oneself_and_the_same_meeting_is_offered_once(web: Tes
     )
 
 
+@pytest.mark.codec
 def test_a_voice_the_uploader_settled_meanwhile_is_refused(web: TestClient, tmp_path: Path) -> None:
     library = team_library(tmp_path)
     rec = meeting(library)
@@ -294,6 +298,7 @@ def test_a_voice_the_uploader_settled_meanwhile_is_refused(web: TestClient, tmp_
     assert {p.name for p in team.people()} == {"李总"} and web.get("/api/personas").json() == []
 
 
+@pytest.mark.codec
 def test_without_a_work_address_or_a_voiceprint_there_is_nothing_to_find(web: TestClient, tmp_path: Path) -> None:
     meeting(team_library(tmp_path))
     assert as_(web, NO_ADDRESS).get("/api/library/voice").status_code == 404

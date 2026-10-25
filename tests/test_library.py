@@ -108,6 +108,7 @@ def settled(client: TestClient) -> dict[str, Any]:
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_upload_transcribes_once_keeps_voiceprints_and_drops_the_upload(client: TestClient, tmp_path: Path) -> None:
     first = upload(client, wav_bytes())
     assert first.status_code == 200 and first.json()["new"] is True
@@ -133,6 +134,7 @@ def test_upload_transcribes_once_keeps_voiceprints_and_drops_the_upload(client: 
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_transcription_progress_shows_without_writing_the_library(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -168,6 +170,7 @@ def test_transcription_progress_shows_without_writing_the_library(
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp_path: Path) -> None:
     FakeTranscriber.fail = True
     upload(client, wav_bytes())
@@ -186,6 +189,7 @@ def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_a_failed_recording_says_when_its_file_wants_uploading_again(client: TestClient, tmp_path: Path) -> None:
     """Not sound that can be read: retrying the same file only fails again, so the page offers uploading it anew;
     once the upload is gone, retrying is not possible at all."""
@@ -229,6 +233,7 @@ def test_interrupted_transcription_is_queued_again(tmp_path: Path) -> None:
         ("bash -c 'kill -KILL $$'", "failed"),
     ],
 )
+@pytest.mark.codec
 def test_a_transcription_cut_off_by_a_stop_waits_again_instead_of_failing(
     tmp_path: Path, command: str, status: str
 ) -> None:
@@ -247,6 +252,7 @@ def test_a_transcription_cut_off_by_a_stop_waits_again_instead_of_failing(
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_a_stop_right_after_publishing_leaves_a_ready_recording(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -283,6 +289,7 @@ def pcm(path: Path) -> bytes:
 
 
 @needs_ffmpeg
+@pytest.mark.codec
 def test_the_audio_sent_for_transcription_is_kept_as_the_playback_copy(tmp_path: Path) -> None:
     """One FLAC is decoded: it carries the very samples the wav did (so transcripts and times stay as they were),
     goes to the service and becomes the playback copy, with nothing encoded again."""
@@ -352,6 +359,7 @@ def silent_flac(tmp_path: Path, seconds: int) -> bytes:
         (False, 10**12, 1),
     ],
 )
+@pytest.mark.codec
 def test_the_next_recording_starts_while_one_is_transcribed_when_its_audio_fits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ahead: bool, free: int, together: int
 ) -> None:

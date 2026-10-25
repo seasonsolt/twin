@@ -63,4 +63,7 @@ mypy_path = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["rewrite: run the real retrieval rewrite call instead of the test-wide stub"]
+markers = [
+    "rewrite: run the real retrieval rewrite call instead of the test-wide stub",
+    "codec: runs the real ffmpeg / ffprobe; scripts/check.py leaves these to the codec host (TWIN_CODEC_HOST, y15)",
+]

@@ -41,6 +41,7 @@ from ..persona.attachments import (
 )
 from ..persona.chat import (
     LEDGER_PREFIX,
+    Asker,
     PersonaChat,
     index_persona,
     index_stale,
@@ -220,6 +221,14 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
     }
 
 
+def chat_asker(desk: HandoffDesk, email: str | None, name: str) -> Asker | None:
+    """Who the twin is talking with: the signed-in person by name, or the person it is made for, who has taken it;
+    nobody without sign-in, where no one is known."""
+    if not email or not name:
+        return None
+    return Asker(name, person=email == desk.owner())
+
+
 def run_chat(
     settings: Settings,
     llm: LLM,
@@ -247,6 +256,7 @@ def run_chat(
             audience=audience,
             reach=handoffs[0].reach(email) if handoffs else "none",
             assistant=assistant,
+            asker=chat_asker(handoffs[0], email, handoffs[1]) if handoffs else None,
         )
         owner_said = store.owner_replies(conversation_id, email) if conversation_id else []
         # Team answers that match the question are shown as cards of their own; the twin is told so.
@@ -1292,6 +1302,8 @@ def register(
                             audience=audience,
                             reach=desk.reach(None if preview else email),
                             assistant=assistant,
+                            # 看同事会得到什么 is asked by nobody in particular.
+                            asker=None if preview else chat_asker(desk, email, asker_name),
                         )
                     )
                     # What the person answered themself in this conversation settles it; read here, from what the

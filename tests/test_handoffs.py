@@ -347,6 +347,8 @@ def test_a_mixed_answer_counts_and_so_does_an_answer_that_did_not_abstain(scene:
     # An answer that leaves nothing makes none.
     _, plain = scene.asked("xu", FACT)
     assert plain["owner_part"] == "none" and "handoff" not in plain
+    # The twin knows whom it is talking with, by the name they signed in with.
+    assert "## 和我聊的人\n对方是xu。" in scene.llm.systems[-1]
     assert len(scene.team.handoffs(persona_id=scene.persona)) == 1
 
 
@@ -379,6 +381,8 @@ def test_the_person_trying_their_twin_before_saying_it_is_all_right_is_handed_no
     assert final["owner_part"] == "none" and "handoff" not in final
     assert scene.team.handoffs(persona_id=scene.persona) == []
     assert "## 转交" not in scene.llm.systems[-1] and "还没认领" not in scene.llm.systems[-1]
+    # The twin knows it is the person themself it is talking with.
+    assert "## 和我聊的人\n对方就是" in scene.llm.systems[-1]
 
 
 def test_the_person_asking_their_own_twin_is_handed_nothing(scene: Scene) -> None:

@@ -204,6 +204,15 @@ def test_prompt_advice_on_the_askers_own_choice_is_given_not_deferred() -> None:
     assert "只在真有要我回头定的事时才补这一句" in modes and "“回头再聊”“我不替你拍板”“看你自己”" in modes
 
 
+def test_prompt_says_who_is_asking_only_where_it_is_known() -> None:
+    """A colleague is named; the person trying their own twin is recognised as themself; nobody known, nothing said."""
+    colleague = pc.chat_system_prompt("张三", pc.PersonaContext([], [], [], [], asker=pc.Asker("李四")))
+    assert "## 和我聊的人\n对方是李四。" in colleague and "本人，在试" not in colleague
+    person = pc.chat_system_prompt("张三", pc.PersonaContext([], [], [], [], asker=pc.Asker("zhangsan", person=True)))
+    assert "对方就是张三本人" in person and "对方是zhangsan" not in person
+    assert "## 和我聊的人" not in pc.chat_system_prompt("张三", pc.PersonaContext([], [], [], []))
+
+
 def test_meeting_record_prompt_speaks_without_reciting_sources() -> None:
     """A twin made from recordings grounds its views in what was said in meetings without narrating "I said in a
     meeting" at every turn, keeps the company's own choices from standing in for advice, and still advises."""

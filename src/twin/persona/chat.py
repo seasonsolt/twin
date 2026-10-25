@@ -258,6 +258,15 @@ def _space_vectors(store: PersonaStore, namespace: str, fingerprint: str | None)
     return store.get_vectors(namespace)
 
 
+@dataclass(frozen=True)
+class Asker:
+    """Who is talking with the twin, where the server knows: what they are called, and whether they are the person
+    the twin is made for, trying it."""
+
+    name: str
+    person: bool = False
+
+
 @dataclass
 class PersonaContext:
     items: list[tuple[PersonaItem, float]]
@@ -303,6 +312,8 @@ class PersonaContext:
     # Team answers (``teamanswers``) matching the question, as lines for the prompt: they are shown to the asker as
     # cards of their own, above the reply.
     team_answers: list[str] = field(default_factory=list)
+    # Who is asking (``Asker``); None where nobody is known, as for a channel, an agent or a service without sign-in.
+    asker: Asker | None = None
 
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
@@ -481,6 +492,7 @@ class PersonaChat:
         audience: Audience = COLLEAGUE,
         reach: Reach = "none",
         assistant: bool = False,
+        asker: Asker | None = None,
     ) -> None:
         """``audience``: the tier of memory the conversation answers from. A conversation of the person themself
         (``self``) may use every item; any other (``colleague``, the default, so a caller that says nothing never
@@ -491,8 +503,9 @@ class PersonaChat:
         rebuilt: every way of asking a twin goes through here. ``reach``: whom the part of an answer only the person can
         settle goes to (``Reach``); the person themself, whatever it says, is never handed anything. ``assistant``: the
         conversation is the person's own, answered by their assistant in the second person (``persona.assistant``);
-        only the self tier has one."""
+        only the self tier has one. ``asker``: who is asking, so the twin can say whom it is talking to."""
         self.audience = audience
+        self.asker = asker
         self.assistant = assistant and audience == SELF_AUDIENCE
         self.reach: Reach = "none" if audience == SELF_AUDIENCE else reach
         self.memory = gate.version(store)
@@ -772,6 +785,7 @@ class PersonaChat:
             owner_cue = bool(OWNER_CUE.search(messages[-1].content))
         ctx = self.retrieve(query, as_of, found.hints, found.alternatives, today)
         ctx.reach = self.reach
+        ctx.asker = self.asker
         ctx.owner_cue = owner_cue
         return ctx
 
@@ -1159,6 +1173,16 @@ missing（对方要的是只有我本人才答得了的答复，比如我的打�
 和对方要的截止日期（YYYY-MM-DD，没说就留空）。
 这几个字段只在元数据里，不写进正文。"""
 
+ASKER_SECTION = """
+
+## 和我聊的人
+对方是{asker}。问到对方是谁时照这个回答；除此之外不凭名字编我和他的交情或往事。"""
+
+PERSON_ASKING_SECTION = """
+
+## 和我聊的人
+对方就是{name}本人，在试和自己说话的效果。问到对方是谁时，直接说出他就是{name}本人；其余照常像{name}那样作答。"""
+
 UNCLAIMED_SECTION = """
 
 ## 这个分身还没有人认领
@@ -1226,6 +1250,10 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
         return prompt + (ASSISTANT_MEETING_SECTION if ctx.meeting_record else "") + team + _attachment_section(ctx)
     if ctx.meeting_record:
         prompt += MEETING_RECORD_SECTION
+    if ctx.asker is not None:
+        prompt += (
+            PERSON_ASKING_SECTION.format(name=name) if ctx.asker.person else ASKER_SECTION.format(asker=ctx.asker.name)
+        )
     if ctx.reach == "owner":
         prompt += HANDOFF_SECTION
     elif ctx.reach == "unclaimed":

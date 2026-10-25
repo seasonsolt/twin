@@ -21,7 +21,7 @@ from twin.config import ASRSettings, LibrarySettings, Settings
 from twin.embed import HashingEmbedder
 from twin.llm import FakeLLM
 from twin.media.ingest import CommandTranscriber, Progress, Segment, Speaker, extract_audio
-from twin.media.library import Library, TranscriptionError, TranscriptionInterrupted, owner_key
+from twin.media.library import UNREADABLE, Library, TranscriptionError, TranscriptionInterrupted, owner_key
 from twin.ops.backup import backup, restore
 from twin.ops.paths import TwinPaths
 from twin.web import create_app
@@ -173,6 +173,8 @@ def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp
     upload(client, wav_bytes())
     failed = settled(client)["recordings"][0]
     assert failed["status"] == "failed" and "private" not in failed["error"]
+    # The upload is there and could be read: retrying is the way on.
+    assert failed["retryable"] and not failed["reupload"]
     folder = tmp_path / "library" / "team" / "recordings" / failed["id"]
     assert [p.name for p in folder.iterdir()] == ["original.wav"]
     FakeTranscriber.fail = False
@@ -181,6 +183,25 @@ def test_failed_transcription_keeps_the_upload_for_retry(client: TestClient, tmp
     assert client.post(f"/api/library/recordings/{failed['id']}/retry", headers=HEADERS).status_code == 409
     assert client.delete(f"/api/library/recordings/{failed['id']}", headers=HEADERS).json() == {"deleted": True}
     assert not folder.exists() and client.get("/api/library").json()["recordings"] == []
+
+
+@needs_ffmpeg
+def test_a_failed_recording_says_when_its_file_wants_uploading_again(client: TestClient, tmp_path: Path) -> None:
+    """Not sound that can be read: retrying the same file only fails again, so the page offers uploading it anew;
+    once the upload is gone, retrying is not possible at all."""
+    assert upload(client, b"not a recording at all" * 64).status_code == 200
+    (failed,) = settled(client)["recordings"]
+    assert failed["status"] == "failed" and failed["error"] == UNREADABLE
+    assert failed["retryable"] and failed["reupload"]
+    folder = tmp_path / "library" / "team" / "recordings" / failed["id"]
+    next(folder.glob("original.*")).unlink()
+    (gone,) = client.get("/api/library").json()["recordings"]
+    assert not gone["retryable"] and gone["reupload"]
+    assert client.post(f"/api/library/recordings/{failed['id']}/retry", headers=HEADERS).status_code == 409
+    # Uploading it anew starts from the deleted one: the same file is a recording of its own again.
+    assert client.delete(f"/api/library/recordings/{failed['id']}", headers=HEADERS).json() == {"deleted": True}
+    again = upload(client, b"not a recording at all" * 64)
+    assert again.status_code == 200 and again.json()["new"] is True
 
 
 def test_interrupted_transcription_is_queued_again(tmp_path: Path) -> None:

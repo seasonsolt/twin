@@ -343,6 +343,8 @@ it("shows the single sign-on name and signs out back to twin's own sign-in page"
     await screen.findByRole('heading', { name: '登录 twin' }),
   ).toBeVisible();
   expect(loggedIn).toBe(false);
+  // Signed out on purpose: whoever signs in next starts afresh, not on the page left open.
+  expect(window.location.hash).toBe('#/login');
 });
 
 it("offers the company sign-in as a form posted on this site, beside twin's own account", async () => {
@@ -439,7 +441,7 @@ it.each([0, 1, 2])(
       id: `p-${index}`,
       name: `分身${index}`,
     }));
-    window.location.hash = '#/about';
+    window.location.hash = '#/';
     const user = userEvent.setup();
     render(<App />);
     const code = await requestCode(user);
@@ -454,7 +456,7 @@ it.each([0, 1, 2])(
 );
 
 it('makes the sign-in an address of its own: signed out leads to it, signed in leaves it for the start page', async () => {
-  window.location.hash = '#/profile';
+  window.location.hash = '#/';
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole('heading', { name: '用邮箱登录' });
@@ -483,7 +485,55 @@ it('signs out to the sign-in address and asks for it again from any page', async
     });
   });
   await screen.findByRole('heading', { name: '用邮箱登录' });
-  expect(window.location.hash).toBe('#/login');
+  // The session ran out: signing back in returns to the page in use.
+  expect(window.location.hash).toBe('#/login?next=%2Fchat');
+});
+
+it('goes back to the link someone signed out opened once signed in', async () => {
+  window.location.hash = '#/team/twin/p-first?fill=q-1';
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('heading', { name: '用邮箱登录' });
+  expect(window.location.hash).toBe(
+    '#/login?next=%2Fteam%2Ftwin%2Fp-first%3Ffill%3Dq-1',
+  );
+  const code = await requestCode(user);
+  await user.type(code, '012345');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  await waitFor(() =>
+    expect(window.location.hash).toBe('#/team/twin/p-first?fill=q-1'),
+  );
+});
+
+it('never goes back to another site after signing in', async () => {
+  window.location.hash = '#/login?next=%2F%2Fevil.example%2F';
+  const user = userEvent.setup();
+  render(<App />);
+  const code = await requestCode(user);
+  await user.type(code, '012345');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  await screen.findByRole('heading', { name: '从一段会议录音开始' });
+  expect(window.location.hash).toBe('#/team');
+});
+
+it('remembers the link across the company sign-in and goes back to it on return', async () => {
+  methods = companySignIn;
+  window.location.hash = '#/inbox';
+  const { unmount } = render(<App />);
+  const button = await screen.findByRole('button', {
+    name: '用享佳统一身份登录',
+  });
+  // jsdom does not post forms; the page records the address as the browser leaves.
+  fireEvent.submit(button.closest('form')!);
+  unmount();
+  // The company sign-in brings the browser back to the start page, signed in.
+  loggedIn = true;
+  useAuth.getState().clear();
+  window.location.hash = '#/';
+  render(<App />);
+  await waitFor(() => expect(window.location.hash).toBe('#/inbox'));
+  // Only once: a later visit to the start page stays there.
+  expect(sessionStorage.getItem('twin-return-to')).toBeNull();
 });
 
 it('clears a stale persona and selects the first owned twin rather than default', async () => {

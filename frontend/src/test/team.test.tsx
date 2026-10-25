@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, ToastViewport } from '../components/ui';
 import { Team } from '../features/library/Team';
@@ -93,10 +93,17 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 const emptyReview = { items: [], voices: [], fragments: [], unsorted: [] };
+/** Where the page went: the chat names the twin it opens on. */
+function Address() {
+  const { pathname, search } = useLocation();
+  return <output aria-label="地址">{pathname + search}</output>;
+}
+
 const teamView = (version = 0) => (
   <MemoryRouter>
     <ConfirmProvider>
       <Team version={version} recordings={[]} />
+      <Address />
     </ConfirmProvider>
   </MemoryRouter>
 );
@@ -956,7 +963,7 @@ it('lists twins made by hand and public ones in the same table, each opening its
         <Routes>
           <Route path="/team" element={<Team version={0} recordings={[]} />} />
           <Route path="/team/twin/:twinId" element={<p>分身成员页</p>} />
-          <Route path="/chat" element={<p>聊天页</p>} />
+          <Route path="/chat" element={<Address />} />
         </Routes>
       </ConfirmProvider>
     </MemoryRouter>,
@@ -973,8 +980,11 @@ it('lists twins made by hand and public ones in the same table, each opening its
   // Someone else's public twin is for talking to: no menu of things to manage.
   expect(within(row).queryByLabelText('王总的更多操作')).toBeNull();
   await userEvent.click(within(row).getByRole('button', { name: '聊天' }));
-  expect(await screen.findByText('聊天页')).toBeInTheDocument();
-  expect(switched).toEqual(['p-pub']);
+  // The chat opens on the twin itself (and switches to it), at an address that can be shared.
+  expect(await screen.findByRole('status', { name: '地址' })).toHaveTextContent(
+    '/chat?with=p-pub',
+  );
+  expect(switched).toEqual([]);
 });
 
 it('lets a twin made by hand be found by name and filtered with the rest', async () => {
@@ -1120,20 +1130,44 @@ it('lets someone talk to a public twin of a person from the table, though the tw
       throw new Error(url);
     }),
   );
-  const switched: string[] = [];
-  usePersonas.setState({
-    items: [],
-    switchTo: async (id: string) => {
-      switched.push(id);
-    },
-  });
+  usePersonas.setState({ items: [] });
   render(teamView());
   const row = (
     await screen.findByRole('link', { name: '张总的成员页' })
   ).closest('tr')!;
   expect(within(row).getByText('可以聊')).toBeVisible();
   await userEvent.click(within(row).getByRole('button', { name: '聊天' }));
-  expect(switched).toEqual(['p-pub']);
+  expect(screen.getByRole('status', { name: '地址' })).toHaveTextContent(
+    '/chat?with=p-pub',
+  );
+});
+
+it('shows a twin with nothing in it yet as waiting for a recording, to open rather than to talk to', async () => {
+  people = [person({ persona_id: 'p-1' })];
+  usePersonas.setState({
+    items: [twinOf({}), twinOf({ id: 'p-new', name: '陈一', sources: 0 })],
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const row = (
+    await screen.findByRole('link', { name: '陈一的成员页' })
+  ).closest('tr')!;
+  expect(within(row).getByText('等录音')).toBeVisible();
+  expect(within(row).queryByText('可以聊')).toBeNull();
+  // Talking to it would only get "I don't know": its page is where something to learn from is added.
+  expect(within(row).queryByRole('button', { name: '聊天' })).toBeNull();
+  expect(screen.getByRole('button', { name: '等录音 1' })).toBeVisible();
+  await userEvent.click(within(row).getByRole('button', { name: '查看' }));
+  expect(screen.getByRole('status', { name: '地址' })).toHaveTextContent(
+    '/team/twin/p-new',
+  );
 });
 
 it("lists a colleague's public twin and a twin that is one's own by voice once, as the person they belong to", async () => {

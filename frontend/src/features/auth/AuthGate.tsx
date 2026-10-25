@@ -1,20 +1,31 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Navigate, useLocation } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 import { Button, Skeleton } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
 import { usePersonas } from '../../stores/personas';
 import { Login } from './Login';
+import { local, loginPath, takeReturn } from './returnTo';
 
 /**
- * Everything behind signing in. Signed out, every address leads to ``#/login``; signed in, ``#/login`` leads to the
- * team (where a guest, who may only talk to twins, is sent on to the chat). Needs a router around it.
+ * Everything behind signing in. Signed out, every address leads to ``#/login``, which keeps the page asked for
+ * (``?next=``); signed in, ``#/login`` leads back to it, else to the team (where a guest, who may only talk to twins,
+ * is sent on to the chat). Needs a router around it.
  */
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
   const identity = useAuth((state) => state.identity);
+  const signedOut = useAuth((state) => state.signedOut);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState('');
+  // Back from the company sign-in, which returns to the start page: the page it was started from.
+  const [back, setBack] = useState('');
+  useEffect(() => {
+    if (!back) return;
+    setBack('');
+    void navigate(back, { replace: true });
+  }, [back, navigate]);
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
@@ -32,6 +43,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
     void useAuth
       .getState()
       .login(controller.signal)
+      .then(() => {
+        if (active && useAuth.getState().identity) setBack(takeReturn());
+      })
       .catch((failure: unknown) => {
         if (
           active &&
@@ -60,6 +74,20 @@ export function AuthGate({ children }: { children: ReactNode }) {
       </main>
     );
   if (!identity)
-    return pathname === '/login' ? <Login /> : <Navigate to="/login" replace />;
-  return pathname === '/login' ? <Navigate to="/team" replace /> : children;
+    return pathname === '/login' ? (
+      <Login />
+    ) : (
+      <Navigate
+        to={signedOut ? '/login' : loginPath(pathname + search)}
+        replace
+      />
+    );
+  return pathname === '/login' ? (
+    <Navigate
+      to={local(new URLSearchParams(search).get('next')) || '/team'}
+      replace
+    />
+  ) : (
+    children
+  );
 }

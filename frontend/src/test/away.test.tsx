@@ -487,6 +487,47 @@ it('answers them all at once, into each one’s own conversation, and can make t
   );
 });
 
+it('titles the card with the earliest question, then with the matter summed up by the draft for them all', async () => {
+  const user = userEvent.setup();
+  // The group as it may come: not in the order they were asked.
+  away = data({ waiting: same, groups: [['c', 'a', 'b']], pending: 3 });
+  let summed = '旧版 Word 模板这次之后还能导出吗？';
+  fetcher.mockImplementation(async (url: string) => {
+    if (url === '/api/persona/handoffs') return json(away);
+    if (url === '/api/persona/handoffs/a/draft')
+      return json({ text: '支持到 12 月底。', question: summed });
+    throw new Error(url);
+  });
+  mountAway();
+  const card = await screen.findByRole('article', { name: '同一件事' });
+  expect(
+    within(card).getByText('旧版 Word 模板导出，这次之后还支持吗？', {
+      selector: 'p',
+    }),
+  ).toBeVisible();
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  // One draft for all three, from the first asked, with the others along.
+  await waitFor(() =>
+    expect(posts()).toEqual([
+      ['/api/persona/handoffs/a/draft', { also: ['b', 'c'] }],
+    ]),
+  );
+  expect(await within(card).findByText(summed)).toBeVisible();
+  expect(
+    within(card).getByRole('textbox', { name: '以本人回复 3 人' }),
+  ).toHaveValue('支持到 12 月底。');
+  // A title the person wrote stays theirs when they draft again.
+  await user.click(within(card).getByRole('button', { name: '改问法' }));
+  const title = within(card).getByRole('textbox', { name: '归纳的问法' });
+  await user.clear(title);
+  await user.type(title, '旧模板还支持吗？{Enter}');
+  summed = '别的问法';
+  await user.click(within(card).getByRole('button', { name: '请分身起草' }));
+  await waitFor(() => expect(posts()).toHaveLength(2));
+  expect(within(card).getByText('旧模板还支持吗？')).toBeVisible();
+  expect(within(card).queryByText('别的问法')).toBeNull();
+});
+
 it('answers them all in the tier chosen, and a team answer is always for colleagues', async () => {
   const user = userEvent.setup();
   away = data({ waiting: same, groups: [['a', 'b', 'c']], pending: 3 });

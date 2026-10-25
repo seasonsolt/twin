@@ -167,6 +167,8 @@ it('shows failures with a retry and asks before deleting', async () => {
     recording({
       status: 'failed',
       error: '语音识别失败，请检查转写服务后重试',
+      retryable: true,
+      reupload: false,
     }),
   ];
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
@@ -188,10 +190,10 @@ it('shows failures with a retry and asks before deleting', async () => {
   });
   vi.stubGlobal('fetch', fetcher);
   show();
-  // One state for the row: the retry, with the reason a hover away, not a badge and a red line beside it.
+  // One state for the row: why it failed in one line, and the retry; no badge besides.
   const retry = await screen.findByRole('button', { name: '重试' });
-  expect(retry).toHaveAttribute('title', '语音识别失败，请检查转写服务后重试');
-  expect(screen.queryByText('语音识别失败，请检查转写服务后重试')).toBeNull();
+  expect(screen.getByText('语音识别失败，请检查转写服务后重试')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '重新上传' })).toBeNull();
   expect(screen.queryByText('失败')).toBeNull();
   await userEvent.click(retry);
   expect(await screen.findByText('排队')).toBeInTheDocument();
@@ -205,6 +207,76 @@ it('shows failures with a retry and asks before deleting', async () => {
     }),
   );
   expect(await screen.findByText('还没有录音')).toBeInTheDocument();
+});
+
+it('offers uploading a failed recording anew when retrying cannot work, in place of the failed one', async () => {
+  state.recordings = [
+    recording({
+      filename: '电话会议.amr',
+      status: 'failed',
+      error: '转写失败后超过 30 天，原始文件已清理，请重新上传',
+      retryable: false,
+      reupload: true,
+    }),
+    recording({
+      id: 'rec_2',
+      filename: '坏文件.wav',
+      status: 'failed',
+      error: '无法读取音频，请确认文件完整且是常见音视频格式',
+      retryable: true,
+      reupload: true,
+    }),
+  ];
+  const calls: string[] = [];
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push(`${init?.method ?? 'GET'} ${url}`);
+    if (url === '/api/library') return json(state);
+    if (
+      url.startsWith('/api/library/people') ||
+      url.startsWith('/api/library/review')
+    )
+      return json({ items: [], voices: [], fragments: [], unsorted: [] });
+    if (init?.method === 'DELETE') {
+      state.recordings = state.recordings.slice(1);
+      return json({ deleted: true });
+    }
+    if (url === '/api/library/uploads')
+      return json({ id: 'up_1', offset: 0, size: 3 });
+    if (url.startsWith('/api/library/uploads/up_1/finish'))
+      return json({ id: 'rec_new', filename: '电话会议.m4a', new: true });
+    if (url.startsWith('/api/library/uploads/up_1')) return json({ offset: 3 });
+    throw new Error(url);
+  });
+  vi.stubGlobal('fetch', fetcher);
+  show();
+  const gone = (await screen.findByText('电话会议.amr')).closest('li')!;
+  // The reason is on the row, and the way on is uploading it again: the file it would retry is gone.
+  expect(
+    within(gone).getByText('转写失败后超过 30 天，原始文件已清理，请重新上传'),
+  ).toBeVisible();
+  // Not on the row nor in its menu.
+  expect(within(gone).queryByRole('button', { name: '重试' })).toBeNull();
+  // A file that could not be read would fail the same way again: retrying is only in the menu.
+  const unreadable = screen.getByText('坏文件.wav').closest('li')!;
+  expect(
+    within(unreadable).getByRole('button', { name: '重新上传' }),
+  ).toBeVisible();
+  const menu = within(unreadable)
+    .getByLabelText('更多：坏文件.wav')
+    .closest('details')!;
+  expect(
+    within(menu).getByRole('button', { name: '重试' }),
+  ).toBeInTheDocument();
+  await userEvent.click(within(gone).getByRole('button', { name: '重新上传' }));
+  await userEvent.upload(screen.getByLabelText('选择重新上传的录音'), [
+    new File(['abc'], '电话会议.m4a'),
+  ]);
+  // The failed one goes first, so the file uploaded is a recording of its own, not that failure again.
+  await waitFor(() => expect(calls).toContain('POST /api/library/uploads'));
+  expect(calls.indexOf('DELETE /api/library/recordings/rec_1')).toBeLessThan(
+    calls.indexOf('POST /api/library/uploads'),
+  );
+  expect(screen.queryByText('电话会议.amr')).toBeNull();
 });
 
 it('says recordings wait when no diarizing transcription service is set up', async () => {
@@ -350,10 +422,8 @@ it('filters locally with counts, including proofreading in processing, and shows
     screen.getByRole('progressbar', { name: '转写.m4a转写进度' }),
   ).toHaveAttribute('aria-valuenow', '1500');
   await userEvent.click(within(group).getByRole('button', { name: '失败 1' }));
-  expect(screen.getByRole('button', { name: '重试' })).toHaveAttribute(
-    'title',
-    '识别失败',
-  );
+  expect(screen.getByRole('button', { name: '重试' })).toBeVisible();
+  expect(screen.getByText('识别失败')).toBeVisible();
   expect(vi.mocked(fetch).mock.calls).toHaveLength(calls);
 });
 

@@ -49,11 +49,14 @@ export const accountLabel = (identity: Identity) =>
 let version = 0;
 export const useAuth = create<{
   identity: Identity | null;
+  /** Signed out on purpose: the next person to sign in starts afresh, not on the page the last one had open. */
+  signedOut: boolean;
   login: (signal?: AbortSignal) => Promise<void>;
   logout: () => Promise<void>;
   clear: () => void;
 }>((set, get) => ({
   identity: null,
+  signedOut: false,
   clear() {
     ++version;
     set({ identity: null });
@@ -65,10 +68,12 @@ export const useAuth = create<{
     const identity = await api<Identity>('/api/whoami', { signal });
     if (signal?.aborted || current !== version) return;
     await usePersonas.getState().refresh();
-    if (!signal?.aborted && current === version) set({ identity });
+    if (!signal?.aborted && current === version)
+      set({ identity, signedOut: false });
   },
   async logout() {
     await api('/api/auth/logout', { method: 'POST' });
+    set({ signedOut: true });
     get().clear();
   },
 }));

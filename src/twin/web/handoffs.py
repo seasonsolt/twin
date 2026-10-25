@@ -63,6 +63,12 @@ class ReplyManyBody(BaseModel):
     team_answer: AnswerBody | None = None
 
 
+class DraftBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # The other questions of the same matter, answered with one reply (a card of several askers).
+    also: list[str] = Field(default_factory=list, max_length=GROUP_MAX)
+
+
 class MakeAnswerBody(AnswerBody):
     handoff_id: str = Field(min_length=1, max_length=100)
 
@@ -158,19 +164,21 @@ def register(
         return settled(h, me, remembered=kept(body))
 
     @app.post("/api/persona/handoffs/{handoff_id}/draft")
-    def draft(handoff_id: str, request: Request) -> dict[str, str]:
-        """请分身起草: words for the person to change and send; nothing is sent or kept."""
+    def draft(handoff_id: str, request: Request, body: DraftBody | None = None) -> dict[str, str]:
+        """请分身起草: words for the person to change and send; nothing is sent or kept. With ``also`` (the rest of a
+        card of several askers), one reply for all of them, and their question summed up (``question``) for the card's
+        title."""
         me = person(request)
         team_ready()
         llm, embedder = backends.chat_llm(), backends.embedder()
         try:
-            text = desk.draft(handoff_id, me, llm, embedder, settings)
+            drafted = desk.draft(handoff_id, me, llm, embedder, settings, body.also if body else ())
         except (KeyError, HandoffRefused) as e:
             raise refused(e) from e
         except LLMError:
             # What a model backend says can hold prompts or addresses: not passed on.
             raise HTTPException(502, "分身暂时无法起草，请重试") from None
-        return {"text": text}
+        return {"text": drafted.text, **({"question": drafted.question} if drafted.question else {})}
 
     @app.post("/api/persona/handoffs/{handoff_id}/accept")
     def accept(handoff_id: str, request: Request, body: AcceptBody | None = None) -> dict[str, Any]:

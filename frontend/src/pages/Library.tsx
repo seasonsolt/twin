@@ -68,6 +68,10 @@ export interface Recording {
   can_edit?: boolean;
   // The transcript before it was last transcribed again, to go back to.
   previous?: string | null;
+  // A failed one: whether it can be retried (its upload is there), and whether its file wants uploading again (it
+  // is gone, or not sound that can be read, which a retry would only fail on again).
+  retryable?: boolean;
+  reupload?: boolean;
 }
 /** Recordings the current transcription service would transcribe anew (``Library.recollectable``). */
 interface Recollection {
@@ -167,6 +171,9 @@ export function Library() {
   const confirm = useConfirm();
   const input = useRef<HTMLInputElement>(null);
   const transcriptInput = useRef<HTMLInputElement>(null);
+  // 重新上传: the failed recording the file chosen next takes the place of.
+  const reuploadInput = useRef<HTMLInputElement>(null);
+  const [replacing, setReplacing] = useState<Recording | null>(null);
   // Transcripts chosen or dropped, brought in one at a time.
   const [transcripts, setTranscripts] = useState<File[]>([]);
   // Transcripts picked or dropped elsewhere in the app come here to be looked at.
@@ -234,6 +241,21 @@ export function Library() {
       setProblem(failure instanceof Error ? failure.message : '重试失败');
     }
     await load();
+  };
+  // The failed one goes first: the same file uploaded while it is there would only be that failed recording again.
+  const reupload = async (recording: Recording, files: File[]) => {
+    setReplacing(null);
+    if (!files.length) return;
+    setProblem('');
+    try {
+      await api(`/api/library/recordings/${recording.id}`, {
+        method: 'DELETE',
+      });
+    } catch (failure) {
+      setProblem(failure instanceof Error ? failure.message : '重新上传失败');
+      return;
+    }
+    take(files);
   };
   const recollect = async (ids: string[]) => {
     setProblem('');
@@ -361,6 +383,11 @@ export function Library() {
         }
       >
         <FileInput ref={input} label="选择录音文件" multiple onFiles={take} />
+        <FileInput
+          ref={reuploadInput}
+          label="选择重新上传的录音"
+          onFiles={(files) => replacing && void reupload(replacing, files)}
+        />
         <FileInput
           ref={transcriptInput}
           label="选择转写稿"
@@ -491,16 +518,28 @@ export function Library() {
                                 都认出来了
                               </Text>
                             )}
-                          {failed && editable && (
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              title={recording.error || undefined}
-                              onClick={() => void retry(recording)}
-                            >
-                              重试
-                            </Button>
-                          )}
+                          {failed &&
+                            editable &&
+                            (recording.reupload ? (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                  setReplacing(recording);
+                                  reuploadInput.current?.click();
+                                }}
+                              >
+                                重新上传
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void retry(recording)}
+                              >
+                                重试
+                              </Button>
+                            ))}
                           {ready && recording.unsettled > 0 && editable && (
                             <RouteButton
                               size="sm"
@@ -513,6 +552,17 @@ export function Library() {
                             <ActionMenu
                               label={`更多：${recording.filename}`}
                               items={[
+                                // Unlikely to work, but the upload is there: still possible, out of the way.
+                                ...(failed &&
+                                recording.reupload &&
+                                recording.retryable
+                                  ? [
+                                      {
+                                        label: '重试',
+                                        onSelect: () => void retry(recording),
+                                      },
+                                    ]
+                                  : []),
                                 ...(offered.some((r) => r.id === recording.id)
                                   ? [
                                       {
@@ -555,8 +605,14 @@ export function Library() {
                           max={recording.duration_s ?? 100}
                         />
                       )}
-                      {recording.error && !(failed && editable) && (
-                        <Text size="sm" tone="danger">
+                      {recording.error && (
+                        // Why it failed, in one line, beside what to do about it.
+                        <Text
+                          size="sm"
+                          tone="danger"
+                          truncate
+                          title={recording.error}
+                        >
                           {recording.error}
                         </Text>
                       )}

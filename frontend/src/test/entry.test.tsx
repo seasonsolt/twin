@@ -110,6 +110,8 @@ const entries = async () => {
 };
 
 it('lets an administrator in at the team, with every place to work in', async () => {
+  // A fresh visit, not a link to a page: signing in starts at the team.
+  window.location.hash = '#/';
   whoami = { email: 'admin@example.test', admin: true, auth_enabled: true };
   items = [twin({ can_manage: false, name: '朋友' })];
   await signIn();
@@ -120,6 +122,8 @@ it('lets an administrator in at the team, with every place to work in', async ()
 });
 
 it('lets the person behind a twin in at the team, with the same places', async () => {
+  // A fresh visit, not a link to a page: signing in starts at the team.
+  window.location.hash = '#/';
   whoami = { email: 'me@example.test', admin: false, auth_enabled: true };
   items = [
     twin({

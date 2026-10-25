@@ -108,6 +108,12 @@ function Answer({
             已转给{target.name}本人 · {target.handoff.status_label}
           </Text>
         )}
+        {target.state === 'needs_owner' && target.ask && (
+          // What 转给本人 hands over, before it is pressed.
+          <Text size="sm" tone="secondary" truncate title={target.ask}>
+            会问{target.name}本人：{target.ask}
+          </Text>
+        )}
         {target.state === 'needs_owner' && (
           <Row gap={2} wrap>
             <Button size="sm" disabled={busy} onClick={onForward}>

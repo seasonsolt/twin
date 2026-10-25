@@ -47,21 +47,31 @@ export function Merged({
   onDone: () => Promise<void>;
 }) {
   const me = useStatus((state) => state.data?.target_name) ?? '我';
-  const [title, setTitle] = useState(items[0].question.slice(0, 80));
+  // Who asked first, then on: the title starts as the first question, until the draft sums them all up.
+  const asked = [...items].sort((a, b) =>
+    a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
+  );
+  const [first] = asked;
+  const [title, setTitle] = useState(first.question.slice(0, 80));
   const [renaming, setRenaming] = useState(false);
+  // A title the person wrote is theirs: a draft's summing up does not take its place.
+  const [named, setNamed] = useState(false);
   const [team, setTeam] = useState(false);
   const [tier, setTier] = useState<ReplyTier>('colleague');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const { text, edit, clear, drafting, draft, replaced, restore } =
     useReplyDraft(
-      `/api/persona/handoffs/${encodeURIComponent(items[0].id)}/draft`,
+      `/api/persona/handoffs/${encodeURIComponent(first.id)}/draft`,
       setError,
+      {
+        also: asked.slice(1).map((item) => item.id),
+        onQuestion: (question) => {
+          if (!named) setTitle(question.slice(0, 80));
+        },
+      },
     );
-  const earliest = items.reduce(
-    (first, item) => (item.created_at < first ? item.created_at : first),
-    items[0].created_at,
-  );
+  const earliest = first.created_at;
   const send = async () => {
     setBusy(true);
     setError('');
@@ -130,7 +140,10 @@ export function Merged({
               value={title}
               maxLength={80}
               autoFocus
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                setNamed(true);
+              }}
               onBlur={() => setRenaming(false)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') setRenaming(false);
@@ -148,7 +161,7 @@ export function Merged({
           )}
         </Row>
         <Stack as="ul" gap={0}>
-          {items.map((item) => (
+          {asked.map((item) => (
             <ListRow
               key={item.id}
               variant="plain"
@@ -199,7 +212,7 @@ export function Merged({
                 id: 'preview',
                 persona_id: '',
                 owner_name: me,
-                title: title.trim() || items[0].question,
+                title: title.trim() || first.question,
                 body: text.trim(),
                 confirmed_at: new Date().toISOString(),
                 status: 'valid',

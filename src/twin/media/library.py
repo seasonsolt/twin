@@ -303,6 +303,10 @@ def matches(transcript: Transcript, segments: list[Segment]) -> bool:
     )
 
 
+# Why a recording failed when its file is not sound that can be read: the same file fails the same way again.
+UNREADABLE = "无法读取音频，请确认文件完整且是常见音视频格式"
+
+
 class TranscriptionError(Exception):
     """A recording could not be transcribed; the message is shown to the owner as is."""
 
@@ -634,6 +638,15 @@ class Library:
             self.update(recording_id, status="queued", error="", transcribed_s=0)
             return self.get(recording_id)
 
+    def retryable(self, recording: Recording) -> bool:
+        """Whether ``retry`` can queue a failed recording again: its upload is still there."""
+        return recording.status == "failed" and self.original(recording.id) is not None
+
+    def reupload(self, recording: Recording) -> bool:
+        """Whether a failed recording wants its file uploaded again: the upload is gone, or it is not sound that
+        can be read, which a retry of the same file would only fail on again."""
+        return recording.status == "failed" and (recording.error == UNREADABLE or not self.retryable(recording))
+
     def expire_failed(self, days: int) -> int:
         """Delete the original of every recording that has been failed for ``days`` days (0: never), which a retry
         would need; the recording stays, saying why it cannot be retried, and each deletion is logged. Only an
@@ -879,7 +892,7 @@ class Library:
             try:
                 duration, creation = extract_flac(original, audio)
             except (subprocess.SubprocessError, OSError, ValueError, KeyError, IndexError) as exc:
-                raise TranscriptionError("无法读取音频，请确认文件完整且是常见音视频格式") from exc
+                raise TranscriptionError(UNREADABLE) from exc
             self.update(recording_id, duration_s=duration, creation_time=creation)
             transcriber.diarize, transcriber.reference, transcriber.references = True, None, {}
             try:

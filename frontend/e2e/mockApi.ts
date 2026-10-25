@@ -230,6 +230,8 @@ const recordings = [
     kind: 'audio',
     status: 'failed',
     error: '无法读取音频，请换一种格式再试',
+    retryable: true,
+    reupload: true,
     duration_s: null,
     transcribed_s: 0,
     speakers: 0,

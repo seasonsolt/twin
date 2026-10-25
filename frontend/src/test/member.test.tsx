@@ -514,7 +514,8 @@ it('shows a colleague someone else’s public twin as its name and the way to ta
   await userEvent
     .setup()
     .click(screen.getByRole('button', { name: '和朋友聊天' }));
-  await waitFor(() => expect(window.location.hash).toBe('#/chat'));
+  // The chat opens on this twin, not on all conversations.
+  await waitFor(() => expect(window.location.hash).toBe('#/chat?with=friend'));
 });
 
 it('lets the person themselves see what the twin could not answer, counted on the tab and on the account', async () => {

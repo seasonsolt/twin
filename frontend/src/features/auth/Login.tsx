@@ -16,6 +16,7 @@ import {
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
 import { THEMES, useTheme } from '../../stores/theme';
+import { local, rememberReturn } from './returnTo';
 
 /** The ways the server signs people in (GET /api/auth/methods). */
 export interface LoginMethods {
@@ -27,13 +28,19 @@ export interface LoginMethods {
   email: boolean;
 }
 
-/** Paths on this site only: never send the browser, or a form, to another origin. */
-const local = (path: string | null | undefined) =>
-  path && path.startsWith('/') && !path.startsWith('//') ? path : '';
+/** The page someone signed out came for (``#/login?next=…``), on this site only. */
+const cameFor = () =>
+  local(
+    new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('next'),
+  );
 
-/** Start from the team once signed in: people are found in the recordings, not set up first. */
+/**
+ * Back to the page they came for once signed in, else start from the team: people are found in the recordings, not
+ * set up first.
+ */
 async function signedIn() {
-  window.location.hash = '#/team';
+  window.location.hash = `#${cameFor() || '/team'}`;
+  rememberReturn('');
   await useAuth.getState().login();
 }
 
@@ -125,14 +132,23 @@ export function Login() {
               {sso &&
                 (start ? (
                   // The other app checks that the post comes from this site, then hands the browser to the sign-in.
-                  <form method="post" action={start}>
+                  <form
+                    method="post"
+                    action={start}
+                    onSubmit={() => rememberReturn(cameFor())}
+                  >
                     <Button type="submit" size="lg" className="min-h-12 w-full">
                       <ShieldCheck aria-hidden className="size-5" />
                       用享佳统一身份登录
                     </Button>
                   </form>
                 ) : (
-                  <LinkButton href={link} size="lg" className="min-h-12 w-full">
+                  <LinkButton
+                    href={link}
+                    size="lg"
+                    className="min-h-12 w-full"
+                    onClick={() => rememberReturn(cameFor())}
+                  >
                     <ShieldCheck aria-hidden className="size-5" />
                     用享佳统一身份登录
                   </LinkButton>

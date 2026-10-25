@@ -21,14 +21,14 @@ import {
 } from '../components/ui';
 import { api } from '../lib/api';
 import { useMobile } from '../lib/useMobile';
-import { memberPath, twinMemberPath } from '../lib/members';
+import { chatPath, memberPath, twinMemberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useIdentity } from '../features/identity/useIdentity';
 import { Away } from '../features/away/Away';
 import { LensTab } from '../features/lens/LensTab';
 import { useAway } from '../features/away/useAway';
 import { PersonFace } from '../features/library/PersonFace';
-import { TWIN_STATES, twinState } from '../features/library/Team';
+import { looseState, TWIN_STATES, twinState } from '../features/library/Team';
 import { MemberHeader } from '../features/members/MemberHeader';
 import { NoTwinMember } from '../features/members/NoTwinMember';
 import { useMemoryCount } from '../features/members/useMemoryCount';
@@ -63,7 +63,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   // Where the twin stands is said as the team table says it. A twin the page can be opened on is one that can be
   // talked to, so the kinds that are about not having one (own, elsewhere, none) say only whether it is being
   // rebuilt, as they did before.
-  const found = person ? twinState(person) : 'ready';
+  const found = person ? twinState(person) : looseState(twin);
   const standing =
     found === 'none' || found === 'own' || found === 'elsewhere'
       ? person?.updating || memoryUpdating
@@ -177,7 +177,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
             // Their own twin is their assistant, which only they have.
             label:
               twin.mine && twin.approved ? '问问我的分身' : `和${name}聊天`,
-            onClick: () => navigate('/chat'),
+            onClick: () => navigate(chatPath(twin.id)),
           }}
         />
         {awaitsApproval(twin) && (

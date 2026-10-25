@@ -103,6 +103,14 @@ it('hands a question to its twin’s person only when the asker presses the card
   const user = userEvent.setup();
   mount();
   const chen = await screen.findByRole('article', { name: '陈一的分身的回答' });
+  // What goes to the person is said on the card before it is pressed.
+  expect(within(chen).getByText('会问陈一本人：脚本排期怎么定')).toBeVisible();
+  // Nothing to hand over on an answered card.
+  expect(
+    within(
+      screen.getByRole('article', { name: '王屿的分身的回答' }),
+    ).queryByText(/会问/u),
+  ).toBeNull();
   expect(posts()).toEqual([]);
   view = asked([
     view.targets[0],
@@ -122,6 +130,7 @@ it('hands a question to its twin’s person only when the asker presses the card
     '已转给陈一本人 · 已送达',
   );
   expect(within(chen).queryByRole('button', { name: '转给本人' })).toBeNull();
+  expect(within(chen).queryByText(/会问/u)).toBeNull();
 });
 
 it('shows what the colleague wrote back as theirs, on the card', async () => {

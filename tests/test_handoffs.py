@@ -119,6 +119,9 @@ class Scripted(FakeLLM):
         if schema.__name__ == "Drafted":
             self.drafts.append((system, user))
             return {"reply": "方案周五前给你。【请你定：大文件导入这次上不上】"}
+        if schema.__name__ == "DraftedForMany":
+            self.drafts.append((system, user))
+            return {"question": "  大文件导入这次上不上？ ", "reply": "这次先不上，下个版本再说。"}
         if schema.__name__ == "Aspects":
             if self.rewrite_fails:
                 raise LLMError("rewrite is down")
@@ -872,6 +875,28 @@ def test_the_twin_drafts_a_reply_for_the_person_to_change_and_nothing_is_sent_or
     assert scene.post(made.id, "draft").status_code == 409
     scene.as_("xu")
     assert scene.web.post(f"/api/persona/handoffs/{made.id}/draft", json={}, headers=scene.headers).status_code == 403
+
+
+def test_one_draft_answers_several_askers_of_one_matter_and_sums_their_question_up(
+    scene: Scene, web: tuple[TestClient, Scripted]
+) -> None:
+    llm = web[1]
+    scene.asked("shen", DECISION)
+    scene.asked("xu", DECISION)
+    first, second = scene.team.handoffs(persona_id=scene.persona)
+    drafted = scene.post(first.id, "draft", also=[second.id])
+    assert drafted.status_code == 200, drafted.text
+    # The card's title is the matter asked once, in no one's words; the reply is one for all of them.
+    assert drafted.json() == {"text": "这次先不上，下个版本再说。", "question": "大文件导入这次上不上？"}
+    [(_, user)] = llm.drafts
+    assert "同事们问的同一件事" in user and user.count(DECISION) == 2
+    # One asker alone is drafted as before, with no title.
+    alone = scene.post(first.id, "draft")
+    assert alone.status_code == 200 and "question" not in alone.json()
+    # Only the person's own handoffs, and only those still waiting, are drafted for.
+    assert scene.post(first.id, "draft", also=["nope"]).status_code == 404
+    assert scene.reply(second.id, "不上。").status_code == 200
+    assert scene.post(first.id, "draft", also=[second.id]).status_code == 409
 
 
 def test_a_draft_draws_only_on_what_the_twin_may_tell_the_colleague(

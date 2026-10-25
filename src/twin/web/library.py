@@ -1593,6 +1593,12 @@ class Libraries:
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
                     **self.proofread_view(library, r, waiting, now),
                     "can_edit": access[r.id].edit,
+                    # A failed one: whether it can be retried, and whether its file wants uploading again.
+                    **(
+                        {"retryable": library.retryable(r), "reupload": library.reupload(r)}
+                        if r.status == "failed"
+                        else {}
+                    ),
                 }
                 for r in recordings
             ],

@@ -172,6 +172,21 @@ class Drafted(BaseModel):
     reply: str = Field(description="给提问人的回复草稿，本人的口吻，第一人称；要他定的地方写成【请你定：……】")
 
 
+class DraftedForMany(BaseModel):
+    """One draft for several colleagues who asked the same thing, and that thing asked once, as the card's title."""
+
+    question: str = Field(description="把几位同事的问题归纳成一句中性的问法，不带任何人的口吻和称呼，30 字以内")
+    reply: str = Field(description="给这几位同事的同一条回复草稿，本人的口吻，第一人称；要他定的地方写成【请你定：……】")
+
+
+@dataclass(frozen=True)
+class Draft:
+    """请分身起草's words, and for several askers (``also``) their question summed up; '' for one."""
+
+    text: str
+    question: str = ""
+
+
 @dataclass(frozen=True)
 class Away:
     """What the person's 你不在时 page shows (see ``HandoffDesk.away``)."""
@@ -538,42 +553,61 @@ class HandoffDesk:
         self._mine(handoff_id, owner)
         self.team.set_meta(f"{OFTEN_DECLINED}{handoff_id}", _now().isoformat())
 
-    def draft(self, handoff_id: str, owner: str | None, llm: LLM, embedder: Embedder, settings: Settings) -> str:
+    def draft(
+        self,
+        handoff_id: str,
+        owner: str | None,
+        llm: LLM,
+        embedder: Embedder,
+        settings: Settings,
+        also: Sequence[str] = (),
+    ) -> Draft:
         """请分身起草: the words the person might answer with, from what the twin may tell colleagues (it is sent to
-        one), for them to change and send. Nothing is sent or kept; what only they can settle is left as a gap for
-        them to fill."""
+        them), for them to change and send. Nothing is sent or kept; what only they can settle is left as a gap for
+        them to fill. ``also``: the other handoffs of the same matter (one card on the 你不在时 page), each asker's
+        question shown to the model, which answers them once and sums their question up."""
         h = self._mine(handoff_id, owner)
-        if h.status not in ("delivered", "dismissed", "expired"):
-            raise HandoffRefused(_unavailable(h.status))
+        others = [self._mine(other, owner) for other in dict.fromkeys(also) if other != h.id]
+        group = sorted([h, *others], key=lambda x: (x.created_at, x.id))
+        for each in group:
+            if each.status not in ("delivered", "dismissed", "expired"):
+                raise HandoffRefused(_unavailable(each.status))
         name = self.name()
         with PersonaStore(self.store_path()) as store:
             # The draft is sent to the colleague: it draws on what the twin may tell them (the colleague tier their
             # conversation answers from, as every handed-on one does), never on the person's own tier or ledger.
             chat = PersonaChat(store, llm, embedder, settings, audience=COLLEAGUE)
-            ctx = chat.retrieve(h.question)
+            ctx = chat.retrieve(" ".join(dict.fromkeys(x.question for x in group)))
             said = None
             if h.conversation_id is not None and h.turn is not None:
                 turn = store.conversation_turn(h.conversation_id, h.turn)
                 said = turn["content"] if turn else None
         core, voice = portrait_text(ctx.core, ctx.voice)
         lines = ["【检索资料】", material_text(ctx), ""]
-        if h.context:
-            lines.append(f"【对方上一句】{h.context}")
-        lines.append(f"【对方的问题】{h.question}")
+        if others:
+            # Each in their own words: the reply answers all of them, the question sums them up.
+            lines.append("【同事们问的同一件事】")
+            lines += [f"- {x.asker_name or '同事'}：{x.question}" for x in group]
+        else:
+            if h.context:
+                lines.append(f"【对方上一句】{h.context}")
+            lines.append(f"【对方的问题】{h.question}")
         if said:
             lines.append(f"【分身当时的回答】{said}")
-        if h.ask:
-            lines.append(f"【要他定的事】{h.ask}")
-        drafted = llm.structured(
-            system=DRAFT_SYSTEM.format(name=name, core=core, voice=voice),
-            user="\n".join(lines),
-            schema=Drafted,
-            effort=settings.effective_chat_llm.effort_twin,
-        )
-        text = drafted.reply.strip()[:REPLY_MAX_CHARS]
+        for ask in dict.fromkeys(x.ask for x in group if x.ask):
+            lines.append(f"【要他定的事】{ask}")
+        system = DRAFT_SYSTEM.format(name=name, core=core, voice=voice)
+        user, effort = "\n".join(lines), settings.effective_chat_llm.effort_twin
+        question = ""
+        if others:
+            many = llm.structured(system=system, user=user, schema=DraftedForMany, effort=effort)
+            reply, question = many.reply, summary_title(many.question)
+        else:
+            reply = llm.structured(system=system, user=user, schema=Drafted, effort=effort).reply
+        text = reply.strip()[:REPLY_MAX_CHARS]
         if not text:
             raise HandoffRefused("这次没起草出来，请自己写或再试一次")
-        return text
+        return Draft(text, question)
 
     def accept(self, handoff_id: str, owner: str | None, due: dt.date | None = None) -> Handoff:
         """Take on the commitment a handoff asks for (on a new date if ``due``); the asker is told in the

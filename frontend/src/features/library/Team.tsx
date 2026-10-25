@@ -32,7 +32,7 @@ import {
 import { PersonFace } from './PersonFace';
 import { api } from '../../lib/api';
 import { byName } from '../../lib/names';
-import { memberPath, twinMemberPath } from '../../lib/members';
+import { chatPath, memberPath, twinMemberPath } from '../../lib/members';
 import { useAuth } from '../../stores/auth';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useNewTwinCard } from '../../components/layout/NewTwin';
@@ -361,9 +361,11 @@ const retryClock = (at: string) =>
 
 /** Where a person's twin stands, as the team table's filter and status column name it. ``behind``: new recordings
  * wait while it answers from the memory it has; ``held``: the administrator switched the automatic rebuild off;
- * ``stalled``: its update stopped without completing. */
+ * ``stalled``: its update stopped without completing; ``waiting``: a twin with nothing to learn from yet (made by
+ * hand, or for someone who just signed in), which has nothing to answer with until a recording or note is added. */
 export type TwinState =
   | 'ready'
+  | 'waiting'
   | 'behind'
   | 'updating'
   | 'held'
@@ -389,6 +391,7 @@ export const twinState = (person: Person): TwinState =>
         : 'none';
 export const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
   ready: { label: '可以聊', tone: 'success' },
+  waiting: { label: '等录音', tone: 'neutral' },
   behind: { label: '有新录音', tone: 'neutral' },
   updating: { label: '整理中', tone: 'warning' },
   held: { label: '整理已暂停', tone: 'warning' },
@@ -400,6 +403,7 @@ export const TWIN_STATES: Record<TwinState, { label: string; tone: Tone }> = {
 // The filters over the table (each only while someone is in it); the two kinds managed elsewhere show under 全部.
 const TWIN_FILTERS: TwinState[] = [
   'ready',
+  'waiting',
   'behind',
   'updating',
   'held',
@@ -584,8 +588,12 @@ function personRow({
   ];
 }
 
+/** Where a twin no recording belongs to stands: with nothing in it yet, it waits for a recording. */
+export const looseState = (twin: Persona): TwinState =>
+  twin.sources > 0 ? 'ready' : 'waiting';
+
 /** A twin no recording belongs to (made by hand, or someone else's public one), as a row of the same table: it is
- * there to talk to and to open. */
+ * there to talk to and to open; an empty one only to open, to add what it learns from. */
 function twinRow({
   twin,
   me,
@@ -603,6 +611,7 @@ function twinRow({
   onMember: () => void;
   onSame: (match: TwinMatch, same: boolean) => void;
 }): ReactNode[] {
+  const state = looseState(twin);
   return [
     <IdentityLink
       key="who"
@@ -635,16 +644,22 @@ function twinRow({
       —
     </Text>,
     <Row key="twin" gap={2}>
-      <StatusDot tone={TWIN_STATES.ready.tone} />
-      <Text size="sm">{TWIN_STATES.ready.label}</Text>
+      <StatusDot tone={TWIN_STATES[state].tone} />
+      <Text size="sm">{TWIN_STATES[state].label}</Text>
     </Row>,
     <Text key="recent" size="sm" tone="secondary">
       —
     </Text>,
     <Row key="act" gap={1} justify="end">
-      <Button size="sm" variant="secondary" onClick={() => onOpen(twin.id)}>
-        聊天
-      </Button>
+      {state === 'ready' ? (
+        <Button size="sm" variant="secondary" onClick={() => onOpen(twin.id)}>
+          聊天
+        </Button>
+      ) : (
+        <Button size="sm" variant="secondary" onClick={onMember}>
+          查看
+        </Button>
+      )}
       {match && (
         <ActionMenu
           label={`${twin.name}是不是会议里的人`}
@@ -741,7 +756,6 @@ function Roster({
   const confirm = useConfirm();
   const navigate = useNavigate();
   const refreshPersonas = usePersonas((state) => state.refresh);
-  const switchTo = usePersonas((state) => state.switchTo);
   const twins = usePersonas((state) => state.items);
   const identity = useAuth((state) => state.identity);
   const newTwin = useNewTwinCard((state) => state.set);
@@ -803,11 +817,8 @@ function Roster({
       // The twin's name and illustration follow.
       if (person.persona_id) await refreshPersonas();
     });
-  // Talking to someone's twin: switch to it, then its chat.
-  const chat = async (personaId: string) => {
-    await switchTo(personaId);
-    void navigate('/chat');
-  };
+  // Talking to someone's twin: its chat, which switches to it and lists its conversations.
+  const chat = (personaId: string) => void navigate(chatPath(personaId));
 
   // The team's roster holds everyone; this page shows the people the viewer looks after or can talk to.
   // Whoever was heard longest first: the people with the most recorded speech make the fullest twins. Equal
@@ -829,7 +840,7 @@ function Roster({
     ...loose.map((twin) => ({
       key: `twin-${twin.id}`,
       name: twin.name,
-      state: 'ready' as const,
+      state: looseState(twin),
       twin,
     })),
   ];
@@ -927,7 +938,7 @@ function Roster({
                   person: entry.person,
                   twin: twinOf(entry.person),
                   busy,
-                  onOpen: (personaId) => void chat(personaId),
+                  onOpen: chat,
                   onMember: () => void navigate(memberPath(entry.person.id)),
                   onEdit: () => setEditing(entry.person),
                   onAddress: () => address(entry.person),
@@ -939,7 +950,7 @@ function Roster({
                   twin: entry.twin,
                   me: identity?.email,
                   match: matches.find((m) => m.persona_id === entry.twin.id),
-                  onOpen: (personaId) => void chat(personaId),
+                  onOpen: chat,
                   onMember: () => void navigate(twinMemberPath(entry.twin.id)),
                   onSame: (match, same) => void sameTwin(match, same),
                 }),

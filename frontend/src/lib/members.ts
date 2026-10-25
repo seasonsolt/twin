@@ -4,3 +4,6 @@ export const memberPath = (personId: string, section?: string) =>
   `/team/${encodeURIComponent(personId)}${section ? `?section=${section}` : ''}`;
 export const twinMemberPath = (twinId: string, section?: string) =>
   `/team/twin/${encodeURIComponent(twinId)}${section ? `?section=${section}` : ''}`;
+/** The chat with a twin (``?with=``): its conversations listed, the next message written to it. */
+export const chatPath = (twinId: string) =>
+  `/chat?with=${encodeURIComponent(twinId)}`;

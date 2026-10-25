@@ -464,7 +464,10 @@ it('keeps the page and reports a blocked deletion without clearing local data', 
   const user = userEvent.setup();
   await screen.findByRole('heading', { level: 1, name: '朋友' });
   await choose(user, '删除分身');
-  expect(await toasts().findByText('这个分身还有任务在运行')).toBeVisible();
+  // The toast fades in: refused at once, it is looked for before it has.
+  await waitFor(() =>
+    expect(toasts().getByText('这个分身还有任务在运行')).toBeVisible(),
+  );
   expect(window.location.hash).toBe('#/team/twin/friend');
   expect(sessionStorage.getItem(personaKey(CHAT_KEY, 'friend'))).toBe(
     'private',

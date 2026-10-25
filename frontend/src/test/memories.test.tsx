@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, toast } from '../components/ui';
-import { Memories, type Memory } from '../pages/Memories';
+import { addedOn, Memories, type Memory } from '../pages/Memories';
 import { api } from '../lib/api';
 import { useAuth } from '../stores/auth';
 import { useStatus } from '../stores/status';
@@ -680,3 +680,11 @@ it.each([true, false])(
     useAuth.setState({ identity: null });
   },
 );
+
+it('says when a memory was added, with the year only when it is not this one', () => {
+  const now = new Date('2026-10-25T12:00:00');
+  expect(addedOn('2026-03-16T18:48:00', now)).toBe('3月16日加入');
+  expect(addedOn('2025-11-10T19:15:00', now)).toBe('2025年11月10日加入');
+  expect(addedOn(undefined, now)).toBeNull();
+  expect(addedOn('not a date', now)).toBeNull();
+});

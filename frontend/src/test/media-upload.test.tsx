@@ -164,6 +164,7 @@ it('shows upload percent/MB and all media row states with retranscription', asyn
     first_date: null,
     duration_s: 120,
     transcribed_s: 60,
+    imported_at: '2026-03-16T18:48:00',
     status,
     remembered: 2,
   });
@@ -203,6 +204,16 @@ it('shows upload percent/MB and all media row states with retranscription', asyn
   expect(screen.getByText('提取音频')).toBeInTheDocument();
   expect(screen.getByText('整理中')).toBeInTheDocument();
   expect(screen.getByText('已加入 · 已记住 2 条')).toBeInTheDocument();
+  // Each card says when it was added, after its kind and length.
+  expect(
+    screen.getAllByText(
+      (_, element) =>
+        element?.tagName === 'P' &&
+        /^视频 · 2\.0 分钟 · (2026年)?3月16日加入$/u.test(
+          element.textContent ?? '',
+        ),
+    ),
+  ).toHaveLength(6);
   expect(screen.getByText('需要配置语音识别')).toBeInTheDocument();
   await userEvent.click(
     screen.getAllByRole('button', { name: '重新转写' })[0]!,

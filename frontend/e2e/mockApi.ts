@@ -1393,6 +1393,7 @@ const memory = (
   source_id,
   title,
   first_date: '2026-10-15',
+  imported_at: '2026-10-16T09:30:00',
   detected_kind_label: '会议录音',
   status,
   remembered: status === 'remembered' ? 6 : 0,

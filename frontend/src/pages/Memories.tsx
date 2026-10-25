@@ -52,6 +52,8 @@ export interface Memory {
   source_id: string;
   title: string;
   first_date: string | null;
+  /** When it was added (local time, ISO). */
+  imported_at?: string;
   detected_kind_label: string;
   status:
     | 'processing'
@@ -74,6 +76,15 @@ export interface Memory {
   chunks_total?: number;
   extraction?: { returned: number; kept: number } | null;
 }
+/** When a memory was added, as its card says it: 10月25日加入, with the year when it is not this one. */
+export function addedOn(iso: string | undefined, now = new Date()) {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  const year =
+    date.getFullYear() === now.getFullYear() ? '' : `${date.getFullYear()}年`;
+  return `${year}${date.getMonth() + 1}月${date.getDate()}日加入`;
+}
+
 export interface SourceSummary {
   total: number;
   duration_s: number;
@@ -944,9 +955,16 @@ export function Memories({
                             memory.duration_s != null
                               ? `${(memory.duration_s / 60).toFixed(1)} 分钟`
                               : null,
+                            addedOn(memory.imported_at),
                           ]
                             .filter(Boolean)
-                            .join(' · ')}
+                            // A narrow card wraps between the parts, never inside one (10月16日加 / 入).
+                            .map((part, index) => (
+                              <span key={index} className="whitespace-nowrap">
+                                {index > 0 && ' · '}
+                                {part}
+                              </span>
+                            ))}
                         </Text>
                         <Badge
                           tone={

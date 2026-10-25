@@ -346,7 +346,12 @@ export function Library() {
     [r.filename, ...r.people].some((text) =>
       text.toLocaleLowerCase().includes(wanted),
     );
-  const filtered = recordings.filter((r) => matches[filter](r) && found(r));
+  // What is still being processed comes first, the rest as the server lists them (the sort is stable).
+  const filtered = recordings
+    .filter((r) => matches[filter](r) && found(r))
+    .sort(
+      (a, b) => Number(matches.processing(b)) - Number(matches.processing(a)),
+    );
   return (
     <FileDropSurface onFiles={take}>
       <Page

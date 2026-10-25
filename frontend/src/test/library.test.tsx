@@ -398,6 +398,14 @@ it('filters locally with counts, including proofreading in processing, and shows
   const group = await screen.findByRole('group', { name: '录音分类' });
   await screen.findByRole('button', { name: '全部 6' });
   const calls = vi.mocked(fetch).mock.calls.length;
+  // What is still being processed leads, the rest keep the server's order.
+  const titles = ['校对', '排队', '转写', '待确认', '完成', '失败'];
+  const rows = Array.from(
+    screen.getByRole('list', { name: '录音列表' }).children,
+  );
+  expect(
+    rows.map((row) => titles.find((t) => row.textContent?.includes(t))),
+  ).toEqual(titles);
   expect(
     within(group).getByRole('button', { name: '处理中 3' }),
   ).toBeInTheDocument();

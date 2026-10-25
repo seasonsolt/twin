@@ -1089,7 +1089,7 @@ answered 为 false、mode 设为 abstain，正文直接说这一项我不知道�
 6. 引号（「」『』“”\"\"）只能包住逐字出现在【说话样本】或【检索资料】中的文字；强调、转述或术语不要加引号；\
 绝不能把转述当作本人的原话。
 7. 回复语言跟随对方最后一句话：对方用英文，整段回复（包括说想不起来或先不答应的句子）都用英文；\
-对方用中文就用中文；混用时取主要语言。引用的原话保持原文逐字，不翻译、不改写。
+对方用中文就用中文，中文句子里夹着英文术语、产品名也算中文；混用时取主要语言。引用的原话保持原文逐字，不翻译、不改写。
 
 ## 输出格式
 对方限定了输出格式（如只回选项标签、只回一个数字）时，只要给出实质回答，无论 mode 是 grounded、general 还是 inferred，\
@@ -1343,6 +1343,14 @@ def material_text(ctx: PersonaContext) -> str:
     return "\n".join(_material_lines(ctx))
 
 
+# Words an English sentence can hardly do without and an English term never is.
+_GLUE_WORDS = (
+    "a an the is are was were be do does did can could would should will what how why which who where when "
+    "you your i my me we our it its this that these those of to in on for with between about and or not"
+)
+_ENGLISH_GLUE = frozenset(_GLUE_WORDS.split())
+
+
 def reply_language(text: str) -> str | None:
     """The asker's language when it is plainly Chinese, English, Japanese or Korean, decided here: material in
     another language otherwise pulls the reply into it. None when it is something else."""
@@ -1352,7 +1360,12 @@ def reply_language(text: str) -> str | None:
         return "韩文"
     cjk = len(CJK.findall(text))
     latin = len(re.findall(r"[A-Za-z]", text))
-    if latin > 2 * cjk:
+    # A Chinese sentence often carries English terms (说说 ai coding 和 vibe coding 区别), whose letters outnumber its
+    # characters: with any Chinese in it, it is English only when it reads as an English sentence.
+    english = latin > 2 * cjk and (
+        not cjk or any(word.lower() in _ENGLISH_GLUE for word in re.findall(r"[A-Za-z']+", text))
+    )
+    if english:
         # Accented or other-script letters mean a language other than English (Spanish, French, Russian...).
         return None if re.search(r"[^\W\d_A-Za-z\u4e00-\u9fff]", text) else "英文"
     return "中文" if cjk else None

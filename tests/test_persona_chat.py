@@ -432,6 +432,9 @@ def test_reply_language_follows_the_asker(store: PersonaStore, settings: Setting
     for text, instruction in (
         ("Which store did I redeem the coupon at?", "整段回复用英文。"),
         ("你怎么看签大单？", "整段回复用中文。"),
+        ("说说ai coding 和 vibe coding 区别", "整段回复用中文。"),
+        ("ai coding vs vibe coding 区别", "整段回复用中文。"),
+        ("What's the difference between 微服务 and a monolith?", "整段回复用英文。"),
         ("Do you use the Shopify app?", "整段回复用英文。"),
         ("このプランはどう思う？", "整段回复用日文。"),
         ("이 계획 어때?", "整段回复用韩文。"),

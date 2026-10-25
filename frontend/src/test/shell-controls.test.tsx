@@ -104,6 +104,37 @@ it('gives the focus back to the "⋯" a choice was made from, as the list closes
   expect(screen.getByLabelText('更多')).toHaveFocus();
 });
 
+it('closes an open "⋯" list when another opens, on a press elsewhere and on Escape', async () => {
+  const user = userEvent.setup();
+  render(
+    <>
+      <ActionMenu
+        label="甲的更多"
+        items={[{ label: '编辑甲', onSelect() {} }]}
+      />
+      <ActionMenu
+        label="乙的更多"
+        items={[{ label: '编辑乙', onSelect() {} }]}
+      />
+      <p>别处</p>
+    </>,
+  );
+  const first = screen.getByLabelText('甲的更多').closest('details')!;
+  const second = screen.getByLabelText('乙的更多').closest('details')!;
+  await user.click(screen.getByLabelText('甲的更多'));
+  await waitFor(() => expect(first).toHaveAttribute('open'));
+  await user.click(screen.getByLabelText('乙的更多'));
+  await waitFor(() => expect(second).toHaveAttribute('open'));
+  expect(first).not.toHaveAttribute('open');
+  await user.click(screen.getByText('别处'));
+  await waitFor(() => expect(second).not.toHaveAttribute('open'));
+  await user.click(screen.getByLabelText('甲的更多'));
+  await waitFor(() => expect(first).toHaveAttribute('open'));
+  await user.keyboard('{Escape}');
+  expect(first).not.toHaveAttribute('open');
+  expect(screen.getByLabelText('甲的更多')).toHaveFocus();
+});
+
 it('puts the whole of text cut short in its hover, however it is made up', () => {
   render(
     <TooltipProvider>

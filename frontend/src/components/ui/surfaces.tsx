@@ -3,6 +3,9 @@ import {
   type ComponentProps,
   type ReactElement,
   type ReactNode,
+  useEffect,
+  useRef,
+  useState,
 } from 'react';
 import { motion } from 'motion/react';
 import { Link } from 'react-router';
@@ -938,7 +941,8 @@ function ActionMenuItem({ item }: { item: ActionItem }) {
 }
 
 /**
- * A round "⋯" button that opens a short list of actions below it; choosing one closes the list. Destructive items
+ * A round "⋯" button that opens a short list of actions below it; choosing one, pressing elsewhere or Escape closes
+ * the list. Destructive items
  * (`danger`) come last, after a divider, whatever their place in `items`. `className` places the menu (for example
  * absolute in a card's corner).
  */
@@ -956,8 +960,34 @@ export function ActionMenu({
 }) {
   const ordinary = items.filter((item) => !item.danger);
   const destructive = items.filter((item) => item.danger);
+  const menu = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  // An open list closes when the press lands anywhere else (another row's "⋯" too) or on Escape, so only one is
+  // ever open and none stays behind over the rows.
+  useEffect(() => {
+    if (!open) return;
+    const close = () => menu.current?.removeAttribute('open');
+    const outside = (event: PointerEvent) => {
+      if (!menu.current?.contains(event.target as Node)) close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      close();
+      menu.current?.querySelector('summary')?.focus();
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
   return (
-    <details className={cn('relative', className)}>
+    <details
+      ref={menu}
+      className={cn('relative', className)}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary
         aria-label={text ? undefined : label}
         className={cn(

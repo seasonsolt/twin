@@ -422,7 +422,17 @@ export function Inbox() {
       label,
       told(() =>
         item.kind === 'voice'
-          ? data.decideVoice(item.voice.members, decisionOf(how), false)
+          ? data
+              .decideVoice(item.voice.members, decisionOf(how), false)
+              .then((failed) => {
+                // Given to the unnamed person it is most like, who is called by the name typed from now on.
+                const unnamed =
+                  how.to === 'name' &&
+                  people?.find((p) => p.id === how.person.id);
+                return failed || !unnamed
+                  ? failed
+                  : data.rename(unnamed, how.name, false);
+              })
           : how.to === 'person'
             ? data.resolve(item.person, how.person, false)
             : how.to === 'new'
@@ -481,7 +491,13 @@ export function Inbox() {
           onUndo={() => undo(item.id)}
         />
       ) : (
-        <VoiceRow key={item.id} item={item} known={known} onAnswer={answer} />
+        <VoiceRow
+          key={item.id}
+          item={item}
+          people={people ?? []}
+          known={known}
+          onAnswer={answer}
+        />
       ),
     );
   // Rows of a kind that wait to be taken back, apart from those listed in their own place.

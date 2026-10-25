@@ -113,7 +113,7 @@ export function InboxFocus({
   const navigate = useNavigate();
   const hear = useHeard();
   const known = useMemo(() => people.filter((p) => !p.auto), [people]);
-  const { facts, title: named } = voiceFacts(item ?? EMPTY);
+  const { facts, title: named } = voiceFacts(item ?? EMPTY, people);
   const title = facts?.lead ?? named;
   const members = item ? heardIn(item) : [];
   const current = members.length ? members[heard % members.length] : undefined;
@@ -121,15 +121,16 @@ export function InboxFocus({
   useEffect(() => setHeard(0), [slot]);
 
   // The latest values for the key handler, which is bound once.
-  const live = useRef({ item, options, known, members, last });
+  const into = facts?.into;
+  const live = useRef({ item, options, known, members, last, into });
   useEffect(() => {
-    live.current = { item, options, known, members, last };
+    live.current = { item, options, known, members, last, into };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || covered(event))
         return;
-      const { item, options, known, members, last } = live.current;
+      const { item, options, known, members, last, into } = live.current;
       if (typing(event.target)) {
         if (event.key === 'Escape' && event.target instanceof HTMLElement)
           event.target.blur();
@@ -161,7 +162,7 @@ export function InboxFocus({
         const option = options[Number(key) - 1];
         if (option) {
           handled();
-          onAnswer(item, answerFor('', known, option));
+          onAnswer(item, answerFor('', known, option, into));
         }
       } else if (key === 's') {
         handled();
@@ -174,7 +175,7 @@ export function InboxFocus({
         const sure = options.find((option) => option.sure);
         if (sure) {
           handled();
-          onAnswer(item, answerFor('', known, sure));
+          onAnswer(item, answerFor('', known, sure, into));
         }
       }
     };
@@ -284,7 +285,9 @@ export function InboxFocus({
                 </Row>
                 <Button
                   variant={option.sure ? 'primary' : 'secondary'}
-                  onClick={() => onAnswer(item, answerFor('', known, option))}
+                  onClick={() =>
+                    onAnswer(item, answerFor('', known, option, into))
+                  }
                 >
                   {option.added ? `新建${option.name}` : `是${option.name}`}
                 </Button>
@@ -301,7 +304,9 @@ export function InboxFocus({
             placeholder="都不是？输入名字"
             known={known}
             inputRef={field}
-            onName={(name) => onAnswer(item, answerFor(name, known))}
+            onName={(name) =>
+              onAnswer(item, answerFor(name, known, undefined, into))
+            }
           />
         </Stack>
         <Button

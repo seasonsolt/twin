@@ -437,6 +437,38 @@ it('takes an answer back before the server hears it, without a request', async (
   ).toHaveLength(0);
 });
 
+it('asks for a name for a voice most like an unnamed one, and gives it to both', async () => {
+  const user = clock();
+  server.people = [...server.people, fresh({ id: 'per_9', name: '未命名 23' })];
+  server.voices = [
+    voice('a', {
+      candidates: [{ person_id: 'per_9', name: '未命名 23', score: 0.7 }],
+    }),
+  ];
+  view();
+  const list = await screen.findByRole('list', { name: '新的声音' });
+  const row = within(list)
+    .getAllByRole('listitem')
+    .find((item) => within(item).queryByText('和未命名 23像同一人'))!;
+  // “未命名 23” is nobody to choose: no button, the row asks for a name.
+  expect(
+    within(row).queryByRole('button', { name: '归给未命名 23' }),
+  ).toBeNull();
+  await user.type(
+    within(row).getByRole('combobox', { name: /像同一人.*是谁/u }),
+    '王芳{Enter}',
+  );
+  expect(await screen.findByText('已新建王芳')).toBeVisible();
+  await later();
+  expect(posted('/api/library/voices')[0].body).toMatchObject({
+    action: 'confirm',
+    person_id: 'per_9',
+  });
+  expect(posted('/api/library/people/per_9')[0].body).toEqual({
+    name: '王芳',
+  });
+});
+
 it('tells the server every answer still waiting when the page is left', async () => {
   const user = clock();
   server.voices = ['a', 'b', 'c'].map((id, i) =>

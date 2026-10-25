@@ -44,10 +44,34 @@ export interface VoiceFacts {
   split: boolean;
   /** What was said that names the voice. */
   quote: string;
+  /** The unnamed person the voice is most like: no answer of its own, the name given is theirs too. */
+  into?: { id: string; name: string };
 }
 
-export function describeVoice(voice: Voice): VoiceFacts {
+/** `unnamed` says whether someone is a voice still waiting for a name rather than a person the owner named. */
+export function describeVoice(
+  voice: Voice,
+  unnamed: (personId: string) => boolean = () => false,
+): VoiceFacts {
   const [likely, other] = voice.candidates;
+  // Most like a voice that has no name yet either: “未命名 3” is nobody to choose, so the row asks for a name.
+  if (likely && unnamed(likely.person_id)) {
+    const called =
+      voice.called && !voice.candidates.some((c) => c.called)
+        ? voice.called
+        : '';
+    const title = called ? `会上被叫作${called}` : `和${likely.name}像同一人`;
+    return {
+      title,
+      lead: title,
+      options: called
+        ? [{ id: 'new', name: called, added: true, sure: false }]
+        : [],
+      split: false,
+      quote: voice.called && voice.quote ? voice.quote : '',
+      into: { id: likely.person_id, name: likely.name },
+    };
+  }
   // A voice very close to one person, or far enough ahead of everyone else (the middle tier), is the surest answer;
   // a nearer guess is a choice to make on purpose.
   const middle = voice.tier === 'mid' && !!likely && !voice.near;
@@ -108,28 +132,34 @@ export function describeVoice(voice: Voice): VoiceFacts {
   };
 }
 
-/** What the owner says a voice is: someone in the team, a name to add, nobody they know, or several people. */
+/** What the owner says a voice is: someone in the team, a name to add (or to give the unnamed person it is most
+ * like), nobody they know, or several people. */
 export type Answer =
   | { to: 'person'; person: { id: string; name: string } }
   | { to: 'new'; name: string }
+  | { to: 'name'; person: { id: string; name: string }; name: string }
   | { to: 'nobody' }
   | { to: 'mixed' };
 
-/** The answer a button or a typed name stands for: someone already in the team by that name, else a new person. */
+/** The answer a button or a typed name stands for: someone already in the team by that name, else a new person, or
+ * the name of the unnamed person the voice is most like (`into`). */
 export function answerFor(
   name: string,
   known: Person[],
   option?: Option,
+  into?: VoiceFacts['into'],
 ): Answer {
+  const added = (name: string): Answer =>
+    into ? { to: 'name', person: into, name } : { to: 'new', name };
   if (option)
     return option.added
-      ? { to: 'new', name: option.name }
+      ? added(option.name)
       : { to: 'person', person: { id: option.id, name: option.name } };
   const typed = name.trim();
   const match = known.find((p) => p.name === typed);
   return match
     ? { to: 'person', person: { id: match.id, name: match.name } }
-    : { to: 'new', name: typed };
+    : added(typed);
 }
 
 /** What settling a voice heard in recordings tells the server. */
@@ -139,6 +169,9 @@ export function decisionOf(answer: Answer): VoiceDecision {
       return { action: 'confirm', person_id: answer.person.id };
     case 'new':
       return { action: 'confirm', new_person: answer.name };
+    // Given to the unnamed person first; the name follows (``Inbox``).
+    case 'name':
+      return { action: 'confirm', person_id: answer.person.id };
     case 'nobody':
       return { action: 'unknown' };
     case 'mixed':
@@ -152,6 +185,7 @@ export function labelOf(answer: Answer): string {
     case 'person':
       return `已归给${answer.person.name}`;
     case 'new':
+    case 'name':
       return `已新建${answer.name}`;
     case 'nobody':
       return '已标为不认识';

@@ -52,9 +52,14 @@ export const clipSrc = (heard: Heard) =>
     `/api/library/recordings/${encodeURIComponent(heard.recording_id)}/speakers/${encodeURIComponent(heard.speaker_id)}/samples/0`,
   );
 
-/** What a voice is called in the list and the one line under it. */
-export function voiceFacts(item: VoiceItem) {
-  const facts = item.kind === 'voice' ? describeVoice(item.voice) : undefined;
+/** What a voice is called in the list and the one line under it; `people` tells who is unnamed still. */
+export function voiceFacts(item: VoiceItem, people: Person[]) {
+  const facts =
+    item.kind === 'voice'
+      ? describeVoice(item.voice, (id) =>
+          people.some((p) => p.id === id && p.auto),
+        )
+      : undefined;
   const title =
     facts?.title ?? (item.kind === 'person' ? item.person.name : '');
   const meta = [
@@ -139,16 +144,19 @@ export function NameField({
 /** A new voice in the list: hear it, then answer with one of the names it may be, or type one; the rest is in “⋯”. */
 export function VoiceRow({
   item,
+  people,
   known,
   onAnswer,
 }: {
   item: VoiceItem;
+  /** Everyone in the team, the unnamed among them. */
+  people: Person[];
   known: Person[];
   onAnswer: (item: VoiceItem, answer: Answer) => void;
 }) {
   const navigate = useNavigate();
   const hear = useHeard();
-  const { facts, title, meta } = voiceFacts(item);
+  const { facts, title, meta } = voiceFacts(item, people);
   const members = heardIn(item);
   const [heard, setHeard] = useState(0);
   const [asking, setAsking] = useState(false);
@@ -200,7 +208,9 @@ export function VoiceRow({
                     ? `新建成员：${option.name}`
                     : `归给${option.name}`
                 }
-                onClick={() => onAnswer(item, answerFor('', known, option))}
+                onClick={() =>
+                  onAnswer(item, answerFor('', known, option, facts?.into))
+                }
               >
                 {option.added ? `+ ${option.name}` : option.name}
               </Button>
@@ -210,7 +220,9 @@ export function VoiceRow({
                 label={`${named}，是谁`}
                 known={known}
                 autoFocus={asking}
-                onName={(name) => onAnswer(item, answerFor(name, known))}
+                onName={(name) =>
+                  onAnswer(item, answerFor(name, known, undefined, facts?.into))
+                }
               />
             )}
           </Row>

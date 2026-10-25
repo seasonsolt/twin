@@ -576,10 +576,84 @@ test('hear two people whose voice samples sound alike', async ({
   page.on('pageerror', (error) => errors.push(error.message));
   await page.clock.setFixedTime(NOW);
   await mockApi(page, missing);
+  // Beside the pair heard in one meeting, two never heard together, one of whose samples' recording was
+  // transcribed again: it can be merged, and that sample cannot be heard.
+  await page.route('**/api/library/voice-clashes', (route) => {
+    const sample = (
+      id: number,
+      person_id: string,
+      name: string,
+      recording_id: string,
+      filename: string,
+      more: { unlike_own?: boolean; gone?: boolean } = {},
+    ) => ({
+      id,
+      person_id,
+      name,
+      recording_id,
+      filename,
+      speaker_id: 'S1',
+      seconds: more.gone ? 0 : 600,
+      unlike_own: false,
+      gone: false,
+      ...more,
+    });
+    return route.fulfill({
+      json: [
+        {
+          score: 0.91,
+          together: true,
+          samples: [
+            sample(
+              1,
+              'u-linzhou',
+              '林舟',
+              'r-weekly',
+              '2026-10-15 产品周会.m4a',
+            ),
+            sample(
+              2,
+              'u-qinghe',
+              '许清禾',
+              'r-review',
+              '2026-10-12 需求评审.mp4',
+              {
+                unlike_own: true,
+              },
+            ),
+          ],
+        },
+        {
+          score: 0.87,
+          together: false,
+          samples: [
+            sample(
+              3,
+              'u-linzhou',
+              '林舟',
+              'r-retro',
+              '2026-10-16 迭代复盘.m4a',
+            ),
+            sample(
+              4,
+              'u-shiyan',
+              '周石言',
+              'r-weekly',
+              '2026-10-15 产品周会.m4a',
+              {
+                gone: true,
+              },
+            ),
+          ],
+        },
+      ],
+    });
+  });
   await page.goto('/#/team');
   await page.getByRole('button', { name: '核对', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '核对声线' });
   await expect(dialog.getByText('更像对方')).toBeVisible();
+  await expect(dialog.getByText('听不到')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot(`voice-clashes-${info.project.name}.png`);
   expect(errors, 'page errors').toEqual([]);

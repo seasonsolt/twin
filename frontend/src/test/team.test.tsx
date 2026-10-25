@@ -1470,7 +1470,7 @@ it('shows an administrator people whose voice samples sound alike, to hear them 
   useAuth.setState({
     identity: { email: 'admin@example.com', admin: true, auth_enabled: true },
   });
-  const sample = (id: number, who: Person, wrong = false) => ({
+  const sample = (id: number, who: Person, wrong = false, gone = false) => ({
     id,
     person_id: who.id,
     name: who.name,
@@ -1479,6 +1479,7 @@ it('shows an administrator people whose voice samples sound alike, to hear them 
     speaker_id: 'S1',
     seconds: 300,
     unlike_own: wrong,
+    gone,
   });
   const [zhang, li] = people;
   const wang = person({ id: 'per_3', name: '王总' });
@@ -1492,7 +1493,7 @@ it('shows an administrator people whose voice samples sound alike, to hear them 
     {
       score: 0.88,
       together: true,
-      samples: [sample(3, zhang), sample(4, wang)],
+      samples: [sample(3, zhang), sample(4, wang, false, true)],
     },
   ];
   const posts: { url: string; body: unknown }[] = [];
@@ -1533,6 +1534,17 @@ it('shows an administrator people whose voice samples sound alike, to hear them 
   expect(within(layer).getAllByRole('button', { name: '合并' })).toHaveLength(
     1,
   );
+  // A sample whose recording was transcribed again cannot be heard: it says so in place of playing.
+  const other = within(
+    within(layer).getByRole('list', { name: '张总 和 王总的声线' }),
+  ).getAllByRole('listitem');
+  expect(within(other[1]).getByText('听不到')).toBeVisible();
+  expect(
+    within(other[1]).queryByRole('button', { name: /^听王总/u }),
+  ).toBeNull();
+  expect(
+    within(other[0]).getByRole('button', { name: /^听张总/u }),
+  ).toBeVisible();
 
   await user.click(within(rows[1]).getByRole('button', { name: '移除这段' }));
   await user.click(await screen.findByRole('button', { name: '移除' }));

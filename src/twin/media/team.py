@@ -210,13 +210,16 @@ class ClashSample(BaseModel):
     seconds: float
     # More like the other person's sample than like any of the person's own other samples: likely given wrongly.
     unlike_own: bool = False
+    # Its speaker is gone from the recording's transcript (transcribed again since): it cannot be heard, and the
+    # voices it was taken from were split another way since, so it is as likely given wrongly.
+    gone: bool = False
 
 
 class VoiceClash(BaseModel):
     """Voice samples of two people that sound nearly alike: one person known twice, or a sample given wrongly."""
 
     score: float
-    # Both were confirmed by the owner in one recording: two people, so one of the samples is wrong.
+    # Both were heard in one recording, by voice or by the owner: two people, so one of the samples is wrong.
     together: bool
     samples: list[ClashSample]
 
@@ -1677,7 +1680,7 @@ class Team:
             together: dict[str, set[str]] = {}
             for person_id, recording_id in db.execute(
                 "SELECT a.person_id, a.recording_id FROM attributions a JOIN recordings r ON r.id = a.recording_id "
-                "AND r.transcript_id = a.transcript_id WHERE a.decision = 'confirmed' AND a.auto = 0"
+                "AND r.transcript_id = a.transcript_id WHERE a.decision = 'confirmed'"
             ):
                 together.setdefault(person_id, set()).add(recording_id)
         vectors = []
@@ -1705,6 +1708,15 @@ class Team:
 
         def sample(index: int, score: float) -> ClashSample:
             row = rows[index]
+            recording = self.library.get(row["recording_id"])
+            speaker = next(
+                (
+                    s
+                    for s in (self.library.speakers(recording) if recording else None) or ()
+                    if s.id == row["speaker_id"]
+                ),
+                None,
+            )
             own = [
                 float(alike[index, k])
                 for k in range(len(rows))
@@ -1717,8 +1729,9 @@ class Team:
                 recording_id=row["recording_id"],
                 filename=row["filename"],
                 speaker_id=row["speaker_id"],
-                seconds=round(self._seconds(row["recording_id"], row["speaker_id"]), 1),
+                seconds=round(speaker.seconds, 1) if speaker else 0.0,
                 unlike_own=bool(own) and max(own) < score,
+                gone=speaker is None,
             )
 
         clashes = [

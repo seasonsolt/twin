@@ -1,8 +1,10 @@
+import { VolumeX } from 'lucide-react';
 import {
   Badge,
   Button,
   ClipButton,
   Dialog,
+  IconButton,
   ListRow,
   Row,
   Section,
@@ -23,12 +25,14 @@ export interface ClashSample {
   seconds: number;
   // More like the other person's sample than like the person's own other samples.
   unlike_own: boolean;
+  // Its speaker is gone from the recording's transcript (transcribed again): it cannot be heard, and is as suspect.
+  gone: boolean;
 }
 
 /** Voice samples of two people that sound nearly alike (``Team.voice_clashes``). */
 export interface VoiceClash {
   score: number;
-  // Both were confirmed in one recording: two people, so a sample is wrong.
+  // Both were heard in one recording: two people, so a sample is wrong.
   together: boolean;
   samples: [ClashSample, ClashSample];
 }
@@ -116,19 +120,41 @@ export function VoiceClashes({
                     key={sample.id}
                     variant="divided"
                     leading={
-                      <ClipButton
-                        size="md"
-                        label={`听${sample.name}的声线（${sample.filename}）`}
-                        src={hear(clip(sample.recording_id, sample.speaker_id))}
-                      />
+                      sample.gone ? (
+                        <IconButton
+                          label={`${sample.name}的这段声线听不到`}
+                          shape="circle"
+                          variant="secondary"
+                          disabled
+                        >
+                          <VolumeX aria-hidden className="size-4" />
+                        </IconButton>
+                      ) : (
+                        <ClipButton
+                          size="md"
+                          label={`听${sample.name}的声线（${sample.filename}）`}
+                          src={hear(
+                            clip(sample.recording_id, sample.speaker_id),
+                          )}
+                        />
+                      )
                     }
                     title={
                       <Row gap={2}>
                         <Text truncate title={sample.filename}>
                           {sample.name}
                         </Text>
-                        {sample.unlike_own && (
-                          <Badge tone="warning">更像对方</Badge>
+                        {sample.gone ? (
+                          <Badge
+                            tone="warning"
+                            title="录音重新转写过，这段声线已对不上原来的说话人"
+                          >
+                            听不到
+                          </Badge>
+                        ) : (
+                          sample.unlike_own && (
+                            <Badge tone="warning">更像对方</Badge>
+                          )
                         )}
                       </Row>
                     }

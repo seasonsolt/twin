@@ -1946,6 +1946,7 @@ const handlers: Record<string, Handler> = {
           speaker_id: 'S1',
           seconds: 1260,
           unlike_own: false,
+          gone: false,
         },
         {
           id: 2,
@@ -1956,6 +1957,7 @@ const handlers: Record<string, Handler> = {
           speaker_id: 'S2',
           seconds: 540,
           unlike_own: true,
+          gone: false,
         },
       ],
     },

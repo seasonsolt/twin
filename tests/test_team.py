@@ -1310,12 +1310,23 @@ def test_voice_samples_of_two_people_that_sound_alike_are_shown_until_heard(tmp_
     # 张三 has no other sample to compare with: nothing says which of the two is wrong on his side.
     assert (by_person[zhang.id].name, by_person[zhang.id].unlike_own) == ("张三", False)
 
-    # Both confirmed by the owner in one meeting: two people, so a sample is wrong rather than one person twice.
-    both = voices(library, "四.m4a", ([0.0, 0.0, 1.0], 30), ([0.0, 0.7, 0.7], 30))
+    # Both heard in one meeting, 张三 named by the owner and 李四 taken by voice: two people, so a sample is wrong
+    # rather than one person twice.
+    both = voices(library, "四.m4a", ([0.0, 0.0, 1.0], 30), ([0.0, 1.0, 0.0], 30))
     decide(team, both, "S1", "confirm", zhang.id)
-    decide(team, both, "S2", "confirm", li.id)
+    team.classify(both)
+    assert next(s for s in team.speakers(library.get(both)) if s.id == "S2").auto  # type: ignore[arg-type]
     [clash] = team.voice_clashes()
-    assert clash.together
+    assert clash.together and not any(s.gone for s in clash.samples)
+
+    # The recording of 李四's sample transcribed again, its speakers numbered anew: it cannot be heard any more.
+    with library.transaction() as db:
+        db.execute("UPDATE voiceprints SET speaker_id = 'S9' WHERE recording_id = ?", (second,))
+    [clash] = team.voice_clashes()
+    gone = next(s for s in clash.samples if s.person_id == li.id)
+    assert (gone.gone, gone.seconds) == (True, 0.0)
+    with library.transaction() as db:
+        db.execute("UPDATE voiceprints SET speaker_id = 'S1' WHERE recording_id = ?", (second,))
 
     # Heard and both right: not shown again, until another sample of theirs clashes.
     team.samples_apart(*(s.id for s in clash.samples))

@@ -499,6 +499,10 @@ class PersonaStore:
         with self._lock:
             return int(self._db.execute("SELECT COUNT(*) FROM p_sources").fetchone()[0])
 
+    def has_conversations(self) -> bool:
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM conversations LIMIT 1").fetchone() is not None
+
     def get_source(self, source_id: str) -> Source | None:
         with self._lock:
             row = self._db.execute("SELECT json FROM p_sources WHERE source_id = ?", (source_id,)).fetchone()

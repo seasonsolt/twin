@@ -429,6 +429,25 @@ it('protects the default twin: nothing to delete in its menu, and the settings s
   expect(screen.queryByRole('button', { name: '删除这个分身' })).toBeNull();
 });
 
+it('lets an empty leftover default twin be deleted, warning that it cannot be restored', async () => {
+  items[0] = { ...items[0], sources: 0, retirable: true };
+  window.location.hash = '#/team/twin/default';
+  setPersonaId('default');
+  usePersonas.setState({ id: 'default', items });
+  render(<App />);
+  const user = userEvent.setup();
+  await choose(user, '删除分身', '本人');
+  await screen.findByRole('dialog', { name: '分身设置' });
+  expect(screen.queryByText('默认分身不能删除')).toBeNull();
+  await user.click(await screen.findByRole('button', { name: '删除这个分身' }));
+  const dialog = screen.getByRole('dialog', { name: '删除「本人」？' });
+  expect(dialog).toHaveTextContent('它是空的，删除后不能恢复');
+  await user.click(within(dialog).getByRole('button', { name: '取消' }));
+  expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(
+    false,
+  );
+});
+
 it('keeps the page and reports a blocked deletion without clearing local data', async () => {
   sessionStorage.setItem(personaKey(CHAT_KEY, 'friend'), 'private');
   const original = fetcher.getMockImplementation()! as (

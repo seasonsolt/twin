@@ -18,6 +18,8 @@ export interface Persona {
   sources: number;
   created_at: string;
   is_default: boolean;
+  /** The default twin is an empty leftover another twin has taken the place of: it may be deleted (only then). */
+  retirable?: boolean;
   public?: boolean;
   can_manage?: boolean;
   owner?: string | null;

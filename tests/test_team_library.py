@@ -298,6 +298,29 @@ def test_twins_of_old_libraries_follow_the_teams_and_are_rebuilt(web: TestClient
         assert [e.text for e in store.list_expressions() if e.is_target] == ["[00:00] 周会.m4a：我先说。"]
 
 
+def test_a_person_of_the_default_twin_can_be_deleted_once_that_empty_twin_is_deleted(
+    web: TestClient, tmp_path: Path
+) -> None:
+    library = team_of(tmp_path)
+    _, zhang = zhang_was_there(library)
+    Team(library).link(zhang, "default")
+    as_(web, ADMIN)
+    [default] = web.get("/api/personas").json()
+    assert default["is_default"] and "retirable" not in default
+    assert web.delete("/api/personas/default", headers=CSRF).status_code == 400
+    web.post("/api/personas", json={"name": "接替的人"}, headers=CSRF)
+    [default, _] = web.get("/api/personas").json()
+    assert default["retirable"] is True
+    [person] = [p for p in web.get("/api/library/people").json()["items"] if p["id"] == zhang]
+    assert person["persona_id"] == "default"
+    assert web.delete(f"/api/library/people/{zhang}", headers=CSRF).status_code == 409
+    assert web.delete("/api/personas/default", headers=CSRF).json() == {"deleted": True}
+    [person] = [p for p in web.get("/api/library/people").json()["items"] if p["id"] == zhang]
+    assert person["persona_id"] is None and person["twin_elsewhere"] is False
+    assert web.delete(f"/api/library/people/{zhang}", headers=CSRF).json() == {"deleted": True}
+    assert zhang not in {p["id"] for p in web.get("/api/library/people").json()["items"]}
+
+
 def test_a_person_whose_twin_was_deleted_can_be_deleted(web: TestClient, tmp_path: Path) -> None:
     library = team_of(tmp_path)
     _, zhang = zhang_was_there(library)

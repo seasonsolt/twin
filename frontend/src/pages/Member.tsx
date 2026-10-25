@@ -162,7 +162,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                     label: twin.public ? '设为私有' : '设为公开',
                     onSelect: () => void togglePublic(),
                   },
-                  ...(twin.is_default
+                  ...(twin.is_default && !twin.retirable
                     ? []
                     : [
                         {

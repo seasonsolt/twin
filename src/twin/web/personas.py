@@ -320,10 +320,30 @@ class Personas:
 
     def view(self, entry: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         self.check_live(entry["id"])
-        return self._view(entry, identity, self._settings(entry["id"], read_name=False), self.data["default"])
+        return self._view(
+            entry,
+            identity,
+            self._settings(entry["id"], read_name=False),
+            self.data["default"],
+            self.has_other(entry["id"]),
+        )
+
+    def has_other(self, persona_id: str) -> bool:
+        """Whether a twin other than this one is there to take its place (under ``lock``)."""
+        return any(p["id"] != persona_id and not p.get("deleted_at") for p in self.data["personas"])
+
+    @staticmethod
+    def leftover(entry: dict[str, Any], store: PersonaStore) -> bool:
+        """A twin nobody was made for and nothing was put into or said to: the default twin may be deleted then."""
+        return not (entry.get("claim") or entry.get("member") or store.count_sources() or store.has_conversations())
 
     def _view(
-        self, entry: dict[str, Any], identity: dict[str, Any], settings: Settings, default: str
+        self,
+        entry: dict[str, Any],
+        identity: dict[str, Any],
+        settings: Settings,
+        default: str | None,
+        has_other: bool,
     ) -> dict[str, Any]:
         """Reads the persona's files; needs no ``lock`` given a copy of ``entry``, the persona counted as in flight."""
         persona_id = entry["id"]
@@ -331,6 +351,7 @@ class Personas:
         portrait = AssetStore(settings.db_path).path("portrait")
         with PersonaStore(settings.db_path) as store:
             sources = store.count_sources()
+            retirable = persona_id == default and has_other and self.leftover(entry, store)
         return {
             # ``photo`` is the company's address of the profile picture, kept to know which one the twin wears; the
             # page is given the twin's own picture (``avatar_url``).
@@ -344,6 +365,7 @@ class Personas:
             "is_default": persona_id == default,
             "public": bool(entry.get("public")),
             "can_manage": self.accessible(entry, identity),
+            **({"retirable": True} if retirable else {}),
             **self.claim_view(entry, identity),
         }
 
@@ -536,11 +558,12 @@ class Personas:
                     if self.visible(entry, identity)
                 ]
                 default = self.data["default"]
+                has_other = default is not None and self.has_other(default)
                 for entry, _ in listed:
                     self.enter(entry["id"])
             try:
                 self.remove_trash(expired)
-                return [self._view(entry, identity, settings, default) for entry, settings in listed]
+                return [self._view(entry, identity, settings, default, has_other) for entry, settings in listed]
             finally:
                 for entry, _ in listed:
                     self.leave(entry["id"])
@@ -681,8 +704,12 @@ class Personas:
             with self.lock:
                 self.check_owner(persona_id, request.scope["twin_identity"])
                 settings = self.settings_for(persona_id)
-                if persona_id == self.data["default"]:
-                    raise HTTPException(400, "默认分身不能删除")
+                entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
+                retiring = persona_id == self.data["default"]
+                if retiring:
+                    with PersonaStore(settings.db_path) as store:
+                        if not (self.has_other(persona_id) and self.leftover(entry, store)):
+                            raise HTTPException(400, "默认分身只有空着、没人认领、且已有别的分身时才能删除")
                 context = self.apps.get(persona_id)
                 if (
                     self.in_flight(persona_id)
@@ -690,7 +717,6 @@ class Personas:
                     or (context is not None and not context.state.processing.close_if_idle())
                 ):
                     raise HTTPException(409, "这个分身还有任务在运行，请等任务结束后再删除")
-                entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
                 name = stored_identity(settings.db_path)[0] or settings.target_name
                 deleted_at = self.clock()
                 trash_directory = f"{persona_id}-{deleted_at.strftime('%Y%m%dT%H%M%S%fZ')}"
@@ -699,10 +725,16 @@ class Personas:
                 # Never hold the registry's thread lock while waiting for the channel loop.
                 self.on_removed(persona_id)
                 with self.lock:
-                    private_directory(self.root / "trash")
-                    settings.db_path.parent.rename(self.root / "trash" / trash_directory)
+                    if retiring:
+                        # Its files are the data directory itself: nothing goes to the trash, the empty database
+                        # stays where it is for the command line, and no twin is the default any more.
+                        self.data["personas"].remove(entry)
+                        self.data["default"] = None
+                    else:
+                        private_directory(self.root / "trash")
+                        settings.db_path.parent.rename(self.root / "trash" / trash_directory)
+                        entry.update(name=name, deleted_at=deleted_at.isoformat(), trash_directory=trash_directory)
                     self.apps.pop(persona_id, None)
-                    entry.update(name=name, deleted_at=deleted_at.isoformat(), trash_directory=trash_directory)
                     self.save()
                 return {"deleted": True}
             finally:
@@ -769,17 +801,13 @@ class PersonaMiddleware:
                 scope["twin_visitor"] = registry.check_access(persona_id, identity, str(scope["method"]), path)
             else:
                 registry.claim(identity)
-                persona_id = (
-                    registry.data["default"]
-                    if identity["admin"]
-                    else next(
-                        (
-                            p["id"]
-                            for p in registry.data["personas"]
-                            if not p.get("deleted_at") and registry.accessible(p, identity)
-                        ),
-                        None,
-                    )
+                persona_id = (registry.data["default"] if identity["admin"] else None) or next(
+                    (
+                        p["id"]
+                        for p in registry.data["personas"]
+                        if not p.get("deleted_at") and registry.accessible(p, identity)
+                    ),
+                    None,
                 )
                 if persona_id is None:
                     return None

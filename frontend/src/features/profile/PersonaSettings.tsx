@@ -74,12 +74,14 @@ export function PersonaSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const remove = async () => {
-    if (!current || current.is_default || busy) return;
+    if (!current || (current.is_default && !current.retirable) || busy) return;
     const deleting = current;
     if (
       !(await confirm({
         title: `删除「${deleting.name}」？`,
-        body: '删除后 7 天内可以在团队页的「已删除」里恢复',
+        body: deleting.is_default
+          ? '它是空的，删除后不能恢复'
+          : '删除后 7 天内可以在团队页的「已删除」里恢复',
         confirmLabel: '删除分身',
         tone: 'danger',
       })) ||
@@ -114,7 +116,7 @@ export function PersonaSettings({
       {section === 'services' && <ExternalServices />}
       {section === 'delete' && (
         <Stack gap={3} align="start">
-          {current?.is_default ? (
+          {current?.is_default && !current.retirable ? (
             <Text tone="secondary">默认分身不能删除</Text>
           ) : (
             current && (

@@ -129,6 +129,7 @@ def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: 
         "claim": None,
         "claimed": False,
     }
+    assert web.delete("/api/personas/default", headers=CSRF).status_code == 400
     persona = create(web)
     assert re.fullmatch(r"p-[0-9a-f]{10}", persona)
     settings = registry(web).settings_for(persona)
@@ -145,13 +146,59 @@ def test_registry_and_default_paths_remain_unchanged(web: TestClient, tmp_path: 
     assert web.get("/api/personas").json()[1]["name"] == "改名"
     with TestClient(create_app(resolved), base_url="http://localhost") as reopened:
         assert reopened.get("/api/personas").json()[1]["name"] == "改名"
-    assert web.delete("/api/personas/default", headers=CSRF).status_code == 400
     assert web.delete(f"/api/personas/{persona}", headers=CSRF).json() == {"deleted": True}
     assert not settings.db_path.parent.exists()
     assert len(web.get("/api/personas").json()) == 1
     for folder in ("assets", "media-cache", "media-sources", "uploads"):
         assert (tmp_path / folder / "sentinel").read_text() == "original"
     assert json.loads((tmp_path / "personas.json").read_text())["default"] == "default"
+
+
+def test_empty_default_twin_can_be_deleted_once_another_twin_takes_its_place(web: TestClient, tmp_path: Path) -> None:
+    assert "retirable" not in web.get("/api/personas").json()[0]
+    other = create(web, "接替的人")
+    default, _ = web.get("/api/personas").json()
+    assert default["retirable"] is True and "retirable" not in _
+    assert web.delete("/api/personas/default", headers=CSRF).json() == {"deleted": True}
+    assert [p["id"] for p in web.get("/api/personas").json()] == [other]
+    assert not web.get("/api/personas").json()[0]["is_default"]
+    data = json.loads((tmp_path / "personas.json").read_text())
+    assert data["default"] is None and [p["id"] for p in data["personas"]] == [other]
+    # The data directory is the default twin's own: nothing moves to the trash, the database stays.
+    assert (tmp_path / "old-name.db").is_file()
+    assert not (tmp_path / "trash").exists() and web.get("/api/personas/trash").json() == []
+    assert web.delete("/api/personas/default", headers=CSRF).status_code == 404
+    assert web.post("/api/personas/default/restore", headers=CSRF).status_code == 404
+    # An administrator's request without a twin goes to the first one left.
+    assert web.get("/api/identity").json()["name"] == "接替的人"
+    assert web.get("/api/identity", headers=headers("default")).status_code == 404
+    with TestClient(create_app(registry(web).settings), base_url="http://localhost") as reopened:
+        assert [p["id"] for p in reopened.get("/api/personas").json()] == [other]
+        assert reopened.get("/api/identity").json()["name"] == "接替的人"
+
+
+def test_default_twin_with_anything_in_it_cannot_be_deleted(web: TestClient) -> None:
+    create(web)
+
+    def refused() -> None:
+        assert "retirable" not in web.get("/api/personas").json()[0]
+        assert web.delete("/api/personas/default", headers=CSRF).status_code == 400
+        assert web.get("/api/personas").json()[0]["id"] == "default"
+
+    assert web.put("/api/personas/default/claim", json={"claim": "10001"}, headers=CSRF).status_code == 200
+    refused()
+    assert web.put("/api/personas/default/claim", json={"claim": None}, headers=CSRF).status_code == 200
+    assert web.get("/api/personas").json()[0]["retirable"] is True
+    assert web.post("/api/persona/notes", json={"text": "不能丢失的记忆"}, headers=CSRF).status_code < 300
+    refused()
+
+
+def test_default_twin_with_a_conversation_cannot_be_deleted(web: TestClient) -> None:
+    create(web)
+    with PersonaStore(registry(web).settings_for("default").db_path) as store:
+        store.create_conversation(None)
+    assert "retirable" not in web.get("/api/personas").json()[0]
+    assert web.delete("/api/personas/default", headers=CSRF).status_code == 400
 
 
 @pytest.mark.parametrize("name", ["", "  ", "字" * 21])

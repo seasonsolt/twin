@@ -173,7 +173,7 @@ it('asks the queue only how much waits, and counts from its totals', async () =>
           totals: {
             voices: { count: 3, seconds: 90 },
             enough: { count: 1, seconds: 600 },
-            strangers: { count: 0, seconds: 0 },
+            strangers: { count: 4, seconds: 300 },
             items: { count: 0 },
             unsorted: { count: 2 },
             suspects: { count: 5 },
@@ -186,10 +186,10 @@ it('asks the queue only how much waits, and counts from its totals', async () =>
   );
   show('/chat');
   const nav = await screen.findByRole('navigation', { name: '主导航' });
-  // The unnamed voice, four voices, two recordings to settle one by one and the failed recording; suspect
-  // speakers can wait.
+  // The unnamed voice, three voices, two recordings to settle one by one and the failed recording; voices surely
+  // heard enough already, like ones nobody could name, and suspect speakers can wait.
   expect(
-    await within(nav).findByRole('link', { name: '待处理（8）' }),
+    await within(nav).findByRole('link', { name: '待处理（7）' }),
   ).toBeVisible();
   expect(asked).toEqual([
     '/api/library/review?voices=0&enough=0&strangers=0&items=0&unsorted=0&suspects=0',

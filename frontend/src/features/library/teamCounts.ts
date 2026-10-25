@@ -28,7 +28,9 @@ export const reviewPath = (first: Partial<Record<Paged, number>> = {}) =>
 /** The review queue's lists, as far as counting needs them (``/api/library/review``). */
 export interface ReviewLists {
   items: unknown[];
-  voices: unknown[];
+  // A voice surely someone heard enough already, or like one the owner could not name, waits harmlessly: listed,
+  // never counted as waiting.
+  voices: { enough?: boolean; stranger?: boolean }[];
   fragments: unknown[];
   unsorted: unknown[];
   // Confirmed speakers some of whose speech sounds like someone else: optional, so never counted as waiting.
@@ -100,10 +102,8 @@ export function waitingCount({
   return (
     unnamedPeople(people).length +
     (review.totals
-      ? inAll(review, 'voices', 0) +
-        inAll(review, 'enough', 0) +
-        inAll(review, 'strangers', 0)
-      : review.voices.length) +
+      ? inAll(review, 'voices', 0)
+      : review.voices.filter((v) => !v.enough && !v.stranger).length) +
     (review.fragments.length ? 1 : 0) +
     similarPairs(people).length +
     inAll(review, 'items', review.items.length) +

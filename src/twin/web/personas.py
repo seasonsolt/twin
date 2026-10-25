@@ -65,7 +65,7 @@ EMPLOYEE_NUMBER = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 def claim_key(value: str | None) -> str | None:
     """Who a twin is made for, as the company sign-in names them: a work e-mail, or an employee number (the SSO
-    account, such as 77845). Compared without case."""
+    account, such as 12345). Compared without case."""
     value = (value or "").strip().lower()
     if not value:
         return None

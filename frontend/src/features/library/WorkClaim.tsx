@@ -61,7 +61,7 @@ export function WorkClaim({
             id="work-claim"
             autoComplete="off"
             maxLength={254}
-            placeholder="name@company.com 或 77845"
+            placeholder="name@company.com 或 12345"
             value={claim}
             onChange={(event) => setClaim(event.target.value)}
           />

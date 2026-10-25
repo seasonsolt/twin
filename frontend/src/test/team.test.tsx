@@ -538,7 +538,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
   );
   await userEvent.type(
     within(dialog).getByRole('textbox', { name: '李总 · 1 段录音' }),
-    '77845',
+    '12345',
   );
   await userEvent.click(
     within(dialog).getByRole('button', { name: '为 2 位同事建分身' }),
@@ -546,7 +546,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
   await waitFor(() =>
     expect(sent).toEqual([
       ['/api/library/people/per_1/persona', 'POST', { claim: 'zhang@acme.cn' }],
-      ['/api/personas/p-li/claim', 'PUT', { claim: '77845' }],
+      ['/api/personas/p-li/claim', 'PUT', { claim: '12345' }],
     ]),
   );
   // The one that did not go through stays, with why; the rest leave the list.
@@ -555,7 +555,7 @@ it('makes twins for several colleagues by e-mail or employee number, and shows o
   ).toBeInTheDocument();
   expect(
     within(dialog).getByRole('textbox', { name: '李总 · 1 段录音' }),
-  ).toHaveValue('77845');
+  ).toHaveValue('12345');
   expect(
     within(dialog).getByRole('textbox', { name: '张总 · 1 段录音' }),
   ).toHaveValue('');

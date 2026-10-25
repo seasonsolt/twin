@@ -654,15 +654,15 @@ def test_a_twin_made_for_a_work_address_is_taken_on_signing_in(sso: tuple[TestCl
 
 def test_a_twin_made_for_an_employee_number_is_taken_by_that_sso_account(sso: tuple[TestClient, FakeLogin]) -> None:
     web, login = sso
-    login.sessions["cookie-d"] = {"authenticated": True, "subject": "19538", "display_name": "钱七", "account": "77845"}
+    login.sessions["cookie-d"] = {"authenticated": True, "subject": "19538", "display_name": "钱七", "account": "12345"}
     web.cookies.set("sso", "cookie-b")
     persona = create(web)
-    assert web.put(f"/api/personas/{persona}/claim", json={"claim": "77845"}, headers=CSRF).json()["claim"] == "77845"
+    assert web.put(f"/api/personas/{persona}/claim", json={"claim": "12345"}, headers=CSRF).json()["claim"] == "12345"
     web.cookies.set("sso", "cookie-a")  # another account takes nothing
     assert all(p["id"] != persona for p in web.get("/api/personas").json())
     web.cookies.set("sso", "cookie-d")
     whoami = web.get("/api/whoami").json()
-    assert whoami["account"] == "77845" and whoami["address"] is None
+    assert whoami["account"] == "12345" and whoami["address"] is None
     [mine] = web.get("/api/personas").json()
     assert mine["id"] == persona and mine["mine"] is True and mine["approved"] is False
 

@@ -215,7 +215,7 @@ class Auth:
         """``aliases``: other names the login service gives the same person (an SSO account name or address),
         compared with the administrators. ``address``: the person's work e-mail, by which a twin an administrator
         made for them becomes theirs (``email`` is the account's key, which for SSO is not an address); ``account``: the
-        name the company sign-in gives them, such as the employee number 77845, which does the same; ``photo``: the
+        name the company sign-in gives them, such as the employee number 12345, which does the same; ``photo``: the
         address of their company profile photo, which the twins they take wear (``Personas.offer_photo``)."""
         return {
             "email": email,

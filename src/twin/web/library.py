@@ -327,7 +327,7 @@ class Libraries:
         """The people in the library who are the viewer: whom they said a voice of theirs is (``web.voice``), and
         those whose twin they took as theirs."""
         team = self.team(TEAM)
-        found = {person.id for person in team.people() if person.account == viewer.key}
+        found = team.for_account(viewer.key)
         if self.registry is not None and viewer.email:
             for persona_id, person_id, _, _ in team.synced():
                 entry = self.registry.entry(persona_id)
@@ -352,32 +352,34 @@ class Libraries:
                 found[recording.id] = Access(False)
         return found
 
-    def allowed(self, viewer: Viewer, recording_id: str, edit: bool = False) -> Access:
+    def allowed(
+        self, viewer: Viewer, recording_id: str, edit: bool = False, visible: Mapping[str, Access] | None = None
+    ) -> Access:
         """What the viewer may do with the recording; 404 when they may not see it (as if it were not there), 403
         when they may see but not decide."""
-        access = self.access(viewer).get(recording_id)
+        access = (self.access(viewer) if visible is None else visible).get(recording_id)
         if access is None:
             raise HTTPException(404, "找不到这段录音")
         if edit and not access.edit:
             raise HTTPException(403, "这段录音由上传的同事或管理员整理，你可以在自己的发言上点「不是我」")
         return access
 
-    def managed(self, viewer: Viewer) -> set[str] | None:
+    def managed(self, viewer: Viewer, visible: Mapping[str, Access] | None = None) -> set[str] | None:
         """The people the viewer may name, merge into others or make twins of: those identified in a recording
         they decide about, and those identified nowhere yet; ``None`` for everyone (an administrator)."""
         if viewer.admin:
             return None
         team = self.team(TEAM)
-        editable = {rid for rid, access in self.access(viewer).items() if access.edit}
+        editable = {rid for rid, access in (self.access(viewer) if visible is None else visible).items() if access.edit}
         attended = team.attendance()
         heard = set().union(*attended.values()) if attended else set()
-        people = team.people()
-        found = {person.id for person in people if person.id not in heard}
+        people = team.roster()
+        found = {person_id for person_id, _, _ in people if person_id not in heard}
         for recording_id in editable:
             found |= attended.get(recording_id, set())
         # A twin made by hand is its maker's to speak for, not the library's: whoever keeps the recordings does not
         # rename its person (which renames the twin) or delete it with them.
-        made = {person.id: person.persona_id for person in people if person.persona_id}
+        made = {person_id: persona_id for person_id, _, persona_id in people if persona_id}
         if made and self.registry is not None:
             built = {persona_id for persona_id, _, _, _ in team.synced()}
             for person_id, persona_id in made.items():
@@ -1857,8 +1859,9 @@ def register(
     @app.post("/api/library/voices")
     def post_voice(body: VoiceBody, request: Request) -> dict[str, Any]:
         viewer = libraries.viewer(request)
+        visible = libraries.access(viewer)
         for recording_id in {m.recording_id for m in body.members}:
-            libraries.allowed(viewer, recording_id, edit=True)
+            libraries.allowed(viewer, recording_id, edit=True, visible=visible)
         return libraries.decide_voice(libraries.owner(request), body)
 
     @app.get("/api/library/people")
@@ -1874,7 +1877,7 @@ def register(
         synced = {persona_id: (wanted, done) for persona_id, _, wanted, done in team.synced()}
         behind = team.answering_behind()
         visible = libraries.access(viewer)
-        managed = libraries.managed(viewer)
+        managed = libraries.managed(viewer, visible)
         similar = team.similar()
         meetings = team.last_meetings(set(visible))
         # What the viewer may spot-check: speakers given by voice in recordings they decide about.

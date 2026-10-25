@@ -290,14 +290,18 @@ class Overlap:
                 texts[k] = text
         return texts
 
-    def voiceprints(self, wav, act, speakers):
-        """Per speaker: the separated-domain centroid (for assigning streams) and the claim centroid."""
+    def voiceprints(self, wav, act, speakers, overlapping):
+        """Claim centroids for everyone; separated-domain centroids only for usable overlap pairs."""
         engine = self.engine
         alone = act & (act.sum(axis=0) == 1)
         separated, claims = {}, {}
         for i, x in enumerate(speakers):
             runs = runs_of(alone[i])
-            longest = sorted((r for r in runs if len(r) >= PROBE_FRAMES), key=len, reverse=True)[:PROBES]
+            longest = (
+                sorted((r for r in runs if len(r) >= PROBE_FRAMES), key=len, reverse=True)[:PROBES]
+                if x in overlapping
+                else []
+            )
             vectors = []
             for r in longest:
                 streams = self.separate(wav[int(r[0] * 160) : int(r[0] * 160) + 3 * SAMPLE_RATE])
@@ -341,9 +345,12 @@ class Overlap:
         progress(0.15)
         speakers = sorted({x for _, _, x in turns})
         act = activity(turns, speakers, len(wav) // 160 + 1)
-        separated, claims = self.voiceprints(wav, act, speakers)
-        progress(0.3)
         regions = overlap_regions(act, speakers)
+        overlapping = {
+            x for r in regions if int(r["end"] * SAMPLE_RATE) - int(r["start"] * SAMPLE_RATE) >= 1600 for x in r["pair"]
+        }
+        separated, claims = self.voiceprints(wav, act, speakers, overlapping)
+        progress(0.3)
         self.assign(wav, regions, separated, progress)
         pieces = [
             (b, e, x, speaker_audio(wav, b, e, x, act[speakers.index(x)], regions))

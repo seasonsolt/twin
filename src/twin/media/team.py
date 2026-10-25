@@ -555,17 +555,30 @@ class Team:
                 "JOIN recordings r ON r.id = a.recording_id AND r.transcript_id = a.transcript_id "
                 "WHERE a.decision = 'confirmed'"
             ).fetchall()
+            # One read for the recordings whose speech is counted; opening a connection per recording makes
+            # even a warm roster grow expensive as the meeting library grows.
+            recordings = {
+                row["id"]: Recording.model_validate(dict(row))
+                for row in db.execute(
+                    "SELECT * FROM recordings WHERE id IN "
+                    "(SELECT recording_id FROM attributions WHERE decision = 'confirmed')"
+                )
+            }
         seconds: dict[str, float] = {}
         counts: dict[str, int] = {}
         heard: dict[str, tuple[Speaker, ...]] = {}
         heard_in: dict[str, tuple[str, str]] = {}
         checks: dict[str, int] = {}
-        for person_id, recording_id, _, speaker_id, auto in confirmed:
+        for person_id, recording_id, transcript_id, speaker_id, auto in confirmed:
             if auto:
                 checks[person_id] = checks.get(person_id, 0) + 1
             if recording_id not in heard:
-                recording = self.library.get(recording_id)
-                heard[recording_id] = (self.library.speakers(recording) if recording else None) or ()
+                recording = recordings.get(recording_id)
+                # A new transcription can arrive between the attribution and recording reads. Its S1 need not
+                # be the old S1: never count its speech for an attribution to the previous transcript.
+                heard[recording_id] = (
+                    self.library.speakers(recording) if recording and recording.transcript_id == transcript_id else None
+                ) or ()
             speaker = next((s for s in heard[recording_id] if s.id == speaker_id), None)
             counts[person_id] = counts.get(person_id, 0) + 1
             seconds[person_id] = seconds.get(person_id, 0) + (speaker.seconds if speaker else 0)
@@ -731,6 +744,11 @@ class Team:
         with self.library.read() as db:
             rows = db.execute("SELECT id, name, persona_id FROM people ORDER BY name").fetchall()
         return [(r["id"], r["name"], r["persona_id"]) for r in rows]
+
+    def for_account(self, account: str) -> set[str]:
+        """The people who claimed this account's voice, without counting anyone's speech."""
+        with self.library.read() as db:
+            return {str(row[0]) for row in db.execute("SELECT id FROM people WHERE account = ?", (account,))}
 
     def attach(self, person_id: str, persona_id: str) -> bool:
         """Say that a twin made by hand is this person's, when neither has the other yet; False otherwise."""

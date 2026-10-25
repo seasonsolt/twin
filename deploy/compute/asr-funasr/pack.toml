@@ -1,5 +1,5 @@
 name = "asr-funasr"
-version = "1.5.4"
+version = "1.5.5"
 # The version whose transcripts this one reproduces, what a transcript says made it (run.py); bump it only when
 # transcripts change, or twin offers to transcribe every recording again for nothing.
 transcription = "1.5.4"

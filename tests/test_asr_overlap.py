@@ -1,6 +1,7 @@
 """asr-funasr 1.4 overlap-aware path: the model-free parts of overlap.py and diarize.py."""
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -73,6 +74,98 @@ def test_loudness_and_loop_detection(overlap):
     assert overlap.degenerate("对对对对对对对对", 3.0)
     assert overlap.degenerate("我" * 50, 2.0)
     assert not overlap.degenerate("今天我们讨论一下预算。", 3.0)
+
+
+@pytest.mark.parametrize(
+    ("turns", "region", "expected_calls"),
+    [
+        ([(0, 3, 0), (3, 6, 1), (6, 9, 2)], None, (3, 0)),
+        ([(0, 4, 0), (3, 7, 1), (8, 11, 2)], None, (4, 3)),
+        ([(0, 3, 0), (2.95, 6, 1), (6, 9, 2)], None, (4, 1)),
+        # B has no clean run, so assign must retain its existing loudness fallback.
+        ([(0, 4, 0), (1, 2, 1), (5, 8, 2)], None, (3, 2)),
+        # Compare integer sample positions exactly as assign does, not duration in seconds.
+        ([(0, 4, 0), (3, 7, 1), (8, 11, 2)], (3.00001, 3.1), (4, 3)),
+        ([(0, 4, 0), (3, 7, 1), (8, 11, 2)], (3, 3.099999), (4, 1)),
+    ],
+    ids=["no-overlap", "overlap", "short-overlap", "missing-prototype", "1600-samples", "1599-samples"],
+)
+def test_only_usable_overlap_pairs_need_separated_prototypes(overlap, monkeypatch, turns, region, expected_calls):
+    wav = np.linspace(-0.4, 0.5, 12 * overlap.SAMPLE_RATE, dtype=np.float32)
+    monkeypatch.setitem(sys.modules, "librosa", SimpleNamespace(load=lambda *a, **k: (wav.copy(), overlap.SAMPLE_RATE)))
+    if region is not None:
+        monkeypatch.setattr(
+            overlap,
+            "overlap_regions",
+            lambda *args: [{"start": region[0], "end": region[1], "pair": ["S0", "S1"]}],
+        )
+
+    def run(eager):
+        calls = {"separation": 0, "probe_embedding": 0, "claim_windows": 0}
+        assigned, recognized = [], []
+
+        def separate(clip):
+            calls["separation"] += 1
+            return [clip * 0.25, clip * 0.75]
+
+        def vector(clip):
+            return overlap.unit(np.array([clip.mean(), np.square(clip).mean(), 1.0]))
+
+        def embed(clip):
+            calls["probe_embedding"] += 1
+            return vector(clip)
+
+        def embed_all(windows, progress, singles_on_gpu=False):
+            assert singles_on_gpu
+            calls["claim_windows"] += len(windows)
+            return np.stack([vector(w) for w in windows])
+
+        def describe(order, names, totals, claims, reference, references):
+            return [
+                {"speaker": names[x], "seconds": totals[x], "embedding": claims[x].tolist() if x in claims else None}
+                for x in order
+            ]
+
+        def recognize(clips):
+            recognized.extend(c.copy() for c in clips)
+            return ["同一段转写" for _ in clips]
+
+        path = overlap.Overlap.__new__(overlap.Overlap)
+        path.engine = SimpleNamespace(embed_gpu=embed, embed_all=embed_all, describe=describe)
+        path.diarizer = lambda samples: turns
+        path.separate = separate
+        path.firered = recognize
+        path.finish = lambda clips, raw, hotwords: raw
+        original_voiceprints = path.voiceprints
+        if eager:
+            # Before 1.5.5 every speaker got a prototype, whether assign used it or not.
+            path.voiceprints = lambda wav, act, speakers, overlapping: original_voiceprints(
+                wav, act, speakers, set(speakers)
+            )
+        original_assign = path.assign
+
+        def assign(wav, regions, separated, progress):
+            original_assign(wav, regions, separated, progress)
+            assigned.extend({x: s.copy() for x, s in r["audio"].items()} for r in regions)
+
+        path.assign = assign
+        result = path.transcribe(Path("unused.wav"), True, None, [], lambda f: None)
+        return result, assigned, recognized, calls
+
+    before, after = run(True), run(False)
+    assert before[0] == after[0]  # All speakers' claim vectors and returned transcript stay identical.
+    assert len(before[1]) == len(after[1])
+    for old, new in zip(before[1], after[1], strict=True):
+        assert old.keys() == new.keys()
+        for speaker in old:
+            np.testing.assert_array_equal(old[speaker], new[speaker])
+    assert len(before[2]) == len(after[2])
+    for old, new in zip(before[2], after[2], strict=True):
+        np.testing.assert_array_equal(old, new)
+    assert (before[3]["separation"], after[3]["separation"]) == expected_calls
+    assert before[3]["claim_windows"] == after[3]["claim_windows"] > 0
+    saved = expected_calls[0] - expected_calls[1]
+    assert before[3]["probe_embedding"] - after[3]["probe_embedding"] == saved
 
 
 def test_diarize_timeline_helpers(diarize):

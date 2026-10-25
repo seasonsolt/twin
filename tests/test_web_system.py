@@ -436,6 +436,19 @@ def test_admin_changes_common_parameters_at_once(tmp_path: Path) -> None:
     assert fallback.kernel.max_auto_rebuild_chunks == 400
 
 
+def test_admin_sets_how_many_calls_a_memory_build_sends_at_once(tmp_path: Path) -> None:
+    settings = Settings(db_path=tmp_path / "twin.db", max_workers=6)
+    client = client_for(settings)
+    params = {p["key"]: p for p in client.get("/api/admin/system").json()["params"]}
+    # Unset in twin.toml, it is what a build sent at once before it had a setting: ``max_workers``.
+    assert (params["kernel.max_concurrent"]["value"], params["kernel.max_concurrent"]["unit"]) == (6, "路")
+    assert client.put("/api/admin/system/params/kernel.max_concurrent", json={"value": 16}, headers=CSRF).is_success
+    assert settings.kernel.max_concurrent == 16
+    too_many = client.put("/api/admin/system/params/kernel.max_concurrent", json={"value": 65}, headers=CSRF)
+    assert too_many.status_code == 400 and "不能大于 64" in too_many.json()["detail"]
+    assert settings.kernel.max_concurrent == 16
+
+
 def test_admin_upgrades_every_twins_kernel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(db_path=tmp_path / "twin.db", kernel=KernelSettings(auto_rebuild=False))
     with PersonaStore(settings.db_path) as store:

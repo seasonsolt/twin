@@ -28,8 +28,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..config import Settings
-from ..llm import LLM, LLMError, LLMTruncated, failure_summary, retry_truncated
+from ..config import MAX_BUILD_CONCURRENT, Settings
+from ..llm import LLM, LimitedLLM, LLMError, LLMTruncated, failure_summary, retry_truncated
 from ..usage import call_totals, collect_calls, default_stage
 from ..util import Progress, run_parallel, verify_quote
 from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
@@ -807,8 +807,11 @@ def build_profile(
     grant_gated: bool = False,
 ) -> BuildReport:
     """``grant_gated`` treats every consent-gated facet as allowed; only evaluations use it, to measure what the
-    profile could hold with the person's consent. Production builds derive consent from questionnaires."""
+    profile could hold with the person's consent. Production builds derive consent from questionnaires.
+    At most ``[kernel] max_concurrent`` model calls are in flight at once, read at every call: the section is the one
+    an administrator's change is written into, so raising it speeds up a build already running."""
     report = BuildReport()
+    llm = LimitedLLM(llm, lambda: settings.kernel.max_concurrent)
     built = store.kernel_built()
     # Snapshot once per kernel change, before stale extractions are dropped, so a bad kernel can be rolled back.
     if (
@@ -891,7 +894,7 @@ def _extract_and_merge(
     run_parallel(
         extract,
         todo,
-        settings.max_workers,
+        MAX_BUILD_CONCURRENT,
         safe_progress,
         label=lambda job: f"persona extract {job[0].chunk_id}",
         on_result=persist,
@@ -908,8 +911,9 @@ def _extract_and_merge(
         if not _merged(store, facet.facet_id, by_facet.get(facet.facet_id, []))
     ]
 
-    # Every facet's batches share one pool of ``max_workers``, so the largest facet does not finish alone.
-    pool = ThreadPoolExecutor(max_workers=max(1, settings.max_workers))
+    # Every facet's batches share one pool, so the largest facet does not finish alone; ``LimitedLLM`` bounds the
+    # model calls.
+    pool = ThreadPoolExecutor(max_workers=MAX_BUILD_CONCURRENT)
     caches: dict[str, MergeCache] = {}
     # Batches to merge, for the progress shown while the build merges (a lone candidate needs no merge).
     merge_total = sum(len(merge_batches(merge_order(members))) for _, members in jobs if len(members) > 1)

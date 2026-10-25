@@ -20,7 +20,7 @@ from twin import api
 from twin.config import LLMSettings, Settings, load_settings, make_llm, with_fallback
 from twin.egress import egress_status
 from twin.embed import HashingEmbedder
-from twin.llm import FakeLLM, FallbackLLM, LLMError, LLMInvalidOutput, LLMRefusal, failure_kind
+from twin.llm import FakeLLM, FallbackLLM, LimitedLLM, LLMError, LLMInvalidOutput, LLMRefusal, failure_kind
 from twin.persona.items import PersonaItem
 from twin.persona.schema import ChatDraft
 from twin.persona.store import PersonaStore
@@ -328,6 +328,31 @@ def test_the_fallback_takes_only_so_many_calls_at_once() -> None:
     assert replies == ["备选"] * 8 and peak[0] == 2
 
 
+def test_a_limited_backend_takes_only_so_many_calls_at_once_and_a_raised_limit_at_once() -> None:
+    limit, running, peak = [1], [0], [0]
+    lock = threading.Lock()
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.05)
+        with lock:
+            running[0] -= 1
+        return {"reply": "主模型", "citations": [], "confidence": 0.1, "abstain": True}
+
+    llm = LimitedLLM(FakeLLM(answer), lambda: limit[0])
+    assert llm.name == "fake"
+    ask = lambda _: llm.structured(system="s", user="u", schema=ChatDraft).reply  # noqa: E731
+    with ThreadPoolExecutor(6) as pool:
+        assert list(pool.map(ask, range(6))) == ["主模型"] * 6
+    assert peak[0] == 1
+    limit[0] = 3
+    with ThreadPoolExecutor(6) as pool:
+        assert list(pool.map(ask, range(6))) == ["主模型"] * 6
+    assert peak[0] == 3
+
+
 def test_a_failure_is_logged_by_kind_without_its_message() -> None:
     assert failure_kind(_failing(_Status(429))) == "LLMError(429)"
     timeout = _failing(openai.APITimeoutError(request=httpx.Request("POST", "http://x")))
@@ -340,10 +365,10 @@ def test_an_administrator_sets_how_many_calls_the_fallback_takes_at_once(tmp_pat
         db_path=tmp_path / "twin.db", llm_fallback=LLMSettings(model="glm", base_url="http://fallback.test/v1")
     )
     llm = with_fallback(FakeLLM(lambda *_: {}), settings)
-    assert isinstance(llm, FallbackLLM) and llm._limit() == 4
+    assert isinstance(llm, FallbackLLM) and llm._turns._limit() == 4
     system = SystemSettings(settings, tmp_path / "system.json", env_file=tmp_path / ".env")
     system.set_param("llm_fallback.max_concurrent", 2, "admin")
-    assert llm._limit() == 2
+    assert llm._turns._limit() == 2
     with pytest.raises(ValueError):
         system.set_param("llm_fallback.max_concurrent", 0, "admin")
     unconfigured = SystemSettings(Settings(db_path=tmp_path / "t.db"), tmp_path / "s.json", env_file=tmp_path / ".e")

@@ -95,6 +95,14 @@ PARAMS: dict[str, Param] = {
         "需要重新整理的段数超过这个数时不自动升级，等管理员确认；每段调用一次模型。",
         "段",
     ),
+    "kernel.max_concurrent": Param(
+        "kernel",
+        "max_concurrent",
+        "整理记忆并发数",
+        "整理记忆时同时发给模型的请求最多这么多，改了对正在进行的整理也立即生效。模型服务限流或报错多时调小，"
+        "扛得住时调大可以更快。",
+        "路",
+    ),
     "library.auto_build": Param(
         "library",
         "auto_build",
@@ -381,6 +389,8 @@ class SystemSettings:
                 raise ValueError(f"{param.label}不能小于 {bounds['ge']:g}") from None
             if "gt" in bounds:
                 raise ValueError(f"{param.label}要大于 {bounds['gt']:g}") from None
+            if "le" in bounds:
+                raise ValueError(f"{param.label}不能大于 {bounds['le']:g}") from None
             kind = "整数" if isinstance(self._toml_params[key], int) else "数字"
             raise ValueError(f"{param.label}请填{kind}") from None
         result: bool | int | float = getattr(checked, param.field)

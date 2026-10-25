@@ -79,6 +79,7 @@ max_workers = 4
 # [kernel]
 # auto_rebuild = true
 # max_auto_rebuild_chunks = 400
+# max_concurrent = 4  # 整理记忆时同时发给模型的请求数，默认同 max_workers；也可在系统设置里随时调整
 
 [media]
 # font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体

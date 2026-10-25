@@ -434,9 +434,17 @@ class WeComSettings(BaseModel):
     url: str = "wss://openws.work.weixin.qq.com"
 
 
+# The most model calls a memory build may have in flight: its worker pools are this large, and ``max_concurrent``
+# lets through as many of them as it says at a time.
+MAX_BUILD_CONCURRENT = 64
+
+
 class KernelSettings(BaseModel):
     auto_rebuild: bool = True
     max_auto_rebuild_chunks: int = Field(default=400, ge=0)
+    # The most model calls a memory build sends at once. Read at every call, so an administrator's change applies to
+    # a build already running; unset, it is ``max_workers``.
+    max_concurrent: int = Field(default=4, gt=0, le=MAX_BUILD_CONCURRENT)
 
 
 class OpsSettings(BaseModel):
@@ -486,6 +494,14 @@ class Settings(BaseModel):
     api: ApiSettings = Field(default_factory=ApiSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     wecom: WeComSettings = Field(default_factory=WeComSettings)
+
+    @model_validator(mode="after")
+    def build_concurrency(self) -> Settings:
+        """A memory build sent ``max_workers`` calls at once before it had a setting of its own, and still does unless
+        ``[kernel] max_concurrent`` says otherwise."""
+        if "max_concurrent" not in self.kernel.model_fields_set:
+            self.kernel.max_concurrent = max(1, min(self.max_workers, MAX_BUILD_CONCURRENT))
+        return self
 
     @property
     def effective_chat_llm(self) -> LLMSettings:

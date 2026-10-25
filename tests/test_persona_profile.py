@@ -578,6 +578,40 @@ def test_a_facets_merge_batches_run_at_once_in_the_pool(
     assert sorted(lines) == [f"merged 2.1 batch {n}/3" for n in (1, 2, 3)]
 
 
+def test_a_build_sends_as_many_calls_at_once_as_the_kernel_setting_says_even_when_raised_midway() -> None:
+    """``[kernel] max_concurrent`` bounds the model calls in flight, and raising it speeds up a build already
+    running: the administrator's change is read at every call."""
+    import threading
+    import time
+
+    settings = Settings(target_name="张三", pseudonymize_others=False)
+    assert settings.kernel.max_concurrent == settings.max_workers == 4  # unset: as before it had a setting
+    settings.kernel.max_concurrent = 1
+    store = PersonaStore(":memory:")
+    for day in range(1, 13):
+        text = f"2026-09-{day:02d} 10:00 张三：第 {day} 天，钱进了账户才算数\n"
+        store.put_source(parse_chat(f"群_2026-09-{day:02d}.txt", text, settings))
+    lock = threading.Lock()
+    running, finished, peaks = [0], [0], {1: 0, 3: 0}
+
+    def extract(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        with lock:
+            running[0] += 1
+            limit = settings.kernel.max_concurrent
+            peaks[limit] = max(peaks[limit], running[0])
+        time.sleep(0.05)
+        with lock:
+            running[0] -= 1
+            finished[0] += 1
+            if finished[0] == 3:
+                settings.kernel.max_concurrent = 3
+        return {"items": []}
+
+    report = pf.build_profile(store, FakeLLM(extract), settings)
+    assert report.chunks_extracted == 12 and report.failures == []
+    assert peaks == {1: 1, 3: 3}
+
+
 def synthetic_candidates(count: int, start: int = 0) -> list[PersonaCandidate]:
     return [
         PersonaCandidate(

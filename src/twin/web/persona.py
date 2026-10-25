@@ -206,6 +206,7 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         "sources": report.sources,
         "chunks": report.chunks_total,
         "chunks_extracted": report.chunks_extracted,
+        "chunks_superseded": report.chunks_superseded,
         "candidates": report.candidates,
         "facets_merged": report.facets_merged,
         "items": report.items,

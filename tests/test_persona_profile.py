@@ -213,6 +213,38 @@ def test_failed_chunk_is_reported_and_retried_next_build(store: PersonaStore, se
     assert second.chunks_extracted == 1 and second.failures == []
 
 
+@pytest.mark.parametrize("change", ["stored again", "removed"])
+def test_a_source_changed_during_the_build_is_left_for_the_next(
+    store: PersonaStore, settings: Settings, change: str
+) -> None:
+    again = {
+        SourceKind.QUESTIONNAIRE: parse_questionnaire("q_2026-08-30.md", QUESTIONNAIRE, settings),
+        SourceKind.CHAT: parse_chat("群_2026-09.txt", CHAT, settings),
+    }
+    extracted: list[str] = []
+
+    def changes_the_other(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        if schema is pf.ExtractDraft and not extracted:
+            # A sync writes the other source while this one is with the model; it waits for the only turn.
+            other = again[SourceKind.QUESTIONNAIRE if "对照组" in user else SourceKind.CHAT]
+            store.put_source(other) if change == "stored again" else store.delete_source(other.source.source_id)
+        if schema is pf.ExtractDraft:
+            extracted.append(user)
+        return handler(system, user, schema)
+
+    one_at_a_time = settings.model_copy(deep=True)
+    one_at_a_time.kernel.max_concurrent = 1
+    first = pf.build_profile(store, FakeLLM(changes_the_other), one_at_a_time)
+    assert len(extracted) == 1
+    assert first.chunks_superseded == 1 and first.chunks_extracted == 1 and first.failures == []
+    assert pf.stale_reason(store) == "sources"
+
+    second = pf.build_profile(store, FakeLLM(handler), settings)
+    assert second.chunks_superseded == 0
+    assert second.chunks_extracted == (1 if change == "stored again" else 0)
+    assert store.pending_source_ids() == set() and pf.stale_reason(store) is None
+
+
 def test_a_truncated_call_is_made_once_more(store: PersonaStore, settings: Settings) -> None:
     truncated: list[str] = []
 
@@ -665,6 +697,37 @@ def test_merge_batches_are_cut_by_content_so_an_edit_changes_only_its_own_batch(
     sliced = [candidates[i : i + 80] for i in range(0, len(candidates), 80)]
     shifted = [[synthetic_candidates(1, start=9999)[0], *candidates][i : i + 80] for i in range(0, 2001, 80)]
     assert len(set(ordered_ids(shifted)) - set(ordered_ids(sliced))) == len(shifted)
+
+
+def test_undated_candidates_merge_by_source_so_one_changed_source_touches_few_batches() -> None:
+    def from_source(source: str, version: str = "") -> list[PersonaCandidate]:
+        return [
+            c.model_copy(
+                update={
+                    "candidate_id": pf._candidate_id(f"ck_{source}{version}", i),
+                    "evidence": [e.model_copy(update={"source_id": source, "date": None}) for e in c.evidence],
+                }
+            )
+            for i, c in enumerate(synthetic_candidates(40))
+        ]
+
+    sources = [f"src_lib_rec{n:02d}_x" for n in range(20)]
+    candidates = [c for s in sources for c in from_source(s)]
+    ordered = pf.merge_order(candidates)
+    runs = [c.evidence[0].source_id for c in ordered]
+    assert [s for n, s in enumerate(runs) if n == 0 or runs[n - 1] != s] == sources  # each source in one run
+    before = set(ordered_ids(pf.merge_batches(ordered)))
+    assert len(before) >= 10
+
+    # the meeting is extracted again: all its candidates are new
+    changed = [c for c in candidates if c.evidence[0].source_id != sources[7]] + from_source(sources[7], "+")
+    after = set(ordered_ids(pf.merge_batches(pf.merge_order(changed))))
+    assert len(after - before) <= 3
+
+    # dates still come first
+    dated = from_source("src_lib_rec99_x")[0]
+    dated = dated.model_copy(update={"evidence": [dated.evidence[0].model_copy(update={"date": dt.date(2026, 1, 1)})]})
+    assert pf.merge_order([dated, *candidates])[-1] == dated
 
 
 def test_merge_reuses_cached_batches_and_prunes_the_unused(settings: Settings) -> None:

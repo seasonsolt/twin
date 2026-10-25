@@ -553,8 +553,13 @@ class MergeDegraded(Exception):
 
 
 def merge_order(candidates: Sequence[PersonaCandidate]) -> list[PersonaCandidate]:
-    """A facet's candidates in the order its merge batches are cut from: earliest evidence first."""
-    return sorted(candidates, key=lambda c: (min(e.date or dt.date.min for e in c.evidence), c.candidate_id))
+    """A facet's candidates in the order its merge batches are cut from: earliest evidence first, and those of one
+    source together within a day. Undated sources (recordings with no date) would otherwise be ordered by candidate
+    id alone, scattering one meeting's candidates over most batches, so that changing one meeting merged half the
+    facet again."""
+    return sorted(
+        candidates, key=lambda c: (min((e.date or dt.date.min, e.source_id) for e in c.evidence), c.candidate_id)
+    )
 
 
 def merge_batches(ordered: Sequence[PersonaCandidate]) -> list[list[PersonaCandidate]]:
@@ -732,6 +737,8 @@ class BuildReport:
     chunks_total: int = 0
     chunks_extracted: int = 0
     chunks_dropped: int = 0
+    # Left for the next build: their source was stored again or removed while this one ran.
+    chunks_superseded: int = 0
     # What this build's extraction calls returned and dropped; ``candidates`` counts every stored one.
     extraction: ExtractStats = field(default_factory=ExtractStats)
     candidates: int = 0
@@ -832,6 +839,9 @@ def build_profile(
 
     sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
     report.sources = len(sources)
+    # Read before the corpus: a source stored again after this is newer than the chunks cut below, and is neither
+    # extracted (``_extract_and_merge``) nor settled by this build.
+    pending = store.pending_versions([s.source_id for s in sources])
     chunks = corpus_chunks(store, sources, allowed, settings)
     report.chunks_total = len(chunks)
     store.adopt_legacy_chunks({c.legacy_id: c.chunk_id for c in chunks}, allowed)
@@ -839,14 +849,13 @@ def build_profile(
     store.restrict_chunk_facets(allowed)
     done = store.chunk_facets()
     todo = [(c, missing) for c in chunks if (missing := _missing(c, done, allowed))]
-    pending = store.pending_versions([s.source_id for s in sources])
     totals: dict[str, int] = {}
     for chunk in chunks:
         totals[chunk.source.source_id] = totals.get(chunk.source.source_id, 0) + 1
     store.set_build_progress("extract", totals)
     try:
         with collect_calls() as rows:
-            _extract_and_merge(store, llm, settings, report, todo, allowed, safe_progress, totals)
+            _extract_and_merge(store, llm, settings, report, todo, allowed, safe_progress, totals, pending)
     finally:
         store.clear_build_progress()
         report.calls = {"started_at": built_at, "models": sorted({r.model for r in rows}), **call_totals(rows)}
@@ -861,28 +870,43 @@ def build_profile(
 
 def _extract_and_merge(
     store: PersonaStore,
-    llm: LLM,
+    llm: LimitedLLM,
     settings: Settings,
     report: BuildReport,
     todo: list[tuple[Chunk, frozenset[str]]],
     allowed: frozenset[str],
     safe_progress: Progress,
     totals: dict[str, int],
+    pending: dict[str, str],
 ) -> None:
-    def extract(job: tuple[Chunk, frozenset[str]]) -> Extraction:
+    def superseded(source_id: str) -> bool:
+        """Whether the source was stored again or removed since the build read it (``pending``)."""
+        return store.get_meta(f"source_pending:{source_id}") != pending.get(source_id) or (
+            store.get_source(source_id) is None
+        )
+
+    def extract(job: tuple[Chunk, frozenset[str]]) -> Extraction | None:
         chunk, facets = job
-        if facets == allowed:
-            return extract_chunk(llm, chunk, facets, settings)
-        # Only the facets this chunk lacks; a distinct id keeps their candidate ids apart from the chunk's own.
-        salted = replace(chunk, chunk_id=f"{chunk.chunk_id}+{content_digest(sorted(facets))[:8]}")
-        found = extract_chunk(llm, salted, facets, settings)
+        # Looked at once the chunk's turn has come, which may be long after the build began: its text may be gone
+        # by then, and the build that follows the change extracts what is there.
+        with llm.turn() as model:
+            if superseded(chunk.source.source_id):
+                return None
+            if facets == allowed:
+                return extract_chunk(model, chunk, facets, settings)
+            # Only the facets this chunk lacks; a distinct id keeps their candidate ids apart from the chunk's own.
+            salted = replace(chunk, chunk_id=f"{chunk.chunk_id}+{content_digest(sorted(facets))[:8]}")
+            found = extract_chunk(model, salted, facets, settings)
         return Extraction([c.model_copy(update={"chunk_id": chunk.chunk_id}) for c in found.candidates], found.stats)
 
-    def persist(job: tuple[Chunk, frozenset[str]], outcome: Extraction | Exception) -> None:
+    def persist(job: tuple[Chunk, frozenset[str]], outcome: Extraction | Exception | None) -> None:
         chunk, facets = job
         if isinstance(outcome, Exception):
             report.failures.append(f"extract {chunk.chunk_id}: {failure_summary(outcome)}")
             report.failed_sources.add(chunk.source.source_id)
+            return
+        if outcome is None:
+            report.chunks_superseded += 1
             return
         if facets == allowed:
             store.put_chunk(chunk.chunk_id, chunk.source.source_id, outcome.candidates, outcome.stats, facets)

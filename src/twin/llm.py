@@ -22,7 +22,8 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -548,9 +549,15 @@ class LimitedLLM:
         self._turns = Turns(concurrent)
 
     def structured(self, *, system: str, user: str, schema: type[T], **options: Any) -> T:
+        with self.turn() as llm:
+            return llm.structured(system=system, user=user, schema=schema, **options)
+
+    @contextmanager
+    def turn(self) -> Iterator[LLM]:
+        """A turn held across calls: what is done in it, once the turn came, goes to ``llm`` one call after another."""
         self._turns.take()
         try:
-            return self.llm.structured(system=system, user=user, schema=schema, **options)
+            yield self.llm
         finally:
             self._turns.end()
 

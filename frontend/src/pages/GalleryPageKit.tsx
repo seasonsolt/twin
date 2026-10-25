@@ -631,7 +631,18 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               trailing={
                 <>
                   <Badge tone="success">已认人</Badge>
-                  <Button variant="ghost" size="sm" disabled={disabled}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={disabled}
+                    // What can be restored goes at once, and the toast offers to undo it.
+                    onClick={() =>
+                      toast('已删除「产品周会」', 'neutral', 8000, {
+                        label: '撤销',
+                        onSelect: () => toast('已恢复「产品周会」', 'success'),
+                      })
+                    }
+                  >
                     删除
                   </Button>
                 </>

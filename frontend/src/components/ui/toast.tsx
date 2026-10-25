@@ -3,14 +3,17 @@ import { X } from 'lucide-react';
 import { useEffect } from 'react';
 import { create } from 'zustand';
 import { DragDismiss } from '../motion';
-import { IconButton, type Tone } from './controls';
+import { Button, IconButton, type Tone } from './controls';
 import { useMotionPreset } from '../../design/motion';
 
+/** One step the toast offers, such as undoing what it reports; choosing it closes the toast. */
+export type ToastAction = { label: string; onSelect: () => void };
 type ToastMessage = {
   id: number;
   message: string;
   tone: Tone;
   duration: number;
+  action?: ToastAction;
 };
 let nextId = 0;
 const useToasts = create<{
@@ -28,9 +31,10 @@ export function toast(
   message: string,
   tone: Tone = 'neutral',
   duration = 5000,
+  action?: ToastAction,
 ) {
   const id = ++nextId;
-  useToasts.getState().add({ id, message, tone, duration });
+  useToasts.getState().add({ id, message, tone, duration, action });
   return () => useToasts.getState().remove(id);
 }
 
@@ -51,6 +55,18 @@ function Toast({ item }: { item: ToastMessage }) {
       className="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-canvas p-3 shadow-elevation-2"
     >
       <p className="flex-1 text-primary">{item.message}</p>
+      {item.action && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            remove(item.id);
+            item.action!.onSelect();
+          }}
+        >
+          {item.action.label}
+        </Button>
+      )}
       <IconButton label="关闭通知" onClick={() => remove(item.id)}>
         <X className="size-4" />
       </IconButton>

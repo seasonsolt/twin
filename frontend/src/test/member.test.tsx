@@ -15,6 +15,7 @@ vi.mock('motion/react', async (original) => ({
   useReducedMotion: () => true,
 }));
 let items: Persona[];
+let deleted: Persona | undefined;
 let people: Record<string, unknown>[];
 let handoffs: Record<string, unknown>[];
 let team_answers: Record<string, unknown>[];
@@ -68,6 +69,7 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   items = [twin({ id: 'default', name: '本人', is_default: true }), twin({})];
+  deleted = undefined;
   people = [];
   handoffs = [];
   team_answers = [];
@@ -86,8 +88,14 @@ beforeEach(() => {
     if (path === '/api/personas') return json(items);
     if (path === '/api/personas/trash') return json([]);
     if (path === '/api/personas/friend' && init?.method === 'DELETE') {
+      deleted = items.find((item) => item.id === 'friend');
       items = items.filter((item) => item.id !== 'friend');
       return json({ deleted: true });
+    }
+    if (path === '/api/personas/friend/restore' && deleted) {
+      items = [...items, deleted];
+      deleted = undefined;
+      return json({});
     }
     if (/^\/api\/personas\/[^/]+$/.test(path) && init?.method === 'PATCH') {
       const target = path.split('/').at(-1);
@@ -206,6 +214,9 @@ afterEach(() => {
 });
 
 const more = (name = '朋友') => screen.findByLabelText(`${name}的更多操作`);
+// The toasts as seen, apart from the live region that reads the latest one out.
+const toasts = () => within(screen.getByLabelText('通知'));
+
 async function choose(
   user: ReturnType<typeof userEvent.setup>,
   name: string,
@@ -378,43 +389,35 @@ it('mounts polling components only in their selected panel and aborts them when 
   expect(screen.queryByRole('article')).toBeNull();
 });
 
-// Deleting is one of the twin's settings, under its own section.
-async function openDelete(user: ReturnType<typeof userEvent.setup>) {
-  await choose(user, '删除分身');
-  return screen.findByRole('dialog', { name: '分身设置' });
-}
-
-it('confirms deletion before clearing only the deleted twin, and returns to the team', async () => {
+it('deletes at once from “⋯”, returns to the team, and undoes it from the toast', async () => {
   sessionStorage.setItem(personaKey(CHAT_KEY, 'friend'), 'private');
   sessionStorage.setItem(CHAT_KEY, 'default history');
   render(<App />);
   const user = userEvent.setup();
   await screen.findByRole('heading', { level: 1, name: '朋友' });
-  await openDelete(user);
-  await user.click(await screen.findByRole('button', { name: '删除这个分身' }));
-  let dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
-  await user.click(within(dialog).getByRole('button', { name: '取消' }));
-  await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: '删除「朋友」？' })).toBeNull(),
-  );
-  expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(
-    false,
-  );
-  await user.click(screen.getByRole('button', { name: '删除这个分身' }));
-  dialog = screen.getByRole('dialog', { name: '删除「朋友」？' });
-  expect(dialog).toHaveTextContent(
-    '删除后 7 天内可以在团队页的「已删除」里恢复',
-  );
-  await user.click(within(dialog).getByRole('button', { name: '删除分身' }));
+  await choose(user, '删除分身');
+  // A twin deleted waits a week in the trash: no confirmation, the toast undoes it.
+  expect(screen.queryByRole('dialog')).toBeNull();
   await waitFor(() => expect(window.location.hash).toBe('#/team'));
   expect(usePersonas.getState().id).toBe('default');
   expect(sessionStorage.getItem(personaKey(CHAT_KEY, 'friend'))).toBeNull();
   expect(sessionStorage.getItem(CHAT_KEY)).toBe('default history');
   await screen.findByRole('heading', { name: '团队' });
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(await toasts().findByText('已删除「朋友」')).toBeVisible();
+  await user.click(toasts().getByRole('button', { name: '撤销' }));
+  expect(await toasts().findByText('已恢复「朋友」')).toBeVisible();
+  expect(
+    fetcher.mock.calls.some(
+      ([path, init]) =>
+        path === '/api/personas/friend/restore' && init?.method === 'POST',
+    ),
+  ).toBe(true);
+  expect(usePersonas.getState().items.map((item) => item.id)).toContain(
+    'friend',
+  );
 });
 
-it('protects the default twin: nothing to delete in its menu, and the settings say why', async () => {
+it('protects the default twin: nothing to delete in its menu or its settings', async () => {
   window.location.hash = '#/team/twin/default';
   setPersonaId('default');
   usePersonas.setState({ id: 'default' });
@@ -424,12 +427,12 @@ it('protects the default twin: nothing to delete in its menu, and the settings s
   expect(screen.queryByRole('button', { name: '删除分身' })).toBeNull();
   await user.click(screen.getByRole('button', { name: '别名' }));
   const settings = await screen.findByRole('dialog', { name: '分身设置' });
-  await user.click(within(settings).getByRole('button', { name: '删除分身' }));
-  expect(await screen.findByText('默认分身不能删除')).toBeVisible();
-  expect(screen.queryByRole('button', { name: '删除这个分身' })).toBeNull();
+  expect(
+    within(settings).queryByRole('button', { name: '删除分身' }),
+  ).toBeNull();
 });
 
-it('lets an empty leftover default twin be deleted, warning that it cannot be restored', async () => {
+it('asks once before deleting an empty leftover default twin, which cannot be restored', async () => {
   items[0] = { ...items[0], sources: 0, retirable: true };
   window.location.hash = '#/team/twin/default';
   setPersonaId('default');
@@ -437,15 +440,13 @@ it('lets an empty leftover default twin be deleted, warning that it cannot be re
   render(<App />);
   const user = userEvent.setup();
   await choose(user, '删除分身', '本人');
-  await screen.findByRole('dialog', { name: '分身设置' });
-  expect(screen.queryByText('默认分身不能删除')).toBeNull();
-  await user.click(await screen.findByRole('button', { name: '删除这个分身' }));
   const dialog = screen.getByRole('dialog', { name: '删除「本人」？' });
   expect(dialog).toHaveTextContent('它是空的，删除后不能恢复');
   await user.click(within(dialog).getByRole('button', { name: '取消' }));
   expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(
     false,
   );
+  expect(window.location.hash).toBe('#/team/twin/default');
 });
 
 it('keeps the page and reports a blocked deletion without clearing local data', async () => {
@@ -462,17 +463,8 @@ it('keeps the page and reports a blocked deletion without clearing local data', 
   render(<App />);
   const user = userEvent.setup();
   await screen.findByRole('heading', { level: 1, name: '朋友' });
-  await openDelete(user);
-  await user.click(await screen.findByRole('button', { name: '删除这个分身' }));
-  await user.click(
-    within(screen.getByRole('dialog', { name: '删除「朋友」？' })).getByRole(
-      'button',
-      { name: '删除分身' },
-    ),
-  );
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    '这个分身还有任务在运行',
-  );
+  await choose(user, '删除分身');
+  expect(await toasts().findByText('这个分身还有任务在运行')).toBeVisible();
   expect(window.location.hash).toBe('#/team/twin/friend');
   expect(sessionStorage.getItem(personaKey(CHAT_KEY, 'friend'))).toBe(
     'private',

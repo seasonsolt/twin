@@ -50,6 +50,7 @@ import { WorkClaim } from './WorkClaim';
 import { BuildMeter } from '../memories/BuildProgress';
 import { minutes } from './review';
 import { useTeamData } from './useTeamData';
+import { deletable, useDeleteTwin } from '../profile/useDeleteTwin';
 import { looseTwins, namedPeople } from './teamCounts';
 
 /** A twin deleted in the last days, which can still be brought back. */
@@ -446,6 +447,7 @@ function personRow({
   onEdit,
   onAddress,
   onRemove,
+  onDeleteTwin,
   onVoice,
   onRebuild,
 }: {
@@ -459,6 +461,8 @@ function personRow({
   onEdit: () => void;
   onAddress: () => void;
   onRemove: () => void;
+  /** Delete their twin, which waits a week in the trash. */
+  onDeleteTwin: (twin: Persona) => void;
   /** Their voice samples, and what voice alone gave them, to spot-check. */
   onVoice: () => void;
   /** Build their twin again now: its update stopped, or the switched-off automatic rebuild holds it. */
@@ -593,6 +597,17 @@ function personRow({
                   },
                 ]
               : []),
+            ...(twin && deletable(twin)
+              ? [
+                  {
+                    label: '删除分身',
+                    icon: Trash2,
+                    danger: true,
+                    disabled: busy,
+                    onSelect: () => onDeleteTwin(twin),
+                  },
+                ]
+              : []),
             ...(!person.persona_id &&
             !person.self_claimed &&
             !person.twin_elsewhere
@@ -626,6 +641,7 @@ function twinRow({
   onOpen,
   onMember,
   onSame,
+  onDelete,
 }: {
   twin: Persona;
   /** The signed-in person's address, so only other people's twins name their owner. */
@@ -635,8 +651,28 @@ function twinRow({
   onOpen: (personaId: string) => void;
   onMember: () => void;
   onSame: (match: TwinMatch, same: boolean) => void;
+  /** Delete the twin, which waits a week in the trash. */
+  onDelete: () => void;
 }): ReactNode[] {
   const state = looseState(twin);
+  const menu = [
+    ...(match
+      ? [
+          { label: '是同一人', onSelect: () => onSame(match, true) },
+          { label: '不是同一人', onSelect: () => onSame(match, false) },
+        ]
+      : []),
+    ...(deletable(twin)
+      ? [
+          {
+            label: '删除分身',
+            icon: Trash2,
+            danger: true,
+            onSelect: onDelete,
+          },
+        ]
+      : []),
+  ];
   return [
     <IdentityLink
       key="who"
@@ -685,13 +721,12 @@ function twinRow({
           查看
         </Button>
       )}
-      {match && (
+      {menu.length > 0 && (
         <ActionMenu
-          label={`${twin.name}是不是会议里的人`}
-          items={[
-            { label: '是同一人', onSelect: () => onSame(match, true) },
-            { label: '不是同一人', onSelect: () => onSame(match, false) },
-          ]}
+          label={
+            match ? `${twin.name}是不是会议里的人` : `${twin.name}的更多操作`
+          }
+          items={menu}
         />
       )}
     </Row>,
@@ -867,6 +902,11 @@ function Roster({
   useEffect(() => {
     void loadTrash();
   }, [loadTrash]);
+  const deleteTwin = useDeleteTwin();
+  // A twin deleted or brought back changes its row and the deleted tab.
+  const reloadAll = async () => {
+    await Promise.all([load(), loadTrash()]);
+  };
 
   const restore = (entry: Trashed) =>
     act(async () => {
@@ -1051,6 +1091,7 @@ function Roster({
                   onEdit: () => setEditing(entry.person),
                   onAddress: () => address(entry.person),
                   onRemove: () => void remove(entry.person),
+                  onDeleteTwin: (twin) => void deleteTwin(twin, reloadAll),
                   onVoice: () => setHearing(entry.person),
                   onRebuild: () => void rebuild(entry.person),
                 })
@@ -1061,6 +1102,7 @@ function Roster({
                   onOpen: chat,
                   onMember: () => void navigate(twinMemberPath(entry.twin.id)),
                   onSame: (match, same) => void sameTwin(match, same),
+                  onDelete: () => void deleteTwin(entry.twin, reloadAll),
                 }),
           )}
         />

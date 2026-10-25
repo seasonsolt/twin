@@ -37,6 +37,7 @@ import { EditIdentityDialog } from '../features/profile/EditIdentityDialog';
 import { MemoriesTab, type MemoryView } from '../features/profile/MemoriesTab';
 import { OverviewTab } from '../features/profile/OverviewTab';
 import { PersonaSettings } from '../features/profile/PersonaSettings';
+import { deletable, useDeleteTwin } from '../features/profile/useDeleteTwin';
 import { Ledger } from './Ledger';
 import type { Person } from './Recording';
 import { useIsSelf } from '../stores/access';
@@ -56,6 +57,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const mobile = useMobile();
   const [params, setParams] = useSearchParams();
   const canManage = twin.can_manage !== false;
+  const deleteTwin = useDeleteTwin();
   const self = useIsSelf(twin);
   const ledgerOn = useAuth((state) => featureOn(state.identity, 'ledger'));
   const memories = useMemoryCount(twin.id, canManage);
@@ -162,15 +164,18 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                     label: twin.public ? '设为私有' : '设为公开',
                     onSelect: () => void togglePublic(),
                   },
-                  ...(twin.is_default && !twin.retirable
-                    ? []
-                    : [
+                  ...(deletable(twin)
+                    ? [
                         {
                           label: '删除分身',
                           danger: true,
-                          onSelect: () => setSettings('delete'),
+                          onSelect: () =>
+                            void deleteTwin(twin).then((deleted) => {
+                              if (deleted) void navigate('/team');
+                            }),
                         },
-                      ]),
+                      ]
+                    : []),
                 ]
               : undefined
           }

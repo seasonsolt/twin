@@ -15,6 +15,7 @@ import os
 import shlex
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,11 @@ MAX_TAT_CONTENT_BYTES = 64 * 1024
 ARCHIVE_CHUNK_BYTES = 30_000
 # Each chunk is one TAT round trip (dispatch plus 2 s polls); chunks are independent files, so upload in parallel.
 UPLOAD_PARALLELISM = 8
+# TAT takes at most 20 API requests a second (for the account, and audiostudio deploys with it too): every upload's
+# dispatch and polls keep to one pace well below that, and a request TAT refuses for the rate is sent again; a refused
+# request was not run, so sending it again runs nothing twice.
+REQUESTS_PER_SECOND = 10
+RATE_RETRIES = 5
 FINISHED = {"CANCELLED", "DELIVER_FAILED", "FAILED", "START_FAILED", "SUCCESS", "TASK_TIMEOUT", "TERMINATED", "TIMEOUT"}
 
 
@@ -63,6 +69,50 @@ tar -xOf {release} deploy/daw/deploy.sh > {script}
 chmod 700 {script}
 {script} {release}
 """
+
+
+class Pace:
+    """At most ``rate`` requests a second, across every thread that waits on it."""
+
+    def __init__(
+        self,
+        rate: float,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.gap = 1 / rate
+        self.clock = clock
+        self.sleep = sleep
+        self._next = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        with self._lock:
+            now = self.clock()
+            start = max(now, self._next)
+            self._next = start + self.gap
+        if start > now:
+            self.sleep(start - now)
+
+
+class Paced:
+    """A TAT client whose requests keep to ``pace``, sent again (after 1, 2, 4… seconds) when TAT refuses them for
+    the rate."""
+
+    def __init__(self, client: Any, pace: Pace) -> None:
+        self.client = client
+        self.pace = pace
+
+    def call_json(self, action: str, params: dict[str, Any]) -> Any:
+        for attempt in range(RATE_RETRIES + 1):
+            self.pace.wait()
+            try:
+                return self.client.call_json(action, params)
+            except Exception as error:
+                if getattr(error, "code", None) != "RequestLimitExceeded" or attempt == RATE_RETRIES:
+                    raise
+                self.pace.sleep(2**attempt)
+        raise AssertionError("unreachable")
 
 
 def run_tat(client: Any, instance_id: str, command: str, timeout: int = 600) -> str:
@@ -125,8 +175,11 @@ def main() -> None:
         raise SystemExit("Release archive is empty")
     remote_dir = f"/tmp/twin-cnb-{hashlib.sha256(archive).hexdigest()[:16]}"
 
+    pace = Pace(REQUESTS_PER_SECOND)
+
     def make_client() -> Any:
-        return CommonClient("tat", "2020-10-28", credential.Credential(secret_id, secret_key), region, ClientProfile())
+        sdk = CommonClient("tat", "2020-10-28", credential.Credential(secret_id, secret_key), region, ClientProfile())
+        return Paced(sdk, pace)
 
     client = make_client()
     local = threading.local()  # the SDK does not promise a thread-safe client

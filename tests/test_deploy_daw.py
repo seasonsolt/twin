@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tarfile
+from itertools import pairwise
 from pathlib import Path
 from types import ModuleType
 
@@ -63,6 +64,46 @@ def test_corrupted_chunk_stops_before_deploying(tat: ModuleType, tmp_path: Path)
     first.write_bytes(b"tampered" + first.read_bytes()[8:])
     result = subprocess.run(["bash", "-c", tat.final_command(archive, staging)], capture_output=True)
     assert result.returncode != 0 and not marker.exists()
+
+
+def test_requests_keep_one_pace_across_threads_and_a_rate_refusal_is_sent_again(tat: ModuleType) -> None:
+    now = [0.0]
+    slept: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    pace = tat.Pace(10, clock=lambda: now[0], sleep=sleep)
+
+    class Refused(Exception):
+        def __init__(self, code: str) -> None:
+            super().__init__(code)
+            self.code = code
+
+    sent: list[tuple[float, str]] = []
+    refusals = ["RequestLimitExceeded", "RequestLimitExceeded"]
+
+    class Sdk:
+        def call_json(self, action: str, params: dict[str, object]) -> dict[str, object]:
+            sent.append((now[0], action))
+            if action == "RunCommand" and refusals:
+                raise Refused(refusals.pop())
+            if action == "Broken":
+                raise Refused("AuthFailure")
+            return {"Response": {}}
+
+    client = tat.Paced(Sdk(), pace)
+    assert client.call_json("RunCommand", {}) == {"Response": {}}
+    client.call_json("DescribeInvocationTasks", {})
+    # Sent three times (refused twice, after waiting 1 then 2 seconds), and never two requests within 0.1 seconds.
+    assert [action for _, action in sent] == ["RunCommand"] * 3 + ["DescribeInvocationTasks"]
+    times = [at for at, _ in sent]
+    assert all(later - earlier >= 0.1 - 1e-9 for earlier, later in pairwise(times))
+    assert times[1] - times[0] >= 1 and times[2] - times[1] >= 2
+    with pytest.raises(Refused, match="AuthFailure"):
+        client.call_json("Broken", {})
+    assert [action for _, action in sent].count("Broken") == 1
 
 
 def test_oversized_command_is_refused(tat: ModuleType) -> None:

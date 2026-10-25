@@ -809,11 +809,12 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           </Field>
           <Field
             id="gallery-suggest-input"
-            label="带候选的输入框 Input suggestions"
+            label="带候选的选人框 Input suggestions width=name"
           >
             <Input
               id="gallery-suggest-input"
               placeholder="这是谁"
+              width="name"
               suggestions={['林舟', '许清禾', '周石言']}
             />
           </Field>

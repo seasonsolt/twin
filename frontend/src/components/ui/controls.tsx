@@ -158,12 +158,15 @@ export function IconButton({
 
 export function Input({
   size = 'md',
+  width = 'fill',
   suggestions,
   className,
   ...props
-}: Omit<ComponentProps<'input'>, 'size' | 'list'> & {
+}: Omit<ComponentProps<'input'>, 'size' | 'list' | 'width'> & {
   /** lg: the one prominent field of a short form (sign-in), 48px with a heavy border. */
   size?: 'md' | 'lg';
+  /** fill: as wide as its place; name: wide enough for a name, the same on every row of a list, so they line up. */
+  width?: 'fill' | 'name';
   /** Values offered as the owner types (such as people's names); anything else can still be typed. */
   suggestions?: string[];
 }) {
@@ -174,7 +177,8 @@ export function Input({
         {...props}
         list={suggestions?.length ? listId : undefined}
         className={cn(
-          'w-full rounded-sm bg-surface px-3 text-primary placeholder:text-tertiary disabled:opacity-50',
+          'rounded-sm bg-surface px-3 text-primary placeholder:text-tertiary disabled:opacity-50',
+          width === 'fill' ? 'w-full' : 'w-[14rem] max-w-full shrink-0',
           size === 'lg'
             ? 'min-h-12 border-2 border-primary text-md'
             : 'min-h-9 border border-tertiary/60 hover:border-tertiary',

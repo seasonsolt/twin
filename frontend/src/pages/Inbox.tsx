@@ -11,6 +11,7 @@ import {
   Segmented,
   Stack,
   Tabs,
+  TaskGroupHead,
   Text,
   toast,
   useConfirm,
@@ -66,19 +67,33 @@ import {
 // New voices shown at first, and each time more are asked for.
 const VOICES_PER_PAGE = 20;
 const TASKS_PER_PAGE = 10;
-type Folded = 'enough' | 'stranger';
+type Folded = 'once' | 'enough' | 'stranger';
 type Shown = Category | Folded;
 // Which list of the queue each group of voices is.
 const LIST: Record<'main' | Folded, Paged> = {
   main: 'voices',
+  once: 'once',
   enough: 'enough',
   stranger: 'strangers',
 };
+// The groups of the list, by what settling a voice costs (``team.roi``): its name, and what answering takes.
+const PARTS: Record<1 | 2 | 3, { title: string; hint: string }> = {
+  1: { title: '一键确认', hint: '点一下就完' },
+  2: { title: '两人难分', hint: '听一下选一个' },
+  3: { title: '待你认人', hint: '可能是新同事' },
+};
+const roiOf = (voice: Pick<Voice, 'roi'>) => voice.roi ?? 3;
 // Rounded up to a whole page, so a run of answers waiting to be taken back asks the server again once a page.
 const whole = (count: number) =>
   Math.ceil(count / VOICES_PER_PAGE) * VOICES_PER_PAGE;
-const groupOf = (voice: Pick<Voice, 'enough' | 'stranger'>) =>
-  voice.stranger ? 'stranger' : voice.enough ? 'enough' : 'main';
+const groupOf = (voice: Pick<Voice, 'enough' | 'stranger' | 'roi'>) =>
+  voice.stranger
+    ? 'stranger'
+    : voice.enough
+      ? 'enough'
+      : roiOf(voice) === 4
+        ? 'once'
+        : 'main';
 // Asked for more than has arrived yet: the next page waits for it, however far the owner scrolls.
 const awaited = (asked: number, shown: number, all: number) =>
   asked > shown && shown < all;
@@ -117,6 +132,7 @@ export function Inbox() {
   // are gone from the queue) does not ask again.
   const [extra, setExtra] = useState<Record<'main' | Folded, number>>({
     main: 0,
+    once: 0,
     enough: 0,
     stranger: 0,
   });
@@ -125,6 +141,7 @@ export function Inbox() {
     onReload: reload,
     first: {
       voices: whole(voicesShown + extra.main),
+      once: whole((pages.once ?? VOICES_PER_PAGE) + extra.once),
       enough: whole((pages.enough ?? VOICES_PER_PAGE) + extra.enough),
       strangers: whole((pages.stranger ?? VOICES_PER_PAGE) + extra.stranger),
       items: pages.disputed ?? TASKS_PER_PAGE,
@@ -205,7 +222,7 @@ export function Inbox() {
     twins.find((t) => t.id === person.persona_id);
   const live = (id: string) => !deferred.has(id);
 
-  // Whoever speaks longest first, a new person or a voice alike: settling them teaches a twin the most.
+  // Whoever a twin still lacks first, the quickest to answer first among them, a new person or a voice alike.
   const voiced: VoiceItem[] = [
     ...unnamedPeople(people ?? []).map((person): VoiceItem => ({
       kind: 'person',
@@ -214,6 +231,7 @@ export function Inbox() {
       recordings: person.speakers,
       enough: false,
       stranger: false,
+      roi: 3,
       person,
     })),
     ...voices.map((voice): VoiceItem => ({
@@ -223,14 +241,17 @@ export function Inbox() {
       recordings: new Set(voice.members.map((m) => m.recording_id)).size,
       enough: Boolean(voice.enough),
       stranger: Boolean(voice.stranger),
+      roi: roiOf(voice),
       voice,
     })),
   ].sort(
-    // Whoever a twin still lacks first, then the voice heard in the most recordings (settled, it tells the others
-    // there apart) and the longest; voices like one already marked 不认识 wait last.
+    // As the server orders them (``Team.voices``): whoever a twin still lacks first, the quickest to answer first,
+    // then the voice heard in the most recordings (settled, it tells the others there apart) and the longest; voices
+    // like one already marked 不认识 wait last.
     (a, b) =>
       Number(a.stranger) - Number(b.stranger) ||
       Number(a.enough) - Number(b.enough) ||
+      a.roi - b.roi ||
       b.recordings - a.recordings ||
       b.seconds - a.seconds,
   );
@@ -248,13 +269,15 @@ export function Inbox() {
   };
   const heldIn = (group: 'main' | Folded) =>
     voiced.filter((v) => !live(v.id) && groupOf(v) === group).length;
-  const [heldMain, heldEnough, heldStranger] = [
+  const [heldMain, heldOnce, heldEnough, heldStranger] = [
     heldIn('main'),
+    heldIn('once'),
     heldIn('enough'),
     heldIn('stranger'),
   ];
-  const [moreMain, moreEnough, moreStranger] = [
+  const [moreMain, moreOnce, moreEnough, moreStranger] = [
     unloaded('main').count > 0,
+    unloaded('once').count > 0,
     unloaded('enough').count > 0,
     unloaded('stranger').count > 0,
   ];
@@ -263,18 +286,29 @@ export function Inbox() {
       setExtra((now) => {
         const next = {
           main: moreMain ? Math.max(now.main, heldMain) : now.main,
+          once: moreOnce ? Math.max(now.once, heldOnce) : now.once,
           enough: moreEnough ? Math.max(now.enough, heldEnough) : now.enough,
           stranger: moreStranger
             ? Math.max(now.stranger, heldStranger)
             : now.stranger,
         };
         return next.main === now.main &&
+          next.once === now.once &&
           next.enough === now.enough &&
           next.stranger === now.stranger
           ? now
           : next;
       }),
-    [heldMain, heldEnough, heldStranger, moreMain, moreEnough, moreStranger],
+    [
+      heldMain,
+      heldOnce,
+      heldEnough,
+      heldStranger,
+      moreMain,
+      moreOnce,
+      moreEnough,
+      moreStranger,
+    ],
   );
   // New people (all loaded with the people) among the voices: one ranked after the last voice loaded may yet be
   // passed by a voice still to load, so none is shown past that voice until the rest are.
@@ -286,18 +320,19 @@ export function Inbox() {
     ? voiced.filter((v, i) => v.kind === 'voice' || i < lastLoaded)
     : voiced;
   const open = reachable.filter((item) => live(item.id));
-  const main = open.filter((v) => !v.enough && !v.stranger);
+  const main = open.filter((v) => groupOf(v) === 'main');
   // The rows of the list: an answer waiting to be taken back stays where its voice was, as what was done.
   const listed: VoiceItem[] = [];
   let seen = 0;
   for (const item of reachable) {
-    if (item.enough || item.stranger) continue;
+    if (groupOf(item) !== 'main') continue;
     if (live(item.id)) {
       if (seen >= voicesShown) break;
       seen += 1;
     } else if (!deferred.held(item.id)) continue;
     listed.push(item);
   }
+  const once = open.filter((v) => groupOf(v) === 'once');
   const enough = open.filter((v) => v.enough && !v.stranger);
   const strangers = open.filter((v) => v.stranger);
   const settledHere = (category: Category) =>
@@ -306,6 +341,7 @@ export function Inbox() {
   const mainCount =
     voiced.filter((v) => live(v.id) && groupOf(v) === 'main').length +
     unloaded('main').count;
+  const onceCount = once.length + unloaded('once').count;
   const enoughCount = enough.length + unloaded('enough').count;
   const strangerCount = strangers.length + unloaded('stranger').count;
   // How many of a kind are loaded: those still to load are asked for as the owner scrolls.
@@ -315,7 +351,7 @@ export function Inbox() {
     disputed: waiting.length,
   };
   const counts: Record<Category, number> = {
-    voice: mainCount + enoughCount + strangerCount,
+    voice: mainCount + onceCount + enoughCount + strangerCount,
     mixed: inAll({ totals }, 'suspects', suspects.length),
     unsorted: inAll({ totals }, 'unsorted', unsorted.length),
     failed: failed.length,
@@ -326,7 +362,10 @@ export function Inbox() {
   };
   // The tab counts what the side bar does (``waitingCount``): voices surely heard enough already, or like ones the
   // owner could not name, stay listed, folded away, but are not counted.
-  const shown: Record<Category, number> = { ...counts, voice: mainCount };
+  const shown: Record<Category, number> = {
+    ...counts,
+    voice: mainCount + onceCount,
+  };
   // A kind stays in the tabs while a row of it waits to be taken back.
   const present = CATEGORIES.filter(
     (c) => counts[c.id] > 0 || settledHere(c.id) > 0,
@@ -353,9 +392,12 @@ export function Inbox() {
   );
 
   // The rows the keyboard walks through, as they stand.
-  const order = [...main.slice(0, voicesShown), ...enough, ...strangers].map(
-    (item) => item.id,
-  );
+  const order = [
+    ...main.slice(0, voicesShown),
+    ...once,
+    ...enough,
+    ...strangers,
+  ].map((item) => item.id);
   // Where they stood when the page was left for a recording, for the keyboard to land after the one settled there.
   const standing = useRef(order);
   // Taken as the page opens: leaving it again (or a development double mount) writes the variable anew.
@@ -483,6 +525,35 @@ export function Inbox() {
       await data.removeRecording(recording);
   };
 
+  // How many open voices of the list's first group wait in a part of it, those still on the server too.
+  const partCount = (part: 1 | 2 | 3) => {
+    const loadedHere = loadedIn('main').filter((v) => roiOf(v) === part).length;
+    return (
+      voiced.filter(
+        (v) => live(v.id) && groupOf(v) === 'main' && v.roi === part,
+      ).length +
+      Math.max(0, (totals?.voices?.parts?.[part] ?? loadedHere) - loadedHere)
+    );
+  };
+  // The list's first group, a head before the first row of each part.
+  const partRows = (items: VoiceItem[]) =>
+    items.flatMap((item, i) => {
+      const part = item.roi as 1 | 2 | 3;
+      return [
+        ...(i === 0 || items[i - 1].roi !== part
+          ? [
+              <TaskGroupHead
+                key={`part-${part}`}
+                number={part}
+                title={PARTS[part].title}
+                count={partCount(part)}
+                hint={PARTS[part].hint}
+              />,
+            ]
+          : []),
+        ...voiceRows([item]),
+      ];
+    });
   const voiceRows = (items: VoiceItem[]) =>
     items.map((item) =>
       deferred.held(item.id) ? (
@@ -582,18 +653,19 @@ export function Inbox() {
       <Stack gap={4}>
         <Stack as="ul" gap={0} aria-label="新的声音">
           {settledRows('voice', listed)}
-          {voiceRows(listed)}
+          {partRows(listed)}
         </Stack>
         {later.count > 0 && (
           <LoadMore
             shown={shownMain}
             total={mainCount}
             label={`再显示 ${Math.min(VOICES_PER_PAGE, later.count)} 个`}
-            description={`还有 ${later.count} 个说得更少（共 ${span(later.seconds)}）`}
+            description={`还有 ${later.count} 个（共 ${span(later.seconds)}）`}
             disabled={awaited(voicesShown, shownMain, mainCount)}
             onLoadMore={() => setVoicesShown((n) => n + VOICES_PER_PAGE)}
           />
         )}
+        {folded(`只出现一场 ${onceCount}`, once, onceCount, 'once')}
         {folded(`已够建分身 ${enoughCount}`, enough, enoughCount, 'enough')}
         {folded(
           `${strangerCount} 个像你标过不认识的`,

@@ -228,19 +228,22 @@ def test_disputed_speakers_are_matched_alone(tmp_path: Path, monkeypatch: pytest
     assert matched == [[1.0, 0.0, 0.0]]  # S1 alone, not the meeting's undecided S2 and S3.
 
 
-def voice(key: str, seconds: float, **flags: bool) -> dict[str, Any]:
-    return {"id": key, "seconds": seconds, "stranger": False, "enough": False, **flags}
+def voice(key: str, seconds: float, roi: int = 3, **flags: bool) -> dict[str, Any]:
+    return {"id": key, "seconds": seconds, "stranger": False, "enough": False, "roi": roi, **flags}
 
 
 def test_a_page_holds_the_first_of_each_list_and_how_many_each_holds() -> None:
     reading = {
         "heard": {"settled": 1.0, "total": 9.0},
         "items": [{"id": "S1"}, {"id": "S2"}],
-        # As ``Team.voices`` sorts them: those asked first, then those surely of someone heard enough, then strangers.
+        # As ``Team.voices`` sorts them: those asked first, the quickest first, then those heard once and like nobody,
+        # those surely of someone heard enough, then strangers.
         "voices": [
-            voice("a", 30),
-            voice("b", 20),
+            voice("a", 30, roi=1),
+            voice("b", 20, roi=2),
             voice("c", 10.25),
+            voice("g", 70, roi=4),
+            voice("h", 3, roi=4),
             voice("d", 50, enough=True),
             voice("e", 40, enough=True),
             voice("f", 5, stranger=True, enough=True),
@@ -250,13 +253,16 @@ def test_a_page_holds_the_first_of_each_list_and_how_many_each_holds() -> None:
         "suspects": [],
     }
     before = deepcopy(reading)
-    paged = page(reading, {"voices": 2, "enough": 1, "strangers": 0, "items": 1, "unsorted": 5, "suspects": 3})
-    assert [v["id"] for v in paged["voices"]] == ["a", "b", "d"]
+    paged = page(
+        reading, {"voices": 2, "once": 1, "enough": 1, "strangers": 0, "items": 1, "unsorted": 5, "suspects": 3}
+    )
+    assert [v["id"] for v in paged["voices"]] == ["a", "b", "g", "d"]
     assert paged["items"] == [{"id": "S1"}] and len(paged["unsorted"]) == 3 and paged["suspects"] == []
     # Fragments are one task, settled together: always whole.
     assert paged["fragments"] == reading["fragments"] and paged["heard"] == reading["heard"]
     assert paged["totals"] == {
-        "voices": {"count": 3, "seconds": 60.2},
+        "voices": {"count": 3, "seconds": 60.2, "parts": {"1": 1, "2": 1, "3": 1}},
+        "once": {"count": 2, "seconds": 73},
         "enough": {"count": 2, "seconds": 90},
         "strangers": {"count": 1, "seconds": 5},
         "items": {"count": 2},

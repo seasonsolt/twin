@@ -27,30 +27,40 @@ from ..media.team import Team
 logger = logging.getLogger(__name__)
 
 # The lists a page of the queue holds the first so many of: voices by when they are asked (``Team.voices`` sorts
-# them so), speakers someone said are not them, recordings settled one by one, and suspect confirmed speakers.
-# Fragments are one task, settled all at once, and always come whole.
-PAGED = ("voices", "enough", "strangers", "items", "unsorted", "suspects")
+# them so), those heard in one recording only and like nobody known (``team.roi`` 4), speakers someone said are not
+# them, recordings settled one by one, and suspect confirmed speakers. Fragments are one task, settled all at once,
+# and always come whole.
+PAGED = ("voices", "once", "enough", "strangers", "items", "unsorted", "suspects")
+# The parts of ``voices`` the page heads (``team.roi``), each counted in all.
+ROI_PARTS = (1, 2, 3)
 
 
 def _group(voice: Mapping[str, Any]) -> str:
-    """Which list a voice is in: like one the owner could not name, surely someone heard enough already, or asked."""
-    return "strangers" if voice.get("stranger") else "enough" if voice.get("enough") else "voices"
+    """Which list a voice is in: like one the owner could not name, surely someone heard enough already, heard once
+    and like nobody known, or asked."""
+    if voice.get("stranger"):
+        return "strangers"
+    if voice.get("enough"):
+        return "enough"
+    return "once" if voice.get("roi") == 4 else "voices"
 
 
 def page(reading: Mapping[str, Any], limits: Mapping[str, int | None]) -> dict[str, Any]:
     """The first ``limits[name]`` of each list in ``PAGED`` (the whole list without a limit), and how many each holds
-    in all (``totals``; with how long they speak, for voices). The page asks again for more from the start, not for
-    the rest after an offset: every list on it is of one reading, so a task settled meanwhile is neither shown twice
-    nor skipped."""
-    voices: dict[str, list[dict[str, Any]]] = {"voices": [], "enough": [], "strangers": []}
+    in all (``totals``; with how long they speak, for voices, and how many of ``voices`` wait in each ``ROI_PARTS``).
+    The page asks again for more from the start, not for the rest after an offset: every list on it is of one reading,
+    so a task settled meanwhile is neither shown twice nor skipped."""
+    voices: dict[str, list[dict[str, Any]]] = {"voices": [], "once": [], "enough": [], "strangers": []}
     for voice in reading["voices"]:
         voices[_group(voice)].append(voice)
     lists = {**voices, **{name: reading[name] for name in ("items", "unsorted", "suspects")}}
-    totals: dict[str, dict[str, float]] = {}
+    totals: dict[str, dict[str, Any]] = {}
     for name in PAGED:
         totals[name] = {"count": len(lists[name])}
         if name in voices:
             totals[name]["seconds"] = round(sum(voice["seconds"] for voice in lists[name]), 1)
+        if name == "voices":
+            totals[name]["parts"] = {str(n): sum(v.get("roi", 3) == n for v in lists[name]) for n in ROI_PARTS}
         limit = limits.get(name)
         if limit is not None:
             lists[name] = lists[name][:limit]

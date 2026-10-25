@@ -192,7 +192,7 @@ it('asks the queue only how much waits, and counts from its totals', async () =>
     await within(nav).findByRole('link', { name: '待处理（7）' }),
   ).toBeVisible();
   expect(asked).toEqual([
-    '/api/library/review?voices=0&enough=0&strangers=0&items=0&unsorted=0&suspects=0',
+    '/api/library/review?voices=0&once=0&enough=0&strangers=0&items=0&unsorted=0&suspects=0',
   ]);
 });
 

@@ -1824,6 +1824,7 @@ def register(
     def get_review(
         request: Request,
         voices: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
+        once: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
         enough: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
         strangers: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
         items: Annotated[int | None, Query(ge=0, le=MAX_REVIEW_PAGE)] = None,
@@ -1843,6 +1844,7 @@ def register(
         editable = {rid for rid, access in libraries.access(libraries.viewer(request)).items() if access.edit}
         limits = {
             "voices": voices,
+            "once": once,
             "enough": enough,
             "strangers": strangers,
             "items": items,

@@ -41,7 +41,12 @@ export interface Voice {
   // 'mid': voice alone is not sure enough to decide, but the leading candidate is far enough ahead to be offered
   // for one key (``team.tier``).
   tier?: 'mid' | 'low';
+  // Where it waits in the queue (``team.roi``), what settling it costs: 1 one click, 2 one of two people too alike,
+  // 3 to hear and name, 4 heard in one recording only and like nobody known.
+  roi?: Roi;
 }
+
+export type Roi = 1 | 2 | 3 | 4;
 
 /** A recording whose undecided speakers have no voiceprint to group by: settled in the recording itself. */
 export interface Unsorted {

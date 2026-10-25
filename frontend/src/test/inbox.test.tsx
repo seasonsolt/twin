@@ -99,8 +99,15 @@ const page = (url: string) => {
     limits.has(name) ? rows.slice(0, Number(limits.get(name))) : rows;
   const is = (v: Server['voices'][number], flag: 'enough' | 'stranger') =>
     Boolean((v as Record<string, unknown>)[flag]);
+  const asked = (v: Server['voices'][number]) =>
+    !is(v, 'enough') && !is(v, 'stranger');
   const groups = {
-    voices: server.voices.filter((v) => !is(v, 'enough') && !is(v, 'stranger')),
+    voices: server.voices.filter(
+      (v) => asked(v) && (v as { roi?: number }).roi !== 4,
+    ),
+    once: server.voices.filter(
+      (v) => asked(v) && (v as { roi?: number }).roi === 4,
+    ),
     enough: server.voices.filter((v) => is(v, 'enough') && !is(v, 'stranger')),
     strangers: server.voices.filter((v) => is(v, 'stranger')),
   };
@@ -653,7 +660,7 @@ it('settles a voice of several people apart, and short voices with whom they sou
   ] as never;
   view();
   const list = await screen.findByRole('list', { name: '新的声音' });
-  const first = list.querySelector('li')!;
+  const first = within(list).getAllByRole('listitem')[0];
   await user.click(within(first).getByLabelText(/^更多：/u));
   await user.click(
     within(first).getByRole('button', { name: '几个人混在一起' }),
@@ -748,7 +755,7 @@ it('shows twenty new voices at first and more on request, with what the rest add
   view();
   const list = await screen.findByRole('list', { name: '新的声音' });
   expect(within(list).getAllByRole('listitem')).toHaveLength(20);
-  expect(screen.getByText(/还有 7 个说得更少（共 \d+ 分钟）/u)).toBeVisible();
+  expect(screen.getByText(/还有 7 个（共 \d+ 分钟）/u)).toBeVisible();
   await userEvent.click(screen.getByRole('button', { name: '再显示 7 个' }));
   expect(within(list).getAllByRole('listitem')).toHaveLength(27);
 });
@@ -778,7 +785,7 @@ it('asks for the first page of each list, counts the rest from the totals, and a
   const list = await screen.findByRole('list', { name: '新的声音' });
   // Once, opened cold: the library arriving first is no change for the page to load again for.
   expect(asked()).toEqual([
-    '/api/library/review?voices=20&enough=20&strangers=20&items=10&unsorted=10&suspects=10&stale=true',
+    '/api/library/review?voices=20&once=20&enough=20&strangers=20&items=10&unsorted=10&suspects=10&stale=true',
   ]);
   expect(
     vi
@@ -793,7 +800,7 @@ it('asks for the first page of each list, counts the rest from the totals, and a
       .getAllByRole('button')
       .map((b) => b.textContent),
   ).toEqual(['新的声音26', '还没认人13']);
-  expect(screen.getByText(/还有 6 个说得更少（共 \d+ 分钟）/u)).toBeVisible();
+  expect(screen.getByText(/还有 6 个（共 \d+ 分钟）/u)).toBeVisible();
   // Five voices still to load come before the new person: they are not shown past the last voice loaded.
   expect(screen.queryByText('未命名 1')).not.toBeInTheDocument();
 

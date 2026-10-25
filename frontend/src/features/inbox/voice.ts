@@ -1,5 +1,5 @@
 import type { Person } from '../../pages/Recording';
-import type { Voice, VoiceDecision } from '../library/review';
+import type { Roi, Voice, VoiceDecision } from '../library/review';
 
 /** One new voice waiting for a name: someone the library found and nobody named (``person``), or a voice heard in
  * several recordings (``voice``). */
@@ -11,6 +11,8 @@ export type VoiceItem =
       recordings: number;
       enough: false;
       stranger: false;
+      // Where it waits in the queue (``team.roi``): a person still unnamed asks for a name.
+      roi: 3;
       person: Person;
     }
   | {
@@ -20,6 +22,7 @@ export type VoiceItem =
       recordings: number;
       enough: boolean;
       stranger: boolean;
+      roi: Roi;
       voice: Voice;
     };
 

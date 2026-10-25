@@ -105,11 +105,14 @@ export function NameField({
   autoFocus,
   placeholder = '输入名字',
   inputRef,
+  width = 'fill',
   onName,
 }: {
   label: string;
   known: Person[];
   autoFocus?: boolean;
+  /** name: a field of the same width on every row, after the answers offered. */
+  width?: 'fill' | 'name';
   placeholder?: string;
   inputRef?: Ref<HTMLInputElement>;
   onName: (name: string) => void;
@@ -119,7 +122,7 @@ export function NameField({
     <Row
       as="form"
       gap={2}
-      grow
+      grow={width === 'fill'}
       onSubmit={(event) => {
         event.preventDefault();
         if (name.trim()) onName(name);
@@ -133,7 +136,8 @@ export function NameField({
         value={name}
         autoFocus={autoFocus}
         suggestions={known.map((p) => p.name).sort(byName)}
-        className="min-w-0 flex-1"
+        width={width}
+        className={width === 'fill' ? 'min-w-0 flex-1' : undefined}
         onChange={(event) => setName(event.target.value)}
       />
       {name.trim() && <Button type="submit">确认</Button>}
@@ -141,7 +145,8 @@ export function NameField({
   );
 }
 
-/** A new voice in the list: hear it, then answer with one of the names it may be, or type one; the rest is in “⋯”. */
+/** A new voice in the list: hear it, then answer with one of the names it may be, or pick or type anyone in the
+ * field every row ends with; the rest is in “⋯”. */
 export function VoiceRow({
   item,
   people,
@@ -159,10 +164,8 @@ export function VoiceRow({
   const { facts, title, meta } = voiceFacts(item, people);
   const members = heardIn(item);
   const [heard, setHeard] = useState(0);
-  const [asking, setAsking] = useState(false);
   const options: Option[] = facts?.options ?? [];
   const current = members.length ? members[heard % members.length] : undefined;
-  const typing = options.length === 0 || asking;
   // Rows often share a title: the time they speak tells them apart to a screen reader.
   const named = `${title}（${span(item.seconds)}）`;
   return (
@@ -194,15 +197,13 @@ export function VoiceRow({
         </Row>
       }
       meta={meta}
-      actionsWidth={typing ? 'field' : 'auto'}
       actions={
         <>
-          <Row gap={2} wrap grow role="group" aria-label="这是谁">
+          <Row gap={2} wrap justify="end" role="group" aria-label="这是谁">
             {options.map((option) => (
               <Button
                 key={option.id}
-                // Once 其他人 is chosen, the name typed is the row's answer.
-                variant={option.sure && !asking ? 'primary' : 'secondary'}
+                variant={option.sure ? 'primary' : 'secondary'}
                 aria-label={
                   option.added
                     ? `新建成员：${option.name}`
@@ -215,23 +216,18 @@ export function VoiceRow({
                 {option.added ? `+ ${option.name}` : option.name}
               </Button>
             ))}
-            {typing && (
-              <NameField
-                label={`${named}，是谁`}
-                known={known}
-                autoFocus={asking}
-                onName={(name) =>
-                  onAnswer(item, answerFor(name, known, undefined, facts?.into))
-                }
-              />
-            )}
+            <NameField
+              label={`${named}，是谁`}
+              known={known}
+              width="name"
+              onName={(name) =>
+                onAnswer(item, answerFor(name, known, undefined, facts?.into))
+              }
+            />
           </Row>
           <ActionMenu
             label={`更多：${named}`}
             items={[
-              ...(!typing
-                ? [{ label: '其他人', onSelect: () => setAsking(true) }]
-                : []),
               ...(members.length > 1
                 ? [
                     {

@@ -510,6 +510,39 @@ export function TaskRow({
   );
 }
 
+/**
+ * The head of a group of TaskRows in one list: its number, name, how many it holds, and a few words on what answering
+ * them takes. Render it in the list, before the group's first row.
+ */
+export function TaskGroupHead({
+  number,
+  title,
+  count,
+  hint,
+}: {
+  number: number;
+  title: ReactNode;
+  count: number;
+  hint?: ReactNode;
+}) {
+  return (
+    // Not a row of the list: a heading among its rows.
+    <li
+      role="presentation"
+      className="border-b border-border pt-6 pb-2 first:pt-0"
+    >
+      <div role="heading" aria-level={3} className="flex items-center gap-2">
+        <StepNumber size="sm" state="current">
+          {number}
+        </StepNumber>
+        <span className="font-semibold">{title}</span>
+        <span className="text-secondary tabular-nums">{count}</span>
+        {hint && <span className="truncate text-sm text-tertiary">{hint}</span>}
+      </div>
+    </li>
+  );
+}
+
 /** A number with what it counts, for summaries. */
 export function Stat({
   label,

@@ -4,13 +4,24 @@ import type { Person } from '../../pages/Recording';
 import type { Persona } from '../../stores/personas';
 
 /** The lists of the review queue that come a page at a time (``review_queue.page``): voices by when they are
- * asked, speakers someone said are not them, recordings settled one by one, and suspect confirmed speakers. */
+ * asked (heard in one recording only and like nobody known apart, ``once``), speakers someone said are not them,
+ * recordings settled one by one, and suspect confirmed speakers. */
 export type Paged =
-  'voices' | 'enough' | 'strangers' | 'items' | 'unsorted' | 'suspects';
+  | 'voices'
+  | 'once'
+  | 'enough'
+  | 'strangers'
+  | 'items'
+  | 'unsorted'
+  | 'suspects';
 
-/** How many each paged list holds in all, and how long its voices speak; a list without one came whole. */
+/** How many each paged list holds in all, and how long its voices speak; a list without one came whole. ``parts``:
+ * how many of ``voices`` wait in each group (``team.roi`` 1–3). */
 export type ReviewTotals = Partial<
-  Record<Paged, { count: number; seconds?: number }>
+  Record<
+    Paged,
+    { count: number; seconds?: number; parts?: Record<string, number> }
+  >
 >;
 
 /** The review queue with the first so many of each paged list (none unless asked for): asking again with more keeps
@@ -18,6 +29,7 @@ export type ReviewTotals = Partial<
 export const reviewPath = (first: Partial<Record<Paged, number>> = {}) =>
   `/api/library/review?${new URLSearchParams({
     voices: String(first.voices ?? 0),
+    once: String(first.once ?? 0),
     enough: String(first.enough ?? 0),
     strangers: String(first.strangers ?? 0),
     items: String(first.items ?? 0),
@@ -102,7 +114,7 @@ export function waitingCount({
   return (
     unnamedPeople(people).length +
     (review.totals
-      ? inAll(review, 'voices', 0)
+      ? inAll(review, 'voices', 0) + inAll(review, 'once', 0)
       : review.voices.filter((v) => !v.enough && !v.stranger).length) +
     (review.fragments.length ? 1 : 0) +
     similarPairs(people).length +

@@ -40,6 +40,10 @@ from .library import Library, Recording, Transcript
 Action = Literal["confirm", "unknown", "mixed", "reject", "clear"]
 # How sure voice alone is of a speaker (``tier``): decided without asking, offered to confirm with one key, asked.
 Tier = Literal["high", "mid", "low"]
+# Where a voice waits in the review queue, by what settling it costs the owner and what it gives the twins
+# (``roi``): 1 answered in one click, 2 one of two people too alike to tell apart, 3 to hear and name, 4 heard in one
+# recording only and like nobody known, most often someone from outside the team.
+Roi = Literal[1, 2, 3, 4]
 Gender = Literal["", "male", "female"]
 _Item = TypeVar("_Item", bound=tuple[Any, ...])
 Decision = Literal["none", "confirmed", "unknown", "mixed"]
@@ -299,6 +303,27 @@ class Voice(BaseModel):
     # How sure voice alone is of the leading candidate (``tier``): "mid" is offered to confirm with one key. Never
     # "high": what voice alone takes is not asked about.
     tier: Tier = "low"
+    # Where it waits in the queue (``roi``).
+    roi: Roi = 3
+
+
+def roi(voice: Voice, unnamed: set[str]) -> Roi:
+    """Where a voice waits in the review queue (``Roi``), as the page offers it: the middle tier, a candidate surely
+    the one, a name the meeting calls it (someone's, or one nobody has yet) are one click; two people near alike are
+    a choice of two; a voice most like someone still unnamed asks for a name, as does any other with a candidate or
+    heard in several recordings."""
+    lead = voice.candidates[0] if voice.candidates else None
+    # A name the meeting calls the voice that nobody in the team has yet: added in one click.
+    new_name = bool(voice.called) and not any(c.called for c in voice.candidates)
+    if lead is not None and lead.person_id in unnamed:
+        return 1 if new_name else 3
+    if voice.near and len(voice.candidates) > 1:
+        return 2
+    if new_name or (lead is not None and (voice.tier == "mid" or lead.sure or lead.called)):
+        return 1
+    if lead is None and len({m.recording_id for m in voice.members}) == 1:
+        return 4
+    return 3
 
 
 @dataclass
@@ -1297,7 +1322,9 @@ class Team:
             tuple[VoiceMember, list[float], set[str], Candidate | None, set[str], bool, Cue | None, str | None]
         ] = []
         # How long each person is heard in all confirmed speakers, whichever recordings are asked about.
-        had = {person.id: person.seconds for person in self.people()}
+        everyone = self.people()
+        had = {person.id: person.seconds for person in everyone}
+        unnamed = {person.id for person in everyone if person.auto}
         for recording in self.library.list():
             if recording.status != "ready" or recording.transcript_id is None:
                 continue
@@ -1427,11 +1454,15 @@ class Team:
                 enough=lead is not None and had.get(lead.person_id, 0.0) >= ENOUGH_SECONDS,
                 tier=level,
             )
+            voice.roi = roi(voice, unnamed)
             (fragments if voice.seconds < FRAGMENT_SECONDS and not called else voices).append(voice)
-        # Whoever a twin still lacks first, then the voice heard in the most recordings and the longest: settled, it
-        # becomes a rival to everyone else's voice there (``_rival``) and recognises the most. Voices like one the
-        # owner already said they do not know wait last, the least likely to teach a twin anything.
-        voices.sort(key=lambda v: (v.stranger, v.enough, -len({m.recording_id for m in v.members}), -v.seconds, v.id))
+        # Whoever a twin still lacks first, the quickest to answer first among them (``roi``), then the voice heard in
+        # the most recordings and the longest: settled, it becomes a rival to everyone else's voice there (``_rival``)
+        # and recognises the most. Voices like one the owner already said they do not know wait last, the least
+        # likely to teach a twin anything.
+        voices.sort(
+            key=lambda v: (v.stranger, v.enough, v.roi, -len({m.recording_id for m in v.members}), -v.seconds, v.id)
+        )
         return voices, fragments
 
     def unvoiced(self, recordings: set[str] | None = None) -> list[tuple[Recording, int]]:

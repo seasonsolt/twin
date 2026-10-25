@@ -9,7 +9,12 @@ export const NOW = new Date('2026-10-17T10:00:00+08:00');
 type Handler = (url: URL, route: Route) => unknown;
 const reply = (body: unknown) => () => body;
 
-type Listed = { seconds?: number; enough?: boolean; stranger?: boolean };
+type Listed = {
+  seconds?: number;
+  enough?: boolean;
+  stranger?: boolean;
+  roi?: number;
+};
 /** A page of the review queue as the server cuts it (``review_queue.page``): the first so many of each list the
  * page asks for, and how many each holds in all. */
 const reviewPage = (
@@ -18,9 +23,16 @@ const reviewPage = (
     Record<string, unknown>,
 ) => {
   const kind = (voice: Listed) =>
-    voice.stranger ? 'strangers' : voice.enough ? 'enough' : 'voices';
+    voice.stranger
+      ? 'strangers'
+      : voice.enough
+        ? 'enough'
+        : voice.roi === 4
+          ? 'once'
+          : 'voices';
   const lists: Record<string, Listed[]> = {
     voices: [],
+    once: [],
     enough: [],
     strangers: [],
     items: reading.items,
@@ -28,17 +40,29 @@ const reviewPage = (
     suspects: (reading.suspects as Listed[] | undefined) ?? [],
   };
   for (const voice of reading.voices) lists[kind(voice)].push(voice);
-  const totals: Record<string, { count: number; seconds?: number }> = {};
+  const totals: Record<
+    string,
+    { count: number; seconds?: number; parts?: Record<string, number> }
+  > = {};
   for (const [name, rows] of Object.entries(lists)) {
     totals[name] = { count: rows.length };
-    if (['voices', 'enough', 'strangers'].includes(name))
+    if (['voices', 'once', 'enough', 'strangers'].includes(name))
       totals[name].seconds = rows.reduce((n, row) => n + (row.seconds ?? 0), 0);
+    if (name === 'voices')
+      totals[name].parts = Object.fromEntries(
+        [1, 2, 3].map((n) => [n, rows.filter((row) => row.roi === n).length]),
+      );
     const limit = url.searchParams.get(name);
     if (limit !== null) lists[name] = rows.slice(0, Number(limit));
   }
   return {
     ...reading,
-    voices: [...lists.voices, ...lists.enough, ...lists.strangers],
+    voices: [
+      ...lists.voices,
+      ...lists.once,
+      ...lists.enough,
+      ...lists.strangers,
+    ],
     items: lists.items,
     unsorted: lists.unsorted,
     suspects: lists.suspects,
@@ -2038,8 +2062,10 @@ const handlers: Record<string, Handler> = {
           seconds: 1050,
           candidates: weekly.speakers[2].candidates,
           near: false,
+          roi: 3,
         },
-        // Many voices wait: the longest are asked first, the rest folded away.
+        // Many voices wait, the quickest to answer first (``team.roi``); those heard in one recording only and like
+        // nobody known, and the rest, folded away.
         ...[
           {
             id: 'voice_sure',
@@ -2052,6 +2078,7 @@ const handlers: Record<string, Handler> = {
                 sure: true,
               },
             ],
+            roi: 1,
           },
           // Not surely 周石言, but far ahead of everyone else: offered for Enter.
           {
@@ -2061,6 +2088,7 @@ const handlers: Record<string, Handler> = {
             candidates: [
               { person_id: 'u-shiyan', name: '周石言', score: 0.66 },
             ],
+            roi: 1,
           },
           {
             id: 'voice_called',
@@ -2068,17 +2096,29 @@ const handlers: Record<string, Handler> = {
             called: '老宋',
             quote: '老宋你那边排期怎么样',
             candidates: [],
+            roi: 1,
           },
-          { id: 'voice_blank', seconds: 500, candidates: [] },
+          { id: 'voice_blank', seconds: 500, candidates: [], roi: 4 },
           {
             id: 'voice_split',
             seconds: 400,
             candidates: [
               { person_id: 'u-linzhou', name: '林舟', score: 0.8, split: true },
             ],
+            roi: 3,
           },
-          { id: 'voice_short_1', seconds: 120, candidates: [] },
-          { id: 'voice_short_2', seconds: 90, candidates: [] },
+          // Two people too alike to tell apart: one of the two.
+          {
+            id: 'voice_short_1',
+            seconds: 120,
+            near: true,
+            candidates: [
+              { person_id: 'u-linzhou', name: '林舟', score: 0.62 },
+              { person_id: 'u-qinghe', name: '许清禾', score: 0.6 },
+            ],
+            roi: 2,
+          },
+          { id: 'voice_short_2', seconds: 90, candidates: [], roi: 4 },
           {
             id: 'voice_enough',
             seconds: 60,

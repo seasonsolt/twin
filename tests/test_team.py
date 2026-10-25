@@ -28,7 +28,7 @@ from twin.media.cues import Cue, Named
 from twin.media.ingest import Segment, Speaker
 from twin.media.library import Library, Recording, Transcript
 from twin.media.schema import AVATAR_GENDERS
-from twin.media.team import Stale, Team
+from twin.media.team import Candidate, Stale, Team, Voice, VoiceMember, roi
 from twin.persona import gate
 from twin.persona.chat import PersonaChat
 from twin.persona.items import PersonaItem
@@ -1345,6 +1345,33 @@ def test_voice_samples_of_two_people_that_sound_alike_are_shown_until_heard(tmp_
     assert team.voice_clashes() == []
 
 
+def test_a_voice_waits_by_what_settling_it_costs() -> None:
+    def heard(*recordings: str, candidates: tuple[Candidate, ...] = (), **fields: Any) -> Voice:
+        members = [
+            VoiceMember(recording_id=r, filename=r, transcript_id=r, speaker_id="S1", seconds=30) for r in recordings
+        ]
+        return Voice(id="v", members=members, seconds=30.0 * len(members), candidates=list(candidates), **fields)
+
+    li = Candidate(person_id="li", name="李", score=0.6)
+    wang = Candidate(person_id="wang", name="王", score=0.58)
+    auto = Candidate(person_id="p-auto", name="", score=0.7, sure=True)
+    unnamed = {"p-auto"}
+    # One click: offered for one key, surely the one, called by their name, or a new name the meeting calls them.
+    assert roi(heard("a", candidates=(li,), tier="mid"), unnamed) == 1
+    assert roi(heard("a", candidates=(li.model_copy(update={"sure": True}),)), unnamed) == 1
+    assert roi(heard("a", candidates=(li.model_copy(update={"called": True}),)), unnamed) == 1
+    assert roi(heard("a", called="小周"), unnamed) == 1
+    # Two people too alike: a choice of two.
+    assert roi(heard("a", "b", candidates=(li, wang), near=True), unnamed) == 2
+    # Most like someone still unnamed: asks for their name, unless the meeting already says one.
+    assert roi(heard("a", candidates=(auto,)), unnamed) == 3
+    assert roi(heard("a", candidates=(auto,), called="小周"), unnamed) == 1
+    # Like nobody: heard across recordings it is worth naming; in one only, it most often comes from outside.
+    assert roi(heard("a", "b"), unnamed) == 3
+    assert roi(heard("a", candidates=(li,)), unnamed) == 3
+    assert roi(heard("a"), unnamed) == 4
+
+
 def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path) -> None:
     library = Library(tmp_path / "library" / "team")
     voices(library, "一.m4a", ([1.0, 0.0, 0.0], 60), ([0.0, 1.0, 0.0], 40), ([0.0, 0.0, 1.0], 20))
@@ -1352,11 +1379,13 @@ def test_the_review_queue_comes_a_page_at_a_time(web: TestClient, tmp_path: Path
         recording(library, name, [Segment(start=0, end=1, text="嗯。", speaker="S1")], [Speaker(id="S1", seconds=1)])
     whole = web.get("/api/library/review").json()
     assert [v["seconds"] for v in whole["voices"]] == [60, 40, 20] and len(whole["unsorted"]) == 2
-    first = web.get("/api/library/review?voices=2&enough=5&strangers=5&items=10&unsorted=1&suspects=10").json()
-    # The longest first, as on the whole list, and how many wait after them.
+    first = web.get("/api/library/review?voices=5&once=2&enough=5&strangers=5&items=10&unsorted=1&suspects=10").json()
+    # The longest first, as on the whole list, and how many wait after them. Heard in one recording and like nobody
+    # known, the three wait apart from the voices asked first (``team.roi`` 4).
     assert first["voices"] == whole["voices"][:2] and first["unsorted"] == whole["unsorted"][:1]
-    assert first["totals"]["voices"] == {"count": 3, "seconds": 120} and first["totals"]["unsorted"] == {"count": 2}
-    more = web.get("/api/library/review?voices=4&unsorted=2").json()
+    assert first["totals"]["once"] == {"count": 3, "seconds": 120} and first["totals"]["unsorted"] == {"count": 2}
+    assert first["totals"]["voices"] == {"count": 0, "seconds": 0, "parts": {"1": 0, "2": 0, "3": 0}}
+    more = web.get("/api/library/review?once=4&unsorted=2").json()
     assert more["voices"] == whole["voices"] and more["unsorted"] == whole["unsorted"]
     assert web.get("/api/library/review?voices=-1").status_code == 400
     assert whole["stale"] is False

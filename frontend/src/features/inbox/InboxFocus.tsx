@@ -371,6 +371,7 @@ const EMPTY = {
   recordings: 0,
   enough: false,
   stranger: false,
+  roi: 3,
   voice: { id: '', members: [], seconds: 0, candidates: [], near: false },
 } as const satisfies VoiceItem;
 

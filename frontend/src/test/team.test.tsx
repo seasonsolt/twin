@@ -1126,13 +1126,18 @@ it('deletes a twin from its row in one step, and the toast undoes it', async () 
   // It waits a week in the trash: no confirmation, it goes at once.
   expect(screen.queryByRole('dialog')).toBeNull();
   await waitFor(() => expect(calls).toEqual(['delete']));
-  expect(await toasts().findByText('已删除「张总」')).toBeVisible();
+  // The toast fades in: looked for at once, it may not have yet.
+  await waitFor(() =>
+    expect(toasts().getByText('已删除「张总」')).toBeVisible(),
+  );
   expect(
     await screen.findByRole('tab', { name: /已删除.*1/u }),
   ).toBeInTheDocument();
   await userEvent.click(toasts().getByRole('button', { name: '撤销' }));
   await waitFor(() => expect(calls).toEqual(['delete', 'restore']));
-  expect(await toasts().findByText('已恢复「张总」')).toBeVisible();
+  await waitFor(() =>
+    expect(toasts().getByText('已恢复「张总」')).toBeVisible(),
+  );
   await waitFor(() =>
     expect(screen.queryByRole('tab', { name: /已删除/u })).toBeNull(),
   );

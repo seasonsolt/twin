@@ -403,9 +403,14 @@ it('deletes at once from “⋯”, returns to the team, and undoes it from the 
   expect(sessionStorage.getItem(personaKey(CHAT_KEY, 'friend'))).toBeNull();
   expect(sessionStorage.getItem(CHAT_KEY)).toBe('default history');
   await screen.findByRole('heading', { name: '团队' });
-  expect(await toasts().findByText('已删除「朋友」')).toBeVisible();
+  // The toast fades in: looked for at once, it may not have yet.
+  await waitFor(() =>
+    expect(toasts().getByText('已删除「朋友」')).toBeVisible(),
+  );
   await user.click(toasts().getByRole('button', { name: '撤销' }));
-  expect(await toasts().findByText('已恢复「朋友」')).toBeVisible();
+  await waitFor(() =>
+    expect(toasts().getByText('已恢复「朋友」')).toBeVisible(),
+  );
   expect(
     fetcher.mock.calls.some(
       ([path, init]) =>

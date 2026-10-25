@@ -1010,7 +1010,10 @@ it('takes the commitments page to a twin its person looks after, and offers no o
     await screen.findByRole('button', { name: /^切换分身/u }),
   );
   const choices = await screen.findByRole('dialog', { name: '切换分身' });
-  expect(within(choices).getByText('我的分身')).toBeVisible();
+  // The dialog fades in: on a busy machine the first look can come before it has.
+  await waitFor(() =>
+    expect(within(choices).getByText('我的分身')).toBeVisible(),
+  );
   expect(within(choices).queryByText('同事')).toBeNull();
 });
 

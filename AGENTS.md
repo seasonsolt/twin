@@ -63,11 +63,15 @@
 - **缺组件时先在 `components/ui` 里加**（语义参数、不开放外观 className），在 `pages/GalleryPageKit.tsx`（`#/gallery`）里展示，再在页面里用。
 - **不写任意样式**：页面和功能代码里不手写 `button/input/select/textarea`，不写 `style`、任意值 `xx-[..]`、十六进制颜色、字号类、圆角类，也不能用 `eslint-disable`。`pnpm -C frontend lint` 会报错并说明该用哪个组件；豁免目录和原因写在 `frontend/eslint.config.js`。尺度（字号、圆角、间距、颜色）在 `design/tokens.css` 的 `@theme` 里锁定，超出档位的类不会生成。
 - **手机端暂不单独设计**：现阶段界面只按桌面端设计和验收，不为手机端单独做展示、布局或跳转上的设计调整。手机端截图基线随改动一起更新，只确认没有坏掉（内容溢出、控件不可用）。
-- **改界面后跑截图对比** `./scripts/screenshots.sh`（需要 Docker；`check.py --full` 和 CI 也会跑）。失败时差异图在 `frontend/e2e/.results/`。只有**有意**改变外观时才更新基线：`./scripts/screenshots.sh --update-snapshots`，逐张看过新图、确认只变了想变的地方，再和代码一起提交。页面新请求了接口时，在 `frontend/e2e/mockApi.ts` 补上固定数据。
+- **改布局或样式后跑截图对比** `./scripts/screenshots.sh -g <页面>`，只对比改到的页面（需要 Docker；`check.py --full` 对比全部页面，cnb CI 不跑截图）。失败时差异图在 `frontend/e2e/.results/`。只有**有意**改变外观时才更新基线：`./scripts/screenshots.sh --update-snapshots`，逐张看过新图、确认只变了想变的地方，再和代码一起提交。页面新请求了接口时，在 `frontend/e2e/mockApi.ts` 补上固定数据。
 
 ## 开发约定
 
-- 检查：改动过程中和提交前运行 `uv run python scripts/check.py`，只跑受影响的测试（pytest-testmon 按代码改动挑选；改了前端时才跑前端检查和构建）。只有改了界面（`frontend/src`）或用户能感知的业务流程时，提交前再跑一次 `uv run python scripts/check.py --full`（含关键页面截图对比，需要 Docker）；只改评测、文档、算力包、脚本或测试时，增量检查通过即可提交，全量交给 CI。改了前端时一起提交 `src/twin/web/static`。
+- 检查：改动过程中运行 `uv run python scripts/check.py`，只跑受影响的测试（pytest-testmon 按代码改动挑选；改了前端时才跑前端检查和构建）。提交前按改动分三档：
+  - **小改动**：单点 bug、文案、加减菜单项或按钮、不动布局和样式的前端逻辑、不动数据结构的后端修复，以及只改评测、文档、算力包、脚本或测试。增量检查通过即可提交 main，其余交给 CI。
+  - **界面**：改布局、样式、`components/ui` 的组件，新页面或页面改版。增量检查，再对比改到的页面的截图 `./scripts/screenshots.sh -g <页面>`。
+  - **内核**：抽取/合并提示词或维度分类（要提版本）、数据库迁移、录音库归属和片段复核规则、登录和权限，以及发布前。跑 `uv run python scripts/check.py --full`（全部测试、y15 编解码测试和全部页面截图，需要 Docker）。
+  - 拿不准属于哪档时按高一档。cnb CI 不跑截图，界面档只覆盖改到的页面。改了前端时一起提交 `src/twin/web/static`。
 - **测试流程（本机由很多工作区和会话共用，按这套来）**：
   - 测试和构建只走 `check.py`，不要直接跑 `pytest -n auto`、整套 vitest 或 `pnpm build`。调试时只跑那一个测试文件。
   - 排队和限流：测试、构建、截图每步占本机一个名额（默认 2 个，`TWIN_CHECK_SLOTS`），满了排队；每步最多“核数 ÷ 名额”个进程（`TWIN_CHECK_WORKERS`），低优先级运行。直接跑 vitest 默认也只用一半核。

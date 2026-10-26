@@ -2,8 +2,10 @@
 
 Quick check while iterating: ruff and mypy as usual, but only the tests the changes can affect, and the frontend
 checks only when ``frontend/`` changed since ``--base`` (default origin/main, else main; uncommitted and untracked
-files included). ``--full`` runs every check CI runs, including the screenshot comparison of the key pages
-(scripts/screenshots.sh, in Docker); run it once before committing or releasing.
+files included). ``--full`` runs every check, including the screenshot comparison of every key page
+(scripts/screenshots.sh, in Docker): for changes to the kernel, migrations, attribution or review rules, sign-in and
+permissions, and before releasing. A small change is committed once the quick check passes; a layout or style change
+also compares the pages it touches (AGENTS.md).
 
 Python tests are chosen by pytest-testmon, which records the code each test executes in ``.testmondata`` and reruns
 a test when that code changes; the first run in a checkout records every test and takes longer. A new worktree
@@ -341,7 +343,7 @@ def main() -> int:
         else:
             steps.append(("前端构建", ["pnpm", "-C", "frontend", "build"], True))
         if args.full:
-            # Compares the build just made; about a minute, so only before committing.
+            # Compares the build just made; about a minute, so only with --full.
             steps.append(
                 (
                     "截图对比",
@@ -350,7 +352,7 @@ def main() -> int:
                 )
             )
         else:
-            print("改了前端：截图对比只在 --full 时运行（./scripts/screenshots.sh）。")
+            print("改了前端：动了布局或样式时，对比改到的页面截图：./scripts/screenshots.sh -g <页面>。")
     if args.dry_run:
         print(f"测试和构建最多 {WORKERS} 个进程，本机同时最多 {SLOTS} 个检查在跑这些步骤。")
         if CODEC_HOST:
@@ -371,7 +373,7 @@ def main() -> int:
     if failed:
         print(f"\n✗ 未通过：{'、'.join(failed)}")
         return 1
-    print("\n✓ 全部通过" + ("" if args.full else "；提交前再跑一次 --full。"))
+    print("\n✓ 全部通过" + ("" if args.full else "。小改动可以直接提交；改内核、迁移、权限或发布前跑 --full。"))
     return 0
 
 

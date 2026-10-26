@@ -114,7 +114,7 @@ twin 不添加免责声明。React 按文本渲染服务端内容，不执行用
 ./scripts/screenshots.sh -g chat              # 其余参数交给 playwright test
 ```
 
-在固定镜像里跑，字体和渲染与机器无关：同一套基线在 arm64（本机）和 amd64（CI）上逐像素一致。需要 Docker；`check.py --full` 和 CI 都会跑。只有有意改变外观时才更新基线，逐张看过新图后与代码一起提交；对比失败时实际图和差异图在 `frontend/e2e/.results/`（CI 上传为 screenshot-diffs）。
+在固定镜像里跑，字体和渲染与机器无关：同一套基线在 arm64（本机）和 amd64（CI）上逐像素一致。需要 Docker；`check.py --full` 对比全部页面，改布局或样式时用 `-g <页面>` 只对比改到的页面，cnb CI 不跑。只有有意改变外观时才更新基线，逐张看过新图后与代码一起提交；对比失败时实际图和差异图在 `frontend/e2e/.results/`（CI 上传为 screenshot-diffs）。
 
 ## 动效与 React Bits wrappers
 

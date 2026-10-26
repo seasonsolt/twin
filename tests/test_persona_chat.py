@@ -656,7 +656,7 @@ def test_reply_quote_guard_uses_prompt_material(
     draft = f' \t「{words}」；“虚构飞船旅行”\n"他有虚构推断观点"、『术语』。 \n'
     llm = FakeLLM(lambda *a: {"reply": draft, "citations": sorted(ctx.ids) if cited else [], "confidence": 0.9})
     chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
-    monkeypatch.setattr(chat, "retrieve", lambda *a: ctx)
+    monkeypatch.setattr(chat, "_ranked", lambda *a: ctx)
     reply = chat.reply([ChatTurn(role="user", content=question)])
     assert reply.reply == f" \t「{words}」；虚构飞船旅行\n他有虚构推断观点、『术语』。 \n"
     assert reply.quotes_removed == 2
@@ -684,7 +684,7 @@ def test_quote_guard_rejects_unseen_material(
     draft = "「从未展示的旧证据」「裁掉的证据尾巴」「裁掉的表达尾巴」「裁掉的样本尾巴」「问题以前的话」"
     llm = FakeLLM(lambda *a: {"reply": draft, "citations": [], "confidence": 0.5})
     chat = pc.PersonaChat(store, llm, HashingEmbedder(), settings)
-    monkeypatch.setattr(chat, "retrieve", lambda *a: ctx)
+    monkeypatch.setattr(chat, "_ranked", lambda *a: ctx)
     reply = chat.reply([ChatTurn(role="user", content="问题以前的话"), ChatTurn(role="user", content="最后的问题")])
     assert reply.reply == draft.replace("「", "").replace("」", "") and reply.quotes_removed == 5
 

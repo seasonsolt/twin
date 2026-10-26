@@ -233,7 +233,7 @@ def test_nothing_found_skips_the_round_that_works_things_out(
     def nothing(*_: Any, **__: Any) -> pc.PersonaContext:
         return pc.PersonaContext(items=[], expressions=[], core=[], voice=[])
 
-    monkeypatch.setattr(chat, "retrieve", nothing)
+    monkeypatch.setattr(chat, "_ranked", nothing)
     asked: list[type[BaseModel]] = []
 
     def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:

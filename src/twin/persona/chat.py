@@ -20,7 +20,7 @@ from collections.abc import AsyncGenerator, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from contextvars import copy_context
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Literal
@@ -41,7 +41,7 @@ from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
 from .ledger import KIND_LABELS, SELF, STATUS_LABELS, for_chat
-from .lexical import BM25, tokenize
+from .lexical import BM25, cached, tokenize
 from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
 from .rewrite import Rewrite, rewrite
@@ -389,17 +389,33 @@ def _rrf(*rankings: list[str]) -> list[tuple[str, float]]:
 
 class _Corpus[T]:
     """The stored vectors of one namespace and a keyword index over ``candidates``, built once and ranked against
-    as many times as a retrieval needs."""
+    as many times as a retrieval needs. The keyword index of the whole namespace is kept between questions
+    (``lexical.cached``): building it is most of a retrieval's work once a person has a large memory."""
 
     def __init__(
-        self, vectors: tuple[list[str], np.ndarray], candidates: dict[str, T], text: Callable[[T], str]
+        self,
+        vectors: tuple[list[str], np.ndarray],
+        candidates: dict[str, T],
+        text: Callable[[T], str],
+        *,
+        bm25: BM25 | None = None,
     ) -> None:
+        """``bm25``: the keyword index over ``candidates`` when already built; otherwise the kept one."""
         self.vectors, self.candidates, self.text = vectors, candidates, text
-        self.bm25 = BM25({ref: text(candidate) for ref, candidate in candidates.items()})
+        self.bm25 = cached({ref: text(c) for ref, c in candidates.items()}) if bm25 is None else bm25
+        # The rows of the stored vectors that are candidates, and where each one's ref sorts among them.
+        self.rows = np.fromiter((n for n, ref in enumerate(vectors[0]) if ref in candidates), dtype=np.int64)
+        refs = np.array([vectors[0][n] for n in self.rows.tolist()], dtype=np.str_)
+        self.ref_order = np.argsort(np.argsort(refs, kind="stable"), kind="stable")
 
     def subset(self, candidates: dict[str, T]) -> _Corpus[T]:
-        """The same vectors with keywords weighted within ``candidates`` alone."""
-        return _Corpus(self.vectors, candidates, self.text)
+        """The same vectors with keywords weighted within ``candidates`` alone; the index of a subset is not kept."""
+        bm25 = BM25({ref: self.text(c) for ref, c in candidates.items()})
+        return _Corpus(self.vectors, candidates, self.text, bm25=bm25)
+
+    def keywords_only(self) -> _Corpus[T]:
+        """The same candidates ranked by keywords alone."""
+        return _Corpus(NO_VECTORS, self.candidates, self.text, bm25=self.bm25)
 
     def rank(self, queries: Sequence[tuple[str, np.ndarray]], k: int) -> list[tuple[T, float]]:
         """RRF over a vector and a keyword ranking for each query."""
@@ -409,9 +425,10 @@ class _Corpus[T]:
         rankings: list[list[str]] = []
         for query, vector in queries:
             if ids:
-                sims = matrix @ vector
-                order = sorted((float(s), ref) for ref, s in zip(ids, sims, strict=True) if ref in self.candidates)
-                rankings.append([ref for _, ref in reversed(order)])
+                sims = (matrix @ vector)[self.rows].astype(np.float64)
+                # Most similar first, equal similarities by descending ref.
+                order = self.rows[np.lexsort((self.ref_order, sims))[::-1]]
+                rankings.append([ids[n] for n in order.tolist()])
             scores = self.bm25.scores(query)
             rankings.append(sorted(scores, key=lambda ref: (-scores[ref], ref)))
         return [(self.candidates[ref], score) for ref, score in _rrf(*rankings)[:k]]
@@ -435,6 +452,32 @@ def _rank[T](
 def _add_new[T](ranked: list[tuple[T, float]], found: list[tuple[T, float]], ref: Callable[[T], str]) -> None:
     seen = {ref(x) for x, _ in ranked}
     ranked.extend(pair for pair in found if ref(pair[0]) not in seen)
+
+
+@dataclass(frozen=True)
+class _Material:
+    """What a retrieval ranks, in the conversation's view: each namespace's candidates with their vectors and keyword
+    index, and what every prompt carries whatever is asked."""
+
+    items: _Corpus[PersonaItem]
+    expressions: _Corpus[Expression]
+    others: _Corpus[Expression]
+    core: list[PersonaItem]
+    voice: list[str]
+    extreme_rate: float | None
+
+    def keywords_only(self) -> _Material:
+        return replace(
+            self,
+            items=self.items.keywords_only(),
+            expressions=self.expressions.keywords_only(),
+            others=self.others.keywords_only(),
+        )
+
+
+def _query_texts(query: str, hints: str, alternatives: Sequence[str]) -> list[str]:
+    """What a retrieval embeds: the query, the hints when there are any, then each alternative."""
+    return [_clip(text, 2000) for text in [query, *([hints] if hints else []), *alternatives]]
 
 
 def search_items(
@@ -536,58 +579,91 @@ class PersonaChat:
         """``hints`` (from ``rewrite``) are ranked for alongside the query, with equal weight; each of
         ``alternatives`` adds its own best matches on top. When the query points at a relative time ("last
         Saturday"), the best matches among what the person said in that window are added too."""
-        main = [query, *([hints] if hints else [])]
-        texts = [_clip(text, 2000) for text in [*main, *alternatives]]
+        texts = _query_texts(query, hints, alternatives)
         # Start network embedding while assembling the persona's stable material.
         with ThreadPoolExecutor(max_workers=1) as pool:
-            embedding = pool.submit(copy_context().run, self.embedder.embed, texts)
-            # One read of the corpus serves the evidence quotes, the person's own words and other people's.
-            view = ExpressionView(self.store, self.settings)
-            hidden = self._private_expressions()
-            items = self._items(as_of, view, hidden)
-            expressions = {
-                e.expression_id: e for e in view.select(target_only=True, until=as_of) if e.expression_id not in hidden
-            }
-            others = {
-                ref: e
-                for ref, e in others_view(self.store, self.settings, until=as_of, view=view).items()
-                if ref not in hidden
-            }
-            fingerprint: str | None = embedder_fingerprint(self.embedder)
-            try:
-                vectors = embedding.result()
-            except EmbedError:
-                # An embedding service that is down (a local Ollama that was quit) leaves keywords to rank alone.
-                fingerprint, vectors = None, np.zeros((len(texts), 0), dtype=np.float32)
+            embedding = pool.submit(copy_context().run, self._embed, texts)
+            material = self._material(as_of)
+            vectors = embedding.result()
+        return self._ranked(material, vectors, query, as_of, hints, alternatives, today)
+
+    def _embed(self, texts: list[str]) -> Matrix | None:
+        """The texts' vectors; None when the embedding service is down (a local Ollama that was quit), which leaves
+        keywords to rank alone."""
+        try:
+            return self.embedder.embed(texts)
+        except EmbedError:
+            return None
+
+    def _material(self, as_of: dt.date | None) -> _Material:
+        """What a retrieval ranks and every prompt carries, read before the question is known."""
+        # One read of the corpus serves the evidence quotes, the person's own words and other people's.
+        view = ExpressionView(self.store, self.settings)
+        hidden = self._private_expressions()
+        items = self._items(as_of, view, hidden)
+        expressions = {
+            e.expression_id: e for e in view.select(target_only=True, until=as_of) if e.expression_id not in hidden
+        }
+        others = {
+            ref: e
+            for ref, e in others_view(self.store, self.settings, until=as_of, view=view).items()
+            if ref not in hidden
+        }
+        fingerprint = embedder_fingerprint(self.embedder)
+        core, voice = self._portrait(list(items.values()), list(expressions.values()))
+        surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
+        # Each namespace's vectors and keyword index are loaded once and shared by every ranking of the question.
+        return _Material(
+            _Corpus(_space_vectors(self.store, ITEMS_NS, fingerprint), items, item_text),
+            _Corpus(_space_vectors(self.store, EXPRESSIONS_NS, fingerprint), expressions, expression_text),
+            # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
+            _Corpus(_space_vectors(self.store, OTHERS_NS, fingerprint), others, lambda e: e.text),
+            core,
+            voice,
+            extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated),
+        )
+
+    def _ranked(
+        self,
+        material: _Material,
+        vectors: Matrix | None,
+        query: str,
+        as_of: dt.date | None,
+        hints: str,
+        alternatives: Sequence[str],
+        today: dt.date | None,
+    ) -> PersonaContext:
+        """``material`` ranked for the query, the hints and each alternative, embedded as ``vectors`` (None: by
+        keywords alone)."""
+        main = [query, *([hints] if hints else [])]
+        if vectors is None:
+            material = material.keywords_only()
+            vectors = np.zeros((len(main) + len(alternatives), 0), dtype=np.float32)
         queries = list(zip(main, vectors[: len(main)], strict=True))
-        # Each namespace's vectors and keyword index are loaded once and shared by every ranking below.
-        item_corpus = _Corpus(_space_vectors(self.store, ITEMS_NS, fingerprint), items, item_text)
-        expr_corpus = _Corpus(_space_vectors(self.store, EXPRESSIONS_NS, fingerprint), expressions, expression_text)
+        item_corpus, expr_corpus = material.items, material.expressions
         ranked_items = item_corpus.rank(queries, K_ITEMS)
         k_expressions = K_EXPRESSIONS_SPAN if needs_derivation(query) else K_EXPRESSIONS
         ranked_expr = expr_corpus.rank(queries, k_expressions)
         window = time_window(query, today or as_of or dt.date.today())
         if window is not None:
-            within = {ref: e for ref, e in expressions.items() if e.date and window[0] <= e.date <= window[1]}
+            within = {
+                ref: e for ref, e in expr_corpus.candidates.items() if e.date and window[0] <= e.date <= window[1]
+            }
             _add_new(ranked_expr, expr_corpus.subset(within).rank(queries, K_WINDOW), lambda e: e.expression_id)
         for alternative in zip(alternatives, vectors[len(main) :], strict=True):
             _add_new(ranked_items, item_corpus.rank([alternative], K_ALTERNATIVE_ITEMS), lambda i: i.item_id)
             _add_new(ranked_expr, expr_corpus.rank([alternative], K_ALTERNATIVE_EXPRESSIONS), lambda e: e.expression_id)
-        # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
-        ranked_others = _rank(self.store, OTHERS_NS, queries, others, lambda e: e.text, K_OTHERS, fingerprint)
-        core, voice = self._portrait(list(items.values()), list(expressions.values()))
-        surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
-        style = extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated)
+        ranked_others = material.others.rank(queries, K_OTHERS)
         day = today or as_of or dt.date.today()
         entries = for_chat(self.store.list_ledger(), query, day, as_of) if self.ledger else []
         return PersonaContext(
             ranked_items,
             ranked_expr,
-            core,
-            voice,
+            material.core,
+            material.voice,
             as_of,
             query,
-            extreme_rate=style,
+            extreme_rate=material.extreme_rate,
             others=ranked_others,
             window=window,
             ledger=entries,
@@ -788,15 +864,20 @@ class PersonaChat:
     ) -> PersonaContext:
         """Retrieve for the latest user turns, plus the aspects ``rewrite`` names; a failed rewrite only drops them."""
         query = "\n".join([m.content for m in messages if m.role == "user"][-2:])
-        try:
-            with default_stage("chat.rewrite"):
-                found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
-            owner_cue = found.owner_cue
-        except LLMError:
-            # Nothing decided it: the words do.
-            found = Rewrite()
-            owner_cue = bool(OWNER_CUE.search(messages[-1].content))
-        ctx = self.retrieve(query, as_of, found.hints, found.alternatives, today)
+        # The material does not depend on the rewrite: it is read, and its indexes loaded, while the rewrite is asked.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            reading = pool.submit(copy_context().run, self._material, as_of)
+            try:
+                with default_stage("chat.rewrite"):
+                    found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
+                owner_cue = found.owner_cue
+            except LLMError:
+                # Nothing decided it: the words do.
+                found = Rewrite()
+                owner_cue = bool(OWNER_CUE.search(messages[-1].content))
+            material = reading.result()
+        vectors = self._embed(_query_texts(query, found.hints, found.alternatives))
+        ctx = self._ranked(material, vectors, query, as_of, found.hints, found.alternatives, today)
         ctx.reach = self.reach
         ctx.asker = self.asker
         ctx.owner_cue = owner_cue

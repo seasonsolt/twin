@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Callable
 from time import process_time
 
@@ -12,8 +13,10 @@ from twin.config import Settings
 from twin.embed import EmbedError, Matrix
 from twin.llm import FakeLLM
 from twin.persona import chat as pc
+from twin.persona import lexical
 from twin.persona.items import PersonaItem
-from twin.persona.lexical import BM25, tokenize
+from twin.persona.lexical import BM25, cached, tokenize
+from twin.persona.schema import ChatTurn
 from twin.persona.sources import parse_chat, pseudonym
 from twin.persona.store import PersonaStore
 
@@ -60,6 +63,23 @@ def test_bm25_rare_term_outranks_common_term() -> None:
 def test_bm25_lucene_score() -> None:
     scores = BM25({"a": "term term", "b": "other word"}).scores("term")
     assert scores == {"a": pytest.approx(math.log(2) * 2 * 2.2 / (2 + 1.2))}
+
+
+def test_kept_bm25_is_reused_for_the_same_documents_and_rebuilt_for_changed_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    docs = {"a": "回款计划", "b": "数据核对"}
+    index = cached(docs)
+    # Another read of the same memory, as the next question's store connection makes, finds the index already built.
+    assert cached(dict(docs)) is index
+    assert cached(docs).scores("回款") == BM25(docs).scores("回款")
+    changed = cached({**docs, "b": "回款核对"})
+    assert changed is not index and set(changed.scores("回款")) == {"a", "b"}
+    # Past the budget the least recently used index is dropped, never the one just built.
+    monkeypatch.setattr(lexical, "CACHED_POSTINGS", 1)
+    latest = cached({"c": "预算"})
+    assert cached({"c": "预算"}) is latest
+    assert cached(docs) is not index
 
 
 def test_rrf_order_and_tie_break() -> None:
@@ -203,3 +223,31 @@ def test_bm25_5000_docs_under_one_second(record_property: Callable[[str, object]
     # Coverage tracing (pytest-testmon recording the code each test runs) slows it severalfold; time it untraced.
     if Coverage.current() is None:
         assert elapsed < 1.0
+
+
+@pytest.mark.rewrite
+def test_the_material_is_read_while_the_question_is_rewritten() -> None:
+    settings = Settings(target_name="张三")
+    with PersonaStore(":memory:") as store:
+        store.replace_facet_items(
+            "2.1", [PersonaItem(item_id="pi_000", facet_id="2.1", statement="负责QX-7项目", evidence=[])]
+        )
+        read = threading.Event()
+        read_corpus = store.read_corpus
+
+        def reading() -> tuple[list[object], list[object]]:
+            read.set()
+            return read_corpus()  # type: ignore[return-value]
+
+        store.read_corpus = reading  # type: ignore[method-assign]
+        overlapped: list[bool] = []
+
+        def rewrite(system: str, user: str, schema: type) -> dict[str, object]:
+            # The rewrite waits on the network; the store is read meanwhile, not after it answers.
+            overlapped.append(read.wait(timeout=10))
+            return {"aspects": ["项目（project）"]}
+
+        chat = pc.PersonaChat(store, FakeLLM(rewrite), ConstantEmbedder(), settings)
+        ctx = chat._search([ChatTurn(role="user", content="QX-7 怎么样？")], None)
+        assert overlapped == [True]
+        assert [item.item_id for item, _ in ctx.items] == ["pi_000"]

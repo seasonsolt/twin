@@ -1,23 +1,21 @@
-# cnb CI: the same checks as .github/workflows/ci.yml, on pushes to main and on PRs into main.
+# cnb CI: the checks of .github/workflows/ci.yml, on pushes to main and on PRs into main, except the codec tests.
 # Script arrays are joined with &&, so any failing command fails the stage.
 main:
   push: &checks
     - name: backend
       docker:
-        image: python:3.12-bookworm
+        # Python with the CJK fonts and uv, built from this file once and reused until it changes.
+        build:
+          dockerfile: .cnb/ci-backend.Dockerfile
+          versionBy:
+            - .cnb/ci-backend.Dockerfile
         volumes:
           - /root/.cache/uv:copy-on-write
-          # ffmpeg and the CJK fonts take a minute or two to download each run; keep packages and lists cached
-          # (the image's docker-clean deletes packages after install, so the tools stage removes it first).
-          - /var/cache/apt/archives:copy-on-write
-          - /var/lib/apt/lists:copy-on-write
+          # mypy rechecks only what changed since the last run on the same build machine.
+          - /root/.cache/mypy:copy-on-write
+      env:
+        MYPY_CACHE_DIR: /root/.cache/mypy
       stages:
-        - name: tools
-          script:
-            - rm -f /etc/apt/apt.conf.d/docker-clean
-            - apt-get update
-            - apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
-            - pip install --no-cache-dir uv==0.13.0
         - name: sync
           script: uv sync --frozen --python 3.12
         - name: ruff
@@ -27,8 +25,9 @@ main:
         - name: mypy
           script: uv run mypy
         - name: pytest
-          # Each worker has its own temporary databases, so tests run in parallel.
-          script: uv run pytest -q -n auto
+          # Each worker has its own temporary databases, so tests run in parallel. The tests that run the real
+          # ffmpeg (marked codec) are left to the codec host, as scripts/check.py does; the image has no ffmpeg.
+          script: uv run pytest -q -n auto -m "not codec"
 
     - name: frontend
       docker:

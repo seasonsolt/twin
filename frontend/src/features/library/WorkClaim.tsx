@@ -3,6 +3,11 @@ import { Button, Dialog, Field, Input, Row, Text } from '../../components/ui';
 import type { Person } from '../../pages/Recording';
 import type { Persona } from '../../stores/personas';
 
+/** The work e-mail or employee number a twin is bound to: the one it was made for, else the one its person signs in
+ * with (a twin they made themselves or took by voice was given none). */
+export const boundClaim = (twin?: Persona) =>
+  twin?.claim ?? twin?.member_login ?? '';
+
 /**
  * The work e-mail or employee number of the person a twin is made for: when they sign in with the company account
  * it names, the twin is theirs. Asked when the twin is made; changeable until they have taken it, and after that by an
@@ -26,7 +31,7 @@ export function WorkClaim({
 }) {
   const [claim, setClaim] = useState('');
   useEffect(() => {
-    if (person) setClaim(twin?.claim ?? '');
+    if (person) setClaim(boundClaim(twin));
   }, [person, twin]);
   const making = !twin;
   return (
@@ -80,7 +85,7 @@ export function WorkClaim({
           </Button>
           <Button
             type="submit"
-            disabled={busy || (!making && !claim.trim() && !twin?.claim)}
+            disabled={busy || (!making && !claim.trim() && !boundClaim(twin))}
           >
             {making ? '建好' : '保存'}
           </Button>

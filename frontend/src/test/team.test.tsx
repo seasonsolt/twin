@@ -697,6 +697,57 @@ it('lets an administrator point a taken twin at another account, after saying wh
   );
 });
 
+it('shows an administrator the account a twin given none is taken by, and saving it again asks nothing', async () => {
+  people = [person({ persona_id: 'p-zhang' })];
+  const taken: Persona = {
+    id: 'p-zhang',
+    name: '张总',
+    avatar_url: null,
+    sources: 1,
+    created_at: 'x',
+    is_default: false,
+    claim: null,
+    claimed: true,
+    member_login: '77845',
+  };
+  usePersonas.setState({ items: [taken] });
+  const sent: [string, string | undefined, unknown][] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/library/voice-clashes') return json([]);
+      if (url === '/api/personas') return json([taken]);
+      sent.push([url, init?.method, JSON.parse(String(init?.body))]);
+      return json(taken);
+    }),
+  );
+  act(() =>
+    useAuth.setState({
+      identity: { email: 'admin@example.com', admin: true, auth_enabled: true },
+    }),
+  );
+  render(teamView());
+  const row = (
+    await screen.findByRole('link', { name: '张总的成员页' })
+  ).closest('tr')!;
+  await userEvent.click(
+    await within(row).findByRole('button', { name: '改绑企业账号 已认领' }),
+  );
+  const dialog = await screen.findByRole('dialog', {
+    name: '张总的企业邮箱或工号',
+  });
+  expect(within(dialog).getByLabelText('企业邮箱或工号')).toHaveValue('77845');
+  await userEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+  await waitFor(() =>
+    expect(sent).toEqual([
+      ['/api/personas/p-zhang/claim', 'PUT', { claim: '77845' }],
+    ]),
+  );
+  expect(screen.queryByRole('dialog', { name: '改绑这个分身？' })).toBeNull();
+});
+
 it('shows a person who found themselves by voice as having their own twin', async () => {
   people = [person({ self_claimed: true }), people[1]!];
   vi.stubGlobal(

@@ -35,6 +35,8 @@ export interface Persona {
    * have taken it. */
   claim?: string | null;
   claimed?: boolean;
+  /** For those who manage it, once taken: the work e-mail or employee number its person signs in with. */
+  member_login?: string;
   /** The e-mail or employee number its person said was not theirs ("这不是我"). */
   claim_rejected?: string;
 }

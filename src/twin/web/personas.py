@@ -379,7 +379,8 @@ class Personas:
         return {
             # ``photo`` is the company's address of the profile picture, kept to know which one the twin wears; the
             # page is given the twin's own picture (``avatar_url``).
-            **{k: v for k, v in entry.items() if k != "photo"},
+            # ``member_login`` only for those who manage it (``claim_view``).
+            **{k: v for k, v in entry.items() if k not in ("photo", "member_login")},
             "name": name or settings.target_name,
             "avatar_url": f"/api/media/avatar-image?persona={persona_id}"
             if portrait or settings.avatar.image_path
@@ -407,6 +408,8 @@ class Personas:
         if self.accessible(entry, identity):
             view["claim"] = entry.get("claim")
             view["claimed"] = bool(entry.get("member"))
+            if entry.get("member") and entry.get("member_login"):
+                view["member_login"] = entry["member_login"]
             if entry.get("claim_rejected"):
                 view["claim_rejected"] = entry["claim_rejected"]
         return view
@@ -419,10 +422,17 @@ class Personas:
         keys = claim_keys(identity)
         if keys and identity.get("email"):
             changed = False
+            # What they sign in with, shown to whoever manages their twins (``member_login``): the employee number
+            # first, as administrators bind by it. A twin they made themselves or took by voice was given none.
+            given = (identity.get("account"), identity.get("address"))
+            login = next((k.strip().lower() for k in given if k and k.strip()), None)
             for entry in self.data["personas"]:
                 if entry.get("claim") in keys and not entry.get("member") and not entry.get("deleted_at"):
                     now = self.clock().isoformat()
                     entry.update(member=identity["email"], claimed_at=now, approved_at=now)
+                    changed = True
+                if entry.get("member") == identity["email"] and entry.get("member_login") != login:
+                    entry["member_login"] = login
                     changed = True
             if changed:
                 self.save()
@@ -432,7 +442,7 @@ class Personas:
         """The twin's person goes (under ``lock``): it is nobody's, private to colleagues, and what they kept in it to
         themself goes with them (``forget_departed``)."""
         persona_id, departed = entry["id"], entry["member"]
-        for key in ("member", "claimed_at", "approved_at", "made_for_self", "by_voice"):
+        for key in ("member", "member_login", "claimed_at", "approved_at", "made_for_self", "by_voice"):
             entry.pop(key, None)
         entry["public"] = False
         self.save()
@@ -709,7 +719,7 @@ class Personas:
                 if entry.get("member"):
                     if not identity["admin"]:
                         raise HTTPException(409, "本人已经认领了这个分身")
-                    if key and key == entry.get("claim"):
+                    if key and key in (entry.get("claim"), entry.get("member_login")):
                         return self.view(entry, identity)  # Theirs already.
                 if key and any(
                     p is not entry and not p.get("deleted_at") and p.get("claim") == key for p in self.data["personas"]

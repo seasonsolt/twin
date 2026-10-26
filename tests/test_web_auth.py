@@ -712,6 +712,40 @@ def test_an_administrator_points_a_taken_twin_at_someone_else_or_takes_it_back(
     assert web.get("/api/personas").json() == []
 
 
+def test_administrators_see_the_account_a_twin_given_none_is_taken_by(sso: tuple[TestClient, FakeLogin]) -> None:
+    """A twin its person made themself or took by voice was bound to no e-mail or employee number: administrators see
+    the one its person signs in with, saving it again changes nothing, and taking the twin back forgets it."""
+    web, login = sso
+    login.sessions["cookie-d"] = {"authenticated": True, "subject": "19538", "display_name": "钱七", "account": "12345"}
+    web.cookies.set("sso", "cookie-b")
+    persona = create(web)
+    registry = web.app.state.personas  # type: ignore[attr-defined]
+    with registry.lock:
+        registry.entry(persona).update(
+            member="sso:19538", claimed_at="2026-01-01T00:00:00+00:00", by_voice=True, public=True
+        )
+    web.cookies.set("sso", "cookie-d")  # 钱七 signs in
+    [mine] = web.get("/api/personas").json()
+    assert mine["mine"] is True
+    talked = web.post("/api/conversations", json={}, headers={**CSRF, "X-Twin-Persona": persona})
+    assert talked.status_code == 201, talked.text
+    login.sessions["cookie-c"] = {"authenticated": True, "subject": "1003", "display_name": "王五"}
+    web.cookies.set("sso", "cookie-c")  # a colleague asking it does not see it
+    [asked] = web.get("/api/personas").json()
+    assert asked["id"] == persona and "member_login" not in asked
+
+    web.cookies.set("sso", "cookie-b")
+    seen = next(p for p in web.get("/api/personas").json() if p["id"] == persona)
+    assert seen["claim"] is None and seen["claimed"] is True and seen["member_login"] == "12345"
+    same = web.put(f"/api/personas/{persona}/claim", json={"claim": "12345"}, headers=CSRF).json()
+    assert same["claimed"] is True and same["member_login"] == "12345" and same["public"] is True
+    with PersonaStore(registry.db_path_of(persona)) as store:
+        assert len(store.list_conversations("sso:19538")) == 1
+    back = web.put(f"/api/personas/{persona}/claim", json={"claim": None}, headers=CSRF).json()
+    assert back["claimed"] is False and "member_login" not in back
+    assert "member_login" not in registry.entry(persona)
+
+
 def picture(size: int, color: str) -> bytes:
     output = io.BytesIO()
     Image.new("RGB", (size, size), color).save(output, format="PNG")

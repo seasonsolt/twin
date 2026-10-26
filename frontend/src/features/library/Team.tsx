@@ -51,7 +51,7 @@ import {
   type ClashSample,
   type VoiceClash,
 } from './VoiceClashes';
-import { WorkClaim } from './WorkClaim';
+import { boundClaim, WorkClaim } from './WorkClaim';
 import { BuildMeter } from '../memories/BuildProgress';
 import { minutes } from './review';
 import { useTeamData } from './useTeamData';
@@ -1278,7 +1278,7 @@ function Roster({
           // Taken already: whoever has it loses it, and what they kept in it to themself goes with them.
           if (
             twin?.claimed &&
-            claim !== (twin.claim ?? '') &&
+            claim !== boundClaim(twin) &&
             !(await confirm({
               title: claim ? '改绑这个分身？' : '收回这个分身？',
               body: '原认领人会失去它，TA 的私人笔记和对话会清掉。',

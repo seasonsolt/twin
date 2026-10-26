@@ -458,6 +458,9 @@ class OpsSettings(BaseModel):
     allow_hosts: list[str] = Field(default_factory=list)
     compute_services: dict[str, list[str]] = Field(default_factory=dict)
     tunnel_command: list[str] = Field(default_factory=list)
+    # The keyword indexes chat keeps between questions, about this many MB for all twins together; a twin with a
+    # hundred thousand expressions takes some 70. The latest one is kept whatever its size.
+    keyword_index_mb: int = Field(default=192, ge=0)
 
 
 class UpgradeSettings(BaseModel):

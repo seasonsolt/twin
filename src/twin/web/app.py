@@ -30,6 +30,7 @@ from ..media.tts import SpeechSynthesizer
 from ..persona import gate
 from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
+from ..persona.lexical import keep_up_to
 from ..persona.profile import pending_chunks
 from ..persona.store import NewerStoreError, PersonaStore, stored_avatar, stored_identity
 from ..teamanswers import TeamAnswers
@@ -336,6 +337,7 @@ def create_app(
     app = FastAPI(title="twin", docs_url=None, redoc_url=None, openapi_url=None)
     if usage is not None:
         install_default(UsageRecorder(settings.pricing, ledger=usage, keep_rows=False))
+    keep_up_to(settings.ops.keyword_index_mb)
     backends = Backends(settings, llm_factory, embedder_factory, work_model_factory)
     jobs = JobManager(settings.max_workers, describe_error)
     auth = Auth(settings.auth, settings.db_path.parent)

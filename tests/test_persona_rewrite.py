@@ -60,7 +60,8 @@ def test_reply_ranks_for_the_question_and_the_named_aspects(
 
     chat.llm = FakeLLM(answer)
     chat.reply([ChatTurn(role="user", content="Carbon tax?")], persist=False)
-    assert embedded == [["Carbon tax?", "政治立场（political views, party）"]]
+    # The question is embedded while the rewrite is asked, what it names once it answers; the two calls may overlap.
+    assert sorted(embedded) == [["Carbon tax?"], ["政治立场（political views, party）"]]
     assert [call[0] for call in chat.llm.calls] == ["Aspects", "ChatDraft"]
 
 

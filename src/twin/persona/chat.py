@@ -16,7 +16,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Hashable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from contextvars import copy_context
@@ -389,8 +389,9 @@ def _rrf(*rankings: list[str]) -> list[tuple[str, float]]:
 
 class _Corpus[T]:
     """The stored vectors of one namespace and a keyword index over ``candidates``, built once and ranked against
-    as many times as a retrieval needs. The keyword index of the whole namespace is kept between questions
-    (``lexical.cached``): building it is most of a retrieval's work once a person has a large memory."""
+    as many times as a retrieval needs. The keyword index of a whole namespace is kept between questions and updated
+    as the memory changes (``lexical.cached``): building it is most of a retrieval's work once a person has a large
+    memory."""
 
     def __init__(
         self,
@@ -398,11 +399,16 @@ class _Corpus[T]:
         candidates: dict[str, T],
         text: Callable[[T], str],
         *,
+        family: Hashable = None,
         bm25: BM25 | None = None,
     ) -> None:
-        """``bm25``: the keyword index over ``candidates`` when already built; otherwise the kept one."""
+        """``bm25``: the keyword index over ``candidates`` when already built. Otherwise it is built, and kept between
+        questions for ``family`` (``_family``) when there is one."""
         self.vectors, self.candidates, self.text = vectors, candidates, text
-        self.bm25 = cached({ref: text(c) for ref, c in candidates.items()}) if bm25 is None else bm25
+        if bm25 is None:
+            docs = {ref: text(c) for ref, c in candidates.items()}
+            bm25 = BM25(docs) if family is None else cached(docs, family)
+        self.bm25 = bm25
         # The rows of the stored vectors that are candidates, and where each one's ref sorts among them.
         self.rows = np.fromiter((n for n, ref in enumerate(vectors[0]) if ref in candidates), dtype=np.int64)
         refs = np.array([vectors[0][n] for n in self.rows.tolist()], dtype=np.str_)
@@ -475,6 +481,12 @@ class _Material:
         )
 
 
+def _family(store: PersonaStore, namespace: str, *view: object) -> Hashable:
+    """Which kept keyword index a namespace's candidates update: one per twin, namespace and view (the audience, the
+    date answered as of), so conversations of different tiers do not undo each other's changes."""
+    return (str(store.path.resolve()) if str(store.path) not in ("", ":memory:") else ":memory:", namespace, *view)
+
+
 def _query_texts(query: str, hints: str, alternatives: Sequence[str]) -> list[str]:
     """What a retrieval embeds: the query, the hints when there are any, then each alternative."""
     return [_clip(text, 2000) for text in [query, *([hints] if hints else []), *alternatives]]
@@ -491,7 +503,11 @@ def search_items(
     items = {i.item_id: i for i in for_audience(store.list_items(), store.item_tiers(), audience)}
     vector = embedder.embed([_clip(query, 2000)])[0] if embedder is not None else np.zeros(0, dtype=np.float32)
     vectors = _space_vectors(store, ITEMS_NS, embedder_fingerprint(embedder) if embedder is not None else None)
-    corpus = _Corpus(vectors, items, lambda i: "\n".join([item_text(i), *(e.quote for e in i.evidence)]))
+
+    def text(i: PersonaItem) -> str:
+        return "\n".join([item_text(i), *(e.quote for e in i.evidence)])
+
+    corpus = _Corpus(vectors, items, text, family=_family(store, ITEMS_NS, "search", audience))
     return [item for item, _ in corpus.rank([(query, vector)], k)]
 
 
@@ -612,12 +628,18 @@ class PersonaChat:
         fingerprint = embedder_fingerprint(self.embedder)
         core, voice = self._portrait(list(items.values()), list(expressions.values()))
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
+        view_of = (self.audience, as_of)
+
+        def corpus[T](namespace: str, candidates: dict[str, T], text: Callable[[T], str]) -> _Corpus[T]:
+            vectors = _space_vectors(self.store, namespace, fingerprint)
+            return _Corpus(vectors, candidates, text, family=_family(self.store, namespace, *view_of))
+
         # Each namespace's vectors and keyword index are loaded once and shared by every ranking of the question.
         return _Material(
-            _Corpus(_space_vectors(self.store, ITEMS_NS, fingerprint), items, item_text),
-            _Corpus(_space_vectors(self.store, EXPRESSIONS_NS, fingerprint), expressions, expression_text),
+            corpus(ITEMS_NS, items, item_text),
+            corpus(EXPRESSIONS_NS, expressions, expression_text),
             # Keyword-rank the whole message: a recommendation is often deep in a long reply, past the embedded head.
-            _Corpus(_space_vectors(self.store, OTHERS_NS, fingerprint), others, lambda e: e.text),
+            corpus(OTHERS_NS, others, lambda e: e.text),
             core,
             voice,
             extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated),
@@ -864,9 +886,12 @@ class PersonaChat:
     ) -> PersonaContext:
         """Retrieve for the latest user turns, plus the aspects ``rewrite`` names; a failed rewrite only drops them."""
         query = "\n".join([m.content for m in messages if m.role == "user"][-2:])
-        # The material does not depend on the rewrite: it is read, and its indexes loaded, while the rewrite is asked.
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        # Neither the material nor the question's vector depends on the rewrite: the material is read, and its indexes
+        # loaded, and the question embedded while the rewrite is asked; what it names is embedded as soon as it answers,
+        # while a large memory is still being read.
+        with ThreadPoolExecutor(max_workers=3) as pool:
             reading = pool.submit(copy_context().run, self._material, as_of)
+            asking = pool.submit(copy_context().run, self._embed, _query_texts(query, "", ()))
             try:
                 with default_stage("chat.rewrite"):
                     found = rewrite(self.llm, query, self.settings.effective_chat_llm.effort_extract)
@@ -875,8 +900,14 @@ class PersonaChat:
                 # Nothing decided it: the words do.
                 found = Rewrite()
                 owner_cue = bool(OWNER_CUE.search(messages[-1].content))
+            named = _query_texts(query, found.hints, found.alternatives)[1:]
+            naming = pool.submit(copy_context().run, self._embed, named) if named else None
             material = reading.result()
-        vectors = self._embed(_query_texts(query, found.hints, found.alternatives))
+            vectors = asking.result()
+            if naming is not None:
+                more = naming.result()
+                # Either failing leaves keywords to rank alone.
+                vectors = None if vectors is None or more is None else np.vstack([vectors, more])
         ctx = self._ranked(material, vectors, query, as_of, found.hints, found.alternatives, today)
         ctx.reach = self.reach
         ctx.asker = self.asker

@@ -59,6 +59,8 @@ twin doctor --probe        # 才会调用启用的 LLM、向量、TTS、ASR，�
 [ops]
 web_port = 8765
 allow_hosts = ["twin.example.com"]
+# 聊天在两问之间保留的关键词索引，所有分身合计约多少 MB；十万条原话约占 70 MB。
+keyword_index_mb = 192
 # 必须先自行配置 Cloudflare Tunnel 与凭据；命令只写路径和参数，不放 token。
 # tunnel_command = ["/opt/homebrew/bin/cloudflared", "tunnel", "run", "your-tunnel-name"]
 

@@ -65,21 +65,50 @@ def test_bm25_lucene_score() -> None:
     assert scores == {"a": pytest.approx(math.log(2) * 2 * 2.2 / (2 + 1.2))}
 
 
-def test_kept_bm25_is_reused_for_the_same_documents_and_rebuilt_for_changed_ones(
+def test_kept_bm25_is_reused_for_the_same_documents_and_updated_for_changed_ones(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    docs = {"a": "回款计划", "b": "数据核对"}
-    index = cached(docs)
+    family = ("test-kept", "items")
+    docs = {f"d{i}": f"日常工作安排{i}" for i in range(20)} | {"a": "回款计划", "b": "数据核对"}
+    index = cached(docs, family)
     # Another read of the same memory, as the next question's store connection makes, finds the index already built.
-    assert cached(dict(docs)) is index
-    assert cached(docs).scores("回款") == BM25(docs).scores("回款")
-    changed = cached({**docs, "b": "回款核对"})
-    assert changed is not index and set(changed.scores("回款")) == {"a", "b"}
-    # Past the budget the least recently used index is dropped, never the one just built.
-    monkeypatch.setattr(lexical, "CACHED_POSTINGS", 1)
-    latest = cached({"c": "预算"})
-    assert cached({"c": "预算"}) is latest
-    assert cached(docs) is not index
+    assert cached(dict(docs), family) is index
+    assert index.scores("回款") == BM25(docs).scores("回款")
+    # A changed document updates the kept index, sharing its postings, and scores as an index built afresh would.
+    changed_docs = {**docs, "b": "回款核对"}
+    changed = cached(changed_docs, family)
+    assert changed is not index and changed._base is index._base
+    assert changed.scores("回款核对") == BM25(changed_docs).scores("回款核对")
+    # Past the budget the least recently used family is dropped, never the one just built.
+    monkeypatch.setattr(lexical, "KEPT_BYTES", 1)
+    latest = cached({"c": "预算"}, ("test-kept", "others"))
+    assert cached({"c": "预算"}, ("test-kept", "others")) is latest
+    assert cached(changed_docs, family) is not changed
+
+
+def test_an_updated_bm25_scores_exactly_as_one_built_afresh() -> None:
+    rng = np.random.default_rng(7)
+    words = ["回款", "预算", "数据", "核对", "客户", "项目", "plan", "trips", "风险", "交付"]
+
+    def text() -> str:
+        return " ".join(rng.choice(words, size=int(rng.integers(0, 12))).tolist())
+
+    docs = {f"d{i}": text() for i in range(400)}
+    index = BM25(docs)
+    queries = ["回款 预算", "数据核对 plan", "trip 风险", "交付", "missing"]
+    bases = {id(index._base)}
+    for step in range(30):
+        removed = rng.choice(sorted(docs), size=int(rng.integers(0, 4)), replace=False).tolist()
+        added = {ref: text() for ref in rng.choice(sorted(docs), size=int(rng.integers(0, 3))).tolist()}
+        added |= {f"n{step}-{k}": text() for k in range(int(rng.integers(0, 3)))}
+        docs = {ref: t for ref, t in docs.items() if ref not in removed} | added
+        index = index.changed(docs, [*removed, *(ref for ref in added if ref not in removed)], added)
+        bases.add(id(index._base))
+        fresh = BM25(docs)
+        for query in queries:
+            assert index.scores(query) == fresh.scores(query)
+    # The changes grew past ``COMPACT_SHARE`` of the documents along the way, so it was built again at least once.
+    assert len(bases) > 1
 
 
 def test_rrf_order_and_tie_break() -> None:
@@ -226,7 +255,7 @@ def test_bm25_5000_docs_under_one_second(record_property: Callable[[str, object]
 
 
 @pytest.mark.rewrite
-def test_the_material_is_read_while_the_question_is_rewritten() -> None:
+def test_the_material_is_read_and_the_question_embedded_while_the_question_is_rewritten() -> None:
     settings = Settings(target_name="张三")
     with PersonaStore(":memory:") as store:
         store.replace_facet_items(
@@ -240,14 +269,27 @@ def test_the_material_is_read_while_the_question_is_rewritten() -> None:
             return read_corpus()  # type: ignore[return-value]
 
         store.read_corpus = reading  # type: ignore[method-assign]
+        embedded: list[list[str]] = []
+        asked = threading.Event()
+
+        class Recording(ConstantEmbedder):
+            def embed(self, texts: list[str]) -> Matrix:
+                embedded.append(texts)
+                asked.set()
+                return super().embed(texts)
+
         overlapped: list[bool] = []
 
         def rewrite(system: str, user: str, schema: type) -> dict[str, object]:
-            # The rewrite waits on the network; the store is read meanwhile, not after it answers.
-            overlapped.append(read.wait(timeout=10))
-            return {"aspects": ["项目（project）"]}
+            # The rewrite waits on the network; the store is read and the question embedded meanwhile, not after it
+            # answers.
+            overlapped.append(read.wait(timeout=10) and asked.wait(timeout=10))
+            return {"aspects": ["项目（project）"], "alternatives": ["甲", "乙"]}
 
-        chat = pc.PersonaChat(store, FakeLLM(rewrite), ConstantEmbedder(), settings)
+        chat = pc.PersonaChat(store, FakeLLM(rewrite), Recording(), settings)
         ctx = chat._search([ChatTurn(role="user", content="QX-7 怎么样？")], None)
         assert overlapped == [True]
+        # What the rewrite named is embedded once it answers, in the order retrieval ranks it; the question's call may
+        # still be running then.
+        assert sorted(embedded) == [["QX-7 怎么样？"], ["项目（project）", "甲", "乙"]]
         assert [item.item_id for item, _ in ctx.items] == ["pi_000"]

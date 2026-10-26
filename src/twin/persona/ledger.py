@@ -111,6 +111,7 @@ class LedgerReport:
     sources: int = 0
     entries: int = 0
     dropped: int = 0
+    stopped: bool = False
 
 
 def _now() -> str:
@@ -293,13 +294,18 @@ def build_ledger(
     reasoning_effort: str | None = None,
     force: bool = False,
     log: Callable[[str], None] | None = None,
+    stopped: Callable[[], bool] | None = None,
 ) -> LedgerReport:
-    """Read every meeting source the current extractor has not read yet (all of them with ``force``), oldest first."""
+    """Read every meeting source the current extractor has not read yet (all of them with ``force``), oldest first.
+    ``stopped`` is asked before each meeting; once it says yes the rest are left for a later build."""
     report = LedgerReport()
     meetings = [s for s in store.list_sources() if is_meeting(s)]
     meetings.sort(key=lambda s: (s.first_date or dt.date.min, s.source_id))
     todo = [s for s in meetings if force or store.ledger_done(s.source_id) != LEDGER_VERSION]
     for k, source in enumerate(todo, 1):
+        if stopped is not None and stopped():
+            report.stopped = True
+            break
         if log:
             log(f"[{k}/{len(todo)}] 整理承诺：{source.title}")
         ledger = [

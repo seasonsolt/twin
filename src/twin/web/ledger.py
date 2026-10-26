@@ -89,6 +89,8 @@ def entry_view(
 
 def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobManager, desk: HandoffDesk) -> None:
     admission = threading.Lock()
+    # Set while an administrator has the ledger switched off.
+    switched_off = threading.Event()
 
     @contextmanager
     def open_store() -> Iterator[PersonaStore]:
@@ -221,8 +223,10 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
                     reasoning_effort=settings.llm.effective_reasoning_effort_extract,
                     force=force,
                     log=log,
+                    stopped=switched_off.is_set,
                 )
-            log(f"读了 {report.sources} 场会议，记下 {report.entries} 条")
+            stop = "，承诺账本已关闭，其余会议没有读" if report.stopped else ""
+            log(f"读了 {report.sources} 场会议，记下 {report.entries} 条{stop}")
             return asdict(report)
 
         with admission:
@@ -237,9 +241,17 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
             total, pending = meetings(store)
         return {"meetings": total, "pending": pending, "running": jobs.active_of("ledger_build") is not None}
 
-    # For the system settings, which list and start every twin's ledger upgrade.
+    def ledger_switched(enabled: bool) -> None:
+        """An administrator switched the ledger on or off: a build that is running stops before its next meeting."""
+        if enabled:
+            switched_off.clear()
+        else:
+            switched_off.set()
+
+    # For the system settings, which list and start every twin's ledger upgrade and switch the ledger off.
     app.state.ledger_status = ledger_status
     app.state.ledger_build = start_build
+    app.state.ledger_switched = ledger_switched
 
     @app.get("/api/persona/ledger/brief")
     def get_brief(

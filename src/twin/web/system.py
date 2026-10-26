@@ -817,6 +817,11 @@ def register(
         if name not in FEATURES:
             raise HTTPException(404, "没有这个功能；聊天不能关闭")
         system.set_feature(name, body.enabled, by)
+        if name == "ledger":
+            # Only twins already loaded can have a build running; one loaded later cannot start one while it is off.
+            for context in list(registry.apps.values()):
+                if switched := getattr(context.state, "ledger_switched", None):
+                    switched(body.enabled)
         return view(request)
 
     @app.put("/api/admin/system/team")

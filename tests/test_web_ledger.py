@@ -234,3 +234,31 @@ def test_model_failure_fails_the_job_and_keeps_meetings_pending(
     job = finished(client, client.post("/api/persona/ledger/build").json()["job_id"])
     assert job["status"] == "failed" and job["error"].startswith("整理承诺账本失败")
     assert client.get("/api/persona/ledger").json()["meetings"] == {"total": 1, "pending": 1}
+
+
+def test_switching_the_ledger_off_stops_a_build_before_its_next_meeting(
+    web: Callable[[Handler], TestClient], tmp_path: Path
+) -> None:
+    meeting(tmp_path / "persona.db", "m1", "2026-10-12")
+    meeting(tmp_path / "persona.db", "m2", "2026-10-19")
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        entered.set()
+        assert release.wait(5)
+        return extract(system, user, schema)
+
+    client = web(slow)
+    job_id = client.post("/api/persona/ledger/build").json()["job_id"]
+    assert entered.wait(5)
+    assert client.put("/api/admin/system/features/ledger", json={"enabled": False}).status_code == 200
+    release.set()
+    job = finished(client, job_id)
+    assert job["status"] == "done" and job["result"]["sources"] == 1 and job["result"]["stopped"]
+    assert "承诺账本已关闭" in job["progress"][-1]
+
+    # Switched on again, the next build reads the meeting left over.
+    client.put("/api/admin/system/features/ledger", json={"enabled": True})
+    assert client.get("/api/persona/ledger").json()["meetings"] == {"total": 2, "pending": 1}
+    job = finished(client, client.post("/api/persona/ledger/build").json()["job_id"])
+    assert job["result"]["sources"] == 1 and not job["result"]["stopped"]

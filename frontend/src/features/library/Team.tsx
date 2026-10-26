@@ -275,12 +275,23 @@ function BatchClaim({
 
 /** What is worth a line under a name: that a colleague sent the twin back or the twin waits for its person to sign in,
  * else who they are in their own words (``about``), else that the twin is theirs. */
+/** The employee number or work e-mail the twin is bound to, for those who manage it: an e-mail by the part before
+ * the @, which names the person within the company, with the whole address on hover. */
+function Account({ twin }: { twin?: Persona }) {
+  const account = boundClaim(twin);
+  return (
+    <Text size="sm" tone="secondary" title={account || undefined}>
+      {account.split('@')[0] || '—'}
+    </Text>
+  );
+}
+
 function ClaimLine({ twin, about }: { twin?: Persona; about?: string | null }) {
   const [label, tone]: [string, TextTone] | [null, null] =
     twin?.claimed === false && twin.claim_rejected
       ? [`${twin.claim_rejected} 说不是 TA，换一个`, 'danger']
       : twin?.claimed === false && twin.claim
-        ? [`等 ${twin.claim} 登录认领`, 'secondary']
+        ? ['等 TA 登录认领', 'secondary']
         : about
           ? [about, 'secondary']
           : twin?.claimed
@@ -505,6 +516,7 @@ function personRow({
         <ClaimLine twin={twin} about={person.about} />
       </Stack>
     </IdentityLink>,
+    <Account key="account" twin={twin} />,
     <Text key="heard" size="sm" tone="secondary">
       {person.speakers > 0
         ? `${person.speakers} 段 · ${minutes(person.seconds)}`
@@ -732,6 +744,7 @@ function twinRow({
         )}
       </Stack>
     </IdentityLink>,
+    <Account key="account" twin={twin} />,
     <Text key="heard" size="sm" tone="secondary">
       —
     </Text>,
@@ -1109,7 +1122,7 @@ function Roster({
       {matchingPeople && matchingPeople.length > 0 && (
         <Table
           caption="成员"
-          headers={['成员', '录音', '分身', '最近', '操作']}
+          headers={['成员', '工号', '录音', '分身', '最近', '操作']}
           scroll={false}
           rows={matchingPeople.slice(0, peopleShown).map((entry) =>
             'person' in entry

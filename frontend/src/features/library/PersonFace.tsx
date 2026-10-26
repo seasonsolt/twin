@@ -1,3 +1,4 @@
+import { personaUrl } from '../../lib/persona';
 import { Avatar } from '../avatar/Avatar';
 import type { Persona } from '../../stores/personas';
 
@@ -14,7 +15,12 @@ export function PersonFace({
 }) {
   if (!twin) return <>{Array.from(name)[0]}</>;
   return twin.avatar_url ? (
-    <img src={twin.avatar_url} alt="" className="size-full object-cover" />
+    // Through the path prefix, as daw serves twin under /twin/.
+    <img
+      src={personaUrl(twin.avatar_url, twin.id)}
+      alt=""
+      className="size-full object-cover"
+    />
   ) : (
     <Avatar preset={preset ?? twin.avatar_preset} blinking={false} />
   );

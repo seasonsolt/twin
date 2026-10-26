@@ -72,7 +72,7 @@ it('leads a row with the face of whom it is with, where the list spans people', 
   // A listed twin shows its portrait, one not listed yet the first character of the name.
   expect(row('预算怎么排').querySelector('img')).toHaveAttribute(
     'src',
-    '/api/personas/t_li/avatar',
+    '/api/personas/t_li/avatar?persona=t_li',
   );
   expect(row('周会安排').firstElementChild).toHaveTextContent('王');
   // A list of one person's conversations needs no face on every row.

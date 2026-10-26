@@ -732,6 +732,7 @@ it('shows an administrator the account a twin given none is taken by, and saving
   const row = (
     await screen.findByRole('link', { name: '张总的成员页' })
   ).closest('tr')!;
+  expect(within(row).getAllByRole('cell')[1]).toHaveTextContent('77845');
   await userEvent.click(
     await within(row).findByRole('button', { name: '改绑企业账号 已认领' }),
   );
@@ -1353,7 +1354,7 @@ it('names the latest meeting of each person in its own column, and a line about 
     within(table)
       .getAllByRole('columnheader')
       .map((cell) => cell.textContent),
-  ).toEqual(['成员', '录音', '分身', '最近', '操作']);
+  ).toEqual(['成员', '工号', '录音', '分身', '最近', '操作']);
   const first = screen
     .getByRole('link', { name: '张总的成员页' })
     .closest('tr')!;
@@ -1362,7 +1363,10 @@ it('names the latest meeting of each person in its own column, and a line about 
   const second = screen
     .getByRole('link', { name: '李总的成员页' })
     .closest('tr')!;
-  expect(within(second).getByText('—')).toBeVisible();
+  // No meeting, and no twin bound to an account.
+  const [, account, , , recent] = within(second).getAllByRole('cell');
+  expect(account).toHaveTextContent('—');
+  expect(recent).toHaveTextContent('—');
 });
 
 it('lets someone talk to a public twin of a person from the table, though the twin is not theirs to look after', async () => {

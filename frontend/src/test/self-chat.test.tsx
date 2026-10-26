@@ -1021,7 +1021,7 @@ it('leads the top bar with the face of whom the conversation is with, the person
     twin('default', '林舟', {
       mine: true,
       approved: true,
-      avatar_url: '/api/personas/default/avatar',
+      avatar_url: '/api/personas/default/avatar?persona=default',
     }),
     personas[1],
   ]);
@@ -1029,6 +1029,6 @@ it('leads the top bar with the face of whom the conversation is with, the person
   const bar = (await screen.findByText('仅你可见')).closest('.chat-topbar')!;
   expect(bar.querySelector('img')).toHaveAttribute(
     'src',
-    '/api/personas/default/avatar',
+    '/api/personas/default/avatar?persona=default',
   );
 });

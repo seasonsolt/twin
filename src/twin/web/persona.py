@@ -200,7 +200,14 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         if note := transient_summary(report.calls.get("transient", {})):
             log(note)
         log("[2/2] 更新检索向量")
-        index_persona(store, embedder, settings, log)
+        try:
+            index_persona(store, embedder, settings, log)
+            index_pending = False
+        except EmbedError:
+            # The memory is built: retrieval ranks by keywords where vectors are missing, and ``IndexRetry`` fills
+            # them in once the embedding service answers again.
+            log("向量服务暂时连不上：先按关键词检索，服务恢复后自动补齐")
+            index_pending = True
     if report.failures and report.chunks_extracted == 0 and report.facets_merged == 0:
         raise RuntimeError(f"模型调用全部失败：{report.failures[-1]}")
     return {
@@ -220,6 +227,7 @@ def run_persona_build(settings: Settings, llm: LLM, embedder: Embedder, log: Log
         "items_removed": report.items_removed,
         "facets_changed": report.facets_changed,
         "calls": report.calls,
+        "index_pending": index_pending,
     }
 
 
@@ -635,6 +643,19 @@ def register(
 
     # Called after an administrator chose another embedding model in the system settings.
     app.state.resume_index = resume_index
+
+    def index_behind() -> bool:
+        """Whether the twin's index waits for vectors (``IndexRetry``)."""
+        if not settings.db_path.is_file():
+            return False
+        try:
+            embedder = backends.embedder()
+        except BackendUnavailable:
+            return False
+        with open_store() as store:
+            return index_stale(store, embedder)
+
+    app.state.index_behind = index_behind
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager

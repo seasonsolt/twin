@@ -462,3 +462,49 @@ def test_cli_reextracts_only_empty_chunks(settings: Settings, monkeypatch: pytes
     with PersonaStore(settings.db_path) as store:
         assert store.empty_chunks() == {} and pf.profile_stale(store)
         assert pf.source_memories(store)[found].chunks_extracted == 1
+
+
+def test_a_build_finishes_without_the_embedding_service_and_its_vectors_follow_once_it_answers(
+    settings: Settings,
+) -> None:
+    from types import SimpleNamespace
+
+    from twin.embed import EmbedError
+    from twin.persona import chat as pc
+    from twin.web.index_retry import IndexRetry
+
+    down = {"on": True}
+
+    class Unreachable(HashingEmbedder):
+        def embed(self, texts: list[str]) -> Any:
+            if down["on"]:
+                raise EmbedError("connection refused")
+            return super().embed(texts)
+
+    app = create_app(settings, llm_factory=lambda: FakeLLM(handler), embedder_factory=Unreachable)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.post(
+            "/api/persona/import?kind=document",
+            files={"files": ("测试.md", "先核对测试数据。".encode())},
+            headers=HEADERS,
+        )
+        logs: list[str] = []
+        result = run_persona_build(settings, FakeLLM(handler), Unreachable(), logs.append)
+        assert result["index_pending"] and result["items_added"] == 1
+        assert "向量服务暂时连不上：先按关键词检索，服务恢复后自动补齐" in logs
+        assert not client.get("/api/persona/state").json()["stale"]  # the memory is built all the same
+        with PersonaStore(settings.db_path) as store:
+            assert pc.index_stale(store, Unreachable())
+
+        retry = IndexRetry(app.state.personas, SimpleNamespace(embedder=Unreachable))  # type: ignore[arg-type]
+        assert retry.tick() == 0  # still unreachable: nothing is started
+        down["on"] = False
+        assert retry.tick() == 1
+        deadline = time.monotonic() + 10
+        while True:
+            with PersonaStore(settings.db_path) as store:
+                if not pc.index_stale(store, Unreachable()):
+                    break
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert retry.tick() == 0  # nothing is behind any more

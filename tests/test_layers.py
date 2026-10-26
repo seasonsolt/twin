@@ -64,6 +64,7 @@ LAYERS: dict[str, int] = {
     "web.team_answers": 9,
     "web.work": 9,
     "web.wecom_photos": 9,
+    "web.index_retry": 9,
     "identity": 1,
     "persona": 1,
     "persona.dimensions": 1,

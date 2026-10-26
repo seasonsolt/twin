@@ -45,6 +45,7 @@ from .commitments import register_all as register_all_commitments
 from .conversations import ConversationIndex, request_asker_name
 from .conversations import register_all as register_all_conversations
 from .delegation import Delegations
+from .index_retry import IndexRetry
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
 from .wecom_photos import wecom_photos
@@ -660,6 +661,7 @@ def create_app(
     team_answers.register_all(app, registry, team, desk_for, twin_name)
     voice.register(app, settings, libraries, registry)
     system.register(app, system_settings, monitor, libraries, registry, usage)
+    index_retry = IndexRetry(registry, backends)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
@@ -677,9 +679,11 @@ def create_app(
                 photos.start()
             monitor.start()
             libraries.start()
+            index_retry.start()
             try:
                 yield
             finally:
+                await anyio.to_thread.run_sync(index_retry.stop)
                 await anyio.to_thread.run_sync(monitor.stop)
                 await anyio.to_thread.run_sync(libraries.stop)
                 if photos is not None:

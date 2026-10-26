@@ -32,6 +32,7 @@ import {
   Stack,
   Text,
   TextLink,
+  toast,
 } from '../components/ui';
 import { api, ApiError } from '../lib/api';
 import { sortByName } from '../lib/names';
@@ -507,6 +508,7 @@ export function Recording() {
   const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [refreshRequired, setRefreshRequired] = useState(false);
   // The speaker to settle first: one just reopened, or the one a link points at (in the address, so a recording
   // opened in a new tab opens on the same voice).
   const [params] = useSearchParams();
@@ -520,30 +522,80 @@ export function Recording() {
   // They said the only speaker given to them is not them: the recording is no longer theirs to see.
   const [left, setLeft] = useState(false);
   const base = `/api/library/recordings/${encodeURIComponent(recordingId)}`;
-  const load = useCallback(async () => {
-    try {
-      const [value, folks] = await Promise.all([
-        api<Detail>(base),
-        api<{ items: Person[] }>('/api/library/people'),
-      ]);
-      // Someone who only reads it is not shown whom the voices resemble.
-      setDetail({
-        ...value,
-        speakers: value.speakers.map((s) => ({
-          ...s,
-          candidates: s.candidates ?? [],
-          rejected: s.rejected ?? [],
-          near: s.near ?? false,
-        })),
-      });
-      setPeople(folks.items);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '无法加载录音');
-    }
-  }, [base]);
+  const scope = useRef<AbortController | null>(null);
+  const loadVersion = useRef(0);
+  const withdrawalPending = useRef(false);
+  const load = useCallback(
+    async (clearError = true) => {
+      const current = scope.current;
+      if (!current || current.signal.aborted) return;
+      const version = ++loadVersion.current;
+      try {
+        const [value, folks] = await Promise.all([
+          api<Detail>(base, { signal: current.signal }),
+          api<{ items: Person[] }>('/api/library/people', {
+            signal: current.signal,
+          }),
+        ]);
+        if (current.signal.aborted || version !== loadVersion.current) return;
+        // Someone who only reads it is not shown whom the voices resemble.
+        const loaded = {
+          ...value,
+          speakers: value.speakers.map((s) => ({
+            ...s,
+            candidates: s.candidates ?? [],
+            rejected: s.rejected ?? [],
+            near: s.near ?? false,
+          })),
+        };
+        setDetail(loaded);
+        setPeople(folks.items);
+        withdrawalPending.current = false;
+        setRefreshRequired(false);
+        if (clearError) setError('');
+        return loaded;
+      } catch (failure) {
+        if (!current.signal.aborted && version === loadVersion.current) {
+          if (
+            withdrawalPending.current &&
+            failure instanceof ApiError &&
+            failure.status === 404
+          ) {
+            withdrawalPending.current = false;
+            setLeft(true);
+            setRefreshRequired(false);
+            setError('');
+            return 'left';
+          }
+          setRefreshRequired(true);
+          setError(failure instanceof Error ? failure.message : '无法加载录音');
+        }
+      }
+      return null;
+    },
+    [base],
+  );
   useEffect(() => {
+    const current = new AbortController();
+    scope.current = current;
+    setDetail(null);
+    setPeople([]);
+    setError('');
+    setBusy(false);
+    setRefreshRequired(false);
+    setLeft(false);
+    withdrawalPending.current = false;
+    setReopened(linked);
     void load();
-  }, [load]);
+    return () => current.abort();
+  }, [load, linked]);
+  useEffect(() => {
+    const refresh = () => {
+      if (!busy && !left) void load();
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [busy, left, load]);
   // The transcript is open on the line the link points at: bring it to the middle once the page has it.
   const hasDetail = detail !== null;
   useEffect(() => {
@@ -554,9 +606,20 @@ export function Recording() {
   }, [hasDetail, pointedLine]);
 
   const decide = async (speaker: Speaker, decision: Decision) => {
-    if (!detail) return;
+    const current = scope.current;
+    if (
+      !detail ||
+      !current ||
+      current.signal.aborted ||
+      busy ||
+      refreshRequired
+    )
+      return;
+    loadVersion.current += 1;
     setBusy(true);
     setError('');
+    let saved = false;
+    let uncertain = false;
     try {
       await api(`${base}/speakers/${encodeURIComponent(speaker.id)}`, {
         method: 'PUT',
@@ -566,6 +629,8 @@ export function Recording() {
           ...decision,
         },
       });
+      saved = true;
+      if (current.signal.aborted) return;
       setReopened(decision.action === 'clear' ? speaker.id : null);
       if (
         location.state?.inboxTask &&
@@ -587,36 +652,65 @@ export function Recording() {
         return;
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '保存失败');
-      if (!(failure instanceof ApiError && failure.status === 409)) {
-        setBusy(false);
+      uncertain = failure instanceof ApiError && failure.status === 0;
+      if (current.signal.aborted) {
+        toast(
+          `刚才的修改未能确认：${failure instanceof Error ? failure.message : '保存失败'}`,
+          'danger',
+          8000,
+        );
         return;
       }
+      setError(failure instanceof Error ? failure.message : '保存失败');
     }
-    // A saved decision moves the revision on; a refused one means someone else did.
-    await load();
-    setBusy(false);
+    // A lost response may still have saved: read back before offering another decision on the old revision.
+    const latest = await load(false);
+    if (!current.signal.aborted) {
+      if (!latest)
+        setError(
+          saved ? '修改已保存，请刷新确认' : '修改结果未确认，请刷新后再操作',
+        );
+      else if (saved || uncertain) setError('');
+      setBusy(false);
+    }
   };
 
   const notMe = async (speaker: Speaker) => {
+    const current = scope.current;
+    if (!current || current.signal.aborted || busy || refreshRequired) return;
+    loadVersion.current += 1;
     setBusy(true);
     setError('');
+    withdrawalPending.current = true;
+    let saved = false;
+    let uncertain = false;
     try {
       await api(`${base}/speakers/${encodeURIComponent(speaker.id)}/not-me`, {
         method: 'POST',
       });
-      try {
-        await api(base);
-        await load();
-      } catch (failure) {
-        if (failure instanceof ApiError && failure.status === 404)
-          setLeft(true);
-        else throw failure;
-      }
+      saved = true;
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '保存失败');
+      uncertain = failure instanceof ApiError && failure.status === 0;
+      if (!current.signal.aborted)
+        setError(failure instanceof Error ? failure.message : '保存失败');
+      else
+        toast(
+          `刚才的修改未能确认：${failure instanceof Error ? failure.message : '保存失败'}`,
+          'danger',
+          8000,
+        );
     }
-    setBusy(false);
+    if (current.signal.aborted) return;
+    // Withdrawing the last speaker may remove access; load also recognises that after a failed read is retried.
+    const latest = await load(false);
+    if (!current.signal.aborted) {
+      if (!latest)
+        setError(
+          saved ? '修改已保存，请刷新确认' : '修改结果未确认，请刷新后再操作',
+        );
+      else if (saved || uncertain) setError('');
+      setBusy(false);
+    }
   };
 
   const names = new Map(people.map((p) => [p.id, p.name]));
@@ -727,9 +821,19 @@ export function Recording() {
       }
     >
       {error && (
-        <Text role="alert" tone="danger">
-          {error}
-        </Text>
+        <Row gap={2}>
+          <Text role="alert" tone="danger">
+            {error}
+          </Text>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => void load()}
+          >
+            刷新
+          </Button>
+        </Row>
       )}
       {left ? (
         <Notice
@@ -774,7 +878,7 @@ export function Recording() {
                               variant="secondary"
                               size="sm"
                               aria-label={`${s.id} 不是我`}
-                              disabled={busy}
+                              disabled={busy || refreshRequired}
                               onClick={() => void notMe(s)}
                             >
                               不是我
@@ -794,7 +898,7 @@ export function Recording() {
         <>
           {current ? (
             <SpeakerCard
-              key={`${current.id}-${detail.revision}`}
+              key={`${detail.id}-${detail.transcript_id}-${current.id}`}
               recordingId={detail.id}
               speaker={current}
               // Deciding here settles this recording alone: how much they said in it.
@@ -805,7 +909,7 @@ export function Recording() {
               }
               people={people}
               segments={detail.segments}
-              busy={busy}
+              busy={busy || refreshRequired}
               remaining={remaining.length + 1}
               now={
                 current.decision === 'confirmed'
@@ -876,7 +980,7 @@ export function Recording() {
                             variant="ghost"
                             size="sm"
                             aria-label={`改 ${s.id}`}
-                            disabled={busy}
+                            disabled={busy || refreshRequired}
                             onClick={() => void decide(s, { action: 'clear' })}
                           >
                             改

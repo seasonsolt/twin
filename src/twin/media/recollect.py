@@ -9,7 +9,7 @@ decision about it stay, so the recording can go back to it (``rollback``).
 
 Only people's decisions are carried. Automatic ones are made again for the new transcript: ``Team.classify`` right
 after the switch, the review (``media.review``), proofreading and speaker names when their turn comes, as for any new
-transcript. A twin is rebuilt only if a person's speech in the recording changed (``Team._reopen``).
+transcript. A twin is rebuilt only if a person's speech in the recording changed (``attribution.reopen_twins``).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 from pydantic import BaseModel
 
+from . import attribution
 from .ingest import CommandTranscriber, Progress, Segment, flac_seconds
 from .library import Library, Recording, Transcript, TranscriptionError, TranscriptionInterrupted, _interrupted
 from .team import Team, cosine, segment_owners
@@ -309,7 +310,7 @@ def _switch(library: Library, recording: Recording, old: Transcript, new: Transc
             "recollect = NULL, revision = revision + 1, updated_at = ? WHERE id = ?",
             (new.id, old.id, new.asr, len(new.speakers), len(new.segments), now, recording.id),
         )
-        Team._reopen(db, recording.id, set(before))
+        attribution.reopen_twins(db, recording.id, set(before))
         db.execute(
             "INSERT INTO recollections (recording_id, old_transcript, new_transcript, at, report) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -370,9 +371,9 @@ def _move_samples(
 def settle_samples(library: Library, recordings: set[str] | None = None) -> tuple[int, int]:
     """Voice samples still standing on an older transcript of their recording (``recordings``: only theirs) move
     to the speaker of the current transcript most like them, at least ``SAMPLE_MOVE`` alike and given to the same
-    person, by the owner or by voice; the others stop standing. Such a sample cannot be heard (its speaker is numbered
-    anew) and was measured by an older service. The decisions it took stay: they are made again under the current
-    rules (``collector``). What moved or stopped is added to the transcription again that left it (``rollback``).
+    person, by the owner or by voice; the others stop standing and their automatic decisions return to the owner.
+    Such a sample cannot be heard (its speaker is numbered anew) and was measured by an older service.
+    What moved or stopped is added to the transcription again that left it (``rollback``).
     Returns how many moved and how many stopped."""
     with library.read() as db:
         rows = db.execute(
@@ -416,7 +417,16 @@ def settle_samples(library: Library, recordings: set[str] | None = None) -> tupl
                 (recording_id, recording.transcript_id),
             ).fetchone()
             report = Report.model_validate_json(found[0]) if found else None
-            for row in samples:
+            retired_samples: set[int] = set()
+            for previous in samples:
+                # Reading the speakers can take a while. A person may meanwhile have removed the sample or
+                # corrected whom it belongs to: never move or retire that earlier reading over their decision.
+                row = db.execute(
+                    "SELECT * FROM voiceprints WHERE id = ? AND active = 1 AND person_id = ? AND transcript_id = ?",
+                    (previous["id"], previous["person_id"], previous["transcript_id"]),
+                ).fetchone()
+                if row is None:
+                    continue
                 vector = json.loads(row["embedding"])
                 scored = [(cosine(vector, s.embedding), s) for s in speakers if s.embedding]
                 score, heir = max(scored, key=lambda pair: pair[0], default=(0.0, None))
@@ -425,6 +435,7 @@ def settle_samples(library: Library, recordings: set[str] | None = None) -> tupl
                 trail = report if report is not None and row["transcript_id"] == report.old_transcript else None
                 if heir is None or score < SAMPLE_MOVE or given.get(heir.id) != row["person_id"]:
                     retired += 1
+                    retired_samples.add(int(row["id"]))
                     if trail is not None:
                         trail.samples_retired.append(int(row["id"]))
                     continue
@@ -451,6 +462,8 @@ def settle_samples(library: Library, recordings: set[str] | None = None) -> tupl
                 moved += 1
                 if trail is not None:
                     trail.samples_moved.append((int(row["id"]), into))
+            if attribution.withdraw_samples(db, retired_samples):
+                Team._prune(db)
             if report is not None:
                 db.execute(
                     "UPDATE recollections SET report = ? WHERE recording_id = ? AND new_transcript = ?",
@@ -488,20 +501,47 @@ def rollback(library: Library, recording_id: str) -> bool:
             )
             if r[0]
         }
-        # Samples of the new transcript stand no more; those moved from the old one stand again.
+        # Samples of the new transcript stand no more; those moved from the old one stand again, unless a person
+        # removed them meanwhile. Rolling back the transcription must not undo that correction.
+        standing = {
+            int(r[0])
+            for r in db.execute(
+                "SELECT id FROM voiceprints WHERE recording_id = ? AND transcript_id = ? AND active = 1",
+                (recording_id, recording.transcript_id),
+            )
+        }
+        restored: set[int] = set()
         db.execute(
             "UPDATE voiceprints SET active = 0 WHERE recording_id = ? AND transcript_id = ?",
             (recording_id, recording.transcript_id),
         )
         for before, after in report.samples_moved if report else ():
+            if after not in standing:
+                continue
             db.execute(
                 "UPDATE voiceprints SET active = 1, corrected = COALESCE((SELECT corrected FROM voiceprints "
                 "WHERE id = ?), corrected) WHERE id = ?",
                 (after, before),
             )
             db.execute("UPDATE attributions SET sample = ? WHERE sample = ?", (before, after))
+            restored.add(after)
         for before in report.samples_retired if report else ():
             db.execute("UPDATE voiceprints SET active = 1 WHERE id = ?", (before,))
+        # Samples first taken on the newer transcript have no predecessor to stand on; their recognitions in
+        # other recordings are withdrawn just as when the owner removes a sample directly.
+        withdrawn = attribution.withdraw_samples(db, standing - restored)
+        # Older releases could leave automatic decisions pointing at a removed or retired sample in the
+        # previous transcript. Check after restoring legitimate predecessors above, before publishing it.
+        unsupported = {
+            int(r[0])
+            for r in db.execute(
+                "SELECT DISTINCT a.sample FROM attributions a LEFT JOIN voiceprints v ON v.id = a.sample "
+                "WHERE a.recording_id = ? AND a.transcript_id = ? AND a.auto = 1 "
+                "AND a.decision = 'confirmed' AND a.sample IS NOT NULL AND (v.id IS NULL OR v.active = 0)",
+                (recording_id, previous.id),
+            )
+        }
+        withdrawn += attribution.withdraw_samples(db, unsupported)
         db.execute(
             "UPDATE recordings SET transcript_id = ?, previous = NULL, asr = ?, speakers = ?, segments = ?, "
             "revision = revision + 1, updated_at = ? WHERE id = ?",
@@ -511,7 +551,10 @@ def rollback(library: Library, recording_id: str) -> bool:
             "UPDATE recollections SET rolled_back = 1 WHERE recording_id = ? AND new_transcript = ?",
             (recording_id, recording.transcript_id),
         )
-        Team._reopen(db, recording_id, people)
+        attribution.reopen_twins(db, recording_id, people)
+        if withdrawn:
+            # Judge orphans against the restored transcript, which may be the only one still naming a person.
+            Team._prune(db)
     return True
 
 

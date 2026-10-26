@@ -1575,7 +1575,25 @@ class Libraries:
                 raise HTTPException(404, "这段录音已删除，请重新上传")
             return self.filed(viewer, existing, False)
         _, part = uploads.paths(upload_id)
-        recording, new = library.add(part, info["filename"], uploader=viewer.key, sha=uploads.digest(upload_id))
+        sha = info.get("filing_sha256")
+        if not sha:
+            sha = uploads.digest(upload_id)
+            # Persist before add consumes .part: a retry after a lost response or process stop can find the
+            # committed recording by content, or recover the moved original if the insert did not commit.
+            info["filing_sha256"] = sha
+            uploads.save(upload_id, info)
+        with library.lock:
+            recording = library.by_sha(sha)
+            new = False
+            if recording is None:
+                source = part if part.is_file() else library.original("rec_" + sha[:20])
+                if source is None:
+                    raise HTTPException(404, "上传文件已不在，请重新上传")
+                if source.stat().st_size != info["size"]:
+                    raise HTTPException(409, "上传文件大小不符，请重新选择文件")
+                recording, new = library.add(source, info["filename"], uploader=viewer.key, sha=sha)
+            else:
+                part.unlink(missing_ok=True)
         info["recording_id"] = recording.id
         uploads.save(upload_id, info)
         self.kick(owner)

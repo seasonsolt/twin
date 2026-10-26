@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api } from '../lib/api';
+import { api, beginApiSession } from '../lib/api';
 import { usePersonas } from './personas';
 import { useWelcome } from './welcome';
 
@@ -59,12 +59,14 @@ export const useAuth = create<{
   signedOut: false,
   clear() {
     ++version;
+    beginApiSession();
     set({ identity: null });
     usePersonas.getState().reset();
     useWelcome.getState().reset();
   },
   async login(signal) {
     const current = ++version;
+    beginApiSession();
     const identity = await api<Identity>('/api/whoami', { signal });
     if (signal?.aborted || current !== version) return;
     await usePersonas.getState().refresh();
@@ -72,7 +74,9 @@ export const useAuth = create<{
       set({ identity, signedOut: false });
   },
   async logout() {
+    const current = version;
     await api('/api/auth/logout', { method: 'POST' });
+    if (current !== version) return;
     set({ signedOut: true });
     get().clear();
   },

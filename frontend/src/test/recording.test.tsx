@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -40,6 +46,8 @@ let fail: boolean;
 let denoised: boolean;
 let requests: Record<string, unknown>[];
 beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   revision = 1;
   fail = false;
   denoised = false;
@@ -109,7 +117,10 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 function show(address = '/library/r') {
   return render(
     <MemoryRouter initialEntries={[address]}>
@@ -120,6 +131,17 @@ function show(address = '/library/r') {
   );
 }
 
+function replacementAudio(previous: HTMLAudioElement, source: RegExp) {
+  expect(document.querySelectorAll('audio')).toHaveLength(1);
+  const current = screen.getByLabelText<HTMLAudioElement>('S1 试听');
+  expect(current).not.toBe(previous);
+  expect(previous).not.toBeInTheDocument();
+  expect(vi.mocked(previous.pause).mock.contexts).toContain(previous);
+  expect(previous).not.toHaveAttribute('src');
+  expect(current.getAttribute('src')).toMatch(source);
+  return current;
+}
+
 it('shows one current speaker and one player; clips change audio and matching transcript without selecting a person', async () => {
   show();
   const current = await screen.findByRole('region', { name: 'S1 是谁？' });
@@ -128,7 +150,7 @@ it('shows one current speaker and one player; clips change audio and matching tr
     'S2 · 说了 5 分钟 · 没认出来',
   );
   expect(document.querySelectorAll('audio')).toHaveLength(1);
-  const audio = screen.getByLabelText('S1 试听');
+  const audio = screen.getByLabelText<HTMLAudioElement>('S1 试听');
   expect(audio).toHaveAttribute('src', expect.stringContaining('/samples/0'));
   // Nothing to switch between until the recording has a denoised copy.
   expect(screen.queryByRole('button', { name: '原声' })).toBeNull();
@@ -137,7 +159,7 @@ it('shows one current speaker and one player; clips change audio and matching tr
     name: '片段 2 · 00:26',
   });
   await userEvent.click(second);
-  expect(audio).toHaveAttribute('src', expect.stringContaining('/samples/1'));
+  replacementAudio(audio, /\/samples\/1$/u);
   expect(second).toHaveAttribute('aria-pressed', 'true');
   expect(within(current).getByText('先看进展。')).toBeInTheDocument();
   expect(within(current).queryByText('再看计划。')).toBeNull();
@@ -154,18 +176,18 @@ it('shows one current speaker and one player; clips change audio and matching tr
 it('plays the denoised copy by default and the original once asked, remembered by this browser', async () => {
   denoised = true;
   show();
-  const audio = await screen.findByLabelText('S1 试听');
+  let audio = await screen.findByLabelText<HTMLAudioElement>('S1 试听');
   expect(audio.getAttribute('src')).toMatch(/\/samples\/0$/u);
   const original = screen.getByRole('button', { name: '原声' });
   expect(original).toHaveAttribute('aria-pressed', 'false');
   await userEvent.click(original);
   expect(original).toHaveAttribute('aria-pressed', 'true');
-  expect(audio.getAttribute('src')).toMatch(/\/samples\/0\?original=true$/u);
+  audio = replacementAudio(audio, /\/samples\/0\?original=true$/u);
   expect(localStorage.getItem('twin:listen-original')).toBe('1');
   await userEvent.click(screen.getByRole('button', { name: '片段 2 · 00:26' }));
-  expect(audio.getAttribute('src')).toMatch(/\/samples\/1\?original=true$/u);
+  audio = replacementAudio(audio, /\/samples\/1\?original=true$/u);
   await userEvent.click(original);
-  expect(audio.getAttribute('src')).toMatch(/\/samples\/1$/u);
+  replacementAudio(audio, /\/samples\/1$/u);
   expect(localStorage.getItem('twin:listen-original')).toBeNull();
 });
 

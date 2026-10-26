@@ -32,6 +32,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from ..util import date_from_name
+from . import attribution
 from .collector import ATTRIBUTION_VERSION, CLEANUP_VERSION, LEGACY_ATTRIBUTION
 from .cues import Cue
 from .ingest import Segment, Speaker, timestamp
@@ -340,7 +341,7 @@ class _Group:
     stranger: bool
     # What the meeting calls its members, longest member first.
     cues: list[Cue]
-    # Whom a member was given to by voice until its sample stopped standing (``Team._withdraw``).
+    # Whom a member was given to by voice until its sample stopped standing (``attribution.withdraw_samples``).
     suggest: str | None = None
 
 
@@ -698,8 +699,8 @@ class Team:
 
     def remove_sample(self, person_id: str, sample_id: int) -> int | None:
         """The owner says one of the person's samples does not stand for them: it no longer recognises anyone, and
-        the speakers it gave them go back to the owner (``_withdraw``), not dropped. How many went back; None when
-        the person has no such sample. The speaker it was taken from stays theirs."""
+        the speakers it gave them go back to the owner (``attribution.withdraw_samples``), not dropped. How many
+        went back; None when the person has no such sample. The speaker it was taken from stays theirs."""
         with self.library.transaction() as db:
             row = db.execute(
                 "SELECT recording_id FROM voiceprints WHERE id = ? AND person_id = ? AND active = 1",
@@ -708,7 +709,7 @@ class Team:
             if row is None:
                 return None
             db.execute("UPDATE voiceprints SET active = 0 WHERE id = ?", (sample_id,))
-            back = self._withdraw(db, {sample_id})
+            back = attribution.withdraw_samples(db, {sample_id})
             if back:
                 self._prune(db)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (row[0],))
@@ -783,7 +784,7 @@ class Team:
             (person_id, person_id, person_id),
         ).fetchall()
         for (recording_id,) in touched:
-            Team._reopen(db, recording_id, {person_id})
+            attribution.reopen_twins(db, recording_id, {person_id})
         db.execute("DELETE FROM segment_fixes WHERE from_person = ? OR to_person = ?", (person_id, person_id))
         db.execute(
             "UPDATE attributions SET decision = 'none', person_id = NULL, updated_at = ? WHERE person_id = ?",
@@ -924,9 +925,9 @@ class Team:
                 "AND person_id IS NOT ?",
                 (recording_id, transcript_id, speaker_id, after),
             )
-            if self._withdraw(db, gone):
+            if attribution.withdraw_samples(db, gone):
                 self._prune(db)
-            self._reopen(db, recording_id, {before, after})
+            attribution.reopen_twins(db, recording_id, {before, after})
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return True
 
@@ -1004,7 +1005,7 @@ class Team:
                 if row is not None and row["auto"] and before and row["sample"] is not None:
                     # The owner gave otherwise a speaker a sample gave by voice alone: its track record.
                     gone |= self._correct(db, int(row["sample"]))
-                self._withdraw(db, gone)
+                attribution.withdraw_samples(db, gone)
             # The recording already gives them a sample, from this speaker or another (``VOICE_SAMPLES``).
             already = db.execute(
                 "SELECT 1 FROM voiceprints WHERE recording_id = ? AND person_id IS ? AND active = 1",
@@ -1017,7 +1018,7 @@ class Team:
                     (after, recording_id, transcript_id, speaker_id, json.dumps(speaker.embedding), _now()),
                 )
             if before != after:
-                self._reopen(db, recording_id, {p for p in (before, after) if p})
+                attribution.reopen_twins(db, recording_id, {p for p in (before, after) if p})
                 self._prune(db)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return int(revision + 1)
@@ -1044,7 +1045,7 @@ class Team:
                     (person_id,),
                 )
             }
-            self._bump(db, together | {person_id})
+            attribution.bump_twins(db, together | {person_id})
             return str(row[0]) if row[0] else None
 
     def resolve(self, person_id: str, into: str | None) -> None:
@@ -1080,7 +1081,7 @@ class Team:
                     (_now(), person_id),
                 )
             for recording_id in heard:
-                self._reopen(db, recording_id, {into} if into else set())
+                attribution.reopen_twins(db, recording_id, {into} if into else set())
                 db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             self._forget(db, person_id)
 
@@ -1190,7 +1191,7 @@ class Team:
                 count += 1
             if not count:
                 return 0
-            self._reopen(db, recording_id, decided)
+            attribution.reopen_twins(db, recording_id, decided)
             if undone:
                 # An unnamed person whose only speaker was taken back is nobody any more.
                 self._prune(db)
@@ -1202,8 +1203,8 @@ class Team:
         they lead the runner-up (``_rival``). A speaker sure enough of someone who already has a speaker here is "mid"
         when a recording gives a person one speaker by voice (``ONE_PER_RECORDING``), and so is one the owner acted on
         or one taken back (``classify`` leaves both to the owner); one given to someone by voice until its sample
-        stopped standing (``_withdraw``) is offered to them again as "mid", while they still sound most alike. People
-        the speaker was denied to be are never candidates."""
+        stopped standing (``attribution.withdraw_samples``) is offered to them again as "mid", while they still
+        sound most alike. People the speaker was denied to be are never candidates."""
         if recording.transcript_id is None:
             return {}
         with self.library.read() as db:
@@ -1368,7 +1369,7 @@ class Team:
                 matched = self._suggest(embedding, prints, rejected, here)
                 suggest = row["suggest"] if row is not None else None
                 if suggest:
-                    # Given to them by voice until its sample stopped standing (``_withdraw``).
+                    # Given to them by voice until its sample stopped standing (``attribution.withdraw_samples``).
                     matched.sort(key=lambda c: c.person_id != suggest)
                 known = max((c.score for c in self._match(embedding, prints, rejected, floor=-1.0)), default=0.0)
                 stranger = self._stranger(embedding, strangers, known)
@@ -1601,7 +1602,7 @@ class Team:
                 )
             for recording_id in sorted({h[0] for h in heard}):
                 if owner:
-                    self._reopen(db, recording_id, {owner})
+                    attribution.reopen_twins(db, recording_id, {owner})
                 db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
 
     def unlike(self, members: Iterable[tuple[str, str]], person_id: str) -> Candidate | None:
@@ -1715,10 +1716,10 @@ class Team:
             if rows[person_id]["gender"] and not rows[into]["gender"]:
                 db.execute("UPDATE people SET gender = ? WHERE id = ?", (rows[person_id]["gender"], into))
             for recording_id in heard:
-                self._reopen(db, recording_id, {into})
+                attribution.reopen_twins(db, recording_id, {into})
                 db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             # Everyone who spoke with them calls them by the kept name now.
-            self._bump(db, {into})
+            attribution.bump_twins(db, {into})
             self._forget(db, person_id)
 
     def voice_clashes(self) -> list[VoiceClash]:
@@ -2063,32 +2064,6 @@ class Team:
         others = [c.model_copy(update={"sure": False}) for c in candidates if c.person_id != person_id]
         return [found.model_copy(update={"called": True}), *others][:2], cue.name
 
-    def _withdraw(self, db: sqlite3.Connection, samples: set[int]) -> int:
-        """Take back the speakers given to someone by voice alone through these voice samples, which no longer stand
-        for them: each waits for the owner, offered to whom it was given (``voice_tiers``) rather than dropped.
-        How many were taken back."""
-        if not samples:
-            return 0
-        marks = ", ".join("?" * len(samples))
-        rows = db.execute(
-            "SELECT a.recording_id, a.transcript_id, a.speaker_id, a.person_id FROM attributions a JOIN recordings r "
-            "ON r.id = a.recording_id AND r.transcript_id = a.transcript_id WHERE a.auto = 1 "
-            f"AND a.decision = 'confirmed' AND a.sample IN ({marks})",
-            sorted(samples),
-        ).fetchall()
-        taken: dict[str, set[str]] = {}
-        for recording_id, transcript_id, speaker_id, person_id in rows:
-            db.execute(
-                "UPDATE attributions SET decision = 'none', person_id = NULL, suggest = ?, tier = 'mid', "
-                "updated_at = ? WHERE recording_id = ? AND transcript_id = ? AND speaker_id = ?",
-                (person_id, _now(), recording_id, transcript_id, speaker_id),
-            )
-            taken.setdefault(recording_id, set()).add(person_id)
-        for recording_id, people in taken.items():
-            self._reopen(db, recording_id, people)
-            db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
-        return len(rows)
-
     @staticmethod
     def _correct(db: sqlite3.Connection, sample: int) -> set[int]:
         """Count that the owner gave otherwise a speaker this sample gave by voice alone; the sample itself when that
@@ -2105,30 +2080,6 @@ class Team:
         db.execute("UPDATE voiceprints SET active = 0 WHERE id = ?", (sample,))
         return {sample}
 
-    @staticmethod
-    def _reopen(db: sqlite3.Connection, recording_id: str, people: set[str]) -> None:
-        """Close the twins of everyone who speaks in the recording (their sources name the others too), including
-        those given segments there (``media.review``), and of ``people``, whose speakers there just changed."""
-        speaking = {
-            row[0]
-            for row in db.execute(
-                "SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed' "
-                "UNION SELECT to_person FROM segment_fixes WHERE recording_id = ? AND action = 'move'",
-                (recording_id, recording_id),
-            )
-            if row[0]
-        }
-        Team._bump(db, speaking | people)
-
-    @staticmethod
-    def _bump(db: sqlite3.Connection, people: set[str]) -> None:
-        affected = sorted(people)
-        if affected:
-            db.execute(
-                f"UPDATE personas_sync SET wanted = wanted + 1 WHERE person_id IN ({','.join('?' * len(affected))})",
-                affected,
-            )
-
     def proofread(self, recording_id: str, transcript_id: str, changed: bool) -> bool:
         """Note that the recording's transcript was proofread; when its words changed, close the twins of everyone
         identified in it, in the same transaction, so they are rebuilt from the corrected words. False when the
@@ -2139,7 +2090,7 @@ class Team:
                 (transcript_id, recording_id, transcript_id),
             ).rowcount
             if updated and changed:
-                self._reopen(db, recording_id, set())
+                attribution.reopen_twins(db, recording_id, set())
             return bool(updated)
 
     # -------------------------------------------------------------- twin sync

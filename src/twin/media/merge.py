@@ -27,6 +27,7 @@ from contextlib import closing
 from pathlib import Path
 
 from ..util import prepare_private_file, private_directory
+from . import attribution
 from .library import TEAM, Library
 from .team import UNNAMED, Team
 
@@ -138,7 +139,7 @@ def merge(team: Library, folder: Path, same: Same) -> list[str]:
             )
             twins.append(str(row["persona_id"]))
         # Everyone who speaks with someone whose recordings just arrived is rebuilt too.
-        Team._bump(db, set(people.values()))
+        attribution.bump_twins(db, set(people.values()))
         for row in source.execute("SELECT at, kind, tokens FROM spending"):
             db.execute("INSERT INTO spending (at, kind, tokens) VALUES (?, ?, ?)", tuple(row))
         db.execute("INSERT INTO merged_libraries (key, merged_at) VALUES (?, ?)", (folder.name, _now()))

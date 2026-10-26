@@ -1,5 +1,5 @@
 import { withBase } from './base';
-import { ApiError, handleApiFailure } from './api';
+import { ApiError, apiFailureHandler } from './api';
 import { compactable, compactMedia, type Compaction } from './compactMedia';
 import { getPersonaId, personaKey } from './persona';
 
@@ -22,6 +22,7 @@ export function uploadForm<T>(
   progress: (percent: number) => void,
   method = 'POST',
 ): Promise<T> {
+  const failed = apiFailureHandler(signal);
   return new Promise((resolve, reject) => {
     signal.throwIfAborted();
     const xhr = new XMLHttpRequest();
@@ -45,7 +46,7 @@ export function uploadForm<T>(
       }
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
       else {
-        handleApiFailure(xhr.status, data);
+        failed(xhr.status, data);
         reject(
           new ApiError(
             xhr.status,
@@ -164,6 +165,7 @@ async function request(
   onPause: (paused: boolean) => void,
   persona: string,
 ): Promise<{ response: Response; data: Record<string, unknown> }> {
+  const failed = apiFailureHandler(signal, persona);
   for (let attempt = 0; ; attempt++) {
     while (!navigator.onLine) {
       onPause(true);
@@ -186,7 +188,8 @@ async function request(
         },
       });
       const data = (await response.json()) as Record<string, unknown>;
-      if (!response.ok) handleApiFailure(response.status, data);
+      abort(signal);
+      if (!response.ok) failed(response.status, data);
       if (!response.ok && response.status !== 409)
         throw new ApiError(
           response.status,

@@ -2213,6 +2213,29 @@ def eval_asr_library_command(
     _say(f"已评估 {card['sessions']} 场；成绩单：{out / 'scorecard.md'}")
 
 
+@app.command("eval-asr-attribution")
+def eval_asr_attribution_command(
+    sessions: Annotated[Path, typer.Option("--sessions", help="整场会议清单，沿用 eval-asr-session 格式")],
+    cache: Annotated[Path, typer.Option("--cache", help="已有 eval-asr-session 转写缓存 JSONL")],
+    enrollment: Annotated[Path, typer.Option("--enrollment", help="voice:<音频SHA256> 声纹缓存 JSONL")],
+    provenance: Annotated[Path, typer.Option("--provenance", help="转写、参考声纹和人工标注来源 JSON")],
+    out: Annotated[Path, typer.Option("--out", help="仓库外的成绩单目录")],
+    split: Annotated[str, typer.Option("--split", help="all / dev / formal，会议或声明的组不会拆开")] = "all",
+    seed: Annotated[str, typer.Option("--seed", help="冻结会议划分的种子")] = "attribution-meetings-v1",
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """仅用缓存评测自动归属：每场独立，不调用转写服务；工作量只报代理，不估算人工工时。"""
+    from .evals.asr_attribution import run_attribution_benchmark
+    from .evals.personal import ensure_output_directory
+
+    with _errors():
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        card = run_attribution_benchmark(
+            sessions, cache, enrollment, out, provenance_path=provenance, split=split, seed=seed
+        )
+    _say(f"已评估 {len(card['protocol']['meetings'])} 场（仅归属层）；成绩单：{out / 'scorecard.md'}")
+
+
 @app.command("eval-compare")
 def personal_eval_compare_command(
     ctx: typer.Context,

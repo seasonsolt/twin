@@ -34,6 +34,7 @@ from typing import Literal
 import numpy as np
 from pydantic import BaseModel
 
+from . import attribution
 from .collector import CLEANUP_VERSION, LEGACY_CLEANUP
 from .ingest import CommandTranscriber, Segment
 from .library import Library, Recording
@@ -616,7 +617,6 @@ class Reviews:
         ``recordings`` or all heard ones (all once a speaker is given away), and close the twins this changes. A
         decision of the owner's about a stretch is never replaced, and a stretch they kept stays theirs. Returns how
         many speakers were given away and segments left out."""
-        from .team import Team
 
         moved = step = self._reassign(recordings)
         # A speaker given away takes their voice sample from the wrong person, so others confirmed as that person
@@ -680,7 +680,7 @@ class Reviews:
                         (recording_id, recording.transcript_id, segment, person_id, now, CLEANUP_VERSION),
                     ).rowcount
                 if added:
-                    Team._reopen(db, recording_id, {person_id for _, person_id in rows} | given)
+                    attribution.reopen_twins(db, recording_id, {person_id for _, person_id in rows} | given)
                 left += added
         return moved + left
 
@@ -737,9 +737,7 @@ class Reviews:
                     returned.add(person_id)
                     back += 1
                 if returned:
-                    from .team import Team
-
-                    Team._reopen(db, recording_id, returned)
+                    attribution.reopen_twins(db, recording_id, returned)
         return back
 
     def _reassign(self, recordings: set[str] | None) -> int:
@@ -774,9 +772,10 @@ class Reviews:
     ) -> int:
         """The owner's decision about stretches of a confirmed speaker, for each of their segments: not the person
         (``exclude``), ``to_person``'s (``move``), the person's indeed (``keep``), or undecided again (``clear``).
-        Closes the twins it changes (``Team._reopen``); returns the recording's new revision. ``Stale`` when the page
-        decided on another transcript or revision; ``ValueError`` for an unknown stretch or person."""
-        from .team import Stale, Team
+        Closes the twins it changes (``attribution.reopen_twins``); returns the recording's new revision.
+        ``Stale`` when the page decided on another transcript or revision; ``ValueError`` for an unknown stretch
+        or person."""
+        from .team import Stale
 
         if not indices:
             raise ValueError("没有选中片段")
@@ -845,6 +844,6 @@ class Reviews:
                 affected.add(to_person)
             # Keeping what was the person's anyway changes nothing a twin reads.
             if action in {"exclude", "move"} or any(r[0] != "keep" for r in before):
-                Team._reopen(db, recording_id, affected)
+                attribution.reopen_twins(db, recording_id, affected)
             db.execute("UPDATE recordings SET revision = revision + 1 WHERE id = ?", (recording_id,))
             return revision + 1

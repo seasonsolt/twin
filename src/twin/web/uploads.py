@@ -110,13 +110,23 @@ class Uploads:
         if not metadata.is_file():
             raise HTTPException(404, "找不到上传记录，请重新选择文件")
         info: dict[str, Any] = json.loads(metadata.read_text())
-        info["offset"] = info["size"] if finished(info) else part.stat().st_size
+        # Filing a library recording consumes .part. Its durable content hash lets finish resume even if the
+        # process stopped before writing recording_id, so this upload's bytes are already complete then too.
+        try:
+            info["offset"] = info["size"] if finished(info) or info.get("filing_sha256") else part.stat().st_size
+        except FileNotFoundError:
+            raise HTTPException(404, "上传文件已不在，请重新选择文件") from None
         return info
 
     def save(self, upload_id: str, info: dict[str, Any]) -> None:
         metadata, _ = self.paths(upload_id)
-        metadata.write_text(json.dumps(info, ensure_ascii=False))
-        metadata.chmod(0o600)
+        temporary = metadata.with_name(f".{metadata.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.touch(mode=0o600)
+            temporary.write_text(json.dumps(info, ensure_ascii=False))
+            temporary.replace(metadata)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def arriving(self) -> tuple[int, int]:
         """(uploads still arriving, bytes they have yet to send)."""
@@ -607,7 +617,7 @@ def upload_routes(
         uploads = uploads_for(request)
         async with locks.hold(upload_id):
             info = await run_in_threadpool(uploads.load, upload_id)
-            if offset != info["offset"] or finished(info):
+            if offset != info["offset"] or finished(info) or info.get("filing_sha256"):
                 return JSONResponse({"offset": info["offset"]}, status_code=409)
             declared = request.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > min(MAX_CHUNK_SIZE, info["size"] - offset):

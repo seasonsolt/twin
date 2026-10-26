@@ -342,9 +342,11 @@ it.each([
     }
     if (section === 'channels') {
       const settings = await screen.findByRole('dialog', { name: '分身设置' });
-      expect(
-        await within(settings).findByRole('button', { name: '绑定' }),
-      ).toBeVisible();
+      await waitFor(() =>
+        expect(
+          within(settings).getByRole('button', { name: '绑定' }),
+        ).toBeVisible(),
+      );
       await waitFor(() =>
         expect(window.location.hash).toBe(
           '#/team/twin/friend?section=overview',

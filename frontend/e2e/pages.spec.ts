@@ -491,11 +491,14 @@ for (const { name, path, ready, viewport, setup } of pages) {
     await mockApi(page, missing);
     await setup?.(page);
     await page.goto(path);
-    await expect(page.getByText(ready).first()).toBeVisible();
+    await expect(page.getByText(ready).first()).toBeVisible({
+      timeout: 15_000,
+    });
     await page.evaluate(() => document.fonts.ready);
     await expect(page).toHaveScreenshot(
       `${name}-${test.info().project.name}.png`,
-      { fullPage: !viewport },
+      // JS progress transitions can settle late under shared Docker load; keep exact pixel comparison.
+      { fullPage: !viewport, timeout: 15_000 },
     );
     expect(errors, 'page errors').toEqual([]);
     expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
@@ -739,7 +742,9 @@ test('ask the whole team with ⌘K', async ({ page }, info) => {
   await page.clock.setFixedTime(NOW);
   await mockApi(page, missing);
   await page.goto('/#/team');
-  await expect(page.getByText('全部录音（').first()).toBeVisible();
+  await expect(page.getByText('全部录音（').first()).toBeVisible({
+    timeout: 15000,
+  });
   // 第 16 屏: the answer the team already has, whom to ask, and the meetings it came up in.
   await page.keyboard.press('ControlOrMeta+k');
   const dialog = page.getByRole('dialog', { name: '问一句、找人' });
@@ -770,6 +775,48 @@ test('recording controls', async ({ page }) => {
   await expect(
     page.getByRole('button', { name: '确认是许清禾' }),
   ).toBeEnabled();
+  expect(missing).toEqual([]);
+});
+
+test('recording keeps the chosen person through a concurrent decision', async ({
+  page,
+}) => {
+  const missing: string[] = [];
+  await mockApi(page, missing);
+  let revision = weekly.revision;
+  const decisions: Record<string, unknown>[] = [];
+  await page.route('**/api/library/recordings/r-weekly', (route) =>
+    route.fulfill({ json: { ...weekly, revision } }),
+  );
+  await page.route(
+    '**/api/library/recordings/r-weekly/speakers/S3',
+    (route) => {
+      decisions.push(route.request().postDataJSON() as Record<string, unknown>);
+      if (decisions.length === 1) {
+        revision += 1;
+        return route.fulfill({
+          status: 409,
+          json: { detail: '这段录音刚被修改过，请刷新后再确认' },
+        });
+      }
+      return route.fulfill({ json: { revision: revision + 1 } });
+    },
+  );
+  await page.goto('/#/library/r-weekly');
+  const select = page.getByLabel('这是谁');
+  await select.selectOption('u-qinghe');
+  const confirm = page.getByRole('button', { name: '确认是许清禾' });
+  await confirm.click();
+  await expect(page.getByRole('alert')).toContainText('请刷新后再确认');
+  await expect(select).toHaveValue('u-qinghe');
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect.poll(() => decisions.length).toBe(2);
+  expect(decisions[1]).toMatchObject({
+    revision,
+    transcript_id: weekly.transcript_id,
+    person_id: 'u-qinghe',
+  });
   expect(missing).toEqual([]);
 });
 
@@ -858,6 +905,7 @@ test('the person’s own assistant, set apart above the conversations', async ({
   await expect(page.getByRole('button', { name: /^我的分身/ })).toHaveAttribute(
     'aria-pressed',
     'true',
+    { timeout: 15000 },
   );
   await page
     .getByRole('button', { name: /^我上周答应过谁什么(?!的更多操作)/ })

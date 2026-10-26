@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterator
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,7 +74,8 @@ class Scripted(FakeLLM):
 
     def __init__(self, plan: dict[str, dict[str, Any]] | None = None) -> None:
         super().__init__(self.handle)
-        self.plan = plan or {}
+        # A test can change its answers without changing the next test's shared plan, including nested metadata.
+        self.plan = deepcopy(plan) if plan is not None else {}
         self.seen: list[str] = []
         self.systems: list[str] = []
         self.structured_calls: list[tuple[str, str, str]] = []

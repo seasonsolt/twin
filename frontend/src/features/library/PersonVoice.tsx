@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { VolumeX } from 'lucide-react';
 import {
   ActionMenu,
@@ -16,7 +16,7 @@ import {
   toast,
   useConfirm,
 } from '../../components/ui';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import { withBase } from '../../lib/base';
 import { useHeard } from '../../stores/listening';
 import type { Person } from '../../pages/Recording';
@@ -145,6 +145,7 @@ export function PersonVoice({
 }) {
   const [state, setState] = useState<PersonVoiceState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshRequired, setRefreshRequired] = useState(false);
   const [error, setError] = useState('');
   const [shown, setShown] = useState(CHECKS_PER_PAGE);
   const confirm = useConfirm();
@@ -152,32 +153,108 @@ export function PersonVoice({
   const base = person
     ? `/api/library/people/${encodeURIComponent(person.id)}`
     : '';
-  const load = useCallback(async () => {
-    if (!base) return;
-    try {
-      setState(await api<PersonVoiceState>(`${base}/voice`));
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '无法加载');
-    }
-  }, [base]);
+  const scope = useRef<AbortController | null>(null);
+  const loadVersion = useRef(0);
+  const load = useCallback(
+    async (clearError = true) => {
+      const current = scope.current;
+      if (!base || !current || current.signal.aborted) return;
+      const version = ++loadVersion.current;
+      try {
+        const value = await api<PersonVoiceState>(`${base}/voice`, {
+          signal: current.signal,
+        });
+        if (!current.signal.aborted && version === loadVersion.current) {
+          setState(value);
+          setRefreshRequired(false);
+          if (clearError) setError('');
+          return value;
+        }
+      } catch (failure) {
+        if (!current.signal.aborted && version === loadVersion.current) {
+          setRefreshRequired(true);
+          setError(failure instanceof Error ? failure.message : '无法加载');
+        }
+      }
+      return null;
+    },
+    [base],
+  );
   useEffect(() => {
+    const current = new AbortController();
+    scope.current = current;
     setState(null);
+    setBusy(false);
+    setRefreshRequired(false);
     setError('');
     setShown(CHECKS_PER_PAGE);
     void load();
+    return () => current.abort();
   }, [load]);
+  useEffect(() => {
+    const refresh = () => {
+      if (!busy) void load();
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [busy, load]);
 
   const act = async (work: () => Promise<unknown>) => {
+    const current = scope.current;
+    if (!current || current.signal.aborted || busy || refreshRequired) return;
+    loadVersion.current += 1;
     setBusy(true);
     setError('');
+    let saved = false;
+    let uncertain = false;
+    let refreshed = false;
     try {
-      await work();
+      try {
+        await work();
+        saved = true;
+      } catch (failure) {
+        uncertain = failure instanceof ApiError && failure.status === 0;
+        const message = failure instanceof Error ? failure.message : '操作失败';
+        if (!current.signal.aborted) setError(message);
+        else toast(`刚才的修改未能确认：${message}`, 'danger', 8000);
+      }
+      if (!current.signal.aborted) {
+        refreshed = !!(await load(false));
+        if (!current.signal.aborted) {
+          if (!refreshed)
+            setError(
+              saved
+                ? '修改已保存，请刷新确认'
+                : '修改结果未确认，请刷新后再操作',
+            );
+          else if (saved || uncertain) setError('');
+        }
+      }
+      // The library still follows a saved answer when its side layer was closed meanwhile.
+      await onChanged();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '操作失败');
+      if (!current.signal.aborted && refreshed)
+        setError(
+          saved
+            ? '修改已保存，列表刷新失败'
+            : failure instanceof Error
+              ? failure.message
+              : '无法刷新人物',
+        );
+    } finally {
+      if (!current.signal.aborted) setBusy(false);
     }
-    await load();
-    await onChanged();
-    setBusy(false);
+  };
+  const refresh = async () => {
+    const current = scope.current;
+    if (!(await load()) || !current || current.signal.aborted) return;
+    const version = loadVersion.current;
+    try {
+      await onChanged();
+    } catch {
+      if (!current.signal.aborted && version === loadVersion.current)
+        setError('列表刷新失败，请重试');
+    }
   };
   const decide = (
     check: Check,
@@ -200,6 +277,7 @@ export function PersonVoice({
       ),
     );
   const remove = async (sample: VoiceSample) => {
+    const current = scope.current;
     if (
       !(await confirm({
         title: '移除这段声线？',
@@ -212,6 +290,7 @@ export function PersonVoice({
       }))
     )
       return;
+    if (!current || current.signal.aborted) return;
     await act(async () => {
       const { returned } = await api<{ returned: number }>(
         `${base}/samples/${sample.id}`,
@@ -235,7 +314,23 @@ export function PersonVoice({
       title={`${name}的声音`}
     >
       <Stack gap={6}>
-        {error && <Notice tone="danger">{error}</Notice>}
+        {error && (
+          <Notice
+            tone="danger"
+            actions={
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => void refresh()}
+              >
+                刷新
+              </Button>
+            }
+          >
+            {error}
+          </Notice>
+        )}
         {!state && !error && (
           <Text size="sm" tone="secondary">
             正在加载…
@@ -280,7 +375,7 @@ export function PersonVoice({
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={busy}
+                          disabled={busy || refreshRequired}
                           onClick={() => void decide(check, 'confirm')}
                         >
                           是{name}
@@ -290,17 +385,17 @@ export function PersonVoice({
                           items={[
                             {
                               label: `不是${name}，放回待处理`,
-                              disabled: busy,
+                              disabled: busy || refreshRequired,
                               onSelect: () => void decide(check, 'reject'),
                             },
                             {
                               label: '不认识',
-                              disabled: busy,
+                              disabled: busy || refreshRequired,
                               onSelect: () => void decide(check, 'unknown'),
                             },
                             {
                               label: '几个人混在一起',
-                              disabled: busy,
+                              disabled: busy || refreshRequired,
                               onSelect: () => void decide(check, 'mixed'),
                             },
                           ]}
@@ -372,7 +467,7 @@ export function PersonVoice({
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={busy}
+                        disabled={busy || refreshRequired}
                         onClick={() => void remove(sample)}
                       >
                         移除

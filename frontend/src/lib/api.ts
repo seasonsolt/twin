@@ -25,7 +25,28 @@ const errors: Record<number, string> = {
   503: '服务暂时不可用',
 };
 
-export function handleApiFailure(status: number, data: unknown) {
+let sessionVersion = 0;
+
+/** A fresh sign-in cycle must not be invalidated by responses from the account that preceded it. */
+export function beginApiSession() {
+  ++sessionVersion;
+}
+
+/** Bind global recovery to the account and persona for which a request was started. */
+export function apiFailureHandler(
+  signal?: AbortSignal,
+  persona: string | null = getPersonaId(),
+) {
+  const session = sessionVersion;
+  return (status: number, data: unknown) => {
+    if (signal?.aborted || session !== sessionVersion) return;
+    if (status === 404 && persona !== null && persona !== getPersonaId())
+      return;
+    handleApiFailure(status, data);
+  };
+}
+
+function handleApiFailure(status: number, data: unknown) {
   if (!data || typeof data !== 'object') return;
   // twin's own sign-in page offers every way in, single sign-on included, so a 401 never leaves the page.
   if (status === 401 && 'code' in data && data.code === 'login_required')
@@ -79,6 +100,10 @@ export async function api<T>(
     headers.set('X-Twin-Persona', getPersonaId());
   if (method !== 'GET') headers.set('X-Twin', '1');
   if (json !== undefined) headers.set('Content-Type', 'application/json');
+  const failed = apiFailureHandler(
+    init.signal ?? undefined,
+    headers.get('X-Twin-Persona'),
+  );
   let response: Response;
   try {
     response = await fetch(withBase(path), {
@@ -96,6 +121,7 @@ export async function api<T>(
     if (error instanceof Error && error.name === 'AbortError') throw error;
     throw new ApiError(0, '无法连接本地服务，请检查服务是否启动');
   }
+  init.signal?.throwIfAborted();
   if (response.ok && responseType === 'stream') return response as T;
   const data: unknown =
     response.status === 204
@@ -103,6 +129,7 @@ export async function api<T>(
       : response.ok && responseType === 'text'
         ? await response.text()
         : await response.json().catch(() => null);
+  init.signal?.throwIfAborted();
   if (!response.ok) {
     const detail =
       data && typeof data === 'object' && 'detail' in data ? data.detail : null;
@@ -113,7 +140,7 @@ export async function api<T>(
       typeof data.code === 'string'
         ? data.code
         : null;
-    handleApiFailure(response.status, data);
+    failed(response.status, data);
     throw new ApiError(
       response.status,
       typeof detail === 'string' && /[\u3400-\u9fff]/u.test(detail)

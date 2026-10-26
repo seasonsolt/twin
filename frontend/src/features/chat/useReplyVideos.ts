@@ -142,7 +142,7 @@ export function useReplyVideos(
                   answer: turn!.reply,
                   persona_name: persona,
                 },
-                signal: controller.signal,
+                // Submission is shared across mounts; only polling belongs to this component's lifetime.
                 headers: { 'X-Twin-Persona': personaId },
               });
               submissions.set(key(id, assets), submission);

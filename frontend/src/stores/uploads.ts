@@ -71,13 +71,18 @@ export const useUploadStore = create<Uploads>((set, get) => {
         const filed = await uploadMedia(
           pick.file,
           abort.signal,
-          (progress) => update(pick, { progress }),
+          (progress) => {
+            if (controller === abort) update(pick, { progress });
+          },
           LIBRARY_UPLOADS,
         );
+        // Signing out may have reset the queue and started a different person's upload meanwhile.
+        if (controller !== abort) return;
         // The same meeting a colleague uploaded first stays theirs to sort out.
         if (filed.mine === false) theirs.push(pick.file.name);
         update(pick, { done: true });
       } catch (failure) {
+        if (controller !== abort) return;
         if (failure instanceof DOMException && failure.name === 'AbortError')
           break;
         update(pick, {
@@ -86,6 +91,7 @@ export const useUploadStore = create<Uploads>((set, get) => {
       }
       set((state) => ({ changes: state.changes + 1 }));
     }
+    if (controller !== abort) return;
     active = null;
     if (theirs.length)
       set({

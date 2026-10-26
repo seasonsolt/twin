@@ -3,7 +3,7 @@ import {
   usePersonaId,
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
-import { api, ApiError, handleApiFailure } from '../../lib/api';
+import { api, ApiError, apiFailureHandler } from '../../lib/api';
 import { basePath } from '../../lib/base';
 import { personaUrl } from '../../lib/persona';
 import type { AudioPart } from '../avatar/types';
@@ -308,6 +308,7 @@ export function useReplyAudio(active: boolean) {
                 )
               )
                 throw new Error('语音文件不可用，请重试');
+              const failed = apiFailureHandler(controller.signal, persona);
               const response = await fetch(item.url, {
                 signal: controller.signal,
                 headers: { 'X-Twin-Persona': persona },
@@ -315,7 +316,7 @@ export function useReplyAudio(active: boolean) {
                 redirect: 'error',
               });
               if (!response.ok) {
-                handleApiFailure(
+                failed(
                   response.status,
                   await response.json().catch(() => null),
                 );

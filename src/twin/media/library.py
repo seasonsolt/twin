@@ -36,6 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..util import prepare_private_file, private_directory
+from . import attribution
 from .collector import ATTRIBUTION_VERSION, CLEANUP_VERSION, CollectorVersion, recollect_scope
 from .cues import Cue, Named, said
 from .ingest import (
@@ -137,8 +138,8 @@ CREATE TABLE IF NOT EXISTS attributions (
     score REAL,
     lead REAL,
     sample INTEGER,
-    -- An automatic decision taken back because its sample no longer stands (``Team._withdraw``): whom it was given
-    -- to, offered to the owner to confirm while the speaker is undecided.
+    -- An automatic decision taken back because its sample no longer stands (``attribution.withdraw_samples``):
+    -- whom it was given to, offered to the owner to confirm while the speaker is undecided.
     suggest TEXT,
     PRIMARY KEY (recording_id, transcript_id, speaker_id)
 );
@@ -517,11 +518,10 @@ class Library:
             with upload.open("rb") as file:
                 sha = hashlib.file_digest(file, "sha256").hexdigest()
         with self.lock:
-            with self._db() as db:
-                row = db.execute("SELECT * FROM recordings WHERE sha256 = ?", (sha,)).fetchone()
-            if row:
+            existing = self.by_sha(sha)
+            if existing:
                 upload.unlink(missing_ok=True)
-                return Recording.model_validate(dict(row)), False
+                return existing, False
             extension = Path(filename).suffix.lower().lstrip(".")
             recording_id = "rec_" + sha[:20]
             folder = self.folder(recording_id)
@@ -550,6 +550,12 @@ class Library:
                     tuple(data.values()),
                 )
             return recording, True
+
+    def by_sha(self, sha: str) -> Recording | None:
+        """The recording already filed from these bytes, including after an upload's finish was interrupted."""
+        with self._db() as db:
+            row = db.execute("SELECT * FROM recordings WHERE sha256 = ?", (sha,)).fetchone()
+        return Recording.model_validate(dict(row)) if row else None
 
     def add_transcript(
         self,
@@ -693,6 +699,13 @@ class Library:
             if recording.status == "transcribing":
                 return False
             with self.transaction() as db:
+                # Losing a sample also takes back its automatic decisions in other recordings. Do this before
+                # deleting the sample rows, in the transaction that closes every affected twin.
+                samples = {
+                    int(row[0])
+                    for row in db.execute("SELECT id FROM voiceprints WHERE recording_id = ?", (recording_id,))
+                }
+                attribution.withdraw_samples(db, samples)
                 db.execute(
                     "UPDATE personas_sync SET wanted = wanted + 1 WHERE person_id IN "
                     "(SELECT person_id FROM attributions WHERE recording_id = ? AND decision = 'confirmed' "

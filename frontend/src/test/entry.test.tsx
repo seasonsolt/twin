@@ -194,6 +194,8 @@ it('leads the commitments and the old ledger address to the conversation once an
 });
 
 it('keeps the side bar where it is while the next place waits for its twin', async () => {
+  // The team does not read identity; the next page must start the request held below, rather than reuse chat's.
+  window.location.hash = '#/team';
   whoami = { email: 'admin@example.test', admin: true, auth_enabled: true };
   await signIn();
   await entries();
@@ -202,6 +204,9 @@ it('keeps the side bar where it is while the next place waits for its twin', asy
   identityHeld = new Promise((resolve) => (letGo = resolve));
   window.location.hash = '#/commitments';
   await waitFor(() => expect(window.location.hash).toBe('#/commitments'));
+  await waitFor(() =>
+    expect(fetch).toHaveBeenCalledWith('/api/identity', expect.anything()),
+  );
   // Only the page waits: the navigation is the very same, not drawn again.
   expect(screen.queryByText('承诺页')).toBeNull();
   expect(screen.getByRole('navigation', { name: '主导航' })).toBe(nav);

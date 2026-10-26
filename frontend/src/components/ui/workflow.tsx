@@ -1,14 +1,20 @@
 import {
   useImperativeHandle,
-  useRef,
-  useState,
+  useId,
   type ComponentProps,
   type ReactNode,
   type Ref,
 } from 'react';
 import { Link } from 'react-router';
-import { ChevronRight, Pause, Play } from 'lucide-react';
+import {
+  ChevronRight,
+  LoaderCircle,
+  Pause,
+  Play,
+  RotateCcw,
+} from 'lucide-react';
 import { Button, IconButton } from './controls';
+import { useClipAudio } from './useClipAudio';
 import { cn } from '../../lib/utils';
 
 /** Route navigation with the same appearance as an action button. */
@@ -101,7 +107,36 @@ export function DecisionBar({
 export function AudioPlayer(
   props: Pick<ComponentProps<'audio'>, 'src' | 'aria-label'>,
 ) {
-  return <audio {...props} controls preload="none" className="h-11 w-full" />;
+  const player = useClipAudio(props.src, true);
+  const errorId = useId();
+  return (
+    <>
+      <audio
+        {...props}
+        key={props.src}
+        ref={player.audio}
+        aria-describedby={player.error ? errorId : undefined}
+        controls
+        preload="none"
+        className="h-11 w-full"
+      />
+      {player.error && (
+        <span className="flex items-center gap-2 text-sm text-danger">
+          <span id={errorId} role="alert">
+            {player.error}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={player.toggle}
+            aria-label={`重试${props['aria-label'] ?? '试听'}`}
+          >
+            重试
+          </Button>
+        </span>
+      )}
+    </>
+  );
 }
 
 /** What a shortcut key can do to a clip button. */
@@ -126,16 +161,24 @@ export function ClipButton({
   /** Play or pause from outside, for a shortcut key. */
   controls?: Ref<ClipControls>;
 }) {
-  const audio = useRef<HTMLAudioElement>(null);
-  const [playing, setPlaying] = useState(false);
-  const toggle = () => {
-    const element = audio.current;
-    if (!element) return;
-    if (playing) element.pause();
-    else void Promise.resolve(element.play()).catch(() => setPlaying(false));
-  };
+  const { audio, playing, loading, error, toggle } = useClipAudio(src);
+  const errorId = useId();
   useImperativeHandle(controls, () => ({ toggle }));
-  const icon = playing ? (
+  const action = playing
+    ? `暂停${label}`
+    : loading
+      ? `停止${label}`
+      : error
+        ? `重试${label}`
+        : label;
+  const icon = loading ? (
+    <LoaderCircle
+      aria-hidden
+      className="size-4 animate-spin motion-reduce:animate-none"
+    />
+  ) : error ? (
+    <RotateCcw aria-hidden className="size-4" />
+  ) : playing ? (
     <Pause aria-hidden className="size-4" />
   ) : (
     <Play aria-hidden className="size-4" />
@@ -145,10 +188,13 @@ export function ClipButton({
       {caption ? (
         <Button
           type="button"
-          variant="ghost"
+          variant={error ? 'danger' : 'ghost'}
           size="sm"
-          aria-label={playing ? `暂停${label}` : label}
+          aria-label={action}
+          title={error || undefined}
           aria-pressed={playing}
+          aria-busy={loading}
+          aria-describedby={error ? errorId : undefined}
           onClick={toggle}
         >
           {icon}
@@ -156,24 +202,25 @@ export function ClipButton({
         </Button>
       ) : (
         <IconButton
-          label={playing ? `暂停${label}` : label}
+          label={action}
           shape="circle"
           size={size}
-          variant="secondary"
+          variant={error ? 'danger' : 'secondary'}
+          title={error || undefined}
           aria-pressed={playing}
+          aria-busy={loading}
+          aria-describedby={error ? errorId : undefined}
           onClick={toggle}
         >
           {icon}
         </IconButton>
       )}
-      <audio
-        ref={audio}
-        src={src}
-        preload="none"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-      />
+      <audio key={src} ref={audio} src={src} preload="none" />
+      {error && (
+        <span id={errorId} role="alert" className="sr-only">
+          {error}
+        </span>
+      )}
     </>
   );
 }

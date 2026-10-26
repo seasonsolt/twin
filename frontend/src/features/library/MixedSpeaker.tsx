@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   ClipButton,
@@ -9,8 +9,9 @@ import {
   Row,
   Stack,
   Text,
+  toast,
 } from '../../components/ui';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import { withBase } from '../../lib/base';
 import { useHeard } from '../../stores/listening';
 
@@ -90,50 +91,132 @@ export function MixedSpeaker({
   const hear = useHeard();
   const [detail, setDetail] = useState<SuspectSpeaker | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshRequired, setRefreshRequired] = useState(false);
   const [error, setError] = useState('');
   const base = suspect
     ? `/api/library/recordings/${encodeURIComponent(suspect.recording_id)}/speakers/${encodeURIComponent(suspect.speaker_id)}/units`
     : '';
-  const load = useCallback(async () => {
-    if (!base) return;
-    try {
-      setDetail(await api<SuspectSpeaker>(base));
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '无法加载片段');
-    }
-  }, [base]);
+  const scope = useRef<AbortController | null>(null);
+  const loadVersion = useRef(0);
+  const load = useCallback(
+    async (clearError = true) => {
+      const current = scope.current;
+      if (!base || !current || current.signal.aborted) return;
+      const version = ++loadVersion.current;
+      try {
+        const value = await api<SuspectSpeaker>(base, {
+          signal: current.signal,
+        });
+        if (!current.signal.aborted && version === loadVersion.current) {
+          setDetail(value);
+          setRefreshRequired(false);
+          if (clearError) setError('');
+          return value;
+        }
+      } catch (failure) {
+        if (!current.signal.aborted && version === loadVersion.current) {
+          setRefreshRequired(true);
+          setError(failure instanceof Error ? failure.message : '无法加载片段');
+        }
+      }
+      return null;
+    },
+    [base],
+  );
   useEffect(() => {
+    const current = new AbortController();
+    scope.current = current;
     setDetail(null);
+    setBusy(false);
+    setRefreshRequired(false);
     setError('');
     void load();
+    return () => current.abort();
   }, [load]);
+  useEffect(() => {
+    const refresh = () => {
+      if (!busy) void load();
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [busy, load]);
 
   const decide = async (
     units: ReviewUnit[],
     action: UnitFix | 'clear',
     personId?: string | null,
   ) => {
-    if (!detail || !units.length) return;
+    const current = scope.current;
+    if (
+      !detail ||
+      !units.length ||
+      !current ||
+      current.signal.aborted ||
+      busy ||
+      refreshRequired
+    )
+      return;
+    loadVersion.current += 1;
     setBusy(true);
     setError('');
+    let saved = false;
+    let uncertain = false;
+    let refreshed = false;
     try {
-      await api(base, {
-        method: 'PUT',
-        json: {
-          transcript_id: detail.transcript_id,
-          revision: detail.revision,
-          units: units.map((u) => u.index),
-          action,
-          ...(personId ? { person_id: personId } : {}),
-        },
-      });
-      await load();
+      try {
+        await api(base, {
+          method: 'PUT',
+          json: {
+            transcript_id: detail.transcript_id,
+            revision: detail.revision,
+            units: units.map((u) => u.index),
+            action,
+            ...(personId ? { person_id: personId } : {}),
+          },
+        });
+        saved = true;
+      } catch (failure) {
+        uncertain = failure instanceof ApiError && failure.status === 0;
+        const message = failure instanceof Error ? failure.message : '操作失败';
+        if (!current.signal.aborted) setError(message);
+        else toast(`刚才的修改未能确认：${message}`, 'danger', 8000);
+      }
+      if (!current.signal.aborted) {
+        refreshed = !!(await load(false));
+        if (!current.signal.aborted) {
+          if (!refreshed)
+            setError(
+              saved
+                ? '修改已保存，请刷新确认'
+                : '修改结果未确认，请刷新后再操作',
+            );
+          else if (saved || uncertain) setError('');
+        }
+      }
       await onChanged();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '操作失败');
-      await load();
+      const message = saved
+        ? '修改已保存，列表刷新失败'
+        : failure instanceof Error
+          ? failure.message
+          : '操作失败';
+      if (!current.signal.aborted && refreshed) {
+        setError(message);
+      }
+    } finally {
+      if (!current.signal.aborted) setBusy(false);
     }
-    setBusy(false);
+  };
+  const refresh = async () => {
+    const current = scope.current;
+    if (!(await load()) || !current || current.signal.aborted) return;
+    const version = loadVersion.current;
+    try {
+      await onChanged();
+    } catch {
+      if (!current.signal.aborted && version === loadVersion.current)
+        setError('列表刷新失败，请重试');
+    }
   };
 
   const name = detail?.name ?? suspect?.name ?? '';
@@ -188,7 +271,7 @@ export function MixedSpeaker({
             <Button
               variant="ghost"
               size="sm"
-              disabled={busy}
+              disabled={busy || refreshRequired}
               onClick={() => void decide([unit], 'clear')}
             >
               撤销
@@ -199,7 +282,7 @@ export function MixedSpeaker({
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={busy}
+                  disabled={busy || refreshRequired}
                   onClick={() => void decide([unit], 'move', unit.like)}
                 >
                   是{unit.like_name}
@@ -208,7 +291,7 @@ export function MixedSpeaker({
               <Button
                 variant={unit.verdict ? 'secondary' : 'ghost'}
                 size="sm"
-                disabled={busy}
+                disabled={busy || refreshRequired}
                 onClick={() => void decide([unit], 'exclude')}
               >
                 {unit.auto ? `确实不是${name}` : `不是${name}`}
@@ -217,7 +300,7 @@ export function MixedSpeaker({
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={busy}
+                  disabled={busy || refreshRequired}
                   onClick={() => void decide([unit], 'keep')}
                 >
                   是{name}
@@ -243,7 +326,23 @@ export function MixedSpeaker({
       }
     >
       <Stack gap={4}>
-        {error && <Notice tone="danger">{error}</Notice>}
+        {error && (
+          <Notice
+            tone="danger"
+            actions={
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => void refresh()}
+              >
+                刷新
+              </Button>
+            }
+          >
+            {error}
+          </Notice>
+        )}
         {!detail && !error && (
           <Text size="sm" tone="secondary">
             正在加载…
@@ -254,7 +353,7 @@ export function MixedSpeaker({
             {likely && toLikely.length > 0 && (
               <Button
                 size="sm"
-                disabled={busy}
+                disabled={busy || refreshRequired}
                 onClick={() => void decide(toLikely, 'move', likely)}
               >
                 都改给{likelyName}
@@ -263,7 +362,7 @@ export function MixedSpeaker({
             <Button
               variant="secondary"
               size="sm"
-              disabled={busy}
+              disabled={busy || refreshRequired}
               onClick={() => void decide(open, 'exclude')}
             >
               都不是{name}
@@ -271,7 +370,7 @@ export function MixedSpeaker({
             <Button
               variant="ghost"
               size="sm"
-              disabled={busy}
+              disabled={busy || refreshRequired}
               onClick={() => void decide(open, 'keep')}
             >
               其实都是{name}

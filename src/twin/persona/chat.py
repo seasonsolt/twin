@@ -259,6 +259,14 @@ def _space_vectors(store: PersonaStore, namespace: str, fingerprint: str | None)
 
 
 @dataclass(frozen=True)
+class Step:
+    """What a streamed answer is doing before its first words (``stream_reply(steps=True)``): looking up the
+    material, working out dates and links in it, or writing."""
+
+    name: Literal["search", "think", "write"]
+
+
+@dataclass(frozen=True)
 class Asker:
     """Who is talking with the twin, where the server knows: what they are called, and whether they are the person
     the twin is made for, trying it."""
@@ -676,7 +684,10 @@ class PersonaChat:
         persist: bool = True,
         owner_said: Sequence[str] = (),
         team_answers: Sequence[str] = (),
-    ) -> AsyncGenerator[str | ChatReply]:
+        steps: bool = False,
+    ) -> AsyncGenerator[str | ChatReply | Step]:
+        """The answer's words as they come, then the reply; with ``steps``, also a ``Step`` as each stage before the
+        words begins, for the page to say what it waits for."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
         # Every store read and write runs off the event loop, which other requests share.
@@ -684,11 +695,18 @@ class PersonaChat:
             yield unbuilt.reply
             yield unbuilt
             return
+        if steps:
+            yield Step("search")
         ctx = await off_loop(partial(self._search, messages, as_of))
         ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
         ctx.team_answers = list(team_answers)
         self._attach_files(ctx, attachments)
-        await off_loop(partial(self._derive, messages, ctx))
+        if found_material(ctx):
+            if steps:
+                yield Step("think")
+            await off_loop(partial(self._derive, messages, ctx))
+        if steps:
+            yield Step("write")
         system, user = await off_loop(
             lambda: (
                 chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
@@ -1328,6 +1346,12 @@ def _said_dates(ctx: PersonaContext) -> dict[str, dt.date | None]:
     dates.update((e.expression_id, e.date) for e, _ in [*ctx.expressions, *ctx.others])
     dates.update((ledger_ref(e), e.meeting_date) for e, _ in ctx.ledger)
     return dates
+
+
+def found_material(ctx: PersonaContext) -> bool:
+    """Whether retrieval found anything to work out dates, order or links from; with nothing found, the round of
+    calls that does (``PersonaChat._derive``) is skipped."""
+    return bool(ctx.items or ctx.expressions or ctx.others or ctx.attachments or ctx.ledger)
 
 
 def _material_lines(ctx: PersonaContext) -> list[str]:

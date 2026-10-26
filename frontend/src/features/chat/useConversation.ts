@@ -98,6 +98,9 @@ function migrate(key: string, turns: Turn[], headers: HeadersInit) {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : '无法加载对话记录';
 
+/** What a streamed answer is doing before its first words: looking things up, working them out, writing. */
+export type ChatStep = 'search' | 'think' | 'write';
+
 export function useConversation(active: boolean) {
   const legacyKey = personaKey(CHAT_KEY);
   const currentKey = personaKey(CURRENT_CHAT_KEY);
@@ -136,6 +139,8 @@ export function useConversation(active: boolean) {
   // Counts what was written to the person's conversations (made, answered, renamed, deleted), for the list to ask again.
   const [written, setWritten] = useState(0);
   const [newest, setNewest] = useState<string | null>(null);
+  // What the twin is doing before its first words, as the server says (``step`` events).
+  const [step, setStep] = useState<ChatStep | null>(null);
   const mounted = useRef(false);
   const request = useRef<AbortController | null>(null);
   const failed = useRef<string | null>(null);
@@ -281,6 +286,7 @@ export function useConversation(active: boolean) {
     setBusy(true);
     setError('');
     setNewest(null);
+    setStep(null);
     try {
       if (!id.current && !trial) {
         const created = await api<{ id: string; audience?: Audience }>(
@@ -369,7 +375,9 @@ export function useConversation(active: boolean) {
         controller.signal,
       )) {
         if (controller.signal.aborted || !mounted.current) return;
-        if (event === 'delta') {
+        if (event === 'step') {
+          setStep((data as { step: ChatStep }).step);
+        } else if (event === 'delta') {
           twin.content += (data as { text: string }).text;
           setTurns([...pending, { ...twin }]);
           setNewest(twin.id);
@@ -408,7 +416,10 @@ export function useConversation(active: boolean) {
       }
     } finally {
       if (request.current === controller) request.current = null;
-      if (!controller.signal.aborted && mounted.current) setBusy(false);
+      if (!controller.signal.aborted && mounted.current) {
+        setBusy(false);
+        setStep(null);
+      }
     }
   };
   // What an answer left to the person is theirs to settle, when they can: until then the conversation is asked again
@@ -574,6 +585,7 @@ export function useConversation(active: boolean) {
     restoreFailed,
     error,
     newest,
+    step,
     send,
     clear,
     openError,

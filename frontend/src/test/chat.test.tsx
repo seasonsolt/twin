@@ -242,6 +242,30 @@ it('sends a selected file with the question and clears it after the reply', asyn
   await waitFor(() => expect(screen.queryByText('合同.txt')).toBeNull());
 });
 
+it('says which step the twin is on until its first words', async () => {
+  mount();
+  const user = userEvent.setup();
+  fireEvent.change(screen.getByLabelText('你说'), {
+    target: { value: '合同期限是多少？' },
+  });
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('思考中…')).toBeInTheDocument();
+  await act(async () => {
+    streamController.enqueue(encode('step', { step: 'search' }));
+  });
+  expect(await screen.findByText('查资料…')).toBeInTheDocument();
+  await act(async () => {
+    streamController.enqueue(encode('step', { step: 'write' }));
+  });
+  expect(await screen.findByText('写回答…')).toBeInTheDocument();
+  await act(async () => {
+    streamController.enqueue(encode('delta', { text: reply.reply }));
+    streamController.enqueue(encode('final', reply));
+    streamController.close();
+  });
+  await waitFor(() => expect(screen.queryByText('写回答…')).toBeNull());
+});
+
 it('keeps a selected file for retry when the reply stream fails', async () => {
   mount();
   const user = userEvent.setup();

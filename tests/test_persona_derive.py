@@ -217,12 +217,43 @@ def test_streamed_reply_derives_too(chat: pc.PersonaChat) -> None:
         return [
             part
             async for part in chat.stream_reply(
-                [ChatTurn(role="user", content="烟熏炉是多久以前买的？")], persist=False
+                [ChatTurn(role="user", content="烟熏炉是多久以前买的？")], persist=False, steps=True
             )
         ]
 
-    assert asyncio.run(run())[-1].reply == "十天前"
+    parts = asyncio.run(run())
+    assert parts[-1].reply == "十天前"
+    assert [p.name for p in parts if isinstance(p, pc.Step)] == ["search", "think", "write"]
     assert "【推算】" in chat.llm.calls[-1][2]
+
+
+def test_nothing_found_skips_the_round_that_works_things_out(
+    chat: pc.PersonaChat, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def nothing(*_: Any, **__: Any) -> pc.PersonaContext:
+        return pc.PersonaContext(items=[], expressions=[], core=[], voice=[])
+
+    monkeypatch.setattr(chat, "retrieve", nothing)
+    asked: list[type[BaseModel]] = []
+
+    def answer(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        asked.append(schema)
+        return {"reply": "资料里没有", "citations": [], "confidence": 0.2, "mode": "abstain"}
+
+    chat.llm = FakeLLM(answer)
+
+    async def run() -> list[Any]:
+        return [
+            part
+            async for part in chat.stream_reply(
+                [ChatTurn(role="user", content="烟熏炉是多久以前买的？")], persist=False, steps=True
+            )
+        ]
+
+    parts = asyncio.run(run())
+    assert [p.name for p in parts if isinstance(p, pc.Step)] == ["search", "write"]
+    assert not {dv.FactSheet} & set(asked)
+    assert "【推算】" not in chat.llm.calls[-1][2]
 
 
 def test_count_for_a_named_month_leaves_out_other_months_and_undated_things() -> None:

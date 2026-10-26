@@ -43,6 +43,7 @@ from ..persona.chat import (
     LEDGER_PREFIX,
     Asker,
     PersonaChat,
+    Step,
     index_persona,
     index_stale,
     no_profile_reply,
@@ -1316,10 +1317,13 @@ def register(
                             persist=not attachment_passages and not preview,
                             owner_said=[] if preview else owner_said,
                             team_answers=[prompt_line(c) for c in shown],
+                            steps=True,
                         )
                     ) as replies:
                         async for result in replies:
-                            if isinstance(result, str):
+                            if isinstance(result, Step):
+                                yield sse_event("step", {"step": result.name})
+                            elif isinstance(result, str):
                                 yield sse_event("delta", {"text": result})
                             else:
                                 yield sse_event("final", await off_loop(partial(save, store, result)))

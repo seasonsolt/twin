@@ -17,6 +17,7 @@ from test_chat_streaming import StreamingLLM, seed
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
+from twin.persona import chat as persona_chat
 from twin.persona.chat import PersonaChat, open_store_off_loop
 from twin.persona.store import PersonaStore
 from twin.web import create_app, persona
@@ -49,6 +50,8 @@ def test_disconnect_drains_the_worker_before_closing_the_store_and_releasing_adm
             raise
 
     monkeypatch.setattr(PersonaChat, phase, blocked)
+    # Working things out is skipped when retrieval found nothing: this one holds it whatever was found.
+    monkeypatch.setattr(persona_chat, "found_material", lambda _: True)
 
     async def run() -> None:
         disconnected, delivered = asyncio.Event(), asyncio.Event()

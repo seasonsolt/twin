@@ -47,7 +47,7 @@ import { MessageText } from './MessageText';
 import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
-import type { useConversation } from './useConversation';
+import type { ChatStep, useConversation } from './useConversation';
 import { handoffText, promiseTaken, type ChatReply, type Turn } from './types';
 import type { Playback } from './usePlayback';
 
@@ -57,6 +57,11 @@ const CHAT_ATTACHMENT_SUFFIXES = new Set(
   'txt md pdf docx epub html htm csv json srt vtt'.split(' '),
 );
 const MAX_CHAT_ATTACHMENT_COUNT = 5;
+const STEP_TEXT: Record<ChatStep, string> = {
+  search: '查资料…',
+  think: '推算中…',
+  write: '写回答…',
+};
 // More lenses than this are chosen from a list, not laid out as a chip each.
 const MAX_LENS_CHIPS = 2;
 const MAX_CHAT_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -609,7 +614,9 @@ export function ChatThread({
                 />
                 {chat.busy && !chat.newest && (
                   <div className="py-3">
-                    <TypingIndicator />
+                    <TypingIndicator
+                      text={chat.step ? STEP_TEXT[chat.step] : undefined}
+                    />
                   </div>
                 )}
               </div>

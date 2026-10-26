@@ -382,7 +382,7 @@ class WeComBotRunner:
                                 and await self._stream(socket, session, req_id, stream_id, draft, finish=False)
                             ):
                                 sent, refreshed = draft, time.monotonic()
-                        else:
+                        elif isinstance(result, ChatReply):
                             reply = result
         finally:
             if ticket is not None:

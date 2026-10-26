@@ -247,12 +247,14 @@ def seed(path: Path) -> None:
         )
 
 
-def parse_events(response: httpx.Response) -> list[tuple[str, dict[str, Any]]]:
+def parse_events(response: httpx.Response, *, steps: bool = False) -> list[tuple[str, dict[str, Any]]]:
+    """The stream's events; the steps said before the first words only with ``steps``."""
     events = []
     for frame in response.text.split("\n\n"):
         if frame.startswith("event:"):
             name, data = frame.split("\n", 1)
-            events.append((name[7:], json.loads(data[6:])))
+            if name[7:] != "step" or steps:
+                events.append((name[7:], json.loads(data[6:])))
     return events
 
 
@@ -276,6 +278,8 @@ def test_sse_headers_quote_guard_persistence_and_persona(tmp_path: Path) -> None
         assert response.headers["cache-control"] == "no-cache"
         assert response.headers["x-accel-buffering"] == "no"
         assert response.headers["x-content-type-options"] == "nosniff"
+        steps = [data["step"] for name, data in parse_events(response, steps=True) if name == "step"]
+        assert steps == ["search", "write"]  # nothing retrieved: no round working things out
         events = parse_events(response)
         assert all(name == "delta" for name, _ in events[:-1]) and events[-1][0] == "final"
         assert "".join(data["text"] for _, data in events[:-1]) == "先“核对数据”。\n"

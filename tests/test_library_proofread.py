@@ -238,7 +238,13 @@ def recording_state(web: TestClient, rec: str) -> str:
 
 
 def open_twin(web: TestClient, persona_id: str) -> bool:
+    """The twin's memory holds every decision of its library."""
     return web.get("/api/status", headers={"X-Twin-Persona": persona_id}).json()["memory_updating"] is False
+
+
+def answers(web: TestClient, persona_id: str) -> bool:
+    """The twin's memory can be read (from its last build, while a newer one waits)."""
+    return web.get("/api/persona/items", headers={"X-Twin-Persona": persona_id}).status_code == 200
 
 
 def idle(web: TestClient, persona_id: str) -> bool:
@@ -310,7 +316,7 @@ def test_a_spent_quota_holds_proofreading_and_rebuilds_and_says_so(
     until(lambda: open_twin(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"])
     assert web.get("/api/library").json()["quota"]["waiting_twins"] == 0
 
-    # Spent again: a later change closes the twin, and its rebuild waits.
+    # Spent again: a later change leaves the twin behind its library, and its rebuild waits.
     limit(web, sum(spending(library).values()))
     confirm(web, rec, "S1", new_person="李总")
     until(lambda: web.get("/api/library").json()["quota"]["waiting_twins"] == 1)
@@ -445,16 +451,16 @@ def test_with_the_automatic_rebuild_off_a_twin_that_only_gains_recordings_keeps_
     confirm(web, second, "S2", person_id=zhang)
     until(lambda: card(web, zhang)["held"])
     assert card(web, zhang)["updating"] and card(web, zhang)["answers_behind"]
-    assert open_twin(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"]
+    assert answers(web, pid) and own_words(tmp_path, pid) == [f"[00:06] {MEANT}"]
     assert wanted_done(library, pid)[0] != wanted_done(library, pid)[1]
 
-    # Speech taken away from what it was built from: it stops answering until rebuilt.
+    # Speech taken away from what it was built from: it still answers from its last build until rebuilt.
     detail = web.get(f"/api/library/recordings/{first}").json()
     body = {"transcript_id": detail["transcript_id"], "revision": detail["revision"], "action": "reject"}
     body["person_id"] = zhang
     assert web.put(f"/api/library/recordings/{first}/speakers/S2", json=body, headers=HEADERS).status_code == 200
     until(lambda: not card(web, zhang)["answers_behind"])
-    assert not open_twin(web, pid) and card(web, zhang)["held"]
+    assert answers(web, pid) and not open_twin(web, pid) and card(web, zhang)["held"]
 
     # Rebuilt by hand while still switched off.
     assert web.post(f"/api/library/people/{zhang}/rebuild", headers=HEADERS).status_code == 202

@@ -781,28 +781,37 @@ def test_speakers_without_a_voiceprint_are_settled_in_their_recording(tmp_path: 
     assert team.unvoiced() == []
 
 
-def test_every_way_of_asking_is_refused_until_the_build_is_complete(tmp_path: Path) -> None:
+def test_every_way_of_asking_answers_from_the_last_build_while_a_newer_one_is_made(tmp_path: Path) -> None:
     library, db = linked_store(tmp_path)
     settings = Settings(db_path=db)
     llm = FakeLLM(lambda *_: {"reply": "回款优先", "citations": [], "confidence": 0.5, "mode": "general"})
-    with PersonaStore(db) as store, pytest.raises(gate.MemoryUpdating):
+    assert gate.updating(db)  # nothing built yet: it answers from what it has
+    with PersonaStore(db) as store:
         PersonaChat(store, llm, HashingEmbedder(), settings)
     api = create_api(settings, lambda: PersonaChat(PersonaStore(db), llm, HashingEmbedder(), settings), token="t" * 32)
     with TestClient(api, base_url="http://localhost") as client:
-        refused = client.post("/v1/ask", json={"question": "怎么看？"}, headers={"Authorization": "Bearer " + "t" * 32})
-    assert refused.status_code == 409 and refused.json()["code"] == "memory_updating"
+        answered = client.post(
+            "/v1/ask", json={"question": "怎么看？"}, headers={"Authorization": "Bearer " + "t" * 32}
+        )
+    assert answered.status_code == 200, answered.text
 
     Team(library).built("p-zhang", 1)
+    assert not gate.updating(db)
     with PersonaStore(db) as store:
         chat = PersonaChat(store, llm, HashingEmbedder(), settings)
-        # The twin's memory changes while it answers: the answer is void and not logged.
+        # A decision changes its recordings while it answers: the answer is given and logged all the same.
         with library.transaction() as connection:
             connection.execute("UPDATE personas_sync SET wanted = wanted + 1")
-        with pytest.raises(gate.MemoryUpdating):
-            chat.reply([ChatTurn(role="user", content="怎么看？")])
-        assert chat.stale
+        assert gate.updating(db)
+        assert chat.reply([ChatTurn(role="user", content="怎么看？")]).reply
     with sqlite3.connect(db) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM p_chat_log").fetchone()[0] == 1
+
+    # Only a twin whose library cannot be read does not answer.
+    with PersonaStore(db) as store:
+        store.set_meta(gate.LINK, '{"db": "missing/library.db", "persona": "p-zhang"}')
+        with pytest.raises(gate.MemoryUpdating):
+            PersonaChat(store, llm, HashingEmbedder(), settings)
 
 
 def test_a_meeting_record_answers_without_the_portrait(tmp_path: Path) -> None:
@@ -882,10 +891,10 @@ def test_a_misattributed_fact_leaves_the_twin_and_reaches_the_right_one(web: Tes
     sources = web.get("/api/persona/sources", headers=persona).json()["items"]
     assert len(sources) == 1 and sources[0]["n_target"] == 1
 
-    # Corrected to 李总: from this moment until the rebuild, nothing of 张总's memory is read.
+    # Corrected to 李总: until the rebuild, 张总's twin still answers from its last build.
     revision_now = web.get(f"/api/library/recordings/{rec}").json()["revision"]
     li = web.post("/api/library/people", json={"name": "李总"}, headers=HEADERS).json()["id"]
-    # Hold the rebuild so the closed state can be observed: no build timer fires while held.
+    # Hold the rebuild so the state in between can be observed: no build timer fires while held.
     held: list[Any] = []
     web.app.state.personas.application(pid).state.processing._schedule = lambda delay, fn: held.append(fn)  # type: ignore[union-attr]
     moved = web.put(
@@ -914,7 +923,9 @@ def test_a_misattributed_fact_leaves_the_twin_and_reaches_the_right_one(web: Tes
         ("post", "/api/persona/work", {"text": "写一份周报"}),
     ]:
         response = getattr(web, method)(path, headers={**HEADERS, **persona}, **({"json": payload} if payload else {}))
-        assert response.status_code == 409 and response.json()["code"] == "memory_updating", path
+        # The work model is not configured here; what matters is that nothing says the memory is updating.
+        assert response.status_code < 400 or path == "/api/persona/work", (path, response.text)
+        assert "memory_updating" not in response.text, path
     until(lambda: bool(held))
     for fn in held:
         fn()
@@ -1148,7 +1159,7 @@ def test_a_change_waiting_at_shutdown_is_carried_out_after_restart(
         assert wanted_done(library, pid)[0] == wanted_done(library, pid)[1] == 2
 
 
-def test_an_answer_streamed_while_the_memory_changes_is_marked_and_not_saved(
+def test_an_answer_streamed_while_the_recordings_change_is_given_and_saved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library, _ = linked_store(tmp_path)
@@ -1168,14 +1179,14 @@ def test_an_answer_streamed_while_the_memory_changes_is_marked_and_not_saved(
     )
 
     class Changing(StreamingLLM):
-        """Writes its answer while a decision changes the twin's recordings."""
+        """Writes its answer while a decision changes the twin's recordings and a new build lands."""
 
         async def stream(self, **kwargs: Any) -> AsyncIterator[str]:
             first = True
             async for chunk in super().stream(**kwargs):
                 if first:
                     with library.transaction() as connection:
-                        connection.execute("UPDATE personas_sync SET wanted = wanted + 1")
+                        connection.execute("UPDATE personas_sync SET wanted = wanted + 1, done = done + 1")
                     first = False
                 yield chunk
 
@@ -1186,9 +1197,9 @@ def test_an_answer_streamed_while_the_memory_changes_is_marked_and_not_saved(
         cid = web.post("/api/conversations", headers=persona).json()["id"]
         body = {"conversation_id": cid, "messages": [{"role": "user", "content": "怎么看？"}]}
         events = parse_events(web.post("/api/persona/chat/stream", json=body, headers=persona))
-        assert events[-1][0] == "stale" and "过时" in events[-1][1]["detail"]
+        assert events[-1][0] == "final", events[-1]
         turns = web.get(f"/api/conversations/{cid}", headers=persona).json()["turns"]
-        assert [t["role"] for t in turns] == ["user"]
+        assert [t["role"] for t in turns] == ["user", "twin"]
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")

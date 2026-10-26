@@ -116,10 +116,12 @@ def register_all(app: FastAPI, registry: Personas) -> None:
             try:
                 gate.version_at(path)
             except gate.MemoryUpdating:
-                # Its memory is being brought in line with changed recordings: nothing of it is used until then,
-                # as in its own ledger (``MemoryGateMiddleware``); the list says whose is missing for now.
+                # Its library cannot be read, as in its own ledger (``MemoryGateMiddleware``): left out for now.
                 updating.append({"id": twin["id"], "name": who})
                 continue
+            if gate.updating(path):
+                # Being brought in line with changed recordings: listed from its last build, and said to be so.
+                updating.append({"id": twin["id"], "name": who})
             names[twin["id"]] = who
             with PersonaStore(path) as store:
                 entries = store.list_ledger()

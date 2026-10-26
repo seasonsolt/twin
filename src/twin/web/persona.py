@@ -417,7 +417,6 @@ def validate_chat(body: ChatBody) -> list[ChatTurn]:
     return messages
 
 
-STALE_REPLY = "记忆刚更新，这条回答可能已经过时，没有保存。请再问一次"
 # Reading a twin's memory: refused while a twin made from a recording library is being rebuilt (``gate``).
 GATED_PATHS = (
     "/api/persona/chat",
@@ -1322,9 +1321,6 @@ def register(
                         async for result in replies:
                             if isinstance(result, str):
                                 yield sse_event("delta", {"text": result})
-                            elif chat.stale:
-                                # The twin's memory changed while this was written: shown as outdated, not saved.
-                                yield sse_event("stale", {"detail": STALE_REPLY})
                             else:
                                 yield sse_event("final", await off_loop(partial(save, store, result)))
 

@@ -1036,16 +1036,6 @@ def test_an_answer_held_back_is_shown_once_by_a_model_that_cannot_stream(scene: 
 
 
 @pytest.mark.rewrite
-def test_an_answer_held_back_when_the_twins_memory_changed_under_it_is_not_shown_at_all(
-    scene: Scene, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with PersonaStore(scene.path) as store:
-        chat = chat_of(scene, Scripted(), store)
-        monkeypatch.setattr("twin.persona.chat.gate.current", lambda *_: False)
-        events = streamed(chat, HOLD)
-    assert [type(e).__name__ for e in events] == ["ChatReply"] and chat.stale
-
-
 # ------------------------------------------------------------------ guessed answers and what has a source
 
 

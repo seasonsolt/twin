@@ -105,9 +105,10 @@ export function BuildMeter({ processing }: { processing?: Processing | null }) {
  * yet, and the bar shows how far the update has gone.
  */
 export function MemoryUpdating({
-  text = '记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答。',
+  text = '记忆更新中，先按已整理的内容回答。',
 }: {
-  /** What the line says: the twin cannot answer yet, by default; a page that lists things says what it waits to list. */
+  /** What the line says: the twin answers from what it has meanwhile, by default; a page that lists things says what
+   * it waits to list. */
   text?: string;
 }) {
   const personaId = usePersonaId();

@@ -292,7 +292,7 @@ it('says a twin whose memory is being rebuilt is on its way, not that its ledger
   }
 });
 
-it('names the twins left out of everyone’s list while they are rebuilt, instead of saying there are no meetings', async () => {
+it('names the twins being rebuilt in everyone’s list, instead of saying there are no meetings', async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -309,6 +309,6 @@ it('names the twins left out of everyone’s list while they are rebuilt, instea
     }),
   );
   show('/commitments?who=all');
-  expect(await screen.findByText('林舟整理中，完成后列出')).toBeVisible();
+  expect(await screen.findByText('林舟整理中')).toBeVisible();
   expect(screen.queryByText('还没有会议。')).toBeNull();
 });

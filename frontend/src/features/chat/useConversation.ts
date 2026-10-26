@@ -386,8 +386,7 @@ export function useConversation(active: boolean) {
             markWritten();
           }
           break;
-        } else if (event === 'error' || event === 'stale') {
-          // A stale answer was written while the twin's memory changed: not saved, so it is not shown either.
+        } else if (event === 'error') {
           throw new Error(
             (data as { detail: string }).detail || '分身没能回复，请重试',
           );

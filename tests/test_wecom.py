@@ -931,7 +931,8 @@ def test_legacy_config_ignored(tmp_path: Path) -> None:
         '[[wecom.bots]]\npersona = "default"\nbot_id = "aibOld"\nsecret_env = "OLD_SECRET"\n'
         '[[wecom.bots]]\nbot_id = "aibOld"\n'
     )
-    assert load_settings(config).wecom.model_dump() == {"url": "wss://openws.work.weixin.qq.com"}
+    assert load_settings(config).wecom.model_dump() == WeComSettings().model_dump()
+    assert WeComSettings().corp_id is None
     assert WeComSettings().url == "wss://openws.work.weixin.qq.com"
 
 

@@ -780,7 +780,7 @@ export function Ledger({
   const organising = data?.updating ?? [];
   usePolling(load, rebuilding || organising.length ? 15000 : 0);
   const organisingLine = organising.length
-    ? `${organising.map((twin) => twin.name).join('、')}整理中，完成后列出`
+    ? `${organising.map((twin) => twin.name).join('、')}整理中`
     : '';
   const meetings = data?.meetings;
   // In the list of everyone's: whose ledgers have meetings not read yet.

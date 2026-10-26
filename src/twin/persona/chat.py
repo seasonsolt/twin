@@ -499,8 +499,9 @@ class PersonaChat:
         shows more than a colleague may see) only the items of the colleague tier, in the retrieval, the core
         portrait and what an inference may rest on. ``ledger``: whether the commitment ledger is material, only when
         the person themselves is asking; it is private, so a visitor, a colleague's conversation, a channel or an
-        agent never sees it. ``MemoryUpdating`` for a twin made from a recording library while its memory is being
-        rebuilt: every way of asking a twin goes through here. ``reach``: whom the part of an answer only the person can
+        agent never sees it. A twin made from a recording library answers from its last build, also while a newer one
+        is made; ``MemoryUpdating`` only when its library cannot be read: every way of asking a twin goes through
+        here. ``reach``: whom the part of an answer only the person can
         settle goes to (``Reach``); the person themself, whatever it says, is never handed anything. ``assistant``: the
         conversation is the person's own, answered by their assistant in the second person (``persona.assistant``);
         only the self tier has one. ``asker``: who is asking, so the twin can say whom it is talking to."""
@@ -508,11 +509,8 @@ class PersonaChat:
         self.asker = asker
         self.assistant = assistant and audience == SELF_AUDIENCE
         self.reach: Reach = "none" if audience == SELF_AUDIENCE else reach
-        self.memory = gate.version(store)
+        gate.version(store)  # ``MemoryUpdating`` when its library cannot be read
         self.meeting_record = gate.meeting_record(store)
-        # Set by an answer that finished after the twin's memory changed under it: not logged, not to be shown as
-        # current.
-        self.stale = False
         self.store = store
         self.llm = llm
         self.embedder = embedder
@@ -667,10 +665,7 @@ class PersonaChat:
                 schema=ChatDraft,
                 effort=self.settings.effective_chat_llm.effort_twin,
             )
-        reply = self._finalize(draft, ctx, messages, as_of, persist=persist)
-        if self.stale:
-            raise gate.MemoryUpdating()
-        return reply
+        return self._finalize(draft, ctx, messages, as_of, persist=persist)
 
     async def stream_reply(
         self,
@@ -739,7 +734,7 @@ class PersonaChat:
                 if recovered is not None:
                     draft, verified = recovered, True
         final = await off_loop(partial(self._finalize, draft, ctx, messages, as_of, persist=persist, verified=verified))
-        if held and not self.stale:
+        if held:
             yield final.reply
         yield final
 
@@ -880,8 +875,7 @@ class PersonaChat:
             promise_to=draft.promise_to.strip()[:60] if self.assistant and draft.promise_what.strip() else "",
             promise_due=_iso_date(draft.promise_due) if self.assistant and draft.promise_what.strip() else None,
         )
-        self.stale = not gate.current(self.store, self.memory)
-        if persist and not self.stale:
+        if persist:
             asked = [m.content for m in messages if m.role == "user"]
             self.store.log_chat(asked[-1], reply, asked[-2] if len(asked) > 1 else "")
         return reply

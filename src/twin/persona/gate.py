@@ -1,12 +1,10 @@
-"""Whether a twin made from a recording library may answer right now.
+"""Which build of a recording library a twin made from it answers from.
 
-Such a twin answers only from a complete build of the library's current decisions: its row in the owner's
-``library.db`` (``personas_sync``) has ``done == wanted``. Every decision that changes the twin's recordings raises
-``wanted`` in the same transaction, so from that moment until a build of exactly that state succeeds, nothing of the
-twin's memory is used: its own words, its profile and the meeting record alike. One exception: while the rebuild is
-held (quota spent, automatic rebuild switched off), a change found to only add recordings to the last build
-(``answerable == wanted``) leaves the twin answering from that build, since nothing it holds was taken away; any
-further change closes it until checked again. Twins not made from a library are unaffected.
+Its row in the owner's ``library.db`` (``personas_sync``) counts the library's decisions: every decision that changes
+the twin's recordings raises ``wanted`` in the same transaction, and a build of exactly that state sets ``done``. The
+twin always answers from what it holds, the last build (``done``), also while a newer one is wanted or being made
+(``updating``): a rebuild that waits on a model or GPU service that is down must not stop people talking to it. Only a
+twin whose library cannot be read does not answer. Twins not made from a library are unaffected.
 """
 
 from __future__ import annotations
@@ -28,10 +26,10 @@ MEETING_RECORD = "meeting_record"
 
 
 class MemoryUpdating(Exception):
-    """The twin's memory is being brought in line with changed recordings; it must not answer yet."""
+    """The library the twin is made from cannot be read, so which of its memory is current is not known."""
 
     def __init__(self) -> None:
-        super().__init__("记忆更新中：录音的说话人归属刚有变化，整理完成后就能回答")
+        super().__init__("记忆暂时读不到：录音库打不开，稍后再试")
 
 
 def link(store: PersonaStore, library_db: Path, persona_id: str) -> None:
@@ -42,8 +40,8 @@ def link(store: PersonaStore, library_db: Path, persona_id: str) -> None:
 
 
 def version(store: PersonaStore) -> int | None:
-    """The memory version the twin answers from; None for a twin not made from a library. ``MemoryUpdating``
-    while a change is waiting for its build (or the library cannot be read)."""
+    """The memory version the twin answers from, its last build; None for a twin not made from a library.
+    ``MemoryUpdating`` when the library cannot be read."""
     return _version(store.path, store.get_meta(LINK))
 
 
@@ -66,29 +64,37 @@ def _linked(db_path: Path) -> str | None:
     return str(row[0]) if row and row[0] else None
 
 
-def _version(db_path: Path, linked: str | None) -> int | None:
+def updating(db_path: Path) -> bool:
+    """Whether the twin at ``db_path`` is made from a library whose latest decisions its memory does not hold yet
+    (or whose library cannot be read): it answers from its last build meanwhile."""
+    linked = _linked(db_path)
     if not linked:
-        return None
+        return False
+    row = _sync_row(db_path, linked)
+    return row is None or row[0] != row[1]
+
+
+def _sync_row(db_path: Path, linked: str) -> tuple[int, int] | None:
+    """(wanted, done) of the twin in its library; None when the library cannot be read."""
     try:
         info = json.loads(linked)
         path = (db_path.resolve().parent / info["db"]).resolve()
         with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=10)) as db:
             row = db.execute(
-                "SELECT wanted, done, answerable FROM personas_sync WHERE persona_id = ?", (info["persona"],)
+                "SELECT wanted, done FROM personas_sync WHERE persona_id = ?", (info["persona"],)
             ).fetchone()
     except (ValueError, KeyError, TypeError, sqlite3.Error):
-        row = None
-    if row is None or (row[0] != row[1] and row[2] != row[0]):
+        return None
+    return (int(row[0]), int(row[1])) if row else None
+
+
+def _version(db_path: Path, linked: str | None) -> int | None:
+    if not linked:
+        return None
+    row = _sync_row(db_path, linked)
+    if row is None:
         raise MemoryUpdating()
-    return int(row[1])
-
-
-def current(store: PersonaStore, expected: int | None) -> bool:
-    """Whether the twin still answers from ``expected``, the version it started an answer with."""
-    try:
-        return version(store) == expected
-    except MemoryUpdating:
-        return False
+    return row[1]
 
 
 def meeting_record(store: PersonaStore) -> bool:

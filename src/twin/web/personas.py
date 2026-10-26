@@ -166,6 +166,8 @@ class Personas:
         self.on_conversation_deleted: Callable[[str, str], None] = lambda _, __: None
         # Whoever a twin was taken by said "这不是我": what they lent out of it is not for the next person to carry on.
         self.on_disowned: Callable[[str], None] = lambda _: None
+        # A twin was given an employee number or e-mail address (``set_claim``).
+        self.on_claimed: Callable[[str], None] = lambda _: None
         with self.lock:
             if not self.path.exists():
                 self.data: dict[str, Any] = {
@@ -445,26 +447,31 @@ class Personas:
 
     def offer_photo(self, identity: dict[str, Any]) -> None:
         """Let the twins the signed-in person has taken wear the profile photo the company sign-in gives (under
-        ``lock``). Each twin fetches it once, in the background; ``photo`` in its entry is the last one it was
-        offered, so signing in again with the same photo does nothing."""
+        ``lock``)."""
         url, email = identity.get("photo"), identity.get("email")
         if not url or not email:
             return
-        now = time.monotonic()
         for entry in self.data["personas"]:
-            persona_id = entry["id"]
-            if (
-                entry.get("member") != email
-                or entry.get("deleted_at")
-                or entry.get("photo") == url
-                or persona_id in self.removing
-                or now < self.photo_tries.get((persona_id, url), -PHOTO_RETRY_SECONDS) + PHOTO_RETRY_SECONDS
-            ):
-                continue
-            self.photo_tries[(persona_id, url)] = now
-            job = threading.Thread(target=self.adopt_photo, args=(persona_id, url), name="twin-photo", daemon=True)
-            self.photo_jobs[persona_id] = job
-            job.start()
+            if entry.get("member") == email:
+                self.offer(entry, url)
+
+    def offer(self, entry: dict[str, Any], url: str) -> None:
+        """Let a twin wear a company profile photo, from the sign-in or from WeCom (``web.wecom_photos``) (under
+        ``lock``). It fetches it once, in the background; ``photo`` in its entry is the last one it was offered, so
+        being offered the same photo again does nothing."""
+        persona_id = entry["id"]
+        now = time.monotonic()
+        if (
+            entry.get("deleted_at")
+            or entry.get("photo") == url
+            or persona_id in self.removing
+            or now < self.photo_tries.get((persona_id, url), -PHOTO_RETRY_SECONDS) + PHOTO_RETRY_SECONDS
+        ):
+            return
+        self.photo_tries[(persona_id, url)] = now
+        job = threading.Thread(target=self.adopt_photo, args=(persona_id, url), name="twin-photo", daemon=True)
+        self.photo_jobs[persona_id] = job
+        job.start()
 
     def adopt_photo(self, persona_id: str, url: str) -> None:
         """``offer_photo``'s background work: the twin counts as in flight, so it is not moved to the trash while
@@ -717,6 +724,8 @@ class Personas:
                 entry["claim"] = key
                 entry.pop("claim_rejected", None)
                 self.save()
+                if key:
+                    self.on_claimed(persona_id)
                 return self.view(entry, identity)
 
         @app.post("/api/personas/{persona_id}/approve")

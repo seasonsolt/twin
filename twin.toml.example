@@ -91,6 +91,10 @@ api_key_env = "TWIN_EMBED_KEY"
 # sign_in_origin = "https://center.example.com"  # 配 start_url 时必填：认证中心的源，加进 CSP form-action
 # cache_seconds = 60
 
+# [wecom]  # 可选：SSO 不给头像时，按工号（即企业微信账号）从企业微信通讯录取头像，给填了工号的分身换上
+# corp_id = "ww0123456789abcdef"
+# contacts_secret_env = "TWIN_WECOM_CONTACTS_SECRET"  # 能读成员的密钥（如通讯录同步 secret），只放环境变量
+
 # [video] # 可选真人视频通道，默认关闭
 # provider = "remote" # 执行配置的 SSH 或本机任务
 # command 必须配置；host 省略或为空时本机执行并复制输出，否则使用 SSH/scp；出境声明与契约见 docs/MEDIA.md

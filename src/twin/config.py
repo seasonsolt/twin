@@ -432,6 +432,12 @@ class AuthSettings(BaseModel):
 
 class WeComSettings(BaseModel):
     url: str = "wss://openws.work.weixin.qq.com"
+    # The company's WeCom contacts, to give a twin made for an employee number its member's profile photo
+    # (``web.wecom_photos``): the corp ID, and the environment variable holding the secret of an app allowed to read
+    # members (the contacts sync secret, say). Without both, no photo is fetched.
+    corp_id: str | None = None
+    contacts_secret_env: str = "TWIN_WECOM_CONTACTS_SECRET"
+    api: str = "https://qyapi.weixin.qq.com"
 
 
 # The most model calls a memory build may have in flight: its worker pools are this large, and ``max_concurrent``

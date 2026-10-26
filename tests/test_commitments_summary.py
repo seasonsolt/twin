@@ -179,7 +179,9 @@ def test_a_meeting_not_yet_read_is_counted_once_however_many_twins_were_in_it(we
     assert {t["pending"] for t in data["twins"]} == {0}
 
 
-def test_a_twin_whose_memory_is_being_rebuilt_is_left_out_until_it_is_done(web: TestClient, tmp_path: Path) -> None:
+def test_a_twin_whose_memory_is_being_rebuilt_is_listed_from_its_last_build_and_said_to_be_updating(
+    web: TestClient, tmp_path: Path
+) -> None:
     lin, lin_db = twin(web, tmp_path, "林舟")
     _, xu_db = twin(web, tmp_path, "许清禾")
     seed(lin_db, [entry("lin_own_001", library_source("aaaaaaaaaaaa"), 3, lg.SELF, "周五前给华澜新报价方案")])
@@ -190,10 +192,10 @@ def test_a_twin_whose_memory_is_being_rebuilt_is_left_out_until_it_is_done(web: 
         gate.link(store, library.db_path, lin)
     with library.transaction() as db:
         db.execute("INSERT INTO personas_sync (persona_id, person_id, wanted, done) VALUES (?, 'per_x', 2, 1)", (lin,))
-    assert web.get("/api/persona/ledger", headers={"X-Twin-Persona": lin}).status_code == 409
+    assert web.get("/api/persona/ledger", headers={"X-Twin-Persona": lin}).status_code == 200
     everyone = web.get("/api/personas/commitments").json()
-    assert [(r["entry_id"], r["owner"]) for r in everyone["entries"]] == [("xu_own_0001", "许清禾")]
-    # Whose is missing is said, so an empty list does not read as no meetings at all.
+    assert {r["entry_id"] for r in everyone["entries"]} == {"lin_own_001", "xu_own_0001"}
+    # Whose may change soon is said.
     assert everyone["updating"] == [{"id": lin, "name": "林舟"}]
     # The library says a rebuild is under way, so the team page asks for people again without a recording changing.
     started = web.get("/api/library").json()["twins"]

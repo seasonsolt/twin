@@ -62,13 +62,12 @@ def test_deleting_a_sample_recording_removes_dependent_speech_from_the_next_buil
     assert withdrawn.decision == "none" and withdrawn.person_id is None
     assert team.classify_all() == 0  # Another valid sample cannot silently restore the withdrawn decision.
     assert {s.title for s in team.sources(person.id, person.name)} == {"manual", "another-sample"}
-    with pytest.raises(gate.MemoryUpdating):
-        gate.version_at(target.db_path)
-    # A held rebuild cannot keep answering from the removed recordings by treating the correction as additions.
+    # Until the rebuild it answers from its last build, and says its memory is behind.
+    assert gate.version_at(target.db_path) == 1 and gate.updating(target.db_path)
+    # A held rebuild does not pass the correction off as additions: the twin stays behind its library.
     settings.library.auto_build = False
     assert libraries.write_sources(TEAM, pid) is False
-    with pytest.raises(gate.MemoryUpdating):
-        gate.version_at(target.db_path)
+    assert gate.updating(target.db_path)
     settings.library.auto_build = True
     assert libraries.write_sources(TEAM, pid)
     wanted = team.wanted(pid)

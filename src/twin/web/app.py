@@ -47,6 +47,7 @@ from .conversations import register_all as register_all_conversations
 from .delegation import Delegations
 from .jobs import JobConflict, JobManager, TooManyJobs, describe_error
 from .personas import PersonaMiddleware, Personas
+from .wecom_photos import wecom_photos
 
 logger = logging.getLogger(__name__)
 
@@ -428,6 +429,7 @@ def create_app(
     # make it into the team database are made.
     run_all(desks)
     hub = WeComHub(settings, registry, backends, jobs)
+    photos = wecom_photos(settings, registry)
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
 
     def restored(persona_id: str) -> None:
@@ -563,14 +565,11 @@ def create_app(
                 kernel = kernel_status(store)
             description = backends.describe()
             name = stored_identity(resolved.db_path)[0] or resolved.target_name
-            try:
-                updating = False
-                gate.version_at(resolved.db_path)
-            except MemoryUpdating:
-                updating = True
+            updating = gate.updating(resolved.db_path)
             return {
                 "target_name": name,
-                # A twin made from the recording library while it is rebuilt after a change: it does not answer.
+                # A twin made from the recording library while it is rebuilt after a change: it answers from its
+                # last build meanwhile.
                 "memory_updating": updating,
                 "counts": counts,
                 "kernel": kernel,
@@ -674,6 +673,8 @@ def create_app(
                 context = registry.application(entry["id"])
                 await stack.enter_async_context(context.router.lifespan_context(context))
             await hub.start()
+            if photos is not None:
+                photos.start()
             monitor.start()
             libraries.start()
             try:
@@ -681,6 +682,8 @@ def create_app(
             finally:
                 await anyio.to_thread.run_sync(monitor.stop)
                 await anyio.to_thread.run_sync(libraries.stop)
+                if photos is not None:
+                    await anyio.to_thread.run_sync(photos.stop)
                 await hub.stop()
                 for context in list(registry.apps.values()):
                     context.state.processing.close()

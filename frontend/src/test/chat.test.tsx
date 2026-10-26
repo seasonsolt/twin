@@ -737,22 +737,6 @@ it('renders stream failure inline with retry', async () => {
   expect(screen.queryByLabelText('分身回复')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '重试' })).toBeEnabled();
 });
-it("drops an answer written while the twin's memory changed and offers to ask again", async () => {
-  mount();
-  await submit();
-  await act(async () => {
-    streamController.enqueue(encode('delta', { text: '过时的回答' }));
-    streamController.enqueue(
-      encode('stale', {
-        detail: '记忆刚更新，这条回答可能已经过时，没有保存。请再问一次',
-      }),
-    );
-    streamController.close();
-  });
-  expect(screen.getByRole('alert')).toHaveTextContent('可能已经过时');
-  expect(screen.queryByText('过时的回答')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('你说')).toHaveValue('你怎么看？');
-});
 it('uses a bounded thread, a two-line composer and mobile-safe font sizes', () => {
   const view = mount();
   const messages = screen.getByTestId('chat-messages');

@@ -403,6 +403,7 @@ def create_app(
 
     delegations = Delegations(registry, team, backends, desk_for, answers, twin_name)
     registry.adopt_own()
+    registry.approve_claimed()
     desks: list[HandoffDesk] = []
     for entry in registry.data["personas"]:
         if not entry.get("deleted_at"):

@@ -604,6 +604,64 @@ it('keeps the dialog and what was typed when the e-mail of a twin to make is not
   );
 });
 
+it('lets an administrator point a taken twin at another account, after saying what its person loses', async () => {
+  people = [person({ persona_id: 'p-zhang' })];
+  const taken: Persona = {
+    id: 'p-zhang',
+    name: '张总',
+    avatar_url: null,
+    sources: 1,
+    created_at: 'x',
+    is_default: false,
+    claim: '12345',
+    claimed: true,
+  };
+  usePersonas.setState({ items: [taken] });
+  const sent: [string, string | undefined, unknown][] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      if (url === '/api/library/voice-clashes') return json([]);
+      if (url === '/api/personas') return json([taken]);
+      sent.push([url, init?.method, JSON.parse(String(init?.body))]);
+      return json(taken);
+    }),
+  );
+  render(teamView());
+  const row = (
+    await screen.findByRole('link', { name: '张总的成员页' })
+  ).closest('tr')!;
+  // Only an administrator may take it from its person.
+  expect(within(row).queryByRole('button', { name: /企业账号/u })).toBeNull();
+  act(() =>
+    useAuth.setState({
+      identity: { email: 'admin@example.com', admin: true, auth_enabled: true },
+    }),
+  );
+  await userEvent.click(
+    await within(row).findByRole('button', { name: '改绑企业账号 已认领' }),
+  );
+  const dialog = await screen.findByRole('dialog', {
+    name: '张总的企业邮箱或工号',
+  });
+  const field = within(dialog).getByLabelText('企业邮箱或工号');
+  await userEvent.clear(field);
+  await userEvent.type(field, '67890');
+  await userEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+  const asked = await screen.findByRole('dialog', {
+    name: '改绑这个分身？',
+  });
+  expect(sent).toEqual([]);
+  await userEvent.click(within(asked).getByRole('button', { name: '改绑' }));
+  await waitFor(() =>
+    expect(sent).toEqual([
+      ['/api/personas/p-zhang/claim', 'PUT', { claim: '67890' }],
+    ]),
+  );
+});
+
 it('shows a person who found themselves by voice as having their own twin', async () => {
   people = [person({ self_claimed: true }), people[1]!];
   vi.stubGlobal(
@@ -1612,7 +1670,9 @@ it('shows an administrator people whose voice samples sound alike, to hear them 
   const pair = within(layer).getByRole('list', { name: '张总 和 李总的声线' });
   const rows = within(pair).getAllByRole('listitem');
   // The sample more like the other person than like their own is the likely mistake.
-  expect(within(rows[1]).getByText('更像对方')).toBeVisible();
+  await waitFor(() =>
+    expect(within(rows[1]).getByText('更像对方')).toBeVisible(),
+  );
   expect(within(rows[0]).queryByText('更像对方')).toBeNull();
   expect(
     within(rows[1]).getByRole('button', { name: '听李总的声线（rec_2.m4a）' }),

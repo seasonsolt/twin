@@ -440,6 +440,13 @@ it('does not let an older registry response undo a switch to a newly created per
   expect(usePersonas.getState().items).toContainEqual(created);
 });
 
+it('starts a fresh sign-in at the twin made for the person, not the default one', async () => {
+  items[1] = { ...items[1], mine: true, approved: true, made_by_other: true };
+  usePersonas.getState().reset();
+  await usePersonas.getState().refresh();
+  expect(usePersonas.getState().id).toBe(B);
+});
+
 it('can switch when browser storage is unavailable', async () => {
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
     throw new Error('disabled');

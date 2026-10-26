@@ -127,9 +127,14 @@ export const usePersonas = create<{
     if (version !== refreshVersion) return;
     if (!Array.isArray(items)) throw new Error('无法加载分身列表');
     set({ items });
+    // Signing in starts at the person's own twin (made for their work e-mail or employee number), not the team's
+    // default one.
     if (!items.some((item) => item.id === get().id))
       await get().switchTo(
-        items.find((item) => item.is_default)?.id ?? items[0]?.id ?? '',
+        items.find((item) => item.mine)?.id ??
+          items.find((item) => item.is_default)?.id ??
+          items[0]?.id ??
+          '',
       );
   },
 }));

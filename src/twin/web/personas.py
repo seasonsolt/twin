@@ -213,6 +213,28 @@ class Personas:
                 logger.info("自建的分身 %s 归建它的人本人所有", "、".join(adopted))
         return adopted
 
+    def approve_claimed(self) -> list[str]:
+        """Twins taken by the work e-mail or employee number they were made for before taking one settled it
+        (``claim``), still waiting for their person to say they are all right: approved as of when they were taken.
+        Twins made from one's own voice (``by_voice``) still wait for their person. Returns the ids approved; run once
+        at startup."""
+        approved = []
+        with self.lock:
+            for entry in self.data["personas"]:
+                if (
+                    entry.get("member")
+                    and entry.get("claim")
+                    and not entry.get("approved_at")
+                    and not entry.get("by_voice")
+                    and not entry.get("deleted_at")
+                ):
+                    entry["approved_at"] = entry.get("claimed_at") or self.clock().isoformat()
+                    approved.append(entry["id"])
+            if approved:
+                self.save()
+                logger.info("按工号或邮箱认领的分身 %s 视为本人已确认", "、".join(approved))
+        return approved
+
     def purge_trash(self) -> list[Path]:
         """Forget personas deleted a week ago (under ``lock``); returns their directories, which the caller removes
         with ``remove_trash`` after letting go of ``lock``, as deleting many files can take long."""
@@ -389,18 +411,37 @@ class Personas:
 
     def claim(self, identity: dict[str, Any]) -> None:
         """Give the signed-in person the twins made for their work e-mail or employee number that nobody has taken
-        yet (under ``lock``). The company sign-in fixes both, so they alone say whose a twin is."""
+        yet (under ``lock``). The company sign-in fixes both, so they alone say whose a twin is: whoever assigned it
+        settled the claim, and the twin is the person's own from their first sign-in, with nothing to approve. Whether
+        colleagues may ask it stays as it was."""
         keys = claim_keys(identity)
         if keys and identity.get("email"):
             changed = False
             for entry in self.data["personas"]:
                 if entry.get("claim") in keys and not entry.get("member") and not entry.get("deleted_at"):
-                    entry["member"] = identity["email"]
-                    entry["claimed_at"] = self.clock().isoformat()
+                    now = self.clock().isoformat()
+                    entry.update(member=identity["email"], claimed_at=now, approved_at=now)
                     changed = True
             if changed:
                 self.save()
         self.offer_photo(identity)
+
+    def release(self, entry: dict[str, Any]) -> None:
+        """The twin's person goes (under ``lock``): it is nobody's, private to colleagues, and what they kept in it to
+        themself goes with them (``forget_departed``)."""
+        persona_id, departed = entry["id"], entry["member"]
+        for key in ("member", "claimed_at", "approved_at", "made_for_self", "by_voice"):
+            entry.pop(key, None)
+        entry["public"] = False
+        self.save()
+        self.on_disowned(persona_id)
+        settings = self.settings_for(persona_id)
+        if settings.db_path.is_file():
+            with PersonaStore(settings.db_path) as store:
+                forgotten = forget_departed(store, departed, partial(self.on_conversation_deleted, persona_id))
+            context = self.apps.get(persona_id)
+            if forgotten and context is not None:
+                context.state.processing.queue()
 
     def offer_photo(self, identity: dict[str, Any]) -> None:
         """Let the twins the signed-in person has taken wear the profile photo the company sign-in gives (under
@@ -639,24 +680,40 @@ class Personas:
 
         @app.put("/api/personas/{persona_id}/claim")
         def set_claim(persona_id: str, body: ClaimBody, request: Request) -> dict[str, Any]:
-            """Say whose twin this is by their work e-mail or employee number: they take it when they sign in."""
+            """Say whose twin this is by their work e-mail or employee number: they take it when they sign in. Once
+            taken, only an administrator can change it, to someone else or to nobody: whoever had it then goes as if
+            they had said "这不是我"."""
             key = claim_key(body.claim)
             with self.lock:
                 identity = request.scope["twin_identity"]
                 self.check_owner(persona_id, identity)
                 entry = next(p for p in self.data["personas"] if p["id"] == persona_id)
-                if entry.get("made_for_self") and entry.get("member") == entry.get("owner") and key:
-                    if entry["owner"] == identity["email"] and key in claim_keys(identity):
+                if (
+                    entry.get("made_for_self")
+                    and entry.get("member") == entry.get("owner") == identity["email"]
+                    and key
+                ):
+                    if key in claim_keys(identity):
                         return self.view(entry, identity)  # Theirs already.
                     # Adopted as its maker's own (``adopt_own``), but made for someone else after all.
                     for stale in ("member", "claimed_at", "approved_at", "made_for_self"):
                         entry.pop(stale, None)
                 if entry.get("member"):
-                    raise HTTPException(409, "本人已经认领了这个分身")
+                    if not identity["admin"]:
+                        raise HTTPException(409, "本人已经认领了这个分身")
+                    if key and key == entry.get("claim"):
+                        return self.view(entry, identity)  # Theirs already.
                 if key and any(
                     p is not entry and not p.get("deleted_at") and p.get("claim") == key for p in self.data["personas"]
                 ):
                     raise HTTPException(409, "这个邮箱或工号已经用在另一个分身上")
+                if entry.get("member"):
+                    departed = entry["member"]
+                    if entry.get("owner") == departed:
+                        # Made by them (for themself, or from their voice): it is the administrator's now.
+                        entry["owner"] = identity["email"]
+                    self.release(entry)
+                    logger.info("管理员把分身 %s 从原认领人名下收回", persona_id)
                 entry["claim"] = key
                 entry.pop("claim_rejected", None)
                 self.save()
@@ -683,20 +740,7 @@ class Personas:
                 if entry.get("owner") == identity["email"]:
                     raise HTTPException(409, "这是你自己建的分身")
                 entry["claim_rejected"] = entry.pop("claim", None) or ""
-                for key in ("member", "claimed_at", "approved_at"):
-                    entry.pop(key, None)
-                entry["public"] = False
-                self.save()
-                self.on_disowned(persona_id)
-                settings = self.settings_for(persona_id)
-                if settings.db_path.is_file():
-                    with PersonaStore(settings.db_path) as store:
-                        forgotten = forget_departed(
-                            store, identity["email"], partial(self.on_conversation_deleted, persona_id)
-                        )
-                    context = self.apps.get(persona_id)
-                    if forgotten and context is not None:
-                        context.state.processing.queue()
+                self.release(entry)
                 return {"disowned": True}
 
         @app.delete("/api/personas/{persona_id}")

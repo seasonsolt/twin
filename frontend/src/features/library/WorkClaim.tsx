@@ -5,7 +5,8 @@ import type { Persona } from '../../stores/personas';
 
 /**
  * The work e-mail or employee number of the person a twin is made for: when they sign in with the company account
- * it names, the twin becomes theirs. Asked when the twin is made, and changeable until they have taken it.
+ * it names, the twin is theirs. Asked when the twin is made; changeable until they have taken it, and after that by an
+ * administrator, which takes it from them.
  */
 export function WorkClaim({
   person,
@@ -37,7 +38,7 @@ export function WorkClaim({
           ? `为${person?.name ?? ''}建分身`
           : `${person?.name ?? ''}的企业邮箱或工号`
       }
-      body="填 TA 企业账号的邮箱或工号。TA 一登录，分身就归到 TA 名下；TA 看过并点“没问题”之前，分身不对同事回答。"
+      body="填 TA 企业账号的邮箱或工号，TA 一登录分身就归 TA。"
     >
       <form
         className="space-y-5"
@@ -54,7 +55,9 @@ export function WorkClaim({
           help={
             twin?.claim_rejected
               ? `${twin.claim_rejected} 的主人说这不是 TA，换一个吧`
-              : '填错了也不要紧：对方登录后点“这不是我”，分身会退回给你。'
+              : twin?.claimed
+                ? '改绑或清空后，原认领人的私人内容会清掉。'
+                : '对方登录前都能改。'
           }
         >
           <Input

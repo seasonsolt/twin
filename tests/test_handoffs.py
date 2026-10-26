@@ -376,6 +376,10 @@ def test_the_person_trying_their_twin_before_saying_it_is_all_right_is_handed_no
         scene.web.put(f"/api/personas/{scene.persona}/claim", json={"claim": PERSON}, headers=CSRF).status_code == 200
     )
     scene.web.get("/api/personas")  # they take it
+    # Taken by its address it is approved at once; one made from their own voice waits for them (``web.voice``).
+    entry = scene.web.app.state.personas.entry(scene.persona)  # type: ignore[attr-defined]
+    entry.update(by_voice=True)
+    entry.pop("approved_at")
     conversation = scene.conversation()
     final = scene.ask(conversation, PROMISE)
     assert final["owner_part"] == "none" and "handoff" not in final

@@ -22,10 +22,12 @@ from pydantic import ValidationError
 
 from twin.assets import AssetStore
 from twin.config import AuthSettings, Settings, SMTPSettings, SSOSettings
+from twin.persona.store import PersonaStore
 from twin.web import assets as web_assets
 from twin.web import create_app
 from twin.web.auth import Auth, digest, normalize_email, photo_url, send_code
-from twin.web.jobs import PersonaProcessing
+from twin.web.jobs import JobManager, PersonaProcessing, describe_error
+from twin.web.personas import Personas
 
 CSRF = {"X-Twin": "1"}
 ADMIN = "admin@example.com"
@@ -634,8 +636,12 @@ def test_a_twin_made_for_a_work_address_is_taken_on_signing_in(sso: tuple[TestCl
     assert web.get("/api/whoami").json()["address"] == "zhangsan@acme.cn"
     [mine] = web.get("/api/personas").json()
     assert mine["id"] == persona and mine["can_manage"] is True
-    assert mine["mine"] is True and mine["approved"] is False and mine["made_by_other"] is True
-    assert mine["public"] is False  # it answers nobody else before 张三 says it is all right
+    # Assigning the address settled the claim: 张三's own from the first sign-in, still private to colleagues.
+    assert mine["mine"] is True and mine["approved"] is True and mine["made_by_other"] is True
+    assert mine["public"] is False
+    web.cookies.set("sso", "cookie-c")  # colleagues cannot ask it until 张三 shares it
+    assert web.get("/api/personas").json() == []
+    web.cookies.set("sso", "cookie-a")
     approved = web.post(f"/api/personas/{persona}/approve", json={"public": True}, headers=CSRF)
     assert approved.status_code == 200 and approved.json()["approved"] is True and approved.json()["public"] is True
     assert web.put(f"/api/personas/{persona}/claim", json={"claim": None}, headers=CSRF).status_code == 409
@@ -664,7 +670,46 @@ def test_a_twin_made_for_an_employee_number_is_taken_by_that_sso_account(sso: tu
     whoami = web.get("/api/whoami").json()
     assert whoami["account"] == "12345" and whoami["address"] is None
     [mine] = web.get("/api/personas").json()
-    assert mine["id"] == persona and mine["mine"] is True and mine["approved"] is False
+    assert mine["id"] == persona and mine["mine"] is True and mine["approved"] is True
+
+
+def test_an_administrator_points_a_taken_twin_at_someone_else_or_takes_it_back(
+    sso: tuple[TestClient, FakeLogin],
+) -> None:
+    """Once taken, only an administrator can change whose a twin is; whoever had it goes as if they had said "这不是我":
+    it is no longer theirs, and their own conversations with it go with them."""
+    web, login = sso
+    login.sessions["cookie-d"] = {"authenticated": True, "subject": "19538", "display_name": "钱七", "account": "12345"}
+    web.cookies.set("sso", "cookie-b")  # the administrator
+    persona = create(web)
+    web.put(f"/api/personas/{persona}/claim", json={"claim": "12345"}, headers=CSRF)
+    web.cookies.set("sso", "cookie-d")  # 钱七 takes it and talks to it
+    [mine] = web.get("/api/personas").json()
+    assert mine["mine"] is True
+    talked = web.post("/api/conversations", json={}, headers={**CSRF, "X-Twin-Persona": persona})
+    assert talked.status_code == 201, talked.text
+    with PersonaStore(web.app.state.personas.db_path_of(persona)) as store:  # type: ignore[attr-defined]
+        assert len(store.list_conversations("sso:19538")) == 1
+    assert web.put(f"/api/personas/{persona}/claim", json={"claim": "zhangsan"}, headers=CSRF).status_code == 409
+
+    web.cookies.set("sso", "cookie-b")
+    assert web.put(f"/api/personas/{persona}/claim", json={"claim": "12345"}, headers=CSRF).json()["claimed"] is True
+    moved = web.put(f"/api/personas/{persona}/claim", json={"claim": "zhangsan"}, headers=CSRF).json()
+    assert moved["claim"] == "zhangsan" and moved["claimed"] is False and "claim_rejected" not in moved
+    with PersonaStore(web.app.state.personas.db_path_of(persona)) as store:  # type: ignore[attr-defined]
+        assert store.list_conversations("sso:19538") == []
+
+    web.cookies.set("sso", "cookie-d")  # 钱七 has it no more
+    assert web.get("/api/personas").json() == []
+    web.cookies.set("sso", "cookie-a")  # 张三 (account zhangsan) has it from signing in
+    [mine] = web.get("/api/personas").json()
+    assert mine["id"] == persona and mine["mine"] is True and mine["approved"] is True
+
+    web.cookies.set("sso", "cookie-b")  # taken back: nobody's
+    back = web.put(f"/api/personas/{persona}/claim", json={"claim": None}, headers=CSRF).json()
+    assert back["claim"] is None and back["claimed"] is False
+    web.cookies.set("sso", "cookie-a")
+    assert web.get("/api/personas").json() == []
 
 
 def picture(size: int, color: str) -> bytes:
@@ -1119,3 +1164,19 @@ def test_accounts_are_managed_from_the_command_line(tmp_path: Path) -> None:
     config.write_text(f'db_path = "{tmp_path / "twin.db"}"\n', encoding="utf-8")
     off = runner.invoke(cli, ["--config", str(config), "account", "list"])
     assert off.exit_code != 0 and "password_login" in off.output
+
+
+def test_twins_taken_by_address_before_it_settled_the_claim_are_approved_at_startup(tmp_path: Path) -> None:
+    """Taken by the address it was made for but never said to be all right: approved as of when it was taken. A twin
+    made from one's own voice still waits for its person."""
+    registry = Personas(Settings(db_path=tmp_path / "twin.db"), JobManager(1, describe_error))
+    admin = {"email": "user:admin", "admin": True}
+    taken, voiced, waiting = (registry.create(name, admin)["id"] for name in ("甲", "乙", "丙"))
+    with registry.lock:
+        registry.entry(taken).update(claim="12345", member="user:a", claimed_at="2026-01-01T00:00:00+00:00")
+        registry.entry(voiced).update(member="user:b", claimed_at="2026-01-02T00:00:00+00:00", by_voice=True)
+        registry.entry(waiting)["claim"] = "67890"
+    assert registry.approve_claimed() == [taken]
+    assert registry.entry(taken)["approved_at"] == "2026-01-01T00:00:00+00:00"
+    assert "approved_at" not in registry.entry(voiced) and "approved_at" not in registry.entry(waiting)
+    assert registry.approve_claimed() == []

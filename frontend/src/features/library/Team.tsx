@@ -445,6 +445,7 @@ function personRow({
   onOpen,
   onMember,
   onEdit,
+  admin,
   onAddress,
   onRemove,
   onDeleteTwin,
@@ -454,6 +455,8 @@ function personRow({
   person: Person;
   twin?: Persona;
   busy: boolean;
+  /** An administrator can point a twin its person has taken at someone else, or at nobody. */
+  admin: boolean;
   /** Talk to their twin: switch to it and open the chat. */
   onOpen: (personaId: string) => void;
   /** Their page: the recordings they are in, and their twin if they have one. */
@@ -585,13 +588,18 @@ function personRow({
                   },
                 ]
               : []),
-            ...(person.persona_id && twin?.claimed === false
+            ...(person.persona_id &&
+            (twin?.claimed === false || (admin && twin?.claimed))
               ? [
                   {
-                    label: '绑定企业账号',
+                    label: twin.claimed ? '改绑企业账号' : '绑定企业账号',
                     icon: IdCard,
                     // Given one nobody has signed in with yet, it waits for them; none given, it is not bound.
-                    status: twin.claim ? '待认领' : '未绑定',
+                    status: twin.claimed
+                      ? '已认领'
+                      : twin.claim
+                        ? '待认领'
+                        : '未绑定',
                     disabled: busy,
                     onSelect: onAddress,
                   },
@@ -1086,6 +1094,7 @@ function Roster({
                   person: entry.person,
                   twin: twinOf(entry.person),
                   busy,
+                  admin,
                   onOpen: chat,
                   onMember: () => void navigate(memberPath(entry.person.id)),
                   onEdit: () => setEditing(entry.person),
@@ -1234,8 +1243,21 @@ function Roster({
         busy={busy}
         error={claimError}
         onClose={() => address(null)}
-        onSave={(claim) => {
+        onSave={async (claim) => {
           if (!addressing) return;
+          const twin = twins.find((t) => t.id === addressing.persona_id);
+          // Taken already: whoever has it loses it, and what they kept in it to themself goes with them.
+          if (
+            twin?.claimed &&
+            claim !== (twin.claim ?? '') &&
+            !(await confirm({
+              title: claim ? '改绑这个分身？' : '收回这个分身？',
+              body: '原认领人会失去它，TA 的私人笔记和对话会清掉。',
+              confirmLabel: claim ? '改绑' : '收回',
+              tone: 'danger',
+            }))
+          )
+            return;
           setClaimError('');
           void saveClaim(addressing, claim).then((failed) => {
             if (failed) setClaimError(failed);

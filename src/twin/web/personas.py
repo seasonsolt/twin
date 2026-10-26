@@ -470,8 +470,9 @@ class Personas:
             return
         self.photo_tries[(persona_id, url)] = now
         job = threading.Thread(target=self.adopt_photo, args=(persona_id, url), name="twin-photo", daemon=True)
-        self.photo_jobs[persona_id] = job
+        # Listed once started, so whoever finds it here can join it.
         job.start()
+        self.photo_jobs[persona_id] = job
 
     def adopt_photo(self, persona_id: str, url: str) -> None:
         """``offer_photo``'s background work: the twin counts as in flight, so it is not moved to the trash while
